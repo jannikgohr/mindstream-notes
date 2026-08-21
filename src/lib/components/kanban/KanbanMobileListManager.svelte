@@ -21,6 +21,13 @@
     onClose: () => void;
   }
 
+  interface DragVisual {
+    left: number;
+    top: number;
+    width: number;
+    grabY: number;
+  }
+
   let { columns, activeId, onReorder, onRename, onClose }: Props = $props();
 
   const initialColumns = untrack(() =>
@@ -31,8 +38,12 @@
   let editingId = $state<string | null>(null);
   let editInput = $state<HTMLInputElement | null>(null);
   let draggedId = $state<string | null>(null);
+  let dragVisual = $state<DragVisual | null>(null);
   let dragPointerId: number | null = null;
   let persistedOrder = initialColumns.map((column) => column.id).join('\u0000');
+  const draggedColumn = $derived(
+    ordered.find((column) => column.id === draggedId) ?? null
+  );
 
   $effect(() => {
     if (!editingId) return;
@@ -75,18 +86,35 @@
 
   function beginDrag(event: PointerEvent, id: string): void {
     if (event.button !== 0 || editingId) return;
+    const row = (event.currentTarget as HTMLElement).closest<HTMLElement>(
+      '[data-manage-list-id]'
+    );
+    if (!row) return;
+    const rect = row.getBoundingClientRect();
     event.preventDefault();
     draggedId = id;
     dragPointerId = event.pointerId;
+    dragVisual = {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      grabY: event.clientY - rect.top
+    };
     window.addEventListener('pointermove', moveDrag, { capture: true });
     window.addEventListener('pointerup', finishDrag, { capture: true });
     window.addEventListener('pointercancel', cancelDrag, { capture: true });
   }
 
   function moveDrag(event: PointerEvent): void {
-    if (!draggedId || event.pointerId !== dragPointerId || !listContainer)
+    if (
+      !draggedId ||
+      event.pointerId !== dragPointerId ||
+      !listContainer ||
+      !dragVisual
+    )
       return;
     event.preventDefault();
+    dragVisual.top = event.clientY - dragVisual.grabY;
 
     const containerRect = listContainer.getBoundingClientRect();
     if (event.clientY < containerRect.top + 48) listContainer.scrollTop -= 12;
@@ -124,6 +152,7 @@
     window.removeEventListener('pointerup', finishDrag, true);
     window.removeEventListener('pointercancel', cancelDrag, true);
     draggedId = null;
+    dragVisual = null;
     dragPointerId = null;
   }
 
@@ -162,45 +191,66 @@
 
   <div class="list" bind:this={listContainer}>
     {#each ordered as column (column.id)}
-      <div
-        class="list-row"
-        class:active={column.id === activeId}
-        class:dragging={column.id === draggedId}
-        data-manage-list-id={column.id}
-      >
-        <button
-          type="button"
-          class="drag-handle"
-          aria-label={tUi('editor.kanban.reorderList')}
-          onpointerdown={(event) => beginDrag(event, column.id)}
+      {#if column.id === draggedId}
+        <div
+          class="list-placeholder"
+          data-manage-list-id={column.id}
+          aria-hidden="true"
+        ></div>
+      {:else}
+        <div
+          class="list-row"
+          class:active={column.id === activeId}
+          data-manage-list-id={column.id}
         >
-          <GripVertical aria-hidden="true" />
-        </button>
+          <button
+            type="button"
+            class="drag-handle"
+            aria-label={tUi('editor.kanban.reorderList')}
+            onpointerdown={(event) => beginDrag(event, column.id)}
+          >
+            <GripVertical aria-hidden="true" />
+          </button>
 
-        {#if editingId === column.id}
-          <input
-            bind:this={editInput}
-            value={column.label}
+          {#if editingId === column.id}
+            <input
+              bind:this={editInput}
+              value={column.label}
+              aria-label={tUi('editor.kanban.renameList')}
+              onkeydown={(event) => handleRenameKeydown(event, column.id)}
+              onblur={(event) =>
+                finishRename(column.id, event.currentTarget.value, 'blur')}
+            />
+          {:else}
+            <span class="list-label">{column.label}</span>
+          {/if}
+
+          <button
+            type="button"
+            class="rename-button"
             aria-label={tUi('editor.kanban.renameList')}
-            onkeydown={(event) => handleRenameKeydown(event, column.id)}
-            onblur={(event) =>
-              finishRename(column.id, event.currentTarget.value, 'blur')}
-          />
-        {:else}
-          <span class="list-label">{column.label}</span>
-        {/if}
-
-        <button
-          type="button"
-          class="rename-button"
-          aria-label={tUi('editor.kanban.renameList')}
-          onclick={() => startRename(column.id)}
-        >
-          <Pencil aria-hidden="true" />
-        </button>
-      </div>
+            onclick={() => startRename(column.id)}
+          >
+            <Pencil aria-hidden="true" />
+          </button>
+        </div>
+      {/if}
     {/each}
   </div>
+
+  {#if draggedColumn && dragVisual}
+    <div
+      class="list-row drag-ghost"
+      aria-hidden="true"
+      style:left={`${dragVisual.left}px`}
+      style:top={`${dragVisual.top}px`}
+      style:width={`${dragVisual.width}px`}
+    >
+      <span class="drag-handle"><GripVertical aria-hidden="true" /></span>
+      <span class="list-label">{draggedColumn.label}</span>
+      <span class="rename-button"><Pencil aria-hidden="true" /></span>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -313,14 +363,31 @@
       opacity 120ms ease;
   }
 
-  .list-row.active {
+  .list-row.active,
+  .list-row:focus-within {
     border-color: var(--ring);
   }
 
-  .list-row.dragging {
-    z-index: 1;
-    opacity: 0.72;
-    box-shadow: 0 8px 24px rgb(0 0 0 / 0.2);
+  .list-placeholder {
+    box-sizing: border-box;
+    height: 3.5rem;
+    margin-bottom: 0.5rem;
+    border: 1px dashed var(--ring);
+    border-radius: var(--radius-lg);
+    background: color-mix(in srgb, var(--ring) 10%, transparent);
+  }
+
+  .drag-ghost {
+    position: fixed;
+    z-index: 282;
+    margin: 0;
+    border-color: var(--ring);
+    opacity: 0.96;
+    box-shadow:
+      0 0 0 1px var(--ring),
+      0 8px 20px rgb(0 0 0 / 0.22);
+    pointer-events: none;
+    will-change: top;
   }
 
   .drag-handle {
@@ -348,12 +415,10 @@
 
   input {
     height: 2.25rem;
-    border: 1px solid var(--ring);
-    border-radius: var(--radius-sm);
-    background: var(--background);
-    padding: 0 0.625rem;
+    border: 0;
+    background: transparent;
+    padding: 0;
     color: var(--foreground);
     outline: none;
-    box-shadow: 0 0 0 1px var(--ring);
   }
 </style>

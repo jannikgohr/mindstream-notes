@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
   import { ChevronLeft, Ellipsis, GripVertical, Plus } from '@lucide/svelte';
   import type { KanbanColumnHeaderContext } from '@mindstream/svelte-kanban';
   import { tooltip } from '$lib/actions/tooltip';
@@ -17,7 +16,6 @@
     onCancelRename: () => void;
     onOpenMenu: (event: MouseEvent) => void;
     onDragStart: (event: PointerEvent) => void;
-    onOpenListManager?: () => void;
     mobile?: boolean;
   }
 
@@ -29,19 +27,10 @@
     onCancelRename,
     onOpenMenu,
     onDragStart,
-    onOpenListManager,
     mobile = false
   }: Props = $props();
 
   let renameInput = $state<HTMLInputElement | null>(null);
-  let holdTimer: ReturnType<typeof setTimeout> | null = null;
-  let holdPointerId: number | null = null;
-  let holdStartX = 0;
-  let holdStartY = 0;
-  let suppressTitleClick = false;
-  let suppressResetTimer: ReturnType<typeof setTimeout> | null = null;
-  const HOLD_DELAY_MS = 450;
-  const HOLD_MOVE_TOLERANCE_PX = 8;
 
   $effect(() => {
     if (!renaming) return;
@@ -65,61 +54,6 @@
       event.key === 'Enter' ? 'enter' : 'escape'
     );
   }
-
-  function beginTitleHold(event: PointerEvent): void {
-    if (!mobile || context.readonly || !onOpenListManager) return;
-    clearTitleHold();
-    holdPointerId = event.pointerId;
-    holdStartX = event.clientX;
-    holdStartY = event.clientY;
-    holdTimer = setTimeout(() => {
-      suppressTitleClick = true;
-      if (suppressResetTimer) clearTimeout(suppressResetTimer);
-      suppressResetTimer = setTimeout(() => {
-        suppressTitleClick = false;
-        suppressResetTimer = null;
-      }, 800);
-      clearTitleHold();
-      onOpenListManager?.();
-    }, HOLD_DELAY_MS);
-    window.addEventListener('pointermove', moveTitleHold, true);
-    window.addEventListener('pointerup', clearTitleHold, true);
-    window.addEventListener('pointercancel', clearTitleHold, true);
-  }
-
-  function moveTitleHold(event: PointerEvent): void {
-    if (event.pointerId !== holdPointerId) return;
-    if (
-      Math.hypot(event.clientX - holdStartX, event.clientY - holdStartY) >
-      HOLD_MOVE_TOLERANCE_PX
-    ) {
-      clearTitleHold();
-    }
-  }
-
-  function clearTitleHold(): void {
-    if (holdTimer) clearTimeout(holdTimer);
-    holdTimer = null;
-    holdPointerId = null;
-    window.removeEventListener('pointermove', moveTitleHold, true);
-    window.removeEventListener('pointerup', clearTitleHold, true);
-    window.removeEventListener('pointercancel', clearTitleHold, true);
-  }
-
-  function handleTitleClick(): void {
-    if (suppressTitleClick) {
-      suppressTitleClick = false;
-      if (suppressResetTimer) clearTimeout(suppressResetTimer);
-      suppressResetTimer = null;
-      return;
-    }
-    onStartRename();
-  }
-
-  onDestroy(() => {
-    clearTitleHold();
-    if (suppressResetTimer) clearTimeout(suppressResetTimer);
-  });
 </script>
 
 <header class="wx-column-header mindstream-list-header" class:mobile>
@@ -151,11 +85,7 @@
       class="list-title"
       use:tooltip={context.column.label}
       disabled={context.readonly}
-      onpointerdown={beginTitleHold}
-      onclick={handleTitleClick}
-      oncontextmenu={(event) => {
-        if (mobile) event.preventDefault();
-      }}
+      onclick={onStartRename}
     >
       {context.column.label}
     </button>

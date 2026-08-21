@@ -205,6 +205,14 @@
   let mobileCardEditorNavHeld = false;
   let mobileListManagerOpen = $state(false);
   let mobileListManagerNavHeld = false;
+  let mobileTabHoldTimer: ReturnType<typeof setTimeout> | null = null;
+  let mobileTabHoldPointerId: number | null = null;
+  let mobileTabHoldStartX = 0;
+  let mobileTabHoldStartY = 0;
+  let suppressMobileTabClick = false;
+  let suppressMobileTabClickTimer: ReturnType<typeof setTimeout> | null = null;
+  const MOBILE_TAB_HOLD_DELAY_MS = 450;
+  const MOBILE_TAB_HOLD_MOVE_TOLERANCE_PX = 8;
 
   let provider: CollabProvider | null = null;
   let stopObserve: (() => void) | null = null;
@@ -678,6 +686,60 @@
     if (!mobileListManagerNavHeld) return;
     mobileListManagerNavHeld = false;
     closeNavOverlay(MOBILE_LIST_MANAGER_NAV_ID);
+  }
+
+  function beginMobileTabHold(event: PointerEvent): void {
+    if (!mobile || isTrashed) return;
+    clearMobileTabHold();
+    mobileTabHoldPointerId = event.pointerId;
+    mobileTabHoldStartX = event.clientX;
+    mobileTabHoldStartY = event.clientY;
+    mobileTabHoldTimer = setTimeout(() => {
+      suppressMobileTabClick = true;
+      if (suppressMobileTabClickTimer)
+        clearTimeout(suppressMobileTabClickTimer);
+      suppressMobileTabClickTimer = setTimeout(() => {
+        suppressMobileTabClick = false;
+        suppressMobileTabClickTimer = null;
+      }, 800);
+      clearMobileTabHold();
+      openMobileListManager();
+    }, MOBILE_TAB_HOLD_DELAY_MS);
+    window.addEventListener('pointermove', moveMobileTabHold, true);
+    window.addEventListener('pointerup', clearMobileTabHold, true);
+    window.addEventListener('pointercancel', clearMobileTabHold, true);
+  }
+
+  function moveMobileTabHold(event: PointerEvent): void {
+    if (event.pointerId !== mobileTabHoldPointerId) return;
+    if (
+      Math.hypot(
+        event.clientX - mobileTabHoldStartX,
+        event.clientY - mobileTabHoldStartY
+      ) > MOBILE_TAB_HOLD_MOVE_TOLERANCE_PX
+    ) {
+      clearMobileTabHold();
+    }
+  }
+
+  function clearMobileTabHold(): void {
+    if (mobileTabHoldTimer) clearTimeout(mobileTabHoldTimer);
+    mobileTabHoldTimer = null;
+    mobileTabHoldPointerId = null;
+    window.removeEventListener('pointermove', moveMobileTabHold, true);
+    window.removeEventListener('pointerup', clearMobileTabHold, true);
+    window.removeEventListener('pointercancel', clearMobileTabHold, true);
+  }
+
+  function handleMobileTabClick(id: string): void {
+    if (suppressMobileTabClick) {
+      suppressMobileTabClick = false;
+      if (suppressMobileTabClickTimer)
+        clearTimeout(suppressMobileTabClickTimer);
+      suppressMobileTabClickTimer = null;
+      return;
+    }
+    mobileActiveColumnId = id;
   }
 
   function openKanbanSearch(): void {
@@ -1252,6 +1314,8 @@
 
   onDestroy(() => {
     cleanupListPointerDrag();
+    clearMobileTabHold();
+    if (suppressMobileTabClickTimer) clearTimeout(suppressMobileTabClickTimer);
     if (mobileCardEditorNavHeld) {
       mobileCardEditorNavHeld = false;
       closeNavOverlay(MOBILE_CARD_EDITOR_NAV_ID);
@@ -1295,7 +1359,6 @@
     onCancelRename={cancelRenameList}
     onOpenMenu={(event) => openListMenu(event, columnId)}
     onDragStart={(event) => beginListPointerDrag(event, columnId)}
-    onOpenListManager={openMobileListManager}
     {mobile}
   />
 {/snippet}
@@ -1382,7 +1445,9 @@
                   aria-current={column.id === mobileActiveColumn?.id
                     ? 'page'
                     : undefined}
-                  onclick={() => (mobileActiveColumnId = column.id)}
+                  onpointerdown={beginMobileTabHold}
+                  onclick={() => handleMobileTabClick(column.id)}
+                  oncontextmenu={(event) => event.preventDefault()}
                 >
                   {column.label}
                 </button>
