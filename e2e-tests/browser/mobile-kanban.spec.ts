@@ -4,7 +4,11 @@ const ANDROID_UA =
   'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
 
-test.use({ userAgent: ANDROID_UA, viewport: { width: 412, height: 915 } });
+test.use({
+  userAgent: ANDROID_UA,
+  viewport: { width: 412, height: 915 },
+  hasTouch: true
+});
 
 test('mobile Kanban supports list management and card actions', async ({
   page
@@ -145,10 +149,47 @@ test('mobile Kanban supports list management and card actions', async ({
   await expect(page.getByRole('button', { name: 'Delete' })).toBeVisible();
 
   await page.getByTitle('Close').click();
+  await page.getByRole('button', { name: 'Add card' }).click();
+  await page.getByTitle('Close').click();
+
+  const cardRows = page.locator(
+    '.kanban-scope.mobile .wx-column:not(.mobile-list-transition-ghost) .wx-card-row'
+  );
+  await expect(cardRows).toHaveCount(2);
+  const initialCardOrder = await cardRows.evaluateAll((rows) =>
+    rows.map((row) => row.getAttribute('data-kanban-card-id'))
+  );
+
   const cardBody = page.locator('.wx-card .kanban-card-body').first();
   await expect(cardBody).toBeVisible();
+  await expect
+    .poll(() =>
+      cardBody.evaluate(
+        (element) =>
+          getComputedStyle(element.closest('.wx-card') as HTMLElement)
+            .touchAction
+      )
+    )
+    .toBe('none');
   const cardBodyBox = await cardBody.boundingBox();
   expect(cardBodyBox).not.toBeNull();
+
+  const holdX = cardBodyBox!.x + cardBodyBox!.width / 2;
+  const holdY = cardBodyBox!.y + cardBodyBox!.height / 2;
+  await page.mouse.move(holdX, holdY);
+  await page.mouse.down();
+  await page.waitForTimeout(320);
+  await expect(page.locator('.wx-ghost')).toBeVisible();
+  await page.mouse.up();
+  await expect(page.locator('.wx-ghost')).toBeHidden();
+  await expect
+    .poll(() =>
+      cardRows.evaluateAll((rows) =>
+        rows.map((row) => row.getAttribute('data-kanban-card-id'))
+      )
+    )
+    .toEqual(initialCardOrder);
+
   await cardBody.dispatchEvent('pointerdown', {
     button: 0,
     pointerId: 20,
@@ -195,15 +236,40 @@ test('mobile Kanban supports list management and card actions', async ({
   await expect(mouseGhost).toBeHidden();
   await page.mouse.up();
 
-  await cardBody.dispatchEvent('pointerdown', {
+  const bottomCardBody = cardRows.last().locator('.kanban-card-body');
+  const bottomCardBox = await bottomCardBody.boundingBox();
+  expect(bottomCardBox).not.toBeNull();
+  const touchX = bottomCardBox!.x + bottomCardBox!.width / 2;
+  const touchY = bottomCardBox!.y + bottomCardBox!.height / 2;
+  await bottomCardBody.dispatchEvent('pointerdown', {
     button: 0,
     pointerId: 21,
     pointerType: 'touch',
-    clientX: cardBodyBox!.x + cardBodyBox!.width / 2,
-    clientY: cardBodyBox!.y + cardBodyBox!.height / 2
+    clientX: touchX,
+    clientY: touchY
   });
   await page.waitForTimeout(320);
-  await expect(page.locator('.wx-ghost')).toBeVisible();
+  const touchGhost = page.locator('.wx-ghost');
+  await expect(touchGhost).toBeVisible();
+  const initialTouchGhostTransform = await touchGhost.getAttribute('style');
+  await page.evaluate(
+    ({ x, y }) => {
+      window.dispatchEvent(
+        new PointerEvent('pointermove', {
+          bubbles: true,
+          pointerId: 21,
+          pointerType: 'touch',
+          clientX: x,
+          clientY: y - 12
+        })
+      );
+    },
+    { x: touchX, y: touchY }
+  );
+  await expect(touchGhost).toBeVisible();
+  await expect
+    .poll(() => touchGhost.getAttribute('style'))
+    .not.toBe(initialTouchGhostTransform);
   await page.evaluate(() => {
     window.dispatchEvent(
       new PointerEvent('pointercancel', {
@@ -213,5 +279,5 @@ test('mobile Kanban supports list management and card actions', async ({
       })
     );
   });
-  await expect(page.locator('.wx-ghost')).toBeHidden();
+  await expect(touchGhost).toBeHidden();
 });

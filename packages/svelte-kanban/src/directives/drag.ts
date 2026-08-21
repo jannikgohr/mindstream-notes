@@ -66,6 +66,9 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
   let activePointerId: number | null = null;
   let cardHoldTimer: ReturnType<typeof setTimeout> | null = null;
   let active: Resolved | null = null;
+  let scrollEl: HTMLElement | null = null;
+  let scrollStartTop = 0;
+  let manualScrolling = false;
   let edgeTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingEdge: CardDragEdgeDirection | null = null;
   let edgeLatched = false;
@@ -125,6 +128,9 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     activePointerId = e.pointerId;
     startX = e.clientX;
     startY = e.clientY;
+    scrollEl = fullCardDrag ? columnEl : null;
+    scrollStartTop = columnEl.scrollTop;
+    manualScrolling = false;
     if (fullCardDrag && !startedOnHandle) {
       cardHoldTimer = setTimeout(() => {
         cardHoldTimer = null;
@@ -153,12 +159,21 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     if (!started) {
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
+      if (manualScrolling) {
+        e.preventDefault();
+        if (scrollEl) scrollEl.scrollTop = scrollStartTop - dy;
+        return;
+      }
       if (cardHoldTimer) {
         if (
           dx * dx + dy * dy >=
           CARD_HOLD_MOVE_TOLERANCE_PX * CARD_HOLD_MOVE_TOLERANCE_PX
         ) {
-          cancelActiveDrag();
+          clearTimeout(cardHoldTimer);
+          cardHoldTimer = null;
+          manualScrolling = true;
+          e.preventDefault();
+          if (scrollEl) scrollEl.scrollTop = scrollStartTop - dy;
         }
         return;
       }
@@ -172,11 +187,14 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
   }
 
   function onPointerUp() {
+    const wasManualScrolling = manualScrolling;
     teardownListeners();
     if (started && active) {
       commitDrop(active);
       active.dnd.reset();
       document.body.style.userSelect = '';
+      suppressNextClick();
+    } else if (wasManualScrolling) {
       suppressNextClick();
     }
     pending = false;
@@ -201,7 +219,10 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     a.dnd.pointer = { x: clientX, y: clientY };
     a.dnd.cardId = a.id;
     a.dnd.sourceColumn = a.column;
-    a.dnd.target = { column: a.column, beforeId: null };
+    a.dnd.target = {
+      column: a.column,
+      beforeId: originalBeforeId(a)
+    };
     a.dnd.active = true;
     document.body.style.userSelect = 'none';
     started = true;
@@ -218,6 +239,8 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
       node.releasePointerCapture(activePointerId);
     }
     activePointerId = null;
+    scrollEl = null;
+    manualScrolling = false;
     clearEdgeTimer();
     edgeLatched = false;
     latchedEdgeColumn = null;
@@ -358,6 +381,8 @@ function resolveRenderedCardId(
 function commitDrop(a: Resolved) {
   const target = a.dnd.target;
   if (!target) return;
+  if (target.column === a.column && target.beforeId === originalBeforeId(a))
+    return;
 
   const payload: { id: CardID; column?: ColumnID; before?: CardID | null } = {
     id: a.id,
@@ -366,6 +391,16 @@ function commitDrop(a: Resolved) {
   if (target.beforeId != null) payload.before = target.beforeId;
 
   void a.store.exec('move-card', payload);
+}
+
+function originalBeforeId(a: Resolved): CardID | null {
+  const column = a.store
+    .getState()
+    .viewData.columns.find((item: ColumnView) => item.id === a.column);
+  if (!column) return null;
+
+  const index = column.cards.findIndex((card: KanbanCard) => card.id === a.id);
+  return index >= 0 ? (column.cards[index + 1]?.id ?? null) : null;
 }
 
 function suppressNextClick() {
