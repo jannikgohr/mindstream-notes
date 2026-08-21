@@ -112,6 +112,19 @@ test('mobile Kanban supports list management and card actions', async ({
     page.locator('.mobile-list-tabs > button:not(.mobile-add-list)')
   ).toHaveText(['In Progress', 'Done', 'Planning']);
 
+  await page
+    .getByRole('navigation', { name: 'Kanban lists' })
+    .getByRole('button', { name: 'Done', exact: true })
+    .click();
+  await expect(page.locator('.mindstream-list-header .list-title')).toHaveText(
+    'Done'
+  );
+  await expect
+    .poll(() =>
+      column.evaluate((element) => getComputedStyle(element).animationName)
+    )
+    .toContain('mobile-list-enter-previous');
+
   await page.getByRole('button', { name: 'Add card' }).click();
   await expect(page.getByTitle('Close')).toBeVisible();
   await expect(

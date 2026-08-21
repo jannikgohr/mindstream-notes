@@ -201,6 +201,9 @@
   let board = $state<KanbanBoard>({ columns: [], cards: [] });
   let mobile = $state(false);
   let mobileActiveColumnId = $state<string | null>(null);
+  let mobileListTransitionDirection = $state<CardDragEdgeDirection | null>(
+    null
+  );
   let mobileTabs = $state<HTMLElement | null>(null);
   let mobileCardEditorNavHeld = false;
   let mobileListManagerOpen = $state(false);
@@ -209,8 +212,6 @@
   let mobileTabHoldPointerId: number | null = null;
   let mobileTabHoldStartX = 0;
   let mobileTabHoldStartY = 0;
-  let suppressMobileTabClick = false;
-  let suppressMobileTabClickTimer: ReturnType<typeof setTimeout> | null = null;
   const MOBILE_TAB_HOLD_DELAY_MS = 450;
   const MOBILE_TAB_HOLD_MOVE_TOLERANCE_PX = 8;
 
@@ -583,7 +584,7 @@
     };
     upsertBoardIntoYDoc(yDoc, { columns: [column], cards: [] });
     board = readBoardFromYDoc(yDoc);
-    if (mobile) mobileActiveColumnId = column.id;
+    if (mobile) activateMobileColumn(column.id, 'next');
     updateUndoState();
     creatingList = false;
   }
@@ -603,8 +604,26 @@
     const nextIndex = currentIndex + (direction === 'next' ? 1 : -1);
     const nextColumn = board.columns[nextIndex];
     if (!nextColumn) return null;
-    mobileActiveColumnId = nextColumn.id;
+    activateMobileColumn(nextColumn.id, direction);
     return nextColumn.id;
+  }
+
+  function activateMobileColumn(
+    id: string,
+    direction?: CardDragEdgeDirection
+  ): void {
+    if (id === mobileActiveColumn?.id) return;
+    let nextDirection = direction;
+    if (!nextDirection) {
+      const currentIndex = board.columns.findIndex(
+        (column) => column.id === mobileActiveColumn?.id
+      );
+      const nextIndex = board.columns.findIndex((column) => column.id === id);
+      nextDirection =
+        currentIndex >= 0 && nextIndex < currentIndex ? 'previous' : 'next';
+    }
+    mobileListTransitionDirection = nextDirection;
+    mobileActiveColumnId = id;
   }
 
   function openCardMenu(e: MouseEvent): void {
@@ -695,13 +714,6 @@
     mobileTabHoldStartX = event.clientX;
     mobileTabHoldStartY = event.clientY;
     mobileTabHoldTimer = setTimeout(() => {
-      suppressMobileTabClick = true;
-      if (suppressMobileTabClickTimer)
-        clearTimeout(suppressMobileTabClickTimer);
-      suppressMobileTabClickTimer = setTimeout(() => {
-        suppressMobileTabClick = false;
-        suppressMobileTabClickTimer = null;
-      }, 800);
       clearMobileTabHold();
       openMobileListManager();
     }, MOBILE_TAB_HOLD_DELAY_MS);
@@ -732,14 +744,7 @@
   }
 
   function handleMobileTabClick(id: string): void {
-    if (suppressMobileTabClick) {
-      suppressMobileTabClick = false;
-      if (suppressMobileTabClickTimer)
-        clearTimeout(suppressMobileTabClickTimer);
-      suppressMobileTabClickTimer = null;
-      return;
-    }
-    mobileActiveColumnId = id;
+    activateMobileColumn(id);
   }
 
   function openKanbanSearch(): void {
@@ -1315,7 +1320,6 @@
   onDestroy(() => {
     cleanupListPointerDrag();
     clearMobileTabHold();
-    if (suppressMobileTabClickTimer) clearTimeout(suppressMobileTabClickTimer);
     if (mobileCardEditorNavHeld) {
       mobileCardEditorNavHeld = false;
       closeNavOverlay(MOBILE_CARD_EDITOR_NAV_ID);
@@ -1467,6 +1471,10 @@
           <!-- Right-click a card to open the Edit/Duplicate/Delete menu. -->
           <div
             class="relative min-h-0 flex-1"
+            class:mobile-list-enter-previous={mobileListTransitionDirection ===
+              'previous'}
+            class:mobile-list-enter-next={mobileListTransitionDirection ===
+              'next'}
             role="presentation"
             oncontextmenucapture={openCardMenu}
             onpointerdowncapture={rememberCardEditorPressOrigin}
@@ -1822,6 +1830,38 @@
   :global(.kanban-scope.mobile .wx-card) {
     min-height: 3.5rem;
     padding-right: 2.75rem;
+  }
+  .mobile-list-enter-previous :global(.wx-column) {
+    animation: mobile-list-enter-previous 220ms ease-out;
+  }
+  .mobile-list-enter-next :global(.wx-column) {
+    animation: mobile-list-enter-next 220ms ease-out;
+  }
+  @keyframes mobile-list-enter-previous {
+    from {
+      opacity: 0.55;
+      transform: translateX(-1.5rem);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+  @keyframes mobile-list-enter-next {
+    from {
+      opacity: 0.55;
+      transform: translateX(1.5rem);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .mobile-list-enter-previous :global(.wx-column),
+    .mobile-list-enter-next :global(.wx-column) {
+      animation: none;
+    }
   }
   :global(.kanban-scope .mindstream-list-placeholder) {
     opacity: 0.18;
