@@ -26,6 +26,8 @@ type Resolved = {
 };
 
 const DRAG_THRESHOLD_PX = 4;
+const TOUCH_CARD_HOLD_MS = 280;
+const TOUCH_CARD_HOLD_MOVE_TOLERANCE_PX = 8;
 export const CARD_DRAG_EDGE_ZONE_PX = 32;
 export const CARD_DRAG_EDGE_MIN_TRAVEL_PX = 20;
 const CARD_DRAG_EDGE_DWELL_MS = 650;
@@ -61,6 +63,8 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
   let startY = 0;
   let pending = false;
   let started = false;
+  let activePointerId: number | null = null;
+  let touchHoldTimer: ReturnType<typeof setTimeout> | null = null;
   let active: Resolved | null = null;
   let edgeTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingEdge: CardDragEdgeDirection | null = null;
@@ -77,7 +81,18 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
       : null;
     if (!cardEl || !node.contains(cardEl)) return;
     const dragHandle = cardEl.querySelector('[data-kanban-card-drag-handle]');
-    if (dragHandle && !target?.closest('[data-kanban-card-drag-handle]'))
+    const startedOnHandle = Boolean(
+      target?.closest('[data-kanban-card-drag-handle]')
+    );
+    const fullCardDrag = Boolean(params.onEdgeSwitch);
+    if (dragHandle && !startedOnHandle && !fullCardDrag) return;
+    if (
+      fullCardDrag &&
+      !startedOnHandle &&
+      target?.closest(
+        'button, a, input, textarea, select, [contenteditable="true"], [data-kanban-no-drag]'
+      )
+    )
       return;
 
     const columnEl = cardEl.closest(
@@ -107,8 +122,21 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
 
     pending = true;
     started = false;
+    activePointerId = e.pointerId;
     startX = e.clientX;
     startY = e.clientY;
+    if (fullCardDrag && !startedOnHandle && e.pointerType === 'touch') {
+      touchHoldTimer = setTimeout(() => {
+        touchHoldTimer = null;
+        if (!pending || started || !active) return;
+        try {
+          active.cardEl.setPointerCapture(e.pointerId);
+        } catch {
+          // Synthetic pointer events and an interrupted touch may not be capturable.
+        }
+        beginDrag(e.clientX, e.clientY, active);
+      }, TOUCH_CARD_HOLD_MS);
+    }
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
     window.addEventListener('pointercancel', onPointerCancel);
@@ -125,9 +153,19 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     if (!started) {
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
+      if (touchHoldTimer) {
+        if (
+          dx * dx + dy * dy >=
+          TOUCH_CARD_HOLD_MOVE_TOLERANCE_PX * TOUCH_CARD_HOLD_MOVE_TOLERANCE_PX
+        ) {
+          cancelActiveDrag();
+        }
+        return;
+      }
       if (dx * dx + dy * dy < DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) return;
-      beginDrag(e, active);
+      beginDrag(e.clientX, e.clientY, active);
     }
+    e.preventDefault();
     active.dnd.pointer = { x: e.clientX, y: e.clientY };
     updateTarget(e.clientX, e.clientY, active);
     updateEdgeSwitch(e.clientX, active);
@@ -155,12 +193,12 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     cancelActiveDrag();
   }
 
-  function beginDrag(e: PointerEvent, a: Resolved) {
+  function beginDrag(clientX: number, clientY: number, a: Resolved) {
     const rect = a.cardEl.getBoundingClientRect();
     a.dnd.width = rect.width;
     a.dnd.height = rect.height;
     a.dnd.offset = { x: startX - rect.left, y: startY - rect.top };
-    a.dnd.pointer = { x: e.clientX, y: e.clientY };
+    a.dnd.pointer = { x: clientX, y: clientY };
     a.dnd.cardId = a.id;
     a.dnd.sourceColumn = a.column;
     a.dnd.target = { column: a.column, beforeId: null };
@@ -174,6 +212,15 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     window.removeEventListener('pointerup', onPointerUp);
     window.removeEventListener('pointercancel', onPointerCancel);
     window.removeEventListener('keydown', onKeyDown);
+    if (touchHoldTimer) clearTimeout(touchHoldTimer);
+    touchHoldTimer = null;
+    if (
+      activePointerId != null &&
+      active?.cardEl.hasPointerCapture(activePointerId)
+    ) {
+      active.cardEl.releasePointerCapture(activePointerId);
+    }
+    activePointerId = null;
     clearEdgeTimer();
     edgeLatched = false;
     latchedEdgeColumn = null;
