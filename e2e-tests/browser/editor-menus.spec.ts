@@ -17,7 +17,9 @@ import { clickFileTreeCreateAction } from './file-tree-toolbar';
 
 async function boot(page: Page) {
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'Welcome' })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Welcome', exact: true })
+  ).toBeVisible();
 }
 
 function fileTree(page: Page): Locator {
@@ -57,6 +59,27 @@ function slashMenu(page: Page): Locator {
 /** Our own toolbar above the editor pane, not one of Crepe's. */
 function formattingToolbar(page: Page): Locator {
   return page.getByRole('toolbar', { name: 'Formatting' });
+}
+
+/**
+ * Wait until the caret sits inside `selector`.
+ *
+ * Crepe mounts a slash-menu block (list item, heading) as its own component
+ * and restores the selection into it a tick later. Typing before that lands
+ * the first characters, then the caret jumps to the start of the new block
+ * and the rest is typed in front of them — the text comes out scrambled.
+ */
+async function caretInside(page: Page, selector: string): Promise<void> {
+  await expect
+    .poll(() =>
+      page.evaluate((sel) => {
+        const node = window.getSelection()?.anchorNode ?? null;
+        const el =
+          node instanceof Element ? node : (node?.parentElement ?? null);
+        return el?.closest(sel) !== null && el?.closest(sel) !== undefined;
+      }, selector)
+    )
+    .toBe(true);
 }
 
 /** What the browser currently has selected, as plain text. */
@@ -216,6 +239,8 @@ test.describe('slash menu', () => {
 
     const menu = await openSlashMenu(page);
     await menu.getByText('Heading 1', { exact: true }).click();
+    await expect(editor(page).locator('h1')).toBeVisible();
+    await caretInside(page, 'h1');
     await page.keyboard.type(heading);
 
     // The block became a heading and the `/` trigger text is gone.
@@ -229,9 +254,12 @@ test.describe('slash menu', () => {
 
     const menu = await openSlashMenu(page);
     await menu.getByText('Bullet List', { exact: true }).click();
+    const listItem = editor(page).locator('ul li');
+    await expect(listItem).toBeVisible();
+    await caretInside(page, 'li');
     await page.keyboard.type(item);
 
-    await expect(editor(page).locator('ul li')).toContainText(item);
+    await expect(listItem).toContainText(item);
   });
 
   test('does not make the note scroll past its content', async ({ page }) => {

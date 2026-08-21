@@ -39,7 +39,9 @@ function mentionMenu(page: Page): Locator {
 
 async function boot(page: Page) {
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'Welcome' })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Welcome', exact: true })
+  ).toBeVisible();
   await expect(wysiwygPane(page)).toBeVisible();
   await expect(modeButton(page)).toBeVisible();
 }

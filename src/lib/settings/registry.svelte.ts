@@ -249,7 +249,7 @@ export const INFO_VALUES: Record<string, () => string> = {
       `SvelteKit ${depVersion('@sveltejs/kit')}`,
       `Svelte ${depVersion('svelte')}`,
       `Milkdown Crepe ${depVersion('@milkdown/crepe')}`,
-      `dockview ${depVersion('dockview-core')}`
+      `dockview ${depVersion('dockview')}`
     ].join(' · '),
   // Body of the "Managed mode" notice in the account section. Lives
   // here (rather than as a hardcoded string in the schema) so the

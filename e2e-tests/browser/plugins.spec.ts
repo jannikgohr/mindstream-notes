@@ -27,7 +27,9 @@ const NEW_FROM_TEMPLATE = 'New from template';
 
 async function boot(page: Page) {
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'Welcome' })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Welcome', exact: true })
+  ).toBeVisible();
 }
 
 function toolbarTemplateButton(page: Page): Locator {

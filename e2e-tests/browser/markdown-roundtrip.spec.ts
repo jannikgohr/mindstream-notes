@@ -31,7 +31,9 @@ function wysiwygPane(page: Page): Locator {
 
 async function boot(page: Page) {
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'Welcome' })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Welcome', exact: true })
+  ).toBeVisible();
   await expect(wysiwygPane(page)).toBeVisible();
   // The mode toggle only appears once the editor is interactive.
   await expect(modeButton(page)).toBeVisible();

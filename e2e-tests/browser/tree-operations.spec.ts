@@ -11,7 +11,9 @@ import { clickFileTreeCreateAction } from './file-tree-toolbar';
 
 async function boot(page: Page) {
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'Welcome' })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Welcome', exact: true })
+  ).toBeVisible();
 }
 
 function fileTree(page: Page): Locator {
