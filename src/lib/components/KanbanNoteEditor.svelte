@@ -2032,6 +2032,7 @@
   }
   :global(.kanban-scope .wx-sidearea:has(.kanban-card-editor)) {
     z-index: 240;
+    max-width: 100%;
     background: var(--surface-3);
     color: var(--foreground);
   }
@@ -2057,7 +2058,15 @@
   :global(.wx-menu.kanban-card-menu) {
     z-index: 250;
   }
+  /*
+   * The upstream panel is a grid whose single auto track is sized by its
+   * widest child. SVAR hard-codes `--wx-field-width: 600px` on `.wx-sections`,
+   * so the track grew to 640px inside a 448px side area and the right ~30% of
+   * every row (the Delete button included) was clipped by the board viewport.
+   * Cap the track and let the fields take the width they are given instead.
+   */
   :global(.kanban-scope .kanban-card-editor) {
+    grid-template-columns: minmax(0, 1fr);
     background: var(--background);
     color: var(--foreground);
   }
@@ -2082,9 +2091,12 @@
     min-height: 2.75rem;
   }
   :global(.kanban-scope .kanban-card-editor .wx-content) {
+    width: 100%;
+    min-width: 0;
     background: var(--background);
   }
   :global(.kanban-scope .kanban-card-editor .wx-sections) {
+    --wx-field-width: 100%;
     margin-inline: 1.25rem;
   }
   :global(.kanban-scope .kanban-card-editor .wx-field) {
