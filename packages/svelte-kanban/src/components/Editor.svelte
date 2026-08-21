@@ -14,6 +14,7 @@
   import { en } from '@svar-ui/kanban-locales';
   import { en as coreEn } from '@svar-ui/core-locales';
   import { getEditorItems } from '../defaults.js';
+  import './editor.css';
 
   registerEditorItem('richselect', RichSelect);
   registerEditorItem('multicombo', MultiCombo);
@@ -175,9 +176,3 @@
     css={editorCss}
   />
 {/if}
-
-<style>
-  :global(.wx-sidearea .wx-editor-kanban) {
-    width: 450px;
-  }
-</style>
