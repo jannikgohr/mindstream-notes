@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Component } from 'svelte';
-  import { setContext } from 'svelte';
+  import { setContext, untrack } from 'svelte';
   import { writable } from 'svelte/store';
 
   import { EventBusRouter } from '@svar-ui/lib-state';
@@ -84,8 +84,9 @@
     ...restProps
   }: Props = $props();
 
-  // svelte-ignore state_referenced_locally
-  const store = new KanbanStore(writable, { undo: history });
+  const store = new KanbanStore(writable, {
+    undo: untrack(() => history)
+  });
   // define event route
   let firstInRoute = store.in;
 
@@ -139,8 +140,7 @@
   });
 
   store.init({ ...input(), renderMode: '' });
-  // svelte-ignore state_referenced_locally
-  init?.(api);
+  untrack(() => init)?.(api);
 
   let firstEffect = true;
   $effect(() => {

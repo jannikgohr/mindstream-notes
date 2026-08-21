@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getContext, setContext, type ComponentProps } from 'svelte';
+  import { getContext, setContext, type ComponentProps, untrack } from 'svelte';
   import {
     Editor as EditorBase,
     registerEditorItem
@@ -38,7 +38,7 @@
 
   let {
     api,
-    values,
+    values: _values,
     items = getEditorItems(),
     placement = 'sidebar',
     layout = 'default',
@@ -53,11 +53,7 @@
     onOpenChange,
     ...editorProps
   }: EditorProps = $props();
-  // svelte-ignore state_referenced_locally
-  void values;
-
-  // svelte-ignore state_referenced_locally
-  const { editorData } = api.getReactiveState();
+  const { editorData } = untrack(() => api.getReactiveState());
 
   let l = getContext<ILocale | undefined>('wx-i18n');
   if (!l) {
