@@ -123,13 +123,20 @@ pattern collapses to `bg-success-subtle border-success-border text-success`.
 
 ### Documented exceptions
 
-Two blocks in `app.css` deliberately use fixed hues, because the colour _is_ the
-meaning and must not follow a user-chosen accent:
+Some things are deliberately not on the surface or accent scales, because the
+colour _is_ the meaning and must not follow a user-chosen accent. They are still
+tokens with light and dark values — the exception is the fixed hue, not the
+absence of a token:
 
-- Spelling / grammar / style diagnostic underlines.
-- Note-history diff add/remove decorations.
+- `--diagnostic-spelling` / `-grammar` / `-style`, the squiggle underlines.
+- `--diff-add` / `--diff-remove` (plus `-subtle`), used by both the
+  ProseMirror diff decorations in `app.css` and the diff components.
+- `--scrim`, the wash behind a modal. Always black, because a scrim's job is
+  to darken what is behind it; only its strength is theme-dependent.
 
-Both still ship separate light and dark values.
+Shadows are the other carve-out: `--elevation-raised` / `--elevation-overlay`
+cover the common cases, but a few components need a directional shadow (a
+bottom sheet lifting off the bottom edge) and spell it out locally.
 
 ## Pre-paint bootstrap
 
@@ -156,21 +163,15 @@ the panel is `surface-1`, its sections are `surface-2`, and items on a section
 
 ## Migration status
 
-The token system is in place, all layer-2 tokens are derived from it, and both
-sidebars plus the desktop and mobile shell chrome are on the scale. Areas still
-carrying their own conventions, in order of intended migration:
+Everything is on the token system: both sidebars, the desktop and mobile shell
+chrome, the Kanban board, the dockview chrome, the Milkdown/Crepe editor, and
+every status colour. There are no raw Tailwind palette utilities left in
+`src/` — no `bg-emerald-500`, no `text-amber-700`, no `dark:` colour variants.
 
-- **Kanban** — the `--wx-*` bridge in `KanbanNoteEditor.svelte` should map onto
-  the elevation scale (column → `surface-2`, card → `surface-3`), and its
-  full-bleed mobile column needs its radius and insets restored.
+Known remaining work:
+
 - **Dialogs and sheets** — the dialog body is `surface-3` (correct, it floats)
   but its header bars are `bg-card` too, so they are flat against it. They want
   `Surface variant="overlay"` for the shell and a lower step for the header.
-- **Dockview** — the `--dock-strip` alias should be retired in favour of
-  `--surface-0` directly.
-- **Status colours** — roughly ten components still use raw Tailwind palette
-  pairs; they should move onto the status ramp.
-- **Milkdown / Crepe** — `.dark .milkdown` hardcodes a parallel dark palette
-  copied from `frame-dark.css`; it should derive from tokens.
 - **Guardrails** — a lint rule banning raw palette utilities and colour
-  literals in `src/**/*.svelte`, so this does not re-accumulate.
+  literals in `src/`, so this does not re-accumulate.

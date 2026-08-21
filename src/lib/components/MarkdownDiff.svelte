@@ -20,11 +20,10 @@
 
 <div class="text-xs">
   <p class="mb-2 text-[11px] text-muted-foreground">
-    <span class="text-emerald-600 dark:text-emerald-400"
-      >+{stats.added} {tUi('history.diff.added')}</span
+    <span class="text-diff-add">+{stats.added} {tUi('history.diff.added')}</span
     >
     ·
-    <span class="text-rose-600 dark:text-rose-400"
+    <span class="text-diff-remove"
       >−{stats.removed} {tUi('history.diff.removed')}</span
     >
   </p>
@@ -34,9 +33,9 @@
     <pre
       class="overflow-x-auto rounded-md border border-border bg-muted/40 p-2 font-mono text-[11px] leading-relaxed">{#each ops as op (op)}<div
           class={op.type === 'add'
-            ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+            ? 'bg-diff-add-subtle text-diff-add'
             : op.type === 'del'
-              ? 'bg-rose-500/10 text-rose-700 dark:text-rose-300'
+              ? 'bg-diff-remove-subtle text-diff-remove'
               : 'text-foreground/80'}><span
             class="mr-1.5 select-none opacity-60">{symbol(op.type)}</span
           >{op.text || ' '}</div>{/each}</pre>

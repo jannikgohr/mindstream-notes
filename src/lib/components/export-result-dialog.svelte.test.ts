@@ -41,7 +41,7 @@ describe('showDataResult queue', () => {
     const promise = showDataResult({
       titleKey: 't',
       headerIcon: 'archive',
-      tone: 'sky',
+      tone: 'success',
       chips: []
     });
     expect(exportResultQueue.items).toHaveLength(1);
@@ -53,13 +53,13 @@ describe('showDataResult queue', () => {
     void showDataResult({
       titleKey: 'a',
       headerIcon: 'archive',
-      tone: 'sky',
+      tone: 'success',
       chips: []
     });
     void showDataResult({
       titleKey: 'b',
       headerIcon: 'cloud',
-      tone: 'teal',
+      tone: 'neutral',
       chips: []
     });
     expect(exportResultQueue.items.map((i) => i.titleKey)).toEqual(['a', 'b']);
@@ -71,7 +71,7 @@ describe('showExportResult', () => {
     void showExportResult(exportReport({ markdown_written: 3 }), '/tmp/vault');
     const opts = exportResultQueue.items[0];
     expect(opts.location?.path).toBe('/tmp/vault');
-    expect(opts.tone).toBe('emerald');
+    expect(opts.tone).toBe('success');
   });
 
   it('always shows the notes chip but hides zero-count optional chips', () => {
@@ -124,13 +124,13 @@ describe('showBackupResult', () => {
   it('marks the account chip as cloud when the account is present', () => {
     void showBackupResult(report({ account_present: true }));
     const chip = chipByIcon(exportResultQueue.items[0].chips, 'cloud');
-    expect(chip?.tone).toBe('teal');
+    expect(chip?.tone).toBe('success');
   });
 
   it('marks the account chip as local-only hard drive when absent', () => {
     void showBackupResult(report({ account_present: false }));
     const chips = exportResultQueue.items[0].chips;
-    expect(chipByIcon(chips, 'hardDrive')?.tone).toBe('amber');
+    expect(chipByIcon(chips, 'hardDrive')?.tone).toBe('warning');
     expect(chipByIcon(chips, 'cloud')).toBeUndefined();
   });
 
@@ -152,17 +152,17 @@ describe('showMergeResult', () => {
     ...over
   });
 
-  it('flags orphaned notes with an amber tone only when present', () => {
+  it('flags orphaned notes with a warning tone only when present', () => {
     void showMergeResult(report({ notes_orphaned: 0 }));
     expect(
       chipByIcon(exportResultQueue.items[0].chips, 'alertTriangle')?.tone
-    ).toBe('emerald');
+    ).toBe('success');
 
     exportResultQueue.items = [];
     void showMergeResult(report({ notes_orphaned: 3 }));
     expect(
       chipByIcon(exportResultQueue.items[0].chips, 'alertTriangle')?.tone
-    ).toBe('amber');
+    ).toBe('warning');
   });
 });
 
@@ -204,6 +204,6 @@ describe('showRestoreReadyResult', () => {
   it('shows a sync chip whose tone tracks same-account', () => {
     void showRestoreReadyResult(preview(false), staged(false));
     const chips = exportResultQueue.items[0].chips;
-    expect(chipByIcon(chips, 'hardDrive')?.tone).toBe('amber');
+    expect(chipByIcon(chips, 'hardDrive')?.tone).toBe('warning');
   });
 });
