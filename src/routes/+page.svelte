@@ -194,8 +194,11 @@
     height: 100vh;
     padding: 2rem;
     text-align: center;
-    color: var(--color-foreground, #e5e5e5);
-    background: var(--color-background, #0a0a0a);
+    /* Fallbacks mirror --foreground and --surface-1 in dark mode, for the
+       window between first paint and app.css loading. Keep in step with
+       app.html’s bootstrap block. */
+    color: var(--color-foreground, oklch(0.985 0 0));
+    background: var(--color-background, oklch(0.185 0.003 286.2));
   }
   .boot-title {
     font-size: 1.125rem;
@@ -209,8 +212,8 @@
     margin-top: 0.5rem;
     padding: 0.5rem 1.25rem;
     border-radius: 0.375rem;
-    border: 1px solid var(--color-border, #333);
-    background: var(--color-accent, #262626);
+    border: 1px solid var(--color-border, oklch(0.285 0.004 286.2));
+    background: var(--color-accent, oklch(0.245 0.004 286.2));
     color: inherit;
     cursor: pointer;
     font-size: 0.875rem;
