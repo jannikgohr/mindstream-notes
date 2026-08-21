@@ -26,8 +26,12 @@ import {
   openFileTreeCreateMore,
   restartApp,
   revealFileTreeCreateAction,
+  setPluginEnabledByName,
   waitForShell
 } from '../helpers/harness.js';
+
+/** The bundled plugin whose toolbar contribution this spec asserts on. */
+const TEMPLATES_PLUGIN = 'Templates';
 
 /** Open Settings and land on the Plugins overview. */
 async function openPluginsCategory(): Promise<void> {
@@ -61,7 +65,7 @@ describe('T3 plugin framework', function () {
     await revealFileTreeCreateAction('New from template');
 
     await openPluginsCategory();
-    await clickName('Enable plugin'); // toggle off
+    await setPluginEnabledByName(TEMPLATES_PLUGIN, false);
     await closeSettingsDialog(browser);
     // The reactive registry drops the contribution immediately.
     await openFileTreeCreateMore();
@@ -83,7 +87,7 @@ describe('T3 plugin framework', function () {
     // Re-enable so the profile dir doesn't leak a disabled plugin into later
     // specs sharing it.
     await openPluginsCategory();
-    await clickName('Enable plugin');
+    await setPluginEnabledByName(TEMPLATES_PLUGIN, true);
     await closeSettingsDialog(browser);
     await revealFileTreeCreateAction('New from template');
   });

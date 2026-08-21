@@ -1098,3 +1098,151 @@ fn large_native_tool_output_is_drained_without_deadlock() {
         out.stdout.len()
     );
 }
+
+/// Artifact publishing: the half of the download that is bytes and files.
+///
+/// The request itself stays untested here (it needs a host serving HTTPS the
+/// app trusts, which is why flow 2.8 in docs/e2e/flows.md is still open), but
+/// the gate the request feeds is the part that decides whether a downloaded
+/// file is safe to keep.
+mod artifacts {
+    use super::*;
+
+    fn artifact_dir(name: &str) -> PathBuf {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("mindstream-artifact-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn artifact(bytes: &[u8]) -> PluginArtifactManifest {
+        PluginArtifactManifest {
+            id: "typst-compiler".into(),
+            kind: "wasm".into(),
+            version: "0.13.1".into(),
+            url: "https://example.test/typst.wasm".into(),
+            sha256: sha256_hex(bytes),
+            file_name: "typst.wasm".into(),
+            size_bytes: Some(bytes.len() as u64),
+        }
+    }
+
+    /// Files under the root, so a test can say "nothing was written".
+    fn files(root: &Path) -> Vec<String> {
+        let mut found = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    found.push(path.file_name().unwrap().to_string_lossy().into_owned());
+                }
+            }
+        }
+        found.sort();
+        found
+    }
+
+    #[test]
+    fn publishes_a_body_that_matches_the_manifest() {
+        let root = artifact_dir("ok");
+        let bytes = b"pretend compiler bytes";
+        let declared = artifact(bytes);
+
+        let path = install_artifact_bytes(&root, &declared, bytes).unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert!(
+            path.ends_with("typst-compiler/0.13.1/typst.wasm"),
+            "laid out by id and version: {path:?}"
+        );
+        // The staging copy is gone: it was renamed, not left behind.
+        assert_eq!(files(&root), ["typst.wasm"]);
+    }
+
+    #[test]
+    fn rejects_a_body_whose_digest_does_not_match_and_writes_nothing() {
+        // Swapped for a body of the SAME length, so the size check cannot be
+        // what catches it — this is the digest doing the work it exists for.
+        // Keeping those bytes would hand the loader something to execute that
+        // nobody vouched for.
+        let root = artifact_dir("digest");
+        let declared = artifact(b"the real compiler");
+
+        let err = install_artifact_bytes(&root, &declared, b"the fake compiler").unwrap_err();
+
+        assert!(format!("{err}").contains("digest mismatch"), "{err}");
+        assert!(files(&root).is_empty(), "left {:?} behind", files(&root));
+    }
+
+    #[test]
+    fn rejects_a_body_of_the_wrong_length_and_writes_nothing() {
+        let root = artifact_dir("size");
+        let bytes = b"exactly this";
+        let mut declared = artifact(bytes);
+        declared.size_bytes = Some(bytes.len() as u64 + 1);
+
+        let err = install_artifact_bytes(&root, &declared, bytes).unwrap_err();
+
+        assert!(format!("{err}").contains("size mismatch"), "{err}");
+        assert!(files(&root).is_empty());
+    }
+
+    #[test]
+    fn accepts_a_manifest_that_declares_no_size() {
+        // `sizeBytes` is optional; the digest alone still has to be enough.
+        let root = artifact_dir("nosize");
+        let bytes = b"no declared size";
+        let mut declared = artifact(bytes);
+        declared.size_bytes = None;
+
+        assert!(install_artifact_bytes(&root, &declared, bytes).is_ok());
+        assert_eq!(files(&root), ["typst.wasm"]);
+    }
+
+    #[test]
+    fn replaces_a_previously_installed_file() {
+        // Re-downloading the same artifact must end with exactly one file, not
+        // fail on the existing one.
+        let root = artifact_dir("replace");
+        let first = b"first build";
+        install_artifact_bytes(&root, &artifact(first), first).unwrap();
+
+        let second = b"second build";
+        let path = install_artifact_bytes(&root, &artifact(second), second).unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), second);
+        assert_eq!(files(&root), ["typst.wasm"]);
+    }
+
+    #[test]
+    fn refuses_a_manifest_that_would_escape_the_artifact_root() {
+        // Every path segment comes from the manifest, which is untrusted: a
+        // traversal here would be a write-anywhere primitive.
+        let root = artifact_dir("escape");
+        let bytes = b"payload";
+        for (field, value) in [
+            ("id", "../../evil"),
+            ("version", ".."),
+            ("file_name", "sub/evil.wasm"),
+        ] {
+            let mut declared = artifact(bytes);
+            match field {
+                "id" => declared.id = value.into(),
+                "version" => declared.version = value.into(),
+                _ => declared.file_name = value.into(),
+            }
+            assert!(
+                install_artifact_bytes(&root, &declared, bytes).is_err(),
+                "{field} = {value} was accepted"
+            );
+        }
+        assert!(files(&root).is_empty());
+    }
+}

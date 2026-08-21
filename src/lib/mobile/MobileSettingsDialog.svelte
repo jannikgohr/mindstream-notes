@@ -31,6 +31,7 @@
   import type { Category, Setting } from '$lib/settings/types';
   import PluginsOverview from '$lib/plugins/PluginsOverview.svelte';
   import PluginNativeToolsSection from '$lib/plugins/PluginNativeToolsSection.svelte';
+  import PluginTextCheckersSection from '$lib/plugins/PluginTextCheckersSection.svelte';
   import {
     PLUGINS_CATEGORY_ID,
     pluginSettingsCategory,
@@ -236,6 +237,7 @@
               {#if plugin.enabled && (plugin.manifest.contributes.nativeTools ?? []).length > 0}
                 <div class="mb-6" id="plugins-nativetools-{plugin.manifest.id}">
                   <PluginNativeToolsSection pluginId={plugin.manifest.id} />
+                  <PluginTextCheckersSection pluginId={plugin.manifest.id} />
                 </div>
               {/if}
             {/each}
