@@ -131,6 +131,7 @@ describe('root menu', () => {
   });
 
   it('renders plugin file-tree openMenu effects as hover submenus', async () => {
+    tree.notesById = { n1: note({ note_kind: 'kanban' }) };
     registerPlugin({
       id: 'com.example.templates',
       name: 'Templates',
@@ -172,6 +173,11 @@ describe('root menu', () => {
     expect(templates?.children?.map((child) => child.label)).toEqual([
       'Daily note'
     ]);
+    expect(templates?.pluginIcon).toEqual({
+      pluginId: 'com.example.templates',
+      file: 'icons/templates.svg'
+    });
+    expect(templates?.children?.[0]?.noteKind).toBe('kanban');
     expect(templates?.onSelect).toBeUndefined();
     expect(pluginApi.runScript).toHaveBeenCalledWith(
       'com.example.templates',
@@ -179,15 +185,77 @@ describe('root menu', () => {
       expect.any(Object)
     );
   });
+
+  it('uses a plugin note kind icon for plugin template entries', async () => {
+    registerPlugin({
+      id: 'com.example.documents',
+      name: 'Documents',
+      version: '1.0.0',
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'noteKinds.contribute',
+        'notes.create'
+      ],
+      contributes: {
+        i18n: {
+          en: {
+            'notes.document': 'Document',
+            'templates.document': 'New document'
+          }
+        },
+        noteKinds: [
+          {
+            id: 'document',
+            labelKey: 'notes.document',
+            icon: 'icons/document.svg',
+            render: { export: 'renderDocument' }
+          }
+        ],
+        noteTemplates: [
+          {
+            id: 'document',
+            labelKey: 'templates.document',
+            noteKind: 'plugin.com.example.documents.document',
+            titleTemplate: 'Untitled document',
+            bodyTemplate: ''
+          }
+        ]
+      }
+    });
+
+    const { menuItemsForTarget } = createMenuBuilder(context());
+    const items = await menuItemsForTarget({ kind: 'root' });
+
+    expect(item(items, 'New document')?.pluginIcon).toEqual({
+      pluginId: 'com.example.documents',
+      file: 'icons/document.svg'
+    });
+  });
 });
 
 describe('folder create submenu', () => {
   it('offers one entry per enabled note type plus a nested folder', async () => {
     const { folderCreateMenuItems } = createMenuBuilder(context());
-    const items = labels(await folderCreateMenuItems('folder-1'));
+    const menuItems = await folderCreateMenuItems('folder-1');
+    const items = labels(menuItems);
 
-    expect(items).toContain('New note in folder');
-    expect(items).toContain('New folder inside');
+    expect(items).toContain('New note');
+    expect(items).toContain('New folder');
+    for (const label of [
+      'New note',
+      'New drawing canvas',
+      'New handwritten note',
+      'Import PDF',
+      'New Kanban board',
+      'New folder'
+    ]) {
+      expect(
+        item(menuItems, label)?.icon,
+        `${label} should have an icon`
+      ).toBeTruthy();
+    }
   });
 
   it('routes every entry at the folder it was opened on', async () => {
@@ -428,6 +496,7 @@ describe('folder menu', () => {
       'Manage access…',
       'Stop sharing…'
     ]);
+    expect(sharing?.icon).toBeTruthy();
   });
 
   it('offers leave and manage actions for editable shared root anchors', async () => {
@@ -443,7 +512,7 @@ describe('folder menu', () => {
 
     const items = await menuItemsForTarget({ kind: 'folder', id: 'f1' });
 
-    expect(labels(items)).toContain('Sharing');
+    expect(item(items, 'Sharing')?.icon).toBeTruthy();
     expect(labels(items)).toContain('Leave shared folder…');
     expect(labels(items)).not.toContain('Rename folder…');
     expect(labels(items)).not.toContain('Delete');

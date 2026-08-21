@@ -24,7 +24,12 @@ function setUA(ua: string) {
   });
 }
 
-afterEach(() => setUA(UAS.windows));
+afterEach(() => {
+  delete (window as Window & { __TAURI_INTERNALS__?: unknown })
+    .__TAURI_INTERNALS__;
+  setUA(UAS.windows);
+  window.history.replaceState({}, '', '/');
+});
 
 describe('getPlatform', () => {
   it('maps each known user agent', () => {
@@ -65,6 +70,35 @@ describe('isMobile / isAndroid', () => {
     setUA(UAS.windows);
     expect(isMobile()).toBe(false);
     expect(isAndroid()).toBe(false);
+  });
+
+  it('applies the Android dev preview to every platform helper', () => {
+    setUA(UAS.windows);
+    window.history.replaceState({}, '', '/?mobile=1');
+    expect(isMobile()).toBe(true);
+    expect(isAndroid()).toBe(true);
+    expect(getPlatform()).toBe('android');
+  });
+
+  it('applies the iOS dev preview to every platform helper', () => {
+    setUA(UAS.windows);
+    window.history.replaceState({}, '', '/?mobile=ios');
+    expect(isMobile()).toBe(true);
+    expect(isAndroid()).toBe(false);
+    expect(getPlatform()).toBe('ios');
+  });
+
+  it('does not apply the dev preview inside Tauri', () => {
+    setUA(UAS.windows);
+    window.history.replaceState({}, '', '/?mobile=1');
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      value: {},
+      configurable: true
+    });
+
+    expect(isMobile()).toBe(false);
+    expect(isAndroid()).toBe(false);
+    expect(getPlatform()).toBe('windows');
   });
 });
 

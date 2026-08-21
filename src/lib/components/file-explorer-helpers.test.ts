@@ -3,6 +3,7 @@ import {
   defaultDraftText,
   dragPayloadFromTransfer,
   dragItemsForStart,
+  draftHasName,
   draftKindToNoteKind,
   emptyStateMessageForSource,
   FILE_EXPLORER_SOURCES,
@@ -27,6 +28,21 @@ describe('defaultDraftText', () => {
     expect(defaultDraftText('ink')).toBe('Untitled handwritten note');
     expect(defaultDraftText('kanban')).toBe('Untitled board');
     expect(defaultDraftText('note')).toBe('Untitled');
+  });
+});
+
+describe('draftHasName', () => {
+  const draft = {
+    kind: 'note' as const,
+    parentId: null,
+    text: 'Untitled',
+    initialText: 'Untitled'
+  };
+
+  it('requires a name that differs from the seeded title', () => {
+    expect(draftHasName(draft)).toBe(false);
+    expect(draftHasName({ ...draft, text: '   ' })).toBe(false);
+    expect(draftHasName({ ...draft, text: 'Project notes' })).toBe(true);
   });
 });
 

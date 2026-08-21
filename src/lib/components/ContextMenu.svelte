@@ -8,7 +8,22 @@
    * default is suppressed in step 3.
    */
   import { onMount } from 'svelte';
-  import { ChevronRight } from '@lucide/svelte';
+  import {
+    ChevronRight,
+    Download,
+    ExternalLink,
+    FolderInput,
+    FolderPlus,
+    Pencil,
+    Plus,
+    RotateCcw,
+    Share2,
+    Trash2
+  } from '@lucide/svelte';
+  import { getSettingValue } from '$lib/settings/store.svelte';
+  import PluginIcon from '$lib/plugins/PluginIcon.svelte';
+  import { noteKindIcon } from './note-kind-icon';
+  import { menuItemForShortcut } from './context-menu-shortcuts';
   import type { MenuItem } from './context-menu-types';
 
   interface Props {
@@ -25,18 +40,46 @@
     ignoreEl?: HTMLElement | null;
     /** App-wide menus sit above editors; editor-local menus stay below
      * top-level app popovers and dialogs. */
-    layer?: 'app' | 'editor';
+    layer?: 'app' | 'editor' | 'overlay';
     onClose: () => void;
   }
 
   let { x, y, items, ignoreEl, layer = 'app', onClose }: Props = $props();
   let menuEl: HTMLDivElement | null = $state(null);
   let activeSubmenu = $state<number | null>(null);
-  const layerClass = $derived(layer === 'editor' ? 'z-[250]' : 'z-350');
+  const layerClass = $derived(
+    layer === 'editor' ? 'z-[250]' : layer === 'overlay' ? 'z-[450]' : 'z-350'
+  );
+  const showIcons = $derived(
+    getSettingValue('appearance.contextMenuIcons') !== false
+  );
+
+  function fallbackIcon(item: MenuItem) {
+    const label = item.label.toLocaleLowerCase();
+    if (/delete|trash|remove|löschen|papierkorb/.test(label)) return Trash2;
+    if (/restore|wiederherstellen/.test(label)) return RotateCcw;
+    if (/rename|umbenennen/.test(label)) return Pencil;
+    if (/export|download/.test(label)) return Download;
+    if (/share|freigab/.test(label)) return Share2;
+    if (/move|verschieben/.test(label)) return FolderInput;
+    if (/folder|ordner/.test(label) && /new|neu/.test(label)) return FolderPlus;
+    if (/new|add|neu|hinzufügen/.test(label)) return Plus;
+    if (/open|öffnen/.test(label)) return ExternalLink;
+    return null;
+  }
 
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (e.repeat || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      const item = menuItemForShortcut(items, e.key);
+      if (!item) return;
+      e.preventDefault();
+      e.stopPropagation();
+      invoke(item);
     };
     // pointerdown unifies mouse + touch — some mobile webviews (notably
     // iOS Safari and older Android variants) skip synthesized mousedown
@@ -97,6 +140,9 @@
     {#if item === 'separator'}
       <div class="my-1 h-px bg-border"></div>
     {:else}
+      {@const Icon = showIcons ? (item.icon ?? fallbackIcon(item)) : null}
+      {@const KindIcon =
+        showIcons && item.noteKind ? noteKindIcon(item.noteKind) : null}
       <div
         role="none"
         class="relative"
@@ -131,29 +177,40 @@
           onfocus={() => (activeSubmenu = item.children?.length ? i : null)}
         >
           <span class="flex min-w-0 items-center gap-2">
-            {#if item.icon}
-              {@const Icon = item.icon}
-              <Icon class="size-4 shrink-0 text-muted-foreground" />
+            {#if showIcons && item.pluginIcon}
+              <PluginIcon
+                pluginId={item.pluginIcon.pluginId}
+                file={item.pluginIcon.file}
+                class="size-4 text-current"
+              />
+            {:else if KindIcon}
+              <KindIcon class="size-4 shrink-0 text-current" />
+            {:else if Icon}
+              <Icon class="size-4 shrink-0 text-current" />
             {/if}
             <span class="truncate">{item.label}</span>
           </span>
           {#if item.children?.length}
-            <ChevronRight
-              class="size-4 text-muted-foreground"
-              aria-hidden="true"
-            />
+            <ChevronRight class="size-4 text-current" aria-hidden="true" />
           {:else if item.shortcut}
-            <span class="text-xs text-muted-foreground">{item.shortcut}</span>
+            <span class="text-xs text-current">{item.shortcut}</span>
           {/if}
         </button>
         {#if item.children?.length && activeSubmenu === i}
           <div
             role="menu"
-            class="absolute top-0 {layerClass} min-w-[200px] rounded-md border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg {submenuOpensLeft
+            class="absolute -top-1 {layerClass} min-w-[200px] rounded-md border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg {submenuOpensLeft
               ? 'right-full mr-1'
               : 'left-full ml-1'}"
           >
             {#each item.children as child, childIndex (child.id ?? child.label ?? childIndex)}
+              {@const ChildIcon = showIcons
+                ? (child.icon ?? fallbackIcon(child))
+                : null}
+              {@const ChildKindIcon =
+                showIcons && child.noteKind
+                  ? noteKindIcon(child.noteKind)
+                  : null}
               <button
                 type="button"
                 role="menuitem"
@@ -164,16 +221,21 @@
                 onclick={() => invoke(child)}
               >
                 <span class="flex min-w-0 items-center gap-2">
-                  {#if child.icon}
-                    {@const ChildIcon = child.icon}
-                    <ChildIcon class="size-4 shrink-0 text-muted-foreground" />
+                  {#if showIcons && child.pluginIcon}
+                    <PluginIcon
+                      pluginId={child.pluginIcon.pluginId}
+                      file={child.pluginIcon.file}
+                      class="size-4 text-current"
+                    />
+                  {:else if ChildKindIcon}
+                    <ChildKindIcon class="size-4 shrink-0 text-current" />
+                  {:else if ChildIcon}
+                    <ChildIcon class="size-4 shrink-0 text-current" />
                   {/if}
                   <span class="truncate">{child.label}</span>
                 </span>
                 {#if child.shortcut}
-                  <span class="text-xs text-muted-foreground"
-                    >{child.shortcut}</span
-                  >
+                  <span class="text-xs text-current">{child.shortcut}</span>
                 {/if}
               </button>
             {/each}

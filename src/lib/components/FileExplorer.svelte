@@ -7,34 +7,29 @@
     FileText,
     Folder,
     FolderOpen,
-    FolderPlus,
-    FileUp,
     PencilRuler,
-    FilePlus2,
     Share2,
-    SquareKanban,
     Trash2
   } from '@lucide/svelte';
   import FavouriteStar from './FavouriteStar.svelte';
   import NoteKindIcon from './NoteKindIcon.svelte';
-  import { noteTypeEnabled } from '$lib/notes/note-types';
   import { pluginToolbarButtons } from '$lib/plugins/registry.svelte';
   import {
     pluginTemplateDefaultTitle,
     pluginTemplateNoteKind,
     runPluginTemplate
   } from '$lib/plugins/menu';
-  import { runPluginButton } from '$lib/plugins/effects';
-  import { resolvePluginString } from '$lib/plugins/plugin-i18n';
-  import PluginIcon from '$lib/plugins/PluginIcon.svelte';
   import { tooltip } from '$lib/actions/tooltip';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Separator } from '$lib/components/ui/separator';
   import ContextMenu from './ContextMenu.svelte';
   import type { MenuItem } from './context-menu-types';
+  import { menuItemForShortcut } from './context-menu-shortcuts';
   import { alert, confirm } from './confirm-dialog.svelte';
   import SortControl from './SortControl.svelte';
+  import FileTreeCreateToolbar from './FileTreeCreateToolbar.svelte';
+  import type { CoreFileTreeActionId } from './file-tree-toolbar-preferences';
   import { sortTree } from '$lib/sort';
   import {
     tree,
@@ -85,8 +80,10 @@
     defaultDraftText,
     dragPayloadFromTransfer,
     draftKindToNoteKind,
+    draftHasName,
     emptyStateMessageForSource,
     dragItemsForStart,
+    itemFromSelectionKey,
     nodeKey,
     selectedItemsFromKeys,
     selectionKeyForItem,
@@ -245,7 +242,8 @@
   function startDraft(kind: DraftKind, parentId: string | null) {
     if (!canStartDraft(parentId)) return;
     if (parentId) expanded[parentId] = true;
-    draft = { kind, parentId, text: defaultDraftText(kind) };
+    const text = defaultDraftText(kind);
+    draft = { kind, parentId, text, initialText: text };
   }
   // Name-first creation of a plugin-template note (e.g. a Typst document): seed
   // the inline draft with the template's default title, then render + create on
@@ -257,10 +255,12 @@
   ) {
     if (!canStartDraft(parentId)) return;
     if (parentId) expanded[parentId] = true;
+    const text = pluginTemplateDefaultTitle(pluginId, templateId);
     draft = {
       kind: 'note',
       parentId,
-      text: pluginTemplateDefaultTitle(pluginId, templateId),
+      text,
+      initialText: text,
       template: {
         pluginId,
         templateId,
@@ -326,7 +326,7 @@
   function onDraftBlur() {
     setTimeout(() => {
       if (!draft) return;
-      if (!draft.text.trim()) cancelDraft();
+      if (!draftHasName(draft)) cancelDraft();
       else void commitDraft();
     }, 0);
   }
@@ -401,17 +401,9 @@
     currentMenuItems = [];
   }
 
-  /** Open a plugin toolbar button's action, anchoring any menu under it. */
-  function onPluginToolbarClick(
-    e: MouseEvent,
-    pluginId: string,
-    button: Parameters<typeof runPluginButton>[1]
-  ) {
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    void runPluginButton(pluginId, button, {
-      x: rect.left,
-      y: rect.bottom + 4
-    });
+  function runCreateToolbarAction(action: CoreFileTreeActionId) {
+    if (action === 'pdf') startPdfImport(null);
+    else startDraft(action, null);
   }
 
   async function runNoteExporter(
@@ -614,6 +606,35 @@
     return [target];
   }
 
+  async function onTreeKeydown(e: KeyboardEvent) {
+    if (menuOpen || !explorerRoot?.contains(document.activeElement)) return;
+    if (e.repeat || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    if (e.key !== 'F2' && e.key !== 'Delete') return;
+    const eventTarget = e.target;
+    if (
+      eventTarget instanceof HTMLElement &&
+      (eventTarget.matches('input, textarea, select') ||
+        eventTarget.isContentEditable)
+    ) {
+      return;
+    }
+    const targetKey =
+      activeKey && (selectedKeys.length === 0 || selectedKeySet.has(activeKey))
+        ? activeKey
+        : (selectedKeys.at(-1) ?? null);
+    if (!targetKey) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    const target = itemFromSelectionKey(targetKey);
+    const selected = selectedItemsFromKeys(selectedKeys);
+    const items =
+      selected.length > 1
+        ? await menuItemsForBatch(selected)
+        : await menuItemsForTarget(target);
+    menuItemForShortcut(items, e.key)?.onSelect?.();
+  }
+
   // ---------- Drag and drop ----------
   let drag = $state<Drag>(null);
   let dragOver = $state<string | null>(null);
@@ -794,11 +815,15 @@
       if (explorerRoot?.contains(target)) return;
       clearFileTreeInteractionState(true);
     };
+    const onDocumentKeyDown = (event: KeyboardEvent) => {
+      void onTreeKeydown(event);
+    };
     if (sourceChipRow) sourceObserver.observe(sourceChipRow);
     if (toolbarRow) toolbarObserver.observe(toolbarRow);
     document.addEventListener('pointerdown', onDocumentPointerDown, {
       capture: true
     });
+    document.addEventListener('keydown', onDocumentKeyDown);
     requestAnimationFrame(() => {
       updateSourceChipCollapse();
       updateSortControlCollapse();
@@ -809,6 +834,7 @@
       document.removeEventListener('pointerdown', onDocumentPointerDown, {
         capture: true
       });
+      document.removeEventListener('keydown', onDocumentKeyDown);
     };
   });
 
@@ -851,96 +877,10 @@
       collapsed={sortControlCollapsed}
     />
     {#if canCreate}
-      <div class="flex shrink-0 items-center gap-1">
-        <Button
-          variant="ghost"
-          size="icon"
-          onclick={() => startDraft('folder', null)}
-          title={tUi('fileTree.newFolder')}
-          aria-label={tUi('fileTree.newFolder')}
-          class="size-7"
-        >
-          <FolderPlus class="size-3.5" />
-        </Button>
-        {#if noteTypeEnabled('freeform')}
-          <Button
-            variant="ghost"
-            size="icon"
-            onclick={() => startDraft('drawing', null)}
-            title={tUi('fileTree.newDrawing')}
-            aria-label={tUi('fileTree.newDrawing')}
-            class="size-7"
-          >
-            <PencilRuler class="size-3.5" />
-          </Button>
-        {/if}
-        {#if noteTypeEnabled('ink')}
-          <Button
-            variant="ghost"
-            size="icon"
-            onclick={() => startDraft('ink', null)}
-            title={tUi('fileTree.newInk')}
-            aria-label={tUi('fileTree.newInk')}
-            class="size-7"
-          >
-            <Feather class="size-3.5" />
-          </Button>
-        {/if}
-        {#if noteTypeEnabled('kanban')}
-          <Button
-            variant="ghost"
-            size="icon"
-            onclick={() => startDraft('kanban', null)}
-            title={tUi('fileTree.newKanban')}
-            aria-label={tUi('fileTree.newKanban')}
-            class="size-7"
-          >
-            <SquareKanban class="size-3.5" />
-          </Button>
-        {/if}
-        {#if noteTypeEnabled('pdf')}
-          <Button
-            variant="ghost"
-            size="icon"
-            onclick={() => startPdfImport(null)}
-            title={tUi('fileTree.importPdf')}
-            aria-label={tUi('fileTree.importPdf')}
-            class="size-7"
-          >
-            <FileUp class="size-3.5" />
-          </Button>
-        {/if}
-        {#each pluginToolbarButtons('file-tree') as tb (`${tb.pluginId}:${tb.button.id}`)}
-          {@const label = resolvePluginString(
-            tb.pluginId,
-            tb.button.labelKey ?? tb.button.id
-          )}
-          <Button
-            variant="ghost"
-            size="icon"
-            onclick={(e) => onPluginToolbarClick(e, tb.pluginId, tb.button)}
-            title={label}
-            aria-label={label}
-            class="size-7"
-          >
-            <PluginIcon
-              pluginId={tb.pluginId}
-              file={tb.button.icon ?? ''}
-              class="size-3.5"
-            />
-          </Button>
-        {/each}
-        <Button
-          variant="ghost"
-          size="icon"
-          onclick={() => startDraft('note', null)}
-          title={tUi('fileTree.newNote')}
-          aria-label={tUi('fileTree.newNote')}
-          class="size-7"
-        >
-          <FilePlus2 class="size-3.5" />
-        </Button>
-      </div>
+      <FileTreeCreateToolbar
+        pluginButtons={pluginToolbarButtons('file-tree')}
+        onCreate={runCreateToolbarAction}
+      />
     {:else if source === 'trash'}
       <Button
         variant="ghost"

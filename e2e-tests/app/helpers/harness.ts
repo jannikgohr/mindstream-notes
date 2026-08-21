@@ -111,6 +111,32 @@ export function treeItem(name: string): ChainablePromiseElement {
   return byName('File tree').$(`aria/${name}`);
 }
 
+const FILE_TREE_CREATE_ACTIONS = new Set([
+  'New folder',
+  'New note',
+  'New drawing canvas',
+  'New handwritten note',
+  'New Kanban board',
+  'New from template'
+]);
+
+async function displayedByName(
+  name: string
+): Promise<ChainablePromiseElement | undefined> {
+  const escaped = name.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const toolbarButton = $(`button[aria-label="${escaped}"]`);
+  if (await toolbarButton.isDisplayed().catch(() => false)) {
+    return toolbarButton;
+  }
+  const menuItems = await $$('button[role="menuitem"]');
+  for (const item of menuItems) {
+    if ((await item.isDisplayed()) && (await item.getText()).trim() === name) {
+      return item as unknown as ChainablePromiseElement;
+    }
+  }
+  return undefined;
+}
+
 export async function waitForClientReady(
   client: WebdriverIO.Browser,
   label = 'client',
@@ -329,7 +355,47 @@ export async function clickName(
   name: string,
   opts: { button?: 'left' | 'right' } = {}
 ): Promise<void> {
+  if (
+    (opts.button ?? 'left') === 'left' &&
+    FILE_TREE_CREATE_ACTIONS.has(name)
+  ) {
+    await clickFileTreeCreateAction(name);
+    return;
+  }
   await clickElement(byName(name), opts);
+}
+
+export async function openFileTreeCreateMore(): Promise<void> {
+  const more = $('button[aria-label="More actions"]');
+  if ((await more.getAttribute('aria-expanded')) !== 'true') {
+    await clickElement(more);
+  }
+}
+
+export async function isFileTreeCreateActionDisplayed(
+  name: string
+): Promise<boolean> {
+  return Boolean(await displayedByName(name));
+}
+
+export async function revealFileTreeCreateAction(
+  name: string
+): Promise<ChainablePromiseElement> {
+  let action = await displayedByName(name);
+  if (!action) {
+    await openFileTreeCreateMore();
+    await browser.waitUntil(async () => Boolean(await displayedByName(name)), {
+      timeout: 30_000,
+      timeoutMsg: `file-tree create action did not become visible: ${name}`
+    });
+    action = await displayedByName(name);
+  }
+  if (!action) throw new Error(`missing file-tree create action: ${name}`);
+  return action;
+}
+
+export async function clickFileTreeCreateAction(name: string): Promise<void> {
+  await clickElement(await revealFileTreeCreateAction(name));
 }
 
 export async function clickMenuItem(label: string): Promise<void> {
@@ -423,7 +489,9 @@ export async function closeSettings(): Promise<void> {
   await closeSettingsDialog(browser);
 }
 
-async function closeSettingsDialog(client: WebdriverIO.Browser): Promise<void> {
+export async function closeSettingsDialog(
+  client: WebdriverIO.Browser
+): Promise<void> {
   await client.execute(() => {
     const dialog = Array.from(
       document.querySelectorAll<HTMLElement>('[role="dialog"]')
@@ -722,7 +790,7 @@ export async function syncClient(client: WebdriverIO.Browser): Promise<void> {
  * The tree-seed helpers (`newRootFolder`, `newNoteInFolder`) drive the same UI
  * flow the browser-fallback T2 specs validate in e2e-tests/browser/tree-operations
  * .spec.ts: the toolbar "New folder"/"New note" buttons and the folder context
- * menu's "New folder inside"/"New note in folder" items, each opening an inline
+ * menu's "New folder"/"New note" items, each opening an inline
  * draft input whose accessible name is its placeholder ("New folder"/"New note").
  */
 export interface ClientHelpers {
@@ -806,8 +874,52 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
     );
   };
 
-  const click = (name: string, opts: { button?: 'left' | 'right' } = {}) =>
-    clickElement(byName(name), opts);
+  const displayedByName = async (
+    name: string
+  ): Promise<ChainablePromiseElement | undefined> => {
+    const escaped = name.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const toolbarButton = client.$(`button[aria-label="${escaped}"]`);
+    if (await toolbarButton.isDisplayed().catch(() => false)) {
+      return toolbarButton;
+    }
+    const menuItems = await client.$$('button[role="menuitem"]');
+    for (const item of menuItems) {
+      if (
+        (await item.isDisplayed()) &&
+        (await item.getText()).trim() === name
+      ) {
+        return item as unknown as ChainablePromiseElement;
+      }
+    }
+    return undefined;
+  };
+
+  const click = async (
+    name: string,
+    opts: { button?: 'left' | 'right' } = {}
+  ): Promise<void> => {
+    if (
+      (opts.button ?? 'left') === 'left' &&
+      FILE_TREE_CREATE_ACTIONS.has(name)
+    ) {
+      let action = await displayedByName(name);
+      if (!action) {
+        await clickElement(client.$('button[aria-label="More actions"]'));
+        await client.waitUntil(
+          async () => Boolean(await displayedByName(name)),
+          {
+            timeout: 30_000,
+            timeoutMsg: `file-tree create action did not become visible: ${name}`
+          }
+        );
+        action = await displayedByName(name);
+      }
+      if (!action) throw new Error(`missing file-tree create action: ${name}`);
+      await clickElement(action);
+      return;
+    }
+    await clickElement(byName(name), opts);
+  };
 
   const setValue = async (name: string, value: string): Promise<void> => {
     const resolved = await byName(name);
@@ -994,7 +1106,7 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
     note: string
   ): Promise<void> => {
     await clickElement(treeItem(folder), { button: 'right' });
-    await clickMenuItem('New note in folder');
+    await clickMenuItem('New note');
     await commitDraft('New note', note);
   };
 

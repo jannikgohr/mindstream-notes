@@ -28,6 +28,8 @@ export const KANBAN_LOCAL_ORIGIN = 'kanban-local';
 export const KANBAN_SEED_ORIGIN = 'kanban-seed';
 /** Transaction origin for a history-snapshot restore. */
 export const KANBAN_RESTORE_ORIGIN = 'kanban-restore';
+/** Cached Milkdown HTML refresh. It is persisted but excluded from undo. */
+export const KANBAN_RENDER_ORIGIN = 'kanban-render';
 
 const COLUMNS_KEY = 'kanban:columns';
 const CARDS_KEY = 'kanban:cards';
@@ -58,6 +60,8 @@ export interface KanbanCardData {
   label: string;
   column: string;
   description?: string;
+  /** Sanitized cached rendering of `description` for card-list display. */
+  descriptionHtml?: string;
   priority?: number;
   progress?: number;
   deadline?: Date;
@@ -79,6 +83,7 @@ const CARD_FIELDS = [
   'label',
   'column',
   'description',
+  'descriptionHtml',
   'priority',
   'progress',
   'deadline',
@@ -156,6 +161,7 @@ function readCard(map: Y.Map<unknown>, index: number): KanbanCardData | null {
     label: (map.get('label') as string) ?? '',
     column: (map.get('column') as string) ?? '',
     description: map.get('description') as string | undefined,
+    descriptionHtml: map.get('descriptionHtml') as string | undefined,
     priority: map.get('priority') as number | undefined,
     progress: map.get('progress') as number | undefined,
     deadline:
@@ -500,7 +506,8 @@ export function isLocalOnly(
     return (
       origin === KANBAN_LOCAL_ORIGIN ||
       origin === KANBAN_SEED_ORIGIN ||
-      origin === KANBAN_RESTORE_ORIGIN
+      origin === KANBAN_RESTORE_ORIGIN ||
+      origin === KANBAN_RENDER_ORIGIN
     );
   });
 }

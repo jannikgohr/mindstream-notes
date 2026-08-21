@@ -20,9 +20,12 @@
 import { expect } from '@wdio/globals';
 import {
   byName,
+  closeSettingsDialog,
   clickName,
-  closeSettings,
+  isFileTreeCreateActionDisplayed,
+  openFileTreeCreateMore,
   restartApp,
+  revealFileTreeCreateAction,
   setPluginEnabledByName,
   waitForShell
 } from '../helpers/harness.js';
@@ -48,24 +51,27 @@ describe('T3 plugin framework', function () {
     // The "New from template" create-bar button is the Templates plugin's
     // `file-tree` toolbar contribution — its presence means `plugins_discover`
     // read the bundled dir and the app registered the enabled plugin.
-    await expect(byName('New from template')).toBeDisplayed();
+    await revealFileTreeCreateAction('New from template');
   });
 
   it('lists the plugin in the settings overview', async () => {
     await openPluginsCategory();
     await expect(byName('Enable plugin')).toBeDisplayed();
     await expect(byName('Plugin settings')).toBeDisplayed();
-    await closeSettings();
+    await closeSettingsDialog(browser);
   });
 
   it('a disabled plugin stays disabled across a restart (plugin-record persistence)', async () => {
-    await expect(byName('New from template')).toBeDisplayed();
+    await revealFileTreeCreateAction('New from template');
 
     await openPluginsCategory();
     await setPluginEnabledByName(TEMPLATES_PLUGIN, false);
-    await closeSettings();
+    await closeSettingsDialog(browser);
     // The reactive registry drops the contribution immediately.
-    await expect(byName('New from template')).not.toBeDisplayed();
+    await openFileTreeCreateMore();
+    expect(await isFileTreeCreateActionDisplayed('New from template')).toBe(
+      false
+    );
 
     await restartApp();
     await waitForShell();
@@ -73,13 +79,16 @@ describe('T3 plugin framework', function () {
     // The disabled flag was persisted to the plugin-record table and re-read by
     // discovery on boot — the contribution is still gone, not resurrected by a
     // fresh discovery pass.
-    await expect(byName('New from template')).not.toBeDisplayed();
+    await openFileTreeCreateMore();
+    expect(await isFileTreeCreateActionDisplayed('New from template')).toBe(
+      false
+    );
 
     // Re-enable so the profile dir doesn't leak a disabled plugin into later
     // specs sharing it.
     await openPluginsCategory();
     await setPluginEnabledByName(TEMPLATES_PLUGIN, true);
-    await closeSettings();
-    await expect(byName('New from template')).toBeDisplayed();
+    await closeSettingsDialog(browser);
+    await revealFileTreeCreateAction('New from template');
   });
 });
