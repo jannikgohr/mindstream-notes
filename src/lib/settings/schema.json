@@ -114,7 +114,7 @@
               "id": "appearance.accent",
               "scope": "V",
               "type": "color",
-              "default": "#0a0a0a"
+              "default": "#3b6fd4"
             },
             {
               "id": "appearance.reduceMotion",

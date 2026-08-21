@@ -8,8 +8,8 @@ afterEach(() => clearAccentColor());
 describe('applyAccentColor', () => {
   it('sets the three accent CSS vars for a valid hex', () => {
     applyAccentColor('#3b82f6');
-    expect(root().style.getPropertyValue('--primary')).toBe('#3b82f6');
-    expect(root().style.getPropertyValue('--primary-foreground')).toBe(
+    expect(root().style.getPropertyValue('--accent-brand')).toBe('#3b82f6');
+    expect(root().style.getPropertyValue('--accent-brand-foreground')).toBe(
       '#ffffff'
     );
     expect(root().style.getPropertyValue('--ring')).toBe('#3b82f6');
@@ -18,14 +18,14 @@ describe('applyAccentColor', () => {
   it('accepts 3-, 4-, 6- and 8-digit hex', () => {
     for (const c of ['#abc', '#abcd', '#aabbcc', '#aabbccdd']) {
       applyAccentColor(c);
-      expect(root().style.getPropertyValue('--primary')).toBe(c);
+      expect(root().style.getPropertyValue('--accent-brand')).toBe(c);
     }
   });
 
   it('clears the vars for an invalid or empty colour', () => {
     applyAccentColor('#3b82f6');
     applyAccentColor('not-a-color');
-    expect(root().style.getPropertyValue('--primary')).toBe('');
+    expect(root().style.getPropertyValue('--accent-brand')).toBe('');
 
     applyAccentColor('#3b82f6');
     applyAccentColor('');
@@ -37,8 +37,19 @@ describe('clearAccentColor', () => {
   it('removes all three vars', () => {
     applyAccentColor('#10b981');
     clearAccentColor();
+    expect(root().style.getPropertyValue('--accent-brand')).toBe('');
+    expect(root().style.getPropertyValue('--accent-brand-foreground')).toBe('');
+    expect(root().style.getPropertyValue('--ring')).toBe('');
+  });
+
+  it('also clears the legacy --primary override from older builds', () => {
+    // Builds before the brand-token split wrote the accent onto --primary.
+    // Nothing else removes it, so a stale inline value would leave every
+    // neutral button permanently tinted.
+    root().style.setProperty('--primary', '#10b981');
+    root().style.setProperty('--primary-foreground', '#ffffff');
+    clearAccentColor();
     expect(root().style.getPropertyValue('--primary')).toBe('');
     expect(root().style.getPropertyValue('--primary-foreground')).toBe('');
-    expect(root().style.getPropertyValue('--ring')).toBe('');
   });
 });
