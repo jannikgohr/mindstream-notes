@@ -1,7 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { PanelLeft, PanelRight, SquareChevronRight } from '@lucide/svelte';
-  import { Search as SearchIcon, Settings as SettingsIcon } from '@jis3r/icons';
+  import {
+    PanelRight,
+    Search as SearchIcon,
+    Settings as SettingsIcon,
+    SquareChevronRight
+  } from '@jis3r/icons';
+  import CuedIcon from '$lib/components/icons/CuedIcon.svelte';
   import { Button } from '$lib/components/ui/button';
   import { Separator } from '$lib/components/ui/separator';
   import ThemeToggle from '$lib/components/ThemeToggle.svelte';
@@ -46,7 +51,18 @@
     title={ui.leftSidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
     aria-label="Toggle left sidebar"
   >
-    <PanelLeft class="size-4" />
+    <!--
+      One glyph for both rails: the left button mirrors `panel-right`
+      rather than pulling in a second icon, so the two toggles animate
+      identically and the divider always nudges towards its own edge.
+      The nudge fires on the toggle, never on hover.
+    -->
+    <CuedIcon
+      icon={PanelRight}
+      cue={ui.leftSidebarOpen}
+      duration={300}
+      class="-scale-x-100"
+    />
   </Button>
   <Separator orientation="vertical" class="mx-1 h-5" />
   {#if customDecorations}
@@ -71,7 +87,7 @@
     title={tUi('search.open')}
     aria-label={tUi('search.open')}
   >
-    <SearchIcon size={16} />
+    <CuedIcon icon={SearchIcon} size={16} />
   </Button>
   <Button
     variant="ghost"
@@ -80,7 +96,7 @@
     title={tUi('commandPalette.open')}
     aria-label={tUi('commandPalette.open')}
   >
-    <SquareChevronRight class="size-4" />
+    <CuedIcon icon={SquareChevronRight} size={16} />
   </Button>
   <NotificationCenter />
   <Button
@@ -90,7 +106,7 @@
     title="Settings"
     aria-label="Open settings"
   >
-    <SettingsIcon size={16} />
+    <CuedIcon icon={SettingsIcon} size={16} />
   </Button>
   <ThemeToggle />
   <Button
@@ -100,7 +116,7 @@
     title={ui.rightSidebarOpen ? tUi('sidebar.hide') : tUi('sidebar.show')}
     aria-label={ui.rightSidebarOpen ? tUi('sidebar.hide') : tUi('sidebar.show')}
   >
-    <PanelRight class="size-4" />
+    <CuedIcon icon={PanelRight} cue={ui.rightSidebarOpen} duration={300} />
   </Button>
 
   {#if customDecorations}
