@@ -1,4 +1,8 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import {
+  fileTreeCreateAction,
+  openFileTreeCreateMore
+} from './file-tree-toolbar';
 
 /**
  * The plugin framework, driven through the browser-fallback SPA.
@@ -27,7 +31,7 @@ async function boot(page: Page) {
 }
 
 function toolbarTemplateButton(page: Page): Locator {
-  return page.getByRole('button', { name: NEW_FROM_TEMPLATE });
+  return fileTreeCreateAction(page, NEW_FROM_TEMPLATE);
 }
 
 /** Open Settings and land on the Plugins category (its overview heading). */
@@ -50,6 +54,7 @@ test.describe('plugin framework — bundled Templates plugin', () => {
     page
   }) => {
     await boot(page);
+    await openFileTreeCreateMore(page);
     await expect(toolbarTemplateButton(page)).toBeVisible();
   });
 
@@ -86,6 +91,7 @@ test.describe('plugin framework — bundled Templates plugin', () => {
   }) => {
     await boot(page);
     const templateButton = toolbarTemplateButton(page);
+    await openFileTreeCreateMore(page);
     await expect(templateButton).toBeVisible();
 
     // Disable → the contribution and the "Plugin settings" affordance vanish.
@@ -95,12 +101,14 @@ test.describe('plugin framework — bundled Templates plugin', () => {
       dialog.getByRole('button', { name: 'Plugin settings' })
     ).toBeHidden();
     await dialog.getByRole('button', { name: 'Close' }).click();
+    await openFileTreeCreateMore(page);
     await expect(templateButton).toBeHidden();
 
     // Re-enable → the toolbar button comes back.
     const dialog2 = await openPluginsCategory(page);
     await dialog2.getByRole('switch', { name: 'Enable plugin' }).click();
     await dialog2.getByRole('button', { name: 'Close' }).click();
+    await openFileTreeCreateMore(page);
     await expect(templateButton).toBeVisible();
   });
 });

@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { clickFileTreeCreateAction } from './file-tree-toolbar';
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
@@ -10,9 +11,7 @@ test('opens Kanban search from the active-note search hotkey', async ({
 }) => {
   const title = `Board ${Date.now()}`;
 
-  await page
-    .getByRole('button', { name: 'New Kanban board', exact: true })
-    .click();
+  await clickFileTreeCreateAction(page, 'New Kanban board');
   const draft = page.getByRole('textbox', { name: 'New note' });
   await expect(draft).toBeFocused();
   await draft.fill(title);

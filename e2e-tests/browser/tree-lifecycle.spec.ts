@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { clickFileTreeCreateAction } from './file-tree-toolbar';
 
 /**
  * CI-safe tree lifecycle coverage for browser-fallback mode. These tests
@@ -20,7 +21,7 @@ function treeItem(page: Page, name: string): Locator {
 }
 
 async function createRootNote(page: Page, title: string) {
-  await page.getByRole('button', { name: 'New note', exact: true }).click();
+  await clickFileTreeCreateAction(page, 'New note');
   const draft = page.getByRole('textbox', { name: 'New note' });
   await expect(draft).toBeFocused();
   await draft.fill(title);
