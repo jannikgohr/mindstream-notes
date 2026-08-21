@@ -69,6 +69,12 @@ function spawnDriver(client: ClientProc): ChildProcess {
   client.profileDir = mkdtempSync(
     join(tmpdir(), `mindstream-${client.profileId}-`)
   );
+  // Dictionaries live outside the profile dir, so each client needs a
+  // disposable one of its own — otherwise a T4 run reads and writes the
+  // developer's real dictionaries. See spellcheck::DICTIONARY_DIR_ENV.
+  const dictionaryDir = mkdtempSync(
+    join(tmpdir(), `mindstream-${client.profileId}-dict-`)
+  );
   return spawnTauriDriver(
     ['--port', String(client.port), '--native-port', String(client.nativePort)],
     {
@@ -77,7 +83,8 @@ function spawnDriver(client: ClientProc): ChildProcess {
       // the two clients distinct users' devices. The profile id namespaces the
       // OS keyring entry; without it both clients default to `e2e`.
       MINDSTREAM_PROFILE_DIR: client.profileDir,
-      MINDSTREAM_PROFILE_ID: client.profileId
+      MINDSTREAM_PROFILE_ID: client.profileId,
+      MINDSTREAM_DICTIONARY_DIR: dictionaryDir
     }
   );
 }

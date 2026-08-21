@@ -1,0 +1,145 @@
+{
+  "id": "com.mindstream.languagetool",
+  "name": "LanguageTool",
+  "version": "0.1.0",
+  "author": "Mindstream",
+  "enabledByDefault": false,
+  "runtime": "manifest-only",
+  "descriptionKey": "plugin.description",
+  "icon": "icons/spell-check.svg",
+  "permissions": ["textCheckers.contribute"],
+  "contributes": {
+    "documentation": [
+      {
+        "file": "docs/getting-started.md"
+      }
+    ],
+    "textCheckers": [
+      {
+        "id": "grammar",
+        "kinds": ["grammar", "style", "spelling"],
+        "endpointSetting": "endpoint",
+        "apiKeySetting": "api-key",
+        "usernameSetting": "username",
+        "spellingSetting": "spelling",
+        "spellingCategories": ["TYPOS"],
+        "disabledCategories": [],
+        "defaultKind": "grammar",
+        "categoryKinds": {
+          "TYPOS": "spelling",
+          "STYLE": "style",
+          "REDUNDANCY": "style",
+          "PLAIN_ENGLISH": "style",
+          "WORDINESS": "style",
+          "CREATIVE_WRITING": "style",
+          "COLLOQUIALISMS": "style",
+          "TYPOGRAPHY": "style",
+          "REGIONALISMS": "style",
+          "GENDER_NEUTRALITY": "style"
+        },
+        "protocol": {
+          "trimEndpointSuffix": "/v2",
+          "check": {
+            "path": "/v2/check",
+            "encoding": "form",
+            "fields": {
+              "text": "text",
+              "language": "language",
+              "apiKey": "apiKey",
+              "username": "username",
+              "preferredVariants": "preferredVariants",
+              "disabledCategories": "disabledCategories"
+            }
+          },
+          "matches": {
+            "list": "/matches",
+            "offset": "/offset",
+            "length": "/length",
+            "message": "/message",
+            "replacements": "/replacements",
+            "replacementValue": "/value",
+            "category": "/rule/category/id"
+          },
+          "detection": {
+            "code": "/language/detectedLanguage/code",
+            "confidence": "/language/detectedLanguage/confidence"
+          },
+          "probe": {
+            "path": "/v2/languages",
+            "list": "",
+            "languageCode": ["/longCode", "/code"]
+          }
+        },
+        "labelKey": "checker.label"
+      }
+    ],
+    "settings": [
+      {
+        "sectionId": "server",
+        "titleKey": "settings.server.title",
+        "settings": [
+          {
+            "id": "spelling",
+            "labelKey": "settings.spelling.label",
+            "descriptionKey": "settings.spelling.description",
+            "scope": "D",
+            "type": "toggle",
+            "default": true
+          },
+          {
+            "id": "endpoint",
+            "labelKey": "settings.endpoint.label",
+            "descriptionKey": "settings.endpoint.description",
+            "scope": "D",
+            "type": "text",
+            "default": ""
+          },
+          {
+            "id": "username",
+            "labelKey": "settings.username.label",
+            "descriptionKey": "settings.username.description",
+            "scope": "D",
+            "type": "text",
+            "default": ""
+          },
+          {
+            "id": "api-key",
+            "labelKey": "settings.apiKey.label",
+            "descriptionKey": "settings.apiKey.description",
+            "scope": "D",
+            "type": "text",
+            "default": ""
+          }
+        ]
+      }
+    ],
+    "i18n": {
+      "en": {
+        "plugin.description": "Grammar and style checking through a LanguageTool server.",
+        "checker.label": "LanguageTool",
+        "settings.server.title": "Server",
+        "settings.endpoint.label": "Server URL",
+        "settings.endpoint.description": "Base URL of a LanguageTool server, for example http://localhost:8081. Until this is set, nothing is checked and no text leaves your device. Note text is sent to this server on every check, so prefer one you run yourself.",
+        "settings.username.label": "Account e-mail",
+        "settings.username.description": "Only needed for LanguageTool's hosted API, which authenticates with an e-mail and key together. Leave empty for a self-hosted server.",
+        "settings.apiKey.label": "API key",
+        "settings.apiKey.description": "Only needed for the hosted API. Stored on this device and never synced with your notes.",
+        "settings.spelling.label": "Check spelling too",
+        "settings.spelling.description": "Let LanguageTool check spelling instead of the app's dictionaries. Its suggestions are usually better because it weighs the whole sentence, not just the word. Falls back to the built-in dictionary whenever the server cannot be reached, so you are never left without spellchecking."
+      },
+      "de": {
+        "plugin.description": "Grammatik- und Stilprüfung über einen LanguageTool-Server.",
+        "checker.label": "LanguageTool",
+        "settings.server.title": "Server",
+        "settings.endpoint.label": "Server-URL",
+        "settings.endpoint.description": "Basis-URL eines LanguageTool-Servers, zum Beispiel http://localhost:8081. Solange nichts eingetragen ist, wird nicht geprüft und es verlässt kein Text dein Gerät. Bei jeder Prüfung wird Notiztext an diesen Server gesendet — bevorzuge daher einen selbst betriebenen.",
+        "settings.username.label": "Konto-E-Mail",
+        "settings.username.description": "Nur für die gehostete LanguageTool-API nötig, die sich mit E-Mail und Schlüssel zusammen authentifiziert. Für einen eigenen Server leer lassen.",
+        "settings.apiKey.label": "API-Schlüssel",
+        "settings.apiKey.description": "Nur für die gehostete API nötig. Wird auf diesem Gerät gespeichert und nie mit den Notizen synchronisiert.",
+        "settings.spelling.label": "Auch Rechtschreibung prüfen",
+        "settings.spelling.description": "Lässt LanguageTool statt der App-Wörterbücher die Rechtschreibung prüfen. Die Vorschläge sind meist besser, weil der ganze Satz einbezogen wird und nicht nur das Wort. Ist der Server nicht erreichbar, übernimmt automatisch wieder das eingebaute Wörterbuch — ohne Prüfung bleibst du nie."
+      }
+    }
+  }
+}

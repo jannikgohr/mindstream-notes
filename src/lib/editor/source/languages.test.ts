@@ -5,7 +5,10 @@ import {
   resetPluginRegistry,
   setPluginEnabled
 } from '$lib/plugins/registry.svelte';
-import { sourceLanguageExtensions } from './languages';
+import {
+  sourceLanguageDiagnosticSyntax,
+  sourceLanguageExtensions
+} from './languages';
 
 interface StreamParserLike {
   startState: () => unknown;
@@ -36,7 +39,9 @@ function tokenizeTypst(
   return out;
 }
 
-function typstLanguageManifest(): Record<string, unknown> {
+function typstLanguageManifest(
+  diagnostics?: Record<string, unknown>
+): Record<string, unknown> {
   return {
     id: 'com.example.typst',
     name: 'Typst',
@@ -49,7 +54,8 @@ function typstLanguageManifest(): Record<string, unknown> {
           id: 'typst',
           aliases: ['typ'],
           extensions: ['typ'],
-          provider: { type: 'host', id: 'typst' }
+          provider: { type: 'host', id: 'typst' },
+          ...(diagnostics ? { diagnostics } : {})
         }
       ]
     }
@@ -74,6 +80,47 @@ describe('sourceLanguageExtensions', () => {
     registerPlugin(typstLanguageManifest());
     setPluginEnabled('com.example.typst', false);
     expect(sourceLanguageExtensions('typst')).toHaveLength(0);
+  });
+});
+
+describe('sourceLanguageDiagnosticSyntax', () => {
+  it('checks built-in markdown as markdown', () => {
+    expect(sourceLanguageDiagnosticSyntax('markdown')?.id).toBe('markdown');
+  });
+
+  it('leaves a plugin language unchecked until its manifest opts in', () => {
+    // Not a fallback to plain text: a language nobody has called prose gets no
+    // squiggles at all, so enabling a plugin can never speckle a document the
+    // app does not know how to read.
+    registerPlugin(typstLanguageManifest());
+    expect(sourceLanguageDiagnosticSyntax('typst')).toBeNull();
+  });
+
+  it('uses the host syntax the manifest names, through aliases too', () => {
+    registerPlugin(typstLanguageManifest({ syntax: 'typst' }));
+    expect(sourceLanguageDiagnosticSyntax('typst')?.id).toBe('typst');
+    expect(sourceLanguageDiagnosticSyntax('typ')?.id).toBe('typst');
+  });
+
+  it('stops checking when the owning plugin is disabled', () => {
+    registerPlugin(typstLanguageManifest({ syntax: 'typst' }));
+    setPluginEnabled('com.example.typst', false);
+    expect(sourceLanguageDiagnosticSyntax('typst')).toBeNull();
+  });
+
+  it('leaves an unknown language unchecked', () => {
+    expect(sourceLanguageDiagnosticSyntax('text')).toBeNull();
+  });
+
+  it('builds a syntax from a grammar the manifest declares', () => {
+    // The point of the grammar: a plugin brings a language the app has no
+    // scanner for, and its comments stop reaching the dictionary.
+    registerPlugin(typstLanguageManifest({ grammar: { lineComments: ['%'] } }));
+    const syntax = sourceLanguageDiagnosticSyntax('typst');
+    expect(syntax?.id).toBe('grammar');
+    expect(syntax?.ignoreRanges('kept % dropped')).toEqual([
+      { from: 5, to: 14 }
+    ]);
   });
 });
 

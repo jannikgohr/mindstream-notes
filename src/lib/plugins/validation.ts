@@ -17,6 +17,7 @@
  * manifest never takes down app startup or another plugin.
  */
 
+import { compilePattern, isDiagnosticSyntaxId } from '$lib/diagnostics/syntax';
 import {
   KNOWN_PLUGIN_PERMISSIONS,
   PLUGIN_ARTIFACT_KINDS,
@@ -32,6 +33,7 @@ import {
   type PluginManifest,
   type PluginNativeToolContribution,
   type PluginNativeServiceContribution,
+  type PluginCheckerProtocol,
   type PluginNoteExporterContribution,
   type PluginNoteExportFormat,
   type PluginNoteKindContribution,
@@ -40,6 +42,7 @@ import {
   type PluginPreviewMimeType,
   type PluginPermission,
   type PluginSetting,
+  type PluginDiagnosticsContribution,
   type PluginSourceLanguageContribution,
   type PluginSettingsContribution,
   type PluginCommandContribution,
@@ -117,6 +120,8 @@ const SETTING_TYPES = new Set<PluginSetting['type']>([
   'folder',
   'tag'
 ]);
+
+const DIAGNOSTIC_KINDS = new Set(['spelling', 'grammar', 'style']);
 const VARIABLE_TYPES = new Set<PluginTemplateVariable['type']>([
   'text',
   'date',
@@ -552,6 +557,371 @@ function validateSourceLanguage(
       pluginId,
       `${path}.provider.id ("${String(language.provider.id)}") is not a supported host source language provider`
     );
+  }
+  if (language.diagnostics !== undefined) {
+    validateDiagnostics(pluginId, language.diagnostics, `${path}.diagnostics`);
+  }
+}
+
+/**
+ * Caps on a declared grammar.
+ *
+ * The scanner walks the document on every keystroke, testing the delimiters
+ * that begin with each character. These bounds keep that cost flat no matter
+ * what a manifest asks for, and they are far above anything a real language
+ * needs — LaTeX gets by on one line comment and a handful of pairs.
+ */
+const MAX_DELIMITERS = 24;
+const MAX_DELIMITER_LENGTH = 32;
+
+function assertDelimiter(
+  pluginId: string,
+  value: unknown,
+  path: string
+): asserts value is string {
+  assertNonEmptyString(pluginId, value, path);
+  if ((value as string).length > MAX_DELIMITER_LENGTH) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path} must be at most ${MAX_DELIMITER_LENGTH} characters`
+    );
+  }
+}
+
+function assertDelimiterList(
+  pluginId: string,
+  value: unknown,
+  path: string,
+  paired: boolean
+): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    throw new PluginValidationError(pluginId, `${path} must be an array`);
+  }
+  if (value.length > MAX_DELIMITERS) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path} must have at most ${MAX_DELIMITERS} entries`
+    );
+  }
+  for (const [i, entry] of value.entries()) {
+    if (!paired) {
+      assertDelimiter(pluginId, entry, `${path}[${i}]`);
+      continue;
+    }
+    if (!Array.isArray(entry) || entry.length !== 2) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}[${i}] must be an [open, close] pair`
+      );
+    }
+    assertDelimiter(pluginId, entry[0], `${path}[${i}][0]`);
+    assertDelimiter(pluginId, entry[1], `${path}[${i}][1]`);
+  }
+}
+
+/**
+ * A source language's diagnostics opt-in: either a host syntax or a grammar,
+ * never both and never neither.
+ *
+ * Rejecting both is not pedantry — a manifest that sets both has an intent the
+ * host would have to guess at, and guessing silently produces a document
+ * checked by rules its author did not choose.
+ */
+function validateDiagnostics(
+  pluginId: string,
+  diagnostics: PluginDiagnosticsContribution,
+  path: string
+): void {
+  if (!diagnostics || typeof diagnostics !== 'object') {
+    throw new PluginValidationError(pluginId, `${path} must be an object`);
+  }
+  const hasSyntax = diagnostics.syntax !== undefined;
+  const hasGrammar = diagnostics.grammar !== undefined;
+  if (hasSyntax === hasGrammar) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path} must set exactly one of syntax or grammar`
+    );
+  }
+
+  if (hasSyntax) {
+    if (!isDiagnosticSyntaxId(diagnostics.syntax)) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.syntax ("${String(diagnostics.syntax)}") is not a syntax the app ships`
+      );
+    }
+    return;
+  }
+
+  const grammar = diagnostics.grammar;
+  if (!grammar || typeof grammar !== 'object' || Array.isArray(grammar)) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.grammar must be an object`
+    );
+  }
+  assertDelimiterList(
+    pluginId,
+    grammar.lineComments,
+    `${path}.grammar.lineComments`,
+    false
+  );
+  for (const key of ['blockComments', 'verbatim', 'math'] as const) {
+    assertDelimiterList(pluginId, grammar[key], `${path}.grammar.${key}`, true);
+  }
+  if (grammar.escape !== undefined) {
+    assertNonEmptyString(pluginId, grammar.escape, `${path}.grammar.escape`);
+    if ([...grammar.escape].length !== 1) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.grammar.escape must be a single character`
+      );
+    }
+  }
+  for (const key of ['indentation', 'addresses'] as const) {
+    if (grammar[key] !== undefined && typeof grammar[key] !== 'boolean') {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.grammar.${key} must be a boolean`
+      );
+    }
+  }
+  validateIgnorePatterns(
+    pluginId,
+    grammar.ignorePatterns,
+    `${path}.grammar.ignorePatterns`
+  );
+}
+
+const MAX_PATTERNS = 16;
+const MAX_PATTERN_LENGTH = 200;
+
+/** Backreferences, numbered or named — see `validateIgnorePatterns`. */
+const BACKREFERENCE = /\\[1-9]|\\k</;
+
+/**
+ * Patterns a plugin wants ignored.
+ *
+ * These checks are hygiene, NOT the safety guarantee. No static analysis
+ * reliably separates a regex that backtracks catastrophically from one that
+ * does not — star-height tests miss `(a|ab)*`, and the popular `safe-regex`
+ * passes patterns that hang. The guarantee is that patterns run in a terminable
+ * Worker (see `$lib/diagnostics/syntax/grammar-runner`); what happens here only
+ * turns the cheap mistakes into manifest errors instead of runtime faults.
+ *
+ * Compiled with the same helper the scanner uses, so a manifest cannot be
+ * accepted under flags different from the ones it will run under. Flags are the
+ * host's to choose — a plugin that could set them could disable the `d` flag
+ * capture-group scoping depends on.
+ */
+function validateIgnorePatterns(
+  pluginId: string,
+  patterns: unknown,
+  path: string
+): void {
+  if (patterns === undefined) return;
+  if (!Array.isArray(patterns)) {
+    throw new PluginValidationError(pluginId, `${path} must be an array`);
+  }
+  if (patterns.length > MAX_PATTERNS) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path} must have at most ${MAX_PATTERNS} entries`
+    );
+  }
+  for (const [i, pattern] of patterns.entries()) {
+    assertNonEmptyString(pluginId, pattern, `${path}[${i}]`);
+    if (pattern.length > MAX_PATTERN_LENGTH) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}[${i}] must be at most ${MAX_PATTERN_LENGTH} characters`
+      );
+    }
+    // Rejected because a backreference forces a backtracking match no matter
+    // how simple the rest of the pattern looks, and nothing here needs one.
+    if (BACKREFERENCE.test(pattern)) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}[${i}] must not use a backreference`
+      );
+    }
+    try {
+      compilePattern(pattern);
+    } catch {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}[${i}] is not a valid regular expression`
+      );
+    }
+  }
+}
+
+const CHECKER_ENCODINGS = new Set(['form', 'json']);
+
+/**
+ * A JSON Pointer (RFC 6901): empty for the document root, otherwise a run of
+ * `/`-prefixed tokens. Deliberately not a query language — a pointer cannot
+ * loop, backtrack or run for an unbounded time, which matters because these
+ * resolve against every response of every check.
+ */
+function assertPointer(
+  pluginId: string,
+  value: unknown,
+  path: string,
+  required = true
+): void {
+  if (value === undefined && !required) return;
+  if (typeof value !== 'string') {
+    throw new PluginValidationError(pluginId, `${path} must be a string`);
+  }
+  if (value !== '' && !value.startsWith('/')) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path} ("${value}") must be a JSON Pointer — "" for the root, otherwise starting with "/"`
+    );
+  }
+}
+
+/**
+ * The declared shape of a checking service.
+ *
+ * Every field here used to be a line of app code that named LanguageTool. The
+ * point of validating it thoroughly is that a manifest is now the only place a
+ * service is described, so a mistake in one has to fail loudly at load rather
+ * than as an empty result on every paragraph.
+ */
+function validateCheckerProtocol(
+  pluginId: string,
+  protocol: PluginCheckerProtocol,
+  path: string
+): void {
+  if (!protocol || typeof protocol !== 'object' || Array.isArray(protocol)) {
+    throw new PluginValidationError(pluginId, `${path} must be an object`);
+  }
+  if (protocol.trimEndpointSuffix !== undefined) {
+    assertNonEmptyString(
+      pluginId,
+      protocol.trimEndpointSuffix,
+      `${path}.trimEndpointSuffix`
+    );
+  }
+
+  const check = protocol.check;
+  if (!check || typeof check !== 'object') {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.check must be an object`
+    );
+  }
+  assertNonEmptyString(pluginId, check.path, `${path}.check.path`);
+  if (!CHECKER_ENCODINGS.has(String(check.encoding))) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.check.encoding ("${String(check.encoding)}") must be form or json`
+    );
+  }
+  if (!check.fields || typeof check.fields !== 'object') {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.check.fields must be an object`
+    );
+  }
+  // Without somewhere to put the text there is no check to make.
+  assertNonEmptyString(
+    pluginId,
+    check.fields.text,
+    `${path}.check.fields.text`
+  );
+  for (const field of [
+    'language',
+    'apiKey',
+    'username',
+    'preferredVariants',
+    'disabledCategories'
+  ] as const) {
+    const value = check.fields[field];
+    if (value !== undefined) {
+      assertNonEmptyString(pluginId, value, `${path}.check.fields.${field}`);
+    }
+  }
+  if (check.staticFields !== undefined) {
+    if (
+      !check.staticFields ||
+      typeof check.staticFields !== 'object' ||
+      Array.isArray(check.staticFields)
+    ) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.check.staticFields must be an object`
+      );
+    }
+    for (const [key, value] of Object.entries(check.staticFields)) {
+      assertNonEmptyString(
+        pluginId,
+        value,
+        `${path}.check.staticFields.${key}`
+      );
+    }
+  }
+
+  const matches = protocol.matches;
+  if (!matches || typeof matches !== 'object') {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.matches must be an object`
+    );
+  }
+  assertPointer(pluginId, matches.list, `${path}.matches.list`);
+  assertPointer(pluginId, matches.offset, `${path}.matches.offset`);
+  assertPointer(pluginId, matches.message, `${path}.matches.message`);
+  // A finding needs an extent, and the two ways of expressing one are not
+  // interchangeable — guessing wrong misplaces every squiggle in the document.
+  if ((matches.length === undefined) === (matches.end === undefined)) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.matches must set exactly one of length or end`
+    );
+  }
+  assertPointer(pluginId, matches.length, `${path}.matches.length`, false);
+  assertPointer(pluginId, matches.end, `${path}.matches.end`, false);
+  assertPointer(
+    pluginId,
+    matches.replacements,
+    `${path}.matches.replacements`,
+    false
+  );
+  assertPointer(
+    pluginId,
+    matches.replacementValue,
+    `${path}.matches.replacementValue`,
+    false
+  );
+  assertPointer(pluginId, matches.category, `${path}.matches.category`, false);
+
+  if (protocol.detection !== undefined) {
+    assertPointer(pluginId, protocol.detection?.code, `${path}.detection.code`);
+    assertPointer(
+      pluginId,
+      protocol.detection?.confidence,
+      `${path}.detection.confidence`
+    );
+  }
+
+  if (protocol.probe !== undefined) {
+    assertNonEmptyString(pluginId, protocol.probe?.path, `${path}.probe.path`);
+    assertPointer(pluginId, protocol.probe?.list, `${path}.probe.list`);
+    const codes = protocol.probe?.languageCode;
+    if (!Array.isArray(codes) || codes.length === 0) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.probe.languageCode must be a non-empty array of pointers`
+      );
+    }
+    for (const [i, pointer] of codes.entries()) {
+      assertPointer(pluginId, pointer, `${path}.probe.languageCode[${i}]`);
+    }
   }
 }
 
@@ -1337,6 +1707,101 @@ export function validateManifest(input: unknown): PluginManifest {
       );
     }
     seenSourceLanguageIds.add(language.id);
+  }
+
+  // ---- Text checkers ---------------------------------------------------
+  const textCheckers = contributes.textCheckers ?? [];
+  if (!Array.isArray(textCheckers)) {
+    throw new PluginValidationError(
+      pluginId,
+      'manifest.contributes.textCheckers must be an array'
+    );
+  }
+  const seenCheckerIds = new Set<string>();
+  for (const [i, checker] of textCheckers.entries()) {
+    const path = `textCheckers[${i}]`;
+    assertSlug(pluginId, checker?.id, `${path}.id`);
+    validateCheckerProtocol(pluginId, checker?.protocol, `${path}.protocol`);
+    if (
+      !Array.isArray(checker.kinds) ||
+      checker.kinds.length === 0 ||
+      checker.kinds.some((kind: unknown) => !DIAGNOSTIC_KINDS.has(String(kind)))
+    ) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.kinds must list at least one of spelling, grammar, style`
+      );
+    }
+    // The settings named here are read to build the request, so they must
+    // exist as slugs the plugin actually owns.
+    assertSlug(pluginId, checker.endpointSetting, `${path}.endpointSetting`);
+    for (const [field, value] of [
+      ['apiKeySetting', checker.apiKeySetting],
+      ['usernameSetting', checker.usernameSetting],
+      ['spellingSetting', checker.spellingSetting]
+    ] as const) {
+      if (value !== undefined) assertSlug(pluginId, value, `${path}.${field}`);
+    }
+    for (const [field, value] of [
+      ['disabledCategories', checker.disabledCategories],
+      ['spellingCategories', checker.spellingCategories]
+    ] as const) {
+      if (value === undefined) continue;
+      if (!Array.isArray(value)) {
+        throw new PluginValidationError(
+          pluginId,
+          `${path}.${field} must be an array`
+        );
+      }
+      for (const [j, entry] of value.entries()) {
+        assertNonEmptyString(pluginId, entry, `${path}.${field}[${j}]`);
+      }
+    }
+    if (checker.categoryKinds !== undefined) {
+      if (
+        !checker.categoryKinds ||
+        typeof checker.categoryKinds !== 'object' ||
+        Array.isArray(checker.categoryKinds)
+      ) {
+        throw new PluginValidationError(
+          pluginId,
+          `${path}.categoryKinds must be an object`
+        );
+      }
+      for (const [category, kind] of Object.entries(checker.categoryKinds)) {
+        if (!DIAGNOSTIC_KINDS.has(String(kind))) {
+          throw new PluginValidationError(
+            pluginId,
+            `${path}.categoryKinds.${category} ("${String(kind)}") must be spelling, grammar or style`
+          );
+        }
+      }
+    }
+    if (
+      checker.defaultKind !== undefined &&
+      !DIAGNOSTIC_KINDS.has(String(checker.defaultKind))
+    ) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.defaultKind ("${String(checker.defaultKind)}") must be spelling, grammar or style`
+      );
+    }
+    if (checker.labelKey !== undefined) {
+      assertI18nKey(pluginId, checker.labelKey, `${path}.labelKey`);
+    }
+    if (seenCheckerIds.has(checker.id)) {
+      throw new PluginValidationError(
+        pluginId,
+        `duplicate text checker id "${checker.id}"`
+      );
+    }
+    seenCheckerIds.add(checker.id);
+  }
+  if (textCheckers.length > 0 && !permissions.has('textCheckers.contribute')) {
+    throw new PluginValidationError(
+      pluginId,
+      'contributes textCheckers but is missing the "textCheckers.contribute" permission'
+    );
   }
 
   // ---- Plugin note kinds ----------------------------------------------

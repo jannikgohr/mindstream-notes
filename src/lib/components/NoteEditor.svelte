@@ -36,6 +36,20 @@
     clearNoteStatus
   } from '$lib/stores/note-status.svelte';
   import { getSettingValue, settings } from '$lib/settings/store.svelte';
+  import {
+    checkSegments,
+    invalidateDiagnostics,
+    spellcheckEnabled,
+    spellcheckLanguages,
+    subscribeDiagnosticsInvalidated,
+    suggestFor
+  } from '$lib/diagnostics/editor-diagnostics.svelte';
+  import {
+    closeDiagnosticPopover,
+    openDiagnosticPopover,
+    type DiagnosticMenuContext
+  } from '$lib/diagnostics/popover-bridge.svelte';
+  import type { Diagnostic } from '$lib/diagnostics/types';
   import { CollabProvider } from '$lib/sync/collab-provider';
   import { isMobile } from '$lib/platform';
   import {
@@ -132,6 +146,36 @@
   const mermaidEnabled = $derived(
     (getSettingValue('editor.mermaid') as boolean | undefined) ?? true
   );
+  // Spellcheck squiggles.
+  //
+  // The plugin is registered unconditionally on both surfaces and asks
+  // `enabled()` per check, rather than being gated at construction. Crepe
+  // cannot add or remove a plugin after `create()`, so gating there meant
+  // the setting only applied to notes opened afterwards — and any note
+  // already on screen kept whatever it had.
+  //
+  // Changing the language set or installing a dictionary changes the answer
+  // for text nobody has touched, which no editor can observe on its own, so
+  // it is pushed to them instead.
+  $effect(() => {
+    // Read both so the effect re-runs when either changes.
+    spellcheckEnabled();
+    spellcheckLanguages().join(',');
+    invalidateDiagnostics();
+  });
+
+  // Shared by both surfaces: the plugin supplies the clicked word and a
+  // writer for its own surface, so this handler stays surface-agnostic.
+  function handleDiagnosticMenu(
+    diagnostic: Diagnostic,
+    event: MouseEvent,
+    context: DiagnosticMenuContext
+  ) {
+    openDiagnosticPopover(
+      { diagnostic, x: event.clientX, y: event.clientY, ...context },
+      suggestFor
+    );
+  }
   const wikilinksEnabled = $derived(
     (getSettingValue('editor.wikilinks') as boolean | undefined) ?? true
   );
@@ -486,7 +530,12 @@
         userMentionBridge,
         currentUsername: () => authSession.current?.username ?? null,
         searchBridge,
-        assetBridge
+        assetBridge,
+        diagnosticsCheck: checkSegments,
+        diagnosticsEnabled: spellcheckEnabled,
+        subscribeDiagnosticsInvalidated,
+        onDiagnosticMenu: handleDiagnosticMenu,
+        onDiagnosticMenuDismiss: closeDiagnosticPopover
       });
       await crepe.create();
 
@@ -1746,6 +1795,11 @@
             wikilinkBridge={sourceWikilinkBridge}
             {userMentionsEnabled}
             userMentionBridge={sourceUserMentionBridge}
+            diagnosticsCheck={checkSegments}
+            diagnosticsEnabled={spellcheckEnabled}
+            {subscribeDiagnosticsInvalidated}
+            onDiagnosticMenu={handleDiagnosticMenu}
+            onDiagnosticMenuDismiss={closeDiagnosticPopover}
           />
         </div>
       {/if}

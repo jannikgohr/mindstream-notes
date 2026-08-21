@@ -32,6 +32,7 @@ import type {
   PluginSettingsContribution,
   PluginSourceLanguageContribution,
   PluginToolbarButton,
+  PluginTextCheckerContribution,
   PluginToolbarLocation
 } from './types';
 
@@ -77,6 +78,12 @@ export interface PluginSettingsSectionRef {
 export interface PluginCommandRef {
   pluginId: string;
   command: PluginCommandContribution;
+}
+
+/** A text checker paired with the plugin that owns it. */
+export interface PluginTextCheckerRef {
+  pluginId: string;
+  checker: PluginTextCheckerContribution;
 }
 
 /** A toolbar button paired with its owning plugin. */
@@ -285,6 +292,26 @@ export function pluginCommands(): PluginCommandRef[] {
     if (!enabled) continue;
     for (const command of manifest.contributes.commands ?? []) {
       out.push({ pluginId: manifest.id, command });
+    }
+  }
+  return out;
+}
+
+/**
+ * Text checkers contributed by all enabled plugins.
+ *
+ * Filtered by permission as well as by enabled state: a plugin can declare
+ * the contribution, but it only reaches the diagnostics bus once the user
+ * has granted `textCheckers.contribute` — the checker sees the full text of
+ * every note being edited.
+ */
+export function pluginTextCheckers(): PluginTextCheckerRef[] {
+  const out: PluginTextCheckerRef[] = [];
+  for (const { manifest, enabled } of Object.values(state.plugins)) {
+    if (!enabled) continue;
+    if (!manifest.permissions.includes('textCheckers.contribute')) continue;
+    for (const checker of manifest.contributes.textCheckers ?? []) {
+      out.push({ pluginId: manifest.id, checker });
     }
   }
   return out;

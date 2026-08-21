@@ -1376,4 +1376,133 @@ mod tests {
 
         proxy.shutdown();
     }
+
+    /// An upstream that completes a websocket handshake and then echoes.
+    ///
+    /// Returns the port plus a channel carrying the handshake it received, so
+    /// the test can assert the proxy rewrote it before forwarding.
+    fn fake_ws_upstream() -> (u16, std::sync::mpsc::Receiver<String>) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let Ok((mut upstream, _)) = listener.accept() else {
+                return;
+            };
+            let head = read_http_head(&mut upstream).unwrap_or_default();
+            let _ = tx.send(String::from_utf8_lossy(&head).into_owned());
+            let _ = upstream
+                .write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n");
+            // Echo whatever the client sends after the handshake.
+            let mut frame = [0_u8; 64];
+            if let Ok(n) = upstream.read(&mut frame) {
+                let _ = upstream.write_all(&frame[..n]);
+            }
+            let _ = upstream.shutdown(Shutdown::Write);
+        });
+        (port, rx)
+    }
+
+    #[test]
+    fn loopback_proxy_tunnels_a_websocket_upgrade_to_the_service() {
+        // tinymist's control plane is a websocket; the proxy has to pass it
+        // through rather than answer it with HTML, or scroll-sync and
+        // click-to-source stop working behind the themed proxy.
+        let (upstream_port, handshakes) = fake_ws_upstream();
+        let proxy = start_loopback_proxy(upstream_port, PreviewProxyStyles::default()).unwrap();
+
+        let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, proxy.port)).unwrap();
+        client
+            .write_all(
+                format!(
+                    "GET / HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nOrigin: http://127.0.0.1:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+                    proxy.port, proxy.port
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+
+        let forwarded = handshakes
+            .recv_timeout(Duration::from_secs(10))
+            .expect("upstream never saw the handshake");
+        // Retargeted at the service, not at the proxy that received it.
+        assert!(
+            forwarded.contains(&format!("Host: 127.0.0.1:{upstream_port}")),
+            "{forwarded}"
+        );
+        assert!(
+            forwarded.contains(&format!("Origin: http://127.0.0.1:{upstream_port}")),
+            "{forwarded}"
+        );
+        assert!(forwarded
+            .to_ascii_lowercase()
+            .contains("upgrade: websocket"));
+
+        client.write_all(b"ping").unwrap();
+        // Close the write half: the tunnel copies until each side stops
+        // sending, so a client that never finishes never gets its echo.
+        client.shutdown(Shutdown::Write).unwrap();
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+        assert!(response.contains("101 Switching Protocols"), "{response}");
+        assert!(
+            response.ends_with("ping"),
+            "bytes flow both ways: {response}"
+        );
+
+        proxy.shutdown();
+    }
+
+    #[test]
+    fn loopback_proxy_reports_a_websocket_upstream_that_is_down() {
+        // Held bound until the proxy has taken its own port, so the OS cannot
+        // hand the proxy the very port we are about to free: a proxy pointed
+        // at itself would tunnel into itself and never reach end of stream.
+        let dead = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let dead_port = dead.local_addr().unwrap().port();
+        let proxy = start_loopback_proxy(dead_port, PreviewProxyStyles::default()).unwrap();
+        drop(dead);
+
+        let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, proxy.port)).unwrap();
+        client
+            .write_all(b"GET / HTTP/1.1\r\nHost: proxy\r\nUpgrade: websocket\r\n\r\n")
+            .unwrap();
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+
+        assert!(response.contains("502 Bad Gateway"), "{response}");
+        assert!(response.contains("preview websocket unavailable"));
+
+        proxy.shutdown();
+    }
+
+    #[test]
+    fn read_http_head_stops_at_the_end_of_the_headers() {
+        // The body of a proxied request is never needed, and reading past the
+        // headers would block on a connection the client keeps open.
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+            let _ = client.write_all(b"GET /?bg=%23fff HTTP/1.1\r\nHost: proxy\r\n\r\n");
+            // Held open deliberately: the read must not wait for EOF.
+            thread::sleep(Duration::from_secs(5));
+        });
+
+        let (mut server, _) = listener.accept().unwrap();
+        let head = read_http_head(&mut server).unwrap();
+
+        assert!(head.ends_with(b"\r\n\r\n"));
+        assert_eq!(
+            query_param_from_request(&head, "bg"),
+            Some("#fff".to_string())
+        );
+    }
+
+    #[test]
+    fn wait_until_ready_returns_as_soon_as_the_port_accepts() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(wait_until_ready(port).is_ok());
+    }
 }

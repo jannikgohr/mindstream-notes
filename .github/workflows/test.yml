@@ -31,6 +31,7 @@ jobs:
   js:
     name: JS check + test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:
@@ -58,6 +59,7 @@ jobs:
   rust:
     name: Cargo test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -73,16 +75,23 @@ jobs:
       # required even for `cargo test` because tauri-build runs.
       - name: Install Linux system deps
         if: runner.os == 'Linux'
+        timeout-minutes: 20
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo apt-get \
+            -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=15 \
+            -o Acquire::https::Timeout=15 \
+            update
+          sudo apt-get \
+            -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=15 \
+            -o Acquire::https::Timeout=15 \
+            install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev \
             libsoup-3.0-dev \
             libgtk-3-dev \
             librsvg2-dev \
-            libayatana-appindicator3-dev \
-            libssl-dev \
-            build-essential curl wget file
+            libayatana-appindicator3-dev
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -109,22 +118,30 @@ jobs:
   coverage:
     name: Coverage (Linux)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Linux system deps
+        timeout-minutes: 20
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo apt-get \
+            -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=15 \
+            -o Acquire::https::Timeout=15 \
+            update
+          sudo apt-get \
+            -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=15 \
+            -o Acquire::https::Timeout=15 \
+            install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev \
             libsoup-3.0-dev \
             libgtk-3-dev \
             librsvg2-dev \
-            libayatana-appindicator3-dev \
-            libssl-dev \
-            build-essential curl wget file
+            libayatana-appindicator3-dev
 
       - uses: pnpm/action-setup@v4
         with:
@@ -195,6 +212,11 @@ jobs:
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Keep this tag in sync with @playwright/test in pnpm-lock.yaml.
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble
+      options: --user 1001
     steps:
       - uses: actions/checkout@v4
 
@@ -207,9 +229,6 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
-
-      - name: Install Playwright browsers
-        run: pnpm exec playwright install --with-deps chromium
 
       - name: Run Playwright tests
         run: pnpm test:e2e
@@ -231,6 +250,7 @@ jobs:
   format:
     name: Prettier (web + docs)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
 

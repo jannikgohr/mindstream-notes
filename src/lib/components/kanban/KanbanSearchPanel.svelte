@@ -103,6 +103,7 @@
         bind:this={inputEl}
         type="text"
         value={filters.query}
+        spellcheck="false"
         placeholder={tUi('editor.kanban.searchPlaceholder')}
         aria-label={tUi('editor.kanban.searchPlaceholder')}
         oninput={(event) => update({ query: event.currentTarget.value })}

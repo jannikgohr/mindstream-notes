@@ -14,6 +14,11 @@
  * grant/record can always be traced back to exactly one plugin.
  */
 
+import type {
+  DiagnosticGrammar,
+  DiagnosticSyntaxId
+} from '$lib/diagnostics/syntax';
+
 /**
  * Capabilities a plugin may request in its manifest:
  *   - `templates.contribute` — surface note templates in create menus;
@@ -48,7 +53,8 @@ export type PluginPermission =
   | 'pluginStorage.write'
   | 'pluginWebviews.allowEval'
   | 'nativeTools.runDeclared'
-  | 'nativeServices.run';
+  | 'nativeServices.run'
+  | 'textCheckers.contribute';
 
 /** All permissions the current app version understands. */
 export const KNOWN_PLUGIN_PERMISSIONS: readonly PluginPermission[] = [
@@ -62,7 +68,8 @@ export const KNOWN_PLUGIN_PERMISSIONS: readonly PluginPermission[] = [
   'pluginStorage.write',
   'pluginWebviews.allowEval',
   'nativeTools.runDeclared',
-  'nativeServices.run'
+  'nativeServices.run',
+  'textCheckers.contribute'
 ];
 
 /**
@@ -206,6 +213,42 @@ export interface PluginSourceLanguageContribution {
     type: 'host';
     id: PluginSourceLanguageHostProvider;
   };
+  /**
+   * Opt this language's notes into spelling and grammar checking.
+   *
+   * The split here is the same one the language provider makes, for the same
+   * reason. WHETHER a plugin's notes are prose worth checking is the plugin's
+   * call — a Typst document is, a generated log would not be — but HOW to find
+   * the prose inside them is the app's, because that code runs on every
+   * keystroke of every note in the language and belongs nowhere near a plugin
+   * bundle. So the manifest names a syntax the app ships and stops there.
+   *
+   * Omitted means no checking, which keeps every existing plugin exactly as it
+   * was: a squiggle a user did not ask for, in a language the app might read
+   * wrong, is worse than no squiggle.
+   */
+  diagnostics?: PluginDiagnosticsContribution;
+}
+
+/**
+ * How a plugin's notes should be read when looking for prose.
+ *
+ * Exactly one of the two. `syntax` names a language the app already has code
+ * for; `grammar` describes one it does not, in literal delimiters the host
+ * scans with. Naming a host syntax is always preferable where one fits — it is
+ * a real parser rather than a span matcher — so the grammar is for languages
+ * the app has never heard of.
+ */
+export interface PluginDiagnosticsContribution {
+  /** One of `DIAGNOSTIC_SYNTAX_IDS` — see `$lib/diagnostics/syntax`. */
+  syntax?: DiagnosticSyntaxId;
+  /**
+   * A language described rather than shipped: comment, verbatim and math
+   * delimiters, all literal text. Deliberately not patterns — a
+   * plugin-supplied regex runs on every keystroke, where catastrophic
+   * backtracking is an editor freeze the user cannot escape.
+   */
+  grammar?: DiagnosticGrammar;
 }
 
 export const PLUGIN_NOTE_EXPORT_FORMATS = ['pdf'] as const;
@@ -538,6 +581,207 @@ export interface PluginDocSection {
 }
 
 /** The `contributes` block of a manifest. Every field is optional. */
+/**
+ * Wire protocols a text checker can speak.
+ *
+ * Host-owned, exactly like `PLUGIN_SOURCE_LANGUAGE_HOST_PROVIDERS`: a
+ * manifest picks from protocols the app ships an implementation for, rather
+ * than supplying its own transport. That is what keeps a checker a
+ * declaration instead of arbitrary code with access to every note's text.
+ * A second protocol is added here, not in a plugin bundle.
+ */
+/** How the request body carries its fields. */
+export type PluginCheckerEncoding = 'form' | 'json';
+
+/**
+ * Where a value lives in the server's JSON, as a JSON Pointer (RFC 6901).
+ *
+ * Pointers rather than a query language on purpose: they are a standard, they
+ * cannot loop or backtrack, and `serde_json` resolves them natively. A service
+ * whose response cannot be described by pointers is out of scope for a
+ * declarative protocol — see docs/plugins for where that boundary sits.
+ */
+export type PluginJsonPointer = string;
+
+/** How to build the check request. */
+export interface PluginCheckerRequestSpec {
+  /** Appended to the user's endpoint, e.g. `/v2/check`. */
+  path: string;
+  encoding: PluginCheckerEncoding;
+  /**
+   * Names the host's values take in the request. A field left out is not sent,
+   * which is how a server that has no concept of (say) an API key simply omits
+   * it rather than declaring an empty name.
+   */
+  fields: {
+    /** REQUIRED — the field carrying the text to check. */
+    text: string;
+    language?: string;
+    apiKey?: string;
+    username?: string;
+    /** Sent only alongside automatic language selection. */
+    preferredVariants?: string;
+    /** Carries `disabledCategories`, joined with commas. */
+    disabledCategories?: string;
+  };
+  /** Fixed fields sent verbatim on every request. */
+  staticFields?: Record<string, string>;
+}
+
+/** Where the findings are in the response. All pointers are match-relative
+ *  except `list`, which is document-relative. */
+export interface PluginCheckerMatchSpec {
+  /** Pointer to the array of findings. */
+  list: PluginJsonPointer;
+  /** Start of the finding, in characters from the start of the sent text. */
+  offset: PluginJsonPointer;
+  /** Exactly one of these: a length, or an end offset. */
+  length?: PluginJsonPointer;
+  end?: PluginJsonPointer;
+  message: PluginJsonPointer;
+  /** Pointer to the suggestions array. Omit if the service offers none. */
+  replacements?: PluginJsonPointer;
+  /**
+   * Pointer INTO each replacement entry, when they are objects rather than
+   * plain strings — LanguageTool returns `{ "value": "…" }`.
+   */
+  replacementValue?: PluginJsonPointer;
+  /** The service's rule category, mapped to a diagnostic kind by `categoryKinds`. */
+  category?: PluginJsonPointer;
+}
+
+/**
+ * Optional: where the service reports the language it detected.
+ *
+ * Declaring it switches on the host's re-ask behaviour — when detection is not
+ * confident enough, or lands outside the languages the user writes, the host
+ * repeats the request naming a language outright. Checking German prose against
+ * a French dictionary produces far more nonsense than a wrong regional variant.
+ */
+export interface PluginCheckerDetectionSpec {
+  code: PluginJsonPointer;
+  confidence: PluginJsonPointer;
+}
+
+/**
+ * Optional: a cheap endpoint that lists the languages the server offers, used
+ * by the "test connection" button.
+ *
+ * Kept apart from the check path because the point is to send NOTHING — the
+ * common question is "is my container up?", and answering it should not
+ * transmit text anywhere.
+ */
+export interface PluginCheckerProbeSpec {
+  path: string;
+  /** Pointer to the list; empty string is the document root. */
+  list: PluginJsonPointer;
+  /** Pointer into each entry for its BCP-47 tag, tried in order. */
+  languageCode: PluginJsonPointer[];
+}
+
+/**
+ * Everything the host needs to talk to a checking service, as data.
+ *
+ * This replaces a host-owned allow-list of protocol names. That list had one
+ * entry, `languagetool`, and its client lived in the app — so a second service
+ * meant editing the app and shipping a release, and a third-party plugin could
+ * not add one at all. The service's wire format is the plugin's business; the
+ * request, the egress and the rendering stay the host's.
+ *
+ * The host still makes every request, which is what keeps the strong property:
+ * a plugin never receives note text and cannot choose where it goes. Only the
+ * SHAPE is declared.
+ */
+export interface PluginCheckerProtocol {
+  /**
+   * A path suffix to strip from the user's endpoint before appending paths.
+   *
+   * Users paste whatever their server's docs show — often the API root
+   * including a version segment — which would otherwise build `/v2/v2/check`
+   * and 404 as an unreachable server rather than a URL one segment too long.
+   */
+  trimEndpointSuffix?: string;
+  check: PluginCheckerRequestSpec;
+  matches: PluginCheckerMatchSpec;
+  detection?: PluginCheckerDetectionSpec;
+  probe?: PluginCheckerProbeSpec;
+}
+
+/**
+ * A checker a plugin adds to the diagnostics pipeline.
+ *
+ * Deliberately DECLARATIVE — the plugin describes an endpoint, and the host
+ * makes the request and renders the result. It never receives note text or
+ * returns rendered UI. Two reasons: with Yjs underneath, a checker that
+ * could edit the document would fight collaborative updates, and a checker
+ * that drew its own squiggles would make the source and WYSIWYG panes
+ * disagree. Plugins supply findings; the host owns the document and the
+ * pixels.
+ *
+ * Gated by `textCheckers.contribute`, its own permission rather than
+ * `notes.read`, because a checker sees the full text of every note the user
+ * types in — including ones it would never otherwise be granted.
+ */
+export interface PluginTextCheckerContribution {
+  /** Namespaced to `plugins.<pluginId>.<id>` at runtime, like settings. */
+  id: string;
+  /**
+   * Kinds this checker may emit. Declared so overlapping providers can be
+   * de-conflicted without running them — the built-in dictionary owns
+   * spelling, so a grammar service should not also claim it.
+   */
+  kinds: ('spelling' | 'grammar' | 'style')[];
+  /** How to talk to the service, declared rather than named. */
+  protocol: PluginCheckerProtocol;
+  /**
+   * Id of the plugin setting holding the server URL.
+   *
+   * A setting rather than a manifest value because the endpoint is the
+   * user's choice — their own self-hosted instance, or the public API with
+   * its rate limits and its very different privacy implications.
+   */
+  endpointSetting: string;
+  /** Id of the plugin setting holding an API key, when the server needs one. */
+  apiKeySetting?: string;
+  /**
+   * Id of the plugin setting holding an account name. LanguageTool's public
+   * API authenticates with username and key together; self-hosted servers
+   * usually need neither.
+   */
+  usernameSetting?: string;
+  /** Rule categories to switch off server-side, always. */
+  disabledCategories?: string[];
+  /**
+   * Id of the plugin setting toggling whether this checker does spelling.
+   *
+   * Declaring `spelling` in `kinds` says it CAN; this setting says whether it
+   * does, so a user can keep the built-in dictionary's behaviour without
+   * disabling the plugin. Omitted means it always does.
+   */
+  spellingSetting?: string;
+  /**
+   * Categories to disable when this checker is NOT doing spelling.
+   *
+   * Named by the plugin because they are the service's vocabulary — the host
+   * has no idea that LanguageTool calls its spelling rules `TYPOS`. Switching
+   * them off server-side avoids paying for findings that would be discarded,
+   * and avoids one word carrying two underlines whose fixes disagree.
+   */
+  spellingCategories?: string[];
+  /**
+   * The service's rule categories mapped to diagnostic kinds.
+   *
+   * Also the service's vocabulary, and previously a hardcoded set of
+   * LanguageTool ids — including German-only ones — sitting in app code.
+   * Anything unlisted falls back to `defaultKind`.
+   */
+  categoryKinds?: Record<string, 'spelling' | 'grammar' | 'style'>;
+  /** Kind for categories `categoryKinds` does not name. Defaults to grammar. */
+  defaultKind?: 'spelling' | 'grammar' | 'style';
+  /** i18n key for the name shown in the suggestion popover. */
+  labelKey?: string;
+}
+
 export interface PluginContributions {
   i18n?: PluginI18nContribution;
   settings?: PluginSettingsContribution[];
@@ -549,6 +793,7 @@ export interface PluginContributions {
   noteTemplates?: PluginNoteTemplateContribution[];
   noteKinds?: PluginNoteKindContribution[];
   commands?: PluginCommandContribution[];
+  textCheckers?: PluginTextCheckerContribution[];
   /** Ordered, file-backed documentation sections shown in the docs modal. */
   documentation?: PluginDocSection[];
   /** Toolbar buttons the plugin places into host surfaces (file-tree, …). */

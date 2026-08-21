@@ -5,6 +5,7 @@
   import PluginsOverview from '$lib/plugins/PluginsOverview.svelte';
   import PluginIcon from '$lib/plugins/PluginIcon.svelte';
   import PluginNativeToolsSection from '$lib/plugins/PluginNativeToolsSection.svelte';
+  import PluginTextCheckersSection from '$lib/plugins/PluginTextCheckersSection.svelte';
   import {
     SCHEMA,
     closeSettings,
@@ -433,6 +434,7 @@
               {/each}
               {#if isPluginsCategory && activePluginId}
                 <PluginNativeToolsSection pluginId={activePluginId} />
+                <PluginTextCheckersSection pluginId={activePluginId} />
               {/if}
             {/if}
           {/if}
