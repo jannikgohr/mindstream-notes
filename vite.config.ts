@@ -80,6 +80,9 @@ function silenceUpstreamWarnings(): Plugin {
 // Tauri expects a fixed port and ignores hidden Vite cache changes.
 const host = process.env.TAURI_DEV_HOST;
 const packageJsonPath = fileURLToPath(new URL('package.json', import.meta.url));
+const workspacePackagesPath = fileURLToPath(
+  new URL('packages', import.meta.url)
+);
 
 export default defineConfig({
   plugins: [
@@ -135,6 +138,9 @@ export default defineConfig({
       '@milkdown/kit/prose/model',
       '@milkdown/kit/prose/state',
       '@milkdown/kit/prose/view',
+      // Imported directly by the lazy Kanban Markdown renderer. Without an
+      // explicit entry Vite discovers it when the first board opens and reloads.
+      'prosemirror-model',
       '@codemirror/language',
       'mermaid',
       // Raw-markdown Source editor (CodeMirror 6) — reached through the lazy
@@ -168,7 +174,16 @@ export default defineConfig({
       'perfect-freehand',
       'image-js',
       // Kanban boards
-      '@svar-ui/svelte-kanban',
+      '@svar-ui/core-locales',
+      '@svar-ui/kanban-locales',
+      '@svar-ui/kanban-provider',
+      '@svar-ui/kanban-store',
+      '@svar-ui/lib-dom',
+      '@svar-ui/lib-state',
+      '@svar-ui/svelte-core',
+      '@svar-ui/svelte-editor',
+      '@svar-ui/svelte-menu',
+      '@svar-ui/svelte-toolbar',
       // Desktop dockview shell — lazy via DesktopLayout.svelte
       'dockview-core',
       // Tauri API + plugins — dynamically imported, so only loaded under Tauri
@@ -189,7 +204,10 @@ export default defineConfig({
       'mode-watcher',
       'tailwind-merge',
       'tailwind-variants'
-    ]
+    ],
+    // This workspace package contains Svelte source and must pass through the
+    // Svelte compiler instead of esbuild's dependency pre-bundler.
+    exclude: ['@mindstream/svelte-kanban']
   },
 
   // Vite options tailored for Tauri development.
@@ -210,7 +228,7 @@ export default defineConfig({
       ignored: ['**/src-tauri/**']
     },
     fs: {
-      allow: [packageJsonPath]
+      allow: [packageJsonPath, workspacePackagesPath]
     }
   },
 

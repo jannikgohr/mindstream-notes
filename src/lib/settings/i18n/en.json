@@ -39,6 +39,8 @@
     "empty": "No settings match your search.",
     "saving": "Saving…",
     "picker.none": "None",
+    "picker.search": "Search folders and tags…",
+    "picker.empty": "No matches",
     "account.managedUnavailable": "Not available yet — pick \"Self-hosted\" to use your own server.",
     "data.openFolder.failed.title": "Couldn't open the data folder",
     "data.openFolder.failed.message": "{error}",
@@ -160,6 +162,12 @@
     "fileTree.newInk": "New handwritten note",
     "fileTree.importPdf": "Import PDF",
     "fileTree.newFolder": "New folder",
+    "fileTree.toolbar.more": "More actions",
+    "fileTree.toolbar.customize": "Reorder actions",
+    "fileTree.toolbar.customizeHint": "Drag actions to reorder them or move them between sections.",
+    "fileTree.toolbar.shown": "Shown in toolbar",
+    "fileTree.toolbar.restore": "Restore defaults",
+    "fileTree.toolbar.done": "Done",
     "fileTree.loading": "Loading…",
     "fileTree.error": "Couldn't load notes",
     "fileTree.emptyRoot": "No notes yet. Right-click here to create one.",
@@ -209,6 +217,17 @@
     "metadata.attachments.one": "{count} file",
     "metadata.attachments.other": "{count} files",
     "metadata.noNote": "No note selected.",
+    "sidebar.metadata": "Metadata",
+    "sidebar.show": "Show right sidebar",
+    "sidebar.hide": "Hide right sidebar",
+    "sidebar.links": "Links",
+    "sidebar.backlinks": "Backlinks",
+    "sidebar.backlinks.empty": "No notes link here.",
+    "sidebar.outgoingLinks": "Outgoing links",
+    "sidebar.outgoingLinks.empty": "This note does not link to another note.",
+    "sidebar.links.loading": "Loading links…",
+    "sidebar.links.failed": "Links could not be loaded.",
+    "sidebar.sections.empty": "Choose sidebar sections in Appearance settings.",
     "desktop.emptyState.title": "No note open",
     "desktop.emptyState.message": "Open a note from the explorer to start editing.",
     "history.title": "History",
@@ -445,7 +464,7 @@
     "hotkeys.command.global.undo": "Undo",
     "hotkeys.command.global.redo": "Redo",
     "hotkeys.command.global.toggleNoteOverview": "Toggle note overview",
-    "hotkeys.command.global.toggleNoteMetadata": "Toggle note metadata",
+    "hotkeys.command.global.toggleNoteMetadata": "Toggle right sidebar",
     "hotkeys.command.global.addTag": "Add tag",
     "hotkeys.command.global.showShortcutHelp": "Show keyboard shortcuts",
     "hotkeys.command.global.showApp": "Show app",
@@ -694,7 +713,7 @@
     "updater.unsupportedLinux.title": "In-app update not available",
     "updater.unsupportedLinux.message": "Mindstream Notes was installed from a system package (rpm / deb), which can only be updated through your distribution. Download the latest version from https://github.com/jannikgohr/mindstream-notes/releases/latest and reinstall, or use the AppImage build for in-app updates.",
     "nav.create.kanban": "New Kanban board",
-    "nav.create.kanbanInFolder": "New Kanban board in folder",
+    "nav.create.kanbanInFolder": "New Kanban board",
     "fab.fromTemplate": "New from template",
     "plugins.manage.title": "Installed plugins",
     "plugins.manage.empty": "No plugins installed.",
@@ -763,6 +782,16 @@
     "fileTree.newKanban": "New Kanban board",
     "editor.kanban.newList": "New list",
     "editor.kanban.addList": "Add list",
+    "editor.kanban.addCard": "Add card",
+    "editor.kanban.reorderCard": "Reorder card",
+    "editor.kanban.cardCount": "Card count",
+    "editor.kanban.lists": "Kanban lists",
+    "editor.kanban.reorderList": "Reorder list",
+    "editor.kanban.manageLists": "Manage lists",
+    "editor.kanban.manageListsHint": "Drag lists to reorder",
+    "editor.kanban.moveListLeft": "Move list left",
+    "editor.kanban.moveListRight": "Move list right",
+    "editor.kanban.collapseList": "Collapse list",
     "editor.kanban.renameList": "Rename list",
     "editor.kanban.deleteList": "Delete list",
     "editor.kanban.deleteListTitle": "Delete list?",
@@ -863,6 +892,10 @@
     },
     "appearance.fileTree": {
       "label": "File tree"
+    },
+    "appearance.sidebar": {
+      "label": "Right sidebar",
+      "description": "Choose which sections appear beside the active note."
     },
     "editor.input": {
       "label": "Input"
@@ -969,6 +1002,18 @@
     },
     "appearance.foldersFirst": {
       "label": "Folders first"
+    },
+    "appearance.contextMenuIcons": {
+      "label": "Icons in context menus"
+    },
+    "appearance.sidebar.metadata": {
+      "label": "Show metadata"
+    },
+    "appearance.sidebar.history": {
+      "label": "Show history"
+    },
+    "appearance.sidebar.links": {
+      "label": "Show links"
     },
     "editor.defaultMode": {
       "label": "Default mode"

@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
   pluginTemplateEntries: vi.fn(
     () => [] as { pluginId: string; templateId: string; label: string }[]
   ),
+  pluginTemplateNoteKind: vi.fn(() => 'markdown'),
   pluginToolbarButtons: vi.fn(() => [] as unknown[]),
   moveNoteTo: vi.fn(() => Promise.resolve()),
   moveCollectionTo: vi.fn(() => Promise.resolve()),
@@ -58,10 +59,12 @@ vi.mock('./share-dialog.svelte', () => ({
   openCollectionShareDialog: h.openCollectionShareDialog
 }));
 vi.mock('$lib/plugins/menu', () => ({
-  pluginTemplateEntries: h.pluginTemplateEntries
+  pluginTemplateEntries: h.pluginTemplateEntries,
+  pluginTemplateNoteKind: h.pluginTemplateNoteKind
 }));
 vi.mock('$lib/plugins/registry.svelte', () => ({
-  pluginToolbarButtons: h.pluginToolbarButtons
+  pluginToolbarButtons: h.pluginToolbarButtons,
+  pluginNoteKind: () => undefined
 }));
 vi.mock('$lib/stores/tree.svelte', async (orig) => ({
   ...(await orig<typeof import('$lib/stores/tree.svelte')>()),
@@ -316,7 +319,7 @@ describe('folder actions (home)', () => {
     const { menuItemsForTarget } = createMenuBuilder(ctx);
     const items = await menuItemsForTarget({ kind: 'folder', id: 'f1' });
 
-    find(items, 'New note in folder').onSelect!();
+    find(items, 'New note').onSelect!();
     expect(ctx.startDraft).toHaveBeenCalledWith('note', 'f1');
     find(items, 'Rename folder…').onSelect!();
     expect(ctx.startRename).toHaveBeenCalledWith('folder', 'f1', 'Folder');

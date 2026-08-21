@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { clickFileTreeCreateAction } from './file-tree-toolbar';
 
 /**
  * Create + select flows against the live tree store. Each test names its
@@ -14,7 +15,7 @@ test.beforeEach(async ({ page }) => {
 test('creates a new note from the toolbar', async ({ page }) => {
   const title = `Note ${Date.now()}`;
 
-  await page.getByRole('button', { name: 'New note', exact: true }).click();
+  await clickFileTreeCreateAction(page, 'New note');
 
   // The draft row focuses an inline rename input pre-filled "Untitled".
   const draft = page.getByRole('textbox', { name: 'New note' });
@@ -31,7 +32,7 @@ test('creates a new note from the toolbar', async ({ page }) => {
 test('creates a new folder from the toolbar', async ({ page }) => {
   const name = `Folder ${Date.now()}`;
 
-  await page.getByRole('button', { name: 'New folder', exact: true }).click();
+  await clickFileTreeCreateAction(page, 'New folder');
   const draft = page.getByRole('textbox', { name: 'New folder', exact: true });
   await expect(draft).toBeFocused();
   await draft.fill(name);

@@ -38,6 +38,7 @@ import {
   annotationTypeLabel,
   formatPdfUi
 } from './annotation-labels';
+import { annotationCanMove } from './annotation-interaction';
 
 /** The per-page draw state the overlays read. Owned by the render action. */
 export interface PageOverlayHost {
@@ -356,8 +357,8 @@ export function createPageOverlays(
         // stay anchored to the text they mark and are not movable.
         const movable =
           !ctx.isTrashed &&
-          (annotation.type === 'ink' || annotation.type === 'signature');
-        if (textMode && movable) {
+          annotationCanMove(annotation.type, host.params.activeTool, textMode);
+        if (movable) {
           node.style.pointerEvents = 'auto';
           node.classList.add('pdf-app-annotation-movable');
           attachMoveHandler(node, annotation);

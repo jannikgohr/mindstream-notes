@@ -11,8 +11,14 @@
 
 import type { MenuItem } from './context-menu-types';
 import { noteTypeEnabled } from '$lib/notes/note-types';
-import { pluginTemplateEntries } from '$lib/plugins/menu';
-import { pluginToolbarButtons } from '$lib/plugins/registry.svelte';
+import {
+  pluginTemplateEntries,
+  pluginTemplateNoteKind
+} from '$lib/plugins/menu';
+import {
+  pluginNoteKind,
+  pluginToolbarButtons
+} from '$lib/plugins/registry.svelte';
 import { resolvePluginString } from '$lib/plugins/plugin-i18n';
 import {
   menuItemFromPluginEffect,
@@ -56,6 +62,8 @@ import type {
 } from './file-explorer-helpers';
 import type { DesktopNoteSource } from '$lib/stores/note-source.svelte';
 import type { TreeNode } from '$lib/api';
+import { noteKindIcon } from './note-kind-icon';
+import { FolderPlus, Share2 } from '@lucide/svelte';
 
 /**
  * The explorer state and commands the menu builder reads.
@@ -128,12 +136,23 @@ async function pluginCreateMenuItems(
 ): Promise<MenuItem[]> {
   // Plugin note kinds (e.g. a Typst document) open a name-first inline draft
   // like "New note" does, so the file name can be set before the note exists.
-  const items: MenuItem[] = pluginTemplateEntries().map((entry) => ({
-    id: `plugin-template:${entry.pluginId}:${entry.templateId}`,
-    label: entry.label,
-    onSelect: () =>
-      ctx.startPluginTemplateDraft(entry.pluginId, entry.templateId, parentId)
-  }));
+  const items: MenuItem[] = pluginTemplateEntries().map((entry) => {
+    const noteKind = pluginTemplateNoteKind(entry.pluginId, entry.templateId);
+    const pluginKind = pluginNoteKind(noteKind);
+    return {
+      id: `plugin-template:${entry.pluginId}:${entry.templateId}`,
+      label: entry.label,
+      noteKind: noteKind ?? undefined,
+      pluginIcon: pluginKind?.contribution?.icon
+        ? {
+            pluginId: pluginKind.pluginId,
+            file: pluginKind.contribution.icon
+          }
+        : undefined,
+      onSelect: () =>
+        ctx.startPluginTemplateDraft(entry.pluginId, entry.templateId, parentId)
+    };
+  });
 
   // Plugin-declared file-tree actions (e.g. the Templates plugin's "New from
   // template"). Both the label and the behaviour come from the plugin — the app
@@ -143,16 +162,16 @@ async function pluginCreateMenuItems(
     const effect = await pluginButtonEffect(pluginId, button);
     if (!effect) continue;
     const id = `plugin-filetree:${pluginId}:${button.id}`;
-    items.push(
-      menuItemFromPluginEffect(
-        pluginId,
-        id,
-        resolvePluginString(pluginId, button.labelKey ?? button.id),
-        effect,
-        undefined,
-        { defaultParentId: parentId }
-      )
+    const item = menuItemFromPluginEffect(
+      pluginId,
+      id,
+      resolvePluginString(pluginId, button.labelKey ?? button.id),
+      effect,
+      undefined,
+      { defaultParentId: parentId }
     );
+    if (button.icon) item.pluginIcon = { pluginId, file: button.icon };
+    items.push(item);
   }
   return items;
 }
@@ -187,7 +206,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
         }
       );
     }
-    return [{ label: tUi('sharing.menu.group'), children }];
+    return [{ label: tUi('sharing.menu.group'), icon: Share2, children }];
   }
 
   function batchLabel(items: TreeItemRef[]): string {
@@ -280,13 +299,15 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
     const pluginItems = await pluginCreateMenuItems(ctx, id);
     return [
       {
-        label: 'New note in folder',
+        label: 'New note',
+        icon: noteKindIcon('markdown'),
         onSelect: () => ctx.startDraft('note', id)
       },
       ...(noteTypeEnabled('freeform')
         ? [
             {
-              label: 'New drawing canvas in folder',
+              label: 'New drawing canvas',
+              icon: noteKindIcon('freeform'),
               onSelect: () => ctx.startDraft('drawing', id)
             }
           ]
@@ -294,7 +315,8 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
       ...(noteTypeEnabled('ink')
         ? [
             {
-              label: 'New handwritten note in folder',
+              label: 'New handwritten note',
+              icon: noteKindIcon('ink'),
               onSelect: () => ctx.startDraft('ink', id)
             }
           ]
@@ -302,7 +324,8 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
       ...(noteTypeEnabled('pdf')
         ? [
             {
-              label: 'Import PDF in folder',
+              label: 'Import PDF',
+              icon: noteKindIcon('pdf'),
               onSelect: () => ctx.startPdfImport(id)
             }
           ]
@@ -311,6 +334,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
         ? [
             {
               label: tUi('nav.create.kanbanInFolder'),
+              icon: noteKindIcon('kanban'),
               onSelect: () => ctx.startDraft('kanban', id)
             }
           ]
@@ -322,7 +346,8 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
           )[])
         : []),
       {
-        label: 'New folder inside',
+        label: 'New folder',
+        icon: FolderPlus,
         onSelect: () => ctx.startDraft('folder', id)
       }
     ];
@@ -498,6 +523,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
           if (canManageShare) {
             items.push({
               label: tUi('sharing.menu.group'),
+              icon: Share2,
               children: [
                 {
                   label: tUi('sharing.menu.shareFolder'),
@@ -578,11 +604,16 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
 
     const pluginItems = await pluginCreateMenuItems(ctx, null);
     return [
-      { label: 'New note', onSelect: () => ctx.startDraft('note', null) },
+      {
+        label: 'New note',
+        icon: noteKindIcon('markdown'),
+        onSelect: () => ctx.startDraft('note', null)
+      },
       ...(noteTypeEnabled('freeform')
         ? [
             {
               label: 'New drawing canvas',
+              icon: noteKindIcon('freeform'),
               onSelect: () => ctx.startDraft('drawing', null)
             }
           ]
@@ -591,17 +622,25 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
         ? [
             {
               label: 'New handwritten note',
+              icon: noteKindIcon('ink'),
               onSelect: () => ctx.startDraft('ink', null)
             }
           ]
         : []),
       ...(noteTypeEnabled('pdf')
-        ? [{ label: 'Import PDF', onSelect: () => ctx.startPdfImport(null) }]
+        ? [
+            {
+              label: 'Import PDF',
+              icon: noteKindIcon('pdf'),
+              onSelect: () => ctx.startPdfImport(null)
+            }
+          ]
         : []),
       ...(noteTypeEnabled('kanban')
         ? [
             {
               label: tUi('nav.create.kanban'),
+              icon: noteKindIcon('kanban'),
               onSelect: () => ctx.startDraft('kanban', null)
             }
           ]
@@ -612,7 +651,11 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
             | 'separator'
           )[])
         : []),
-      { label: 'New folder', onSelect: () => ctx.startDraft('folder', null) }
+      {
+        label: 'New folder',
+        icon: FolderPlus,
+        onSelect: () => ctx.startDraft('folder', null)
+      }
     ];
   }
 

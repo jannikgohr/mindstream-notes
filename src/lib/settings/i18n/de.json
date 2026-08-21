@@ -39,6 +39,8 @@
     "empty": "Keine Einstellungen passen zur Suche.",
     "saving": "Wird gespeichert…",
     "picker.none": "Keine",
+    "picker.search": "Ordner und Tags suchen…",
+    "picker.empty": "Keine Treffer",
     "account.managedUnavailable": "Noch nicht verfügbar — wähle \"Selbst gehostet\", um deinen eigenen Server zu nutzen.",
     "sort.label": "Sortierung",
     "sort.ascending": "Aufsteigend sortieren",
@@ -62,6 +64,12 @@
     "fileTree.newInk": "Neue handschriftliche Notiz",
     "fileTree.importPdf": "PDF importieren",
     "fileTree.newFolder": "Neuer Ordner",
+    "fileTree.toolbar.more": "Weitere Aktionen",
+    "fileTree.toolbar.customize": "Aktionen neu anordnen",
+    "fileTree.toolbar.customizeHint": "Ziehe Aktionen, um sie zu sortieren oder zwischen den Bereichen zu verschieben.",
+    "fileTree.toolbar.shown": "In der Werkzeugleiste",
+    "fileTree.toolbar.restore": "Standardeinstellungen wiederherstellen",
+    "fileTree.toolbar.done": "Fertig",
     "fileTree.loading": "Wird geladen…",
     "fileTree.error": "Notizen konnten nicht geladen werden",
     "fileTree.emptyRoot": "Noch keine Notizen. Rechtsklick zum Anlegen.",
@@ -111,6 +119,17 @@
     "metadata.attachments.one": "{count} Datei",
     "metadata.attachments.other": "{count} Dateien",
     "metadata.noNote": "Keine Notiz ausgewählt.",
+    "sidebar.metadata": "Metadaten",
+    "sidebar.show": "Rechte Seitenleiste anzeigen",
+    "sidebar.hide": "Rechte Seitenleiste ausblenden",
+    "sidebar.links": "Links",
+    "sidebar.backlinks": "Rückverweise",
+    "sidebar.backlinks.empty": "Keine Notiz verweist hierher.",
+    "sidebar.outgoingLinks": "Ausgehende Links",
+    "sidebar.outgoingLinks.empty": "Diese Notiz verweist auf keine andere Notiz.",
+    "sidebar.links.loading": "Links werden geladen…",
+    "sidebar.links.failed": "Links konnten nicht geladen werden.",
+    "sidebar.sections.empty": "Wähle die Seitenleistenbereiche in den Darstellungseinstellungen aus.",
     "desktop.emptyState.title": "Keine Notiz geöffnet",
     "desktop.emptyState.message": "Öffne links im Explorer eine Notiz, um mit dem Bearbeiten zu beginnen.",
     "history.title": "Verlauf",
@@ -347,7 +366,7 @@
     "hotkeys.command.global.undo": "Rückgängig",
     "hotkeys.command.global.redo": "Wiederholen",
     "hotkeys.command.global.toggleNoteOverview": "Notizübersicht ein-/ausblenden",
-    "hotkeys.command.global.toggleNoteMetadata": "Notizmetadaten ein-/ausblenden",
+    "hotkeys.command.global.toggleNoteMetadata": "Rechte Seitenleiste ein-/ausblenden",
     "hotkeys.command.global.addTag": "Tag hinzufügen",
     "hotkeys.command.global.showShortcutHelp": "Tastenkürzel anzeigen",
     "hotkeys.command.global.showApp": "App anzeigen",
@@ -694,7 +713,7 @@
     "data.exportVault.failed.title": "Notizen konnten nicht exportiert werden",
     "data.exportVault.failed.message": "{error}",
     "nav.create.kanban": "Neues Kanban-Board",
-    "nav.create.kanbanInFolder": "Neues Kanban-Board im Ordner",
+    "nav.create.kanbanInFolder": "Neues Kanban-Board",
     "fab.fromTemplate": "Neu aus Vorlage",
     "plugins.manage.title": "Installierte Plugins",
     "plugins.manage.empty": "Keine Plugins installiert.",
@@ -763,6 +782,16 @@
     "fileTree.newKanban": "Neues Kanban-Board",
     "editor.kanban.newList": "Neue Liste",
     "editor.kanban.addList": "Liste hinzufügen",
+    "editor.kanban.addCard": "Karte hinzufügen",
+    "editor.kanban.reorderCard": "Karte neu anordnen",
+    "editor.kanban.cardCount": "Kartenanzahl",
+    "editor.kanban.lists": "Kanban-Listen",
+    "editor.kanban.reorderList": "Liste neu anordnen",
+    "editor.kanban.manageLists": "Listen verwalten",
+    "editor.kanban.manageListsHint": "Listen zum Sortieren ziehen",
+    "editor.kanban.moveListLeft": "Liste nach links verschieben",
+    "editor.kanban.moveListRight": "Liste nach rechts verschieben",
+    "editor.kanban.collapseList": "Liste einklappen",
     "editor.kanban.renameList": "Liste umbenennen",
     "editor.kanban.deleteList": "Liste löschen",
     "editor.kanban.deleteListTitle": "Liste löschen?",
@@ -859,6 +888,10 @@
     },
     "appearance.fileTree": {
       "label": "Dateibaum"
+    },
+    "appearance.sidebar": {
+      "label": "Rechte Seitenleiste",
+      "description": "Lege fest, welche Bereiche neben der aktiven Notiz erscheinen."
     },
     "editor.input": {
       "label": "Eingabe"
@@ -959,6 +992,18 @@
     },
     "appearance.foldersFirst": {
       "label": "Ordner zuerst"
+    },
+    "appearance.contextMenuIcons": {
+      "label": "Symbole in Kontextmenüs"
+    },
+    "appearance.sidebar.metadata": {
+      "label": "Metadaten anzeigen"
+    },
+    "appearance.sidebar.history": {
+      "label": "Verlauf anzeigen"
+    },
+    "appearance.sidebar.links": {
+      "label": "Links anzeigen"
     },
     "editor.defaultMode": {
       "label": "Standard-Editor"

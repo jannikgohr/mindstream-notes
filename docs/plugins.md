@@ -121,12 +121,13 @@ is namespaced under the plugin `id`, so two plugins can never collide.
     "location": "file-tree",
     "labelKey": "toolbar.newFromTemplate",   // plugin i18n key (tooltip)
     "icon": "icons/templates.svg",           // safe relative .svg path
+    "opensMenu": true,                        // show and open as a submenu on hover
     "action": { "type": "script", "export": "newFromTemplate" }
   }]
   ```
   The export returns a **declarative effect** the app performs (see below) — so
-  one button is either a single action or a sub-menu, depending on what it
-  returns.
+  Set `opensMenu` when the export returns `openMenu`. The host then marks the
+  button as a submenu and resolves it on hover.
 
 ### Placeholder syntax (declarative templates)
 

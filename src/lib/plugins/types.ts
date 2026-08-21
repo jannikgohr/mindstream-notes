@@ -524,6 +524,9 @@ export interface PluginToolbarButton {
   labelKey?: string;
   /** Safe relative path to a bundled `.svg` icon (rendered themed via a mask). */
   icon?: string;
+  /** The script returns an `openMenu` effect. Hosts show a submenu affordance
+   * and may resolve it on hover. */
+  opensMenu?: boolean;
   action: PluginToolbarAction;
 }
 

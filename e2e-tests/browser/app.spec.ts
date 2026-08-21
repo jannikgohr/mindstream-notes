@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { revealFileTreeCreateAction } from './file-tree-toolbar';
 
 /**
  * Smoke + navigation coverage for the desktop shell running in
@@ -43,9 +44,7 @@ test('exposes the note-creation toolbar actions', async ({ page }) => {
     'New handwritten note',
     'Import PDF'
   ]) {
-    await expect(
-      page.getByRole('button', { name: action, exact: true })
-    ).toBeVisible();
+    await revealFileTreeCreateAction(page, action);
   }
 });
 

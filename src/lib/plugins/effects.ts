@@ -16,7 +16,7 @@
 
 import { pluginsRunScript } from '$lib/api/plugins';
 import type { NoteKind } from '$lib/api';
-import { createNoteIn } from '$lib/stores/tree.svelte';
+import { createNoteIn, tree } from '$lib/stores/tree.svelte';
 import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
 import { insertMarkdownIntoActiveNote } from '$lib/hotkeys';
 import { createNoteFromNote } from '$lib/templates/user-templates';
@@ -145,10 +145,26 @@ function pluginEffectMenuItems(
   anchor?: EffectAnchor,
   opts?: RunEffectOptions
 ): MenuItem[] {
-  return items.map((it) => ({
-    label: it.label,
-    onSelect: () => void runPluginEffect(pluginId, it.run, anchor, opts)
-  }));
+  return items.map((it) => {
+    const noteKind =
+      it.run.effect === 'createNote'
+        ? (it.run.noteKind ?? 'markdown')
+        : it.run.effect === 'createNoteFromNote'
+          ? tree.notesById?.[it.run.sourceNoteId]?.note_kind
+          : undefined;
+    const pluginKind = pluginNoteKind(noteKind);
+    return {
+      label: it.label,
+      noteKind,
+      pluginIcon: pluginKind?.contribution?.icon
+        ? {
+            pluginId: pluginKind.pluginId,
+            file: pluginKind.contribution.icon
+          }
+        : undefined,
+      onSelect: () => void runPluginEffect(pluginId, it.run, anchor, opts)
+    };
+  });
 }
 
 /**

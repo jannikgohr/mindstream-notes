@@ -64,6 +64,17 @@ describe('schema flattening', () => {
     expect(BY_ID['account.syncEnabled'].scope).toBe('V');
     expect(BY_ID['account.syncInterval'].scope).toBe('V');
   });
+
+  it('keeps right-sidebar visibility per device and enabled by default', () => {
+    for (const id of [
+      'appearance.sidebar.metadata',
+      'appearance.sidebar.history',
+      'appearance.sidebar.links'
+    ]) {
+      expect(BY_ID[id].scope).toBe('D');
+      expect(BY_ID[id].default).toBe(true);
+    }
+  });
 });
 
 describe('getSettingValue / hasSettingValue', () => {
