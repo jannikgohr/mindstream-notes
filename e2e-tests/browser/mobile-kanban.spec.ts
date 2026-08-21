@@ -116,14 +116,26 @@ test('mobile Kanban supports list management and card actions', async ({
     .getByRole('navigation', { name: 'Kanban lists' })
     .getByRole('button', { name: 'Done', exact: true })
     .click();
-  await expect(page.locator('.mindstream-list-header .list-title')).toHaveText(
-    'Done'
-  );
+  const exitingList = page.locator('.mobile-list-transition-ghost');
+  await expect(exitingList).toBeVisible();
   await expect
     .poll(() =>
-      column.evaluate((element) => getComputedStyle(element).animationName)
+      exitingList.evaluate((element) => getComputedStyle(element).animationName)
+    )
+    .toContain('mobile-list-exit-previous');
+  await expect(
+    page.locator(
+      '.wx-column:not(.mobile-list-transition-ghost) .mindstream-list-header .list-title'
+    )
+  ).toHaveText('Done');
+  await expect
+    .poll(() =>
+      page
+        .locator('.wx-column:not(.mobile-list-transition-ghost)')
+        .evaluate((element) => getComputedStyle(element).animationName)
     )
     .toContain('mobile-list-enter-previous');
+  await expect(exitingList).toBeHidden();
 
   await page.getByRole('button', { name: 'Add card' }).click();
   await expect(page.getByTitle('Close')).toBeVisible();
