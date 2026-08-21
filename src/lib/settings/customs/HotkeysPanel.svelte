@@ -240,7 +240,7 @@
       return 'border-destructive/40 bg-destructive/10 text-destructive';
     }
     if (kind === 'warning') {
-      return 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400';
+      return 'border-warning-border bg-warning-subtle text-warning';
     }
     return 'border-border bg-muted text-muted-foreground';
   }
@@ -632,7 +632,7 @@
                       we just can't tell for sure.
                     -->
                       <span
-                        class="max-w-[16rem] text-xs text-amber-600 dark:text-amber-500"
+                        class="max-w-[16rem] text-xs text-warning"
                         use:tooltip={tUi('hotkeys.osConflict.tooltip')}
                       >
                         {tUi('hotkeys.osConflict.label')}: {osConflictReason}

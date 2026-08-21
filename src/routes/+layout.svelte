@@ -41,6 +41,7 @@
   import { loadPlugins } from '$lib/plugins/load';
   import { installPluginSettingsBridge } from '$lib/plugins/settings-bridge';
   import { startPickerSettingPruning } from '$lib/settings/pickers.svelte';
+  import { startSpellcheckSettingsWatcher } from '$lib/diagnostics/editor-diagnostics.svelte';
   import { loadCustomDictionary } from '$lib/diagnostics/custom-dictionary.svelte';
   import { syncPluginTextCheckers } from '$lib/diagnostics/plugin-checkers.svelte';
 
@@ -93,6 +94,10 @@
     void loadPlugins();
     // Clear any folder/tag picker setting whose target gets deleted.
     const stopPickerPruning = startPickerSettingPruning();
+    // Reload the dictionary configuration and re-check every open surface
+    // when the spellcheck settings change. App-wide rather than per editor,
+    // so one language change is one reload and one re-check.
+    const stopSpellcheckWatch = startSpellcheckSettingsWatcher();
     // Surface a notification when Rust reports the sync server is
     // unreachable (and clear it on the next successful sync).
     const teardownSyncStatus = installSyncStatusBridge();
@@ -111,6 +116,7 @@
       teardownTreeRefresh();
       void teardownGlobalShortcuts();
       stopPickerPruning();
+      stopSpellcheckWatch();
     };
   });
 
@@ -150,11 +156,13 @@
   });
 
   // Re-apply the accent colour whenever the user changes it (or on
-  // first mount, since $effect runs once for the initial values). The
-  // helper only overrides --primary / --primary-foreground / --ring
-  // when the setting differs from its schema default — leaving the
-  // existing dark/light theme tokens intact for users who haven't
-  // picked a custom accent.
+  // first mount, since $effect runs once for the initial values). Only
+  // applied when the setting differs from its schema default: a single
+  // user hex can't carry separate light/dark values, so an untouched
+  // install is better served by the theme's own --accent-brand.
+  // The helper overrides the brand tokens (--accent-brand /
+  // --accent-brand-foreground / --ring) and leaves --primary — the
+  // neutral button surface — alone. See docs/theming.md.
   $effect(() => {
     const value = getSettingValue('appearance.accent') as string | undefined;
     if (isModified('appearance.accent') && value) {

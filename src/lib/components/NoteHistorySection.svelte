@@ -21,6 +21,7 @@
   import { confirm } from '$lib/components/confirm-dialog.svelte';
   import { formatNoteDateTime } from '$lib/date-time';
   import { isMobile } from '$lib/platform';
+  import { SectionHeader } from '$lib/components/ui/section-header';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
     clearRestoreUndo,
@@ -334,11 +335,9 @@
 
 <section>
   <div class="mb-2 flex items-center justify-between">
-    <h4
-      class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
-    >
+    <SectionHeader>
       {tUi('history.title')}
-    </h4>
+    </SectionHeader>
     {#if !detail}
       <button
         type="button"

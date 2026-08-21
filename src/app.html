@@ -122,15 +122,16 @@
        * active theme. app.css, dockview, and Crepe stylesheets all load
        * after this point; without these rules the WebView shows its default
        * white between window-create and CSS-ready, which is a "flashbang"
-       * for dark-mode users. Values mirror the --background tokens from
-       * app.css verbatim so the cross-fade is invisible.
+       * for dark-mode users. Values must mirror --surface-1 (what
+       * --background resolves to) and --foreground from app.css verbatim so
+       * the cross-fade is invisible — update both together.
        */
       :root {
-        background-color: oklch(1 0 0);
+        background-color: oklch(0.976 0.002 247.84);
         color: oklch(0.145 0 0);
       }
       :root.dark {
-        background-color: oklch(0.145 0 0);
+        background-color: oklch(0.185 0.003 286.2);
         color: oklch(0.985 0 0);
       }
     </style>

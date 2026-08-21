@@ -17,6 +17,8 @@
   import NoteHistorySection from '$lib/components/NoteHistorySection.svelte';
   import NoteLinksSection from '$lib/components/NoteLinksSection.svelte';
   import PageOverlayScrollbar from '$lib/layout/page-overlay-scrollbar.svelte';
+  import { Surface } from '$lib/components/ui/surface';
+  import { SectionHeader } from '$lib/components/ui/section-header';
   import {
     loadNote,
     noteWordCount,
@@ -381,21 +383,21 @@
   </dl>
 {/snippet}
 
-<aside class="relative flex h-full w-full min-w-0 flex-col bg-card text-sm">
+<Surface
+  as="aside"
+  variant="panel"
+  class="relative flex h-full w-full min-w-0 flex-col text-sm"
+>
   <div
     bind:this={metadataScroller}
     class="scrollbar-none flex-1 overflow-y-auto p-3"
   >
     {#if note}
       {#if showMetadata}
-        <section
-          class="rounded-lg border border-border bg-background p-4 text-foreground shadow-sm"
-        >
-          <h2
-            class="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
-          >
+        <Surface as="section" padding="lg">
+          <SectionHeader as="h2" class="mb-3">
             {tUi('sidebar.metadata')}
-          </h2>
+          </SectionHeader>
           <div class="flex min-w-0 items-start justify-between gap-3">
             <div class="min-w-0">
               <h3 class="truncate text-base font-semibold leading-6">
@@ -424,11 +426,9 @@
           </div>
 
           <section class="mt-5">
-            <h4
-              class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
-            >
+            <SectionHeader class="mb-2">
               {tUi('metadata.organization')}
-            </h4>
+            </SectionHeader>
             <dl class="border-y border-border">
               <div
                 class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
@@ -440,7 +440,7 @@
                   {tUi('metadata.folder')}
                 </dt>
                 <dd
-                  class="max-w-[9rem] truncate rounded-full bg-primary/10 px-2 py-0.5 text-right text-[11px] font-medium text-primary"
+                  class="max-w-[9rem] truncate rounded-full bg-accent-brand/10 px-2 py-0.5 text-right text-[11px] font-medium text-accent-brand"
                   title={folderTitle}
                 >
                   {folderLabel}
@@ -487,11 +487,9 @@
 
           {#if showSharingMetadata && shareScope}
             <section class="mt-5">
-              <h4
-                class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
-              >
+              <SectionHeader class="mb-2">
                 {tUi('metadata.sharing')}
-              </h4>
+              </SectionHeader>
               <dl class="border-y border-border">
                 {#if showShareScopeRow}
                   <div
@@ -504,7 +502,7 @@
                       {tUi('metadata.sharing.scope')}
                     </dt>
                     <dd
-                      class="max-w-[9rem] truncate rounded-full bg-primary/10 px-2 py-0.5 text-right text-[11px] font-medium text-primary"
+                      class="max-w-[9rem] truncate rounded-full bg-accent-brand/10 px-2 py-0.5 text-right text-[11px] font-medium text-accent-brand"
                       title={shareScope.name}
                     >
                       {shareScope.name}
@@ -585,11 +583,9 @@
           {/if}
 
           <section class="mt-5">
-            <h4
-              class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
-            >
+            <SectionHeader class="mb-2">
               {tUi('metadata.dates')}
-            </h4>
+            </SectionHeader>
             <dl class="border-y border-border">
               <div
                 class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
@@ -626,36 +622,34 @@
 
           {#if showContentStats}
             <section class="mt-5">
-              <h4
-                class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
-              >
+              <SectionHeader class="mb-2">
                 {tUi('metadata.content')}
-              </h4>
+              </SectionHeader>
               <div class="grid grid-cols-3 gap-2">
-                <div class="rounded-md bg-muted px-2.5 py-2">
+                <Surface variant="raised" class="px-2.5 py-2">
                   <div class="truncate text-base font-semibold leading-none">
                     {statValue(contentStats.words)}
                   </div>
                   <div class="mt-1 truncate text-[10px] text-muted-foreground">
                     {tUi('metadata.content.words')}
                   </div>
-                </div>
-                <div class="rounded-md bg-muted px-2.5 py-2">
+                </Surface>
+                <Surface variant="raised" class="px-2.5 py-2">
                   <div class="truncate text-base font-semibold leading-none">
                     {readValue(contentStats.readMinutes)}
                   </div>
                   <div class="mt-1 truncate text-[10px] text-muted-foreground">
                     {tUi('metadata.content.read')}
                   </div>
-                </div>
-                <div class="rounded-md bg-muted px-2.5 py-2">
+                </Surface>
+                <Surface variant="raised" class="px-2.5 py-2">
                   <div class="truncate text-base font-semibold leading-none">
                     {statValue(contentStats.links)}
                   </div>
                   <div class="mt-1 truncate text-[10px] text-muted-foreground">
                     {tUi('metadata.content.links')}
                   </div>
-                </div>
+                </Surface>
               </div>
               {#if showAttachments}
                 <div class="mt-4">
@@ -665,11 +659,9 @@
             </section>
           {:else if showAttachments}
             <section class="mt-5">
-              <h4
-                class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
-              >
+              <SectionHeader class="mb-2">
                 {tUi('metadata.attachments')}
-              </h4>
+              </SectionHeader>
               {@render attachmentsRow()}
             </section>
           {/if}
@@ -681,15 +673,13 @@
           >
             <TagsSection noteId={note.id} />
           </div>
-        </section>
+        </Surface>
       {/if}
 
       {#if showHistory && noteHistoryEnabled(note.note_kind)}
-        <section
-          class="mt-3 rounded-lg border border-border bg-background p-4 text-foreground shadow-sm"
-        >
+        <Surface as="section" padding="lg" class="mt-3">
           <NoteHistorySection noteId={note.id} noteKind={note.note_kind} />
-        </section>
+        </Surface>
       {/if}
 
       {#if supportsNoteLinks && showLinks}
@@ -699,19 +689,15 @@
       {/if}
 
       {#if !showMetadata && !(showHistory && noteHistoryEnabled(note.note_kind)) && !(supportsNoteLinks && showLinks)}
-        <p
-          class="rounded-lg border border-border bg-background p-4 text-xs text-muted-foreground"
-        >
+        <Surface as="p" padding="lg" class="text-xs text-muted-foreground">
           {tUi('sidebar.sections.empty')}
-        </p>
+        </Surface>
       {/if}
     {:else}
-      <p
-        class="rounded-lg border border-border bg-background p-4 text-xs text-muted-foreground"
-      >
+      <Surface as="p" padding="lg" class="text-xs text-muted-foreground">
         {tUi('metadata.noNote')}
-      </p>
+      </Surface>
     {/if}
   </div>
   <PageOverlayScrollbar target={metadataScroller} />
-</aside>
+</Surface>

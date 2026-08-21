@@ -137,10 +137,8 @@
             -->
             <p class="mt-0.5 flex items-center gap-1 text-xs">
               {#if live.state === 'active'}
-                <CheckCircle2
-                  class="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
-                />
-                <span class="text-emerald-600 dark:text-emerald-400">
+                <CheckCircle2 class="size-3.5 shrink-0 text-success" />
+                <span class="text-success">
                   {tUi('plugins.textCheckers.state.active')}
                 </span>
               {:else if live.state === 'failed'}
@@ -182,9 +180,7 @@
               </p>
             {/if}
             {#if row?.state === 'ok'}
-              <p
-                class="mt-1 flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400"
-              >
+              <p class="mt-1 flex items-center gap-1 text-xs text-success">
                 <CheckCircle2 class="size-3.5 shrink-0" />
                 {tUi('plugins.textCheckers.reachable')}
               </p>

@@ -1673,27 +1673,33 @@
 
 <style>
   /* Re-skin the SVAR widget with the app's design tokens so the board matches
-     the rest of the UI in both light and dark. The app tokens (--card,
-     --muted, …) already switch with the theme, so a single set of overrides
-     covers both modes. Set on an inner wrapper (a closer ancestor than SVAR's
-     .wx-*-theme div) so these win regardless of stylesheet order. Several
-     kanban vars are hardcoded hex in the SVAR theme, so they're listed
-     explicitly rather than relying on the base-var derivations. */
+     the rest of the UI in both light and dark. Set on an inner wrapper (a
+     closer ancestor than SVAR's .wx-*-theme div) so these win regardless of
+     stylesheet order. Several kanban vars are hardcoded hex in the SVAR theme,
+     so they're listed explicitly rather than relying on the base-var
+     derivations.
+
+     Surfaces map onto the app's elevation scale (see docs/theming.md): the
+     board is a panel, a column is a container on that panel, and a card is an
+     item on the column — surface-1 → 2 → 3. Previously the column was --muted
+     and the card --card, which in dark mode put the column a full 0.10
+     lightness ABOVE the board while the cards sat below it, so the columns
+     read as pale slabs with darker cards floating on them. */
   .kanban-scope {
     height: 100%;
     width: 100%;
 
     /* base palette */
-    --wx-background: var(--card);
-    --wx-background-alt: var(--muted);
+    --wx-background: var(--surface-3);
+    --wx-background-alt: var(--surface-2);
     --wx-background-hover: var(--accent);
     --wx-border-color: var(--border);
     --wx-color-font: var(--foreground);
     --wx-color-font-alt: var(--muted-foreground);
     --wx-color-font-disabled: var(--muted-foreground);
-    --wx-color-primary: var(--primary);
-    --wx-color-primary-font: var(--primary-foreground);
-    --wx-color-link: var(--primary);
+    --wx-color-primary: var(--accent-brand);
+    --wx-color-primary-font: var(--accent-brand-foreground);
+    --wx-color-link: var(--accent-brand);
     --wx-color-danger: var(--destructive);
     --wx-color-disabled: var(--muted);
     --wx-color-disabled-alt: var(--muted);
@@ -1713,11 +1719,10 @@
     --wx-font-weight: 400;
     --wx-font-weight-md: 600;
     --wx-font-weight-b: 700;
-    --wx-shadow-light:
-      0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    /* Theme-aware: the light-mode values were near-invisible on a dark board. */
+    --wx-shadow-light: var(--elevation-overlay);
     --wx-shadow-medium: none;
-    --wx-box-shadow:
-      0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    --wx-box-shadow: var(--elevation-overlay);
 
     /* editor / form surfaces */
     --wx-field-gutter: 1rem;
@@ -1735,7 +1740,7 @@
     --wx-popup-border: 1px solid var(--border);
     --wx-popup-border-radius: var(--radius-md);
     --wx-popup-shadow: var(--wx-shadow-light);
-    --wx-modal-background: var(--background);
+    --wx-modal-background: var(--surface-3);
     --wx-modal-border: 1px solid var(--border);
     --wx-modal-border-radius: 0;
     --wx-modal-shadow: none;
@@ -1746,23 +1751,23 @@
     --wx-button-danger-font-color: var(--destructive-foreground);
     --wx-button-font-color: var(--secondary-foreground);
     --wx-button-pressed: var(--accent);
-    --wx-button-primary-pressed: var(--primary);
+    --wx-button-primary-pressed: var(--accent-brand);
     --wx-button-danger-pressed: var(--destructive);
     --wx-button-box-shadow: none;
     --wx-button-primary-box-shadow: none;
     --wx-slider-background: var(--muted);
-    --wx-slider-primary: var(--primary);
+    --wx-slider-primary: var(--accent-brand);
 
     /* kanban surfaces (hardcoded in the SVAR theme — override directly) */
-    --wx-kanban-bg: var(--background);
-    --wx-kanban-column-bg: var(--muted);
-    --wx-kanban-card-bg: var(--card);
+    --wx-kanban-bg: var(--surface-1);
+    --wx-kanban-column-bg: var(--surface-2);
+    --wx-kanban-card-bg: var(--surface-3);
     --wx-kanban-tag-bg: var(--accent);
-    --wx-kanban-avatar-bg: var(--muted);
+    --wx-kanban-avatar-bg: var(--surface-2);
     --wx-kanban-border-color: var(--border);
-    --wx-kanban-progress-bg: var(--muted);
-    --wx-kanban-progress-fill: var(--primary);
-    --wx-kanban-card-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+    --wx-kanban-progress-bg: var(--surface-2);
+    --wx-kanban-progress-fill: var(--accent-brand);
+    --wx-kanban-card-shadow: var(--elevation-raised);
   }
 
   /* Board actions stay in the compact toolbar; list actions live on the lists. */
@@ -1823,7 +1828,7 @@
     z-index: 260;
     inset: 0;
     border: 0;
-    background: rgb(0 0 0 / 0.4);
+    background: var(--scrim);
   }
   .mobile-list-menu {
     position: fixed;
@@ -1895,14 +1900,26 @@
     height: 100%;
     padding: 0;
   }
+  /* Mobile pages through one list at a time, so the column IS the screen.
+     Give it the board's own surface rather than the container step: a
+     full-bleed surface-2 slab edge to edge reads as a giant grey panel with
+     nothing to contain, which is what made the mobile board look so unlike
+     the rest of the app. On the board surface the cards (surface-3) simply
+     float on the page, and the list identity is carried by the tab strip
+     above instead of by a background colour. */
   :global(.kanban-scope.mobile .wx-column) {
     max-width: 100%;
     flex: 1 1 100%;
     height: 100%;
     border-radius: 0;
+    background: var(--surface-1);
   }
+  /* Expanded past the plain 0.75rem so cards clear a notch or rounded corner
+     in landscape, matching the mobile editor's reading gutter. */
   :global(.kanban-scope.mobile .wx-column-cards) {
     padding: 0.75rem;
+    padding-left: max(0.75rem, env(safe-area-inset-left));
+    padding-right: max(0.75rem, env(safe-area-inset-right));
   }
   :global(.kanban-scope.mobile .wx-card) {
     min-height: 3.5rem;
@@ -2003,22 +2020,20 @@
   }
   :global(.kanban-list-drag-ghost .wx-card) {
     border-radius: var(--radius-md);
-    background: var(--card) !important;
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+    background: var(--surface-3) !important;
+    box-shadow: var(--elevation-raised);
   }
   :global(.kanban-list-drag-ghost .wx-body) {
     -webkit-backdrop-filter: blur(10px) saturate(1.1);
     backdrop-filter: blur(10px) saturate(1.1);
   }
-  :global(.wx-willow-dark-theme.kanban-list-drag-ghost .wx-body) {
-    background: rgb(52 52 52 / 0.78);
-  }
-  :global(.wx-willow-theme.kanban-list-drag-ghost .wx-body) {
-    background: rgb(240 240 240 / 0.78);
+  :global(.kanban-list-drag-ghost .wx-body) {
+    background: color-mix(in oklch, var(--surface-2) 78%, transparent);
   }
   :global(.kanban-scope .wx-sidearea:has(.kanban-card-editor)) {
     z-index: 240;
-    background: var(--background);
+    max-width: 100%;
+    background: var(--surface-3);
     color: var(--foreground);
   }
   :global(.kanban-scope.mobile .wx-sidearea:has(.kanban-card-editor)) {
@@ -2043,7 +2058,15 @@
   :global(.wx-menu.kanban-card-menu) {
     z-index: 250;
   }
+  /*
+   * The upstream panel is a grid whose single auto track is sized by its
+   * widest child. SVAR hard-codes `--wx-field-width: 600px` on `.wx-sections`,
+   * so the track grew to 640px inside a 448px side area and the right ~30% of
+   * every row (the Delete button included) was clipped by the board viewport.
+   * Cap the track and let the fields take the width they are given instead.
+   */
   :global(.kanban-scope .kanban-card-editor) {
+    grid-template-columns: minmax(0, 1fr);
     background: var(--background);
     color: var(--foreground);
   }
@@ -2068,9 +2091,12 @@
     min-height: 2.75rem;
   }
   :global(.kanban-scope .kanban-card-editor .wx-content) {
+    width: 100%;
+    min-width: 0;
     background: var(--background);
   }
   :global(.kanban-scope .kanban-card-editor .wx-sections) {
+    --wx-field-width: 100%;
     margin-inline: 1.25rem;
   }
   :global(.kanban-scope .kanban-card-editor .wx-field) {
@@ -2118,8 +2144,7 @@
     --wx-popup-background: var(--popover);
     --wx-popup-border: 1px solid var(--border);
     --wx-popup-border-radius: var(--radius-md);
-    --wx-popup-shadow:
-      0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    --wx-popup-shadow: var(--elevation-overlay);
   }
   :global(.wx-popup .wx-list) {
     scrollbar-width: thin;
@@ -2137,8 +2162,7 @@
     --wx-font-weight: 400;
     --wx-icon-color: var(--muted-foreground);
     --wx-icon-size: 1rem;
-    --wx-shadow-light:
-      0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    --wx-shadow-light: var(--elevation-overlay);
 
     border: 1px solid var(--border);
     color: var(--popover-foreground);

@@ -198,12 +198,11 @@
       aria-label={tUi('history.diff.legend')}
     >
       <span class="inline-flex items-center gap-1.5">
-        <span class="size-2 rounded-sm bg-emerald-500/70" aria-hidden="true"
-        ></span>
+        <span class="size-2 rounded-sm bg-diff-add" aria-hidden="true"></span>
         {tUi('history.diff.legendInsertion')}
       </span>
       <span class="inline-flex items-center gap-1.5">
-        <span class="size-2 rounded-sm bg-rose-500/70" aria-hidden="true"
+        <span class="size-2 rounded-sm bg-diff-remove" aria-hidden="true"
         ></span>
         {tUi('history.diff.legendDeletion')}
       </span>

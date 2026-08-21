@@ -397,7 +397,7 @@
     border: 1px solid var(--wx-border-color);
     border-radius: 6px;
     background: var(--wx-background);
-    box-shadow: var(--wx-popup-shadow, 0 12px 30px rgb(0 0 0 / 0.18));
+    box-shadow: var(--wx-popup-shadow, var(--elevation-overlay));
     padding: 4px;
   }
 

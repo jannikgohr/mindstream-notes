@@ -135,7 +135,7 @@
          lets the user drag the window from any non-button area. -->
     <header
       data-tauri-drag-region
-      class="flex h-9 shrink-0 select-none items-center gap-1 border-b border-border bg-card px-2"
+      class="flex h-9 shrink-0 select-none items-center gap-1 border-b border-border bg-surface-0 px-2"
     >
       <span
         data-tauri-drag-region
@@ -149,7 +149,7 @@
     </header>
   {:else}
     <header
-      class="flex h-9 shrink-0 select-none items-center gap-1 border-b border-border bg-card px-2"
+      class="flex h-9 shrink-0 select-none items-center gap-1 border-b border-border bg-surface-0 px-2"
     >
       <span class="ml-2 truncate text-xs font-medium text-foreground">
         {title}

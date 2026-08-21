@@ -35,7 +35,7 @@
     type AvailableDictionary
   } from '$lib/api/spellcheck';
   import { getSettingValue } from '$lib/settings/store.svelte';
-  import { invalidateDiagnostics } from '$lib/diagnostics/editor-diagnostics.svelte';
+  import { reloadSpellcheckConfig } from '$lib/diagnostics/editor-diagnostics.svelte';
   import { tUi, tValue } from '$lib/settings/i18n.svelte';
   import { spellingOwner } from '$lib/diagnostics/editor-diagnostics.svelte';
 
@@ -82,7 +82,9 @@
     failed = null;
     try {
       await spellcheckInstallDictionary(entry.id);
-      invalidateDiagnostics();
+      // Awaited: the new dictionary's word characters have to be loaded
+      // before the re-check runs, or it tokenizes with the old ones.
+      await reloadSpellcheckConfig();
       await refresh();
     } catch (err) {
       console.error('[spellcheck] install failed', err);
@@ -97,7 +99,7 @@
     failed = null;
     try {
       await spellcheckRemoveDictionary(entry.id);
-      invalidateDiagnostics();
+      await reloadSpellcheckConfig();
       await refresh();
     } finally {
       busy = null;

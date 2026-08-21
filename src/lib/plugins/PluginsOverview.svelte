@@ -123,7 +123,7 @@
     if (status === 'valid') {
       return {
         label: tUi('plugins.signature.valid'),
-        class: 'border-emerald-500/40 text-emerald-700 dark:text-emerald-400'
+        class: 'border-success-border text-success'
       };
     }
     if (status === 'invalid') {

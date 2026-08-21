@@ -260,7 +260,7 @@
 
 <div class="safe-x flex h-full w-full flex-col">
   {#if showHome}
-    <div class="safe-top flex shrink-0 flex-col bg-card">
+    <div class="safe-top flex shrink-0 flex-col bg-surface-0">
       <MobileTopBar />
     </div>
 
@@ -273,7 +273,7 @@
       {/if}
     </div>
 
-    <div class="safe-bottom shrink-0 bg-card">
+    <div class="safe-bottom shrink-0 bg-surface-0">
       <MobileBottomNav />
     </div>
   {:else}

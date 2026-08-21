@@ -105,9 +105,7 @@
               <p class="mt-0.5 text-xs text-muted-foreground">{description}</p>
             {/if}
             {#if row?.state === 'available'}
-              <p
-                class="mt-1 flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400"
-              >
+              <p class="mt-1 flex items-center gap-1 text-xs text-success">
                 <CheckCircle2 class="size-3.5 shrink-0" />
                 {tUi('plugins.nativeTools.available')}
               </p>
