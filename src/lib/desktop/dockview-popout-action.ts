@@ -8,6 +8,7 @@ import { mount, unmount } from 'svelte';
 import { tree } from '$lib/stores/tree.svelte';
 import { openNoteWindow } from '$lib/api';
 import { tUi } from '$lib/settings/i18n.svelte';
+import { tooltip } from '$lib/actions/tooltip';
 import NoteStatusIcons from './NoteStatusIcons.svelte';
 
 /**
@@ -37,6 +38,7 @@ export class PopoutHeaderAction implements IHeaderActionsRenderer {
   private statusInstance: ReturnType<typeof mount> | null = null;
   private statusNoteId: string | null = null;
   private activePanelListener: { dispose: () => void } | null = null;
+  private readonly btnTooltip: { destroy: () => void };
 
   constructor(dock: DockviewApi | null) {
     this.dock = dock;
@@ -56,7 +58,6 @@ export class PopoutHeaderAction implements IHeaderActionsRenderer {
     // language changes get picked up on the next dock layout cycle —
     // good enough for a tooltip.
     const popoutLabel = tUi('editor.popout');
-    this.btn.title = popoutLabel;
     this.btn.setAttribute('aria-label', popoutLabel);
     this.btn.className = 'dv-popout-button';
     // Lucide "square-arrow-out-up-right" — the standard pop-out glyph.
@@ -71,6 +72,7 @@ export class PopoutHeaderAction implements IHeaderActionsRenderer {
       </svg>
     `;
     this.btn.addEventListener('click', this.onClick);
+    this.btnTooltip = tooltip(this.btn, popoutLabel);
     this.el.appendChild(this.btn);
   }
 
@@ -119,6 +121,7 @@ export class PopoutHeaderAction implements IHeaderActionsRenderer {
 
   dispose(): void {
     this.btn.removeEventListener('click', this.onClick);
+    this.btnTooltip.destroy();
     this.activePanelListener?.dispose();
     this.activePanelListener = null;
     if (this.statusInstance) {

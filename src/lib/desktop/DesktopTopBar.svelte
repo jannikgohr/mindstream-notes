@@ -26,13 +26,13 @@
 {#if windowChrome.customDecorations}
   <header
     data-tauri-drag-region
-    class="flex h-10 shrink-0 select-none items-center gap-1 border-b border-border bg-card px-2"
+    class="flex h-10 shrink-0 select-none items-center gap-1 border-b border-border bg-surface-0 px-2"
   >
     {@render TopBarContent(true)}
   </header>
 {:else}
   <header
-    class="flex h-10 shrink-0 select-none items-center gap-1 border-b border-border bg-card px-2"
+    class="flex h-10 shrink-0 select-none items-center gap-1 border-b border-border bg-surface-0 px-2"
   >
     {@render TopBarContent(false)}
   </header>

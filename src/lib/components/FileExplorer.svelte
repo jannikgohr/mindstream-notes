@@ -23,6 +23,7 @@
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Separator } from '$lib/components/ui/separator';
+  import { Surface } from '$lib/components/ui/surface';
   import ContextMenu from './ContextMenu.svelte';
   import type { MenuItem } from './context-menu-types';
   import { menuItemForShortcut } from './context-menu-shortcuts';
@@ -858,9 +859,11 @@
   });
 </script>
 
-<aside
-  bind:this={explorerRoot}
-  class="flex h-full w-full flex-col bg-card text-sm"
+<Surface
+  as="aside"
+  variant="panel"
+  bind:ref={explorerRoot}
+  class="flex h-full w-full flex-col text-sm"
   oncontextmenu={(e) => openMenu(e, { kind: 'root' })}
 >
   <div
@@ -928,8 +931,8 @@
       <button
         type="button"
         class="source-chip inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors {active
-          ? 'border-primary bg-primary text-primary-foreground'
-          : 'border-border bg-background text-muted-foreground hover:bg-accent hover:text-foreground'}"
+          ? 'border-accent-brand bg-accent-brand text-accent-brand-foreground'
+          : 'border-border bg-surface-2 text-muted-foreground hover:bg-accent hover:text-foreground'}"
         class:source-chip-active={active}
         use:tooltip={active ? undefined : label}
         aria-current={active ? 'page' : undefined}
@@ -977,7 +980,7 @@
       {@render renderDraft()}
     {/if}
   </div>
-</aside>
+</Surface>
 
 <input
   bind:this={pdfInput}
@@ -1073,7 +1076,7 @@
         <span class="truncate">{node.name}</span>
         {#if sharedByMe}
           <Share2
-            class="ml-auto size-3.5 shrink-0 text-primary"
+            class="ml-auto size-3.5 shrink-0 text-accent-brand"
             aria-label={tUi('nav.shared')}
           />
         {/if}

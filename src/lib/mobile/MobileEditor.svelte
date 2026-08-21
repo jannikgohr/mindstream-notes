@@ -38,7 +38,7 @@
 
 <div class="flex h-full w-full flex-col">
   <header
-    class="flex h-12 shrink-0 select-none items-center gap-1 border-b border-border bg-card px-2"
+    class="flex h-12 shrink-0 select-none items-center gap-1 border-b border-border bg-surface-0 px-2"
   >
     <Button
       variant="ghost"
@@ -106,7 +106,7 @@
   <button
     type="button"
     aria-label={tUi('close')}
-    class="fixed inset-0 z-40 bg-black/40"
+    class="fixed inset-0 z-40 bg-scrim"
     onclick={() => (metadataOpen = false)}
   ></button>
   <div

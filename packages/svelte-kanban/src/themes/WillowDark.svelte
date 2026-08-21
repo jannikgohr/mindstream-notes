@@ -2,8 +2,9 @@
   import type { Snippet } from 'svelte';
   import { WillowDark } from '@svar-ui/svelte-core';
   import './willow-dark.css';
+  import './wxi-icons.css';
 
-  let { fonts = true, children }: { fonts?: boolean; children?: Snippet } =
+  let { fonts = false, children }: { fonts?: boolean; children?: Snippet } =
     $props();
 </script>
 

@@ -38,9 +38,7 @@
   import SourceEditor from '$lib/editor/source/SourceEditor.svelte';
   import {
     checkSegments,
-    invalidateDiagnostics,
     spellcheckEnabled,
-    spellcheckLanguages,
     subscribeDiagnosticsInvalidated,
     suggestFor
   } from '$lib/diagnostics/editor-diagnostics.svelte';
@@ -145,7 +143,9 @@
   // reverse proxy; if its readiness beacon doesn't arrive, we fall back to the
   // service URL directly so the preview still works.
   let proxyState = $state<'off' | 'trying' | 'ok' | 'fallback'>('off');
-  const PREVIEW_BG_FALLBACK = 'oklch(0.1735 0.002 286.18)';
+  /* Mirrors --surface-1 in dark mode (what --background resolves to). Only
+     used if the live token read below fails; see docs/theming.md. */
+  const PREVIEW_BG_FALLBACK = 'oklch(0.185 0.003 286.2)';
   let previewBg = $state(PREVIEW_BG_FALLBACK);
   let previewFg = $state('rgb(255,255,255)');
   let previewGutter = $state('12px');
@@ -176,13 +176,9 @@
   );
 
   // Changing the language set or installing a dictionary changes the answer
-  // for text nobody has touched, which no editor can observe on its own — the
-  // same push the Markdown editor makes, for the same reason.
-  $effect(() => {
-    spellcheckEnabled();
-    spellcheckLanguages().join(',');
-    invalidateDiagnostics();
-  });
+  // for text nobody has touched. `startSpellcheckSettingsWatcher` sees that
+  // for the whole app and invalidates; this surface just listens, the same
+  // way the Markdown editor does.
 
   /**
    * Open the shared suggestion popover on a right-clicked squiggle.
@@ -994,6 +990,7 @@
   }
 
   function buildWebviewPreviewDocument(): string {
+    const previewDocumentTheme = readPreviewTheme();
     const scriptSources = [
       "'unsafe-inline'",
       'blob:',
@@ -1004,7 +1001,11 @@
       '<!doctype html><html><head><meta charset="utf-8">',
       '<meta name="viewport" content="width=device-width,initial-scale=1">',
       `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src ${scriptSources}; style-src 'unsafe-inline'; img-src blob: data:; font-src blob: data:; worker-src blob:; connect-src 'none'">`,
-      '<style>html,body,#plugin-preview-root{height:100%;margin:0}body{background:#fff;color:#111827;font:15px/1.55 system-ui,sans-serif}</style>',
+      /* The iframe is a separate document, so app.css tokens do not reach it —
+         the resolved values are read from the host and inlined instead. This
+         used to hardcode a light page (#fff on #111827), which left every
+         plugin webview preview stuck in light mode inside a dark app. */
+      `<style>html,body,#plugin-preview-root{height:100%;margin:0}body{background:${previewDocumentTheme.bg};color:${previewDocumentTheme.fg};font:15px/1.55 system-ui,sans-serif}</style>`,
       '</head><body><div id="plugin-preview-root"></div>',
       '<scr',
       `ipt>${webviewBootstrapScript()}</scr`,

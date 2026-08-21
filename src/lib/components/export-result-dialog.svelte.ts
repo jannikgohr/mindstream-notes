@@ -14,13 +14,15 @@ import type {
 import type { ExportReport } from '$lib/notes-export';
 import { formatBytes } from '$lib/utils';
 
-export type DataResultTone =
-  | 'emerald'
-  | 'sky'
-  | 'amber'
-  | 'violet'
-  | 'teal'
-  | 'destructive';
+/**
+ * Tones are SEMANTIC, not decorative. They previously named hues
+ * (emerald / sky / amber / violet / teal), which meant the chips were colour
+ * coded by note kind — so the "ink notes" chip rendered amber and read as a
+ * warning even in a fully successful export. Category is already carried by
+ * each chip's own icon and label, so category chips are now neutral and
+ * colour is reserved for things that actually have a status.
+ */
+export type DataResultTone = 'neutral' | 'success' | 'warning' | 'destructive';
 
 export type DataResultIcon =
   | 'archive'
@@ -100,7 +102,7 @@ export function showExportResult(
   return showDataResult({
     titleKey: 'data.exportVault.success.title',
     headerIcon: 'partyPopper',
-    tone: 'emerald',
+    tone: 'success',
     location: {
       labelKey: 'data.exportVault.savedTo',
       actionLabelKey: 'data.exportVault.openLocation',
@@ -117,7 +119,7 @@ export function showExportResult(
         otherKey: 'data.exportVault.chip.notes.other',
         statusKey: 'data.exportVault.chip.notes.status',
         icon: 'fileText',
-        tone: 'emerald',
+        tone: 'neutral',
         show: true
       },
       {
@@ -126,7 +128,7 @@ export function showExportResult(
         otherKey: 'data.exportVault.chip.pdfs.other',
         statusKey: 'data.exportVault.chip.pdfs.status',
         icon: 'fileType',
-        tone: 'sky',
+        tone: 'neutral',
         show: report.pdf_written > 0
       },
       {
@@ -135,7 +137,7 @@ export function showExportResult(
         otherKey: 'data.exportVault.chip.inkNotes.other',
         statusKey: 'data.exportVault.chip.inkNotes.status',
         icon: 'feather',
-        tone: 'amber',
+        tone: 'neutral',
         show: report.ink_written > 0
       },
       {
@@ -144,7 +146,7 @@ export function showExportResult(
         otherKey: 'data.exportVault.chip.diagrams.other',
         statusKey: 'data.exportVault.chip.diagrams.status',
         icon: 'pencilRuler',
-        tone: 'violet',
+        tone: 'neutral',
         show: report.freeform_written > 0
       },
       {
@@ -153,7 +155,7 @@ export function showExportResult(
         otherKey: 'data.exportVault.chip.attachments.other',
         statusKey: 'data.exportVault.chip.attachments.status',
         icon: 'paperclip',
-        tone: 'teal',
+        tone: 'neutral',
         show: report.assets_written > 0
       },
       {
@@ -173,7 +175,7 @@ export function showBackupResult(report: BackupReport): Promise<string> {
   return showDataResult({
     titleKey: 'data.backupNow.success.title',
     headerIcon: 'archive',
-    tone: 'sky',
+    tone: 'success',
     location: {
       labelKey: 'data.backupNow.savedTo',
       actionLabelKey: 'data.backupNow.openLocation',
@@ -198,7 +200,7 @@ export function showBackupResult(report: BackupReport): Promise<string> {
         labelKey: 'data.backupNow.chip.account.label',
         statusKey: 'data.backupNow.chip.account.status',
         icon: report.account_present ? 'cloud' : 'hardDrive',
-        tone: report.account_present ? 'teal' : 'amber',
+        tone: report.account_present ? 'success' : 'warning',
         show: true
       }
     ]
@@ -209,7 +211,7 @@ export function showMergeResult(report: MergeReport): Promise<string> {
   return showDataResult({
     titleKey: 'data.import.merge.success.title',
     headerIcon: 'gitMerge',
-    tone: 'violet',
+    tone: 'success',
     primaryAction: {
       labelKey: 'data.import.result.close',
       value: 'close'
@@ -226,7 +228,7 @@ export function showMergeResult(report: MergeReport): Promise<string> {
         otherKey: 'data.import.merge.chip.attachments.other',
         statusKey: 'data.import.merge.chip.attachments.status',
         icon: 'paperclip',
-        tone: 'teal',
+        tone: 'neutral',
         show: true
       },
       {
@@ -235,7 +237,7 @@ export function showMergeResult(report: MergeReport): Promise<string> {
         otherKey: 'data.import.merge.chip.orphaned.other',
         statusKey: 'data.import.merge.chip.orphaned.status',
         icon: 'alertTriangle',
-        tone: report.notes_orphaned > 0 ? 'amber' : 'emerald',
+        tone: report.notes_orphaned > 0 ? 'warning' : 'success',
         show: true
       }
     ]
@@ -252,7 +254,7 @@ export function showRestoreReadyResult(
       ? 'data.import.result.restoreReady.sanitized'
       : 'data.import.result.restoreReady.preserved',
     headerIcon: 'rotateCcw',
-    tone: 'amber',
+    tone: 'warning',
     primaryAction: {
       labelKey: 'data.import.restart.button',
       value: 'restart'
@@ -283,7 +285,7 @@ export function showRestoreReadyResult(
         labelKey: 'data.import.restore.chip.sync.label',
         statusKey: 'data.import.restore.chip.sync.status',
         icon: preview.same_account ? 'cloud' : 'hardDrive',
-        tone: preview.same_account ? 'teal' : 'amber',
+        tone: preview.same_account ? 'success' : 'warning',
         show: true
       }
     ]
@@ -297,7 +299,7 @@ function notesChip(count: number, statusKey: string): DataResultChip {
     otherKey: 'data.result.chip.notes.other',
     statusKey,
     icon: 'fileText',
-    tone: 'emerald',
+    tone: 'neutral',
     show: true
   };
 }
@@ -309,7 +311,7 @@ function foldersChip(count: number, statusKey: string): DataResultChip {
     otherKey: 'data.result.chip.folders.other',
     statusKey,
     icon: 'folder',
-    tone: 'sky',
+    tone: 'neutral',
     show: true
   };
 }
@@ -320,7 +322,7 @@ function attachmentBytesChip(bytes: number, statusKey: string): DataResultChip {
     labelKey: 'data.result.chip.attachments.label',
     statusKey,
     icon: 'paperclip',
-    tone: 'teal',
+    tone: 'neutral',
     show: true
   };
 }

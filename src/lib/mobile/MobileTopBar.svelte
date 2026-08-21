@@ -21,7 +21,7 @@
 </script>
 
 <header
-  class="flex shrink-0 select-none items-center gap-2 border-b border-border bg-card px-3 py-2"
+  class="flex shrink-0 select-none items-center gap-2 border-b border-border bg-surface-0 px-3 py-2"
 >
   <button
     type="button"

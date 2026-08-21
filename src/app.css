@@ -3,40 +3,168 @@
 @import '@milkdown/crepe/theme/frame.css';
 @import 'dockview-core/dist/styles/dockview.css';
 
-/*
- * Tailwind v4 design tokens for shadcn-svelte.
+/* ===========================================================================
+ * Design tokens. See docs/theming.md for the rules that govern this file.
+ *
+ * Two layers:
+ *   1. The SYSTEM layer — the elevation scale, border tiers, brand accent and
+ *      status ramps. These are the source of truth and the only place a raw
+ *      colour literal belongs.
+ *   2. The shadcn COMPATIBILITY layer — --background, --card, --muted, … are
+ *      re-derived from layer 1 rather than authored independently, so the
+ *      existing `bg-card` / `text-muted-foreground` utilities keep working
+ *      while tracking a single palette.
+ *
  * Light tokens live on :root, dark tokens swap in when html.dark is set.
- * We expose them through @theme so utility classes like `bg-background`
- * and `text-foreground` resolve.
- */
+ * @theme exposes them so utilities like `bg-surface-2` resolve.
+ * ======================================================================== */
 
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-  --background: oklch(0.9846 0.002 247.84);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  /* -- Elevation ---------------------------------------------------------
+   * Four steps, ordered the SAME WAY in both themes: a higher index is
+   * always lighter. Elevation is distance toward the viewer, so a
+   * container that recesses (a Kanban column, a grouped well) takes a
+   * LOWER index than its parent, and one that lifts (a card, a popover)
+   * takes a higher one. The previous palette inverted this between light
+   * and dark, which is what made dark-mode Kanban columns read as pale
+   * slabs with darker cards floating on them.
+   *
+   *   surface-0  window chrome behind everything — title bar, dock strip
+   *   surface-1  panels — sidebars, editor panel, board background
+   *   surface-2  containers on a panel — Kanban columns, sidebar sections
+   *   surface-3  items and overlays — cards, popovers, dialogs, menus
+   *
+   * Light mode starts at a real grey rather than near-white so all four
+   * steps fit below pure white with room to breathe. */
+  --surface-0: oklch(0.955 0.003 247.84);
+  --surface-1: oklch(0.976 0.002 247.84);
+  --surface-2: oklch(0.99 0.002 247.84);
+  --surface-3: oklch(1 0 0);
+
+  /* The wash behind a modal, sheet or palette. Always black — a scrim's job
+   * is to darken whatever is behind it, so it does not follow the surface
+   * scale — but the strength differs by theme, and it was previously spelled
+   * five different ways across ten files (bg-black/50, /35, rgb(0 0 0 / 0.4),
+   * rgb(0 0 0 / 0.52), …). */
+  --scrim: oklch(0 0 0 / 0.45);
+
+  /* Light-mode steps compress as they approach white, so shadow carries
+   * the rest of the elevation cue. Dark mode overrides these deeper. */
+  --elevation-raised: 0 1px 2px oklch(0.145 0 0 / 0.08);
+  --elevation-overlay:
+    0 10px 15px -3px oklch(0.145 0 0 / 0.12),
+    0 4px 6px -4px oklch(0.145 0 0 / 0.1);
+
+  /* -- Borders -----------------------------------------------------------
+   * Two tiers. `subtle` is the default (--border) because most borders in
+   * this app are dividers inside a surface; `strong` is opt-in for
+   * container outlines that must survive against a raised surface. In the
+   * old palette --border was identical to --muted in dark mode, so a
+   * bordered card on a muted surface had no visible outline at all. */
+  --border-subtle: oklch(0.905 0.003 247.84);
+  --border-strong: oklch(0.855 0.004 247.84);
+
+  /* -- Brand accent ------------------------------------------------------
+   * Distinct from --primary. --primary is the neutral high-contrast button
+   * surface (near-black here, near-white in dark); --accent-brand is the
+   * app's identity colour, used for links, mentions, selection and
+   * active-state emphasis. Appearance → Accent overrides this one, so
+   * picking an accent no longer repaints every neutral button.
+   *
+   * Naming hazard: --accent (in the compatibility layer below) is shadcn's
+   * HOVER WASH, not a brand colour. Reach for --accent-brand when you mean
+   * identity. */
+  --accent-brand: oklch(0.55 0.16 255);
+  --accent-brand-foreground: oklch(0.99 0 0);
+
+  /* -- Status ------------------------------------------------------------
+   * Replaces the per-component raw Tailwind palette pairs
+   * (text-emerald-700 / text-emerald-400, bg-amber-500/10, …). The base is
+   * tuned for TEXT contrast against the surrounding surface; `-subtle` and
+   * `-border` are translucent mixes of it, so they compose over any
+   * elevation step without needing a per-surface variant.
+   *
+   * --destructive is the fourth member of this ramp. It keeps its shadcn
+   * name rather than gaining a `--danger` alias, so there is exactly one
+   * word for the concept. */
+  --success: oklch(0.52 0.13 158);
+  --success-foreground: oklch(0.99 0 0);
+  --warning: oklch(0.55 0.13 75);
+  --warning-foreground: oklch(0.99 0 0);
+  --info: oklch(0.54 0.15 250);
+  --info-foreground: oklch(0.99 0 0);
   --destructive: oklch(0.577 0.245 27.325);
   --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+
+  /* Find-and-replace and PDF search highlights. Another fixed-hue set — a
+   * highlighter is yellow and the focused hit is orange, in either theme —
+   * but shared by the editor decorations here and the PDF viewer's overlay,
+   * which previously spelled the same four colours out separately. */
+  --highlight-search: oklch(0.86 0.17 92 / 0.4);
+  --highlight-search-active: oklch(0.7 0.19 45 / 0.5);
+  --highlight-search-active-outline: oklch(0.63 0.2 42 / 0.9);
+  --highlight-selection: oklch(0.52 0.24 265 / 0.22);
+
+  /* Diff add/remove. A deliberate fixed-hue pair: in a diff the colour IS
+   * the meaning, so it must not follow a user-chosen accent. Tokenised all
+   * the same, because the same two colours are needed by app.css (the
+   * ProseMirror decorations) and by the diff components, and they used to be
+   * spelled as rgb() literals in one and Tailwind palette classes in the
+   * other. Reuses the success/destructive hues so a diff still looks like it
+   * belongs to the app. */
+  --diff-add: var(--success);
+  --diff-add-subtle: color-mix(in oklch, var(--success) 13%, transparent);
+  --diff-remove: var(--destructive);
+  --diff-remove-subtle: color-mix(
+    in oklch,
+    var(--destructive) 10%,
+    transparent
+  );
+
+  --success-subtle: color-mix(in oklch, var(--success) 12%, transparent);
+  --success-border: color-mix(in oklch, var(--success) 30%, transparent);
+  --warning-subtle: color-mix(in oklch, var(--warning) 12%, transparent);
+  --warning-border: color-mix(in oklch, var(--warning) 30%, transparent);
+  --info-subtle: color-mix(in oklch, var(--info) 12%, transparent);
+  --info-border: color-mix(in oklch, var(--info) 30%, transparent);
+  --destructive-subtle: color-mix(
+    in oklch,
+    var(--destructive) 12%,
+    transparent
+  );
+  --destructive-border: color-mix(
+    in oklch,
+    var(--destructive) 30%,
+    transparent
+  );
+
+  /* -- shadcn compatibility layer ----------------------------------------
+   * Derived, not authored. Change the scale above, not these. */
+  --background: var(--surface-1);
+  --foreground: oklch(0.145 0 0);
+  --card: var(--surface-3);
+  --card-foreground: var(--foreground);
+  --popover: var(--surface-3);
+  --popover-foreground: var(--foreground);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: var(--surface-2);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: var(--surface-2);
+  --muted-foreground: oklch(0.556 0 0);
+  /* Hover wash. Translucent rather than opaque so one token reads
+   * correctly on every elevation step — the old opaque value was equal to
+   * --muted, which made hover invisible on any surface that happened to
+   * share its lightness. */
+  --accent: oklch(from var(--foreground) l c h / 0.06);
+  --accent-foreground: var(--foreground);
+  --border: var(--border-subtle);
+  --input: var(--border-strong);
+  --ring: var(--accent-brand);
   --radius: 0.5rem;
-  /* Dockview chrome elevation — sits between --background and --muted so
-   * the tab strip reads as a distinct band from both the content panel
-   * below it and the inactive tabs above it. */
-  --dock-strip: oklch(0.9542 0.003 247.86);
+
   /* Height of the floating mobile formatting toolbar — set live by
    * MobileEditorToolbar.svelte on mount, cleared on destroy. The 0px
    * default keeps desktop unaffected and tells CSS resolvers (IDE
@@ -72,29 +200,102 @@ html {
 }
 
 .dark {
-  --background: oklch(0.1735 0.002 286.18);
-  --dock-strip: oklch(0.219 0.004 286.076);
+  /* Same ordering as light: index up = lighter. Even 0.030 steps, so each
+   * boundary is perceptible without any step becoming a pale slab — the
+   * old --muted sat at 0.269, nearly 0.10 above the background, which is
+   * what made Kanban columns dominate the dark board. */
+  --surface-0: oklch(0.155 0.003 286.2);
+  --surface-1: oklch(0.185 0.003 286.2);
+  --surface-2: oklch(0.215 0.004 286.2);
+  --surface-3: oklch(0.245 0.004 286.2);
+
+  /* Stronger than light mode: over already-dark content a 45% wash barely
+   * separates the overlay from the page behind it. */
+  --scrim: oklch(0 0 0 / 0.6);
+
+  /* Deeper than light mode: on a dark ground a shadow has to be near-black
+   * and wider to register at all. */
+  --elevation-raised: 0 1px 2px oklch(0 0 0 / 0.5);
+  --elevation-overlay:
+    0 10px 15px -3px oklch(0 0 0 / 0.6), 0 4px 6px -4px oklch(0 0 0 / 0.45);
+
+  /* Both tiers sit clear of every surface step (max 0.245), so a border is
+   * visible no matter which elevation it lands on. */
+  --border-subtle: oklch(0.285 0.004 286.2);
+  --border-strong: oklch(0.345 0.005 286.2);
+
+  --accent-brand: oklch(0.72 0.14 255);
+  --accent-brand-foreground: oklch(0.17 0.02 255);
+
+  /* Lifted into the 0.7–0.8 band so these read as TEXT against a dark
+   * surface. The old dark --destructive was 0.396 — a dark red that left
+   * `text-destructive` (used in the file-tree menus) barely legible. */
+  --success: oklch(0.78 0.15 158);
+  --success-foreground: oklch(0.17 0.02 158);
+  --warning: oklch(0.8 0.14 75);
+  --warning-foreground: oklch(0.17 0.02 75);
+  --info: oklch(0.75 0.14 250);
+  --info-foreground: oklch(0.17 0.02 250);
+  --destructive: oklch(0.7 0.19 25);
+  --destructive-foreground: oklch(0.17 0.02 25);
+
   --foreground: oklch(0.985 0 0);
-  --card: oklch(0.18 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.18 0 0);
-  --popover-foreground: oklch(0.985 0 0);
   --primary: oklch(0.985 0 0);
   --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
   --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.396 0.141 25.723);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.269 0 0);
-  --input: oklch(0.269 0 0);
-  --ring: oklch(0.439 0 0);
+  /* Slightly stronger than light mode: a white wash at 6% disappears on a
+   * dark ground. */
+  --accent: oklch(from var(--foreground) l c h / 0.09);
 }
 
 @theme inline {
+  /* Elevation scale — `bg-surface-2`, `border-surface-3`, … */
+  --color-surface-0: var(--surface-0);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+
+  --color-scrim: var(--scrim);
+  --color-highlight-search: var(--highlight-search);
+  --color-highlight-selection: var(--highlight-selection);
+  --color-diff-add: var(--diff-add);
+  --color-diff-add-subtle: var(--diff-add-subtle);
+  --color-diff-remove: var(--diff-remove);
+  --color-diff-remove-subtle: var(--diff-remove-subtle);
+
+  /* `shadow-raised` / `shadow-overlay`. The raw tokens are named
+   * --elevation-* rather than --shadow-* because Tailwind owns the
+   * `--shadow-` namespace here and same-name entries would self-reference. */
+  --shadow-raised: var(--elevation-raised);
+  --shadow-overlay: var(--elevation-overlay);
+
+  /* Border tiers — `border-subtle` / `border-strong`. Plain `border-border`
+   * still resolves, and equals the subtle tier. */
+  --color-border-subtle: var(--border-subtle);
+  --color-border-strong: var(--border-strong);
+
+  /* Brand accent — `text-accent-brand`, `bg-accent-brand`. */
+  --color-accent-brand: var(--accent-brand);
+  --color-accent-brand-foreground: var(--accent-brand-foreground);
+
+  /* Status ramp — `text-success`, `bg-warning-subtle`, `border-info-border`. */
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-success-subtle: var(--success-subtle);
+  --color-success-border: var(--success-border);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning-subtle: var(--warning-subtle);
+  --color-warning-border: var(--warning-border);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-info-subtle: var(--info-subtle);
+  --color-info-border: var(--info-border);
+  --color-destructive-subtle: var(--destructive-subtle);
+  --color-destructive-border: var(--destructive-border);
+
+  /* shadcn compatibility layer. */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -160,7 +361,7 @@ body {
 
 /* Native-feel selection */
 ::selection {
-  background-color: oklch(from var(--primary) l c h / 0.25);
+  background-color: oklch(from var(--accent-brand) l c h / 0.25);
 }
 
 .ms-tooltip {
@@ -220,9 +421,10 @@ body {
 .dockview-theme-bridge {
   --dv-background-color: var(--background);
   --dv-paneview-active-outline-color: var(--ring);
-  /* Strip — mid-tone so the floating tab pills (--background) read
-   * cleanly against it. */
-  --dv-tabs-and-actions-container-background-color: var(--dock-strip);
+  /* The strip is window chrome, so it sits at the bottom of the elevation
+   * scale and the active tab pill (surface-1, the panel it reveals) comes
+   * forward out of it — the same relationship Chrome uses. */
+  --dv-tabs-and-actions-container-background-color: var(--surface-0);
   --dv-tabs-and-actions-container-font-size: 13px;
   --dv-tabs-and-actions-container-height: 40px;
   /* Chrome uses its own hairline-via-pseudo-element separator (see
@@ -248,8 +450,8 @@ body {
   --dv-active-sash-transition-delay: 0s;
   --dv-paneview-header-border-color: var(--border);
   --dv-icon-hover-background-color: var(--accent);
-  --dv-floating-box-shadow: 0 4px 14px rgb(0 0 0 / 0.2);
-  --dv-drag-over-background-color: oklch(from var(--primary) l c h / 0.15);
+  --dv-floating-box-shadow: var(--elevation-overlay);
+  --dv-drag-over-background-color: oklch(from var(--accent-brand) l c h / 0.15);
   --dv-drag-over-border-color: var(--ring);
   /*
    * Drives the z-index of every dockview overlay — the tabs-overflow
@@ -366,7 +568,7 @@ body.dv-tab-dragging
 /* Subtle elevation so the active tab reads as the foreground card sitting
  * on the strip, the way Chrome's selected tab does. */
 .dockview-theme-bridge .dv-tabs-container > .dv-tab.dv-active-tab {
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.18);
+  box-shadow: var(--elevation-raised);
 }
 
 /* Hover pill — most of the way toward the active tab's --background but
@@ -393,11 +595,7 @@ body.dv-tab-dragging
   .dv-groupview
   .dv-tabs-container
   > .dv-tab.dv-inactive-tab:hover {
-  background-color: color-mix(
-    in oklch,
-    var(--dock-strip),
-    var(--background) 80%
-  );
+  background-color: color-mix(in oklch, var(--surface-0), var(--surface-1) 80%);
 }
 
 /* Hairline separator between two adjacent inactive-and-unhovered tabs.
@@ -551,22 +749,21 @@ body.dv-tab-dragging
  * orientation flip (separators become horizontal, sit in the inter-row
  * margin instead of the inter-tab gap).
  *
- * Container uses --dock-strip rather than --popover so the popup reads
- * as a continuation of the tab strip rather than a generic popover
- * surface. The box-shadow + border give it the elevation that the
- * strip itself doesn't need (the strip is flush with the panel chrome
- * below it; this popup floats over content).
+ * The container is a floating menu, so it takes the overlay step and the
+ * app's standard popover chrome — the same surface, border and shadow as
+ * ContextMenu and the dropdowns. It used to borrow the tab strip's colour
+ * to read as a continuation of the strip, which put a floating element on
+ * the darkest chrome step and made the dockview overflow the one menu in
+ * the app that looked like something else.
  */
 .dockview-theme-bridge .dv-tabs-overflow-container {
-  background-color: var(--dock-strip);
-  color: var(--foreground);
+  background-color: var(--popover);
+  color: var(--popover-foreground);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 4px;
   min-width: 200px;
-  box-shadow:
-    0 10px 15px -3px rgb(0 0 0 / 0.2),
-    0 4px 6px -4px rgb(0 0 0 / 0.15);
+  box-shadow: var(--elevation-overlay);
 }
 
 /* Drop dockview's full-width per-row divider — replaced by the pseudo
@@ -590,23 +787,17 @@ body.dv-tab-dragging
   transition: background-color 120ms ease-out;
 }
 
-/* Hover pill — same color-mix bias toward --background as the inline
- * tabs, so a pointer move across the popup reads identically to a
- * pointer move across the strip. */
+/* Hover wash — the same one every other menu row in the app uses. */
 .dockview-theme-bridge .dv-tabs-overflow-container .dv-tab:hover {
-  background-color: color-mix(
-    in oklch,
-    var(--dock-strip),
-    var(--background) 80%
-  );
+  background-color: var(--accent);
 }
 
-/* Active row — full --background pill + same drop shadow as the inline
- * active tab, so the "selected" cue is consistent across both views. */
+/* Active row — the selected cue on a menu is a filled row, not a raised
+ * pill; on the overlay step there is nothing above surface-3 to rise to. */
 .dockview-theme-bridge .dv-tabs-overflow-container .dv-active-tab {
-  background-color: var(--background);
+  background-color: var(--accent);
+  color: var(--accent-foreground);
   font-weight: 500;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.18);
 }
 
 /* Horizontal hairline between two adjacent inactive-and-unhovered rows
@@ -747,38 +938,62 @@ body.dv-tab-dragging
 }
 
 /*
- * Crepe dark theme.
- * Crepe ships frame.css (light) and frame-dark.css (dark) but both target
- * the same `.milkdown` selector, so importing the dark file globally would
- * stomp the light one. Instead we re-declare the dark token values under
- * `.dark .milkdown` — same variables Crepe's components read, just scoped
- * to our manual dark mode toggle. Values mirror frame-dark.css verbatim
- * so the whole editor (slash menu, link tooltip, code-block chrome, list
- * checkboxes, etc.) flips correctly.
+ * Crepe theme bridge.
+ *
+ * Crepe ships frame.css (light) and frame-dark.css (dark), both targeting the
+ * same `.milkdown` selector, so importing the dark file globally would stomp
+ * the light one. We used to solve that by re-declaring frame-dark.css's values
+ * verbatim under `.dark .milkdown` — which left the editor carrying a second,
+ * hand-maintained palette that immediately drifted: its surfaces were copies
+ * of --card and --dock-strip as those tokens stood at the time, and both have
+ * since moved.
+ *
+ * Instead, map Crepe's variables onto our tokens once, on `.milkdown` itself.
+ * The tokens already carry both themes, so this single block replaces the
+ * light defaults AND the dark override, and the editor chrome (slash menu,
+ * link tooltip, code-block header, list checkboxes) now tracks the same scale
+ * as everything around it. app.css imports Crepe first, so these equal
+ * specificity rules win on source order.
  */
-.dark .milkdown {
-  --crepe-color-background: oklch(0.18 0 0);
-  --crepe-color-on-background: oklch(0.92 0 0);
-  --crepe-color-surface: oklch(0.18 0 0);
-  --crepe-color-surface-low: oklch(0.219 0.004 286.076);
-  --crepe-color-on-surface: oklch(0.86 0 0);
-  --crepe-color-on-surface-variant: oklch(0.7 0 0);
-  --crepe-color-outline: oklch(0.45 0 0);
-  --crepe-color-primary: oklch(0.78 0 0);
-  --crepe-color-secondary: oklch(0.32 0 0);
-  --crepe-color-on-secondary: oklch(0.88 0 0);
-  --crepe-color-inverse: oklch(0.93 0 0);
-  --crepe-color-on-inverse: oklch(0.205 0 0);
-  --crepe-color-inline-code: oklch(0.74 0.16 18);
-  --crepe-color-error: oklch(0.74 0.16 18);
-  --crepe-color-hover: oklch(0.27 0 0);
-  --crepe-color-selected: oklch(0.32 0 0);
-  --crepe-color-inline-area: oklch(0.27 0 0);
+.milkdown {
+  /* Surfaces. Crepe's "surface" is its floating chrome (slash menu, tooltips)
+   * so it takes the overlay step; "surface-low" is the recessed chrome inside
+   * a block, such as the code-block header. */
+  --crepe-color-background: var(--surface-1);
+  --crepe-color-surface: var(--surface-3);
+  --crepe-color-surface-low: var(--surface-2);
+  --crepe-color-secondary: var(--surface-2);
+  --crepe-color-inline-area: var(--surface-2);
 
-  --crepe-shadow-1:
-    0px 1px 2px 0px rgba(0, 0, 0, 0.55), 0px 1px 3px 1px rgba(0, 0, 0, 0.4);
-  --crepe-shadow-2:
-    0px 1px 2px 0px rgba(0, 0, 0, 0.55), 0px 2px 6px 2px rgba(0, 0, 0, 0.4);
+  /* Text. */
+  --crepe-color-on-background: var(--foreground);
+  --crepe-color-on-surface: var(--foreground);
+  --crepe-color-on-surface-variant: var(--muted-foreground);
+  --crepe-color-on-secondary: var(--foreground);
+
+  --crepe-color-outline: var(--border-strong);
+
+  /* Identity. Inline code shares the brand hue rather than Crepe's stock red,
+   * which read as an error next to the real error colour below. */
+  --crepe-color-primary: var(--accent-brand);
+  --crepe-color-inline-code: var(--accent-brand);
+  --crepe-color-error: var(--destructive);
+
+  /* Inverted chrome (Crepe's tooltip-on-dark treatment). */
+  --crepe-color-inverse: var(--foreground);
+  --crepe-color-on-inverse: var(--background);
+
+  /* Interaction. Translucent, so one value works on every surface Crepe
+   * paints it over. */
+  --crepe-color-hover: var(--accent);
+  --crepe-color-selected: color-mix(
+    in oklch,
+    var(--accent-brand) 18%,
+    transparent
+  );
+
+  --crepe-shadow-1: var(--elevation-raised);
+  --crepe-shadow-2: var(--elevation-overlay);
 }
 
 /*
@@ -1040,43 +1255,51 @@ body.dv-tab-dragging .freeform-canvas-host * {
  * ------------------------------------------------------------------------- */
 
 .wikilink {
-  color: var(--primary);
+  color: var(--accent-brand);
   text-decoration: underline;
-  text-decoration-color: color-mix(in oklch, var(--primary), transparent 55%);
+  text-decoration-color: color-mix(
+    in oklch,
+    var(--accent-brand),
+    transparent 55%
+  );
   text-underline-offset: 2px;
   cursor: text;
 }
 .wikilink:hover {
-  text-decoration-color: color-mix(in oklch, var(--primary), transparent 20%);
+  text-decoration-color: color-mix(
+    in oklch,
+    var(--accent-brand),
+    transparent 20%
+  );
 }
 .wikilink-note-link {
   padding: 0 0.15em;
   border-radius: 4px;
-  background: color-mix(in oklch, var(--primary), transparent 88%);
-  color: var(--primary);
+  background: color-mix(in oklch, var(--accent-brand), transparent 88%);
+  color: var(--accent-brand);
   text-decoration: none;
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
 }
 .wikilink-note-link:hover {
-  background: color-mix(in oklch, var(--primary), transparent 82%);
+  background: color-mix(in oklch, var(--accent-brand), transparent 82%);
 }
 .wikilink-open-on-click .wikilink-note-link {
   cursor: pointer;
 }
 .wikilink-note-link::before {
   content: '[[';
-  color: color-mix(in oklch, var(--primary), transparent 35%);
+  color: color-mix(in oklch, var(--accent-brand), transparent 35%);
 }
 .wikilink-note-link::after {
   content: ']]';
-  color: color-mix(in oklch, var(--primary), transparent 35%);
+  color: color-mix(in oklch, var(--accent-brand), transparent 35%);
 }
 .ProseMirror.wikilink-boundary-inside .prosemirror-virtual-cursor {
-  --prosemirror-virtual-cursor-color: var(--primary);
+  --prosemirror-virtual-cursor-color: var(--accent-brand);
   border-left-width: 3px;
   filter: drop-shadow(
-    0 0 3px color-mix(in oklch, var(--primary), transparent 35%)
+    0 0 3px color-mix(in oklch, var(--accent-brand), transparent 35%)
   );
 }
 .ProseMirror.wikilink-boundary-outside .prosemirror-virtual-cursor {
@@ -1117,8 +1340,8 @@ body.dv-tab-dragging .freeform-canvas-host * {
 .user-mention {
   padding: 0 0.2em;
   border-radius: 4px;
-  background: color-mix(in oklch, var(--primary), transparent 90%);
-  color: var(--primary);
+  background: color-mix(in oklch, var(--accent-brand), transparent 90%);
+  color: var(--accent-brand);
   font-weight: 500;
   text-decoration: none;
   cursor: text;
@@ -1126,17 +1349,17 @@ body.dv-tab-dragging .freeform-canvas-host * {
   box-decoration-break: clone;
 }
 .user-mention:hover {
-  background: color-mix(in oklch, var(--primary), transparent 84%);
+  background: color-mix(in oklch, var(--accent-brand), transparent 84%);
 }
 /* You. Warmer, higher-contrast chip so a mention of yourself stands out at a
  * glance from mentions of other people. */
 .user-mention-self {
-  background: color-mix(in oklch, var(--primary), transparent 74%);
-  color: var(--primary-foreground);
+  background: color-mix(in oklch, var(--accent-brand), transparent 74%);
+  color: var(--accent-brand-foreground);
   font-weight: 600;
 }
 .user-mention-self:hover {
-  background: color-mix(in oklch, var(--primary), transparent 66%);
+  background: color-mix(in oklch, var(--accent-brand), transparent 66%);
 }
 /* Keep Crepe's stock link tooltip out of sight for mentions — the internal
  * user scheme leaks otherwise (mirrors the note-link rule above). */
@@ -1157,12 +1380,12 @@ body.dv-tab-dragging .freeform-canvas-host * {
  * ------------------------------------------------------------------------- */
 
 .ProseMirror .search-match {
-  background: rgb(250 204 21 / 0.4);
+  background: var(--highlight-search);
   border-radius: 1px;
 }
 .ProseMirror .search-match-active {
-  background: rgb(249 115 22 / 0.5);
-  box-shadow: 0 0 0 1px rgb(234 88 12 / 0.9);
+  background: var(--highlight-search-active);
+  box-shadow: 0 0 0 1px var(--highlight-search-active-outline);
 }
 
 /* -------------------------------------------------------------------------
@@ -1243,17 +1466,22 @@ body.dv-tab-dragging .freeform-canvas-host * {
  * Note-history diff decorations (see MilkdownDiffView.svelte). The diff view
  * renders the OLD snapshot read-only and overlays the changes against the
  * current note: removed text struck through in red, added text shown inline
- * in green. Colours use translucent tints so they read in light and dark.
+ * in green. Uses the fixed-hue --diff-* tokens, which carry their own
+ * light and dark values.
  */
 .milkdown-diff .diff-del {
   text-decoration: line-through;
-  text-decoration-color: rgb(239 68 68 / 0.7);
-  color: rgb(239 68 68 / 0.9);
-  background: rgb(239 68 68 / 0.1);
+  text-decoration-color: color-mix(
+    in oklch,
+    var(--diff-remove) 70%,
+    transparent
+  );
+  color: var(--diff-remove);
+  background: var(--diff-remove-subtle);
 }
 .milkdown-diff .diff-ins {
-  color: rgb(16 185 129);
-  background: rgb(16 185 129 / 0.13);
+  color: var(--diff-add);
+  background: var(--diff-add-subtle);
   border-radius: 0.125rem;
   padding: 0 0.1em;
 }
@@ -1275,13 +1503,13 @@ body.dv-tab-dragging .freeform-canvas-host * {
 }
 .milkdown-diff table.diff-del-block,
 .milkdown-diff .diff-del-block table {
-  background: rgb(239 68 68 / 0.08);
+  background: var(--diff-remove-subtle);
 }
 .milkdown-diff table.diff-del-block th,
 .milkdown-diff table.diff-del-block td,
 .milkdown-diff .diff-del-cell {
-  border-color: rgb(239 68 68 / 0.45);
-  background: rgb(239 68 68 / 0.08);
+  border-color: color-mix(in oklch, var(--diff-remove) 45%, transparent);
+  background: var(--diff-remove-subtle);
 }
 
 /* -------------------------------------------------------------------------

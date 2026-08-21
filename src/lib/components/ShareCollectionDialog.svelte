@@ -100,7 +100,7 @@
 
 {#if collectionId}
   <div
-    class="fixed inset-0 z-400 flex items-center justify-center bg-black/35 p-4"
+    class="fixed inset-0 z-400 flex items-center justify-center bg-scrim p-4"
     role="presentation"
     onclick={(event) => {
       if (event.target === event.currentTarget) closeCollectionShareDialog();

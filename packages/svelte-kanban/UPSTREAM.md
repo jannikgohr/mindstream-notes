@@ -19,3 +19,7 @@ with the application.
 - Expose a custom column-header snippet.
 - Expose a board-end snippet for controls after the final column.
 - Add stable column data attributes for list reordering.
+- Draw the `wxi` icons from local `data:` SVG masks
+  (`src/themes/wxi-icons.css`) and default the themes to `fonts={false}`, so
+  the widget no longer depends on `cdn.svar.dev`, which the packaged app's CSP
+  blocks.

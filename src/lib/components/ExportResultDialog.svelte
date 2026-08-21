@@ -82,41 +82,33 @@
     DataResultTone,
     { box: string; text: string; header: string; headerIcon: string }
   > = {
-    emerald: {
-      box: 'border-emerald-500/30 bg-emerald-500/10',
-      text: 'text-emerald-700 dark:text-emerald-400',
-      header: 'border-emerald-500/20 bg-emerald-500/10',
-      headerIcon: 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
+    /* One row per tone, all drawn from the status ramp (see
+       docs/theming.md) — no raw palette hues, and no dark: variants, since
+       the tokens already carry both themes. `neutral` is the common case:
+       a category chip whose icon and label already say what it is. */
+    neutral: {
+      box: 'border-border bg-surface-2',
+      text: 'text-muted-foreground',
+      header: 'border-border bg-surface-2',
+      headerIcon: 'bg-surface-3 text-muted-foreground'
     },
-    sky: {
-      box: 'border-sky-500/30 bg-sky-500/10',
-      text: 'text-sky-700 dark:text-sky-400',
-      header: 'border-sky-500/20 bg-sky-500/10',
-      headerIcon: 'bg-sky-500/20 text-sky-700 dark:text-sky-300'
+    success: {
+      box: 'border-success-border bg-success-subtle',
+      text: 'text-success',
+      header: 'border-success-border bg-success-subtle',
+      headerIcon: 'bg-success-subtle text-success'
     },
-    amber: {
-      box: 'border-amber-500/30 bg-amber-500/10',
-      text: 'text-amber-700 dark:text-amber-400',
-      header: 'border-amber-500/20 bg-amber-500/10',
-      headerIcon: 'bg-amber-500/20 text-amber-700 dark:text-amber-300'
-    },
-    violet: {
-      box: 'border-violet-500/30 bg-violet-500/10',
-      text: 'text-violet-700 dark:text-violet-400',
-      header: 'border-violet-500/20 bg-violet-500/10',
-      headerIcon: 'bg-violet-500/20 text-violet-700 dark:text-violet-300'
-    },
-    teal: {
-      box: 'border-teal-500/30 bg-teal-500/10',
-      text: 'text-teal-700 dark:text-teal-400',
-      header: 'border-teal-500/20 bg-teal-500/10',
-      headerIcon: 'bg-teal-500/20 text-teal-700 dark:text-teal-300'
+    warning: {
+      box: 'border-warning-border bg-warning-subtle',
+      text: 'text-warning',
+      header: 'border-warning-border bg-warning-subtle',
+      headerIcon: 'bg-warning-subtle text-warning'
     },
     destructive: {
-      box: 'border-destructive/30 bg-destructive/10',
+      box: 'border-destructive-border bg-destructive-subtle',
       text: 'text-destructive',
-      header: 'border-destructive/20 bg-destructive/10',
-      headerIcon: 'bg-destructive/20 text-destructive'
+      header: 'border-destructive-border bg-destructive-subtle',
+      headerIcon: 'bg-destructive-subtle text-destructive'
     }
   };
 
@@ -177,7 +169,7 @@
 >
   <AlertDialog.Portal>
     <AlertDialog.Overlay
-      class="fixed inset-0 z-[400] bg-black/50 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+      class="fixed inset-0 z-[400] bg-scrim backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
     />
     <AlertDialog.Content
       class="fixed left-1/2 top-1/2 z-[400] w-[min(480px,94vw)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-lg border border-border bg-card text-card-foreground shadow-xl focus:outline-none"
