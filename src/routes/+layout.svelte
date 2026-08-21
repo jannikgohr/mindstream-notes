@@ -41,6 +41,7 @@
   import { loadPlugins } from '$lib/plugins/load';
   import { installPluginSettingsBridge } from '$lib/plugins/settings-bridge';
   import { startPickerSettingPruning } from '$lib/settings/pickers.svelte';
+  import { startSpellcheckSettingsWatcher } from '$lib/diagnostics/editor-diagnostics.svelte';
   import { loadCustomDictionary } from '$lib/diagnostics/custom-dictionary.svelte';
   import { syncPluginTextCheckers } from '$lib/diagnostics/plugin-checkers.svelte';
 
@@ -93,6 +94,10 @@
     void loadPlugins();
     // Clear any folder/tag picker setting whose target gets deleted.
     const stopPickerPruning = startPickerSettingPruning();
+    // Reload the dictionary configuration and re-check every open surface
+    // when the spellcheck settings change. App-wide rather than per editor,
+    // so one language change is one reload and one re-check.
+    const stopSpellcheckWatch = startSpellcheckSettingsWatcher();
     // Surface a notification when Rust reports the sync server is
     // unreachable (and clear it on the next successful sync).
     const teardownSyncStatus = installSyncStatusBridge();
@@ -111,6 +116,7 @@
       teardownTreeRefresh();
       void teardownGlobalShortcuts();
       stopPickerPruning();
+      stopSpellcheckWatch();
     };
   });
 

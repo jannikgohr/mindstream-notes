@@ -38,9 +38,7 @@
   import SourceEditor from '$lib/editor/source/SourceEditor.svelte';
   import {
     checkSegments,
-    invalidateDiagnostics,
     spellcheckEnabled,
-    spellcheckLanguages,
     subscribeDiagnosticsInvalidated,
     suggestFor
   } from '$lib/diagnostics/editor-diagnostics.svelte';
@@ -178,13 +176,9 @@
   );
 
   // Changing the language set or installing a dictionary changes the answer
-  // for text nobody has touched, which no editor can observe on its own — the
-  // same push the Markdown editor makes, for the same reason.
-  $effect(() => {
-    spellcheckEnabled();
-    spellcheckLanguages().join(',');
-    invalidateDiagnostics();
-  });
+  // for text nobody has touched. `startSpellcheckSettingsWatcher` sees that
+  // for the whole app and invalidates; this surface just listens, the same
+  // way the Markdown editor does.
 
   /**
    * Open the shared suggestion popover on a right-clicked squiggle.
