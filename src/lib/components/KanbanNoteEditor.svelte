@@ -627,11 +627,16 @@
   }
 
   function openCardMenu(e: MouseEvent): void {
-    if (!cardMenu || isTrashed) return;
     const target = e.target instanceof Element ? e.target : null;
     const cardEl = target?.closest<HTMLElement>(
       '.wx-card[data-id], .wx-card-row[data-kanban-card-id]'
     );
+    if (mobile && cardEl) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (!cardMenu || isTrashed) return;
     const id = cardEl?.dataset.id ?? cardEl?.dataset.kanbanCardId;
     if (!id) return;
     cardMenu.show(e, id);
