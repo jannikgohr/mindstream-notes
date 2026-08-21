@@ -18,9 +18,14 @@
 const MOBILE_UA = /android|iphone|ipad|ipod/i;
 const ANDROID_UA = /android/i;
 
-function browserMobilePreview(): 'android' | 'ios' | null {
-  if (typeof window === 'undefined' || '__TAURI_INTERNALS__' in window)
+function devMobilePreview(): 'android' | 'ios' | null {
+  if (
+    !import.meta.env.DEV ||
+    typeof window === 'undefined' ||
+    '__TAURI_INTERNALS__' in window
+  ) {
     return null;
+  }
   const value = new URLSearchParams(window.location.search).get('mobile');
   if (value === 'ios') return 'ios';
   if (value === '1' || value === 'true' || value === 'android')
@@ -48,13 +53,13 @@ const MOBILE_PLATFORMS: Platform[] = ['android', 'ios'];
 
 export function isMobile(): boolean {
   if (typeof navigator === 'undefined') return false;
-  return browserMobilePreview() !== null || MOBILE_UA.test(navigator.userAgent);
+  return devMobilePreview() !== null || MOBILE_UA.test(navigator.userAgent);
 }
 
 export function isAndroid(): boolean {
   if (typeof navigator === 'undefined') return false;
   return (
-    browserMobilePreview() === 'android' || ANDROID_UA.test(navigator.userAgent)
+    devMobilePreview() === 'android' || ANDROID_UA.test(navigator.userAgent)
   );
 }
 
@@ -69,7 +74,7 @@ export function isAndroid(): boolean {
  */
 export function getPlatform(): Platform | null {
   if (typeof navigator === 'undefined') return null;
-  const preview = browserMobilePreview();
+  const preview = devMobilePreview();
   if (preview) return preview;
   const ua = navigator.userAgent;
   if (/android/i.test(ua)) return 'android';
