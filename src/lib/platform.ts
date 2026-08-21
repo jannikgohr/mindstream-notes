@@ -18,6 +18,16 @@
 const MOBILE_UA = /android|iphone|ipad|ipod/i;
 const ANDROID_UA = /android/i;
 
+function browserMobilePreview(): 'android' | 'ios' | null {
+  if (typeof window === 'undefined' || '__TAURI_INTERNALS__' in window)
+    return null;
+  const value = new URLSearchParams(window.location.search).get('mobile');
+  if (value === 'ios') return 'ios';
+  if (value === '1' || value === 'true' || value === 'android')
+    return 'android';
+  return null;
+}
+
 /** Specific operating systems. The schema can target these directly. */
 export type Platform =
   | 'windows'
@@ -38,12 +48,14 @@ const MOBILE_PLATFORMS: Platform[] = ['android', 'ios'];
 
 export function isMobile(): boolean {
   if (typeof navigator === 'undefined') return false;
-  return MOBILE_UA.test(navigator.userAgent);
+  return browserMobilePreview() !== null || MOBILE_UA.test(navigator.userAgent);
 }
 
 export function isAndroid(): boolean {
   if (typeof navigator === 'undefined') return false;
-  return ANDROID_UA.test(navigator.userAgent);
+  return (
+    browserMobilePreview() === 'android' || ANDROID_UA.test(navigator.userAgent)
+  );
 }
 
 /**
@@ -57,6 +69,8 @@ export function isAndroid(): boolean {
  */
 export function getPlatform(): Platform | null {
   if (typeof navigator === 'undefined') return null;
+  const preview = browserMobilePreview();
+  if (preview) return preview;
   const ua = navigator.userAgent;
   if (/android/i.test(ua)) return 'android';
   if (/iphone|ipad|ipod/i.test(ua)) return 'ios';
