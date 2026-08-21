@@ -15,6 +15,7 @@
    * avatar (MobileOptionsMenu) right of the search pill.
    */
   import { Search } from '@jis3r/icons';
+  import CuedIcon from '$lib/components/icons/CuedIcon.svelte';
   import { openSearch } from '$lib/search/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import MobileOptionsMenu from './MobileOptionsMenu.svelte';
@@ -29,9 +30,10 @@
     aria-label={tUi('search.notes.label')}
     class="relative flex h-12 min-w-0 flex-1 items-center gap-3 rounded-full border border-input bg-background pl-11 pr-4 text-left text-sm text-muted-foreground hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
   >
-    <Search
+    <CuedIcon
+      icon={Search}
       size={20}
-      class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground"
+      class="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground"
     />
     <span class="truncate">{tUi('search.notes.placeholder')}</span>
   </button>
