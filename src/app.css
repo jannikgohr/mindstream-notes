@@ -839,6 +839,25 @@ body.dv-tab-dragging
   padding: 1.25rem 5px;
 }
 
+/* Body-level layer that hosts Crepe's slash menu (see
+ * $lib/editor/floating-portal.ts). It carries `.milkdown` so the menu keeps
+ * Crepe's styling and our --crepe-color-* mapping, which means it also
+ * inherits the editor padding and min-height above — neither of which
+ * belongs on a full-viewport overlay. It sits above the editor and its
+ * decorations (z-index 20) and below dialogs, and passes clicks through
+ * everywhere except on the menu itself. */
+.milkdown-floating-portal {
+  position: fixed;
+  inset: 0;
+  padding: 0;
+  min-height: 0;
+  z-index: 30;
+  pointer-events: none;
+}
+.milkdown-floating-portal > * {
+  pointer-events: auto;
+}
+
 /* Appearance → Typography: editor body text size + line height.
  *
  * Crepe hardcodes px font-sizes and line-heights on every block element
