@@ -6,7 +6,7 @@ const ANDROID_UA =
 
 test.use({ userAgent: ANDROID_UA, viewport: { width: 412, height: 915 } });
 
-test('mobile Kanban fills the viewport and exposes card actions', async ({
+test('mobile Kanban supports list management and card actions', async ({
   page
 }) => {
   await page.goto('/');
@@ -32,6 +32,81 @@ test('mobile Kanban fills the viewport and exposes card actions', async ({
   }));
   expect(widths.board).toBe(widths.viewport);
   expect(widths.column).toBe(widths.viewport);
+
+  const activeListTitle = page.locator('.mindstream-list-header .list-title');
+  await activeListTitle.dispatchEvent('pointerdown', {
+    button: 0,
+    pointerId: 11,
+    pointerType: 'touch',
+    clientX: 72,
+    clientY: 140
+  });
+  await page.waitForTimeout(500);
+
+  const listManager = page.getByRole('dialog', { name: 'Manage lists' });
+  await expect(listManager).toBeVisible();
+  await expect(
+    listManager.getByRole('button', { name: 'Rename list' })
+  ).toHaveCount(3);
+
+  const firstRow = listManager.locator('[data-manage-list-id]').first();
+  await firstRow.getByRole('button', { name: 'Rename list' }).click();
+  const renameInput = firstRow.getByRole('textbox', { name: 'Rename list' });
+  await renameInput.fill('Cancelled rename');
+  await listManager.getByRole('heading', { name: 'Manage lists' }).click();
+  await expect(firstRow).toContainText('To Do');
+  await expect(firstRow).not.toContainText('Cancelled rename');
+
+  await firstRow.getByRole('button', { name: 'Rename list' }).click();
+  await firstRow.getByRole('textbox', { name: 'Rename list' }).fill('Planning');
+  await firstRow.getByRole('textbox', { name: 'Rename list' }).press('Enter');
+  await expect(firstRow).toContainText('Planning');
+
+  const dragHandle = firstRow.getByRole('button', { name: 'Reorder list' });
+  const handleBox = await dragHandle.boundingBox();
+  const lastRowBox = await listManager
+    .locator('[data-manage-list-id]')
+    .last()
+    .boundingBox();
+  expect(handleBox).not.toBeNull();
+  expect(lastRowBox).not.toBeNull();
+  await dragHandle.dispatchEvent('pointerdown', {
+    button: 0,
+    pointerId: 12,
+    pointerType: 'touch',
+    clientX: handleBox!.x + handleBox!.width / 2,
+    clientY: handleBox!.y + handleBox!.height / 2
+  });
+  await page.evaluate(
+    ({ x, y }) => {
+      window.dispatchEvent(
+        new PointerEvent('pointermove', {
+          bubbles: true,
+          pointerId: 12,
+          pointerType: 'touch',
+          clientX: x,
+          clientY: y
+        })
+      );
+      window.dispatchEvent(
+        new PointerEvent('pointerup', {
+          bubbles: true,
+          pointerId: 12,
+          pointerType: 'touch',
+          clientX: x,
+          clientY: y
+        })
+      );
+    },
+    {
+      x: lastRowBox!.x + lastRowBox!.width / 2,
+      y: lastRowBox!.y + lastRowBox!.height
+    }
+  );
+  await listManager.getByRole('button', { name: 'Close' }).click();
+  await expect(
+    page.locator('.mobile-list-tabs > button:not(.mobile-add-list)')
+  ).toHaveText(['In Progress', 'Done', 'Planning']);
 
   await page.getByRole('button', { name: 'Add card' }).click();
   await expect(page.getByTitle('Close')).toBeVisible();

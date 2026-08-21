@@ -786,6 +786,8 @@
     "editor.kanban.cardCount": "Kartenanzahl",
     "editor.kanban.lists": "Kanban-Listen",
     "editor.kanban.reorderList": "Liste neu anordnen",
+    "editor.kanban.manageLists": "Listen verwalten",
+    "editor.kanban.manageListsHint": "Listen zum Sortieren ziehen",
     "editor.kanban.moveListLeft": "Liste nach links verschieben",
     "editor.kanban.moveListRight": "Liste nach rechts verschieben",
     "editor.kanban.collapseList": "Liste einklappen",
