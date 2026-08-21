@@ -325,6 +325,7 @@
     class="wx-board"
     class:wx-scroll-board={!columnScroll}
     class:wx-layout-flex={!fixedColumnWidth}
+    class:wx-full-card-drag={Boolean(onCardDragEdge)}
     use:cardDrag={{ dnd, store, readonly, onEdgeSwitch: onCardDragEdge }}
     use:delegateCardClick
     use:cardHotkeys
@@ -452,6 +453,10 @@
   .wx-board:not(.wx-scroll-board) :global(.wx-column.wx-collapsed) {
     height: 100%;
     min-height: 0;
+  }
+
+  .wx-full-card-drag :global(.wx-card) {
+    touch-action: none;
   }
 
   /* board-wide vertical scroll (columnScroll: false) */
