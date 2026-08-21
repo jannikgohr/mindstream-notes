@@ -259,7 +259,7 @@
     z-index: 280;
     inset: 0;
     border: 0;
-    background: rgb(0 0 0 / 0.52);
+    background: var(--scrim);
   }
 
   .sheet {

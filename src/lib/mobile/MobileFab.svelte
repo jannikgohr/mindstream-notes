@@ -50,7 +50,7 @@
   <button
     type="button"
     aria-label="Close action menu"
-    class="fixed inset-0 z-30 bg-black/20"
+    class="fixed inset-0 z-30 bg-scrim"
     onclick={collapseFab}
   ></button>
 {/if}

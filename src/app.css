@@ -43,6 +43,13 @@
   --surface-2: oklch(0.99 0.002 247.84);
   --surface-3: oklch(1 0 0);
 
+  /* The wash behind a modal, sheet or palette. Always black — a scrim's job
+   * is to darken whatever is behind it, so it does not follow the surface
+   * scale — but the strength differs by theme, and it was previously spelled
+   * five different ways across ten files (bg-black/50, /35, rgb(0 0 0 / 0.4),
+   * rgb(0 0 0 / 0.52), …). */
+  --scrim: oklch(0 0 0 / 0.45);
+
   /* Light-mode steps compress as they approach white, so shadow carries
    * the rest of the elevation cue. Dark mode overrides these deeper. */
   --elevation-raised: 0 1px 2px oklch(0.145 0 0 / 0.08);
@@ -181,6 +188,10 @@ html {
   --surface-2: oklch(0.215 0.004 286.2);
   --surface-3: oklch(0.245 0.004 286.2);
 
+  /* Stronger than light mode: over already-dark content a 45% wash barely
+   * separates the overlay from the page behind it. */
+  --scrim: oklch(0 0 0 / 0.6);
+
   /* Deeper than light mode: on a dark ground a shadow has to be near-black
    * and wider to register at all. */
   --elevation-raised: 0 1px 2px oklch(0 0 0 / 0.5);
@@ -223,6 +234,8 @@ html {
   --color-surface-1: var(--surface-1);
   --color-surface-2: var(--surface-2);
   --color-surface-3: var(--surface-3);
+
+  --color-scrim: var(--scrim);
 
   /* `shadow-raised` / `shadow-overlay`. The raw tokens are named
    * --elevation-* rather than --shadow-* because Tailwind owns the
