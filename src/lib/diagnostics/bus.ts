@@ -49,6 +49,22 @@ export interface CheckOptions {
    */
   owners?: Partial<Record<DiagnosticKind, string>>;
   /**
+   * How long a fallback waits for the owner of a kind before drawing anyway.
+   *
+   * Ownership is a question about a finished check, but findings are drawn
+   * as they arrive. The local dictionary answers a paragraph in microseconds
+   * and a service takes seconds, so between the two the owner has not
+   * answered yet — which used to read as "the owner has no opinion" and put
+   * the dictionary's squiggles on screen under the user's cursor, to be
+   * replaced by the service's a second later. Every keystroke did it again.
+   *
+   * While the owner is still working on a segment its fallbacks stay quiet.
+   * The grace bounds that: a service that hangs rather than failing must not
+   * take spellchecking down with it, so once it expires the fallbacks are
+   * drawn and the owner's answer, if it ever comes, replaces them.
+   */
+  ownerGraceMs?: number;
+  /**
    * Called each time a provider finishes, with everything known so far.
    *
    * Checkers differ in speed by orders of magnitude — the local dictionary
@@ -77,6 +93,17 @@ const DEFAULT_CACHE_ENTRIES = 512;
  * one by embedding the separator in a field.
  */
 const KEY_SEP = String.fromCharCode(31);
+
+/**
+ * Default `ownerGraceMs`.
+ *
+ * A LanguageTool round trip measured ~2.4s, dominated by the trip rather
+ * than the payload, so the grace has to clear that comfortably or it would
+ * re-introduce the flicker it exists to prevent on every slow-ish response.
+ * It is a backstop for a service that never answers at all, not a latency
+ * budget.
+ */
+const DEFAULT_OWNER_GRACE_MS = 6000;
 
 class AbortError extends Error {
   readonly name = 'AbortError';
@@ -136,17 +163,78 @@ export class DiagnosticBus {
     /** Provider ids per segment index that returned without failing. */
     const answered = new Map<number, Set<string>>();
 
+    /**
+     * Owners this run is still waiting on.
+     *
+     * Only owners that are actually registered: a kind owned by a provider
+     * that is not here is not being checked by anyone, so nothing should
+     * wait for it.
+     */
+    const registered = new Set(this.#providers.map((p) => p.id));
+    const waitingFor = new Set(
+      Object.values(owners).filter(
+        (id): id is string => id !== undefined && registered.has(id)
+      )
+    );
+    /** True once the grace expired, or when there was nothing to wait for. */
+    let graceExpired = waitingFor.size === 0;
+
     /** Everything known so far, with ownership applied. */
     const compose = (): Diagnostic[] => {
       const owned = found
         .filter(({ providerId, segment, diagnostic }) => {
           const owner = owners[diagnostic.kind];
           if (owner === undefined || owner === providerId) return true;
-          // Drop only when the owner actually answered for THIS segment.
-          return !answered.get(segment)?.has(owner);
+          // The owner spoke for THIS segment, so its silence is the verdict.
+          if (answered.get(segment)?.has(owner)) return false;
+          // Still working on it: stay quiet rather than flashing a second
+          // opinion that is about to be overwritten.
+          return graceExpired || !waitingFor.has(owner);
         })
         .map(({ diagnostic }) => diagnostic);
       return resolveOverlaps(owned, this.#order(options.precedence));
+    };
+
+    // Nothing redraws by itself when the grace expires — the owner is, by
+    // definition, not finishing — so the wait ends with a publish of its own.
+    const grace = options.ownerGraceMs ?? DEFAULT_OWNER_GRACE_MS;
+    const graceTimer =
+      graceExpired || grace <= 0
+        ? null
+        : setTimeout(() => {
+            graceExpired = true;
+            if (!signal?.aborted) options.onPartial?.(compose());
+          }, grace);
+
+    /**
+     * Take one provider's answer for one segment into the running result.
+     *
+     * Providers report positions relative to the text they were handed;
+     * rebasing happens here so no provider has to know where in the document
+     * its paragraph lives. Recording also marks the provider as having
+     * answered for that segment, which is what ownership is resolved on.
+     */
+    const record = (
+      provider: DiagnosticProvider,
+      index: number,
+      relative: Diagnostic[]
+    ) => {
+      const seen = answered.get(index) ?? new Set<string>();
+      seen.add(provider.id);
+      answered.set(index, seen);
+
+      const segment = segments[index];
+      for (const d of relative) {
+        found.push({
+          providerId: provider.id,
+          segment: index,
+          diagnostic: {
+            ...d,
+            from: d.from + segment.from,
+            to: d.to + segment.from
+          }
+        });
+      }
     };
 
     const runProvider = async (provider: DiagnosticProvider) => {
@@ -161,6 +249,19 @@ export class DiagnosticBus {
         const hit = this.#cacheGet(key);
         if (hit === undefined) pending.push({ index, segment, key });
         else resolved.set(index, hit);
+      }
+
+      // What is already known goes out before the slow part starts. A
+      // keystroke leaves every other paragraph's text untouched, so a
+      // network checker has a cached answer for all of them — holding those
+      // back until the one edited paragraph comes back from the server took
+      // the whole document's squiggles off screen on every keystroke, which
+      // is the other half of the flicker.
+      if (resolved.size > 0 && pending.length > 0) {
+        for (const [index, relative] of resolved)
+          record(provider, index, relative);
+        resolved.clear();
+        options.onPartial?.(compose());
       }
 
       if (pending.length > 0) {
@@ -201,27 +302,12 @@ export class DiagnosticBus {
         }
       }
 
-      for (const [index, relative] of resolved) {
-        const seen = answered.get(index) ?? new Set<string>();
-        seen.add(provider.id);
-        answered.set(index, seen);
+      for (const [index, relative] of resolved)
+        record(provider, index, relative);
 
-        // Providers report positions relative to the text they were handed;
-        // rebasing happens here so no provider has to know where in the
-        // document its paragraph lives.
-        const segment = segments[index];
-        for (const d of relative) {
-          found.push({
-            providerId: provider.id,
-            segment: index,
-            diagnostic: {
-              ...d,
-              from: d.from + segment.from,
-              to: d.to + segment.from
-            }
-          });
-        }
-      }
+      // Nobody is waiting on this one any more — whether it answered,
+      // declined or failed, its fallbacks are free to draw from here on.
+      waitingFor.delete(provider.id);
 
       // Publish as soon as THIS provider is done. The local dictionary
       // answers in microseconds while a network checker takes seconds, so
@@ -230,9 +316,13 @@ export class DiagnosticBus {
       options.onPartial?.(compose());
     };
 
-    // Run in parallel: a slow network checker must not delay a local one
-    // that was ready immediately.
-    await Promise.all(this.#providers.map(runProvider));
+    try {
+      // Run in parallel: a slow network checker must not delay a local one
+      // that was ready immediately.
+      await Promise.all(this.#providers.map(runProvider));
+    } finally {
+      if (graceTimer !== null) clearTimeout(graceTimer);
+    }
 
     if (signal?.aborted) throw new AbortError();
     return compose();
