@@ -109,6 +109,7 @@
   import KanbanSearchPanel from './kanban/KanbanSearchPanel.svelte';
   import KanbanAddListControl from './kanban/KanbanAddListControl.svelte';
   import KanbanListHeader from './kanban/KanbanListHeader.svelte';
+  import KanbanMobileListManager from './kanban/KanbanMobileListManager.svelte';
   import {
     KANBAN_LOCAL_ORIGIN,
     KANBAN_RENDER_ORIGIN,
@@ -202,6 +203,8 @@
   let mobileActiveColumnId = $state<string | null>(null);
   let mobileTabs = $state<HTMLElement | null>(null);
   let mobileCardEditorNavHeld = false;
+  let mobileListManagerOpen = $state(false);
+  let mobileListManagerNavHeld = false;
 
   let provider: CollabProvider | null = null;
   let stopObserve: (() => void) | null = null;
@@ -635,6 +638,7 @@
   }
 
   const MOBILE_CARD_EDITOR_NAV_ID = 'mobile-kanban-card-editor';
+  const MOBILE_LIST_MANAGER_NAV_ID = 'mobile-kanban-list-manager';
 
   function closeMobileCardEditor(): void {
     api?.exec('select-card', { id: null });
@@ -649,6 +653,31 @@
       mobileCardEditorNavHeld = false;
       closeNavOverlay(MOBILE_CARD_EDITOR_NAV_ID);
     }
+  }
+
+  function handleMobileListManagerHistoryClose(): void {
+    mobileListManagerOpen = false;
+    mobileListManagerNavHeld = false;
+  }
+
+  function openMobileListManager(): void {
+    if (!mobile || isTrashed || mobileListManagerOpen) return;
+    listMenu = null;
+    renamingListId = null;
+    creatingList = false;
+    mobileListManagerOpen = true;
+    mobileListManagerNavHeld = true;
+    openNavOverlay(
+      MOBILE_LIST_MANAGER_NAV_ID,
+      handleMobileListManagerHistoryClose
+    );
+  }
+
+  function closeMobileListManager(): void {
+    mobileListManagerOpen = false;
+    if (!mobileListManagerNavHeld) return;
+    mobileListManagerNavHeld = false;
+    closeNavOverlay(MOBILE_LIST_MANAGER_NAV_ID);
   }
 
   function openKanbanSearch(): void {
@@ -888,6 +917,18 @@
     });
     board = readBoardFromYDoc(yDoc);
     updateUndoState();
+  }
+
+  function commitMobileColumnOrder(ids: string[]): void {
+    const byId = new Map(board.columns.map((column) => [column.id, column]));
+    const reordered = ids
+      .map((id) => byId.get(id))
+      .filter((column): column is KanbanColumnData => column !== undefined);
+    const included = new Set(reordered.map((column) => column.id));
+    commitColumnOrder([
+      ...reordered,
+      ...board.columns.filter((column) => !included.has(column.id))
+    ]);
   }
 
   function moveMobileColumn(id: string, offset: -1 | 1): void {
@@ -1215,6 +1256,10 @@
       mobileCardEditorNavHeld = false;
       closeNavOverlay(MOBILE_CARD_EDITOR_NAV_ID);
     }
+    if (mobileListManagerNavHeld) {
+      mobileListManagerNavHeld = false;
+      closeNavOverlay(MOBILE_LIST_MANAGER_NAV_ID);
+    }
     if (saveTimer) {
       clearTimeout(saveTimer);
       saveTimer = null;
@@ -1250,6 +1295,7 @@
     onCancelRename={cancelRenameList}
     onOpenMenu={(event) => openListMenu(event, columnId)}
     onDragStart={(event) => beginListPointerDrag(event, columnId)}
+    onOpenListManager={openMobileListManager}
     {mobile}
   />
 {/snippet}
@@ -1461,6 +1507,15 @@
         submitLabel={tUi('editor.kanban.addList')}
         onSubmit={addColumn}
         onClose={cancelAddColumn}
+      />
+    {/if}
+    {#if mobile && mobileListManagerOpen}
+      <KanbanMobileListManager
+        columns={board.columns}
+        activeId={mobileActiveColumn?.id ?? null}
+        onReorder={commitMobileColumnOrder}
+        onRename={renameColumn}
+        onClose={closeMobileListManager}
       />
     {/if}
   {/if}

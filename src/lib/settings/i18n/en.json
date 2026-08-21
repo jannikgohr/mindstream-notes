@@ -786,6 +786,8 @@
     "editor.kanban.cardCount": "Card count",
     "editor.kanban.lists": "Kanban lists",
     "editor.kanban.reorderList": "Reorder list",
+    "editor.kanban.manageLists": "Manage lists",
+    "editor.kanban.manageListsHint": "Drag lists to reorder",
     "editor.kanban.moveListLeft": "Move list left",
     "editor.kanban.moveListRight": "Move list right",
     "editor.kanban.collapseList": "Collapse list",
