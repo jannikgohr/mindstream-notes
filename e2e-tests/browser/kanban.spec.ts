@@ -3,7 +3,9 @@ import { clickFileTreeCreateAction } from './file-tree-toolbar';
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'Welcome' })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Welcome', exact: true })
+  ).toBeVisible();
 });
 
 test('opens Kanban search from the active-note search hotkey', async ({

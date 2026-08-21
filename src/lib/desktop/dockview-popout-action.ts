@@ -3,7 +3,7 @@ import type {
   IDockviewGroupPanel,
   IGroupHeaderProps,
   IHeaderActionsRenderer
-} from 'dockview-core';
+} from 'dockview';
 import { mount, unmount } from 'svelte';
 import { tree } from '$lib/stores/tree.svelte';
 import { openNoteWindow } from '$lib/api';

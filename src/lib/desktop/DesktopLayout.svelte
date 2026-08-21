@@ -16,7 +16,7 @@
     TabPartInitParameters,
     DockviewGroupPanel,
     DockviewTheme
-  } from 'dockview-core';
+  } from 'dockview';
   import { FileText } from '@lucide/svelte';
   import TopBar from './DesktopTopBar.svelte';
   import LazyFileExplorer from '$lib/components/LazyFileExplorer.svelte';
@@ -167,7 +167,7 @@
 
   async function setupDockview() {
     if (!dockHost) return;
-    const { DockviewComponent, DefaultTab } = await import('dockview-core');
+    const { DockviewComponent, DefaultTab } = await import('dockview');
 
     const component = new DockviewComponent(dockHost, {
       createComponent: (options) => {
@@ -216,9 +216,12 @@
 
     dock = component.api;
 
-    dock.onDidActivePanelChange((panel) => {
+    // v7 changed this payload from the panel itself to `{ panel, origin }`
+    // so a handler can tell a user click from an API call; we treat both
+    // the same, but the panel now has to be unwrapped.
+    dock.onDidActivePanelChange((event) => {
       setActiveNote(
-        (panel?.params as { noteId?: string } | undefined)?.noteId ?? null
+        (event.panel?.params as { noteId?: string } | undefined)?.noteId ?? null
       );
       schedulePersist();
     });
@@ -686,7 +689,7 @@
   onMount(() => {
     // Load the tree independently of the dockview bootstrap. The two used to
     // be coupled (loadTree lived inside setupDockview), so any failure or
-    // early-return in the UI setup — e.g. a flaky `import('dockview-core')`
+    // early-return in the UI setup — e.g. a flaky `import('dockview')`
     // during a Vite dev rebuild — left the sidebar stuck on "Loading…"
     // forever. Data loading must not be hostage to UI bootstrap.
     void loadTree();

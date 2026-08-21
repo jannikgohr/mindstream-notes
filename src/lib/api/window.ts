@@ -12,7 +12,7 @@ import {
   type DockviewApi,
   type IDockviewGroupPanel,
   type IDockviewPanel
-} from 'dockview-core';
+} from 'dockview';
 
 /**
  * Pick a WebView background colour matching the saved (or OS-default) theme
