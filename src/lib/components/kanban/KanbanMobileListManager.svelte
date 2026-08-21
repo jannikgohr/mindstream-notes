@@ -416,8 +416,10 @@
   input {
     height: 2.25rem;
     border: 0;
-    background: transparent;
-    padding: 0;
+    border-bottom: 2px solid var(--ring);
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    background: color-mix(in srgb, var(--ring) 8%, transparent);
+    padding: 0 0.375rem;
     color: var(--foreground);
     outline: none;
   }
