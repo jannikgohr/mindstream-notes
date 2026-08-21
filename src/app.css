@@ -98,6 +98,22 @@
   --destructive: oklch(0.577 0.245 27.325);
   --destructive-foreground: oklch(0.985 0 0);
 
+  /* Diff add/remove. A deliberate fixed-hue pair: in a diff the colour IS
+   * the meaning, so it must not follow a user-chosen accent. Tokenised all
+   * the same, because the same two colours are needed by app.css (the
+   * ProseMirror decorations) and by the diff components, and they used to be
+   * spelled as rgb() literals in one and Tailwind palette classes in the
+   * other. Reuses the success/destructive hues so a diff still looks like it
+   * belongs to the app. */
+  --diff-add: var(--success);
+  --diff-add-subtle: color-mix(in oklch, var(--success) 13%, transparent);
+  --diff-remove: var(--destructive);
+  --diff-remove-subtle: color-mix(
+    in oklch,
+    var(--destructive) 10%,
+    transparent
+  );
+
   --success-subtle: color-mix(in oklch, var(--success) 12%, transparent);
   --success-border: color-mix(in oklch, var(--success) 30%, transparent);
   --warning-subtle: color-mix(in oklch, var(--warning) 12%, transparent);
@@ -140,10 +156,6 @@
   --ring: var(--accent-brand);
   --radius: 0.5rem;
 
-  /* Deprecated alias — the dockview rules further down still read this.
-   * Kept pointing at the scale so both stay in sync until those rules are
-   * migrated to --surface-0 directly. */
-  --dock-strip: var(--surface-0);
   /* Height of the floating mobile formatting toolbar — set live by
    * MobileEditorToolbar.svelte on mount, cleared on destroy. The 0px
    * default keeps desktop unaffected and tells CSS resolvers (IDE
@@ -236,6 +248,10 @@ html {
   --color-surface-3: var(--surface-3);
 
   --color-scrim: var(--scrim);
+  --color-diff-add: var(--diff-add);
+  --color-diff-add-subtle: var(--diff-add-subtle);
+  --color-diff-remove: var(--diff-remove);
+  --color-diff-remove-subtle: var(--diff-remove-subtle);
 
   /* `shadow-raised` / `shadow-overlay`. The raw tokens are named
    * --elevation-* rather than --shadow-* because Tailwind owns the
@@ -394,9 +410,10 @@ body {
 .dockview-theme-bridge {
   --dv-background-color: var(--background);
   --dv-paneview-active-outline-color: var(--ring);
-  /* Strip — mid-tone so the floating tab pills (--background) read
-   * cleanly against it. */
-  --dv-tabs-and-actions-container-background-color: var(--dock-strip);
+  /* The strip is window chrome, so it sits at the bottom of the elevation
+   * scale and the active tab pill (surface-1, the panel it reveals) comes
+   * forward out of it — the same relationship Chrome uses. */
+  --dv-tabs-and-actions-container-background-color: var(--surface-0);
   --dv-tabs-and-actions-container-font-size: 13px;
   --dv-tabs-and-actions-container-height: 40px;
   /* Chrome uses its own hairline-via-pseudo-element separator (see
@@ -422,7 +439,7 @@ body {
   --dv-active-sash-transition-delay: 0s;
   --dv-paneview-header-border-color: var(--border);
   --dv-icon-hover-background-color: var(--accent);
-  --dv-floating-box-shadow: 0 4px 14px rgb(0 0 0 / 0.2);
+  --dv-floating-box-shadow: var(--elevation-overlay);
   --dv-drag-over-background-color: oklch(from var(--accent-brand) l c h / 0.15);
   --dv-drag-over-border-color: var(--ring);
   /*
@@ -540,7 +557,7 @@ body.dv-tab-dragging
 /* Subtle elevation so the active tab reads as the foreground card sitting
  * on the strip, the way Chrome's selected tab does. */
 .dockview-theme-bridge .dv-tabs-container > .dv-tab.dv-active-tab {
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.18);
+  box-shadow: var(--elevation-raised);
 }
 
 /* Hover pill — most of the way toward the active tab's --background but
@@ -567,11 +584,7 @@ body.dv-tab-dragging
   .dv-groupview
   .dv-tabs-container
   > .dv-tab.dv-inactive-tab:hover {
-  background-color: color-mix(
-    in oklch,
-    var(--dock-strip),
-    var(--background) 80%
-  );
+  background-color: color-mix(in oklch, var(--surface-0), var(--surface-1) 80%);
 }
 
 /* Hairline separator between two adjacent inactive-and-unhovered tabs.
@@ -725,22 +738,21 @@ body.dv-tab-dragging
  * orientation flip (separators become horizontal, sit in the inter-row
  * margin instead of the inter-tab gap).
  *
- * Container uses --dock-strip rather than --popover so the popup reads
- * as a continuation of the tab strip rather than a generic popover
- * surface. The box-shadow + border give it the elevation that the
- * strip itself doesn't need (the strip is flush with the panel chrome
- * below it; this popup floats over content).
+ * The container is a floating menu, so it takes the overlay step and the
+ * app's standard popover chrome — the same surface, border and shadow as
+ * ContextMenu and the dropdowns. It used to borrow the tab strip's colour
+ * to read as a continuation of the strip, which put a floating element on
+ * the darkest chrome step and made the dockview overflow the one menu in
+ * the app that looked like something else.
  */
 .dockview-theme-bridge .dv-tabs-overflow-container {
-  background-color: var(--dock-strip);
-  color: var(--foreground);
+  background-color: var(--popover);
+  color: var(--popover-foreground);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 4px;
   min-width: 200px;
-  box-shadow:
-    0 10px 15px -3px rgb(0 0 0 / 0.2),
-    0 4px 6px -4px rgb(0 0 0 / 0.15);
+  box-shadow: var(--elevation-overlay);
 }
 
 /* Drop dockview's full-width per-row divider — replaced by the pseudo
@@ -764,23 +776,17 @@ body.dv-tab-dragging
   transition: background-color 120ms ease-out;
 }
 
-/* Hover pill — same color-mix bias toward --background as the inline
- * tabs, so a pointer move across the popup reads identically to a
- * pointer move across the strip. */
+/* Hover wash — the same one every other menu row in the app uses. */
 .dockview-theme-bridge .dv-tabs-overflow-container .dv-tab:hover {
-  background-color: color-mix(
-    in oklch,
-    var(--dock-strip),
-    var(--background) 80%
-  );
+  background-color: var(--accent);
 }
 
-/* Active row — full --background pill + same drop shadow as the inline
- * active tab, so the "selected" cue is consistent across both views. */
+/* Active row — the selected cue on a menu is a filled row, not a raised
+ * pill; on the overlay step there is nothing above surface-3 to rise to. */
 .dockview-theme-bridge .dv-tabs-overflow-container .dv-active-tab {
-  background-color: var(--background);
+  background-color: var(--accent);
+  color: var(--accent-foreground);
   font-weight: 500;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.18);
 }
 
 /* Horizontal hairline between two adjacent inactive-and-unhovered rows
@@ -921,38 +927,62 @@ body.dv-tab-dragging
 }
 
 /*
- * Crepe dark theme.
- * Crepe ships frame.css (light) and frame-dark.css (dark) but both target
- * the same `.milkdown` selector, so importing the dark file globally would
- * stomp the light one. Instead we re-declare the dark token values under
- * `.dark .milkdown` — same variables Crepe's components read, just scoped
- * to our manual dark mode toggle. Values mirror frame-dark.css verbatim
- * so the whole editor (slash menu, link tooltip, code-block chrome, list
- * checkboxes, etc.) flips correctly.
+ * Crepe theme bridge.
+ *
+ * Crepe ships frame.css (light) and frame-dark.css (dark), both targeting the
+ * same `.milkdown` selector, so importing the dark file globally would stomp
+ * the light one. We used to solve that by re-declaring frame-dark.css's values
+ * verbatim under `.dark .milkdown` — which left the editor carrying a second,
+ * hand-maintained palette that immediately drifted: its surfaces were copies
+ * of --card and --dock-strip as those tokens stood at the time, and both have
+ * since moved.
+ *
+ * Instead, map Crepe's variables onto our tokens once, on `.milkdown` itself.
+ * The tokens already carry both themes, so this single block replaces the
+ * light defaults AND the dark override, and the editor chrome (slash menu,
+ * link tooltip, code-block header, list checkboxes) now tracks the same scale
+ * as everything around it. app.css imports Crepe first, so these equal
+ * specificity rules win on source order.
  */
-.dark .milkdown {
-  --crepe-color-background: oklch(0.18 0 0);
-  --crepe-color-on-background: oklch(0.92 0 0);
-  --crepe-color-surface: oklch(0.18 0 0);
-  --crepe-color-surface-low: oklch(0.219 0.004 286.076);
-  --crepe-color-on-surface: oklch(0.86 0 0);
-  --crepe-color-on-surface-variant: oklch(0.7 0 0);
-  --crepe-color-outline: oklch(0.45 0 0);
-  --crepe-color-primary: oklch(0.78 0 0);
-  --crepe-color-secondary: oklch(0.32 0 0);
-  --crepe-color-on-secondary: oklch(0.88 0 0);
-  --crepe-color-inverse: oklch(0.93 0 0);
-  --crepe-color-on-inverse: oklch(0.205 0 0);
-  --crepe-color-inline-code: oklch(0.74 0.16 18);
-  --crepe-color-error: oklch(0.74 0.16 18);
-  --crepe-color-hover: oklch(0.27 0 0);
-  --crepe-color-selected: oklch(0.32 0 0);
-  --crepe-color-inline-area: oklch(0.27 0 0);
+.milkdown {
+  /* Surfaces. Crepe's "surface" is its floating chrome (slash menu, tooltips)
+   * so it takes the overlay step; "surface-low" is the recessed chrome inside
+   * a block, such as the code-block header. */
+  --crepe-color-background: var(--surface-1);
+  --crepe-color-surface: var(--surface-3);
+  --crepe-color-surface-low: var(--surface-2);
+  --crepe-color-secondary: var(--surface-2);
+  --crepe-color-inline-area: var(--surface-2);
 
-  --crepe-shadow-1:
-    0px 1px 2px 0px rgba(0, 0, 0, 0.55), 0px 1px 3px 1px rgba(0, 0, 0, 0.4);
-  --crepe-shadow-2:
-    0px 1px 2px 0px rgba(0, 0, 0, 0.55), 0px 2px 6px 2px rgba(0, 0, 0, 0.4);
+  /* Text. */
+  --crepe-color-on-background: var(--foreground);
+  --crepe-color-on-surface: var(--foreground);
+  --crepe-color-on-surface-variant: var(--muted-foreground);
+  --crepe-color-on-secondary: var(--foreground);
+
+  --crepe-color-outline: var(--border-strong);
+
+  /* Identity. Inline code shares the brand hue rather than Crepe's stock red,
+   * which read as an error next to the real error colour below. */
+  --crepe-color-primary: var(--accent-brand);
+  --crepe-color-inline-code: var(--accent-brand);
+  --crepe-color-error: var(--destructive);
+
+  /* Inverted chrome (Crepe's tooltip-on-dark treatment). */
+  --crepe-color-inverse: var(--foreground);
+  --crepe-color-on-inverse: var(--background);
+
+  /* Interaction. Translucent, so one value works on every surface Crepe
+   * paints it over. */
+  --crepe-color-hover: var(--accent);
+  --crepe-color-selected: color-mix(
+    in oklch,
+    var(--accent-brand) 18%,
+    transparent
+  );
+
+  --crepe-shadow-1: var(--elevation-raised);
+  --crepe-shadow-2: var(--elevation-overlay);
 }
 
 /*
@@ -1425,17 +1455,22 @@ body.dv-tab-dragging .freeform-canvas-host * {
  * Note-history diff decorations (see MilkdownDiffView.svelte). The diff view
  * renders the OLD snapshot read-only and overlays the changes against the
  * current note: removed text struck through in red, added text shown inline
- * in green. Colours use translucent tints so they read in light and dark.
+ * in green. Uses the fixed-hue --diff-* tokens, which carry their own
+ * light and dark values.
  */
 .milkdown-diff .diff-del {
   text-decoration: line-through;
-  text-decoration-color: rgb(239 68 68 / 0.7);
-  color: rgb(239 68 68 / 0.9);
-  background: rgb(239 68 68 / 0.1);
+  text-decoration-color: color-mix(
+    in oklch,
+    var(--diff-remove) 70%,
+    transparent
+  );
+  color: var(--diff-remove);
+  background: var(--diff-remove-subtle);
 }
 .milkdown-diff .diff-ins {
-  color: rgb(16 185 129);
-  background: rgb(16 185 129 / 0.13);
+  color: var(--diff-add);
+  background: var(--diff-add-subtle);
   border-radius: 0.125rem;
   padding: 0 0.1em;
 }
@@ -1457,13 +1492,13 @@ body.dv-tab-dragging .freeform-canvas-host * {
 }
 .milkdown-diff table.diff-del-block,
 .milkdown-diff .diff-del-block table {
-  background: rgb(239 68 68 / 0.08);
+  background: var(--diff-remove-subtle);
 }
 .milkdown-diff table.diff-del-block th,
 .milkdown-diff table.diff-del-block td,
 .milkdown-diff .diff-del-cell {
-  border-color: rgb(239 68 68 / 0.45);
-  background: rgb(239 68 68 / 0.08);
+  border-color: color-mix(in oklch, var(--diff-remove) 45%, transparent);
+  background: var(--diff-remove-subtle);
 }
 
 /* -------------------------------------------------------------------------

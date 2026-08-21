@@ -34,11 +34,11 @@
     info: Info
   };
 
-  // Accent per variant. Success mirrors the emerald treatment used by
+  // Accent per variant. Success uses the status ramp, shared with
   // ExportResultDialog; error reuses the destructive token the share dialog's
   // inline errors already use, so the two error surfaces read as one system.
   const accents: Record<ToastVariant, string> = {
-    success: 'text-emerald-600 dark:text-emerald-400',
+    success: 'text-success',
     error: 'text-destructive',
     info: 'text-primary'
   };
