@@ -150,11 +150,13 @@
   });
 
   // Re-apply the accent colour whenever the user changes it (or on
-  // first mount, since $effect runs once for the initial values). The
-  // helper only overrides --primary / --primary-foreground / --ring
-  // when the setting differs from its schema default — leaving the
-  // existing dark/light theme tokens intact for users who haven't
-  // picked a custom accent.
+  // first mount, since $effect runs once for the initial values). Only
+  // applied when the setting differs from its schema default: a single
+  // user hex can't carry separate light/dark values, so an untouched
+  // install is better served by the theme's own --accent-brand.
+  // The helper overrides the brand tokens (--accent-brand /
+  // --accent-brand-foreground / --ring) and leaves --primary — the
+  // neutral button surface — alone. See docs/theming.md.
   $effect(() => {
     const value = getSettingValue('appearance.accent') as string | undefined;
     if (isModified('appearance.accent') && value) {

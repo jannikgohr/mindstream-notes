@@ -1,0 +1,160 @@
+# Theming
+
+All colour, elevation and radius in the app comes from tokens defined in
+[`src/app.css`](../src/app.css). This document is the contract for that file:
+what each token means, which one to reach for, and what is not allowed.
+
+## Why the system exists
+
+The app previously had tokens but no system. `--muted` was _darker_ than
+`--background` in light mode and _lighter_ in dark mode, so any component using
+it as a surface recessed in one theme and lifted in the other — most visibly the
+Kanban board, whose columns became pale slabs with darker cards floating on
+them. `--border`, `--muted`, `--accent` and `--secondary` were all the same
+value in dark mode, so bordered elements on a muted surface had no outline. Each
+area of the app worked around this locally, which is why the sidebars, the
+Kanban board and the dockview chrome each ended up with their own look.
+
+## The two layers
+
+**Layer 1 — the system.** The elevation scale, border tiers, brand accent and
+status ramp. This is the source of truth, and the only place a raw colour
+literal belongs.
+
+**Layer 2 — shadcn compatibility.** `--background`, `--card`, `--popover`,
+`--muted`, `--secondary`, `--accent`, `--border`, `--input`, `--ring` are
+_derived_ from layer 1, not authored independently. They exist so the existing
+`bg-card` / `text-muted-foreground` utilities and the shadcn-svelte primitives
+keep working. **Change layer 1; never edit a layer-2 value directly.**
+
+## Elevation
+
+Four surface steps. The rule that makes light and dark consistent:
+
+> **A higher index is always lighter, in both themes.**
+
+Elevation is distance toward the viewer. A container that recesses takes a
+_lower_ index than its parent; one that lifts takes a _higher_ one. This holds
+identically in light and dark, so a layout designed in one theme is correct in
+the other.
+
+| Token         | Use for                                                                                     | Light `L` | Dark `L` |
+| ------------- | ------------------------------------------------------------------------------------------- | --------- | -------- |
+| `--surface-0` | window chrome behind everything — title bar, dock strip, mobile top/bottom bars             | 0.955     | 0.155    |
+| `--surface-1` | panels — sidebars, editor panel, board background (this is what `--background` resolves to) | 0.976     | 0.185    |
+| `--surface-2` | containers on a panel — Kanban columns, sidebar sections, grouped wells                     | 0.990     | 0.215    |
+| `--surface-3` | items and overlays — cards, popovers, dialogs, menus                                        | 1.000     | 0.245    |
+
+Utilities: `bg-surface-0` … `bg-surface-3`.
+
+Light mode starts at a real grey rather than near-white so all four steps fit
+below pure white. Its steps compress as they approach white, so shadow carries
+the rest of the cue — pair a raised surface with `shadow-raised`, an overlay
+with `shadow-overlay`. Both are theme-aware (dark mode uses deeper, near-black
+shadows, because a soft grey shadow does not register on a dark ground).
+
+The raw tokens behind those utilities are named `--elevation-raised` /
+`--elevation-overlay`, not `--shadow-*`: Tailwind owns the `--shadow-`
+namespace inside `@theme`, and a same-named entry would self-reference.
+
+## Borders
+
+Two tiers, both clear of every surface step so a border is visible wherever it
+lands:
+
+- `--border-subtle` — dividers _inside_ a surface. This is the default, so
+  `border-border` and `--border` resolve to it.
+- `--border-strong` — outlines of containers that must hold their own against a
+  raised surface. Opt in with `border-strong`.
+
+## Brand accent vs. primary
+
+These are different things and the naming is a known hazard:
+
+- `--primary` — the neutral high-contrast button surface. Near-black in light,
+  near-white in dark. Not a brand colour.
+- `--accent` — shadcn's **hover wash**. Not a brand colour either. It is
+  translucent (a wash of `--foreground`), so the same token reads correctly on
+  every elevation step.
+- `--accent-brand` — the app's identity colour: links, wikilinks, mentions,
+  text selection, active-state emphasis. **This is the one you want when you
+  mean "accent" in the everyday sense.**
+
+Appearance → Accent overrides `--accent-brand`, `--accent-brand-foreground` and
+`--ring` only (see [`src/lib/settings/accent.ts`](../src/lib/settings/accent.ts)).
+It used to override `--primary`, which turned every neutral button in the app
+into the user's accent colour.
+
+The setting is applied only when the user has actually changed it. A single hex
+cannot carry separate light and dark values, so an untouched install keeps the
+theme's own `--accent-brand`, which does.
+
+## Status colours
+
+`--success`, `--warning`, `--info` and `--destructive`. `--destructive` is the
+fourth member of this ramp and keeps its shadcn name — there is no `--danger`
+alias, so there is exactly one word for the concept.
+
+Each has three companions:
+
+| Suffix        | Meaning                                                     | Example utility           |
+| ------------- | ----------------------------------------------------------- | ------------------------- |
+| _(base)_      | tuned for **text** contrast against the surrounding surface | `text-success`            |
+| `-foreground` | text placed **on** the base colour as a fill                | `text-success-foreground` |
+| `-subtle`     | translucent tint for a background                           | `bg-success-subtle`       |
+| `-border`     | translucent tint for an outline                             | `border-success-border`   |
+
+`-subtle` and `-border` are `color-mix` derivations of the base, so they compose
+over any elevation step and no per-surface variant is needed. The whole
+`bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-400`
+pattern collapses to `bg-success-subtle border-success-border text-success`.
+
+## Rules
+
+1. **No raw colour literals in components.** No hex, no `rgb()`, no Tailwind
+   palette utilities (`bg-emerald-500`, `text-amber-700`, `border-sky-500/30`).
+   If a token is missing, add one to layer 1 rather than reaching past it.
+2. **No `dark:` variants for colour.** Tokens already swap. A `dark:` colour
+   variant means a token is missing or the wrong one is being used.
+3. **Pick a surface by elevation, not by appearance.** "What sits on what" is
+   the question, not "what looks about right".
+4. **Derive, don't duplicate.** A new semantic token should be a `var()` or
+   `color-mix()` of an existing one wherever the meaning allows.
+
+### Documented exceptions
+
+Two blocks in `app.css` deliberately use fixed hues, because the colour _is_ the
+meaning and must not follow a user-chosen accent:
+
+- Spelling / grammar / style diagnostic underlines.
+- Note-history diff add/remove decorations.
+
+Both still ship separate light and dark values.
+
+## Pre-paint bootstrap
+
+The inline `<style>` in [`src/app.html`](../src/app.html) hardcodes the
+`--surface-1` and `--foreground` values to avoid a flash of the wrong colour
+scheme before `app.css` loads. It cannot use tokens — it runs first. **If you
+change `--surface-1` or `--foreground`, update `app.html` in the same commit.**
+
+## Migration status
+
+The token system is in place and all layer-2 tokens are derived from it. Areas
+still carrying their own conventions, in order of intended migration:
+
+- **Shared surface primitives** — the two sidebars build sections by hand
+  (`NoteSidebar.svelte` repeats a card class string four times;
+  `FileExplorer.svelte` has no section containers at all). A shared
+  `ui/surface` primitive should replace both.
+- **Kanban** — the `--wx-*` bridge in `KanbanNoteEditor.svelte` should map onto
+  the elevation scale (column → `surface-2`, card → `surface-3`), and its
+  full-bleed mobile column needs its radius and insets restored.
+- **Dockview** — the `--dock-strip` alias should be retired in favour of
+  `--surface-0` directly.
+- **Status colours** — roughly ten components still use raw Tailwind palette
+  pairs; they should move onto the status ramp.
+- **Milkdown / Crepe** — `.dark .milkdown` hardcodes a parallel dark palette
+  copied from `frame-dark.css`; it should derive from tokens.
+- **Guardrails** — a lint rule banning raw palette utilities and colour
+  literals in `src/**/*.svelte`, so this does not re-accumulate.
