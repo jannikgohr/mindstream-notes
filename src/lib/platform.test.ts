@@ -70,7 +70,7 @@ describe('isMobile / isAndroid', () => {
     expect(isAndroid()).toBe(false);
   });
 
-  it('supports Android mobile preview in a desktop browser', () => {
+  it('applies the Android dev preview to every platform helper', () => {
     setUA(UAS.windows);
     window.history.replaceState({}, '', '/?mobile=1');
     expect(isMobile()).toBe(true);
@@ -78,7 +78,7 @@ describe('isMobile / isAndroid', () => {
     expect(getPlatform()).toBe('android');
   });
 
-  it('supports iOS mobile preview in a desktop browser', () => {
+  it('applies the iOS dev preview to every platform helper', () => {
     setUA(UAS.windows);
     window.history.replaceState({}, '', '/?mobile=ios');
     expect(isMobile()).toBe(true);

@@ -1691,6 +1691,8 @@
     padding: 0;
   }
   :global(.kanban-scope.mobile .wx-column) {
+    max-width: 100%;
+    flex: 1 1 100%;
     height: 100%;
     border-radius: 0;
   }
