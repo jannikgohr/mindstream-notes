@@ -14,7 +14,9 @@
    */
   import { onDestroy, tick } from 'svelte';
   import { Dialog } from 'bits-ui';
-  import { Folder, Search as SearchIcon, X } from '@lucide/svelte';
+  import { Folder, X } from '@lucide/svelte';
+  import { Search as SearchIcon } from '@jis3r/icons';
+  import CuedIcon from '$lib/components/icons/CuedIcon.svelte';
   import { searchNotes, type SearchHit } from '$lib/api';
   import { splitByRanges } from '$lib/api/search-matcher';
   import NoteKindIcon from '$lib/components/NoteKindIcon.svelte';
@@ -171,7 +173,16 @@
       <Dialog.Title class="sr-only">{tUi('search.open')}</Dialog.Title>
 
       <header class="flex items-center gap-2 border-b border-border px-3 py-2">
-        <SearchIcon class="size-4 shrink-0 text-muted-foreground" />
+        <!--
+          The magnifier animates on each burst of typing rather than on
+          hover: it's the one moment in this dialog where motion tracks
+          what the user is doing.
+        -->
+        <CuedIcon
+          icon={SearchIcon}
+          cue={query}
+          class="shrink-0 text-muted-foreground"
+        />
         <input
           bind:this={inputEl}
           bind:value={query}

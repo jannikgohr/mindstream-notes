@@ -10,7 +10,9 @@
    * silently mounting `NoteEditor` and corrupting the body on save.
    */
   import { onMount } from 'svelte';
-  import { ArrowLeftToLine, PanelRight } from '@lucide/svelte';
+  import { ArrowLeftToLine } from '@lucide/svelte';
+  import { PanelRight } from '@jis3r/icons';
+  import CuedIcon from '$lib/components/icons/CuedIcon.svelte';
   import { Button } from '$lib/components/ui/button';
   import LazyNoteSidebar from '$lib/components/LazyNoteSidebar.svelte';
   import NoteKindRenderer from '$lib/components/NoteKindRenderer.svelte';
@@ -125,7 +127,7 @@
     aria-keyshortcuts={metadataToggleAriaShortcut || undefined}
     aria-pressed={ui.rightSidebarOpen}
   >
-    <PanelRight class="size-4" />
+    <CuedIcon icon={PanelRight} cue={ui.rightSidebarOpen} duration={300} />
   </Button>
 {/snippet}
 

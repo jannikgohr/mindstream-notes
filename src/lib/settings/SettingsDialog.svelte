@@ -1,6 +1,8 @@
 <script lang="ts">
   import { Dialog } from 'bits-ui';
   import { X, Search, ChevronRight } from '@lucide/svelte';
+  import { Settings as SettingsIcon } from '@jis3r/icons';
+  import CuedIcon from '$lib/components/icons/CuedIcon.svelte';
   import SettingControl from './SettingControl.svelte';
   import PluginsOverview from '$lib/plugins/PluginsOverview.svelte';
   import PluginIcon from '$lib/plugins/PluginIcon.svelte';
@@ -268,6 +270,19 @@
       <header
         class="flex items-center gap-3 border-b border-border bg-card px-4 py-3"
       >
+        <!--
+          The gear is the app's settings mark, moved off the top-bar
+          button (static there) and onto the dialog title, where it has
+          something to say: it takes a half-turn every time the user
+          picks another category, so the rail selection registers.
+        -->
+        <CuedIcon
+          icon={SettingsIcon}
+          cue={activeCategoryId}
+          mode="toggle"
+          size={18}
+          class="text-muted-foreground"
+        />
         <Dialog.Title class="text-base font-semibold"
           >{tUi('title')}</Dialog.Title
         >
