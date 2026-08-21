@@ -98,6 +98,15 @@
   --destructive: oklch(0.577 0.245 27.325);
   --destructive-foreground: oklch(0.985 0 0);
 
+  /* Find-and-replace and PDF search highlights. Another fixed-hue set — a
+   * highlighter is yellow and the focused hit is orange, in either theme —
+   * but shared by the editor decorations here and the PDF viewer's overlay,
+   * which previously spelled the same four colours out separately. */
+  --highlight-search: oklch(0.86 0.17 92 / 0.4);
+  --highlight-search-active: oklch(0.7 0.19 45 / 0.5);
+  --highlight-search-active-outline: oklch(0.63 0.2 42 / 0.9);
+  --highlight-selection: oklch(0.52 0.24 265 / 0.22);
+
   /* Diff add/remove. A deliberate fixed-hue pair: in a diff the colour IS
    * the meaning, so it must not follow a user-chosen accent. Tokenised all
    * the same, because the same two colours are needed by app.css (the
@@ -248,6 +257,8 @@ html {
   --color-surface-3: var(--surface-3);
 
   --color-scrim: var(--scrim);
+  --color-highlight-search: var(--highlight-search);
+  --color-highlight-selection: var(--highlight-selection);
   --color-diff-add: var(--diff-add);
   --color-diff-add-subtle: var(--diff-add-subtle);
   --color-diff-remove: var(--diff-remove);
@@ -1369,12 +1380,12 @@ body.dv-tab-dragging .freeform-canvas-host * {
  * ------------------------------------------------------------------------- */
 
 .ProseMirror .search-match {
-  background: rgb(250 204 21 / 0.4);
+  background: var(--highlight-search);
   border-radius: 1px;
 }
 .ProseMirror .search-match-active {
-  background: rgb(249 115 22 / 0.5);
-  box-shadow: 0 0 0 1px rgb(234 88 12 / 0.9);
+  background: var(--highlight-search-active);
+  box-shadow: 0 0 0 1px var(--highlight-search-active-outline);
 }
 
 /* -------------------------------------------------------------------------

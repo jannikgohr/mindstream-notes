@@ -111,6 +111,11 @@ pattern collapses to `bg-success-subtle border-success-border text-success`.
 
 ## Rules
 
+These are enforced by `pnpm lint:theme`
+([`src-tauri/scripts/lint-theme.mjs`](../src-tauri/scripts/lint-theme.mjs)),
+which runs on staged files at commit time and over all of `src/` as part of
+`pnpm verify`.
+
 1. **No raw colour literals in components.** No hex, no `rgb()`, no Tailwind
    palette utilities (`bg-emerald-500`, `text-amber-700`, `border-sky-500/30`).
    If a token is missing, add one to layer 1 rather than reaching past it.
@@ -134,9 +139,20 @@ absence of a token:
 - `--scrim`, the wash behind a modal. Always black, because a scrim's job is
   to darken what is behind it; only its strength is theme-dependent.
 
-Shadows are the other carve-out: `--elevation-raised` / `--elevation-overlay`
-cover the common cases, but a few components need a directional shadow (a
-bottom sheet lifting off the bottom edge) and spell it out locally.
+- `--highlight-search` / `-active` / `-selection`, shared by the editor's
+  find decorations and the PDF viewer's overlay.
+
+The linter also allows three things by design:
+
+- **Shadows.** `--elevation-raised` / `--elevation-overlay` cover the common
+  cases, but a directional shadow (a bottom sheet lifting off the bottom edge)
+  is geometry as much as colour and is spelled out locally.
+- **`var()` fallbacks.** Anything painting before `app.css` loads — the boot
+  screen, `app.html`'s bootstrap — must inline a literal. Keep those in step
+  with the tokens they stand in for.
+- **Canvas painting.** `ctx.fillStyle` / `strokeStyle` take a resolved colour
+  string, not a `var()`. The ink editor reads tokens from the DOM where it
+  can; the rest are drawing constants.
 
 ## Pre-paint bootstrap
 
@@ -173,5 +189,5 @@ Known remaining work:
 - **Dialogs and sheets** — the dialog body is `surface-3` (correct, it floats)
   but its header bars are `bg-card` too, so they are flat against it. They want
   `Surface variant="overlay"` for the shell and a lower step for the header.
-- **Guardrails** — a lint rule banning raw palette utilities and colour
-  literals in `src/`, so this does not re-accumulate.
+  Guardrails are in place: `pnpm lint:theme` fails the commit if a raw palette
+  utility, a `dark:` colour variant, or a colour literal reappears.

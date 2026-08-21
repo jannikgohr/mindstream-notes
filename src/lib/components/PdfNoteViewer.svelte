@@ -2825,7 +2825,7 @@
     width: 100%;
     height: 100%;
     pointer-events: none;
-    background: rgb(0 90 255 / 0.22);
+    background: var(--highlight-selection);
   }
 
   :global(.pdf-page-host .pdf-app-annotation-layer) {
@@ -2899,7 +2899,7 @@
 
   :global(.pdf-page-host .pdf-app-annotation-preview) {
     outline: 1px dashed color-mix(in srgb, var(--foreground) 70%, transparent);
-    background: rgb(250 204 21 / 0.18);
+    background: color-mix(in oklch, var(--highlight-search) 45%, transparent);
   }
 
   :global(.pdf-page-host .pdf-app-annotation-selected) {
@@ -2954,12 +2954,12 @@
   :global(.pdf-page-host .pdf-search-hit) {
     position: absolute;
     border-radius: 1px;
-    background: rgb(250 204 21 / 0.42);
+    background: var(--highlight-search);
     mix-blend-mode: multiply;
   }
 
   :global(.pdf-page-host .pdf-search-hit-active) {
-    background: rgb(249 115 22 / 0.55);
-    box-shadow: 0 0 0 1px rgb(234 88 12 / 0.9);
+    background: var(--highlight-search-active);
+    box-shadow: 0 0 0 1px var(--highlight-search-active-outline);
   }
 </style>
