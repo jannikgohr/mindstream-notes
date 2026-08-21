@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CARD_DRAG_EDGE_MIN_TRAVEL_PX,
   CARD_DRAG_EDGE_ZONE_PX,
-  cardDragEdgeDirection
+  cardDragEdgeDirection,
+  cardDragEdgeSwitchDirection
 } from '../../../../packages/svelte-kanban/src/directives/drag.js';
 
 describe('cardDragEdgeDirection', () => {
@@ -24,5 +26,53 @@ describe('cardDragEdgeDirection', () => {
 
   it('does not switch lists in the board centre', () => {
     expect(cardDragEdgeDirection(300, left, right)).toBeNull();
+  });
+});
+
+describe('cardDragEdgeSwitchDirection', () => {
+  const left = 100;
+  const right = 500;
+
+  it('does not switch when a handle starts inside the edge zone', () => {
+    const startX = right - 16;
+    expect(cardDragEdgeSwitchDirection(startX, startX, left, right)).toBeNull();
+    expect(
+      cardDragEdgeSwitchDirection(
+        startX + CARD_DRAG_EDGE_MIN_TRAVEL_PX - 1,
+        startX,
+        left,
+        right
+      )
+    ).toBeNull();
+  });
+
+  it('switches after deliberate horizontal travel toward an edge', () => {
+    expect(
+      cardDragEdgeSwitchDirection(
+        right,
+        right - CARD_DRAG_EDGE_MIN_TRAVEL_PX,
+        left,
+        right
+      )
+    ).toBe('next');
+    expect(
+      cardDragEdgeSwitchDirection(
+        left,
+        left + CARD_DRAG_EDGE_MIN_TRAVEL_PX,
+        left,
+        right
+      )
+    ).toBe('previous');
+  });
+
+  it('ignores horizontal travel away from the active edge', () => {
+    expect(
+      cardDragEdgeSwitchDirection(
+        right,
+        right + CARD_DRAG_EDGE_MIN_TRAVEL_PX,
+        left,
+        right
+      )
+    ).toBeNull();
   });
 });

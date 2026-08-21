@@ -26,8 +26,9 @@ type Resolved = {
 };
 
 const DRAG_THRESHOLD_PX = 4;
-export const CARD_DRAG_EDGE_ZONE_PX = 44;
-const CARD_DRAG_EDGE_DWELL_MS = 450;
+export const CARD_DRAG_EDGE_ZONE_PX = 32;
+export const CARD_DRAG_EDGE_MIN_TRAVEL_PX = 20;
+const CARD_DRAG_EDGE_DWELL_MS = 650;
 
 export function cardDragEdgeDirection(
   x: number,
@@ -37,6 +38,20 @@ export function cardDragEdgeDirection(
 ): CardDragEdgeDirection | null {
   if (x <= left + zone) return 'previous';
   if (x >= right - zone) return 'next';
+  return null;
+}
+
+export function cardDragEdgeSwitchDirection(
+  x: number,
+  startX: number,
+  left: number,
+  right: number,
+  zone = CARD_DRAG_EDGE_ZONE_PX,
+  minTravel = CARD_DRAG_EDGE_MIN_TRAVEL_PX
+): CardDragEdgeDirection | null {
+  const direction = cardDragEdgeDirection(x, left, right, zone);
+  if (direction === 'previous' && startX - x >= minTravel) return direction;
+  if (direction === 'next' && x - startX >= minTravel) return direction;
   return null;
 }
 
@@ -173,7 +188,12 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
   function updateEdgeSwitch(x: number, a: Resolved) {
     if (!params.onEdgeSwitch) return;
     const rect = node.getBoundingClientRect();
-    const direction = cardDragEdgeDirection(x, rect.left, rect.right);
+    const direction = cardDragEdgeSwitchDirection(
+      x,
+      startX,
+      rect.left,
+      rect.right
+    );
     if (!direction) {
       clearEdgeTimer();
       edgeLatched = false;
