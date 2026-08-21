@@ -158,7 +158,7 @@
 <button
   type="button"
   aria-label="Close folder picker"
-  class="fixed inset-0 z-40 bg-black/40"
+  class="fixed inset-0 z-40 bg-scrim"
   onclick={onClose}
 ></button>
 

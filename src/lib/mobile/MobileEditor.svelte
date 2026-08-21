@@ -106,7 +106,7 @@
   <button
     type="button"
     aria-label={tUi('close')}
-    class="fixed inset-0 z-40 bg-black/40"
+    class="fixed inset-0 z-40 bg-scrim"
     onclick={() => (metadataOpen = false)}
   ></button>
   <div
