@@ -157,6 +157,52 @@ test('mobile Kanban supports list management and card actions', async ({
   }, cardBodyBox!);
   await expect(page.locator('.wx-ghost')).toBeHidden();
 
+  const contextMenuPrevented = await cardBody.evaluate((element) => {
+    const event = new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true
+    });
+    element.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  expect(contextMenuPrevented).toBe(true);
+
+  await cardBody.dispatchEvent('pointerdown', {
+    button: 0,
+    pointerId: 22,
+    pointerType: 'mouse',
+    clientX: cardBodyBox!.x + cardBodyBox!.width / 2,
+    clientY: cardBodyBox!.y + cardBodyBox!.height / 2
+  });
+  await page.waitForTimeout(320);
+  const mouseGhost = page.locator('.wx-ghost');
+  await expect(mouseGhost).toBeVisible();
+  const initialGhostTransform = await mouseGhost.getAttribute('style');
+  await page.evaluate(({ x, y }) => {
+    window.dispatchEvent(
+      new PointerEvent('pointermove', {
+        bubbles: true,
+        pointerId: 22,
+        pointerType: 'mouse',
+        clientX: x + 24,
+        clientY: y + 24
+      })
+    );
+  }, cardBodyBox!);
+  await expect
+    .poll(() => mouseGhost.getAttribute('style'))
+    .not.toBe(initialGhostTransform);
+  await page.evaluate(() => {
+    window.dispatchEvent(
+      new PointerEvent('pointercancel', {
+        bubbles: true,
+        pointerId: 22,
+        pointerType: 'mouse'
+      })
+    );
+  });
+  await expect(mouseGhost).toBeHidden();
+
   await cardBody.dispatchEvent('pointerdown', {
     button: 0,
     pointerId: 21,

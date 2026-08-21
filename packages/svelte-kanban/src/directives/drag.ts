@@ -26,8 +26,8 @@ type Resolved = {
 };
 
 const DRAG_THRESHOLD_PX = 4;
-const TOUCH_CARD_HOLD_MS = 280;
-const TOUCH_CARD_HOLD_MOVE_TOLERANCE_PX = 8;
+const CARD_HOLD_MS = 280;
+const CARD_HOLD_MOVE_TOLERANCE_PX = 8;
 export const CARD_DRAG_EDGE_ZONE_PX = 32;
 export const CARD_DRAG_EDGE_MIN_TRAVEL_PX = 20;
 const CARD_DRAG_EDGE_DWELL_MS = 650;
@@ -64,7 +64,7 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
   let pending = false;
   let started = false;
   let activePointerId: number | null = null;
-  let touchHoldTimer: ReturnType<typeof setTimeout> | null = null;
+  let cardHoldTimer: ReturnType<typeof setTimeout> | null = null;
   let active: Resolved | null = null;
   let edgeTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingEdge: CardDragEdgeDirection | null = null;
@@ -125,9 +125,9 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     activePointerId = e.pointerId;
     startX = e.clientX;
     startY = e.clientY;
-    if (fullCardDrag && !startedOnHandle && e.pointerType === 'touch') {
-      touchHoldTimer = setTimeout(() => {
-        touchHoldTimer = null;
+    if (fullCardDrag && !startedOnHandle) {
+      cardHoldTimer = setTimeout(() => {
+        cardHoldTimer = null;
         if (!pending || started || !active) return;
         try {
           active.cardEl.setPointerCapture(e.pointerId);
@@ -135,7 +135,7 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
           // Synthetic pointer events and an interrupted touch may not be capturable.
         }
         beginDrag(e.clientX, e.clientY, active);
-      }, TOUCH_CARD_HOLD_MS);
+      }, CARD_HOLD_MS);
     }
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
@@ -153,10 +153,10 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     if (!started) {
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
-      if (touchHoldTimer) {
+      if (cardHoldTimer) {
         if (
           dx * dx + dy * dy >=
-          TOUCH_CARD_HOLD_MOVE_TOLERANCE_PX * TOUCH_CARD_HOLD_MOVE_TOLERANCE_PX
+          CARD_HOLD_MOVE_TOLERANCE_PX * CARD_HOLD_MOVE_TOLERANCE_PX
         ) {
           cancelActiveDrag();
         }
@@ -212,8 +212,8 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     window.removeEventListener('pointerup', onPointerUp);
     window.removeEventListener('pointercancel', onPointerCancel);
     window.removeEventListener('keydown', onKeyDown);
-    if (touchHoldTimer) clearTimeout(touchHoldTimer);
-    touchHoldTimer = null;
+    if (cardHoldTimer) clearTimeout(cardHoldTimer);
+    cardHoldTimer = null;
     if (
       activePointerId != null &&
       active?.cardEl.hasPointerCapture(activePointerId)
