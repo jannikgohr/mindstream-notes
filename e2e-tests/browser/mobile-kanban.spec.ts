@@ -33,8 +33,10 @@ test('mobile Kanban supports list management and card actions', async ({
   expect(widths.board).toBe(widths.viewport);
   expect(widths.column).toBe(widths.viewport);
 
-  const activeListTitle = page.locator('.mindstream-list-header .list-title');
-  await activeListTitle.dispatchEvent('pointerdown', {
+  const activeListTab = page
+    .locator('.mobile-list-tabs button[data-list-id]')
+    .first();
+  await activeListTab.dispatchEvent('pointerdown', {
     button: 0,
     pointerId: 11,
     pointerType: 'touch',
@@ -77,6 +79,8 @@ test('mobile Kanban supports list management and card actions', async ({
     clientX: handleBox!.x + handleBox!.width / 2,
     clientY: handleBox!.y + handleBox!.height / 2
   });
+  await expect(listManager.locator('.list-placeholder')).toBeVisible();
+  await expect(listManager.locator('.drag-ghost')).toContainText('Planning');
   await page.evaluate(
     ({ x, y }) => {
       window.dispatchEvent(
