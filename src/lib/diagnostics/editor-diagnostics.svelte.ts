@@ -85,14 +85,31 @@ export function selectedLanguageTags(): string[] {
 }
 
 async function refreshLanguageTags(): Promise<void> {
-  const available = await spellcheckAvailableDictionaries();
-  bcp47ById = new Map(available.map((entry) => [entry.id, entry.bcp47]));
+  try {
+    const available = await spellcheckAvailableDictionaries();
+    bcp47ById = new Map(available.map((entry) => [entry.id, entry.bcp47]));
+  } catch (err) {
+    // Keep the previous mapping rather than dropping every tag: a network
+    // checker with slightly stale tags still checks, one with none stops.
+    console.warn('[spellcheck] language tags refresh failed', err);
+  }
 }
 
 async function refreshWordChars(): Promise<void> {
   const languages = spellcheckLanguages();
-  wordChars =
-    languages.length === 0 ? '' : await spellcheckWordChars(languages);
+  if (languages.length === 0) {
+    wordChars = '';
+    return;
+  }
+  try {
+    wordChars = await spellcheckWordChars(languages);
+  } catch (err) {
+    // A selected-but-not-installed dictionary is the common cause. Degrades
+    // to letters-only tokenization instead of leaving the *previous*
+    // selection's word characters in place.
+    console.warn('[spellcheck] word characters refresh failed', err);
+    wordChars = '';
+  }
 }
 
 // The cache is keyed by the selected languages, so installing a dictionary
@@ -100,9 +117,60 @@ async function refreshWordChars(): Promise<void> {
 // answer. Clearing it is just another thing to do on invalidation.
 subscribeDiagnosticsInvalidated(() => {
   bus.clearCache();
-  void refreshWordChars();
-  void refreshLanguageTags();
 });
+
+/**
+ * Reload everything cached about the dictionary configuration, then tell the
+ * surfaces their results are stale.
+ *
+ * The order is the point. `wordChars` and the BCP-47 map are read DURING a
+ * check, and both are fetched from the backend. Refreshing them from inside
+ * an invalidation listener meant the re-check those same listeners started
+ * ran against the previous selection's word characters, and only whatever
+ * got checked after the fetch resolved used the new ones — two notes, or two
+ * paragraphs of one note, disagreeing about the same word. Loading first and
+ * invalidating afterwards makes the re-check see one configuration.
+ *
+ * Never rejects: a failed refresh still has to invalidate, or the squiggles
+ * on screen keep describing a selection the user has already changed.
+ */
+export async function reloadSpellcheckConfig(): Promise<void> {
+  await Promise.all([refreshWordChars(), refreshLanguageTags()]);
+  invalidateDiagnostics();
+}
+
+/**
+ * App-lifetime watcher: when the spellcheck settings change, reload the
+ * configuration and re-check every open surface.
+ *
+ * One watcher for the whole app rather than an effect per editor. Each
+ * mounted editor used to run this itself, which meant the shared bus cache
+ * was cleared once per open note on every change — and cleared again by the
+ * effect's first run whenever a note was opened, throwing away results for
+ * every OTHER note for no reason. Notes that were not open at the time were
+ * never the problem; a check they have never run reads the settings when it
+ * happens.
+ *
+ * Returns a stop handle (used by tests and the root layout's teardown).
+ */
+export function startSpellcheckSettingsWatcher(): () => void {
+  return $effect.root(() => {
+    let previous: string | null = null;
+    $effect(() => {
+      // Reading a setting subscribes to the whole values object's keys, so
+      // an unrelated setting being written for the first time re-runs this.
+      // Compare the configuration itself rather than re-checking the world
+      // because some other panel was touched.
+      const key = `${spellcheckEnabled()}:${spellcheckLanguages().join(',')}`;
+      if (key === previous) return;
+      previous = key;
+      // The first run is startup, where this is the initial load of
+      // `wordChars` — nothing has been checked yet, so the invalidation it
+      // ends with costs an empty cache clear.
+      void reloadSpellcheckConfig();
+    });
+  });
+}
 
 export { invalidateDiagnostics, subscribeDiagnosticsInvalidated };
 

@@ -38,9 +38,7 @@
   import { getSettingValue, settings } from '$lib/settings/store.svelte';
   import {
     checkSegments,
-    invalidateDiagnostics,
     spellcheckEnabled,
-    spellcheckLanguages,
     subscribeDiagnosticsInvalidated,
     suggestFor
   } from '$lib/diagnostics/editor-diagnostics.svelte';
@@ -155,14 +153,9 @@
   // already on screen kept whatever it had.
   //
   // Changing the language set or installing a dictionary changes the answer
-  // for text nobody has touched, which no editor can observe on its own, so
-  // it is pushed to them instead.
-  $effect(() => {
-    // Read both so the effect re-runs when either changes.
-    spellcheckEnabled();
-    spellcheckLanguages().join(',');
-    invalidateDiagnostics();
-  });
+  // for text nobody has touched, which no editor can observe on its own. The
+  // push comes from `startSpellcheckSettingsWatcher` — one watcher for the
+  // app, not one per open note — and arrives here as an invalidation.
 
   // Shared by both surfaces: the plugin supplies the clicked word and a
   // writer for its own surface, so this handler stays surface-agnostic.
