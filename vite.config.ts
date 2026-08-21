@@ -80,6 +80,9 @@ function silenceUpstreamWarnings(): Plugin {
 // Tauri expects a fixed port and ignores hidden Vite cache changes.
 const host = process.env.TAURI_DEV_HOST;
 const packageJsonPath = fileURLToPath(new URL('package.json', import.meta.url));
+const workspacePackagesPath = fileURLToPath(
+  new URL('packages', import.meta.url)
+);
 
 export default defineConfig({
   plugins: [
@@ -171,6 +174,16 @@ export default defineConfig({
       'perfect-freehand',
       'image-js',
       // Kanban boards
+      '@svar-ui/core-locales',
+      '@svar-ui/kanban-locales',
+      '@svar-ui/kanban-provider',
+      '@svar-ui/kanban-store',
+      '@svar-ui/lib-dom',
+      '@svar-ui/lib-state',
+      '@svar-ui/svelte-core',
+      '@svar-ui/svelte-editor',
+      '@svar-ui/svelte-menu',
+      '@svar-ui/svelte-toolbar',
       // Desktop dockview shell — lazy via DesktopLayout.svelte
       'dockview-core',
       // Tauri API + plugins — dynamically imported, so only loaded under Tauri
@@ -215,7 +228,7 @@ export default defineConfig({
       ignored: ['**/src-tauri/**']
     },
     fs: {
-      allow: [packageJsonPath]
+      allow: [packageJsonPath, workspacePackagesPath]
     }
   },
 

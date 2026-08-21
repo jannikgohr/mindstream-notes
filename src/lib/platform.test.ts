@@ -24,7 +24,10 @@ function setUA(ua: string) {
   });
 }
 
-afterEach(() => setUA(UAS.windows));
+afterEach(() => {
+  setUA(UAS.windows);
+  window.history.replaceState({}, '', '/');
+});
 
 describe('getPlatform', () => {
   it('maps each known user agent', () => {
@@ -65,6 +68,22 @@ describe('isMobile / isAndroid', () => {
     setUA(UAS.windows);
     expect(isMobile()).toBe(false);
     expect(isAndroid()).toBe(false);
+  });
+
+  it('supports Android mobile preview in a desktop browser', () => {
+    setUA(UAS.windows);
+    window.history.replaceState({}, '', '/?mobile=1');
+    expect(isMobile()).toBe(true);
+    expect(isAndroid()).toBe(true);
+    expect(getPlatform()).toBe('android');
+  });
+
+  it('supports iOS mobile preview in a desktop browser', () => {
+    setUA(UAS.windows);
+    window.history.replaceState({}, '', '/?mobile=ios');
+    expect(isMobile()).toBe(true);
+    expect(isAndroid()).toBe(false);
+    expect(getPlatform()).toBe('ios');
   });
 });
 
