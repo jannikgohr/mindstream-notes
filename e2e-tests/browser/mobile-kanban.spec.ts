@@ -131,4 +131,49 @@ test('mobile Kanban supports list management and card actions', async ({
     page.getByRole('button', { name: 'Duplicate card' })
   ).toBeVisible();
   await expect(page.getByRole('button', { name: 'Delete' })).toBeVisible();
+
+  await page.getByTitle('Close').click();
+  const cardBody = page.locator('.wx-card .kanban-card-body').first();
+  await expect(cardBody).toBeVisible();
+  const cardBodyBox = await cardBody.boundingBox();
+  expect(cardBodyBox).not.toBeNull();
+  await cardBody.dispatchEvent('pointerdown', {
+    button: 0,
+    pointerId: 20,
+    pointerType: 'touch',
+    clientX: cardBodyBox!.x + cardBodyBox!.width / 2,
+    clientY: cardBodyBox!.y + cardBodyBox!.height / 2
+  });
+  await page.evaluate(({ x, y }) => {
+    window.dispatchEvent(
+      new PointerEvent('pointermove', {
+        bubbles: true,
+        pointerId: 20,
+        pointerType: 'touch',
+        clientX: x,
+        clientY: y + 12
+      })
+    );
+  }, cardBodyBox!);
+  await expect(page.locator('.wx-ghost')).toBeHidden();
+
+  await cardBody.dispatchEvent('pointerdown', {
+    button: 0,
+    pointerId: 21,
+    pointerType: 'touch',
+    clientX: cardBodyBox!.x + cardBodyBox!.width / 2,
+    clientY: cardBodyBox!.y + cardBodyBox!.height / 2
+  });
+  await page.waitForTimeout(320);
+  await expect(page.locator('.wx-ghost')).toBeVisible();
+  await page.evaluate(() => {
+    window.dispatchEvent(
+      new PointerEvent('pointercancel', {
+        bubbles: true,
+        pointerId: 21,
+        pointerType: 'touch'
+      })
+    );
+  });
+  await expect(page.locator('.wx-ghost')).toBeHidden();
 });
