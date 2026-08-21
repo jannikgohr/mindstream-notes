@@ -22,4 +22,13 @@ describe('menuItemForShortcut', () => {
       )
     ).toBe(rename);
   });
+
+  it('returns null when no enabled leaf advertises the key', () => {
+    expect(
+      menuItemForShortcut(
+        ['separator', { label: 'Rename', shortcut: 'F2' }],
+        'Enter'
+      )
+    ).toBeNull();
+  });
 });
