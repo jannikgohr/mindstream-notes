@@ -179,41 +179,21 @@ test('mobile Kanban supports list management and card actions', async ({
   });
   expect(contextMenuPrevented).toBe(true);
 
-  await cardBody.dispatchEvent('pointerdown', {
-    button: 0,
-    pointerId: 22,
-    pointerType: 'mouse',
-    clientX: cardBodyBox!.x + cardBodyBox!.width / 2,
-    clientY: cardBodyBox!.y + cardBodyBox!.height / 2
-  });
+  const mouseX = cardBodyBox!.x + cardBodyBox!.width / 2;
+  const mouseY = cardBodyBox!.y + cardBodyBox!.height / 2;
+  await page.mouse.move(mouseX, mouseY);
+  await page.mouse.down();
   await page.waitForTimeout(320);
   const mouseGhost = page.locator('.wx-ghost');
   await expect(mouseGhost).toBeVisible();
   const initialGhostTransform = await mouseGhost.getAttribute('style');
-  await page.evaluate(({ x, y }) => {
-    window.dispatchEvent(
-      new PointerEvent('pointermove', {
-        bubbles: true,
-        pointerId: 22,
-        pointerType: 'mouse',
-        clientX: x + 24,
-        clientY: y + 24
-      })
-    );
-  }, cardBodyBox!);
+  await page.mouse.move(mouseX + 24, mouseY + 24, { steps: 4 });
   await expect
     .poll(() => mouseGhost.getAttribute('style'))
     .not.toBe(initialGhostTransform);
-  await page.evaluate(() => {
-    window.dispatchEvent(
-      new PointerEvent('pointercancel', {
-        bubbles: true,
-        pointerId: 22,
-        pointerType: 'mouse'
-      })
-    );
-  });
+  await page.keyboard.press('Escape');
   await expect(mouseGhost).toBeHidden();
+  await page.mouse.up();
 
   await cardBody.dispatchEvent('pointerdown', {
     button: 0,
