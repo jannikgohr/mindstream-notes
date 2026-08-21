@@ -96,6 +96,7 @@
   import type { PeerPresence } from '$lib/editor/source/source-presence-extension';
   import type { EditorView as CmEditorView } from '@codemirror/view';
   import { Selection as ProseSelection } from '@milkdown/kit/prose/state';
+  import { isEditorEndClick } from '$lib/editor/end-click';
   import {
     registerEditor,
     unregisterEditor,
@@ -1022,19 +1023,11 @@
           })()
         : null;
       if (!dom) return false;
-      const proseDom = dom as HTMLElement;
-      const target = e.target as Node | null;
-      if (target && !proseDom.contains(target)) return true;
-      const blocks = Array.from(proseDom.children).filter(
-        (child): child is HTMLElement =>
-          child instanceof HTMLElement &&
-          child.offsetHeight > 0 &&
-          !child.classList.contains('ProseMirror-yjs-cursor') &&
-          !child.classList.contains('ProseMirror-yjs-selection')
+      return isEditorEndClick(
+        dom as HTMLElement,
+        e.target as Node | null,
+        e.clientY
       );
-      const last = blocks.at(-1);
-      if (!last) return true;
-      return e.clientY > last.getBoundingClientRect().bottom + 4;
     };
     const onFocusIn = (e: FocusEvent) => {
       // registerEditor is the "re-promote" path too: if the listener
