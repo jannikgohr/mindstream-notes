@@ -204,6 +204,9 @@
   let mobileListTransitionDirection = $state<CardDragEdgeDirection | null>(
     null
   );
+  let mobileBoardViewport = $state<HTMLElement | null>(null);
+  let mobileListTransitionGhost: HTMLElement | null = null;
+  let mobileListTransitionTimer: ReturnType<typeof setTimeout> | null = null;
   let mobileTabs = $state<HTMLElement | null>(null);
   let mobileCardEditorNavHeld = false;
   let mobileListManagerOpen = $state(false);
@@ -622,8 +625,61 @@
       nextDirection =
         currentIndex >= 0 && nextIndex < currentIndex ? 'previous' : 'next';
     }
+    createMobileListTransitionGhost(nextDirection);
     mobileListTransitionDirection = nextDirection;
     mobileActiveColumnId = id;
+  }
+
+  function createMobileListTransitionGhost(
+    direction: CardDragEdgeDirection
+  ): void {
+    cleanupMobileListTransitionGhost();
+    if (
+      !mobileBoardViewport ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    )
+      return;
+    const currentColumn = mobileBoardViewport.querySelector<HTMLElement>(
+      '.wx-column:not(.mobile-list-transition-ghost)'
+    );
+    if (!currentColumn) return;
+
+    const viewportRect = mobileBoardViewport.getBoundingClientRect();
+    const columnRect = currentColumn.getBoundingClientRect();
+    const ghost = currentColumn.cloneNode(true) as HTMLElement;
+    ghost
+      .querySelectorAll('[id]')
+      .forEach((element) => element.removeAttribute('id'));
+    ghost.classList.add(
+      'mobile-list-transition-ghost',
+      `mobile-list-exit-${direction}`
+    );
+    ghost.setAttribute('aria-hidden', 'true');
+    ghost.setAttribute('inert', '');
+    Object.assign(ghost.style, {
+      position: 'absolute',
+      left: `${columnRect.left - viewportRect.left}px`,
+      top: `${columnRect.top - viewportRect.top}px`,
+      width: `${columnRect.width}px`,
+      height: `${columnRect.height}px`,
+      maxWidth: 'none',
+      margin: '0',
+      zIndex: '3',
+      pointerEvents: 'none'
+    });
+    mobileBoardViewport.append(ghost);
+    mobileListTransitionGhost = ghost;
+    mobileListTransitionTimer = setTimeout(
+      cleanupMobileListTransitionGhost,
+      300
+    );
+  }
+
+  function cleanupMobileListTransitionGhost(): void {
+    if (mobileListTransitionTimer) clearTimeout(mobileListTransitionTimer);
+    mobileListTransitionTimer = null;
+    mobileListTransitionGhost?.remove();
+    mobileListTransitionGhost = null;
   }
 
   function openCardMenu(e: MouseEvent): void {
@@ -1324,6 +1380,7 @@
 
   onDestroy(() => {
     cleanupListPointerDrag();
+    cleanupMobileListTransitionGhost();
     clearMobileTabHold();
     if (mobileCardEditorNavHeld) {
       mobileCardEditorNavHeld = false;
@@ -1475,11 +1532,12 @@
           {/if}
           <!-- Right-click a card to open the Edit/Duplicate/Delete menu. -->
           <div
-            class="relative min-h-0 flex-1"
+            class="mobile-board-viewport relative min-h-0 flex-1"
             class:mobile-list-enter-previous={mobileListTransitionDirection ===
               'previous'}
             class:mobile-list-enter-next={mobileListTransitionDirection ===
               'next'}
+            bind:this={mobileBoardViewport}
             role="presentation"
             oncontextmenucapture={openCardMenu}
             onpointerdowncapture={rememberCardEditorPressOrigin}
@@ -1836,35 +1894,61 @@
     min-height: 3.5rem;
     padding-right: 2.75rem;
   }
-  .mobile-list-enter-previous :global(.wx-column) {
-    animation: mobile-list-enter-previous 220ms ease-out;
+  .mobile-board-viewport {
+    overflow: hidden;
   }
-  .mobile-list-enter-next :global(.wx-column) {
-    animation: mobile-list-enter-next 220ms ease-out;
+  .mobile-list-enter-previous
+    :global(.wx-column:not(.mobile-list-transition-ghost)) {
+    animation: mobile-list-enter-previous 260ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .mobile-list-enter-next
+    :global(.wx-column:not(.mobile-list-transition-ghost)) {
+    animation: mobile-list-enter-next 260ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  :global(.mobile-list-transition-ghost.mobile-list-exit-previous) {
+    animation: mobile-list-exit-previous 260ms cubic-bezier(0.32, 0.72, 0, 1)
+      forwards;
+  }
+  :global(.mobile-list-transition-ghost.mobile-list-exit-next) {
+    animation: mobile-list-exit-next 260ms cubic-bezier(0.32, 0.72, 0, 1)
+      forwards;
   }
   @keyframes mobile-list-enter-previous {
     from {
-      opacity: 0.55;
-      transform: translateX(-1.5rem);
+      transform: translateX(-100%);
     }
     to {
-      opacity: 1;
       transform: translateX(0);
     }
   }
   @keyframes mobile-list-enter-next {
     from {
-      opacity: 0.55;
-      transform: translateX(1.5rem);
+      transform: translateX(100%);
     }
     to {
-      opacity: 1;
       transform: translateX(0);
+    }
+  }
+  @keyframes mobile-list-exit-previous {
+    from {
+      transform: translateX(0);
+    }
+    to {
+      transform: translateX(100%);
+    }
+  }
+  @keyframes mobile-list-exit-next {
+    from {
+      transform: translateX(0);
+    }
+    to {
+      transform: translateX(-100%);
     }
   }
   @media (prefers-reduced-motion: reduce) {
     .mobile-list-enter-previous :global(.wx-column),
-    .mobile-list-enter-next :global(.wx-column) {
+    .mobile-list-enter-next :global(.wx-column),
+    :global(.mobile-list-transition-ghost) {
       animation: none;
     }
   }
