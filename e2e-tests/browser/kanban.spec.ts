@@ -27,6 +27,9 @@ test('opens Kanban search from the active-note search hotkey', async ({
   await page.keyboard.press('Control+F');
 
   await expect(page.getByPlaceholder('Search Kanban cards')).toBeVisible();
-  await expect(page.getByText('List', { exact: true })).toBeVisible();
-  await expect(page.getByText('Priority', { exact: true })).toBeVisible();
+  // Scoped to the filter bar: "List" and "Priority" are ordinary words that
+  // also appear in other editors' chrome elsewhere in the document.
+  const filters = page.getByLabel('Kanban filters');
+  await expect(filters.getByText('List', { exact: true })).toBeVisible();
+  await expect(filters.getByText('Priority', { exact: true })).toBeVisible();
 });

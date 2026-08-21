@@ -45,8 +45,13 @@ function selectionToolbar(page: Page): Locator {
  */
 const SELECTION_TOOLBAR_ITEMS = { bold: 0, italic: 1, strikethrough: 2 };
 
+/**
+ * Crepe's slash menu. Each open note panel has one — they live in
+ * body-level portals now (see $lib/editor/floating-portal.ts) instead of
+ * inside the pane — so match the one that is actually open.
+ */
 function slashMenu(page: Page): Locator {
-  return page.locator('.milkdown-slash-menu');
+  return page.locator('.milkdown-slash-menu[data-show="true"]');
 }
 
 /** Our own toolbar above the editor pane, not one of Crepe's. */
@@ -229,13 +234,41 @@ test.describe('slash menu', () => {
     await expect(editor(page).locator('ul li')).toContainText(item);
   });
 
+  test('does not make the note scroll past its content', async ({ page }) => {
+    await createNote(page, `Slash scroll ${Date.now()}`);
+    // Measure from the live editor outwards so the pane is unambiguous.
+    const scrollHeight = () =>
+      editor(page).evaluate((pm) => {
+        const scroller = pm.closest('.milkdown')?.parentElement
+          ?.parentElement as HTMLElement;
+        return { scroll: scroller.scrollHeight, client: scroller.clientHeight };
+      });
+
+    const before = await scrollHeight();
+    const menu = await openSlashMenu(page);
+    await expect(menu).toBeVisible();
+    const open = await scrollHeight();
+
+    // The menu is ~480px tall. Left inside the scrolling pane — where
+    // SlashProvider puts it by default — an absolutely positioned box that
+    // size adds its own height to the scrollable area, and the note scrolls
+    // hundreds of pixels past its last line. It lives in a body-level
+    // portal instead, so the only growth here is the empty block the test
+    // typed to summon it.
+    expect(open.scroll - before.scroll).toBeLessThan(80);
+    // The menu is really down there and really visible — otherwise the
+    // assertion above passes for the wrong reason.
+    const box = (await menu.boundingBox())!;
+    expect(box.height).toBeGreaterThan(100);
+  });
+
   test('closes on Escape without touching the line', async ({ page }) => {
     await createNote(page, `Slash escape ${Date.now()}`);
 
     await openSlashMenu(page);
 
     await page.keyboard.press('Escape');
-    await expect(slashMenu(page)).toBeHidden();
+    await expect(slashMenu(page)).toHaveCount(0);
     await expect(editor(page)).toContainText('/');
   });
 });
