@@ -6,6 +6,8 @@
     LoaderCircle
   } from '@lucide/svelte';
   import NoteKindIcon from './NoteKindIcon.svelte';
+  import { Surface } from '$lib/components/ui/surface';
+  import { SectionHeader } from '$lib/components/ui/section-header';
   import {
     loadNoteRelations,
     type NoteRelations
@@ -88,15 +90,11 @@
   {/if}
 {/snippet}
 
-<section
-  class="rounded-lg border border-border bg-background p-4 text-foreground shadow-sm"
->
-  <h3
-    class="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
-  >
+<Surface as="section" padding="lg">
+  <SectionHeader class="mb-3">
     <Link2 class="size-3.5" />
     {tUi('sidebar.links')}
-  </h3>
+  </SectionHeader>
 
   {#if loading && relations.backlinks.length === 0 && relations.outgoing.length === 0}
     <p class="flex items-center gap-2 py-1 text-xs text-muted-foreground">
@@ -128,4 +126,4 @@
       {@render noteList(relations.outgoing, tUi('sidebar.outgoingLinks.empty'))}
     </div>
   {/if}
-</section>
+</Surface>
