@@ -130,9 +130,9 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
         cardHoldTimer = null;
         if (!pending || started || !active) return;
         try {
-          active.cardEl.setPointerCapture(e.pointerId);
+          node.setPointerCapture(e.pointerId);
         } catch {
-          // Synthetic pointer events and an interrupted touch may not be capturable.
+          // Synthetic pointer events and interrupted pointers may not be capturable.
         }
         beginDrag(e.clientX, e.clientY, active);
       }, CARD_HOLD_MS);
@@ -214,11 +214,8 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     window.removeEventListener('keydown', onKeyDown);
     if (cardHoldTimer) clearTimeout(cardHoldTimer);
     cardHoldTimer = null;
-    if (
-      activePointerId != null &&
-      active?.cardEl.hasPointerCapture(activePointerId)
-    ) {
-      active.cardEl.releasePointerCapture(activePointerId);
+    if (activePointerId != null && node.hasPointerCapture(activePointerId)) {
+      node.releasePointerCapture(activePointerId);
     }
     activePointerId = null;
     clearEdgeTimer();
