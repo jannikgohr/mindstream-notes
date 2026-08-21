@@ -14,7 +14,9 @@
    */
   import { tick } from 'svelte';
   import { Dialog } from 'bits-ui';
-  import { SquareChevronRight, X } from '@lucide/svelte';
+  import { X } from '@lucide/svelte';
+  import { SquareChevronRight } from '@jis3r/icons';
+  import CuedIcon from '$lib/components/icons/CuedIcon.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { closeCommandPalette, commandPalette } from './store.svelte';
   import {
@@ -150,7 +152,13 @@
       <Dialog.Title class="sr-only">{tUi('commandPalette.title')}</Dialog.Title>
 
       <header class="flex items-center gap-2 border-b border-border px-3 py-2">
-        <SquareChevronRight class="size-4 shrink-0 text-muted-foreground" />
+        <!-- Chevron nudges forward as the user types the command. -->
+        <CuedIcon
+          icon={SquareChevronRight}
+          cue={query}
+          duration={300}
+          class="shrink-0 text-muted-foreground"
+        />
         <input
           bind:this={inputEl}
           bind:value={query}
