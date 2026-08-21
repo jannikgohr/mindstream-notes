@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_FILE_TREE_TOOLBAR_PREFERENCES,
   FILE_TREE_TOOLBAR_STORAGE_KEY,
@@ -12,6 +12,10 @@ import {
 const actions = ['note', 'folder', 'drawing', 'ink', 'kanban', 'pdf'];
 
 beforeEach(() => localStorage.clear());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe('file tree toolbar preferences', () => {
   it('uses the compact default for a new installation', () => {
@@ -93,5 +97,35 @@ describe('file tree toolbar preferences', () => {
       toolbar: ['folder'],
       more: ['note']
     });
+  });
+
+  it('uses defaults when storage is unavailable or contains invalid JSON', () => {
+    vi.stubGlobal('localStorage', undefined);
+    expect(loadFileTreeToolbarPreferences(actions)).toEqual(
+      DEFAULT_FILE_TREE_TOOLBAR_PREFERENCES
+    );
+
+    vi.unstubAllGlobals();
+    localStorage.setItem(FILE_TREE_TOOLBAR_STORAGE_KEY, '{invalid');
+    expect(loadFileTreeToolbarPreferences(actions)).toEqual(
+      DEFAULT_FILE_TREE_TOOLBAR_PREFERENCES
+    );
+  });
+
+  it('ignores storage write failures', () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubGlobal('localStorage', {
+      setItem: vi.fn(() => {
+        throw new Error('storage disabled');
+      })
+    });
+
+    expect(() =>
+      saveFileTreeToolbarPreferences({ toolbar: ['note'], more: [] })
+    ).not.toThrow();
+    expect(warning).toHaveBeenCalledWith(
+      '[file-tree-toolbar] save failed',
+      expect.any(Error)
+    );
   });
 });

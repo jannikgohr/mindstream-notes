@@ -12,7 +12,14 @@ const h = vi.hoisted(() => ({
   // plugin id -> granted permissions
   perms: {} as Record<string, string[]>,
   // stored note_kind string -> owning plugin ref (undefined = unknown kind)
-  noteKinds: {} as Record<string, { pluginId: string } | undefined>
+  noteKinds: {} as Record<
+    string,
+    | {
+        pluginId: string;
+        contribution?: { icon?: string };
+      }
+    | undefined
+  >
 }));
 
 vi.mock('$lib/api/plugins', () => ({ pluginsRunScript: h.runScript }));
@@ -244,6 +251,14 @@ describe('runPluginEffect', () => {
 
   it('converts openMenu effects into submenu items with inherited defaults', async () => {
     h.perms.p1 = ['notes.create'];
+    h.noteKinds.kanban = {
+      pluginId: 'p1',
+      contribution: { icon: 'icons/kanban.svg' }
+    };
+    h.noteKinds.markdown = {
+      pluginId: 'p1',
+      contribution: { icon: 'icons/markdown.svg' }
+    };
     const item = menuItemFromPluginEffect(
       'p1',
       'templates',
@@ -254,6 +269,14 @@ describe('runPluginEffect', () => {
           {
             label: 'Daily',
             run: { effect: 'createNoteFromNote', sourceNoteId: 'n1' }
+          },
+          {
+            label: 'Blank',
+            run: { effect: 'createNote', title: 'Blank', body: '' }
+          },
+          {
+            label: 'Notify',
+            run: { effect: 'toast', message: 'Ready' }
           }
         ]
       },
@@ -261,8 +284,23 @@ describe('runPluginEffect', () => {
       { defaultParentId: 'folder-1' }
     );
 
-    expect(item.children?.map((child) => child.label)).toEqual(['Daily']);
+    expect(item.children?.map((child) => child.label)).toEqual([
+      'Daily',
+      'Blank',
+      'Notify'
+    ]);
     expect(item.children?.[0]?.noteKind).toBe('kanban');
+    expect(item.children?.[0]?.pluginIcon).toEqual({
+      pluginId: 'p1',
+      file: 'icons/kanban.svg'
+    });
+    expect(item.children?.[1]?.noteKind).toBe('markdown');
+    expect(item.children?.[1]?.pluginIcon).toEqual({
+      pluginId: 'p1',
+      file: 'icons/markdown.svg'
+    });
+    expect(item.children?.[2]?.noteKind).toBeUndefined();
+    expect(item.children?.[2]?.pluginIcon).toBeUndefined();
     item.children?.[0]?.onSelect?.();
     expect(h.createNoteFromNote).toHaveBeenCalledWith('n1', 'folder-1');
   });

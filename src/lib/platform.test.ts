@@ -25,6 +25,8 @@ function setUA(ua: string) {
 }
 
 afterEach(() => {
+  delete (window as Window & { __TAURI_INTERNALS__?: unknown })
+    .__TAURI_INTERNALS__;
   setUA(UAS.windows);
   window.history.replaceState({}, '', '/');
 });
@@ -84,6 +86,19 @@ describe('isMobile / isAndroid', () => {
     expect(isMobile()).toBe(true);
     expect(isAndroid()).toBe(false);
     expect(getPlatform()).toBe('ios');
+  });
+
+  it('does not apply the dev preview inside Tauri', () => {
+    setUA(UAS.windows);
+    window.history.replaceState({}, '', '/?mobile=1');
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      value: {},
+      configurable: true
+    });
+
+    expect(isMobile()).toBe(false);
+    expect(isAndroid()).toBe(false);
+    expect(getPlatform()).toBe('windows');
   });
 });
 

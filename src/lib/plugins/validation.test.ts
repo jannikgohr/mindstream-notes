@@ -292,6 +292,21 @@ describe('validateManifest', () => {
     expect(() => validateManifest(m)).toThrow(/opensMenu must be a boolean/);
   });
 
+  it('requires submenu toolbar buttons to run a script', () => {
+    const m = luauManifest((c) => {
+      c.toolbar = [
+        {
+          ...luauButton,
+          opensMenu: true,
+          action: { type: 'insertText', text: 'hello' }
+        }
+      ];
+    });
+    expect(() => validateManifest(m)).toThrow(
+      /opensMenu requires a script action/
+    );
+  });
+
   it('accepts a toolbar button on a wasm plugin', () => {
     const m = validManifest({ runtime: 'wasm', entry: 'main.wasm' });
     (m.contributes as Record<string, unknown>).toolbar = [luauButton];

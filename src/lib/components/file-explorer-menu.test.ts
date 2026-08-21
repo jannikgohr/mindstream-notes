@@ -185,6 +185,54 @@ describe('root menu', () => {
       expect.any(Object)
     );
   });
+
+  it('uses a plugin note kind icon for plugin template entries', async () => {
+    registerPlugin({
+      id: 'com.example.documents',
+      name: 'Documents',
+      version: '1.0.0',
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'noteKinds.contribute',
+        'notes.create'
+      ],
+      contributes: {
+        i18n: {
+          en: {
+            'notes.document': 'Document',
+            'templates.document': 'New document'
+          }
+        },
+        noteKinds: [
+          {
+            id: 'document',
+            labelKey: 'notes.document',
+            icon: 'icons/document.svg',
+            render: { export: 'renderDocument' }
+          }
+        ],
+        noteTemplates: [
+          {
+            id: 'document',
+            labelKey: 'templates.document',
+            noteKind: 'plugin.com.example.documents.document',
+            titleTemplate: 'Untitled document',
+            bodyTemplate: ''
+          }
+        ]
+      }
+    });
+
+    const { menuItemsForTarget } = createMenuBuilder(context());
+    const items = await menuItemsForTarget({ kind: 'root' });
+
+    expect(item(items, 'New document')?.pluginIcon).toEqual({
+      pluginId: 'com.example.documents',
+      file: 'icons/document.svg'
+    });
+  });
 });
 
 describe('folder create submenu', () => {
