@@ -506,6 +506,39 @@ mod tests {
     }
 
     #[test]
+    fn a_dictionary_evicted_mid_check_does_not_flag_the_word() {
+        // The one path the pre-pass cannot rule out. MAX_RESIDENT is 4, so a
+        // fifth language pushes the first out of memory between the pre-pass
+        // and the word loop; if its files are gone by then, the reload fails
+        // there instead. That must stay a language with no vote, not a veto
+        // over the dictionaries that did load.
+        let dir = tempdir("evicted-mid-check");
+        for id in ["gone", "l1", "l2", "l3", "l4"] {
+            write_pair(&dir, id, "haus");
+        }
+
+        let mut resident = Resident::default();
+        // Resident before the call, so the pre-pass sees it as usable...
+        resident.get_or_load(&dir, "gone").unwrap();
+        // ...and off disk, so the reload after eviction cannot succeed.
+        std::fs::remove_file(dir.join("gone.aff")).unwrap();
+        std::fs::remove_file(dir.join("gone.dic")).unwrap();
+
+        let languages = ["gone", "l1", "l2", "l3", "l4"].map(String::from);
+        let unknown = unknown_words(
+            &mut resident,
+            &dir,
+            &languages,
+            vec!["haus".into(), "teh".into()],
+        );
+
+        assert_eq!(unknown, ["teh"]);
+        // Proves the word loop really did take the failing branch rather than
+        // finding "gone" still in memory.
+        assert!(!resident.dictionaries.contains_key("gone"));
+    }
+
+    #[test]
     fn sorts_installed_dictionaries_by_id() {
         let dir = tempdir("sorted");
         for id in ["fr_FR", "de_DE", "en_US"] {
