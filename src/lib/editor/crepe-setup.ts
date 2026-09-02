@@ -363,11 +363,20 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
   // anyway because the root layout suppresses the context menu. This app
   // owns spellchecking: when the setting is off there is none, rather than
   // a silent fallback to a checker the user cannot configure or query.
+  //
+  // `autocorrect` rides along for Android, where `spellcheck` alone did not
+  // stop the squiggles (reported on 0.1.14): on a contenteditable the
+  // keyboard keeps underlining regardless. `autocorrect="off"` is the other
+  // attribute an IME reads, and it is the only lever the web platform offers
+  // here — note it needs a WebView on Chromium 137+ to have any effect, so
+  // an old system WebView will still show the native underlines.
+  // `autocapitalize` is deliberately left alone: that is ordinary typing
+  // help, not a second opinion about spelling.
   crepe.editor.use(
     $prose(
       () =>
         new Plugin({
-          props: { attributes: { spellcheck: 'false' } }
+          props: { attributes: { spellcheck: 'false', autocorrect: 'off' } }
         })
     )
   );

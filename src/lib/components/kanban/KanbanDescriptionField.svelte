@@ -167,8 +167,12 @@
       EditorState.readOnly.of(!editable),
       EditorView.editable.of(editable),
       // One checker, one set of squiggles — the same reason the note editors
-      // switch the webview's off.
-      EditorView.contentAttributes.of({ spellcheck: 'false' }),
+      // switch the webview's off (crepe-setup.ts explains the `autocorrect`
+      // half, which is the one the Android keyboard actually reads).
+      EditorView.contentAttributes.of({
+        spellcheck: 'false',
+        autocorrect: 'off'
+      }),
       sourceDiagnostics({
         check: checkSegments,
         syntax: plainSyntax,
