@@ -197,12 +197,19 @@ fn clear_local_state(path: &Path, keyring_account: &str) {
 /// built-in `trash` collection stays clean — it's a local-only
 /// construct that's never pushed.
 ///
-/// Trade-off: if the user logs out and back in to the **same**
-/// account, this re-pushes every note as a new item, producing
-/// duplicates on the server. That's the lesser evil compared to the
-/// alternative — silent "my notes vanished" on a server switch.
-/// Recovery from duplicates is straightforward; recovery from
-/// vanished notes is not.
+/// Cost on a **same-server** re-login: a full re-pull followed by a
+/// full re-push, since every row is dirty. It does *not* duplicate the
+/// vault — `ensure_collection` lists before it creates, so the existing
+/// collections are re-adopted, and `sync::run` pulls before it pushes,
+/// so the pull re-attaches each `etebase_uid` by matching the payload's
+/// own id (see `apply_note_payload`, which keys on `notes.id`). The
+/// push then updates those items in place. Covered by
+/// `apply_note_relinks_a_row_whose_etebase_uid_was_cleared`.
+///
+/// The genuine loss is `tombstones`: deletions queued locally but not
+/// yet pushed are dropped, so those items come back on the re-pull.
+/// That's the lesser evil compared to the alternative — silent "my
+/// notes vanished" on a server switch.
 fn reset_sync_cursors(db: &Db) -> AppResult<()> {
     db.with_conn_mut(|c| {
         let tx = c.transaction()?;

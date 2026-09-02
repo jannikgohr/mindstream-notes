@@ -294,3 +294,63 @@ fn apply_note_read_only_pull_discards_local_crdt_edits() {
     assert_eq!(tags, remote_tags);
     assert_eq!(tags_crdt::tags(&tags_state), remote_tags);
 }
+
+#[test]
+fn apply_note_relinks_a_row_whose_etebase_uid_was_cleared() {
+    // Logging out runs `auth::reset_sync_cursors`, which NULLs every
+    // etebase_uid and re-dirties every row so a switch to a different
+    // server can't push stale UIDs. Signing back into the *same* server
+    // must not duplicate the vault: `run` pulls before it pushes, and
+    // the pull correlates by our own payload id (not the etebase uid),
+    // so the row is re-adopted and the later push updates in place
+    // rather than creating a second item.
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        c.execute(
+            "INSERT INTO collections(id, parent_collection_id, name, position,
+                                     created, modified, dirty)
+             VALUES ('coll_work', NULL, 'Work', 0, 't', 't', 1)",
+            [],
+        )?;
+        // Post-logout shape: content intact, server identity stripped.
+        c.execute(
+            "INSERT INTO notes(id, parent_collection_id, title, body, position,
+                               created, modified, trashed_at, yrs_state,
+                               etebase_uid, etebase_etag, dirty, payload_schema,
+                               favourite, note_kind)
+             VALUES ('note_x', 'coll_work', 'Local Title', 'local body', 0, 't', 't',
+                     NULL, NULL, NULL, NULL, 1, 2, 0, 'markdown')",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+
+    // The full re-pull the cleared stoken forces: the same item, still
+    // carrying the local id it was created with.
+    let remote = remote_note("note_x", Some("coll_work"), None);
+    apply_note_payload(&db, &remote, "uid_x", "etag_x", None, true).unwrap();
+
+    let (uid, etag, count): (Option<String>, Option<String>, i64) = db
+        .with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT etebase_uid, etebase_etag,
+                        (SELECT COUNT(*) FROM notes)
+                 FROM notes WHERE id = 'note_x'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?)
+        })
+        .unwrap();
+
+    assert_eq!(
+        uid.as_deref(),
+        Some("uid_x"),
+        "pull must re-attach the server identity to the existing row"
+    );
+    assert_eq!(etag.as_deref(), Some("etag_x"));
+    assert_eq!(
+        count, 1,
+        "the pull must reuse the local row, not insert a second one"
+    );
+}
