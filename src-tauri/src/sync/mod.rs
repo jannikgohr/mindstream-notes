@@ -142,11 +142,16 @@ fn is_bad_stoken_error(err: &AppError) -> bool {
     )
 }
 
-/// Message surfaced when the server rejects our stored credentials.
-/// Etebase tokens don't expire on a clock and there is no refresh
-/// endpoint — once the server forgets a token, only a fresh login
-/// restores syncing, so say that instead of echoing the server's
-/// opaque "Invalid token." detail.
+/// Last-resort message for a session that can no longer authenticate at
+/// all. A merely-forgotten token does *not* reach here:
+/// [`run_with_reauth`] silently mints a new one from the stored main key
+/// first. This is what's left when that re-authentication is itself
+/// refused — the password changed, or the user was deleted — where no
+/// amount of retrying helps and only a real sign-in will do.
+///
+/// Says the automatic attempt already happened, so it can't be read as
+/// "you should have reconnected sooner". Signing in is only ever
+/// advised once the silent path has actually been tried and failed.
 ///
 /// Safe to prescribe sign-out even though it runs
 /// [`crate::auth::reset_sync_cursors`], which NULLs every `etebase_uid`:
@@ -156,7 +161,7 @@ fn is_bad_stoken_error(err: &AppError) -> bool {
 /// our own payload id. The push then updates in place instead of
 /// creating duplicates.
 const SESSION_EXPIRED_MESSAGE: &str =
-    "sync session expired — sign out and sign in again to reconnect";
+    "sync session could not be renewed automatically — sign out and sign in again to reconnect";
 
 /// True for the `401` etebase returns when the stored session token is
 /// no longer recognised by the server — the account was logged out
@@ -188,6 +193,52 @@ pub(crate) fn describe_run_error(err: AppError) -> String {
     } else {
         err.to_string()
     }
+}
+
+/// [`run`] plus a single silent re-authentication.
+///
+/// A token the server has forgotten fails every request identically and
+/// never recovers on its own, so retrying it on a timer (which the
+/// scheduler does, every 30s) is pure noise. Instead, on the first 401
+/// we mint a new token from the main key the session already holds —
+/// see [`auth::refresh_token`], which needs no password — and run the
+/// sync again.
+///
+/// Exactly one retry: if the refreshed token is *also* rejected, the
+/// credentials themselves are no longer valid (password changed, user
+/// deleted) and only a real sign-in can fix it. A refresh that fails
+/// for any other reason (offline mid-sync) surfaces as itself rather
+/// than being reported as an expired session.
+///
+/// Blocking — the caller is already inside `spawn_blocking`.
+pub(crate) fn run_with_reauth(
+    app: &AppHandle,
+    db: &Db,
+    account: &mut Account,
+    self_username: Option<&str>,
+) -> Result<SyncDelta, String> {
+    let first = match run(db, account, self_username) {
+        Ok(delta) => return Ok(delta),
+        Err(e) => e,
+    };
+    if !is_auth_error(&first) {
+        return Err(describe_run_error(first));
+    }
+
+    log::info!("[sync] token rejected; refreshing it and retrying once");
+    if let Err(e) = auth::refresh_token(app, account) {
+        // The refresh handshake itself was refused: the account can no
+        // longer authenticate at all, so point at sign-in.
+        if is_auth_error(&e) {
+            log::warn!("[sync] re-authentication refused, a real sign-in is needed: {e}");
+            return Err(SESSION_EXPIRED_MESSAGE.to_string());
+        }
+        return Err(e.to_string());
+    }
+
+    run(db, account, self_username)
+        .inspect(|_| log::info!("[sync] re-authenticated; sync recovered without signing in"))
+        .map_err(describe_run_error)
 }
 
 fn load_share_scope_part_uids(cm: &CollectionManager) -> HashSet<String> {
@@ -380,7 +431,7 @@ pub async fn sync_now(app: AppHandle) -> CommandResult<SyncReport> {
     let app_for_blocking = app.clone();
     let delta = tauri::async_runtime::spawn_blocking(move || -> Result<SyncDelta, String> {
         catch_blocking_panic("sync", || {
-            let account = auth::try_restore(&app_for_blocking)
+            let mut account = auth::try_restore(&app_for_blocking)
                 .map_err(|e| format!("restore session: {e}"))?
                 .ok_or_else(|| "not signed in".to_string())?;
             let self_username = auth::read_session_info(&app_for_blocking)
@@ -388,7 +439,12 @@ pub async fn sync_now(app: AppHandle) -> CommandResult<SyncReport> {
                 .flatten()
                 .map(|info| info.username);
             let db = app_for_blocking.state::<Db>();
-            run(&db, &account, self_username.as_deref()).map_err(describe_run_error)
+            run_with_reauth(
+                &app_for_blocking,
+                &db,
+                &mut account,
+                self_username.as_deref(),
+            )
         })
     })
     .await

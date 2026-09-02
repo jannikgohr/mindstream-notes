@@ -78,14 +78,25 @@ fn is_auth_error_rejects_unrelated_errors() {
 
 #[test]
 fn describe_run_error_replaces_the_opaque_401_detail() {
-    // The whole point: "Invalid token." tells the user nothing, so the
-    // IPC boundary must carry the actionable wording instead. Other
-    // failures pass through untouched.
+    // "Invalid token." tells the user nothing, so the IPC boundary must
+    // carry the actionable wording instead. Other failures pass through
+    // untouched.
+    //
+    // Both call sites of this live inside `run_with_reauth` — one behind
+    // a `!is_auth_error` guard, the other only on the retry that follows
+    // a *successful* token refresh — so reaching this message always
+    // means the silent re-auth was tried first. The wording has to match
+    // that, or it advises a sign-in we may not actually need.
     let expired = describe_run_error(AppError::InvalidArg(
         "list mindstream.folders: Invalid token.".into(),
     ));
     assert_eq!(expired, SESSION_EXPIRED_MESSAGE);
     assert!(!expired.contains("Invalid token"));
+    assert!(
+        expired.contains("automatically"),
+        "must say the automatic renewal was already attempted, so the \
+         user isn't told to sign in as if nothing had been tried"
+    );
 
     let other = describe_run_error(AppError::InvalidArg("list folders: timed out".into()));
     assert_eq!(other, "invalid argument: list folders: timed out");
