@@ -342,8 +342,7 @@
               "id": "editor.spellcheck.enabled",
               "scope": "D",
               "type": "toggle",
-              "default": true,
-              "platforms": ["desktop"]
+              "default": true
             },
             {
               "id": "editor.spellcheck.languages",
@@ -367,7 +366,6 @@
                 "cs_CZ",
                 "ru_RU"
               ],
-              "platforms": ["desktop"],
               "showIf": {
                 "id": "editor.spellcheck.enabled",
                 "equals": true
@@ -378,7 +376,6 @@
               "scope": "D",
               "type": "custom",
               "customId": "spellcheck-dictionaries",
-              "platforms": ["desktop"],
               "showIf": {
                 "id": "editor.spellcheck.enabled",
                 "equals": true
@@ -389,7 +386,6 @@
               "scope": "V",
               "type": "custom",
               "customId": "spellcheck-custom-words",
-              "platforms": ["desktop"],
               "showIf": {
                 "id": "editor.spellcheck.enabled",
                 "equals": true

@@ -200,6 +200,7 @@ export default defineConfig({
       '@lucide/svelte',
       '@jis3r/icons',
       'bits-ui',
+      'dockview',
       '@floating-ui/dom',
       'mode-watcher',
       'tailwind-merge',
