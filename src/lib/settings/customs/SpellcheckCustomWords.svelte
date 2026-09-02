@@ -51,8 +51,8 @@
     <p class="text-xs text-muted-foreground">
       {tUi(
         touch
-          ? 'editor.spellcheck.customWords.emptyTouch'
-          : 'editor.spellcheck.customWords.empty'
+          ? 'language.spellcheck.customWords.emptyTouch'
+          : 'language.spellcheck.customWords.empty'
       )}
     </p>
   {:else}
@@ -67,7 +67,7 @@
             size="sm"
             class="size-4 p-0"
             onclick={() => removeCustomWord(word)}
-            aria-label="{tUi('editor.spellcheck.customWords.remove')} {word}"
+            aria-label="{tUi('language.spellcheck.customWords.remove')} {word}"
           >
             <Trash2 class="size-3" />
           </Button>

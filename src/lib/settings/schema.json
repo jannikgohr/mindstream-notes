@@ -336,64 +336,6 @@
           ]
         },
         {
-          "id": "editor.spellcheck",
-          "settings": [
-            {
-              "id": "editor.spellcheck.enabled",
-              "scope": "D",
-              "type": "toggle",
-              "default": true
-            },
-            {
-              "id": "editor.spellcheck.languages",
-              "scope": "V",
-              "type": "multi-select",
-              "default": ["en_US"],
-              "options": [
-                "en_US",
-                "en_GB",
-                "de_DE_frami",
-                "de_AT_frami",
-                "de_CH_frami",
-                "fr",
-                "es_ES",
-                "it_IT",
-                "nl_NL",
-                "pt_PT",
-                "pt_BR",
-                "pl_PL",
-                "sv_SE",
-                "cs_CZ",
-                "ru_RU"
-              ],
-              "showIf": {
-                "id": "editor.spellcheck.enabled",
-                "equals": true
-              }
-            },
-            {
-              "id": "editor.spellcheck.dictionaries",
-              "scope": "D",
-              "type": "custom",
-              "customId": "spellcheck-dictionaries",
-              "showIf": {
-                "id": "editor.spellcheck.enabled",
-                "equals": true
-              }
-            },
-            {
-              "id": "editor.spellcheck.customWords",
-              "scope": "V",
-              "type": "custom",
-              "customId": "spellcheck-custom-words",
-              "showIf": {
-                "id": "editor.spellcheck.enabled",
-                "equals": true
-              }
-            }
-          ]
-        },
-        {
           "id": "editor.freeform",
           "settings": [
             {
@@ -651,6 +593,64 @@
               "type": "select",
               "default": "en",
               "options": ["en", "de"]
+            }
+          ]
+        },
+        {
+          "id": "language.spellcheck",
+          "settings": [
+            {
+              "id": "language.spellcheck.enabled",
+              "scope": "D",
+              "type": "toggle",
+              "default": true
+            },
+            {
+              "id": "language.spellcheck.languages",
+              "scope": "V",
+              "type": "multi-select",
+              "default": ["en_US"],
+              "options": [
+                "en_US",
+                "en_GB",
+                "de_DE_frami",
+                "de_AT_frami",
+                "de_CH_frami",
+                "fr",
+                "es_ES",
+                "it_IT",
+                "nl_NL",
+                "pt_PT",
+                "pt_BR",
+                "pl_PL",
+                "sv_SE",
+                "cs_CZ",
+                "ru_RU"
+              ],
+              "showIf": {
+                "id": "language.spellcheck.enabled",
+                "equals": true
+              }
+            },
+            {
+              "id": "language.spellcheck.dictionaries",
+              "scope": "D",
+              "type": "custom",
+              "customId": "spellcheck-dictionaries",
+              "showIf": {
+                "id": "language.spellcheck.enabled",
+                "equals": true
+              }
+            },
+            {
+              "id": "language.spellcheck.customWords",
+              "scope": "V",
+              "type": "custom",
+              "customId": "spellcheck-custom-words",
+              "showIf": {
+                "id": "language.spellcheck.enabled",
+                "equals": true
+              }
             }
           ]
         }

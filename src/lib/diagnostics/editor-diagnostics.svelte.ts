@@ -37,7 +37,7 @@ const bus = new DiagnosticBus();
 bus.register(
   createSpellcheckProvider({
     unknownWords: spellcheckUnknownWords,
-    message: () => tUi('editor.spellcheck.unknownWord'),
+    message: () => tUi('language.spellcheck.unknownWord'),
     // Filtered in the frontend, before the word is ever sent for
     // checking, so accepting a word takes effect on the next check with
     // no dictionary reload.
@@ -192,13 +192,13 @@ export function registerProvider(provider: DiagnosticProvider): () => void {
 
 export function spellcheckEnabled(): boolean {
   return (
-    (getSettingValue('editor.spellcheck.enabled') as boolean | undefined) ??
+    (getSettingValue('language.spellcheck.enabled') as boolean | undefined) ??
     true
   );
 }
 
 export function spellcheckLanguages(): string[] {
-  const value = getSettingValue('editor.spellcheck.languages');
+  const value = getSettingValue('language.spellcheck.languages');
   return Array.isArray(value) ? (value as string[]) : [];
 }
 

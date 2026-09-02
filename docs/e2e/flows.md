@@ -509,9 +509,10 @@ decorations drawn over a live document.
   validates by _loading_ the pair rather than by checksum, so "the download
   worked" and "the dictionary works" are the same assertion only here.
 - **Steps:** launch with an empty dictionary directory → open **Settings →
-  Editor → Spellcheck** → assert the catalogue lists dictionaries, none
-  installed → install `de_DE_frami` (served by a local stub, or pre-seeded on
-  disk in CI) → select it → type `Gescwindigkeit ist wichtig` in a note →
+  Language → Spelling** → expand **Browse more languages** → assert the
+  catalogue lists dictionaries, none installed → install `de_DE_frami` (served
+  by a local stub, or pre-seeded on disk in CI) → select it → type
+  `Gescwindigkeit ist wichtig` in a note →
   assert exactly one word carries a spelling squiggle.
 - **Proves:** the catalogue → download → stage → load → check chain, and that
   a language the user did not select contributes nothing.
