@@ -55,7 +55,12 @@ describe('applying a suggestion', () => {
     render(DiagnosticPopover);
 
     openDiagnosticPopover(
-      { diagnostic, x: 10, y: 10, word: 'Googel', apply },
+      {
+        diagnostic,
+        anchor: { left: 10, top: 10, bottom: 20 },
+        word: 'Googel',
+        apply
+      },
       async () => []
     );
     await settle();
@@ -78,8 +83,7 @@ describe('applying a suggestion', () => {
     openDiagnosticPopover(
       {
         diagnostic: { ...diagnostic, replacements: [': Google'] },
-        x: 10,
-        y: 10,
+        anchor: { left: 10, top: 10, bottom: 20 },
         word: ':Google',
         apply
       },
@@ -98,8 +102,7 @@ describe('applying a suggestion', () => {
     openDiagnosticPopover(
       {
         diagnostic: { ...diagnostic, replacements: [] },
-        x: 10,
-        y: 10,
+        anchor: { left: 10, top: 10, bottom: 20 },
         word: 'Googel',
         apply
       },
@@ -114,7 +117,12 @@ describe('applying a suggestion', () => {
   it('shows the whole message rather than one clipped line', async () => {
     render(DiagnosticPopover);
     openDiagnosticPopover(
-      { diagnostic, x: 10, y: 10, word: 'Googel', apply: vi.fn() },
+      {
+        diagnostic,
+        anchor: { left: 10, top: 10, bottom: 20 },
+        word: 'Googel',
+        apply: vi.fn()
+      },
       async () => []
     );
     await settle();
@@ -133,7 +141,12 @@ describe('applying a suggestion', () => {
     const apply = vi.fn();
     render(DiagnosticPopover);
     openDiagnosticPopover(
-      { diagnostic, x: 10, y: 10, word: 'Googel', apply },
+      {
+        diagnostic,
+        anchor: { left: 10, top: 10, bottom: 20 },
+        word: 'Googel',
+        apply
+      },
       async () => []
     );
     await settle();
@@ -165,8 +178,7 @@ describe('duplicate suggestions', () => {
           ...diagnostic,
           replacements: ['Google', 'Google', 'Googles']
         },
-        x: 10,
-        y: 10,
+        anchor: { left: 10, top: 10, bottom: 20 },
         word: 'Googel',
         apply
       },
@@ -190,8 +202,7 @@ describe('duplicate suggestions', () => {
     openDiagnosticPopover(
       {
         diagnostic: { ...diagnostic, replacements: [] },
-        x: 10,
-        y: 10,
+        anchor: { left: 10, top: 10, bottom: 20 },
         word: 'x',
         apply
       },
@@ -226,7 +237,12 @@ describe('mouse interaction inside the menu', () => {
     render(DiagnosticPopover);
 
     openDiagnosticPopover(
-      { diagnostic, x: 10, y: 10, word: 'Googel', apply },
+      {
+        diagnostic,
+        anchor: { left: 10, top: 10, bottom: 20 },
+        word: 'Googel',
+        apply
+      },
       async () => []
     );
     await settle();
@@ -246,7 +262,12 @@ describe('mouse interaction inside the menu', () => {
     // A long suggestion list has to be scrollable without dismissing itself.
     render(DiagnosticPopover);
     openDiagnosticPopover(
-      { diagnostic, x: 10, y: 10, word: 'Googel', apply: vi.fn() },
+      {
+        diagnostic,
+        anchor: { left: 10, top: 10, bottom: 20 },
+        word: 'Googel',
+        apply: vi.fn()
+      },
       async () => []
     );
     await settle();
@@ -263,7 +284,12 @@ describe('mouse interaction inside the menu', () => {
   it('still closes on a pointerdown outside', async () => {
     render(DiagnosticPopover);
     openDiagnosticPopover(
-      { diagnostic, x: 10, y: 10, word: 'Googel', apply: vi.fn() },
+      {
+        diagnostic,
+        anchor: { left: 10, top: 10, bottom: 20 },
+        word: 'Googel',
+        apply: vi.fn()
+      },
       async () => []
     );
     await settle();
@@ -274,5 +300,85 @@ describe('mouse interaction inside the menu', () => {
     await settle();
 
     expect(document.querySelector('[data-diagnostic-popover]')).toBeNull();
+  });
+});
+
+describe('positioning', () => {
+  /** jsdom's window is fixed at 1024x768 unless a test says otherwise. */
+  function viewport(width: number, height: number) {
+    Object.defineProperty(window, 'innerWidth', {
+      value: width,
+      configurable: true
+    });
+    Object.defineProperty(window, 'innerHeight', {
+      value: height,
+      configurable: true
+    });
+  }
+
+  function menu(): HTMLElement | null {
+    return document.querySelector('[role="menu"]');
+  }
+
+  it('opens below the flagged word, not over it', async () => {
+    // The bug this replaced: anchored at the pointer, which on a touch
+    // screen is the middle of the word, so the menu covered the line it
+    // was correcting.
+    viewport(1024, 768);
+    render(DiagnosticPopover);
+
+    openDiagnosticPopover(
+      {
+        diagnostic,
+        anchor: { left: 40, top: 100, bottom: 120 },
+        word: 'Googel',
+        apply: vi.fn()
+      },
+      async () => []
+    );
+    await settle();
+
+    expect(menu()?.style.top).toBe('126px');
+    expect(menu()?.style.left).toBe('40px');
+  });
+
+  it('flips above the word when there is no room below', async () => {
+    // Where a note in progress ends, and where the soft keyboard puts the
+    // bottom of the window as soon as the editor has focus.
+    viewport(1024, 768);
+    render(DiagnosticPopover);
+
+    openDiagnosticPopover(
+      {
+        diagnostic,
+        anchor: { left: 40, top: 700, bottom: 720 },
+        word: 'Googel',
+        apply: vi.fn()
+      },
+      async () => []
+    );
+    await settle();
+
+    // 700 - 6 gap - 320 assumed height: clear of the word either way.
+    expect(menu()?.style.top).toBe('374px');
+  });
+
+  it('keeps a word at the right edge from pushing the menu off screen', async () => {
+    viewport(1024, 768);
+    render(DiagnosticPopover);
+
+    openDiagnosticPopover(
+      {
+        diagnostic,
+        anchor: { left: 1000, top: 100, bottom: 120 },
+        word: 'Googel',
+        apply: vi.fn()
+      },
+      async () => []
+    );
+    await settle();
+
+    // 1024 - 288 width - 8 margin.
+    expect(menu()?.style.left).toBe('728px');
   });
 });
