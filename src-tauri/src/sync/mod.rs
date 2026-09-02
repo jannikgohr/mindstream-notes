@@ -148,14 +148,15 @@ fn is_bad_stoken_error(err: &AppError) -> bool {
 /// restores syncing, so say that instead of echoing the server's
 /// opaque "Invalid token." detail.
 ///
-/// Deliberately stops short of telling the user to hit "Log out":
-/// [`crate::auth::reset_sync_cursors`] runs on logout and strips every
-/// `etebase_uid`, so signing back into the *same* account re-pushes the
-/// whole vault as new items and duplicates it server-side. Naming the
-/// condition lets the user pick a recovery; prescribing the button
-/// would walk them into that trap.
+/// Safe to prescribe sign-out even though it runs
+/// [`crate::auth::reset_sync_cursors`], which NULLs every `etebase_uid`:
+/// signing back into the *same* server re-adopts the existing
+/// collections (`ensure_collection` lists before it creates) and `run`
+/// pulls before it pushes, so the pull re-attaches each uid by matching
+/// our own payload id. The push then updates in place instead of
+/// creating duplicates.
 const SESSION_EXPIRED_MESSAGE: &str =
-    "sync session expired — this device needs to sign in again to reconnect";
+    "sync session expired — sign out and sign in again to reconnect";
 
 /// True for the `401` etebase returns when the stored session token is
 /// no longer recognised by the server — the account was logged out
