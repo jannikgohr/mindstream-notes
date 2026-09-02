@@ -15,6 +15,7 @@ import {
   pluginsPreviewStop,
   pluginsPreviewUpdate
 } from '$lib/api/plugins';
+import { toErrorMessage } from '$lib/api/errors';
 
 export interface PreviewJump {
   filepath: string;
@@ -96,7 +97,7 @@ export class PreviewServiceController {
       this.connectControl(handle.controlUrl);
       this.opts.onReady(handle.dataUrl, handle.proxyUrl);
     } catch (err) {
-      if (!this.disposed) this.opts.onError(toMessage(err));
+      if (!this.disposed) this.opts.onError(toErrorMessage(err));
     }
   }
 
@@ -159,19 +160,4 @@ export class PreviewServiceController {
     this.ws = null;
     if (this.started) void pluginsPreviewStop(this.opts.sessionKey);
   }
-}
-
-function toMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === 'string') return err;
-  if (err && typeof err === 'object') {
-    const message = (err as Record<string, unknown>).message;
-    if (typeof message === 'string') return message;
-    try {
-      return JSON.stringify(err);
-    } catch {
-      return String(err);
-    }
-  }
-  return String(err);
 }

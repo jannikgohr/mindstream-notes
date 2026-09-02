@@ -62,4 +62,14 @@ ship without taxing routine PRs. The `MINDSTREAM_E2E_*` env flags already let th
 same specs skip cleanly when their prerequisites aren't up, so wiring them in is
 a workflow change, not a spec change.
 
-Current coverage and the open gaps are tracked in [status.md](status.md).
+Current coverage and the open gaps are tracked in [status.md](status.md); the
+queue of tests still to write is [backlog.md](backlog.md).
+
+### Android is not a tier yet
+
+The four tiers above are all desktop or headless-browser. The mobile specs in
+`e2e-tests/browser/` emulate an Android user-agent and viewport in desktop
+Chromium — they prove mobile layout, not Android. Nothing runs on an Android
+runtime, and `tauri-driver` cannot drive one. What a real Android tier would
+take, and how far it can realistically go, is worked through in
+[backlog.md](backlog.md#7-android).

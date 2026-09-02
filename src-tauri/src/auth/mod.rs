@@ -197,12 +197,19 @@ fn clear_local_state(path: &Path, keyring_account: &str) {
 /// built-in `trash` collection stays clean — it's a local-only
 /// construct that's never pushed.
 ///
-/// Trade-off: if the user logs out and back in to the **same**
-/// account, this re-pushes every note as a new item, producing
-/// duplicates on the server. That's the lesser evil compared to the
-/// alternative — silent "my notes vanished" on a server switch.
-/// Recovery from duplicates is straightforward; recovery from
-/// vanished notes is not.
+/// Cost on a **same-server** re-login: a full re-pull followed by a
+/// full re-push, since every row is dirty. It does *not* duplicate the
+/// vault — `ensure_collection` lists before it creates, so the existing
+/// collections are re-adopted, and `sync::run` pulls before it pushes,
+/// so the pull re-attaches each `etebase_uid` by matching the payload's
+/// own id (see `apply_note_payload`, which keys on `notes.id`). The
+/// push then updates those items in place. Covered by
+/// `apply_note_relinks_a_row_whose_etebase_uid_was_cleared`.
+///
+/// The genuine loss is `tombstones`: deletions queued locally but not
+/// yet pushed are dropped, so those items come back on the re-pull.
+/// That's the lesser evil compared to the alternative — silent "my
+/// notes vanished" on a server switch.
 fn reset_sync_cursors(db: &Db) -> AppResult<()> {
     db.with_conn_mut(|c| {
         let tx = c.transaction()?;
@@ -251,6 +258,64 @@ pub fn read_session_info(app: &AppHandle) -> AppResult<Option<SessionInfo>> {
         username: stored.username,
         server_url: stored.server_url,
     }))
+}
+
+/// Mint a fresh auth token for an already-restored account, without the
+/// user's password.
+///
+/// Etebase tokens are bearer tokens with no clock expiry and no refresh
+/// endpoint, so a server that has forgotten one (logged out elsewhere,
+/// password changed, server DB rebuilt) 401s every request until the
+/// account re-authenticates. `Account::fetch_token` re-runs only the
+/// *signature* half of the login handshake: it asks for a new login
+/// challenge and signs it with the login key derived from `main_key`.
+/// That key is part of the saved session blob and is already in memory
+/// after [`try_restore`], so no password and no user interaction is
+/// needed — unlike [`Account::login`], this skips Argon2id entirely.
+///
+/// The refreshed token is written back to the session file so the next
+/// restore starts authenticated instead of paying another round trip —
+/// and so the other restore sites (live collab, repair) pick it up too.
+/// Failing to persist is logged, not fatal: the in-memory account is
+/// already usable for the caller's current operation.
+///
+/// Blocking HTTP — call from inside `spawn_blocking`, like the other
+/// etebase entry points here.
+pub fn refresh_token(app: &AppHandle, account: &mut Account) -> AppResult<()> {
+    account
+        .fetch_token()
+        .map_err(|e| AppError::InvalidArg(format!("refresh token: {e}")))?;
+    if let Err(e) = persist_session_blob(app, account) {
+        log::warn!("[auth] token refreshed but could not be persisted: {e}");
+    }
+    Ok(())
+}
+
+/// Re-encrypt and write the account's current state (including its new
+/// token) over the existing session file, reusing the keyring-held
+/// wrapper key so the on-disk format is unchanged.
+fn persist_session_blob(app: &AppHandle, account: &Account) -> AppResult<()> {
+    let path = session_path(app)?;
+    // Signed out while the refresh was in flight — nothing to update.
+    let Some(stored) = read_stored(&path)? else {
+        return Ok(());
+    };
+    let key_b64 = keyring_entry(&active_keyring_account(app))?
+        .get_password()
+        .map_err(|e| AppError::InvalidArg(format!("keyring read: {e}")))?;
+    let key =
+        from_base64(&key_b64).map_err(|e| AppError::InvalidArg(format!("keyring decode: {e}")))?;
+    let blob = account
+        .save(Some(&key))
+        .map_err(|e| AppError::InvalidArg(format!("save session: {e}")))?;
+    let updated = StoredSession {
+        username: stored.username,
+        server_url: stored.server_url,
+        blob,
+    };
+    let bytes = serde_json::to_vec(&updated).map_err(|e| AppError::InvalidArg(e.to_string()))?;
+    fs::write(&path, bytes)?;
+    Ok(())
 }
 
 pub fn try_restore(app: &AppHandle) -> AppResult<Option<Account>> {

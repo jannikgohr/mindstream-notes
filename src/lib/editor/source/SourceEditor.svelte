@@ -366,8 +366,12 @@
       EditorView.lineWrapping,
       // The webview's own spellchecker stays off here for the same reason
       // as in the WYSIWYG pane (see crepe-setup.ts): one checker, one set
-      // of squiggles, reachable suggestions.
-      EditorView.contentAttributes.of({ spellcheck: 'false' }),
+      // of squiggles, reachable suggestions. `autocorrect` is what carries
+      // that to the Android IME — see the note there.
+      EditorView.contentAttributes.of({
+        spellcheck: 'false',
+        autocorrect: 'off'
+      }),
       keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
       placeholder(placeholderText),
       readonlyComp.of([

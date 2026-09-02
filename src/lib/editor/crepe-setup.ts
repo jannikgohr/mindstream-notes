@@ -17,6 +17,8 @@
  */
 
 import { Crepe, type CrepeFeature } from '@milkdown/crepe';
+import { EditorStatus } from '@milkdown/kit/core';
+import { createFloatingPortal } from './floating-portal';
 import { remarkStringifyOptionsCtx } from '@milkdown/kit/core';
 import { remarkPreserveEmptyLinePlugin } from '@milkdown/kit/preset/commonmark';
 import { collab } from '@milkdown/plugin-collab';
@@ -43,6 +45,7 @@ import {
   userMentionPlugins,
   wikilinkPlugins,
   type MarkdownSearchBridge,
+  type SlashMenuBuilder,
   type ProseDiagnosticsOptions,
   type UserMentionBridge,
   type WikilinkBridge
@@ -56,6 +59,11 @@ export interface CrepeSetupOptions {
    * Mobile gets a different feature set:
    *   - BlockEdit is off (block-handle is a hover affordance + the slash
    *     menu is awkward on a soft keyboard).
+   *   - Toolbar is off. Selecting text on a touch device should surface
+   *     the webview's own cut/copy/paste menu; Crepe's floating toolbar
+   *     covers the selection and pre-empts it. Formatting is not lost —
+   *     `MobileEditorToolbar` already sits above the keyboard with the
+   *     same commands.
    * The host should also carry the `.mobile-editor` CSS class so the 90px
    * ProseMirror side padding (left intentionally for the desktop block
    * handle) gets zeroed.
@@ -144,7 +152,10 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
   installSelectionToolbarAutoHide(opts.host);
 
   const features: Partial<Record<CrepeFeature, boolean>> = {};
-  if (opts.mobile) features[Crepe.Feature.BlockEdit] = false;
+  if (opts.mobile) {
+    features[Crepe.Feature.BlockEdit] = false;
+    features[Crepe.Feature.Toolbar] = false;
+  }
   if (!opts.mathEnabled) features[Crepe.Feature.Latex] = false;
 
   const imageBlockConfig = {
@@ -157,12 +168,38 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
     proxyDomURL: opts.assetBridge.resolveUrl
   };
 
+  // BlockEdit hosts the "/" slash menu; it is off on mobile, so all of
+  // its configuration is desktop-only.
+  //
+  //   slashMenu.root — takes the menu out of the scrolling pane, where an
+  //     absolutely positioned box of its size adds its own height to how
+  //     far the note can scroll (see floating-portal.ts).
+  //   buildMenu — extends the Advanced group with a "Mermaid diagram"
+  //     entry so the feature is discoverable without users having to know
+  //     the `mermaid` language string.
+  const slashPortal = opts.mobile ? null : createFloatingPortal(opts.host);
+  const blockEditConfig = slashPortal
+    ? {
+        [Crepe.Feature.BlockEdit]: {
+          slashMenu: { root: slashPortal.root },
+          ...(opts.mermaidEnabled
+            ? {
+                buildMenu: (builder: SlashMenuBuilder) => {
+                  addMermaidMenuItem(builder, tUi('editor.menu.mermaid'));
+                }
+              }
+            : {})
+        }
+      }
+    : {};
+
   const crepe = new Crepe({
     root: opts.host,
     defaultValue: '',
     features: Object.keys(features).length > 0 ? features : undefined,
     featureConfigs: {
       [Crepe.Feature.ImageBlock]: imageBlockConfig,
+      ...blockEditConfig,
       ...(opts.mermaidEnabled
         ? {
             [Crepe.Feature.CodeMirror]: {
@@ -173,24 +210,17 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
               // input field (or use the slash menu / toolbar), but the
               // entry-in-the-list path goes through this array.
               languages: [mermaidLanguageDescription]
-            },
-            // BlockEdit hosts Crepe's "/" slash menu. We extend the
-            // existing Advanced group with a "Mermaid diagram" entry
-            // so the feature is discoverable without users having to
-            // know the `mermaid` language string. Skipped on mobile
-            // because BlockEdit itself is off there.
-            ...(opts.mobile
-              ? {}
-              : {
-                  [Crepe.Feature.BlockEdit]: {
-                    buildMenu: (builder) => {
-                      addMermaidMenuItem(builder, tUi('editor.menu.mermaid'));
-                    }
-                  }
-                })
+            }
           }
         : {})
     }
+  });
+
+  // The portal outlives `crepe.destroy()` (Crepe only removes its own menu
+  // element), so tie it to the editor's lifecycle here rather than making
+  // every caller thread a teardown handle.
+  crepe.editor.onStatusChange((status) => {
+    if (status === EditorStatus.Destroyed) slashPortal?.destroy();
   });
 
   // Note-link anchors must not carry a navigable `mindstream://` href, or
@@ -333,11 +363,20 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
   // anyway because the root layout suppresses the context menu. This app
   // owns spellchecking: when the setting is off there is none, rather than
   // a silent fallback to a checker the user cannot configure or query.
+  //
+  // `autocorrect` rides along for Android, where `spellcheck` alone did not
+  // stop the squiggles (reported on 0.1.14): on a contenteditable the
+  // keyboard keeps underlining regardless. `autocorrect="off"` is the other
+  // attribute an IME reads, and it is the only lever the web platform offers
+  // here — note it needs a WebView on Chromium 137+ to have any effect, so
+  // an old system WebView will still show the native underlines.
+  // `autocapitalize` is deliberately left alone: that is ordinary typing
+  // help, not a second opinion about spelling.
   crepe.editor.use(
     $prose(
       () =>
         new Plugin({
-          props: { attributes: { spellcheck: 'false' } }
+          props: { attributes: { spellcheck: 'false', autocorrect: 'off' } }
         })
     )
   );

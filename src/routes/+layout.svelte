@@ -9,6 +9,7 @@
   } from '$lib/settings/store.svelte';
   import { authSession, serverTypeForSession } from '$lib/api/auth.svelte';
   import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
+  import { isMobile } from '$lib/platform';
   import { applyAccentColor, clearAccentColor } from '$lib/settings/accent';
   import {
     applyEditorTypography,
@@ -51,8 +52,13 @@
   // We have our own context menus (file tree); the webview's default just
   // shows debug entries like "Inspect Element" / "Reload" that aren't part
   // of the product UX. Stays enabled in dev so DevTools remain reachable.
+  //
+  // Mobile is exempt: there is no right-click there, and the event that
+  // reaches this listener is the long-press that opens the webview's
+  // text-selection menu (cut / copy / paste). Cancelling it leaves a
+  // selection the user cannot act on.
   onMount(() => {
-    if (!import.meta.env.PROD) return;
+    if (!import.meta.env.PROD || isMobile()) return;
     const block = (e: Event) => {
       // Custom menus call preventDefault() + stopPropagation() before this
       // listener runs, so they're already absent from the event stream.

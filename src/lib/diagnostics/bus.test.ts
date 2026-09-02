@@ -620,8 +620,6 @@ describe('partial results', () => {
   });
 
   it('applies ownership to the final result, not just the partials', async () => {
-    // The dictionary's spelling shows immediately, then gives way once the
-    // owner has actually answered.
     const bus = new DiagnosticBus();
     const owner = slow('lt', 'alpha');
     bus.register({ ...owner.provider, kinds: ['spelling'] });
@@ -634,11 +632,210 @@ describe('partial results', () => {
       onPartial: (d) => partials.push(d.map((x) => x.source))
     });
 
+    // The dictionary has finished by now, but the owner is still working on
+    // this segment, so its spelling is held back rather than drawn and
+    // immediately replaced.
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(partials[0]).toEqual(['spell']);
+    expect(partials[0]).toEqual([]);
 
     owner.release();
     expect((await done).map((d) => d.source)).toEqual(['lt']);
+  });
+});
+
+/**
+ * Waiting for the owner, and the bound on that wait.
+ *
+ * The reported symptom: typing in a note checked by LanguageTool made the
+ * local dictionary's squiggles flash up for about a second on every
+ * keystroke and then be replaced. The dictionary answers in microseconds
+ * and the service in seconds, and in between "the owner has not answered"
+ * looked the same as "the owner has no opinion".
+ */
+describe('owner grace', () => {
+  const slowOwner = (id: string, word: string) => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const provider: DiagnosticProvider = {
+      id,
+      kinds: ['spelling'],
+      async check({ text }) {
+        await gate;
+        const at = text.indexOf(word);
+        return at === -1
+          ? []
+          : [diag({ from: at, to: at + word.length, source: id })];
+      }
+    };
+    return { provider, release: () => release?.() };
+  };
+
+  const dictionary: DiagnosticProvider = {
+    id: 'spell',
+    kinds: ['spelling'],
+    check: ({ text }) => {
+      const at = text.indexOf('teh');
+      return at === -1 ? [] : [diag({ from: at, to: at + 3, source: 'spell' })];
+    }
+  };
+
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it('draws the fallback once the grace expires', async () => {
+    // A service that hangs rather than failing must not take spellchecking
+    // down with it.
+    const bus = new DiagnosticBus();
+    const owner = slowOwner('lt', 'teh');
+    bus.register(owner.provider);
+    bus.register(dictionary);
+
+    const partials: string[][] = [];
+    const done = bus.check(segments(['teh cat', 0]), {
+      languages: ['en'],
+      owners: { spelling: 'lt' },
+      ownerGraceMs: 5,
+      onPartial: (d) => partials.push(d.map((x) => x.source))
+    });
+
+    await settle();
+    expect(partials).toEqual([[]]);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(partials.at(-1)).toEqual(['spell']);
+
+    // And the owner's answer still replaces it when it finally lands.
+    owner.release();
+    expect((await done).map((d) => d.source)).toEqual(['lt']);
+  });
+
+  it('does not wait for an owner that is not registered', async () => {
+    // Nobody is checking that kind, so there is nothing to wait for.
+    const bus = new DiagnosticBus();
+    bus.register(dictionary);
+
+    const partials: string[][] = [];
+    await bus.check(segments(['teh cat', 0]), {
+      languages: ['en'],
+      owners: { spelling: 'lt' },
+      onPartial: (d) => partials.push(d.map((x) => x.source))
+    });
+    expect(partials[0]).toEqual(['spell']);
+  });
+
+  it('does not wait once the owner has failed', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const bus = new DiagnosticBus();
+    bus.register({
+      id: 'lt',
+      kinds: ['spelling'],
+      check: () => {
+        throw new Error('server down');
+      }
+    });
+    bus.register(dictionary);
+
+    const out = await bus.check(segments(['teh cat', 0]), {
+      languages: ['en'],
+      owners: { spelling: 'lt' },
+      // Long enough that passing this test can only mean the failure ended
+      // the wait, not that the grace ran out.
+      ownerGraceMs: 60_000
+    });
+    expect(out.map((d) => d.source)).toEqual(['spell']);
+    spy.mockRestore();
+  });
+
+  it('holds back only the kind that is owned', async () => {
+    const bus = new DiagnosticBus();
+    const owner = slowOwner('lt', 'teh');
+    bus.register(owner.provider);
+    bus.register(dictionary);
+    bus.register({
+      id: 'style',
+      kinds: ['grammar'],
+      check: () => [diag({ from: 0, to: 3, kind: 'grammar', source: 'style' })]
+    });
+
+    const partials: string[][] = [];
+    const done = bus.check(segments(['teh cat', 0]), {
+      languages: ['en'],
+      owners: { spelling: 'lt' },
+      onPartial: (d) => partials.push(d.map((x) => x.source))
+    });
+    await settle();
+    expect(partials.at(-1)).toEqual(['style']);
+    owner.release();
+    await done;
+  });
+
+  it('keeps the checks it already has while it re-checks one paragraph', async () => {
+    // Typing changes one paragraph. Every other paragraph's answer is
+    // already cached, and it goes out before the request for the edited one
+    // is even sent — otherwise the whole note's squiggles disappear for as
+    // long as the round trip takes.
+    const bus = new DiagnosticBus();
+    let gate: (() => void) | undefined;
+    let calls = 0;
+    bus.register({
+      id: 'lt',
+      kinds: ['spelling'],
+      async checkAll(parts) {
+        calls += 1;
+        if (calls > 1) {
+          await new Promise<void>((resolve) => {
+            gate = resolve;
+          });
+        }
+        return parts.map((part) => {
+          const at = part.text.indexOf('teh');
+          return at === -1
+            ? []
+            : [diag({ from: at, to: at + 3, source: 'lt' })];
+        });
+      },
+      check: () => null
+    });
+
+    const first = segments(['teh cat', 0], ['teh dog', 100]);
+    await bus.check(first, { languages: ['en'], owners: { spelling: 'lt' } });
+
+    // Edit the second paragraph; the first is unchanged.
+    const partials: Diagnostic[][] = [];
+    const done = bus.check(segments(['teh cat', 0], ['teh dogs', 100]), {
+      languages: ['en'],
+      owners: { spelling: 'lt' },
+      onPartial: (d) => partials.push(d)
+    });
+    await settle();
+    expect(partials.at(-1)?.map((d) => d.from)).toEqual([0]);
+
+    gate?.();
+    expect((await done).map((d) => d.from)).toEqual([0, 100]);
+  });
+
+  it('stops the grace timer when the check is over', async () => {
+    // A timer that outlived its check would publish a composition of a
+    // document the editor has already moved on from.
+    const bus = new DiagnosticBus();
+    bus.register(dictionary);
+    bus.register({
+      id: 'lt',
+      kinds: ['spelling'],
+      check: () => null
+    });
+
+    const partials: string[][] = [];
+    await bus.check(segments(['teh cat', 0]), {
+      languages: ['en'],
+      owners: { spelling: 'lt' },
+      ownerGraceMs: 5,
+      onPartial: (d) => partials.push(d.map((x) => x.source))
+    });
+    const seen = partials.length;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(partials.length).toBe(seen);
   });
 });
 

@@ -10,6 +10,7 @@
     scanForCollectionInviteNotifications
   } from './store.svelte';
   import type { AppNotification, ShareBundleNotificationData } from './types';
+  import { toErrorMessage } from '$lib/api/errors';
 
   interface Props {
     notification: AppNotification<ShareBundleNotificationData>;
@@ -59,7 +60,7 @@
       void scanForCollectionInviteNotifications();
       onClose?.();
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = toErrorMessage(err);
     } finally {
       pending = false;
     }
@@ -74,7 +75,7 @@
       dismissNotification(notification.id);
       void scanForCollectionInviteNotifications();
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = toErrorMessage(err);
     } finally {
       pending = false;
     }

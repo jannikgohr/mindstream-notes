@@ -19,6 +19,7 @@ import type {
   DiagnosticKind,
   DiagnosticProvider
 } from './types';
+import { toErrorMessage } from '$lib/api/errors';
 
 /**
  * A service's rule categories mapped to diagnostic kinds.
@@ -274,10 +275,7 @@ export function createHttpCheckerProvider(
       });
 
       if (failure) {
-        options.onStatus?.(
-          'failed',
-          failure instanceof Error ? failure.message : String(failure)
-        );
+        options.onStatus?.('failed', toErrorMessage(failure));
         throw failure;
       }
       if (signal.aborted) return segments.map(() => null);
@@ -306,10 +304,7 @@ export function createHttpCheckerProvider(
       } catch (err) {
         // Reported before rethrowing: the bus turns this into "provider
         // skipped for this segment", which is invisible on its own.
-        options.onStatus?.(
-          'failed',
-          err instanceof Error ? err.message : String(err)
-        );
+        options.onStatus?.('failed', toErrorMessage(err));
         throw err;
       }
       if (signal.aborted) return null;

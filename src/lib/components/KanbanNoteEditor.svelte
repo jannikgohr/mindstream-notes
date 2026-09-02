@@ -143,6 +143,7 @@
   import { isMobile } from '$lib/platform';
   import NameInputSheet from '$lib/mobile/NameInputSheet.svelte';
   import { closeNavOverlay, openNavOverlay } from '$lib/mobile/state.svelte';
+  import { toErrorMessage } from '$lib/api/errors';
 
   registerEditorItem('mindstream-linked-note', KanbanLinkedNoteField);
   registerEditorItem('mindstream-labels', KanbanLabelsField);
@@ -1345,7 +1346,7 @@
 
       loading = false;
     } catch (err) {
-      loadError = err instanceof Error ? err.message : String(err);
+      loadError = toErrorMessage(err);
       loading = false;
       console.error('[KanbanNoteEditor] load failed', err);
     }
