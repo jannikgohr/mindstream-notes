@@ -177,6 +177,58 @@ pub fn installed_dictionaries(dir: &Path) -> AppResult<Vec<InstalledDictionary>>
     Ok(found)
 }
 
+/// The subset of `words` that no LOADED dictionary recognises.
+///
+/// Split out of the command so it can be tested without a Tauri runtime.
+///
+/// Resolving the dictionaries up front is what makes the answer correct:
+/// "nothing could be loaded" and "every dictionary rejected the word" are
+/// opposite verdicts, and a per-word loop cannot tell them apart. Nothing is
+/// bundled with the app, so a device where no dictionary has been downloaded
+/// yet is the DEFAULT state, not an edge case — deciding it word by word
+/// underlines the entire note.
+fn unknown_words(
+    resident: &mut Resident,
+    dir: &Path,
+    languages: &[String],
+    words: Vec<String>,
+) -> Vec<String> {
+    let mut usable: Vec<&str> = Vec::new();
+    for language in languages {
+        match resident.get_or_load(dir, language) {
+            Ok(_) => usable.push(language.as_str()),
+            Err(err) => log::warn!("[spellcheck] {language} unavailable: {err}"),
+        }
+    }
+    // No dictionary, no opinion. The frontend draws what it is given, so an
+    // empty result is the only way to say "not checked" rather than "wrong".
+    if usable.is_empty() {
+        return Vec::new();
+    }
+
+    let mut unknown = Vec::new();
+    for word in words {
+        let mut known = false;
+        for language in &usable {
+            match resident.get_or_load(dir, language) {
+                Ok(dictionary) => {
+                    if dictionary.check(&word) {
+                        known = true;
+                        break;
+                    }
+                }
+                // Reachable despite the pre-pass: loading a later language can
+                // evict an earlier one when more than MAX_RESIDENT are enabled.
+                Err(err) => log::warn!("[spellcheck] {language} unavailable: {err}"),
+            }
+        }
+        if !known {
+            unknown.push(word);
+        }
+    }
+    unknown
+}
+
 /// The subset of `words` that no enabled dictionary recognises.
 ///
 /// Takes a batch because the frontend checks a paragraph at a time; a
@@ -198,29 +250,7 @@ pub async fn spellcheck_unknown_words(
                 .lock()
                 .map_err(|_| AppError::InvalidArg("spellcheck state poisoned".into()))?;
 
-            let mut unknown = Vec::new();
-            for word in words {
-                let mut known = false;
-                for language in &languages {
-                    match guard.get_or_load(&dir, language) {
-                        Ok(dictionary) => {
-                            if dictionary.check(&word) {
-                                known = true;
-                                break;
-                            }
-                        }
-                        // A missing or corrupt dictionary must not turn every
-                        // word in the note into a misspelling.
-                        Err(err) => {
-                            log::warn!("[spellcheck] {language} unavailable: {err}");
-                        }
-                    }
-                }
-                if !known {
-                    unknown.push(word);
-                }
-            }
-            Ok(unknown)
+            Ok(unknown_words(&mut guard, &dir, &languages, words))
         }
     })
     .await
@@ -410,6 +440,69 @@ mod tests {
 
         let found = installed_dictionaries(&dir).unwrap();
         assert_eq!(found[0].bytes, expected);
+    }
+
+    #[test]
+    fn says_nothing_is_unknown_when_no_dictionary_could_be_loaded() {
+        // The state every device starts in: a language is selected (en_US is
+        // the default) but nothing has been downloaded yet. Reported as a
+        // misspelling per word, this underlines every word in the note.
+        let dir = tempdir("no-dictionary");
+        let mut resident = Resident::default();
+
+        let unknown = unknown_words(
+            &mut resident,
+            &dir,
+            &["en_US".to_string()],
+            vec!["are".into(), "here".into(), "teh".into()],
+        );
+
+        assert!(unknown.is_empty(), "got {unknown:?}");
+    }
+
+    #[test]
+    fn says_nothing_is_unknown_when_no_language_is_selected() {
+        let dir = tempdir("no-language");
+        write_pair(&dir, "en_US", "haus");
+        let mut resident = Resident::default();
+
+        let unknown = unknown_words(&mut resident, &dir, &[], vec!["are".into()]);
+
+        assert!(unknown.is_empty(), "got {unknown:?}");
+    }
+
+    #[test]
+    fn reports_only_the_words_a_loaded_dictionary_rejects() {
+        let dir = tempdir("loaded");
+        write_pair(&dir, "en_US", "haus");
+        let mut resident = Resident::default();
+
+        let unknown = unknown_words(
+            &mut resident,
+            &dir,
+            &["en_US".to_string()],
+            vec!["haus".into(), "teh".into()],
+        );
+
+        assert_eq!(unknown, ["teh"]);
+    }
+
+    #[test]
+    fn a_missing_dictionary_does_not_veto_one_that_loaded() {
+        // Multi-dictionary rule: a word is correct if ANY enabled dictionary
+        // knows it, and a language that failed to load simply has no vote.
+        let dir = tempdir("one-of-two");
+        write_pair(&dir, "en_US", "haus");
+        let mut resident = Resident::default();
+
+        let unknown = unknown_words(
+            &mut resident,
+            &dir,
+            &["en_US".to_string(), "de_DE_frami".to_string()],
+            vec!["haus".into(), "teh".into()],
+        );
+
+        assert_eq!(unknown, ["teh"]);
     }
 
     #[test]
