@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Suggestions for a right-clicked diagnostic.
+   * Suggestions for a diagnostic the user right-clicked or long-pressed.
    *
    * This is the ONLY way to reach spelling corrections in the app, which is
    * why it is a real component rather than a reliance on the native menu:
@@ -54,23 +54,46 @@
     expanded = false;
   });
 
+  /** Breathing room between the flagged word and the menu. */
+  const GAP = 6;
+  /** And between the menu and the edge of the window. */
+  const MARGIN = 8;
+
   /**
-   * Keep the menu inside the viewport. A misspelling near the right or
-   * bottom edge is common (it is where a line ends), so a menu that simply
-   * anchors at the click point would routinely be clipped.
+   * Open beside the flagged word, never over it, and stay in the viewport.
+   *
+   * Below the word is the default because that is where a menu is expected
+   * and where the finger is not. It flips above when there is no room below
+   * — a misspelling near the bottom edge is common, since that is where a
+   * note in progress ends, and on a phone the keyboard takes the bottom half
+   * of the window as soon as the editor has focus.
    */
   const position = $derived.by(() => {
     if (!open) return { left: 0, top: 0 };
     // Rough bounds, matching the container's max-width and a menu with a
     // wrapped two-line message plus a full suggestion list. Over-estimating
-    // costs a little unnecessary shifting; under-estimating clips the menu
-    // against the bottom of the window, which is where misspellings at the
-    // end of a note put it.
+    // only makes it flip above sooner than it strictly had to, and both
+    // sides keep the word visible; under-estimating would clip the menu.
     const width = 288;
     const height = 320;
+    const { left, top, bottom } = open.anchor;
+
+    const roomBelow = window.innerHeight - bottom - GAP - MARGIN;
+    const roomAbove = top - GAP - MARGIN;
+    // Prefer below; take above only when it actually fits, or when neither
+    // does and it is the roomier of the two.
+    const below = roomBelow >= height || roomBelow >= roomAbove;
+    const wanted = below ? bottom + GAP : top - GAP - height;
+
     return {
-      left: Math.min(open.x, Math.max(8, window.innerWidth - width - 8)),
-      top: Math.min(open.y, Math.max(8, window.innerHeight - height - 8))
+      left: Math.min(
+        Math.max(MARGIN, left),
+        Math.max(MARGIN, window.innerWidth - width - MARGIN)
+      ),
+      top: Math.min(
+        Math.max(MARGIN, wanted),
+        Math.max(MARGIN, window.innerHeight - height - MARGIN)
+      )
     };
   });
 
