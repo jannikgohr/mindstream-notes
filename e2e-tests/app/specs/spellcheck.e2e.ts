@@ -150,7 +150,9 @@ async function dictionaryRow(label: string): Promise<string> {
 
 async function openSpellingSettings(): Promise<void> {
   await clickName('Open settings');
-  await clickName('Editor');
+  // Spelling lives under Language, not Editor: it configures which languages
+  // the vault is written in, and the Editor category was already full.
+  await clickName('Language');
   await expect(byName('Check spelling')).toBeDisplayed();
 }
 

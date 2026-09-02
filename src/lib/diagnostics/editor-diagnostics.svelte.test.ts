@@ -109,8 +109,8 @@ function stubProvider(
 
 beforeEach(() => {
   settings.values = new Map<string, unknown>([
-    ['editor.spellcheck.enabled', true],
-    ['editor.spellcheck.languages', ['de_DE_frami']]
+    ['language.spellcheck.enabled', true],
+    ['language.spellcheck.languages', ['de_DE_frami']]
   ]);
   settings.get.mockClear();
   custom.isCustomWord.mockReturnValue(false);
@@ -119,13 +119,13 @@ beforeEach(() => {
 
 describe('spellcheck settings readers', () => {
   it('defaults to enabled when the setting is unset', async () => {
-    settings.values.delete('editor.spellcheck.enabled');
+    settings.values.delete('language.spellcheck.enabled');
     const mod = await load();
     expect(mod.spellcheckEnabled()).toBe(true);
   });
 
   it('reads the stored enabled flag', async () => {
-    settings.values.set('editor.spellcheck.enabled', false);
+    settings.values.set('language.spellcheck.enabled', false);
     const mod = await load();
     expect(mod.spellcheckEnabled()).toBe(false);
   });
@@ -134,7 +134,7 @@ describe('spellcheck settings readers', () => {
     const mod = await load();
     expect(mod.spellcheckLanguages()).toEqual(['de_DE_frami']);
 
-    settings.values.set('editor.spellcheck.languages', 'de_DE_frami');
+    settings.values.set('language.spellcheck.languages', 'de_DE_frami');
     expect(mod.spellcheckLanguages()).toEqual([]);
   });
 });
@@ -151,7 +151,7 @@ describe('checkSegments', () => {
         from: 0,
         to: 3,
         kind: 'spelling',
-        message: 'editor.spellcheck.unknownWord',
+        message: 'language.spellcheck.unknownWord',
         replacements: [],
         source: 'spellcheck'
       }
@@ -168,7 +168,7 @@ describe('checkSegments', () => {
   });
 
   it('reports nothing when spellcheck is off', async () => {
-    settings.values.set('editor.spellcheck.enabled', false);
+    settings.values.set('language.spellcheck.enabled', false);
     const mod = await load();
     expect(
       await mod.checkSegments([segment('teh')], new AbortController().signal)
@@ -177,7 +177,7 @@ describe('checkSegments', () => {
   });
 
   it('reports nothing when no language is selected', async () => {
-    settings.values.set('editor.spellcheck.languages', []);
+    settings.values.set('language.spellcheck.languages', []);
     const mod = await load();
     expect(
       await mod.checkSegments([segment('teh')], new AbortController().signal)
@@ -314,7 +314,7 @@ describe('reloadSpellcheckConfig', () => {
   });
 
   it('skips the word-chars call when no language is selected', async () => {
-    settings.values.set('editor.spellcheck.languages', []);
+    settings.values.set('language.spellcheck.languages', []);
     const mod = await load();
     await mod.reloadSpellcheckConfig();
     expect(api.available).toHaveBeenCalled();
@@ -366,7 +366,7 @@ describe('startSpellcheckSettingsWatcher', () => {
     await started();
     const recheck = listen();
 
-    setSetting('editor.spellcheck.languages', ['en_US']);
+    setSetting('language.spellcheck.languages', ['en_US']);
     flushSync();
 
     await vi.waitFor(() => expect(recheck).toHaveBeenCalledTimes(1));
@@ -379,7 +379,7 @@ describe('startSpellcheckSettingsWatcher', () => {
     await started();
     const recheck = listen();
 
-    setSetting('editor.spellcheck.enabled', false);
+    setSetting('language.spellcheck.enabled', false);
     flushSync();
 
     await vi.waitFor(() => expect(recheck).toHaveBeenCalledTimes(1));
@@ -405,7 +405,7 @@ describe('startSpellcheckSettingsWatcher', () => {
     stopWatcher?.();
     stopWatcher = null;
 
-    setSetting('editor.spellcheck.languages', ['en_US']);
+    setSetting('language.spellcheck.languages', ['en_US']);
     flushSync();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -426,7 +426,7 @@ describe('selectedLanguageTags', () => {
   });
 
   it('drops selections the catalogue does not know', async () => {
-    settings.values.set('editor.spellcheck.languages', [
+    settings.values.set('language.spellcheck.languages', [
       'de_DE_frami',
       'xx_ZZ'
     ]);
@@ -444,7 +444,7 @@ describe('suggestFor', () => {
   });
 
   it('suggests nothing when no language is selected', async () => {
-    settings.values.set('editor.spellcheck.languages', []);
+    settings.values.set('language.spellcheck.languages', []);
     const mod = await load();
     await expect(mod.suggestFor('teh')).resolves.toEqual([]);
     expect(api.suggest).not.toHaveBeenCalled();
