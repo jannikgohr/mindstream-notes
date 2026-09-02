@@ -178,6 +178,7 @@
   import { createPageRenderer } from '$lib/pdf/page-render';
   import { createViewerZoom } from '$lib/pdf/viewer-zoom';
   import { alert } from './confirm-dialog.svelte';
+  import { toErrorMessage } from '$lib/api/errors';
 
   interface Props {
     noteId: string;
@@ -1311,7 +1312,7 @@
       console.error('[PdfNoteViewer] export failed', err);
       await alert({
         title: 'Annotated PDF export failed',
-        message: err instanceof Error ? err.message : String(err)
+        message: toErrorMessage(err)
       });
     }
   }
@@ -1938,7 +1939,7 @@
         void setupCollabProvider();
       });
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = toErrorMessage(err);
       loading = false;
     }
   });

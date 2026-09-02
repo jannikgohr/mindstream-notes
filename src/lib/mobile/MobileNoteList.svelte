@@ -52,6 +52,7 @@
   import { alert, confirm } from '$lib/components/confirm-dialog.svelte';
   import MoveToSheet, { type MoveTarget } from './MoveToSheet.svelte';
   import NameInputSheet from './NameInputSheet.svelte';
+  import { toErrorMessage } from '$lib/api/errors';
   import {
     clearMobileBatchSelection,
     isFavourite,
@@ -459,7 +460,7 @@
       console.error('[mobile] empty trash failed', err);
       await alert({
         title: "Couldn't empty Trash",
-        message: String(err)
+        message: toErrorMessage(err)
       });
     } finally {
       emptyTrashPending = false;

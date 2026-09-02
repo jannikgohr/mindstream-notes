@@ -98,6 +98,7 @@
     type SelectionKey,
     type TreeItemRef
   } from './file-explorer-helpers';
+  import { toErrorMessage } from '$lib/api/errors';
 
   interface Props {
     source?: DesktopNoteSource;
@@ -418,7 +419,7 @@
       console.error('[FileExplorer] note export failed', id, err);
       await alert({
         title: `${label} export failed`,
-        message: err instanceof Error ? err.message : String(err)
+        message: toErrorMessage(err)
       });
     }
   }

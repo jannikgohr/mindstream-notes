@@ -30,6 +30,7 @@ import {
   showRestoreReadyResult
 } from '$lib/components/export-result-dialog.svelte';
 import { tUi } from '../i18n.svelte';
+import { toErrorMessage } from '$lib/api/errors';
 
 export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
   'open-data-folder': async () => {
@@ -41,7 +42,7 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
         title: tUi('data.openFolder.failed.title'),
         message: tUi('data.openFolder.failed.message').replace(
           '{error}',
-          String(err)
+          toErrorMessage(err)
         )
       });
     }
@@ -60,7 +61,7 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
         title: tUi('data.emptyTrash.failed.title'),
         message: tUi('data.emptyTrash.failed.message').replace(
           '{error}',
-          String(err)
+          toErrorMessage(err)
         )
       });
       return;
@@ -92,7 +93,7 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
         title: tUi('data.emptyTrash.failed.title'),
         message: tUi('data.emptyTrash.failed.message').replace(
           '{error}',
-          String(err)
+          toErrorMessage(err)
         )
       });
     }
@@ -111,7 +112,7 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
         title: tUi('data.backupNow.failed.title'),
         message: tUi('data.backupNow.failed.message').replace(
           '{error}',
-          String(err)
+          toErrorMessage(err)
         )
       });
     }
@@ -126,7 +127,7 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
         title: tUi('data.exportVault.failed.title'),
         message: tUi('data.exportVault.failed.message').replace(
           '{error}',
-          String(err)
+          toErrorMessage(err)
         )
       });
       return;
@@ -148,7 +149,7 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
         title: tUi('data.exportVault.failed.title'),
         message: tUi('data.exportVault.failed.message').replace(
           '{error}',
-          String(err)
+          toErrorMessage(err)
         )
       });
     }
@@ -171,7 +172,7 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
         title: tUi('data.import.failed.title'),
         message: tUi('data.import.failed.message').replace(
           '{error}',
-          String(err)
+          toErrorMessage(err)
         )
       });
       return;
@@ -198,7 +199,7 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
           title: tUi('data.import.failed.title'),
           message: tUi('data.import.failed.message').replace(
             '{error}',
-            String(err)
+            toErrorMessage(err)
           )
         });
       }
@@ -234,7 +235,7 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
         title: tUi('data.import.failed.title'),
         message: tUi('data.import.failed.message').replace(
           '{error}',
-          String(err)
+          toErrorMessage(err)
         )
       });
     }
