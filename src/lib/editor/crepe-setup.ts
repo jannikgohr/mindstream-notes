@@ -59,6 +59,11 @@ export interface CrepeSetupOptions {
    * Mobile gets a different feature set:
    *   - BlockEdit is off (block-handle is a hover affordance + the slash
    *     menu is awkward on a soft keyboard).
+   *   - Toolbar is off. Selecting text on a touch device should surface
+   *     the webview's own cut/copy/paste menu; Crepe's floating toolbar
+   *     covers the selection and pre-empts it. Formatting is not lost —
+   *     `MobileEditorToolbar` already sits above the keyboard with the
+   *     same commands.
    * The host should also carry the `.mobile-editor` CSS class so the 90px
    * ProseMirror side padding (left intentionally for the desktop block
    * handle) gets zeroed.
@@ -147,7 +152,10 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
   installSelectionToolbarAutoHide(opts.host);
 
   const features: Partial<Record<CrepeFeature, boolean>> = {};
-  if (opts.mobile) features[Crepe.Feature.BlockEdit] = false;
+  if (opts.mobile) {
+    features[Crepe.Feature.BlockEdit] = false;
+    features[Crepe.Feature.Toolbar] = false;
+  }
   if (!opts.mathEnabled) features[Crepe.Feature.Latex] = false;
 
   const imageBlockConfig = {
