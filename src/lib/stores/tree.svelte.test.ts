@@ -67,6 +67,7 @@ import {
   emptyTrash,
   importPdfIn,
   leaveSharedCollection,
+  loadTree,
   moveManyTo,
   moveCollectionTo,
   moveNoteTo,
@@ -393,5 +394,34 @@ describe('emptyTrash', () => {
     const counts = await emptyTrash();
     expect(emptyTrashCmdMock).toHaveBeenCalled();
     expect(counts).toEqual({ notes: 2, folders: 1 });
+  });
+});
+
+describe('loadTree error surfacing', () => {
+  it('shows the message from a Tauri CommandError rejection', async () => {
+    // Tauri rejects commands with a serialized CommandError — a plain
+    // { code, message } object, not an Error. The old
+    // `err instanceof Error ? err.message : String(err)` fell through to
+    // String(err) and put "[object Object]" on screen; toErrorMessage is
+    // what stops that.
+    loadTreeMock.mockRejectedValueOnce({
+      code: 'invalidArgument',
+      message: 'sync session could not be renewed automatically'
+    });
+
+    await loadTree();
+
+    expect(tree.error).toBe('sync session could not be renewed automatically');
+    expect(tree.error).not.toBe('[object Object]');
+  });
+
+  it('still reads plain Errors and clears on the next success', async () => {
+    loadTreeMock.mockRejectedValueOnce(new Error('offline'));
+    await loadTree();
+    expect(tree.error).toBe('offline');
+
+    await loadTree();
+    expect(tree.error).toBeNull();
+    expect(tree.ready).toBe(true);
   });
 });
