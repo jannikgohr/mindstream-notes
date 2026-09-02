@@ -111,6 +111,7 @@
   import ViewOnlyBanner from './note-editor/ViewOnlyBanner.svelte';
   import WikilinkMenu from './note-editor/WikilinkMenu.svelte';
   import UserMentionMenu from './note-editor/UserMentionMenu.svelte';
+  import { toErrorMessage } from '$lib/api/errors';
 
   interface Props {
     noteId: string;
@@ -795,7 +796,7 @@
       // the session dirty — it's the loaded state, not a user edit.
       void captureHistoryVersion('edited');
     } catch (err) {
-      loadError = err instanceof Error ? err.message : String(err);
+      loadError = toErrorMessage(err);
       loading = false;
       console.error('[NoteEditor] load failed', err);
     }

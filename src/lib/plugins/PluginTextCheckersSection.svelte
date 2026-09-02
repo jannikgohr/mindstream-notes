@@ -32,6 +32,7 @@
   import { resolvePluginStringOptional } from '$lib/plugins/plugin-i18n';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { toErrorMessage } from '$lib/api/errors';
 
   interface Props {
     pluginId: string;
@@ -102,7 +103,7 @@
     } catch (err) {
       rows = {
         ...rows,
-        [checkerId]: { state: 'failed', detail: String(err) }
+        [checkerId]: { state: 'failed', detail: toErrorMessage(err) }
       };
     }
   }

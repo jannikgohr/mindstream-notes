@@ -21,6 +21,7 @@
   } from './share-dialog.svelte';
   import { confirm } from './confirm-dialog.svelte';
   import { pushToast } from './toast.svelte';
+  import { toErrorMessage } from '$lib/api/errors';
 
   let members = $state<CollectionMember[]>([]);
   let shareState = $state<CollectionShareState | null>(null);
@@ -71,7 +72,7 @@
       shareState = state;
       members = list;
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = toErrorMessage(err);
     } finally {
       loading = false;
     }
