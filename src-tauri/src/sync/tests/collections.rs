@@ -47,6 +47,51 @@ fn is_bad_stoken_error_rejects_unrelated_errors() {
 }
 
 #[test]
+fn is_auth_error_matches_the_servers_401_detail() {
+    // Verbatim from an Android device whose stored token the server no
+    // longer recognised. etebase-rs maps 401 to `Error::Unauthorized`,
+    // whose Display is the bare DRF detail — so the wrapped message has
+    // no HTTP status or code in it at all, unlike the bad_stoken case.
+    let folders = AppError::InvalidArg("list mindstream.folders: Invalid token.".into());
+    let notes = AppError::InvalidArg("list mindstream.notes: Invalid token.".into());
+    // DRF's other token-auth rejection, for a disabled account.
+    let inactive = AppError::InvalidArg("list folders: User inactive or deleted.".into());
+    assert!(is_auth_error(&folders));
+    assert!(is_auth_error(&notes));
+    assert!(is_auth_error(&inactive));
+}
+
+#[test]
+fn is_auth_error_rejects_unrelated_errors() {
+    // A dead token is not self-healing: it makes us tell the user to
+    // sign in again. Misfiring on a transient failure would send them
+    // through a needless re-login, so keep the match narrow.
+    let bad_stoken = AppError::InvalidArg(
+        "list folders: HTTP error 400! Code: 'bad_stoken'. Detail: 'Invalid stoken.'".into(),
+    );
+    let offline = AppError::InvalidArg("list folders: connection refused".into());
+    let not_found = AppError::InvalidArg("list notes: Collection not found.".into());
+    assert!(!is_auth_error(&bad_stoken));
+    assert!(!is_auth_error(&offline));
+    assert!(!is_auth_error(&not_found));
+}
+
+#[test]
+fn describe_run_error_replaces_the_opaque_401_detail() {
+    // The whole point: "Invalid token." tells the user nothing, so the
+    // IPC boundary must carry the actionable wording instead. Other
+    // failures pass through untouched.
+    let expired = describe_run_error(AppError::InvalidArg(
+        "list mindstream.folders: Invalid token.".into(),
+    ));
+    assert_eq!(expired, SESSION_EXPIRED_MESSAGE);
+    assert!(!expired.contains("Invalid token"));
+
+    let other = describe_run_error(AppError::InvalidArg("list folders: timed out".into()));
+    assert_eq!(other, "invalid argument: list folders: timed out");
+}
+
+#[test]
 fn usable_vault_collection_rejects_read_only_and_scope_parts() {
     let mut scope_parts = HashSet::new();
     scope_parts.insert("scope_folders".to_string());

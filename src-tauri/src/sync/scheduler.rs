@@ -149,7 +149,7 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
                 .flatten()
                 .map(|info| info.username);
             let db = app_for_blocking.state::<Db>();
-            run(&db, &account, self_username.as_deref()).map_err(|e| e.to_string())
+            run(&db, &account, self_username.as_deref()).map_err(super::describe_run_error)
         })
     })
     .await

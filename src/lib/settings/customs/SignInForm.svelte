@@ -32,6 +32,7 @@
     type ServerType
   } from '$lib/api/auth.svelte';
   import { type SyncReport } from '$lib/api/sync';
+  import { toErrorMessage } from '$lib/api/errors';
   import { normalizeServerUrl } from '$lib/api/server-urls';
   import { upsertNotification } from '$lib/notifications/store.svelte';
   import { runSync } from '$lib/sync/runner';
@@ -129,7 +130,7 @@
         }
       }
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = toErrorMessage(err);
     } finally {
       busy = false;
     }
@@ -152,7 +153,7 @@
       });
       lastReport = null;
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = toErrorMessage(err);
     } finally {
       busy = false;
     }
@@ -165,7 +166,7 @@
     try {
       lastReport = await runSync();
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = toErrorMessage(err);
     } finally {
       syncing = false;
     }
@@ -222,7 +223,7 @@
         : `Health check returned HTTP ${result.status} at ${result.url}`;
     } catch (err) {
       checkUrlStatus = null;
-      error = err instanceof Error ? err.message : String(err);
+      error = toErrorMessage(err);
     } finally {
       checkingUrl = false;
     }

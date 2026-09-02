@@ -142,6 +142,53 @@ fn is_bad_stoken_error(err: &AppError) -> bool {
     )
 }
 
+/// Message surfaced when the server rejects our stored credentials.
+/// Etebase tokens don't expire on a clock and there is no refresh
+/// endpoint — once the server forgets a token, only a fresh login
+/// restores syncing, so say that instead of echoing the server's
+/// opaque "Invalid token." detail.
+///
+/// Deliberately stops short of telling the user to hit "Log out":
+/// [`crate::auth::reset_sync_cursors`] runs on logout and strips every
+/// `etebase_uid`, so signing back into the *same* account re-pushes the
+/// whole vault as new items and duplicates it server-side. Naming the
+/// condition lets the user pick a recovery; prescribing the button
+/// would walk them into that trap.
+const SESSION_EXPIRED_MESSAGE: &str =
+    "sync session expired — this device needs to sign in again to reconnect";
+
+/// True for the `401` etebase returns when the stored session token is
+/// no longer recognised by the server — the account was logged out
+/// elsewhere, the password changed, or the server's DB was rebuilt.
+/// The SDK maps that response to `Error::Unauthorized(detail)` whose
+/// `Display` is the bare DRF detail, so the wrapped message reads:
+///
+///   list mindstream.folders: Invalid token.
+///
+/// Unlike [`is_bad_stoken_error`] this is not self-healing: every
+/// subsequent request fails the same way until the user re-authenticates.
+fn is_auth_error(err: &AppError) -> bool {
+    matches!(
+        err,
+        AppError::InvalidArg(message)
+            if message.contains("Invalid token")
+                || message.contains("User inactive or deleted")
+    )
+}
+
+/// Stringify a [`run`] failure for the IPC boundary, translating the
+/// server's opaque 401 detail into something the user can act on.
+/// Shared by the manual `sync_now` command and the scheduler tick so
+/// both report an expired session identically.
+pub(crate) fn describe_run_error(err: AppError) -> String {
+    if is_auth_error(&err) {
+        log::warn!("[sync] server rejected the stored session token: {err}");
+        SESSION_EXPIRED_MESSAGE.to_string()
+    } else {
+        err.to_string()
+    }
+}
+
 fn load_share_scope_part_uids(cm: &CollectionManager) -> HashSet<String> {
     let list = match cm.list(COLLECTION_TYPE_SHARE_MANIFEST, None) {
         Ok(list) => list,
@@ -340,7 +387,7 @@ pub async fn sync_now(app: AppHandle) -> CommandResult<SyncReport> {
                 .flatten()
                 .map(|info| info.username);
             let db = app_for_blocking.state::<Db>();
-            run(&db, &account, self_username.as_deref()).map_err(|e| e.to_string())
+            run(&db, &account, self_username.as_deref()).map_err(describe_run_error)
         })
     })
     .await
