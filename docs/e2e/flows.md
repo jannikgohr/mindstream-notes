@@ -15,8 +15,10 @@ categories that justify an end-to-end test rather than a unit test.
 > **See also:** [strategy.md](strategy.md) for the test tiers, [harness.md](harness.md)
 > and [backend-stack.md](backend-stack.md) for _how_ to run these against a real
 > Tauri backend and the mindstream-server stack, [status.md](status.md) for what's
-> implemented, and [known-limitations.md](../known-limitations.md) for the
-> by-design behaviours several of these flows are meant to pin down.
+> implemented, [backlog.md](backlog.md) for flows queued but not yet written
+> (§6 account/token lifecycle, §7 Android), and
+> [known-limitations.md](../known-limitations.md) for the by-design behaviours
+> several of these flows are meant to pin down.
 
 The existing `e2e-tests/browser/` Playwright suite runs the SvelteKit SPA in
 **browser-fallback mode** (the in-memory mock store backs every API call), so
