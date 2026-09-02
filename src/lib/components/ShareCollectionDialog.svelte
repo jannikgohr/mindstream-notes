@@ -16,6 +16,7 @@
   } from './share-dialog.svelte';
   import { parseRecipients } from './share-recipients';
   import { pushToast } from './toast.svelte';
+  import { toErrorMessage } from '$lib/api/errors';
 
   interface InviteFailure {
     username: string;
@@ -76,7 +77,7 @@
       } catch (err) {
         failed.push({
           username: recipient,
-          reason: err instanceof Error ? err.message : String(err)
+          reason: toErrorMessage(err)
         });
       }
     }

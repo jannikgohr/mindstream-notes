@@ -21,6 +21,7 @@ import type {
 import { TRASH_ID } from '$lib/api';
 import { runSync } from '$lib/sync/runner';
 import { extractPdfText } from '$lib/pdf/extract-text';
+import { toErrorMessage } from '$lib/api/errors';
 
 interface TreeState {
   tree: TreeNode[];
@@ -64,7 +65,7 @@ async function doLoadTree(): Promise<void> {
     tree.notesById = result.notesById;
     tree.collectionsById = result.collectionsById;
   } catch (err) {
-    tree.error = err instanceof Error ? err.message : String(err);
+    tree.error = toErrorMessage(err);
     console.error('[tree] loadTree failed', err);
   } finally {
     // `ready` means "a load attempt has completed", not "succeeded" — so a

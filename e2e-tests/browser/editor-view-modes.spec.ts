@@ -44,7 +44,13 @@ function wysiwygPane(page: Page): Locator {
 
 async function boot(page: Page) {
   await page.goto('/');
-  const welcome = page.getByRole('button', { name: 'Welcome' });
+  // Scoped rather than exact: on a phone the note list is the whole screen
+  // and its rows carry more than the title, while on the desktop a bare
+  // "Welcome" match would also hit the tab's "Close Welcome" action.
+  const welcome = page
+    .locator('.mobile-note-list, [role="group"][aria-label="File tree"]')
+    .getByRole('button', { name: /Welcome/ })
+    .first();
   await expect(welcome).toBeVisible();
   // Narrow layouts (phone, small window) open on the note LIST — the editor
   // mounts only once a note is picked. Wide layouts restore the Welcome note

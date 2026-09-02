@@ -11,7 +11,9 @@ import { revealFileTreeCreateAction } from './file-tree-toolbar';
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
   // Wait for the SPA to hydrate the seeded tree.
-  await expect(page.getByRole('button', { name: 'Welcome' })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Welcome', exact: true })
+  ).toBeVisible();
 });
 
 test('renders the app shell with seeded content', async ({ page }) => {

@@ -16,7 +16,9 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 
 async function boot(page: Page) {
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'Welcome' })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Welcome', exact: true })
+  ).toBeVisible();
 }
 
 function fileTree(page: Page): Locator {

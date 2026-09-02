@@ -447,6 +447,29 @@ describe('checkAll', () => {
     expect(seen).toEqual([{ state: 'failed', detail: 'checker returned 500' }]);
   });
 
+  it('reports a Tauri CommandError rejection by its message', async () => {
+    // `check` is wired to the `text_checker_check` command, so a real
+    // failure arrives as a serialized CommandError — a plain
+    // { code, message } object rather than an Error. Reporting it with
+    // String(err) would put "[object Object]" in the status row.
+    const seen: { state: string; detail?: string }[] = [];
+    const p = createHttpCheckerProvider({
+      id: 'lt',
+      kinds: ['grammar'],
+      categoryKinds: KINDS,
+      config: () => CONFIG,
+      check: async () => {
+        throw { code: 'invalidArgument', message: 'checker endpoint refused' };
+      },
+      onStatus: (state, detail) => seen.push({ state, detail })
+    });
+
+    await expect(p.checkAll!([seg('one', 0)], ctx)).rejects.toBeTruthy();
+    expect(seen).toEqual([
+      { state: 'failed', detail: 'checker endpoint refused' }
+    ]);
+  });
+
   it('drops a spelling finding on a word the user accepted', async () => {
     // A remote API has no per-request word list, so the personal dictionary
     // has to be applied to what comes back.

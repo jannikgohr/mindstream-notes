@@ -5,6 +5,10 @@ asserts today, and what's still stubbed. The flow catalogue is [flows.md](flows.
 this is the state of its implementation. **Skips are environment gates, not
 hidden passing coverage** — a run's pass count reflects implemented scenarios.
 
+Tests we know we want but haven't written — the account/token-lifecycle flows
+(§6) and the missing Android tier (§7) — are queued in
+[backlog.md](backlog.md), together with the harness work each needs first.
+
 ## What's landed
 
 | Spec                          | Tier | Covers                                                                                        |

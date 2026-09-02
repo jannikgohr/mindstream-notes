@@ -16,6 +16,7 @@
     AppNotification,
     CollaborationInviteNotificationData
   } from './types';
+  import { toErrorMessage } from '$lib/api/errors';
 
   interface Props {
     notification: AppNotification<CollaborationInviteNotificationData>;
@@ -45,7 +46,7 @@
       void scanForCollectionInviteNotifications();
       onClose?.();
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = toErrorMessage(err);
     } finally {
       pending = false;
     }
@@ -60,7 +61,7 @@
       dismissNotification(notification.id);
       void scanForCollectionInviteNotifications();
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = toErrorMessage(err);
     } finally {
       pending = false;
     }

@@ -82,6 +82,7 @@
     readSceneFromYDoc,
     replaceSceneInYDoc
   } from '$lib/freeform/excalidraw-yjs';
+  import { toErrorMessage } from '$lib/api/errors';
 
   interface Props {
     noteId: string;
@@ -376,7 +377,7 @@
         snapshotNow: () => historyCapture.snapshotNow()
       });
     } catch (err) {
-      loadError = err instanceof Error ? err.message : String(err);
+      loadError = toErrorMessage(err);
       loading = false;
       console.error('[FreeformNoteEditor] load failed', err);
     }

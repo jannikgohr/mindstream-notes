@@ -67,7 +67,8 @@ export {
 export {
   addMermaidMenuItem,
   mermaidLanguageDescription,
-  renderMermaidPreview
+  renderMermaidPreview,
+  type SlashMenuBuilder
 } from './prose/mermaid';
 export { resolveNoteIdByTitle, wikilinkPlugins } from './prose/wikilink';
 export {

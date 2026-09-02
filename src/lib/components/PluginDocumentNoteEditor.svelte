@@ -66,6 +66,7 @@
     type EditorListener
   } from '$lib/hotkeys/bus.svelte';
   import PluginSourceToolbar from './PluginSourceToolbar.svelte';
+  import { toErrorMessage } from '$lib/api/errors';
 
   interface Props {
     noteId: string;
@@ -658,7 +659,7 @@
         scheduleRender(0);
       } catch (err) {
         if (destroyed || token !== webviewLoadToken) return;
-        renderError = err instanceof Error ? err.message : String(err);
+        renderError = toErrorMessage(err);
       }
     })();
   });
@@ -796,26 +797,6 @@
     } finally {
       if (!destroyed && token === renderToken) rendering = false;
     }
-  }
-
-  /**
-   * Extract a human message from anything thrown. Tauri command rejections are
-   * structured objects (`{ code, message }`), not `Error`s — `String(err)` on
-   * those yields the useless "[object Object]", so pull `.message` first.
-   */
-  function toErrorMessage(err: unknown): string {
-    if (err instanceof Error) return err.message;
-    if (typeof err === 'string') return err;
-    if (err && typeof err === 'object') {
-      const rec = err as Record<string, unknown>;
-      if (typeof rec.message === 'string') return rec.message;
-      try {
-        return JSON.stringify(err);
-      } catch {
-        return String(err);
-      }
-    }
-    return String(err);
   }
 
   async function loadWebviewArtifacts(

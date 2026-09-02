@@ -1,7 +1,7 @@
 @import 'tailwindcss';
 @import '@milkdown/crepe/theme/common/style.css';
 @import '@milkdown/crepe/theme/frame.css';
-@import 'dockview-core/dist/styles/dockview.css';
+@import 'dockview/dist/styles/dockview.css';
 
 /* ===========================================================================
  * Design tokens. See docs/theming.md for the rules that govern this file.
@@ -419,8 +419,13 @@ body {
 /* dockview theme bridge — map dockview's CSS vars onto our shadcn palette
  * so tabs and panel chrome adopt the active theme. */
 .dockview-theme-bridge {
-  --dv-background-color: var(--background);
+  /* v7 renamed the panel-body background var; the old --dv-background-color
+   * is no longer read by dockview's stylesheet. */
+  --dv-group-view-background-color: var(--background);
   --dv-paneview-active-outline-color: var(--ring);
+  /* Floating groups are enabled, so their titlebar is ours to theme; v6 had
+   * no variable for it. */
+  --dv-floating-titlebar-background-color: var(--surface-0);
   /* The strip is window chrome, so it sits at the bottom of the elevation
    * scale and the active tab pill (surface-1, the panel it reveals) comes
    * forward out of it — the same relationship Chrome uses. */
@@ -837,6 +842,25 @@ body.dv-tab-dragging
 
 .milkdown {
   padding: 1.25rem 5px;
+}
+
+/* Body-level layer that hosts Crepe's slash menu (see
+ * $lib/editor/floating-portal.ts). It carries `.milkdown` so the menu keeps
+ * Crepe's styling and our --crepe-color-* mapping, which means it also
+ * inherits the editor padding and min-height above — neither of which
+ * belongs on a full-viewport overlay. It sits above the editor and its
+ * decorations (z-index 20) and below dialogs, and passes clicks through
+ * everywhere except on the menu itself. */
+.milkdown-floating-portal {
+  position: fixed;
+  inset: 0;
+  padding: 0;
+  min-height: 0;
+  z-index: 30;
+  pointer-events: none;
+}
+.milkdown-floating-portal > * {
+  pointer-events: auto;
 }
 
 /* Appearance → Typography: editor body text size + line height.

@@ -30,6 +30,7 @@
   import type { Profile } from '$lib/api/profiles';
   import { profilesState, loadProfiles } from '$lib/stores/profiles.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { toErrorMessage } from '$lib/api/errors';
 
   let { open = false, onClose }: { open?: boolean; onClose: () => void } =
     $props();
@@ -100,7 +101,7 @@
         title: tUi('vault.switch.failed.title'),
         message: tUi('vault.switch.failed.message').replace(
           '{error}',
-          String(err)
+          toErrorMessage(err)
         )
       });
     } finally {
@@ -144,7 +145,7 @@
         title: tUi('vault.rename.failed.title'),
         message: tUi('vault.rename.failed.message').replace(
           '{error}',
-          String(err)
+          toErrorMessage(err)
         )
       });
     } finally {
@@ -185,7 +186,7 @@
         title: tUi('vault.delete.failed.title'),
         message: tUi('vault.delete.failed.message').replace(
           '{error}',
-          String(err)
+          toErrorMessage(err)
         )
       });
     } finally {
@@ -217,7 +218,7 @@
         title: tUi('vault.create.failed.title'),
         message: tUi('vault.create.failed.message').replace(
           '{error}',
-          String(err)
+          toErrorMessage(err)
         )
       });
     }
