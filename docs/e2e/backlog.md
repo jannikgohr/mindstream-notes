@@ -230,6 +230,28 @@ Each stage is independently useful; stop wherever the value runs out.
 - **Steps:** as 6.1, against a device pointed at the test stack.
 - **Proves:** refresh + persistence work through the Android keyring.
 
+### 7.5 Spellcheck on Android (P2, A2)
+
+- **Why e2e:** the mobile half of spellcheck had never run anywhere. The
+  settings were filtered to `platforms: ["desktop"]`, so the dictionary
+  installer was unreachable on a phone, and the popover is opened by a
+  long-press — a gesture no tier below this one can produce.
+- **Steps:** open Settings → Editor → Spelling → assert the section renders →
+  install `en_US` → assert it reports installed → type a misspelling →
+  long-press it → assert the popover opens BELOW the word rather than over it
+  → pick a suggestion → assert the text changed and the squiggle cleared.
+- **Proves:** the dictionary lands under `app_data_root` on Android, and the
+  correction journey works with touch instead of a right-click.
+
+**What this should NOT try to prove.** The bug that actually shipped —
+`spellcheck_unknown_words` reporting every word as unknown when no dictionary
+loaded — was not Android-specific; it hit any device with nothing installed,
+which is every device before its first download. It is covered by Rust unit
+tests on `unknown_words`, which is the right tier: it needed no webview, no
+device and no dictionary. Android surfaced it only because mobile was the one
+platform that could not reach the installer. Prefer a unit test for anything
+that can be decided without touch.
+
 ### What Android should not try to prove
 
 Per [strategy.md](strategy.md), test at the lowest tier that can prove the

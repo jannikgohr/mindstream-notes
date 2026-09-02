@@ -825,6 +825,7 @@
     "editor.spellcheck.menu.showAll": "Alle anzeigen",
     "editor.spellcheck.menu.addToDictionary": "Zum Wörterbuch hinzufügen",
     "editor.spellcheck.customWords.empty": "Noch keine Wörter hinzugefügt. Klicke mit der rechten Maustaste auf ein markiertes Wort und wähle „Zum Wörterbuch hinzufügen“.",
+    "editor.spellcheck.customWords.emptyTouch": "Noch keine Wörter hinzugefügt. Tippe lange auf ein markiertes Wort und wähle „Zum Wörterbuch hinzufügen“.",
     "editor.spellcheck.customWords.remove": "Entfernen",
     "plugins.textCheckers.title": "Textprüfer",
     "plugins.textCheckers.check": "Prüfen",

@@ -23,11 +23,53 @@ export interface DiagnosticMenuContext {
   apply: (replacement: string) => void;
 }
 
+/**
+ * Where the flagged word sits on screen, so the menu can open beside it
+ * rather than on top of it.
+ *
+ * A rect, not the pointer position: on a touch screen the gesture that opens
+ * this lands in the MIDDLE of the word, so a menu anchored at that point
+ * covers the rest of the line — including the word being corrected, which is
+ * the one thing the user needs to see while choosing a replacement. On
+ * desktop the pointer and the word are in much the same place, so anchoring
+ * to the word costs nothing there.
+ */
+export interface DiagnosticAnchor {
+  /** Left edge of the word; the menu lines up with it. */
+  left: number;
+  /** Top of the word's first line — the menu flips above this when it must. */
+  top: number;
+  /** Bottom of the word's last line — where the menu opens by default. */
+  bottom: number;
+}
+
+/**
+ * The anchor for a diagnostic the user just invoked the menu on.
+ *
+ * Read off the rendered decoration rather than recomputed from document
+ * positions: both editing surfaces tag their squiggles with the same
+ * `data-diagnostic-kind` attribute, so one lookup works for ProseMirror and
+ * CodeMirror alike, and a word wrapped across two lines gives the union of
+ * its rects — which is what "do not cover this" means for a wrapped word.
+ *
+ * Falls back to the pointer when the event did not land on a decoration,
+ * which keeps the menu somewhere sensible rather than at the origin.
+ */
+export function diagnosticAnchorFrom(event: MouseEvent): DiagnosticAnchor {
+  const target = event.target;
+  const el =
+    target instanceof Element ? target.closest('[data-diagnostic-kind]') : null;
+  const rect = el?.getBoundingClientRect();
+  if (!rect || (rect.width === 0 && rect.height === 0)) {
+    return { left: event.clientX, top: event.clientY, bottom: event.clientY };
+  }
+  return { left: rect.left, top: rect.top, bottom: rect.bottom };
+}
+
 interface OpenPopover extends DiagnosticMenuContext {
   diagnostic: Diagnostic;
-  /** Viewport coordinates of the click, for positioning. */
-  x: number;
-  y: number;
+  /** Viewport rect of the flagged word, for positioning. */
+  anchor: DiagnosticAnchor;
 }
 
 let open = $state<OpenPopover | null>(null);
