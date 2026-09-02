@@ -825,6 +825,7 @@
     "editor.spellcheck.menu.showAll": "Show all",
     "editor.spellcheck.menu.addToDictionary": "Add to dictionary",
     "editor.spellcheck.customWords.empty": "No words added yet. Right-click a flagged word and choose \"Add to dictionary\".",
+    "editor.spellcheck.customWords.emptyTouch": "No words added yet. Long-press a flagged word and choose \"Add to dictionary\".",
     "editor.spellcheck.customWords.remove": "Remove",
     "plugins.textCheckers.title": "Text checkers",
     "plugins.textCheckers.check": "Check",

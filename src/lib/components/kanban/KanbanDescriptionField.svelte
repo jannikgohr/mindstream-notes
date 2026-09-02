@@ -36,6 +36,7 @@
   } from '$lib/diagnostics/editor-diagnostics.svelte';
   import {
     closeDiagnosticPopover,
+    diagnosticAnchorFrom,
     openDiagnosticPopover,
     type DiagnosticMenuContext
   } from '$lib/diagnostics/popover-bridge.svelte';
@@ -94,7 +95,7 @@
     context: DiagnosticMenuContext
   ) {
     openDiagnosticPopover(
-      { diagnostic, x: event.clientX, y: event.clientY, ...context },
+      { diagnostic, anchor: diagnosticAnchorFrom(event), ...context },
       suggestFor
     );
   }
