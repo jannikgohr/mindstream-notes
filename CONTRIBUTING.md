@@ -103,6 +103,19 @@ pnpm test:coverage        # frontend, enforces 80%
 pnpm test:coverage:rust   # Rust, enforces 80%
 ```
 
+One Rust test asks a question the rest of the suite can't: whether the wire
+format the LanguageTool plugin's manifest describes is still the one the
+service speaks. It needs a real server, so it skips unless you name one, and
+it is never required:
+
+```sh
+MINDSTREAM_LT_ENDPOINT=http://localhost:8010 cargo test --test languagetool_contract -- --nocapture
+```
+
+Point it at whatever instance you already run. Everything else about the
+checker is tested against an in-process stub — the app's own behaviour is what
+those tests are about, and only a stub can assert what it received.
+
 ## CI
 
 Every push to `main` and every pull request runs
