@@ -5,12 +5,7 @@
  */
 
 import { expect } from '@wdio/globals';
-import {
-  byName,
-  clickElement,
-  restartApp,
-  waitForShell
-} from '../helpers/harness.js';
+import { clickElement, restartApp, waitForShell } from '../helpers/harness.js';
 
 describe('T3 settings persistence', function () {
   beforeEach(async () => {

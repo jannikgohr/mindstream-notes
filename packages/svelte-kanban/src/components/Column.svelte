@@ -38,7 +38,6 @@
     cardContent,
     cardShape,
     contentVisible,
-    requestVisible,
     virtualizeCards,
     estimatedCardHeight,
     cardOverscan,

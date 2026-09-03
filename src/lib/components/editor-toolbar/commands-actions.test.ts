@@ -90,7 +90,6 @@ function makeCtx({
       if (key === editorStateCtx) return state;
       throw new Error(`unexpected ctx key ${JSON.stringify(key)}`);
     }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
   return { ctx, call };
 }

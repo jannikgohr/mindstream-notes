@@ -286,7 +286,10 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
   // We replace it with `preserveBlankLines` below, which carries the same
   // information symmetrically in the blank lines themselves (k empty
   // paragraphs <-> k + 1 blank lines) instead of smuggling HTML into the doc.
-  crepe.editor.remove(remarkPreserveEmptyLinePlugin);
+  // `remove` is async in Milkdown. `buildCrepe` is sync and the editor isn't
+  // created until `.create()` runs later, so the removal is queued rather
+  // than raced — but mark the discard so it isn't mistaken for a sync call.
+  void crepe.editor.remove(remarkPreserveEmptyLinePlugin);
   crepe.editor.use(preserveBlankLines);
 
   // Pasting something copied out of a ProseMirror editor preserves whitespace

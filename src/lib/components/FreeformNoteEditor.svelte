@@ -41,9 +41,7 @@
     saveNote as apiSaveNote,
     TRASH_ID,
     noteRoomInfo,
-    onSessionChange,
-    captureCurrentNoteVersion,
-    type VersionAction
+    onSessionChange
   } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
   import {
@@ -71,10 +69,7 @@
     unregisterEditor,
     type EditorListener
   } from '$lib/hotkeys/bus.svelte';
-  import {
-    bumpNoteHistory,
-    registerNoteHistory
-  } from '$lib/stores/note-history-bridge.svelte';
+  import { registerNoteHistory } from '$lib/stores/note-history-bridge.svelte';
   import {
     parseHistorySnapshot,
     serializeYjsSnapshot

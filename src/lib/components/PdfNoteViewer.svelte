@@ -41,10 +41,8 @@
     noteRoomInfo,
     onSessionChange,
     pdfNoteNeedsText,
-    captureCurrentNoteVersion,
     saveNote as apiSaveNote,
-    setPdfText,
-    type VersionAction
+    setPdfText
   } from '$lib/api';
   import { listen, TauriEventName } from '$lib/api/events';
   import { extractTextFromDocument } from '$lib/pdf/extract-text';
@@ -55,7 +53,6 @@
   } from '$lib/sync/collab-signing-key';
   import { otherPeerCount } from '$lib/editor/awareness-presence';
   import { pickCursorColor } from '$lib/editor/cursor-color';
-  import { isMobile } from '$lib/platform';
   import {
     PAGE_FIT_MARGIN,
     PAGE_SCROLL_PADDING_Y,
@@ -94,32 +91,20 @@
     addSignature,
     removeSignature
   } from '$lib/stores/signatures.svelte';
-  import {
-    cloneSignatureSnapshot,
-    strokeBounds,
-    strokeOutlinePath,
-    strokePointsAttr,
-    translateRect,
-    translateStroke
-  } from '$lib/pdf/stroke-utils';
+  import { translateRect, translateStroke } from '$lib/pdf/stroke-utils';
   import {
     PDF_ANNOTATIONS_MAP,
     PDF_FORM_VALUES_MAP,
     type PdfAnnotation,
     type PdfFormValue,
     type PdfAnnotationType,
-    type PdfInkStroke,
     type PdfRect,
-    type PdfSignatureSnapshot,
-    type PdfStrokePoint
+    type PdfSignatureSnapshot
   } from '$lib/pdf/types';
   import { CollabProvider } from '$lib/sync/collab-provider';
   import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
   import { tree } from '$lib/stores/tree.svelte';
-  import {
-    bumpNoteHistory,
-    registerNoteHistory
-  } from '$lib/stores/note-history-bridge.svelte';
+  import { registerNoteHistory } from '$lib/stores/note-history-bridge.svelte';
   import {
     parseHistorySnapshot,
     serializeYjsSnapshot
@@ -137,25 +122,18 @@
     type EditorListener
   } from '$lib/hotkeys/bus.svelte';
   import {
-    ANNOTATION_CLICK_SLOP_PX,
     ANNOTATION_COLORS,
-    annotationIdAtPoint,
     buildPdfAnnotation,
     clampZoom,
     clonePdfFormValue,
     COMMENT_COLOR,
-    DRAW_KICKOFF_DELAY_MS,
     HIGHLIGHT_COLOR,
     HISTORY_RESTORE_ORIGIN,
     INK_COLOR,
-    INK_WIDTH,
     isCommentLikeAnnotation,
     LOCAL_ORIGIN,
-    MAX_CANVAS_DIM,
-    MAX_CANVAS_PIXELS,
     pdfAssetIdFromBody,
     PDF_PAGE_COLUMN_CLASS,
-    PDF_TO_CSS_UNITS,
     QUICK_ZOOMS,
     RENDER_DROP_DELAY_MS,
     RENDER_ROOT_MARGIN,
@@ -166,13 +144,9 @@
     type PdfAnnotationStorage,
     type PdfDocument,
     type PdfJs,
-    type PdfLink,
-    type PdfPageView,
     type PdfTool,
     type PdfViewport,
     type PdfViewer,
-    type RenderParams,
-    type ZoomAnchor,
     type ZoomMode,
     ZOOM_STEP
   } from '$lib/pdf/viewer-helpers';
@@ -218,7 +192,6 @@
   let pageNavWidth = $state(0);
   // The scrollable toolbar row, driving the custom ToolbarScrollbar below it.
   let toolbarScrollEl = $state<HTMLDivElement | null>(null);
-  let mobileToolbar = $state(false);
   let annotationVersion = $state(0);
   let annotations = $state<PdfAnnotation[]>([]);
   let activeTool = $state<PdfTool>('select');
@@ -470,7 +443,7 @@
     if (storage.__mindstreamFormSyncInstalled) return;
     storage.__mindstreamFormSyncInstalled = true;
     const setValue = storage.setValue.bind(storage);
-    storage.setValue = (key: string, value: Object) => {
+    storage.setValue = (key: string, value: object) => {
       setValue(key, value);
       if (suppressFormStorageSync || !formValuesMap) return;
       const stored = clonePdfFormValue(value);
@@ -1774,7 +1747,6 @@
   });
 
   onMount(async () => {
-    mobileToolbar = isMobile();
     // Ensure the shared signature library is loaded (migrates any legacy
     // localStorage signatures on first run). The reconciling effect arms a
     // default selection once it populates; activeSignatureId stays per-viewer.
