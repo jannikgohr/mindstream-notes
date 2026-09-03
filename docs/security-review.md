@@ -106,20 +106,30 @@ changing.
 
 ## Unverified, which is its own risk
 
-Nothing currently exercises **two real clients converging over the live relay**
-now that every frame type requires a signature. The T4 `collab.e2e.ts` and
-`sharing.e2e.ts` specs would cover it, but both are red — pre-existing, not
-fallout from the security work; see
-[e2e/status.md](e2e/status.md#currently-red--measured-2026-07-20).
+_Re-checked 2026-09-04._
 
-The two tests most worth having are blocked behind that same repair:
+**Two real clients converging over the live relay** is now covered: the T4
+`collab.e2e.ts` and `sharing.e2e.ts` specs were red when this section was
+written and were repaired on 2026-07-20 (see
+[e2e/status.md](e2e/status.md#previously-red-now-fixed--2026-07-20)). This
+paragraph previously said they were still red and linked to a heading that
+no longer exists.
+
+What has **not** changed is the gap that mattered more. Neither of these
+exists in any spec:
 
 - a **read-only member cannot write** to a shared collection
 - a **revoked member loses access** once the epoch rotates
 
 Both are T4. They are the difference between "the crypto is right" and "the
 permission model is right", and only the second class of bug hands a colleague
-data they should not have.
+data they should not have. They are no longer blocked on anything — the specs
+that would host them are green — so what remains is writing them.
+
+Worth stating plainly: T3/T4 don't run in CI at all
+([e2e/status.md, open gaps](e2e/status.md#open-gaps)). Even once these two
+tests exist, nothing will run them on a pull request. The permission model is
+currently verified only when someone runs the suite by hand.
 
 ## Accepted, not fixed
 
