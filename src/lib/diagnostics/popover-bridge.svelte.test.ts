@@ -155,4 +155,21 @@ describe('openDiagnosticPopover', () => {
 
     expect(diagnosticPopover.suggestions).toEqual(['Nr']);
   });
+
+  it('offers nothing rather than the word when it was the only candidate', async () => {
+    // An empty list reads as "no suggestion for this", which is honest. The
+    // word itself reads as a correction that does nothing when applied.
+    await open('Vertragsnummer', [], ['Vertragsnummer']);
+
+    expect(diagnosticPopover.suggestions).toEqual([]);
+    expect(diagnosticPopover.loading).toBe(false);
+  });
+
+  it('leaves an ordinary suggestion list untouched', async () => {
+    // The filter must not become a general re-ranking: a provider that
+    // supplies its own replacements keeps its order and its entries.
+    await open('teh', ['the', 'tea', 'ten']);
+
+    expect(diagnosticPopover.suggestions).toEqual(['the', 'tea', 'ten']);
+  });
 });
