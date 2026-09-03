@@ -31,6 +31,7 @@
 
   import { onDestroy, onMount, untrack } from 'svelte';
   import { createHistoryCapture } from '$lib/history/capture-scheduler';
+  import { onAppSuspend } from '$lib/editor/suspend-flush';
   import * as Y from 'yjs';
   import { Trash2 } from '@lucide/svelte';
   import { userPrefersMode } from 'mode-watcher';
@@ -511,7 +512,11 @@
   }
 
   onDestroy(() => {
-    if (saveTimer) clearTimeout(saveTimer);
+    // Flush before anything else in here: `flushSave` reads the Y.Doc
+    // synchronously (encodeStateAsUpdate) and this teardown destroys it
+    // further down. Only when a save is actually pending, so closing an
+    // untouched canvas doesn't write.
+    if (saveTimer) void flushSave();
     historyCapture.cancel();
     void historyCapture.capture('edited');
     unregisterHistory?.();
@@ -616,6 +621,15 @@
       console.error('[FreeformNoteEditor] save failed', err);
     }
   }
+
+  // The OS can take the process down without unmounting us (Android kills
+  // backgrounded apps), so `onDestroy` alone can't protect the debounce
+  // window. Same guard as the teardown flush: only when a save is pending.
+  $effect(() =>
+    onAppSuspend(() => {
+      if (saveTimer) void flushSave();
+    })
+  );
 
   function scheduleSave() {
     if (isTrashed) return;

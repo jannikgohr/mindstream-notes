@@ -21,6 +21,7 @@
   } from '$lib/ink/view-transform';
   import { createHistoryCapture } from '$lib/history/capture-scheduler';
   import { onDestroy, onMount, tick } from 'svelte';
+  import { onAppSuspend } from '$lib/editor/suspend-flush';
   import {
     AlignJustify,
     CircleDashed,
@@ -638,6 +639,11 @@
       }
     }
   }
+
+  // The OS can take the process down without unmounting us (Android kills
+  // backgrounded apps), so `onDestroy` alone can't protect the debounce
+  // window. `flushPendingState` already no-ops when nothing is pending.
+  $effect(() => onAppSuspend(() => void flushPendingState()));
 
   function scheduleSave() {
     if (!doc && pendingSaveUpdates.length === 0 && !pendingState) return;
