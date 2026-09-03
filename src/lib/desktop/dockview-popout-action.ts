@@ -100,7 +100,7 @@ export class PopoutHeaderAction implements IHeaderActionsRenderer {
     if (this.statusNoteId === noteId) return;
     this.statusNoteId = noteId;
     if (this.statusInstance) {
-      unmount(this.statusInstance);
+      void unmount(this.statusInstance);
       this.statusInstance = null;
     }
     this.statusInstance = mount(NoteStatusIcons, {
@@ -125,7 +125,7 @@ export class PopoutHeaderAction implements IHeaderActionsRenderer {
     this.activePanelListener?.dispose();
     this.activePanelListener = null;
     if (this.statusInstance) {
-      unmount(this.statusInstance);
+      void unmount(this.statusInstance);
       this.statusInstance = null;
     }
   }

@@ -44,12 +44,6 @@ function originUpdate(node: PMNode): Uint8Array {
   return update;
 }
 
-function fragmentText(update: Uint8Array): string {
-  const doc = new Y.Doc();
-  Y.applyUpdate(doc, update);
-  return doc.getXmlFragment('prosemirror').toString();
-}
-
 describe('deterministic seed template origin', () => {
   it('produces byte-identical bytes for the same content', () => {
     const a = originUpdate(docFrom('# Welcome', 'local-first note app'));

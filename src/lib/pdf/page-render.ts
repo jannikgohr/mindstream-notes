@@ -13,33 +13,22 @@
  * component — that is what lets this live outside PdfNoteViewer.svelte.
  */
 
-import { tUi } from '$lib/settings/i18n.svelte';
-import { listen } from '$lib/api/events';
 import type { FlatOutlineItem } from '$lib/pdf/outline';
 import type { PdfSearchMatch } from '$lib/pdf/pdf-text-index';
-import {
-  cloneSignatureSnapshot,
-  strokeBounds,
-  strokeOutlinePath,
-  strokePointsAttr
-} from '$lib/pdf/stroke-utils';
+import {} from '$lib/pdf/stroke-utils';
 import type {
   PdfAnnotation,
   PdfAnnotationType,
   PdfRect,
-  PdfSignatureSnapshot,
-  PdfStrokePoint
+  PdfSignatureSnapshot
 } from '$lib/pdf/types';
 import { PAGE_FIT_MARGIN } from '$lib/layout/page-layout';
 import { createPageOverlays } from './page-overlays';
 import {
-  ANNOTATION_CLICK_SLOP_PX,
   DRAW_KICKOFF_DELAY_MS,
-  INK_WIDTH,
   MAX_CANVAS_DIM,
   MAX_CANVAS_PIXELS,
   PDF_TO_CSS_UNITS,
-  annotationIdAtPoint,
   clampZoom,
   type PageSize,
   type PdfDocument,
@@ -161,8 +150,7 @@ export function createPageRenderer(ctx: PageRenderContext) {
         textModeClickCleanup = value;
       }
     });
-    const { renderAppAnnotations, renderLinkLayer, renderSearchLayer } =
-      overlays;
+    const { renderAppAnnotations } = overlays;
 
     function destroyPageView(view: PdfPageView | null) {
       view?.cancelRendering();

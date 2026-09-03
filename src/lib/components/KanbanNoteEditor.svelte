@@ -23,6 +23,10 @@
 
   import { onDestroy, onMount } from 'svelte';
   import { onAppSuspend } from '$lib/editor/suspend-flush';
+  import {
+    setNoteStatus,
+    clearNoteStatus
+  } from '$lib/stores/note-status.svelte';
   import { createHistoryCapture } from '$lib/history/capture-scheduler';
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
@@ -59,9 +63,7 @@
     noteRoomInfo,
     getYjsRelayUrl,
     onSessionChange,
-    authSession,
-    captureCurrentNoteVersion,
-    type VersionAction
+    authSession
   } from '$lib/api';
   import { listen, TauriEventName } from '$lib/api/events';
   import {
@@ -91,10 +93,7 @@
     unregisterEditor,
     type EditorListener
   } from '$lib/hotkeys/bus.svelte';
-  import {
-    bumpNoteHistory,
-    registerNoteHistory
-  } from '$lib/stores/note-history-bridge.svelte';
+  import { registerNoteHistory } from '$lib/stores/note-history-bridge.svelte';
   import {
     parseHistorySnapshot,
     serializeYjsSnapshot
@@ -195,7 +194,6 @@
   let savingState = $state<'idle' | 'pending' | 'saving' | 'saved' | 'error'>(
     'idle'
   );
-
   let yDoc: Y.Doc | null = null;
   let awareness: Awareness | null = null;
   let undoManager: Y.UndoManager | null = null;
@@ -1118,6 +1116,21 @@
     })
   );
 
+  // Mirror save state into the global per-note store so the dockview tab
+  // header renders the saving/saved/error icons. Every other editor already
+  // did this; the kanban board tracked `savingState` through its whole
+  // lifecycle and never published it, so a failed save showed the user
+  // nothing. No collab fields: this editor has no relay wiring.
+  $effect(() => {
+    setNoteStatus(noteId, {
+      collabConfigured: false,
+      collabOnline: false,
+      savingState,
+      isTrashed,
+      readOnly: false
+    });
+  });
+
   function scheduleSave(): void {
     if (isTrashed) return;
     if (!autoSaveEnabled) {
@@ -1405,6 +1418,7 @@
   });
 
   onDestroy(() => {
+    clearNoteStatus(noteId);
     cleanupListPointerDrag();
     cleanupMobileListTransitionGhost();
     clearMobileTabHold();

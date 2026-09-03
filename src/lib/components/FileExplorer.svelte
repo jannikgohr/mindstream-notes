@@ -40,41 +40,26 @@
     importPdfIn,
     leaveSharedCollection,
     moveManyTo,
-    moveCollectionTo,
-    moveNoteTo,
-    purgeMany as purgeManyItems,
-    purgeCollection,
-    purgeNote,
     renameCollection,
     renameNote,
-    restoreMany as restoreManyItems,
-    restoreCollection,
-    restoreNote,
     setNoteFavourite,
     stopSharingCollection,
-    trashMany as trashManyItems,
-    trashCollection,
     trashNote
   } from '$lib/stores/tree.svelte';
-  import { authSession } from '$lib/api/auth.svelte';
   import { setSortDirection, setSortStrategy, ui } from '$lib/state.svelte';
   import { i18n, tUi } from '$lib/settings/i18n.svelte';
   import type { TreeNode } from '$lib/api';
   import {
     collectionIsSharedByMe,
     collectionIsSharedRoot,
-    collectionUserCanManageSharing,
-    collectionIsUnderTrash,
     collectionScopeIsReadOnly,
     itemSharedRootId,
     nodesForDesktopSource,
-    noteIsUnderShared,
     noteIsUnderTrash,
     sharedFolderIsEditable,
     sharedMoveIsLegal,
     type DesktopNoteSource
   } from '$lib/stores/note-source.svelte';
-  import { openCollectionShareDialog } from './share-dialog.svelte';
   import { pushToast } from './toast.svelte';
   import {
     FILE_EXPLORER_SOURCES,
@@ -372,7 +357,6 @@
   let menuOpen = $state(false);
   let menuX = $state(0);
   let menuY = $state(0);
-  let menuTarget = $state<MenuTarget | null>(null);
   let currentMenuItems = $state<(MenuItem | 'separator')[]>([]);
   let menuToken = 0;
 
@@ -392,14 +376,12 @@
     if (items.length === 0) return;
     menuX = e.clientX;
     menuY = e.clientY;
-    menuTarget = target;
     currentMenuItems = items;
     menuOpen = true;
   }
   function closeMenu() {
     menuToken += 1;
     menuOpen = false;
-    menuTarget = null;
     currentMenuItems = [];
   }
 
@@ -568,8 +550,7 @@
       return onOpenInNewWindow;
     }
   });
-  const { menuItemsForTarget, menuItemsForBatch, folderCreateMenuItems } =
-    menuBuilder;
+  const { menuItemsForTarget, menuItemsForBatch } = menuBuilder;
 
   function selectNodeFromClick(e: MouseEvent, node: TreeNode): boolean {
     const key = nodeKey(node) as SelectionKey;

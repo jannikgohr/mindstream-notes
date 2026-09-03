@@ -10,7 +10,6 @@
 
 import { expect } from '@wdio/globals';
 import {
-  byName,
   clickName,
   requireDialogHook,
   restartApp,

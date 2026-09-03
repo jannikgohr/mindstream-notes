@@ -18,7 +18,6 @@
  * /Ink export, sync) works unchanged.
  */
 
-import type { PdfInkStroke } from '../types';
 import {
   SIGNATURE_PAD_HEIGHT,
   SIGNATURE_PAD_WIDTH,
@@ -30,7 +29,6 @@ import {
 import { binarizeAdaptive, bridgeSmallGaps, inkSignal } from './binarize';
 import {
   FAINT_COMPONENT_RATIO,
-  computeInkAlpha,
   removeBorderBlobs,
   removeFaintComponents,
   removeSpecks

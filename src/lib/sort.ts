@@ -10,7 +10,7 @@
  */
 
 import type { NoteSummary } from './api';
-import type { FolderNode, TreeNode } from './api';
+import type { TreeNode } from './api';
 import { getSettingValue } from '$lib/settings/store.svelte';
 
 export type SortStrategy = 'alphabetical' | 'modified' | 'created';

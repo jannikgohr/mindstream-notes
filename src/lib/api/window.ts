@@ -126,11 +126,20 @@ export async function openNoteWindow(
 
   // Surface failures so future regressions show up in the console instead
   // of silently producing a half-broken window.
+  // `.catch`, not `.then()`: registering the listener is itself async, and
+  // a bare `.then()` attaches no rejection handler — so a failure to even
+  // subscribe used to vanish, which is the opposite of what this is for.
   win
     .once('tauri://error', (e) => {
       console.error('[openNoteWindow] failed to spawn', id, e);
     })
-    .then();
+    .catch((err) => {
+      console.error(
+        '[openNoteWindow] could not subscribe to spawn errors',
+        id,
+        err
+      );
+    });
 
   if (panelGroup) {
     const activePanel: IDockviewPanel | undefined = panelGroup?.activePanel;

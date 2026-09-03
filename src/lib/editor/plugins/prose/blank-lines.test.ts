@@ -22,7 +22,7 @@ import {
 function para(line: number, text = 'x'): MdastNode {
   return {
     type: 'paragraph',
-    children: [{ type: 'text' } as MdastNode],
+    children: [{ type: 'text', value: text } as MdastNode],
     position: { start: { line }, end: { line } }
   };
 }

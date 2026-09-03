@@ -178,7 +178,8 @@ export class InkWebCollabProvider {
     } catch (err) {
       console.warn(
         '[ink-collab] WebSocket constructor threw note=%s',
-        this.opts.noteId
+        this.opts.noteId,
+        err
       );
       this.scheduleReconnect();
       return;
