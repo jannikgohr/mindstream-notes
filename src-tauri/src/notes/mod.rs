@@ -14,6 +14,7 @@ use rusqlite::{
     Connection, OptionalExtension,
 };
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::HashMap;
 use std::str::FromStr;
 
 use crate::db::Db;
@@ -265,6 +266,26 @@ fn load_tags(conn: &Connection, note_id: &str) -> AppResult<Vec<String>> {
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// Every note's tags in one pass, keyed by note id.
+///
+/// [`list`] used to call [`load_tags`] per row, which re-prepared the same
+/// statement and ran a query for every note in the vault — and `list` backs
+/// `load_tree`, which the frontend refetches after *every* mutation. One
+/// grouped scan replaces N+1 round trips under the global connection lock.
+///
+/// Notes without tags are simply absent from the map; callers default to an
+/// empty vec.
+fn load_all_tags(conn: &Connection) -> AppResult<HashMap<String, Vec<String>>> {
+    let mut stmt = conn.prepare("SELECT note_id, tag FROM note_tags ORDER BY note_id, tag")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    for row in rows {
+        let (note_id, tag) = row?;
+        out.entry(note_id).or_default().push(tag);
+    }
+    Ok(out)
+}
+
 pub fn list(conn: &Connection, include_trashed: bool) -> AppResult<Vec<NoteSummary>> {
     let sql = if include_trashed {
         "SELECT id, parent_collection_id, title, position, created, modified,
@@ -281,8 +302,9 @@ pub fn list(conn: &Connection, include_trashed: bool) -> AppResult<Vec<NoteSumma
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map([], row_to_summary)?;
     let mut summaries = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut tags_by_note = load_all_tags(conn)?;
     for s in &mut summaries {
-        s.tags = load_tags(conn, &s.id)?;
+        s.tags = tags_by_note.remove(&s.id).unwrap_or_default();
     }
     Ok(summaries)
 }
