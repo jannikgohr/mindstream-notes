@@ -620,8 +620,10 @@ mod tests {
     /// tests then prove the declaration a real plugin ships actually drives the
     /// generic client, which is the whole claim of this module.
     fn languagetool() -> CheckerProtocol {
-        serde_json::from_str(
-            r#"{
+        serde_json::from_str(LANGUAGETOOL_JSON).unwrap()
+    }
+
+    const LANGUAGETOOL_JSON: &str = r#"{
               "trimEndpointSuffix": "/v2",
               "check": {
                 "path": "/v2/check",
@@ -653,9 +655,22 @@ mod tests {
                 "list": "",
                 "languageCode": ["/longCode", "/code"]
               }
-            }"#,
-        )
-        .unwrap()
+            }"#;
+
+    #[test]
+    fn the_fixture_is_the_protocol_the_plugin_actually_ships() {
+        // "Exactly as its manifest declares it" was a comment, and a comment
+        // cannot notice the manifest changing. Every test in this module is
+        // only evidence about the real plugin while these two agree.
+        let manifest: Value =
+            serde_json::from_str(include_str!("../../../plugins/languagetool/manifest.json"))
+                .unwrap();
+        let shipped = &manifest["contributes"]["textCheckers"][0]["protocol"];
+
+        assert_eq!(
+            serde_json::from_str::<Value>(LANGUAGETOOL_JSON).unwrap(),
+            *shipped
+        );
     }
 
     fn parse(json: &str) -> Vec<CheckerMatch> {
