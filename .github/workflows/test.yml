@@ -1,8 +1,9 @@
 # CI for every push / PR. Five parallel job groups:
 #   - format   : `prettier --check` on the web + docs sources
 #                (pnpm format:web:check), the theme guardrail
-#                (pnpm lint:theme) and `eslint .`, Linux — fails on
-#                formatting drift, a theme violation, or a lint error.
+#                (pnpm lint:theme), `eslint .` and the i18n bundle-parity
+#                check, Linux — fails on formatting drift, a theme
+#                violation, a lint error, or a translation gap.
 #   - js       : svelte-check + vitest + vite build, on all three desktop OSes.
 #   - rust     : `cargo test` for the desktop target on all three desktop OSes,
 #                plus `cargo fmt --check` and `cargo clippy -D warnings` once
@@ -299,3 +300,8 @@ jobs:
       # `prefer-svelte-reactivity`) stay visible in the log without gating,
       # so the backlog is reported rather than silently tolerated.
       - run: pnpm lint
+
+      # Translation bundles must carry the same key set. `de.json` had
+      # silently fallen 19 keys behind `en.json` — those settings rendered
+      # as raw key ids for German users.
+      - run: pnpm lint:i18n
