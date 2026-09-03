@@ -94,7 +94,12 @@ pub struct MatchSpec {
 #[serde(rename_all = "camelCase")]
 pub struct DetectionSpec {
     pub code: String,
-    pub confidence: String,
+    /// Optional, and read by nothing: the language decision is made from the
+    /// code alone. Declaring it is how a service that reports a score says so,
+    /// which is what a future policy would need — but a service that reports
+    /// none must not have to invent a pointer to be usable.
+    #[serde(default)]
+    pub confidence: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -660,22 +665,39 @@ mod tests {
     }
 
     #[test]
-    fn reads_the_detected_language_and_confidence() {
+    fn both_declared_detection_pointers_resolve() {
         // Measured shapes: a full sentence scores 0.99, a single word 0.43 —
         // and at 0.43 the server called the German "Sterbeurkunde" French.
-        // Both pointers still resolve; only the code decides anything now, and
-        // "fr" is refused for naming a language the user does not write rather
-        // than for the score beside it.
+        // Only the code decides anything now, so "fr" is refused for naming a
+        // language the user does not write rather than for the score beside
+        // it. The confidence pointer is asserted because the manifest still
+        // declares one, and a declared pointer that resolves to nothing is a
+        // manifest saying something untrue about the service.
         let json: Value = serde_json::from_str(
             r#"{"matches":[],"language":{"detectedLanguage":{"code":"fr","confidence":0.429}}}"#,
         )
         .unwrap();
         let detection = languagetool().detection.unwrap();
         assert_eq!(string_at(&json, &detection.code).unwrap(), "fr");
-        let confidence = at(&json, &detection.confidence)
-            .and_then(|v| v.as_f64())
-            .unwrap();
-        assert!((0.0..=1.0).contains(&confidence));
+        let confidence = detection.confidence.expect("the fixture declares one");
+        assert_eq!(at(&json, &confidence).and_then(|v| v.as_f64()), Some(0.429));
+    }
+
+    #[test]
+    fn a_service_that_reports_no_confidence_still_declares_detection() {
+        // The pointer is optional precisely so this parses. Before it was, a
+        // checker whose service reports only a code could not declare
+        // detection at all, and lost the language decision with it.
+        let mut without: Value = serde_json::from_str(LANGUAGETOOL_JSON).unwrap();
+        without["detection"]
+            .as_object_mut()
+            .unwrap()
+            .remove("confidence");
+
+        let protocol: CheckerProtocol = serde_json::from_value(without).unwrap();
+        let detection = protocol.detection.expect("code alone is a detection spec");
+        assert_eq!(detection.code, "/language/detectedLanguage/code");
+        assert_eq!(detection.confidence, None);
     }
 
     #[test]

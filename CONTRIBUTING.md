@@ -105,11 +105,11 @@ pnpm test:coverage:rust   # Rust, enforces 80%
 
 One Rust test asks a question the rest of the suite can't: whether the wire
 format the LanguageTool plugin's manifest describes is still the one the
-service speaks. It needs a real server, so it skips unless you name one, and
-it is never required:
+service speaks. It needs a real server, so it is `#[ignore]`d and runs only
+when you ask for it by name. It is never required:
 
 ```sh
-MINDSTREAM_LT_ENDPOINT=http://localhost:8010 cargo test --test languagetool_contract -- --nocapture
+MINDSTREAM_LT_ENDPOINT=http://localhost:8010 cargo test --test languagetool_contract -- --ignored --nocapture
 ```
 
 Point it at whatever instance you already run. Everything else about the

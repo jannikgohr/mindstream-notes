@@ -512,12 +512,17 @@ one at all.
   },
 
   // Optional. Declaring it switches on the host's re-ask behaviour: when
-  // detection is not confident, or lands outside the languages the user
-  // writes, the request is repeated naming a language outright. Checking
-  // German prose against a French dictionary produces far more nonsense than
-  // the wrong regional variant.
+  // detection lands outside the languages the user writes, the request is
+  // repeated naming a language outright. Checking German prose against a
+  // French dictionary produces far more nonsense than the wrong regional
+  // variant. A detection naming a language the user DOES write is taken at
+  // its word however sure the service sounds — a short fragment scores low
+  // whether the guess is right or wrong, so a score floor threw away correct
+  // answers to catch wrong ones this test already catches.
   "detection": {
     "code": "/language/detectedLanguage/code",
+    // Optional, and read by nothing today. Declare it if the service
+    // reports a score; omitting it costs the checker nothing.
     "confidence": "/language/detectedLanguage/confidence"
   },
 

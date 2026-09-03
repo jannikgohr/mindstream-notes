@@ -653,14 +653,20 @@ export interface PluginCheckerMatchSpec {
 /**
  * Optional: where the service reports the language it detected.
  *
- * Declaring it switches on the host's re-ask behaviour — when detection is not
- * confident enough, or lands outside the languages the user writes, the host
- * repeats the request naming a language outright. Checking German prose against
- * a French dictionary produces far more nonsense than a wrong regional variant.
+ * Declaring it switches on the host's re-ask behaviour — when detection lands
+ * outside the languages the user writes, the host repeats the request naming a
+ * language outright. Checking German prose against a French dictionary produces
+ * far more nonsense than a wrong regional variant.
  */
 export interface PluginCheckerDetectionSpec {
   code: PluginJsonPointer;
-  confidence: PluginJsonPointer;
+  /**
+   * Optional, and read by nothing: the language decision is made from `code`
+   * alone. Declare it if the service reports a score — a future policy would
+   * need it — but a service that reports none must not have to invent a
+   * pointer to declare detection at all.
+   */
+  confidence?: PluginJsonPointer;
 }
 
 /**
