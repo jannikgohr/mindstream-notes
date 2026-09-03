@@ -2,7 +2,9 @@
 #   - format   : `prettier --check` on the web + docs sources
 #                (pnpm format:web:check), Linux — fails on formatting drift.
 #   - js       : svelte-check + vitest + vite build, on all three desktop OSes.
-#   - rust     : `cargo test` for the desktop target on all three desktop OSes.
+#   - rust     : `cargo test` for the desktop target on all three desktop OSes,
+#                plus `cargo fmt --check` and `cargo clippy -D warnings` once
+#                on Linux.
 #   - coverage : single-OS (Linux) run that measures vitest (v8) and cargo
 #                (llvm-cov) line coverage and publishes both to Codecov so the
 #                score / badge / PR comment stay current. Kept separate from the
@@ -68,6 +70,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
 
       # Tauri 2's desktop bundle pulls webkit2gtk-4.1 + libsoup-3.0; the
       # secret-service keyring backend uses the `vendored` feature so we
@@ -106,6 +110,24 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      # Formatting and lints run only on Linux: both are platform-agnostic,
+      # and repeating them on three runners just triples the failure noise
+      # for one underlying problem. `cargo test` stays on all three because
+      # the platform-specific code (keyring, paths, drawing) is what it's
+      # there to catch.
+      - name: cargo fmt
+        if: runner.os == 'Linux'
+        working-directory: src-tauri
+        run: cargo fmt --all --check
+
+      # --all-targets covers tests and benches too, so a lint can't hide in
+      # a #[cfg(test)] module. The tree is clean at zero warnings today;
+      # -D keeps it that way rather than letting a backlog accumulate.
+      - name: cargo clippy
+        if: runner.os == 'Linux'
+        working-directory: src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
 
       - name: cargo test
         working-directory: src-tauri
