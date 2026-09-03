@@ -9,13 +9,11 @@
  */
 
 import * as Y from 'yjs';
-import type { InkPoint } from '$lib/ink/page';
 import { sliceStrokeByCircles, type EraserCircle } from '$lib/ink/stroke-slice';
 import {
   DEFAULT_COLOR,
   DEFAULT_WIDTH,
   strokeFromMeta,
-  type DecodedPayload,
   type InProgressStroke,
   type InkStroke,
   type InkStrokeInput,
@@ -29,12 +27,10 @@ import {
   type UndoOp
 } from './stroke-types';
 import {
-  boundsContainPoint,
   boundsIntersect,
   boundsOfPoints,
   strokeHitAt,
   strokeIntersectsLasso,
-  strokesHitAt,
   tileCoord,
   tileKey
 } from './stroke-geometry';

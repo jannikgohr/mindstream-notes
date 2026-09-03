@@ -8,13 +8,7 @@
  * otherwise the click is left to ProseMirror.
  */
 
-import {
-  Plugin,
-  PluginKey,
-  TextSelection,
-  type EditorState
-} from '@milkdown/kit/prose/state';
-import type { Mark } from '@milkdown/kit/prose/model';
+import { Plugin, PluginKey, TextSelection } from '@milkdown/kit/prose/state';
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view';
 import type { EditorView } from '@milkdown/kit/prose/view';
 import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
@@ -24,19 +18,11 @@ import type { WikilinkBridge } from '../../wikilink-bridge.svelte';
 import { resolveNoteIdByTitle, resolveNoteTitleById } from './note-resolve';
 import {
   WIKILINK_RE,
-  activeMarks,
   boundaryEditAt,
-  boundaryLinkMark,
   deleteInsideLinkBoundary,
   deleteNoteLinkText,
   insertLinkBoundaryText,
-  linkMarkType,
-  marksWithLink,
-  marksWithoutLink,
-  noteLinkDeletionRange,
-  noteLinkTextRanges,
   removeAdjacentNoteLink,
-  shouldTypeOutsideLinkBoundary,
   storedInsideBoundaryMark,
   toggleLinkBoundaryEditing,
   typeOutsideLinkBoundary,

@@ -220,9 +220,6 @@
   const serviceUsable = $derived(
     !!previewServiceId && serviceState === 'available'
   );
-  const sessionKey = $derived(
-    contributionRef ? `${contributionRef.pluginId}:${noteId}` : ''
-  );
   // What the live-preview iframe loads: direct by default; a service can opt
   // into the host theme-injecting proxy and still fall back to direct if needed.
   const serviceIframeSrc = $derived.by(() => {

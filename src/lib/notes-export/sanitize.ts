@@ -43,6 +43,8 @@ const RESERVED_BASENAMES = new Set(
 // Windows-reserved chars + control bytes. Internal whitespace is
 // preserved (then collapsed) so "Sprint planning" stays human-readable
 // in the file tree.
+// Stripping C0 control bytes out of a filename is what this regex is for.
+// eslint-disable-next-line no-control-regex
 const UNSAFE_CHARS = /[<>:"/\\|?*\x00-\x1F]/g;
 
 /**

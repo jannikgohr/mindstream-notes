@@ -8,7 +8,6 @@
 
 import { expect } from '@wdio/globals';
 import {
-  byName,
   clickElement,
   clickMenuItem,
   clickName,

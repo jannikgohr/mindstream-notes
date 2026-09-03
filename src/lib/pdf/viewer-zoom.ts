@@ -16,8 +16,6 @@
 import { tick } from 'svelte';
 import { PAGE_FIT_MARGIN } from '$lib/layout/page-layout';
 import {
-  MAX_ZOOM,
-  MIN_ZOOM,
   clampZoom,
   type ZoomAnchor,
   type ZoomMode

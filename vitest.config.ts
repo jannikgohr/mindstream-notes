@@ -9,7 +9,8 @@ import path from 'node:path';
  * automatically when present.
  */
 export default defineConfig({
-  // @ts-ignore
+  // @ts-expect-error - vitest resolves its own vite, so the svelte plugin's
+  // Plugin type comes from a different copy than the one defineConfig expects.
   plugins: [svelte({ hot: false })],
   resolve: {
     alias: {

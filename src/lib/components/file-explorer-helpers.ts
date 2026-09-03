@@ -1,4 +1,4 @@
-import { Home, PencilRuler, Share2, Star, Trash2 } from '@lucide/svelte';
+import { Home, Share2, Star, Trash2 } from '@lucide/svelte';
 import type { NoteKind, TreeNode } from '$lib/api';
 import type { IconComponent } from '$lib/settings/icons';
 import type { DesktopNoteSource } from '$lib/stores/note-source.svelte';

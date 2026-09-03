@@ -1,7 +1,8 @@
 # CI for every push / PR. Five parallel job groups:
 #   - format   : `prettier --check` on the web + docs sources
-#                (pnpm format:web:check) plus the theme guardrail
-#                (pnpm lint:theme), Linux.
+#                (pnpm format:web:check), the theme guardrail
+#                (pnpm lint:theme) and `eslint .`, Linux — fails on
+#                formatting drift, a theme violation, or a lint error.
 #   - js       : svelte-check + vitest + vite build, on all three desktop OSes.
 #   - rust     : `cargo test` for the desktop target on all three desktop OSes,
 #                plus `cargo fmt --check` and `cargo clippy -D warnings` once
@@ -271,7 +272,7 @@ jobs:
   # formatting drift — including broken/unformatted Markdown docs — in CI rather
   # than relying on the hook alone. Linux-only; formatting is platform-agnostic.
   format:
-    name: Prettier (web + docs)
+    name: Prettier + ESLint (web + docs)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -293,3 +294,8 @@ jobs:
       # husky hooks, so `--no-verify` or a fresh clone skipped it and
       # nothing on the server ever checked. Costs under a second.
       - run: pnpm lint:theme
+
+      # `eslint .` fails on errors only; warnings (`no-explicit-any`,
+      # `prefer-svelte-reactivity`) stay visible in the log without gating,
+      # so the backlog is reported rather than silently tolerated.
+      - run: pnpm lint

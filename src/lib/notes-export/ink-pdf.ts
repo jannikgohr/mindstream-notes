@@ -15,7 +15,7 @@
 import { InkDocument } from '$lib/ink/document';
 import type { InkStroke } from '$lib/ink/document';
 import { defaultLayout, strideY } from '$lib/ink/page';
-import type { DocumentLayout, InkPoint } from '$lib/ink/page';
+import type { DocumentLayout } from '$lib/ink/page';
 
 const WIDTH_QUANTUM = 0.25;
 

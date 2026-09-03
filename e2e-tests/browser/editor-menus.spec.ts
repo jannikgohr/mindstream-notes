@@ -314,7 +314,7 @@ test.describe('formatting toolbar', () => {
   test('applies a heading from the Text group menu', async ({ page }) => {
     const text = `Toolbar heading ${Date.now()}`;
     await createNote(page, `Bar heading ${Date.now()}`);
-    const ed = await focusEditor(page);
+    await focusEditor(page);
     await page.keyboard.type(text);
 
     await formattingToolbar(page).getByRole('button', { name: 'Text' }).click();
