@@ -118,7 +118,11 @@ function startStub(): Promise<void> {
                         message: 'Stub rule: did you mean "the"?',
                         offset,
                         length: FLAGGED.length,
-                        replacements: [{ value: 'the' }],
+                        // The flagged word leads the list on purpose. Real
+                        // services do return a replacement identical to what
+                        // they flagged, and applying it does nothing at all —
+                        // so the popover has to drop it and offer `the` first.
+                        replacements: [{ value: FLAGGED }, { value: 'the' }],
                         rule: { id: 'STUB_RULE', category: { id: 'GRAMMAR' } }
                       }
                     ]
@@ -311,6 +315,21 @@ describe('T3 plugin text checker', function () {
     expect(checks.at(-1)?.body).toContain('text=');
   });
 
+  it('names the selected language instead of asking the server to guess', async () => {
+    // One dictionary is selected here, so there is nothing to detect and
+    // nothing to get wrong. Detection is what once had a lone German compound
+    // checked against the English speller and underlined as a misspelling; the
+    // server's side is the only place the language actually sent is visible.
+    const checks = received.filter((r) => r.path === '/v2/check');
+    expect(checks.length).toBeGreaterThan(0);
+    expect(checks.every((check) => check.body.includes('language=en-US'))).toBe(
+      true
+    );
+    expect(checks.some((check) => check.body.includes('language=auto'))).toBe(
+      false
+    );
+  });
+
   it('offers the server’s own replacement in the popover', async () => {
     await clickElement(
       $(`.ProseMirror [data-diagnostic-source="${PROVIDER_ID}"]`),
@@ -320,12 +339,23 @@ describe('T3 plugin text checker', function () {
     );
     await $('[data-diagnostic-popover]').waitForDisplayed({ timeout: 15_000 });
 
-    // The message is the server's sentence, not one of ours, and the
-    // replacement list is the server's too — the app re-ranks only the
-    // dictionary's suggestions.
+    // The message is the server's sentence, not one of ours, and so is the
+    // replacement list: the app re-ranks only the dictionary's own
+    // suggestions, and edits the server's list only as below.
     await expect($('[data-diagnostic-popover]')).toHaveText(
       expect.stringContaining('Stub rule')
     );
+
+    // The one thing the app does edit out of that list: a replacement equal to
+    // the word it is replacing. The stub offers it first, so before the filter
+    // the click below applied `teh` over `teh` and the sentence never changed.
+    const offered = await browser.execute(() =>
+      Array.from(
+        document.querySelectorAll('[data-diagnostic-action="replace"]')
+      ).map((node) => node.textContent?.trim() ?? '')
+    );
+    expect(offered).not.toContain(FLAGGED);
+
     await clickElement($('[data-diagnostic-action="replace"]'));
 
     await expect($('.ProseMirror')).toHaveText(

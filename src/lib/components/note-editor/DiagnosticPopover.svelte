@@ -166,7 +166,7 @@
     style="left: {position.left}px; top: {position.top}px;"
     role="menu"
     data-diagnostic-popover
-    aria-label={tUi('editor.spellcheck.menu.label')}
+    aria-label={tUi('language.spellcheck.menu.label')}
     tabindex="-1"
   >
     <div class="border-b border-border px-3 py-1.5">
@@ -184,11 +184,11 @@
     <div class="max-h-56 overflow-y-auto py-1">
       {#if diagnosticPopover.loading}
         <p class="px-3 py-1.5 text-xs text-muted-foreground">
-          {tUi('editor.spellcheck.menu.loading')}
+          {tUi('language.spellcheck.menu.loading')}
         </p>
       {:else if all.length === 0}
         <p class="px-3 py-1.5 text-xs text-muted-foreground">
-          {tUi('editor.spellcheck.menu.noSuggestions')}
+          {tUi('language.spellcheck.menu.noSuggestions')}
         </p>
       {:else}
         {#each shown as suggestion, index (index)}
@@ -220,7 +220,7 @@
             class="block w-full px-3 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
             onclick={() => (expanded = true)}
           >
-            {tUi('editor.spellcheck.menu.showAll')} ({all.length})
+            {tUi('language.spellcheck.menu.showAll')} ({all.length})
           </button>
         {/if}
       {/if}
@@ -235,7 +235,7 @@
           class="block w-full truncate px-3 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
           onclick={accept}
         >
-          {tUi('editor.spellcheck.menu.addToDictionary')}
+          {tUi('language.spellcheck.menu.addToDictionary')}
         </button>
       </div>
     {/if}

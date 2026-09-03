@@ -22,7 +22,7 @@ export interface SpellcheckProviderOptions {
    * Tauri runtime, and so the custom dictionary can wrap it later.
    */
   unknownWords(languages: string[], words: string[]): Promise<string[]>;
-  /** Localized message for a misspelling, e.g. tUi('editor.spellcheck.unknownWord'). */
+  /** Localized message for a misspelling, e.g. tUi('language.spellcheck.unknownWord'). */
   message(word: string): string;
   /**
    * Words the user has personally accepted. Applied here rather than in the

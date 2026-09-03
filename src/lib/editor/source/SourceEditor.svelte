@@ -93,7 +93,7 @@
     userMentionsEnabled?: boolean;
     userMentionBridge?: UserMentionBridge | null;
     /**
-     * `editor.spellcheck.enabled`, as a PREDICATE read per check so the
+     * `language.spellcheck.enabled`, as a PREDICATE read per check so the
      * setting applies to notes that are already open. Mirrors the WYSIWYG
      * pane, which has no choice but to work this way.
      */

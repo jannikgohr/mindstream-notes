@@ -236,7 +236,7 @@ Each stage is independently useful; stop wherever the value runs out.
   settings were filtered to `platforms: ["desktop"]`, so the dictionary
   installer was unreachable on a phone, and the popover is opened by a
   long-press — a gesture no tier below this one can produce.
-- **Steps:** open Settings → Editor → Spelling → assert the section renders →
+- **Steps:** open Settings → Language → Spelling → assert the section renders →
   install `en_US` → assert it reports installed → type a misspelling →
   long-press it → assert the popover opens BELOW the word rather than over it
   → pick a suggestion → assert the text changed and the squiggle cleared.

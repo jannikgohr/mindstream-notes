@@ -2372,14 +2372,29 @@ describe('validateManifest — text checker failures', () => {
     }
   });
 
-  it('rejects a detection block missing its pointers', () => {
+  it('rejects a detection block without a code pointer', () => {
     expect(() =>
       validateManifest(withProtocol((p) => (p.detection = {})))
     ).toThrow(/detection\.code must be a string/);
+  });
 
+  it('accepts a detection block that reports no confidence', () => {
+    // The code is what decides the language; the score is read by nothing. A
+    // service that does not report one should not have to invent a pointer.
+    const result = validateManifest(
+      withProtocol((p) => (p.detection = { code: '/code' }))
+    );
+    expect(result.contributes.textCheckers).toHaveLength(1);
+  });
+
+  it('still rejects a confidence pointer that is not one', () => {
     expect(() =>
-      validateManifest(withProtocol((p) => (p.detection = { code: '/code' })))
-    ).toThrow(/detection\.confidence must be a string/);
+      validateManifest(
+        withProtocol(
+          (p) => (p.detection = { code: '/code', confidence: 'nope' })
+        )
+      )
+    ).toThrow(/detection\.confidence/);
   });
 
   it('accepts a detection block', () => {
