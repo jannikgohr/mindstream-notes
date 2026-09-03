@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tUi } from '$lib/settings/i18n.svelte';
   /**
    * Bottom-sheet name input used by the mobile shell for note + folder
    * creation and renaming. Replaces window.prompt — that one renders as
@@ -86,7 +87,7 @@
 
 <button
   type="button"
-  aria-label="Cancel"
+  aria-label={tUi('mobile.cancel')}
   class="fixed inset-0 z-40 bg-scrim"
   onclick={onClose}
 ></button>
@@ -105,8 +106,8 @@
       variant="ghost"
       size="icon"
       onclick={onClose}
-      title="Cancel"
-      aria-label="Cancel"
+      title={tUi('mobile.cancel')}
+      aria-label={tUi('mobile.cancel')}
     >
       <X class="size-5" />
     </Button>

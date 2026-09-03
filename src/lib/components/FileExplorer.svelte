@@ -872,8 +872,8 @@
         size="sm"
         onclick={() => void startEmptyTrash()}
         disabled={trashItemCount === 0 || emptyTrashPending}
-        title="Empty trash"
-        aria-label="Empty trash"
+        title={tUi('fileTree.emptyTrash')}
+        aria-label={tUi('fileTree.emptyTrash')}
         class="relative h-7 shrink-0 overflow-hidden px-2 text-xs text-destructive hover:text-destructive"
       >
         {#if emptyTrashAnimation > 0}
