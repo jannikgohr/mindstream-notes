@@ -34,6 +34,7 @@ import {
   addMermaidMenuItem,
   autoPair,
   diagnosticsPlugin,
+  emptyTaskListItems,
   installBlockHandleGuard,
   installSelectionToolbarAutoHide,
   isEmptyParagraph,
@@ -42,6 +43,7 @@ import {
   preserveBlankLines,
   renderMermaidPreview,
   stripPastedInterBlockWhitespace,
+  taskListItemHandler,
   userMentionPlugins,
   wikilinkPlugins,
   type MarkdownSearchBridge,
@@ -248,6 +250,10 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
       ruleRepetition: 3,
       ruleSpaces: false,
       incrementListMarker: true,
+      // Empty task items ("- [ ]") lose their checkbox under the stock gfm
+      // handler; see `taskListItemHandler`. `handlers` is applied after the
+      // extensions', so this override wins.
+      handlers: { ...prev.handlers, listItem: taskListItemHandler },
       // `join` decides how many blank lines go between two siblings (a return
       // of n emits n blank lines; `undefined` = no opinion, use the default 1).
       join: [
@@ -291,6 +297,12 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
   // than raced — but mark the discard so it isn't mistaken for a sync call.
   void crepe.editor.remove(remarkPreserveEmptyLinePlugin);
   crepe.editor.use(preserveBlankLines);
+
+  // Recognise a bare `- [ ]` as an empty task item. GFM needs content after the
+  // checkbox before it counts as one, which makes every half-typed task in the
+  // Source pane render as literal `[ ]` text in WYSIWYG — and the next resync
+  // escapes it to `- \[ ]`, so it can never become a task. See the plugin.
+  crepe.editor.use(emptyTaskListItems);
 
   // Pasting something copied out of a ProseMirror editor preserves whitespace
   // verbatim, so newlines between the clipboard HTML's block tags would land as
