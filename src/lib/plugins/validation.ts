@@ -902,10 +902,13 @@ function validateCheckerProtocol(
 
   if (protocol.detection !== undefined) {
     assertPointer(pluginId, protocol.detection?.code, `${path}.detection.code`);
+    // Optional: nothing reads the score, so a service that reports none
+    // declares detection with a code and nothing else.
     assertPointer(
       pluginId,
       protocol.detection?.confidence,
-      `${path}.detection.confidence`
+      `${path}.detection.confidence`,
+      false
     );
   }
 

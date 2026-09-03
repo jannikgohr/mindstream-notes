@@ -96,6 +96,22 @@ export const diagnosticPopover = {
   }
 };
 
+/**
+ * Drop any suggestion that is the flagged text itself.
+ *
+ * "Change Vertragsnummer to Vertragsnummer" is not an offer, and shown at
+ * the top of the list it reads as the checker being broken. It happens for
+ * real: a remote checker flags a word its own dictionary does not know,
+ * supplies no replacements, and the local fallback — which ranks an exact
+ * match first, by construction — answers with the word.
+ *
+ * Case-sensitive, because a case change (`nr` -> `Nr`) IS a correction and
+ * must survive.
+ */
+function usableSuggestions(word: string, suggestions: string[]): string[] {
+  return suggestions.filter((suggestion) => suggestion !== word);
+}
+
 export function openDiagnosticPopover(
   next: OpenPopover,
   fetchSuggestions: (word: string) => Promise<string[]>
@@ -114,7 +130,7 @@ export function openDiagnosticPopover(
         ? next.diagnostic.replacements
         : await fetchSuggestions(next.word);
       if (token !== requestToken) return;
-      suggestions = found;
+      suggestions = usableSuggestions(next.word, found);
     } catch (err) {
       if (token !== requestToken) return;
       console.error('[diagnostics] suggestion lookup failed', err);

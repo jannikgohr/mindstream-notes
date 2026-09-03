@@ -809,24 +809,26 @@
     "editor.kanban.searchLabels": "Labels",
     "editor.kanban.searchAssignees": "Assignees",
     "editor.kanban.searchLinkedOnly": "Linked note",
-    "editor.spellcheck.unknownWord": "Unknown word",
-    "editor.spellcheck.menu.label": "Spelling suggestions",
-    "editor.spellcheck.menu.noSuggestions": "No suggestions",
-    "editor.spellcheck.menu.loading": "Looking for suggestions…",
-    "editor.spellcheck.dictionaries.install": "Install",
-    "editor.spellcheck.dictionaries.remove": "Remove",
-    "editor.spellcheck.dictionaries.installing": "Installing…",
-    "editor.spellcheck.dictionaries.installed": "Installed",
-    "editor.spellcheck.dictionaries.notInstalled": "Not installed",
-    "editor.spellcheck.dictionaries.enabledNotInstalled": "Selected but not installed",
-    "editor.spellcheck.dictionaries.licenseUnstated": "Licence not stated — see source",
-    "editor.spellcheck.dictionaries.source": "Source",
-    "editor.spellcheck.dictionaries.failed": "Download failed",
-    "editor.spellcheck.menu.showAll": "Show all",
-    "editor.spellcheck.menu.addToDictionary": "Add to dictionary",
-    "editor.spellcheck.customWords.empty": "No words added yet. Right-click a flagged word and choose \"Add to dictionary\".",
-    "editor.spellcheck.customWords.emptyTouch": "No words added yet. Long-press a flagged word and choose \"Add to dictionary\".",
-    "editor.spellcheck.customWords.remove": "Remove",
+    "language.spellcheck.unknownWord": "Unknown word",
+    "language.spellcheck.menu.label": "Spelling suggestions",
+    "language.spellcheck.menu.noSuggestions": "No suggestions",
+    "language.spellcheck.menu.loading": "Looking for suggestions…",
+    "language.spellcheck.dictionaries.install": "Install",
+    "language.spellcheck.dictionaries.remove": "Remove",
+    "language.spellcheck.dictionaries.installing": "Installing…",
+    "language.spellcheck.dictionaries.installed": "Installed",
+    "language.spellcheck.dictionaries.notInstalled": "Not installed",
+    "language.spellcheck.dictionaries.enabledNotInstalled": "Selected but not installed",
+    "language.spellcheck.dictionaries.licenseUnstated": "Licence not stated — see source",
+    "language.spellcheck.dictionaries.source": "Source",
+    "language.spellcheck.dictionaries.failed": "Download failed",
+    "language.spellcheck.dictionaries.browse": "Browse more languages",
+    "language.spellcheck.dictionaries.noneInstalled": "No dictionaries installed on this device yet.",
+    "language.spellcheck.menu.showAll": "Show all",
+    "language.spellcheck.menu.addToDictionary": "Add to dictionary",
+    "language.spellcheck.customWords.empty": "No words added yet. Right-click a flagged word and choose \"Add to dictionary\".",
+    "language.spellcheck.customWords.emptyTouch": "No words added yet. Long-press a flagged word and choose \"Add to dictionary\".",
+    "language.spellcheck.customWords.remove": "Remove",
     "plugins.textCheckers.title": "Text checkers",
     "plugins.textCheckers.check": "Check",
     "plugins.textCheckers.reachable": "Server reachable",
@@ -837,7 +839,7 @@
     "plugins.textCheckers.state.active": "Active",
     "plugins.textCheckers.state.failed": "Failing",
     "plugins.textCheckers.ownsSpelling": "Also checking spelling",
-    "editor.spellcheck.ownedByPlugin": "Spelling is currently checked by {plugin}. These dictionaries are still used whenever it cannot be reached.",
+    "language.spellcheck.ownedByPlugin": "Spelling is currently checked by {plugin}. These dictionaries are still used whenever it cannot be reached.",
     "plugins.textCheckers.missingLanguages": "Not offered by this server:"
   },
   "categories": {
@@ -941,7 +943,7 @@
       "label": "Note types",
       "description": "Choose which kinds of notes appear in the create menus. Turn off the ones you do not use to keep things tidy."
     },
-    "editor.spellcheck": {
+    "language.spellcheck": {
       "label": "Spelling"
     }
   },
@@ -1165,19 +1167,19 @@
     "editor.noteTypes.kanban": {
       "label": "Kanban boards"
     },
-    "editor.spellcheck.enabled": {
+    "language.spellcheck.enabled": {
       "label": "Check spelling",
       "description": "Underline misspelled words as you type. Uses the app's own dictionaries, so it behaves the same on every platform."
     },
-    "editor.spellcheck.languages": {
+    "language.spellcheck.languages": {
       "label": "Languages",
       "description": "A word is accepted if any selected language knows it, so multilingual notes stay clean. A language only takes effect once its dictionary is installed below."
     },
-    "editor.spellcheck.dictionaries": {
+    "language.spellcheck.dictionaries": {
       "label": "Dictionaries",
       "description": "Downloaded on request rather than bundled, because dictionary licences differ. Each shows its licence before you install it."
     },
-    "editor.spellcheck.customWords": {
+    "language.spellcheck.customWords": {
       "label": "Personal dictionary",
       "description": "Words you have accepted. They apply in every language and are stored with this vault, not with the machine."
     }
@@ -1229,20 +1231,20 @@
     "data.historyRetentionDays.forever": "Forever",
     "language.code.en": "English",
     "language.code.de": "Deutsch",
-    "editor.spellcheck.languages.en_US": "English (US)",
-    "editor.spellcheck.languages.en_GB": "English (UK)",
-    "editor.spellcheck.languages.de_DE_frami": "German (Germany)",
-    "editor.spellcheck.languages.de_AT_frami": "German (Austria)",
-    "editor.spellcheck.languages.de_CH_frami": "German (Switzerland)",
-    "editor.spellcheck.languages.fr": "French",
-    "editor.spellcheck.languages.es_ES": "Spanish",
-    "editor.spellcheck.languages.it_IT": "Italian",
-    "editor.spellcheck.languages.nl_NL": "Dutch",
-    "editor.spellcheck.languages.pt_PT": "Portuguese (Portugal)",
-    "editor.spellcheck.languages.pt_BR": "Portuguese (Brazil)",
-    "editor.spellcheck.languages.pl_PL": "Polish",
-    "editor.spellcheck.languages.sv_SE": "Swedish",
-    "editor.spellcheck.languages.cs_CZ": "Czech",
-    "editor.spellcheck.languages.ru_RU": "Russian"
+    "language.spellcheck.languages.en_US": "English (US)",
+    "language.spellcheck.languages.en_GB": "English (UK)",
+    "language.spellcheck.languages.de_DE_frami": "German (Germany)",
+    "language.spellcheck.languages.de_AT_frami": "German (Austria)",
+    "language.spellcheck.languages.de_CH_frami": "German (Switzerland)",
+    "language.spellcheck.languages.fr": "French",
+    "language.spellcheck.languages.es_ES": "Spanish",
+    "language.spellcheck.languages.it_IT": "Italian",
+    "language.spellcheck.languages.nl_NL": "Dutch",
+    "language.spellcheck.languages.pt_PT": "Portuguese (Portugal)",
+    "language.spellcheck.languages.pt_BR": "Portuguese (Brazil)",
+    "language.spellcheck.languages.pl_PL": "Polish",
+    "language.spellcheck.languages.sv_SE": "Swedish",
+    "language.spellcheck.languages.cs_CZ": "Czech",
+    "language.spellcheck.languages.ru_RU": "Russian"
   }
 }
