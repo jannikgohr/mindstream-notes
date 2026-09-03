@@ -1239,7 +1239,7 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
                        WebView2 browser-process UI thread and freezes all input. -->
                   <iframe
                     class="h-full w-full"
-                    title="Live plugin preview"
+                    title={tUi('plugins.preview.live')}
                     aria-hidden="true"
                     tabindex="-1"
                     src={serviceIframeSrc}
@@ -1264,7 +1264,7 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
             <iframe
               bind:this={previewIframe}
               class="min-h-0 flex-1 bg-white"
-              title="Plugin note preview"
+              title={tUi('plugins.preview.note')}
               sandbox={webviewPreview ? 'allow-scripts' : ''}
               srcdoc={previewSrcdoc}
             ></iframe>

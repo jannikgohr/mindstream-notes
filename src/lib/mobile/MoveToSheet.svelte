@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tUi } from '$lib/settings/i18n.svelte';
   /**
    * Folder picker rendered as a full-bleed bottom sheet. The collection
    * tree is rendered recursively from a synthetic "Root" node so the
@@ -157,7 +158,7 @@
 
 <button
   type="button"
-  aria-label="Close folder picker"
+  aria-label={tUi('mobile.moveTo.close')}
   class="fixed inset-0 z-40 bg-scrim"
   onclick={onClose}
 ></button>
@@ -166,7 +167,7 @@
   class="safe-bottom safe-x fixed inset-x-0 bottom-0 z-50 flex max-h-[80vh] flex-col rounded-t-xl border border-border bg-card shadow-2xl"
   role="dialog"
   aria-modal="true"
-  aria-label="Move to folder"
+  aria-label={tUi('mobile.moveTo.title')}
 >
   <header
     class="flex h-12 shrink-0 items-center justify-between border-b border-border px-3"
@@ -176,14 +177,18 @@
       variant="ghost"
       size="icon"
       onclick={onClose}
-      title="Close"
-      aria-label="Close"
+      title={tUi('close')}
+      aria-label={tUi('close')}
     >
       <X class="size-5" />
     </Button>
   </header>
 
-  <div class="flex-1 overflow-y-auto py-2" role="tree" aria-label="Folders">
+  <div
+    class="flex-1 overflow-y-auto py-2"
+    role="tree"
+    aria-label={tUi('mobile.moveTo.folders')}
+  >
     {@render row({
       id: null,
       name: 'Root',

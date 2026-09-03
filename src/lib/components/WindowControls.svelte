@@ -70,8 +70,8 @@
     variant="ghost"
     size="icon"
     onclick={() => appWindow?.minimize()}
-    title="Minimize"
-    aria-label="Minimize"
+    title={tUi('window.minimize')}
+    aria-label={tUi('window.minimize')}
   >
     <Minus class="size-4" />
   </Button>
@@ -104,8 +104,8 @@
       size="icon"
       class="hover:bg-destructive hover:text-destructive-foreground"
       onclick={() => appWindow?.close()}
-      title="Close"
-      aria-label="Close"
+      title={tUi('close')}
+      aria-label={tUi('close')}
     >
       <X class="size-4" />
     </Button>

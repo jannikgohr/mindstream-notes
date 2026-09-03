@@ -44,8 +44,8 @@
       variant="ghost"
       size="icon"
       onclick={back}
-      title="Back"
-      aria-label="Back to notes"
+      title={tUi('mobile.back')}
+      aria-label={tUi('mobile.backToNotes')}
     >
       <ArrowLeft class="size-5" />
     </Button>

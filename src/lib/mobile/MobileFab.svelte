@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tUi } from '$lib/settings/i18n.svelte';
   /**
    * Stacked floating action buttons. The bottom button is the primary
    * "new note" quick action; above it sits a plus button that fans out
@@ -49,7 +50,7 @@
   <!-- Scrim absorbs taps elsewhere so the fan-out feels like a popover. -->
   <button
     type="button"
-    aria-label="Close action menu"
+    aria-label={tUi('mobile.closeActionMenu')}
     class="fixed inset-0 z-30 bg-scrim"
     onclick={collapseFab}
   ></button>

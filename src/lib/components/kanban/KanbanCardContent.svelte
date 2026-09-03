@@ -225,7 +225,10 @@
 
   {#if Number(card.progress ?? 0) > 0 && cardShape.progress}
     <div class="kanban-card-progress-row">
-      <div class="kanban-card-progress" aria-label="Progress">
+      <div
+        class="kanban-card-progress"
+        aria-label={tUi('editor.kanban.cardProgress')}
+      >
         <div
           class="kanban-card-progress-fill"
           style:width={`${progressPercent}%`}
@@ -240,7 +243,10 @@
 
 {#if users.length > 0}
   <div class="kanban-card-footer">
-    <div class="kanban-card-users" aria-label="Users">
+    <div
+      class="kanban-card-users"
+      aria-label={tUi('editor.kanban.cardAssignees')}
+    >
       {#each users.slice(0, 4) as user (user.id)}
         <span class="kanban-card-user" title={user.label}>
           {user.label.slice(0, 1).toUpperCase()}
