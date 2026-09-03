@@ -339,9 +339,9 @@ describe('T3 plugin text checker', function () {
     );
     await $('[data-diagnostic-popover]').waitForDisplayed({ timeout: 15_000 });
 
-    // The message is the server's sentence, not one of ours, and the
-    // replacement list is the server's too — the app re-ranks only the
-    // dictionary's suggestions.
+    // The message is the server's sentence, not one of ours, and so is the
+    // replacement list: the app re-ranks only the dictionary's own
+    // suggestions, and edits the server's list only as below.
     await expect($('[data-diagnostic-popover]')).toHaveText(
       expect.stringContaining('Stub rule')
     );

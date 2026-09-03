@@ -15,11 +15,12 @@
 //!   - the declared pointers actually resolve against a live server's reply,
 //!     which runs only when `MINDSTREAM_LT_ENDPOINT` names one.
 //!
-//! The network test SKIPS when that variable is unset, so it stays out of the
-//! ordinary suite and out of required CI. Point it at whatever instance you
-//! already run:
+//! The network test is `#[ignore]`d, so it stays out of the ordinary suite and
+//! out of required CI — and the run that does not include it says "1 ignored"
+//! rather than reporting a pass for a test that did nothing. Point it at
+//! whatever instance you already run:
 //!
-//!   MINDSTREAM_LT_ENDPOINT=http://localhost:8010 cargo test --test languagetool_contract -- --nocapture
+//!   MINDSTREAM_LT_ENDPOINT=http://localhost:8010 cargo test --test languagetool_contract -- --ignored --nocapture
 //!
 //! It is deliberately not wired into a Docker image. Pinning a LanguageTool
 //! version in CI would test their release process on every push of ours; the
@@ -69,9 +70,12 @@ fn the_shipped_manifest_describes_a_protocol_this_crate_can_execute() {
         .detection
         .expect("the protocol must declare where detection lives");
     assert_eq!(detection.code, "/language/detectedLanguage/code");
+    // Optional in the protocol and read by nothing, but LanguageTool does
+    // report a score, so this manifest declaring one is a claim about their
+    // reply that the live test below actually checks.
     assert_eq!(
-        detection.confidence,
-        "/language/detectedLanguage/confidence"
+        detection.confidence.as_deref(),
+        Some("/language/detectedLanguage/confidence")
     );
     assert!(
         parsed.probe.is_some(),
@@ -80,11 +84,13 @@ fn the_shipped_manifest_describes_a_protocol_this_crate_can_execute() {
 }
 
 #[test]
+#[ignore = "needs a real LanguageTool server; set MINDSTREAM_LT_ENDPOINT and pass --ignored"]
 fn the_declared_pointers_resolve_against_a_real_server() {
-    let Ok(endpoint) = std::env::var(ENDPOINT_VAR) else {
-        eprintln!("skipped: set {ENDPOINT_VAR} to a LanguageTool instance to run this");
-        return;
-    };
+    // Asked for explicitly and still given nothing to talk to: that is a
+    // mistyped invocation, not a skip, and passing quietly would hide it.
+    let endpoint = std::env::var(ENDPOINT_VAR).unwrap_or_else(|_| {
+        panic!("set {ENDPOINT_VAR} to a LanguageTool instance to run this test")
+    });
 
     let found = tauri::async_runtime::block_on(check(
         CheckInput {
