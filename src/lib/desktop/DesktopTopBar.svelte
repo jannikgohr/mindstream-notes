@@ -49,7 +49,7 @@
     size="icon"
     onclick={toggleLeftSidebar}
     title={ui.leftSidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
-    aria-label="Toggle left sidebar"
+    aria-label={tUi('topBar.toggleLeftSidebar')}
   >
     <!--
       One glyph for both rails: the left button mirrors `panel-right`
@@ -103,8 +103,8 @@
     variant="ghost"
     size="icon"
     onclick={() => openSettings()}
-    title="Settings"
-    aria-label="Open settings"
+    title={tUi('topBar.settings')}
+    aria-label={tUi('topBar.openSettings')}
   >
     <CuedIcon icon={SettingsIcon} size={16} />
   </Button>

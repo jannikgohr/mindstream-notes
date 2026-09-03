@@ -219,7 +219,7 @@
           <C {searchQuery} />
         {:else if customComponentId && CUSTOM_COMPONENT_LOADERS[customComponentId]}
           <div class="flex items-center text-xs text-muted-foreground">
-            <Loader2 class="size-3 animate-spin" aria-label="Loading" />
+            <Loader2 class="size-3 animate-spin" aria-label={tUi('loading')} />
           </div>
         {:else}
           <p class="text-xs text-destructive">
@@ -372,7 +372,7 @@
         type="text"
         value={(value as string | undefined) ?? ''}
         oninput={(e) => commit((e.currentTarget as HTMLInputElement).value)}
-        placeholder="Cmd+K"
+        placeholder={tUi('hotkeys.placeholder')}
         class="h-8 w-32 rounded-md border border-input bg-background px-2 text-center font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
     {:else if setting.type === 'button'}

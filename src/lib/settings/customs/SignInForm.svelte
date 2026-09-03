@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tUi } from '$lib/settings/i18n.svelte';
   /**
    * Etebase sign-in / sign-out panel. Only mounted when the surrounding
    * `account.serverType` is "managed" or "self-hosted" (see schema.json).
@@ -298,7 +299,7 @@
               type="url"
               inputmode="url"
               autocomplete="url"
-              aria-label="Server URL"
+              aria-label={tUi('account.serverUrl')}
               value={serverUrlInput}
               oninput={onServerUrlInput}
               placeholder="https://collab.example.com"
@@ -329,7 +330,7 @@
           <span class="text-xs text-muted-foreground">Server</span>
           <div
             class="flex h-8 items-center rounded-md border border-input bg-background/40 px-2 font-mono text-xs text-muted-foreground"
-            title="Managed by Etebase. Switch to self-hosted in the radio above to use your own server."
+            title={tUi('account.managedHint')}
           >
             Managed ({MANAGED_SERVER_URL})
           </div>
@@ -340,7 +341,7 @@
         <input
           type="text"
           autocomplete="username"
-          aria-label="Username or email"
+          aria-label={tUi('account.usernameOrEmail')}
           bind:value={username}
           placeholder="you@example.com"
           disabled={busy}
@@ -352,7 +353,7 @@
         <input
           type="password"
           autocomplete="current-password"
-          aria-label="Password"
+          aria-label={tUi('account.password')}
           bind:value={password}
           disabled={busy}
           class="h-8 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
