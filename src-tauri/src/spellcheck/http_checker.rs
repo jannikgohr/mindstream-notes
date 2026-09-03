@@ -156,6 +156,24 @@ const MIN_DETECTION_CONFIDENCE: f64 = 0.5;
 /// The language value meaning "let the server decide".
 const AUTO_LANGUAGE: &str = "auto";
 
+/// Fewer words than this and detection is not asked at all.
+///
+/// The confidence floor above catches a server that ADMITS it is guessing. It
+/// does nothing about the other failure, which is the one users actually hit: a
+/// one-word paragraph — a heading, a table cell, a label — detected as the
+/// wrong language with high confidence. `Vertragsnummer` alone comes back as
+/// English at a confidence the floor happily accepts, and the English speller
+/// then flags a perfectly good German compound.
+///
+/// A word count rather than a character count, because length carries no
+/// signal here: `Vertragsnummer` is fourteen characters of exactly one clue.
+const MIN_DETECTION_WORDS: usize = 4;
+
+/// True when there is enough text for language detection to mean anything.
+fn worth_detecting(text: &str) -> bool {
+    text.split_whitespace().count() >= MIN_DETECTION_WORDS
+}
+
 /// How many replacements to keep per match.
 ///
 /// A service can return dozens for one match. The popover shows six before
@@ -244,6 +262,18 @@ pub async fn check(
     input: CheckInput<'_>,
     protocol: &CheckerProtocol,
 ) -> AppResult<Vec<CheckerMatch>> {
+    // Too short to detect: name the language outright rather than asking and
+    // then second-guessing the answer. Costs one request instead of two, and
+    // the result is the same every time the same fragment is checked.
+    if input.language == AUTO_LANGUAGE
+        && !input.preferred_variants.is_empty()
+        && !worth_detecting(input.text)
+    {
+        let chosen = input.preferred_variants[0].clone();
+        let response = check_once(&input, protocol, &chosen, &[]).await?;
+        return Ok(into_matches(&response, &protocol.matches));
+    }
+
     let first = check_once(&input, protocol, input.language, input.preferred_variants).await?;
 
     // Auto-detection is only trusted when it is confident AND landed on a
@@ -1036,7 +1066,7 @@ mod tests {
             api_key: None,
             username: None,
             language,
-            text: "Ein Satzz.",
+            text: "Dies ist ein Satzz.",
             disabled_categories: &[],
             preferred_variants: &[],
         }
@@ -1050,7 +1080,11 @@ mod tests {
         let request = server.next();
         assert_eq!(request.path, "/v2/check");
         // Form-encoded, as the protocol declares.
-        assert!(request.body.contains("text=Ein+Satzz."), "{}", request.body);
+        assert!(
+            request.body.contains("text=Dies+ist+ein+Satzz."),
+            "{}",
+            request.body
+        );
         assert!(request.body.contains("language=de-DE"), "{}", request.body);
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].from, 4);
@@ -1065,7 +1099,7 @@ mod tests {
         block_on(check(input(&server.base, "de-DE"), &protocol)).unwrap();
 
         let body: Value = serde_json::from_str(&server.next().body).unwrap();
-        assert_eq!(body["text"], "Ein Satzz.");
+        assert_eq!(body["text"], "Dies ist ein Satzz.");
         assert_eq!(body["language"], "de-DE");
     }
 
@@ -1109,6 +1143,49 @@ mod tests {
         server.next();
         assert!(server.is_done(), "a believable detection must not re-ask");
         assert_eq!(found.len(), 1);
+    }
+
+    #[test]
+    fn never_asks_for_detection_on_a_one_word_paragraph() {
+        // The reported bug: `Vertragsnummer` on its own is detected as English
+        // with high confidence, so the confidence floor lets it through and a
+        // correct German compound comes back underlined.
+        let server = serve(vec![ok(r#"{"matches":[]}"#)]);
+        let variants = vec!["de-DE".to_string(), "en-US".to_string()];
+        let mut request = input(&server.base, AUTO_LANGUAGE);
+        request.text = "Vertragsnummer";
+        request.preferred_variants = &variants;
+
+        block_on(check(request, &languagetool())).unwrap();
+
+        let only = server.next();
+        assert!(only.body.contains("language=de-DE"), "{}", only.body);
+        // Named outright, so there is nothing for the server to guess at.
+        assert!(!only.body.contains("preferredVariants"), "{}", only.body);
+        assert!(server.is_done(), "the short path must cost one request");
+    }
+
+    #[test]
+    fn still_detects_when_there_is_enough_text_to_go_on() {
+        let server = serve(vec![ok(
+            r#"{"matches":[],"language":{"detectedLanguage":{"code":"en","confidence":0.99}}}"#,
+        )]);
+        let variants = vec!["de-DE".to_string(), "en-US".to_string()];
+        let mut request = input(&server.base, AUTO_LANGUAGE);
+        request.text = "This is an English sentence.";
+        request.preferred_variants = &variants;
+
+        block_on(check(request, &languagetool())).unwrap();
+
+        assert!(server.next().body.contains("language=auto"));
+        assert!(server.is_done(), "a believable detection must not re-ask");
+    }
+
+    #[test]
+    fn counts_words_rather_than_characters_for_detection() {
+        assert!(!worth_detecting("Vertragsnummer"));
+        assert!(!worth_detecting("  Nr. 4 \n"));
+        assert!(worth_detecting("Dies ist ein Satz."));
     }
 
     #[test]
