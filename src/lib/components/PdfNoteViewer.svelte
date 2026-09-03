@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount, tick, untrack } from 'svelte';
+  import { onAppSuspend } from '$lib/editor/suspend-flush';
   import { createHistoryCapture } from '$lib/history/capture-scheduler';
   import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
   import {
@@ -1251,6 +1252,15 @@
       snapshotDoc.destroy();
     }
   }
+
+  // The OS can take the process down without unmounting us (Android kills
+  // backgrounded apps), so `onDestroy` alone can't protect the debounce
+  // window. Same guard the teardown flush uses.
+  $effect(() =>
+    onAppSuspend(() => {
+      if (saveTimer) void flushSave();
+    })
+  );
 
   function scheduleSave() {
     if (isTrashed || !saveReady) return;

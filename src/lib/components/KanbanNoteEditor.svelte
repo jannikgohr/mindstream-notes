@@ -22,6 +22,7 @@
    */
 
   import { onDestroy, onMount } from 'svelte';
+  import { onAppSuspend } from '$lib/editor/suspend-flush';
   import { createHistoryCapture } from '$lib/history/capture-scheduler';
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
@@ -1107,6 +1108,16 @@
   }
 
   // ---- Save ----
+  // The OS can take the process down without unmounting us (Android kills
+  // backgrounded apps), so `onDestroy` alone can't protect the debounce
+  // window. `persist` always writes, so gate on a pending save like the
+  // teardown flush does.
+  $effect(() =>
+    onAppSuspend(() => {
+      if (saveTimer && saveReady && !isTrashed) void persist();
+    })
+  );
+
   function scheduleSave(): void {
     if (isTrashed) return;
     if (!autoSaveEnabled) {

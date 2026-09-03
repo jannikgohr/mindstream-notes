@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
+  import { onAppSuspend } from '$lib/editor/suspend-flush';
   import { Crepe } from '@milkdown/crepe';
   import {
     editorViewCtx,
@@ -1486,6 +1487,18 @@
       return null;
     }
   }
+
+  // The OS can take the process down without unmounting us (Android kills
+  // backgrounded apps), so `onDestroy` alone can't protect the debounce
+  // window. Same guard and options the teardown flush uses.
+  $effect(() =>
+    onAppSuspend(() => {
+      if (!saveTimer) return;
+      void persistCurrentNote({ updateStatus: false }).catch((err) => {
+        console.error('[NoteEditor] suspend save failed', err);
+      });
+    })
+  );
 
   function scheduleSave() {
     // setReadonly(true) already prevents user input, but yDoc 'update' can
