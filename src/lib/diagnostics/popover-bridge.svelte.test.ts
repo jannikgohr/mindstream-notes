@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { diagnosticAnchorFrom } from './popover-bridge.svelte';
+import {
+  closeDiagnosticPopover,
+  diagnosticAnchorFrom,
+  diagnosticPopover,
+  openDiagnosticPopover
+} from './popover-bridge.svelte';
+import type { Diagnostic } from './types';
 
 /**
  * jsdom has no layout, so every rect is zero unless a test says otherwise.
@@ -88,5 +94,65 @@ describe('diagnosticAnchorFrom', () => {
   it('falls back to the pointer when the target is not an element', () => {
     // `window` is a legitimate EventTarget with no closest().
     expect(diagnosticAnchorFrom(event(window, 160, 205)).left).toBe(160);
+  });
+});
+
+describe('openDiagnosticPopover', () => {
+  const diagnostic = (replacements: string[]): Diagnostic => ({
+    from: 0,
+    to: 14,
+    kind: 'spelling',
+    message: 'Possible spelling mistake found.',
+    replacements,
+    source: 'plugins.languagetool.check'
+  });
+
+  const open = (
+    word: string,
+    replacements: string[],
+    fetched: string[] = []
+  ) => {
+    openDiagnosticPopover(
+      {
+        word,
+        diagnostic: diagnostic(replacements),
+        anchor: { left: 0, top: 0, bottom: 0 },
+        apply: () => {}
+      },
+      async () => fetched
+    );
+    // The lookup is awaited internally even when it resolves immediately.
+    return Promise.resolve().then(() => Promise.resolve());
+  };
+
+  afterEach(() => closeDiagnosticPopover());
+
+  it('drops a fetched suggestion identical to the flagged word', async () => {
+    // The real report: LanguageTool flags a correct German compound with no
+    // replacements of its own, so the local dictionary answers — and it
+    // ranks the exact match first, offering the word as its own correction.
+    await open(
+      'Vertragsnummer',
+      [],
+      ['Vertragsnummer', 'Vertragsnummern', 'Vertragssummer']
+    );
+
+    expect(diagnosticPopover.suggestions).toEqual([
+      'Vertragsnummern',
+      'Vertragssummer'
+    ]);
+  });
+
+  it('drops a provider replacement identical to the flagged word', async () => {
+    await open('Vertragsnummer', ['Vertragsnummer', 'Vertragsnummern']);
+
+    expect(diagnosticPopover.suggestions).toEqual(['Vertragsnummern']);
+  });
+
+  it('keeps a suggestion that differs only in case', async () => {
+    // A case flip is a real correction, so equality has to stay exact.
+    await open('nr', [], ['Nr', 'nr']);
+
+    expect(diagnosticPopover.suggestions).toEqual(['Nr']);
   });
 });
