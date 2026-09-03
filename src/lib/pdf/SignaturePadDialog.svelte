@@ -138,7 +138,7 @@
       class="flex w-[min(34rem,100%)] flex-col rounded-md border border-border bg-popover text-popover-foreground shadow-lg"
       role="dialog"
       aria-modal="true"
-      aria-label="Create signature"
+      aria-label={tUi('pdf.signature.create')}
     >
       <div
         class="flex h-9 items-center justify-between border-b border-border px-3"
@@ -157,7 +157,7 @@
       <div class="p-3">
         <svg
           role="img"
-          aria-label="Signature drawing pad"
+          aria-label={tUi('pdf.signature.pad')}
           class="aspect-[420/168] w-full touch-none rounded-md border border-input bg-white"
           viewBox="0 0 {PAD_WIDTH} {PAD_HEIGHT}"
           onpointerdown={beginStroke}

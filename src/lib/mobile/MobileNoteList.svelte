@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tUi } from '$lib/settings/i18n.svelte';
   /**
    * Note browser body: filters the tree by the active view + folder,
    * applies the search query, then renders as either a vertical list or
@@ -540,8 +541,8 @@
           type="button"
           class="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
           onclick={clearMobileBatchSelection}
-          aria-label="Cancel selection"
-          title="Cancel"
+          aria-label={tUi('mobile.cancelSelection')}
+          title={tUi('mobile.cancel')}
         >
           <X class="size-4" />
         </button>
@@ -555,8 +556,8 @@
           class="inline-flex h-9 max-w-full shrink-0 items-center justify-center gap-1.5 rounded-md bg-destructive px-3 text-xs font-semibold text-destructive-foreground shadow-sm transition-colors hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-50"
           onclick={() => void startEmptyTrash()}
           disabled={trashRootEmpty || emptyTrashPending}
-          aria-label="Delete all trash permanently"
-          title="Delete all permanently"
+          aria-label={tUi('mobile.deleteAllTrash')}
+          title={tUi('mobile.deleteAllPermanently')}
         >
           {#if emptyTrashPending}
             <Loader2 class="size-3.5 animate-spin" />
@@ -639,8 +640,8 @@
                   class="rounded p-1 text-muted-foreground hover:text-foreground"
                   onclick={(e) =>
                     openContextMenu(e, { kind: node.kind, id: node.id })}
-                  aria-label="More actions"
-                  title="More actions"
+                  aria-label={tUi('fileTree.toolbar.more')}
+                  title={tUi('fileTree.toolbar.more')}
                 >
                   <MoreVertical class="size-4" />
                 </button>
@@ -710,8 +711,8 @@
                 class="shrink-0 rounded p-2 text-muted-foreground hover:text-foreground"
                 onclick={(e) =>
                   openContextMenu(e, { kind: node.kind, id: node.id })}
-                aria-label="More actions"
-                title="More actions"
+                aria-label={tUi('fileTree.toolbar.more')}
+                title={tUi('fileTree.toolbar.more')}
               >
                 <MoreVertical class="size-4" />
               </button>
