@@ -1,6 +1,7 @@
 # CI for every push / PR. Five parallel job groups:
 #   - format   : `prettier --check` on the web + docs sources
-#                (pnpm format:web:check), Linux — fails on formatting drift.
+#                (pnpm format:web:check) plus the theme guardrail
+#                (pnpm lint:theme), Linux.
 #   - js       : svelte-check + vitest + vite build, on all three desktop OSes.
 #   - rust     : `cargo test` for the desktop target on all three desktop OSes,
 #                plus `cargo fmt --check` and `cargo clippy -D warnings` once
@@ -287,3 +288,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm format:web:check
+
+      # Theme guardrail (docs/theming.md). It used to run only in the
+      # husky hooks, so `--no-verify` or a fresh clone skipped it and
+      # nothing on the server ever checked. Costs under a second.
+      - run: pnpm lint:theme
