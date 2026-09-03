@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, untrack } from 'svelte';
+  import { onAppSuspend } from '$lib/editor/suspend-flush';
   import type { EditorView } from '@codemirror/view';
   import { AlertTriangle, Loader2, RefreshCw } from '@lucide/svelte';
   import { loadNote } from '$lib/api';
@@ -695,6 +696,11 @@
   function cycleViewMode() {
     viewMode = nextViewMode(viewMode, splitAvailable());
   }
+
+  // The OS can take the process down without unmounting us (Android kills
+  // backgrounded apps), so `onDestroy` alone can't protect the debounce
+  // window. `flushSave` already no-ops when nothing is dirty.
+  $effect(() => onAppSuspend(() => void flushSave()));
 
   function scheduleSave() {
     dirty = true;
