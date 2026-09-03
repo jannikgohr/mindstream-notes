@@ -62,9 +62,9 @@ fn the_shipped_manifest_describes_a_protocol_this_crate_can_execute() {
     assert_eq!(parsed.check.path, "/v2/check");
     assert_eq!(parsed.matches.list, "/matches");
     assert_eq!(parsed.matches.offset, "/offset");
-    // The short-text language decision reads this pointer. A manifest that
-    // stops declaring detection changes which language a paragraph is checked
-    // in, which is not the kind of change that should pass unnoticed.
+    // The language decision reads the code pointer. A manifest that stops
+    // declaring detection changes which language a paragraph is checked in,
+    // which is not the kind of change that should pass unnoticed.
     let detection = parsed
         .detection
         .expect("the protocol must declare where detection lives");
