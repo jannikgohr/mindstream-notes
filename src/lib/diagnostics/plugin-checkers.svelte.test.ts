@@ -314,10 +314,10 @@ describe('checker request config', () => {
   });
 
   it('preserves the order of the selected languages', async () => {
-    // Load-bearing, not incidental. The backend names the FIRST variant for
-    // any segment too short to language-detect, so sorting this list — or
-    // building it from a Set that happens to reorder — silently changes which
-    // language a one-word paragraph is spellchecked in.
+    // Load-bearing, not incidental. When detection lands on a language that
+    // is not in this list, the backend re-asks naming the FIRST entry — so
+    // sorting the list, or building it from a Set that happens to reorder,
+    // silently changes which dictionary those paragraphs are checked against.
     tags.value = ['en-US', 'de-DE'];
     settings.set('plugins.com.example.lt.endpoint', 'https://lt.example.test');
     const config = await configFor();

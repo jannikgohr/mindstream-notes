@@ -143,36 +143,8 @@ fn base_url(endpoint: &str, trim_suffix: Option<&str>) -> String {
     }
 }
 
-/// Below this, auto-detection is not worth believing.
-///
-/// Measured against a real server: full sentences come back at 0.99, while
-/// single words and short fragments land between 0.23 and 0.46 — and at that
-/// end it gets them wrong, detecting the German `Sterbeurkunde` as French.
-/// Paragraph-at-a-time checking means short segments are the norm, not the
-/// exception, so a mis-detected language would spellcheck a German paragraph
-/// against a French dictionary.
-const MIN_DETECTION_CONFIDENCE: f64 = 0.5;
-
 /// The language value meaning "let the server decide".
 const AUTO_LANGUAGE: &str = "auto";
-
-/// Fewer words than this and detection is not asked at all.
-///
-/// The confidence floor above catches a server that ADMITS it is guessing. It
-/// does nothing about the other failure, which is the one users actually hit: a
-/// one-word paragraph — a heading, a table cell, a label — detected as the
-/// wrong language with high confidence. `Vertragsnummer` alone comes back as
-/// English at a confidence the floor happily accepts, and the English speller
-/// then flags a perfectly good German compound.
-///
-/// A word count rather than a character count, because length carries no
-/// signal here: `Vertragsnummer` is fourteen characters of exactly one clue.
-const MIN_DETECTION_WORDS: usize = 4;
-
-/// True when there is enough text for language detection to mean anything.
-fn worth_detecting(text: &str) -> bool {
-    text.split_whitespace().count() >= MIN_DETECTION_WORDS
-}
 
 /// How many replacements to keep per match.
 ///
@@ -262,35 +234,32 @@ pub async fn check(
     input: CheckInput<'_>,
     protocol: &CheckerProtocol,
 ) -> AppResult<Vec<CheckerMatch>> {
-    // Too short to detect: name the language outright rather than asking and
-    // then second-guessing the answer. Costs one request instead of two, and
-    // the result is the same every time the same fragment is checked.
-    if input.language == AUTO_LANGUAGE
-        && !input.preferred_variants.is_empty()
-        && !worth_detecting(input.text)
-    {
-        let chosen = input.preferred_variants[0].clone();
-        let response = check_once(&input, protocol, &chosen, &[]).await?;
-        return Ok(into_matches(&response, &protocol.matches));
-    }
-
     let first = check_once(&input, protocol, input.language, input.preferred_variants).await?;
 
-    // Auto-detection is only trusted when it is confident AND landed on a
-    // language the user actually writes. Otherwise re-ask, naming the language
-    // outright — checking German prose against a French dictionary produces far
-    // more nonsense than checking it against the wrong German variant.
+    // Auto-detection is trusted when it lands on a language the user actually
+    // writes, and only then. Otherwise re-ask, naming the language outright —
+    // checking German prose against a French dictionary produces far more
+    // nonsense than checking it against the wrong German variant.
+    //
+    // CONFIDENCE IS DELIBERATELY NOT CONSULTED, though the protocol still
+    // declares where it lives. A floor of 0.5 used to sit alongside this test,
+    // and measured against a real server it rejected nothing the test below
+    // does not already reject: a short fragment scores 0.23–0.46 whether the
+    // guess is right or wrong, so the floor threw away correct answers to
+    // catch wrong ones the language list catches anyway. It cost a real bug —
+    // a lone `Vertragsnummer` is detected as German at 0.462, was refused for
+    // being under the floor, and got checked against whichever dictionary
+    // happened to be first, which for a German-and-English user is a coin
+    // flip. A wrong guess that names a language the user does not write is
+    // still refused here, which is what the floor was actually protecting
+    // against.
     if let Some(detection) = &protocol.detection {
         if input.language == AUTO_LANGUAGE && !input.preferred_variants.is_empty() {
             let code = string_at(&first, &detection.code).unwrap_or_default();
-            let confidence = at(&first, &detection.confidence)
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0);
-            let plausible = confidence >= MIN_DETECTION_CONFIDENCE
-                && input
-                    .preferred_variants
-                    .iter()
-                    .any(|tag| same_language(tag, &code));
+            let plausible = input
+                .preferred_variants
+                .iter()
+                .any(|tag| same_language(tag, &code));
             if !plausible {
                 let fallback = input.preferred_variants[0].clone();
                 let retry = check_once(&input, protocol, &fallback, &[]).await?;
@@ -694,6 +663,9 @@ mod tests {
     fn reads_the_detected_language_and_confidence() {
         // Measured shapes: a full sentence scores 0.99, a single word 0.43 —
         // and at 0.43 the server called the German "Sterbeurkunde" French.
+        // Both pointers still resolve; only the code decides anything now, and
+        // "fr" is refused for naming a language the user does not write rather
+        // than for the score beside it.
         let json: Value = serde_json::from_str(
             r#"{"matches":[],"language":{"detectedLanguage":{"code":"fr","confidence":0.429}}}"#,
         )
@@ -703,7 +675,7 @@ mod tests {
         let confidence = at(&json, &detection.confidence)
             .and_then(|v| v.as_f64())
             .unwrap();
-        assert!(confidence < MIN_DETECTION_CONFIDENCE);
+        assert!((0.0..=1.0).contains(&confidence));
     }
 
     #[test]
@@ -1161,47 +1133,15 @@ mod tests {
     }
 
     #[test]
-    fn never_asks_for_detection_on_a_one_word_paragraph() {
-        // The reported bug: `Vertragsnummer` on its own is detected as English
-        // with high confidence, so the confidence floor lets it through and a
-        // correct German compound comes back underlined.
-        let server = serve(vec![ok(r#"{"matches":[]}"#)]);
-        let variants = vec!["de-DE".to_string(), "en-US".to_string()];
-        let mut request = input(&server.base, AUTO_LANGUAGE);
-        request.text = "Vertragsnummer";
-        request.preferred_variants = &variants;
-
-        block_on(check(request, &languagetool())).unwrap();
-
-        let only = server.next();
-        assert!(only.body.contains("language=de-DE"), "{}", only.body);
-        // Named outright, so there is nothing for the server to guess at.
-        assert!(!only.body.contains("preferredVariants"), "{}", only.body);
-        assert!(server.is_done(), "the short path must cost one request");
-    }
-
-    #[test]
-    fn still_detects_when_there_is_enough_text_to_go_on() {
+    fn believes_an_unconfident_detection_that_names_a_language_the_user_writes() {
+        // The reported bug, with the numbers a real server produced for it: a
+        // lone `Vertragsnummer` is detected as German at 0.462. The old floor
+        // of 0.5 refused that and fell back to the first selected language,
+        // which for a German-and-English user is a coin flip — and the flip
+        // that lands on English underlines a perfectly good German compound.
         let server = serve(vec![ok(
-            r#"{"matches":[],"language":{"detectedLanguage":{"code":"en","confidence":0.99}}}"#,
+            r#"{"matches":[],"language":{"detectedLanguage":{"code":"de-DE","confidence":0.462}}}"#,
         )]);
-        let variants = vec!["de-DE".to_string(), "en-US".to_string()];
-        let mut request = input(&server.base, AUTO_LANGUAGE);
-        request.text = "This is an English sentence.";
-        request.preferred_variants = &variants;
-
-        block_on(check(request, &languagetool())).unwrap();
-
-        assert!(server.next().body.contains("language=auto"));
-        assert!(server.is_done(), "a believable detection must not re-ask");
-    }
-
-    #[test]
-    fn the_first_preferred_variant_is_the_one_short_text_gets() {
-        // The order of the user's selected languages decides this, so it is a
-        // contract with the frontend and not an implementation detail: the
-        // same fragment checks as English here and as German in the test above.
-        let server = serve(vec![ok(r#"{"matches":[]}"#)]);
         let variants = vec!["en-US".to_string(), "de-DE".to_string()];
         let mut request = input(&server.base, AUTO_LANGUAGE);
         request.text = "Vertragsnummer";
@@ -1209,17 +1149,75 @@ mod tests {
 
         block_on(check(request, &languagetool())).unwrap();
 
+        let only = server.next();
+        assert!(only.body.contains("language=auto"), "{}", only.body);
+        assert!(
+            server.is_done(),
+            "an in-set detection must be taken at its word, not re-asked"
+        );
+    }
+
+    #[test]
+    fn believes_a_detection_with_no_confidence_reported_at_all() {
+        // Confidence is no longer read, so a service that omits it is not
+        // thereby distrusted — it used to default to 0.0 and be refused.
+        let server = serve(vec![ok(
+            r#"{"matches":[],"language":{"detectedLanguage":{"code":"de"}}}"#,
+        )]);
+        let variants = vec!["en-US".to_string(), "de-DE".to_string()];
+        let mut request = input(&server.base, AUTO_LANGUAGE);
+        request.preferred_variants = &variants;
+
+        block_on(check(request, &languagetool())).unwrap();
+
+        server.next();
+        assert!(server.is_done());
+    }
+
+    #[test]
+    fn re_asks_when_no_language_came_back_at_all() {
+        // An empty code matches nothing in the list, so a reply carrying no
+        // detection falls back rather than checking against ""; `same_language`
+        // is what enforces that and this is the case that proves it.
+        let server = serve(vec![ok(r#"{"matches":[]}"#), ok(r#"{"matches":[]}"#)]);
+        let variants = vec!["de-DE".to_string()];
+        let mut request = input(&server.base, AUTO_LANGUAGE);
+        request.preferred_variants = &variants;
+
+        block_on(check(request, &languagetool())).unwrap();
+
+        server.next();
+        assert!(server.next().body.contains("language=de-DE"));
+    }
+
+    #[test]
+    fn the_first_preferred_variant_is_the_fallback_when_detection_misses() {
+        // The order of the user's selected languages decides where an
+        // out-of-set detection lands, so it is a contract with the frontend
+        // and not an implementation detail.
+        let server = serve(vec![
+            ok(r#"{"matches":[],"language":{"detectedLanguage":{"code":"fr","confidence":0.99}}}"#),
+            ok(r#"{"matches":[]}"#),
+        ]);
+        let variants = vec!["en-US".to_string(), "de-DE".to_string()];
+        let mut request = input(&server.base, AUTO_LANGUAGE);
+        request.preferred_variants = &variants;
+
+        block_on(check(request, &languagetool())).unwrap();
+
+        server.next();
         assert!(server.next().body.contains("language=en-US"));
     }
 
     #[test]
-    fn asks_anyway_when_short_text_has_no_variants_to_fall_back_on() {
-        // Nothing to name the language with, so the server's guess is still
-        // better than refusing to check. Also the indexing guard: variants[0]
-        // must never be reached on an empty list.
-        let server = serve(vec![ok(r#"{"matches":[]}"#)]);
-        let mut request = input(&server.base, AUTO_LANGUAGE);
-        request.text = "Vertragsnummer";
+    fn asks_once_when_there_are_no_variants_to_fall_back_on() {
+        // Nothing to name the language with, so the server's guess stands.
+        // Also the indexing guard: variants[0] must never be reached on an
+        // empty list.
+        let server = serve(vec![ok(
+            r#"{"matches":[],"language":{"detectedLanguage":{"code":"fr","confidence":0.99}}}"#,
+        )]);
+        let request = input(&server.base, AUTO_LANGUAGE);
 
         block_on(check(request, &languagetool())).unwrap();
 
@@ -1228,46 +1226,36 @@ mod tests {
     }
 
     #[test]
-    fn leaves_an_explicitly_named_language_alone_on_short_text() {
+    fn leaves_an_explicitly_named_language_alone() {
         // One selected language means the frontend names it rather than
         // sending `auto`, and there is nothing here to second-guess.
-        let server = serve(vec![ok(r#"{"matches":[]}"#)]);
+        let server = serve(vec![ok(
+            r#"{"matches":[],"language":{"detectedLanguage":{"code":"fr","confidence":0.99}}}"#,
+        )]);
         let mut request = input(&server.base, "de-DE");
         request.text = "Vertragsnummer";
 
         block_on(check(request, &languagetool())).unwrap();
 
         assert!(server.next().body.contains("language=de-DE"));
-        assert!(server.is_done());
+        assert!(server.is_done(), "a named language is never re-asked");
     }
 
     #[test]
-    fn names_the_language_for_short_text_even_without_a_detection_spec() {
-        // A protocol that declares no detection gives us no way to notice a
-        // wrong guess afterwards, which is a reason to guess less, not more.
+    fn takes_the_reply_as_it_stands_without_a_detection_spec() {
+        // Nothing declares where the detected language lives, so there is no
+        // answer to second-guess and no reason to spend a second request.
         let mut protocol = languagetool();
         protocol.detection = None;
         let server = serve(vec![ok(r#"{"matches":[]}"#)]);
         let variants = vec!["de-DE".to_string()];
         let mut request = input(&server.base, AUTO_LANGUAGE);
-        request.text = "Vertragsnummer";
         request.preferred_variants = &variants;
 
         block_on(check(request, &protocol)).unwrap();
 
-        assert!(server.next().body.contains("language=de-DE"));
-    }
-
-    #[test]
-    fn counts_words_rather_than_characters_for_detection() {
-        // Length carries no signal: one long compound is still one clue, and
-        // four short words are enough to tell German from English.
-        assert!(!worth_detecting("Vertragsnummer"));
-        assert!(!worth_detecting("  Nr. 4 \n"));
-        assert!(!worth_detecting(""));
-        assert!(!worth_detecting("Dies ist kurz"));
-        assert!(worth_detecting("Dies ist ein Satz."));
-        assert!(worth_detecting("a b c d"));
+        assert!(server.next().body.contains("language=auto"));
+        assert!(server.is_done());
     }
 
     #[test]
@@ -1292,11 +1280,13 @@ mod tests {
     }
 
     #[test]
-    fn re_asks_by_name_when_detection_is_not_confident() {
-        let server = serve(vec![
-            ok(r#"{"matches":[],"language":{"detectedLanguage":{"code":"de","confidence":0.43}}}"#),
-            ok(r#"{"matches":[]}"#),
-        ]);
+    fn sends_the_selected_languages_alongside_auto() {
+        // Narrowing the guess to what the user writes is the whole reason
+        // detection is usable at all: it is the difference between "which of
+        // the world's languages is this" and "which of these two".
+        let server = serve(vec![ok(
+            r#"{"matches":[],"language":{"detectedLanguage":{"code":"de","confidence":0.43}}}"#,
+        )]);
         let variants = vec!["de-DE".to_string(), "en-US".to_string()];
         let mut request = input(&server.base, AUTO_LANGUAGE);
         request.preferred_variants = &variants;
@@ -1309,7 +1299,7 @@ mod tests {
             "{}",
             first.body
         );
-        assert!(server.next().body.contains("language=de-DE"));
+        assert!(server.is_done());
     }
 
     #[test]
