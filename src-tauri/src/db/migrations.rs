@@ -7,7 +7,7 @@
 
 use rusqlite::{params, Connection};
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 
 struct Migration {
     to: u32,
@@ -596,9 +596,53 @@ pub fn run(conn: &mut Connection) -> AppResult<()> {
     conn.pragma_update(None, "foreign_keys", "ON")?;
     // Surface integrity violations early instead of letting them bite at
     // the next CRUD call.
-    conn.execute("PRAGMA foreign_key_check", [])?;
+    check_foreign_keys(conn)?;
 
     Ok(())
+}
+
+/// Fail if any row violates a foreign key, naming what broke.
+///
+/// `PRAGMA foreign_key_check` reports one row per violation. This used to be
+/// `conn.execute(...)?`, which does detect them — rusqlite returns
+/// `ExecuteReturnedResults` the moment a statement yields a row — but the
+/// error that reached the user was the literal "Query returned results when
+/// it was expected to not return any", with no table, no rowid and no
+/// constraint. A database that failed to open told nobody why.
+///
+/// Reading the rows costs one query on a schema that is already correct
+/// (zero rows) and turns the failure into something actionable.
+fn check_foreign_keys(conn: &Connection) -> AppResult<()> {
+    let mut stmt = conn.prepare("PRAGMA foreign_key_check")?;
+    let violations = stmt
+        .query_map([], |row| {
+            // (child table, child rowid, parent table, index of the failing FK)
+            let table: String = row.get(0)?;
+            let rowid: Option<i64> = row.get(1)?;
+            let parent: String = row.get(2)?;
+            let fkid: i64 = row.get(3)?;
+            Ok(format!(
+                "{table}(rowid={}) -> {parent} [fk #{fkid}]",
+                rowid.map(|r| r.to_string()).unwrap_or_else(|| "?".into())
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    if violations.is_empty() {
+        return Ok(());
+    }
+
+    // Cap the detail: a broken cascade can produce thousands of rows, and the
+    // first handful identify the relationship just as well as all of them.
+    let shown = violations.len().min(10);
+    let mut detail = violations[..shown].join(", ");
+    if violations.len() > shown {
+        detail.push_str(&format!(", … and {} more", violations.len() - shown));
+    }
+    Err(AppError::InvalidArg(format!(
+        "database failed its foreign-key check after migration ({} violation(s)): {detail}",
+        violations.len()
+    )))
 }
 
 /// Did this DB just get its first schema applied (i.e. was empty before)?
@@ -681,6 +725,55 @@ fn insert_note(
 }
 
 const WELCOME_BODY: &str = "# Welcome\n\nThis is a **local-first** note-taking boilerplate built on Tauri v2, SvelteKit\n(SPA mode), Svelte 5 runes, dockview, and Milkdown's Crepe editor.\n\n- The left sidebar is the file tree\n- The right sidebar shows metadata for the active note\n- The middle area is a `dockview` instance — drag tabs to split panes\n\n> Notes now live in a SQLite database under your app data folder.\n";
+
+#[cfg(test)]
+mod fk_check_tests {
+    use super::*;
+
+    /// A clean, migrated database has no violations.
+    #[test]
+    fn passes_on_a_freshly_migrated_database() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run(&mut conn).expect("migrations + fk check");
+        check_foreign_keys(&conn).expect("no violations");
+    }
+
+    /// The point of the change: the error has to say what actually broke.
+    /// Previously this surfaced as rusqlite's "Query returned results when
+    /// it was expected to not return any", which named nothing.
+    #[test]
+    fn reports_the_offending_table_and_parent() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run(&mut conn).unwrap();
+
+        // Insert an orphan behind SQLite's back: enforcement off, so the row
+        // lands, exactly like a migration that rebuilds a referenced table
+        // and leaves a dangling child.
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        conn.execute(
+            "INSERT INTO notes (id, parent_collection_id, title, body, position, created, modified)
+             VALUES ('orphan', 'no-such-folder', 'T', '', 0, '2025-01-01', '2025-01-01')",
+            [],
+        )
+        .unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+
+        let err = check_foreign_keys(&conn).expect_err("must reject the orphan");
+        let message = err.to_string();
+        assert!(
+            message.contains("notes"),
+            "names the child table, got: {message}"
+        );
+        assert!(
+            message.contains("collections"),
+            "names the parent table, got: {message}"
+        );
+        assert!(
+            message.contains("1 violation"),
+            "counts the violations, got: {message}"
+        );
+    }
+}
 
 #[cfg(test)]
 mod seed_tests {
