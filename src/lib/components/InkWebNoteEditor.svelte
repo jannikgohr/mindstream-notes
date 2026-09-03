@@ -74,17 +74,11 @@
     onSessionChange,
     isTauri,
     TRASH_ID,
-    captureCurrentNoteVersion,
     type DrawingToolbarSettings,
-    type DrawingToolbarSettingsPayload,
-    type VersionAction
+    type DrawingToolbarSettingsPayload
   } from '$lib/api';
   import { isAndroid, isMobile } from '$lib/platform';
-  import {
-    PAGE_FIT_MARGIN,
-    PAGE_FIT_TOP_MARGIN,
-    canvasPageSurface
-  } from '$lib/layout/page-layout';
+  import {} from '$lib/layout/page-layout';
   import { tUi, tValue } from '$lib/settings/i18n.svelte';
   import {
     getSettingValue,
@@ -105,10 +99,7 @@
   } from '$lib/hotkeys/bus.svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { InkWebCollabProvider } from '$lib/sync/ink-web-collab-provider';
-  import {
-    bumpNoteHistory,
-    registerNoteHistory
-  } from '$lib/stores/note-history-bridge.svelte';
+  import { registerNoteHistory } from '$lib/stores/note-history-bridge.svelte';
   import {
     parseHistorySnapshot,
     serializeYjsSnapshot
@@ -129,7 +120,6 @@
   import {
     argbToColorHex,
     base64ToBytes,
-    centeredPatternPositions,
     colorHexToArgb,
     cssColor,
     displayColor,
@@ -147,9 +137,7 @@
     INK_QUICK_ZOOMS,
     INK_TOOL_SETTING,
     INK_WIDTH_SETTING,
-    INK_ZOOM_DISPLAY_SCALE,
     INK_ZOOM_STEP,
-    MAX_ZOOM_FACTOR,
     normalizeColorHex,
     normalizeInkEraserMode,
     normalizeInkPageBackground,
@@ -157,16 +145,10 @@
     normalizeInkPageTheme,
     normalizeInkTool,
     normalizeInkWidth,
-    PAGE_FILL_LIGHT,
-    PAGE_GRID_STEP,
-    PAGE_PATTERN_DOT_ALPHA,
-    PAGE_PATTERN_LINE_ALPHA,
-    PAGE_RULE_STEP,
     pointInPolygon,
     POINTER_BUTTON_SECONDARY,
     POINTER_BUTTON_STYLUS_PRIMARY,
     POINTER_BUTTON_STYLUS_SECONDARY,
-    pressureWidth,
     RESIZE_SNAPSHOT_RESTORE_SUPPRESS_MS,
     resizeTransform,
     rotationTransform,
@@ -179,7 +161,6 @@
     selectionCenter,
     TOOL_PREVIEW_DASH,
     transformIsIdentity,
-    transformPoint,
     transformedPoints,
     transformSelectionFrame,
     translationTransform,
@@ -201,13 +182,10 @@
     type WebInkHandleInstance
   } from '$lib/ink/editor-helpers';
   import {
-    DEFAULT_PAGE_GAP,
     containsPagePoint,
     defaultLayout,
     pageCountForContentMaxY,
     pageRect,
-    strideY,
-    type DocumentLayout,
     type InkPoint
   } from '$lib/ink/page';
   import { acquireFullscreen, releaseFullscreen } from '$lib/window/fullscreen';

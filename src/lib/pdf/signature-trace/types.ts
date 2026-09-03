@@ -1,4 +1,4 @@
-import type { PdfInkStroke, PdfStrokePoint } from '../types';
+import type { PdfInkStroke } from '../types';
 
 /**
  * Shared shapes and pad-space constants for signature tracing.

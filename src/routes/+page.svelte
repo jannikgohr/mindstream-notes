@@ -18,7 +18,7 @@
    */
   let mode = $state<'mobile' | 'popout' | 'desktop' | null>(null);
   let popoutNoteId = $state<string | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a dynamically
+
   // imported Svelte component has no statically-known constructor type here.
   let Shell = $state<any>(null);
   let failed = $state(false);

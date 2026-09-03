@@ -11,7 +11,6 @@
  * while the overlay code lives here.
  */
 
-import { tUi } from '$lib/settings/i18n.svelte';
 import {
   cloneSignatureSnapshot,
   strokeBounds,
@@ -33,11 +32,7 @@ import {
   type RenderParams
 } from '$lib/pdf/viewer-helpers';
 import type { PageRenderContext } from './page-render';
-import {
-  annotationAriaLabel,
-  annotationTypeLabel,
-  formatPdfUi
-} from './annotation-labels';
+import { annotationAriaLabel } from './annotation-labels';
 import { annotationCanMove } from './annotation-interaction';
 
 /** The per-page draw state the overlays read. Owned by the render action. */

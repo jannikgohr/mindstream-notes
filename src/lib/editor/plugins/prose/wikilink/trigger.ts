@@ -17,7 +17,6 @@ import {
 import type { EditorView } from '@milkdown/kit/prose/view';
 import { noteHref } from '../../wikilink-href';
 import type { WikilinkBridge } from '../../wikilink-bridge.svelte';
-import { resolveNoteIdByTitle } from './note-resolve';
 
 /* --- Trigger plugin -------------------------------------------------------- */
 

@@ -1,7 +1,7 @@
 <script lang="ts">
   import '../app.css';
   import { onMount } from 'svelte';
-  import { ModeWatcher, mode } from 'mode-watcher';
+  import { ModeWatcher } from 'mode-watcher';
   import {
     getSettingValue,
     isModified,

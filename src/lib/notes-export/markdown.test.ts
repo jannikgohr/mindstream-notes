@@ -60,7 +60,7 @@ describe('renderFrontmatter', () => {
     // Title with the colon must be double-quoted with the inner
     // quotes escaped.
     expect(out).toMatch(/title: "Title with: colon and \\"quotes\\""/);
-    expect(out).toMatch(/  - "has: colon"/);
+    expect(out).toMatch(/ {2}- "has: colon"/);
   });
 });
 
