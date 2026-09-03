@@ -95,6 +95,9 @@ importers:
       image-js:
         specifier: ^1.6.2
         version: 1.6.2
+      mdast-util-gfm-task-list-item:
+        specifier: ^2.0.0
+        version: 2.0.0
       mermaid:
         specifier: ^11.15.0
         version: 11.15.0

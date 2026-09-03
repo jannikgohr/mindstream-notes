@@ -56,6 +56,7 @@ export {
   stripPastedInterBlockWhitespace
 } from './prose/paste-whitespace';
 export { installSelectionToolbarAutoHide } from './prose/selection-toolbar';
+export { emptyTaskListItems, taskListItemHandler } from './prose/task-list';
 export {
   analyzeDocument,
   diagnosticDecorations,

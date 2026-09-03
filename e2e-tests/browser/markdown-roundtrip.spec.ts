@@ -215,3 +215,32 @@ test('a document with no trailing blank lines stays that way', async ({
   expect(first).toBe('Plain doc no trailing\n');
   expect(await roundTrip(page)).toBe(first);
 });
+
+test('an empty task item keeps its checkbox instead of degrading', async ({
+  page
+}) => {
+  // GFM only reads `- [ ]` as a task when something follows the checkbox, so a
+  // half-typed task used to come back from the doc as a bullet whose text was
+  // the literal `[ ]` — escaped to `- \[ ]`, which could never become a task.
+  await setMode(page, 'Source');
+  await setSourceText(page, ['- [ ]', '- [x]', '- [ ] done later'].join('\n'));
+
+  const first = await roundTrip(page);
+  expect(first).not.toContain('\\[');
+  expect(first.startsWith('- [ ]\n- [x]\n- [ ] done later')).toBe(true);
+  expect(await roundTrip(page)).toBe(first);
+});
+
+test('a checkbox is rendered for an empty task item in WYSIWYG', async ({
+  page
+}) => {
+  await setMode(page, 'Source');
+  await setSourceText(page, '- [ ]');
+  await setMode(page, 'WYSIWYG');
+
+  // The item is a real task — Crepe's list-item view labels it with the
+  // unchecked-checkbox icon — not a bullet carrying the characters "[ ]".
+  const listItem = wysiwygPane(page).locator('li.list-item').first();
+  await expect(listItem.locator('.label.unchecked')).toBeVisible();
+  await expect(listItem).not.toContainText('[ ]');
+});
