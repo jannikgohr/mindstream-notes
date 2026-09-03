@@ -1,2 +1,28 @@
-pnpm verify
-pnpm verify:rust
+# Fast smoke gate, not a mirror of CI.
+#
+# Every push and PR runs the full matrix: `pnpm check`, `pnpm test` and
+# `pnpm build` on three OSes, `cargo fmt`/`clippy`/`test` on three OSes,
+# prettier, and the browser e2e suite. Re-running all of that locally cost
+# ~200s per push (build alone was 109s of it) to learn what CI reports
+# anyway a few minutes later. Pushing nine branches took half an hour.
+#
+# What stays is the pair with the best signal per second: a type error or a
+# failing unit test is the overwhelmingly common way a push is broken, and
+# catching them here costs ~70s instead of a CI round trip.
+#
+# What was dropped, and why it is safe:
+#   pnpm build        109s, and the js CI job builds on all three OSes. A
+#                     failure that `check` and `test` both miss is rare.
+#   pnpm format:check pre-commit already runs prettier over staged files via
+#                     lint-staged, and the format CI job covers the rest.
+#   pnpm lint:theme   moved into the format CI job — it was enforced *only*
+#                     here, which meant --no-verify or a fresh clone skipped
+#                     it entirely.
+#   cargo test        the rust CI job runs it on three OSes. Cheap warm (~7s)
+#                     but a cold rebuild after a branch switch dominated
+#                     everything else here.
+#
+# Use `git push --no-verify` when you deliberately want CI to be the first
+# thing that runs, e.g. pushing a WIP branch for a second pair of eyes.
+pnpm check
+pnpm test
