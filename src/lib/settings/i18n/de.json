@@ -844,23 +844,27 @@
   },
   "categories": {
     "account": {
-      "label": "Konto & Synchronisation"
+      "label": "Konto & Synchronisation",
+      "description": "Mit einem verwalteten oder selbst gehosteten Server verbinden, Geräte und Synchronisierung verwalten."
     },
     "general": {
       "label": "Allgemein"
     },
     "appearance": {
-      "label": "Darstellung"
+      "label": "Darstellung",
+      "description": "Design, Typografie, Darstellung des Dateibaums."
     },
     "editor": {
-      "label": "Editor"
+      "label": "Editor",
+      "description": "Wie sich das Schreiben von Notizen anfühlt."
     },
     "hotkeys": {
       "label": "Tastenkürzel",
       "description": "Tastenkürzel für die Anwendung und für die Editoren anpassen."
     },
     "data": {
-      "label": "Daten & Backup"
+      "label": "Daten & Backup",
+      "description": "Papierkorb, Sicherung, Import/Export."
     },
     "language": {
       "label": "Sprache"
@@ -1169,6 +1173,15 @@
     "language.spellcheck.customWords": {
       "label": "Persönliches Wörterbuch",
       "description": "Von dir akzeptierte Wörter. Sie gelten in allen Sprachen und werden im Tresor gespeichert, nicht auf dem Gerät."
+    },
+    "account.syncInterval": {
+      "label": "Synchronisierungsintervall"
+    },
+    "account.conflict": {
+      "label": "Konfliktlösung"
+    },
+    "data.openFolder": {
+      "label": "Datenordner öffnen"
     }
   },
   "values": {
@@ -1220,6 +1233,18 @@
     "language.spellcheck.languages.pl_PL": "Polnisch",
     "language.spellcheck.languages.sv_SE": "Schwedisch",
     "language.spellcheck.languages.cs_CZ": "Tschechisch",
-    "language.spellcheck.languages.ru_RU": "Russisch"
+    "language.spellcheck.languages.ru_RU": "Russisch",
+    "account.serverType.managed": "Verwaltet",
+    "account.serverType.self-hosted": "Selbst gehostet",
+    "account.serverType.local-only": "Nur lokal",
+    "account.syncInterval.live": "Live",
+    "account.syncInterval.1m": "Jede Minute",
+    "account.syncInterval.5m": "Alle 5 Minuten",
+    "account.syncInterval.15m": "Alle 15 Minuten",
+    "account.syncInterval.manual": "Nur manuell",
+    "data.trashRetentionDays.7": "7 Tage",
+    "data.trashRetentionDays.30": "30 Tage",
+    "data.trashRetentionDays.90": "90 Tage",
+    "data.trashRetentionDays.forever": "Unbegrenzt"
   }
 }
