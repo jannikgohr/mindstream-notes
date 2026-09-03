@@ -171,6 +171,59 @@ fn restore_then_purge() {
 }
 
 #[test]
+fn list_attaches_tags_per_note_without_a_query_each() {
+    // `list` swapped a per-note tag query for one grouped scan. Cover the
+    // regrouping itself: tags land on the right note, stay sorted, and a
+    // note with no rows in note_tags gets an empty vec rather than being
+    // skipped or inheriting a neighbour's tags.
+    let db = open_memory_for_tests();
+    let tagged = empty_note(&db, None);
+    let untagged = empty_note(&db, None);
+    let other = empty_note(&db, None);
+
+    for (note, tags) in [
+        (&tagged, vec!["work".to_string(), "alpha".to_string()]),
+        (&other, vec!["zeta".to_string()]),
+    ] {
+        db.with_conn_mut(|c| {
+            update(
+                c,
+                UpdateNote {
+                    id: note.summary.id.clone(),
+                    title: None,
+                    body: None,
+                    position: None,
+                    parent_collection_id: None,
+                    tags: Some(tags.clone()),
+                    yrs_state: None,
+                    favourite: None,
+                },
+            )
+        })
+        .unwrap();
+    }
+
+    let listed = db.with_conn(|c| list(c, false)).unwrap();
+    let by_id = |id: &str| {
+        listed
+            .iter()
+            .find(|s| s.id == id)
+            .unwrap_or_else(|| panic!("note {id} missing from list"))
+    };
+
+    assert_eq!(
+        by_id(&tagged.summary.id).tags,
+        vec!["alpha".to_string(), "work".to_string()],
+        "tags come back sorted"
+    );
+    assert_eq!(by_id(&other.summary.id).tags, vec!["zeta".to_string()]);
+    assert!(
+        by_id(&untagged.summary.id).tags.is_empty(),
+        "a note with no tag rows gets an empty vec, not a neighbour's tags"
+    );
+}
+
+#[test]
 fn save_with_tags_persists_them() {
     let db = open_memory_for_tests();
     let n = empty_note(&db, None);
