@@ -313,6 +313,17 @@ describe('checker request config', () => {
     });
   });
 
+  it('preserves the order of the selected languages', async () => {
+    // Load-bearing, not incidental. The backend names the FIRST variant for
+    // any segment too short to language-detect, so sorting this list — or
+    // building it from a Set that happens to reorder — silently changes which
+    // language a one-word paragraph is spellchecked in.
+    tags.value = ['en-US', 'de-DE'];
+    settings.set('plugins.com.example.lt.endpoint', 'https://lt.example.test');
+    const config = await configFor();
+    expect(config()?.preferredVariants).toEqual(['en-US', 'de-DE']);
+  });
+
   it('silences the service categories the plugin declared', async () => {
     settings.set('plugins.com.example.lt.endpoint', 'https://lt.example.test');
     const config = await configFor({ disabledCategories: ['WHITESPACE'] });

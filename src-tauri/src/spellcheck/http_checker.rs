@@ -1182,10 +1182,77 @@ mod tests {
     }
 
     #[test]
+    fn the_first_preferred_variant_is_the_one_short_text_gets() {
+        // The order of the user's selected languages decides this, so it is a
+        // contract with the frontend and not an implementation detail: the
+        // same fragment checks as English here and as German in the test above.
+        let server = serve(vec![ok(r#"{"matches":[]}"#)]);
+        let variants = vec!["en-US".to_string(), "de-DE".to_string()];
+        let mut request = input(&server.base, AUTO_LANGUAGE);
+        request.text = "Vertragsnummer";
+        request.preferred_variants = &variants;
+
+        block_on(check(request, &languagetool())).unwrap();
+
+        assert!(server.next().body.contains("language=en-US"));
+    }
+
+    #[test]
+    fn asks_anyway_when_short_text_has_no_variants_to_fall_back_on() {
+        // Nothing to name the language with, so the server's guess is still
+        // better than refusing to check. Also the indexing guard: variants[0]
+        // must never be reached on an empty list.
+        let server = serve(vec![ok(r#"{"matches":[]}"#)]);
+        let mut request = input(&server.base, AUTO_LANGUAGE);
+        request.text = "Vertragsnummer";
+
+        block_on(check(request, &languagetool())).unwrap();
+
+        assert!(server.next().body.contains("language=auto"));
+        assert!(server.is_done());
+    }
+
+    #[test]
+    fn leaves_an_explicitly_named_language_alone_on_short_text() {
+        // One selected language means the frontend names it rather than
+        // sending `auto`, and there is nothing here to second-guess.
+        let server = serve(vec![ok(r#"{"matches":[]}"#)]);
+        let mut request = input(&server.base, "de-DE");
+        request.text = "Vertragsnummer";
+
+        block_on(check(request, &languagetool())).unwrap();
+
+        assert!(server.next().body.contains("language=de-DE"));
+        assert!(server.is_done());
+    }
+
+    #[test]
+    fn names_the_language_for_short_text_even_without_a_detection_spec() {
+        // A protocol that declares no detection gives us no way to notice a
+        // wrong guess afterwards, which is a reason to guess less, not more.
+        let mut protocol = languagetool();
+        protocol.detection = None;
+        let server = serve(vec![ok(r#"{"matches":[]}"#)]);
+        let variants = vec!["de-DE".to_string()];
+        let mut request = input(&server.base, AUTO_LANGUAGE);
+        request.text = "Vertragsnummer";
+        request.preferred_variants = &variants;
+
+        block_on(check(request, &protocol)).unwrap();
+
+        assert!(server.next().body.contains("language=de-DE"));
+    }
+
+    #[test]
     fn counts_words_rather_than_characters_for_detection() {
+        // Length carries no signal: one long compound is still one clue, and
+        // four short words are enough to tell German from English.
         assert!(!worth_detecting("Vertragsnummer"));
         assert!(!worth_detecting("  Nr. 4 \n"));
+        assert!(!worth_detecting(""));
+        assert!(!worth_detecting("Dies ist kurz"));
         assert!(worth_detecting("Dies ist ein Satz."));
+        assert!(worth_detecting("a b c d"));
     }
 
     #[test]
