@@ -31,6 +31,7 @@ use include_dir::{include_dir, Dir};
 use sha2::{Digest, Sha256};
 use tauri::AppHandle;
 
+use super::manifest;
 use super::signing;
 use super::{SOURCE_BUILTIN, SOURCE_INSTALLED};
 use crate::error::{AppError, AppResult};
@@ -55,8 +56,13 @@ pub struct DiscoveredPlugin {
     pub signer: Option<String>,
     /// `"unsigned"` | `"valid"` | `"invalid"`.
     pub signature_status: String,
-    /// The parsed manifest, passed through to the frontend for validation.
-    pub manifest: serde_json::Value,
+    /// The manifest, parsed and structurally validated by the backend. This is
+    /// what every backend decision reads.
+    pub manifest: manifest::Manifest,
+    /// The same manifest as raw JSON, forwarded to the frontend so the
+    /// presentational contributions the backend deliberately does not model
+    /// (i18n, settings, docs, templates) survive the trip untouched.
+    pub manifest_json: serde_json::Value,
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -260,42 +266,26 @@ fn read_plugin(files: PluginFiles, source: &str) -> AppResult<DiscoveredPlugin> 
         .find(|(path, _)| path == "manifest.json")
         .map(|(_, bytes)| bytes.as_slice())
         .ok_or_else(|| AppError::InvalidArg("plugin has no manifest.json".to_string()))?;
-    let manifest: serde_json::Value = serde_json::from_slice(manifest_bytes)
+    // One parse, through one schema. Everything the backend later decides —
+    // whether to run a script, spawn a process, open a socket — reads the
+    // result of this, so a malformed manifest stops here rather than being
+    // re-guessed at each decision point.
+    let manifest = manifest::Manifest::parse(manifest_bytes)
+        .map_err(|e| AppError::InvalidArg(e.to_string()))?;
+    let manifest_json: serde_json::Value = serde_json::from_slice(manifest_bytes)
         .map_err(|e| AppError::InvalidArg(format!("manifest.json: {e}")))?;
-    let id = manifest
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::InvalidArg("manifest has no string id".to_string()))?
-        .to_string();
-    let version = manifest
-        .get("version")
-        .and_then(|v| v.as_str())
-        .unwrap_or("0.0.0")
-        .to_string();
-    let permissions = manifest
-        .get("permissions")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
-    let enabled_by_default = manifest
-        .get("enabledByDefault")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
     Ok(DiscoveredPlugin {
-        id,
-        version,
-        permissions,
-        enabled_by_default,
+        id: manifest.id.clone(),
+        version: manifest.version.clone(),
+        permissions: manifest.permission_strings(),
+        enabled_by_default: manifest.enabled_by_default,
         source: source.to_string(),
         files,
         checksum,
         signer: verification.signer,
         signature_status: verification.status.as_str().to_string(),
         manifest,
+        manifest_json,
     })
 }
 
@@ -421,7 +411,7 @@ mod tests {
         fs::write(
             dir.join("manifest.json"),
             format!(
-                r#"{{ "id": "{id}", "version": "1.0.0", "permissions": ["notes.create"]{extra} }}"#
+                r#"{{ "manifestVersion": 1, "id": "{id}", "name": "T", "version": "1.0.0", "runtime": "manifest-only", "permissions": ["notes.create"]{extra} }}"#
             ),
         )
         .unwrap();
@@ -522,7 +512,7 @@ mod tests {
         let root = tmp();
         write_plugin(&root, "p", "com.a.p", "");
         let before = discover_dir(&root, SOURCE_INSTALLED)[0].checksum.clone();
-        write_plugin(&root, "p", "com.a.p", r#", "name": "Changed""#);
+        write_plugin(&root, "p", "com.a.p", r#", "author": "Changed""#);
         let after = discover_dir(&root, SOURCE_INSTALLED)[0].checksum.clone();
         assert_ne!(before, after);
         fs::remove_dir_all(&root).ok();

@@ -36,6 +36,7 @@ use crate::error::{AppError, AppResult, CommandResult};
 
 pub mod discovery;
 pub mod luau;
+pub mod manifest;
 pub mod preview_service;
 pub mod signing;
 
@@ -316,26 +317,6 @@ pub struct DiscoveredPluginView {
     pub manifest: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PluginArtifactManifest {
-    id: String,
-    kind: String,
-    version: String,
-    url: String,
-    sha256: String,
-    file_name: String,
-    size_bytes: Option<u64>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PluginNativeToolManifest {
-    id: String,
-    binary_name: String,
-    description_key: Option<String>,
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginArtifactStatus {
@@ -402,7 +383,7 @@ pub fn reconcile(
         )?;
         views.push(DiscoveredPluginView {
             record,
-            manifest: plugin.manifest,
+            manifest: plugin.manifest_json,
         });
     }
     Ok(views)
@@ -639,32 +620,15 @@ fn safe_segment(value: &str, label: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn parse_artifacts(manifest: &serde_json::Value) -> AppResult<Vec<PluginArtifactManifest>> {
-    let Some(value) = manifest.get("contributes").and_then(|c| c.get("artifacts")) else {
-        return Ok(Vec::new());
-    };
-    serde_json::from_value(value.clone())
-        .map_err(|e| AppError::InvalidArg(format!("manifest.contributes.artifacts: {e}")))
-}
-
-fn parse_native_tools(manifest: &serde_json::Value) -> AppResult<Vec<PluginNativeToolManifest>> {
-    let Some(value) = manifest
-        .get("contributes")
-        .and_then(|c| c.get("nativeTools"))
-    else {
-        return Ok(Vec::new());
-    };
-    serde_json::from_value(value.clone())
-        .map_err(|e| AppError::InvalidArg(format!("manifest.contributes.nativeTools: {e}")))
-}
-
-fn find_native_tool(
-    manifest: &serde_json::Value,
+/// A declared native tool, or a "not declared" error. The lookup is on the
+/// parsed manifest, so "declared" means the manifest said so in a shape the
+/// backend understood — not that a JSON blob happened to have the right keys.
+fn require_native_tool<'a>(
+    manifest: &'a manifest::Manifest,
     tool_id: &str,
-) -> AppResult<PluginNativeToolManifest> {
-    parse_native_tools(manifest)?
-        .into_iter()
-        .find(|tool| tool.id == tool_id)
+) -> AppResult<&'a manifest::NativeToolDecl> {
+    manifest
+        .native_tool(tool_id)
         .ok_or_else(|| AppError::NotFound(format!("plugin native tool {tool_id}")))
 }
 
@@ -757,7 +721,7 @@ fn resolve_path_binary(binary_name: &str) -> AppResult<Option<PathBuf>> {
 
 fn native_tool_status(
     plugin_id: &str,
-    tool: &PluginNativeToolManifest,
+    tool: &manifest::NativeToolDecl,
 ) -> AppResult<PluginNativeToolStatus> {
     let _ = &tool.description_key;
     let path = resolve_path_binary(&tool.binary_name)?;
@@ -775,17 +739,20 @@ fn native_tool_status(
 /// native tools are unavailable, so every declared tool maps to `None` — the
 /// script sees the tool but `available` is always false, matching the
 /// desktop-only guard on the direct `plugins_run_native_tool` command.
-fn resolve_native_tools(manifest: &serde_json::Value) -> HashMap<String, Option<PathBuf>> {
-    let tools = parse_native_tools(manifest).unwrap_or_default();
+/// The plugin's declared tools resolved to their PATH binary. `None` means
+/// declared but not found — which is also what mobile always reports, since
+/// native tools are desktop-only.
+fn resolve_native_tools(manifest: &manifest::Manifest) -> HashMap<String, Option<PathBuf>> {
+    let tools = &manifest.contributes.native_tools;
     tools
-        .into_iter()
+        .iter()
         .map(|tool| {
             let resolved = if cfg!(mobile) {
                 None
             } else {
                 resolve_path_binary(&tool.binary_name).ok().flatten()
             };
-            (tool.id, resolved)
+            (tool.id.clone(), resolved)
         })
         .collect()
 }
@@ -916,13 +883,13 @@ fn run_native_tool_process(
     })
 }
 
-fn find_artifact(
-    manifest: &serde_json::Value,
+/// A declared artifact, or a "not declared" error.
+fn require_artifact<'a>(
+    manifest: &'a manifest::Manifest,
     artifact_id: &str,
-) -> AppResult<PluginArtifactManifest> {
-    parse_artifacts(manifest)?
-        .into_iter()
-        .find(|artifact| artifact.id == artifact_id)
+) -> AppResult<&'a manifest::ArtifactDecl> {
+    manifest
+        .artifact(artifact_id)
         .ok_or_else(|| AppError::NotFound(format!("plugin artifact {artifact_id}")))
 }
 
@@ -937,7 +904,7 @@ fn plugin_artifact_root(app: &AppHandle, plugin_id: &str) -> AppResult<PathBuf> 
 ///
 /// Every segment comes from the manifest, which is untrusted, so each one is
 /// checked before it becomes a path component.
-fn artifact_path_in(root: &Path, artifact: &PluginArtifactManifest) -> AppResult<PathBuf> {
+fn artifact_path_in(root: &Path, artifact: &manifest::ArtifactDecl) -> AppResult<PathBuf> {
     safe_segment(&artifact.id, "artifact id")?;
     safe_segment(&artifact.version, "artifact version")?;
     safe_segment(&artifact.file_name, "artifact file name")?;
@@ -950,7 +917,7 @@ fn artifact_path_in(root: &Path, artifact: &PluginArtifactManifest) -> AppResult
 fn artifact_file_path(
     app: &AppHandle,
     plugin_id: &str,
-    artifact: &PluginArtifactManifest,
+    artifact: &manifest::ArtifactDecl,
 ) -> AppResult<PathBuf> {
     artifact_path_in(&plugin_artifact_root(app, plugin_id)?, artifact)
 }
@@ -958,7 +925,7 @@ fn artifact_file_path(
 fn artifact_status(
     app: &AppHandle,
     plugin_id: &str,
-    artifact: &PluginArtifactManifest,
+    artifact: &manifest::ArtifactDecl,
 ) -> AppResult<PluginArtifactStatus> {
     let path = artifact_file_path(app, plugin_id, artifact)?;
     let bytes = fs::metadata(&path).ok().map(|m| m.len());
@@ -967,7 +934,12 @@ fn artifact_status(
     Ok(PluginArtifactStatus {
         plugin_id: plugin_id.to_string(),
         artifact_id: artifact.id.clone(),
-        kind: artifact.kind.clone(),
+        kind: match artifact.kind {
+            manifest::ArtifactKind::Wasm => "wasm",
+            manifest::ArtifactKind::WebScript => "webScript",
+            manifest::ArtifactKind::Data => "data",
+        }
+        .to_string(),
         version: artifact.version.clone(),
         file_name: artifact.file_name.clone(),
         installed,
@@ -979,7 +951,7 @@ fn artifact_status(
 async fn download_artifact(
     app: AppHandle,
     plugin_id: String,
-    artifact: PluginArtifactManifest,
+    artifact: manifest::ArtifactDecl,
 ) -> AppResult<PluginArtifactStatus> {
     let url = reqwest::Url::parse(&artifact.url)
         .map_err(|e| AppError::InvalidArg(format!("artifact URL: {e}")))?;
@@ -1017,7 +989,7 @@ async fn download_artifact(
 /// leave a half-file where the loader expects a complete one.
 fn install_artifact_bytes(
     root: &Path,
-    artifact: &PluginArtifactManifest,
+    artifact: &manifest::ArtifactDecl,
     bytes: &[u8],
 ) -> AppResult<PathBuf> {
     let len = u64::try_from(bytes.len())
@@ -1125,76 +1097,39 @@ fn ensure_inside_data_root(root: &Path, target: &Path) -> AppResult<()> {
 
 // ---------- Scripted execution ----------
 
-fn manifest_id(manifest: &serde_json::Value) -> &str {
-    manifest
-        .get("id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("plugin")
-}
-
-fn manifest_entry<'a>(
-    manifest: &'a serde_json::Value,
-    runtime: &str,
-    extension: &str,
-) -> AppResult<&'a str> {
-    let entry = manifest
-        .get("entry")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::InvalidArg(format!("{runtime} plugin has no entry")))?;
-    if entry.contains('/') || entry.contains('\\') || entry.contains("..") {
-        return Err(AppError::InvalidArg(format!("unsafe entry '{entry}'")));
-    }
-    if !entry.ends_with(extension) {
-        return Err(AppError::InvalidArg(format!(
-            "{runtime} plugin entry must end in {extension}"
-        )));
-    }
-    Ok(entry)
-}
-
-fn limit_usize(
-    manifest: &serde_json::Value,
-    field: &str,
-    default: usize,
-    min: usize,
-    max: usize,
-) -> usize {
-    manifest
-        .get("limits")
-        .and_then(|v| v.get(field))
-        .and_then(|v| v.as_u64())
+/// A manifest-declared byte limit, clamped into the host's range. A manifest
+/// may ask; only the host decides.
+fn limit_usize(declared: Option<u64>, default: usize, min: usize, max: usize) -> usize {
+    declared
         .and_then(|n| usize::try_from(n).ok())
         .unwrap_or(default)
         .clamp(min, max)
 }
 
+/// A manifest-declared timeout, clamped into the host's range.
 fn limit_duration(
-    manifest: &serde_json::Value,
+    declared: Option<u64>,
     default: std::time::Duration,
     min: std::time::Duration,
     max: std::time::Duration,
 ) -> std::time::Duration {
-    let millis = manifest
-        .get("limits")
-        .and_then(|v| v.get("timeoutMs"))
-        .and_then(|v| v.as_u64())
+    declared
         .map(std::time::Duration::from_millis)
-        .unwrap_or(default);
-    millis.clamp(min, max)
+        .unwrap_or(default)
+        .clamp(min, max)
 }
 
-fn luau_limits(manifest: &serde_json::Value) -> luau::Limits {
+fn luau_limits(manifest: &manifest::Manifest) -> luau::Limits {
     let defaults = luau::Limits::default();
     luau::Limits {
         memory_bytes: limit_usize(
-            manifest,
-            "memoryBytes",
+            manifest.limits.memory_bytes,
             defaults.memory_bytes,
             1024 * 1024,
             64 * 1024 * 1024,
         ),
         timeout: limit_duration(
-            manifest,
+            manifest.limits.timeout_ms,
             defaults.timeout,
             std::time::Duration::from_millis(50),
             std::time::Duration::from_secs(5),
@@ -1203,55 +1138,54 @@ fn luau_limits(manifest: &serde_json::Value) -> luau::Limits {
 }
 
 /// Load a scripted plugin's entry and run its `export` function with `input`,
-/// under the selected runtime's sandbox + resource limits. `manifest` is the
-/// plugin's parsed manifest (for `runtime`/`entry`/`id`); `granted` is the
-/// permission set that decides the host API surface.
+/// under the runtime's sandbox and resource limits. `granted` is the permission
+/// set that decides the host API surface — it comes from the database record,
+/// not from the manifest, so a plugin runs under what the user approved.
 ///
 /// Factored out of the command so it is unit-testable without a Tauri handle.
-#[allow(clippy::too_many_arguments)]
 pub fn run_plugin_script(
     files: &discovery::PluginFiles,
-    manifest: &serde_json::Value,
+    manifest: &manifest::Manifest,
     granted: Vec<String>,
     export: &str,
     input: serde_json::Value,
     notes: Vec<luau::NoteMeta>,
     data_root: Option<PathBuf>,
 ) -> AppResult<serde_json::Value> {
-    match manifest.get("runtime").and_then(|v| v.as_str()) {
-        Some("luau") => {
-            let entry = manifest_entry(manifest, "luau", ".luau")?;
-            let source = files
-                .read_text(entry)?
-                .ok_or_else(|| AppError::InvalidArg(format!("entry '{entry}' not found")))?;
-            // The plugin's other `.luau` files, resolvable via a plugin-scoped `require`.
-            let modules = files.luau_modules()?;
-            let id = manifest_id(manifest);
-            // Resolve the plugin's declared PATH binaries only when the tool
-            // permission was granted; the map decides `ms.nativeTools` availability.
-            let native_tools = if granted.iter().any(|p| p == PERM_NATIVE_TOOLS_RUN_DECLARED) {
-                resolve_native_tools(manifest)
-            } else {
-                HashMap::new()
-            };
-            luau::run(luau::ScriptRequest {
-                source,
-                chunk_name: format!("{id}/{entry}"),
-                export: export.to_string(),
-                input,
-                permissions: granted,
-                notes,
-                native_tools,
-                data_root,
-                modules,
-                limits: luau_limits(manifest),
-            })
-        }
-        Some(other) => Err(AppError::InvalidArg(format!(
-            "plugin runtime '{other}' is not executable"
-        ))),
-        None => Err(AppError::InvalidArg("plugin has no runtime".into())),
+    if !manifest.runtime.is_scripted() {
+        return Err(AppError::InvalidArg(
+            "plugin runtime is not executable".into(),
+        ));
     }
+    // Guaranteed by `Manifest::parse`: a scripted runtime has a safe entry.
+    let entry = manifest
+        .entry
+        .as_deref()
+        .ok_or_else(|| AppError::InvalidArg("luau plugin has no entry".into()))?;
+    let source = files
+        .read_text(entry)?
+        .ok_or_else(|| AppError::InvalidArg(format!("entry '{entry}' not found")))?;
+    // The plugin's other `.luau` files, resolvable via a plugin-scoped `require`.
+    let modules = files.luau_modules()?;
+    // Resolve the plugin's declared PATH binaries only when the tool permission
+    // was granted; the map decides `ms.nativeTools` availability.
+    let native_tools = if granted.iter().any(|p| p == PERM_NATIVE_TOOLS_RUN_DECLARED) {
+        resolve_native_tools(manifest)
+    } else {
+        HashMap::new()
+    };
+    luau::run(luau::ScriptRequest {
+        source,
+        chunk_name: format!("{}/{entry}", manifest.id),
+        export: export.to_string(),
+        input,
+        permissions: granted,
+        notes,
+        native_tools,
+        data_root,
+        modules,
+        limits: luau_limits(manifest),
+    })
 }
 
 /// Build the read-only note snapshot exposed via `ms.notes`. One `notes::list`
@@ -1433,7 +1367,10 @@ pub fn plugins_artifacts_status(
             Some(PERM_PLUGIN_ARTIFACTS_DOWNLOAD),
         )
     })?;
-    parse_artifacts(&plugin.manifest)?
+    plugin
+        .manifest
+        .contributes
+        .artifacts
         .iter()
         .map(|artifact| artifact_status(&app, &id, artifact))
         .collect::<AppResult<Vec<_>>>()
@@ -1456,8 +1393,8 @@ pub async fn plugins_download_artifact(
             Some(PERM_PLUGIN_ARTIFACTS_DOWNLOAD),
         )
     })?;
-    let artifact = find_artifact(&plugin.manifest, &artifact_id)?;
-    download_artifact(app, id, artifact)
+    let artifact = require_artifact(&plugin.manifest, &artifact_id)?;
+    download_artifact(app, id, artifact.clone())
         .await
         .map_err(Into::into)
 }
@@ -1478,8 +1415,8 @@ pub fn plugins_read_artifact(
             Some(PERM_PLUGIN_ARTIFACTS_DOWNLOAD),
         )
     })?;
-    let artifact = find_artifact(&plugin.manifest, &artifact_id)?;
-    let path = artifact_file_path(&app, &id, &artifact)?;
+    let artifact = require_artifact(&plugin.manifest, &artifact_id)?;
+    let path = artifact_file_path(&app, &id, artifact)?;
     let bytes = fs::read(&path).map_err(|_| {
         AppError::NotFound(format!("installed artifact {artifact_id} for plugin {id}"))
     })?;
@@ -1609,19 +1546,19 @@ pub fn plugins_native_tool_status(
             Some(PERM_NATIVE_TOOLS_RUN_DECLARED),
         )
     })?;
-    let tool = find_native_tool(&plugin.manifest, &tool_id)?;
+    let tool = require_native_tool(&plugin.manifest, &tool_id)?;
     // Native tools are desktop-only. Report a uniform "not available" status on
     // mobile rather than erroring, so the frontend can fall back to source-only.
     if cfg!(mobile) {
         return Ok(PluginNativeToolStatus {
             plugin_id: id,
-            tool_id: tool.id,
-            binary_name: tool.binary_name,
+            tool_id: tool.id.clone(),
+            binary_name: tool.binary_name.clone(),
             available: false,
             path: None,
         });
     }
-    native_tool_status(&id, &tool).map_err(Into::into)
+    native_tool_status(&id, tool).map_err(Into::into)
 }
 
 #[tauri::command]
@@ -1646,7 +1583,7 @@ pub async fn plugins_run_native_tool(
             Some(PERM_NATIVE_TOOLS_RUN_DECLARED),
         )
     })?;
-    let tool = find_native_tool(&plugin.manifest, &tool_id)?;
+    let tool = require_native_tool(&plugin.manifest, &tool_id)?;
     let binary = resolve_path_binary(&tool.binary_name)?.ok_or_else(|| {
         AppError::NotFound(format!(
             "native tool '{}' was not found in PATH",

@@ -26,47 +26,36 @@ import type {
   DiagnosticGrammar,
   DiagnosticSyntaxId
 } from '$lib/diagnostics/syntax';
+import type { PluginPermission } from './generated/PluginPermission';
 
 /**
  * A capability a plugin must be granted before the host will do something on
  * its behalf that reaches outside the plugin's own bundle.
  *
+ * **Defined in Rust**, in `src-tauri/src/plugins/manifest.rs`, and generated
+ * from there. The backend is what actually enforces a permission — it decides
+ * whether to spawn a process, open a socket or install a host function — so the
+ * list lives where the enforcement is, and this file imports it rather than
+ * restating it. `cargo test export_bindings` regenerates `generated/`, and a
+ * test fails if the checked-in files drift from the Rust.
+ *
  * The list is deliberately only capabilities. It used to also carry
  * *contribution gates* — `templates.contribute`, `noteKinds.contribute`,
  * `noteExporters.contribute` — which restated what `contributes` already said
  * and gated nothing at runtime, and `pluginWebviews.allowEval`, which is a CSP
- * setting on one contribution rather than a resource anyone can reach. A
- * permission earns its place here only if refusing it would stop the host doing
- * something the user might not want done:
- *
- *   - `notes.read` — read vault metadata (note titles/tags and the folder
- *     tree) through the permission-gated host API and script context.
- *   - `notes.create` — have the app create a note from the plugin's output.
- *     The app performs the write; broad `notes.write` stays deliberately absent.
- *   - `textCheckers.contribute` — send note text to a network endpoint. The
- *     host makes the request and the plugin never sees the text, but a checker
- *     still sees everything the user types, which is what this grants.
- *   - `pluginArtifacts.download` — let the host download and install declared
- *     artifacts after verifying their pinned digest.
- *   - `pluginStorage.read` / `pluginStorage.write` — read/write this plugin's
- *     isolated data directory (`ms.storage`).
- *   - `nativeTools.runDeclared` — run the plugin's declared PATH binaries,
- *     directly and without a shell.
- *   - `nativeServices.run` — run a declared binary as a long-lived local
- *     preview server. Desktop-only.
+ * setting on one contribution rather than a resource anyone can reach.
  */
-export type PluginPermission =
-  | 'notes.read'
-  | 'notes.create'
-  | 'textCheckers.contribute'
-  | 'pluginArtifacts.download'
-  | 'pluginStorage.read'
-  | 'pluginStorage.write'
-  | 'nativeTools.runDeclared'
-  | 'nativeServices.run';
+export type { PluginPermission };
 
-/** All permissions the current app version understands. */
-export const KNOWN_PLUGIN_PERMISSIONS: readonly PluginPermission[] = [
+/**
+ * All permissions this app version understands.
+ *
+ * The values are checked against the generated {@link PluginPermission} union
+ * at compile time, so adding one in Rust without adding it here (or vice
+ * versa) fails to typecheck rather than silently accepting or rejecting a
+ * manifest at runtime.
+ */
+export const KNOWN_PLUGIN_PERMISSIONS = [
   'notes.read',
   'notes.create',
   'textCheckers.contribute',
@@ -75,7 +64,7 @@ export const KNOWN_PLUGIN_PERMISSIONS: readonly PluginPermission[] = [
   'pluginStorage.write',
   'nativeTools.runDeclared',
   'nativeServices.run'
-];
+] as const satisfies readonly PluginPermission[];
 
 /**
  * Every contribution point, and the capability (if any) a manifest must hold to
