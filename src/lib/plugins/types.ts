@@ -1,11 +1,19 @@
 /**
- * Public contract for the declarative plugin system.
+ * Public contract for the plugin system.
  *
- * The first plugin slice is intentionally *manifest-only*: a plugin describes
- * templates, settings, commands and localized strings as data — it never ships
- * runnable code. Everything a plugin can do is expressed through the shapes in
- * this file, which keeps the security model small (see docs/plugins) while the
- * registry, permission and integrity surfaces settle.
+ * Plugins are **data-first**: most extend the app declaratively, through the
+ * shapes in this file, and only opt into a sandboxed script when they need real
+ * logic. What a scripted plugin can then do is still expressed as data — it
+ * returns a closed set of effects the app performs, and never writes anything
+ * itself.
+ *
+ * There are two places a plugin's code can run, and they are different
+ * boundaries: `runtime: 'luau'` runs in the Rust backend with no ambient
+ * filesystem, network or process authority, and `render.webview` runs a module
+ * in a sandboxed iframe on its own origin that can reach neither the app's DOM
+ * nor any command. Everything else — native tools, native services, text
+ * checkers — is the *host* acting on the plugin's behalf from a declaration.
+ * See docs/plugins.md for the whole picture.
  *
  * Namespacing rule that runs through the whole system: a plugin owns a stable,
  * dotted `id` (e.g. `com.mindstream.templates.core`). Every runtime identifier
