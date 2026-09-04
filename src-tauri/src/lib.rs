@@ -47,6 +47,8 @@ pub mod system;
 #[cfg(desktop)]
 pub mod tray;
 pub mod tree_batch;
+#[cfg(desktop)]
+pub mod webview_memory;
 
 use std::borrow::Cow;
 
@@ -211,6 +213,7 @@ pub fn run() {
                         {
                             api.prevent_close();
                             let _ = window.hide();
+                            webview_memory::sync_to_visibility(app_handle);
                             return;
                         }
                         app_handle.exit(0);
@@ -218,6 +221,15 @@ pub fn run() {
                     tauri::WindowEvent::Destroyed => {
                         let app_handle = window.app_handle();
                         app_handle.exit(0);
+                    }
+                    // Minimise, restore and show all surface here as a
+                    // resize; `sync_to_visibility` reads the window's
+                    // actual state rather than trying to infer which one
+                    // this was. Focus changes are included because a
+                    // window restored from the taskbar can report the new
+                    // size before it reports being un-minimised.
+                    tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Focused(_) => {
+                        webview_memory::sync_to_visibility(window.app_handle());
                     }
                     _ => {}
                 }
