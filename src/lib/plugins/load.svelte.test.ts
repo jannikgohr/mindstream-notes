@@ -26,11 +26,12 @@ const CORE_ID = 'com.mindstream.templates.core';
 
 function validManifest(id = CORE_ID): Record<string, unknown> {
   return {
+    manifestVersion: 1,
     id,
     name: 'Core Templates',
     version: '1.0.0',
     runtime: 'manifest-only',
-    permissions: ['templates.contribute', 'notes.create'],
+    permissions: ['notes.create'],
     contributes: {
       i18n: { en: { 'templates.meeting.name': 'Meeting' } },
       noteTemplates: [

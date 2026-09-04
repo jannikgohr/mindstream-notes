@@ -19,7 +19,17 @@
  */
 
 import { registerSettingsLabelResolver } from '$lib/settings/i18n.svelte';
-import { registerDynamicSettingResolver } from '$lib/settings/store.svelte';
+import {
+  registerDynamicSettingResolver,
+  registerExternalSettingStore
+} from '$lib/settings/store.svelte';
+import {
+  hasPluginSettingValue,
+  parsePluginSettingId,
+  pluginSettingValue,
+  resetPluginSettingValue,
+  setPluginSettingValue
+} from './settings-store.svelte';
 import type { Category, Section, Setting } from '$lib/settings/types';
 import { pluginSettingsSections } from './registry.svelte';
 import {
@@ -128,6 +138,17 @@ export function pluginSettingDef(id: string): Setting | undefined {
  * clearing is available for teardown in tests.
  */
 export function installPluginSettingsBridge(): void {
+  // Plugin settings are persisted by the backend, not in localStorage, because
+  // the backend passes them to scripts as `ctx.settings` and has to be able to
+  // read them. The core store delegates any `plugins.*` id here.
+  registerExternalSettingStore({
+    owns: (id) => parsePluginSettingId(id) !== null,
+    read: pluginSettingValue,
+    has: hasPluginSettingValue,
+    write: setPluginSettingValue,
+    clear: resetPluginSettingValue
+  });
+
   registerDynamicSettingResolver(pluginSettingDef);
   registerSettingsLabelResolver({
     label(scope, id) {

@@ -31,11 +31,13 @@ use include_dir::{include_dir, Dir};
 use sha2::{Digest, Sha256};
 use tauri::AppHandle;
 
+use super::manifest;
 use super::signing;
 use super::{SOURCE_BUILTIN, SOURCE_INSTALLED};
 use crate::error::{AppError, AppResult};
 
 /// A plugin found on disk, with its trust `source` fixed by its location.
+#[derive(Debug)]
 pub struct DiscoveredPlugin {
     pub id: String,
     pub version: String,
@@ -54,8 +56,13 @@ pub struct DiscoveredPlugin {
     pub signer: Option<String>,
     /// `"unsigned"` | `"valid"` | `"invalid"`.
     pub signature_status: String,
-    /// The parsed manifest, passed through to the frontend for validation.
-    pub manifest: serde_json::Value,
+    /// The manifest, parsed and structurally validated by the backend. This is
+    /// what every backend decision reads.
+    pub manifest: manifest::Manifest,
+    /// The same manifest as raw JSON, forwarded to the frontend so the
+    /// presentational contributions the backend deliberately does not model
+    /// (i18n, settings, docs, templates) survive the trip untouched.
+    pub manifest_json: serde_json::Value,
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -82,7 +89,7 @@ static BUILTIN_PLUGINS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../plug
 /// `Fs` is a real, user-writable directory (installed third-party plugins).
 /// `Embedded` is a subtree of [`BUILTIN_PLUGINS`], compiled into the binary —
 /// authentic by construction and readable on every platform, mobile included.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum PluginFiles {
     Fs(PathBuf),
     Embedded(&'static Dir<'static>),
@@ -259,42 +266,26 @@ fn read_plugin(files: PluginFiles, source: &str) -> AppResult<DiscoveredPlugin> 
         .find(|(path, _)| path == "manifest.json")
         .map(|(_, bytes)| bytes.as_slice())
         .ok_or_else(|| AppError::InvalidArg("plugin has no manifest.json".to_string()))?;
-    let manifest: serde_json::Value = serde_json::from_slice(manifest_bytes)
+    // One parse, through one schema. Everything the backend later decides —
+    // whether to run a script, spawn a process, open a socket — reads the
+    // result of this, so a malformed manifest stops here rather than being
+    // re-guessed at each decision point.
+    let manifest = manifest::Manifest::parse(manifest_bytes)
+        .map_err(|e| AppError::InvalidArg(e.to_string()))?;
+    let manifest_json: serde_json::Value = serde_json::from_slice(manifest_bytes)
         .map_err(|e| AppError::InvalidArg(format!("manifest.json: {e}")))?;
-    let id = manifest
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::InvalidArg("manifest has no string id".to_string()))?
-        .to_string();
-    let version = manifest
-        .get("version")
-        .and_then(|v| v.as_str())
-        .unwrap_or("0.0.0")
-        .to_string();
-    let permissions = manifest
-        .get("permissions")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
-    let enabled_by_default = manifest
-        .get("enabledByDefault")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
     Ok(DiscoveredPlugin {
-        id,
-        version,
-        permissions,
-        enabled_by_default,
+        id: manifest.id.clone(),
+        version: manifest.version.clone(),
+        permissions: manifest.permission_strings(),
+        enabled_by_default: manifest.enabled_by_default,
         source: source.to_string(),
         files,
         checksum,
         signer: verification.signer,
         signature_status: verification.status.as_str().to_string(),
         manifest,
+        manifest_json,
     })
 }
 
@@ -363,11 +354,51 @@ pub fn discover(third_party_dir: &Path) -> Vec<DiscoveredPlugin> {
     plugins
 }
 
+/// The plugin `id` a directory declares, read from its `manifest.json` alone.
+///
+/// Deliberately cheap: it parses one small file and touches nothing else, so
+/// [`find`] can skip past a candidate without reading, hashing or
+/// signature-checking the rest of its bundle.
+fn declared_id(files: &PluginFiles) -> Option<String> {
+    let bytes = files.read_bytes("manifest.json").ok()??;
+    let manifest: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    manifest.get("id")?.as_str().map(str::to_string)
+}
+
 /// Find one plugin by id across the builtin + third-party sets, applying the
 /// same builtin-wins rule as [`discover`]. Returns the [`DiscoveredPlugin`]
 /// (with its [`PluginFiles`]) so a caller can load the plugin's entry script.
+///
+/// Resolves by id *before* doing any expensive work. This used to be
+/// `discover(dir).find(...)`, which read every file of every installed plugin,
+/// computed a SHA-256 package digest for each and verified each Ed25519
+/// signature — in order to return one. Scripted note kinds call
+/// `plugins_run_script` on a render debounce while the user types, so that ran
+/// several times a second against the whole plugin corpus.
 pub fn find(third_party_dir: &Path, id: &str) -> Option<DiscoveredPlugin> {
-    discover(third_party_dir).into_iter().find(|p| p.id == id)
+    // Builtins win on a colliding id, exactly as in `discover`.
+    for sub in BUILTIN_PLUGINS.dirs() {
+        if sub.get_file(sub.path().join("manifest.json")).is_none() {
+            continue;
+        }
+        let files = PluginFiles::Embedded(sub);
+        if declared_id(&files).as_deref() != Some(id) {
+            continue;
+        }
+        return read_plugin(files, SOURCE_BUILTIN).ok();
+    }
+    for entry in fs::read_dir(third_party_dir).ok()?.flatten() {
+        let path = entry.path();
+        if !path.is_dir() || !path.join("manifest.json").exists() {
+            continue;
+        }
+        let files = PluginFiles::Fs(path);
+        if declared_id(&files).as_deref() != Some(id) {
+            continue;
+        }
+        return read_plugin(files, SOURCE_INSTALLED).ok();
+    }
+    None
 }
 
 #[cfg(test)]
@@ -380,7 +411,7 @@ mod tests {
         fs::write(
             dir.join("manifest.json"),
             format!(
-                r#"{{ "id": "{id}", "version": "1.0.0", "permissions": ["notes.create"]{extra} }}"#
+                r#"{{ "manifestVersion": 1, "id": "{id}", "name": "T", "version": "1.0.0", "runtime": "manifest-only", "permissions": ["notes.create"]{extra} }}"#
             ),
         )
         .unwrap();
@@ -481,7 +512,7 @@ mod tests {
         let root = tmp();
         write_plugin(&root, "p", "com.a.p", "");
         let before = discover_dir(&root, SOURCE_INSTALLED)[0].checksum.clone();
-        write_plugin(&root, "p", "com.a.p", r#", "name": "Changed""#);
+        write_plugin(&root, "p", "com.a.p", r#", "author": "Changed""#);
         let after = discover_dir(&root, SOURCE_INSTALLED)[0].checksum.clone();
         assert_ne!(before, after);
         fs::remove_dir_all(&root).ok();
@@ -500,5 +531,44 @@ mod tests {
         let after = discover_dir(&root, SOURCE_INSTALLED)[0].checksum.clone();
         assert_ne!(before, after);
         fs::remove_dir_all(&root).ok();
+    }
+    #[test]
+    fn find_resolves_by_declared_id_not_directory_name() {
+        // The directory name and the plugin id are independent, so  has to
+        // read manifests — but only the manifest, not the whole bundle.
+        let root = tmp();
+        write_plugin(&root, "first-dir", "com.a.first", "");
+        write_plugin(&root, "second-dir", "com.a.second", "");
+
+        let found = find(&root, "com.a.second").expect("resolves by manifest id");
+        assert_eq!(found.id, "com.a.second");
+        assert_eq!(found.source, SOURCE_INSTALLED);
+        assert!(!found.checksum.is_empty(), "the match is still fully read");
+
+        assert!(find(&root, "com.a.missing").is_none());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn find_returns_none_when_the_third_party_dir_is_absent() {
+        assert!(find(&tmp(), "com.a.anything").is_none());
+    }
+
+    #[test]
+    fn find_returns_an_embedded_builtin_by_id() {
+        let absent = std::env::temp_dir().join(format!(
+            "mindstream-plugins-absent-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let plugin = find(&absent, "com.mindstream.templates.core").expect("builtin plugin");
+        assert_eq!(plugin.source, SOURCE_BUILTIN);
+    }
+
+    #[test]
+    fn find_skips_third_party_directories_without_a_manifest() {
+        let root = tmp();
+        std::fs::create_dir_all(root.join("not-a-plugin")).unwrap();
+        assert!(find(&root, "com.example.missing").is_none());
+        std::fs::remove_dir_all(root).ok();
     }
 }

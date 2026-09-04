@@ -18,7 +18,10 @@
  */
 
 import { compilePattern, isDiagnosticSyntaxId } from '$lib/diagnostics/syntax';
+import pkg from '../../../package.json';
 import {
+  CONTRIBUTION_POINTS,
+  CURRENT_MANIFEST_VERSION,
   KNOWN_PLUGIN_PERMISSIONS,
   PLUGIN_ARTIFACT_KINDS,
   PLUGIN_EDITOR_TOOLBAR_ITEMS,
@@ -75,13 +78,34 @@ const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
  * since these are opaque map keys, not user-facing slugs.
  */
 const I18N_KEY_RE = /^[A-Za-z0-9]+(?:[-._][A-Za-z0-9]+)*$/;
+/** `major.minor.patch`, the shape `minAppVersion` is compared in. */
+const SEMVER_RE = /^\d+\.\d+\.\d+$/;
+
+/**
+ * This app's version, read through a function so a test can stub it rather
+ * than depending on whatever the working tree's package.json currently says.
+ */
+export function appVersion(): string {
+  return pkg.version;
+}
+
+/** `-1`, `0` or `1` comparing two `major.minor.patch` strings numerically. */
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
 /**
  * Safe scripted entry filenames: a single path segment (letters/digits/`._-`)
  * with a runtime-specific extension, no separators or `..`. The backend joins
  * this onto the plugin dir, so this is the traversal guard.
  */
 const SAFE_LUAU_ENTRY_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*)\.luau$/;
-const SAFE_WASM_ENTRY_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*)\.wasm$/;
 /**
  * A safe relative documentation path: one or more `/`-joined segments ending in
  * `.md`. Each segment must start alphanumeric, so `..` (and any dot-leading
@@ -139,7 +163,7 @@ const BUILT_IN_NOTE_KINDS = new Set<string>(KNOWN_NOTE_KINDS);
 function isScriptedRuntime(
   runtime: PluginManifest['runtime'] | undefined
 ): boolean {
-  return runtime === 'luau' || runtime === 'wasm';
+  return runtime === 'luau';
 }
 
 /** Narrow, throwing on failure. */
@@ -369,15 +393,6 @@ function validateNoteKindRender(
       throw new PluginValidationError(
         pluginId,
         `${path}.webview.allowEval must be a boolean`
-      );
-    }
-    if (
-      r.webview.allowEval === true &&
-      !permissions.has('pluginWebviews.allowEval')
-    ) {
-      throw new PluginValidationError(
-        pluginId,
-        `${path}.webview.allowEval requires the "pluginWebviews.allowEval" permission`
       );
     }
     if (r.webview.artifacts !== undefined) {
@@ -1498,6 +1513,42 @@ export function validateManifest(input: unknown): PluginManifest {
     );
   }
   const pluginId = m.id;
+
+  // The schema version is checked before anything else. Without it there is no
+  // way to tell a manifest written for a different app version from one that is
+  // simply malformed, and the error a plugin author sees should say which.
+  if (
+    typeof m.manifestVersion !== 'number' ||
+    !Number.isInteger(m.manifestVersion) ||
+    m.manifestVersion < 1
+  ) {
+    throw new PluginValidationError(
+      pluginId,
+      `manifest.manifestVersion must be a positive integer (this app writes ${CURRENT_MANIFEST_VERSION})`
+    );
+  }
+  if (m.manifestVersion > CURRENT_MANIFEST_VERSION) {
+    throw new PluginValidationError(
+      pluginId,
+      `manifest.manifestVersion ${m.manifestVersion} is newer than this app understands (${CURRENT_MANIFEST_VERSION}); update the app`
+    );
+  }
+  if (m.minAppVersion !== undefined) {
+    assertNonEmptyString(pluginId, m.minAppVersion, 'manifest.minAppVersion');
+    if (!SEMVER_RE.test(m.minAppVersion)) {
+      throw new PluginValidationError(
+        pluginId,
+        `manifest.minAppVersion ("${m.minAppVersion}") must be a major.minor.patch version`
+      );
+    }
+    if (compareVersions(appVersion(), m.minAppVersion) < 0) {
+      throw new PluginValidationError(
+        pluginId,
+        `needs app version ${m.minAppVersion} or newer (this app is ${appVersion()})`
+      );
+    }
+  }
+
   assertNonEmptyString(pluginId, m.name, 'manifest.name');
   assertNonEmptyString(pluginId, m.version, 'manifest.version');
   if (m.author !== undefined) {
@@ -1526,30 +1577,22 @@ export function validateManifest(input: unknown): PluginManifest {
   }
 
   // Runtimes are explicit: purely-declarative `manifest-only`, or sandboxed
-  // backend code in Luau/Wasmtime. Anything else is refused rather than loaded
+  // backend code in Luau. Anything else is refused rather than loaded
   // half-supported.
-  if (
-    m.runtime !== 'manifest-only' &&
-    m.runtime !== 'luau' &&
-    m.runtime !== 'wasm'
-  ) {
+  if (m.runtime !== 'manifest-only' && m.runtime !== 'luau') {
     throw new PluginValidationError(
       pluginId,
-      `manifest.runtime ("${String(m.runtime)}") is unsupported; expected "manifest-only", "luau", or "wasm"`
+      `manifest.runtime ("${String(m.runtime)}") is unsupported; expected "manifest-only" or "luau"`
     );
   }
   if (isScriptedRuntime(m.runtime)) {
     assertNonEmptyString(pluginId, m.entry, 'manifest.entry');
     // The backend reads `<pluginDir>/<entry>`, so entry must be a safe relative
     // filename — no separators, no traversal, and the runtime's extension.
-    const safe =
-      m.runtime === 'luau'
-        ? SAFE_LUAU_ENTRY_RE.test(m.entry)
-        : SAFE_WASM_ENTRY_RE.test(m.entry);
-    if (!safe) {
+    if (!SAFE_LUAU_ENTRY_RE.test(m.entry)) {
       throw new PluginValidationError(
         pluginId,
-        `manifest.entry ("${m.entry}") must be a plain ${m.runtime === 'luau' ? '.luau' : '.wasm'} filename inside the plugin dir (no "/", "\\\\" or "..")`
+        `manifest.entry ("${m.entry}") must be a plain .luau filename inside the plugin dir (no "/", "\\\\" or "..")`
       );
     }
   } else if (m.entry !== undefined) {
@@ -1557,7 +1600,7 @@ export function validateManifest(input: unknown): PluginManifest {
     // surfacing rather than silently ignoring.
     throw new PluginValidationError(
       pluginId,
-      'manifest.entry is only valid for runtime "luau" or "wasm"'
+      'manifest.entry is only valid for runtime "luau"'
     );
   }
 
@@ -1569,7 +1612,7 @@ export function validateManifest(input: unknown): PluginManifest {
       );
     }
     const limits = m.limits as Record<string, unknown>;
-    for (const key of ['memoryBytes', 'timeoutMs', 'fuel']) {
+    for (const key of ['memoryBytes', 'timeoutMs']) {
       if (limits[key] === undefined) continue;
       if (
         typeof limits[key] !== 'number' ||
@@ -1581,12 +1624,6 @@ export function validateManifest(input: unknown): PluginManifest {
           `manifest.limits.${key} must be a positive finite number`
         );
       }
-    }
-    if (limits.fuel !== undefined && m.runtime !== 'wasm') {
-      throw new PluginValidationError(
-        pluginId,
-        'manifest.limits.fuel is only valid for runtime "wasm"'
-      );
     }
   }
 
@@ -1600,7 +1637,7 @@ export function validateManifest(input: unknown): PluginManifest {
     if (!KNOWN_PLUGIN_PERMISSIONS.includes(p as PluginPermission)) {
       throw new PluginValidationError(
         pluginId,
-        `manifest.permissions lists unknown permission "${String(p)}"`
+        `manifest.permissions lists unknown permission "${String(p)}"; it may be from a newer app version`
       );
     }
   }
@@ -1612,6 +1649,22 @@ export function validateManifest(input: unknown): PluginManifest {
       pluginId,
       'manifest.contributes must be an object'
     );
+  }
+
+  // Forward compatibility, stated once so it is a rule rather than an accident:
+  //
+  //   - an unknown *contribution* is dropped with a warning. It is additive by
+  //     construction, so ignoring it costs the user one feature of one plugin
+  //     and the rest of the plugin still works.
+  //   - an unknown *permission* is fatal (above). Silently ignoring one would
+  //     load a plugin under a narrower grant than it was written for, and it
+  //     would fail somewhere later with no trace back to the cause.
+  for (const key of Object.keys(contributes)) {
+    if (key in CONTRIBUTION_POINTS) continue;
+    console.warn(
+      `[plugins] ${pluginId}: ignoring unknown contribution "${key}" — it may be from a newer app version`
+    );
+    delete (contributes as Record<string, unknown>)[key];
   }
 
   // ---- Artifacts -------------------------------------------------------
@@ -1633,12 +1686,6 @@ export function validateManifest(input: unknown): PluginManifest {
     }
     seenArtifactIds.add(artifact.id);
   }
-  if (artifacts.length > 0 && !permissions.has('pluginArtifacts.download')) {
-    throw new PluginValidationError(
-      pluginId,
-      'contributes artifacts but is missing the "pluginArtifacts.download" permission'
-    );
-  }
 
   // ---- Native tools ----------------------------------------------------
   const nativeTools = contributes.nativeTools ?? [];
@@ -1659,12 +1706,6 @@ export function validateManifest(input: unknown): PluginManifest {
     }
     seenNativeToolIds.add(tool.id);
   }
-  if (nativeTools.length > 0 && !permissions.has('nativeTools.runDeclared')) {
-    throw new PluginValidationError(
-      pluginId,
-      'contributes nativeTools but is missing the "nativeTools.runDeclared" permission'
-    );
-  }
 
   // ---- Native services (long-lived preview servers) --------------------
   const nativeServices = contributes.nativeServices ?? [];
@@ -1684,12 +1725,6 @@ export function validateManifest(input: unknown): PluginManifest {
       );
     }
     seenNativeServiceIds.add(service.id);
-  }
-  if (nativeServices.length > 0 && !permissions.has('nativeServices.run')) {
-    throw new PluginValidationError(
-      pluginId,
-      'contributes nativeServices but is missing the "nativeServices.run" permission'
-    );
   }
 
   // ---- Source editor language modes -----------------------------------
@@ -1800,12 +1835,6 @@ export function validateManifest(input: unknown): PluginManifest {
     }
     seenCheckerIds.add(checker.id);
   }
-  if (textCheckers.length > 0 && !permissions.has('textCheckers.contribute')) {
-    throw new PluginValidationError(
-      pluginId,
-      'contributes textCheckers but is missing the "textCheckers.contribute" permission'
-    );
-  }
 
   // ---- Plugin note kinds ----------------------------------------------
   const noteKinds = contributes.noteKinds ?? [];
@@ -1836,16 +1865,10 @@ export function validateManifest(input: unknown): PluginManifest {
     seenNoteKindIds.add(c.id);
     pluginNoteKindIds.add(appKind);
   }
-  if (noteKinds.length > 0 && !permissions.has('noteKinds.contribute')) {
-    throw new PluginValidationError(
-      pluginId,
-      'contributes noteKinds but is missing the "noteKinds.contribute" permission'
-    );
-  }
   if (noteKinds.length > 0 && !isScriptedRuntime(m.runtime)) {
     throw new PluginValidationError(
       pluginId,
-      'contributes noteKinds, which run backend render exports and require runtime "luau" or "wasm"'
+      'contributes noteKinds, which run backend render exports and require runtime "luau"'
     );
   }
 
@@ -1875,19 +1898,10 @@ export function validateManifest(input: unknown): PluginManifest {
     }
     seenNoteExporterIds.add(exporter.id);
   }
-  if (
-    noteExporters.length > 0 &&
-    !permissions.has('noteExporters.contribute')
-  ) {
-    throw new PluginValidationError(
-      pluginId,
-      'contributes noteExporters but is missing the "noteExporters.contribute" permission'
-    );
-  }
   if (noteExporters.length > 0 && !isScriptedRuntime(m.runtime)) {
     throw new PluginValidationError(
       pluginId,
-      'contributes noteExporters, which run backend export functions and require runtime "luau" or "wasm"'
+      'contributes noteExporters, which run backend export functions and require runtime "luau"'
     );
   }
 
@@ -1910,15 +1924,6 @@ export function validateManifest(input: unknown): PluginManifest {
     }
     templateIds.add(t.id);
   }
-  // Contributing a template means it shows up in create surfaces — that is the
-  // capability `templates.contribute` grants. Require it explicitly so a
-  // manifest can't quietly contribute more than it asked for.
-  if (templates.length > 0 && !permissions.has('templates.contribute')) {
-    throw new PluginValidationError(
-      pluginId,
-      'contributes noteTemplates but is missing the "templates.contribute" permission'
-    );
-  }
   // A `render` macro is a backend script export, so it only makes sense on a
   // scripted plugin.
   if (
@@ -1927,7 +1932,7 @@ export function validateManifest(input: unknown): PluginManifest {
   ) {
     throw new PluginValidationError(
       pluginId,
-      'a template "render" export requires runtime "luau" or "wasm"'
+      'a template "render" export requires runtime "luau"'
     );
   }
 
@@ -2019,7 +2024,7 @@ export function validateManifest(input: unknown): PluginManifest {
   ) {
     throw new PluginValidationError(
       pluginId,
-      'contributes toolbar buttons, which run a backend script export and require runtime "luau" or "wasm"'
+      'contributes toolbar buttons, which run a backend script export and require runtime "luau"'
     );
   }
 
@@ -2054,6 +2059,25 @@ export function validateManifest(input: unknown): PluginManifest {
       throw new PluginValidationError(
         pluginId,
         'manifest.contributes.i18n must include an "en" bundle as the fallback locale'
+      );
+    }
+  }
+
+  // Contribution points that need a capability say so in one table, so the
+  // rule the registry enforces at runtime and the rule the manifest is checked
+  // against are the same rule. A manifest may not contribute something it did
+  // not ask permission for: the permissions list is what the user is shown at
+  // approval, so it has to be complete.
+  for (const [point, required] of Object.entries(CONTRIBUTION_POINTS)) {
+    if (required === null) continue;
+    const declared = (m.contributes as Record<string, unknown> | undefined)?.[
+      point
+    ];
+    if (!Array.isArray(declared) || declared.length === 0) continue;
+    if (!permissions.has(required)) {
+      throw new PluginValidationError(
+        pluginId,
+        `contributes ${point} but is missing the "${required}" permission`
       );
     }
   }

@@ -1,7 +1,7 @@
 # Plugins
 
 Mindstream Notes has a small plugin system. A plugin is a folder with a
-`manifest.json` (and, for scripted plugins, a `.luau` or `.wasm` entry). Plugins are
+`manifest.json` (and, for scripted plugins, a `.luau` entry). Plugins are
 **data-first**: most extend the app declaratively, and only opt into a sandboxed
 script when they need real logic.
 
@@ -49,11 +49,13 @@ command palette and mobile create menu offer the same templates.
 
 ```jsonc
 {
+  "manifestVersion": 1, // required; the manifest schema this plugin targets
+  "minAppVersion": "0.2.0", // optional; refuse to load below this app version
   "id": "com.author.my-plugin", // stable, dotted, lowercase — the namespace for everything below
   "name": "My Plugin",
   "version": "1.0.0",
-  "runtime": "manifest-only", // or "luau" / "wasm"
-  "entry": "main.luau", // required iff runtime is scripted; plain .luau/.wasm filename
+  "runtime": "manifest-only", // or "luau"
+  "entry": "main.luau", // required iff runtime is "luau"; a plain .luau filename
   "limits": {
     "memoryBytes": 16777216,
     "timeoutMs": 500
@@ -69,12 +71,34 @@ command palette and mobile create menu offer the same templates.
 Every runtime id derived from a plugin (settings keys, command ids, i18n keys)
 is namespaced under the plugin `id`, so two plugins can never collide.
 
+### Versioning and forward compatibility
+
+`manifestVersion` is required. Without it there is no way to tell a manifest
+written for a different app version from one that is simply malformed, and the
+error a plugin author sees should say which. This app writes and accepts
+version `1`; a manifest declaring a higher version is refused with "update the
+app" rather than failing later on a field this version reads differently.
+
+`minAppVersion` is optional and compared numerically as `major.minor.patch`.
+
+When this app meets something it does not recognize, the rule is deliberately
+asymmetric:
+
+- an unknown **contribution** is dropped with a warning. It is additive by
+  construction, so ignoring it costs the user one feature of one plugin and the
+  rest of the plugin keeps working.
+- an unknown **permission** is fatal. Silently ignoring one would load the
+  plugin under a narrower grant than it was written for, and it would fail
+  somewhere later with nothing pointing back at the cause.
+
 ### Contributions
 
 - **`i18n`** — `{ "<locale>": { "<key>": "<string>" } }`. An `en` bundle is
   required; other locales fall back to it. Referenced by `…Key` fields elsewhere.
 - **`settings`** — sections of controls shown under Settings → Plugins →
-  _(your plugin)_. Each setting is stored at `plugins.<id>.<settingId>`.
+  _(your plugin)_. Each setting is stored at `plugins.<id>.<settingId>`, in the
+  vault database rather than with the app's other settings — a scripted plugin
+  receives them as `ctx.settings`, so the backend has to be able to read them.
   Control `type`s: `toggle`, `text`, `number`, `slider`, `select`, `radio`,
   `color`, and the vault pickers **`folder`** and **`tag`** (their value is a
   folder id / tag string and auto-clears if the target is deleted). `select` and
@@ -99,6 +123,13 @@ is namespaced under the plugin `id`, so two plugins can never collide.
   with `{{…}}` placeholders, see below). Requires `templates.contribute`.
 - **`commands`** — app-local commands (currently `createTemplateNote`), each
   bindable to a hotkey.
+- **`artifacts`** — binaries the host downloads and digest-verifies on the
+  plugin's behalf, for webview renderers. Requires `pluginArtifacts.download`;
+  see "Webview previews" below.
+- **`nativeTools`** — PATH binaries the plugin may run, one shot at a time,
+  never through a shell. Requires `nativeTools.runDeclared`.
+- **`nativeServices`** — a PATH binary the host runs as a long-lived local
+  preview server. Requires `nativeServices.run`.
 - **`documentation`** — an ordered list of real markdown files bundled in the
   plugin, shown read-only in a navigable "View documentation" modal:
   ```jsonc
@@ -111,7 +142,7 @@ is namespaced under the plugin `id`, so two plugins can never collide.
   Localize a section by adding a sibling with a locale suffix — `docs/getting-started.de.md`
   is used for German, falling back to `docs/getting-started.md`. Paths are
   relative to the plugin dir and must be safe (`.md`, no `..`).
-- **`toolbar`** (`runtime: "luau"` or `"wasm"` only) — buttons the plugin adds
+- **`toolbar`** (`runtime: "luau"` only) — buttons the plugin adds
   to a host toolbar (currently the file-tree toolbar). Each ships its own
   bundled `.svg` icon (rendered as a themed monochrome mask) and runs a backend
   script export on click:
@@ -140,18 +171,60 @@ is namespaced under the plugin `id`, so two plugins can never collide.
 
 ## Permissions
 
-| Permission                 | Grants                                                                                  |
-| -------------------------- | --------------------------------------------------------------------------------------- |
-| `templates.contribute`     | the plugin's templates appear in create menus                                           |
-| `noteExporters.contribute` | the plugin's export actions appear in note context menus                                |
-| `notes.create`             | the app creates a note from the plugin's template (the app writes it, never the plugin) |
-| `notes.read`               | a scripted plugin may read note metadata through its gated host API                     |
+A permission names something **the host does on the plugin's behalf that
+reaches outside the plugin's own bundle**. That is the whole test for whether
+something belongs on this list: if refusing it would not stop the host doing
+anything, it is not a permission.
 
-A manifest is rejected if it contributes something it didn't ask permission for.
-Each plugin's requested permissions are shown to the user (with friendly labels)
-in Settings → Plugins, alongside its `descriptionKey` tagline and a "View
-documentation" button that renders the `contributes.documentation` files
+The list used to be longer. It carried _contribution gates_ —
+`templates.contribute`, `noteKinds.contribute`, `noteExporters.contribute` —
+which only restated what `contributes` already said and gated nothing at
+runtime, and `pluginWebviews.allowEval`, which is a CSP setting on one
+contribution rather than a resource anyone can reach. Those are gone;
+`webview.allowEval` is now just the manifest flag it always was.
+
+| Permission                 | Grants                                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------------------ |
+| `notes.read`               | read vault metadata: `ms.notes` (titles, tags, folders — never bodies) and `ctx.folders`         |
+| `notes.create`             | the app creates a note from the plugin's output. The app writes it, never the plugin             |
+| `textCheckers.contribute`  | send note text to a network endpoint. The host makes the request; the plugin declares the format |
+| `pluginStorage.read`       | read the plugin's own isolated data directory (`ms.storage.read` / `.list`)                      |
+| `pluginStorage.write`      | write it (`ms.storage.write` / `.delete`)                                                        |
+| `pluginArtifacts.download` | the host downloads declared artifacts and verifies their pinned digest                           |
+| `nativeTools.runDeclared`  | run the plugin's declared PATH binaries, directly and never through a shell. Desktop-only        |
+| `nativeServices.run`       | run a declared binary as a long-lived local preview server. Desktop-only                         |
+
+Broad `notes.write` stays deliberately absent: the app performs every note
+write, from data the plugin returns.
+
+A manifest is rejected if it contributes something it didn't ask permission
+for — the permissions list is what the user is shown at approval, so it has to
+be complete. That rule lives in one table (`CONTRIBUTION_POINTS` in
+`src/lib/plugins/types.ts`) read by both the validator and the contribution
+registry, so what is checked and what is enforced cannot drift apart.
+
+Each plugin's requested permissions are shown to the user (with friendly
+labels) in Settings → Plugins, alongside its `descriptionKey` tagline and a
+"View documentation" button that renders the `contributes.documentation` files
 read-only.
+
+### Permissions are pinned at approval
+
+Approving a third-party plugin pins three things: its package digest, its
+signer, and **the permission set the user was shown**.
+
+An update signed by the same key auto-approves without re-prompting — but that
+is a claim about _authorship_, not consent to whatever the new bytes ask for.
+So an update may **narrow** its permissions freely, and one that **widens**
+them is gated for re-approval with the added capabilities named. Built-in
+plugins are exempt: they ship inside the signed app binary, so their manifest
+is exactly as authoritative as the app asking the question.
+
+The integrity gate is also applied at **execution** time, not only at
+discovery. Every command that runs plugin code re-reads the plugin from disk
+and compares its digest to the approved one first, so editing an approved
+plugin while the app is running does not get those bytes executed under the
+old approval.
 
 ## Scripted plugins
 
@@ -168,15 +241,15 @@ Scripted manifests may include optional resource limits:
 ```jsonc
 "limits": {
   "memoryBytes": 134217728,
-  "timeoutMs": 5000,
-  "fuel": 100000000 // wasm only
+  "timeoutMs": 5000
 }
 ```
 
-The backend clamps these to host-owned minimums/maximums. Defaults are tuned by
-runtime: Luau stays small and fast by default (16 MiB / 500 ms), while Wasmtime
-defaults are larger (128 MiB / 5 s / fuel budget) so compute-heavy guests such
-as Typst have room to run without getting ambient authority.
+The backend clamps these to host-owned minimums/maximums: memory to 1–64 MiB
+(default 16 MiB) and the timeout to 50 ms – 5 s (default 500 ms). Raise the
+timeout for a script that shells out to a slow native tool — subprocess
+wall-time does not count against the script budget, but the script's own work
+around it does.
 
 ## Luau plugins (`runtime: "luau"`)
 
@@ -266,11 +339,32 @@ A toolbar button's export is called with the context table and returns a
 | `{ effect = "openMenu", items = {{ label, run = <effect> }} }` | show a menu; each item runs its nested effect    |
 
 Returning a terminal effect makes the button a single action; returning
-`openMenu` makes it a sub-menu. The button's `ctx` carries `{ settings, folders,
-activeNoteId, locale, now }`; combined with `ms.notes` (metadata, gated by
-`notes.read`) a script can enumerate/filter notes itself — e.g. the Templates
-plugin lists the notes in its configured folder/tag and returns a menu of
+`openMenu` makes it a sub-menu. Combined with `ms.notes` (metadata, gated by
+`notes.read`) a script can enumerate and filter notes itself — the Templates
+plugin lists the notes in its configured folder or tag and returns a menu of
 `createNoteFromNote`.
+
+### The context table
+
+Every export is called with one `ctx` table. It is assembled from two halves:
+
+| Field          | Built by | Notes                                                      |
+| -------------- | -------- | ---------------------------------------------------------- |
+| `settings`     | backend  | the plugin's stored settings, read from the vault database |
+| `folders`      | backend  | the vault folder tree; empty without `notes.read`          |
+| `now`          | backend  | RFC3339, from the host clock                               |
+| `activeNoteId` | frontend | the note on screen, or `nil`                               |
+| `locale`       | frontend | the window's current locale                                |
+
+Plus whatever the call itself is about — `noteId` and `body` for a note-kind
+render, `format` for an exporter, `variables` for a template.
+
+The split is not cosmetic. Anything the backend can determine for itself, it
+does, and its values win on a collision — so a caller cannot tell a script it
+has settings it does not have, or hand it a false clock. It also means the
+backend has everything it needs to invoke a plugin **without a UI action behind
+it**, which is what a future event or watcher would require. Only the two
+genuinely window-scoped fields come from the frontend.
 
 ### Host API (`ms.*`)
 
@@ -296,6 +390,34 @@ Gated by `notes.read`:
 `ms.notes` is a read-only **metadata** snapshot (no body). Namespaces only exist
 when the matching permission is granted, so `ms.notes == nil` for a plugin
 without `notes.read`.
+
+Gated by `pluginStorage.read` / `pluginStorage.write`:
+
+| API                            | Description                                                           |
+| ------------------------------ | --------------------------------------------------------------------- |
+| `ms.storage.read(path)`        | file contents, or `nil` when absent (`pluginStorage.read`)            |
+| `ms.storage.list(path?)`       | `{ { name, isDir, sizeBytes } }`, sorted (`pluginStorage.read`)       |
+| `ms.storage.write(path, text)` | write, creating parent dirs (`pluginStorage.write`)                   |
+| `ms.storage.delete(path)`      | remove a file or tree; absent is not an error (`pluginStorage.write`) |
+
+This is the plugin's **own** isolated data directory — one per plugin id,
+chosen by the host, never named by the script. Paths are relative, with no
+`..`, no absolute paths and no symlink escape, and a single file is capped at
+4 MiB. The two halves are separate grants, so a plugin that only needs to
+remember something between runs can ask for `read` and get `read`/`list` with
+no `write` in its namespace at all.
+
+Reading a file that does not exist returns `nil` rather than erroring —
+"have I stored this yet?" is the common first call and should not need a
+`pcall`.
+
+```lua
+local storage = assert(ms.storage)
+local seen = storage.read and storage.read("seen.json")
+local state = seen and ms.json.decode(seen) or { count = 0 }
+state.count += 1
+if storage.write then storage.write("seen.json", ms.json.encode(state)) end
+```
 
 Gated by `nativeTools.runDeclared`:
 
@@ -341,9 +463,15 @@ Plugin-owned note kinds can opt into syntax highlighting by setting
 }]
 ```
 
-The provider is always host-owned. A plugin may select from providers shipped by
-the app, but it cannot inject arbitrary editor JavaScript into the WebView.
-Unknown source languages remain editable as plain text.
+The provider is always host-owned, and the host list is currently exactly one
+entry: `typst`. So this contribution point lets a plugin _select_ a highlighting
+mode the app already ships — it is not a way to add one. A plugin cannot inject
+JavaScript into the editor, and adding a new host provider needs an app release.
+
+If your language is not on that list, reach for `diagnostics.grammar` below,
+which is the genuinely extensible half: it describes a language the app has
+never heard of, in data. Unknown source languages remain editable as plain
+text.
 
 ### Spelling and grammar checking
 
@@ -549,6 +677,68 @@ but a manifest: the app contains no code specific to it. A service whose
 response cannot be described with pointers — XML, or two round trips — is
 outside what a declarative protocol can express today.
 
+## Webview previews (`render.webview`, `contributes.artifacts`)
+
+Some renderers only exist as JavaScript. A note kind can therefore render
+itself in a **sandboxed iframe** instead of through a backend script export, by
+giving its `render` a `webview`:
+
+```jsonc
+"noteKinds": [{
+  "id": "diagram",
+  "labelKey": "notes.diagram.label",
+  "render": {
+    "export": "renderDiagram",     // still required: the fallback path
+    "webview": {
+      "entry": "preview.mjs",      // safe relative .js/.mjs inside the plugin
+      "allowEval": false,          // CSP 'unsafe-eval', for generated WASM glue
+      "artifacts": ["engine"]      // artifact ids delivered before first render
+    }
+  }
+}]
+```
+
+This is a real code-execution tier and worth being precise about, because the
+boundary is not the one the rest of this document describes.
+
+**What it is not.** The module does _not_ run in the app's WebView, and it
+cannot reach the editor, the DOM of the app, the vault, or any Tauri command.
+It is not a way to extend the editor — see "Source editor language modes" for
+why that stays host-owned.
+
+**What it is.** The module runs in an iframe on its own origin, under a
+restrictive CSP, talking to the host only over `postMessage` with the note body
+in and rendered output back. `allowEval` relaxes the CSP to permit
+`'unsafe-eval'` within that iframe, which some generated WASM glue requires; it
+is a manifest flag rather than a permission, because it widens nothing outside
+the sandbox the plugin already has.
+
+### Artifacts
+
+A webview renderer usually needs a binary it would be absurd to vendor — a WASM
+engine, a font bundle. `contributes.artifacts` declares one, and the **host**
+fetches it; plugin code never performs the download.
+
+```jsonc
+"artifacts": [{
+  "id": "engine",
+  "kind": "wasm",                  // "wasm" | "webScript" | "data"
+  "version": "0.13.1",
+  "url": "https://example.com/engine.wasm",   // HTTPS only
+  "sha256": "…",                   // pinned digest, lowercase hex
+  "fileName": "engine.wasm",
+  "sizeBytes": 12345678            // optional exact length
+}]
+```
+
+Requires `pluginArtifacts.download`. The digest is the point: it is checked
+after download and again on every read, and the bytes are written through a
+staging file so a failed transfer can never leave a half-file where the loader
+expects a whole one. A mismatch is refused rather than repaired — that is what
+catches a truncated transfer, a host that started serving an HTML error page,
+and a swapped file. Artifacts are stored per plugin and per version, and
+delivered to the iframe as Blob URLs before the first render.
+
 ## Preview services (`contributes.nativeServices`, `nativeServices.run`)
 
 Some tools are **live servers**, not one-shot commands. `contributes.nativeServices`
@@ -559,8 +749,10 @@ rendered output → the source caret jumps there). Desktop-only; gated on
 `nativeServices.run`.
 
 A service entry declares `binaryName`, an `args` template (placeholders
-`{dataPort}`, `{controlPort}` — host-allocated free ports — and `{input}`, the
-absolute path to the materialized source file), a loopback `dataUrl`
+`{dataPort}`, `{controlPort}` — host-allocated free ports — `{input}`, the
+absolute path to the materialized source file, and `{setting:<id>}`, resolved
+from the plugin's own settings so a launch flag can be a user toggle, e.g.
+`--partial-rendering {setting:partial-rendering}`), a loopback `dataUrl`
 (`http://127.0.0.1:{dataPort}`, validated to be loopback-only so a plugin can't
 frame a remote origin), a loopback `controlUrl` (`ws://127.0.0.1:{controlPort}`),
 and a `protocol.jumpEvent` (the control-plane message the host maps to a caret
@@ -588,50 +780,16 @@ bridges such as mapping the host background token to a frontend-specific custom
 property. The proxy keeps the preview document on loopback, applies a restrictive
 CSP, and rejects CSS content that could break out of the injected `<style>`.
 
+A `{setting:<id>}` value is restricted to a safe CLI charset before it is
+substituted: ASCII alphanumerics plus `. _ - : +`, capped at 64 characters, with
+any leading `-` stripped so a value cannot masquerade as a flag. Nothing is run
+through a shell either way — the binary is launched directly — but these values
+originate with the user, so they are constrained regardless.
+
 The host owns the whole lifecycle: it allocates the ports, writes the body to a
 temp file the server watches (rewritten on edit), waits for readiness, connects
 the control plane as the editor, and reaps the process when the note closes or
 the app exits.
-
-## Wasm plugins (`runtime: "wasm"`)
-
-Wasm plugins run through Wasmtime in the Rust backend. There is **no WASI by
-default**: no ambient filesystem, clock, random, network, or process access.
-Capabilities are host imports added by the app's linker only when the plugin has
-the matching granted permission. The first host import is deliberately tiny:
-`notes.read` enables `ms.notes_count() -> i32` as a proof of the permission gate.
-
-### Raw ABI
-
-The MVP ABI is raw JSON bytes in/out:
-
-- export `memory`
-- export `alloc(len: i32) -> i32`
-- optionally export `dealloc(ptr: i32, len: i32)`
-- export the manifest/action function as
-  `(input_ptr: i32, input_len: i32) -> i64`
-
-The returned `i64` packs `(result_ptr << 32) | result_len`. Input and output are
-UTF-8 JSON. For toolbar buttons, return the same declarative effects listed
-above (`toast`, `openMenu`, `insertMarkdown`, etc.). The app performs the
-effect; the module never writes notes directly.
-
-Wasmtime is compiled into non-iOS builds with 64-bit atomics (the epoch-deadline
-API used for wall-clock interruption depends on that support). iOS is
-intentionally gated off for now because Cranelift JIT execution is not available
-without an iOS JIT entitlement. If iOS wasm support becomes important, use a
-JIT-free Wasmtime mode such as Pulley and measure the performance tradeoff
-separately.
-
-### Binary size
-
-Full-default Wasmtime is intentionally heavy: it pulls in Cranelift and related
-runtime support. On 2026-07-29, upstream's prebuilt Wasmtime 47 Windows archive
-is about 13 MB compressed, and a Linux package reports about 43 MB installed;
-embedding the Rust crate in this app should be expected to grow release binaries
-by tens of MB before feature trimming. After this tier is wired in, measure with
-`cargo bloat --release --crates` and then trim Cargo features once the required
-surface is known.
 
 ### Editor setup & type checking
 
@@ -717,7 +875,7 @@ yet:
 Signing proves authorship and lets a plugin's own updates auto-approve instead
 of re-prompting. A signed plugin ships `signature.json` next to `manifest.json`:
 an Ed25519 signature over the plugin's **package digest** (a content hash of
-every file, so the signature covers `.luau`, `.wasm`, docs and icons — not just the
+every file, so the signature covers `.luau` files, docs and icons — not just the
 manifest).
 
 ```bash
