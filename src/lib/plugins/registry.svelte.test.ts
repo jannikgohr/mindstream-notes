@@ -15,6 +15,7 @@ import {
   pluginSourceLanguages,
   pluginTemplate,
   pluginTemplates,
+  pluginTextCheckers,
   pluginI18nBundles,
   recordPluginLoadError,
   registerPlugin,
@@ -22,6 +23,43 @@ import {
   setPluginEnabled,
   unregisterPlugin
 } from './registry.svelte';
+
+// A manifest whose only contribution is permission-gated, so the grant is the
+// only thing that decides whether it appears.
+function checkerManifest(id = 'com.example.checker'): Record<string, unknown> {
+  return {
+    manifestVersion: 1,
+    id,
+    name: 'Checker',
+    version: '1.0.0',
+    runtime: 'manifest-only',
+    permissions: ['textCheckers.contribute'],
+    contributes: {
+      i18n: { en: { 'checker.label': 'Checker' } },
+      textCheckers: [
+        {
+          id: 'grammar',
+          kinds: ['grammar'],
+          labelKey: 'checker.label',
+          endpointSetting: 'endpoint',
+          protocol: {
+            check: {
+              path: '/check',
+              encoding: 'form',
+              fields: { text: 'text' }
+            },
+            matches: {
+              list: '/matches',
+              offset: '/offset',
+              length: '/length',
+              message: '/message'
+            }
+          }
+        }
+      ]
+    }
+  };
+}
 
 function manifest(id = 'com.example.templates'): Record<string, unknown> {
   return {
@@ -282,5 +320,30 @@ describe('lookups and teardown', () => {
     registerPlugin(manifest('com.a.templates'));
     registerPlugin(manifest('com.b.templates'));
     expect(pluginTemplates()).toHaveLength(2);
+  });
+});
+
+describe('granted permissions vs the manifest request', () => {
+  it('filters contributions by the grant, not by what the manifest asks for', () => {
+    // These diverge in a real case: an update that widens its permissions is
+    // gated pending re-approval while the old grant stays pinned, so the
+    // manifest on disk asks for more than the record allows. The backend
+    // enforces the record; the frontend has to agree, or it would surface a
+    // contribution the backend would refuse to act on.
+    const manifest = checkerManifest();
+    registerPlugin(manifest, { enabled: true, granted: [] });
+    expect(pluginTextCheckers()).toHaveLength(0);
+
+    registerPlugin(manifest, {
+      enabled: true,
+      granted: ['textCheckers.contribute']
+    });
+    expect(pluginTextCheckers()).toHaveLength(1);
+  });
+
+  it('falls back to the manifest where there is no record to consult', () => {
+    // The web build has no backend and cannot act on a permission anyway.
+    registerPlugin(checkerManifest(), { enabled: true });
+    expect(pluginTextCheckers()).toHaveLength(1);
   });
 });

@@ -52,9 +52,7 @@ function pluginHasPermission(
   pluginId: string,
   permission: PluginPermission
 ): boolean {
-  return (
-    pluginById(pluginId)?.manifest.permissions.includes(permission) ?? false
-  );
+  return pluginById(pluginId)?.granted.includes(permission) ?? false;
 }
 
 function requireCreate(pluginId: string): void {

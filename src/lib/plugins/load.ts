@@ -76,7 +76,10 @@ function gatedFromViews(views: DiscoveredPluginView[]): GatedPlugin[] {
 function applyDiscovered(view: DiscoveredPluginView): void {
   const { record, manifest } = view;
   try {
-    registerPlugin(manifest, { enabled: record.enabled });
+    registerPlugin(manifest, {
+      enabled: record.enabled,
+      granted: record.grantedPermissions
+    });
     if (record.lastLoadError)
       recordPluginLoadError(record.id, record.lastLoadError);
   } catch (err) {
