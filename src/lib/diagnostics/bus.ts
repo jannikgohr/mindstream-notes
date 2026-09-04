@@ -179,6 +179,72 @@ export class DiagnosticBus {
     /** True once the grace expired, or when there was nothing to wait for. */
     let graceExpired = waitingFor.size === 0;
 
+    /** Owner ids that are actually in play, frozen before any of them finish. */
+    const ownerIds = [...waitingFor];
+    const allIndices = segments.map((_, index) => index);
+
+    /**
+     * Providers whose every declared kind is spoken for by a different,
+     * registered provider.
+     *
+     * These are the offline fallback — the built-in dictionary while
+     * LanguageTool owns spelling. `compose` has always discarded their
+     * findings whenever the owner answered, which meant the local
+     * dictionary was checked on every keystroke for results nobody would
+     * ever see. Worse than wasted CPU: on the desktop build each check is
+     * an IPC round trip that pulls the Hunspell tables (~21 MB for a
+     * bilingual user) back into the Rust process and holds them there.
+     *
+     * So they are not run up front. `startFallbacks` runs them once the
+     * owners have had their say, and only over the segments the owners
+     * left unanswered — which in the healthy case is none of them, and the
+     * dictionary is never touched at all. `kinds` exists on
+     * `DiagnosticProvider` for exactly this ("de-conflicted without
+     * running them"); this is the code that finally reads it.
+     */
+    const isShadowed = (provider: DiagnosticProvider): boolean =>
+      provider.kinds.length > 0 &&
+      provider.kinds.every((kind) => {
+        const owner = owners[kind];
+        return (
+          owner !== undefined && owner !== provider.id && registered.has(owner)
+        );
+      });
+    const fallbacks = this.#providers.filter(isShadowed);
+    const primary = this.#providers.filter((p) => !isShadowed(p));
+
+    /**
+     * Segments no owner has spoken for yet.
+     *
+     * An owner that returned `null` ("did not check this") never records,
+     * so it reads as unanswered here — which is the documented rule: a
+     * provider that declines must not silence the fallback.
+     */
+    const unanswered = (): number[] =>
+      allIndices.filter((index) => {
+        const seen = answered.get(index);
+        return !ownerIds.every((id) => seen?.has(id));
+      });
+
+    /**
+     * Run the fallbacks over whatever the owners left uncovered.
+     *
+     * Started from two places — the grace timer, for an owner that hangs
+     * rather than failing, and the end of the main run — so it memoises
+     * its promise and both callers await the same work.
+     */
+    let fallbackRun: Promise<void> | null = null;
+    const startFallbacks = (): Promise<void> => {
+      if (fallbackRun) return fallbackRun;
+      if (fallbacks.length === 0) return Promise.resolve();
+      const todo = unanswered();
+      if (todo.length === 0) return Promise.resolve();
+      fallbackRun = Promise.all(
+        fallbacks.map((p) => runProvider(p, todo))
+      ).then(() => undefined);
+      return fallbackRun;
+    };
+
     /** Everything known so far, with ownership applied. */
     const compose = (): Diagnostic[] => {
       const owned = found
@@ -197,13 +263,17 @@ export class DiagnosticBus {
 
     // Nothing redraws by itself when the grace expires — the owner is, by
     // definition, not finishing — so the wait ends with a publish of its own.
+    // It also has to START the fallbacks: they are no longer run up front,
+    // so for an owner that hangs this is the only thing that ever asks them.
     const grace = options.ownerGraceMs ?? DEFAULT_OWNER_GRACE_MS;
     const graceTimer =
       graceExpired || grace <= 0
         ? null
         : setTimeout(() => {
             graceExpired = true;
-            if (!signal?.aborted) options.onPartial?.(compose());
+            void startFallbacks().then(() => {
+              if (!signal?.aborted) options.onPartial?.(compose());
+            });
           }, grace);
 
     /**
@@ -237,14 +307,18 @@ export class DiagnosticBus {
       }
     };
 
-    const runProvider = async (provider: DiagnosticProvider) => {
+    const runProvider = async (
+      provider: DiagnosticProvider,
+      indices: readonly number[]
+    ) => {
       // Split cached from pending first, so the bulk path is only asked
       // about segments that actually need work — editing one paragraph of a
       // long note should cost one paragraph, not the whole document again.
       const resolved = new Map<number, Diagnostic[]>();
       const pending: { index: number; segment: Segment; key: string }[] = [];
 
-      for (const [index, segment] of segments.entries()) {
+      for (const index of indices) {
+        const segment = segments[index];
         const key = this.#key(provider.id, languages, segment.text);
         const hit = this.#cacheGet(key);
         if (hit === undefined) pending.push({ index, segment, key });
@@ -319,7 +393,10 @@ export class DiagnosticBus {
     try {
       // Run in parallel: a slow network checker must not delay a local one
       // that was ready immediately.
-      await Promise.all(this.#providers.map(runProvider));
+      await Promise.all(primary.map((p) => runProvider(p, allIndices)));
+      // Owners have all reported (or failed). Anything they left unanswered
+      // is the fallbacks' to cover.
+      await startFallbacks();
     } finally {
       if (graceTimer !== null) clearTimeout(graceTimer);
     }
