@@ -23,6 +23,8 @@ declare global {
     __frames?: number[];
     __inputDelays?: number[];
     __transition?: string;
+    __railClass?: string;
+    __railCount?: number;
     __stopFrames?: () => void;
   }
 }
@@ -38,9 +40,9 @@ describe('settings rail hover latency', function () {
     await waitForShell();
 
     await clickElement($('button[aria-label="Open settings"]'));
-    await $('nav button').waitForDisplayed({ timeout: 10_000 });
+    await $('[role="dialog"] nav button').waitForDisplayed({ timeout: 10_000 });
 
-    const rows = await $$('nav button');
+    const rows = await $$('[role="dialog"] nav button');
     const boxes: { x: number; y: number }[] = [];
     for (const row of rows.slice(0, 8)) {
       const loc = await row.getLocation();
@@ -55,10 +57,16 @@ describe('settings rail hover latency', function () {
       window.__frames = [];
       window.__inputDelays = [];
       window.__transition = '';
-      const rail = document.querySelector('nav button');
+      // Scope to the dialog: the app's left sidebar is also a <nav>, and
+      // picking the first one in the document measured that instead.
+      const rail = document.querySelector('[role="dialog"] nav button');
       if (rail) {
         const style = getComputedStyle(rail);
         window.__transition = `${style.transitionProperty} ${style.transitionDuration} ${style.transitionTimingFunction}`;
+        window.__railClass = (rail as HTMLElement).className;
+        window.__railCount = document.querySelectorAll(
+          '[role="dialog"] nav button'
+        ).length;
       }
       // How long a pointer event sat between the OS timestamping it and JS
       // seeing it. This is the number a lagging highlight is made of; frame
@@ -105,12 +113,16 @@ describe('settings rail hover latency', function () {
       frames: number[];
       inputDelays: number[];
       transition: string;
+      railClass: string;
+      railCount: number;
     } = await browser.execute(() => {
       window.__stopFrames?.();
       return {
         frames: window.__frames ?? [],
         inputDelays: window.__inputDelays ?? [],
-        transition: window.__transition ?? ''
+        transition: window.__transition ?? '',
+        railClass: window.__railClass ?? '',
+        railCount: window.__railCount ?? 0
       };
     });
     const frames = result.frames;
@@ -119,6 +131,9 @@ describe('settings rail hover latency', function () {
     const sample = frames.slice(5).sort((a, b) => a - b);
     const long = sample.filter((f) => f > 32).length;
     const delays = [...result.inputDelays].sort((a, b) => a - b);
+    console.log(
+      `[hover-latency] rail rows=${result.railCount} class="${result.railClass}"`
+    );
     console.log(`[hover-latency] hover transition = ${result.transition}`);
     console.log(
       `[hover-latency] input delay: n=${delays.length}  ` +
