@@ -385,6 +385,7 @@ fn focus_window(app: &AppHandle, label: &str) {
     }
     let _ = window.show();
     let _ = window.set_focus();
+    crate::webview_memory::sync_to_visibility(app);
 }
 
 fn focused_window(app: &AppHandle) -> Option<tauri::WebviewWindow<tauri::Wry>> {

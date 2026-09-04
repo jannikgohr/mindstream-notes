@@ -27,10 +27,18 @@ Two harnesses, deliberately separate:
   - `boot-payload.mjs` — every JS/CSS file the shell fetches to show one
     markdown note, with a guess at each chunk's owner.
 
-  One probe needs the real binary instead, because neither Chromium nor a
-  unit test can measure WebView2's input pipeline:
-  `e2e-tests/perf/settings-hover-latency.e2e.ts`, run through the T3 harness
-  (`pnpm test:e2e:app -- --spec e2e-tests/perf/settings-hover-latency.e2e.ts`).
+  Two probes need the real binary instead, because neither Chromium nor a unit
+  test can see WebView2's input pipeline or its visibility state — run both
+  through the T3 harness (`pnpm test:e2e:app -- --spec <file>`):
+  `e2e-tests/perf/settings-hover-latency.e2e.ts` and
+  `e2e-tests/perf/hidden-visibility.e2e.ts`.
+
+  **Do not run the e2e harness while a long measurement is in flight.** All
+  WebView2 hosts sharing a user-data folder share one browser process, and
+  `mindstream-notes.exe` and `mindstream-notes-e2e-single.exe` share
+  `%LOCALAPPDATA%\com.jannikgohr.mindstream-notes\EBWebView`. Killing the
+  harness tree takes the other app's webview down with it — which looks
+  exactly like the app under measurement having exited on its own.
 
   Start the server first (`vite preview --port 1440 --outDir .output/build`);
   the scripts do not manage it.
@@ -90,21 +98,55 @@ Measured and rejected: `--disable-gpu-compositing` (worse on every axis),
 turns off TurboFan, and ProseMirror plus Yjs are exactly the hot JS that needs
 it), `--js-flags=--optimize-for-size` (inside noise).
 
-### Releasing the webview while the window is hidden
+### Telling the webview it is off screen, and letting it shrink
 
 The app closes to the tray rather than quitting, and supports starting there,
-so "running but invisible" is a state it spends real time in. Chromium's own
-backgrounding only recovered ~11 MB of the 114 MB.
-`ICoreWebView2_19::SetMemoryUsageTargetLevel` — the API Microsoft ships for
-exactly this — recovers most of the rest
-(`src-tauri/src/webview_memory.rs`, driven from the window events in
-`lib.rs`):
+so "running but invisible" is a state it spends real hours in. Two separate
+things had to be fixed for that to be cheap.
 
-| minimised to the taskbar | before   | after    |
-| ------------------------ | -------- | -------- |
-| private working set      | 103.0 MB | 21–32 MB |
-| working set              | ~370 MB  | 89 MB    |
-| commit charge            | ~180 MB  | 168 MB   |
+**The page never knew it was hidden.** `Window::hide()` — what close-to-tray
+calls — and minimising both hide the OS window, but neither touches
+`ICoreWebView2Controller::IsVisible`; wry only sets that from the
+webview-level show/hide, which nothing in the app called. Measured with the
+window minimised, `document.visibilityState` was still `"visible"`. So
+Chromium kept the page in the foreground: timers at full rate, compositing
+alive, and every page released by the memory trim below faulted straight back
+in. That is why a tray-parked app crept back to its full resident size over
+an hour. `webview_memory.rs` now sets `IsVisible` from the window's actual
+state, which is asserted in both directions (plus that the restored window
+still paints) by `e2e-tests/perf/hidden-visibility.e2e.ts`.
+
+A side effect worth knowing: `$lib/editor/suspend-flush` listens for
+`visibilitychange → hidden` to flush the 800 ms save debounce, and its comment
+has always claimed that fires "on desktop when the window is minimised". It
+did not, until now. Closing to the tray mid-edit used to drop the last
+debounce window; it no longer does.
+
+**The memory level.** `ICoreWebView2_19::SetMemoryUsageTargetLevel(LOW)` is
+the switch Microsoft ships for a hidden webview, and it is what produces the
+immediate drop:
+
+| minimised to the taskbar | before   | after   |
+| ------------------------ | -------- | ------- |
+| private working set      | 103.0 MB | 20.1 MB |
+| working set              | ~370 MB  | 89 MB   |
+| commit charge            | ~180 MB  | 168 MB  |
+
+Sampled every five minutes over an hour on the fixed build, private working
+set for the whole tree, starting from 116.3 MB on screen:
+
+| t   | total    | renderer |
+| --- | -------- | -------- |
+| 0m  | 112.1 MB | 48.7 MB  |
+| 6m  | 59.4 MB  | 31.0 MB  |
+| 31m | 59.6 MB  | 30.9 MB  |
+| 41m | 29.8 MB  | 9.1 MB   |
+| 51m | 20.7 MB  | 2.0 MB   |
+| 66m | 20.1 MB  | 1.9 MB   |
+
+The renderer's cumulative CPU does not move across the whole hour, which is
+the real tell: before, the page was still running. The step down after ~35
+minutes is Windows reclaiming pages that nothing has touched since the trim.
 
 Read that honestly: **this is mostly paging out, not freeing.** Commit charge
 barely moves, so the app still owns the address space; what it gives back is
@@ -116,9 +158,13 @@ started at.
 The webview is not discarded or reloaded — the renderer keeps the same PID
 across a hide/restore cycle, so nothing in the editor is lost.
 
-Dropping to LOW is deferred by 20 seconds. Undoing it is not free — the pages
-fault back in as the restored window is used — so a window parked in the tray
-should pay it and a minimise-and-restore ten seconds later should not.
+Dropping to LOW is deferred by 20 seconds; backgrounding the page is not,
+because that costs nothing to undo. Undoing LOW does cost page faults on the
+way back, so a window parked in the tray should pay it and a
+minimise-and-restore ten seconds later should not.
+
+Only the `main` window is managed. Popout note windows get their own webview
+and are short-lived, so they are left alone.
 
 ### Not holding spellcheck dictionaries the user is not using
 

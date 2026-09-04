@@ -1,25 +1,35 @@
-//! Hand memory back to Windows while the app is out of sight.
+//! Tell the webview when the app is off screen, and let it shrink.
 //!
 //! The app is built to live in the tray: closing the window hides it
 //! rather than quitting (see the `CloseRequested` handler in `lib.rs`),
-//! and `start in tray` is a supported launch mode. A hidden window still
-//! carries the whole WebView2 tree — measured at ~103 MB of private
-//! working set minimised, against a ~67 MB floor for the same binary
-//! showing a blank page — because Chromium's own backgrounding only
-//! trims what it considers safe for a tab it might have to repaint at
-//! any moment.
+//! and `start in tray` is a supported launch mode.
 //!
-//! WebView2 exposes the switch for exactly this case:
-//! `ICoreWebView2_19::SetMemoryUsageTargetLevel`. `LOW` tells it the
-//! host does not need snappy repaints right now, so it may release
-//! caches and decommit what it can; `NORMAL` restores the usual
-//! behaviour. Microsoft's guidance is to set `LOW` when the webview is
-//! hidden and `NORMAL` before showing it again, which is what
-//! [`sync_to_visibility`] does.
+//! Two separate things have to happen for that to be cheap, and the app
+//! was doing neither.
 //!
-//! Everything here is Windows-only and best-effort. The interface
-//! arrived in WebView2 runtime 1.0.1722.45; on anything older the cast
-//! fails and we simply leave the level alone.
+//! **Visibility.** `Window::hide()` and minimising both hide the OS
+//! window, but neither touches `ICoreWebView2Controller::IsVisible` --
+//! wry only sets that from the webview-level show/hide, which nothing
+//! here calls. So Chromium never learned the page was off screen:
+//! measured with the window minimised, `document.visibilityState` stayed
+//! `"visible"`. Timers kept their foreground rate, the compositor kept
+//! working, and every page the memory trim below had just released was
+//! faulted straight back in, so a tray-parked app climbed back to its
+//! full resident size within the hour. Setting `IsVisible` is what makes
+//! Chromium background the page properly, and it is also what makes
+//! `visibilitychange` fire, which is what `$lib/editor/suspend-flush`
+//! has always been waiting for to flush pending edits.
+//!
+//! **Memory level.** `ICoreWebView2_19::SetMemoryUsageTargetLevel` is
+//! the switch Microsoft ships for a hidden webview: `LOW` lets it
+//! release caches and decommit what it can, `NORMAL` restores ordinary
+//! behaviour. Deferred by [`HIDE_GRACE`], because undoing it costs page
+//! faults on the way back and a ten-second minimise should not pay them.
+//!
+//! Everything here is Windows-only and best-effort. `IsVisible` is on
+//! the controller wry hands us; the memory level arrived in WebView2
+//! runtime 1.0.1722.45, and on anything older that cast fails and only
+//! the level is skipped.
 
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::time::Duration;
@@ -39,11 +49,27 @@ use windows_core::Interface;
 /// alone.
 const MAIN: &str = "main";
 
-/// Last level handed to WebView2: 0 = unknown, 1 = normal, 2 = low.
+/// What the webview should currently be told.
+///
+/// Three states rather than two because hiding happens in two steps: the
+/// page is told immediately (cheap, instantly reversible), the memory is
+/// released later (not free to undo -- see [`HIDE_GRACE`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Posture {
+    /// On screen: visible, ordinary memory behaviour.
+    Onscreen = 1,
+    /// Off screen, recently: page backgrounded, memory untouched.
+    Offscreen = 2,
+    /// Off screen long enough to be worth reclaiming.
+    Parked = 3,
+}
+
+/// Last posture applied, as a [`Posture`] discriminant; 0 means "unknown,
+/// nothing applied yet".
 ///
 /// `Resized` fires on every frame of a drag-resize, so without this the
 /// main thread would take a COM round trip per frame to re-assert a
-/// level it is already at. One process, one main window, so plain
+/// posture it is already in. One process, one main window, so plain
 /// atomics are the whole story.
 static APPLIED: AtomicU8 = AtomicU8::new(0);
 
@@ -73,11 +99,12 @@ fn is_out_of_sight<R: Runtime>(window: &WebviewWindow<R>) -> bool {
     !visible || minimized
 }
 
-/// Point the webview's memory target at whatever the window's current
-/// visibility calls for.
+/// Put the webview into whatever posture the window's current visibility
+/// calls for.
 ///
-/// Showing takes effect at once; hiding is deferred by [`HIDE_GRACE`] so a
-/// brief minimise does not cost a round of page faults on the way back.
+/// Showing, and backgrounding the page, take effect at once; only the
+/// memory release is deferred by [`HIDE_GRACE`], so a brief minimise does
+/// not cost a round of page faults on the way back.
 ///
 /// Safe to call as often as you like — repeat calls for a level already
 /// applied return without touching the webview, so callers do not have
@@ -86,19 +113,24 @@ pub fn sync_to_visibility<R: Runtime>(app: &tauri::AppHandle<R>) {
     let Some(window) = app.get_webview_window(MAIN) else {
         return;
     };
-    // Every call invalidates whatever release was already scheduled.
+    // Every call invalidates whatever parking was already scheduled.
     let generation = GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
 
     if !is_out_of_sight(&window) {
-        // Coming back is immediate: the user is waiting on this one.
-        set_level(&window, false);
+        // Coming back is immediate: the user is waiting on this one, and
+        // leaving `IsVisible` false would show them a blank window.
+        set_posture(&window, Posture::Onscreen);
         return;
     }
+
+    // Backgrounding the page is immediate too. It costs nothing to undo,
+    // and it is what stops the work that was refilling the working set.
+    set_posture(&window, Posture::Offscreen);
 
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(HIDE_GRACE).await;
-        // Shown again (or hidden again, which scheduled its own release)
+        // Shown again (or hidden again, which scheduled its own parking)
         // while we waited.
         if GENERATION.load(Ordering::Relaxed) != generation {
             return;
@@ -107,39 +139,50 @@ pub fn sync_to_visibility<R: Runtime>(app: &tauri::AppHandle<R>) {
             return;
         };
         if is_out_of_sight(&window) {
-            set_level(&window, true);
+            set_posture(&window, Posture::Parked);
         }
     });
 }
 
-/// Apply a level, skipping the call when it is already the one in force.
-fn set_level<R: Runtime>(window: &WebviewWindow<R>, low: bool) {
-    let want = if low { 2 } else { 1 };
+/// Apply a posture, skipping the COM calls when it is already in force.
+fn set_posture<R: Runtime>(window: &WebviewWindow<R>, posture: Posture) {
+    let want = posture as u8;
     if APPLIED.swap(want, Ordering::Relaxed) == want {
         return;
     }
-    apply(window, low);
+    apply(window, posture);
 }
 
 #[cfg(target_os = "windows")]
-fn apply<R: Runtime>(window: &WebviewWindow<R>, low: bool) {
-    let level = if low {
+fn apply<R: Runtime>(window: &WebviewWindow<R>, posture: Posture) {
+    let visible = matches!(posture, Posture::Onscreen);
+    let level = if matches!(posture, Posture::Parked) {
         COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
     } else {
         COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
     };
 
-    // `with_webview` hops to the main thread, so this returns before the
-    // level is actually set. Nothing depends on the ordering: the only
-    // observable effect is how eagerly WebView2 releases caches.
+    // `with_webview` hops to the main thread, so this returns before
+    // anything is set. Nothing depends on the ordering: the only
+    // observable effects are whether the page believes it is on screen
+    // and how eagerly WebView2 releases caches.
     let result = window.with_webview(move |platform| {
         // SAFETY: `controller()` hands back a live COM pointer owned by
         // wry for the lifetime of the webview, and this closure runs on
         // the thread that owns it. Every call is checked; a runtime too
-        // old to implement ICoreWebView2_19 fails the cast and we do
-        // nothing.
+        // old to implement ICoreWebView2_19 fails that cast and only the
+        // memory level is skipped.
         unsafe {
             let controller = platform.controller();
+
+            // Visibility first, and never skipped on the way back: a
+            // webview left invisible under a shown window is a blank
+            // window, which is the one failure here a user would call a
+            // bug rather than a regression.
+            if let Err(err) = controller.SetIsVisible(visible) {
+                log::debug!("[webview-memory] set visible={visible}: {err}");
+            }
+
             let Ok(core) = controller.CoreWebView2() else {
                 return;
             };
@@ -158,7 +201,7 @@ fn apply<R: Runtime>(window: &WebviewWindow<R>, low: bool) {
     }
 }
 
-/// Non-Windows platforms have no equivalent knob; WKWebView and
-/// WebKitGTK manage this themselves.
+/// Non-Windows platforms have no equivalent knobs; WKWebView and
+/// WebKitGTK track window visibility themselves.
 #[cfg(not(target_os = "windows"))]
-fn apply<R: Runtime>(_window: &WebviewWindow<R>, _low: bool) {}
+fn apply<R: Runtime>(_window: &WebviewWindow<R>, _posture: Posture) {}
