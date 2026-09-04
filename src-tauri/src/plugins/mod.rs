@@ -38,6 +38,7 @@ pub mod discovery;
 pub mod luau;
 pub mod manifest;
 pub mod preview_service;
+pub mod settings;
 pub mod signing;
 
 /// Where a plugin came from. Governs the integrity gate: builtins are trusted,
@@ -1188,6 +1189,65 @@ pub fn run_plugin_script(
     })
 }
 
+/// The half of a script's context the **backend** owns.
+///
+/// Merged into whatever call-specific input the caller supplies, and it wins on
+/// a key collision — these are not fields the frontend gets to choose.
+///
+///   - `settings` come from the database, so they are the plugin's real stored
+///     configuration rather than a snapshot someone assembled and passed down.
+///   - `folders` is the vault structure, gated on `notes.read` exactly like
+///     `ms.notes`. Folder names are user content; the two travel together.
+///   - `now` is the host clock, so a script cannot be handed a false one.
+///
+/// Everything the backend can build itself, it builds itself. What is left over
+/// is genuinely UI state — which note is on screen, which locale the window is
+/// showing — and stays the caller's to pass.
+fn backend_script_context(
+    conn: &Connection,
+    plugin_id: &str,
+    granted: &[String],
+) -> AppResult<serde_json::Value> {
+    let settings = settings::all(conn, plugin_id)?;
+    let folders = if granted.iter().any(|p| p == "notes.read") {
+        let collections = crate::collections::list(conn)?;
+        collections
+            .into_iter()
+            .map(|c| {
+                serde_json::json!({
+                    "id": c.id,
+                    "name": c.name,
+                    "parentId": c.parent_collection_id,
+                })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Ok(serde_json::json!({
+        "settings": settings,
+        "folders": folders,
+        "now": Utc::now().to_rfc3339(),
+    }))
+}
+
+/// Merge the backend-owned context into the caller's input. Backend keys win:
+/// `settings`, `folders` and `now` are the host's answer, not a suggestion.
+fn merge_script_input(
+    mut input: serde_json::Value,
+    backend: serde_json::Value,
+) -> serde_json::Value {
+    let (Some(target), Some(source)) = (input.as_object_mut(), backend.as_object()) else {
+        // A non-object input has nowhere to merge into; hand back the context
+        // alone rather than silently dropping it.
+        return backend;
+    };
+    for (key, value) in source {
+        target.insert(key.clone(), value.clone());
+    }
+    input
+}
+
 /// Build the read-only note snapshot exposed via `ms.notes`. One `notes::list`
 /// plus a folder-path index over `collections::list`; excludes trashed notes.
 fn note_snapshot(conn: &Connection) -> AppResult<Vec<luau::NoteMeta>> {
@@ -1330,7 +1390,14 @@ pub fn plugins_remove(app: AppHandle, db: State<'_, Db>, id: String) -> CommandR
         }
     }
 
-    db.with_conn(|c| remove(c, &id)).map_err(Into::into)
+    // Drop the plugin's stored settings with it: leaving them behind would
+    // silently reapply to a later reinstall the user may have meant as a fresh
+    // start.
+    db.with_conn(|c| {
+        settings::clear(c, &id)?;
+        remove(c, &id)
+    })
+    .map_err(Into::into)
 }
 
 /// Read one of a plugin's bundled text files (docs `.md`, icon `.svg`, …).
@@ -1604,6 +1671,39 @@ pub async fn plugins_run_native_tool(
     })
 }
 
+/// Every setting stored for a plugin, so the settings dialog can show the
+/// values the backend will actually pass to its scripts.
+#[tauri::command]
+pub fn plugins_settings_all(
+    db: State<'_, Db>,
+    id: String,
+) -> CommandResult<settings::PluginSettings> {
+    db.with_conn(|c| settings::all(c, &id)).map_err(Into::into)
+}
+
+/// Store one plugin setting. Requires the plugin to exist, so a typo'd id
+/// cannot quietly accumulate orphan rows.
+#[tauri::command]
+pub fn plugins_settings_set(
+    db: State<'_, Db>,
+    id: String,
+    key: String,
+    value: serde_json::Value,
+) -> CommandResult<()> {
+    db.with_conn(|c| {
+        require(c, &id)?;
+        settings::set(c, &id, &key, &value)
+    })
+    .map_err(Into::into)
+}
+
+/// Remove one plugin setting, so it falls back to the manifest's default.
+#[tauri::command]
+pub fn plugins_settings_remove(db: State<'_, Db>, id: String, key: String) -> CommandResult<()> {
+    db.with_conn(|c| settings::remove(c, &id, &key))
+        .map_err(Into::into)
+}
+
 /// Run a scripted plugin's entry function. The plugin is re-located on disk
 /// (trust stays location-derived) and must be **enabled** in the DB — a gated or
 /// disabled plugin never executes. The script runs on a blocking worker so a
@@ -1627,13 +1727,19 @@ pub async fn plugins_run_script(
     let files = plugin.files;
     let manifest = plugin.manifest;
     let granted = record.granted_permissions;
-    // Capture the note snapshot up front (while we hold the DB) so the blocking
-    // worker needs no DB access; empty unless the plugin holds notes.read.
+    // Capture everything the script needs from the DB up front, so the blocking
+    // worker needs no DB access. The note snapshot is empty unless the plugin
+    // holds notes.read.
     let notes = if granted.iter().any(|p| p == "notes.read") {
         db.with_conn(note_snapshot)?
     } else {
         Vec::new()
     };
+    // Settings, folders and the clock are the backend's to supply — see
+    // `backend_script_context`. The caller's `input` carries only what is
+    // genuinely call-specific (which note, which format, which locale).
+    let backend_ctx = db.with_conn(|c| backend_script_context(c, &id, &granted))?;
+    let input = merge_script_input(input, backend_ctx);
     // The plugin's isolated data directory: the cwd for any native tool the
     // script runs via `ms.nativeTools`, and the root `ms.storage` reads and
     // writes under. Resolved here (it needs the AppHandle) so the blocking

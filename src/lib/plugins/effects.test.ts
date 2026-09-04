@@ -322,24 +322,23 @@ describe('runPluginEffect', () => {
 });
 
 describe('buildPluginContext', () => {
-  it('carries the plugin settings, folders, active note and locale', () => {
-    h.perms.p1 = ['notes.read'];
-    const ctx = buildPluginContext('p1') as Record<string, any>;
-    expect(ctx.settings['source-folder']).toBe('val:plugins.p1.source-folder');
-    expect(ctx.folders).toEqual([{ id: 'f1', name: 'Work', parentId: null }]);
+  it('carries only the state the backend cannot see for itself', () => {
+    const ctx = buildPluginContext() as Record<string, any>;
     expect(ctx.activeNoteId).toBe('active-1');
     expect(ctx.locale).toBe('en');
   });
 
-  it('withholds the folder tree from a plugin without notes.read', () => {
-    // Folder names are user content, so `ctx.folders` travels with `ms.notes`
-    // rather than being handed over as free metadata.
-    h.perms.p1 = [];
-    const ctx = buildPluginContext('p1') as Record<string, any>;
-    expect(ctx.folders).toEqual([]);
-    // Everything the plugin owns or already knows still comes through.
-    expect(ctx.settings['source-folder']).toBe('val:plugins.p1.source-folder');
-    expect(ctx.locale).toBe('en');
+  it('leaves settings, folders and the clock to the backend', () => {
+    // These used to be assembled here and passed down, which is what made a UI
+    // action the only thing that could ever invoke a plugin — nothing else
+    // could build the argument. The backend supplies them now: settings from
+    // the database, folders gated on notes.read, the clock from the host. Its
+    // values win on a collision, so sending them from here would be at best
+    // redundant and at worst a way to influence what a script is told.
+    const ctx = buildPluginContext() as Record<string, any>;
+    expect(ctx).not.toHaveProperty('settings');
+    expect(ctx).not.toHaveProperty('folders');
+    expect(ctx).not.toHaveProperty('now');
   });
 });
 

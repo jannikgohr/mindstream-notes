@@ -1430,3 +1430,101 @@ fn approve_pins_the_permission_set_it_was_shown() {
     })
     .unwrap();
 }
+
+#[test]
+fn backend_owns_settings_folders_and_the_clock() {
+    // These three used to be assembled in the WebView and passed down as the
+    // script's argument, which is what made a UI action the only thing that
+    // could ever invoke a plugin. The backend builds them now.
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        settings::set(c, "com.a.p", "source-folder", &serde_json::json!("f1"))?;
+        settings::set(c, "com.a.p", "open-on-create", &serde_json::json!(true))?;
+        let outer = crate::collections::create(
+            c,
+            crate::collections::CreateCollection {
+                name: "Outer".into(),
+                parent_collection_id: None,
+            },
+        )?;
+
+        let ctx = backend_script_context(c, "com.a.p", &["notes.read".to_string()])?;
+        assert_eq!(ctx["settings"]["source-folder"], serde_json::json!("f1"));
+        assert_eq!(ctx["settings"]["open-on-create"], serde_json::json!(true));
+        // The seeded vault already has folders, so look for ours rather than
+        // asserting the whole list.
+        let folders = ctx["folders"].as_array().unwrap();
+        let ours = folders
+            .iter()
+            .find(|f| f["id"] == serde_json::json!(outer.id))
+            .expect("the created folder reaches the context");
+        assert_eq!(ours["name"], serde_json::json!("Outer"));
+        assert!(ours["parentId"].is_null());
+        assert!(ctx["now"].as_str().unwrap().contains('T'));
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn folders_stay_behind_notes_read() {
+    // Folder names are user content.  is gated, so the vault's shape
+    // is too — otherwise the permission means less than it says.
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        crate::collections::create(
+            c,
+            crate::collections::CreateCollection {
+                name: "Private".into(),
+                parent_collection_id: None,
+            },
+        )?;
+        let ctx = backend_script_context(c, "com.a.p", &[])?;
+        assert_eq!(
+            ctx["folders"],
+            serde_json::json!([]),
+            "no vault structure without notes.read"
+        );
+        // The plugin's own settings are not vault data, so they still come.
+        assert!(ctx["settings"].is_object());
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn backend_context_wins_over_caller_supplied_keys() {
+    // The merge is not a courtesy: a caller must not be able to tell a script
+    // that it has settings it does not have, or a clock it does not have.
+    let merged = merge_script_input(
+        serde_json::json!({
+            "noteId": "n1",
+            "settings": { "spoofed": true },
+            "now": "1999-01-01T00:00:00Z"
+        }),
+        serde_json::json!({
+            "settings": { "real": 1 },
+            "folders": [],
+            "now": "2026-09-04T00:00:00Z"
+        }),
+    );
+    assert_eq!(merged["settings"], serde_json::json!({ "real": 1 }));
+    assert_eq!(merged["now"], serde_json::json!("2026-09-04T00:00:00Z"));
+    // Call-specific keys the backend does not own are preserved.
+    assert_eq!(merged["noteId"], serde_json::json!("n1"));
+}
+
+#[test]
+fn uninstalling_a_plugin_drops_its_settings() {
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        upsert(c, upsert_input("com.a.p", "h1", "installed"))?;
+        settings::set(c, "com.a.p", "k", &serde_json::json!(1))?;
+        settings::clear(c, "com.a.p")?;
+        remove(c, "com.a.p")?;
+        assert!(settings::all(c, "com.a.p")?.is_empty());
+        assert!(get(c, "com.a.p")?.is_none());
+        Ok(())
+    })
+    .unwrap();
+}

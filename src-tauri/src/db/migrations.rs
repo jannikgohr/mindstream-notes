@@ -571,6 +571,30 @@ const MIGRATIONS: &[Migration] = &[
             );
         "#,
     },
+    Migration {
+        to: 24,
+        // Settings contributed by plugins (see src/plugins/settings.rs).
+        //
+        // Here rather than in the settings store for the same reason as the
+        // custom dictionary above — settings live in the WebView's
+        // localStorage — plus one specific to plugins: a scripted plugin
+        // receives its settings as `ctx.settings`, and while those sat in
+        // localStorage the frontend had to assemble the script context and
+        // hand it down. That made a UI action the only thing that could ever
+        // invoke a plugin, because nothing else could build the argument.
+        //
+        // `value` is JSON text, so a setting keeps its type on the way through
+        // instead of everything arriving back as a string.
+        sql: r#"
+            CREATE TABLE plugin_settings (
+                plugin_id  TEXT NOT NULL,
+                key        TEXT NOT NULL,
+                value      TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (plugin_id, key)
+            );
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

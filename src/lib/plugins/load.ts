@@ -23,6 +23,7 @@ import { isTauri } from '$lib/api/core';
 import { pluginsDiscover, type DiscoveredPluginView } from '$lib/api/plugins';
 import templatesManifest from '../../../plugins/templates/manifest.json';
 import { recordPluginLoadError, registerPlugin } from './registry.svelte';
+import { hydratePluginSettings } from './settings-store.svelte';
 import { reportGatedPlugins, type GatedPlugin } from './gate-notify';
 import { SOURCE_INSTALLED } from './source';
 
@@ -106,6 +107,12 @@ export async function loadPlugins(): Promise<void> {
   try {
     const views = await pluginsDiscover();
     for (const view of views) applyDiscovered(view);
+    // Pull each plugin's stored settings into the cache so the first
+    // synchronous read (a settings control, a `$derived`) already has the real
+    // value rather than the manifest default.
+    await Promise.all(
+      views.map((view) => hydratePluginSettings(view.record.id))
+    );
     // Surface (or clear) the "needs re-approval" notification for any
     // third-party plugin the gate disabled.
     reportGatedPlugins(gatedFromViews(views));

@@ -268,7 +268,7 @@ async function renderTemplateViaScript(
   template: PluginNoteTemplateContribution,
   variables: TemplateVariables
 ): Promise<RenderedTemplate> {
-  const ctx = { ...buildPluginContext(pluginId), variables };
+  const ctx = { ...buildPluginContext(), variables };
   const raw = (await pluginsRunScript(pluginId, template.render!, ctx)) as
     | Record<string, unknown>
     | null
