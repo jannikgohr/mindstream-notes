@@ -558,10 +558,10 @@ pub fn plugins_native_service_status(
     id: String,
     service_id: String,
 ) -> CommandResult<PreviewServiceStatus> {
-    db.with_conn(|c| super::require_enabled_permission(c, &id, PERM_NATIVE_SERVICES_RUN))?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
-    let plugin = discovery::find(&third_party_dir, &id)
-        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
+    let (_, plugin) = db.with_conn(|c| {
+        super::load_runnable(c, &third_party_dir, &id, Some(PERM_NATIVE_SERVICES_RUN))
+    })?;
     let service = find_service(&plugin.manifest, &service_id)?;
     // Desktop-only: report unavailable on mobile rather than erroring.
     if cfg!(mobile) {
@@ -604,11 +604,10 @@ pub async fn plugins_preview_start(
         .into_iter()
         .map(|(k, v)| (k, sanitize_setting_value(&v)))
         .collect();
-    db.with_conn(|c| super::require_enabled_permission(c, &id, PERM_NATIVE_SERVICES_RUN))?;
-
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
-    let plugin = discovery::find(&third_party_dir, &id)
-        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
+    let (_, plugin) = db.with_conn(|c| {
+        super::load_runnable(c, &third_party_dir, &id, Some(PERM_NATIVE_SERVICES_RUN))
+    })?;
     let service = find_service(&plugin.manifest, &service_id)?;
     if service.preview_iframe.mode != PreviewIframeMode::Themed
         && service.preview_iframe.css.is_some()

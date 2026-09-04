@@ -1246,3 +1246,78 @@ mod artifacts {
         assert!(files(&root).is_empty());
     }
 }
+
+/// Build a `DiscoveredPlugin` standing for "what is on disk right now". Only
+/// `source` and `checksum` matter to the integrity gate; the rest is filler.
+fn on_disk(id: &str, checksum: &str, source: &str) -> discovery::DiscoveredPlugin {
+    discovery::DiscoveredPlugin {
+        id: id.to_string(),
+        version: "1.0.0".to_string(),
+        permissions: Vec::new(),
+        enabled_by_default: true,
+        source: source.to_string(),
+        files: discovery::PluginFiles::Fs(PathBuf::from("/nonexistent")),
+        checksum: checksum.to_string(),
+        signer: None,
+        signature_status: "unsigned".to_string(),
+        manifest: serde_json::json!({ "id": id }),
+    }
+}
+
+#[test]
+fn approved_installed_plugin_runs_only_while_its_files_are_unchanged() {
+    // The integrity gate used to run only during `reconcile`, so an approved
+    // plugin edited while the app was running would execute unapproved bytes on
+    // the next toolbar click. Execution paths re-check the checksum themselves.
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        upsert(c, upsert_input("com.a.plugin", "hash1", "installed"))?;
+        let rec = approve(c, "com.a.plugin", "hash1", None, "unsigned")?;
+
+        require_approved(&rec, &on_disk("com.a.plugin", "hash1", "installed"))
+            .expect("unchanged files are approved");
+
+        let err = require_approved(&rec, &on_disk("com.a.plugin", "hash2", "installed"))
+            .expect_err("edited files must not run under the old approval");
+        assert!(err.to_string().contains("re-approval required"));
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn builtin_plugins_are_exempt_from_the_execution_time_gate() {
+    // Builtins ship inside the signed app binary: their bytes cannot change
+    // without the binary changing, so the accepted hash tracks rather than gates.
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        let rec = upsert(c, upsert_input("com.a.builtin", "hash1", SOURCE_BUILTIN))?;
+        require_approved(
+            &rec,
+            &on_disk("com.a.builtin", "hash-different", SOURCE_BUILTIN),
+        )
+        .expect("a builtin is trusted by location, not by hash");
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn load_runnable_rejects_disabled_unapproved_and_ungranted_plugins() {
+    let db = open_memory_for_tests();
+    let dir = std::env::temp_dir().join("ms-plugins-load-runnable-empty");
+    db.with_conn(|c| {
+        upsert(c, upsert_input("com.a.plugin", "hash1", "installed"))?;
+        // Disabled: refused before the filesystem is touched at all.
+        let err = load_runnable(c, &dir, "com.a.plugin", None).unwrap_err();
+        assert!(err.to_string().contains("not enabled"));
+
+        approve(c, "com.a.plugin", "hash1", None, "unsigned")?;
+        // Enabled and approved, but the capability was never granted.
+        let err =
+            load_runnable(c, &dir, "com.a.plugin", Some("nativeTools.runDeclared")).unwrap_err();
+        assert!(err.to_string().contains("lacks permission"));
+        Ok(())
+    })
+    .unwrap();
+}
