@@ -364,11 +364,51 @@ pub fn discover(third_party_dir: &Path) -> Vec<DiscoveredPlugin> {
     plugins
 }
 
+/// The plugin `id` a directory declares, read from its `manifest.json` alone.
+///
+/// Deliberately cheap: it parses one small file and touches nothing else, so
+/// [`find`] can skip past a candidate without reading, hashing or
+/// signature-checking the rest of its bundle.
+fn declared_id(files: &PluginFiles) -> Option<String> {
+    let bytes = files.read_bytes("manifest.json").ok()??;
+    let manifest: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    manifest.get("id")?.as_str().map(str::to_string)
+}
+
 /// Find one plugin by id across the builtin + third-party sets, applying the
 /// same builtin-wins rule as [`discover`]. Returns the [`DiscoveredPlugin`]
 /// (with its [`PluginFiles`]) so a caller can load the plugin's entry script.
+///
+/// Resolves by id *before* doing any expensive work. This used to be
+/// `discover(dir).find(...)`, which read every file of every installed plugin,
+/// computed a SHA-256 package digest for each and verified each Ed25519
+/// signature — in order to return one. Scripted note kinds call
+/// `plugins_run_script` on a render debounce while the user types, so that ran
+/// several times a second against the whole plugin corpus.
 pub fn find(third_party_dir: &Path, id: &str) -> Option<DiscoveredPlugin> {
-    discover(third_party_dir).into_iter().find(|p| p.id == id)
+    // Builtins win on a colliding id, exactly as in `discover`.
+    for sub in BUILTIN_PLUGINS.dirs() {
+        if sub.get_file(sub.path().join("manifest.json")).is_none() {
+            continue;
+        }
+        let files = PluginFiles::Embedded(sub);
+        if declared_id(&files).as_deref() != Some(id) {
+            continue;
+        }
+        return read_plugin(files, SOURCE_BUILTIN).ok();
+    }
+    for entry in fs::read_dir(third_party_dir).ok()?.flatten() {
+        let path = entry.path();
+        if !path.is_dir() || !path.join("manifest.json").exists() {
+            continue;
+        }
+        let files = PluginFiles::Fs(path);
+        if declared_id(&files).as_deref() != Some(id) {
+            continue;
+        }
+        return read_plugin(files, SOURCE_INSTALLED).ok();
+    }
+    None
 }
 
 #[cfg(test)]
@@ -501,5 +541,26 @@ mod tests {
         let after = discover_dir(&root, SOURCE_INSTALLED)[0].checksum.clone();
         assert_ne!(before, after);
         fs::remove_dir_all(&root).ok();
+    }
+    #[test]
+    fn find_resolves_by_declared_id_not_directory_name() {
+        // The directory name and the plugin id are independent, so  has to
+        // read manifests — but only the manifest, not the whole bundle.
+        let root = tmp();
+        write_plugin(&root, "first-dir", "com.a.first", "");
+        write_plugin(&root, "second-dir", "com.a.second", "");
+
+        let found = find(&root, "com.a.second").expect("resolves by manifest id");
+        assert_eq!(found.id, "com.a.second");
+        assert_eq!(found.source, SOURCE_INSTALLED);
+        assert!(!found.checksum.is_empty(), "the match is still fully read");
+
+        assert!(find(&root, "com.a.missing").is_none());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn find_returns_none_when_the_third_party_dir_is_absent() {
+        assert!(find(&tmp(), "com.a.anything").is_none());
     }
 }
