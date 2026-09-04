@@ -71,6 +71,33 @@ export function registerDynamicSettingResolver(
   dynamicSettingResolver = resolver;
 }
 
+/**
+ * Storage for settings this store does not own.
+ *
+ * Plugin settings are persisted in the vault database, not `localStorage`,
+ * because the backend passes them to scripts and has to be able to read them.
+ * The plugins layer registers this at startup so the dialog, `isModified` and
+ * every `$derived` chain keep working against one API without the core store
+ * importing the plugins layer.
+ *
+ * `read` stays synchronous — the whole store is built on synchronous reads —
+ * so an implementation is expected to keep its own cache.
+ */
+export interface ExternalSettingStore {
+  owns: (id: string) => boolean;
+  read: (id: string) => unknown;
+  has: (id: string) => boolean;
+  write: (id: string, value: unknown) => Promise<void>;
+  clear: (id: string) => Promise<void>;
+}
+let externalStore: ExternalSettingStore | null = null;
+
+export function registerExternalSettingStore(
+  store: ExternalSettingStore | null
+): void {
+  externalStore = store;
+}
+
 /** Static schema first, then any dynamically-registered (plugin) setting. */
 function settingDef(id: string): Setting | undefined {
   return BY_ID[id] ?? dynamicSettingResolver?.(id);
@@ -232,6 +259,11 @@ void hydrateSettings('startup');
  * don't have to thread Promises.
  */
 export function getSettingValue(id: string): unknown {
+  if (externalStore?.owns(id)) {
+    if (externalStore.has(id)) return externalStore.read(id);
+    const def = settingDef(id);
+    return def ? defaultForSetting(def) : undefined;
+  }
   if (id in settings.values) return settings.values[id];
   const def = settingDef(id);
   return def ? defaultForSetting(def) : undefined;
@@ -239,6 +271,7 @@ export function getSettingValue(id: string): unknown {
 
 /** True when a value was explicitly loaded/saved, not just schema-defaulted. */
 export function hasSettingValue(id: string): boolean {
+  if (externalStore?.owns(id)) return externalStore.has(id);
   return id in settings.values;
 }
 
@@ -252,6 +285,10 @@ export async function setSettingValue(
   id: string,
   value: unknown
 ): Promise<void> {
+  if (externalStore?.owns(id)) {
+    await externalStore.write(id, value);
+    return;
+  }
   const binding = SETTING_BINDINGS[id];
   if (binding) {
     const prev = settings.values[id];
@@ -282,6 +319,10 @@ export async function setSettingValue(
 export async function resetSettingValue(id: string): Promise<void> {
   const def = settingDef(id);
   if (!def) return;
+  if (externalStore?.owns(id)) {
+    await externalStore.clear(id);
+    return;
+  }
   if ('default' in def || def.defaultByPlatform) {
     await setSettingValue(id, defaultForSetting(def));
     return;

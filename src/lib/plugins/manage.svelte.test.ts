@@ -44,11 +44,12 @@ function setTauri(on: boolean): void {
 
 function withSettings(id: string) {
   registerPlugin({
+    manifestVersion: 1,
     id,
     name: `Plugin ${id}`,
     version: '1.2.3',
     runtime: 'manifest-only',
-    permissions: ['templates.contribute', 'notes.create'],
+    permissions: ['notes.create'],
     contributes: {
       i18n: {
         en: { 'settings.general.title': 'General', 'settings.x.label': 'X' }
@@ -83,6 +84,7 @@ function withSettings(id: string) {
 
 function noSettings(id: string) {
   registerPlugin({
+    manifestVersion: 1,
     id,
     name: `Plugin ${id}`,
     version: '0.1.0',
@@ -149,6 +151,7 @@ describe('Tauri-backed admin', () => {
 
   it('refreshPluginAdmin enriches the overview with backend records', async () => {
     registerPlugin({
+      manifestVersion: 1,
       id: 'com.typst.plugin',
       name: 'Typst',
       version: '2.0.0',
@@ -158,7 +161,7 @@ describe('Tauri-backed admin', () => {
       permissions: [
         'nativeTools.runDeclared',
         'nativeServices.run',
-        'templates.contribute',
+
         'notes.create'
       ],
       contributes: {

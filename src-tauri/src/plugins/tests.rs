@@ -1,6 +1,28 @@
 use super::*;
 use crate::db::open_memory_for_tests;
 
+/// Parse a manifest literal the way discovery does, so a test exercises the
+/// same schema the backend enforces rather than a hand-rolled struct.
+fn manifest_from(value: serde_json::Value) -> manifest::Manifest {
+    manifest::Manifest::parse(value.to_string().as_bytes()).expect("valid manifest")
+}
+
+/// The minimum a manifest needs, with `extra` merged over it.
+fn manifest_with(extra: serde_json::Value) -> manifest::Manifest {
+    let mut base = serde_json::json!({
+        "manifestVersion": 1,
+        "id": "com.a.plugin",
+        "name": "A Plugin",
+        "version": "1.0.0",
+        "runtime": "manifest-only"
+    });
+    let obj = base.as_object_mut().unwrap();
+    for (k, v) in extra.as_object().unwrap() {
+        obj.insert(k.clone(), v.clone());
+    }
+    manifest_from(base)
+}
+
 fn signed_input(
     id: &str,
     checksum: &str,
@@ -14,7 +36,7 @@ fn signed_input(
         checksum: checksum.to_string(),
         source: source.to_string(),
         source_path: None,
-        permissions: vec!["templates.contribute".into(), "notes.create".into()],
+        permissions: vec!["notes.create".into()],
         enabled_by_default: true,
         signer: signer.map(String::from),
         signature_status: signature_status.to_string(),
@@ -38,7 +60,7 @@ fn new_installed_plugin_is_gated_disabled_and_unapproved() {
             rec.last_load_error.is_some(),
             "a gate reason is recorded so the UI prompts for approval"
         );
-        assert_eq!(rec.granted_permissions.len(), 2);
+        assert_eq!(rec.granted_permissions, vec!["notes.create".to_string()]);
         assert_eq!(list(c)?.len(), 1);
         Ok(())
     })
@@ -150,7 +172,14 @@ fn installed_plugin_hash_change_disables_and_records_error() {
     db.with_conn(|c| {
         upsert(c, upsert_input("com.a.plugin", "hash1", "installed"))?;
         // Approve it at hash1 so we're testing the *approved-then-changed* gate.
-        approve(c, "com.a.plugin", "hash1", None, "unsigned")?;
+        approve(
+            c,
+            "com.a.plugin",
+            "hash1",
+            &["notes.create".to_string()],
+            None,
+            "unsigned",
+        )?;
         let rec = upsert(c, upsert_input("com.a.plugin", "hash2", "installed"))?;
         assert!(!rec.enabled, "changed hash disables an installed plugin");
         assert!(rec.last_load_error.is_some());
@@ -166,7 +195,14 @@ fn installed_plugin_unchanged_hash_refreshes_and_clears_error() {
     let db = open_memory_for_tests();
     db.with_conn(|c| {
         upsert(c, upsert_input("com.a.plugin", "hash1", "installed"))?;
-        approve(c, "com.a.plugin", "hash1", None, "unsigned")?;
+        approve(
+            c,
+            "com.a.plugin",
+            "hash1",
+            &["notes.create".to_string()],
+            None,
+            "unsigned",
+        )?;
         set_load_error(c, "com.a.plugin", Some("stale error"))?;
         let mut next = upsert_input("com.a.plugin", "hash1", "installed");
         next.version = "1.1.0".into();
@@ -200,7 +236,14 @@ fn approve_accepts_new_hash_enables_and_clears_error() {
         upsert(c, upsert_input("com.a.plugin", "hash1", "installed"))?;
         // Simulate a hash change that disabled the plugin.
         upsert(c, upsert_input("com.a.plugin", "hash2", "installed"))?;
-        let rec = approve(c, "com.a.plugin", "hash2", None, "unsigned")?;
+        let rec = approve(
+            c,
+            "com.a.plugin",
+            "hash2",
+            &["notes.create".to_string()],
+            None,
+            "unsigned",
+        )?;
         assert!(rec.enabled);
         assert_eq!(rec.accepted_hash, "hash2");
         assert!(rec.last_load_error.is_none());
@@ -224,30 +267,37 @@ fn set_enabled_on_missing_plugin_is_not_found() {
 }
 
 #[test]
-fn plugin_permission_gate_requires_enabled_and_granted() {
+fn permission_gate_requires_enabled_and_granted() {
     let db = open_memory_for_tests();
     db.with_conn(|c| {
         upsert(c, upsert_input("com.a.plugin", "hash1", "installed"))?;
-        let err = require_enabled_permission(c, "com.a.plugin", "pluginStorage.read").unwrap_err();
+        let rec = require(c, "com.a.plugin")?;
+        let err = require_enabled(&rec).unwrap_err();
         assert!(err.to_string().contains("not enabled"));
 
-        approve(c, "com.a.plugin", "hash1", None, "unsigned")?;
-        let err = require_enabled_permission(c, "com.a.plugin", "pluginStorage.read").unwrap_err();
+        approve(
+            c,
+            "com.a.plugin",
+            "hash1",
+            &["notes.create".to_string()],
+            None,
+            "unsigned",
+        )?;
+        let rec = require(c, "com.a.plugin")?;
+        require_enabled(&rec).expect("approved plugins are enabled");
+        // The grant is what is checked, not what the manifest asked for.
+        let err = require_permission(&rec, "pluginStorage.read").unwrap_err();
         assert!(err.to_string().contains("lacks permission"));
-
-        let mut input = upsert_input("com.storage.plugin", "hash1", SOURCE_BUILTIN);
-        input.permissions = vec!["pluginStorage.read".into()];
-        upsert(c, input)?;
-        let rec = require_enabled_permission(c, "com.storage.plugin", "pluginStorage.read")?;
-        assert!(rec.enabled);
+        require_permission(&rec, "notes.create").expect("granted capability passes");
         Ok(())
     })
     .unwrap();
 }
 
 #[test]
-fn parse_artifacts_reads_manifest_declarations() {
-    let manifest = serde_json::json!({
+fn artifact_and_native_tool_declarations_reach_the_backend() {
+    let m = manifest_with(serde_json::json!({
+        "permissions": ["pluginArtifacts.download", "nativeTools.runDeclared"],
         "contributes": {
             "artifacts": [{
                 "id": "typst-compiler",
@@ -257,31 +307,23 @@ fn parse_artifacts_reads_manifest_declarations() {
                 "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "fileName": "typst.wasm",
                 "sizeBytes": 123
-            }]
-        }
-    });
-    let artifacts = parse_artifacts(&manifest).unwrap();
-    assert_eq!(artifacts.len(), 1);
-    assert_eq!(artifacts[0].id, "typst-compiler");
-    assert_eq!(artifacts[0].file_name, "typst.wasm");
-    assert_eq!(artifacts[0].size_bytes, Some(123));
-}
-
-#[test]
-fn parse_native_tools_reads_manifest_declarations() {
-    let manifest = serde_json::json!({
-        "contributes": {
+            }],
             "nativeTools": [{
                 "id": "typst",
                 "binaryName": "typst",
                 "descriptionKey": "native.typst.description"
             }]
         }
-    });
-    let tools = parse_native_tools(&manifest).unwrap();
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].id, "typst");
-    assert_eq!(tools[0].binary_name, "typst");
+    }));
+    let artifact = m.artifact("typst-compiler").unwrap();
+    assert_eq!(artifact.file_name, "typst.wasm");
+    assert_eq!(artifact.size_bytes, Some(123));
+    assert_eq!(m.native_tool("typst").unwrap().binary_name, "typst");
+    // Absent declarations are an empty list, not an error.
+    assert!(manifest_with(serde_json::json!({}))
+        .contributes
+        .artifacts
+        .is_empty());
 }
 
 #[test]
@@ -311,7 +353,14 @@ fn signed_same_signer_update_auto_approves() {
             signed_input("com.a.p", "h1", "installed", Some("keyA"), "valid"),
         )?;
         // Approve v1, pinning keyA — that's what lets a same-signer update through.
-        approve(c, "com.a.p", "h1", Some("keyA"), "valid")?;
+        approve(
+            c,
+            "com.a.p",
+            "h1",
+            &["notes.create".to_string()],
+            Some("keyA"),
+            "valid",
+        )?;
         // Changed manifest, still validly signed by the same key → accepted.
         let rec = upsert(
             c,
@@ -334,7 +383,14 @@ fn signed_different_signer_update_is_gated_and_keeps_pin() {
             c,
             signed_input("com.a.p", "h1", "installed", Some("keyA"), "valid"),
         )?;
-        approve(c, "com.a.p", "h1", Some("keyA"), "valid")?;
+        approve(
+            c,
+            "com.a.p",
+            "h1",
+            &["notes.create".to_string()],
+            Some("keyA"),
+            "valid",
+        )?;
         // Validly signed, but by a DIFFERENT key → gated; pin + hash retained.
         let rec = upsert(
             c,
@@ -357,7 +413,14 @@ fn invalid_signature_update_is_gated() {
             c,
             signed_input("com.a.p", "h1", "installed", Some("keyA"), "valid"),
         )?;
-        approve(c, "com.a.p", "h1", Some("keyA"), "valid")?;
+        approve(
+            c,
+            "com.a.p",
+            "h1",
+            &["notes.create".to_string()],
+            Some("keyA"),
+            "valid",
+        )?;
         let rec = upsert(
             c,
             signed_input("com.a.p", "h2", "installed", None, "invalid"),
@@ -387,7 +450,8 @@ fn reconcile_registers_discovered_plugins_and_returns_manifests() {
             checksum: "hash1".into(),
             signer: None,
             signature_status: "unsigned".into(),
-            manifest: serde_json::json!({ "id": "com.a.plugin", "name": "A" }),
+            manifest: manifest_with(serde_json::json!({})),
+            manifest_json: serde_json::json!({ "id": "com.a.plugin", "name": "A" }),
         }];
         let views = reconcile(c, discovered)?;
         assert_eq!(views.len(), 1);
@@ -420,14 +484,19 @@ fn run_plugin_script_executes_luau_entry_with_input() {
         "return { render = function(ctx) return { title = ctx.name } end }",
     )
     .unwrap();
-    let manifest = serde_json::json!({
-        "id": "com.a.luau", "runtime": "luau", "entry": "main.luau"
-    });
+    let manifest = manifest_with(serde_json::json!({
+        "id": "com.a.luau",
+        "runtime": "luau",
+        "entry": "main.luau",
+        "permissions": ["nativeTools.runDeclared"],
+        "contributes": {
+            "nativeTools": [{ "id": "missing", "binaryName": "ms-not-a-real-binary-xyz" }]
+        }
+    }));
     let out = run_plugin_script(
         &super::discovery::PluginFiles::Fs(dir.clone()),
         &manifest,
-        "test-checksum",
-        vec!["templates.contribute".into()],
+        vec!["nativeTools.runDeclared".into()],
         "render",
         serde_json::json!({ "name": "Hi" }),
         Vec::new(),
@@ -449,7 +518,6 @@ fn templates_plugin_renders_macros_in_lua() {
     let out = run_plugin_script(
         &plugin.files,
         &plugin.manifest,
-        &plugin.checksum,
         vec!["notes.read".into(), "notes.create".into()],
         "renderTemplate",
         serde_json::json!({
@@ -489,7 +557,6 @@ fn templates_plugin_localizes_dates_via_locale() {
     let out = run_plugin_script(
         &plugin.files,
         &plugin.manifest,
-        &plugin.checksum,
         vec!["notes.read".into(), "notes.create".into()],
         "renderTemplate",
         serde_json::json!({
@@ -507,11 +574,10 @@ fn templates_plugin_localizes_dates_via_locale() {
 
 #[test]
 fn run_plugin_script_refuses_a_non_luau_runtime() {
-    let manifest = serde_json::json!({ "id": "x", "runtime": "manifest-only" });
+    let manifest = manifest_with(serde_json::json!({}));
     let out = run_plugin_script(
         &super::discovery::PluginFiles::Fs(std::env::temp_dir()),
         &manifest,
-        "test-checksum",
         vec![],
         "render",
         serde_json::json!({}),
@@ -519,61 +585,6 @@ fn run_plugin_script_refuses_a_non_luau_runtime() {
         None,
     );
     assert!(out.is_err());
-}
-
-#[test]
-fn run_plugin_script_executes_wasm_entry_with_input() {
-    fn pack(ptr: u32, len: usize) -> u64 {
-        ((ptr as u64) << 32) | len as u64
-    }
-    fn wat_string(s: &str) -> String {
-        s.replace('\\', "\\5c")
-            .replace('"', "\\22")
-            .replace('\n', "\\0a")
-    }
-
-    let dir = std::env::temp_dir().join(format!("ms-wasm-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let json = r#"{"effect":"toast","message":"hi"}"#;
-    let wasm = wat::parse_str(format!(
-        r#"(module
-          (memory (export "memory") 1)
-          (global $heap (mut i32) (i32.const 1024))
-          (func (export "alloc") (param $len i32) (result i32)
-            (local $ptr i32)
-            global.get $heap
-            local.set $ptr
-            global.get $heap
-            local.get $len
-            i32.add
-            global.set $heap
-            local.get $ptr)
-          (data (i32.const 32) "{}")
-          (func (export "render") (param i32) (param i32) (result i64)
-            i64.const {}))
-        "#,
-        wat_string(json),
-        pack(32, json.len())
-    ))
-    .unwrap();
-    std::fs::write(dir.join("main.wasm"), wasm).unwrap();
-    let manifest = serde_json::json!({
-        "id": "com.a.wasm", "runtime": "wasm", "entry": "main.wasm"
-    });
-    let out = run_plugin_script(
-        &super::discovery::PluginFiles::Fs(dir.clone()),
-        &manifest,
-        "test-checksum",
-        vec![],
-        "render",
-        serde_json::json!({ "name": "Hi" }),
-        Vec::new(),
-        None,
-    )
-    .unwrap();
-    assert_eq!(out["effect"], serde_json::json!("toast"));
-    assert_eq!(out["message"], serde_json::json!("hi"));
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -716,62 +727,37 @@ fn split_plugin_rel_path_normalizes_and_allows_empty_when_asked() {
 }
 
 #[test]
-fn parse_artifacts_and_native_tools_reject_malformed_declarations() {
-    let bad_artifacts = serde_json::json!({
-        "contributes": { "artifacts": [{ "id": 5 }] }
-    });
-    assert!(matches!(
-        parse_artifacts(&bad_artifacts).unwrap_err(),
-        AppError::InvalidArg(_)
-    ));
-    let bad_tools = serde_json::json!({
-        "contributes": { "nativeTools": "not-an-array" }
-    });
-    assert!(matches!(
-        parse_native_tools(&bad_tools).unwrap_err(),
-        AppError::InvalidArg(_)
-    ));
-    // Absent contributions parse to an empty vec, not an error.
-    assert!(parse_artifacts(&serde_json::json!({})).unwrap().is_empty());
-    assert!(parse_native_tools(&serde_json::json!({}))
-        .unwrap()
-        .is_empty());
+fn malformed_declarations_stop_the_whole_manifest() {
+    // A malformed declaration used to surface only when something reached for
+    // it. Now the plugin fails to load, which is the honest outcome: the
+    // manifest does not describe something the backend can act on.
+    for bad in [
+        serde_json::json!({ "contributes": { "artifacts": [{ "id": 5 }] } }),
+        serde_json::json!({ "contributes": { "nativeTools": "not-an-array" } }),
+    ] {
+        let mut v = serde_json::json!({
+            "manifestVersion": 1, "id": "com.a.plugin", "name": "A",
+            "version": "1.0.0", "runtime": "manifest-only"
+        });
+        let obj = v.as_object_mut().unwrap();
+        for (k, val) in bad.as_object().unwrap() {
+            obj.insert(k.clone(), val.clone());
+        }
+        assert!(manifest::Manifest::parse(v.to_string().as_bytes()).is_err());
+    }
 }
 
 #[test]
-fn find_native_tool_returns_the_match_or_not_found() {
-    let manifest = serde_json::json!({
+fn require_native_tool_returns_the_match_or_not_found() {
+    let m = manifest_with(serde_json::json!({
+        "permissions": ["nativeTools.runDeclared"],
         "contributes": { "nativeTools": [{ "id": "typst", "binaryName": "typst" }] }
-    });
-    assert_eq!(find_native_tool(&manifest, "typst").unwrap().id, "typst");
+    }));
+    assert_eq!(require_native_tool(&m, "typst").unwrap().id, "typst");
     assert!(matches!(
-        find_native_tool(&manifest, "ghost").unwrap_err(),
+        require_native_tool(&m, "ghost").unwrap_err(),
         AppError::NotFound(_)
     ));
-}
-
-#[test]
-fn manifest_id_defaults_when_absent() {
-    assert_eq!(manifest_id(&serde_json::json!({ "id": "com.x" })), "com.x");
-    assert_eq!(manifest_id(&serde_json::json!({})), "plugin");
-    // A non-string id also falls back.
-    assert_eq!(manifest_id(&serde_json::json!({ "id": 7 })), "plugin");
-}
-
-#[test]
-fn manifest_entry_validates_extension_and_rejects_traversal() {
-    let ok = serde_json::json!({ "entry": "main.luau" });
-    assert_eq!(manifest_entry(&ok, "luau", ".luau").unwrap(), "main.luau");
-    // No entry at all.
-    assert!(manifest_entry(&serde_json::json!({}), "luau", ".luau").is_err());
-    // Wrong extension.
-    let wrong = serde_json::json!({ "entry": "main.js" });
-    assert!(manifest_entry(&wrong, "luau", ".luau").is_err());
-    // Traversal in the entry path.
-    let evil = serde_json::json!({ "entry": "../main.luau" });
-    assert!(manifest_entry(&evil, "luau", ".luau").is_err());
-    let nested = serde_json::json!({ "entry": "sub/main.luau" });
-    assert!(manifest_entry(&nested, "luau", ".luau").is_err());
 }
 
 #[test]
@@ -896,15 +882,15 @@ fn resolve_path_binary_validates_then_misses_unknown() {
 
 #[test]
 fn native_tool_status_reflects_binary_resolution() {
-    let tool = parse_native_tools(&serde_json::json!({
+    let m = manifest_with(serde_json::json!({
+        "permissions": ["nativeTools.runDeclared"],
         "contributes": {
             "nativeTools": [{ "id": "typst", "binaryName": "ms-not-a-real-binary-xyz" }]
         }
-    }))
-    .unwrap()
-    .remove(0);
+    }));
+    let tool = m.native_tool("typst").unwrap();
 
-    let status = native_tool_status("com.x.plugin", &tool).unwrap();
+    let status = native_tool_status("com.x.plugin", tool).unwrap();
     assert_eq!(status.plugin_id, "com.x.plugin");
     assert_eq!(status.tool_id, "typst");
     assert_eq!(status.binary_name, "ms-not-a-real-binary-xyz");
@@ -917,14 +903,15 @@ fn native_tool_status_reflects_binary_resolution() {
 
 #[test]
 fn resolve_native_tools_maps_every_declared_tool() {
-    let manifest = serde_json::json!({
+    let manifest = manifest_with(serde_json::json!({
+        "permissions": ["nativeTools.runDeclared"],
         "contributes": {
             "nativeTools": [
                 { "id": "typst", "binaryName": "ms-not-real-a-xyz" },
                 { "id": "other", "binaryName": "ms-not-real-b-xyz" }
             ]
         }
-    });
+    }));
     let resolved = resolve_native_tools(&manifest);
     assert_eq!(resolved.len(), 2);
     assert!(resolved.contains_key("typst"));
@@ -934,12 +921,13 @@ fn resolve_native_tools_maps_every_declared_tool() {
     assert!(resolved["other"].is_none());
 
     // A manifest that declares no native tools yields an empty map.
-    assert!(resolve_native_tools(&serde_json::json!({})).is_empty());
+    assert!(resolve_native_tools(&manifest_with(serde_json::json!({}))).is_empty());
 }
 
 #[test]
-fn find_artifact_returns_the_match_or_not_found() {
-    let manifest = serde_json::json!({
+fn require_artifact_returns_the_match_or_not_found() {
+    let manifest = manifest_with(serde_json::json!({
+        "permissions": ["pluginArtifacts.download"],
         "contributes": {
             "artifacts": [{
                 "id": "typst-compiler",
@@ -950,13 +938,13 @@ fn find_artifact_returns_the_match_or_not_found() {
                 "fileName": "typst.wasm"
             }]
         }
-    });
+    }));
     assert_eq!(
-        find_artifact(&manifest, "typst-compiler").unwrap().id,
+        require_artifact(&manifest, "typst-compiler").unwrap().id,
         "typst-compiler"
     );
     assert!(matches!(
-        find_artifact(&manifest, "ghost").unwrap_err(),
+        require_artifact(&manifest, "ghost").unwrap_err(),
         AppError::NotFound(_)
     ));
 }
@@ -1014,41 +1002,29 @@ fn note_snapshot_builds_folder_paths_and_metadata() {
 
 #[test]
 fn limit_readers_clamp_and_fall_back_to_defaults() {
-    // Value present but out of range → clamped.
-    let over = serde_json::json!({ "limits": { "heap": 999 } });
-    assert_eq!(limit_usize(&over, "heap", 10, 1, 100), 100);
-    // Absent field → default (itself clamped into range).
-    let none = serde_json::json!({});
-    assert_eq!(limit_usize(&none, "heap", 10, 1, 100), 10);
-    assert_eq!(limit_u64(&over, "heap", 10, 1, 100), 100);
+    // A manifest may ask; only the host decides. Above the ceiling → clamped.
+    assert_eq!(limit_usize(Some(999), 10, 1, 100), 100);
+    // Absent → the default, itself clamped into range.
+    assert_eq!(limit_usize(None, 10, 1, 100), 10);
 
-    let dur = serde_json::json!({ "limits": { "timeoutMs": 50 } });
+    let ms = std::time::Duration::from_millis;
+    // 50ms is below the 100ms floor → clamped up.
     assert_eq!(
-        limit_duration(
-            &dur,
-            std::time::Duration::from_millis(1000),
-            std::time::Duration::from_millis(100),
-            std::time::Duration::from_millis(5000),
-        ),
-        // 50ms is below the 100ms floor → clamped up.
-        std::time::Duration::from_millis(100)
+        limit_duration(Some(50), ms(1000), ms(100), ms(5000)),
+        ms(100)
     );
-    // Absent timeoutMs → the supplied default (already within range).
-    assert_eq!(
-        limit_duration(
-            &none,
-            std::time::Duration::from_millis(1000),
-            std::time::Duration::from_millis(100),
-            std::time::Duration::from_millis(5000),
-        ),
-        std::time::Duration::from_millis(1000)
-    );
+    // Absent → the supplied default, already within range.
+    assert_eq!(limit_duration(None, ms(1000), ms(100), ms(5000)), ms(1000));
+
+    // And through the real path: a manifest's declared limits reach luau::Limits.
+    let m = manifest_with(serde_json::json!({
+        "runtime": "luau", "entry": "main.luau",
+        "limits": { "memoryBytes": 1, "timeoutMs": 999999 }
+    }));
+    let limits = luau_limits(&m);
+    assert_eq!(limits.memory_bytes, 1024 * 1024, "clamped up to the floor");
+    assert_eq!(limits.timeout, ms(5000), "clamped down to the ceiling");
 }
-
-/// A system binary that reads stdin and writes it straight back to stdout,
-/// available on every supported desktop platform. `cat` streams verbatim;
-/// Windows `sort` buffers then writes the (identically-keyed) lines back — both
-/// produce far more than a pipe buffer's worth of stdout, which is what the
 /// regression below needs. `None` on the rare host missing it → the test skips.
 #[cfg(unix)]
 fn stdin_echo_tool() -> Option<PathBuf> {
@@ -1116,10 +1092,10 @@ mod artifacts {
         dir
     }
 
-    fn artifact(bytes: &[u8]) -> PluginArtifactManifest {
-        PluginArtifactManifest {
+    fn artifact(bytes: &[u8]) -> manifest::ArtifactDecl {
+        manifest::ArtifactDecl {
             id: "typst-compiler".into(),
-            kind: "wasm".into(),
+            kind: manifest::ArtifactKind::Wasm,
             version: "0.13.1".into(),
             url: "https://example.test/typst.wasm".into(),
             sha256: sha256_hex(bytes),
@@ -1245,4 +1221,375 @@ mod artifacts {
         }
         assert!(files(&root).is_empty());
     }
+}
+
+/// Build a `DiscoveredPlugin` standing for "what is on disk right now". Only
+/// `source` and `checksum` matter to the integrity gate; the rest is filler.
+fn on_disk(id: &str, checksum: &str, source: &str) -> discovery::DiscoveredPlugin {
+    discovery::DiscoveredPlugin {
+        id: id.to_string(),
+        version: "1.0.0".to_string(),
+        permissions: Vec::new(),
+        enabled_by_default: true,
+        source: source.to_string(),
+        files: discovery::PluginFiles::Fs(PathBuf::from("/nonexistent")),
+        checksum: checksum.to_string(),
+        signer: None,
+        signature_status: "unsigned".to_string(),
+        manifest: manifest_with(serde_json::json!({ "id": id })),
+        manifest_json: serde_json::json!({ "id": id }),
+    }
+}
+
+#[test]
+fn approved_installed_plugin_runs_only_while_its_files_are_unchanged() {
+    // The integrity gate used to run only during `reconcile`, so an approved
+    // plugin edited while the app was running would execute unapproved bytes on
+    // the next toolbar click. Execution paths re-check the checksum themselves.
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        upsert(c, upsert_input("com.a.plugin", "hash1", "installed"))?;
+        let rec = approve(
+            c,
+            "com.a.plugin",
+            "hash1",
+            &["notes.create".to_string()],
+            None,
+            "unsigned",
+        )?;
+
+        require_approved(&rec, &on_disk("com.a.plugin", "hash1", "installed"))
+            .expect("unchanged files are approved");
+
+        let err = require_approved(&rec, &on_disk("com.a.plugin", "hash2", "installed"))
+            .expect_err("edited files must not run under the old approval");
+        assert!(err.to_string().contains("re-approval required"));
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn builtin_plugins_are_exempt_from_the_execution_time_gate() {
+    // Builtins ship inside the signed app binary: their bytes cannot change
+    // without the binary changing, so the accepted hash tracks rather than gates.
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        let rec = upsert(c, upsert_input("com.a.builtin", "hash1", SOURCE_BUILTIN))?;
+        require_approved(
+            &rec,
+            &on_disk("com.a.builtin", "hash-different", SOURCE_BUILTIN),
+        )
+        .expect("a builtin is trusted by location, not by hash");
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn load_runnable_rejects_disabled_unapproved_and_ungranted_plugins() {
+    let db = open_memory_for_tests();
+    let dir = std::env::temp_dir().join("ms-plugins-load-runnable-empty");
+    db.with_conn(|c| {
+        upsert(c, upsert_input("com.a.plugin", "hash1", "installed"))?;
+        // Disabled: refused before the filesystem is touched at all.
+        let err = load_runnable(c, &dir, "com.a.plugin", None).unwrap_err();
+        assert!(err.to_string().contains("not enabled"));
+
+        approve(
+            c,
+            "com.a.plugin",
+            "hash1",
+            &["notes.create".to_string()],
+            None,
+            "unsigned",
+        )?;
+        // Enabled and approved, but the capability was never granted.
+        let err =
+            load_runnable(c, &dir, "com.a.plugin", Some("nativeTools.runDeclared")).unwrap_err();
+        assert!(err.to_string().contains("lacks permission"));
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn load_runnable_returns_the_approved_plugin_from_disk() {
+    let root =
+        std::env::temp_dir().join(format!("ms-plugins-load-runnable-{}", uuid::Uuid::new_v4()));
+    let plugin_dir = root.join("installed-plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::write(
+        plugin_dir.join("manifest.json"),
+        serde_json::json!({
+            "manifestVersion": 1,
+            "id": "com.a.runnable",
+            "name": "Runnable",
+            "version": "1.0.0",
+            "runtime": "manifest-only",
+            "permissions": ["notes.create"]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let discovered = discovery::discover(&root)
+        .into_iter()
+        .find(|plugin| plugin.id == "com.a.runnable")
+        .expect("plugin is discovered");
+
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        let mut input = upsert_input(&discovered.id, &discovered.checksum, SOURCE_INSTALLED);
+        input.permissions = discovered.permissions.clone();
+        upsert(c, input)?;
+        approve(
+            c,
+            &discovered.id,
+            &discovered.checksum,
+            &discovered.permissions,
+            discovered.signer.as_deref(),
+            &discovered.signature_status,
+        )?;
+
+        let (record, loaded) = load_runnable(c, &root, &discovered.id, Some("notes.create"))?;
+        assert!(record.enabled);
+        assert_eq!(loaded.checksum, discovered.checksum);
+        Ok(())
+    })
+    .unwrap();
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn signed_same_signer_update_cannot_widen_its_permissions() {
+    // Auto-approving a same-signer update is a claim about *authorship* — the
+    // bytes came from the author the user already trusted. It is not the user
+    // agreeing to whatever those bytes now ask for. A plugin approved holding
+    // notes.create must not be able to grant itself native tool execution by
+    // re-signing with the same key.
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        upsert(
+            c,
+            signed_input("com.a.p", "h1", "installed", Some("keyA"), "valid"),
+        )?;
+        let rec = approve(
+            c,
+            "com.a.p",
+            "h1",
+            &["notes.create".to_string()],
+            Some("keyA"),
+            "valid",
+        )?;
+        assert!(rec.enabled);
+
+        let mut wider = signed_input("com.a.p", "h2", "installed", Some("keyA"), "valid");
+        wider.permissions = vec![
+            "notes.create".to_string(),
+            "nativeTools.runDeclared".to_string(),
+        ];
+        let rec = upsert(c, wider)?;
+
+        assert!(!rec.enabled, "a widening update must be gated");
+        assert_eq!(
+            rec.granted_permissions,
+            vec!["notes.create".to_string()],
+            "the pinned grant is kept, not replaced"
+        );
+        assert_eq!(
+            rec.accepted_hash, "h1",
+            "the approved hash is kept so the old bytes stay identifiable"
+        );
+        // The reason names what was added — "needs re-approval" alone gives the
+        // user nothing to decide on.
+        let reason = rec.last_load_error.unwrap();
+        assert!(reason.contains("new permissions"), "{reason}");
+        assert!(reason.contains("nativeTools.runDeclared"), "{reason}");
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn signed_same_signer_update_may_narrow_its_permissions() {
+    // Dropping a permission needs no ceremony: the user already agreed to more.
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        let mut wide = signed_input("com.a.p", "h1", "installed", Some("keyA"), "valid");
+        wide.permissions = vec!["notes.create".to_string(), "notes.read".to_string()];
+        upsert(c, wide)?;
+        approve(
+            c,
+            "com.a.p",
+            "h1",
+            &["notes.create".to_string(), "notes.read".to_string()],
+            Some("keyA"),
+            "valid",
+        )?;
+
+        let mut narrower = signed_input("com.a.p", "h2", "installed", Some("keyA"), "valid");
+        narrower.permissions = vec!["notes.read".to_string()];
+        let rec = upsert(c, narrower)?;
+
+        assert!(rec.enabled, "narrowing stays enabled");
+        assert_eq!(rec.granted_permissions, vec!["notes.read".to_string()]);
+        assert_eq!(rec.accepted_hash, "h2");
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn builtin_updates_may_widen_their_permissions() {
+    // Builtins ship inside the signed binary, so their manifest is exactly as
+    // authoritative as the app asking the question.
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        upsert(c, upsert_input("com.a.builtin", "h1", SOURCE_BUILTIN))?;
+        let mut wider = upsert_input("com.a.builtin", "h2", SOURCE_BUILTIN);
+        wider.permissions = vec![
+            "notes.create".to_string(),
+            "nativeTools.runDeclared".to_string(),
+        ];
+        let rec = upsert(c, wider)?;
+        assert!(rec.enabled);
+        assert!(rec
+            .granted_permissions
+            .contains(&"nativeTools.runDeclared".to_string()));
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn approve_pins_the_permission_set_it_was_shown() {
+    // The approval prompt lists permissions; the set written has to be that
+    // set, or the prompt was describing something other than what happens.
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        upsert(c, upsert_input("com.a.plugin", "h1", "installed"))?;
+        let rec = approve(
+            c,
+            "com.a.plugin",
+            "h1",
+            &["notes.read".to_string()],
+            None,
+            "unsigned",
+        )?;
+        assert_eq!(rec.granted_permissions, vec!["notes.read".to_string()]);
+        assert!(rec.enabled);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn backend_owns_settings_folders_and_the_clock() {
+    // These three used to be assembled in the WebView and passed down as the
+    // script's argument, which is what made a UI action the only thing that
+    // could ever invoke a plugin. The backend builds them now.
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        settings::set(c, "com.a.p", "source-folder", &serde_json::json!("f1"))?;
+        settings::set(c, "com.a.p", "open-on-create", &serde_json::json!(true))?;
+        let outer = crate::collections::create(
+            c,
+            crate::collections::CreateCollection {
+                name: "Outer".into(),
+                parent_collection_id: None,
+            },
+        )?;
+
+        let ctx = backend_script_context(c, "com.a.p", &["notes.read".to_string()])?;
+        assert_eq!(ctx["settings"]["source-folder"], serde_json::json!("f1"));
+        assert_eq!(ctx["settings"]["open-on-create"], serde_json::json!(true));
+        // The seeded vault already has folders, so look for ours rather than
+        // asserting the whole list.
+        let folders = ctx["folders"].as_array().unwrap();
+        let ours = folders
+            .iter()
+            .find(|f| f["id"] == serde_json::json!(outer.id))
+            .expect("the created folder reaches the context");
+        assert_eq!(ours["name"], serde_json::json!("Outer"));
+        assert!(ours["parentId"].is_null());
+        assert!(ctx["now"].as_str().unwrap().contains('T'));
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn folders_stay_behind_notes_read() {
+    // Folder names are user content.  is gated, so the vault's shape
+    // is too — otherwise the permission means less than it says.
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        crate::collections::create(
+            c,
+            crate::collections::CreateCollection {
+                name: "Private".into(),
+                parent_collection_id: None,
+            },
+        )?;
+        let ctx = backend_script_context(c, "com.a.p", &[])?;
+        assert_eq!(
+            ctx["folders"],
+            serde_json::json!([]),
+            "no vault structure without notes.read"
+        );
+        // The plugin's own settings are not vault data, so they still come.
+        assert!(ctx["settings"].is_object());
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn backend_context_wins_over_caller_supplied_keys() {
+    // The merge is not a courtesy: a caller must not be able to tell a script
+    // that it has settings it does not have, or a clock it does not have.
+    let merged = merge_script_input(
+        serde_json::json!({
+            "noteId": "n1",
+            "settings": { "spoofed": true },
+            "now": "1999-01-01T00:00:00Z"
+        }),
+        serde_json::json!({
+            "settings": { "real": 1 },
+            "folders": [],
+            "now": "2026-09-04T00:00:00Z"
+        }),
+    );
+    assert_eq!(merged["settings"], serde_json::json!({ "real": 1 }));
+    assert_eq!(merged["now"], serde_json::json!("2026-09-04T00:00:00Z"));
+    // Call-specific keys the backend does not own are preserved.
+    assert_eq!(merged["noteId"], serde_json::json!("n1"));
+}
+
+#[test]
+fn backend_context_replaces_a_non_object_input() {
+    let backend = serde_json::json!({
+        "settings": { "real": true },
+        "folders": [],
+        "now": "2026-09-04T00:00:00Z"
+    });
+    assert_eq!(
+        merge_script_input(serde_json::json!("not an object"), backend.clone()),
+        backend
+    );
+}
+
+#[test]
+fn uninstalling_a_plugin_drops_its_settings() {
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        upsert(c, upsert_input("com.a.p", "h1", "installed"))?;
+        settings::set(c, "com.a.p", "k", &serde_json::json!(1))?;
+        settings::clear(c, "com.a.p")?;
+        remove(c, "com.a.p")?;
+        assert!(settings::all(c, "com.a.p")?.is_empty());
+        assert!(get(c, "com.a.p")?.is_none());
+        Ok(())
+    })
+    .unwrap();
 }

@@ -52,9 +52,7 @@ function pluginHasPermission(
   pluginId: string,
   permission: PluginPermission
 ): boolean {
-  return (
-    pluginById(pluginId)?.manifest.permissions.includes(permission) ?? false
-  );
+  return pluginById(pluginId)?.granted.includes(permission) ?? false;
 }
 
 function requireCreate(pluginId: string): void {
@@ -256,7 +254,7 @@ export async function pluginButtonEffect(
     return null;
   }
   try {
-    const ctx = buildPluginContext(pluginId);
+    const ctx = buildPluginContext();
     const raw = await pluginsRunScript(pluginId, button.action.export, ctx);
     const effect = parsePluginEffect(raw);
     if (!effect) {

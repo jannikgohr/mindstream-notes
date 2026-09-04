@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ALL_SETTINGS,
   BY_ID,
@@ -13,6 +13,8 @@ import {
   isVisible,
   openSettings,
   parseStoredSettings,
+  registerDynamicSettingResolver,
+  registerExternalSettingStore,
   resetSettingValue,
   setSettingValue,
   setSettingsVaultId,
@@ -31,6 +33,8 @@ const setting = (over: Partial<Setting> = {}): Setting =>
   }) as Setting;
 
 beforeEach(() => {
+  registerDynamicSettingResolver(null);
+  registerExternalSettingStore(null);
   // Pin a desktop UA so platform-filtered visibility is deterministic
   // (the default happy-dom UA is unrecognised → "show everything").
   Object.defineProperty(window.navigator, 'userAgent', {
@@ -42,6 +46,40 @@ beforeEach(() => {
   setSettingsVaultId('default');
   for (const key of Object.keys(settings.values)) delete settings.values[key];
   settings.pending.clear();
+});
+
+describe('external setting storage', () => {
+  it('delegates plugin writes and resets to the registered store', async () => {
+    const values = new Map<string, unknown>();
+    const write = vi.fn(async (id: string, value: unknown) => {
+      values.set(id, value);
+    });
+    const clear = vi.fn(async (id: string) => {
+      values.delete(id);
+    });
+    registerDynamicSettingResolver((id) =>
+      id === 'plugins.com.example.theme.mode'
+        ? setting({ id, default: 'system', type: 'select' })
+        : undefined
+    );
+    registerExternalSettingStore({
+      owns: (id) => id.startsWith('plugins.'),
+      read: (id) => values.get(id),
+      has: (id) => values.has(id),
+      write,
+      clear
+    });
+
+    const id = 'plugins.com.example.theme.mode';
+    expect(getSettingValue(id)).toBe('system');
+    await setSettingValue(id, 'dark');
+    expect(write).toHaveBeenCalledWith(id, 'dark');
+    expect(getSettingValue(id)).toBe('dark');
+
+    await resetSettingValue(id);
+    expect(clear).toHaveBeenCalledWith(id);
+    expect(getSettingValue(id)).toBe('system');
+  });
 });
 
 describe('schema flattening', () => {

@@ -26,11 +26,12 @@ const SECTION_ID = `plugins.${PLUGIN_ID}.general`;
 
 function register(): void {
   registerPlugin({
+    manifestVersion: 1,
     id: PLUGIN_ID,
     name: 'Example',
     version: '1.0.0',
     runtime: 'manifest-only',
-    permissions: ['templates.contribute', 'notes.create'],
+    permissions: ['notes.create'],
     contributes: {
       i18n: {
         en: {
