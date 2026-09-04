@@ -337,6 +337,13 @@ pub fn run() {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
+                // Settle the webview's own visibility against whichever
+                // branch ran. The window is configured `visible: false`
+                // and shown from here, so this is the first point the two
+                // can agree -- and relying on a Focused/Resized event to
+                // arrive would risk starting up with the webview marked
+                // invisible, which paints nothing.
+                webview_memory::sync_to_visibility(app.handle());
             }
 
             // Periodic sync runs in a tokio task owned by this
