@@ -138,6 +138,14 @@ apple-native-keyring-store = { version = "1", features = ["protected"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-native-keyring-store = "1"
+# WebView2 COM interfaces, for the one call in src/webview_memory.rs that
+# tells a hidden webview it may release caches. Tauri hands us the
+# `ICoreWebView2Controller` from `PlatformWebview::controller()`, so the
+# version has to track the one tauri/wry links (2.11 -> 0.38); a mismatch
+# would be two unrelated types with the same name. `windows-core` is only
+# here for `Interface::cast`.
+webview2-com = "0.38"
+windows-core = "0.61"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Matches the v3 `sync-secret-service` feature we were using before.

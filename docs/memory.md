@@ -79,6 +79,32 @@ Measured and rejected: `--disable-gpu-compositing` (worse than
 turns off TurboFan, and ProseMirror plus Yjs are exactly the hot JS that needs
 it), `--js-flags=--optimize-for-size` (inside noise).
 
+### Releasing the webview while the window is hidden
+
+The app closes to the tray rather than quitting, and supports starting there,
+so "running but invisible" is a state it spends real time in. Chromium's own
+backgrounding only recovered ~11 MB of the 114 MB.
+`ICoreWebView2_19::SetMemoryUsageTargetLevel` — the API Microsoft ships for
+exactly this — recovers most of the rest
+(`src-tauri/src/webview_memory.rs`, driven from the window events in
+`lib.rs`):
+
+| minimised to the taskbar | before   | after    |
+| ------------------------ | -------- | -------- |
+| private working set      | 103.0 MB | 21–32 MB |
+| working set              | ~370 MB  | 89 MB    |
+| commit charge            | ~180 MB  | 168 MB   |
+
+Read that honestly: **this is mostly paging out, not freeing.** Commit charge
+barely moves, so the app still owns the address space; what it gives back is
+physical RAM, which is the thing another application can actually use and the
+number Task Manager shows. Restoring the window faults back only what gets
+touched, so a restored window settles around 60 MB rather than the 115 MB it
+started at.
+
+The webview is not discarded or reloaded — the renderer keeps the same PID
+across a hide/restore cycle, so nothing in the editor is lost.
+
 ### Idle eviction of spellcheck dictionaries
 
 Hunspell tables are ~18 MB resident for `de_DE_frami` and ~3 MB for `en_US`,

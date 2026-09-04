@@ -280,6 +280,10 @@ pub(crate) fn focus_main_window(app: &AppHandle) {
     eprintln!(
         "[focus_main_window] exit: visible={visible_after:?} minimized={minimized_after:?} focused={focused_after:?}"
     );
+    // Back on screen: take the webview out of low-memory mode now rather
+    // than waiting for the focus event, so the first repaint after a tray
+    // restore is not the one that pays for it.
+    crate::webview_memory::sync_to_visibility(app);
 }
 
 struct TrayLabels {

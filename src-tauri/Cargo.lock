@@ -2945,6 +2945,8 @@ dependencies = [
  "uuid",
  "wasmi",
  "wat",
+ "webview2-com",
+ "windows-core 0.61.2",
  "windows-native-keyring-store",
  "yrs",
  "zip 8.6.0",
