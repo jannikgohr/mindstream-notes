@@ -3,7 +3,8 @@ import {
   CARD_DRAG_EDGE_MIN_TRAVEL_PX,
   CARD_DRAG_EDGE_ZONE_PX,
   cardDragEdgeDirection,
-  cardDragEdgeSwitchDirection
+  cardDragEdgeSwitchDirection,
+  scrollMomentumStep
 } from '../../../../packages/svelte-kanban/src/directives/drag.js';
 
 describe('cardDragEdgeDirection', () => {
@@ -74,5 +75,24 @@ describe('cardDragEdgeSwitchDirection', () => {
         right
       )
     ).toBeNull();
+  });
+});
+
+describe('scrollMomentumStep', () => {
+  it('continues in the release direction while slowing down', () => {
+    const step = scrollMomentumStep(1, 100);
+    expect(step.delta).toBeGreaterThan(0);
+    expect(step.velocity).toBeCloseTo(0.6);
+
+    const reverse = scrollMomentumStep(-1, 100);
+    expect(reverse.delta).toBeLessThan(0);
+    expect(reverse.velocity).toBeCloseTo(-0.6);
+  });
+
+  it('stops at zero instead of reversing direction', () => {
+    expect(scrollMomentumStep(0.2, 100)).toEqual({
+      delta: 10,
+      velocity: 0
+    });
   });
 });

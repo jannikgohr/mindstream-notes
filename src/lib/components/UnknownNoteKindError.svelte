@@ -12,6 +12,8 @@
    * adaptation.
    */
   import { AlertTriangle } from '@lucide/svelte';
+  import { parsePluginNoteKind } from '$lib/api';
+  import { pluginById } from '$lib/plugins/registry.svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
 
@@ -22,6 +24,20 @@
 
   const kind = $derived(tree.notesById[noteId]?.note_kind ?? '(unknown)');
   const title = $derived(tree.notesById[noteId]?.title ?? noteId);
+  const pluginKind = $derived(parsePluginNoteKind(kind));
+  const plugin = $derived(
+    pluginKind ? pluginById(pluginKind.pluginId) : undefined
+  );
+  const pluginName = $derived(plugin?.manifest.name ?? pluginKind?.pluginId);
+  const message = $derived.by(() => {
+    if (!pluginKind || !pluginName) return tUi('editor.unknownKind.message');
+    const key = !plugin
+      ? 'editor.unknownKind.pluginMissing'
+      : plugin.enabled
+        ? 'editor.unknownKind.pluginUnsupported'
+        : 'editor.unknownKind.pluginDisabled';
+    return tUi(key).replace('{plugin}', pluginName);
+  });
 </script>
 
 <div class="flex h-full w-full items-center justify-center p-6">
@@ -34,7 +50,7 @@
       <span class="font-semibold">{tUi('editor.unknownKind.title')}</span>
     </div>
     <p class="text-foreground">
-      {tUi('editor.unknownKind.message')}
+      {message}
     </p>
     <dl
       class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs text-muted-foreground"

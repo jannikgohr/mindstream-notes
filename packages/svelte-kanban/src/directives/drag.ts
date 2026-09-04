@@ -31,6 +31,31 @@ const CARD_HOLD_MOVE_TOLERANCE_PX = 8;
 export const CARD_DRAG_EDGE_ZONE_PX = 32;
 export const CARD_DRAG_EDGE_MIN_TRAVEL_PX = 20;
 const CARD_DRAG_EDGE_DWELL_MS = 650;
+export const CARD_SCROLL_DECELERATION_PX_PER_MS2 = 0.004;
+const CARD_SCROLL_MIN_VELOCITY_PX_PER_MS = 0.02;
+const CARD_SCROLL_MAX_VELOCITY_PX_PER_MS = 3;
+const CARD_SCROLL_RELEASE_SAMPLE_MAX_MS = 100;
+
+export interface ScrollMomentumStep {
+  delta: number;
+  velocity: number;
+}
+
+/** Advance a constant-deceleration scroll animation without overshooting zero. */
+export function scrollMomentumStep(
+  velocity: number,
+  elapsedMs: number,
+  deceleration = CARD_SCROLL_DECELERATION_PX_PER_MS2
+): ScrollMomentumStep {
+  const elapsed = Math.max(0, elapsedMs);
+  const speed = Math.abs(velocity);
+  const nextSpeed = Math.max(0, speed - Math.max(0, deceleration) * elapsed);
+  const direction = Math.sign(velocity);
+  return {
+    delta: direction * ((speed + nextSpeed) / 2) * elapsed,
+    velocity: direction * nextSpeed
+  };
+}
 
 export function cardDragEdgeDirection(
   x: number,
@@ -69,6 +94,10 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
   let scrollEl: HTMLElement | null = null;
   let scrollStartTop = 0;
   let manualScrolling = false;
+  let scrollSampleTop = 0;
+  let scrollSampleTime = 0;
+  let scrollVelocity = 0;
+  let scrollMomentumFrame = 0;
   let edgeTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingEdge: CardDragEdgeDirection | null = null;
   let edgeLatched = false;
@@ -78,6 +107,7 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     if (e.button !== 0 || params.readonly || !params.dnd || !params.store)
       return;
 
+    cancelScrollMomentum();
     const target = e.target as HTMLElement | null;
     const cardEl = target
       ? (target.closest('[data-kanban-card-id]') as HTMLElement | null)
@@ -131,6 +161,9 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     scrollEl = fullCardDrag ? columnEl : null;
     scrollStartTop = columnEl.scrollTop;
     manualScrolling = false;
+    scrollSampleTop = scrollStartTop;
+    scrollSampleTime = e.timeStamp;
+    scrollVelocity = 0;
     if (fullCardDrag && !startedOnHandle) {
       cardHoldTimer = setTimeout(() => {
         cardHoldTimer = null;
@@ -161,7 +194,7 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
       const dy = e.clientY - startY;
       if (manualScrolling) {
         e.preventDefault();
-        if (scrollEl) scrollEl.scrollTop = scrollStartTop - dy;
+        updateManualScroll(e, dy);
         return;
       }
       if (cardHoldTimer) {
@@ -173,7 +206,7 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
           cardHoldTimer = null;
           manualScrolling = true;
           e.preventDefault();
-          if (scrollEl) scrollEl.scrollTop = scrollStartTop - dy;
+          updateManualScroll(e, dy);
         }
         return;
       }
@@ -186,8 +219,14 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     updateEdgeSwitch(e.clientX, active);
   }
 
-  function onPointerUp() {
+  function onPointerUp(e: PointerEvent) {
     const wasManualScrolling = manualScrolling;
+    const momentumElement = wasManualScrolling ? scrollEl : null;
+    const sampleAge = Math.max(0, e.timeStamp - scrollSampleTime);
+    const releaseVelocity =
+      sampleAge <= CARD_SCROLL_RELEASE_SAMPLE_MAX_MS
+        ? scrollMomentumStep(scrollVelocity, sampleAge).velocity
+        : 0;
     teardownListeners();
     if (started && active) {
       commitDrop(active);
@@ -196,6 +235,9 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
       suppressNextClick();
     } else if (wasManualScrolling) {
       suppressNextClick();
+      if (momentumElement) {
+        startScrollMomentum(momentumElement, releaseVelocity);
+      }
     }
     pending = false;
     started = false;
@@ -226,6 +268,53 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     a.dnd.active = true;
     document.body.style.userSelect = 'none';
     started = true;
+  }
+
+  function updateManualScroll(event: PointerEvent, dy: number) {
+    if (!scrollEl) return;
+    scrollEl.scrollTop = scrollStartTop - dy;
+    const elapsed = event.timeStamp - scrollSampleTime;
+    if (elapsed > 0) {
+      const measured = (scrollEl.scrollTop - scrollSampleTop) / elapsed;
+      const bounded = Math.max(
+        -CARD_SCROLL_MAX_VELOCITY_PX_PER_MS,
+        Math.min(CARD_SCROLL_MAX_VELOCITY_PX_PER_MS, measured)
+      );
+      scrollVelocity =
+        scrollVelocity === 0 ? bounded : scrollVelocity * 0.25 + bounded * 0.75;
+    }
+    scrollSampleTop = scrollEl.scrollTop;
+    scrollSampleTime = event.timeStamp;
+  }
+
+  function startScrollMomentum(element: HTMLElement, initialVelocity: number) {
+    cancelScrollMomentum();
+    if (Math.abs(initialVelocity) < CARD_SCROLL_MIN_VELOCITY_PX_PER_MS) return;
+
+    let velocity = initialVelocity;
+    let lastTime = performance.now();
+    const animate = (now: number) => {
+      const elapsed = Math.min(32, Math.max(0, now - lastTime));
+      lastTime = now;
+      const step = scrollMomentumStep(velocity, elapsed);
+      const before = element.scrollTop;
+      element.scrollTop += step.delta;
+      velocity = step.velocity;
+      if (
+        Math.abs(velocity) < CARD_SCROLL_MIN_VELOCITY_PX_PER_MS ||
+        element.scrollTop === before
+      ) {
+        scrollMomentumFrame = 0;
+        return;
+      }
+      scrollMomentumFrame = requestAnimationFrame(animate);
+    };
+    scrollMomentumFrame = requestAnimationFrame(animate);
+  }
+
+  function cancelScrollMomentum() {
+    if (scrollMomentumFrame) cancelAnimationFrame(scrollMomentumFrame);
+    scrollMomentumFrame = 0;
   }
 
   function teardownListeners() {
@@ -313,6 +402,7 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     },
     destroy() {
       node.removeEventListener('pointerdown', onPointerDown);
+      cancelScrollMomentum();
       cancelActiveDrag();
     }
   };

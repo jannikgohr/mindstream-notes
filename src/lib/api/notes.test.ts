@@ -9,6 +9,7 @@ import {
   createNote,
   isKnownNoteKind,
   isPluginNoteKind,
+  parsePluginNoteKind,
   isSupportedNoteKind,
   KNOWN_NOTE_KINDS,
   listNotes,
@@ -80,6 +81,22 @@ describe('isPluginNoteKind / isSupportedNoteKind', () => {
   it('isSupportedNoteKind covers both built-in and plugin kinds', () => {
     expect(isSupportedNoteKind('markdown')).toBe(true);
     expect(isSupportedNoteKind('nope')).toBe(false);
+  });
+});
+
+describe('parsePluginNoteKind', () => {
+  it('recovers the owner and local kind from a stored plugin note kind', () => {
+    expect(parsePluginNoteKind('plugin.com.mindstream.typst.document')).toEqual(
+      {
+        pluginId: 'com.mindstream.typst',
+        localKindId: 'document'
+      }
+    );
+  });
+
+  it('rejects built-in and malformed note kinds', () => {
+    expect(parsePluginNoteKind('markdown')).toBeNull();
+    expect(parsePluginNoteKind('plugin.only.two')).toBeNull();
   });
 });
 
