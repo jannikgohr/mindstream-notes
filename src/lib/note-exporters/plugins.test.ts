@@ -41,11 +41,7 @@ function registerTypstExporter() {
     version: '1.0.0',
     runtime: 'luau',
     entry: 'main.luau',
-    permissions: [
-      'noteKinds.contribute',
-      'noteExporters.contribute',
-      'nativeTools.runDeclared'
-    ],
+    permissions: ['nativeTools.runDeclared'],
     contributes: {
       i18n: { en: { 'notes.document': 'Typst', 'export.pdf': 'PDF' } },
       nativeTools: [

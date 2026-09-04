@@ -30,7 +30,7 @@ function validManifest(id = CORE_ID): Record<string, unknown> {
     name: 'Core Templates',
     version: '1.0.0',
     runtime: 'manifest-only',
-    permissions: ['templates.contribute', 'notes.create'],
+    permissions: ['notes.create'],
     contributes: {
       i18n: { en: { 'templates.meeting.name': 'Meeting' } },
       noteTemplates: [

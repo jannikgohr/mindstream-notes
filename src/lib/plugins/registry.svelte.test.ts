@@ -29,7 +29,7 @@ function manifest(id = 'com.example.templates'): Record<string, unknown> {
     name: 'Example',
     version: '1.0.0',
     runtime: 'manifest-only',
-    permissions: ['templates.contribute', 'notes.create'],
+    permissions: ['notes.create'],
     contributes: {
       i18n: { en: { 'templates.meeting.name': 'Meeting notes' } },
       noteTemplates: [
@@ -84,7 +84,7 @@ function exporterManifest(
     version: '1.0.0',
     runtime: 'luau',
     entry: 'main.luau',
-    permissions: ['noteExporters.contribute'],
+    permissions: [],
     contributes: {
       i18n: { en: { 'export.pdf': 'PDF' } },
       noteExporters: [
@@ -109,7 +109,7 @@ function kindManifest(id = 'com.example.kinds'): Record<string, unknown> {
     version: '1.0.0',
     runtime: 'luau',
     entry: 'main.luau',
-    permissions: ['noteKinds.contribute', 'notes.create'],
+    permissions: ['notes.create'],
     contributes: {
       noteKinds: [
         {

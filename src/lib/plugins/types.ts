@@ -20,57 +20,85 @@ import type {
 } from '$lib/diagnostics/syntax';
 
 /**
- * Capabilities a plugin may request in its manifest:
- *   - `templates.contribute` — surface note templates in create menus;
- *   - `noteKinds.contribute` — register plugin-owned note kind/editor surfaces;
- *   - `noteExporters.contribute` — add export actions for built-in or
- *     plugin-owned note kinds;
- *   - `notes.create` — have the app create a note from the plugin's template;
- *   - `notes.read` — a scripted plugin may read note metadata through its
- *     permission-gated host API.
- *   - `pluginArtifacts.download` — let the host download/update declared
- *     plugin artifacts after verifying their pinned digest.
- *   - `pluginStorage.read` / `pluginStorage.write` — let the host read/write
- *     this plugin's isolated mutable data directory.
- *   - `pluginWebviews.allowEval` — let sandboxed plugin webviews use string
- *     evaluation for runtimes that require generated JS glue.
- *   - `nativeTools.runDeclared` — let the host run plugin-declared binaries
- *     resolved from the user's PATH, without shell execution.
- *   - `nativeServices.run` — let the host run a plugin-declared binary as a
- *     long-lived local *preview server* (e.g. `tinymist preview`) and surface
- *     it to the note's preview iframe. Desktop-only.
- * Broad `notes.write` stays deliberately absent — the app, not the plugin,
- * performs the actual note write (see templates.ts).
+ * A capability a plugin must be granted before the host will do something on
+ * its behalf that reaches outside the plugin's own bundle.
+ *
+ * The list is deliberately only capabilities. It used to also carry
+ * *contribution gates* — `templates.contribute`, `noteKinds.contribute`,
+ * `noteExporters.contribute` — which restated what `contributes` already said
+ * and gated nothing at runtime, and `pluginWebviews.allowEval`, which is a CSP
+ * setting on one contribution rather than a resource anyone can reach. A
+ * permission earns its place here only if refusing it would stop the host doing
+ * something the user might not want done:
+ *
+ *   - `notes.read` — read vault metadata (note titles/tags and the folder
+ *     tree) through the permission-gated host API and script context.
+ *   - `notes.create` — have the app create a note from the plugin's output.
+ *     The app performs the write; broad `notes.write` stays deliberately absent.
+ *   - `textCheckers.contribute` — send note text to a network endpoint. The
+ *     host makes the request and the plugin never sees the text, but a checker
+ *     still sees everything the user types, which is what this grants.
+ *   - `pluginArtifacts.download` — let the host download and install declared
+ *     artifacts after verifying their pinned digest.
+ *   - `pluginStorage.read` / `pluginStorage.write` — read/write this plugin's
+ *     isolated data directory (`ms.storage`).
+ *   - `nativeTools.runDeclared` — run the plugin's declared PATH binaries,
+ *     directly and without a shell.
+ *   - `nativeServices.run` — run a declared binary as a long-lived local
+ *     preview server. Desktop-only.
  */
 export type PluginPermission =
-  | 'templates.contribute'
-  | 'noteKinds.contribute'
-  | 'noteExporters.contribute'
-  | 'notes.create'
   | 'notes.read'
+  | 'notes.create'
+  | 'textCheckers.contribute'
   | 'pluginArtifacts.download'
   | 'pluginStorage.read'
   | 'pluginStorage.write'
-  | 'pluginWebviews.allowEval'
   | 'nativeTools.runDeclared'
-  | 'nativeServices.run'
-  | 'textCheckers.contribute';
+  | 'nativeServices.run';
 
 /** All permissions the current app version understands. */
 export const KNOWN_PLUGIN_PERMISSIONS: readonly PluginPermission[] = [
-  'templates.contribute',
-  'noteKinds.contribute',
-  'noteExporters.contribute',
-  'notes.create',
   'notes.read',
+  'notes.create',
+  'textCheckers.contribute',
   'pluginArtifacts.download',
   'pluginStorage.read',
   'pluginStorage.write',
-  'pluginWebviews.allowEval',
   'nativeTools.runDeclared',
-  'nativeServices.run',
-  'textCheckers.contribute'
+  'nativeServices.run'
 ];
+
+/**
+ * Every contribution point, and the capability (if any) a manifest must hold to
+ * use it.
+ *
+ * One table rather than a check per point: the registry reads it to expose a
+ * contribution, and the validator reads it to require the matching permission,
+ * so the two can't drift. Adding a contribution point is a row here plus its
+ * shape in `PluginContributions`.
+ *
+ * `null` means the contribution needs no capability — it only adds data to a
+ * host surface, and the plugin being enabled is the whole of the permission.
+ */
+export const CONTRIBUTION_POINTS = {
+  i18n: null,
+  settings: null,
+  documentation: null,
+  commands: null,
+  sourceLanguages: null,
+  noteKinds: null,
+  noteTemplates: null,
+  noteExporters: null,
+  toolbar: null,
+  artifacts: 'pluginArtifacts.download',
+  nativeTools: 'nativeTools.runDeclared',
+  nativeServices: 'nativeServices.run',
+  textCheckers: 'textCheckers.contribute'
+} as const satisfies Record<string, PluginPermission | null>;
+
+/** The name of a contribution point, i.e. a key of `contributes`. */
+export type PluginContributionPoint = keyof typeof CONTRIBUTION_POINTS;
 
 /**
  * Localized strings a plugin contributes, keyed by locale code then by a

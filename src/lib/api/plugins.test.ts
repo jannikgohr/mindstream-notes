@@ -44,7 +44,7 @@ const RAW = {
   source: 'builtin',
   sourcePath: null,
   acceptedHash: 'abcd1234',
-  grantedPermissions: ['templates.contribute', 'notes.create'],
+  grantedPermissions: ['notes.create'],
   lastLoadError: null,
   signer: null,
   signatureStatus: 'unsigned',
@@ -57,7 +57,7 @@ describe('parsePluginRecord', () => {
     const rec = parsePluginRecord(RAW);
     expect(rec.id).toBe('com.example.plugin');
     expect(rec.enabled).toBe(true);
-    expect(rec.grantedPermissions).toHaveLength(2);
+    expect(rec.grantedPermissions).toEqual(['notes.create']);
     expect(rec.sourcePath).toBeNull();
   });
 
