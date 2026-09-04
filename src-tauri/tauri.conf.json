@@ -25,7 +25,8 @@
         "resizable": true,
         "center": true,
         "dragDropEnabled": false,
-        "backgroundColor": "#0A0A0A"
+        "backgroundColor": "#0A0A0A",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,Translate,OptimizationHints,MediaRouter,AudioServiceOutOfProcess,BackForwardCache --enable-features=NetworkServiceInProcess2 --in-process-gpu --renderer-process-limit=1 --disable-background-networking --disable-component-update"
       }
     ],
     "security": {
