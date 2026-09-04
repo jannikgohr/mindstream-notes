@@ -6,7 +6,7 @@
  * strings with `{{variable}}` placeholders); the app renders those strings and
  * calls its own note-creation path. A plugin therefore needs neither
  * `notes.write` nor any code execution to ship a useful template — it only asks
- * for `templates.contribute` (to be shown) and `notes.create` (to be turned
+ * for `notes.create` (to be turned
  * into a note by the app).
  *
  * Interpolation stays declarative — a plugin ships strings, never code — but is

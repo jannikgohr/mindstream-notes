@@ -193,11 +193,7 @@ describe('root menu', () => {
       version: '1.0.0',
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'noteKinds.contribute',
-        'notes.create'
-      ],
+      permissions: ['notes.create'],
       contributes: {
         i18n: {
           en: {

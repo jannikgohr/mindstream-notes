@@ -19,6 +19,7 @@
 
 import { compilePattern, isDiagnosticSyntaxId } from '$lib/diagnostics/syntax';
 import {
+  CONTRIBUTION_POINTS,
   KNOWN_PLUGIN_PERMISSIONS,
   PLUGIN_ARTIFACT_KINDS,
   PLUGIN_EDITOR_TOOLBAR_ITEMS,
@@ -368,15 +369,6 @@ function validateNoteKindRender(
       throw new PluginValidationError(
         pluginId,
         `${path}.webview.allowEval must be a boolean`
-      );
-    }
-    if (
-      r.webview.allowEval === true &&
-      !permissions.has('pluginWebviews.allowEval')
-    ) {
-      throw new PluginValidationError(
-        pluginId,
-        `${path}.webview.allowEval requires the "pluginWebviews.allowEval" permission`
       );
     }
     if (r.webview.artifacts !== undefined) {
@@ -1618,12 +1610,6 @@ export function validateManifest(input: unknown): PluginManifest {
     }
     seenArtifactIds.add(artifact.id);
   }
-  if (artifacts.length > 0 && !permissions.has('pluginArtifacts.download')) {
-    throw new PluginValidationError(
-      pluginId,
-      'contributes artifacts but is missing the "pluginArtifacts.download" permission'
-    );
-  }
 
   // ---- Native tools ----------------------------------------------------
   const nativeTools = contributes.nativeTools ?? [];
@@ -1644,12 +1630,6 @@ export function validateManifest(input: unknown): PluginManifest {
     }
     seenNativeToolIds.add(tool.id);
   }
-  if (nativeTools.length > 0 && !permissions.has('nativeTools.runDeclared')) {
-    throw new PluginValidationError(
-      pluginId,
-      'contributes nativeTools but is missing the "nativeTools.runDeclared" permission'
-    );
-  }
 
   // ---- Native services (long-lived preview servers) --------------------
   const nativeServices = contributes.nativeServices ?? [];
@@ -1669,12 +1649,6 @@ export function validateManifest(input: unknown): PluginManifest {
       );
     }
     seenNativeServiceIds.add(service.id);
-  }
-  if (nativeServices.length > 0 && !permissions.has('nativeServices.run')) {
-    throw new PluginValidationError(
-      pluginId,
-      'contributes nativeServices but is missing the "nativeServices.run" permission'
-    );
   }
 
   // ---- Source editor language modes -----------------------------------
@@ -1785,12 +1759,6 @@ export function validateManifest(input: unknown): PluginManifest {
     }
     seenCheckerIds.add(checker.id);
   }
-  if (textCheckers.length > 0 && !permissions.has('textCheckers.contribute')) {
-    throw new PluginValidationError(
-      pluginId,
-      'contributes textCheckers but is missing the "textCheckers.contribute" permission'
-    );
-  }
 
   // ---- Plugin note kinds ----------------------------------------------
   const noteKinds = contributes.noteKinds ?? [];
@@ -1820,12 +1788,6 @@ export function validateManifest(input: unknown): PluginManifest {
     }
     seenNoteKindIds.add(c.id);
     pluginNoteKindIds.add(appKind);
-  }
-  if (noteKinds.length > 0 && !permissions.has('noteKinds.contribute')) {
-    throw new PluginValidationError(
-      pluginId,
-      'contributes noteKinds but is missing the "noteKinds.contribute" permission'
-    );
   }
   if (noteKinds.length > 0 && !isScriptedRuntime(m.runtime)) {
     throw new PluginValidationError(
@@ -1860,15 +1822,6 @@ export function validateManifest(input: unknown): PluginManifest {
     }
     seenNoteExporterIds.add(exporter.id);
   }
-  if (
-    noteExporters.length > 0 &&
-    !permissions.has('noteExporters.contribute')
-  ) {
-    throw new PluginValidationError(
-      pluginId,
-      'contributes noteExporters but is missing the "noteExporters.contribute" permission'
-    );
-  }
   if (noteExporters.length > 0 && !isScriptedRuntime(m.runtime)) {
     throw new PluginValidationError(
       pluginId,
@@ -1894,15 +1847,6 @@ export function validateManifest(input: unknown): PluginManifest {
       );
     }
     templateIds.add(t.id);
-  }
-  // Contributing a template means it shows up in create surfaces — that is the
-  // capability `templates.contribute` grants. Require it explicitly so a
-  // manifest can't quietly contribute more than it asked for.
-  if (templates.length > 0 && !permissions.has('templates.contribute')) {
-    throw new PluginValidationError(
-      pluginId,
-      'contributes noteTemplates but is missing the "templates.contribute" permission'
-    );
   }
   // A `render` macro is a backend script export, so it only makes sense on a
   // scripted plugin.
@@ -2039,6 +1983,25 @@ export function validateManifest(input: unknown): PluginManifest {
       throw new PluginValidationError(
         pluginId,
         'manifest.contributes.i18n must include an "en" bundle as the fallback locale'
+      );
+    }
+  }
+
+  // Contribution points that need a capability say so in one table, so the
+  // rule the registry enforces at runtime and the rule the manifest is checked
+  // against are the same rule. A manifest may not contribute something it did
+  // not ask permission for: the permissions list is what the user is shown at
+  // approval, so it has to be complete.
+  for (const [point, required] of Object.entries(CONTRIBUTION_POINTS)) {
+    if (required === null) continue;
+    const declared = (m.contributes as Record<string, unknown> | undefined)?.[
+      point
+    ];
+    if (!Array.isArray(declared) || declared.length === 0) continue;
+    if (!permissions.has(required)) {
+      throw new PluginValidationError(
+        pluginId,
+        `contributes ${point} but is missing the "${required}" permission`
       );
     }
   }

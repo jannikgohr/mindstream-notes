@@ -37,7 +37,7 @@ describe('note exporters', () => {
       version: '1.0.0',
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: ['noteExporters.contribute'],
+      permissions: [],
       contributes: {
         i18n: { en: { 'export.pdf': 'PDF' } },
         noteExporters: [
@@ -64,7 +64,7 @@ describe('note exporters', () => {
       version: '1.0.0',
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: ['noteKinds.contribute', 'noteExporters.contribute'],
+      permissions: [],
       contributes: {
         i18n: { en: { 'notes.document': 'Typst', 'export.pdf': 'PDF' } },
         noteKinds: [

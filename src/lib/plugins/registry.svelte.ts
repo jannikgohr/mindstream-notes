@@ -22,8 +22,11 @@
 
 import { checksumManifest } from './canonical';
 import { pluginNoteKindId, validateManifest } from './validation';
+import { CONTRIBUTION_POINTS } from './types';
 import type {
   PluginCommandContribution,
+  PluginContributionPoint,
+  PluginContributions,
   PluginI18nContribution,
   PluginManifest,
   PluginNoteExporterContribution,
@@ -174,16 +177,43 @@ export function pluginById(pluginId: string): RegisteredPlugin | undefined {
   return state.plugins[pluginId];
 }
 
-/** Flattened templates contributed by all enabled plugins. */
-export function pluginTemplates(): PluginTemplateRef[] {
-  const out: PluginTemplateRef[] = [];
+/**
+ * Every entry an enabled plugin contributes at `point`, paired with its owner.
+ *
+ * The single place the enabled + permission rules are applied. A point whose
+ * {@link CONTRIBUTION_POINTS} entry names a capability is filtered by it here,
+ * so revoking a grant removes the contribution from the app even though the
+ * manifest still declares it — the manifest says what a plugin wants, the grant
+ * says what it gets.
+ */
+function contributionsOf<K extends PluginContributionPoint>(
+  point: K
+): {
+  pluginId: string;
+  entry: NonNullable<PluginContributions[K]> extends readonly (infer E)[]
+    ? E
+    : never;
+}[] {
+  const required = CONTRIBUTION_POINTS[point];
+  const out: { pluginId: string; entry: never }[] = [];
   for (const { manifest, enabled } of Object.values(state.plugins)) {
     if (!enabled) continue;
-    for (const template of manifest.contributes.noteTemplates ?? []) {
-      out.push({ pluginId: manifest.id, template });
+    if (required !== null && !manifest.permissions.includes(required)) continue;
+    const declared = manifest.contributes[point];
+    if (!Array.isArray(declared)) continue;
+    for (const entry of declared) {
+      out.push({ pluginId: manifest.id, entry: entry as never });
     }
   }
   return out;
+}
+
+/** Flattened templates contributed by all enabled plugins. */
+export function pluginTemplates(): PluginTemplateRef[] {
+  return contributionsOf('noteTemplates').map(({ pluginId, entry }) => ({
+    pluginId,
+    template: entry
+  }));
 }
 
 /** Resolve a single enabled plugin's template by its plugin-local id. */
@@ -201,18 +231,11 @@ export function pluginTemplate(
 
 /** Flattened plugin-owned note kinds contributed by all enabled plugins. */
 export function pluginNoteKinds(): PluginNoteKindRef[] {
-  const out: PluginNoteKindRef[] = [];
-  for (const { manifest, enabled } of Object.values(state.plugins)) {
-    if (!enabled) continue;
-    for (const contribution of manifest.contributes.noteKinds ?? []) {
-      out.push({
-        pluginId: manifest.id,
-        noteKind: pluginNoteKindId(manifest.id, contribution.id),
-        contribution
-      });
-    }
-  }
-  return out;
+  return contributionsOf('noteKinds').map(({ pluginId, entry }) => ({
+    pluginId,
+    noteKind: pluginNoteKindId(pluginId, entry.id),
+    contribution: entry
+  }));
 }
 
 /** Resolve an enabled plugin-owned note kind by its stored note_kind string. */
@@ -228,14 +251,10 @@ export function pluginNoteKind(
 
 /** Flattened note exporters contributed by all enabled plugins. */
 export function pluginNoteExporters(): PluginNoteExporterRef[] {
-  const out: PluginNoteExporterRef[] = [];
-  for (const { manifest, enabled } of Object.values(state.plugins)) {
-    if (!enabled) continue;
-    for (const exporter of manifest.contributes.noteExporters ?? []) {
-      out.push({ pluginId: manifest.id, exporter });
-    }
-  }
-  return out;
+  return contributionsOf('noteExporters').map(({ pluginId, entry }) => ({
+    pluginId,
+    exporter: entry
+  }));
 }
 
 /** Plugin-contributed exporters that apply to a stored note_kind string. */
@@ -250,14 +269,10 @@ export function pluginNoteExportersForKind(
 
 /** Source editor language modes contributed by all enabled plugins. */
 export function pluginSourceLanguages(): PluginSourceLanguageRef[] {
-  const out: PluginSourceLanguageRef[] = [];
-  for (const { manifest, enabled } of Object.values(state.plugins)) {
-    if (!enabled) continue;
-    for (const language of manifest.contributes.sourceLanguages ?? []) {
-      out.push({ pluginId: manifest.id, language });
-    }
-  }
-  return out;
+  return contributionsOf('sourceLanguages').map(({ pluginId, entry }) => ({
+    pluginId,
+    language: entry
+  }));
 }
 
 /** Resolve a source language id or alias to the first enabled contribution. */
@@ -275,46 +290,33 @@ export function pluginSourceLanguage(
 
 /** Flattened settings subsections contributed by all enabled plugins. */
 export function pluginSettingsSections(): PluginSettingsSectionRef[] {
-  const out: PluginSettingsSectionRef[] = [];
-  for (const { manifest, enabled } of Object.values(state.plugins)) {
-    if (!enabled) continue;
-    for (const contribution of manifest.contributes.settings ?? []) {
-      out.push({ pluginId: manifest.id, contribution });
-    }
-  }
-  return out;
+  return contributionsOf('settings').map(({ pluginId, entry }) => ({
+    pluginId,
+    contribution: entry
+  }));
 }
 
 /** Flattened commands contributed by all enabled plugins. */
 export function pluginCommands(): PluginCommandRef[] {
-  const out: PluginCommandRef[] = [];
-  for (const { manifest, enabled } of Object.values(state.plugins)) {
-    if (!enabled) continue;
-    for (const command of manifest.contributes.commands ?? []) {
-      out.push({ pluginId: manifest.id, command });
-    }
-  }
-  return out;
+  return contributionsOf('commands').map(({ pluginId, entry }) => ({
+    pluginId,
+    command: entry
+  }));
 }
 
 /**
  * Text checkers contributed by all enabled plugins.
  *
- * Filtered by permission as well as by enabled state: a plugin can declare
- * the contribution, but it only reaches the diagnostics bus once the user
- * has granted `textCheckers.contribute` — the checker sees the full text of
- * every note being edited.
+ * Filtered by `textCheckers.contribute` through {@link contributionsOf}: a
+ * plugin can declare the contribution, but it only reaches the diagnostics bus
+ * once that capability is granted — the checker sees the full text of every
+ * note being edited.
  */
 export function pluginTextCheckers(): PluginTextCheckerRef[] {
-  const out: PluginTextCheckerRef[] = [];
-  for (const { manifest, enabled } of Object.values(state.plugins)) {
-    if (!enabled) continue;
-    if (!manifest.permissions.includes('textCheckers.contribute')) continue;
-    for (const checker of manifest.contributes.textCheckers ?? []) {
-      out.push({ pluginId: manifest.id, checker });
-    }
-  }
-  return out;
+  return contributionsOf('textCheckers').map(({ pluginId, entry }) => ({
+    pluginId,
+    checker: entry
+  }));
 }
 
 /** Toolbar buttons contributed by all enabled plugins for a given host surface,
@@ -323,23 +325,16 @@ export function pluginToolbarButtons(
   location: PluginToolbarLocation,
   opts: { noteKind?: string | null } = {}
 ): PluginToolbarButtonRef[] {
-  const out: PluginToolbarButtonRef[] = [];
-  for (const { manifest, enabled } of Object.values(state.plugins)) {
-    if (!enabled) continue;
-    for (const button of manifest.contributes.toolbar ?? []) {
-      if (button.location !== location) continue;
-      if (location === 'note-editor' && opts.noteKind) {
-        if (
-          !button.noteKind ||
-          pluginNoteKindId(manifest.id, button.noteKind) !== opts.noteKind
-        ) {
-          continue;
-        }
-      }
-      out.push({ pluginId: manifest.id, button });
-    }
-  }
-  return out;
+  return contributionsOf('toolbar')
+    .filter(({ pluginId, entry }) => {
+      if (entry.location !== location) return false;
+      if (location !== 'note-editor' || !opts.noteKind) return true;
+      return (
+        !!entry.noteKind &&
+        pluginNoteKindId(pluginId, entry.noteKind) === opts.noteKind
+      );
+    })
+    .map(({ pluginId, entry }) => ({ pluginId, button: entry }));
 }
 
 /** i18n bundles of all enabled plugins, keyed by plugin id. */

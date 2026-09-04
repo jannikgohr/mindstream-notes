@@ -45,9 +45,7 @@ function meetingTemplate(): PluginNoteTemplateContribution {
   };
 }
 
-function registerMeeting(
-  permissions = ['templates.contribute', 'notes.create']
-): void {
+function registerMeeting(permissions = ['notes.create']): void {
   registerPlugin({
     id: PLUGIN_ID,
     name: 'Example',
@@ -231,7 +229,7 @@ describe('createNoteFromPluginTemplate', () => {
   });
 
   it('refuses when the plugin lacks notes.create', async () => {
-    registerMeeting(['templates.contribute']);
+    registerMeeting([]);
     await expect(
       createNoteFromPluginTemplate(PLUGIN_ID, 'meeting', null)
     ).rejects.toThrow(/missing notes.create/);
@@ -261,11 +259,7 @@ describe('createNoteFromPluginTemplate', () => {
       version: '1.0.0',
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'noteKinds.contribute',
-        'notes.create'
-      ],
+      permissions: ['notes.create'],
       contributes: {
         i18n: { en: { 'templates.document.name': 'Document' } },
         noteKinds: [
@@ -315,7 +309,7 @@ describe('createNoteFromPluginTemplate — scripted render', () => {
       version: '1.0.0',
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: ['templates.contribute', 'notes.create'],
+      permissions: ['notes.create'],
       contributes: {
         i18n: { en: { 'templates.standup.name': 'Standup' } },
         noteTemplates: [

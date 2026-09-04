@@ -23,7 +23,7 @@ function register(binding: string | null = null): void {
     name: 'Example',
     version: '1.0.0',
     runtime: 'manifest-only',
-    permissions: ['templates.contribute', 'notes.create'],
+    permissions: ['notes.create'],
     contributes: {
       i18n: {
         en: {

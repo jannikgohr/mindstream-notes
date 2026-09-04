@@ -14,7 +14,7 @@ fn signed_input(
         checksum: checksum.to_string(),
         source: source.to_string(),
         source_path: None,
-        permissions: vec!["templates.contribute".into(), "notes.create".into()],
+        permissions: vec!["notes.create".into()],
         enabled_by_default: true,
         signer: signer.map(String::from),
         signature_status: signature_status.to_string(),
@@ -38,7 +38,7 @@ fn new_installed_plugin_is_gated_disabled_and_unapproved() {
             rec.last_load_error.is_some(),
             "a gate reason is recorded so the UI prompts for approval"
         );
-        assert_eq!(rec.granted_permissions.len(), 2);
+        assert_eq!(rec.granted_permissions, vec!["notes.create".to_string()]);
         assert_eq!(list(c)?.len(), 1);
         Ok(())
     })
@@ -426,7 +426,7 @@ fn run_plugin_script_executes_luau_entry_with_input() {
     let out = run_plugin_script(
         &super::discovery::PluginFiles::Fs(dir.clone()),
         &manifest,
-        vec!["templates.contribute".into()],
+        vec![],
         "render",
         serde_json::json!({ "name": "Hi" }),
         Vec::new(),

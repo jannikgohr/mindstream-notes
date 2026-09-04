@@ -12,17 +12,18 @@
     "timeoutMs": 20000
   },
   "permissions": [
-    "templates.contribute",
-    "noteKinds.contribute",
-    "noteExporters.contribute",
     "notes.create",
     "nativeTools.runDeclared",
     "nativeServices.run"
   ],
   "contributes": {
     "documentation": [
-      { "file": "docs/getting-started.md" },
-      { "file": "docs/requirements.md" }
+      {
+        "file": "docs/getting-started.md"
+      },
+      {
+        "file": "docs/requirements.md"
+      }
     ],
     "i18n": {
       "en": {

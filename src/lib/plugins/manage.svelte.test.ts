@@ -48,7 +48,7 @@ function withSettings(id: string) {
     name: `Plugin ${id}`,
     version: '1.2.3',
     runtime: 'manifest-only',
-    permissions: ['templates.contribute', 'notes.create'],
+    permissions: ['notes.create'],
     contributes: {
       i18n: {
         en: { 'settings.general.title': 'General', 'settings.x.label': 'X' }
@@ -158,7 +158,7 @@ describe('Tauri-backed admin', () => {
       permissions: [
         'nativeTools.runDeclared',
         'nativeServices.run',
-        'templates.contribute',
+
         'notes.create'
       ],
       contributes: {
