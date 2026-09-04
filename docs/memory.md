@@ -40,18 +40,21 @@ Two harnesses, deliberately separate:
 Measured idle, empty vault, one seeded note, on Windows 11 with WebView2
 152.x — sum of private working sets:
 
-| process           | before       | after                           |
-| ----------------- | ------------ | ------------------------------- |
-| renderer          | 53.8 MB      | 51.0 MB                         |
-| WebView2 browser  | 27.9 MB      | 46.7 MB (absorbs GPU + network) |
-| GPU process       | 26.4 MB      | — merged                        |
-| Tauri host (Rust) | 8.0 MB       | 8.0 MB                          |
-| network service   | 6.8 MB       | — merged                        |
-| storage service   | 3.2 MB       | 3.3 MB                          |
-| crashpad handler  | 2.2 MB       | 2.1 MB                          |
-| **total**         | **128.2 MB** | **111.0 MB**                    |
-| processes         | 7            | 5                               |
-| commit charge     | 261 MB       | 176 MB                          |
+| process           | before       | after                                 |
+| ----------------- | ------------ | ------------------------------------- |
+| renderer          | 53.8 MB      | 54.2 MB                               |
+| WebView2 browser  | 27.9 MB      | 27.3 MB (absorbs the network service) |
+| GPU process       | 26.4 MB      | 25.4 MB                               |
+| Tauri host (Rust) | 8.0 MB       | 7.5 MB                                |
+| network service   | 6.8 MB       | — merged                              |
+| storage service   | 3.2 MB       | 3.2 MB                                |
+| crashpad handler  | 2.2 MB       | 2.0 MB                                |
+| **total**         | **128.2 MB** | **119.5 MB**                          |
+| processes         | 7            | 6                                     |
+| working set       | 460.3 MB     | 416.1 MB                              |
+| commit charge     | 261.3 MB     | 244.7 MB                              |
+
+Minimised or parked in the tray, the same build sits at 18–33 MB (below).
 
 ## What moved it
 
@@ -60,12 +63,15 @@ Measured idle, empty vault, one seeded note, on Windows 11 with WebView2
 `app.windows[0].additionalBrowserArgs` in `src-tauri/tauri.conf.json`. JSON
 takes no comments, so the reasoning lives here:
 
-- `--in-process-gpu` — the largest single win (−13 MB private, −75 MB commit,
-  one fewer process). The trade is isolation: a GPU driver fault now takes the
-  webview down with it instead of being restarted underneath us. Accepted
-  because the app autosaves continuously and the alternative costs a third of
-  the commit charge. **This is the first flag to drop if users report black or
-  corrupted rendering on a specific GPU.**
+- `--in-process-gpu` — **measured, shipped, and then reverted.** It was the
+  largest memory win by far (−13 MB private, −75 MB commit, one fewer
+  process), and it cost roughly seven times the frame time: a mouse sweep
+  down the settings rail on the real binary went from a flat 6.1 ms per frame
+  to a p50 of 42 ms with 60% of frames over 32 ms, and pointer-event delay
+  from 4.6 ms to a p95 of 28 ms. That is the whole UI at ~24 fps to save
+  13 MB. Running the GPU thread inside the browser process puts it on the UI
+  thread this app already has contention on — the same thread the Typst
+  preview stall was traced to. Do not re-add it.
 - `--enable-features=NetworkServiceInProcess2` — folds the network service into
   the browser process. The app is local-first; the webview itself fetches
   nothing off-machine (sync and updates run through `reqwest` in Rust).
@@ -78,8 +84,8 @@ takes no comments, so the reasoning lives here:
   defaults and must be repeated here: setting `additionalBrowserArgs` replaces
   them rather than appending.
 
-Measured and rejected: `--disable-gpu-compositing` (worse than
-`--in-process-gpu` on every axis), `--disable-features=StorageServiceOutOfProcess`
+Measured and rejected: `--disable-gpu-compositing` (worse on every axis),
+`--disable-features=StorageServiceOutOfProcess`
 (+5 MB — the process spawns anyway), `--js-flags=--lite-mode` (−5 MB, but it
 turns off TurboFan, and ProseMirror plus Yjs are exactly the hot JS that needs
 it), `--js-flags=--optimize-for-size` (inside noise).
@@ -152,9 +158,16 @@ Three things now bound that:
 sweep down the settings rail and records both frame intervals and how long
 pointer events sit before JS sees them. Worth reaching for before assuming a
 memory change caused a responsiveness one: when the settings rail was reported
-as lagging, this showed input delay at p50 3.6 ms / max 5.2 ms and frames flat
-at 6.1 ms with no long tail, which ruled out the in-process GPU and pointed at
-the 150 ms `transition-colors` fade on the rail rows instead.
+as lagging, it found two separate things: a 150 ms `transition-colors` fade on
+the rail rows (a design choice, now 75 ms), and a real 7× frame-time
+regression from `--in-process-gpu`, which is why that flag is gone.
+
+A warning from getting this wrong once: `MINDSTREAM_E2E_SKIP_BUILD=1` skips
+preflight's binary _copy_ as well as its build, so the T3 harness will happily
+run a stale `mindstream-notes-e2e-single.exe` and report green. When using that
+flag to iterate, copy `mindstream-notes.exe` over it yourself first — the first
+run of this probe measured the previous build and cleared a regression that was
+really there.
 
 ## What is not worth chasing
 
