@@ -228,8 +228,7 @@ export async function createNoteFromPluginTemplate(
   }
 
   const runtime = pluginById(pluginId)?.manifest.runtime;
-  const useScript =
-    !!ref.template.render && (runtime === 'luau' || runtime === 'wasm');
+  const useScript = !!ref.template.render && runtime === 'luau';
   // A typed title reaches a scripted template as a `title` variable; the app
   // still forces the final note title to it below so the two paths agree.
   const scriptVariables = titleOverride?.trim()

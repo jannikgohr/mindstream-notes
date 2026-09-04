@@ -87,15 +87,8 @@ ed25519-dalek = "3.0.0"
 # we use to bound CPU time and memory. Runs in the backend, never the WebView.
 mlua = { version = "0.10", features = ["luau", "vendored", "serialize"] }
 include_dir = "0.7.4"
-# Pure-Rust WebAssembly interpreter for scripted plugins. We use the same
-# runtime on desktop and mobile so the plugin ABI behaves consistently; no WASI
-# imports are linked, and host APIs are installed explicitly per permission.
-wasmi = { version = "1.1.0", default-features = false, features = ["std", "extra-checks"] }
 spellbook = "0.4"
 encoding_rs = "0.8"
-
-[dev-dependencies]
-wat = "1"
 
 # NOTE: panic = "unwind" (the default) is deliberate, not an omission. The app
 # runs untrusted plugin code and applies CRDT edits inside the WebView IPC FFI
