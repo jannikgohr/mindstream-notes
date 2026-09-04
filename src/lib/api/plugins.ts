@@ -547,3 +547,49 @@ export function pluginsRunScript(
     (value) => value
   );
 }
+
+/**
+ * Every setting stored for a plugin, keyed by its plugin-local id.
+ *
+ * Plugin settings live in the vault database rather than `localStorage`,
+ * because the backend passes them to scripts as `ctx.settings` and has to be
+ * able to read them (see `src-tauri/src/plugins/settings.rs`). Outside Tauri
+ * there is no store, so this resolves empty.
+ */
+export function pluginsSettingsAll(
+  id: string
+): Promise<Record<string, unknown>> {
+  return invokeOrFallback<Record<string, unknown>>(
+    TauriCommandName.PluginsSettingsAll,
+    { id },
+    () => ({}),
+    (value) =>
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : {}
+  );
+}
+
+/** Store one plugin setting. No-op outside Tauri, where nothing persists. */
+export function pluginsSettingsSet(
+  id: string,
+  key: string,
+  value: unknown
+): Promise<void> {
+  return invokeOrFallback<void>(
+    TauriCommandName.PluginsSettingsSet,
+    { id, key, value },
+    () => undefined,
+    () => undefined
+  );
+}
+
+/** Remove one plugin setting, so it falls back to the manifest default. */
+export function pluginsSettingsRemove(id: string, key: string): Promise<void> {
+  return invokeOrFallback<void>(
+    TauriCommandName.PluginsSettingsRemove,
+    { id, key },
+    () => undefined,
+    () => undefined
+  );
+}

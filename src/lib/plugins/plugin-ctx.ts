@@ -1,53 +1,29 @@
 /**
- * Builds the read-only context snapshot a plugin's backend script receives as its single
- * argument (a button action or a template `render` macro).
+ * The **UI half** of the context a plugin's backend script receives.
  *
- * Assembled on the frontend, where settings + the folder tree live, so a script
- * never needs a mid-run callback into the app (the script worker has no live DB —
- * `ms.notes` metadata is added separately by the backend when `notes.read` is
- * granted). Kept in its own module so both `effects.ts` and `templates.ts` can
- * use it without an import cycle.
+ * The backend supplies the rest — `settings` from the database, `folders`
+ * gated on `notes.read`, and `now` from the host clock — and its values win on
+ * a collision (see `backend_script_context` in `src-tauri/src/plugins/mod.rs`).
+ * That split is what lets the backend invoke a plugin without a UI action
+ * behind it: everything security-relevant it can build for itself.
+ *
+ * What is left here is genuinely UI state, which the backend has no view of:
+ * which note is on screen, and which locale the window is showing.
+ *
+ * Kept in its own module so both `effects.ts` and `templates.ts` can use it
+ * without an import cycle.
  */
 
-import { getSettingValue } from '$lib/settings/store.svelte';
 import { i18n } from '$lib/settings/i18n.svelte';
 import { ui } from '$lib/state.svelte';
-import { tree } from '$lib/stores/tree.svelte';
-import { pluginById } from './registry.svelte';
 
 /**
- * `{ settings, folders, activeNoteId, locale, now }` for `pluginId`. `settings`
- * carries the plugin's own setting values (keyed by their local id); `folders`
- * is the vault folder tree so a script can resolve "under folder X at any
- * depth" itself.
- *
- * `folders` is gated on `notes.read`, the same permission as `ms.notes`. Folder
- * names are user content — a vault's structure says as much about its owner as
- * its note titles do — so the two travel together rather than one being metadata
- * the app hands over for free. A plugin without the grant gets an empty list.
+ * `{ activeNoteId, locale }` — the part of the script context only the window
+ * knows. The backend merges `settings`, `folders` and `now` over this.
  */
-export function buildPluginContext(pluginId: string): Record<string, unknown> {
-  const plugin = pluginById(pluginId);
-  const settings: Record<string, unknown> = {};
-  for (const section of plugin?.manifest.contributes.settings ?? []) {
-    for (const s of section.settings) {
-      settings[s.id] = getSettingValue(`plugins.${pluginId}.${s.id}`);
-    }
-  }
-  const mayReadVault =
-    plugin?.manifest.permissions.includes('notes.read') ?? false;
-  const folders = mayReadVault
-    ? Object.values(tree.collectionsById).map((c) => ({
-        id: c.id,
-        name: c.name,
-        parentId: c.parent_collection_id
-      }))
-    : [];
+export function buildPluginContext(): Record<string, unknown> {
   return {
-    settings,
-    folders,
     activeNoteId: ui.activeNoteId ?? null,
-    locale: i18n.language,
-    now: new Date().toISOString()
+    locale: i18n.language
   };
 }
