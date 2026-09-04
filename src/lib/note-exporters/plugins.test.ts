@@ -36,6 +36,7 @@ const typstKind = 'plugin.com.example.typst.document';
 
 function registerTypstExporter() {
   registerPlugin({
+    manifestVersion: 1,
     id: 'com.example.typst',
     name: 'Typst',
     version: '1.0.0',

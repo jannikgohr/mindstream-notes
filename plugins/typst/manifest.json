@@ -1,4 +1,5 @@
 {
+  "manifestVersion": 1,
   "id": "com.mindstream.typst",
   "name": "Typst",
   "version": "0.1.0",

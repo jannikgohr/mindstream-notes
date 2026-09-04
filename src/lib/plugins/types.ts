@@ -853,7 +853,31 @@ export interface PluginRuntimeLimits {
  *     app, not the script, still performs any note write. `entry` is required
  *     and must be a safe relative `.luau` filename inside the plugin dir.
  */
+/**
+ * The manifest schema version this app understands.
+ *
+ * Bumped when a change to the manifest is not backwards compatible — a field
+ * that changes meaning, a default that flips. Additive changes (a new optional
+ * field, a new contribution point) do not bump it, because the
+ * forward-compatibility rules below already cover them.
+ */
+export const CURRENT_MANIFEST_VERSION = 1;
+
 export interface PluginManifest {
+  /**
+   * Which manifest schema this plugin was written against. Required: without
+   * it there is no way to tell a manifest written for an older app from one
+   * that is simply malformed, and no way to reject a v2 manifest cleanly once
+   * v2 exists.
+   */
+  manifestVersion: number;
+  /**
+   * Lowest app version this plugin runs on, as `major.minor.patch`. The host
+   * refuses to load the plugin below it rather than failing somewhere deeper,
+   * where the cause would not be obvious. Omit when the plugin has no such
+   * requirement.
+   */
+  minAppVersion?: string;
   id: string;
   name: string;
   version: string;

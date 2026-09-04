@@ -19,6 +19,7 @@ const COMMAND_ID = `plugin.${PLUGIN_ID}.new-meeting`;
 
 function register(binding: string | null = null): void {
   registerPlugin({
+    manifestVersion: 1,
     id: PLUGIN_ID,
     name: 'Example',
     version: '1.0.0',

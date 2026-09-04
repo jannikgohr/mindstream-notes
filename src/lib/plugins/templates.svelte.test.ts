@@ -47,6 +47,7 @@ function meetingTemplate(): PluginNoteTemplateContribution {
 
 function registerMeeting(permissions = ['notes.create']): void {
   registerPlugin({
+    manifestVersion: 1,
     id: PLUGIN_ID,
     name: 'Example',
     version: '1.0.0',
@@ -254,6 +255,7 @@ describe('createNoteFromPluginTemplate', () => {
   it('creates a plugin-owned note kind through the app path', async () => {
     const noteKind = `plugin.${PLUGIN_ID}.document`;
     registerPlugin({
+      manifestVersion: 1,
       id: PLUGIN_ID,
       name: 'Example',
       version: '1.0.0',
@@ -304,6 +306,7 @@ describe('createNoteFromPluginTemplate — scripted render', () => {
 
   function registerScripted(): void {
     registerPlugin({
+      manifestVersion: 1,
       id: PLUGIN,
       name: 'Scripted',
       version: '1.0.0',

@@ -18,8 +18,10 @@
  */
 
 import { compilePattern, isDiagnosticSyntaxId } from '$lib/diagnostics/syntax';
+import pkg from '../../../package.json';
 import {
   CONTRIBUTION_POINTS,
+  CURRENT_MANIFEST_VERSION,
   KNOWN_PLUGIN_PERMISSIONS,
   PLUGIN_ARTIFACT_KINDS,
   PLUGIN_EDITOR_TOOLBAR_ITEMS,
@@ -76,6 +78,28 @@ const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
  * since these are opaque map keys, not user-facing slugs.
  */
 const I18N_KEY_RE = /^[A-Za-z0-9]+(?:[-._][A-Za-z0-9]+)*$/;
+/** `major.minor.patch`, the shape `minAppVersion` is compared in. */
+const SEMVER_RE = /^\d+\.\d+\.\d+$/;
+
+/**
+ * This app's version, read through a function so a test can stub it rather
+ * than depending on whatever the working tree's package.json currently says.
+ */
+export function appVersion(): string {
+  return pkg.version;
+}
+
+/** `-1`, `0` or `1` comparing two `major.minor.patch` strings numerically. */
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
 /**
  * Safe scripted entry filenames: a single path segment (letters/digits/`._-`)
  * with a runtime-specific extension, no separators or `..`. The backend joins
@@ -1489,6 +1513,42 @@ export function validateManifest(input: unknown): PluginManifest {
     );
   }
   const pluginId = m.id;
+
+  // The schema version is checked before anything else. Without it there is no
+  // way to tell a manifest written for a different app version from one that is
+  // simply malformed, and the error a plugin author sees should say which.
+  if (
+    typeof m.manifestVersion !== 'number' ||
+    !Number.isInteger(m.manifestVersion) ||
+    m.manifestVersion < 1
+  ) {
+    throw new PluginValidationError(
+      pluginId,
+      `manifest.manifestVersion must be a positive integer (this app writes ${CURRENT_MANIFEST_VERSION})`
+    );
+  }
+  if (m.manifestVersion > CURRENT_MANIFEST_VERSION) {
+    throw new PluginValidationError(
+      pluginId,
+      `manifest.manifestVersion ${m.manifestVersion} is newer than this app understands (${CURRENT_MANIFEST_VERSION}); update the app`
+    );
+  }
+  if (m.minAppVersion !== undefined) {
+    assertNonEmptyString(pluginId, m.minAppVersion, 'manifest.minAppVersion');
+    if (!SEMVER_RE.test(m.minAppVersion)) {
+      throw new PluginValidationError(
+        pluginId,
+        `manifest.minAppVersion ("${m.minAppVersion}") must be a major.minor.patch version`
+      );
+    }
+    if (compareVersions(appVersion(), m.minAppVersion) < 0) {
+      throw new PluginValidationError(
+        pluginId,
+        `needs app version ${m.minAppVersion} or newer (this app is ${appVersion()})`
+      );
+    }
+  }
+
   assertNonEmptyString(pluginId, m.name, 'manifest.name');
   assertNonEmptyString(pluginId, m.version, 'manifest.version');
   if (m.author !== undefined) {
@@ -1577,7 +1637,7 @@ export function validateManifest(input: unknown): PluginManifest {
     if (!KNOWN_PLUGIN_PERMISSIONS.includes(p as PluginPermission)) {
       throw new PluginValidationError(
         pluginId,
-        `manifest.permissions lists unknown permission "${String(p)}"`
+        `manifest.permissions lists unknown permission "${String(p)}"; it may be from a newer app version`
       );
     }
   }
@@ -1589,6 +1649,22 @@ export function validateManifest(input: unknown): PluginManifest {
       pluginId,
       'manifest.contributes must be an object'
     );
+  }
+
+  // Forward compatibility, stated once so it is a rule rather than an accident:
+  //
+  //   - an unknown *contribution* is dropped with a warning. It is additive by
+  //     construction, so ignoring it costs the user one feature of one plugin
+  //     and the rest of the plugin still works.
+  //   - an unknown *permission* is fatal (above). Silently ignoring one would
+  //     load a plugin under a narrower grant than it was written for, and it
+  //     would fail somewhere later with no trace back to the cause.
+  for (const key of Object.keys(contributes)) {
+    if (key in CONTRIBUTION_POINTS) continue;
+    console.warn(
+      `[plugins] ${pluginId}: ignoring unknown contribution "${key}" — it may be from a newer app version`
+    );
+    delete (contributes as Record<string, unknown>)[key];
   }
 
   // ---- Artifacts -------------------------------------------------------

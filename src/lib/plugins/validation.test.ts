@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { PluginValidationError, validateManifest } from './validation';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  compareVersions,
+  PluginValidationError,
+  validateManifest
+} from './validation';
 import type { PluginManifest } from './types';
 import typstManifest from '../../../plugins/typst/manifest.json';
 import languagetoolManifest from '../../../plugins/languagetool/manifest.json';
@@ -9,6 +13,7 @@ function validManifest(
   overrides: Record<string, unknown> = {}
 ): Record<string, unknown> {
   return {
+    manifestVersion: 1,
     id: 'com.example.templates',
     name: 'Example Templates',
     version: '1.0.0',
@@ -1134,6 +1139,7 @@ function scripted(
   permissions: string[] = []
 ): Record<string, unknown> {
   return {
+    manifestVersion: 1,
     id: 'com.example.scripted',
     name: 'Scripted',
     version: '1.0.0',
@@ -1703,7 +1709,7 @@ describe('validateManifest — native tool + service failures', () => {
 });
 
 describe('validateManifest — note kind render failures', () => {
-  const noteKind = (render: unknown, permissions = []) =>
+  const noteKind = (render: unknown, permissions: string[] = []) =>
     scripted(
       { noteKinds: [{ id: 'doc', labelKey: 'k.label', render }] },
       permissions
@@ -2507,7 +2513,7 @@ describe('validateManifest — top-level shape', () => {
 });
 
 describe('validateManifest — remaining entry guards', () => {
-  const kind = (render: unknown, permissions = []) =>
+  const kind = (render: unknown, permissions: string[] = []) =>
     scripted(
       { noteKinds: [{ id: 'doc', labelKey: 'k.label', render }] },
       permissions
@@ -2800,5 +2806,92 @@ describe('validateManifest — toolbar button guards', () => {
         })
       )
     ).toThrow(/placeholder must be a string/);
+  });
+});
+
+describe('manifest versioning', () => {
+  it('requires a manifestVersion', () => {
+    const m = validManifest();
+    delete m.manifestVersion;
+    expect(() => validateManifest(m)).toThrow(
+      /manifestVersion must be a positive integer/
+    );
+  });
+
+  it('rejects a manifest written for a newer app', () => {
+    // The point of the field: a v2 manifest fails with "update the app"
+    // rather than with whatever v2 field this version happens to read first.
+    expect(() =>
+      validateManifest(validManifest({ manifestVersion: 2 }))
+    ).toThrow(/newer than this app understands/);
+  });
+
+  it('rejects a non-integer manifestVersion', () => {
+    for (const bad of ['1', 1.5, 0, -1, null]) {
+      expect(() =>
+        validateManifest(validManifest({ manifestVersion: bad }))
+      ).toThrow(/manifestVersion must be a positive integer/);
+    }
+  });
+
+  it('accepts a minAppVersion this app satisfies', () => {
+    expect(
+      validateManifest(validManifest({ minAppVersion: '0.0.1' })).minAppVersion
+    ).toBe('0.0.1');
+  });
+
+  it('rejects a minAppVersion newer than this app', () => {
+    expect(() =>
+      validateManifest(validManifest({ minAppVersion: '999.0.0' }))
+    ).toThrow(/needs app version 999\.0\.0 or newer/);
+  });
+
+  it('rejects a malformed minAppVersion', () => {
+    for (const bad of ['1', '1.2', 'v1.2.3', '1.2.3-beta']) {
+      expect(() =>
+        validateManifest(validManifest({ minAppVersion: bad }))
+      ).toThrow(/must be a major\.minor\.patch version/);
+    }
+  });
+
+  it('compares versions numerically, not lexically', () => {
+    // '10' < '9' as strings; the whole point is that it does not here.
+    expect(compareVersions('0.10.0', '0.9.0')).toBe(1);
+    expect(compareVersions('1.0.0', '1.0.0')).toBe(0);
+    expect(compareVersions('1.2.3', '1.2.4')).toBe(-1);
+    expect(compareVersions('2.0.0', '10.0.0')).toBe(-1);
+  });
+});
+
+describe('forward compatibility', () => {
+  it('drops an unknown contribution instead of refusing the plugin', () => {
+    // Additive by construction: ignoring it costs one feature of one plugin,
+    // and everything else the plugin contributes still works.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const m = validManifest();
+    (m.contributes as Record<string, unknown>).somethingFromTheFuture = [
+      { id: 'x' }
+    ];
+
+    const parsed = validateManifest(m);
+    expect(
+      (parsed.contributes as Record<string, unknown>).somethingFromTheFuture
+    ).toBeUndefined();
+    expect(parsed.contributes.noteTemplates).toHaveLength(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('ignoring unknown contribution')
+    );
+    warn.mockRestore();
+  });
+
+  it('refuses an unknown permission rather than narrowing the grant', () => {
+    // The asymmetry is deliberate. Silently dropping a permission would load
+    // the plugin under a narrower grant than it was written for, and it would
+    // fail later with nothing pointing back to the cause.
+    expect(() =>
+      validateManifest(
+        validManifest({ permissions: ['notes.create', 'future.capability'] })
+      )
+    ).toThrow(/unknown permission "future.capability"/);
   });
 });

@@ -11,6 +11,7 @@ const PLUGIN_ID = 'com.example.templates';
 
 function register(): void {
   registerPlugin({
+    manifestVersion: 1,
     id: PLUGIN_ID,
     name: 'Example',
     version: '1.0.0',
