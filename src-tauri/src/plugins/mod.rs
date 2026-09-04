@@ -224,9 +224,28 @@ pub fn upsert(conn: &Connection, input: UpsertPlugin) -> AppResult<PluginRecord>
                 input.signer.is_some() && input.signer.as_deref() == existing.signer.as_deref();
             let accept = trusted || hash_matches || (signed_valid && same_signer);
 
-            if accept {
-                // Trusted, unchanged, or a valid same-signer update: accept the
-                // current manifest + signer, clear any error, keep enabled state.
+            // An accepted update may narrow its permissions freely, but it may
+            // not widen them. Auto-approving a same-signer update is a
+            // convenience about *authorship* — it says the bytes came from the
+            // author the user already trusted, not that the user agreed to
+            // whatever those bytes now ask for. Without this, a plugin approved
+            // holding `notes.read` could ship a re-signed update that added
+            // `nativeTools.runDeclared` and have it granted silently, so the
+            // permission list shown at approval was not the one enforced.
+            let added: Vec<String> = input
+                .permissions
+                .iter()
+                .filter(|p| !existing.granted_permissions.contains(p))
+                .cloned()
+                .collect();
+            // Builtins are trusted by location: they ship inside the signed
+            // binary, so their manifest is as authoritative as the app itself.
+            let widens = !trusted && !added.is_empty();
+
+            if accept && !widens {
+                // Trusted, unchanged, or a valid same-signer update that asks
+                // for no more than it already holds: accept the current
+                // manifest + signer, clear any error, keep enabled state.
                 conn.execute(
                     "UPDATE plugins SET
                         version = ?2, source = ?3, source_path = ?4,
@@ -251,12 +270,20 @@ pub fn upsert(conn: &Connection, input: UpsertPlugin) -> AppResult<PluginRecord>
                 // it off. Keep the old accepted hash + pinned signer so a later
                 // legitimate re-sign by the original author auto-recovers. Update
                 // signature_status so the UI can explain why.
-                let reason = if input.signature_status == "invalid" {
-                    "plugin signature is invalid; re-approval required"
+                let reason = if widens {
+                    // Name them: "needs re-approval" without saying what changed
+                    // gives the user nothing to decide on.
+                    format!(
+                        "update requests new permissions ({}); re-approval required",
+                        added.join(", ")
+                    )
+                } else if input.signature_status == "invalid" {
+                    "plugin signature is invalid; re-approval required".to_string()
                 } else if signed_valid {
                     "plugin is signed by a different key than approved; re-approval required"
+                        .to_string()
                 } else {
-                    "manifest hash changed since it was approved; re-approval required"
+                    "manifest hash changed since it was approved; re-approval required".to_string()
                 };
                 conn.execute(
                     "UPDATE plugins SET
@@ -394,20 +421,35 @@ fn set_enabled(conn: &Connection, id: &str, enabled: bool) -> AppResult<PluginRe
 }
 
 /// Accept the current on-disk manifest for a plugin (re-approval after a change
-/// or a new/rotated signer): pin its checksum + signer, enable it, clear the
-/// load error. Pinning the signer means the author's *next* update auto-approves.
+/// or a new/rotated signer): pin its checksum, signer and **permission set**,
+/// enable it, clear the load error. Pinning the signer means the author's *next*
+/// update auto-approves — as long as it does not ask for more than this.
+///
+/// Pinning the permissions here is what makes the approval prompt honest: the
+/// set the user was shown is the set that gets written, and `upsert` will not
+/// widen it afterwards.
 pub fn approve(
     conn: &Connection,
     id: &str,
     checksum: &str,
+    permissions: &[String],
     signer: Option<&str>,
     signature_status: &str,
 ) -> AppResult<PluginRecord> {
     let now = Utc::now().to_rfc3339();
+    let permissions_json = serde_json::to_string(permissions).unwrap_or_else(|_| "[]".into());
     let changed = conn.execute(
         "UPDATE plugins SET accepted_hash = ?2, signer = ?3, signature_status = ?4,
-            enabled = 1, last_load_error = NULL, updated_at = ?5 WHERE id = ?1",
-        params![id, checksum, signer, signature_status, now],
+            granted_permissions = ?6, enabled = 1, last_load_error = NULL,
+            updated_at = ?5 WHERE id = ?1",
+        params![
+            id,
+            checksum,
+            signer,
+            signature_status,
+            now,
+            permissions_json
+        ],
     )?;
     if changed == 0 {
         return Err(AppError::NotFound(format!("plugin {id}")));
@@ -1311,6 +1353,7 @@ pub fn plugins_approve(
             c,
             &plugin.id,
             &plugin.checksum,
+            &plugin.permissions,
             plugin.signer.as_deref(),
             &plugin.signature_status,
         )

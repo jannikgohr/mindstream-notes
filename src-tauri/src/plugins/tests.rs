@@ -150,7 +150,14 @@ fn installed_plugin_hash_change_disables_and_records_error() {
     db.with_conn(|c| {
         upsert(c, upsert_input("com.a.plugin", "hash1", "installed"))?;
         // Approve it at hash1 so we're testing the *approved-then-changed* gate.
-        approve(c, "com.a.plugin", "hash1", None, "unsigned")?;
+        approve(
+            c,
+            "com.a.plugin",
+            "hash1",
+            &["notes.create".to_string()],
+            None,
+            "unsigned",
+        )?;
         let rec = upsert(c, upsert_input("com.a.plugin", "hash2", "installed"))?;
         assert!(!rec.enabled, "changed hash disables an installed plugin");
         assert!(rec.last_load_error.is_some());
@@ -166,7 +173,14 @@ fn installed_plugin_unchanged_hash_refreshes_and_clears_error() {
     let db = open_memory_for_tests();
     db.with_conn(|c| {
         upsert(c, upsert_input("com.a.plugin", "hash1", "installed"))?;
-        approve(c, "com.a.plugin", "hash1", None, "unsigned")?;
+        approve(
+            c,
+            "com.a.plugin",
+            "hash1",
+            &["notes.create".to_string()],
+            None,
+            "unsigned",
+        )?;
         set_load_error(c, "com.a.plugin", Some("stale error"))?;
         let mut next = upsert_input("com.a.plugin", "hash1", "installed");
         next.version = "1.1.0".into();
@@ -200,7 +214,14 @@ fn approve_accepts_new_hash_enables_and_clears_error() {
         upsert(c, upsert_input("com.a.plugin", "hash1", "installed"))?;
         // Simulate a hash change that disabled the plugin.
         upsert(c, upsert_input("com.a.plugin", "hash2", "installed"))?;
-        let rec = approve(c, "com.a.plugin", "hash2", None, "unsigned")?;
+        let rec = approve(
+            c,
+            "com.a.plugin",
+            "hash2",
+            &["notes.create".to_string()],
+            None,
+            "unsigned",
+        )?;
         assert!(rec.enabled);
         assert_eq!(rec.accepted_hash, "hash2");
         assert!(rec.last_load_error.is_none());
@@ -231,7 +252,14 @@ fn plugin_permission_gate_requires_enabled_and_granted() {
         let err = require_enabled_permission(c, "com.a.plugin", "pluginStorage.read").unwrap_err();
         assert!(err.to_string().contains("not enabled"));
 
-        approve(c, "com.a.plugin", "hash1", None, "unsigned")?;
+        approve(
+            c,
+            "com.a.plugin",
+            "hash1",
+            &["notes.create".to_string()],
+            None,
+            "unsigned",
+        )?;
         let err = require_enabled_permission(c, "com.a.plugin", "pluginStorage.read").unwrap_err();
         assert!(err.to_string().contains("lacks permission"));
 
@@ -311,7 +339,14 @@ fn signed_same_signer_update_auto_approves() {
             signed_input("com.a.p", "h1", "installed", Some("keyA"), "valid"),
         )?;
         // Approve v1, pinning keyA — that's what lets a same-signer update through.
-        approve(c, "com.a.p", "h1", Some("keyA"), "valid")?;
+        approve(
+            c,
+            "com.a.p",
+            "h1",
+            &["notes.create".to_string()],
+            Some("keyA"),
+            "valid",
+        )?;
         // Changed manifest, still validly signed by the same key → accepted.
         let rec = upsert(
             c,
@@ -334,7 +369,14 @@ fn signed_different_signer_update_is_gated_and_keeps_pin() {
             c,
             signed_input("com.a.p", "h1", "installed", Some("keyA"), "valid"),
         )?;
-        approve(c, "com.a.p", "h1", Some("keyA"), "valid")?;
+        approve(
+            c,
+            "com.a.p",
+            "h1",
+            &["notes.create".to_string()],
+            Some("keyA"),
+            "valid",
+        )?;
         // Validly signed, but by a DIFFERENT key → gated; pin + hash retained.
         let rec = upsert(
             c,
@@ -357,7 +399,14 @@ fn invalid_signature_update_is_gated() {
             c,
             signed_input("com.a.p", "h1", "installed", Some("keyA"), "valid"),
         )?;
-        approve(c, "com.a.p", "h1", Some("keyA"), "valid")?;
+        approve(
+            c,
+            "com.a.p",
+            "h1",
+            &["notes.create".to_string()],
+            Some("keyA"),
+            "valid",
+        )?;
         let rec = upsert(
             c,
             signed_input("com.a.p", "h2", "installed", None, "invalid"),
@@ -1212,7 +1261,14 @@ fn approved_installed_plugin_runs_only_while_its_files_are_unchanged() {
     let db = open_memory_for_tests();
     db.with_conn(|c| {
         upsert(c, upsert_input("com.a.plugin", "hash1", "installed"))?;
-        let rec = approve(c, "com.a.plugin", "hash1", None, "unsigned")?;
+        let rec = approve(
+            c,
+            "com.a.plugin",
+            "hash1",
+            &["notes.create".to_string()],
+            None,
+            "unsigned",
+        )?;
 
         require_approved(&rec, &on_disk("com.a.plugin", "hash1", "installed"))
             .expect("unchanged files are approved");
@@ -1252,11 +1308,141 @@ fn load_runnable_rejects_disabled_unapproved_and_ungranted_plugins() {
         let err = load_runnable(c, &dir, "com.a.plugin", None).unwrap_err();
         assert!(err.to_string().contains("not enabled"));
 
-        approve(c, "com.a.plugin", "hash1", None, "unsigned")?;
+        approve(
+            c,
+            "com.a.plugin",
+            "hash1",
+            &["notes.create".to_string()],
+            None,
+            "unsigned",
+        )?;
         // Enabled and approved, but the capability was never granted.
         let err =
             load_runnable(c, &dir, "com.a.plugin", Some("nativeTools.runDeclared")).unwrap_err();
         assert!(err.to_string().contains("lacks permission"));
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn signed_same_signer_update_cannot_widen_its_permissions() {
+    // Auto-approving a same-signer update is a claim about *authorship* — the
+    // bytes came from the author the user already trusted. It is not the user
+    // agreeing to whatever those bytes now ask for. A plugin approved holding
+    // notes.create must not be able to grant itself native tool execution by
+    // re-signing with the same key.
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        upsert(
+            c,
+            signed_input("com.a.p", "h1", "installed", Some("keyA"), "valid"),
+        )?;
+        let rec = approve(
+            c,
+            "com.a.p",
+            "h1",
+            &["notes.create".to_string()],
+            Some("keyA"),
+            "valid",
+        )?;
+        assert!(rec.enabled);
+
+        let mut wider = signed_input("com.a.p", "h2", "installed", Some("keyA"), "valid");
+        wider.permissions = vec![
+            "notes.create".to_string(),
+            "nativeTools.runDeclared".to_string(),
+        ];
+        let rec = upsert(c, wider)?;
+
+        assert!(!rec.enabled, "a widening update must be gated");
+        assert_eq!(
+            rec.granted_permissions,
+            vec!["notes.create".to_string()],
+            "the pinned grant is kept, not replaced"
+        );
+        assert_eq!(
+            rec.accepted_hash, "h1",
+            "the approved hash is kept so the old bytes stay identifiable"
+        );
+        // The reason names what was added — "needs re-approval" alone gives the
+        // user nothing to decide on.
+        let reason = rec.last_load_error.unwrap();
+        assert!(reason.contains("new permissions"), "{reason}");
+        assert!(reason.contains("nativeTools.runDeclared"), "{reason}");
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn signed_same_signer_update_may_narrow_its_permissions() {
+    // Dropping a permission needs no ceremony: the user already agreed to more.
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        let mut wide = signed_input("com.a.p", "h1", "installed", Some("keyA"), "valid");
+        wide.permissions = vec!["notes.create".to_string(), "notes.read".to_string()];
+        upsert(c, wide)?;
+        approve(
+            c,
+            "com.a.p",
+            "h1",
+            &["notes.create".to_string(), "notes.read".to_string()],
+            Some("keyA"),
+            "valid",
+        )?;
+
+        let mut narrower = signed_input("com.a.p", "h2", "installed", Some("keyA"), "valid");
+        narrower.permissions = vec!["notes.read".to_string()];
+        let rec = upsert(c, narrower)?;
+
+        assert!(rec.enabled, "narrowing stays enabled");
+        assert_eq!(rec.granted_permissions, vec!["notes.read".to_string()]);
+        assert_eq!(rec.accepted_hash, "h2");
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn builtin_updates_may_widen_their_permissions() {
+    // Builtins ship inside the signed binary, so their manifest is exactly as
+    // authoritative as the app asking the question.
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        upsert(c, upsert_input("com.a.builtin", "h1", SOURCE_BUILTIN))?;
+        let mut wider = upsert_input("com.a.builtin", "h2", SOURCE_BUILTIN);
+        wider.permissions = vec![
+            "notes.create".to_string(),
+            "nativeTools.runDeclared".to_string(),
+        ];
+        let rec = upsert(c, wider)?;
+        assert!(rec.enabled);
+        assert!(rec
+            .granted_permissions
+            .contains(&"nativeTools.runDeclared".to_string()));
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn approve_pins_the_permission_set_it_was_shown() {
+    // The approval prompt lists permissions; the set written has to be that
+    // set, or the prompt was describing something other than what happens.
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        upsert(c, upsert_input("com.a.plugin", "h1", "installed"))?;
+        let rec = approve(
+            c,
+            "com.a.plugin",
+            "h1",
+            &["notes.read".to_string()],
+            None,
+            "unsigned",
+        )?;
+        assert_eq!(rec.granted_permissions, vec!["notes.read".to_string()]);
+        assert!(rec.enabled);
         Ok(())
     })
     .unwrap();
