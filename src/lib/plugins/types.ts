@@ -27,6 +27,44 @@ import type {
   DiagnosticSyntaxId
 } from '$lib/diagnostics/syntax';
 import type { PluginPermission } from './generated/PluginPermission';
+import type { ArtifactDecl } from './generated/ArtifactDecl';
+import type { ArtifactKind } from './generated/ArtifactKind';
+import type { NativeServiceDecl } from './generated/NativeServiceDecl';
+import type { NativeToolDecl } from './generated/NativeToolDecl';
+import type { PreviewIframeDecl } from './generated/PreviewIframeDecl';
+import type { PreviewIframeMode } from './generated/PreviewIframeMode';
+import type { RuntimeLimits } from './generated/RuntimeLimits';
+
+/**
+ * Declarations the **backend** acts on, defined in
+ * `src-tauri/src/plugins/manifest.rs` and generated from there.
+ *
+ * These are what let a plugin reach outside its own bundle — download a
+ * binary, run a process, start a server — so the definition lives where the
+ * decision to do any of that is made, and this file aliases it rather than
+ * restating it. They used to be declared in both places, which is how the two
+ * came to disagree in the first place.
+ *
+ * The app-facing names are kept so call sites read the same as the rest of the
+ * contribution types around them.
+ */
+export type PluginArtifactKind = ArtifactKind;
+export type PluginArtifactContribution = ArtifactDecl;
+export type PluginNativeToolContribution = NativeToolDecl;
+export type PluginNativeServiceContribution = NativeServiceDecl;
+export type PluginPreviewIframeMode = PreviewIframeMode;
+export type PluginPreviewIframeContribution = PreviewIframeDecl;
+export type PluginRuntimeLimits = RuntimeLimits;
+
+/**
+ * Every artifact kind, checked against the generated union at compile time so
+ * adding one in Rust without adding it here fails to typecheck.
+ */
+export const PLUGIN_ARTIFACT_KINDS = [
+  'wasm',
+  'webScript',
+  'data'
+] as const satisfies readonly PluginArtifactKind[];
 
 /**
  * A capability a plugin must be granted before the host will do something on
@@ -342,31 +380,6 @@ export interface PluginSettingsContribution {
   settings: PluginSetting[];
 }
 
-export const PLUGIN_ARTIFACT_KINDS = ['wasm', 'webScript', 'data'] as const;
-export type PluginArtifactKind = (typeof PLUGIN_ARTIFACT_KINDS)[number];
-
-/**
- * A host-managed binary/blob the plugin needs at runtime. The host downloads
- * and verifies the artifact, then stores it under a per-plugin artifact root.
- *
- * The kind-based shape leaves room for a later native Typst tool declaration
- * without granting arbitrary command execution.
- */
-export interface PluginArtifactContribution {
-  id: string;
-  kind: PluginArtifactKind;
-  /** Human/display version of the artifact, independent of plugin version. */
-  version: string;
-  /** HTTPS URL fetched by the host, never by plugin code. */
-  url: string;
-  /** Expected SHA-256 digest of the downloaded bytes, lowercase hex. */
-  sha256: string;
-  /** Stored filename under the artifact version directory. */
-  fileName: string;
-  /** Optional exact byte length, checked after download when present. */
-  sizeBytes?: number;
-}
-
 /** A plugin-owned sandboxed iframe preview runtime for a note kind. */
 export interface PluginWebviewPreviewContribution {
   /** Safe relative `.js`/`.mjs` module inside the plugin directory. */
@@ -381,79 +394,6 @@ export interface PluginWebviewPreviewContribution {
    * the iframe as Blob URLs + bytes before rendering.
    */
   artifacts?: string[];
-}
-
-/** A PATH-resolved native tool a plugin may request to run. */
-export interface PluginNativeToolContribution {
-  /** Plugin-local slug. */
-  id: string;
-  /** Exact executable basename to resolve from PATH; no paths or shell. */
-  binaryName: string;
-  descriptionKey?: string;
-}
-
-export type PluginPreviewIframeMode = 'direct' | 'themed';
-
-export interface PluginPreviewIframeContribution {
-  /**
-   * `direct` (default) loads the service URL unchanged. `themed` routes it
-   * through the host proxy so app theme variables and optional plugin CSS can be
-   * injected into the iframe document.
-   */
-  mode: PluginPreviewIframeMode;
-  /**
-   * Optional safe relative `.css` file inside the plugin bundle, injected only
-   * for `mode: "themed"` after the host theme variables. This is where a plugin
-   * maps `--ms-preview-*` onto its frontend's DOM.
-   */
-  css?: string;
-  /**
-   * Default WebSocket port the tool's frontend hardcodes as a fallback (e.g.
-   * tinymist's 23625). When set (`mode: "themed"` only), the host injects a
-   * generic shim that redirects a socket to `127.0.0.1:<port>` back to the proxy
-   * origin so it tunnels to the real server. Omit when the frontend derives its
-   * socket from `location`.
-   */
-  socketRewritePort?: number;
-}
-
-/**
- * A long-lived **preview service**: a PATH binary the host runs as a persistent
- * local server whose web frontend is shown in the note's preview iframe. The
- * host allocates the ports and materializes the note body to a temp file the
- * server watches; the plugin only declares how to launch it and how to reach it.
- */
-export interface PluginNativeServiceContribution {
-  /** Plugin-local slug. */
-  id: string;
-  /** Exact executable basename to resolve from PATH; no paths or shell. */
-  binaryName: string;
-  /**
-   * Launch argument template. Each entry may contain the placeholders
-   * `{dataPort}`, `{controlPort}` (host-allocated free ports) and `{input}`
-   * (absolute path to the materialized source file).
-   */
-  args: string[];
-  /** URL the iframe loads, e.g. `http://127.0.0.1:{dataPort}`. */
-  dataUrl: string;
-  /** Control-plane WebSocket URL, e.g. `ws://127.0.0.1:{controlPort}`. */
-  controlUrl: string;
-  /** Extension for the materialized source file (default `txt`). */
-  inputExtension?: string;
-  /**
-   * Controls how the service frontend iframe is loaded. Omitted means
-   * unmodified/direct, which is the safest and most compatible default.
-   */
-  previewIframe?: PluginPreviewIframeContribution;
-  descriptionKey?: string;
-  /**
-   * Control-plane message names the host bridge understands. `jumpEvent` is the
-   * server→editor inverse-search message (payload `{ filepath, start:[line,col] }`)
-   * that moves the source cursor on click.
-   */
-  protocol?: {
-    jumpEvent?: string;
-  };
 }
 
 /**
@@ -829,13 +769,6 @@ export interface PluginContributions {
   documentation?: PluginDocSection[];
   /** Toolbar buttons the plugin places into host surfaces (file-tree, …). */
   toolbar?: PluginToolbarButton[];
-}
-
-export interface PluginRuntimeLimits {
-  /** Guest memory cap in bytes. Clamped by the backend. */
-  memoryBytes?: number;
-  /** Wall-clock timeout in milliseconds. Clamped by the backend. */
-  timeoutMs?: number;
 }
 
 /**

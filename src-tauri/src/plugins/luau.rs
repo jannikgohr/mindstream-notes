@@ -467,11 +467,17 @@ fn storage_module(
                 let path = resolve(&read_root, &rel)?;
                 // Absent is `nil`, not an error: "have I stored this yet?" is the
                 // common first call and should not need a pcall.
+                if !path.exists() {
+                    return Ok(None);
+                }
+                // Containment first, then read. `ensure_inside_data_root`
+                // canonicalizes, so a symlink pointing out of the data root
+                // fails here rather than after its target is already in memory.
+                super::ensure_inside_data_root(&read_root, &path)
+                    .map_err(|e| mlua::Error::runtime(e.to_string()))?;
                 let Ok(bytes) = std::fs::read(&path) else {
                     return Ok(None);
                 };
-                super::ensure_inside_data_root(&read_root, &path)
-                    .map_err(|e| mlua::Error::runtime(e.to_string()))?;
                 if bytes.len() > MAX_STORAGE_FILE_BYTES {
                     return Err(mlua::Error::runtime(format!(
                         "ms.storage.read: '{rel}' is larger than {MAX_STORAGE_FILE_BYTES} bytes"
@@ -536,9 +542,14 @@ fn storage_module(
                 let path = resolve(&write_root, &rel)?;
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent).map_err(mlua::Error::runtime)?;
-                    super::ensure_inside_data_root(&write_root, parent)
-                        .map_err(|e| mlua::Error::runtime(e.to_string()))?;
                 }
+                // Checking only the parent would not be enough: if `path` is
+                // itself an existing symlink, `fs::write` follows it and writes
+                // wherever it points. `ensure_write_target_safe` refuses a
+                // symlink target and containment-checks the parent when the file
+                // does not exist yet.
+                super::ensure_write_target_safe(&write_root, &path)
+                    .map_err(|e| mlua::Error::runtime(e.to_string()))?;
                 std::fs::write(&path, contents).map_err(mlua::Error::runtime)?;
                 Ok(())
             })?,
@@ -1062,6 +1073,37 @@ mod tests {
         // Nothing escaped: the parent still holds only the root we made.
         assert!(!root.parent().unwrap().join("escape.txt").exists());
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "creating a symlink needs elevation on Windows")]
+    fn storage_write_refuses_to_follow_a_symlink_out_of_the_data_root() {
+        // Containment-checking only the parent directory is not enough: if the
+        // target path is itself a symlink, `fs::write` follows it and lands
+        // outside the plugin's data root entirely.
+        let root = storage_tmp();
+        let outside = storage_tmp();
+        let victim = outside.join("victim.txt");
+        std::fs::write(&victim, "original").unwrap();
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&victim, root.join("escape.txt")).unwrap();
+
+        let err = run(storage_req(
+            r#"return { go = function() ms.storage.write("escape.txt", "pwned") return {} end }"#,
+            &["pluginStorage.read", "pluginStorage.write"],
+            &root,
+        ))
+        .expect_err("a symlinked target must be refused");
+        assert!(err.to_string().contains("symlink"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(&victim).unwrap(),
+            "original",
+            "the file outside the data root is untouched"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&outside).ok();
     }
 
     #[test]

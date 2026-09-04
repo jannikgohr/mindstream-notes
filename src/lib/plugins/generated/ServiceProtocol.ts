@@ -7,5 +7,5 @@ export type ServiceProtocol = {
   /**
    * The server-to-editor inverse-search message that moves the source cursor.
    */
-  jumpEvent: string | null;
+  jumpEvent?: string;
 };

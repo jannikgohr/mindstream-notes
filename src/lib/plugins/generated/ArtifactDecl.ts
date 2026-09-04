@@ -28,5 +28,5 @@ export type ArtifactDecl = {
   /**
    * Optional exact byte length, checked alongside the digest.
    */
-  sizeBytes: number | null;
+  sizeBytes?: number;
 };

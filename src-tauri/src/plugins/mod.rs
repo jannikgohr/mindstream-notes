@@ -350,14 +350,6 @@ pub struct PluginNativeToolOutput {
     pub timed_out: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PluginStorageEntry {
-    pub path: String,
-    pub is_dir: bool,
-    pub bytes: Option<u64>,
-}
-
 /// Reconcile every discovered plugin with its DB record (applying the trust
 /// gate via {@link upsert}) and return the records + manifests. The `source`
 /// on each input comes from discovery (the load location), so trust is never
@@ -506,8 +498,6 @@ fn read_plugin_file(dir: &Path, file: &str) -> AppResult<Option<String>> {
 // ---------- Host-managed artifacts + plugin data -------------------------
 
 const PERM_PLUGIN_ARTIFACTS_DOWNLOAD: &str = "pluginArtifacts.download";
-const PERM_PLUGIN_STORAGE_READ: &str = "pluginStorage.read";
-const PERM_PLUGIN_STORAGE_WRITE: &str = "pluginStorage.write";
 const PERM_NATIVE_TOOLS_RUN_DECLARED: &str = "nativeTools.runDeclared";
 const MAX_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_NATIVE_TOOL_ARGS: usize = 64;
@@ -522,17 +512,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
         let _ = write!(out, "{byte:02x}");
     }
     out
-}
-
-fn require_enabled_permission(
-    conn: &Connection,
-    id: &str,
-    permission: &str,
-) -> AppResult<PluginRecord> {
-    let record = require(conn, id)?;
-    require_enabled(&record)?;
-    require_permission(&record, permission)?;
-    Ok(record)
 }
 
 fn require_enabled(record: &PluginRecord) -> AppResult<()> {
@@ -652,6 +631,9 @@ fn validate_binary_name(binary_name: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// Refuse a write whose target is a symlink, and containment-check the parent
+/// when the file does not exist yet. Checking only the parent is not enough: a
+/// symlink at the target path would be followed by `fs::write`.
 fn ensure_write_target_safe(root: &Path, target: &Path) -> AppResult<()> {
     match fs::symlink_metadata(target) {
         Ok(metadata) => {
@@ -1075,14 +1057,6 @@ fn split_plugin_rel_path(path: &str, allow_empty: bool) -> AppResult<Vec<String>
     Ok(out)
 }
 
-fn plugin_data_path(app: &AppHandle, plugin_id: &str, path: &str) -> AppResult<PathBuf> {
-    let mut out = plugin_data_root(app, plugin_id)?;
-    for segment in split_plugin_rel_path(path, true)? {
-        out.push(segment);
-    }
-    Ok(out)
-}
-
 fn ensure_inside_data_root(root: &Path, target: &Path) -> AppResult<()> {
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let target = target
@@ -1496,105 +1470,6 @@ pub fn plugins_read_artifact(
         .into());
     }
     Ok(bytes)
-}
-
-#[tauri::command]
-pub fn plugins_storage_read_text(
-    app: AppHandle,
-    db: State<'_, Db>,
-    id: String,
-    path: String,
-) -> CommandResult<Option<String>> {
-    db.with_conn(|c| require_enabled_permission(c, &id, PERM_PLUGIN_STORAGE_READ))?;
-    split_plugin_rel_path(&path, false)?;
-    let root = plugin_data_root(&app, &id)?;
-    let target = plugin_data_path(&app, &id, &path)?;
-    if !target.exists() {
-        return Ok(None);
-    }
-    ensure_inside_data_root(&root, &target)?;
-    fs::read_to_string(&target).map(Some).map_err(Into::into)
-}
-
-#[tauri::command]
-pub fn plugins_storage_write_text(
-    app: AppHandle,
-    db: State<'_, Db>,
-    id: String,
-    path: String,
-    contents: String,
-) -> CommandResult<()> {
-    db.with_conn(|c| require_enabled_permission(c, &id, PERM_PLUGIN_STORAGE_WRITE))?;
-    split_plugin_rel_path(&path, false)?;
-    let root = plugin_data_root(&app, &id)?;
-    let target = plugin_data_path(&app, &id, &path)?;
-    let parent = target
-        .parent()
-        .ok_or_else(|| AppError::InvalidArg("plugin storage path has no parent".into()))?;
-    fs::create_dir_all(parent)?;
-    ensure_inside_data_root(&root, parent)?;
-    ensure_write_target_safe(&root, &target)?;
-    fs::write(target, contents).map_err(Into::into)
-}
-
-#[tauri::command]
-pub fn plugins_storage_delete(
-    app: AppHandle,
-    db: State<'_, Db>,
-    id: String,
-    path: String,
-) -> CommandResult<()> {
-    db.with_conn(|c| require_enabled_permission(c, &id, PERM_PLUGIN_STORAGE_WRITE))?;
-    split_plugin_rel_path(&path, false)?;
-    let root = plugin_data_root(&app, &id)?;
-    let target = plugin_data_path(&app, &id, &path)?;
-    if !target.exists() {
-        return Ok(());
-    }
-    ensure_inside_data_root(&root, &target)?;
-    if target.is_dir() {
-        fs::remove_dir_all(target)?;
-    } else {
-        fs::remove_file(target)?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub fn plugins_storage_list(
-    app: AppHandle,
-    db: State<'_, Db>,
-    id: String,
-    path: String,
-) -> CommandResult<Vec<PluginStorageEntry>> {
-    db.with_conn(|c| require_enabled_permission(c, &id, PERM_PLUGIN_STORAGE_READ))?;
-    let root = plugin_data_root(&app, &id)?;
-    let target = plugin_data_path(&app, &id, &path)?;
-    if !target.exists() {
-        return Ok(Vec::new());
-    }
-    ensure_inside_data_root(&root, &target)?;
-    let base_segments = split_plugin_rel_path(&path, true)?;
-    let mut out = Vec::new();
-    for entry in fs::read_dir(&target)? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        safe_segment(&name, "plugin storage entry")?;
-        let metadata = entry.metadata()?;
-        let mut parts = base_segments.clone();
-        parts.push(name);
-        out.push(PluginStorageEntry {
-            path: parts.join("/"),
-            is_dir: metadata.is_dir(),
-            bytes: if metadata.is_file() {
-                Some(metadata.len())
-            } else {
-                None
-            },
-        });
-    }
-    out.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(out)
 }
 
 #[tauri::command]

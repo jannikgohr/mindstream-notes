@@ -8,9 +8,9 @@ export type RuntimeLimits = {
   /**
    * Guest memory cap in bytes.
    */
-  memoryBytes: number | null;
+  memoryBytes?: number;
   /**
    * Wall-clock timeout in milliseconds.
    */
-  timeoutMs: number | null;
+  timeoutMs?: number;
 };

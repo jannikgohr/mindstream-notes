@@ -55,12 +55,6 @@ export interface PluginArtifactStatus {
   sha256: string | null;
 }
 
-export interface PluginStorageEntry {
-  path: string;
-  isDir: boolean;
-  bytes: number | null;
-}
-
 export interface PluginNativeToolStatus {
   pluginId: string;
   toolId: string;
@@ -135,25 +129,6 @@ function parseArtifactStatuses(value: unknown): PluginArtifactStatus[] {
     throw new Error('PluginArtifactStatus[] must be an array');
   }
   return value.map(parseArtifactStatus);
-}
-
-function parseStorageEntry(value: unknown): PluginStorageEntry {
-  const raw = assertRecord(value, 'PluginStorageEntry');
-  return {
-    path: assertString(raw.path, 'PluginStorageEntry.path'),
-    isDir: assertBoolean(raw.isDir, 'PluginStorageEntry.isDir'),
-    bytes:
-      raw.bytes === null || raw.bytes === undefined
-        ? null
-        : assertNumber(raw.bytes, 'PluginStorageEntry.bytes')
-  };
-}
-
-function parseStorageEntries(value: unknown): PluginStorageEntry[] {
-  if (!Array.isArray(value)) {
-    throw new Error('PluginStorageEntry[] must be an array');
-  }
-  return value.map(parseStorageEntry);
 }
 
 function parseNativeToolStatus(value: unknown): PluginNativeToolStatus {
@@ -349,53 +324,6 @@ export function pluginsReadArtifact(
       throw new Error('plugins_read_artifact is unavailable outside Tauri');
     },
     parseByteArray
-  );
-}
-
-export function pluginsStorageReadText(
-  id: string,
-  path: string
-): Promise<string | null> {
-  return invokeOrFallback<string | null>(
-    TauriCommandName.PluginsStorageReadText,
-    { id, path },
-    () => null,
-    (value) =>
-      value === null ? null : assertString(value, 'plugins_storage_read_text')
-  );
-}
-
-export function pluginsStorageWriteText(
-  id: string,
-  path: string,
-  contents: string
-): Promise<void> {
-  return invokeOrFallback<void>(
-    TauriCommandName.PluginsStorageWriteText,
-    { id, path, contents },
-    () => undefined,
-    (value) => assertVoid(value, 'plugins_storage_write_text response')
-  );
-}
-
-export function pluginsStorageDelete(id: string, path: string): Promise<void> {
-  return invokeOrFallback<void>(
-    TauriCommandName.PluginsStorageDelete,
-    { id, path },
-    () => undefined,
-    (value) => assertVoid(value, 'plugins_storage_delete response')
-  );
-}
-
-export function pluginsStorageList(
-  id: string,
-  path = ''
-): Promise<PluginStorageEntry[]> {
-  return invokeOrFallback<PluginStorageEntry[]>(
-    TauriCommandName.PluginsStorageList,
-    { id, path },
-    () => [],
-    parseStorageEntries
   );
 }
 

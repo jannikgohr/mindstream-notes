@@ -24,8 +24,12 @@ export type NativeServiceDecl = {
   /**
    * Extension for the materialized source file.
    */
-  inputExtension: string | null;
-  previewIframe: PreviewIframeDecl;
-  descriptionKey: string | null;
-  protocol: ServiceProtocol;
+  inputExtension?: string;
+  /**
+   * Absent means `direct`: load the service URL unchanged, which is the
+   * safest and most compatible default.
+   */
+  previewIframe?: PreviewIframeDecl;
+  descriptionKey?: string;
+  protocol?: ServiceProtocol;
 };
