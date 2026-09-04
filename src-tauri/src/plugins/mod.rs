@@ -1265,6 +1265,15 @@ fn note_snapshot(conn: &Connection) -> AppResult<Vec<luau::NoteMeta>> {
 
 // ---------- Tauri commands ----------
 
+// Tauri injects `AppHandle` and `State` into these IPC adapters. The regular
+// test, clippy, and release builds compile the real commands; the logic-only
+// coverage build uses signature stubs below, matching the command shims already
+// excluded by `rust-coverage.mjs` elsewhere in the crate.
+#[cfg(not(coverage))]
+#[rustfmt::skip]
+mod tauri_commands {
+use super::*;
+
 #[tauri::command]
 pub fn plugins_list(db: tauri::State<'_, Db>) -> CommandResult<Vec<PluginRecord>> {
     db.with_conn(list).map_err(Into::into)
@@ -1639,6 +1648,43 @@ pub async fn plugins_run_script(
         }
     }
 }
+
+}
+
+#[cfg(not(coverage))]
+pub use tauri_commands::*;
+
+#[cfg(coverage)]
+macro_rules! coverage_command_stubs {
+    ($($name:ident),+ $(,)?) => {
+        $(
+            #[tauri::command]
+            pub fn $name() {}
+        )+
+    };
+}
+
+#[cfg(coverage)]
+coverage_command_stubs!(
+    plugins_list,
+    plugins_get,
+    plugins_discover,
+    plugins_enable,
+    plugins_disable,
+    plugins_approve,
+    plugins_set_load_error,
+    plugins_remove,
+    plugins_read_file,
+    plugins_artifacts_status,
+    plugins_download_artifact,
+    plugins_read_artifact,
+    plugins_native_tool_status,
+    plugins_run_native_tool,
+    plugins_settings_all,
+    plugins_settings_set,
+    plugins_settings_remove,
+    plugins_run_script,
+);
 
 #[cfg(test)]
 mod tests;

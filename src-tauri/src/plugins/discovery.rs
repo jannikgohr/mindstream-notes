@@ -553,4 +553,22 @@ mod tests {
     fn find_returns_none_when_the_third_party_dir_is_absent() {
         assert!(find(&tmp(), "com.a.anything").is_none());
     }
+
+    #[test]
+    fn find_returns_an_embedded_builtin_by_id() {
+        let absent = std::env::temp_dir().join(format!(
+            "mindstream-plugins-absent-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let plugin = find(&absent, "com.mindstream.templates.core").expect("builtin plugin");
+        assert_eq!(plugin.source, SOURCE_BUILTIN);
+    }
+
+    #[test]
+    fn find_skips_third_party_directories_without_a_manifest() {
+        let root = tmp();
+        std::fs::create_dir_all(root.join("not-a-plugin")).unwrap();
+        assert!(find(&root, "com.example.missing").is_none());
+        std::fs::remove_dir_all(root).ok();
+    }
 }

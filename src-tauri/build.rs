@@ -1,4 +1,5 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("cargo:rustc-check-cfg=cfg(coverage)");
     generate_i18n_bundle_list()?;
     track_builtin_plugins()?;
     tauri_build::build();

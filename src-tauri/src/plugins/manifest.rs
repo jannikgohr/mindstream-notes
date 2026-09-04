@@ -525,6 +525,11 @@ mod tests {
     }
 
     #[test]
+    fn plugin_id_rejects_more_than_two_hundred_bytes() {
+        assert!(!is_valid_id(&format!("com.{}", "a".repeat(197))));
+    }
+
+    #[test]
     fn refuses_a_manifest_version_from_the_future() {
         let mut v = base();
         v["manifestVersion"] = 2.into();
