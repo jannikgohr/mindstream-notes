@@ -19,6 +19,9 @@ import {
   pluginsRemove,
   pluginsRunNativeTool,
   pluginsRunScript,
+  pluginsSettingsAll,
+  pluginsSettingsRemove,
+  pluginsSettingsSet,
   pluginsSetLoadError
 } from './plugins';
 
@@ -99,6 +102,14 @@ describe('no-Tauri fallbacks', () => {
     await expect(pluginsRemove('x')).resolves.toBeUndefined();
     await expect(pluginsPreviewUpdate('s', 'body')).resolves.toBeUndefined();
     await expect(pluginsPreviewStop('s')).resolves.toBeUndefined();
+    await expect(
+      pluginsSettingsSet('p', 'theme', 'dark')
+    ).resolves.toBeUndefined();
+    await expect(pluginsSettingsRemove('p', 'theme')).resolves.toBeUndefined();
+  });
+
+  it('plugin settings have an empty browser-only store', async () => {
+    await expect(pluginsSettingsAll('p')).resolves.toEqual({});
   });
 
   it('app-only commands reject outside Tauri', async () => {
@@ -339,6 +350,37 @@ describe('in Tauri (IPC + validation path)', () => {
       id: 'p',
       export: 'fn',
       input: { a: 1 }
+    });
+  });
+
+  it('reads and writes plugin settings through IPC', async () => {
+    invoke.mockResolvedValueOnce({ theme: 'dark', count: 2 });
+    await expect(pluginsSettingsAll('p')).resolves.toEqual({
+      theme: 'dark',
+      count: 2
+    });
+    expect(invoke).toHaveBeenLastCalledWith('plugins_settings_all', {
+      id: 'p'
+    });
+
+    invoke.mockResolvedValueOnce([]);
+    await expect(pluginsSettingsAll('p')).resolves.toEqual({});
+
+    invoke.mockResolvedValueOnce(undefined);
+    await expect(
+      pluginsSettingsSet('p', 'theme', 'light')
+    ).resolves.toBeUndefined();
+    expect(invoke).toHaveBeenLastCalledWith('plugins_settings_set', {
+      id: 'p',
+      key: 'theme',
+      value: 'light'
+    });
+
+    invoke.mockResolvedValueOnce(undefined);
+    await expect(pluginsSettingsRemove('p', 'theme')).resolves.toBeUndefined();
+    expect(invoke).toHaveBeenLastCalledWith('plugins_settings_remove', {
+      id: 'p',
+      key: 'theme'
     });
   });
 });

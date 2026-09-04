@@ -485,12 +485,18 @@ fn run_plugin_script_executes_luau_entry_with_input() {
     )
     .unwrap();
     let manifest = manifest_with(serde_json::json!({
-        "id": "com.a.luau", "runtime": "luau", "entry": "main.luau"
+        "id": "com.a.luau",
+        "runtime": "luau",
+        "entry": "main.luau",
+        "permissions": ["nativeTools.runDeclared"],
+        "contributes": {
+            "nativeTools": [{ "id": "missing", "binaryName": "ms-not-a-real-binary-xyz" }]
+        }
     }));
     let out = run_plugin_script(
         &super::discovery::PluginFiles::Fs(dir.clone()),
         &manifest,
-        vec![],
+        vec!["nativeTools.runDeclared".into()],
         "render",
         serde_json::json!({ "name": "Hi" }),
         Vec::new(),
@@ -1308,6 +1314,53 @@ fn load_runnable_rejects_disabled_unapproved_and_ungranted_plugins() {
 }
 
 #[test]
+fn load_runnable_returns_the_approved_plugin_from_disk() {
+    let root =
+        std::env::temp_dir().join(format!("ms-plugins-load-runnable-{}", uuid::Uuid::new_v4()));
+    let plugin_dir = root.join("installed-plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::write(
+        plugin_dir.join("manifest.json"),
+        serde_json::json!({
+            "manifestVersion": 1,
+            "id": "com.a.runnable",
+            "name": "Runnable",
+            "version": "1.0.0",
+            "runtime": "manifest-only",
+            "permissions": ["notes.create"]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let discovered = discovery::discover(&root)
+        .into_iter()
+        .find(|plugin| plugin.id == "com.a.runnable")
+        .expect("plugin is discovered");
+
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        let mut input = upsert_input(&discovered.id, &discovered.checksum, SOURCE_INSTALLED);
+        input.permissions = discovered.permissions.clone();
+        upsert(c, input)?;
+        approve(
+            c,
+            &discovered.id,
+            &discovered.checksum,
+            &discovered.permissions,
+            discovered.signer.as_deref(),
+            &discovered.signature_status,
+        )?;
+
+        let (record, loaded) = load_runnable(c, &root, &discovered.id, Some("notes.create"))?;
+        assert!(record.enabled);
+        assert_eq!(loaded.checksum, discovered.checksum);
+        Ok(())
+    })
+    .unwrap();
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn signed_same_signer_update_cannot_widen_its_permissions() {
     // Auto-approving a same-signer update is a claim about *authorship* — the
     // bytes came from the author the user already trusted. It is not the user
@@ -1511,6 +1564,19 @@ fn backend_context_wins_over_caller_supplied_keys() {
     assert_eq!(merged["now"], serde_json::json!("2026-09-04T00:00:00Z"));
     // Call-specific keys the backend does not own are preserved.
     assert_eq!(merged["noteId"], serde_json::json!("n1"));
+}
+
+#[test]
+fn backend_context_replaces_a_non_object_input() {
+    let backend = serde_json::json!({
+        "settings": { "real": true },
+        "folders": [],
+        "now": "2026-09-04T00:00:00Z"
+    });
+    assert_eq!(
+        merge_script_input(serde_json::json!("not an object"), backend.clone()),
+        backend
+    );
 }
 
 #[test]

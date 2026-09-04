@@ -1133,6 +1133,52 @@ mod tests {
     }
 
     #[test]
+    fn storage_lists_a_missing_directory_as_empty() {
+        let root = storage_tmp();
+        let out = run(storage_req(
+            r#"return { go = function() return { listed = ms.storage.list("missing") } end }"#,
+            &["pluginStorage.read"],
+            &root,
+        ))
+        .unwrap();
+        assert_eq!(out["listed"], serde_json::json!({}));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn storage_refuses_files_over_the_size_limit() {
+        let root = storage_tmp();
+        std::fs::write(
+            root.join("large.txt"),
+            vec![b'x'; MAX_STORAGE_FILE_BYTES + 1],
+        )
+        .unwrap();
+        let err = run(storage_req(
+            r#"return { go = function() ms.storage.read("large.txt") return {} end }"#,
+            &["pluginStorage.read"],
+            &root,
+        ))
+        .expect_err("an oversized stored file must not enter the runtime");
+        assert!(err.to_string().contains("is larger than"), "{err}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn storage_refuses_writes_over_the_size_limit() {
+        let root = storage_tmp();
+        let mut request = storage_req(
+            r#"return { go = function(ctx) ms.storage.write("large.txt", ctx.contents) return {} end }"#,
+            &["pluginStorage.write"],
+            &root,
+        );
+        request.input = serde_json::json!({ "contents": "x".repeat(MAX_STORAGE_FILE_BYTES + 1) });
+        let err = run(request).expect_err("an oversized value must not be written");
+        assert!(err.to_string().contains("exceeds"), "{err}");
+        assert!(!root.join("large.txt").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn storage_without_a_data_dir_fails_loudly() {
         // The namespace exists so a script can call it; every call errors
         // rather than silently doing nothing.
