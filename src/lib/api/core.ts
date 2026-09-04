@@ -141,6 +141,7 @@ export enum TauriCommandName {
   SpellcheckSuggest = 'spellcheck_suggest',
   SpellcheckUnknownWords = 'spellcheck_unknown_words',
   SpellcheckWordChars = 'spellcheck_word_chars',
+  SpellcheckReleaseDictionaries = 'spellcheck_release_dictionaries',
   StopSharingCollection = 'stop_sharing_collection',
   SweepTrashRetention = 'sweep_trash_retention',
   SweepUnreferencedMarkdownAssets = 'sweep_unreferenced_markdown_assets',

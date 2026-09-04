@@ -156,14 +156,17 @@ impl Resident {
         }
         match self.last_used {
             Some(at) if now.saturating_duration_since(at) < idle_for => 0,
-            _ => {
-                let freed = self.dictionaries.len();
-                self.dictionaries.clear();
-                self.order.clear();
-                self.last_used = None;
-                freed
-            }
+            _ => self.release_all(),
         }
+    }
+
+    /// Drop everything resident, whatever its age. Returns how many went.
+    fn release_all(&mut self) -> usize {
+        let freed = self.dictionaries.len();
+        self.dictionaries.clear();
+        self.order.clear();
+        self.last_used = None;
+        freed
     }
 
     /// Load `id` if it is not already resident, then return it.
@@ -342,6 +345,32 @@ pub async fn spellcheck_suggest(
     Ok(suggestions)
 }
 
+/// Drop the resident dictionaries now.
+///
+/// The idle sweep below would get there eventually, but "eventually" is up
+/// to three minutes, and the frontend knows the answer immediately: when
+/// the user turns the built-in checker off, deselects every language, or
+/// hands spelling to a plugin checker, nothing is going to ask for a
+/// dictionary again. Waiting out the timer in that case just holds ~21 MB
+/// for no reason.
+///
+/// Idempotent, and never an error: releasing what is already released is
+/// the normal case (the setting is written far more often than a
+/// dictionary is loaded).
+#[tauri::command]
+pub async fn spellcheck_release_dictionaries(app: AppHandle) -> CommandResult<()> {
+    let resident = app.state::<SpellcheckState>().inner.clone();
+    let mut guard = resident
+        .lock()
+        .map_err(|_| AppError::InvalidArg("spellcheck state poisoned".into()))?;
+    let freed = guard.release_all();
+    drop(guard);
+    if freed > 0 {
+        log::info!("[spellcheck] released {freed} dictionar(y/ies) on request");
+    }
+    Ok(())
+}
+
 /// Give the resident dictionaries back to the OS once the user stops
 /// spellchecking.
 ///
@@ -434,6 +463,29 @@ mod tests {
             0
         );
         assert_eq!(resident.dictionaries.len(), 1);
+    }
+
+    #[test]
+    fn releasing_drops_everything_regardless_of_age() {
+        let mut resident = Resident::default();
+        resident.order.push("en_US".into());
+        resident.last_used = Some(Instant::now());
+        resident
+            .dictionaries
+            .insert("en_US".into(), marker_dictionary());
+
+        // Just used, so the idle sweep would keep it — an explicit release
+        // must not care.
+        assert_eq!(resident.release_all(), 1);
+        assert!(resident.dictionaries.is_empty());
+        assert_eq!(resident.last_used, None);
+    }
+
+    #[test]
+    fn releasing_twice_is_harmless() {
+        let mut resident = Resident::default();
+        assert_eq!(resident.release_all(), 0);
+        assert_eq!(resident.release_all(), 0);
     }
 
     #[test]

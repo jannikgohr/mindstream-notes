@@ -394,6 +394,7 @@ pub fn run() {
             spellcheck::custom_dictionary_add,
             spellcheck::custom_dictionary_remove,
             spellcheck::spellcheck_word_chars,
+            spellcheck::spellcheck_release_dictionaries,
             spellcheck::http_checker::text_checker_check,
             spellcheck::http_checker::text_checker_test_connection,
             // Search
