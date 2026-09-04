@@ -96,7 +96,9 @@ asymmetric:
 - **`i18n`** — `{ "<locale>": { "<key>": "<string>" } }`. An `en` bundle is
   required; other locales fall back to it. Referenced by `…Key` fields elsewhere.
 - **`settings`** — sections of controls shown under Settings → Plugins →
-  _(your plugin)_. Each setting is stored at `plugins.<id>.<settingId>`.
+  _(your plugin)_. Each setting is stored at `plugins.<id>.<settingId>`, in the
+  vault database rather than with the app's other settings — a scripted plugin
+  receives them as `ctx.settings`, so the backend has to be able to read them.
   Control `type`s: `toggle`, `text`, `number`, `slider`, `select`, `radio`,
   `color`, and the vault pickers **`folder`** and **`tag`** (their value is a
   folder id / tag string and auto-clears if the target is deleted). `select` and
@@ -337,11 +339,32 @@ A toolbar button's export is called with the context table and returns a
 | `{ effect = "openMenu", items = {{ label, run = <effect> }} }` | show a menu; each item runs its nested effect    |
 
 Returning a terminal effect makes the button a single action; returning
-`openMenu` makes it a sub-menu. The button's `ctx` carries `{ settings, folders,
-activeNoteId, locale, now }`; combined with `ms.notes` (metadata, gated by
-`notes.read`) a script can enumerate/filter notes itself — e.g. the Templates
-plugin lists the notes in its configured folder/tag and returns a menu of
+`openMenu` makes it a sub-menu. Combined with `ms.notes` (metadata, gated by
+`notes.read`) a script can enumerate and filter notes itself — the Templates
+plugin lists the notes in its configured folder or tag and returns a menu of
 `createNoteFromNote`.
+
+### The context table
+
+Every export is called with one `ctx` table. It is assembled from two halves:
+
+| Field          | Built by | Notes                                                      |
+| -------------- | -------- | ---------------------------------------------------------- |
+| `settings`     | backend  | the plugin's stored settings, read from the vault database |
+| `folders`      | backend  | the vault folder tree; empty without `notes.read`          |
+| `now`          | backend  | RFC3339, from the host clock                               |
+| `activeNoteId` | frontend | the note on screen, or `nil`                               |
+| `locale`       | frontend | the window's current locale                                |
+
+Plus whatever the call itself is about — `noteId` and `body` for a note-kind
+render, `format` for an exporter, `variables` for a template.
+
+The split is not cosmetic. Anything the backend can determine for itself, it
+does, and its values win on a collision — so a caller cannot tell a script it
+has settings it does not have, or hand it a false clock. It also means the
+backend has everything it needs to invoke a plugin **without a UI action behind
+it**, which is what a future event or watcher would require. Only the two
+genuinely window-scoped fields come from the frontend.
 
 ### Host API (`ms.*`)
 

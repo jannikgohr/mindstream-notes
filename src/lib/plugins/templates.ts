@@ -146,9 +146,7 @@ function pluginHasPermission(
   pluginId: string,
   permission: PluginPermission
 ): boolean {
-  return (
-    pluginById(pluginId)?.manifest.permissions.includes(permission) ?? false
-  );
+  return pluginById(pluginId)?.granted.includes(permission) ?? false;
 }
 
 /** The rendered title + body a template produces for the given variables. */

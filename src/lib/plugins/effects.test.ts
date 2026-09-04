@@ -54,6 +54,10 @@ vi.mock('$lib/state.svelte', () => ({ ui: { activeNoteId: 'active-1' } }));
 vi.mock('./plugin-menu.svelte', () => ({ openPluginMenu: h.openPluginMenu }));
 vi.mock('./registry.svelte', () => ({
   pluginById: (id: string) => ({
+    // The registry carries the *granted* permissions from the backend record,
+    // which is what the frontend checks — the manifest only says what was asked
+    // for, and a gated update can ask for more than it holds.
+    granted: h.perms[id] ?? [],
     manifest: {
       permissions: h.perms[id] ?? [],
       contributes: {

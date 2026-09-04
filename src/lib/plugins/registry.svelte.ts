@@ -25,6 +25,7 @@ import { pluginNoteKindId, validateManifest } from './validation';
 import { CONTRIBUTION_POINTS } from './types';
 import type {
   PluginCommandContribution,
+  PluginPermission,
   PluginContributionPoint,
   PluginContributions,
   PluginI18nContribution,
@@ -44,6 +45,22 @@ export interface RegisteredPlugin {
   manifest: PluginManifest;
   /** Disabled plugins stay registered but contribute nothing. */
   enabled: boolean;
+  /**
+   * The permissions the backend actually granted this plugin, from its database
+   * record — **not** `manifest.permissions`, which is only what the manifest
+   * currently on disk asks for.
+   *
+   * The two can differ. An update that widens its permissions is gated pending
+   * re-approval while the old grant stays pinned, so the manifest asks for more
+   * than the record allows. The backend enforces the record; so does everything
+   * here, or the frontend would let a plugin do something the backend would
+   * refuse it.
+   *
+   * Outside Tauri there is no record and the manifest's request is all there
+   * is, which is also the only place it is safe: nothing there can run a script,
+   * spawn a process or reach the network.
+   */
+  granted: readonly PluginPermission[];
   /**
    * Canonical checksum of the manifest at registration time. The seam the
    * integrity flow compares against a stored accepted hash (see canonical.ts);
@@ -119,12 +136,15 @@ const state = $state<RegistryState>({ plugins: {}, loadErrors: {} });
  */
 export function registerPlugin(
   input: unknown,
-  opts: { enabled?: boolean } = {}
+  opts: { enabled?: boolean; granted?: readonly string[] } = {}
 ): RegisteredPlugin {
   const manifest = validateManifest(input);
   const registration: RegisteredPlugin = {
     manifest,
     enabled: opts.enabled ?? true,
+    // Fall back to the manifest's request only where there is no record to
+    // consult — the web build, which cannot act on a permission anyway.
+    granted: (opts.granted ?? manifest.permissions) as PluginPermission[],
     checksum: checksumManifest(manifest)
   };
   state.plugins[manifest.id] = registration;
@@ -196,9 +216,9 @@ function contributionsOf<K extends PluginContributionPoint>(
 }[] {
   const required = CONTRIBUTION_POINTS[point];
   const out: { pluginId: string; entry: never }[] = [];
-  for (const { manifest, enabled } of Object.values(state.plugins)) {
+  for (const { manifest, enabled, granted } of Object.values(state.plugins)) {
     if (!enabled) continue;
-    if (required !== null && !manifest.permissions.includes(required)) continue;
+    if (required !== null && !granted.includes(required)) continue;
     const declared = manifest.contributes[point];
     if (!Array.isArray(declared)) continue;
     for (const entry of declared) {
