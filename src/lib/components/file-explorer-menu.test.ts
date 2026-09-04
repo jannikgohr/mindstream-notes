@@ -133,6 +133,7 @@ describe('root menu', () => {
   it('renders plugin file-tree openMenu effects as hover submenus', async () => {
     tree.notesById = { n1: note({ note_kind: 'kanban' }) };
     registerPlugin({
+      manifestVersion: 1,
       id: 'com.example.templates',
       name: 'Templates',
       version: '1.0.0',
@@ -188,6 +189,7 @@ describe('root menu', () => {
 
   it('uses a plugin note kind icon for plugin template entries', async () => {
     registerPlugin({
+      manifestVersion: 1,
       id: 'com.example.documents',
       name: 'Documents',
       version: '1.0.0',

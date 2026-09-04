@@ -32,6 +32,7 @@ describe('note exporters', () => {
 
   it('adds plugin exporters for existing note types', () => {
     registerPlugin({
+      manifestVersion: 1,
       id: 'com.example.markdown-export',
       name: 'Markdown Export',
       version: '1.0.0',
@@ -59,6 +60,7 @@ describe('note exporters', () => {
 
   it('adds plugin exporters for plugin-owned note types', () => {
     registerPlugin({
+      manifestVersion: 1,
       id: 'com.example.typst',
       name: 'Typst',
       version: '1.0.0',

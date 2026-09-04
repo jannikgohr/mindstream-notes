@@ -25,6 +25,7 @@ import {
 
 function manifest(id = 'com.example.templates'): Record<string, unknown> {
   return {
+    manifestVersion: 1,
     id,
     name: 'Example',
     version: '1.0.0',
@@ -79,6 +80,7 @@ function exporterManifest(
   id = 'com.example.exporters'
 ): Record<string, unknown> {
   return {
+    manifestVersion: 1,
     id,
     name: 'Exporter',
     version: '1.0.0',
@@ -104,6 +106,7 @@ function exporterManifest(
  *  toolbar buttons — the surfaces exercised by the selectors below. */
 function kindManifest(id = 'com.example.kinds'): Record<string, unknown> {
   return {
+    manifestVersion: 1,
     id,
     name: 'Kinds',
     version: '1.0.0',
