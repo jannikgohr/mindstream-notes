@@ -26,13 +26,14 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime, State};
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult, CommandResult};
 
 use super::discovery;
+use super::manifest::{self, PreviewIframeMode};
 
 const PERM_NATIVE_SERVICES_RUN: &str = "nativeServices.run";
 /// How long we wait for the server to start accepting connections on its data port.
@@ -53,61 +54,14 @@ const PROXY_CSP: &str = "default-src 'none'; \
      connect-src ws://127.0.0.1:* http://127.0.0.1:* data: blob:; \
      worker-src blob:; base-uri 'none'";
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-enum PreviewIframeMode {
-    Direct,
-    Themed,
-}
-
-fn default_preview_iframe_mode() -> PreviewIframeMode {
-    PreviewIframeMode::Direct
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PreviewIframeManifest {
-    #[serde(default = "default_preview_iframe_mode")]
-    mode: PreviewIframeMode,
-    css: Option<String>,
-    /// Default WebSocket port the tool's own frontend hardcodes as a fallback
-    /// (tinymist uses 23625). When set (themed mode only), the host injects a
-    /// generic shim that redirects a socket opened to `127.0.0.1:<port>` to this
-    /// proxy origin instead, so it tunnels back to the real server. `None` = the
-    /// frontend derives its socket from `location` and no shim is needed.
-    #[serde(default)]
-    socket_rewrite_port: Option<u16>,
-}
-
-impl Default for PreviewIframeManifest {
-    fn default() -> Self {
-        Self {
-            mode: PreviewIframeMode::Direct,
-            css: None,
-            socket_rewrite_port: None,
-        }
-    }
-}
-
-/// A plugin-declared preview service, parsed from `contributes.nativeServices`.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PluginNativeServiceManifest {
-    id: String,
-    /// Exact executable basename resolved from PATH (no path/shell).
-    binary_name: String,
-    /// Argument template. Placeholders `{dataPort}`, `{controlPort}`, `{input}`
-    /// are substituted per launch.
-    args: Vec<String>,
-    /// URL template the iframe loads, e.g. `http://127.0.0.1:{dataPort}`.
-    data_url: String,
-    /// Control-plane URL template, e.g. `ws://127.0.0.1:{controlPort}`.
-    control_url: String,
-    /// File extension for the materialized input (default `typ`).
-    #[serde(default)]
-    input_extension: Option<String>,
-    #[serde(default)]
-    preview_iframe: PreviewIframeManifest,
+/// A declared preview service, or a "not declared" error.
+fn require_service<'a>(
+    manifest: &'a manifest::Manifest,
+    service_id: &str,
+) -> AppResult<&'a manifest::NativeServiceDecl> {
+    manifest
+        .native_service(service_id)
+        .ok_or_else(|| AppError::NotFound(format!("plugin preview service {service_id}")))
 }
 
 /// One running preview server.
@@ -142,7 +96,7 @@ struct LoopbackPreviewProxy {
 #[derive(Clone, Default)]
 struct PreviewProxyStyles {
     plugin_css: Option<String>,
-    /// See [`PreviewIframeManifest::socket_rewrite_port`]. Drives the injected
+    /// See [`manifest::PreviewIframeDecl::socket_rewrite_port`]. Drives the injected
     /// WebSocket shim; `None` injects no shim.
     socket_rewrite_port: Option<u16>,
 }
@@ -208,27 +162,6 @@ pub struct PreviewServiceStatus {
     pub binary_name: String,
     pub available: bool,
     pub path: Option<String>,
-}
-
-fn parse_services(manifest: &serde_json::Value) -> AppResult<Vec<PluginNativeServiceManifest>> {
-    let Some(value) = manifest
-        .get("contributes")
-        .and_then(|c| c.get("nativeServices"))
-    else {
-        return Ok(Vec::new());
-    };
-    serde_json::from_value(value.clone())
-        .map_err(|e| AppError::InvalidArg(format!("manifest.contributes.nativeServices: {e}")))
-}
-
-fn find_service(
-    manifest: &serde_json::Value,
-    service_id: &str,
-) -> AppResult<PluginNativeServiceManifest> {
-    parse_services(manifest)?
-        .into_iter()
-        .find(|s| s.id == service_id)
-        .ok_or_else(|| AppError::NotFound(format!("plugin preview service {service_id}")))
 }
 
 /// Grab a currently-free localhost TCP port by binding `:0` and releasing it.
@@ -562,12 +495,12 @@ pub fn plugins_native_service_status(
     let (_, plugin) = db.with_conn(|c| {
         super::load_runnable(c, &third_party_dir, &id, Some(PERM_NATIVE_SERVICES_RUN))
     })?;
-    let service = find_service(&plugin.manifest, &service_id)?;
+    let service = require_service(&plugin.manifest, &service_id)?.clone();
     // Desktop-only: report unavailable on mobile rather than erroring.
     if cfg!(mobile) {
         return Ok(PreviewServiceStatus {
             service_id,
-            binary_name: service.binary_name,
+            binary_name: service.binary_name.clone(),
             available: false,
             path: None,
         });
@@ -575,7 +508,7 @@ pub fn plugins_native_service_status(
     let path = super::resolve_path_binary(&service.binary_name)?;
     Ok(PreviewServiceStatus {
         service_id,
-        binary_name: service.binary_name,
+        binary_name: service.binary_name.clone(),
         available: path.is_some(),
         path: path.map(|p| p.to_string_lossy().into_owned()),
     })
@@ -608,7 +541,7 @@ pub async fn plugins_preview_start(
     let (_, plugin) = db.with_conn(|c| {
         super::load_runnable(c, &third_party_dir, &id, Some(PERM_NATIVE_SERVICES_RUN))
     })?;
-    let service = find_service(&plugin.manifest, &service_id)?;
+    let service = require_service(&plugin.manifest, &service_id)?.clone();
     if service.preview_iframe.mode != PreviewIframeMode::Themed
         && service.preview_iframe.css.is_some()
     {
@@ -1164,54 +1097,72 @@ mod tests {
 
     #[test]
     fn find_service_reads_manifest() {
-        let manifest = serde_json::json!({
-            "contributes": { "nativeServices": [{
-                "id": "tinymist",
-                "binaryName": "tinymist",
-                "args": ["preview", "{input}"],
-                "dataUrl": "http://127.0.0.1:{dataPort}",
-                "controlUrl": "ws://127.0.0.1:{controlPort}"
-            }]}
-        });
-        let svc = find_service(&manifest, "tinymist").unwrap();
+        let manifest = service_manifest(serde_json::json!({
+            "id": "tinymist",
+            "binaryName": "tinymist",
+            "args": ["preview", "{input}"],
+            "dataUrl": "http://127.0.0.1:{dataPort}",
+            "controlUrl": "ws://127.0.0.1:{controlPort}"
+        }));
+        let svc = require_service(&manifest, "tinymist").unwrap();
         assert_eq!(svc.binary_name, "tinymist");
+        // Absent previewIframe means direct: the safest, most compatible load.
         assert_eq!(svc.preview_iframe.mode, PreviewIframeMode::Direct);
-        assert!(find_service(&manifest, "ghost").is_err());
+        assert!(require_service(&manifest, "ghost").is_err());
+    }
+
+    /// A manifest declaring one native service, parsed the way discovery does.
+    fn service_manifest(service: serde_json::Value) -> manifest::Manifest {
+        let v = serde_json::json!({
+            "manifestVersion": 1,
+            "id": "com.a.plugin",
+            "name": "A Plugin",
+            "version": "1.0.0",
+            "runtime": "manifest-only",
+            "permissions": ["nativeServices.run"],
+            "contributes": { "nativeServices": [service] }
+        });
+        manifest::Manifest::parse(v.to_string().as_bytes()).expect("valid manifest")
     }
 
     #[test]
     fn find_service_reads_themed_preview_iframe_config() {
-        let manifest = serde_json::json!({
-            "contributes": { "nativeServices": [{
-                "id": "tinymist",
-                "binaryName": "tinymist",
-                "args": ["preview", "{input}"],
-                "dataUrl": "http://127.0.0.1:{dataPort}",
-                "controlUrl": "ws://127.0.0.1:{controlPort}",
-                "previewIframe": { "mode": "themed", "css": "preview.css", "socketRewritePort": 23625 }
-            }]}
-        });
-        let svc = find_service(&manifest, "tinymist").unwrap();
+        let manifest = service_manifest(serde_json::json!({
+            "id": "tinymist",
+            "binaryName": "tinymist",
+            "args": ["preview", "{input}"],
+            "dataUrl": "http://127.0.0.1:{dataPort}",
+            "controlUrl": "ws://127.0.0.1:{controlPort}",
+            "previewIframe": { "mode": "themed", "css": "preview.css", "socketRewritePort": 23625 }
+        }));
+        let svc = require_service(&manifest, "tinymist").unwrap();
         assert_eq!(svc.preview_iframe.mode, PreviewIframeMode::Themed);
         assert_eq!(svc.preview_iframe.css.as_deref(), Some("preview.css"));
         assert_eq!(svc.preview_iframe.socket_rewrite_port, Some(23625));
     }
 
     #[test]
-    fn parse_services_is_empty_when_manifest_declares_none() {
-        assert!(parse_services(&serde_json::json!({})).unwrap().is_empty());
-        assert!(parse_services(&serde_json::json!({ "contributes": {} }))
-            .unwrap()
-            .is_empty());
+    fn a_manifest_declaring_no_services_has_none() {
+        let v = serde_json::json!({
+            "manifestVersion": 1, "id": "com.a.plugin", "name": "A",
+            "version": "1.0.0", "runtime": "manifest-only"
+        });
+        let m = manifest::Manifest::parse(v.to_string().as_bytes()).unwrap();
+        assert!(m.contributes.native_services.is_empty());
+        assert!(require_service(&m, "tinymist").is_err());
     }
 
     #[test]
-    fn parse_services_rejects_a_malformed_declaration() {
-        let manifest = serde_json::json!({
+    fn a_malformed_service_declaration_stops_the_whole_manifest() {
+        // A service the backend cannot read is a reason to refuse the plugin,
+        // not something to discover when someone opens a preview.
+        let v = serde_json::json!({
+            "manifestVersion": 1, "id": "com.a.plugin", "name": "A",
+            "version": "1.0.0", "runtime": "manifest-only",
+            "permissions": ["nativeServices.run"],
             "contributes": { "nativeServices": [{ "id": 42 }] }
         });
-        let err = parse_services(&manifest).unwrap_err();
-        assert!(matches!(err, AppError::InvalidArg(_)));
+        assert!(manifest::Manifest::parse(v.to_string().as_bytes()).is_err());
     }
 
     #[test]

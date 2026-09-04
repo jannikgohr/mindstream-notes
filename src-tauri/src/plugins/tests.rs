@@ -1,6 +1,28 @@
 use super::*;
 use crate::db::open_memory_for_tests;
 
+/// Parse a manifest literal the way discovery does, so a test exercises the
+/// same schema the backend enforces rather than a hand-rolled struct.
+fn manifest_from(value: serde_json::Value) -> manifest::Manifest {
+    manifest::Manifest::parse(value.to_string().as_bytes()).expect("valid manifest")
+}
+
+/// The minimum a manifest needs, with `extra` merged over it.
+fn manifest_with(extra: serde_json::Value) -> manifest::Manifest {
+    let mut base = serde_json::json!({
+        "manifestVersion": 1,
+        "id": "com.a.plugin",
+        "name": "A Plugin",
+        "version": "1.0.0",
+        "runtime": "manifest-only"
+    });
+    let obj = base.as_object_mut().unwrap();
+    for (k, v) in extra.as_object().unwrap() {
+        obj.insert(k.clone(), v.clone());
+    }
+    manifest_from(base)
+}
+
 fn signed_input(
     id: &str,
     checksum: &str,
@@ -274,8 +296,9 @@ fn plugin_permission_gate_requires_enabled_and_granted() {
 }
 
 #[test]
-fn parse_artifacts_reads_manifest_declarations() {
-    let manifest = serde_json::json!({
+fn artifact_and_native_tool_declarations_reach_the_backend() {
+    let m = manifest_with(serde_json::json!({
+        "permissions": ["pluginArtifacts.download", "nativeTools.runDeclared"],
         "contributes": {
             "artifacts": [{
                 "id": "typst-compiler",
@@ -285,31 +308,23 @@ fn parse_artifacts_reads_manifest_declarations() {
                 "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "fileName": "typst.wasm",
                 "sizeBytes": 123
-            }]
-        }
-    });
-    let artifacts = parse_artifacts(&manifest).unwrap();
-    assert_eq!(artifacts.len(), 1);
-    assert_eq!(artifacts[0].id, "typst-compiler");
-    assert_eq!(artifacts[0].file_name, "typst.wasm");
-    assert_eq!(artifacts[0].size_bytes, Some(123));
-}
-
-#[test]
-fn parse_native_tools_reads_manifest_declarations() {
-    let manifest = serde_json::json!({
-        "contributes": {
+            }],
             "nativeTools": [{
                 "id": "typst",
                 "binaryName": "typst",
                 "descriptionKey": "native.typst.description"
             }]
         }
-    });
-    let tools = parse_native_tools(&manifest).unwrap();
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].id, "typst");
-    assert_eq!(tools[0].binary_name, "typst");
+    }));
+    let artifact = m.artifact("typst-compiler").unwrap();
+    assert_eq!(artifact.file_name, "typst.wasm");
+    assert_eq!(artifact.size_bytes, Some(123));
+    assert_eq!(m.native_tool("typst").unwrap().binary_name, "typst");
+    // Absent declarations are an empty list, not an error.
+    assert!(manifest_with(serde_json::json!({}))
+        .contributes
+        .artifacts
+        .is_empty());
 }
 
 #[test]
@@ -436,7 +451,8 @@ fn reconcile_registers_discovered_plugins_and_returns_manifests() {
             checksum: "hash1".into(),
             signer: None,
             signature_status: "unsigned".into(),
-            manifest: serde_json::json!({ "id": "com.a.plugin", "name": "A" }),
+            manifest: manifest_with(serde_json::json!({})),
+            manifest_json: serde_json::json!({ "id": "com.a.plugin", "name": "A" }),
         }];
         let views = reconcile(c, discovered)?;
         assert_eq!(views.len(), 1);
@@ -469,9 +485,9 @@ fn run_plugin_script_executes_luau_entry_with_input() {
         "return { render = function(ctx) return { title = ctx.name } end }",
     )
     .unwrap();
-    let manifest = serde_json::json!({
+    let manifest = manifest_with(serde_json::json!({
         "id": "com.a.luau", "runtime": "luau", "entry": "main.luau"
-    });
+    }));
     let out = run_plugin_script(
         &super::discovery::PluginFiles::Fs(dir.clone()),
         &manifest,
@@ -553,7 +569,7 @@ fn templates_plugin_localizes_dates_via_locale() {
 
 #[test]
 fn run_plugin_script_refuses_a_non_luau_runtime() {
-    let manifest = serde_json::json!({ "id": "x", "runtime": "manifest-only" });
+    let manifest = manifest_with(serde_json::json!({}));
     let out = run_plugin_script(
         &super::discovery::PluginFiles::Fs(std::env::temp_dir()),
         &manifest,
@@ -706,62 +722,37 @@ fn split_plugin_rel_path_normalizes_and_allows_empty_when_asked() {
 }
 
 #[test]
-fn parse_artifacts_and_native_tools_reject_malformed_declarations() {
-    let bad_artifacts = serde_json::json!({
-        "contributes": { "artifacts": [{ "id": 5 }] }
-    });
-    assert!(matches!(
-        parse_artifacts(&bad_artifacts).unwrap_err(),
-        AppError::InvalidArg(_)
-    ));
-    let bad_tools = serde_json::json!({
-        "contributes": { "nativeTools": "not-an-array" }
-    });
-    assert!(matches!(
-        parse_native_tools(&bad_tools).unwrap_err(),
-        AppError::InvalidArg(_)
-    ));
-    // Absent contributions parse to an empty vec, not an error.
-    assert!(parse_artifacts(&serde_json::json!({})).unwrap().is_empty());
-    assert!(parse_native_tools(&serde_json::json!({}))
-        .unwrap()
-        .is_empty());
+fn malformed_declarations_stop_the_whole_manifest() {
+    // A malformed declaration used to surface only when something reached for
+    // it. Now the plugin fails to load, which is the honest outcome: the
+    // manifest does not describe something the backend can act on.
+    for bad in [
+        serde_json::json!({ "contributes": { "artifacts": [{ "id": 5 }] } }),
+        serde_json::json!({ "contributes": { "nativeTools": "not-an-array" } }),
+    ] {
+        let mut v = serde_json::json!({
+            "manifestVersion": 1, "id": "com.a.plugin", "name": "A",
+            "version": "1.0.0", "runtime": "manifest-only"
+        });
+        let obj = v.as_object_mut().unwrap();
+        for (k, val) in bad.as_object().unwrap() {
+            obj.insert(k.clone(), val.clone());
+        }
+        assert!(manifest::Manifest::parse(v.to_string().as_bytes()).is_err());
+    }
 }
 
 #[test]
-fn find_native_tool_returns_the_match_or_not_found() {
-    let manifest = serde_json::json!({
+fn require_native_tool_returns_the_match_or_not_found() {
+    let m = manifest_with(serde_json::json!({
+        "permissions": ["nativeTools.runDeclared"],
         "contributes": { "nativeTools": [{ "id": "typst", "binaryName": "typst" }] }
-    });
-    assert_eq!(find_native_tool(&manifest, "typst").unwrap().id, "typst");
+    }));
+    assert_eq!(require_native_tool(&m, "typst").unwrap().id, "typst");
     assert!(matches!(
-        find_native_tool(&manifest, "ghost").unwrap_err(),
+        require_native_tool(&m, "ghost").unwrap_err(),
         AppError::NotFound(_)
     ));
-}
-
-#[test]
-fn manifest_id_defaults_when_absent() {
-    assert_eq!(manifest_id(&serde_json::json!({ "id": "com.x" })), "com.x");
-    assert_eq!(manifest_id(&serde_json::json!({})), "plugin");
-    // A non-string id also falls back.
-    assert_eq!(manifest_id(&serde_json::json!({ "id": 7 })), "plugin");
-}
-
-#[test]
-fn manifest_entry_validates_extension_and_rejects_traversal() {
-    let ok = serde_json::json!({ "entry": "main.luau" });
-    assert_eq!(manifest_entry(&ok, "luau", ".luau").unwrap(), "main.luau");
-    // No entry at all.
-    assert!(manifest_entry(&serde_json::json!({}), "luau", ".luau").is_err());
-    // Wrong extension.
-    let wrong = serde_json::json!({ "entry": "main.js" });
-    assert!(manifest_entry(&wrong, "luau", ".luau").is_err());
-    // Traversal in the entry path.
-    let evil = serde_json::json!({ "entry": "../main.luau" });
-    assert!(manifest_entry(&evil, "luau", ".luau").is_err());
-    let nested = serde_json::json!({ "entry": "sub/main.luau" });
-    assert!(manifest_entry(&nested, "luau", ".luau").is_err());
 }
 
 #[test]
@@ -886,15 +877,15 @@ fn resolve_path_binary_validates_then_misses_unknown() {
 
 #[test]
 fn native_tool_status_reflects_binary_resolution() {
-    let tool = parse_native_tools(&serde_json::json!({
+    let m = manifest_with(serde_json::json!({
+        "permissions": ["nativeTools.runDeclared"],
         "contributes": {
             "nativeTools": [{ "id": "typst", "binaryName": "ms-not-a-real-binary-xyz" }]
         }
-    }))
-    .unwrap()
-    .remove(0);
+    }));
+    let tool = m.native_tool("typst").unwrap();
 
-    let status = native_tool_status("com.x.plugin", &tool).unwrap();
+    let status = native_tool_status("com.x.plugin", tool).unwrap();
     assert_eq!(status.plugin_id, "com.x.plugin");
     assert_eq!(status.tool_id, "typst");
     assert_eq!(status.binary_name, "ms-not-a-real-binary-xyz");
@@ -907,14 +898,15 @@ fn native_tool_status_reflects_binary_resolution() {
 
 #[test]
 fn resolve_native_tools_maps_every_declared_tool() {
-    let manifest = serde_json::json!({
+    let manifest = manifest_with(serde_json::json!({
+        "permissions": ["nativeTools.runDeclared"],
         "contributes": {
             "nativeTools": [
                 { "id": "typst", "binaryName": "ms-not-real-a-xyz" },
                 { "id": "other", "binaryName": "ms-not-real-b-xyz" }
             ]
         }
-    });
+    }));
     let resolved = resolve_native_tools(&manifest);
     assert_eq!(resolved.len(), 2);
     assert!(resolved.contains_key("typst"));
@@ -924,12 +916,13 @@ fn resolve_native_tools_maps_every_declared_tool() {
     assert!(resolved["other"].is_none());
 
     // A manifest that declares no native tools yields an empty map.
-    assert!(resolve_native_tools(&serde_json::json!({})).is_empty());
+    assert!(resolve_native_tools(&manifest_with(serde_json::json!({}))).is_empty());
 }
 
 #[test]
-fn find_artifact_returns_the_match_or_not_found() {
-    let manifest = serde_json::json!({
+fn require_artifact_returns_the_match_or_not_found() {
+    let manifest = manifest_with(serde_json::json!({
+        "permissions": ["pluginArtifacts.download"],
         "contributes": {
             "artifacts": [{
                 "id": "typst-compiler",
@@ -940,13 +933,13 @@ fn find_artifact_returns_the_match_or_not_found() {
                 "fileName": "typst.wasm"
             }]
         }
-    });
+    }));
     assert_eq!(
-        find_artifact(&manifest, "typst-compiler").unwrap().id,
+        require_artifact(&manifest, "typst-compiler").unwrap().id,
         "typst-compiler"
     );
     assert!(matches!(
-        find_artifact(&manifest, "ghost").unwrap_err(),
+        require_artifact(&manifest, "ghost").unwrap_err(),
         AppError::NotFound(_)
     ));
 }
@@ -1004,40 +997,29 @@ fn note_snapshot_builds_folder_paths_and_metadata() {
 
 #[test]
 fn limit_readers_clamp_and_fall_back_to_defaults() {
-    // Value present but out of range → clamped.
-    let over = serde_json::json!({ "limits": { "heap": 999 } });
-    assert_eq!(limit_usize(&over, "heap", 10, 1, 100), 100);
-    // Absent field → default (itself clamped into range).
-    let none = serde_json::json!({});
-    assert_eq!(limit_usize(&none, "heap", 10, 1, 100), 10);
+    // A manifest may ask; only the host decides. Above the ceiling → clamped.
+    assert_eq!(limit_usize(Some(999), 10, 1, 100), 100);
+    // Absent → the default, itself clamped into range.
+    assert_eq!(limit_usize(None, 10, 1, 100), 10);
 
-    let dur = serde_json::json!({ "limits": { "timeoutMs": 50 } });
+    let ms = std::time::Duration::from_millis;
+    // 50ms is below the 100ms floor → clamped up.
     assert_eq!(
-        limit_duration(
-            &dur,
-            std::time::Duration::from_millis(1000),
-            std::time::Duration::from_millis(100),
-            std::time::Duration::from_millis(5000),
-        ),
-        // 50ms is below the 100ms floor → clamped up.
-        std::time::Duration::from_millis(100)
+        limit_duration(Some(50), ms(1000), ms(100), ms(5000)),
+        ms(100)
     );
-    // Absent timeoutMs → the supplied default (already within range).
-    assert_eq!(
-        limit_duration(
-            &none,
-            std::time::Duration::from_millis(1000),
-            std::time::Duration::from_millis(100),
-            std::time::Duration::from_millis(5000),
-        ),
-        std::time::Duration::from_millis(1000)
-    );
+    // Absent → the supplied default, already within range.
+    assert_eq!(limit_duration(None, ms(1000), ms(100), ms(5000)), ms(1000));
+
+    // And through the real path: a manifest's declared limits reach luau::Limits.
+    let m = manifest_with(serde_json::json!({
+        "runtime": "luau", "entry": "main.luau",
+        "limits": { "memoryBytes": 1, "timeoutMs": 999999 }
+    }));
+    let limits = luau_limits(&m);
+    assert_eq!(limits.memory_bytes, 1024 * 1024, "clamped up to the floor");
+    assert_eq!(limits.timeout, ms(5000), "clamped down to the ceiling");
 }
-
-/// A system binary that reads stdin and writes it straight back to stdout,
-/// available on every supported desktop platform. `cat` streams verbatim;
-/// Windows `sort` buffers then writes the (identically-keyed) lines back — both
-/// produce far more than a pipe buffer's worth of stdout, which is what the
 /// regression below needs. `None` on the rare host missing it → the test skips.
 #[cfg(unix)]
 fn stdin_echo_tool() -> Option<PathBuf> {
@@ -1105,10 +1087,10 @@ mod artifacts {
         dir
     }
 
-    fn artifact(bytes: &[u8]) -> PluginArtifactManifest {
-        PluginArtifactManifest {
+    fn artifact(bytes: &[u8]) -> manifest::ArtifactDecl {
+        manifest::ArtifactDecl {
             id: "typst-compiler".into(),
-            kind: "wasm".into(),
+            kind: manifest::ArtifactKind::Wasm,
             version: "0.13.1".into(),
             url: "https://example.test/typst.wasm".into(),
             sha256: sha256_hex(bytes),
@@ -1249,7 +1231,8 @@ fn on_disk(id: &str, checksum: &str, source: &str) -> discovery::DiscoveredPlugi
         checksum: checksum.to_string(),
         signer: None,
         signature_status: "unsigned".to_string(),
-        manifest: serde_json::json!({ "id": id }),
+        manifest: manifest_with(serde_json::json!({ "id": id })),
+        manifest_json: serde_json::json!({ "id": id }),
     }
 }
 

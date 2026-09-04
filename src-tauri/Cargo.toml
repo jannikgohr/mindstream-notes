@@ -89,6 +89,7 @@ mlua = { version = "0.10", features = ["luau", "vendored", "serialize"] }
 include_dir = "0.7.4"
 spellbook = "0.4"
 encoding_rs = "0.8"
+ts-rs = "12.0.1"
 
 # NOTE: panic = "unwind" (the default) is deliberate, not an omission. The app
 # runs untrusted plugin code and applies CRDT edits inside the WebView IPC FFI
