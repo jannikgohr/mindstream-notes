@@ -91,6 +91,22 @@ export function isPluginNoteKind(
   return segments.length >= 3 && segments.every(isNoteKindSegment);
 }
 
+export interface PluginNoteKindParts {
+  pluginId: string;
+  localKindId: string;
+}
+
+/** Recover the owning plugin from a stored plugin note kind. */
+export function parsePluginNoteKind(
+  kind: string | undefined | null
+): PluginNoteKindParts | null {
+  if (!isPluginNoteKind(kind)) return null;
+  const segments = kind.slice('plugin.'.length).split('.');
+  const localKindId = segments.pop();
+  if (!localKindId) return null;
+  return { pluginId: segments.join('.'), localKindId };
+}
+
 export function isSupportedNoteKind(
   kind: string | undefined | null
 ): kind is NoteKind {
