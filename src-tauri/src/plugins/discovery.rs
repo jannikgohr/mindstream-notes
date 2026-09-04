@@ -36,6 +36,7 @@ use super::{SOURCE_BUILTIN, SOURCE_INSTALLED};
 use crate::error::{AppError, AppResult};
 
 /// A plugin found on disk, with its trust `source` fixed by its location.
+#[derive(Debug)]
 pub struct DiscoveredPlugin {
     pub id: String,
     pub version: String,
@@ -82,7 +83,7 @@ static BUILTIN_PLUGINS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../plug
 /// `Fs` is a real, user-writable directory (installed third-party plugins).
 /// `Embedded` is a subtree of [`BUILTIN_PLUGINS`], compiled into the binary —
 /// authentic by construction and readable on every platform, mobile included.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum PluginFiles {
     Fs(PathBuf),
     Embedded(&'static Dir<'static>),

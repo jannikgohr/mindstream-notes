@@ -20,6 +20,11 @@ import { pluginById } from './registry.svelte';
  * carries the plugin's own setting values (keyed by their local id); `folders`
  * is the vault folder tree so a script can resolve "under folder X at any
  * depth" itself.
+ *
+ * `folders` is gated on `notes.read`, the same permission as `ms.notes`. Folder
+ * names are user content — a vault's structure says as much about its owner as
+ * its note titles do — so the two travel together rather than one being metadata
+ * the app hands over for free. A plugin without the grant gets an empty list.
  */
 export function buildPluginContext(pluginId: string): Record<string, unknown> {
   const plugin = pluginById(pluginId);
@@ -29,11 +34,15 @@ export function buildPluginContext(pluginId: string): Record<string, unknown> {
       settings[s.id] = getSettingValue(`plugins.${pluginId}.${s.id}`);
     }
   }
-  const folders = Object.values(tree.collectionsById).map((c) => ({
-    id: c.id,
-    name: c.name,
-    parentId: c.parent_collection_id
-  }));
+  const mayReadVault =
+    plugin?.manifest.permissions.includes('notes.read') ?? false;
+  const folders = mayReadVault
+    ? Object.values(tree.collectionsById).map((c) => ({
+        id: c.id,
+        name: c.name,
+        parentId: c.parent_collection_id
+      }))
+    : [];
   return {
     settings,
     folders,

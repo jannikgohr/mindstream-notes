@@ -507,19 +507,82 @@ fn require_enabled_permission(
     permission: &str,
 ) -> AppResult<PluginRecord> {
     let record = require(conn, id)?;
+    require_enabled(&record)?;
+    require_permission(&record, permission)?;
+    Ok(record)
+}
+
+fn require_enabled(record: &PluginRecord) -> AppResult<()> {
     if !record.enabled {
-        return Err(AppError::InvalidArg(format!("plugin {id} is not enabled")));
+        return Err(AppError::InvalidArg(format!(
+            "plugin {} is not enabled",
+            record.id
+        )));
     }
+    Ok(())
+}
+
+fn require_permission(record: &PluginRecord, permission: &str) -> AppResult<()> {
     if !record
         .granted_permissions
         .iter()
         .any(|granted| granted == permission)
     {
         return Err(AppError::InvalidArg(format!(
-            "plugin {id} lacks permission {permission}"
+            "plugin {} lacks permission {permission}",
+            record.id
         )));
     }
-    Ok(record)
+    Ok(())
+}
+
+/// The integrity gate, applied at **execution** time rather than only at
+/// discovery.
+///
+/// Every command that runs a plugin's code — or acts on its behalf using files
+/// read from disk — re-locates the plugin with [`discovery::find`], which reads
+/// whatever is on disk *now*. `reconcile` runs at startup and on explicit
+/// discovery, so without this check an approved plugin whose files change while
+/// the app is running would execute unapproved bytes under the permissions the
+/// old bytes were approved for.
+///
+/// Builtins are exempt: they are trusted by location and ship inside the signed
+/// app binary, so their `accepted_hash` tracks the binary rather than gating it.
+fn require_approved(record: &PluginRecord, plugin: &discovery::DiscoveredPlugin) -> AppResult<()> {
+    if plugin.source == SOURCE_BUILTIN {
+        return Ok(());
+    }
+    if plugin.checksum != record.accepted_hash {
+        return Err(AppError::InvalidArg(format!(
+            "plugin {} changed on disk since it was approved; re-approval required",
+            record.id
+        )));
+    }
+    Ok(())
+}
+
+/// Locate a plugin on disk and assert it is enabled, unmodified since approval,
+/// and — when `permission` is given — granted that capability.
+///
+/// This is the single front door for every execution path. Callers get the DB
+/// record and the on-disk plugin together precisely so the checksum comparison
+/// cannot be forgotten: there is no way to obtain the [`discovery::DiscoveredPlugin`]
+/// through this helper without the gate having run.
+fn load_runnable(
+    conn: &Connection,
+    third_party_dir: &Path,
+    id: &str,
+    permission: Option<&str>,
+) -> AppResult<(PluginRecord, discovery::DiscoveredPlugin)> {
+    let record = require(conn, id)?;
+    require_enabled(&record)?;
+    if let Some(permission) = permission {
+        require_permission(&record, permission)?;
+    }
+    let plugin = discovery::find(third_party_dir, id)
+        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
+    require_approved(&record, &plugin)?;
+    Ok((record, plugin))
 }
 
 fn safe_segment(value: &str, label: &str) -> AppResult<()> {
@@ -1377,10 +1440,15 @@ pub fn plugins_artifacts_status(
     db: State<'_, Db>,
     id: String,
 ) -> CommandResult<Vec<PluginArtifactStatus>> {
-    db.with_conn(|c| require_enabled_permission(c, &id, PERM_PLUGIN_ARTIFACTS_DOWNLOAD))?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
-    let plugin = discovery::find(&third_party_dir, &id)
-        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
+    let (_, plugin) = db.with_conn(|c| {
+        load_runnable(
+            c,
+            &third_party_dir,
+            &id,
+            Some(PERM_PLUGIN_ARTIFACTS_DOWNLOAD),
+        )
+    })?;
     parse_artifacts(&plugin.manifest)?
         .iter()
         .map(|artifact| artifact_status(&app, &id, artifact))
@@ -1395,10 +1463,15 @@ pub async fn plugins_download_artifact(
     id: String,
     artifact_id: String,
 ) -> CommandResult<PluginArtifactStatus> {
-    db.with_conn(|c| require_enabled_permission(c, &id, PERM_PLUGIN_ARTIFACTS_DOWNLOAD))?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
-    let plugin = discovery::find(&third_party_dir, &id)
-        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
+    let (_, plugin) = db.with_conn(|c| {
+        load_runnable(
+            c,
+            &third_party_dir,
+            &id,
+            Some(PERM_PLUGIN_ARTIFACTS_DOWNLOAD),
+        )
+    })?;
     let artifact = find_artifact(&plugin.manifest, &artifact_id)?;
     download_artifact(app, id, artifact)
         .await
@@ -1412,10 +1485,15 @@ pub fn plugins_read_artifact(
     id: String,
     artifact_id: String,
 ) -> CommandResult<Vec<u8>> {
-    db.with_conn(|c| require_enabled_permission(c, &id, PERM_PLUGIN_ARTIFACTS_DOWNLOAD))?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
-    let plugin = discovery::find(&third_party_dir, &id)
-        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
+    let (_, plugin) = db.with_conn(|c| {
+        load_runnable(
+            c,
+            &third_party_dir,
+            &id,
+            Some(PERM_PLUGIN_ARTIFACTS_DOWNLOAD),
+        )
+    })?;
     let artifact = find_artifact(&plugin.manifest, &artifact_id)?;
     let path = artifact_file_path(&app, &id, &artifact)?;
     let bytes = fs::read(&path).map_err(|_| {
@@ -1538,10 +1616,15 @@ pub fn plugins_native_tool_status(
     id: String,
     tool_id: String,
 ) -> CommandResult<PluginNativeToolStatus> {
-    db.with_conn(|c| require_enabled_permission(c, &id, PERM_NATIVE_TOOLS_RUN_DECLARED))?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
-    let plugin = discovery::find(&third_party_dir, &id)
-        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
+    let (_, plugin) = db.with_conn(|c| {
+        load_runnable(
+            c,
+            &third_party_dir,
+            &id,
+            Some(PERM_NATIVE_TOOLS_RUN_DECLARED),
+        )
+    })?;
     let tool = find_native_tool(&plugin.manifest, &tool_id)?;
     // Native tools are desktop-only. Report a uniform "not available" status on
     // mobile rather than erroring, so the frontend can fall back to source-only.
@@ -1570,10 +1653,15 @@ pub async fn plugins_run_native_tool(
     if cfg!(mobile) {
         return Err(AppError::InvalidArg("native tools are desktop-only".into()).into());
     }
-    db.with_conn(|c| require_enabled_permission(c, &id, PERM_NATIVE_TOOLS_RUN_DECLARED))?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
-    let plugin = discovery::find(&third_party_dir, &id)
-        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
+    let (_, plugin) = db.with_conn(|c| {
+        load_runnable(
+            c,
+            &third_party_dir,
+            &id,
+            Some(PERM_NATIVE_TOOLS_RUN_DECLARED),
+        )
+    })?;
     let tool = find_native_tool(&plugin.manifest, &tool_id)?;
     let binary = resolve_path_binary(&tool.binary_name)?.ok_or_else(|| {
         AppError::NotFound(format!(
@@ -1611,15 +1699,9 @@ pub async fn plugins_run_script(
 ) -> CommandResult<serde_json::Value> {
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
 
-    let record = db
-        .with_conn(|c| get(c, &id))?
-        .ok_or_else(|| AppError::NotFound(format!("plugin {id}")))?;
-    if !record.enabled {
-        return Err(AppError::InvalidArg(format!("plugin {id} is not enabled")).into());
-    }
-
-    let plugin = discovery::find(&third_party_dir, &id)
-        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
+    // Enabled, unmodified since approval, and running under the permissions the
+    // DB pinned — not the ones the manifest currently on disk asks for.
+    let (record, plugin) = db.with_conn(|c| load_runnable(c, &third_party_dir, &id, None))?;
 
     let files = plugin.files;
     let manifest = plugin.manifest;

@@ -323,10 +323,22 @@ describe('runPluginEffect', () => {
 
 describe('buildPluginContext', () => {
   it('carries the plugin settings, folders, active note and locale', () => {
+    h.perms.p1 = ['notes.read'];
     const ctx = buildPluginContext('p1') as Record<string, any>;
     expect(ctx.settings['source-folder']).toBe('val:plugins.p1.source-folder');
     expect(ctx.folders).toEqual([{ id: 'f1', name: 'Work', parentId: null }]);
     expect(ctx.activeNoteId).toBe('active-1');
+    expect(ctx.locale).toBe('en');
+  });
+
+  it('withholds the folder tree from a plugin without notes.read', () => {
+    // Folder names are user content, so `ctx.folders` travels with `ms.notes`
+    // rather than being handed over as free metadata.
+    h.perms.p1 = [];
+    const ctx = buildPluginContext('p1') as Record<string, any>;
+    expect(ctx.folders).toEqual([]);
+    // Everything the plugin owns or already knows still comes through.
+    expect(ctx.settings['source-folder']).toBe('val:plugins.p1.source-folder');
     expect(ctx.locale).toBe('en');
   });
 });
