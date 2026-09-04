@@ -345,6 +345,11 @@ pub fn run() {
             // preview`). Reaped on exit below so nothing is orphaned.
             app.manage(plugins::preview_service::PreviewServiceRegistry::default());
             app.manage(spellcheck::SpellcheckState::default());
+            // Hunspell tables are ~21 MB resident for a bilingual user and
+            // stay warm for the life of the process otherwise. Hands them
+            // back once the user stops typing; the next check reloads in
+            // ~50 ms on a blocking thread.
+            spellcheck::spawn_idle_eviction(app.handle().clone());
 
             Ok(())
         })
