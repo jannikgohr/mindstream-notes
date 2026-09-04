@@ -19,11 +19,7 @@ import {
   pluginsRemove,
   pluginsRunNativeTool,
   pluginsRunScript,
-  pluginsSetLoadError,
-  pluginsStorageDelete,
-  pluginsStorageList,
-  pluginsStorageReadText,
-  pluginsStorageWriteText
+  pluginsSetLoadError
 } from './plugins';
 
 // The wrappers route through `invokeOrFallback`, which branches on `isTauri()`
@@ -92,21 +88,15 @@ describe('no-Tauri fallbacks', () => {
     await expect(pluginsDiscover()).resolves.toEqual([]);
     await expect(pluginsGet('x')).resolves.toBeNull();
     await expect(pluginsArtifactsStatus('x')).resolves.toEqual([]);
-    await expect(pluginsStorageList('x')).resolves.toEqual([]);
   });
 
   it('read helpers return null outside Tauri', async () => {
     await expect(pluginsReadFile('x', 'a.md')).resolves.toBeNull();
-    await expect(pluginsStorageReadText('x', 'a.txt')).resolves.toBeNull();
   });
 
   it('mutating storage calls resolve to undefined outside Tauri', async () => {
     await expect(pluginsSetLoadError('x', null)).resolves.toBeUndefined();
     await expect(pluginsRemove('x')).resolves.toBeUndefined();
-    await expect(
-      pluginsStorageWriteText('x', 'a.txt', 'body')
-    ).resolves.toBeUndefined();
-    await expect(pluginsStorageDelete('x', 'a.txt')).resolves.toBeUndefined();
     await expect(pluginsPreviewUpdate('s', 'body')).resolves.toBeUndefined();
     await expect(pluginsPreviewStop('s')).resolves.toBeUndefined();
   });
@@ -265,28 +255,6 @@ describe('in Tauri (IPC + validation path)', () => {
     await expect(pluginsReadArtifact('p', 'a')).rejects.toThrow(
       /must be an array/
     );
-  });
-
-  it('storage read/write/delete/list round-trip through IPC', async () => {
-    invoke.mockResolvedValueOnce('stored');
-    await expect(pluginsStorageReadText('p', 'k')).resolves.toBe('stored');
-    invoke.mockResolvedValueOnce(undefined);
-    await pluginsStorageWriteText('p', 'k', 'v');
-    expect(invoke).toHaveBeenLastCalledWith('plugins_storage_write_text', {
-      id: 'p',
-      path: 'k',
-      contents: 'v'
-    });
-    invoke.mockResolvedValueOnce(undefined);
-    await pluginsStorageDelete('p', 'k');
-    invoke.mockResolvedValueOnce([
-      { path: 'dir', isDir: true, bytes: null },
-      { path: 'dir/f', isDir: false, bytes: 3 }
-    ]);
-    const entries = await pluginsStorageList('p', 'dir');
-    expect(entries).toHaveLength(2);
-    expect(entries[0].isDir).toBe(true);
-    expect(entries[1].bytes).toBe(3);
   });
 
   it('native tool status + run parse their payloads', async () => {

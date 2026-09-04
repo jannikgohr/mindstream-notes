@@ -267,11 +267,12 @@ fn set_enabled_on_missing_plugin_is_not_found() {
 }
 
 #[test]
-fn plugin_permission_gate_requires_enabled_and_granted() {
+fn permission_gate_requires_enabled_and_granted() {
     let db = open_memory_for_tests();
     db.with_conn(|c| {
         upsert(c, upsert_input("com.a.plugin", "hash1", "installed"))?;
-        let err = require_enabled_permission(c, "com.a.plugin", "pluginStorage.read").unwrap_err();
+        let rec = require(c, "com.a.plugin")?;
+        let err = require_enabled(&rec).unwrap_err();
         assert!(err.to_string().contains("not enabled"));
 
         approve(
@@ -282,14 +283,12 @@ fn plugin_permission_gate_requires_enabled_and_granted() {
             None,
             "unsigned",
         )?;
-        let err = require_enabled_permission(c, "com.a.plugin", "pluginStorage.read").unwrap_err();
+        let rec = require(c, "com.a.plugin")?;
+        require_enabled(&rec).expect("approved plugins are enabled");
+        // The grant is what is checked, not what the manifest asked for.
+        let err = require_permission(&rec, "pluginStorage.read").unwrap_err();
         assert!(err.to_string().contains("lacks permission"));
-
-        let mut input = upsert_input("com.storage.plugin", "hash1", SOURCE_BUILTIN);
-        input.permissions = vec!["pluginStorage.read".into()];
-        upsert(c, input)?;
-        let rec = require_enabled_permission(c, "com.storage.plugin", "pluginStorage.read")?;
-        assert!(rec.enabled);
+        require_permission(&rec, "notes.create").expect("granted capability passes");
         Ok(())
     })
     .unwrap();

@@ -10,5 +10,5 @@ export type NativeToolDecl = {
    * shell string — the host resolves and launches it directly.
    */
   binaryName: string;
-  descriptionKey: string | null;
+  descriptionKey?: string;
 };

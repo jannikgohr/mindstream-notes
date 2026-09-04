@@ -71,10 +71,10 @@ impl PluginRuntime {
 #[ts(export, export_to = "../../src/lib/plugins/generated/")]
 pub struct RuntimeLimits {
     /// Guest memory cap in bytes.
-    #[ts(type = "number | null")]
+    #[ts(optional, type = "number")]
     pub memory_bytes: Option<u64>,
     /// Wall-clock timeout in milliseconds.
-    #[ts(type = "number | null")]
+    #[ts(optional, type = "number")]
     pub timeout_ms: Option<u64>,
 }
 
@@ -161,7 +161,7 @@ pub struct ArtifactDecl {
     /// Stored filename under the artifact's version directory.
     pub file_name: String,
     /// Optional exact byte length, checked alongside the digest.
-    #[ts(type = "number | null")]
+    #[ts(optional, type = "number")]
     pub size_bytes: Option<u64>,
 }
 
@@ -174,6 +174,7 @@ pub struct NativeToolDecl {
     /// Exact executable basename resolved from PATH. Never a path, never a
     /// shell string — the host resolves and launches it directly.
     pub binary_name: String,
+    #[ts(optional)]
     pub description_key: Option<String>,
 }
 
@@ -194,13 +195,17 @@ pub enum PreviewIframeMode {
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/lib/plugins/generated/")]
 pub struct PreviewIframeDecl {
+    /// Absent means `direct`.
     #[serde(default)]
-    pub mode: PreviewIframeMode,
+    #[ts(optional)]
+    pub mode: Option<PreviewIframeMode>,
     /// Plugin-relative `.css` injected after the host theme variables. Themed
     /// mode only.
+    #[ts(optional)]
     pub css: Option<String>,
     /// A port the tool's frontend hardcodes as a socket fallback, redirected
     /// back to the proxy origin. Themed mode only.
+    #[ts(optional)]
     pub socket_rewrite_port: Option<u16>,
 }
 
@@ -210,6 +215,7 @@ pub struct PreviewIframeDecl {
 #[ts(export, export_to = "../../src/lib/plugins/generated/")]
 pub struct ServiceProtocol {
     /// The server-to-editor inverse-search message that moves the source cursor.
+    #[ts(optional)]
     pub jump_event: Option<String>,
 }
 
@@ -228,12 +234,37 @@ pub struct NativeServiceDecl {
     /// Control-plane WebSocket URL. Validated to be loopback.
     pub control_url: String,
     /// Extension for the materialized source file.
+    #[ts(optional)]
     pub input_extension: Option<String>,
+    /// Absent means `direct`: load the service URL unchanged, which is the
+    /// safest and most compatible default.
     #[serde(default)]
-    pub preview_iframe: PreviewIframeDecl,
+    #[ts(optional)]
+    pub preview_iframe: Option<PreviewIframeDecl>,
+    #[ts(optional)]
     pub description_key: Option<String>,
     #[serde(default)]
-    pub protocol: ServiceProtocol,
+    #[ts(optional)]
+    pub protocol: Option<ServiceProtocol>,
+}
+
+impl PreviewIframeDecl {
+    /// The declared mode, defaulting to .
+    pub fn mode(&self) -> PreviewIframeMode {
+        self.mode.unwrap_or_default()
+    }
+}
+
+impl NativeServiceDecl {
+    /// How this service's iframe is loaded, defaulting to `direct`.
+    pub fn iframe(&self) -> PreviewIframeDecl {
+        self.preview_iframe.clone().unwrap_or_default()
+    }
+
+    /// The control-plane message the host maps to a caret jump, if declared.
+    pub fn jump_event(&self) -> Option<&str> {
+        self.protocol.as_ref()?.jump_event.as_deref()
+    }
 }
 
 /// The contribution points the backend acts on.
@@ -242,9 +273,8 @@ pub struct NativeServiceDecl {
 /// templates, note kinds, toolbars, text checkers, source languages — is
 /// presentational, read only by the frontend, and rides through in
 /// [`Manifest::contributes_rest`] untouched.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, TS)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/lib/plugins/generated/")]
 pub struct BackendContributions {
     #[serde(default)]
     pub artifacts: Vec<ArtifactDecl>,
@@ -255,9 +285,8 @@ pub struct BackendContributions {
 }
 
 /// A plugin manifest, as far as the backend is concerned.
-#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/lib/plugins/generated/")]
 pub struct Manifest {
     /// The manifest schema this plugin targets. Required: without it a manifest
     /// written for a different app version is indistinguishable from a
@@ -582,10 +611,10 @@ mod tests {
         assert!(m.native_tool("ghost").is_none());
         assert_eq!(m.artifact("engine").unwrap().size_bytes, Some(12));
         let service = m.native_service("tinymist").unwrap();
-        assert_eq!(service.preview_iframe.mode, PreviewIframeMode::Themed);
-        assert_eq!(service.preview_iframe.css.as_deref(), Some("preview.css"));
+        assert_eq!(service.iframe().mode(), PreviewIframeMode::Themed);
+        assert_eq!(service.iframe().css.as_deref(), Some("preview.css"));
         // Absent optional: the default, not a guess.
-        assert!(service.protocol.jump_event.is_none());
+        assert!(service.jump_event().is_none());
     }
 
     #[test]
@@ -633,7 +662,6 @@ mod tests {
             .join("generated");
 
         for name in [
-            "Manifest",
             "PluginPermission",
             "PluginRuntime",
             "RuntimeLimits",
@@ -641,7 +669,9 @@ mod tests {
             "ArtifactKind",
             "NativeToolDecl",
             "NativeServiceDecl",
-            "BackendContributions",
+            "PreviewIframeDecl",
+            "PreviewIframeMode",
+            "ServiceProtocol",
         ] {
             let path = dir.join(format!("{name}.ts"));
             assert!(

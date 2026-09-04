@@ -2,15 +2,18 @@
 import type { PreviewIframeMode } from './PreviewIframeMode';
 
 export type PreviewIframeDecl = {
-  mode: PreviewIframeMode;
+  /**
+   * Absent means `direct`.
+   */
+  mode?: PreviewIframeMode;
   /**
    * Plugin-relative `.css` injected after the host theme variables. Themed
    * mode only.
    */
-  css: string | null;
+  css?: string;
   /**
    * A port the tool's frontend hardcodes as a socket fallback, redirected
    * back to the proxy origin. Themed mode only.
    */
-  socketRewritePort: number | null;
+  socketRewritePort?: number;
 };

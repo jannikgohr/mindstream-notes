@@ -542,21 +542,18 @@ pub async fn plugins_preview_start(
         super::load_runnable(c, &third_party_dir, &id, Some(PERM_NATIVE_SERVICES_RUN))
     })?;
     let service = require_service(&plugin.manifest, &service_id)?.clone();
-    if service.preview_iframe.mode != PreviewIframeMode::Themed
-        && service.preview_iframe.css.is_some()
-    {
+    // Absent  means direct, so resolve it once and read from that.
+    let iframe = service.iframe();
+    if iframe.mode() != PreviewIframeMode::Themed && iframe.css.is_some() {
         return Err(AppError::InvalidArg(
             "preview iframe css is only allowed when mode is themed".into(),
         )
         .into());
     }
-    let proxy_styles = if service.preview_iframe.mode == PreviewIframeMode::Themed {
+    let proxy_styles = if iframe.mode() == PreviewIframeMode::Themed {
         Some(PreviewProxyStyles {
-            plugin_css: load_plugin_preview_css(
-                &plugin.files,
-                service.preview_iframe.css.as_deref(),
-            )?,
-            socket_rewrite_port: service.preview_iframe.socket_rewrite_port,
+            plugin_css: load_plugin_preview_css(&plugin.files, iframe.css.as_deref())?,
+            socket_rewrite_port: iframe.socket_rewrite_port,
         })
     } else {
         None
@@ -1107,7 +1104,7 @@ mod tests {
         let svc = require_service(&manifest, "tinymist").unwrap();
         assert_eq!(svc.binary_name, "tinymist");
         // Absent previewIframe means direct: the safest, most compatible load.
-        assert_eq!(svc.preview_iframe.mode, PreviewIframeMode::Direct);
+        assert_eq!(svc.iframe().mode(), PreviewIframeMode::Direct);
         assert!(require_service(&manifest, "ghost").is_err());
     }
 
@@ -1136,9 +1133,9 @@ mod tests {
             "previewIframe": { "mode": "themed", "css": "preview.css", "socketRewritePort": 23625 }
         }));
         let svc = require_service(&manifest, "tinymist").unwrap();
-        assert_eq!(svc.preview_iframe.mode, PreviewIframeMode::Themed);
-        assert_eq!(svc.preview_iframe.css.as_deref(), Some("preview.css"));
-        assert_eq!(svc.preview_iframe.socket_rewrite_port, Some(23625));
+        assert_eq!(svc.iframe().mode(), PreviewIframeMode::Themed);
+        assert_eq!(svc.iframe().css.as_deref(), Some("preview.css"));
+        assert_eq!(svc.iframe().socket_rewrite_port, Some(23625));
     }
 
     #[test]
