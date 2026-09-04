@@ -21,7 +21,8 @@
 //! arrived in WebView2 runtime 1.0.1722.45; on anything older the cast
 //! fails and we simply leave the level alone.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::time::Duration;
 
 use tauri::{Manager, Runtime, WebviewWindow};
 
@@ -42,9 +43,23 @@ const MAIN: &str = "main";
 ///
 /// `Resized` fires on every frame of a drag-resize, so without this the
 /// main thread would take a COM round trip per frame to re-assert a
-/// level it is already at. One process, one main window, so a plain
-/// atomic is the whole story.
+/// level it is already at. One process, one main window, so plain
+/// atomics are the whole story.
 static APPLIED: AtomicU8 = AtomicU8::new(0);
+
+/// How long the window has to stay out of sight before its memory is
+/// released.
+///
+/// Dropping to LOW is not free to undo: WebView2 decommits pages, so the
+/// first interactions after the window comes back fault them in again. For
+/// a window parked in the tray all afternoon that is a good trade; for a
+/// minimise-and-restore ten seconds later it is a pure loss, paid exactly
+/// when the user is looking. The delay keeps the win and skips the churn.
+const HIDE_GRACE: Duration = Duration::from_secs(20);
+
+/// Bumped on every visibility change, so a delayed release can tell whether
+/// the window it was scheduled for is still the current situation.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// Is the window currently out of sight — hidden to the tray, or
 /// minimised to the taskbar?
@@ -61,6 +76,9 @@ fn is_out_of_sight<R: Runtime>(window: &WebviewWindow<R>) -> bool {
 /// Point the webview's memory target at whatever the window's current
 /// visibility calls for.
 ///
+/// Showing takes effect at once; hiding is deferred by [`HIDE_GRACE`] so a
+/// brief minimise does not cost a round of page faults on the way back.
+///
 /// Safe to call as often as you like — repeat calls for a level already
 /// applied return without touching the webview, so callers do not have
 /// to track edges themselves.
@@ -68,12 +86,39 @@ pub fn sync_to_visibility<R: Runtime>(app: &tauri::AppHandle<R>) {
     let Some(window) = app.get_webview_window(MAIN) else {
         return;
     };
-    let low = is_out_of_sight(&window);
+    // Every call invalidates whatever release was already scheduled.
+    let generation = GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+
+    if !is_out_of_sight(&window) {
+        // Coming back is immediate: the user is waiting on this one.
+        set_level(&window, false);
+        return;
+    }
+
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(HIDE_GRACE).await;
+        // Shown again (or hidden again, which scheduled its own release)
+        // while we waited.
+        if GENERATION.load(Ordering::Relaxed) != generation {
+            return;
+        }
+        let Some(window) = app.get_webview_window(MAIN) else {
+            return;
+        };
+        if is_out_of_sight(&window) {
+            set_level(&window, true);
+        }
+    });
+}
+
+/// Apply a level, skipping the call when it is already the one in force.
+fn set_level<R: Runtime>(window: &WebviewWindow<R>, low: bool) {
     let want = if low { 2 } else { 1 };
     if APPLIED.swap(want, Ordering::Relaxed) == want {
         return;
     }
-    apply(&window, low);
+    apply(window, low);
 }
 
 #[cfg(target_os = "windows")]

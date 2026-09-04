@@ -27,6 +27,11 @@ Two harnesses, deliberately separate:
   - `boot-payload.mjs` — every JS/CSS file the shell fetches to show one
     markdown note, with a guess at each chunk's owner.
 
+  One probe needs the real binary instead, because neither Chromium nor a
+  unit test can measure WebView2's input pipeline:
+  `e2e-tests/perf/settings-hover-latency.e2e.ts`, run through the T3 harness
+  (`pnpm test:e2e:app -- --spec e2e-tests/perf/settings-hover-latency.e2e.ts`).
+
   Start the server first (`vite preview --port 1440 --outDir .output/build`);
   the scripts do not manage it.
 
@@ -105,12 +110,51 @@ started at.
 The webview is not discarded or reloaded — the renderer keeps the same PID
 across a hide/restore cycle, so nothing in the editor is lost.
 
-### Idle eviction of spellcheck dictionaries
+Dropping to LOW is deferred by 20 seconds. Undoing it is not free — the pages
+fault back in as the restored window is used — so a window parked in the tray
+should pay it and a minimise-and-restore ten seconds later should not.
 
-Hunspell tables are ~18 MB resident for `de_DE_frami` and ~3 MB for `en_US`,
-and used to stay warm for the life of the process after the first check. They
-are now dropped after three idle minutes (`src-tauri/src/spellcheck/mod.rs`)
-and reloaded in ~50 ms on a blocking thread when checking resumes.
+### Not holding spellcheck dictionaries the user is not using
+
+Hunspell tables are by far the largest thing the Rust process holds, and the
+cost is wildly uneven by language — measured as private working set, with the
+process at 0.8 MB before any load:
+
+| resident                    | cost     |
+| --------------------------- | -------- |
+| `en_US` (551 kB pair)       | ~2.1 MB  |
+| `de_DE_frami` (4.4 MB pair) | ~18.9 MB |
+
+They used to stay warm for the life of the process after the first check.
+Three things now bound that:
+
+- **Idle eviction.** Dropped after three idle minutes
+  (`src-tauri/src/spellcheck/mod.rs`), reloaded in ~50 ms on a blocking thread
+  when checking resumes.
+- **Not running a shadowed checker at all.** `DiagnosticProvider.kinds` has
+  always existed so that "overlapping providers can be de-conflicted without
+  running them", but `bus.ts` only ever applied ownership when _composing_
+  results. So with the LanguageTool plugin owning spelling, the built-in
+  dictionary was still checked on every keystroke and its findings thrown
+  away — which on desktop is an IPC round trip that pulls those tables back
+  in and keeps them there. The bus now runs a fully-shadowed provider only
+  over the segments the owner left unanswered, which in the healthy case is
+  none of them. The offline fallback is unchanged: if the owner fails, or
+  hangs past the grace, the dictionary is asked and answers.
+- **Explicit release.** When the built-in checker is switched off, every
+  language is deselected, or a plugin takes spelling over, the frontend calls
+  `spellcheck_release_dictionaries` rather than leaving ~19 MB resident for up
+  to three minutes waiting on the sweep.
+
+### Interaction latency
+
+`e2e-tests/perf/settings-hover-latency.e2e.ts` drives a real WebDriver mouse
+sweep down the settings rail and records both frame intervals and how long
+pointer events sit before JS sees them. Worth reaching for before assuming a
+memory change caused a responsiveness one: when the settings rail was reported
+as lagging, this showed input delay at p50 3.6 ms / max 5.2 ms and frames flat
+at 6.1 ms with no long tail, which ruled out the in-process GPU and pointed at
+the 150 ms `transition-colors` fade on the rail rows instead.
 
 ## What is not worth chasing
 
