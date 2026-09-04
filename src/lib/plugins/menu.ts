@@ -97,8 +97,7 @@ export function pluginTemplateDefaultTitle(
   const ref = pluginTemplate(pluginId, templateId);
   if (!ref) return '';
   const runtime = pluginById(pluginId)?.manifest.runtime;
-  const useScript =
-    !!ref.template.render && (runtime === 'luau' || runtime === 'wasm');
+  const useScript = !!ref.template.render && runtime === 'luau';
   if (!useScript) {
     try {
       return renderPluginTemplate(pluginId, ref.template).title;

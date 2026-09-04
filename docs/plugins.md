@@ -1,7 +1,7 @@
 # Plugins
 
 Mindstream Notes has a small plugin system. A plugin is a folder with a
-`manifest.json` (and, for scripted plugins, a `.luau` or `.wasm` entry). Plugins are
+`manifest.json` (and, for scripted plugins, a `.luau` entry). Plugins are
 **data-first**: most extend the app declaratively, and only opt into a sandboxed
 script when they need real logic.
 
@@ -52,8 +52,8 @@ command palette and mobile create menu offer the same templates.
   "id": "com.author.my-plugin", // stable, dotted, lowercase — the namespace for everything below
   "name": "My Plugin",
   "version": "1.0.0",
-  "runtime": "manifest-only", // or "luau" / "wasm"
-  "entry": "main.luau", // required iff runtime is scripted; plain .luau/.wasm filename
+  "runtime": "manifest-only", // or "luau"
+  "entry": "main.luau", // required iff runtime is "luau"; a plain .luau filename
   "limits": {
     "memoryBytes": 16777216,
     "timeoutMs": 500
@@ -111,7 +111,7 @@ is namespaced under the plugin `id`, so two plugins can never collide.
   Localize a section by adding a sibling with a locale suffix — `docs/getting-started.de.md`
   is used for German, falling back to `docs/getting-started.md`. Paths are
   relative to the plugin dir and must be safe (`.md`, no `..`).
-- **`toolbar`** (`runtime: "luau"` or `"wasm"` only) — buttons the plugin adds
+- **`toolbar`** (`runtime: "luau"` only) — buttons the plugin adds
   to a host toolbar (currently the file-tree toolbar). Each ships its own
   bundled `.svg` icon (rendered as a themed monochrome mask) and runs a backend
   script export on click:
@@ -168,15 +168,15 @@ Scripted manifests may include optional resource limits:
 ```jsonc
 "limits": {
   "memoryBytes": 134217728,
-  "timeoutMs": 5000,
-  "fuel": 100000000 // wasm only
+  "timeoutMs": 5000
 }
 ```
 
-The backend clamps these to host-owned minimums/maximums. Defaults are tuned by
-runtime: Luau stays small and fast by default (16 MiB / 500 ms), while Wasmtime
-defaults are larger (128 MiB / 5 s / fuel budget) so compute-heavy guests such
-as Typst have room to run without getting ambient authority.
+The backend clamps these to host-owned minimums/maximums: memory to 1–64 MiB
+(default 16 MiB) and the timeout to 50 ms – 5 s (default 500 ms). Raise the
+timeout for a script that shells out to a slow native tool — subprocess
+wall-time does not count against the script budget, but the script's own work
+around it does.
 
 ## Luau plugins (`runtime: "luau"`)
 
@@ -593,46 +593,6 @@ temp file the server watches (rewritten on edit), waits for readiness, connects
 the control plane as the editor, and reaps the process when the note closes or
 the app exits.
 
-## Wasm plugins (`runtime: "wasm"`)
-
-Wasm plugins run through Wasmtime in the Rust backend. There is **no WASI by
-default**: no ambient filesystem, clock, random, network, or process access.
-Capabilities are host imports added by the app's linker only when the plugin has
-the matching granted permission. The first host import is deliberately tiny:
-`notes.read` enables `ms.notes_count() -> i32` as a proof of the permission gate.
-
-### Raw ABI
-
-The MVP ABI is raw JSON bytes in/out:
-
-- export `memory`
-- export `alloc(len: i32) -> i32`
-- optionally export `dealloc(ptr: i32, len: i32)`
-- export the manifest/action function as
-  `(input_ptr: i32, input_len: i32) -> i64`
-
-The returned `i64` packs `(result_ptr << 32) | result_len`. Input and output are
-UTF-8 JSON. For toolbar buttons, return the same declarative effects listed
-above (`toast`, `openMenu`, `insertMarkdown`, etc.). The app performs the
-effect; the module never writes notes directly.
-
-Wasmtime is compiled into non-iOS builds with 64-bit atomics (the epoch-deadline
-API used for wall-clock interruption depends on that support). iOS is
-intentionally gated off for now because Cranelift JIT execution is not available
-without an iOS JIT entitlement. If iOS wasm support becomes important, use a
-JIT-free Wasmtime mode such as Pulley and measure the performance tradeoff
-separately.
-
-### Binary size
-
-Full-default Wasmtime is intentionally heavy: it pulls in Cranelift and related
-runtime support. On 2026-07-29, upstream's prebuilt Wasmtime 47 Windows archive
-is about 13 MB compressed, and a Linux package reports about 43 MB installed;
-embedding the Rust crate in this app should be expected to grow release binaries
-by tens of MB before feature trimming. After this tier is wired in, measure with
-`cargo bloat --release --crates` and then trim Cargo features once the required
-surface is known.
-
 ### Editor setup & type checking
 
 Scripts run untyped inside the sandbox, but while you write one you can get full
@@ -717,7 +677,7 @@ yet:
 Signing proves authorship and lets a plugin's own updates auto-approve instead
 of re-prompting. A signed plugin ships `signature.json` next to `manifest.json`:
 an Ed25519 signature over the plugin's **package digest** (a content hash of
-every file, so the signature covers `.luau`, `.wasm`, docs and icons — not just the
+every file, so the signature covers `.luau` files, docs and icons — not just the
 manifest).
 
 ```bash

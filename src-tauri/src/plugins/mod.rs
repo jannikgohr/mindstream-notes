@@ -38,7 +38,6 @@ pub mod discovery;
 pub mod luau;
 pub mod preview_service;
 pub mod signing;
-pub mod wasm;
 
 /// Where a plugin came from. Governs the integrity gate: builtins are trusted,
 /// installed plugins must keep a matching accepted hash.
@@ -1127,15 +1126,6 @@ fn limit_usize(
         .clamp(min, max)
 }
 
-fn limit_u64(manifest: &serde_json::Value, field: &str, default: u64, min: u64, max: u64) -> u64 {
-    manifest
-        .get("limits")
-        .and_then(|v| v.get(field))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(default)
-        .clamp(min, max)
-}
-
 fn limit_duration(
     manifest: &serde_json::Value,
     default: std::time::Duration,
@@ -1170,26 +1160,6 @@ fn luau_limits(manifest: &serde_json::Value) -> luau::Limits {
     }
 }
 
-fn wasm_limits(manifest: &serde_json::Value) -> wasm::Limits {
-    let defaults = wasm::Limits::default();
-    wasm::Limits {
-        memory_bytes: limit_usize(
-            manifest,
-            "memoryBytes",
-            defaults.memory_bytes,
-            16 * 1024 * 1024,
-            512 * 1024 * 1024,
-        ),
-        timeout: limit_duration(
-            manifest,
-            defaults.timeout,
-            std::time::Duration::from_millis(100),
-            std::time::Duration::from_secs(30),
-        ),
-        fuel: limit_u64(manifest, "fuel", defaults.fuel, 10_000, 10_000_000_000),
-    }
-}
-
 /// Load a scripted plugin's entry and run its `export` function with `input`,
 /// under the selected runtime's sandbox + resource limits. `manifest` is the
 /// plugin's parsed manifest (for `runtime`/`entry`/`id`); `granted` is the
@@ -1200,7 +1170,6 @@ fn wasm_limits(manifest: &serde_json::Value) -> wasm::Limits {
 pub fn run_plugin_script(
     files: &discovery::PluginFiles,
     manifest: &serde_json::Value,
-    checksum: &str,
     granted: Vec<String>,
     export: &str,
     input: serde_json::Value,
@@ -1236,39 +1205,11 @@ pub fn run_plugin_script(
                 limits: luau_limits(manifest),
             })
         }
-        Some("wasm") => {
-            run_wasm_plugin_script(files, manifest, checksum, granted, export, input, notes)
-        }
         Some(other) => Err(AppError::InvalidArg(format!(
             "plugin runtime '{other}' is not executable"
         ))),
         None => Err(AppError::InvalidArg("plugin has no runtime".into())),
     }
-}
-
-fn run_wasm_plugin_script(
-    files: &discovery::PluginFiles,
-    manifest: &serde_json::Value,
-    checksum: &str,
-    granted: Vec<String>,
-    export: &str,
-    input: serde_json::Value,
-    notes: Vec<luau::NoteMeta>,
-) -> AppResult<serde_json::Value> {
-    let entry = manifest_entry(manifest, "wasm", ".wasm")?;
-    let wasm = files
-        .read_bytes(entry)?
-        .ok_or_else(|| AppError::InvalidArg(format!("entry '{entry}' not found")))?;
-    wasm::run(wasm::ScriptRequest {
-        wasm,
-        module_name: format!("{}/{}", manifest_id(manifest), entry),
-        checksum: checksum.to_string(),
-        export: export.to_string(),
-        input,
-        permissions: granted,
-        notes,
-        limits: wasm_limits(manifest),
-    })
 }
 
 /// Build the read-only note snapshot exposed via `ms.notes`. One `notes::list`
@@ -1705,7 +1646,6 @@ pub async fn plugins_run_script(
 
     let files = plugin.files;
     let manifest = plugin.manifest;
-    let checksum = plugin.checksum;
     let granted = record.granted_permissions;
     // Capture the note snapshot up front (while we hold the DB) so the blocking
     // worker needs no DB access; empty unless the plugin holds notes.read.
@@ -1719,7 +1659,7 @@ pub async fn plugins_run_script(
     // blocking worker stays Tauri-free.
     let native_tool_cwd = plugin_data_root(&app, &id).ok();
     // Run on a blocking worker: this isolates the guest so a hard crash can't
-    // abort the app. Guest *logic* errors (Luau/wasm) come back as `Ok(Err(..))`
+    // abort the app. Guest *logic* errors come back as `Ok(Err(..))`
     // and are just surfaced to the user; a `JoinError` means the host runtime
     // itself panicked — a crash — so we disable the plugin before returning.
     let export_label = export.clone();
@@ -1727,7 +1667,6 @@ pub async fn plugins_run_script(
         run_plugin_script(
             &files,
             &manifest,
-            &checksum,
             granted,
             &export,
             input,

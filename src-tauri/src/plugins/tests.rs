@@ -426,7 +426,6 @@ fn run_plugin_script_executes_luau_entry_with_input() {
     let out = run_plugin_script(
         &super::discovery::PluginFiles::Fs(dir.clone()),
         &manifest,
-        "test-checksum",
         vec!["templates.contribute".into()],
         "render",
         serde_json::json!({ "name": "Hi" }),
@@ -449,7 +448,6 @@ fn templates_plugin_renders_macros_in_lua() {
     let out = run_plugin_script(
         &plugin.files,
         &plugin.manifest,
-        &plugin.checksum,
         vec!["notes.read".into(), "notes.create".into()],
         "renderTemplate",
         serde_json::json!({
@@ -489,7 +487,6 @@ fn templates_plugin_localizes_dates_via_locale() {
     let out = run_plugin_script(
         &plugin.files,
         &plugin.manifest,
-        &plugin.checksum,
         vec!["notes.read".into(), "notes.create".into()],
         "renderTemplate",
         serde_json::json!({
@@ -511,7 +508,6 @@ fn run_plugin_script_refuses_a_non_luau_runtime() {
     let out = run_plugin_script(
         &super::discovery::PluginFiles::Fs(std::env::temp_dir()),
         &manifest,
-        "test-checksum",
         vec![],
         "render",
         serde_json::json!({}),
@@ -519,61 +515,6 @@ fn run_plugin_script_refuses_a_non_luau_runtime() {
         None,
     );
     assert!(out.is_err());
-}
-
-#[test]
-fn run_plugin_script_executes_wasm_entry_with_input() {
-    fn pack(ptr: u32, len: usize) -> u64 {
-        ((ptr as u64) << 32) | len as u64
-    }
-    fn wat_string(s: &str) -> String {
-        s.replace('\\', "\\5c")
-            .replace('"', "\\22")
-            .replace('\n', "\\0a")
-    }
-
-    let dir = std::env::temp_dir().join(format!("ms-wasm-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let json = r#"{"effect":"toast","message":"hi"}"#;
-    let wasm = wat::parse_str(format!(
-        r#"(module
-          (memory (export "memory") 1)
-          (global $heap (mut i32) (i32.const 1024))
-          (func (export "alloc") (param $len i32) (result i32)
-            (local $ptr i32)
-            global.get $heap
-            local.set $ptr
-            global.get $heap
-            local.get $len
-            i32.add
-            global.set $heap
-            local.get $ptr)
-          (data (i32.const 32) "{}")
-          (func (export "render") (param i32) (param i32) (result i64)
-            i64.const {}))
-        "#,
-        wat_string(json),
-        pack(32, json.len())
-    ))
-    .unwrap();
-    std::fs::write(dir.join("main.wasm"), wasm).unwrap();
-    let manifest = serde_json::json!({
-        "id": "com.a.wasm", "runtime": "wasm", "entry": "main.wasm"
-    });
-    let out = run_plugin_script(
-        &super::discovery::PluginFiles::Fs(dir.clone()),
-        &manifest,
-        "test-checksum",
-        vec![],
-        "render",
-        serde_json::json!({ "name": "Hi" }),
-        Vec::new(),
-        None,
-    )
-    .unwrap();
-    assert_eq!(out["effect"], serde_json::json!("toast"));
-    assert_eq!(out["message"], serde_json::json!("hi"));
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -1020,7 +961,6 @@ fn limit_readers_clamp_and_fall_back_to_defaults() {
     // Absent field → default (itself clamped into range).
     let none = serde_json::json!({});
     assert_eq!(limit_usize(&none, "heap", 10, 1, 100), 10);
-    assert_eq!(limit_u64(&over, "heap", 10, 1, 100), 100);
 
     let dur = serde_json::json!({ "limits": { "timeoutMs": 50 } });
     assert_eq!(

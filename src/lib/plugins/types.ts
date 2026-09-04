@@ -107,7 +107,7 @@ export interface PluginNoteTemplateContribution {
   bodyTemplate: string;
   variables?: PluginTemplateVariable[];
   /**
-   * Optional backend script macro (`runtime: 'luau'` or `'wasm'`): the name of an
+   * Optional backend script macro (`runtime: 'luau'`): the name of an
    * exported function `render(ctx) -> { title, body }` that computes the note
    * instead of the declarative `titleTemplate`/`bodyTemplate`. When set, the app
    * runs the script and uses its result; the app — never the script — still
@@ -811,8 +811,6 @@ export interface PluginRuntimeLimits {
   memoryBytes?: number;
   /** Wall-clock timeout in milliseconds. Clamped by the backend. */
   timeoutMs?: number;
-  /** Wasmi fuel budget (`runtime: 'wasm'` only). Clamped by the backend. */
-  fuel?: number;
 }
 
 /**
@@ -826,10 +824,6 @@ export interface PluginRuntimeLimits {
  *     title/body). The script gets a permission-gated host API (`ms.*`); the
  *     app, not the script, still performs any note write. `entry` is required
  *     and must be a safe relative `.luau` filename inside the plugin dir.
- *   - `'wasm'` — the plugin ships a backend-only WebAssembly `entry` run by
- *     Wasmi with no WASI by default. It uses the same exported-function and
- *     declarative-effect boundary as Luau; `entry` must be a safe `.wasm`
- *     filename.
  */
 export interface PluginManifest {
   id: string;
@@ -847,8 +841,8 @@ export interface PluginManifest {
    * Third-party plugins ignore this and always start gated/disabled.
    */
   enabledByDefault?: boolean;
-  runtime: 'manifest-only' | 'luau' | 'wasm';
-  /** Required for scripted runtimes; a `.luau`/`.wasm` file relative to the plugin dir. */
+  runtime: 'manifest-only' | 'luau';
+  /** Required for `runtime: 'luau'`; a `.luau` file relative to the plugin dir. */
   entry?: string;
   /** Optional per-runtime resource limits. The backend applies hard maximums. */
   limits?: PluginRuntimeLimits;
