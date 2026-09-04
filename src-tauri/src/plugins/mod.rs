@@ -1174,7 +1174,7 @@ pub fn run_plugin_script(
     export: &str,
     input: serde_json::Value,
     notes: Vec<luau::NoteMeta>,
-    native_tool_cwd: Option<PathBuf>,
+    data_root: Option<PathBuf>,
 ) -> AppResult<serde_json::Value> {
     match manifest.get("runtime").and_then(|v| v.as_str()) {
         Some("luau") => {
@@ -1200,7 +1200,7 @@ pub fn run_plugin_script(
                 permissions: granted,
                 notes,
                 native_tools,
-                native_tool_cwd,
+                data_root,
                 modules,
                 limits: luau_limits(manifest),
             })
@@ -1654,25 +1654,18 @@ pub async fn plugins_run_script(
     } else {
         Vec::new()
     };
-    // The plugin's isolated data root is the cwd for any native tool the script
-    // runs via `ms.nativeTools`; resolved here (needs the AppHandle) so the
-    // blocking worker stays Tauri-free.
-    let native_tool_cwd = plugin_data_root(&app, &id).ok();
+    // The plugin's isolated data directory: the cwd for any native tool the
+    // script runs via `ms.nativeTools`, and the root `ms.storage` reads and
+    // writes under. Resolved here (it needs the AppHandle) so the blocking
+    // worker stays Tauri-free.
+    let data_root = plugin_data_root(&app, &id).ok();
     // Run on a blocking worker: this isolates the guest so a hard crash can't
     // abort the app. Guest *logic* errors come back as `Ok(Err(..))`
     // and are just surfaced to the user; a `JoinError` means the host runtime
     // itself panicked — a crash — so we disable the plugin before returning.
     let export_label = export.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
-        run_plugin_script(
-            &files,
-            &manifest,
-            granted,
-            &export,
-            input,
-            notes,
-            native_tool_cwd,
-        )
+        run_plugin_script(&files, &manifest, granted, &export, input, notes, data_root)
     })
     .await;
     match outcome {

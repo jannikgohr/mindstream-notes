@@ -32,7 +32,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -101,9 +101,10 @@ pub struct ScriptRequest {
     /// tool is declared but not found (or the platform is mobile, where native
     /// tools are unavailable). Empty when the permission wasn't granted.
     pub native_tools: HashMap<String, Option<PathBuf>>,
-    /// Working directory for native tool runs (the plugin's isolated data root).
-    /// `None` disables running even when tools resolved (tests / no data dir).
-    pub native_tool_cwd: Option<PathBuf>,
+    /// The plugin's isolated data directory: the working directory for native
+    /// tool runs, and the root `ms.storage` reads and writes under. `None`
+    /// disables both (tests / no data dir).
+    pub data_root: Option<PathBuf>,
     /// The plugin's other `.luau` files as `module path (no extension) → source`,
     /// so the script can split itself across files via a plugin-scoped `require`.
     /// Keys use `/` separators; only these modules are resolvable (no filesystem
@@ -150,7 +151,7 @@ pub fn run(req: ScriptRequest) -> AppResult<serde_json::Value> {
         &req.permissions,
         &req.notes,
         &req.native_tools,
-        &req.native_tool_cwd,
+        &req.data_root,
         deadline.clone(),
     )
     .map_err(|e| map_lua(&req.chunk_name, e))?;
@@ -209,7 +210,7 @@ fn install_host_api(
     permissions: &[String],
     notes: &[NoteMeta],
     native_tools: &HashMap<String, Option<PathBuf>>,
-    native_tool_cwd: &Option<PathBuf>,
+    data_root: &Option<PathBuf>,
     deadline: Rc<Cell<Instant>>,
 ) -> mlua::Result<()> {
     let ms = lua.create_table()?;
@@ -243,7 +244,19 @@ fn install_host_api(
     if granted("nativeTools.runDeclared") {
         ms.set(
             "nativeTools",
-            native_tools_module(lua, native_tools, native_tool_cwd, deadline)?,
+            native_tools_module(lua, native_tools, data_root, deadline)?,
+        )?;
+    }
+
+    // --- Gated: pluginStorage.read / .write → ms.storage -------------------
+    // Present when either half is granted; the individual functions are added
+    // per grant, so a read-only plugin gets `read`/`list` and no `write`.
+    let may_read = granted("pluginStorage.read");
+    let may_write = granted("pluginStorage.write");
+    if may_read || may_write {
+        ms.set(
+            "storage",
+            storage_module(lua, data_root, may_read, may_write)?,
         )?;
     }
 
@@ -397,6 +410,164 @@ fn normalize_module(name: &str) -> Option<String> {
 /// `ms.date`: current time + formatting + arithmetic, all in local time and
 /// using the same moment-style tokens as the frontend template engine
 /// (`YYYY-MM-DD`, `HH:mm`, `dddd`, …), so a script's dates match `{{date:…}}`.
+/// Largest single file `ms.storage` will read or write. Plugin storage is for
+/// a plugin's own state — a cache index, a set of user preferences it computes —
+/// not a place to park a corpus, and an unbounded read would let a script pull
+/// an arbitrary amount into the VM's memory cap in one call.
+const MAX_STORAGE_FILE_BYTES: usize = 4 * 1024 * 1024;
+
+/// `ms.storage`: read and write files under the plugin's own isolated data
+/// directory. Gated on `pluginStorage.read` / `pluginStorage.write`.
+///
+/// Every path is resolved through the same `split_plugin_rel_path` +
+/// `ensure_inside_data_root` pair the storage commands use, so a script gets
+/// exactly the containment the frontend does: relative paths only, no `..`, no
+/// absolute paths, no symlink escape. The root itself is chosen by the host from
+/// the plugin id — a script never names it.
+fn storage_module(
+    lua: &Lua,
+    root: &Option<PathBuf>,
+    may_read: bool,
+    may_write: bool,
+) -> mlua::Result<Table> {
+    let table = lua.create_table()?;
+    let Some(root) = root.clone() else {
+        // No data dir (tests, or a profile without one). The namespace still
+        // exists so a script can call it, and every call fails loudly rather
+        // than silently doing nothing.
+        let fail = |lua: &Lua, name: &'static str| {
+            lua.create_function(move |_, _: mlua::MultiValue| -> mlua::Result<()> {
+                Err(mlua::Error::runtime(format!(
+                    "ms.storage.{name}: this plugin has no data directory"
+                )))
+            })
+        };
+        for name in ["read", "write", "delete", "list"] {
+            table.set(name, fail(lua, name)?)?;
+        }
+        return Ok(table);
+    };
+
+    /// Resolve a script-supplied relative path inside `root`, creating nothing.
+    fn resolve(root: &Path, rel: &str) -> mlua::Result<PathBuf> {
+        let segments = super::split_plugin_rel_path(rel, false)
+            .map_err(|e| mlua::Error::runtime(e.to_string()))?;
+        let mut out = root.to_path_buf();
+        for segment in segments {
+            out.push(segment);
+        }
+        Ok(out)
+    }
+
+    if may_read {
+        let read_root = root.clone();
+        table.set(
+            "read",
+            lua.create_function(move |_, rel: String| {
+                let path = resolve(&read_root, &rel)?;
+                // Absent is `nil`, not an error: "have I stored this yet?" is the
+                // common first call and should not need a pcall.
+                let Ok(bytes) = std::fs::read(&path) else {
+                    return Ok(None);
+                };
+                super::ensure_inside_data_root(&read_root, &path)
+                    .map_err(|e| mlua::Error::runtime(e.to_string()))?;
+                if bytes.len() > MAX_STORAGE_FILE_BYTES {
+                    return Err(mlua::Error::runtime(format!(
+                        "ms.storage.read: '{rel}' is larger than {MAX_STORAGE_FILE_BYTES} bytes"
+                    )));
+                }
+                Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
+            })?,
+        )?;
+
+        let list_root = root.clone();
+        table.set(
+            "list",
+            lua.create_function(move |lua, rel: Option<String>| {
+                let dir = match rel.as_deref() {
+                    None | Some("") => list_root.clone(),
+                    Some(rel) => resolve(&list_root, rel)?,
+                };
+                let out = lua.create_table()?;
+                let Ok(entries) = std::fs::read_dir(&dir) else {
+                    // A directory that was never written to lists as empty.
+                    return Ok(out);
+                };
+                super::ensure_inside_data_root(&list_root, &dir)
+                    .map_err(|e| mlua::Error::runtime(e.to_string()))?;
+                let mut names: Vec<(String, bool, u64)> = Vec::new();
+                for entry in entries.flatten() {
+                    let meta = match entry.metadata() {
+                        Ok(meta) => meta,
+                        Err(_) => continue,
+                    };
+                    names.push((
+                        entry.file_name().to_string_lossy().into_owned(),
+                        meta.is_dir(),
+                        meta.len(),
+                    ));
+                }
+                // Stable order: a script that renders a list should not have it
+                // reshuffle between calls because the filesystem felt like it.
+                names.sort();
+                for (i, (name, is_dir, size)) in names.into_iter().enumerate() {
+                    let item = lua.create_table()?;
+                    item.set("name", name)?;
+                    item.set("isDir", is_dir)?;
+                    item.set("sizeBytes", size)?;
+                    out.set(i + 1, item)?;
+                }
+                Ok(out)
+            })?,
+        )?;
+    }
+
+    if may_write {
+        let write_root = root.clone();
+        table.set(
+            "write",
+            lua.create_function(move |_, (rel, contents): (String, String)| {
+                if contents.len() > MAX_STORAGE_FILE_BYTES {
+                    return Err(mlua::Error::runtime(format!(
+                        "ms.storage.write: '{rel}' exceeds {MAX_STORAGE_FILE_BYTES} bytes"
+                    )));
+                }
+                let path = resolve(&write_root, &rel)?;
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent).map_err(mlua::Error::runtime)?;
+                    super::ensure_inside_data_root(&write_root, parent)
+                        .map_err(|e| mlua::Error::runtime(e.to_string()))?;
+                }
+                std::fs::write(&path, contents).map_err(mlua::Error::runtime)?;
+                Ok(())
+            })?,
+        )?;
+
+        let delete_root = root.clone();
+        table.set(
+            "delete",
+            lua.create_function(move |_, rel: String| {
+                let path = resolve(&delete_root, &rel)?;
+                if !path.exists() {
+                    // Deleting what is not there is success, not an error.
+                    return Ok(());
+                }
+                super::ensure_inside_data_root(&delete_root, &path)
+                    .map_err(|e| mlua::Error::runtime(e.to_string()))?;
+                if path.is_dir() {
+                    std::fs::remove_dir_all(&path).map_err(mlua::Error::runtime)?;
+                } else {
+                    std::fs::remove_file(&path).map_err(mlua::Error::runtime)?;
+                }
+                Ok(())
+            })?,
+        )?;
+    }
+
+    Ok(table)
+}
+
 fn date_module(lua: &Lua) -> mlua::Result<Table> {
     let date = lua.create_table()?;
     // now(format?, offsetDays?) → the current local date/time, formatted.
@@ -802,10 +973,136 @@ mod tests {
             permissions: perms.iter().map(|s| s.to_string()).collect(),
             notes: Vec::new(),
             native_tools: HashMap::new(),
-            native_tool_cwd: None,
+            data_root: None,
             modules: HashMap::new(),
             limits: Limits::default(),
         }
+    }
+
+    /// A scratch data root plus a request wired to it, for the ms.storage tests.
+    fn storage_req(source: &str, perms: &[&str], root: &std::path::Path) -> ScriptRequest {
+        let mut r = req(source, "go", serde_json::json!({}), perms);
+        r.data_root = Some(root.to_path_buf());
+        r
+    }
+
+    fn storage_tmp() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ms-storage-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn storage_is_absent_without_either_permission() {
+        let root = storage_tmp();
+        let out = run(storage_req(
+            "return { go = function() return { has = ms.storage ~= nil } end }",
+            &[],
+            &root,
+        ))
+        .unwrap();
+        assert_eq!(out["has"], serde_json::json!(false));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn storage_round_trips_a_value() {
+        let root = storage_tmp();
+        let out = run(storage_req(
+            r#"return { go = function()
+                local before = ms.storage.read("state.json")
+                ms.storage.write("state.json", '{"seen":1}')
+                return { before = before, after = ms.storage.read("state.json") }
+            end }"#,
+            &["pluginStorage.read", "pluginStorage.write"],
+            &root,
+        ))
+        .unwrap();
+        // Absent reads as nil rather than erroring: "have I stored this yet?"
+        // is the common first call.
+        assert!(out["before"].is_null());
+        assert_eq!(out["after"], serde_json::json!(r#"{"seen":1}"#));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn storage_write_is_refused_with_only_read() {
+        let root = storage_tmp();
+        let out = run(storage_req(
+            r#"return { go = function()
+                return { canRead = ms.storage.read ~= nil, canWrite = ms.storage.write ~= nil }
+            end }"#,
+            &["pluginStorage.read"],
+            &root,
+        ))
+        .unwrap();
+        assert_eq!(out["canRead"], serde_json::json!(true));
+        assert_eq!(out["canWrite"], serde_json::json!(false));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn storage_rejects_traversal_out_of_the_data_root() {
+        let root = storage_tmp();
+        for path in ["../escape.txt", "/etc/passwd", "a/../../b.txt"] {
+            let source = format!(
+                r#"return {{ go = function() ms.storage.write("{path}", "x") return {{}} end }}"#
+            );
+            let err = run(storage_req(
+                &source,
+                &["pluginStorage.read", "pluginStorage.write"],
+                &root,
+            ))
+            .expect_err("traversal must be refused");
+            assert!(
+                err.to_string().contains("unsafe plugin storage path"),
+                "unexpected error for {path}: {err}"
+            );
+        }
+        // Nothing escaped: the parent still holds only the root we made.
+        assert!(!root.parent().unwrap().join("escape.txt").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn storage_lists_and_deletes() {
+        let root = storage_tmp();
+        let out = run(storage_req(
+            r#"return { go = function()
+                ms.storage.write("b.txt", "second")
+                ms.storage.write("a.txt", "first")
+                local listed = ms.storage.list()
+                ms.storage.delete("a.txt")
+                return { listed = listed, afterDelete = ms.storage.read("a.txt"), kept = ms.storage.read("b.txt") }
+            end }"#,
+            &["pluginStorage.read", "pluginStorage.write"],
+            &root,
+        ))
+        .unwrap();
+        let listed = out["listed"].as_array().unwrap();
+        assert_eq!(listed.len(), 2);
+        // Sorted, so a script rendering the list does not see it reshuffle.
+        assert_eq!(listed[0]["name"], serde_json::json!("a.txt"));
+        assert_eq!(listed[0]["isDir"], serde_json::json!(false));
+        assert_eq!(listed[0]["sizeBytes"], serde_json::json!(5));
+        assert!(out["afterDelete"].is_null());
+        assert_eq!(out["kept"], serde_json::json!("second"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn storage_without_a_data_dir_fails_loudly() {
+        // The namespace exists so a script can call it; every call errors
+        // rather than silently doing nothing.
+        let mut r = req(
+            r#"return { go = function() ms.storage.write("x", "y") return {} end }"#,
+            "go",
+            serde_json::json!({}),
+            &["pluginStorage.write"],
+        );
+        r.data_root = None;
+        let err = run(r).expect_err("no data dir must not silently succeed");
+        assert!(err.to_string().contains("no data directory"));
     }
 
     fn note(id: &str, title: &str, tags: &[&str]) -> NoteMeta {

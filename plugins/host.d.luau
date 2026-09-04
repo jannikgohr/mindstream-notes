@@ -84,6 +84,32 @@ type MsNativeTools = {
 	run: (toolId: string, options: MsNativeToolRunOptions?) -> MsNativeToolResult,
 }
 
+-- One entry from `ms.storage.list`.
+type MsStorageEntry = {
+	name: string,
+	isDir: boolean,
+	sizeBytes: number,
+}
+
+-- Present when the plugin was granted `pluginStorage.read` and/or
+-- `pluginStorage.write`. Reads and writes files under the plugin's own isolated
+-- data directory: relative paths only, no `..`, no absolute paths. Each function
+-- exists only with its matching grant, so narrow before calling — e.g.
+-- `local write = assert(storage.write)`.
+type MsStorage = {
+	-- File contents, or nil when the file does not exist (not an error: "have I
+	-- stored this yet?" is the common first call). Needs `pluginStorage.read`.
+	read: ((path: string) -> string?)?,
+	-- Directory listing, sorted by name. Omit the path to list the root.
+	-- Needs `pluginStorage.read`.
+	list: ((path: string?) -> { MsStorageEntry })?,
+	-- Write a file, creating parent directories. Needs `pluginStorage.write`.
+	write: ((path: string, contents: string) -> ())?,
+	-- Remove a file or directory tree; deleting what is absent is not an error.
+	-- Needs `pluginStorage.write`.
+	delete: ((path: string) -> ())?,
+}
+
 -- The `ms` host API. Always-present helpers are non-optional; a namespace typed
 -- as optional is permission-gated — it exists only when the manifest's
 -- `permissions` include the matching capability, so a script must narrow it
@@ -98,6 +124,7 @@ export type Ms = {
 	md: MsMd,
 	notes: MsNotes?, -- gated by `notes.read`
 	nativeTools: MsNativeTools?, -- gated by `nativeTools.runDeclared`
+	storage: MsStorage?, -- gated by `pluginStorage.read` / `pluginStorage.write`
 }
 
 declare ms: Ms
