@@ -1,11 +1,19 @@
 /**
- * Public contract for the declarative plugin system.
+ * Public contract for the plugin system.
  *
- * The first plugin slice is intentionally *manifest-only*: a plugin describes
- * templates, settings, commands and localized strings as data — it never ships
- * runnable code. Everything a plugin can do is expressed through the shapes in
- * this file, which keeps the security model small (see docs/plugins) while the
- * registry, permission and integrity surfaces settle.
+ * Plugins are **data-first**: most extend the app declaratively, through the
+ * shapes in this file, and only opt into a sandboxed script when they need real
+ * logic. What a scripted plugin can then do is still expressed as data — it
+ * returns a closed set of effects the app performs, and never writes anything
+ * itself.
+ *
+ * There are two places a plugin's code can run, and they are different
+ * boundaries: `runtime: 'luau'` runs in the Rust backend with no ambient
+ * filesystem, network or process authority, and `render.webview` runs a module
+ * in a sandboxed iframe on its own origin that can reach neither the app's DOM
+ * nor any command. Everything else — native tools, native services, text
+ * checkers — is the *host* acting on the plugin's behalf from a declaration.
+ * See docs/plugins.md for the whole picture.
  *
  * Namespacing rule that runs through the whole system: a plugin owns a stable,
  * dotted `id` (e.g. `com.mindstream.templates.core`). Every runtime identifier
@@ -18,59 +26,114 @@ import type {
   DiagnosticGrammar,
   DiagnosticSyntaxId
 } from '$lib/diagnostics/syntax';
+import type { PluginPermission } from './generated/PluginPermission';
+import type { ArtifactDecl } from './generated/ArtifactDecl';
+import type { ArtifactKind } from './generated/ArtifactKind';
+import type { NativeServiceDecl } from './generated/NativeServiceDecl';
+import type { NativeToolDecl } from './generated/NativeToolDecl';
+import type { PreviewIframeDecl } from './generated/PreviewIframeDecl';
+import type { PreviewIframeMode } from './generated/PreviewIframeMode';
+import type { RuntimeLimits } from './generated/RuntimeLimits';
 
 /**
- * Capabilities a plugin may request in its manifest:
- *   - `templates.contribute` — surface note templates in create menus;
- *   - `noteKinds.contribute` — register plugin-owned note kind/editor surfaces;
- *   - `noteExporters.contribute` — add export actions for built-in or
- *     plugin-owned note kinds;
- *   - `notes.create` — have the app create a note from the plugin's template;
- *   - `notes.read` — a scripted plugin may read note metadata through its
- *     permission-gated host API.
- *   - `pluginArtifacts.download` — let the host download/update declared
- *     plugin artifacts after verifying their pinned digest.
- *   - `pluginStorage.read` / `pluginStorage.write` — let the host read/write
- *     this plugin's isolated mutable data directory.
- *   - `pluginWebviews.allowEval` — let sandboxed plugin webviews use string
- *     evaluation for runtimes that require generated JS glue.
- *   - `nativeTools.runDeclared` — let the host run plugin-declared binaries
- *     resolved from the user's PATH, without shell execution.
- *   - `nativeServices.run` — let the host run a plugin-declared binary as a
- *     long-lived local *preview server* (e.g. `tinymist preview`) and surface
- *     it to the note's preview iframe. Desktop-only.
- * Broad `notes.write` stays deliberately absent — the app, not the plugin,
- * performs the actual note write (see templates.ts).
+ * Declarations the **backend** acts on, defined in
+ * `src-tauri/src/plugins/manifest.rs` and generated from there.
+ *
+ * These are what let a plugin reach outside its own bundle — download a
+ * binary, run a process, start a server — so the definition lives where the
+ * decision to do any of that is made, and this file aliases it rather than
+ * restating it. They used to be declared in both places, which is how the two
+ * came to disagree in the first place.
+ *
+ * The app-facing names are kept so call sites read the same as the rest of the
+ * contribution types around them.
  */
-export type PluginPermission =
-  | 'templates.contribute'
-  | 'noteKinds.contribute'
-  | 'noteExporters.contribute'
-  | 'notes.create'
-  | 'notes.read'
-  | 'pluginArtifacts.download'
-  | 'pluginStorage.read'
-  | 'pluginStorage.write'
-  | 'pluginWebviews.allowEval'
-  | 'nativeTools.runDeclared'
-  | 'nativeServices.run'
-  | 'textCheckers.contribute';
+export type PluginArtifactKind = ArtifactKind;
+export type PluginArtifactContribution = ArtifactDecl;
+export type PluginNativeToolContribution = NativeToolDecl;
+export type PluginNativeServiceContribution = NativeServiceDecl;
+export type PluginPreviewIframeMode = PreviewIframeMode;
+export type PluginPreviewIframeContribution = PreviewIframeDecl;
+export type PluginRuntimeLimits = RuntimeLimits;
 
-/** All permissions the current app version understands. */
-export const KNOWN_PLUGIN_PERMISSIONS: readonly PluginPermission[] = [
-  'templates.contribute',
-  'noteKinds.contribute',
-  'noteExporters.contribute',
-  'notes.create',
+/**
+ * Every artifact kind, checked against the generated union at compile time so
+ * adding one in Rust without adding it here fails to typecheck.
+ */
+export const PLUGIN_ARTIFACT_KINDS = [
+  'wasm',
+  'webScript',
+  'data'
+] as const satisfies readonly PluginArtifactKind[];
+
+/**
+ * A capability a plugin must be granted before the host will do something on
+ * its behalf that reaches outside the plugin's own bundle.
+ *
+ * **Defined in Rust**, in `src-tauri/src/plugins/manifest.rs`, and generated
+ * from there. The backend is what actually enforces a permission — it decides
+ * whether to spawn a process, open a socket or install a host function — so the
+ * list lives where the enforcement is, and this file imports it rather than
+ * restating it. `cargo test export_bindings` regenerates `generated/`, and a
+ * test fails if the checked-in files drift from the Rust.
+ *
+ * The list is deliberately only capabilities. It used to also carry
+ * *contribution gates* — `templates.contribute`, `noteKinds.contribute`,
+ * `noteExporters.contribute` — which restated what `contributes` already said
+ * and gated nothing at runtime, and `pluginWebviews.allowEval`, which is a CSP
+ * setting on one contribution rather than a resource anyone can reach.
+ */
+export type { PluginPermission };
+
+/**
+ * All permissions this app version understands.
+ *
+ * The values are checked against the generated {@link PluginPermission} union
+ * at compile time, so adding one in Rust without adding it here (or vice
+ * versa) fails to typecheck rather than silently accepting or rejecting a
+ * manifest at runtime.
+ */
+export const KNOWN_PLUGIN_PERMISSIONS = [
   'notes.read',
+  'notes.create',
+  'textCheckers.contribute',
   'pluginArtifacts.download',
   'pluginStorage.read',
   'pluginStorage.write',
-  'pluginWebviews.allowEval',
   'nativeTools.runDeclared',
-  'nativeServices.run',
-  'textCheckers.contribute'
-];
+  'nativeServices.run'
+] as const satisfies readonly PluginPermission[];
+
+/**
+ * Every contribution point, and the capability (if any) a manifest must hold to
+ * use it.
+ *
+ * One table rather than a check per point: the registry reads it to expose a
+ * contribution, and the validator reads it to require the matching permission,
+ * so the two can't drift. Adding a contribution point is a row here plus its
+ * shape in `PluginContributions`.
+ *
+ * `null` means the contribution needs no capability — it only adds data to a
+ * host surface, and the plugin being enabled is the whole of the permission.
+ */
+export const CONTRIBUTION_POINTS = {
+  i18n: null,
+  settings: null,
+  documentation: null,
+  commands: null,
+  sourceLanguages: null,
+  noteKinds: null,
+  noteTemplates: null,
+  noteExporters: null,
+  toolbar: null,
+  artifacts: 'pluginArtifacts.download',
+  nativeTools: 'nativeTools.runDeclared',
+  nativeServices: 'nativeServices.run',
+  textCheckers: 'textCheckers.contribute'
+} as const satisfies Record<string, PluginPermission | null>;
+
+/** The name of a contribution point, i.e. a key of `contributes`. */
+export type PluginContributionPoint = keyof typeof CONTRIBUTION_POINTS;
 
 /**
  * Localized strings a plugin contributes, keyed by locale code then by a
@@ -107,7 +170,7 @@ export interface PluginNoteTemplateContribution {
   bodyTemplate: string;
   variables?: PluginTemplateVariable[];
   /**
-   * Optional backend script macro (`runtime: 'luau'` or `'wasm'`): the name of an
+   * Optional backend script macro (`runtime: 'luau'`): the name of an
    * exported function `render(ctx) -> { title, body }` that computes the note
    * instead of the declarative `titleTemplate`/`bodyTemplate`. When set, the app
    * runs the script and uses its result; the app — never the script — still
@@ -317,31 +380,6 @@ export interface PluginSettingsContribution {
   settings: PluginSetting[];
 }
 
-export const PLUGIN_ARTIFACT_KINDS = ['wasm', 'webScript', 'data'] as const;
-export type PluginArtifactKind = (typeof PLUGIN_ARTIFACT_KINDS)[number];
-
-/**
- * A host-managed binary/blob the plugin needs at runtime. The host downloads
- * and verifies the artifact, then stores it under a per-plugin artifact root.
- *
- * The kind-based shape leaves room for a later native Typst tool declaration
- * without granting arbitrary command execution.
- */
-export interface PluginArtifactContribution {
-  id: string;
-  kind: PluginArtifactKind;
-  /** Human/display version of the artifact, independent of plugin version. */
-  version: string;
-  /** HTTPS URL fetched by the host, never by plugin code. */
-  url: string;
-  /** Expected SHA-256 digest of the downloaded bytes, lowercase hex. */
-  sha256: string;
-  /** Stored filename under the artifact version directory. */
-  fileName: string;
-  /** Optional exact byte length, checked after download when present. */
-  sizeBytes?: number;
-}
-
 /** A plugin-owned sandboxed iframe preview runtime for a note kind. */
 export interface PluginWebviewPreviewContribution {
   /** Safe relative `.js`/`.mjs` module inside the plugin directory. */
@@ -356,79 +394,6 @@ export interface PluginWebviewPreviewContribution {
    * the iframe as Blob URLs + bytes before rendering.
    */
   artifacts?: string[];
-}
-
-/** A PATH-resolved native tool a plugin may request to run. */
-export interface PluginNativeToolContribution {
-  /** Plugin-local slug. */
-  id: string;
-  /** Exact executable basename to resolve from PATH; no paths or shell. */
-  binaryName: string;
-  descriptionKey?: string;
-}
-
-export type PluginPreviewIframeMode = 'direct' | 'themed';
-
-export interface PluginPreviewIframeContribution {
-  /**
-   * `direct` (default) loads the service URL unchanged. `themed` routes it
-   * through the host proxy so app theme variables and optional plugin CSS can be
-   * injected into the iframe document.
-   */
-  mode: PluginPreviewIframeMode;
-  /**
-   * Optional safe relative `.css` file inside the plugin bundle, injected only
-   * for `mode: "themed"` after the host theme variables. This is where a plugin
-   * maps `--ms-preview-*` onto its frontend's DOM.
-   */
-  css?: string;
-  /**
-   * Default WebSocket port the tool's frontend hardcodes as a fallback (e.g.
-   * tinymist's 23625). When set (`mode: "themed"` only), the host injects a
-   * generic shim that redirects a socket to `127.0.0.1:<port>` back to the proxy
-   * origin so it tunnels to the real server. Omit when the frontend derives its
-   * socket from `location`.
-   */
-  socketRewritePort?: number;
-}
-
-/**
- * A long-lived **preview service**: a PATH binary the host runs as a persistent
- * local server whose web frontend is shown in the note's preview iframe. The
- * host allocates the ports and materializes the note body to a temp file the
- * server watches; the plugin only declares how to launch it and how to reach it.
- */
-export interface PluginNativeServiceContribution {
-  /** Plugin-local slug. */
-  id: string;
-  /** Exact executable basename to resolve from PATH; no paths or shell. */
-  binaryName: string;
-  /**
-   * Launch argument template. Each entry may contain the placeholders
-   * `{dataPort}`, `{controlPort}` (host-allocated free ports) and `{input}`
-   * (absolute path to the materialized source file).
-   */
-  args: string[];
-  /** URL the iframe loads, e.g. `http://127.0.0.1:{dataPort}`. */
-  dataUrl: string;
-  /** Control-plane WebSocket URL, e.g. `ws://127.0.0.1:{controlPort}`. */
-  controlUrl: string;
-  /** Extension for the materialized source file (default `txt`). */
-  inputExtension?: string;
-  /**
-   * Controls how the service frontend iframe is loaded. Omitted means
-   * unmodified/direct, which is the safest and most compatible default.
-   */
-  previewIframe?: PluginPreviewIframeContribution;
-  descriptionKey?: string;
-  /**
-   * Control-plane message names the host bridge understands. `jumpEvent` is the
-   * server→editor inverse-search message (payload `{ filepath, start:[line,col] }`)
-   * that moves the source cursor on click.
-   */
-  protocol?: {
-    jumpEvent?: string;
-  };
 }
 
 /**
@@ -806,15 +771,6 @@ export interface PluginContributions {
   toolbar?: PluginToolbarButton[];
 }
 
-export interface PluginRuntimeLimits {
-  /** Guest memory cap in bytes. Clamped by the backend. */
-  memoryBytes?: number;
-  /** Wall-clock timeout in milliseconds. Clamped by the backend. */
-  timeoutMs?: number;
-  /** Wasmi fuel budget (`runtime: 'wasm'` only). Clamped by the backend. */
-  fuel?: number;
-}
-
 /**
  * A plugin manifest.
  *
@@ -826,12 +782,32 @@ export interface PluginRuntimeLimits {
  *     title/body). The script gets a permission-gated host API (`ms.*`); the
  *     app, not the script, still performs any note write. `entry` is required
  *     and must be a safe relative `.luau` filename inside the plugin dir.
- *   - `'wasm'` — the plugin ships a backend-only WebAssembly `entry` run by
- *     Wasmi with no WASI by default. It uses the same exported-function and
- *     declarative-effect boundary as Luau; `entry` must be a safe `.wasm`
- *     filename.
  */
+/**
+ * The manifest schema version this app understands.
+ *
+ * Bumped when a change to the manifest is not backwards compatible — a field
+ * that changes meaning, a default that flips. Additive changes (a new optional
+ * field, a new contribution point) do not bump it, because the
+ * forward-compatibility rules below already cover them.
+ */
+export const CURRENT_MANIFEST_VERSION = 1;
+
 export interface PluginManifest {
+  /**
+   * Which manifest schema this plugin was written against. Required: without
+   * it there is no way to tell a manifest written for an older app from one
+   * that is simply malformed, and no way to reject a v2 manifest cleanly once
+   * v2 exists.
+   */
+  manifestVersion: number;
+  /**
+   * Lowest app version this plugin runs on, as `major.minor.patch`. The host
+   * refuses to load the plugin below it rather than failing somewhere deeper,
+   * where the cause would not be obvious. Omit when the plugin has no such
+   * requirement.
+   */
+  minAppVersion?: string;
   id: string;
   name: string;
   version: string;
@@ -847,8 +823,8 @@ export interface PluginManifest {
    * Third-party plugins ignore this and always start gated/disabled.
    */
   enabledByDefault?: boolean;
-  runtime: 'manifest-only' | 'luau' | 'wasm';
-  /** Required for scripted runtimes; a `.luau`/`.wasm` file relative to the plugin dir. */
+  runtime: 'manifest-only' | 'luau';
+  /** Required for `runtime: 'luau'`; a `.luau` file relative to the plugin dir. */
   entry?: string;
   /** Optional per-runtime resource limits. The backend applies hard maximums. */
   limits?: PluginRuntimeLimits;

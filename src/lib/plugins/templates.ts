@@ -6,7 +6,7 @@
  * strings with `{{variable}}` placeholders); the app renders those strings and
  * calls its own note-creation path. A plugin therefore needs neither
  * `notes.write` nor any code execution to ship a useful template — it only asks
- * for `templates.contribute` (to be shown) and `notes.create` (to be turned
+ * for `notes.create` (to be turned
  * into a note by the app).
  *
  * Interpolation stays declarative — a plugin ships strings, never code — but is
@@ -146,9 +146,7 @@ function pluginHasPermission(
   pluginId: string,
   permission: PluginPermission
 ): boolean {
-  return (
-    pluginById(pluginId)?.manifest.permissions.includes(permission) ?? false
-  );
+  return pluginById(pluginId)?.granted.includes(permission) ?? false;
 }
 
 /** The rendered title + body a template produces for the given variables. */
@@ -228,8 +226,7 @@ export async function createNoteFromPluginTemplate(
   }
 
   const runtime = pluginById(pluginId)?.manifest.runtime;
-  const useScript =
-    !!ref.template.render && (runtime === 'luau' || runtime === 'wasm');
+  const useScript = !!ref.template.render && runtime === 'luau';
   // A typed title reaches a scripted template as a `title` variable; the app
   // still forces the final note title to it below so the two paths agree.
   const scriptVariables = titleOverride?.trim()
@@ -269,7 +266,7 @@ async function renderTemplateViaScript(
   template: PluginNoteTemplateContribution,
   variables: TemplateVariables
 ): Promise<RenderedTemplate> {
-  const ctx = { ...buildPluginContext(pluginId), variables };
+  const ctx = { ...buildPluginContext(), variables };
   const raw = (await pluginsRunScript(pluginId, template.render!, ctx)) as
     | Record<string, unknown>
     | null
