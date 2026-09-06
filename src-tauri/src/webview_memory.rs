@@ -64,15 +64,6 @@ enum Posture {
     Parked = 3,
 }
 
-/// Last posture applied, as a [`Posture`] discriminant; 0 means "unknown,
-/// nothing applied yet".
-///
-/// `Resized` fires on every frame of a drag-resize, so without this the
-/// main thread would take a COM round trip per frame to re-assert a
-/// posture it is already in. One process, one main window, so plain
-/// atomics are the whole story.
-static APPLIED: AtomicU8 = AtomicU8::new(0);
-
 /// How long the window has to stay out of sight before its memory is
 /// released.
 ///
@@ -83,9 +74,70 @@ static APPLIED: AtomicU8 = AtomicU8::new(0);
 /// when the user is looking. The delay keeps the win and skips the churn.
 const HIDE_GRACE: Duration = Duration::from_secs(20);
 
-/// Bumped on every visibility change, so a delayed release can tell whether
-/// the window it was scheduled for is still the current situation.
-static GENERATION: AtomicU64 = AtomicU64::new(0);
+#[derive(Debug, PartialEq, Eq)]
+struct VisibilityChange {
+    generation: u64,
+    posture: Posture,
+    apply: bool,
+    schedule_parking: bool,
+}
+
+/// The platform-independent visibility policy.
+///
+/// Tauri supplies window state and WebView2 applies the result. Keeping the
+/// generation and deduplication here makes the restore-before-timeout race
+/// testable without a real window or a 20-second sleep.
+struct VisibilityPolicy {
+    /// Last posture applied, as a [`Posture`] discriminant. Zero means no
+    /// posture has been applied yet.
+    applied: AtomicU8,
+    /// Bumped on every visibility event so delayed parking can reject stale
+    /// work after a restore or a newer hide event.
+    generation: AtomicU64,
+}
+
+impl VisibilityPolicy {
+    const fn new() -> Self {
+        Self {
+            applied: AtomicU8::new(0),
+            generation: AtomicU64::new(0),
+        }
+    }
+
+    fn visibility_changed(&self, out_of_sight: bool) -> VisibilityChange {
+        let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+        let posture = if out_of_sight {
+            Posture::Offscreen
+        } else {
+            Posture::Onscreen
+        };
+
+        VisibilityChange {
+            generation,
+            posture,
+            apply: self.claim(posture),
+            schedule_parking: out_of_sight,
+        }
+    }
+
+    fn is_current(&self, generation: u64) -> bool {
+        self.generation.load(Ordering::Relaxed) == generation
+    }
+
+    fn parking_due(&self, generation: u64, out_of_sight: bool) -> Option<Posture> {
+        if !out_of_sight || !self.is_current(generation) {
+            return None;
+        }
+        self.claim(Posture::Parked).then_some(Posture::Parked)
+    }
+
+    fn claim(&self, posture: Posture) -> bool {
+        let want = posture as u8;
+        self.applied.swap(want, Ordering::Relaxed) != want
+    }
+}
+
+static POLICY: VisibilityPolicy = VisibilityPolicy::new();
 
 /// Is the window currently out of sight — hidden to the tray, or
 /// minimised to the taskbar?
@@ -103,18 +155,6 @@ fn is_out_of_sight<R: Runtime>(window: &WebviewWindow<R>) -> bool {
     is_out_of_sight_state(window.is_visible().ok(), window.is_minimized().ok())
 }
 
-fn immediate_posture(out_of_sight: bool) -> Posture {
-    if out_of_sight {
-        Posture::Offscreen
-    } else {
-        Posture::Onscreen
-    }
-}
-
-fn should_park(scheduled_generation: u64, current_generation: u64, out_of_sight: bool) -> bool {
-    scheduled_generation == current_generation && out_of_sight
-}
-
 /// Put the webview into whatever posture the window's current visibility
 /// calls for.
 ///
@@ -129,46 +169,32 @@ pub fn sync_to_visibility<R: Runtime>(app: &tauri::AppHandle<R>) {
     let Some(window) = app.get_webview_window(MAIN) else {
         return;
     };
-    // Every call invalidates whatever parking was already scheduled.
-    let generation = GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
-
-    let posture = immediate_posture(is_out_of_sight(&window));
-    if posture == Posture::Onscreen {
-        // Coming back is immediate: the user is waiting on this one, and
-        // leaving `IsVisible` false would show them a blank window.
-        set_posture(&window, posture);
+    // Every call invalidates whatever parking was already scheduled. Both
+    // foregrounding and backgrounding are immediate; only parking waits.
+    let change = POLICY.visibility_changed(is_out_of_sight(&window));
+    if change.apply {
+        apply(&window, change.posture);
+    }
+    if !change.schedule_parking {
         return;
     }
 
-    // Backgrounding the page is immediate too. It costs nothing to undo,
-    // and it is what stops the work that was refilling the working set.
-    set_posture(&window, posture);
-
+    let generation = change.generation;
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(HIDE_GRACE).await;
         // Shown again (or hidden again, which scheduled its own parking)
         // while we waited.
-        let current_generation = GENERATION.load(Ordering::Relaxed);
-        if generation != current_generation {
+        if !POLICY.is_current(generation) {
             return;
         }
         let Some(window) = app.get_webview_window(MAIN) else {
             return;
         };
-        if should_park(generation, current_generation, is_out_of_sight(&window)) {
-            set_posture(&window, Posture::Parked);
+        if let Some(posture) = POLICY.parking_due(generation, is_out_of_sight(&window)) {
+            apply(&window, posture);
         }
     });
-}
-
-/// Apply a posture, skipping the COM calls when it is already in force.
-fn set_posture<R: Runtime>(window: &WebviewWindow<R>, posture: Posture) {
-    let want = posture as u8;
-    if APPLIED.swap(want, Ordering::Relaxed) == want {
-        return;
-    }
-    apply(window, posture);
 }
 
 #[cfg(target_os = "windows")]
@@ -244,19 +270,82 @@ mod tests {
     }
 
     #[test]
-    fn visible_windows_use_the_onscreen_posture_immediately() {
-        assert_eq!(immediate_posture(false), Posture::Onscreen);
+    fn visible_windows_apply_onscreen_without_scheduling_work() {
+        let policy = VisibilityPolicy::new();
+
+        assert_eq!(
+            policy.visibility_changed(false),
+            VisibilityChange {
+                generation: 1,
+                posture: Posture::Onscreen,
+                apply: true,
+                schedule_parking: false,
+            }
+        );
     }
 
     #[test]
-    fn hidden_windows_are_backgrounded_before_the_grace_period() {
-        assert_eq!(immediate_posture(true), Posture::Offscreen);
+    fn hidden_windows_apply_offscreen_and_schedule_parking() {
+        let policy = VisibilityPolicy::new();
+
+        assert_eq!(
+            policy.visibility_changed(true),
+            VisibilityChange {
+                generation: 1,
+                posture: Posture::Offscreen,
+                apply: true,
+                schedule_parking: true,
+            }
+        );
     }
 
     #[test]
-    fn parking_requires_the_same_hidden_generation() {
-        assert!(should_park(7, 7, true));
-        assert!(!should_park(7, 8, true));
-        assert!(!should_park(7, 7, false));
+    fn restoring_before_the_grace_period_cancels_parking() {
+        let policy = VisibilityPolicy::new();
+        let hidden = policy.visibility_changed(true);
+        let restored = policy.visibility_changed(false);
+
+        assert_eq!(restored.posture, Posture::Onscreen);
+        assert!(restored.apply);
+        assert!(!policy.is_current(hidden.generation));
+        assert_eq!(policy.parking_due(hidden.generation, true), None);
+    }
+
+    #[test]
+    fn the_latest_hidden_generation_parks_once() {
+        let policy = VisibilityPolicy::new();
+        let first = policy.visibility_changed(true);
+        let latest = policy.visibility_changed(true);
+
+        assert!(first.apply);
+        assert!(!latest.apply, "offscreen was already applied");
+        assert_eq!(policy.parking_due(first.generation, true), None);
+        assert_eq!(
+            policy.parking_due(latest.generation, true),
+            Some(Posture::Parked)
+        );
+        assert_eq!(policy.parking_due(latest.generation, true), None);
+    }
+
+    #[test]
+    fn a_window_that_is_visible_when_the_timer_fires_does_not_park() {
+        let policy = VisibilityPolicy::new();
+        let hidden = policy.visibility_changed(true);
+
+        assert_eq!(policy.parking_due(hidden.generation, false), None);
+    }
+
+    #[test]
+    fn restoring_a_parked_window_reapplies_the_onscreen_posture() {
+        let policy = VisibilityPolicy::new();
+        let hidden = policy.visibility_changed(true);
+        assert_eq!(
+            policy.parking_due(hidden.generation, true),
+            Some(Posture::Parked)
+        );
+
+        let restored = policy.visibility_changed(false);
+        assert_eq!(restored.posture, Posture::Onscreen);
+        assert!(restored.apply);
     }
 }
