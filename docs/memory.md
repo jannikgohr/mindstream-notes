@@ -46,21 +46,23 @@ Two harnesses, deliberately separate:
 ## Where the floor comes from
 
 Measured idle, empty vault, one seeded note, on Windows 11 with WebView2
-152.x — sum of private working sets:
+152.x. Each total is the median of ten private-working-set samples taken one
+second apart after a 25-second startup wait:
 
-| process           | before       | after                                 |
-| ----------------- | ------------ | ------------------------------------- |
-| renderer          | 53.8 MB      | 54.2 MB                               |
-| WebView2 browser  | 27.9 MB      | 27.3 MB (absorbs the network service) |
-| GPU process       | 26.4 MB      | 25.4 MB                               |
-| Tauri host (Rust) | 8.0 MB       | 7.5 MB                                |
-| network service   | 6.8 MB       | — merged                              |
-| storage service   | 3.2 MB       | 3.2 MB                                |
-| crashpad handler  | 2.2 MB       | 2.0 MB                                |
-| **total**         | **128.2 MB** | **119.5 MB**                          |
-| processes         | 7            | 6                                     |
-| working set       | 460.3 MB     | 416.1 MB                              |
-| commit charge     | 261.3 MB     | 244.7 MB                              |
+| process           | unsafe process folding | safe production flags |
+| ----------------- | ---------------------: | --------------------: |
+| renderer          |                51.7 MB |               52.0 MB |
+| WebView2 browser  |                26.9 MB |               28.4 MB |
+| GPU process       |                24.6 MB |               26.5 MB |
+| Tauri host (Rust) |                 7.4 MB |                7.9 MB |
+| network service   |                      — |                6.8 MB |
+| storage service   |                 3.2 MB |                3.2 MB |
+| crashpad handler  |                 2.1 MB |                2.1 MB |
+| **total**         |           **116.1 MB** |          **126.9 MB** |
+| processes         |                      6 |                     7 |
+
+Removing the unsafe flags costs 10.8 MB, or 9.3%, at idle. Most of that is
+the restored network-service process.
 
 Minimised or parked in the tray, the same build sits at 18–33 MB (below).
 
@@ -80,17 +82,19 @@ takes no comments, so the reasoning lives here:
   13 MB. Running the GPU thread inside the browser process puts it on the UI
   thread this app already has contention on — the same thread the Typst
   preview stall was traced to. Do not re-add it.
-- `--enable-features=NetworkServiceInProcess2` — folds the network service into
-  the browser process. The app is local-first; the webview itself fetches
-  nothing off-machine (sync and updates run through `reqwest` in Rust).
 - `--renderer-process-limit=1` — popout note windows are same-origin views of
   the same app, so let them share one renderer instead of paying a fresh
   ~50 MB each.
-- `--disable-features=…Translate,OptimizationHints,MediaRouter,AudioServiceOutOfProcess,BackForwardCache`
-  — none of these are reachable in an app with no navigation, no `<audio>`, and
-  no cast targets. `msWebOOUI,msPdfOOUI,msSmartScreenProtection` are wry's
-  defaults and must be repeated here: setting `additionalBrowserArgs` replaces
-  them rather than appending.
+- `--disable-features=msWebOOUI,msPdfOOUI,Translate,OptimizationHints,MediaRouter,BackForwardCache`
+  removes browser UI and navigation features this app does not use.
+
+Measured and removed from production: `NetworkServiceInProcess2` saved 10.8 MB
+by moving the network service into the privileged browser process. That is not
+a reasonable security trade for this app. The same cleanup removed
+`msSmartScreenProtection`, `AudioServiceOutOfProcess`,
+`--disable-background-networking`, and `--disable-component-update`. Those
+flags either remove browser protections, suppress their update paths, or move
+more parsing into the browser process.
 
 Measured and rejected: `--disable-gpu-compositing` (worse on every axis),
 `--disable-features=StorageServiceOutOfProcess`
