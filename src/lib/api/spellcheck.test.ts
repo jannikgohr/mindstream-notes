@@ -11,6 +11,7 @@ import {
   customDictionaryRemove,
   spellcheckAvailableDictionaries,
   spellcheckInstallDictionary,
+  spellcheckReleaseDictionaries,
   spellcheckRemoveDictionary,
   spellcheckSuggest,
   spellcheckUnknownWords,
@@ -147,6 +148,13 @@ describe('spellcheck API — desktop path', () => {
     expect(invoke).toHaveBeenCalledWith('spellcheck_word_chars', {
       languages: ['en-US', 'de-DE']
     });
+  });
+
+  it('releases resident dictionaries', async () => {
+    invoke.mockResolvedValueOnce(undefined);
+
+    await expect(spellcheckReleaseDictionaries()).resolves.toBeUndefined();
+    expect(invoke).toHaveBeenCalledWith('spellcheck_release_dictionaries', {});
   });
 
   it('rejects word chars that are not a string', async () => {
@@ -377,6 +385,7 @@ describe('spellcheck API — browser fallback', () => {
   it('makes dictionary and personal-word mutations no-ops', async () => {
     await expect(spellcheckInstallDictionary('de_DE')).resolves.toBeUndefined();
     await expect(spellcheckRemoveDictionary('de_DE')).resolves.toBeUndefined();
+    await expect(spellcheckReleaseDictionaries()).resolves.toBeUndefined();
     await expect(customDictionaryAdd('Mindstream')).resolves.toBeUndefined();
     await expect(customDictionaryRemove('Mindstream')).resolves.toBeUndefined();
     expect(invoke).not.toHaveBeenCalled();
