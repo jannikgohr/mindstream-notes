@@ -122,58 +122,31 @@ export default defineConfig({
   // heavy / `import()`ed deps are added.
   optimizeDeps: {
     include: [
-      // Markdown editor — lazy via components/note-editor/lazy-components.ts
+      '@codemirror/commands',
+      '@codemirror/lang-markdown',
+      '@codemirror/language',
+      '@codemirror/state',
+      '@codemirror/view',
+      '@excalidraw/excalidraw',
+      '@floating-ui/dom',
+      '@jis3r/icons',
+      '@lezer/highlight',
+      '@lucide/svelte',
       '@milkdown/crepe',
-      '@milkdown/plugin-collab',
-      '@milkdown/plugin-diff',
+      '@milkdown/kit/component/image-block',
       '@milkdown/kit/core',
-      '@milkdown/kit/utils',
-      '@milkdown/kit/plugin/listener',
       '@milkdown/kit/plugin/history',
+      '@milkdown/kit/plugin/listener',
       '@milkdown/kit/preset/commonmark',
       '@milkdown/kit/preset/gfm',
-      '@milkdown/kit/component/image-block',
       '@milkdown/kit/prose/commands',
       '@milkdown/kit/prose/history',
       '@milkdown/kit/prose/model',
       '@milkdown/kit/prose/state',
       '@milkdown/kit/prose/view',
-      // Imported directly by the lazy Kanban Markdown renderer. Without an
-      // explicit entry Vite discovers it when the first board opens and reloads.
-      'prosemirror-model',
-      '@codemirror/language',
-      'mermaid',
-      // Raw-markdown Source editor (CodeMirror 6) — reached through the lazy
-      // note editor via editor/source/SourceEditor.svelte, so Vite only
-      // discovers these once a note is opened in Source/Split.
-      '@codemirror/state',
-      '@codemirror/view',
-      '@codemirror/commands',
-      '@codemirror/lang-markdown',
-      '@lezer/highlight',
-      // Collab sync — Yjs doc + awareness + transport, plus the ProseMirror
-      // binding. y-prosemirror is reached two lazy hops in (the NoteEditor
-      // import() → editor/seed-template.ts, and @milkdown/plugin-collab's
-      // peer), so without it here the first markdown note a user opens
-      // triggers the re-optimise reload this whole list exists to avoid. Its
-      // position mapping is also read directly by editor/source/source-presence.ts
-      // to place peer markers in the Source view.
-      'yjs',
-      'y-prosemirror',
-      'y-protocols/awareness',
-      'socket.io-client',
-      // PDF viewing + export — lazy via pdf/*.ts and notes-export/*
-      'pdfjs-dist',
-      'pdfjs-dist/web/pdf_viewer.mjs',
-      'pdf-lib',
-      // Excalidraw freeform island + ink/drawing — lazy via *NoteEditor.svelte
-      'react',
-      'react-dom',
-      'react-dom/client',
-      '@excalidraw/excalidraw',
-      'perfect-freehand',
-      'image-js',
-      // Kanban boards
+      '@milkdown/kit/utils',
+      '@milkdown/plugin-collab',
+      '@milkdown/plugin-diff',
       '@svar-ui/core-locales',
       '@svar-ui/kanban-locales',
       '@svar-ui/kanban-provider',
@@ -184,27 +157,35 @@ export default defineConfig({
       '@svar-ui/svelte-editor',
       '@svar-ui/svelte-menu',
       '@svar-ui/svelte-toolbar',
-      // Desktop dockview shell — lazy via DesktopLayout.svelte
-      'dockview-core',
-      // Tauri API + plugins — dynamically imported, so only loaded under Tauri
       '@tauri-apps/api/core',
       '@tauri-apps/api/event',
-      '@tauri-apps/api/window',
       '@tauri-apps/api/webviewWindow',
+      '@tauri-apps/api/window',
       '@tauri-apps/plugin-autostart',
       '@tauri-apps/plugin-process',
-      '@tauri-apps/plugin-updater',
       '@tauri-apps/plugin-shell',
-      // Core UI libs — pulled in across the shell; list them so they land in
-      // the first pass instead of trickling in over the first few reloads.
-      '@lucide/svelte',
-      '@jis3r/icons',
+      '@tauri-apps/plugin-updater',
       'bits-ui',
       'dockview',
-      '@floating-ui/dom',
+      'dockview-core',
+      'image-js',
+      'mdast-util-gfm-task-list-item',
+      'mermaid',
       'mode-watcher',
+      'pdf-lib',
+      'pdfjs-dist',
+      'pdfjs-dist/web/pdf_viewer.mjs',
+      'perfect-freehand',
+      'prosemirror-model',
+      'react',
+      'react-dom',
+      'react-dom/client',
+      'socket.io-client',
       'tailwind-merge',
-      'tailwind-variants'
+      'tailwind-variants',
+      'y-prosemirror',
+      'y-protocols/awareness',
+      'yjs'
     ],
     // This workspace package contains Svelte source and must pass through the
     // Svelte compiler instead of esbuild's dependency pre-bundler.

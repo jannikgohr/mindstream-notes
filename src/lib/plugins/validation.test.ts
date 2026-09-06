@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { PluginValidationError, validateManifest } from './validation';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  compareVersions,
+  PluginValidationError,
+  validateManifest
+} from './validation';
 import type { PluginManifest } from './types';
 import typstManifest from '../../../plugins/typst/manifest.json';
 import languagetoolManifest from '../../../plugins/languagetool/manifest.json';
@@ -9,11 +13,12 @@ function validManifest(
   overrides: Record<string, unknown> = {}
 ): Record<string, unknown> {
   return {
+    manifestVersion: 1,
     id: 'com.example.templates',
     name: 'Example Templates',
     version: '1.0.0',
     runtime: 'manifest-only',
-    permissions: ['templates.contribute', 'notes.create'],
+    permissions: ['notes.create'],
     contributes: {
       i18n: {
         en: { 'templates.meeting.name': 'Meeting notes' },
@@ -142,7 +147,7 @@ describe('validateManifest', () => {
   it('rejects an unknown runtime', () => {
     expect(() =>
       validateManifest(validManifest({ runtime: 'js', entry: 'main.js' }))
-    ).toThrow(/expected "manifest-only", "luau", or "wasm"/);
+    ).toThrow(/expected "manifest-only" or "luau"/);
   });
 
   it('accepts a luau runtime with a safe entry', () => {
@@ -153,24 +158,17 @@ describe('validateManifest', () => {
     expect(m.entry).toBe('main.luau');
   });
 
-  it('accepts a wasm runtime with a safe entry and limits', () => {
-    const m = validateManifest(
-      validManifest({
-        runtime: 'wasm',
-        entry: 'main.wasm',
-        limits: { memoryBytes: 134217728, timeoutMs: 5000, fuel: 1000000 }
-      })
-    );
-    expect(m.runtime).toBe('wasm');
-    expect(m.entry).toBe('main.wasm');
-    expect(m.limits?.fuel).toBe(1000000);
+  it('refuses a wasm runtime', () => {
+    // The wasm tier is gone: its entire host API was `ms.notes_count()`, so a
+    // wasm plugin could not express any of the effects the contract expects.
+    // Refusing outright beats loading one half-supported.
+    expect(() =>
+      validateManifest(validManifest({ runtime: 'wasm', entry: 'main.wasm' }))
+    ).toThrow(/is unsupported; expected "manifest-only" or "luau"/);
   });
 
   it('requires an entry for scripted runtimes', () => {
     expect(() => validateManifest(validManifest({ runtime: 'luau' }))).toThrow(
-      /manifest.entry must be a non-empty string/
-    );
-    expect(() => validateManifest(validManifest({ runtime: 'wasm' }))).toThrow(
       /manifest.entry must be a non-empty string/
     );
   });
@@ -189,24 +187,10 @@ describe('validateManifest', () => {
     }
   });
 
-  it('rejects a traversing or non-.wasm entry', () => {
-    for (const entry of [
-      '../evil.wasm',
-      'sub/main.wasm',
-      'main.luau',
-      'main.js',
-      '.wasm'
-    ]) {
-      expect(() =>
-        validateManifest(validManifest({ runtime: 'wasm', entry }))
-      ).toThrow(/must be a plain \.wasm filename/);
-    }
-  });
-
   it('rejects an entry on a manifest-only runtime', () => {
     expect(() =>
       validateManifest(validManifest({ entry: 'main.luau' }))
-    ).toThrow(/only valid for runtime "luau" or "wasm"/);
+    ).toThrow(/only valid for runtime "luau"/);
   });
 
   it('rejects invalid limits', () => {
@@ -214,8 +198,8 @@ describe('validateManifest', () => {
       validateManifest(validManifest({ limits: { timeoutMs: -1 } }))
     ).toThrow(/manifest.limits.timeoutMs/);
     expect(() =>
-      validateManifest(validManifest({ limits: { fuel: 1000 } }))
-    ).toThrow(/fuel is only valid/);
+      validateManifest(validManifest({ limits: { memoryBytes: 0 } }))
+    ).toThrow(/manifest.limits.memoryBytes/);
   });
 
   it('accepts an optional descriptionKey and rejects a bad one', () => {
@@ -307,8 +291,8 @@ describe('validateManifest', () => {
     );
   });
 
-  it('accepts a toolbar button on a wasm plugin', () => {
-    const m = validManifest({ runtime: 'wasm', entry: 'main.wasm' });
+  it('accepts a toolbar button on a luau plugin', () => {
+    const m = validManifest({ runtime: 'luau', entry: 'main.luau' });
     (m.contributes as Record<string, unknown>).toolbar = [luauButton];
     expect(validateManifest(m).contributes.toolbar).toHaveLength(1);
   });
@@ -317,9 +301,7 @@ describe('validateManifest', () => {
     const m = withContributes((c) => {
       c.toolbar = [luauButton];
     });
-    expect(() => validateManifest(m)).toThrow(
-      /require runtime "luau" or "wasm"/
-    );
+    expect(() => validateManifest(m)).toThrow(/require runtime "luau"/);
   });
 
   it('rejects a toolbar icon that is not a safe .svg path', () => {
@@ -355,8 +337,8 @@ describe('validateManifest', () => {
     expect(() => validateManifest(bad)).toThrow(/requires runtime "luau"/);
   });
 
-  it('accepts a template render export on a wasm plugin', () => {
-    const m = validManifest({ runtime: 'wasm', entry: 'main.wasm' });
+  it('accepts a template render export on a luau plugin', () => {
+    const m = validManifest({ runtime: 'luau', entry: 'main.luau' });
     (
       (m.contributes as Record<string, unknown>).noteTemplates as Record<
         string,
@@ -370,11 +352,7 @@ describe('validateManifest', () => {
     const builtIn = validManifest({
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'notes.create',
-        'noteExporters.contribute'
-      ]
+      permissions: ['notes.create']
     });
     (builtIn.contributes as Record<string, unknown>).noteExporters = [
       {
@@ -390,12 +368,7 @@ describe('validateManifest', () => {
     const pluginOwned = validManifest({
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'noteKinds.contribute',
-        'noteExporters.contribute',
-        'notes.create'
-      ]
+      permissions: ['notes.create']
     });
     const contributes = pluginOwned.contributes as Record<string, unknown>;
     contributes.noteKinds = [
@@ -419,31 +392,9 @@ describe('validateManifest', () => {
     ).toHaveLength(1);
   });
 
-  it('rejects note exporters without permission or scripted runtime', () => {
-    const missingPermission = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau'
-    });
-    (missingPermission.contributes as Record<string, unknown>).noteExporters = [
-      {
-        id: 'pdf',
-        labelKey: 'export.pdf',
-        noteKind: 'markdown',
-        format: 'pdf',
-        export: 'exportPdf'
-      }
-    ];
-    expect(() => validateManifest(missingPermission)).toThrow(
-      /missing the "noteExporters.contribute"/
-    );
-
-    const manifestOnly = validManifest({
-      permissions: [
-        'templates.contribute',
-        'notes.create',
-        'noteExporters.contribute'
-      ]
-    });
+  it('rejects note exporters on a non-scripted runtime', () => {
+    // An exporter runs a backend export function, so it needs a script to run.
+    const manifestOnly = validManifest({ permissions: ['notes.create'] });
     (manifestOnly.contributes as Record<string, unknown>).noteExporters = [
       {
         id: 'pdf',
@@ -454,7 +405,7 @@ describe('validateManifest', () => {
       }
     ];
     expect(() => validateManifest(manifestOnly)).toThrow(
-      /require runtime "luau" or "wasm"/
+      /require runtime "luau"/
     );
   });
 
@@ -462,11 +413,7 @@ describe('validateManifest', () => {
     const base = validManifest({
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'notes.create',
-        'noteExporters.contribute'
-      ]
+      permissions: ['notes.create']
     });
     const contributes = base.contributes as Record<string, unknown>;
     contributes.noteExporters = [
@@ -496,12 +443,7 @@ describe('validateManifest', () => {
     const m = validManifest({
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'notes.create',
-        'noteExporters.contribute',
-        'nativeTools.runDeclared'
-      ]
+      permissions: ['notes.create', 'nativeTools.runDeclared']
     });
     (m.contributes as Record<string, unknown>).noteExporters = [
       {
@@ -535,11 +477,7 @@ describe('validateManifest', () => {
 
   it('accepts declared plugin artifacts behind the download permission', () => {
     const m = validManifest({
-      permissions: [
-        'templates.contribute',
-        'notes.create',
-        'pluginArtifacts.download'
-      ]
+      permissions: ['notes.create', 'pluginArtifacts.download']
     });
     (m.contributes as Record<string, unknown>).artifacts = [
       {
@@ -559,13 +497,7 @@ describe('validateManifest', () => {
     const m = validManifest({
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'noteKinds.contribute',
-        'notes.create',
-        'pluginArtifacts.download',
-        'pluginWebviews.allowEval'
-      ]
+      permissions: ['notes.create', 'pluginArtifacts.download']
     });
     const contributes = m.contributes as Record<string, unknown>;
     contributes.artifacts = [
@@ -601,39 +533,11 @@ describe('validateManifest', () => {
     });
   });
 
-  it('rejects iframe preview eval without the eval permission', () => {
-    const m = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'noteKinds.contribute',
-        'notes.create'
-      ]
-    });
-    const contributes = m.contributes as Record<string, unknown>;
-    contributes.noteKinds = [
-      {
-        id: 'document',
-        labelKey: 'notes.document.label',
-        render: {
-          export: 'renderDocument',
-          webview: { entry: 'preview.mjs', allowEval: true }
-        }
-      }
-    ];
-    expect(() => validateManifest(m)).toThrow(/pluginWebviews\.allowEval/);
-  });
-
   it('rejects iframe preview runtimes that reference unsafe or undeclared assets', () => {
     const m = validManifest({
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'noteKinds.contribute',
-        'notes.create'
-      ]
+      permissions: ['notes.create']
     });
     const contributes = m.contributes as Record<string, unknown>;
     contributes.noteKinds = [
@@ -658,11 +562,7 @@ describe('validateManifest', () => {
 
   it('accepts declared native tools behind the native permission', () => {
     const m = validManifest({
-      permissions: [
-        'templates.contribute',
-        'notes.create',
-        'nativeTools.runDeclared'
-      ]
+      permissions: ['notes.create', 'nativeTools.runDeclared']
     });
     (m.contributes as Record<string, unknown>).nativeTools = [
       {
@@ -751,11 +651,7 @@ describe('validateManifest', () => {
 
   it('rejects unsafe artifact download declarations', () => {
     const m = validManifest({
-      permissions: [
-        'templates.contribute',
-        'notes.create',
-        'pluginArtifacts.download'
-      ]
+      permissions: ['notes.create', 'pluginArtifacts.download']
     });
     (m.contributes as Record<string, unknown>).artifacts = [
       {
@@ -770,21 +666,11 @@ describe('validateManifest', () => {
     expect(() => validateManifest(m)).toThrow(/HTTPS|sha256|fileName/);
   });
 
-  it('requires templates.contribute when contributing templates', () => {
-    expect(() =>
-      validateManifest(validManifest({ permissions: ['notes.create'] }))
-    ).toThrow(/missing the "templates.contribute" permission/);
-  });
-
   it('accepts a plugin-owned note kind and a template that creates it', () => {
     const m = validManifest({
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'noteKinds.contribute',
-        'notes.create'
-      ]
+      permissions: ['notes.create']
     });
     const contributes = m.contributes as Record<string, unknown>;
     contributes.noteKinds = [
@@ -806,12 +692,7 @@ describe('validateManifest', () => {
     const m = validManifest({
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'noteKinds.contribute',
-        'notes.create',
-        'nativeTools.runDeclared'
-      ]
+      permissions: ['notes.create', 'nativeTools.runDeclared']
     });
     const contributes = m.contributes as Record<string, unknown>;
     contributes.nativeTools = [{ id: 'typst', binaryName: 'typst' }];
@@ -835,12 +716,7 @@ describe('validateManifest', () => {
     const m = validManifest({
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'noteKinds.contribute',
-        'notes.create',
-        'nativeTools.runDeclared'
-      ]
+      permissions: ['notes.create', 'nativeTools.runDeclared']
     });
     const contributes = m.contributes as Record<string, unknown>;
     contributes.noteKinds = [
@@ -861,12 +737,7 @@ describe('validateManifest', () => {
     const m = validManifest({
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'noteKinds.contribute',
-        'notes.create',
-        'nativeServices.run'
-      ]
+      permissions: ['notes.create', 'nativeServices.run']
     });
     const contributes = m.contributes as Record<string, unknown>;
     contributes.nativeServices = [
@@ -903,12 +774,7 @@ describe('validateManifest', () => {
     const m = validManifest({
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'noteKinds.contribute',
-        'notes.create',
-        'nativeServices.run'
-      ]
+      permissions: ['notes.create', 'nativeServices.run']
     });
     (m.contributes as Record<string, unknown>).nativeServices = [
       {
@@ -927,12 +793,7 @@ describe('validateManifest', () => {
     const m = validManifest({
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'noteKinds.contribute',
-        'notes.create',
-        'nativeServices.run'
-      ]
+      permissions: ['notes.create', 'nativeServices.run']
     });
     (m.contributes as Record<string, unknown>).nativeServices = [
       {
@@ -951,12 +812,7 @@ describe('validateManifest', () => {
     const m = validManifest({
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'noteKinds.contribute',
-        'notes.create',
-        'nativeServices.run'
-      ]
+      permissions: ['notes.create', 'nativeServices.run']
     });
     (m.contributes as Record<string, unknown>).nativeServices = [
       {
@@ -975,12 +831,7 @@ describe('validateManifest', () => {
     const m = validManifest({
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'noteKinds.contribute',
-        'notes.create',
-        'nativeServices.run'
-      ]
+      permissions: ['notes.create', 'nativeServices.run']
     });
     (m.contributes as Record<string, unknown>).noteKinds = [
       {
@@ -1000,11 +851,7 @@ describe('validateManifest', () => {
     const m = validManifest({
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'noteKinds.contribute',
-        'notes.create'
-      ]
+      permissions: ['notes.create']
     });
     const contributes = m.contributes as Record<string, unknown>;
     contributes.noteKinds = [
@@ -1022,11 +869,7 @@ describe('validateManifest', () => {
     const m = validManifest({
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'noteKinds.contribute',
-        'notes.create'
-      ]
+      permissions: ['notes.create']
     });
     const contributes = m.contributes as Record<string, unknown>;
     contributes.noteKinds = [
@@ -1042,7 +885,7 @@ describe('validateManifest', () => {
 
   it('rejects plugin setting option labels for undeclared options', () => {
     const m = validManifest({
-      permissions: ['templates.contribute', 'notes.create']
+      permissions: ['notes.create']
     });
     const contributes = m.contributes as Record<string, unknown>;
     contributes.settings = [
@@ -1073,11 +916,7 @@ describe('validateManifest', () => {
     const m = validManifest({
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'noteKinds.contribute',
-        'notes.create'
-      ]
+      permissions: ['notes.create']
     });
     const contributes = m.contributes as Record<string, unknown>;
     contributes.noteKinds = [
@@ -1117,11 +956,7 @@ describe('validateManifest', () => {
     const m = validManifest({
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'noteKinds.contribute',
-        'notes.create'
-      ]
+      permissions: ['notes.create']
     });
     const contributes = m.contributes as Record<string, unknown>;
     contributes.noteKinds = [
@@ -1149,11 +984,7 @@ describe('validateManifest', () => {
     const m = validManifest({
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'noteKinds.contribute',
-        'notes.create'
-      ]
+      permissions: ['notes.create']
     });
     const contributes = m.contributes as Record<string, unknown>;
     contributes.noteKinds = [
@@ -1179,11 +1010,7 @@ describe('validateManifest', () => {
     const m = validManifest({
       runtime: 'luau',
       entry: 'main.luau',
-      permissions: [
-        'templates.contribute',
-        'noteKinds.contribute',
-        'notes.create'
-      ]
+      permissions: ['notes.create']
     });
     (m.contributes as Record<string, unknown>).toolbar = [
       {
@@ -1208,20 +1035,6 @@ describe('validateManifest', () => {
       ];
     });
     expect(() => validateManifest(m)).toThrow(/only valid for note-editor/);
-  });
-
-  it('requires noteKinds.contribute when contributing note kinds', () => {
-    const m = validManifest({ runtime: 'luau', entry: 'main.luau' });
-    (m.contributes as Record<string, unknown>).noteKinds = [
-      {
-        id: 'document',
-        labelKey: 'notes.document.label',
-        render: { export: 'renderDocument' }
-      }
-    ];
-    expect(() => validateManifest(m)).toThrow(
-      /missing the "noteKinds.contribute"/
-    );
   });
 
   it('rejects a template for an undeclared plugin note kind', () => {
@@ -1326,6 +1139,7 @@ function scripted(
   permissions: string[] = []
 ): Record<string, unknown> {
   return {
+    manifestVersion: 1,
     id: 'com.example.scripted',
     name: 'Scripted',
     version: '1.0.0',
@@ -1895,7 +1709,7 @@ describe('validateManifest — native tool + service failures', () => {
 });
 
 describe('validateManifest — note kind render failures', () => {
-  const noteKind = (render: unknown, permissions = ['noteKinds.contribute']) =>
+  const noteKind = (render: unknown, permissions: string[] = []) =>
     scripted(
       { noteKinds: [{ id: 'doc', labelKey: 'k.label', render }] },
       permissions
@@ -1909,7 +1723,6 @@ describe('validateManifest — note kind render failures', () => {
     expect(() =>
       validateManifest(
         noteKind({ export: 'render', requiresNativeTool: 'ghost' }, [
-          'noteKinds.contribute',
           'nativeTools.runDeclared'
         ])
       )
@@ -1962,7 +1775,7 @@ describe('validateManifest — note kind field + exporter failures', () => {
           { id: 'doc', labelKey: 'k.label', render: { export: 'r' }, ...extra }
         ]
       },
-      ['noteKinds.contribute']
+      []
     );
   it('rejects an unsafe icon path', () => {
     expect(() => validateManifest(noteKindWith({ icon: '../x.svg' }))).toThrow(
@@ -1991,7 +1804,7 @@ describe('validateManifest — note kind field + exporter failures', () => {
   });
 
   const exporter = (e: Record<string, unknown>) =>
-    scripted({ noteExporters: [e] }, ['noteExporters.contribute']);
+    scripted({ noteExporters: [e] }, []);
   const goodExporter = {
     id: 'pdf',
     labelKey: 'k.label',
@@ -2067,7 +1880,7 @@ describe('validateManifest — text checker failures', () => {
 
   it('requires the textCheckers.contribute permission', () => {
     const m = checkerManifest();
-    m.permissions = ['templates.contribute', 'notes.create'];
+    m.permissions = ['notes.create'];
     expect(() => validateManifest(m)).toThrow(/textCheckers\.contribute/);
   });
 
@@ -2501,10 +2314,7 @@ describe('validateManifest — contribution lists', () => {
       runtime: 'luau',
       entry: 'main.luau',
       permissions: [
-        'templates.contribute',
         'notes.create',
-        'noteKinds.contribute',
-        'noteExporters.contribute',
         'nativeTools.runDeclared',
         'nativeServices.run',
         'pluginArtifacts.download',
@@ -2614,8 +2424,6 @@ describe('validateManifest — contribution lists', () => {
     ['artifacts', 'pluginArtifacts.download'],
     ['nativeTools', 'nativeTools.runDeclared'],
     ['nativeServices', 'nativeServices.run'],
-    ['noteKinds', 'noteKinds.contribute'],
-    ['noteExporters', 'noteExporters.contribute'],
     ['textCheckers', 'textCheckers.contribute']
   ];
 
@@ -2685,7 +2493,7 @@ describe('validateManifest — top-level shape', () => {
 
   it('rejects non-array permissions', () => {
     expect(() =>
-      validateManifest(validManifest({ permissions: 'templates.contribute' }))
+      validateManifest(validManifest({ permissions: 'notes.read' }))
     ).toThrow(/permissions must be an array/);
   });
 
@@ -2705,7 +2513,7 @@ describe('validateManifest — top-level shape', () => {
 });
 
 describe('validateManifest — remaining entry guards', () => {
-  const kind = (render: unknown, permissions = ['noteKinds.contribute']) =>
+  const kind = (render: unknown, permissions: string[] = []) =>
     scripted(
       { noteKinds: [{ id: 'doc', labelKey: 'k.label', render }] },
       permissions
@@ -2761,7 +2569,7 @@ describe('validateManifest — remaining entry guards', () => {
           }
         ]
       },
-      ['noteKinds.contribute', 'pluginArtifacts.download']
+      ['pluginArtifacts.download']
     );
     expect(() => validateManifest(m)).toThrow(/more than once/);
   });
@@ -2780,7 +2588,7 @@ describe('validateManifest — remaining entry guards', () => {
           }
         ]
       },
-      ['noteExporters.contribute']
+      []
     );
     expect(() => validateManifest(m)).toThrow(
       /requiresNativeTool must be a string/
@@ -2873,11 +2681,7 @@ describe('validateManifest — remaining entry guards', () => {
     // A note kind runs a backend render export, so a declarative plugin
     // cannot have one even with the permission.
     const m = validManifest({
-      permissions: [
-        'templates.contribute',
-        'notes.create',
-        'noteKinds.contribute'
-      ]
+      permissions: ['notes.create']
     });
     (m.contributes as Record<string, unknown>).noteKinds = [
       {
@@ -2886,9 +2690,7 @@ describe('validateManifest — remaining entry guards', () => {
         render: { export: 'render' }
       }
     ];
-    expect(() => validateManifest(m)).toThrow(
-      /require runtime "luau" or "wasm"/
-    );
+    expect(() => validateManifest(m)).toThrow(/require runtime "luau"/);
   });
 });
 
@@ -2910,7 +2712,7 @@ describe('validateManifest — toolbar button guards', () => {
           }
         ]
       },
-      ['noteKinds.contribute']
+      []
     );
 
   it('rejects a note kind on a button outside the note editor', () => {
@@ -2970,7 +2772,7 @@ describe('validateManifest — toolbar button guards', () => {
           }
         ]
       },
-      ['noteKinds.contribute']
+      []
     );
 
   it('rejects insertText without text', () => {
@@ -3004,5 +2806,92 @@ describe('validateManifest — toolbar button guards', () => {
         })
       )
     ).toThrow(/placeholder must be a string/);
+  });
+});
+
+describe('manifest versioning', () => {
+  it('requires a manifestVersion', () => {
+    const m = validManifest();
+    delete m.manifestVersion;
+    expect(() => validateManifest(m)).toThrow(
+      /manifestVersion must be a positive integer/
+    );
+  });
+
+  it('rejects a manifest written for a newer app', () => {
+    // The point of the field: a v2 manifest fails with "update the app"
+    // rather than with whatever v2 field this version happens to read first.
+    expect(() =>
+      validateManifest(validManifest({ manifestVersion: 2 }))
+    ).toThrow(/newer than this app understands/);
+  });
+
+  it('rejects a non-integer manifestVersion', () => {
+    for (const bad of ['1', 1.5, 0, -1, null]) {
+      expect(() =>
+        validateManifest(validManifest({ manifestVersion: bad }))
+      ).toThrow(/manifestVersion must be a positive integer/);
+    }
+  });
+
+  it('accepts a minAppVersion this app satisfies', () => {
+    expect(
+      validateManifest(validManifest({ minAppVersion: '0.0.1' })).minAppVersion
+    ).toBe('0.0.1');
+  });
+
+  it('rejects a minAppVersion newer than this app', () => {
+    expect(() =>
+      validateManifest(validManifest({ minAppVersion: '999.0.0' }))
+    ).toThrow(/needs app version 999\.0\.0 or newer/);
+  });
+
+  it('rejects a malformed minAppVersion', () => {
+    for (const bad of ['1', '1.2', 'v1.2.3', '1.2.3-beta']) {
+      expect(() =>
+        validateManifest(validManifest({ minAppVersion: bad }))
+      ).toThrow(/must be a major\.minor\.patch version/);
+    }
+  });
+
+  it('compares versions numerically, not lexically', () => {
+    // '10' < '9' as strings; the whole point is that it does not here.
+    expect(compareVersions('0.10.0', '0.9.0')).toBe(1);
+    expect(compareVersions('1.0.0', '1.0.0')).toBe(0);
+    expect(compareVersions('1.2.3', '1.2.4')).toBe(-1);
+    expect(compareVersions('2.0.0', '10.0.0')).toBe(-1);
+  });
+});
+
+describe('forward compatibility', () => {
+  it('drops an unknown contribution instead of refusing the plugin', () => {
+    // Additive by construction: ignoring it costs one feature of one plugin,
+    // and everything else the plugin contributes still works.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const m = validManifest();
+    (m.contributes as Record<string, unknown>).somethingFromTheFuture = [
+      { id: 'x' }
+    ];
+
+    const parsed = validateManifest(m);
+    expect(
+      (parsed.contributes as Record<string, unknown>).somethingFromTheFuture
+    ).toBeUndefined();
+    expect(parsed.contributes.noteTemplates).toHaveLength(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('ignoring unknown contribution')
+    );
+    warn.mockRestore();
+  });
+
+  it('refuses an unknown permission rather than narrowing the grant', () => {
+    // The asymmetry is deliberate. Silently dropping a permission would load
+    // the plugin under a narrower grant than it was written for, and it would
+    // fail later with nothing pointing back to the cause.
+    expect(() =>
+      validateManifest(
+        validManifest({ permissions: ['notes.create', 'future.capability'] })
+      )
+    ).toThrow(/unknown permission "future.capability"/);
   });
 });

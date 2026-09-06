@@ -36,9 +36,10 @@ use crate::error::{AppError, AppResult, CommandResult};
 
 pub mod discovery;
 pub mod luau;
+pub mod manifest;
 pub mod preview_service;
+pub mod settings;
 pub mod signing;
-pub mod wasm;
 
 /// Where a plugin came from. Governs the integrity gate: builtins are trusted,
 /// installed plugins must keep a matching accepted hash.
@@ -225,9 +226,28 @@ pub fn upsert(conn: &Connection, input: UpsertPlugin) -> AppResult<PluginRecord>
                 input.signer.is_some() && input.signer.as_deref() == existing.signer.as_deref();
             let accept = trusted || hash_matches || (signed_valid && same_signer);
 
-            if accept {
-                // Trusted, unchanged, or a valid same-signer update: accept the
-                // current manifest + signer, clear any error, keep enabled state.
+            // An accepted update may narrow its permissions freely, but it may
+            // not widen them. Auto-approving a same-signer update is a
+            // convenience about *authorship* — it says the bytes came from the
+            // author the user already trusted, not that the user agreed to
+            // whatever those bytes now ask for. Without this, a plugin approved
+            // holding `notes.read` could ship a re-signed update that added
+            // `nativeTools.runDeclared` and have it granted silently, so the
+            // permission list shown at approval was not the one enforced.
+            let added: Vec<String> = input
+                .permissions
+                .iter()
+                .filter(|p| !existing.granted_permissions.contains(p))
+                .cloned()
+                .collect();
+            // Builtins are trusted by location: they ship inside the signed
+            // binary, so their manifest is as authoritative as the app itself.
+            let widens = !trusted && !added.is_empty();
+
+            if accept && !widens {
+                // Trusted, unchanged, or a valid same-signer update that asks
+                // for no more than it already holds: accept the current
+                // manifest + signer, clear any error, keep enabled state.
                 conn.execute(
                     "UPDATE plugins SET
                         version = ?2, source = ?3, source_path = ?4,
@@ -252,12 +272,20 @@ pub fn upsert(conn: &Connection, input: UpsertPlugin) -> AppResult<PluginRecord>
                 // it off. Keep the old accepted hash + pinned signer so a later
                 // legitimate re-sign by the original author auto-recovers. Update
                 // signature_status so the UI can explain why.
-                let reason = if input.signature_status == "invalid" {
-                    "plugin signature is invalid; re-approval required"
+                let reason = if widens {
+                    // Name them: "needs re-approval" without saying what changed
+                    // gives the user nothing to decide on.
+                    format!(
+                        "update requests new permissions ({}); re-approval required",
+                        added.join(", ")
+                    )
+                } else if input.signature_status == "invalid" {
+                    "plugin signature is invalid; re-approval required".to_string()
                 } else if signed_valid {
                     "plugin is signed by a different key than approved; re-approval required"
+                        .to_string()
                 } else {
-                    "manifest hash changed since it was approved; re-approval required"
+                    "manifest hash changed since it was approved; re-approval required".to_string()
                 };
                 conn.execute(
                     "UPDATE plugins SET
@@ -288,26 +316,6 @@ pub fn upsert(conn: &Connection, input: UpsertPlugin) -> AppResult<PluginRecord>
 pub struct DiscoveredPluginView {
     pub record: PluginRecord,
     pub manifest: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PluginArtifactManifest {
-    id: String,
-    kind: String,
-    version: String,
-    url: String,
-    sha256: String,
-    file_name: String,
-    size_bytes: Option<u64>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PluginNativeToolManifest {
-    id: String,
-    binary_name: String,
-    description_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -342,14 +350,6 @@ pub struct PluginNativeToolOutput {
     pub timed_out: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PluginStorageEntry {
-    pub path: String,
-    pub is_dir: bool,
-    pub bytes: Option<u64>,
-}
-
 /// Reconcile every discovered plugin with its DB record (applying the trust
 /// gate via {@link upsert}) and return the records + manifests. The `source`
 /// on each input comes from discovery (the load location), so trust is never
@@ -376,7 +376,7 @@ pub fn reconcile(
         )?;
         views.push(DiscoveredPluginView {
             record,
-            manifest: plugin.manifest,
+            manifest: plugin.manifest_json,
         });
     }
     Ok(views)
@@ -395,20 +395,35 @@ fn set_enabled(conn: &Connection, id: &str, enabled: bool) -> AppResult<PluginRe
 }
 
 /// Accept the current on-disk manifest for a plugin (re-approval after a change
-/// or a new/rotated signer): pin its checksum + signer, enable it, clear the
-/// load error. Pinning the signer means the author's *next* update auto-approves.
+/// or a new/rotated signer): pin its checksum, signer and **permission set**,
+/// enable it, clear the load error. Pinning the signer means the author's *next*
+/// update auto-approves — as long as it does not ask for more than this.
+///
+/// Pinning the permissions here is what makes the approval prompt honest: the
+/// set the user was shown is the set that gets written, and `upsert` will not
+/// widen it afterwards.
 pub fn approve(
     conn: &Connection,
     id: &str,
     checksum: &str,
+    permissions: &[String],
     signer: Option<&str>,
     signature_status: &str,
 ) -> AppResult<PluginRecord> {
     let now = Utc::now().to_rfc3339();
+    let permissions_json = serde_json::to_string(permissions).unwrap_or_else(|_| "[]".into());
     let changed = conn.execute(
         "UPDATE plugins SET accepted_hash = ?2, signer = ?3, signature_status = ?4,
-            enabled = 1, last_load_error = NULL, updated_at = ?5 WHERE id = ?1",
-        params![id, checksum, signer, signature_status, now],
+            granted_permissions = ?6, enabled = 1, last_load_error = NULL,
+            updated_at = ?5 WHERE id = ?1",
+        params![
+            id,
+            checksum,
+            signer,
+            signature_status,
+            now,
+            permissions_json
+        ],
     )?;
     if changed == 0 {
         return Err(AppError::NotFound(format!("plugin {id}")));
@@ -483,8 +498,6 @@ fn read_plugin_file(dir: &Path, file: &str) -> AppResult<Option<String>> {
 // ---------- Host-managed artifacts + plugin data -------------------------
 
 const PERM_PLUGIN_ARTIFACTS_DOWNLOAD: &str = "pluginArtifacts.download";
-const PERM_PLUGIN_STORAGE_READ: &str = "pluginStorage.read";
-const PERM_PLUGIN_STORAGE_WRITE: &str = "pluginStorage.write";
 const PERM_NATIVE_TOOLS_RUN_DECLARED: &str = "nativeTools.runDeclared";
 const MAX_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_NATIVE_TOOL_ARGS: usize = 64;
@@ -501,25 +514,77 @@ fn sha256_hex(bytes: &[u8]) -> String {
     out
 }
 
-fn require_enabled_permission(
-    conn: &Connection,
-    id: &str,
-    permission: &str,
-) -> AppResult<PluginRecord> {
-    let record = require(conn, id)?;
+fn require_enabled(record: &PluginRecord) -> AppResult<()> {
     if !record.enabled {
-        return Err(AppError::InvalidArg(format!("plugin {id} is not enabled")));
+        return Err(AppError::InvalidArg(format!(
+            "plugin {} is not enabled",
+            record.id
+        )));
     }
+    Ok(())
+}
+
+fn require_permission(record: &PluginRecord, permission: &str) -> AppResult<()> {
     if !record
         .granted_permissions
         .iter()
         .any(|granted| granted == permission)
     {
         return Err(AppError::InvalidArg(format!(
-            "plugin {id} lacks permission {permission}"
+            "plugin {} lacks permission {permission}",
+            record.id
         )));
     }
-    Ok(record)
+    Ok(())
+}
+
+/// The integrity gate, applied at **execution** time rather than only at
+/// discovery.
+///
+/// Every command that runs a plugin's code — or acts on its behalf using files
+/// read from disk — re-locates the plugin with [`discovery::find`], which reads
+/// whatever is on disk *now*. `reconcile` runs at startup and on explicit
+/// discovery, so without this check an approved plugin whose files change while
+/// the app is running would execute unapproved bytes under the permissions the
+/// old bytes were approved for.
+///
+/// Builtins are exempt: they are trusted by location and ship inside the signed
+/// app binary, so their `accepted_hash` tracks the binary rather than gating it.
+fn require_approved(record: &PluginRecord, plugin: &discovery::DiscoveredPlugin) -> AppResult<()> {
+    if plugin.source == SOURCE_BUILTIN {
+        return Ok(());
+    }
+    if plugin.checksum != record.accepted_hash {
+        return Err(AppError::InvalidArg(format!(
+            "plugin {} changed on disk since it was approved; re-approval required",
+            record.id
+        )));
+    }
+    Ok(())
+}
+
+/// Locate a plugin on disk and assert it is enabled, unmodified since approval,
+/// and — when `permission` is given — granted that capability.
+///
+/// This is the single front door for every execution path. Callers get the DB
+/// record and the on-disk plugin together precisely so the checksum comparison
+/// cannot be forgotten: there is no way to obtain the [`discovery::DiscoveredPlugin`]
+/// through this helper without the gate having run.
+fn load_runnable(
+    conn: &Connection,
+    third_party_dir: &Path,
+    id: &str,
+    permission: Option<&str>,
+) -> AppResult<(PluginRecord, discovery::DiscoveredPlugin)> {
+    let record = require(conn, id)?;
+    require_enabled(&record)?;
+    if let Some(permission) = permission {
+        require_permission(&record, permission)?;
+    }
+    let plugin = discovery::find(third_party_dir, id)
+        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
+    require_approved(&record, &plugin)?;
+    Ok((record, plugin))
 }
 
 fn safe_segment(value: &str, label: &str) -> AppResult<()> {
@@ -535,32 +600,15 @@ fn safe_segment(value: &str, label: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn parse_artifacts(manifest: &serde_json::Value) -> AppResult<Vec<PluginArtifactManifest>> {
-    let Some(value) = manifest.get("contributes").and_then(|c| c.get("artifacts")) else {
-        return Ok(Vec::new());
-    };
-    serde_json::from_value(value.clone())
-        .map_err(|e| AppError::InvalidArg(format!("manifest.contributes.artifacts: {e}")))
-}
-
-fn parse_native_tools(manifest: &serde_json::Value) -> AppResult<Vec<PluginNativeToolManifest>> {
-    let Some(value) = manifest
-        .get("contributes")
-        .and_then(|c| c.get("nativeTools"))
-    else {
-        return Ok(Vec::new());
-    };
-    serde_json::from_value(value.clone())
-        .map_err(|e| AppError::InvalidArg(format!("manifest.contributes.nativeTools: {e}")))
-}
-
-fn find_native_tool(
-    manifest: &serde_json::Value,
+/// A declared native tool, or a "not declared" error. The lookup is on the
+/// parsed manifest, so "declared" means the manifest said so in a shape the
+/// backend understood — not that a JSON blob happened to have the right keys.
+fn require_native_tool<'a>(
+    manifest: &'a manifest::Manifest,
     tool_id: &str,
-) -> AppResult<PluginNativeToolManifest> {
-    parse_native_tools(manifest)?
-        .into_iter()
-        .find(|tool| tool.id == tool_id)
+) -> AppResult<&'a manifest::NativeToolDecl> {
+    manifest
+        .native_tool(tool_id)
         .ok_or_else(|| AppError::NotFound(format!("plugin native tool {tool_id}")))
 }
 
@@ -583,6 +631,9 @@ fn validate_binary_name(binary_name: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// Refuse a write whose target is a symlink, and containment-check the parent
+/// when the file does not exist yet. Checking only the parent is not enough: a
+/// symlink at the target path would be followed by `fs::write`.
 fn ensure_write_target_safe(root: &Path, target: &Path) -> AppResult<()> {
     match fs::symlink_metadata(target) {
         Ok(metadata) => {
@@ -653,7 +704,7 @@ fn resolve_path_binary(binary_name: &str) -> AppResult<Option<PathBuf>> {
 
 fn native_tool_status(
     plugin_id: &str,
-    tool: &PluginNativeToolManifest,
+    tool: &manifest::NativeToolDecl,
 ) -> AppResult<PluginNativeToolStatus> {
     let _ = &tool.description_key;
     let path = resolve_path_binary(&tool.binary_name)?;
@@ -671,17 +722,20 @@ fn native_tool_status(
 /// native tools are unavailable, so every declared tool maps to `None` — the
 /// script sees the tool but `available` is always false, matching the
 /// desktop-only guard on the direct `plugins_run_native_tool` command.
-fn resolve_native_tools(manifest: &serde_json::Value) -> HashMap<String, Option<PathBuf>> {
-    let tools = parse_native_tools(manifest).unwrap_or_default();
+/// The plugin's declared tools resolved to their PATH binary. `None` means
+/// declared but not found — which is also what mobile always reports, since
+/// native tools are desktop-only.
+fn resolve_native_tools(manifest: &manifest::Manifest) -> HashMap<String, Option<PathBuf>> {
+    let tools = &manifest.contributes.native_tools;
     tools
-        .into_iter()
+        .iter()
         .map(|tool| {
             let resolved = if cfg!(mobile) {
                 None
             } else {
                 resolve_path_binary(&tool.binary_name).ok().flatten()
             };
-            (tool.id, resolved)
+            (tool.id.clone(), resolved)
         })
         .collect()
 }
@@ -812,13 +866,13 @@ fn run_native_tool_process(
     })
 }
 
-fn find_artifact(
-    manifest: &serde_json::Value,
+/// A declared artifact, or a "not declared" error.
+fn require_artifact<'a>(
+    manifest: &'a manifest::Manifest,
     artifact_id: &str,
-) -> AppResult<PluginArtifactManifest> {
-    parse_artifacts(manifest)?
-        .into_iter()
-        .find(|artifact| artifact.id == artifact_id)
+) -> AppResult<&'a manifest::ArtifactDecl> {
+    manifest
+        .artifact(artifact_id)
         .ok_or_else(|| AppError::NotFound(format!("plugin artifact {artifact_id}")))
 }
 
@@ -833,7 +887,7 @@ fn plugin_artifact_root(app: &AppHandle, plugin_id: &str) -> AppResult<PathBuf> 
 ///
 /// Every segment comes from the manifest, which is untrusted, so each one is
 /// checked before it becomes a path component.
-fn artifact_path_in(root: &Path, artifact: &PluginArtifactManifest) -> AppResult<PathBuf> {
+fn artifact_path_in(root: &Path, artifact: &manifest::ArtifactDecl) -> AppResult<PathBuf> {
     safe_segment(&artifact.id, "artifact id")?;
     safe_segment(&artifact.version, "artifact version")?;
     safe_segment(&artifact.file_name, "artifact file name")?;
@@ -846,7 +900,7 @@ fn artifact_path_in(root: &Path, artifact: &PluginArtifactManifest) -> AppResult
 fn artifact_file_path(
     app: &AppHandle,
     plugin_id: &str,
-    artifact: &PluginArtifactManifest,
+    artifact: &manifest::ArtifactDecl,
 ) -> AppResult<PathBuf> {
     artifact_path_in(&plugin_artifact_root(app, plugin_id)?, artifact)
 }
@@ -854,7 +908,7 @@ fn artifact_file_path(
 fn artifact_status(
     app: &AppHandle,
     plugin_id: &str,
-    artifact: &PluginArtifactManifest,
+    artifact: &manifest::ArtifactDecl,
 ) -> AppResult<PluginArtifactStatus> {
     let path = artifact_file_path(app, plugin_id, artifact)?;
     let bytes = fs::metadata(&path).ok().map(|m| m.len());
@@ -863,7 +917,12 @@ fn artifact_status(
     Ok(PluginArtifactStatus {
         plugin_id: plugin_id.to_string(),
         artifact_id: artifact.id.clone(),
-        kind: artifact.kind.clone(),
+        kind: match artifact.kind {
+            manifest::ArtifactKind::Wasm => "wasm",
+            manifest::ArtifactKind::WebScript => "webScript",
+            manifest::ArtifactKind::Data => "data",
+        }
+        .to_string(),
         version: artifact.version.clone(),
         file_name: artifact.file_name.clone(),
         installed,
@@ -875,7 +934,7 @@ fn artifact_status(
 async fn download_artifact(
     app: AppHandle,
     plugin_id: String,
-    artifact: PluginArtifactManifest,
+    artifact: manifest::ArtifactDecl,
 ) -> AppResult<PluginArtifactStatus> {
     let url = reqwest::Url::parse(&artifact.url)
         .map_err(|e| AppError::InvalidArg(format!("artifact URL: {e}")))?;
@@ -913,7 +972,7 @@ async fn download_artifact(
 /// leave a half-file where the loader expects a complete one.
 fn install_artifact_bytes(
     root: &Path,
-    artifact: &PluginArtifactManifest,
+    artifact: &manifest::ArtifactDecl,
     bytes: &[u8],
 ) -> AppResult<PathBuf> {
     let len = u64::try_from(bytes.len())
@@ -998,14 +1057,6 @@ fn split_plugin_rel_path(path: &str, allow_empty: bool) -> AppResult<Vec<String>
     Ok(out)
 }
 
-fn plugin_data_path(app: &AppHandle, plugin_id: &str, path: &str) -> AppResult<PathBuf> {
-    let mut out = plugin_data_root(app, plugin_id)?;
-    for segment in split_plugin_rel_path(path, true)? {
-        out.push(segment);
-    }
-    Ok(out)
-}
-
 fn ensure_inside_data_root(root: &Path, target: &Path) -> AppResult<()> {
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let target = target
@@ -1021,85 +1072,39 @@ fn ensure_inside_data_root(root: &Path, target: &Path) -> AppResult<()> {
 
 // ---------- Scripted execution ----------
 
-fn manifest_id(manifest: &serde_json::Value) -> &str {
-    manifest
-        .get("id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("plugin")
-}
-
-fn manifest_entry<'a>(
-    manifest: &'a serde_json::Value,
-    runtime: &str,
-    extension: &str,
-) -> AppResult<&'a str> {
-    let entry = manifest
-        .get("entry")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::InvalidArg(format!("{runtime} plugin has no entry")))?;
-    if entry.contains('/') || entry.contains('\\') || entry.contains("..") {
-        return Err(AppError::InvalidArg(format!("unsafe entry '{entry}'")));
-    }
-    if !entry.ends_with(extension) {
-        return Err(AppError::InvalidArg(format!(
-            "{runtime} plugin entry must end in {extension}"
-        )));
-    }
-    Ok(entry)
-}
-
-fn limit_usize(
-    manifest: &serde_json::Value,
-    field: &str,
-    default: usize,
-    min: usize,
-    max: usize,
-) -> usize {
-    manifest
-        .get("limits")
-        .and_then(|v| v.get(field))
-        .and_then(|v| v.as_u64())
+/// A manifest-declared byte limit, clamped into the host's range. A manifest
+/// may ask; only the host decides.
+fn limit_usize(declared: Option<u64>, default: usize, min: usize, max: usize) -> usize {
+    declared
         .and_then(|n| usize::try_from(n).ok())
         .unwrap_or(default)
         .clamp(min, max)
 }
 
-fn limit_u64(manifest: &serde_json::Value, field: &str, default: u64, min: u64, max: u64) -> u64 {
-    manifest
-        .get("limits")
-        .and_then(|v| v.get(field))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(default)
-        .clamp(min, max)
-}
-
+/// A manifest-declared timeout, clamped into the host's range.
 fn limit_duration(
-    manifest: &serde_json::Value,
+    declared: Option<u64>,
     default: std::time::Duration,
     min: std::time::Duration,
     max: std::time::Duration,
 ) -> std::time::Duration {
-    let millis = manifest
-        .get("limits")
-        .and_then(|v| v.get("timeoutMs"))
-        .and_then(|v| v.as_u64())
+    declared
         .map(std::time::Duration::from_millis)
-        .unwrap_or(default);
-    millis.clamp(min, max)
+        .unwrap_or(default)
+        .clamp(min, max)
 }
 
-fn luau_limits(manifest: &serde_json::Value) -> luau::Limits {
+fn luau_limits(manifest: &manifest::Manifest) -> luau::Limits {
     let defaults = luau::Limits::default();
     luau::Limits {
         memory_bytes: limit_usize(
-            manifest,
-            "memoryBytes",
+            manifest.limits.memory_bytes,
             defaults.memory_bytes,
             1024 * 1024,
             64 * 1024 * 1024,
         ),
         timeout: limit_duration(
-            manifest,
+            manifest.limits.timeout_ms,
             defaults.timeout,
             std::time::Duration::from_millis(50),
             std::time::Duration::from_secs(5),
@@ -1107,105 +1112,114 @@ fn luau_limits(manifest: &serde_json::Value) -> luau::Limits {
     }
 }
 
-fn wasm_limits(manifest: &serde_json::Value) -> wasm::Limits {
-    let defaults = wasm::Limits::default();
-    wasm::Limits {
-        memory_bytes: limit_usize(
-            manifest,
-            "memoryBytes",
-            defaults.memory_bytes,
-            16 * 1024 * 1024,
-            512 * 1024 * 1024,
-        ),
-        timeout: limit_duration(
-            manifest,
-            defaults.timeout,
-            std::time::Duration::from_millis(100),
-            std::time::Duration::from_secs(30),
-        ),
-        fuel: limit_u64(manifest, "fuel", defaults.fuel, 10_000, 10_000_000_000),
-    }
-}
-
 /// Load a scripted plugin's entry and run its `export` function with `input`,
-/// under the selected runtime's sandbox + resource limits. `manifest` is the
-/// plugin's parsed manifest (for `runtime`/`entry`/`id`); `granted` is the
-/// permission set that decides the host API surface.
+/// under the runtime's sandbox and resource limits. `granted` is the permission
+/// set that decides the host API surface — it comes from the database record,
+/// not from the manifest, so a plugin runs under what the user approved.
 ///
 /// Factored out of the command so it is unit-testable without a Tauri handle.
-#[allow(clippy::too_many_arguments)]
 pub fn run_plugin_script(
     files: &discovery::PluginFiles,
-    manifest: &serde_json::Value,
-    checksum: &str,
+    manifest: &manifest::Manifest,
     granted: Vec<String>,
     export: &str,
     input: serde_json::Value,
     notes: Vec<luau::NoteMeta>,
-    native_tool_cwd: Option<PathBuf>,
+    data_root: Option<PathBuf>,
 ) -> AppResult<serde_json::Value> {
-    match manifest.get("runtime").and_then(|v| v.as_str()) {
-        Some("luau") => {
-            let entry = manifest_entry(manifest, "luau", ".luau")?;
-            let source = files
-                .read_text(entry)?
-                .ok_or_else(|| AppError::InvalidArg(format!("entry '{entry}' not found")))?;
-            // The plugin's other `.luau` files, resolvable via a plugin-scoped `require`.
-            let modules = files.luau_modules()?;
-            let id = manifest_id(manifest);
-            // Resolve the plugin's declared PATH binaries only when the tool
-            // permission was granted; the map decides `ms.nativeTools` availability.
-            let native_tools = if granted.iter().any(|p| p == PERM_NATIVE_TOOLS_RUN_DECLARED) {
-                resolve_native_tools(manifest)
-            } else {
-                HashMap::new()
-            };
-            luau::run(luau::ScriptRequest {
-                source,
-                chunk_name: format!("{id}/{entry}"),
-                export: export.to_string(),
-                input,
-                permissions: granted,
-                notes,
-                native_tools,
-                native_tool_cwd,
-                modules,
-                limits: luau_limits(manifest),
-            })
-        }
-        Some("wasm") => {
-            run_wasm_plugin_script(files, manifest, checksum, granted, export, input, notes)
-        }
-        Some(other) => Err(AppError::InvalidArg(format!(
-            "plugin runtime '{other}' is not executable"
-        ))),
-        None => Err(AppError::InvalidArg("plugin has no runtime".into())),
+    if !manifest.runtime.is_scripted() {
+        return Err(AppError::InvalidArg(
+            "plugin runtime is not executable".into(),
+        ));
     }
-}
-
-fn run_wasm_plugin_script(
-    files: &discovery::PluginFiles,
-    manifest: &serde_json::Value,
-    checksum: &str,
-    granted: Vec<String>,
-    export: &str,
-    input: serde_json::Value,
-    notes: Vec<luau::NoteMeta>,
-) -> AppResult<serde_json::Value> {
-    let entry = manifest_entry(manifest, "wasm", ".wasm")?;
-    let wasm = files
-        .read_bytes(entry)?
+    // Guaranteed by `Manifest::parse`: a scripted runtime has a safe entry.
+    let entry = manifest
+        .entry
+        .as_deref()
+        .ok_or_else(|| AppError::InvalidArg("luau plugin has no entry".into()))?;
+    let source = files
+        .read_text(entry)?
         .ok_or_else(|| AppError::InvalidArg(format!("entry '{entry}' not found")))?;
-    wasm::run(wasm::ScriptRequest {
-        wasm,
-        module_name: format!("{}/{}", manifest_id(manifest), entry),
-        checksum: checksum.to_string(),
+    // The plugin's other `.luau` files, resolvable via a plugin-scoped `require`.
+    let modules = files.luau_modules()?;
+    // Resolve the plugin's declared PATH binaries only when the tool permission
+    // was granted; the map decides `ms.nativeTools` availability.
+    let native_tools = if granted.iter().any(|p| p == PERM_NATIVE_TOOLS_RUN_DECLARED) {
+        resolve_native_tools(manifest)
+    } else {
+        HashMap::new()
+    };
+    luau::run(luau::ScriptRequest {
+        source,
+        chunk_name: format!("{}/{entry}", manifest.id),
         export: export.to_string(),
         input,
         permissions: granted,
         notes,
-        limits: wasm_limits(manifest),
+        native_tools,
+        data_root,
+        modules,
+        limits: luau_limits(manifest),
     })
+}
+
+/// The half of a script's context the **backend** owns.
+///
+/// Merged into whatever call-specific input the caller supplies, and it wins on
+/// a key collision — these are not fields the frontend gets to choose.
+///
+///   - `settings` come from the database, so they are the plugin's real stored
+///     configuration rather than a snapshot someone assembled and passed down.
+///   - `folders` is the vault structure, gated on `notes.read` exactly like
+///     `ms.notes`. Folder names are user content; the two travel together.
+///   - `now` is the host clock, so a script cannot be handed a false one.
+///
+/// Everything the backend can build itself, it builds itself. What is left over
+/// is genuinely UI state — which note is on screen, which locale the window is
+/// showing — and stays the caller's to pass.
+fn backend_script_context(
+    conn: &Connection,
+    plugin_id: &str,
+    granted: &[String],
+) -> AppResult<serde_json::Value> {
+    let settings = settings::all(conn, plugin_id)?;
+    let folders = if granted.iter().any(|p| p == "notes.read") {
+        let collections = crate::collections::list(conn)?;
+        collections
+            .into_iter()
+            .map(|c| {
+                serde_json::json!({
+                    "id": c.id,
+                    "name": c.name,
+                    "parentId": c.parent_collection_id,
+                })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Ok(serde_json::json!({
+        "settings": settings,
+        "folders": folders,
+        "now": Utc::now().to_rfc3339(),
+    }))
+}
+
+/// Merge the backend-owned context into the caller's input. Backend keys win:
+/// `settings`, `folders` and `now` are the host's answer, not a suggestion.
+fn merge_script_input(
+    mut input: serde_json::Value,
+    backend: serde_json::Value,
+) -> serde_json::Value {
+    let (Some(target), Some(source)) = (input.as_object_mut(), backend.as_object()) else {
+        // A non-object input has nowhere to merge into; hand back the context
+        // alone rather than silently dropping it.
+        return backend;
+    };
+    for (key, value) in source {
+        target.insert(key.clone(), value.clone());
+    }
+    input
 }
 
 /// Build the read-only note snapshot exposed via `ms.notes`. One `notes::list`
@@ -1250,6 +1264,15 @@ fn note_snapshot(conn: &Connection) -> AppResult<Vec<luau::NoteMeta>> {
 }
 
 // ---------- Tauri commands ----------
+
+// Tauri injects `AppHandle` and `State` into these IPC adapters. The regular
+// test, clippy, and release builds compile the real commands; the logic-only
+// coverage build uses signature stubs below, matching the command shims already
+// excluded by `rust-coverage.mjs` elsewhere in the crate.
+#[cfg(not(coverage))]
+#[rustfmt::skip]
+mod tauri_commands {
+use super::*;
 
 #[tauri::command]
 pub fn plugins_list(db: tauri::State<'_, Db>) -> CommandResult<Vec<PluginRecord>> {
@@ -1307,6 +1330,7 @@ pub fn plugins_approve(
             c,
             &plugin.id,
             &plugin.checksum,
+            &plugin.permissions,
             plugin.signer.as_deref(),
             &plugin.signature_status,
         )
@@ -1349,7 +1373,14 @@ pub fn plugins_remove(app: AppHandle, db: State<'_, Db>, id: String) -> CommandR
         }
     }
 
-    db.with_conn(|c| remove(c, &id)).map_err(Into::into)
+    // Drop the plugin's stored settings with it: leaving them behind would
+    // silently reapply to a later reinstall the user may have meant as a fresh
+    // start.
+    db.with_conn(|c| {
+        settings::clear(c, &id)?;
+        remove(c, &id)
+    })
+    .map_err(Into::into)
 }
 
 /// Read one of a plugin's bundled text files (docs `.md`, icon `.svg`, …).
@@ -1377,11 +1408,19 @@ pub fn plugins_artifacts_status(
     db: State<'_, Db>,
     id: String,
 ) -> CommandResult<Vec<PluginArtifactStatus>> {
-    db.with_conn(|c| require_enabled_permission(c, &id, PERM_PLUGIN_ARTIFACTS_DOWNLOAD))?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
-    let plugin = discovery::find(&third_party_dir, &id)
-        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
-    parse_artifacts(&plugin.manifest)?
+    let (_, plugin) = db.with_conn(|c| {
+        load_runnable(
+            c,
+            &third_party_dir,
+            &id,
+            Some(PERM_PLUGIN_ARTIFACTS_DOWNLOAD),
+        )
+    })?;
+    plugin
+        .manifest
+        .contributes
+        .artifacts
         .iter()
         .map(|artifact| artifact_status(&app, &id, artifact))
         .collect::<AppResult<Vec<_>>>()
@@ -1395,12 +1434,17 @@ pub async fn plugins_download_artifact(
     id: String,
     artifact_id: String,
 ) -> CommandResult<PluginArtifactStatus> {
-    db.with_conn(|c| require_enabled_permission(c, &id, PERM_PLUGIN_ARTIFACTS_DOWNLOAD))?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
-    let plugin = discovery::find(&third_party_dir, &id)
-        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
-    let artifact = find_artifact(&plugin.manifest, &artifact_id)?;
-    download_artifact(app, id, artifact)
+    let (_, plugin) = db.with_conn(|c| {
+        load_runnable(
+            c,
+            &third_party_dir,
+            &id,
+            Some(PERM_PLUGIN_ARTIFACTS_DOWNLOAD),
+        )
+    })?;
+    let artifact = require_artifact(&plugin.manifest, &artifact_id)?;
+    download_artifact(app, id, artifact.clone())
         .await
         .map_err(Into::into)
 }
@@ -1412,12 +1456,17 @@ pub fn plugins_read_artifact(
     id: String,
     artifact_id: String,
 ) -> CommandResult<Vec<u8>> {
-    db.with_conn(|c| require_enabled_permission(c, &id, PERM_PLUGIN_ARTIFACTS_DOWNLOAD))?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
-    let plugin = discovery::find(&third_party_dir, &id)
-        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
-    let artifact = find_artifact(&plugin.manifest, &artifact_id)?;
-    let path = artifact_file_path(&app, &id, &artifact)?;
+    let (_, plugin) = db.with_conn(|c| {
+        load_runnable(
+            c,
+            &third_party_dir,
+            &id,
+            Some(PERM_PLUGIN_ARTIFACTS_DOWNLOAD),
+        )
+    })?;
+    let artifact = require_artifact(&plugin.manifest, &artifact_id)?;
+    let path = artifact_file_path(&app, &id, artifact)?;
     let bytes = fs::read(&path).map_err(|_| {
         AppError::NotFound(format!("installed artifact {artifact_id} for plugin {id}"))
     })?;
@@ -1433,128 +1482,34 @@ pub fn plugins_read_artifact(
 }
 
 #[tauri::command]
-pub fn plugins_storage_read_text(
-    app: AppHandle,
-    db: State<'_, Db>,
-    id: String,
-    path: String,
-) -> CommandResult<Option<String>> {
-    db.with_conn(|c| require_enabled_permission(c, &id, PERM_PLUGIN_STORAGE_READ))?;
-    split_plugin_rel_path(&path, false)?;
-    let root = plugin_data_root(&app, &id)?;
-    let target = plugin_data_path(&app, &id, &path)?;
-    if !target.exists() {
-        return Ok(None);
-    }
-    ensure_inside_data_root(&root, &target)?;
-    fs::read_to_string(&target).map(Some).map_err(Into::into)
-}
-
-#[tauri::command]
-pub fn plugins_storage_write_text(
-    app: AppHandle,
-    db: State<'_, Db>,
-    id: String,
-    path: String,
-    contents: String,
-) -> CommandResult<()> {
-    db.with_conn(|c| require_enabled_permission(c, &id, PERM_PLUGIN_STORAGE_WRITE))?;
-    split_plugin_rel_path(&path, false)?;
-    let root = plugin_data_root(&app, &id)?;
-    let target = plugin_data_path(&app, &id, &path)?;
-    let parent = target
-        .parent()
-        .ok_or_else(|| AppError::InvalidArg("plugin storage path has no parent".into()))?;
-    fs::create_dir_all(parent)?;
-    ensure_inside_data_root(&root, parent)?;
-    ensure_write_target_safe(&root, &target)?;
-    fs::write(target, contents).map_err(Into::into)
-}
-
-#[tauri::command]
-pub fn plugins_storage_delete(
-    app: AppHandle,
-    db: State<'_, Db>,
-    id: String,
-    path: String,
-) -> CommandResult<()> {
-    db.with_conn(|c| require_enabled_permission(c, &id, PERM_PLUGIN_STORAGE_WRITE))?;
-    split_plugin_rel_path(&path, false)?;
-    let root = plugin_data_root(&app, &id)?;
-    let target = plugin_data_path(&app, &id, &path)?;
-    if !target.exists() {
-        return Ok(());
-    }
-    ensure_inside_data_root(&root, &target)?;
-    if target.is_dir() {
-        fs::remove_dir_all(target)?;
-    } else {
-        fs::remove_file(target)?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub fn plugins_storage_list(
-    app: AppHandle,
-    db: State<'_, Db>,
-    id: String,
-    path: String,
-) -> CommandResult<Vec<PluginStorageEntry>> {
-    db.with_conn(|c| require_enabled_permission(c, &id, PERM_PLUGIN_STORAGE_READ))?;
-    let root = plugin_data_root(&app, &id)?;
-    let target = plugin_data_path(&app, &id, &path)?;
-    if !target.exists() {
-        return Ok(Vec::new());
-    }
-    ensure_inside_data_root(&root, &target)?;
-    let base_segments = split_plugin_rel_path(&path, true)?;
-    let mut out = Vec::new();
-    for entry in fs::read_dir(&target)? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        safe_segment(&name, "plugin storage entry")?;
-        let metadata = entry.metadata()?;
-        let mut parts = base_segments.clone();
-        parts.push(name);
-        out.push(PluginStorageEntry {
-            path: parts.join("/"),
-            is_dir: metadata.is_dir(),
-            bytes: if metadata.is_file() {
-                Some(metadata.len())
-            } else {
-                None
-            },
-        });
-    }
-    out.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(out)
-}
-
-#[tauri::command]
 pub fn plugins_native_tool_status(
     app: AppHandle,
     db: State<'_, Db>,
     id: String,
     tool_id: String,
 ) -> CommandResult<PluginNativeToolStatus> {
-    db.with_conn(|c| require_enabled_permission(c, &id, PERM_NATIVE_TOOLS_RUN_DECLARED))?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
-    let plugin = discovery::find(&third_party_dir, &id)
-        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
-    let tool = find_native_tool(&plugin.manifest, &tool_id)?;
+    let (_, plugin) = db.with_conn(|c| {
+        load_runnable(
+            c,
+            &third_party_dir,
+            &id,
+            Some(PERM_NATIVE_TOOLS_RUN_DECLARED),
+        )
+    })?;
+    let tool = require_native_tool(&plugin.manifest, &tool_id)?;
     // Native tools are desktop-only. Report a uniform "not available" status on
     // mobile rather than erroring, so the frontend can fall back to source-only.
     if cfg!(mobile) {
         return Ok(PluginNativeToolStatus {
             plugin_id: id,
-            tool_id: tool.id,
-            binary_name: tool.binary_name,
+            tool_id: tool.id.clone(),
+            binary_name: tool.binary_name.clone(),
             available: false,
             path: None,
         });
     }
-    native_tool_status(&id, &tool).map_err(Into::into)
+    native_tool_status(&id, tool).map_err(Into::into)
 }
 
 #[tauri::command]
@@ -1570,11 +1525,16 @@ pub async fn plugins_run_native_tool(
     if cfg!(mobile) {
         return Err(AppError::InvalidArg("native tools are desktop-only".into()).into());
     }
-    db.with_conn(|c| require_enabled_permission(c, &id, PERM_NATIVE_TOOLS_RUN_DECLARED))?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
-    let plugin = discovery::find(&third_party_dir, &id)
-        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
-    let tool = find_native_tool(&plugin.manifest, &tool_id)?;
+    let (_, plugin) = db.with_conn(|c| {
+        load_runnable(
+            c,
+            &third_party_dir,
+            &id,
+            Some(PERM_NATIVE_TOOLS_RUN_DECLARED),
+        )
+    })?;
+    let tool = require_native_tool(&plugin.manifest, &tool_id)?;
     let binary = resolve_path_binary(&tool.binary_name)?.ok_or_else(|| {
         AppError::NotFound(format!(
             "native tool '{}' was not found in PATH",
@@ -1595,6 +1555,39 @@ pub async fn plugins_run_native_tool(
     })
 }
 
+/// Every setting stored for a plugin, so the settings dialog can show the
+/// values the backend will actually pass to its scripts.
+#[tauri::command]
+pub fn plugins_settings_all(
+    db: State<'_, Db>,
+    id: String,
+) -> CommandResult<settings::PluginSettings> {
+    db.with_conn(|c| settings::all(c, &id)).map_err(Into::into)
+}
+
+/// Store one plugin setting. Requires the plugin to exist, so a typo'd id
+/// cannot quietly accumulate orphan rows.
+#[tauri::command]
+pub fn plugins_settings_set(
+    db: State<'_, Db>,
+    id: String,
+    key: String,
+    value: serde_json::Value,
+) -> CommandResult<()> {
+    db.with_conn(|c| {
+        require(c, &id)?;
+        settings::set(c, &id, &key, &value)
+    })
+    .map_err(Into::into)
+}
+
+/// Remove one plugin setting, so it falls back to the manifest's default.
+#[tauri::command]
+pub fn plugins_settings_remove(db: State<'_, Db>, id: String, key: String) -> CommandResult<()> {
+    db.with_conn(|c| settings::remove(c, &id, &key))
+        .map_err(Into::into)
+}
+
 /// Run a scripted plugin's entry function. The plugin is re-located on disk
 /// (trust stays location-derived) and must be **enabled** in the DB — a gated or
 /// disabled plugin never executes. The script runs on a blocking worker so a
@@ -1611,47 +1604,38 @@ pub async fn plugins_run_script(
 ) -> CommandResult<serde_json::Value> {
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
 
-    let record = db
-        .with_conn(|c| get(c, &id))?
-        .ok_or_else(|| AppError::NotFound(format!("plugin {id}")))?;
-    if !record.enabled {
-        return Err(AppError::InvalidArg(format!("plugin {id} is not enabled")).into());
-    }
-
-    let plugin = discovery::find(&third_party_dir, &id)
-        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
+    // Enabled, unmodified since approval, and running under the permissions the
+    // DB pinned — not the ones the manifest currently on disk asks for.
+    let (record, plugin) = db.with_conn(|c| load_runnable(c, &third_party_dir, &id, None))?;
 
     let files = plugin.files;
     let manifest = plugin.manifest;
-    let checksum = plugin.checksum;
     let granted = record.granted_permissions;
-    // Capture the note snapshot up front (while we hold the DB) so the blocking
-    // worker needs no DB access; empty unless the plugin holds notes.read.
+    // Capture everything the script needs from the DB up front, so the blocking
+    // worker needs no DB access. The note snapshot is empty unless the plugin
+    // holds notes.read.
     let notes = if granted.iter().any(|p| p == "notes.read") {
         db.with_conn(note_snapshot)?
     } else {
         Vec::new()
     };
-    // The plugin's isolated data root is the cwd for any native tool the script
-    // runs via `ms.nativeTools`; resolved here (needs the AppHandle) so the
-    // blocking worker stays Tauri-free.
-    let native_tool_cwd = plugin_data_root(&app, &id).ok();
+    // Settings, folders and the clock are the backend's to supply — see
+    // `backend_script_context`. The caller's `input` carries only what is
+    // genuinely call-specific (which note, which format, which locale).
+    let backend_ctx = db.with_conn(|c| backend_script_context(c, &id, &granted))?;
+    let input = merge_script_input(input, backend_ctx);
+    // The plugin's isolated data directory: the cwd for any native tool the
+    // script runs via `ms.nativeTools`, and the root `ms.storage` reads and
+    // writes under. Resolved here (it needs the AppHandle) so the blocking
+    // worker stays Tauri-free.
+    let data_root = plugin_data_root(&app, &id).ok();
     // Run on a blocking worker: this isolates the guest so a hard crash can't
-    // abort the app. Guest *logic* errors (Luau/wasm) come back as `Ok(Err(..))`
+    // abort the app. Guest *logic* errors come back as `Ok(Err(..))`
     // and are just surfaced to the user; a `JoinError` means the host runtime
     // itself panicked — a crash — so we disable the plugin before returning.
     let export_label = export.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
-        run_plugin_script(
-            &files,
-            &manifest,
-            &checksum,
-            granted,
-            &export,
-            input,
-            notes,
-            native_tool_cwd,
-        )
+        run_plugin_script(&files, &manifest, granted, &export, input, notes, data_root)
     })
     .await;
     match outcome {
@@ -1664,6 +1648,43 @@ pub async fn plugins_run_script(
         }
     }
 }
+
+}
+
+#[cfg(not(coverage))]
+pub use tauri_commands::*;
+
+#[cfg(coverage)]
+macro_rules! coverage_command_stubs {
+    ($($name:ident),+ $(,)?) => {
+        $(
+            #[tauri::command]
+            pub fn $name() {}
+        )+
+    };
+}
+
+#[cfg(coverage)]
+coverage_command_stubs!(
+    plugins_list,
+    plugins_get,
+    plugins_discover,
+    plugins_enable,
+    plugins_disable,
+    plugins_approve,
+    plugins_set_load_error,
+    plugins_remove,
+    plugins_read_file,
+    plugins_artifacts_status,
+    plugins_download_artifact,
+    plugins_read_artifact,
+    plugins_native_tool_status,
+    plugins_run_native_tool,
+    plugins_settings_all,
+    plugins_settings_set,
+    plugins_settings_remove,
+    plugins_run_script,
+);
 
 #[cfg(test)]
 mod tests;

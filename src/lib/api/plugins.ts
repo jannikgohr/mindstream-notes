@@ -55,12 +55,6 @@ export interface PluginArtifactStatus {
   sha256: string | null;
 }
 
-export interface PluginStorageEntry {
-  path: string;
-  isDir: boolean;
-  bytes: number | null;
-}
-
 export interface PluginNativeToolStatus {
   pluginId: string;
   toolId: string;
@@ -135,25 +129,6 @@ function parseArtifactStatuses(value: unknown): PluginArtifactStatus[] {
     throw new Error('PluginArtifactStatus[] must be an array');
   }
   return value.map(parseArtifactStatus);
-}
-
-function parseStorageEntry(value: unknown): PluginStorageEntry {
-  const raw = assertRecord(value, 'PluginStorageEntry');
-  return {
-    path: assertString(raw.path, 'PluginStorageEntry.path'),
-    isDir: assertBoolean(raw.isDir, 'PluginStorageEntry.isDir'),
-    bytes:
-      raw.bytes === null || raw.bytes === undefined
-        ? null
-        : assertNumber(raw.bytes, 'PluginStorageEntry.bytes')
-  };
-}
-
-function parseStorageEntries(value: unknown): PluginStorageEntry[] {
-  if (!Array.isArray(value)) {
-    throw new Error('PluginStorageEntry[] must be an array');
-  }
-  return value.map(parseStorageEntry);
 }
 
 function parseNativeToolStatus(value: unknown): PluginNativeToolStatus {
@@ -352,53 +327,6 @@ export function pluginsReadArtifact(
   );
 }
 
-export function pluginsStorageReadText(
-  id: string,
-  path: string
-): Promise<string | null> {
-  return invokeOrFallback<string | null>(
-    TauriCommandName.PluginsStorageReadText,
-    { id, path },
-    () => null,
-    (value) =>
-      value === null ? null : assertString(value, 'plugins_storage_read_text')
-  );
-}
-
-export function pluginsStorageWriteText(
-  id: string,
-  path: string,
-  contents: string
-): Promise<void> {
-  return invokeOrFallback<void>(
-    TauriCommandName.PluginsStorageWriteText,
-    { id, path, contents },
-    () => undefined,
-    (value) => assertVoid(value, 'plugins_storage_write_text response')
-  );
-}
-
-export function pluginsStorageDelete(id: string, path: string): Promise<void> {
-  return invokeOrFallback<void>(
-    TauriCommandName.PluginsStorageDelete,
-    { id, path },
-    () => undefined,
-    (value) => assertVoid(value, 'plugins_storage_delete response')
-  );
-}
-
-export function pluginsStorageList(
-  id: string,
-  path = ''
-): Promise<PluginStorageEntry[]> {
-  return invokeOrFallback<PluginStorageEntry[]>(
-    TauriCommandName.PluginsStorageList,
-    { id, path },
-    () => [],
-    parseStorageEntries
-  );
-}
-
 export function pluginsNativeToolStatus(
   id: string,
   toolId: string
@@ -545,5 +473,51 @@ export function pluginsRunScript(
       throw new Error('scripted (luau) plugins are only available in the app');
     },
     (value) => value
+  );
+}
+
+/**
+ * Every setting stored for a plugin, keyed by its plugin-local id.
+ *
+ * Plugin settings live in the vault database rather than `localStorage`,
+ * because the backend passes them to scripts as `ctx.settings` and has to be
+ * able to read them (see `src-tauri/src/plugins/settings.rs`). Outside Tauri
+ * there is no store, so this resolves empty.
+ */
+export function pluginsSettingsAll(
+  id: string
+): Promise<Record<string, unknown>> {
+  return invokeOrFallback<Record<string, unknown>>(
+    TauriCommandName.PluginsSettingsAll,
+    { id },
+    () => ({}),
+    (value) =>
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : {}
+  );
+}
+
+/** Store one plugin setting. No-op outside Tauri, where nothing persists. */
+export function pluginsSettingsSet(
+  id: string,
+  key: string,
+  value: unknown
+): Promise<void> {
+  return invokeOrFallback<void>(
+    TauriCommandName.PluginsSettingsSet,
+    { id, key, value },
+    () => undefined,
+    () => undefined
+  );
+}
+
+/** Remove one plugin setting, so it falls back to the manifest default. */
+export function pluginsSettingsRemove(id: string, key: string): Promise<void> {
+  return invokeOrFallback<void>(
+    TauriCommandName.PluginsSettingsRemove,
+    { id, key },
+    () => undefined,
+    () => undefined
   );
 }

@@ -43,6 +43,7 @@ function typstLanguageManifest(
   diagnostics?: Record<string, unknown>
 ): Record<string, unknown> {
   return {
+    manifestVersion: 1,
     id: 'com.example.typst',
     name: 'Typst',
     version: '1.0.0',
