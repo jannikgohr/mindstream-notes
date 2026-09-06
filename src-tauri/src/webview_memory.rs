@@ -54,7 +54,7 @@ const MAIN: &str = "main";
 /// Three states rather than two because hiding happens in two steps: the
 /// page is told immediately (cheap, instantly reversible), the memory is
 /// released later (not free to undo -- see [`HIDE_GRACE`]).
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Posture {
     /// On screen: visible, ordinary memory behaviour.
     Onscreen = 1,
@@ -93,10 +93,26 @@ static GENERATION: AtomicU64 = AtomicU64::new(0);
 /// Split out from the FFI so the policy is readable (and so a query
 /// that fails is treated as "visible", never as an excuse to throttle a
 /// window the user is looking at).
-fn is_out_of_sight<R: Runtime>(window: &WebviewWindow<R>) -> bool {
-    let visible = window.is_visible().unwrap_or(true);
-    let minimized = window.is_minimized().unwrap_or(false);
+fn is_out_of_sight_state(visible: Option<bool>, minimized: Option<bool>) -> bool {
+    let visible = visible.unwrap_or(true);
+    let minimized = minimized.unwrap_or(false);
     !visible || minimized
+}
+
+fn is_out_of_sight<R: Runtime>(window: &WebviewWindow<R>) -> bool {
+    is_out_of_sight_state(window.is_visible().ok(), window.is_minimized().ok())
+}
+
+fn immediate_posture(out_of_sight: bool) -> Posture {
+    if out_of_sight {
+        Posture::Offscreen
+    } else {
+        Posture::Onscreen
+    }
+}
+
+fn should_park(scheduled_generation: u64, current_generation: u64, out_of_sight: bool) -> bool {
+    scheduled_generation == current_generation && out_of_sight
 }
 
 /// Put the webview into whatever posture the window's current visibility
@@ -116,29 +132,31 @@ pub fn sync_to_visibility<R: Runtime>(app: &tauri::AppHandle<R>) {
     // Every call invalidates whatever parking was already scheduled.
     let generation = GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
 
-    if !is_out_of_sight(&window) {
+    let posture = immediate_posture(is_out_of_sight(&window));
+    if posture == Posture::Onscreen {
         // Coming back is immediate: the user is waiting on this one, and
         // leaving `IsVisible` false would show them a blank window.
-        set_posture(&window, Posture::Onscreen);
+        set_posture(&window, posture);
         return;
     }
 
     // Backgrounding the page is immediate too. It costs nothing to undo,
     // and it is what stops the work that was refilling the working set.
-    set_posture(&window, Posture::Offscreen);
+    set_posture(&window, posture);
 
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(HIDE_GRACE).await;
         // Shown again (or hidden again, which scheduled its own parking)
         // while we waited.
-        if GENERATION.load(Ordering::Relaxed) != generation {
+        let current_generation = GENERATION.load(Ordering::Relaxed);
+        if generation != current_generation {
             return;
         }
         let Some(window) = app.get_webview_window(MAIN) else {
             return;
         };
-        if is_out_of_sight(&window) {
+        if should_park(generation, current_generation, is_out_of_sight(&window)) {
             set_posture(&window, Posture::Parked);
         }
     });
@@ -205,3 +223,40 @@ fn apply<R: Runtime>(window: &WebviewWindow<R>, posture: Posture) {
 /// WebKitGTK track window visibility themselves.
 #[cfg(not(target_os = "windows"))]
 fn apply<R: Runtime>(_window: &WebviewWindow<R>, _posture: Posture) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hidden_or_minimized_windows_are_out_of_sight() {
+        assert!(is_out_of_sight_state(Some(false), Some(false)));
+        assert!(is_out_of_sight_state(Some(true), Some(true)));
+        assert!(is_out_of_sight_state(Some(false), Some(true)));
+        assert!(!is_out_of_sight_state(Some(true), Some(false)));
+    }
+
+    #[test]
+    fn failed_window_queries_do_not_throttle_a_visible_window() {
+        assert!(!is_out_of_sight_state(None, None));
+        assert!(!is_out_of_sight_state(None, Some(false)));
+        assert!(!is_out_of_sight_state(Some(true), None));
+    }
+
+    #[test]
+    fn visible_windows_use_the_onscreen_posture_immediately() {
+        assert_eq!(immediate_posture(false), Posture::Onscreen);
+    }
+
+    #[test]
+    fn hidden_windows_are_backgrounded_before_the_grace_period() {
+        assert_eq!(immediate_posture(true), Posture::Offscreen);
+    }
+
+    #[test]
+    fn parking_requires_the_same_hidden_generation() {
+        assert!(should_park(7, 7, true));
+        assert!(!should_park(7, 8, true));
+        assert!(!should_park(7, 7, false));
+    }
+}
