@@ -17,12 +17,15 @@ pub enum ImportSourceKind {
     /// A folder of GitHub-flavoured markdown. Also what
     /// `mediawiki-to-markdown` produces.
     Gfm,
+    /// An Obsidian vault — markdown plus wikilinks, embeds and inline tags.
+    Obsidian,
 }
 
 impl ImportSourceKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Gfm => "gfm",
+            Self::Obsidian => "obsidian",
         }
     }
 }
@@ -47,10 +50,21 @@ pub fn detect(path: &Path) -> AppResult<DetectedSource> {
         ));
     }
     Ok(DetectedSource {
-        kind: ImportSourceKind::Gfm,
+        kind: detect_directory_kind(path),
         path: path.to_string_lossy().to_string(),
         suggested_name: suggested_name(path),
     })
+}
+
+/// An Obsidian vault is identified by its `.obsidian` config directory — the
+/// only marker the format has. A vault whose config was stripped reads as a
+/// GFM folder, which is a perfectly reasonable way to import it, and the
+/// dialog lets the user say otherwise.
+fn detect_directory_kind(path: &Path) -> ImportSourceKind {
+    if path.join(".obsidian").is_dir() {
+        return ImportSourceKind::Obsidian;
+    }
+    ImportSourceKind::Gfm
 }
 
 /// The folder's own name, falling back to something usable when the user

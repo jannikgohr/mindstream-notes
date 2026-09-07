@@ -44,6 +44,11 @@ pub enum Flavour {
     /// Plain markdown folder. Links are ordinary relative markdown links;
     /// `[[…]]` is not a link syntax here and must not be treated as one.
     Gfm,
+    /// An Obsidian vault: `[[wikilinks]]`, `![[embeds]]`, inline `#tags`, and
+    /// frontmatter `aliases:`. Obsidian resolves both links and attachments by
+    /// *name* rather than by path, so a bare `![[diagram.png]]` finds the file
+    /// wherever it lives in the vault.
+    Obsidian,
 }
 
 pub struct MarkdownVaultSource {
@@ -52,6 +57,14 @@ pub struct MarkdownVaultSource {
     /// Root-relative directory path → minted collection id, so phase 2 can
     /// place a note without re-walking.
     folder_ids: HashMap<String, String>,
+    /// Lowercased file name → root-relative path, for every non-markdown file
+    /// in the vault.
+    ///
+    /// Obsidian addresses attachments by bare name (`![[diagram.png]]`) no
+    /// matter which folder they sit in, so resolving one means knowing every
+    /// file's name up front. Built during the index walk, which is already
+    /// visiting all of them.
+    attachments_by_name: HashMap<String, String>,
 }
 
 impl MarkdownVaultSource {
@@ -60,6 +73,7 @@ impl MarkdownVaultSource {
             root,
             flavour,
             folder_ids: HashMap::new(),
+            attachments_by_name: HashMap::new(),
         }
     }
 
@@ -113,7 +127,15 @@ impl ImportSource for MarkdownVaultSource {
                 continue;
             }
 
-            if !entry.file_type().is_file() || !mime::is_markdown(&relative) {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            if !mime::is_markdown(&relative) {
+                // First one wins, so a deterministic sorted walk makes the
+                // choice between same-named files stable across runs.
+                self.attachments_by_name
+                    .entry(file_name(&relative).to_lowercase())
+                    .or_insert_with(|| relative.clone());
                 continue;
             }
             out.items.push(self.index_note(&relative));
@@ -132,7 +154,24 @@ impl ImportSource for MarkdownVaultSource {
             .clone()
             .unwrap_or_else(|| markdown::infer_title(body, &stem));
 
-        let attachments = self.collect_attachments(&item.locator, body);
+        // Rewrite `![[file.png]]` into ordinary image syntax BEFORE anything
+        // else looks at the body: left alone, the wikilink pass would turn an
+        // embedded image into a note link.
+        let body = match self.flavour {
+            Flavour::Obsidian => self.expand_embeds(&item.locator, body),
+            Flavour::Gfm => body.to_string(),
+        };
+
+        let mut tags = frontmatter.tags.clone();
+        if self.flavour == Flavour::Obsidian {
+            for tag in markdown::extract_inline_tags(&body) {
+                if !tags.contains(&tag) {
+                    tags.push(tag);
+                }
+            }
+        }
+
+        let attachments = self.collect_attachments(&item.locator, &body);
 
         let fs_modified = fs::metadata(&path)
             .ok()
@@ -145,7 +184,7 @@ impl ImportSource for MarkdownVaultSource {
                 title,
                 folder_id: item.folder_id.clone(),
                 body: body.trim_start_matches(['\n', '\r']).to_string(),
-                tags: frontmatter.tags.clone(),
+                tags,
                 created: normalize_timestamp(frontmatter.created.as_deref()),
                 modified: normalize_timestamp(frontmatter.modified.as_deref()).or(fs_modified),
                 note_kind: NoteKind::Markdown,
@@ -176,6 +215,10 @@ impl ImportSource for MarkdownVaultSource {
             // than a link, so the wikilink pass stays off.
             Flavour::Gfm => RewriteOptions {
                 wikilinks: false,
+                markdown_links: true,
+            },
+            Flavour::Obsidian => RewriteOptions {
+                wikilinks: true,
                 markdown_links: true,
             },
         }
@@ -217,6 +260,65 @@ impl MarkdownVaultSource {
         }
     }
 
+    /// Turn `![[file.png]]` into `![file.png](file.png)` so the rest of the
+    /// pipeline sees ordinary markdown.
+    ///
+    /// Only embeds that resolve to a real *file* are converted. An embed of
+    /// another note (`![[Some note]]`) is left for the wikilink pass, which
+    /// degrades it to a plain link — Mindstream has no transclusion, and a
+    /// link to the same note is the closest thing that still works.
+    ///
+    /// Obsidian allows a display option after a pipe (`![[img.png|300]]`),
+    /// which is a width, not an alias.
+    fn expand_embeds(&self, note_relative: &str, body: &str) -> String {
+        let base_dir = parent_dir(note_relative).unwrap_or("");
+        let mut out = String::with_capacity(body.len());
+        let mut rest = body;
+        while let Some(at) = rest.find("![[") {
+            out.push_str(&rest[..at]);
+            let after = &rest[at + 3..];
+            let Some(close) = after.find("]]") else {
+                out.push_str(&rest[at..]);
+                return out;
+            };
+            let inner = &after[..close];
+            let target = inner.split('|').next().unwrap_or(inner).trim();
+            match self.resolve_embed(base_dir, target) {
+                Some(path) => out.push_str(&format!("![{target}]({path})")),
+                None => out.push_str(&rest[at..at + 3 + close + 2]),
+            }
+            rest = &after[close + 2..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    fn resolve_embed(&self, base_dir: &str, target: &str) -> Option<String> {
+        if target.is_empty() || mime::is_markdown(target) {
+            return None;
+        }
+        let decoded = links::percent_decode(target);
+        [
+            links::rebase(base_dir, &decoded),
+            links::rebase("", &decoded),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|candidate| self.absolute(candidate).is_file())
+        .or_else(|| self.attachment_by_name(&decoded))
+    }
+
+    /// Obsidian's name-based attachment lookup. Returns `None` for every other
+    /// flavour, which keeps GFM's path resolution strict.
+    fn attachment_by_name(&self, target: &str) -> Option<String> {
+        if self.flavour != Flavour::Obsidian {
+            return None;
+        }
+        self.attachments_by_name
+            .get(&file_name(target).to_lowercase())
+            .cloned()
+    }
+
     /// Find every link in the body that points at a real non-markdown file
     /// inside the vault.
     ///
@@ -238,11 +340,15 @@ impl MarkdownVaultSource {
             // Try the path as written and rebased on the note's directory,
             // matching what the link rewriter does for note links.
             let candidates = [links::rebase(base_dir, decoded), links::rebase("", decoded)];
-            let Some(resolved) = candidates
+            let resolved = candidates
                 .into_iter()
                 .flatten()
                 .find(|candidate| self.absolute(candidate).is_file())
-            else {
+                // Obsidian only: a bare file name resolves anywhere in the
+                // vault. GFM stays strict, where a path that doesn't exist is
+                // a broken link and guessing would be worse than leaving it.
+                .or_else(|| self.attachment_by_name(decoded));
+            let Some(resolved) = resolved else {
                 continue;
             };
             seen.push(AttachmentRef {

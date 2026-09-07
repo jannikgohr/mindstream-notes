@@ -125,11 +125,12 @@ fn build_source(
     kind: ImportSourceKind,
     root: PathBuf,
 ) -> AppResult<Box<dyn source::ImportSource + Send>> {
+    use sources::markdown_vault::{Flavour, MarkdownVaultSource};
     match kind {
-        ImportSourceKind::Gfm => Ok(Box::new(sources::markdown_vault::MarkdownVaultSource::new(
-            root,
-            sources::markdown_vault::Flavour::Gfm,
-        ))),
+        ImportSourceKind::Gfm => Ok(Box::new(MarkdownVaultSource::new(root, Flavour::Gfm))),
+        ImportSourceKind::Obsidian => {
+            Ok(Box::new(MarkdownVaultSource::new(root, Flavour::Obsidian)))
+        }
     }
 }
 

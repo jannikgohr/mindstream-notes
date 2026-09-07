@@ -48,6 +48,18 @@ impl Drop for TempVault {
     }
 }
 
+/// Mark a fixture vault as an Obsidian vault the way Obsidian itself does.
+fn as_obsidian_vault(vault: &TempVault) {
+    fs::create_dir_all(vault.path().join(".obsidian")).expect("config dir");
+}
+
+fn obsidian_options(vault: &TempVault) -> ImportOptions {
+    ImportOptions {
+        kind: Some(ImportSourceKind::Obsidian),
+        ..options(vault)
+    }
+}
+
 fn options(vault: &TempVault) -> ImportOptions {
     ImportOptions {
         source_path: vault.path().to_string_lossy().to_string(),
@@ -639,4 +651,183 @@ fn detect_refuses_a_path_that_is_not_a_directory() {
     let err = super::detect::detect(&file).unwrap_err();
 
     assert!(matches!(err, AppError::InvalidArg(_)), "got {err:?}");
+}
+
+// ---------- Obsidian ----------
+
+#[test]
+fn an_obsidian_vault_is_detected_by_its_config_directory() {
+    let vault = TempVault::new();
+    vault.write("note.md", "x");
+    assert_eq!(
+        super::detect::detect(vault.path()).unwrap().kind,
+        ImportSourceKind::Gfm
+    );
+
+    as_obsidian_vault(&vault);
+    assert_eq!(
+        super::detect::detect(vault.path()).unwrap().kind,
+        ImportSourceKind::Obsidian
+    );
+}
+
+#[test]
+fn obsidian_wikilinks_resolve_by_bare_name_across_folders() {
+    // Obsidian's shortest-path linking: `[[Deep note]]` finds the file
+    // wherever it lives, which is why the basename tier exists.
+    let vault = TempVault::new();
+    as_obsidian_vault(&vault);
+    vault
+        .write("Hub.md", "Go to [[Deep note]] now.")
+        .write("Archive/Nested/Deep note.md", "arrived");
+    let db = open_memory_for_tests();
+
+    let report = import(&db, obsidian_options(&vault));
+
+    assert_eq!(report.links_resolved, 1);
+    let target = note_id_of(&db, "Deep note");
+    assert_eq!(
+        body_of(&db, "Hub"),
+        format!("Go to [Deep note](mindstream://note/{target}) now.")
+    );
+}
+
+#[test]
+fn obsidian_mutual_wikilinks_resolve_both_ways() {
+    let vault = TempVault::new();
+    as_obsidian_vault(&vault);
+    vault
+        .write("Alpha.md", "[[Beta]]")
+        .write("Beta.md", "[[Alpha]]");
+    let db = open_memory_for_tests();
+
+    import(&db, obsidian_options(&vault));
+
+    let alpha = note_id_of(&db, "Alpha");
+    let beta = note_id_of(&db, "Beta");
+    assert_eq!(
+        body_of(&db, "Alpha"),
+        format!("[Beta](mindstream://note/{beta})")
+    );
+    assert_eq!(
+        body_of(&db, "Beta"),
+        format!("[Alpha](mindstream://note/{alpha})")
+    );
+}
+
+#[test]
+fn an_obsidian_alias_resolves_to_its_note() {
+    let vault = TempVault::new();
+    as_obsidian_vault(&vault);
+    vault
+        .write("Canonical.md", "---\naliases:\n  - Nickname\n---\nthe note")
+        .write("Ref.md", "see [[Nickname]]");
+    let db = open_memory_for_tests();
+
+    import(&db, obsidian_options(&vault));
+
+    let target = note_id_of(&db, "Canonical");
+    assert_eq!(
+        body_of(&db, "Ref"),
+        format!("see [Nickname](mindstream://note/{target})")
+    );
+}
+
+#[test]
+fn an_obsidian_image_embed_becomes_an_asset_reference() {
+    // `![[diagram.png]]` addresses the file by bare name, from anywhere in the
+    // vault, and must not go through the wikilink pass — that would turn an
+    // image into a note link.
+    let vault = TempVault::new();
+    as_obsidian_vault(&vault);
+    vault
+        .write_bytes("Files/attachments/diagram.png", b"\x89PNG\r\n\x1a\nfixture")
+        .write("Note.md", "Look: ![[diagram.png]]");
+    let db = open_memory_for_tests();
+
+    let report = import(&db, obsidian_options(&vault));
+
+    assert_eq!(report.attachments_imported, 1);
+    let body = body_of(&db, "Note");
+    assert!(
+        body.starts_with("Look: ![diagram.png](asset:mindstream/asset_"),
+        "got {body}"
+    );
+}
+
+#[test]
+fn an_obsidian_embed_width_is_not_mistaken_for_an_alias() {
+    let vault = TempVault::new();
+    as_obsidian_vault(&vault);
+    vault
+        .write_bytes("pic.png", b"bytes")
+        .write("Note.md", "![[pic.png|300]]");
+    let db = open_memory_for_tests();
+
+    let report = import(&db, obsidian_options(&vault));
+
+    assert_eq!(report.attachments_imported, 1);
+    assert!(body_of(&db, "Note").starts_with("![pic.png](asset:mindstream/"));
+}
+
+#[test]
+fn an_obsidian_note_embed_degrades_to_a_link() {
+    let vault = TempVault::new();
+    as_obsidian_vault(&vault);
+    vault
+        .write("Host.md", "![[Embedded]]")
+        .write("Embedded.md", "content");
+    let db = open_memory_for_tests();
+
+    import(&db, obsidian_options(&vault));
+
+    let target = note_id_of(&db, "Embedded");
+    assert_eq!(
+        body_of(&db, "Host"),
+        format!("[Embedded](mindstream://note/{target})")
+    );
+}
+
+#[test]
+fn obsidian_inline_tags_land_on_the_note() {
+    let vault = TempVault::new();
+    as_obsidian_vault(&vault);
+    vault.write(
+        "Tagged.md",
+        "---\ntags: [front]\n---\nBody with #inline and #nested/tag\n",
+    );
+    let db = open_memory_for_tests();
+
+    import(&db, obsidian_options(&vault));
+
+    let tags: Vec<String> = db
+        .with_conn(|c| {
+            let mut stmt = c.prepare("SELECT tag FROM note_tags ORDER BY tag")?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .unwrap();
+    assert_eq!(
+        tags,
+        vec![
+            "front".to_string(),
+            "inline".to_string(),
+            "nested/tag".to_string()
+        ]
+    );
+}
+
+#[test]
+fn gfm_leaves_double_brackets_alone() {
+    // `[[1]]` in a plain markdown folder is a citation marker, not a link.
+    let vault = TempVault::new();
+    vault
+        .write("Paper.md", "As shown in [[1]] and [[Other]].")
+        .write("Other.md", "x");
+    let db = open_memory_for_tests();
+
+    let report = import(&db, options(&vault));
+
+    assert_eq!(report.links_resolved, 0);
+    assert_eq!(body_of(&db, "Paper"), "As shown in [[1]] and [[Other]].");
 }

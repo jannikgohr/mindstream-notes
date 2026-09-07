@@ -203,7 +203,8 @@ fn store_attachments(
         } else {
             written += 1;
         }
-        body = body.replace(
+        body = replace_link_target(
+            &body,
             &reference.placeholder,
             &format!("asset:mindstream/{}", stored.id),
         );
@@ -217,6 +218,42 @@ fn store_attachments(
         written,
         deduplicated,
     })
+}
+
+/// Swap a link's *target* for `replacement`, leaving its text alone.
+///
+/// A plain `str::replace` is wrong here, and quietly so: `![pic.png](pic.png)`
+/// — which is exactly what an Obsidian `![[pic.png]]` embed expands to — would
+/// have its alt text rewritten into an asset URL too. Anchoring on the `](`
+/// that opens a target, and requiring the match to end the target, confines
+/// the edit to where it belongs.
+///
+/// Every occurrence is replaced, since a note may embed the same image twice.
+fn replace_link_target(body: &str, target: &str, replacement: &str) -> String {
+    if target.is_empty() {
+        return body.to_string();
+    }
+    let opener = format!("]({target}");
+    let mut out = String::with_capacity(body.len());
+    let mut rest = body;
+    while let Some(at) = rest.find(&opener) {
+        let after = &rest[at + opener.len()..];
+        // A title can follow the target (`](a.png "Caption")`), so accept a
+        // space as well as the closing paren.
+        let ends_target = matches!(after.chars().next(), Some(')') | Some(' ') | Some('\t'));
+        if !ends_target {
+            let consumed = at + opener.len();
+            out.push_str(&rest[..consumed]);
+            rest = after;
+            continue;
+        }
+        out.push_str(&rest[..at]);
+        out.push_str("](");
+        out.push_str(replacement);
+        rest = after;
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Create the empty notes minted for link targets the source never defined.
