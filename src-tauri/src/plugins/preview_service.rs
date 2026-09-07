@@ -585,10 +585,9 @@ pub async fn plugins_preview_start(
             .iter()
             .map(|a| substitute(a, data_port, control_port, &input_str, &settings))
             .collect();
-        let child = Command::new(&binary)
-            .args(&args)
-            .current_dir(&cwd)
-            .spawn()?;
+        let mut command = Command::new(&binary);
+        command.args(&args).current_dir(&cwd);
+        let child = super::hide_console_window(&mut command).spawn()?;
         let data_url = substitute(
             &service.data_url,
             data_port,
