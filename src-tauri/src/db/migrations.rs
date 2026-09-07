@@ -595,6 +595,94 @@ const MIGRATIONS: &[Migration] = &[
             );
         "#,
     },
+    Migration {
+        to: 25,
+        // Attachments become content-addressed and reference-counted.
+        //
+        // Before this migration an asset's lifetime was tied to exactly one
+        // note: `owning_note_id` was NOT NULL ... ON DELETE CASCADE, and
+        // `purge_unreferenced_markdown_assets` only looked for
+        // `asset:mindstream/<id>` inside the *owning* note's body and
+        // history. An asset referenced from any OTHER note was therefore
+        // invisible to that scan — purge the owner and the cascade took the
+        // blob with it, silently breaking the second note's image. Copying a
+        // note that contains an image reaches this today.
+        //
+        // Two changes fix it:
+        //
+        //   asset_refs      the authoritative "which notes reference this
+        //                   asset" set, many-to-many. Deletion is now driven
+        //                   by this being empty, not by one FK.
+        //
+        //   content_hash    sha256 of `bytes`, so re-uploading identical
+        //                   content reuses the existing row instead of
+        //                   storing a second copy. Backfilled in Rust right
+        //                   after this migration (see backfill_content_hashes)
+        //                   because SQLite has no hashing function.
+        //
+        // `owning_note_id` survives as a nullable *creator anchor*: it is
+        // still on the sync wire (AssetPayload in src/sync/payloads.rs), so
+        // it cannot be dropped, but ON DELETE SET NULL means it no longer
+        // decides when the blob dies.
+        //
+        // idx_assets_scope_hash is deliberately NOT UNIQUE. Existing vaults
+        // already hold duplicate blobs, and collapsing them here would mean
+        // rewriting the asset URLs embedded in note bodies from inside a
+        // migration. Dedup applies to new writes; the duplicates already on
+        // disk stay addressable.
+        //
+        // The dedup lookup is keyed on (share_scope_id, content_hash), never
+        // on the hash alone: matching globally would let a vault-local asset
+        // be reused inside a shared collection and pushed to that scope's
+        // recipients, which crosses an E2EE boundary.
+        sql: r#"
+            CREATE TABLE assets_v2 (
+                id               TEXT PRIMARY KEY,
+                owning_note_id   TEXT REFERENCES notes(id) ON DELETE SET NULL,
+                mime_type        TEXT NOT NULL,
+                bytes            BLOB NOT NULL,
+                size             INTEGER NOT NULL,
+                created          TEXT NOT NULL,
+                modified         TEXT NOT NULL,
+                etebase_uid      TEXT,
+                etebase_etag     TEXT,
+                dirty            INTEGER NOT NULL DEFAULT 1,
+                share_scope_id   TEXT,
+                content_hash     TEXT
+            );
+            INSERT INTO assets_v2(id, owning_note_id, mime_type, bytes, size,
+                                  created, modified, etebase_uid, etebase_etag,
+                                  dirty, share_scope_id, content_hash)
+                SELECT a.id,
+                       CASE WHEN n.id IS NULL THEN NULL ELSE a.owning_note_id END,
+                       a.mime_type, a.bytes, a.size, a.created, a.modified,
+                       a.etebase_uid, a.etebase_etag, a.dirty, a.share_scope_id,
+                       NULL
+                FROM assets a
+                LEFT JOIN notes n ON n.id = a.owning_note_id;
+            DROP TABLE assets;
+            ALTER TABLE assets_v2 RENAME TO assets;
+
+            CREATE INDEX idx_assets_owning_note ON assets(owning_note_id);
+            CREATE INDEX idx_assets_dirty       ON assets(dirty)       WHERE dirty = 1;
+            CREATE INDEX idx_assets_etebase_uid ON assets(etebase_uid) WHERE etebase_uid IS NOT NULL;
+            CREATE INDEX idx_assets_share_scope ON assets(share_scope_id) WHERE share_scope_id IS NOT NULL;
+            CREATE INDEX idx_assets_scope_hash  ON assets(share_scope_id, content_hash);
+            -- Lets the post-migration backfill probe for remaining work with
+            -- an index hit instead of a table scan on every app start.
+            CREATE INDEX idx_assets_unhashed    ON assets(id) WHERE content_hash IS NULL;
+
+            CREATE TABLE asset_refs (
+                asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+                note_id  TEXT NOT NULL REFERENCES notes(id)  ON DELETE CASCADE,
+                PRIMARY KEY (asset_id, note_id)
+            );
+            CREATE INDEX idx_asset_refs_note ON asset_refs(note_id);
+
+            INSERT INTO asset_refs(asset_id, note_id)
+                SELECT id, owning_note_id FROM assets WHERE owning_note_id IS NOT NULL;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {
@@ -621,6 +709,11 @@ pub fn run(conn: &mut Connection) -> AppResult<()> {
     // Surface integrity violations early instead of letting them bite at
     // the next CRUD call.
     check_foreign_keys(conn)?;
+
+    // Migration 25 adds assets.content_hash but can't populate it — SQLite
+    // has no hashing function. Do it here, once; the column is only a dedup
+    // lookup key, so a row that stays NULL costs storage, never correctness.
+    crate::assets::backfill_content_hashes(conn)?;
 
     Ok(())
 }

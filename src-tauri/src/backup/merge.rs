@@ -270,10 +270,24 @@ pub(super) fn merge_into(live: &mut Connection, backup: &Connection) -> AppResul
             continue;
         }
         tx.execute(
-            "INSERT INTO assets(id, owning_note_id, mime_type, bytes, size, created, modified, dirty)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)",
-            params![id, owning_note_id, mime, bytes, size, created, modified],
+            "INSERT INTO assets(id, owning_note_id, mime_type, bytes, size,
+                                created, modified, dirty, content_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8)",
+            params![
+                id,
+                owning_note_id,
+                mime,
+                bytes,
+                size,
+                created,
+                modified,
+                crate::assets::content_hash(bytes),
+            ],
         )?;
+        // Lifetime is driven by asset_refs, not by owning_note_id — without a
+        // row here the next sweep would free everything the merge just
+        // restored.
+        crate::assets::add_ref(&tx, id, owning_note_id)?;
         assets_added += 1;
     }
 

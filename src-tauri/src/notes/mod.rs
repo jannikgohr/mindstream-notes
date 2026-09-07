@@ -505,6 +505,12 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
                 params![new_body, new_state, now, input.id],
             )?;
         }
+        // Claim every asset the new body mentions. Additive only — an image
+        // the user just deleted keeps its (now stale) row until the
+        // reconciliation sweep, because the authoritative check also has to
+        // read the note's history snapshots and that is far too expensive to
+        // do on a save. See assets::register_body_refs.
+        crate::assets::register_body_refs(&tx, &input.id, new_body)?;
     } else if let Some(supplied_state) = &input.yrs_state {
         // Editor supplies a fresh yrs_state but no body — used by
         // note kinds whose document content lives entirely in the
@@ -637,21 +643,14 @@ pub fn purge(conn: &Connection, id: &str) -> AppResult<()> {
         crate::sync::queue_tombstone(conn, "note", &uid)?;
     }
 
-    // Tombstone every asset that's been pushed for this note BEFORE the
-    // DELETE — once the FK ON DELETE CASCADE fires, the asset rows are
-    // gone and we can't recover their etebase_uids. Locally-only assets
-    // (never pushed, etebase_uid IS NULL) need no server delete; the
-    // cascade handles them.
-    {
-        let mut stmt = conn.prepare(
-            "SELECT etebase_uid FROM assets
-             WHERE owning_note_id = ?1 AND etebase_uid IS NOT NULL",
-        )?;
-        let rows = stmt.query_map(params![id], |r| r.get::<_, String>(0))?;
-        for uid in rows {
-            crate::sync::queue_tombstone(conn, "asset", &uid?)?;
-        }
-    }
+    // Release this note's claim on its assets BEFORE the DELETE, while both
+    // the reference rows and the assets' etebase_uids are still readable.
+    //
+    // Assets no longer cascade off the owning note (see the assets module
+    // docs): an image pasted into two notes has to survive the first one
+    // being purged. `release_note_assets` deletes only what nothing else
+    // references, tombstones those, and re-anchors the survivors.
+    crate::assets::release_note_assets(conn, id)?;
 
     let n = conn.execute("DELETE FROM notes WHERE id = ?1", params![id])?;
     if n == 0 {

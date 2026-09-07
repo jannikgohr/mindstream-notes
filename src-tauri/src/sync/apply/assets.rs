@@ -130,6 +130,11 @@ pub(in crate::sync) fn apply_asset(
                 ],
             )?;
         }
+        // Asset lifetime is driven by asset_refs, so a freshly pulled blob
+        // needs a row or the next sweep would treat it as unreferenced and
+        // delete what we just downloaded. The payload's owning note is
+        // confirmed to exist by the FK gate above.
+        crate::assets::add_ref(&tx, &payload.id, &payload.owning_note_id)?;
         tx.commit()?;
         Ok(ApplyAssetOutcome::Applied(payload.id))
     })
