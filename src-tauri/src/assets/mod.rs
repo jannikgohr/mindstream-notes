@@ -120,6 +120,17 @@ pub(crate) fn content_hash(bytes: &[u8]) -> String {
     out
 }
 
+/// Outcome of a content-addressed store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredAsset {
+    /// The id to embed in the note body — freshly minted, or the existing
+    /// row's if the bytes were already stored.
+    pub id: String,
+    /// True when no new blob was written. Import surfaces this as a count so
+    /// the user can see how much a vault of repeated images saved.
+    pub deduplicated: bool,
+}
+
 /// Store `bytes` on behalf of `note_id` and return the asset id to embed in
 /// that note's body.
 ///
@@ -132,7 +143,7 @@ pub fn store_deduped(
     note_id: &str,
     mime_type: &str,
     bytes: &[u8],
-) -> AppResult<String> {
+) -> AppResult<StoredAsset> {
     require_note(conn, note_id)?;
 
     // Inherit the owning note's share scope so an image dropped into a shared
@@ -168,17 +179,23 @@ pub fn store_deduped(
 
     if let Some(asset_id) = existing {
         add_ref(conn, &asset_id, note_id)?;
-        return Ok(asset_id);
+        return Ok(StoredAsset {
+            id: asset_id,
+            deduplicated: true,
+        });
     }
 
     let id = format!("asset_{}", uuid::Uuid::new_v4());
     insert_asset(conn, &id, note_id, mime_type, bytes, &hash, share_scope_id)?;
-    Ok(id)
+    Ok(StoredAsset {
+        id,
+        deduplicated: false,
+    })
 }
 
 pub fn upload(conn: &Connection, input: UploadAsset) -> AppResult<Asset> {
-    let id = store_deduped(conn, &input.owning_note_id, &input.mime_type, &input.bytes)?;
-    load(conn, &id)
+    let stored = store_deduped(conn, &input.owning_note_id, &input.mime_type, &input.bytes)?;
+    load(conn, &stored.id)
 }
 
 /// Insert an asset under a caller-chosen id, skipping dedup.

@@ -544,7 +544,8 @@ fn an_asset_referenced_by_two_notes_survives_purging_one() {
 
     let asset_id = db
         .with_conn(|c| store_deduped(c, &first, "image/png", &[1, 2, 3]))
-        .unwrap();
+        .unwrap()
+        .id;
     let body = format!("![pic](asset:mindstream/{asset_id})");
     for note in [&first, &second] {
         db.with_conn_mut(|c| {
@@ -588,7 +589,8 @@ fn purging_the_last_referencing_note_frees_the_asset() {
     let second = make_markdown_note(&db);
     let asset_id = db
         .with_conn(|c| store_deduped(c, &first, "image/png", &[9, 9, 9]))
-        .unwrap();
+        .unwrap()
+        .id;
     db.with_conn(|c| add_ref(c, &asset_id, &second)).unwrap();
 
     db.with_conn(|c| crate::notes::purge(c, &first)).unwrap();
@@ -611,7 +613,8 @@ fn purging_the_creator_re_anchors_a_still_referenced_asset() {
     let other = make_markdown_note(&db);
     let asset_id = db
         .with_conn(|c| store_deduped(c, &creator, "image/png", &[4, 5, 6]))
-        .unwrap();
+        .unwrap()
+        .id;
     db.with_conn(|c| add_ref(c, &asset_id, &other)).unwrap();
 
     db.with_conn(|c| crate::notes::purge(c, &creator)).unwrap();
@@ -634,7 +637,8 @@ fn a_pushed_asset_is_tombstoned_when_its_last_reference_goes() {
     let note_id = make_markdown_note(&db);
     let asset_id = db
         .with_conn(|c| store_deduped(c, &note_id, "image/png", &[7]))
-        .unwrap();
+        .unwrap()
+        .id;
     db.with_conn(|c| {
         c.execute(
             "UPDATE assets SET etebase_uid = 'remote-uid' WHERE id = ?1",
@@ -673,6 +677,10 @@ fn identical_bytes_in_one_scope_store_a_single_blob() {
         .with_conn(|c| store_deduped(c, &second, "image/png", &[1, 1, 2, 3, 5]))
         .unwrap();
 
+    assert!(!a.deduplicated, "first store writes the blob");
+    assert!(b.deduplicated, "second store reuses it");
+    let a = a.id;
+    let b = b.id;
     assert_eq!(a, b, "same bytes in the same scope reuse one row");
     let rows: i64 = db
         .with_conn(|c| Ok(c.query_row("SELECT COUNT(*) FROM assets", [], |r| r.get(0))?))
@@ -709,11 +717,14 @@ fn identical_bytes_in_different_scopes_are_not_shared() {
 
     let a = db
         .with_conn(|c| store_deduped(c, &vault_note, "image/png", &[42]))
-        .unwrap();
+        .unwrap()
+        .id;
     let b = db
         .with_conn(|c| store_deduped(c, &shared_note, "image/png", &[42]))
         .unwrap();
 
+    assert!(!b.deduplicated, "a different scope must store its own copy");
+    let b = b.id;
     assert_ne!(a, b, "scopes must not share a blob");
     let scope: Option<String> = db
         .with_conn(|c| {
@@ -765,7 +776,8 @@ fn the_sweep_never_frees_a_freeform_notes_asset() {
     let note_id = make_note(&db);
     let asset_id = db
         .with_conn(|c| store_deduped(c, &note_id, "image/png", &[1, 2, 3, 4]))
-        .unwrap();
+        .unwrap()
+        .id;
 
     let removed = db
         .with_conn(sweep_unreferenced_markdown_assets_inner)
@@ -814,7 +826,8 @@ fn the_sweep_collects_assets_orphaned_by_a_folder_delete() {
         .id;
     let asset_id = db
         .with_conn(|c| store_deduped(c, &note_id, "image/png", &[8, 8]))
-        .unwrap();
+        .unwrap()
+        .id;
 
     db.with_conn(|c| crate::collections::delete(c, &folder))
         .unwrap();
@@ -834,7 +847,8 @@ fn backfill_hashes_rows_that_predate_content_addressing() {
     let note_id = make_markdown_note(&db);
     let asset_id = db
         .with_conn(|c| store_deduped(c, &note_id, "image/png", &[3, 1, 4]))
-        .unwrap();
+        .unwrap()
+        .id;
     // Simulate a row written before migration 25.
     db.with_conn(|c| {
         c.execute(

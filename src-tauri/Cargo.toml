@@ -91,6 +91,15 @@ spellbook = "0.4"
 encoding_rs = "0.8"
 ts-rs = "12.0.1"
 
+# ---- Vault import (see src/import/) ----
+# Directory walking with symlink-loop detection, which the hand-rolled
+# recursion this replaces would have had to reimplement to be safe on a
+# user-supplied vault.
+walkdir = "2.5"
+# YAML frontmatter on imported markdown. serde_yaml is unmaintained and we
+# only need scalars and sequences, so a plain parser beats a serde derive.
+yaml-rust2 = "0.12"
+
 # NOTE: panic = "unwind" (the default) is deliberate, not an omission. The app
 # runs untrusted plugin code and applies CRDT edits inside the WebView IPC FFI
 # callback; we rely on `catch_unwind` (yrs edits) and `spawn_blocking` panic
