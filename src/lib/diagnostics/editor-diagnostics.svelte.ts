@@ -19,6 +19,7 @@ import {
 import type { Diagnostic, DiagnosticProvider, Segment } from './types';
 import {
   spellcheckAvailableDictionaries,
+  spellcheckReleaseDictionaries,
   spellcheckSuggest,
   spellcheckUnknownWords,
   spellcheckWordChars
@@ -161,15 +162,46 @@ export function startSpellcheckSettingsWatcher(): () => void {
       // an unrelated setting being written for the first time re-runs this.
       // Compare the configuration itself rather than re-checking the world
       // because some other panel was touched.
-      const key = `${spellcheckEnabled()}:${spellcheckLanguages().join(',')}`;
+      //
+      // The spelling owner is part of the configuration for this purpose:
+      // a plugin taking spelling over changes who does the work, which is
+      // what decides whether the backend needs its dictionaries at all.
+      const key = [
+        spellcheckEnabled(),
+        spellcheckLanguages().join(','),
+        spellingOwner()?.id ?? ''
+      ].join(':');
       if (key === previous) return;
       previous = key;
       // The first run is startup, where this is the initial load of
       // `wordChars` — nothing has been checked yet, so the invalidation it
       // ends with costs an empty cache clear.
       void reloadSpellcheckConfig();
+      // Nothing will ask the dictionary again under this configuration, so
+      // hand its memory back now rather than waiting out the backend's
+      // idle sweep. Ordering is safe: neither call in
+      // `reloadSpellcheckConfig` loads a dictionary — `wordChars` reads the
+      // .aff header only — and a re-check that does need one reloads it in
+      // ~50 ms.
+      if (!builtInDictionaryActive()) void spellcheckReleaseDictionaries();
     });
   });
+}
+
+/**
+ * Is the built-in dictionary the thing that will actually answer a check?
+ *
+ * False when the feature is off, when no language is selected, and when a
+ * plugin checker owns spelling — in that last case the dictionary is only
+ * the offline fallback, and the bus no longer runs it unless the owner
+ * leaves a segment unanswered (see `bus.ts`).
+ */
+export function builtInDictionaryActive(): boolean {
+  return (
+    spellcheckEnabled() &&
+    spellcheckLanguages().length > 0 &&
+    spellingOwner() === null
+  );
 }
 
 export { invalidateDiagnostics, subscribeDiagnosticsInvalidated };

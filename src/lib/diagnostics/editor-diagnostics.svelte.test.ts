@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
   ),
   suggest: vi.fn(async (_languages: string[], _word: string) => ['tea', 'the']),
   wordChars: vi.fn(async (_languages: string[]) => "'"),
+  release: vi.fn(async () => undefined),
   available: vi.fn(async () => [
     {
       id: 'de_DE_frami',
@@ -42,6 +43,7 @@ vi.mock('$lib/api/spellcheck', () => ({
   spellcheckUnknownWords: api.unknownWords,
   spellcheckSuggest: api.suggest,
   spellcheckWordChars: api.wordChars,
+  spellcheckReleaseDictionaries: api.release,
   spellcheckAvailableDictionaries: api.available
 }));
 vi.mock('$lib/settings/store.svelte', () => ({
@@ -383,6 +385,39 @@ describe('startSpellcheckSettingsWatcher', () => {
     flushSync();
 
     await vi.waitFor(() => expect(recheck).toHaveBeenCalledTimes(1));
+  });
+
+  it('releases the backend dictionaries when the feature is switched off', async () => {
+    await started();
+    api.release.mockClear();
+
+    setSetting('language.spellcheck.enabled', false);
+    flushSync();
+
+    // Otherwise the ~21 MB of Hunspell tables sit in the Rust process until
+    // the idle sweep notices, minutes after the user turned the feature off.
+    await vi.waitFor(() => expect(api.release).toHaveBeenCalled());
+  });
+
+  it('releases them when every language is deselected', async () => {
+    await started();
+    api.release.mockClear();
+
+    setSetting('language.spellcheck.languages', []);
+    flushSync();
+
+    await vi.waitFor(() => expect(api.release).toHaveBeenCalled());
+  });
+
+  it('keeps them while the built-in dictionary is the active checker', async () => {
+    await started();
+    api.release.mockClear();
+
+    setSetting('language.spellcheck.languages', ['en_US']);
+    flushSync();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(api.release).not.toHaveBeenCalled();
   });
 
   it('ignores writes to unrelated settings', async () => {

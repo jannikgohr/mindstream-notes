@@ -30,6 +30,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime};
@@ -50,6 +51,21 @@ pub use dictionary::{
 /// realistic multilingual user with room to spare; loading is ~50ms, so
 /// evicting and reloading is cheap if someone exceeds it.
 const MAX_RESIDENT: usize = 4;
+
+/// How long the resident set survives with no check or suggestion.
+///
+/// The ceiling above bounds the WORST case; this bounds the IDLE case,
+/// which is what an app open all day actually spends its time in. A
+/// German dictionary is ~18 MB resident and an English one ~3 MB, so a
+/// bilingual user carries ~21 MB of lookup tables that do nothing while
+/// no editor is open (or while they read rather than type). Loading is
+/// ~50 ms off the UI thread, so the cost of being wrong is one
+/// imperceptible reload on the next keystroke batch.
+const IDLE_EVICT_AFTER: Duration = Duration::from_secs(180);
+
+/// How often the eviction task looks. Coarse on purpose: the point is to
+/// give memory back eventually, not promptly.
+const IDLE_SWEEP_EVERY: Duration = Duration::from_secs(60);
 
 /// e2e/test seam: put the dictionary directory somewhere disposable.
 ///
@@ -103,6 +119,9 @@ struct Resident {
     /// Most-recently-used first, so eviction is a `pop()`.
     order: Vec<String>,
     dictionaries: HashMap<String, spellbook::Dictionary>,
+    /// When a dictionary was last read. `None` means nothing is resident.
+    /// Drives [`Resident::evict_if_idle`].
+    last_used: Option<Instant>,
 }
 
 impl Resident {
@@ -123,8 +142,36 @@ impl Resident {
         }
     }
 
+    /// Drop every resident dictionary if none has been read for
+    /// `idle_for`. Returns how many were freed, so the caller can log a
+    /// number instead of a guess.
+    ///
+    /// All-or-nothing rather than per-dictionary: a check consults every
+    /// enabled language for each unknown word, so they are used together
+    /// or not at all, and a partial eviction would only guarantee a
+    /// reload on the very next check.
+    fn evict_if_idle(&mut self, now: Instant, idle_for: Duration) -> usize {
+        if self.dictionaries.is_empty() {
+            return 0;
+        }
+        match self.last_used {
+            Some(at) if now.saturating_duration_since(at) < idle_for => 0,
+            _ => self.release_all(),
+        }
+    }
+
+    /// Drop everything resident, whatever its age. Returns how many went.
+    fn release_all(&mut self) -> usize {
+        let freed = self.dictionaries.len();
+        self.dictionaries.clear();
+        self.order.clear();
+        self.last_used = None;
+        freed
+    }
+
     /// Load `id` if it is not already resident, then return it.
     fn get_or_load(&mut self, dir: &Path, id: &str) -> AppResult<&spellbook::Dictionary> {
+        self.last_used = Some(Instant::now());
         if self.dictionaries.contains_key(id) {
             self.touch(id);
         } else {
@@ -298,6 +345,64 @@ pub async fn spellcheck_suggest(
     Ok(suggestions)
 }
 
+/// Drop the resident dictionaries now.
+///
+/// The idle sweep below would get there eventually, but "eventually" is up
+/// to three minutes, and the frontend knows the answer immediately: when
+/// the user turns the built-in checker off, deselects every language, or
+/// hands spelling to a plugin checker, nothing is going to ask for a
+/// dictionary again. Waiting out the timer in that case just holds ~21 MB
+/// for no reason.
+///
+/// Idempotent, and never an error: releasing what is already released is
+/// the normal case (the setting is written far more often than a
+/// dictionary is loaded).
+#[tauri::command]
+pub async fn spellcheck_release_dictionaries(app: AppHandle) -> CommandResult<()> {
+    let resident = app.state::<SpellcheckState>().inner.clone();
+    let mut guard = resident
+        .lock()
+        .map_err(|_| AppError::InvalidArg("spellcheck state poisoned".into()))?;
+    let freed = guard.release_all();
+    drop(guard);
+    if freed > 0 {
+        log::info!("[spellcheck] released {freed} dictionar(y/ies) on request");
+    }
+    Ok(())
+}
+
+/// Give the resident dictionaries back to the OS once the user stops
+/// spellchecking.
+///
+/// Mirrors the other background loops owned by the Rust side (sync,
+/// trash retention): a tokio task started once from `setup`, sweeping on
+/// a coarse interval. Nothing has to tell it the app went idle — the
+/// timestamp [`Resident::get_or_load`] stamps is the only signal it
+/// needs, so there is no event to miss and nothing to unsubscribe.
+pub fn spawn_idle_eviction<R: Runtime>(app: AppHandle<R>) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(IDLE_SWEEP_EVERY).await;
+
+            // Registered in `setup` alongside this spawn, but a missing
+            // state must not kill the loop.
+            let Some(state) = app.try_state::<SpellcheckState>() else {
+                continue;
+            };
+            let Ok(mut guard) = state.inner.lock() else {
+                // Poisoned by a panic inside a check. Nothing to evict
+                // safely; leave it for the next sweep.
+                continue;
+            };
+            let freed = guard.evict_if_idle(Instant::now(), IDLE_EVICT_AFTER);
+            drop(guard);
+            if freed > 0 {
+                log::info!("[spellcheck] evicted {freed} idle dictionar(y/ies)");
+            }
+        }
+    });
+}
+
 #[tauri::command]
 pub async fn spellcheck_installed_dictionaries(
     app: AppHandle,
@@ -316,6 +421,80 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// A one-word dictionary built from strings.
+    ///
+    /// The eviction decision only reads the map's length, so what the
+    /// dictionary contains is irrelevant — but the map holds real
+    /// `spellbook::Dictionary` values, so the test needs a real one.
+    fn marker_dictionary() -> spellbook::Dictionary {
+        spellbook::Dictionary::new("SET UTF-8\n", "1\nword\n").unwrap()
+    }
+
+    #[test]
+    fn idle_eviction_frees_the_whole_resident_set() {
+        let mut resident = Resident::default();
+        resident.order.push("en_US".into());
+        resident.last_used = Some(Instant::now() - Duration::from_secs(600));
+        resident
+            .dictionaries
+            .insert("en_US".into(), marker_dictionary());
+
+        let freed = resident.evict_if_idle(Instant::now(), Duration::from_secs(180));
+
+        assert_eq!(freed, 1);
+        assert!(resident.dictionaries.is_empty());
+        assert!(resident.order.is_empty());
+        assert_eq!(resident.last_used, None);
+    }
+
+    #[test]
+    fn a_recently_used_dictionary_stays_resident() {
+        let mut resident = Resident::default();
+        resident.order.push("en_US".into());
+        resident.last_used = Some(Instant::now());
+        resident
+            .dictionaries
+            .insert("en_US".into(), marker_dictionary());
+
+        assert_eq!(
+            resident.evict_if_idle(Instant::now(), Duration::from_secs(180)),
+            0
+        );
+        assert_eq!(resident.dictionaries.len(), 1);
+    }
+
+    #[test]
+    fn releasing_drops_everything_regardless_of_age() {
+        let mut resident = Resident::default();
+        resident.order.push("en_US".into());
+        resident.last_used = Some(Instant::now());
+        resident
+            .dictionaries
+            .insert("en_US".into(), marker_dictionary());
+
+        // Just used, so the idle sweep would keep it — an explicit release
+        // must not care.
+        assert_eq!(resident.release_all(), 1);
+        assert!(resident.dictionaries.is_empty());
+        assert_eq!(resident.last_used, None);
+    }
+
+    #[test]
+    fn releasing_twice_is_harmless() {
+        let mut resident = Resident::default();
+        assert_eq!(resident.release_all(), 0);
+        assert_eq!(resident.release_all(), 0);
+    }
+
+    #[test]
+    fn idle_eviction_is_a_no_op_when_nothing_is_resident() {
+        let mut resident = Resident::default();
+        assert_eq!(
+            resident.evict_if_idle(Instant::now(), Duration::from_secs(180)),
+            0
+        );
     }
 
     #[test]

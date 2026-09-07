@@ -34,6 +34,9 @@ export const config: WebdriverIO.Config = {
   hostname: '127.0.0.1',
   port: 4444,
   specs: [
+    // Windows-only, self-skipping elsewhere: guards the webview being left
+    // marked invisible under a shown window, which paints nothing.
+    join(here, '..', 'perf', 'hidden-visibility.e2e.ts'),
     join(here, 'specs', 'backup.e2e.ts'),
     join(here, 'specs', 'editor-roundtrip.e2e.ts'),
     join(here, 'specs', 'history.e2e.ts'),

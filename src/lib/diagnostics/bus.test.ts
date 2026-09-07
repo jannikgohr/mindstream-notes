@@ -632,14 +632,118 @@ describe('partial results', () => {
       onPartial: (d) => partials.push(d.map((x) => x.source))
     });
 
-    // The dictionary has finished by now, but the owner is still working on
-    // this segment, so its spelling is held back rather than drawn and
-    // immediately replaced.
+    // The owner is still working on this segment, so nothing of the
+    // dictionary's reaches the screen. It is not merely held back: with
+    // the owner answering, the dictionary is never asked at all, so there
+    // is no partial to publish.
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(partials[0]).toEqual([]);
+    expect(partials).toEqual([]);
 
     owner.release();
     expect((await done).map((d) => d.source)).toEqual(['lt']);
+  });
+});
+
+/**
+ * A fallback whose every kind is owned by someone else is not run unless
+ * the owner leaves something unanswered.
+ *
+ * The findings were already discarded by `compose`; what was left was the
+ * work. On desktop the built-in dictionary is an IPC round trip that pulls
+ * the Hunspell tables back into the Rust process and keeps them resident,
+ * so "checked and thrown away" costs ~21 MB for a bilingual user who is
+ * not even using the dictionary.
+ */
+describe('shadowed fallbacks', () => {
+  const owners = { spelling: 'lt' } as const;
+
+  /** Counts calls so a test can assert the dictionary was never asked. */
+  function counting(id: string, word: string, fail = false) {
+    let calls = 0;
+    const provider: DiagnosticProvider = {
+      id,
+      kinds: ['spelling'],
+      check({ text }) {
+        calls += 1;
+        if (fail) throw new Error('server down');
+        const at = text.indexOf(word);
+        return at === -1
+          ? []
+          : [diag({ from: at, to: at + word.length, source: id })];
+      }
+    };
+    return { provider, calls: () => calls };
+  }
+
+  it('never asks the fallback when the owner answers', async () => {
+    const bus = new DiagnosticBus();
+    const dictionary = counting('spell', 'beta');
+    bus.register(counting('lt', 'alpha').provider);
+    bus.register(dictionary.provider);
+
+    await bus.check(segments(['alpha beta', 0], ['gamma', 20]), {
+      languages: ['en'],
+      owners
+    });
+
+    expect(dictionary.calls()).toBe(0);
+  });
+
+  it('asks the fallback for the segments the owner failed on', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const bus = new DiagnosticBus();
+    const dictionary = counting('spell', 'beta');
+    bus.register(counting('lt', 'alpha', true).provider);
+    bus.register(dictionary.provider);
+
+    const out = await bus.check(segments(['alpha beta', 0]), {
+      languages: ['en'],
+      owners
+    });
+
+    expect(dictionary.calls()).toBe(1);
+    expect(out.map((d) => d.source)).toEqual(['spell']);
+    spy.mockRestore();
+  });
+
+  it('still runs a provider that owns one of its own kinds', async () => {
+    // Two kinds, only one of them owned elsewhere: it still has grammar to
+    // contribute, so shadowing must not swallow it.
+    const bus = new DiagnosticBus();
+    let calls = 0;
+    bus.register(counting('lt', 'alpha').provider);
+    bus.register({
+      id: 'both',
+      kinds: ['spelling', 'grammar'],
+      check() {
+        calls += 1;
+        return [diag({ from: 0, to: 5, kind: 'grammar', source: 'both' })];
+      }
+    });
+
+    const out = await bus.check(segments(['alpha beta', 0]), {
+      languages: ['en'],
+      owners
+    });
+
+    expect(calls).toBe(1);
+    // Both survive: they overlap but report different kinds. Order comes
+    // from registration, which this test has no opinion about.
+    expect(out.map((d) => d.source).sort()).toEqual(['both', 'lt']);
+  });
+
+  it('runs the fallback when the owner is not registered', async () => {
+    const bus = new DiagnosticBus();
+    const dictionary = counting('spell', 'beta');
+    bus.register(dictionary.provider);
+
+    const out = await bus.check(segments(['alpha beta', 0]), {
+      languages: ['en'],
+      owners
+    });
+
+    expect(dictionary.calls()).toBe(1);
+    expect(out.map((d) => d.source)).toEqual(['spell']);
   });
 });
 
@@ -699,9 +803,13 @@ describe('owner grace', () => {
       onPartial: (d) => partials.push(d.map((x) => x.source))
     });
 
+    // Nothing yet: the owner is still working, and the dictionary is not
+    // asked while that is true.
     await settle();
-    expect(partials).toEqual([[]]);
+    expect(partials).toEqual([]);
 
+    // The grace expiring is what asks it — for an owner that hangs rather
+    // than failing, this is the only thing that ever does.
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(partials.at(-1)).toEqual(['spell']);
 
