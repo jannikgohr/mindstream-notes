@@ -36,7 +36,7 @@ pub fn store_text(conn: &Connection, note_id: &str, text: &str) -> AppResult<()>
 /// frontend background backfill sweep.
 pub fn notes_missing_text(conn: &Connection) -> AppResult<Vec<String>> {
     let mut stmt = conn.prepare(
-        "SELECT id FROM notes
+        "SELECT id FROM active_notes
          WHERE note_kind = 'pdf' AND pdf_text IS NULL AND trashed_at IS NULL",
     )?;
     let ids = stmt
@@ -50,7 +50,7 @@ pub fn notes_missing_text(conn: &Connection) -> AppResult<Vec<String>> {
 pub fn note_needs_text(conn: &Connection, note_id: &str) -> AppResult<bool> {
     let needs: bool = conn.query_row(
         "SELECT EXISTS(
-            SELECT 1 FROM notes
+            SELECT 1 FROM active_notes
             WHERE id = ?1 AND note_kind = 'pdf' AND pdf_text IS NULL
          )",
         params![note_id],

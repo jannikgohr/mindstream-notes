@@ -60,17 +60,22 @@ fn is_trash(id: &str) -> bool {
 /// already in trash and got re-shuffled inside it — retention should
 /// run from when the user originally trashed the item, not from the
 /// last drag-and-drop within the Trash view.
+pub enum TrashTable {
+    Notes,
+    Collections,
+}
+
 pub fn stamp_trashed_at_on_parent_change(
     conn: &rusqlite::Connection,
-    table: &str,
+    table: TrashTable,
     id: &str,
     new_parent: Option<&str>,
     now: &str,
 ) -> AppResult<()> {
-    // Hard-coded list avoids passing arbitrary user input into the
-    // statement. Only callers in the crate touch this; the table arg
-    // is a constant at the call site.
-    debug_assert!(matches!(table, "notes" | "collections"));
+    let table = match table {
+        TrashTable::Notes => "notes",
+        TrashTable::Collections => "collections",
+    };
     if matches!(new_parent, Some(TRASH_ID)) {
         let sql = format!("UPDATE {table} SET trashed_at = COALESCE(trashed_at, ?1) WHERE id = ?2");
         conn.execute(&sql, params![now, id])?;
@@ -108,6 +113,7 @@ pub fn list(conn: &Connection) -> AppResult<Vec<Collection>> {
 }
 
 pub fn create(conn: &Connection, input: CreateCollection) -> AppResult<Collection> {
+    crate::sharing::ensure_parent_writable(conn, input.parent_collection_id.as_deref())?;
     let id = format!("coll_{}", uuid::Uuid::new_v4());
     let now = Utc::now().to_rfc3339();
     let position = next_position(conn, input.parent_collection_id.as_deref())?;
@@ -156,6 +162,10 @@ pub fn get(conn: &Connection, id: &str) -> AppResult<Collection> {
 }
 
 pub fn update(conn: &Connection, input: UpdateCollection) -> AppResult<Collection> {
+    crate::sharing::ensure_subtree_writable(conn, &input.id)?;
+    if let Some(parent) = &input.parent_collection_id {
+        crate::sharing::ensure_parent_writable(conn, parent.as_deref())?;
+    }
     if is_trash(&input.id) {
         return Err(AppError::InvalidArg(
             "the trash collection cannot be modified".into(),
@@ -192,7 +202,13 @@ pub fn update(conn: &Connection, input: UpdateCollection) -> AppResult<Collectio
         // updated above, but it would tick on every later in-place edit
         // too — `trashed_at` is the dedicated "when did this enter trash"
         // stamp the sweep needs.
-        stamp_trashed_at_on_parent_change(conn, "collections", &input.id, parent.as_deref(), &now)?;
+        stamp_trashed_at_on_parent_change(
+            conn,
+            TrashTable::Collections,
+            &input.id,
+            parent.as_deref(),
+            &now,
+        )?;
         // Re-home the subtree if the move crossed a share-scope boundary: the
         // destination's scope wins (NULL for a root / vault parent). Skip when
         // the moved folder is itself a share anchor — a share root's scope is
@@ -226,6 +242,13 @@ pub fn update(conn: &Connection, input: UpdateCollection) -> AppResult<Collectio
 }
 
 pub fn delete(conn: &Connection, id: &str) -> AppResult<()> {
+    crate::sharing::ensure_subtree_writable(conn, id)?;
+    if conn.is_autocommit() {
+        let tx = conn.unchecked_transaction()?;
+        delete(&tx, id)?;
+        tx.commit()?;
+        return Ok(());
+    }
     if is_trash(id) {
         return Err(AppError::InvalidArg(
             "the trash collection cannot be deleted".into(),
