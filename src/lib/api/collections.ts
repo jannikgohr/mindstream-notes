@@ -79,7 +79,7 @@ export function deleteCollection(id: string): Promise<void> {
   );
 }
 
-function parseCollection(value: unknown): Collection {
+export function parseCollection(value: unknown): Collection {
   const raw = assertRecord(value, 'collection');
   return {
     id: assertString(raw.id, 'collection.id'),

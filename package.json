@@ -39,7 +39,7 @@
     "format:rust:check": "node src-tauri/scripts/format-rust.mjs --check",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "lint:i18n": "node src-tauri/scripts/lint-i18n.mjs",
+    "lint:i18n": "node --test src-tauri/scripts/lint-i18n.test.mjs && node src-tauri/scripts/lint-i18n.mjs",
     "lint:theme": "node src-tauri/scripts/lint-theme.mjs",
     "prepare": "husky"
   },

@@ -763,9 +763,11 @@
       // Both are best-effort: if the editor is mid-teardown when the
       // event fires, the no-op'd refs short-circuit safely.
       void listen(TauriEventName.SyncCompleted, (payload) => {
-        handleSyncCompleted(
+        void handleSyncCompleted(
           payload.notes_pulled_ids,
           payload.assets_pulled_ids
+        ).catch((err: unknown) =>
+          console.error('[editor] sync refresh failed', err)
         );
       }).then((unlisten) => {
         unsubSync = unlisten;
@@ -1134,7 +1136,9 @@
     provider = null;
     collabOnline = false;
     collabConfigured = false;
-    crepe?.destroy();
+    void crepe
+      ?.destroy()
+      .catch((err: unknown) => console.error('[editor] destroy failed', err));
     crepe = null;
     awareness?.destroy();
     awareness = null;

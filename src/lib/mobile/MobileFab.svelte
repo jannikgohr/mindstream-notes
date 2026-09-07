@@ -23,7 +23,7 @@
 
   interface Props {
     /** Primary quick action — always visible at the bottom. */
-    primary: FabAction;
+    primary: Omit<FabAction, 'id'>;
     /** Extra actions revealed when the plus is expanded. */
     actions: FabAction[];
   }

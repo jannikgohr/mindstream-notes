@@ -109,8 +109,22 @@ const seedNote = (over: Partial<NoteSummary> = {}): NoteSummary => ({
 });
 
 beforeEach(() => {
-  saveNoteMock.mockReset().mockResolvedValue(undefined);
-  updateCollectionMock.mockReset().mockResolvedValue(undefined);
+  saveNoteMock.mockReset().mockImplementation(async (input) => ({
+    ...seedNote({ id: input.id }),
+    body: '',
+    yrs_state: [],
+    payload_schema: 2,
+    ...input
+  }));
+  updateCollectionMock.mockReset().mockImplementation(async (input) => ({
+    id: input.id,
+    name: 'Folder',
+    parent_collection_id: null,
+    position: 0,
+    created: 'now',
+    modified: 'now',
+    ...input
+  }));
   createNoteMock.mockReset().mockResolvedValue(undefined);
   moveManyMock.mockReset().mockResolvedValue({ notes: 1, folders: 1 });
   trashManyMock.mockReset().mockResolvedValue({ notes: 2, folders: 0 });
@@ -423,5 +437,80 @@ describe('loadTree error surfacing', () => {
     await loadTree();
     expect(tree.error).toBeNull();
     expect(tree.ready).toBe(true);
+  });
+});
+
+describe('reloads after an in-flight snapshot', () => {
+  it('waits for a fresh snapshot after a mutation and coalesces its callers', async () => {
+    let resolveFirst!: (value: unknown) => void;
+    let resolveSecond!: (value: unknown) => void;
+    loadTreeMock
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve;
+          })
+      );
+    const first = loadTree();
+    const mutation = moveNoteTo('n1', 'new-folder');
+    await Promise.resolve();
+    const joined = loadTree();
+    let done = false;
+    void joined.then(() => {
+      done = true;
+    });
+    resolveFirst({ tree: [], notesById: {}, collectionsById: {} });
+    await vi.waitFor(() => expect(loadTreeMock).toHaveBeenCalledTimes(2));
+    expect(done).toBe(false);
+    expect(tree.loading).toBe(true);
+    const current = seedNote({ parent_collection_id: 'new-folder' });
+    resolveSecond({
+      tree: [],
+      notesById: { n1: current },
+      collectionsById: {}
+    });
+    await Promise.all([first, mutation, joined]);
+    expect(tree.notesById.n1.parent_collection_id).toBe('new-folder');
+    expect(loadTreeMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a failed older snapshot when a reload was requested', async () => {
+    let reject!: (reason: Error) => void;
+    loadTreeMock.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, fail) => {
+          reject = fail;
+        })
+    );
+    const first = loadTree();
+    const next = loadTree();
+    reject(new Error('old read failed'));
+    await Promise.all([first, next]);
+    expect(loadTreeMock).toHaveBeenCalledTimes(2);
+    expect(tree.error).toBeNull();
+  });
+});
+
+describe('bounded mutation refreshes', () => {
+  it('applies a returned note without loading the vault again', async () => {
+    tree.ready = true;
+    await moveNoteTo('n1', 'trash');
+    expect(loadTreeMock).not.toHaveBeenCalled();
+    expect(tree.notesById.n1.parent_collection_id).toBe('trash');
+    expect(tree.notesById.n1).not.toHaveProperty('body');
+    expect(tree.notesById.n1).not.toHaveProperty('yrs_state');
+  });
+  it('renames a folder without re-reading every tag', async () => {
+    tree.ready = true;
+    await renameCollection('f1', 'New name');
+    expect(loadTreeMock).not.toHaveBeenCalled();
+    expect(tree.collectionsById.f1.name).toBe('New name');
+    expect(tree.tree.find((node) => node.id === 'f1')?.name).toBe('New name');
   });
 });

@@ -736,14 +736,18 @@
     pressStartedInsideCardEditor = false;
     if (!api || isTrashed || e.button !== 0) return;
     if (startedInside || startsInsideCardEditor(e.target)) return;
-    api.exec('select-card', { id: null });
+    void api
+      .exec('select-card', { id: null })
+      .catch((err: unknown) => console.error('[kanban] deselect failed', err));
   }
 
   const MOBILE_CARD_EDITOR_NAV_ID = 'mobile-kanban-card-editor';
   const MOBILE_LIST_MANAGER_NAV_ID = 'mobile-kanban-list-manager';
 
   function closeMobileCardEditor(): void {
-    api?.exec('select-card', { id: null });
+    void api
+      ?.exec('select-card', { id: null })
+      .catch((err: unknown) => console.error('[kanban] deselect failed', err));
   }
 
   function handleCardEditorOpenChange(open: boolean): void {
@@ -831,7 +835,11 @@
   function closeKanbanSearch(): void {
     searchOpen = false;
     searchFilters = { ...EMPTY_KANBAN_SEARCH_FILTERS };
-    api?.exec('filter-cards', { tag: KANBAN_SEARCH_FILTER_TAG });
+    void api
+      ?.exec('filter-cards', { tag: KANBAN_SEARCH_FILTER_TAG })
+      .catch((err: unknown) =>
+        console.error('[kanban] filter reset failed', err)
+      );
   }
 
   function updateKanbanSearch(filters: KanbanSearchFilters): void {

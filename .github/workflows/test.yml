@@ -136,10 +136,7 @@ jobs:
         working-directory: src-tauri
         run: cargo test --locked
 
-  # Coverage runs once on Linux and uploads two lcov reports to Codecov,
-  # tagged with `flags` so the service tracks the frontend and Rust
-  # backend percentages independently. Coverage is informational while it
-  # ramps up: a Codecov hiccup shouldn't fail the build.
+  # Coverage thresholds fail CI; reports upload even when tests fail.
   coverage:
     name: Coverage (Linux)
     runs-on: ubuntu-latest
@@ -186,20 +183,11 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Frontend: vitest with the v8 provider emits .output/coverage/frontend/lcov.info.
-      # `continue-on-error` so a sub-threshold run (vitest.config.ts thresholds)
-      # still leaves the already-written lcov.info in place and lets the Codecov
-      # upload below run — coverage is published regardless of the percentage.
       - name: JS coverage
-        continue-on-error: true
         run: pnpm test:coverage
 
-      # Backend: cargo-llvm-cov emits .output/coverage/rust/lcov.info. The helper applies
-      # the shared ignore-regex (integration/IPC/network/UI surfaces). Also
-      # non-fatal so the upload always runs even if the previous step reported low
-      # coverage.
       - name: Rust coverage
-        continue-on-error: true
+        if: ${{ !cancelled() }}
         run: node src-tauri/scripts/rust-coverage.mjs --lcov --output-path ../.output/coverage/rust/lcov.info
 
       - name: Note skipped Codecov upload
@@ -211,7 +199,7 @@ jobs:
       # frontend and backend reports, cross-contaminating the flags. We name the
       # single report explicitly via `files:` instead.
       - name: Upload frontend coverage
-        if: ${{ env.CODECOV_TOKEN != '' }}
+        if: ${{ !cancelled() && env.CODECOV_TOKEN != '' }}
         uses: codecov/codecov-action@v5
         with:
           files: ./.output/coverage/frontend/lcov.info
@@ -221,7 +209,7 @@ jobs:
           token: ${{ env.CODECOV_TOKEN }}
 
       - name: Upload backend coverage
-        if: ${{ env.CODECOV_TOKEN != '' }}
+        if: ${{ !cancelled() && env.CODECOV_TOKEN != '' }}
         uses: codecov/codecov-action@v5
         with:
           files: ./.output/coverage/rust/lcov.info
@@ -305,3 +293,66 @@ jobs:
       # silently fallen 19 keys behind `en.json` — those settings rendered
       # as raw key ids for German users.
       - run: pnpm lint:i18n
+
+  app-e2e:
+    name: Tauri E2E (${{ matrix.suite }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [single, multi, multi-a2]
+    env:
+      MINDSTREAM_DOCKER_NO_SUDO: '1'
+      WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install desktop test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev webkit2gtk-driver xvfb xauth dbus-x11 gnome-keyring
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: pnpm install --frozen-lockfile
+      - run: cargo install tauri-driver --locked
+      - name: Start disposable collaboration backend
+        if: matrix.suite != 'single'
+        run: pnpm backend:test:up
+      - name: Run packaged app suite
+        env:
+          APP_SUITE: ${{ matrix.suite }}
+        run: |
+          case "$APP_SUITE" in
+            single) export TEST_COMMAND=test:e2e:app ;;
+            multi) export TEST_COMMAND=test:e2e:app:multi ;;
+            multi-a2) export TEST_COMMAND=test:e2e:app:multi:a2 ;;
+          esac
+          dbus-run-session -- bash -eu -c '
+            eval "$(printf %s ci-test-keyring | gnome-keyring-daemon --unlock --components=secrets)"
+            xvfb-run -a pnpm "$TEST_COMMAND"
+          '
+      - name: Capture backend logs
+        if: ${{ !cancelled() && matrix.suite != 'single' }}
+        run: |
+          mkdir -p .output/wdio
+          docker compose -f backend/docker-compose.yml -f backend/docker-compose.test.yml --env-file backend/.env.test -p mindstream-test logs --no-color > .output/wdio/backend.log
+      - name: Stop disposable backend
+        if: ${{ always() && matrix.suite != 'single' }}
+        run: pnpm backend:test:down
+      - name: Upload app test logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: wdio-${{ matrix.suite }}
+          path: .output/wdio
+          retention-days: 7

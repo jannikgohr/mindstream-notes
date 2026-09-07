@@ -12,11 +12,7 @@ import svelteParser from 'svelte-eslint-parser';
  * adds is the class of bug neither can see — a rejected promise nobody
  * awaits, a variable that stopped being used, a `catch` that swallows.
  *
- * `.ts` files get the type-aware ruleset (it needs the TypeScript program,
- * which is why it's scoped rather than global). `.svelte` files get the
- * syntactic rules only: type-aware linting through svelte-eslint-parser is
- * both slow and unreliable on `$state`/`$derived` runes, and the component
- * bodies are already type-checked by `pnpm check`.
+ * Type-aware async rules cover TypeScript, rune modules and Svelte components.
  */
 export default ts.config(
   {
@@ -120,19 +116,15 @@ export default ts.config(
     rules: { '@typescript-eslint/no-unused-expressions': 'off' }
   },
 
-  // Type-aware pass. This is the reason the config exists: the app fires
-  // hundreds of promises with `void` and has no `unhandledrejection`
-  // handler, so a rejection is a silent no-op.
+  // Forward the same TypeScript project through both parsers.
   {
-    // `.svelte.ts` rune modules are excluded: eslint-plugin-svelte routes
-    // them through svelte-eslint-parser, which doesn't forward the
-    // TypeScript program these rules need.
-    files: ['src/**/*.ts'],
-    ignores: ['**/*.test.ts', '**/*.svelte.ts'],
+    files: ['src/**/*.ts', 'src/**/*.svelte'],
+    ignores: ['**/*.test.ts'],
     languageOptions: {
       parser: ts.parser,
       parserOptions: {
         projectService: true,
+        extraFileExtensions: ['.svelte'],
         tsconfigRootDir: import.meta.dirname
       }
     },

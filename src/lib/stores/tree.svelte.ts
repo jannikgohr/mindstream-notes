@@ -2,8 +2,8 @@
  * Reactive file tree, hydrated from the Rust API.
  *
  * The store is the only place the rest of the app reads tree data from;
- * mutations call the API and refetch (cheap for desktop note counts —
- * upgrade to optimistic in-place updates if you ever hit perf limits).
+ * single-item mutations apply the returned metadata. Sync and subtree
+ * mutations reload one database snapshot.
  *
  * IDs everywhere: collections and notes both have stable string ids. The
  * older name-based API has been retired; the only place a name is used
@@ -19,6 +19,7 @@ import type {
   TreeNode
 } from '$lib/api';
 import { TRASH_ID } from '$lib/api';
+import { composeTree } from '$lib/api/tree';
 import { runSync } from '$lib/sync/runner';
 import { extractPdfText } from '$lib/pdf/extract-text';
 import { toErrorMessage } from '$lib/api/errors';
@@ -46,34 +47,41 @@ export const tree = $state<TreeState>({
 // loadTree() from onMount and again from the dockview bootstrap; without this
 // they'd race two fetches whose assignments could interleave.
 let inFlight: Promise<void> | null = null;
+let pendingReload = false;
 
 /** Reload the tree + summaries from Rust. Idempotent. */
 export function loadTree(): Promise<void> {
-  if (inFlight) return inFlight;
-  inFlight = doLoadTree().finally(() => {
-    inFlight = null;
-  });
+  if (inFlight) {
+    pendingReload = true;
+    return inFlight;
+  }
+  tree.loading = true;
+  inFlight = (async () => {
+    try {
+      do {
+        pendingReload = false;
+        await doLoadTree();
+      } while (pendingReload);
+    } finally {
+      tree.ready = true;
+      tree.loading = false;
+      inFlight = null;
+    }
+  })();
   return inFlight;
 }
 
 async function doLoadTree(): Promise<void> {
-  tree.loading = true;
   tree.error = null;
   try {
     const result = await api.loadTree();
+    if (pendingReload) return;
     tree.tree = result.tree;
     tree.notesById = result.notesById;
     tree.collectionsById = result.collectionsById;
   } catch (err) {
     tree.error = toErrorMessage(err);
     console.error('[tree] loadTree failed', err);
-  } finally {
-    // `ready` means "a load attempt has completed", not "succeeded" — so a
-    // failed load drops out of the loading state and lets the UI surface
-    // tree.error instead of an eternal spinner. Callers that need success
-    // should check tree.error.
-    tree.ready = true;
-    tree.loading = false;
   }
 }
 
@@ -91,7 +99,7 @@ export async function createNoteIn(
     note_kind: noteKind,
     body
   });
-  await loadTree();
+  await applyNoteSummary(note);
   // Live collab keys live on the etebase server — the per-note crypto_key
   // doesn't exist locally until the first push, and the room id is the
   // etebase Item UID. Kicking off a sync now means the note can join its
@@ -128,7 +136,7 @@ export async function importPdfIn(
     title,
     bytes
   });
-  await loadTree();
+  await applyNoteSummary(note);
   // Index the PDF's text for cross-note search. Derived/local-only, so it
   // runs off the import path and failures are non-fatal (the background
   // sweep retries un-indexed PDFs later).
@@ -164,6 +172,7 @@ export async function renameNote(id: string, title: string): Promise<void> {
     };
   }
   patchNodeName(tree.tree, id, title);
+  if (inFlight) await loadTree();
 }
 
 /** Move a note into the special trash collection. */
@@ -175,8 +184,11 @@ export async function moveNoteTo(
   noteId: string,
   targetCollectionId: string | null
 ): Promise<void> {
-  await api.saveNote({ id: noteId, parent_collection_id: targetCollectionId });
-  await loadTree();
+  const note = await api.saveNote({
+    id: noteId,
+    parent_collection_id: targetCollectionId
+  });
+  await applyNoteSummary(note);
 }
 
 export async function moveManyTo(
@@ -194,6 +206,7 @@ export async function setNoteBody(id: string, body: string): Promise<void> {
   if (existing) {
     tree.notesById[id] = { ...existing, modified: new Date().toISOString() };
   }
+  if (inFlight) await loadTree();
 }
 
 /**
@@ -215,6 +228,7 @@ export async function setNoteFavourite(
       modified: new Date().toISOString()
     };
   }
+  if (inFlight) await loadTree();
 }
 
 /**
@@ -233,6 +247,7 @@ export async function setNoteTags(id: string, tags: string[]): Promise<void> {
       modified: new Date().toISOString()
     };
   }
+  if (inFlight) await loadTree();
 }
 
 /**
@@ -312,7 +327,8 @@ export async function createCollectionIn(
     name,
     parent_collection_id: parentId
   });
-  await loadTree();
+  tree.collectionsById[c.id] = c;
+  await finishLocalChange();
   return c.id;
 }
 
@@ -320,8 +336,9 @@ export async function renameCollection(
   id: string,
   name: string
 ): Promise<void> {
-  await api.updateCollection({ id, name });
-  await loadTree();
+  const collection = await api.updateCollection({ id, name });
+  tree.collectionsById[id] = collection;
+  await finishLocalChange();
 }
 
 export async function moveCollectionTo(
@@ -432,4 +449,28 @@ function patchNodeName(nodes: TreeNode[], id: string, name: string): void {
       patchNodeName(n.children, id, name);
     }
   }
+}
+
+/** Apply the command result without fetching every note and tag in the vault. */
+async function applyNoteSummary(note: api.Note): Promise<void> {
+  const {
+    body: _body,
+    yrs_state: _state,
+    payload_schema: _schema,
+    ...summary
+  } = note;
+  tree.notesById[note.id] = summary;
+  await finishLocalChange();
+}
+
+async function finishLocalChange(): Promise<void> {
+  // An older read can overwrite this patch. Join its follow-up snapshot.
+  if (inFlight || !tree.ready) {
+    await loadTree();
+    return;
+  }
+  tree.tree = composeTree(
+    Object.values(tree.collectionsById),
+    Object.values(tree.notesById)
+  ).tree;
 }
