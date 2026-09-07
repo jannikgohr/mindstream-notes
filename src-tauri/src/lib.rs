@@ -507,6 +507,8 @@ pub fn run() {
             backup::import_cleanup,
             backup::import_restore,
             backup::import_merge,
+            import::notes_import_pick_folder,
+            import::notes_import_pick_file,
             import::notes_import_detect,
             import::notes_import_run,
             import::notes_import_cancel,

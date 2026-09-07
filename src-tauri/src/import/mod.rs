@@ -345,6 +345,79 @@ fn resolve_destination(db: &Db, options: &ImportOptions) -> AppResult<Option<Str
     Ok(Some(collection.id))
 }
 
+// ---------- Source pickers ----------
+
+/// Two pickers rather than one, because a native file dialog cannot offer
+/// files and folders in the same list on any of our platforms. Obsidian and
+/// GFM vaults are folders; Evernote and Joplin ship a single file. The import
+/// dialog asks which the user has before opening either.
+#[tauri::command]
+pub async fn notes_import_pick_folder(app: AppHandle) -> CommandResult<Option<String>> {
+    pick_folder_inner(app).await.map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn notes_import_pick_file(app: AppHandle) -> CommandResult<Option<String>> {
+    pick_file_inner(app).await.map_err(Into::into)
+}
+
+#[cfg(desktop)]
+async fn pick_folder_inner(app: AppHandle) -> AppResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("Import notes — pick a vault folder")
+        .pick_folder(move |path| {
+            let _ = tx.send(path);
+        });
+    resolve_picked(rx).await
+}
+
+#[cfg(desktop)]
+async fn pick_file_inner(app: AppHandle) -> AppResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("Import notes — pick an export file")
+        .add_filter("Note exports", &["enex", "jex"])
+        .pick_file(move |path| {
+            let _ = tx.send(path);
+        });
+    resolve_picked(rx).await
+}
+
+#[cfg(desktop)]
+async fn resolve_picked(
+    rx: tokio::sync::oneshot::Receiver<Option<tauri_plugin_dialog::FilePath>>,
+) -> AppResult<Option<String>> {
+    let Some(file_path) = rx.await.map_err(|e| AppError::InvalidArg(e.to_string()))? else {
+        return Ok(None);
+    };
+    let path = file_path
+        .into_path()
+        .map_err(|e| AppError::InvalidArg(format!("path conversion: {e}")))?;
+    let text = path
+        .to_str()
+        .ok_or_else(|| AppError::InvalidArg("that path is not valid UTF-8".into()))?;
+    Ok(Some(text.to_string()))
+}
+
+#[cfg(not(desktop))]
+async fn pick_folder_inner(_app: AppHandle) -> AppResult<Option<String>> {
+    Err(AppError::InvalidArg(
+        "importing notes is not supported on this platform yet".into(),
+    ))
+}
+
+#[cfg(not(desktop))]
+async fn pick_file_inner(_app: AppHandle) -> AppResult<Option<String>> {
+    Err(AppError::InvalidArg(
+        "importing notes is not supported on this platform yet".into(),
+    ))
+}
+
 // ---------- Tauri commands ----------
 
 #[tauri::command]

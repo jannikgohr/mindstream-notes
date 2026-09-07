@@ -26,9 +26,11 @@ import { alert, confirm } from '$lib/components/confirm-dialog.svelte';
 import {
   showBackupResult,
   showExportResult,
+  showImportResult,
   showMergeResult,
   showRestoreReadyResult
 } from '$lib/components/export-result-dialog.svelte';
+import { openImportDialog } from '$lib/components/import-notes-dialog.svelte';
 import { tUi } from '../i18n.svelte';
 import { toErrorMessage } from '$lib/api/errors';
 
@@ -154,13 +156,17 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
       });
     }
   },
-  'import-notes': () => {
-    // No logic yet — placeholder for the upcoming "import markdown /
-    // Obsidian / external sources" flow. The settings-dialog button
-    // is wired through this action so the button at least renders
-    // without throwing; replace with the real implementation when
-    // that slice lands.
-    console.info('[settings] action: import-notes (stub, not yet wired)');
+  'import-notes': async () => {
+    // The dialog owns the whole flow — picking a source, detecting its
+    // format, and running the import — because it has to render progress
+    // while the run is in flight. It resolves with the report, or null if
+    // the user backed out before starting.
+    const report = await openImportDialog();
+    if (report === null) return;
+    // Imported notes and folders are only in SQLite so far; the tree store
+    // is what the file explorer renders from.
+    await loadTree();
+    await showImportResult(report);
   },
   'restore-backup': async () => {
     let preview;
