@@ -14,7 +14,7 @@
 //! bytes); on the dominant Basic Multilingual Plane characters the two
 //! agree, so the UI can slice directly.
 
-use rusqlite::{params, Connection};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 use crate::db::Db;
@@ -55,13 +55,39 @@ pub fn search(conn: &Connection, query: &str) -> AppResult<Vec<SearchHit>> {
         return Ok(Vec::new());
     }
 
-    let mut stmt = conn.prepare(
-        "SELECT id, parent_collection_id, title, position, created, modified,
-                trashed_at, favourite, etebase_uid, note_kind, body, pdf_text
-         FROM notes
-         WHERE trashed_at IS NULL",
-    )?;
-    let rows = stmt.query_map([], |row| {
+    let pool = load_candidates(conn, query)?;
+    Ok(rank_candidates(pool, &terms))
+}
+
+type Candidate = (NoteSummary, String);
+
+fn load_candidates(conn: &Connection, query: &str) -> AppResult<Vec<Candidate>> {
+    // Trigrams retain substring matching. Short queries fall back to the
+    // active-note scan because FTS5 cannot index fewer than three characters.
+    let indexed_terms: Vec<String> = query
+        .split_whitespace()
+        .filter(|term| term.chars().count() >= 3)
+        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .collect();
+    let fts_query = indexed_terms.join(" AND ");
+    let filter = if fts_query.is_empty() {
+        ""
+    } else {
+        " AND n.id IN (SELECT notes.id FROM notes JOIN note_search ON notes.rowid = note_search.rowid WHERE note_search MATCH ?1)"
+    };
+    let sql = format!(
+        "SELECT n.id, parent_collection_id, title, position, created, modified,
+                trashed_at, favourite, etebase_uid, note_kind, body, pdf_text,
+                (SELECT json_group_array(tag) FROM (SELECT tag FROM note_tags WHERE note_id = n.id ORDER BY tag)) AS tags
+         FROM active_notes n WHERE 1=1{filter}"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let values: Vec<&dyn rusqlite::ToSql> = if fts_query.is_empty() {
+        vec![]
+    } else {
+        vec![&fts_query]
+    };
+    let rows = stmt.query_map(values.as_slice(), |row| {
         let trashed_at: Option<String> = row.get("trashed_at")?;
         let favourite: i64 = row.get("favourite")?;
         let etebase_uid: Option<String> = row.get("etebase_uid")?;
@@ -84,7 +110,13 @@ pub fn search(conn: &Connection, query: &str) -> AppResult<Vec<SearchHit>> {
                 position: row.get("position")?,
                 created: row.get("created")?,
                 modified: row.get("modified")?,
-                tags: Vec::new(),
+                tags: serde_json::from_str(&row.get::<_, String>("tags")?).map_err(|err| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        12,
+                        rusqlite::types::Type::Text,
+                        Box::new(err),
+                    )
+                })?,
                 trashed: trashed_at.is_some(),
                 favourite: favourite != 0,
                 pushed: etebase_uid.is_some(),
@@ -94,22 +126,15 @@ pub fn search(conn: &Connection, query: &str) -> AppResult<Vec<SearchHit>> {
         ))
     })?;
 
-    let pool: Vec<(NoteSummary, String)> = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
 
-    // Per-note tag fetch — small enough that one statement-per-note is
-    // simpler than building an IN-list.
-    let mut tag_stmt = conn.prepare("SELECT tag FROM note_tags WHERE note_id = ?1 ORDER BY tag")?;
-
+fn rank_candidates(pool: Vec<Candidate>, terms: &[Vec<char>]) -> Vec<SearchHit> {
     let mut scored: Vec<(i64, SearchHit)> = Vec::new();
-    for (mut summary, body) in pool {
-        let tags: Vec<String> = tag_stmt
-            .query_map(params![summary.id], |r| r.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        summary.tags = tags.clone();
-
+    for (summary, body) in pool {
         let title_chars = lowercase_chars(&summary.title);
         let body_chars = lowercase_chars(&body);
-        let tags_joined = tags.join(" ");
+        let tags_joined = summary.tags.join(" ");
         let tags_chars = lowercase_chars(&tags_joined);
 
         // AND match: every term must appear in title ∪ body ∪ tags.
@@ -122,12 +147,12 @@ pub fn search(conn: &Connection, query: &str) -> AppResult<Vec<SearchHit>> {
             continue;
         }
 
-        let title_matches = find_matches(&summary.title, &terms);
+        let title_matches = find_matches(&summary.title, terms);
         let body_match_count: usize = terms.iter().map(|t| count_matches(&body_chars, t)).sum();
 
         let score: i64 = (title_matches.len() as i64) * 10 + (body_match_count as i64);
 
-        let (snippet, snippet_matches) = build_snippet(&body, &terms);
+        let (snippet, snippet_matches) = build_snippet(&body, terms);
 
         scored.push((
             score,
@@ -146,7 +171,7 @@ pub fn search(conn: &Connection, query: &str) -> AppResult<Vec<SearchHit>> {
             .then_with(|| b.1.note.modified.cmp(&a.1.note.modified))
     });
 
-    Ok(scored.into_iter().map(|(_, hit)| hit).collect())
+    scored.into_iter().take(200).map(|(_, hit)| hit).collect()
 }
 
 fn lowercase_chars(s: &str) -> Vec<char> {
@@ -310,7 +335,15 @@ fn collapse_whitespace(s: &str) -> String {
 
 #[tauri::command]
 pub fn search_notes(db: tauri::State<'_, Db>, query: String) -> CommandResult<Vec<SearchHit>> {
-    db.with_conn(|c| search(c, &query)).map_err(Into::into)
+    let terms: Vec<Vec<char>> = query
+        .split_whitespace()
+        .map(|term| term.to_lowercase().chars().collect())
+        .collect();
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let candidates = db.with_conn(|c| load_candidates(c, &query))?;
+    Ok(rank_candidates(candidates, &terms))
 }
 
 #[cfg(test)]
@@ -318,6 +351,7 @@ mod tests {
     use super::*;
     use crate::db::open_memory_for_tests;
     use crate::notes::{create, update, CreateNote, UpdateNote};
+    use rusqlite::params;
 
     fn seed_note(db: &Db, title: &str, body: &str) -> String {
         let n = db
@@ -501,5 +535,89 @@ mod tests {
         let by_title = db.with_conn(|c| search(c, "invoice")).unwrap();
         assert_eq!(by_title.len(), 1);
         assert_eq!(by_title[0].note.id, id);
+    }
+    #[test]
+    fn nested_trash_is_excluded_and_restoring_folder_restores_visibility() {
+        let db = open_memory_for_tests();
+        let folder = db
+            .with_conn(|c| {
+                crate::collections::create(
+                    c,
+                    crate::collections::CreateCollection {
+                        name: "Parent".into(),
+                        parent_collection_id: None,
+                    },
+                )
+            })
+            .unwrap()
+            .id;
+        let child = db
+            .with_conn(|c| {
+                crate::collections::create(
+                    c,
+                    crate::collections::CreateCollection {
+                        name: "Child".into(),
+                        parent_collection_id: Some(folder.clone()),
+                    },
+                )
+            })
+            .unwrap()
+            .id;
+        let id = seed_pdf_note(&db, "needle PDF", None);
+        db.with_conn(|c| {
+            c.execute(
+                "UPDATE notes SET parent_collection_id = ?1 WHERE id = ?2",
+                params![child, id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        for parent in [Some("trash".to_string()), None] {
+            let hidden = parent.is_some();
+            db.with_conn_mut(|c| {
+                crate::tree_batch::move_many_items(
+                    c,
+                    vec![crate::tree_batch::TreeItemRef::Folder { id: folder.clone() }],
+                    parent,
+                )
+            })
+            .unwrap();
+            db.with_conn(|c| {
+                assert_eq!(search(c, "needle")?.is_empty(), hidden);
+                assert_eq!(crate::notes::list(c, false)?.is_empty(), hidden);
+                assert_eq!(crate::pdf_text::notes_missing_text(c)?.is_empty(), hidden);
+                assert_eq!(crate::pdf_text::note_needs_text(c, &id)?, !hidden);
+                Ok(())
+            })
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn fts_candidates_track_updates_deletes_tags_and_literal_substrings() {
+        let db = open_memory_for_tests();
+        let id = seed_note(&db, "pineapple", "quote\"mark");
+        seed_note(&db, "unrelated", &"large irrelevant content ".repeat(1000));
+        db.with_conn(|c| {
+            assert_eq!(load_candidates(c, "apple")?.len(), 1);
+            assert_eq!(search(c, "pi")?.len(), 1);
+            assert_eq!(search(c, "quote\"mark")?.len(), 1);
+            c.execute(
+                "UPDATE notes SET body = 'changed' WHERE id = ?1",
+                params![id],
+            )?;
+            assert!(search(c, "quote\"mark")?.is_empty());
+            c.execute(
+                "INSERT INTO note_tags(note_id, tag) VALUES (?1, 'new-tag')",
+                params![id],
+            )?;
+            assert_eq!(search(c, "new-tag")?.len(), 1);
+            c.execute("DELETE FROM note_tags WHERE note_id = ?1", params![id])?;
+            assert!(search(c, "new-tag")?.is_empty());
+            crate::notes::purge(c, &id)?;
+            assert!(search(c, "apple")?.is_empty());
+            Ok(())
+        })
+        .unwrap();
     }
 }

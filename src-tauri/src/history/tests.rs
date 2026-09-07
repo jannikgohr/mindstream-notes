@@ -272,3 +272,21 @@ fn capture_trims_to_the_per_note_version_cap() {
     // The newest revision is retained; the oldest was trimmed.
     assert_eq!(versions.first().unwrap().action, "edited");
 }
+
+#[test]
+fn capture_rolls_back_insert_when_cap_pruning_fails() {
+    let db = open_memory_for_tests();
+    let note = make_note(&db);
+    for i in 0..MAX_VERSIONS_PER_NOTE {
+        cap(&db, &note, "edited", None, &format!("version {i}"));
+    }
+    let before = db.with_conn(|c| list(c, &note)).unwrap();
+    db.with_conn(|c| {
+        c.execute_batch("CREATE TRIGGER refuse_version_delete BEFORE DELETE ON note_versions BEGIN SELECT RAISE(ABORT, 'simulated prune failure'); END;")?;
+        assert!(capture(c, &note, "markdown", "edited", None, "new version").is_err());
+        let after = list(c, &note)?;
+        assert_eq!(after.len(), before.len());
+        assert_eq!(after[0].id, before[0].id);
+        Ok(())
+    }).unwrap();
+}
