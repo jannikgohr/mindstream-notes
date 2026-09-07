@@ -47,6 +47,8 @@ pub mod system;
 #[cfg(desktop)]
 pub mod tray;
 pub mod tree_batch;
+#[cfg(desktop)]
+pub mod webview_memory;
 
 use std::borrow::Cow;
 
@@ -211,6 +213,7 @@ pub fn run() {
                         {
                             api.prevent_close();
                             let _ = window.hide();
+                            webview_memory::sync_to_visibility(app_handle);
                             return;
                         }
                         app_handle.exit(0);
@@ -218,6 +221,15 @@ pub fn run() {
                     tauri::WindowEvent::Destroyed => {
                         let app_handle = window.app_handle();
                         app_handle.exit(0);
+                    }
+                    // Minimise, restore and show all surface here as a
+                    // resize; `sync_to_visibility` reads the window's
+                    // actual state rather than trying to infer which one
+                    // this was. Focus changes are included because a
+                    // window restored from the taskbar can report the new
+                    // size before it reports being un-minimised.
+                    tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Focused(_) => {
+                        webview_memory::sync_to_visibility(window.app_handle());
                     }
                     _ => {}
                 }
@@ -325,6 +337,13 @@ pub fn run() {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
+                // Settle the webview's own visibility against whichever
+                // branch ran. The window is configured `visible: false`
+                // and shown from here, so this is the first point the two
+                // can agree -- and relying on a Focused/Resized event to
+                // arrive would risk starting up with the webview marked
+                // invisible, which paints nothing.
+                webview_memory::sync_to_visibility(app.handle());
             }
 
             // Periodic sync runs in a tokio task owned by this
@@ -345,6 +364,11 @@ pub fn run() {
             // preview`). Reaped on exit below so nothing is orphaned.
             app.manage(plugins::preview_service::PreviewServiceRegistry::default());
             app.manage(spellcheck::SpellcheckState::default());
+            // Hunspell tables are ~21 MB resident for a bilingual user and
+            // stay warm for the life of the process otherwise. Hands them
+            // back once the user stops typing; the next check reloads in
+            // ~50 ms on a blocking thread.
+            spellcheck::spawn_idle_eviction(app.handle().clone());
 
             Ok(())
         })
@@ -377,6 +401,7 @@ pub fn run() {
             spellcheck::custom_dictionary_add,
             spellcheck::custom_dictionary_remove,
             spellcheck::spellcheck_word_chars,
+            spellcheck::spellcheck_release_dictionaries,
             spellcheck::http_checker::text_checker_check,
             spellcheck::http_checker::text_checker_test_connection,
             // Search

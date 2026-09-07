@@ -131,6 +131,22 @@ export function spellcheckWordChars(languages: string[]): Promise<string> {
   );
 }
 
+/**
+ * Drop the backend's resident dictionaries now.
+ *
+ * Called when the built-in checker stops being the one doing the work, so
+ * the Hunspell tables (~21 MB for a bilingual user) do not sit in the Rust
+ * process until the idle sweep notices. A no-op without a backend.
+ */
+export function spellcheckReleaseDictionaries(): Promise<void> {
+  return invokeOrFallback<void>(
+    TauriCommandName.SpellcheckReleaseDictionaries,
+    {},
+    () => undefined,
+    () => undefined
+  );
+}
+
 export interface CheckerMatch {
   from: number;
   to: number;

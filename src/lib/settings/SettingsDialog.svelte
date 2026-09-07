@@ -325,7 +325,7 @@
                 <button
                   type="button"
                   onclick={selectPluginOverview}
-                  class="flex flex-1 items-center gap-2 px-3 py-2 text-left text-sm transition-colors {showingPluginOverview
+                  class="flex flex-1 items-center gap-2 px-3 py-2 text-left text-sm transition-colors duration-75 {showingPluginOverview
                     ? 'bg-accent text-accent-foreground'
                     : 'text-foreground hover:bg-accent/60'}"
                 >
@@ -338,7 +338,7 @@
                     aria-label={tLabel('categories', cat.id)}
                     aria-expanded={pluginsExpanded}
                     onclick={() => (pluginsExpanded = !pluginsExpanded)}
-                    class="flex shrink-0 items-center justify-center px-2.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+                    class="flex shrink-0 items-center justify-center px-2.5 text-muted-foreground transition-colors duration-75 hover:bg-accent/60 hover:text-foreground"
                   >
                     <ChevronRight
                       class="size-3.5 transition-transform {pluginsExpanded
@@ -356,7 +356,7 @@
                   <button
                     type="button"
                     onclick={() => selectPlugin(child.id)}
-                    class="flex w-full items-center gap-2 py-1.5 pl-6 pr-3 text-left text-sm transition-colors {childActive
+                    class="flex w-full items-center gap-2 py-1.5 pl-6 pr-3 text-left text-sm transition-colors duration-75 {childActive
                       ? 'bg-accent text-accent-foreground'
                       : 'text-foreground hover:bg-accent/60'}"
                   >
@@ -379,7 +379,7 @@
               <button
                 type="button"
                 onclick={() => selectCategory(cat.id)}
-                class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors {isActive
+                class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors duration-75 {isActive
                   ? 'bg-accent text-accent-foreground'
                   : 'text-foreground hover:bg-accent/60'}"
               >
