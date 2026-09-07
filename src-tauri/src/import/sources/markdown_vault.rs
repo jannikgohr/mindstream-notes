@@ -49,6 +49,14 @@ pub enum Flavour {
     /// *name* rather than by path, so a bare `![[diagram.png]]` finds the file
     /// wherever it lives in the vault.
     Obsidian,
+    /// Joplin's "Markdown + Front Matter" export: a real folder tree, YAML
+    /// frontmatter, resources under `_resources/`.
+    ///
+    /// Joplin rewrites resource links to relative paths on the way out, but
+    /// whether it rewrites *note* links depends on the version — older exports
+    /// leave `:/id` in place. Both forms are therefore enabled, and the `:/id`
+    /// pass simply finds nothing when the export already resolved them.
+    JoplinMarkdown,
 }
 
 pub struct MarkdownVaultSource {
@@ -159,7 +167,7 @@ impl ImportSource for MarkdownVaultSource {
         // embedded image into a note link.
         let body = match self.flavour {
             Flavour::Obsidian => self.expand_embeds(&item.locator, body),
-            Flavour::Gfm => body.to_string(),
+            Flavour::Gfm | Flavour::JoplinMarkdown => body.to_string(),
         };
 
         let mut tags = frontmatter.tags.clone();
@@ -216,10 +224,17 @@ impl ImportSource for MarkdownVaultSource {
             Flavour::Gfm => RewriteOptions {
                 wikilinks: false,
                 markdown_links: true,
+                id_links: false,
             },
             Flavour::Obsidian => RewriteOptions {
                 wikilinks: true,
                 markdown_links: true,
+                id_links: false,
+            },
+            Flavour::JoplinMarkdown => RewriteOptions {
+                wikilinks: false,
+                markdown_links: true,
+                id_links: true,
             },
         }
     }

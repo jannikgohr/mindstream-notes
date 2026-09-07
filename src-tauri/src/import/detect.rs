@@ -19,6 +19,12 @@ pub enum ImportSourceKind {
     Gfm,
     /// An Obsidian vault — markdown plus wikilinks, embeds and inline tags.
     Obsidian,
+    /// Joplin's lossless RAW export: a flat directory of `<id>.md` items.
+    JoplinRaw,
+    /// A Joplin `.jex` archive, which is a tar of the RAW layout.
+    JoplinJex,
+    /// Joplin's "Markdown + Front Matter" export.
+    JoplinMarkdown,
 }
 
 impl ImportSourceKind {
@@ -26,6 +32,9 @@ impl ImportSourceKind {
         match self {
             Self::Gfm => "gfm",
             Self::Obsidian => "obsidian",
+            Self::JoplinRaw => "joplin-raw",
+            Self::JoplinJex => "joplin-jex",
+            Self::JoplinMarkdown => "joplin-markdown",
         }
     }
 }
@@ -45,9 +54,16 @@ pub fn detect(path: &Path) -> AppResult<DetectedSource> {
         return Err(AppError::NotFound(format!("{}", path.display())));
     }
     if !path.is_dir() {
-        return Err(AppError::InvalidArg(
-            "pick a folder containing markdown files".into(),
-        ));
+        let Some(kind) = detect_file_kind(path) else {
+            return Err(AppError::InvalidArg(
+                "pick a folder of notes, or a Joplin .jex export".into(),
+            ));
+        };
+        return Ok(DetectedSource {
+            kind,
+            path: path.to_string_lossy().to_string(),
+            suggested_name: file_stem_name(path),
+        });
     }
     Ok(DetectedSource {
         kind: detect_directory_kind(path),
@@ -56,15 +72,45 @@ pub fn detect(path: &Path) -> AppResult<DetectedSource> {
     })
 }
 
-/// An Obsidian vault is identified by its `.obsidian` config directory — the
-/// only marker the format has. A vault whose config was stripped reads as a
-/// GFM folder, which is a perfectly reasonable way to import it, and the
-/// dialog lets the user say otherwise.
+/// Single-file sources, identified by extension.
+fn detect_file_kind(path: &Path) -> Option<ImportSourceKind> {
+    let extension = path.extension()?.to_string_lossy().to_ascii_lowercase();
+    match extension.as_str() {
+        "jex" => Some(ImportSourceKind::JoplinJex),
+        _ => None,
+    }
+}
+
+/// Directory formats, in order of how specific their marker is.
+///
+/// Obsidian is identified by its `.obsidian` config directory and Joplin's
+/// Markdown export by `_resources/` — the only markers those formats have. A
+/// Joplin RAW export has no marker at all, so it is recognised by content:
+/// its items carry a trailing `type_:` metadata block that nothing else
+/// writes.
+///
+/// Every fallback lands on GFM, which is a reasonable way to import any folder
+/// of markdown, and the dialog lets the user say otherwise.
 fn detect_directory_kind(path: &Path) -> ImportSourceKind {
     if path.join(".obsidian").is_dir() {
         return ImportSourceKind::Obsidian;
     }
+    if path.join("_resources").is_dir() {
+        return ImportSourceKind::JoplinMarkdown;
+    }
+    if crate::import::sources::joplin_raw::looks_like_raw_export(path) {
+        return ImportSourceKind::JoplinRaw;
+    }
     ImportSourceKind::Gfm
+}
+
+/// Destination-folder name for an archive: the file name without its
+/// extension, so `MyNotes.jex` suggests "MyNotes".
+fn file_stem_name(path: &Path) -> String {
+    path.file_stem()
+        .map(|name| name.to_string_lossy().to_string())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| "Imported notes".to_string())
 }
 
 /// The folder's own name, falling back to something usable when the user

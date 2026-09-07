@@ -163,6 +163,10 @@ pub fn normalize_title(raw: &str) -> String {
 pub struct RewriteOptions {
     pub wikilinks: bool,
     pub markdown_links: bool,
+    /// Joplin's `[text](:/<id>)`, where the target is the note's own id.
+    /// Resolves exactly, with no title guessing — which is why the RAW export
+    /// is the Joplin format worth parsing.
+    pub id_links: bool,
 }
 
 /// Everything the rewrite needs about *where* the body came from.
@@ -218,9 +222,45 @@ pub fn rewrite_links(
     if context.options.wikilinks {
         out = rewrite_wikilinks(&out, index, stats);
     }
+    if context.options.id_links {
+        out = rewrite_id_links(&out, index, stats);
+    }
     if context.options.markdown_links {
         out = rewrite_markdown_links(&out, index, &context.base_dir, stats);
     }
+    out
+}
+
+/// `[text](:/<32-hex-id>)` — Joplin's internal link form.
+///
+/// Ids that name a *resource* rather than a note are deliberately left alone:
+/// the source reports those as attachments, and the writer swaps them for
+/// asset URLs once the bytes are stored.
+fn rewrite_id_links(body: &str, index: &mut LinkIndex, stats: &mut RewriteStats) -> String {
+    const OPENER: &str = "](:/";
+    let mut out = String::with_capacity(body.len());
+    let mut rest = body;
+    while let Some(at) = rest.find(OPENER) {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + OPENER.len()..];
+        let id: String = after
+            .chars()
+            .take_while(char::is_ascii_alphanumeric)
+            .collect();
+        let tail = &after[id.len()..];
+        match index.resolve(&id).map(str::to_string) {
+            Some(note_id) if tail.starts_with(')') => {
+                stats.resolved += 1;
+                out.push_str(&format!("]({})", note_href(&note_id)));
+                rest = &tail[1..];
+            }
+            _ => {
+                out.push_str(&rest[at..at + OPENER.len()]);
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
     out
 }
 

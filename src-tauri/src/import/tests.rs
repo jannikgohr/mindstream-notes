@@ -265,6 +265,7 @@ fn rewrite(body: &str, index: &mut LinkIndex) -> (String, RewriteStats) {
             options: RewriteOptions {
                 wikilinks: true,
                 markdown_links: true,
+                id_links: true,
             },
             base_dir: String::new(),
         },
@@ -830,4 +831,336 @@ fn gfm_leaves_double_brackets_alone() {
 
     assert_eq!(report.links_resolved, 0);
     assert_eq!(body_of(&db, "Paper"), "As shown in [[1]] and [[Other]].");
+}
+
+// ---------- Joplin ----------
+
+/// Build a Joplin RAW item file: title, body, then the trailing metadata
+/// block that identifies the format.
+fn joplin_item(title: &str, body: &str, fields: &[(&str, &str)]) -> String {
+    let meta: String = fields
+        .iter()
+        .map(|(key, value)| format!("{key}: {value}\n"))
+        .collect();
+    format!("{title}\n\n{body}\n\n{meta}")
+}
+
+const NOTE_A: &str = "0a1b2c3d4e5f60718293a4b5c6d7e8f9";
+const NOTE_B: &str = "1b2c3d4e5f60718293a4b5c6d7e8f9a0";
+const FOLDER_A: &str = "2c3d4e5f60718293a4b5c6d7e8f9a0b1";
+const RESOURCE_A: &str = "3d4e5f60718293a4b5c6d7e8f9a0b1c2";
+
+fn joplin_options(vault: &TempVault) -> ImportOptions {
+    ImportOptions {
+        kind: Some(ImportSourceKind::JoplinRaw),
+        ..options(vault)
+    }
+}
+
+fn write_joplin_pair(vault: &TempVault) {
+    vault
+        .write(
+            &format!("{FOLDER_A}.md"),
+            &joplin_item("Work", "", &[("id", FOLDER_A), ("type_", "2")]),
+        )
+        .write(
+            &format!("{NOTE_A}.md"),
+            &joplin_item(
+                "First note",
+                &format!("Points at [Second note](:/{NOTE_B})."),
+                &[
+                    ("id", NOTE_A),
+                    ("parent_id", FOLDER_A),
+                    ("created_time", "2024-01-01T10:00:00.000Z"),
+                    ("updated_time", "2024-02-02T11:00:00.000Z"),
+                    ("type_", "1"),
+                ],
+            ),
+        )
+        .write(
+            &format!("{NOTE_B}.md"),
+            &joplin_item(
+                "Second note",
+                &format!("Back to [First note](:/{NOTE_A})."),
+                &[("id", NOTE_B), ("parent_id", FOLDER_A), ("type_", "1")],
+            ),
+        );
+}
+
+#[test]
+fn a_joplin_raw_export_is_detected_by_its_metadata_block() {
+    let vault = TempVault::new();
+    write_joplin_pair(&vault);
+
+    assert_eq!(
+        super::detect::detect(vault.path()).unwrap().kind,
+        ImportSourceKind::JoplinRaw
+    );
+}
+
+#[test]
+fn joplin_id_links_resolve_in_both_directions() {
+    // The reason the RAW export is the Joplin format worth parsing: links are
+    // `:/id`, so resolution is exact rather than a title match.
+    let vault = TempVault::new();
+    write_joplin_pair(&vault);
+    let db = open_memory_for_tests();
+
+    let report = import(&db, joplin_options(&vault));
+
+    assert_eq!(report.notes_created, 2);
+    assert_eq!(report.folders_created, 1);
+    assert_eq!(report.links_resolved, 2);
+
+    let first = note_id_of(&db, "First note");
+    let second = note_id_of(&db, "Second note");
+    assert_eq!(
+        body_of(&db, "First note"),
+        format!("Points at [Second note](mindstream://note/{second}).")
+    );
+    assert_eq!(
+        body_of(&db, "Second note"),
+        format!("Back to [First note](mindstream://note/{first}).")
+    );
+}
+
+#[test]
+fn joplin_notes_land_in_their_folder_with_their_timestamps() {
+    let vault = TempVault::new();
+    write_joplin_pair(&vault);
+    let db = open_memory_for_tests();
+
+    import(&db, joplin_options(&vault));
+
+    let (folder, created) = db
+        .with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT p.name, n.created FROM notes n
+                 JOIN collections p ON p.id = n.parent_collection_id
+                 WHERE n.title = 'First note'",
+                [],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(folder, "Work");
+    assert!(created.starts_with("2024-01-01"), "created was {created}");
+}
+
+#[test]
+fn a_joplin_resource_becomes_an_attachment() {
+    let vault = TempVault::new();
+    vault
+        .write(
+            &format!("{RESOURCE_A}.md"),
+            &joplin_item(
+                "diagram.png",
+                "",
+                &[
+                    ("id", RESOURCE_A),
+                    ("mime", "image/png"),
+                    ("file_extension", "png"),
+                    ("type_", "4"),
+                ],
+            ),
+        )
+        .write_bytes(
+            "resources/3d4e5f60718293a4b5c6d7e8f9a0b1c2.png",
+            b"PNGBYTES",
+        )
+        .write(
+            &format!("{NOTE_A}.md"),
+            &joplin_item(
+                "Illustrated",
+                &format!("![diagram](:/{RESOURCE_A})"),
+                &[("id", NOTE_A), ("type_", "1")],
+            ),
+        );
+    let db = open_memory_for_tests();
+
+    let report = import(&db, joplin_options(&vault));
+
+    assert_eq!(report.attachments_imported, 1);
+    let body = body_of(&db, "Illustrated");
+    assert!(
+        body.starts_with("![diagram](asset:mindstream/asset_"),
+        "got {body}"
+    );
+    let mime: String = db
+        .with_conn(|c| Ok(c.query_row("SELECT mime_type FROM assets", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(mime, "image/png");
+}
+
+#[test]
+fn a_joplin_body_containing_colon_lines_keeps_them() {
+    // The metadata block is the trailing run of `key: value` lines. A body
+    // that happens to contain one must not be swallowed into it.
+    let vault = TempVault::new();
+    vault.write(
+        &format!("{NOTE_A}.md"),
+        &joplin_item(
+            "Recipe",
+            "ingredients: flour\n\nMix well.",
+            &[("id", NOTE_A), ("type_", "1")],
+        ),
+    );
+    let db = open_memory_for_tests();
+
+    import(&db, joplin_options(&vault));
+
+    assert_eq!(body_of(&db, "Recipe"), "ingredients: flour\n\nMix well.");
+}
+
+#[test]
+fn joplin_tags_reach_their_notes() {
+    let vault = TempVault::new();
+    let tag_id = "4e5f60718293a4b5c6d7e8f9a0b1c2d3";
+    let join_id = "5f60718293a4b5c6d7e8f9a0b1c2d3e4";
+    vault
+        .write(
+            &format!("{NOTE_A}.md"),
+            &joplin_item("Tagged", "body", &[("id", NOTE_A), ("type_", "1")]),
+        )
+        .write(
+            &format!("{tag_id}.md"),
+            &joplin_item("important", "", &[("id", tag_id), ("type_", "5")]),
+        )
+        .write(
+            &format!("{join_id}.md"),
+            &joplin_item(
+                "",
+                "",
+                &[
+                    ("id", join_id),
+                    ("note_id", NOTE_A),
+                    ("tag_id", tag_id),
+                    ("type_", "6"),
+                ],
+            ),
+        );
+    let db = open_memory_for_tests();
+
+    import(&db, joplin_options(&vault));
+
+    let tags: Vec<String> = db
+        .with_conn(|c| {
+            let mut stmt = c.prepare("SELECT tag FROM note_tags")?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .unwrap();
+    assert_eq!(tags, vec!["important".to_string()]);
+}
+
+#[test]
+fn a_jex_archive_imports_like_the_raw_directory_it_wraps() {
+    // A .jex is a tar of the RAW layout, which is why one parser serves both.
+    let source = TempVault::new();
+    write_joplin_pair(&source);
+
+    let holder = TempVault::new();
+    let archive_path = holder.path().join("export.jex");
+    {
+        let file = fs::File::create(&archive_path).expect("create archive");
+        let mut builder = tar::Builder::new(file);
+        builder
+            .append_dir_all(".", source.path())
+            .expect("append vault");
+        builder.finish().expect("finish archive");
+    }
+
+    let detected = super::detect::detect(&archive_path).unwrap();
+    assert_eq!(detected.kind, ImportSourceKind::JoplinJex);
+    assert_eq!(detected.suggested_name, "export");
+
+    let db = open_memory_for_tests();
+    let report = import(
+        &db,
+        ImportOptions {
+            source_path: archive_path.to_string_lossy().to_string(),
+            kind: Some(ImportSourceKind::JoplinJex),
+            ..options(&source)
+        },
+    );
+
+    assert_eq!(report.notes_created, 2);
+    assert_eq!(report.links_resolved, 2);
+}
+
+#[test]
+fn a_joplin_markdown_export_is_detected_by_its_resources_folder() {
+    let vault = TempVault::new();
+    vault
+        .write("Note.md", "---\ntitle: Note\n---\nbody")
+        .write_bytes("_resources/pic.png", b"bytes");
+
+    assert_eq!(
+        super::detect::detect(vault.path()).unwrap().kind,
+        ImportSourceKind::JoplinMarkdown
+    );
+}
+
+#[test]
+fn a_joplin_markdown_export_resolves_relative_note_links() {
+    let vault = TempVault::new();
+    vault
+        .write_bytes("_resources/pic.png", b"bytes")
+        .write(
+            "Work/Plan.md",
+            "---\ntitle: Plan\n---\nSee [Notes](../Notes.md) and ![pic](../_resources/pic.png)",
+        )
+        .write("Notes.md", "---\ntitle: Notes\n---\nreference");
+    let db = open_memory_for_tests();
+
+    let report = import(
+        &db,
+        ImportOptions {
+            kind: Some(ImportSourceKind::JoplinMarkdown),
+            ..options(&vault)
+        },
+    );
+
+    assert_eq!(report.links_resolved, 1);
+    assert_eq!(report.attachments_imported, 1);
+    let target = note_id_of(&db, "Notes");
+    let body = body_of(&db, "Plan");
+    assert!(
+        body.contains(&format!("[Notes](mindstream://note/{target})")),
+        "{body}"
+    );
+    assert!(body.contains("![pic](asset:mindstream/asset_"), "{body}");
+}
+
+#[test]
+fn a_jex_entry_cannot_escape_the_staging_directory() {
+    // Archives are user-supplied files; an entry naming ../ must be refused
+    // rather than written outside the temp dir.
+    let holder = TempVault::new();
+    let archive_path = holder.path().join("evil.jex");
+    {
+        let file = fs::File::create(&archive_path).expect("create archive");
+        let mut builder = tar::Builder::new(file);
+        let payload = b"pwned";
+        let mut header = tar::Header::new_gnu();
+        // set_path refuses `..`, which is exactly the entry a hostile archive
+        // would carry — so write the name straight into the header instead.
+        // Nothing stops a real attacker from doing the same.
+        let name = b"../escaped.txt";
+        let gnu = header.as_gnu_mut().expect("gnu header");
+        gnu.name[..name.len()].copy_from_slice(name);
+        header.set_size(payload.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder.append(&header, &payload[..]).expect("append");
+        builder.finish().expect("finish");
+    }
+
+    let staged = super::stage::extract_tar(&archive_path).expect("extract");
+
+    assert!(
+        !holder.path().join("escaped.txt").exists(),
+        "traversal entry must not be written"
+    );
+    assert!(!staged.path().join("escaped.txt").exists());
 }

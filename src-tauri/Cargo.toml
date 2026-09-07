@@ -99,6 +99,9 @@ walkdir = "2.5"
 # YAML frontmatter on imported markdown. serde_yaml is unmaintained and we
 # only need scalars and sequences, so a plain parser beats a serde derive.
 yaml-rust2 = "0.12"
+# Joplin's .jex is a tar of its RAW export, so unpacking one lets a single
+# parser serve both formats.
+tar = "0.4"
 
 # NOTE: panic = "unwind" (the default) is deliberate, not an omission. The app
 # runs untrusted plugin code and applies CRDT edits inside the WebView IPC FFI

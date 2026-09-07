@@ -46,6 +46,7 @@ pub mod mime;
 pub mod model;
 pub mod source;
 pub mod sources;
+pub mod stage;
 pub mod writer;
 
 #[cfg(test)]
@@ -125,12 +126,19 @@ fn build_source(
     kind: ImportSourceKind,
     root: PathBuf,
 ) -> AppResult<Box<dyn source::ImportSource + Send>> {
+    use sources::joplin_raw::JoplinRawSource;
     use sources::markdown_vault::{Flavour, MarkdownVaultSource};
     match kind {
         ImportSourceKind::Gfm => Ok(Box::new(MarkdownVaultSource::new(root, Flavour::Gfm))),
         ImportSourceKind::Obsidian => {
             Ok(Box::new(MarkdownVaultSource::new(root, Flavour::Obsidian)))
         }
+        ImportSourceKind::JoplinMarkdown => Ok(Box::new(MarkdownVaultSource::new(
+            root,
+            Flavour::JoplinMarkdown,
+        ))),
+        ImportSourceKind::JoplinRaw => Ok(Box::new(JoplinRawSource::new(root))),
+        ImportSourceKind::JoplinJex => Ok(Box::new(JoplinRawSource::from_archive(&root)?)),
     }
 }
 
