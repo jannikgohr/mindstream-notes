@@ -167,6 +167,8 @@ pub struct RewriteOptions {
     /// Resolves exactly, with no title guessing — which is why the RAW export
     /// is the Joplin format worth parsing.
     pub id_links: bool,
+    /// Evernote's `[text](evernote:///view/<user>/<shard>/<guid>/<guid>/)`.
+    pub evernote_links: bool,
 }
 
 /// Everything the rewrite needs about *where* the body came from.
@@ -224,6 +226,9 @@ pub fn rewrite_links(
     }
     if context.options.id_links {
         out = rewrite_id_links(&out, index, stats);
+    }
+    if context.options.evernote_links {
+        out = rewrite_evernote_links(&out, index, stats);
     }
     if context.options.markdown_links {
         out = rewrite_markdown_links(&out, index, &context.base_dir, stats);
@@ -349,6 +354,64 @@ fn split_wikilink(inner: &str) -> (&str, Option<&str>) {
         }
     });
     (target, display)
+}
+
+/// `[text](evernote:///view/<user>/<shard>/<guid>/<guid>/)`.
+///
+/// The guid is tried first, but most exports omit the `<guid>` element on the
+/// notes themselves, so there is usually nothing for it to match. The fallback
+/// is the anchor text, which Evernote fills in with the target note's title —
+/// imprecise where two notes share a title, and still far better than dropping
+/// the link.
+fn rewrite_evernote_links(body: &str, index: &mut LinkIndex, stats: &mut RewriteStats) -> String {
+    const SCHEME: &str = "](evernote:";
+    let mut out = String::with_capacity(body.len());
+    let mut rest = body;
+    while let Some(at) = rest.find(SCHEME) {
+        let Some(close) = rest[at..].find(')').map(|idx| idx + at) else {
+            out.push_str(rest);
+            return out;
+        };
+        let url = &rest[at + 2..close];
+        // The link text is what precedes the `](`, back to its unescaped `[`.
+        let text_start = match rest[..at].rfind('[') {
+            Some(idx) => idx,
+            None => {
+                out.push_str(&rest[..close + 1]);
+                rest = &rest[close + 1..];
+                continue;
+            }
+        };
+        let text = &rest[text_start + 1..at];
+        let resolved = evernote_guid(url)
+            .and_then(|guid| index.resolve(&guid).map(str::to_string))
+            .or_else(|| index.resolve(text).map(str::to_string));
+
+        out.push_str(&rest[..text_start]);
+        match resolved {
+            Some(note_id) => {
+                stats.resolved += 1;
+                out.push_str(&format!("[{text}]({})", note_href(&note_id)));
+            }
+            None => {
+                stats.unresolved += 1;
+                // Drop the dead scheme but keep the words: an
+                // `evernote:///view/...` href is useless outside Evernote.
+                out.push_str(text);
+            }
+        }
+        rest = &rest[close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Pull the note guid out of an `evernote:///view/<user>/<shard>/<guid>/...`
+/// URL. Anything shorter than that shape has no guid to give.
+fn evernote_guid(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("evernote:///view/")?;
+    let segments: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
+    segments.get(2).map(|guid| guid.to_string())
 }
 
 /// `[text](relative/path.md)` — the GFM way of linking between files.

@@ -277,6 +277,7 @@ impl ImportSource for JoplinRawSource {
             wikilinks: false,
             markdown_links: true,
             id_links: true,
+            evernote_links: false,
         }
     }
 }

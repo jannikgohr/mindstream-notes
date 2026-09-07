@@ -126,6 +126,7 @@ fn build_source(
     kind: ImportSourceKind,
     root: PathBuf,
 ) -> AppResult<Box<dyn source::ImportSource + Send>> {
+    use sources::evernote::EvernoteSource;
     use sources::joplin_raw::JoplinRawSource;
     use sources::markdown_vault::{Flavour, MarkdownVaultSource};
     match kind {
@@ -139,6 +140,7 @@ fn build_source(
         ))),
         ImportSourceKind::JoplinRaw => Ok(Box::new(JoplinRawSource::new(root))),
         ImportSourceKind::JoplinJex => Ok(Box::new(JoplinRawSource::from_archive(&root)?)),
+        ImportSourceKind::Evernote => Ok(Box::new(EvernoteSource::new(root))),
     }
 }
 

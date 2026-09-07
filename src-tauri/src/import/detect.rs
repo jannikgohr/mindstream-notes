@@ -25,6 +25,8 @@ pub enum ImportSourceKind {
     JoplinJex,
     /// Joplin's "Markdown + Front Matter" export.
     JoplinMarkdown,
+    /// An Evernote `.enex` file.
+    Evernote,
 }
 
 impl ImportSourceKind {
@@ -35,6 +37,7 @@ impl ImportSourceKind {
             Self::JoplinRaw => "joplin-raw",
             Self::JoplinJex => "joplin-jex",
             Self::JoplinMarkdown => "joplin-markdown",
+            Self::Evernote => "evernote",
         }
     }
 }
@@ -56,7 +59,7 @@ pub fn detect(path: &Path) -> AppResult<DetectedSource> {
     if !path.is_dir() {
         let Some(kind) = detect_file_kind(path) else {
             return Err(AppError::InvalidArg(
-                "pick a folder of notes, or a Joplin .jex export".into(),
+                "pick a folder of notes, an Evernote .enex file, or a Joplin .jex export".into(),
             ));
         };
         return Ok(DetectedSource {
@@ -77,6 +80,7 @@ fn detect_file_kind(path: &Path) -> Option<ImportSourceKind> {
     let extension = path.extension()?.to_string_lossy().to_ascii_lowercase();
     match extension.as_str() {
         "jex" => Some(ImportSourceKind::JoplinJex),
+        "enex" => Some(ImportSourceKind::Evernote),
         _ => None,
     }
 }

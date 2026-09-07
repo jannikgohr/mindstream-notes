@@ -266,6 +266,7 @@ fn rewrite(body: &str, index: &mut LinkIndex) -> (String, RewriteStats) {
                 wikilinks: true,
                 markdown_links: true,
                 id_links: true,
+                evernote_links: false,
             },
             base_dir: String::new(),
         },
@@ -1163,4 +1164,275 @@ fn a_jex_entry_cannot_escape_the_staging_directory() {
         "traversal entry must not be written"
     );
     assert!(!staged.path().join("escaped.txt").exists());
+}
+
+// ---------- Evernote ----------
+
+/// Base64 of the eight-byte PNG signature, and the MD5 Evernote would address
+/// it by. Computed rather than hard-coded so the fixture can't drift.
+fn png_resource() -> (String, String) {
+    use base64::Engine as _;
+    let bytes: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let digest = <md5::Md5 as md5::Digest>::digest(bytes);
+    let hash = digest
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    (b64, hash)
+}
+
+fn enex(notes: &str) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <!DOCTYPE en-export SYSTEM \"http://xml.evernote.com/pub/evernote-export4.dtd\">\n\
+         <en-export export-date=\"20240101T000000Z\" application=\"Evernote\" version=\"10.0\">\n\
+         {notes}</en-export>\n"
+    )
+}
+
+fn enex_note(title: &str, enml: &str, extra: &str) -> String {
+    format!(
+        "<note><title>{title}</title>\n\
+         <content><![CDATA[<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+         <!DOCTYPE en-note SYSTEM \"http://xml.evernote.com/pub/enml2.dtd\">\
+         <en-note>{enml}</en-note>]]></content>\n\
+         <created>20240102T101500Z</created><updated>20240305T091000Z</updated>\n\
+         {extra}</note>\n"
+    )
+}
+
+fn enex_options(vault: &TempVault, file: &str) -> ImportOptions {
+    ImportOptions {
+        source_path: vault.path().join(file).to_string_lossy().to_string(),
+        kind: Some(ImportSourceKind::Evernote),
+        ..options(vault)
+    }
+}
+
+#[test]
+fn an_enex_file_is_detected_by_its_extension() {
+    let vault = TempVault::new();
+    vault.write("export.enex", &enex(&enex_note("A", "<div>hi</div>", "")));
+
+    let detected = super::detect::detect(&vault.path().join("export.enex")).unwrap();
+
+    assert_eq!(detected.kind, ImportSourceKind::Evernote);
+    assert_eq!(detected.suggested_name, "export");
+}
+
+#[test]
+fn enml_becomes_markdown_with_tags_and_timestamps() {
+    let vault = TempVault::new();
+    vault.write(
+        "export.enex",
+        &enex(&enex_note(
+            "Meeting notes",
+            "<div>Discussed <b>the plan</b>.</div><ul><li>First</li><li>Second</li></ul>",
+            "<tag>work</tag><tag>2024</tag>",
+        )),
+    );
+    let db = open_memory_for_tests();
+
+    let report = import(&db, enex_options(&vault, "export.enex"));
+
+    assert_eq!(report.notes_created, 1);
+    let body = body_of(&db, "Meeting notes");
+    assert!(body.contains("**the plan**"), "got {body}");
+    assert!(body.contains("- First"), "got {body}");
+
+    let (created, modified) = db
+        .with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT created, modified FROM notes WHERE title = 'Meeting notes'",
+                [],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )?)
+        })
+        .unwrap();
+    assert!(created.starts_with("2024-01-02T10:15"), "created {created}");
+    assert!(
+        modified.starts_with("2024-03-05T09:10"),
+        "modified {modified}"
+    );
+
+    let tags: Vec<String> = db
+        .with_conn(|c| {
+            let mut stmt = c.prepare("SELECT tag FROM note_tags ORDER BY tag")?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .unwrap();
+    assert_eq!(tags, vec!["2024".to_string(), "work".to_string()]);
+}
+
+#[test]
+fn an_en_media_element_becomes_an_asset_reference() {
+    // Evernote addresses a resource by the MD5 of its bytes; there is no id to
+    // match on, so the importer has to hash every resource it decodes.
+    let (b64, hash) = png_resource();
+    let vault = TempVault::new();
+    vault.write(
+        "export.enex",
+        &enex(&enex_note(
+            "Illustrated",
+            &format!(
+                "<div>Before</div><en-media hash=\"{hash}\" type=\"image/png\"/><div>After</div>"
+            ),
+            &format!(
+                "<resource><data encoding=\"base64\">{b64}</data><mime>image/png</mime>\
+                 <resource-attributes><file-name>diagram.png</file-name></resource-attributes>\
+                 </resource>"
+            ),
+        )),
+    );
+    let db = open_memory_for_tests();
+
+    let report = import(&db, enex_options(&vault, "export.enex"));
+
+    assert_eq!(report.attachments_imported, 1);
+    let body = body_of(&db, "Illustrated");
+    assert!(body.contains("(asset:mindstream/asset_"), "got {body}");
+    // The surrounding text must survive: html5ever does not honour XML
+    // self-closing on unknown elements, so an un-rewritten <en-media/> would
+    // swallow everything after it.
+    assert!(
+        body.contains("Before") && body.contains("After"),
+        "got {body}"
+    );
+}
+
+#[test]
+fn en_todo_elements_become_task_list_items() {
+    let vault = TempVault::new();
+    vault.write(
+        "export.enex",
+        &enex(&enex_note(
+            "Checklist",
+            "<div><en-todo checked=\"true\"/>Done thing</div>\
+             <div><en-todo checked=\"false\"/>Pending thing</div>",
+            "",
+        )),
+    );
+    let db = open_memory_for_tests();
+
+    import(&db, enex_options(&vault, "export.enex"));
+
+    let body = body_of(&db, "Checklist");
+    assert!(body.contains("- [x] Done thing"), "got {body}");
+    assert!(body.contains("- [ ] Pending thing"), "got {body}");
+}
+
+#[test]
+fn an_evernote_note_link_resolves_by_its_anchor_text() {
+    // Most exports carry no <guid>, so the link's guid matches nothing and the
+    // anchor text — which Evernote fills with the target's title — is all
+    // there is to go on.
+    let vault = TempVault::new();
+    vault.write(
+        "export.enex",
+        &enex(&format!(
+            "{}{}",
+            enex_note(
+                "Source",
+                "<div>See <a href=\"evernote:///view/123/s1/abc-guid/abc-guid/\">Target note</a>.</div>",
+                "",
+            ),
+            enex_note("Target note", "<div>arrived</div>", ""),
+        )),
+    );
+    let db = open_memory_for_tests();
+
+    let report = import(&db, enex_options(&vault, "export.enex"));
+
+    assert_eq!(report.links_resolved, 1);
+    let target = note_id_of(&db, "Target note");
+    assert!(
+        body_of(&db, "Source").contains(&format!("[Target note](mindstream://note/{target})")),
+        "got {}",
+        body_of(&db, "Source")
+    );
+}
+
+#[test]
+fn an_evernote_guid_resolves_exactly_when_the_export_carries_one() {
+    let vault = TempVault::new();
+    vault.write(
+        "export.enex",
+        &enex(&format!(
+            "{}{}",
+            enex_note(
+                "Source",
+                // Deliberately mismatched anchor text: only the guid can get
+                // this right.
+                "<div><a href=\"evernote:///view/123/s1/the-guid/the-guid/\">click here</a></div>",
+                "",
+            ),
+            enex_note("Real target", "<div>arrived</div>", "<guid>the-guid</guid>"),
+        )),
+    );
+    let db = open_memory_for_tests();
+
+    import(&db, enex_options(&vault, "export.enex"));
+
+    let target = note_id_of(&db, "Real target");
+    assert!(
+        body_of(&db, "Source").contains(&format!("[click here](mindstream://note/{target})")),
+        "got {}",
+        body_of(&db, "Source")
+    );
+}
+
+#[test]
+fn an_unresolvable_evernote_link_keeps_its_words_and_drops_the_dead_scheme() {
+    let vault = TempVault::new();
+    vault.write(
+        "export.enex",
+        &enex(&enex_note(
+            "Orphan",
+            "<div>See <a href=\"evernote:///view/1/s1/gone/gone/\">a missing note</a>.</div>",
+            "",
+        )),
+    );
+    let db = open_memory_for_tests();
+
+    let report = import(&db, enex_options(&vault, "export.enex"));
+
+    assert_eq!(report.links_unresolved, 1);
+    let body = body_of(&db, "Orphan");
+    assert!(body.contains("a missing note"), "got {body}");
+    assert!(!body.contains("evernote:"), "dead scheme kept: {body}");
+}
+
+#[test]
+fn several_enex_notes_are_addressed_independently() {
+    // Notes are read back by byte range rather than held in memory, so the
+    // ranges have to line up with the right note.
+    let vault = TempVault::new();
+    let notes: String = (0..5)
+        .map(|i| enex_note(&format!("Note {i}"), &format!("<div>body {i}</div>"), ""))
+        .collect();
+    vault.write("export.enex", &enex(&notes));
+    let db = open_memory_for_tests();
+
+    let report = import(&db, enex_options(&vault, "export.enex"));
+
+    assert_eq!(report.notes_created, 5);
+    for i in 0..5 {
+        assert_eq!(body_of(&db, &format!("Note {i}")), format!("body {i}"));
+    }
+}
+
+#[test]
+fn xml_entities_in_a_title_are_decoded() {
+    let vault = TempVault::new();
+    vault.write(
+        "export.enex",
+        &enex(&enex_note("Tom &amp; Jerry", "<div>x</div>", "")),
+    );
+    let db = open_memory_for_tests();
+
+    import(&db, enex_options(&vault, "export.enex"));
+
+    assert!(!note_id_of(&db, "Tom & Jerry").is_empty());
 }
