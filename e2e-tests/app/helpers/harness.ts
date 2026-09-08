@@ -27,6 +27,7 @@
  */
 
 import { mkdtempSync } from 'node:fs';
+import { installPageDiagnostics } from './failure-capture.js';
 import { freemem, tmpdir, totalmem } from 'node:os';
 import { join } from 'node:path';
 
@@ -424,6 +425,10 @@ export async function clickLastButtonText(
 /** Wait for the seeded shell to hydrate (the Welcome note in the tree). */
 export async function waitForShell(): Promise<void> {
   await byName('Welcome').waitForDisplayed({ timeout: 30_000 });
+  // A restart or reloadSession() drops the page-side error buffer the wdio
+  // `beforeTest` hook installed. Every spec waits for the shell after one, so
+  // re-arming here is what keeps post-restart failures diagnosable.
+  await installPageDiagnostics(browser);
 }
 
 export async function waitForSaved(): Promise<void> {

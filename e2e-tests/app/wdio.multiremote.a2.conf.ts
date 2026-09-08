@@ -27,6 +27,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  captureFailureArtifacts,
+  installPageDiagnostics
+} from './helpers/failure-capture.js';
+import {
   appBinaryForProfile,
   preflight,
   repoRoot,
@@ -35,6 +39,7 @@ import {
 } from './helpers/preflight.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const outputDir = join(repoRoot, '.output', 'wdio', 'multi-a2');
 
 /**
  * One tauri-driver process per client. `port` is what wdio connects to;
@@ -95,7 +100,8 @@ function spawnDriver(client: ClientProc): ChildProcess {
       MINDSTREAM_PROFILE_DIR: client.profileDir,
       MINDSTREAM_PROFILE_ID: client.profileId,
       MINDSTREAM_DICTIONARY_DIR: dictionaryDir
-    }
+    },
+    join(outputDir, `tauri-driver-${client.profileId}.log`)
   );
 }
 
@@ -103,7 +109,7 @@ export const config: WebdriverIO.Config = {
   runner: 'local',
   specs: [join(here, 'specs', 'sharing-multi-device.e2e.ts')],
   maxInstances: 1,
-  outputDir: join(repoRoot, '.output', 'wdio', 'multi-a2'),
+  outputDir,
   // Multiremote: an OBJECT keyed by instance name, each with its own connection
   // (port → its tauri-driver) plus capabilities. Cast as the two-client config
   // does — the multiremote object shape isn't the standalone array type.
@@ -149,6 +155,21 @@ export const config: WebdriverIO.Config = {
       backend: true,
       buildProfiles: ['e2e-a1', 'e2e-a2', 'e2e-b']
     }),
+
+  // Buffer page-side errors on every client — WebKitWebDriver has no log
+  // endpoint, so what the app logged is only recoverable from the page.
+  beforeTest: () => installPageDiagnostics(browser),
+
+  // Screenshot + DOM per client on failure, same as the two-client config.
+  afterTest: async (test, _context, { passed, error }) => {
+    if (passed) return;
+    await captureFailureArtifacts({
+      client: browser,
+      outputDir,
+      title: `${test.parent} ${test.title}`,
+      error
+    });
+  },
 
   beforeSession: () => {
     for (const [index, client] of Object.values(clients).entries()) {

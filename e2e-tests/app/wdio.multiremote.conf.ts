@@ -21,6 +21,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  captureFailureArtifacts,
+  installPageDiagnostics
+} from './helpers/failure-capture.js';
+import {
   appBinaryForProfile,
   preflight,
   repoRoot,
@@ -29,6 +33,7 @@ import {
 } from './helpers/preflight.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const outputDir = join(repoRoot, '.output', 'wdio', 'multi');
 
 /**
  * One tauri-driver process per client. `port` is what wdio connects to;
@@ -85,7 +90,8 @@ function spawnDriver(client: ClientProc): ChildProcess {
       MINDSTREAM_PROFILE_DIR: client.profileDir,
       MINDSTREAM_PROFILE_ID: client.profileId,
       MINDSTREAM_DICTIONARY_DIR: dictionaryDir
-    }
+    },
+    join(outputDir, `tauri-driver-${client.profileId}.log`)
   );
 }
 
@@ -100,7 +106,7 @@ export const config: WebdriverIO.Config = {
     join(here, 'specs', 'seed-merge.e2e.ts')
   ],
   maxInstances: 1,
-  outputDir: join(repoRoot, '.output', 'wdio', 'multi'),
+  outputDir,
   // Multiremote: an OBJECT (not an array) keyed by instance name. Each entry
   // carries its own connection (port → its tauri-driver) plus capabilities.
   // `WebdriverIO.Config['capabilities']` is typed as the standalone array, so
@@ -151,6 +157,22 @@ export const config: WebdriverIO.Config = {
   // build — instead of five specs each timing out in their `before` hook.
   onPrepare: () =>
     preflight({ backend: true, buildProfiles: ['e2e-a', 'e2e-b'] }),
+
+  // Buffer page-side errors on both clients — WebKitWebDriver has no log
+  // endpoint, so what the app logged is only recoverable from the page.
+  beforeTest: () => installPageDiagnostics(browser),
+
+  // Screenshot + DOM per client on failure — a two-client failure is usually
+  // about what one client sees and the other doesn't (see helpers/failure-capture.ts).
+  afterTest: async (test, _context, { passed, error }) => {
+    if (passed) return;
+    await captureFailureArtifacts({
+      client: browser,
+      outputDir,
+      title: `${test.parent} ${test.title}`,
+      error
+    });
+  },
 
   // Bring up tauri-driver processes on a stagger. wdio opens multiremote
   // sessions concurrently; if both driver ports are already listening, that

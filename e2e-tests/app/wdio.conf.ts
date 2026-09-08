@@ -18,6 +18,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  captureFailureArtifacts,
+  installPageDiagnostics
+} from './helpers/failure-capture.js';
+import {
   appBinary as application,
   preflight,
   repoRoot,
@@ -26,6 +30,7 @@ import {
 } from './helpers/preflight.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const outputDir = join(repoRoot, '.output', 'wdio', 'single');
 
 let tauriDriver: ChildProcess | undefined;
 
@@ -47,7 +52,7 @@ export const config: WebdriverIO.Config = {
     join(here, 'specs', 'trash-retention.e2e.ts')
   ],
   maxInstances: 1,
-  outputDir: join(repoRoot, '.output', 'wdio', 'single'),
+  outputDir,
   capabilities: [
     {
       maxInstances: 1,
@@ -64,6 +69,24 @@ export const config: WebdriverIO.Config = {
   // no backend.
   onPrepare: () => preflight({ backend: false }),
 
+  // Start buffering page-side errors. WebKitWebDriver serves no log endpoint,
+  // so what the app logged is only recoverable if the page kept it.
+  beforeTest: () => installPageDiagnostics(browser),
+
+  // A failed app-tier test leaves nothing behind to look at — the app is
+  // headless in CI and gone by the time the log is read. Drop a screenshot,
+  // the DOM and a diagnostics report next to the wdio logs, which the workflow
+  // already uploads.
+  afterTest: async (test, _context, { passed, error }) => {
+    if (passed) return;
+    await captureFailureArtifacts({
+      client: browser,
+      outputDir,
+      title: `${test.parent} ${test.title}`,
+      error
+    });
+  },
+
   // Spawn tauri-driver with a fresh profile dir for this spec file. In-spec
   // reloadSession() calls keep the same driver env, so restart-persistence
   // assertions still relaunch against the same data directory without leaking
@@ -78,11 +101,15 @@ export const config: WebdriverIO.Config = {
       join(tmpdir(), 'mindstream-e2e-dict-')
     );
     process.env.MINDSTREAM_DICTIONARY_DIR = runDictionaryDir;
-    tauriDriver = spawnTauriDriver([], {
-      ...process.env,
-      MINDSTREAM_PROFILE_DIR: runProfileDir,
-      MINDSTREAM_DICTIONARY_DIR: runDictionaryDir
-    });
+    tauriDriver = spawnTauriDriver(
+      [],
+      {
+        ...process.env,
+        MINDSTREAM_PROFILE_DIR: runProfileDir,
+        MINDSTREAM_DICTIONARY_DIR: runDictionaryDir
+      },
+      join(outputDir, 'tauri-driver.log')
+    );
   },
 
   afterSession: async () => {

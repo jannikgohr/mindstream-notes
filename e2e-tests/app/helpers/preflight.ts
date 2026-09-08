@@ -18,6 +18,7 @@ import {
 } from 'node:child_process';
 import {
   copyFileSync,
+  createWriteStream,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -90,18 +91,47 @@ export const tauriDriverPath = join(
   `tauri-driver${exeSuffix}`
 );
 
+/**
+ * Launch tauri-driver, optionally teeing its output to a file.
+ *
+ * The driver's stdio carries the *app's* too — Rust `tracing` output, GTK and
+ * WebKit warnings, and any panic that gets past the catch_unwind seams. Left
+ * on the console it interleaves with every other worker's, which makes it
+ * near-unreadable in CI; `logPath` keeps a per-suite copy next to the failure
+ * artifacts while the console still sees everything it saw before.
+ */
 export function spawnTauriDriver(
   args: string[],
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  logPath?: string
 ): ChildProcess {
   const options: SpawnOptions = {
-    stdio: [null, process.stdout, process.stderr],
+    stdio: logPath
+      ? [null, 'pipe', 'pipe']
+      : [null, process.stdout, process.stderr],
     env
   };
   if (process.platform !== 'win32') {
     options.detached = true;
   }
-  return spawn(tauriDriverPath, args, options);
+  const child = spawn(tauriDriverPath, args, options);
+  if (!logPath) return child;
+
+  mkdirSync(dirname(logPath), { recursive: true });
+  const log = createWriteStream(logPath, { flags: 'a' });
+  const tee = (chunk: Buffer, mirror: NodeJS.WriteStream) => {
+    mirror.write(chunk);
+    log.write(chunk);
+  };
+  child.stdout?.on('data', (chunk: Buffer) => tee(chunk, process.stdout));
+  child.stderr?.on('data', (chunk: Buffer) => tee(chunk, process.stderr));
+  // The driver outliving the stream is normal (it is killed on teardown); a
+  // write to a closed stream must not take the run down with it.
+  log.on('error', (error) =>
+    console.warn(`[preflight] driver log write failed (${logPath}):`, error)
+  );
+  child.once('close', () => log.end());
+  return child;
 }
 
 const tauriScript = join(repoRoot, 'src-tauri', 'scripts', 'tauri.mjs');
