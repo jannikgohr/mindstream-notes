@@ -724,18 +724,18 @@
     pressStartedInsideCardEditor = false;
     if (!api || isTrashed || e.button !== 0) return;
     if (startedInside || startsInsideCardEditor(e.target)) return;
-    void api.exec('select-card', { id: null }).catch((error) => {
-      console.error('[KanbanNoteEditor] selection failed', error);
-    });
+    void api
+      .exec('select-card', { id: null })
+      .catch((err: unknown) => console.error('[kanban] deselect failed', err));
   }
 
   const MOBILE_CARD_EDITOR_NAV_ID = 'mobile-kanban-card-editor';
   const MOBILE_LIST_MANAGER_NAV_ID = 'mobile-kanban-list-manager';
 
   function closeMobileCardEditor(): void {
-    void api?.exec('select-card', { id: null }).catch((error) => {
-      console.error('[KanbanNoteEditor] selection failed', error);
-    });
+    void api
+      ?.exec('select-card', { id: null })
+      .catch((err: unknown) => console.error('[kanban] deselect failed', err));
   }
 
   function handleCardEditorOpenChange(open: boolean): void {
@@ -825,9 +825,9 @@
     searchFilters = { ...EMPTY_KANBAN_SEARCH_FILTERS };
     void api
       ?.exec('filter-cards', { tag: KANBAN_SEARCH_FILTER_TAG })
-      .catch((error) => {
-        console.error('[KanbanNoteEditor] filter failed', error);
-      });
+      .catch((err: unknown) =>
+        console.error('[kanban] filter reset failed', err)
+      );
   }
 
   function updateKanbanSearch(filters: KanbanSearchFilters): void {
