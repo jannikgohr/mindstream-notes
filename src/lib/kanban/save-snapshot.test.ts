@@ -27,7 +27,7 @@ describe('Kanban save snapshot', () => {
         }
       ]
     });
-    const saving = captureKanbanSave(doc);
+    const save = captureKanbanSave(doc);
     writeBoardToYDoc(doc, {
       columns: [],
       cards: [
@@ -41,6 +41,7 @@ describe('Kanban save snapshot', () => {
       ]
     });
     doc.destroy();
+    const saving = save();
     complete('<p>before</p>');
     const saved = await saving;
     const restored = new Y.Doc();
@@ -71,7 +72,7 @@ describe('Kanban save snapshot', () => {
         }
       ]
     });
-    await expect(captureKanbanSave(doc)).rejects.toThrow(
+    await expect(captureKanbanSave(doc)()).rejects.toThrow(
       'renderer unavailable'
     );
     doc.destroy();

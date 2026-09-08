@@ -126,8 +126,6 @@
     pdfAssetIdFromBody,
     PDF_PAGE_COLUMN_CLASS,
     QUICK_ZOOMS,
-    RENDER_DROP_DELAY_MS,
-    RENDER_ROOT_MARGIN,
     SEARCH_DEBOUNCE_MS,
     SIGNATURE_COLOR,
     type PageSize,
@@ -141,6 +139,7 @@
     ZOOM_STEP
   } from '$lib/pdf/viewer-helpers';
   import { createPageRenderer } from '$lib/pdf/page-render';
+  import { createPageRenderWindow } from '$lib/pdf/page-render-window';
   import { createViewerZoom } from '$lib/pdf/viewer-zoom';
   import { alert } from './confirm-dialog.svelte';
   import { toErrorMessage } from '$lib/api/errors';
@@ -267,41 +266,20 @@
   let unsubSession: (() => void) | null = null;
   let editorListener: EditorListener | null = null;
   let resizeObserver: ResizeObserver | null = null;
-  let pageIntersectionObserver: IntersectionObserver | null = null;
-  let pageRenderObserver: IntersectionObserver | null = null;
-  // Per-page visibility ratios — most-visible page wins as the awareness
-  // pageIndex. Map (not array) because the observer fires per-page and
-  // multiple pages can be partially visible during scroll.
-  const pageVisibility = new Map<number, number>();
-  // Pre-fetched natural-size viewports (scale=1, PDF units). One entry per
-  // page so placeholder figures can be sized correctly without a rendered
-  // canvas, keeping scroll position + page-jump targets stable.
   let pageSizes = $state<PageSize[]>([]);
-  // Pages currently inside the render window (visible ± buffer). Anything
-  // not in this Set renders as a sized blank placeholder — no PDFPageView,
-  // no canvas, no text layer. Bookkeeping via the `renderSetVersion`
-  // counter because Svelte 5 reactivity doesn't track Set mutations.
-  const renderSet = new Set<number>();
-  let renderSetVersion = $state(0);
-  // Pending teardown timers per page — set when a page leaves the render
-  // window, cleared if it re-enters within the grace window.
-  const renderDropTimers = new Map<number, ReturnType<typeof setTimeout>>();
-  // Per-page cancellation hooks the renderObserver fires the instant a
-  // page leaves the band — without this, an in-flight PDF.js render keeps
-  // hogging the worker for ~200 ms (the DOM-teardown grace) before the
-  // action sees shouldRender=false and tears it down. Cancelling the
-  // worker task immediately lets the now-visible page jump the queue.
-  const pageCancelHooks = new Map<number, () => void>();
-  // Pages whose in-flight render was pre-empted while still inside the
-  // grace window. Used to trigger a fresh draw if the user scrolls back
-  // before the timer fires (otherwise the canvas would stay partially-
-  // drawn until the next zoom/pan invalidation).
-  const pageRenderCancelled = new Set<number>();
-  // Per-page redraw counter bumped on grace-window re-entry. Threaded
-  // through RenderParams so the action sees a `visualChange` and re-runs
-  // draw() to complete the cancelled render.
-  const pageInvalidation = new Map<number, number>();
-  let pageInvalidationVersion = $state(0);
+  let renderWindowVersion = $state(0);
+  const pageWindow = createPageRenderWindow({
+    getActivePage: () => activePageNumber,
+    setActivePage: (page) => {
+      activePageNumber = page;
+    },
+    ensurePageSize,
+    onChange: () => {
+      untrack(() => {
+        renderWindowVersion += 1;
+      });
+    }
+  });
   // Reactive container width drives the fit-width placeholder sizing. The
   // resizeObserver below pushes updates into it.
   let containerWidth = $state(0);
@@ -1179,7 +1157,7 @@
 
   const saveScheduler = createSaveScheduler({
     canSave: () => !isTrashed && saveReady && !!yDoc,
-    save: flushSave,
+    capture: captureSave,
     onError: (error) => {
       console.error('[PdfNoteViewer] save failed', error);
     }
@@ -1189,27 +1167,27 @@
     savingState = saveScheduler.pending ? 'pending' : 'idle';
   }
 
-  async function flushSave() {
-    if (isTrashed) return;
-    saveScheduler.cancel();
-    const doc = yDoc;
-    if (!doc) return;
-    try {
+  function captureSave(): (() => Promise<void>) | null {
+    if (!yDoc || isTrashed) return null;
+    const capturedNoteId = noteId;
+    const yrsState = Array.from(Y.encodeStateAsUpdate(yDoc));
+    return async () => {
       savingState = 'saving';
-      const yrsState = Array.from(Y.encodeStateAsUpdate(doc));
-      await apiSaveNote({ id: noteId, yrs_state: yrsState });
-      const existing = tree.notesById[noteId];
-      if (existing) {
-        tree.notesById[noteId] = {
-          ...existing,
-          modified: new Date().toISOString()
-        };
+      try {
+        await apiSaveNote({ id: capturedNoteId, yrs_state: yrsState });
+        const existing = tree.notesById[capturedNoteId];
+        if (existing) {
+          tree.notesById[capturedNoteId] = {
+            ...existing,
+            modified: new Date().toISOString()
+          };
+        }
+        savingState = 'saved';
+      } catch (err) {
+        savingState = 'error';
+        throw err;
       }
-      savingState = 'saved';
-    } catch (err) {
-      savingState = 'error';
-      throw err;
-    }
+    };
   }
 
   function setTool(tool: PdfTool) {
@@ -1232,7 +1210,7 @@
 
   async function exportCurrentPdfNote() {
     try {
-      await flushSave();
+      await saveScheduler.saveNow();
       await exportAnnotatedPdfNote(noteId);
     } catch (err) {
       console.error('[PdfNoteViewer] export failed', err);
@@ -1313,21 +1291,13 @@
     zoomMode === 'fit-width' ? fitWidthZoom : zoom
   );
 
-  // Wraps Set.has so the read is a tracked dependency on `renderSetVersion`.
-  // Svelte 5's reactivity ignores Set mutations directly, so the version
-  // counter is what actually triggers re-derivation of `shouldRender` per
-  // page when the render-window observer changes the set.
   function isRendering(pageNumber: number): boolean {
-    void renderSetVersion;
-    return renderSet.has(pageNumber);
+    void renderWindowVersion;
+    return pageWindow.isRendering(pageNumber);
   }
   function invalidationOf(pageNumber: number): number {
-    void pageInvalidationVersion;
-    return pageInvalidation.get(pageNumber) ?? 0;
-  }
-  function invalidatePage(pageNum: number): void {
-    pageInvalidation.set(pageNum, (pageInvalidation.get(pageNum) ?? 0) + 1);
-    pageInvalidationVersion += 1;
+    void renderWindowVersion;
+    return pageWindow.invalidationOf(pageNumber);
   }
 
   // Pages whose natural size has been fetched (or is in flight). Guards
@@ -1528,142 +1498,10 @@
   });
   const setupCollabProvider = collabSession.setup;
 
-  // Track which page the user is most likely looking at via
-  // IntersectionObserver. Used as the awareness `pageIndex` so peers can
-  // see what other peers are reading. Re-runs whenever pageNumbers
-  // changes (i.e. once the PDF loads) to start observing fresh DOM nodes.
   $effect(() => {
-    if (!container || pageNumbers.length === 0) return;
-    pageIntersectionObserver?.disconnect();
-    pageRenderObserver?.disconnect();
-    pageVisibility.clear();
-    renderSet.clear();
-    for (const t of renderDropTimers.values()) clearTimeout(t);
-    renderDropTimers.clear();
-    pageRenderCancelled.clear();
-    // pageCancelHooks is owned by per-action lifecycles, not the effect.
-    // pageInvalidation persists across PDF reloads — clearing it would
-    // reset all action params' invalidation counter back to 0, which
-    // would not trigger redraws on subsequent re-entry events.
-    // No renderSetVersion bump here — `renderSetVersion += 1` reads the
-    // state, which Svelte 5 records as a dep of this effect; the write
-    // then re-triggers the effect, creating a teardown loop. The clear()
-    // calls are idempotent on a fresh PDF load (set was already empty)
-    // and the cleanup function below handles the bump on a re-run.
-
-    // Visibility observer — drives the active-page indicator + awareness.
-    // Tight thresholds, no margin: only truly on-screen pages count.
-    const visibilityObserver = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          const pageAttr = (entry.target as HTMLElement).dataset.pageNumber;
-          const pageNum = pageAttr ? Number(pageAttr) : NaN;
-          if (!Number.isFinite(pageNum)) continue;
-          if (entry.intersectionRatio > 0) {
-            pageVisibility.set(pageNum, entry.intersectionRatio);
-          } else {
-            pageVisibility.delete(pageNum);
-          }
-        }
-        // Pick the most-visible page; ties go to the smaller page number
-        // so scrolling down advances the indicator predictably.
-        let best = activePageNumber;
-        let bestRatio = -1;
-        for (const [page, ratio] of pageVisibility) {
-          if (ratio > bestRatio) {
-            bestRatio = ratio;
-            best = page;
-          }
-        }
-        if (best !== activePageNumber) activePageNumber = best;
-      },
-      {
-        root: container,
-        threshold: [0, 0.1, 0.25, 0.5, 0.75, 1]
-      }
-    );
-    pageIntersectionObserver = visibilityObserver;
-
-    // Render-window observer — wider rootMargin so a page joins the render
-    // set well before it scrolls into view, hiding canvas-draw latency. A
-    // page that exits the band is dropped after RENDER_DROP_DELAY_MS to
-    // absorb fast scrubs without churning the PDFPageView lifecycle.
-    const renderObserver = new IntersectionObserver(
-      (entries) => {
-        let changed = false;
-        for (const entry of entries) {
-          const pageAttr = (entry.target as HTMLElement).dataset.pageNumber;
-          const pageNum = pageAttr ? Number(pageAttr) : NaN;
-          if (!Number.isFinite(pageNum)) continue;
-          if (entry.isIntersecting) {
-            // A page near the viewport: fetch its real size (if not already
-            // known) so the placeholder is correct by the time it renders.
-            void ensurePageSize(pageNum);
-            const existing = renderDropTimers.get(pageNum);
-            if (existing) {
-              clearTimeout(existing);
-              renderDropTimers.delete(pageNum);
-            }
-            // If a page comes back inside the band before its grace timer
-            // fired, its in-flight render had already been pre-empted —
-            // bump invalidation so the action restarts draw() instead of
-            // leaving the canvas half-finished.
-            if (pageRenderCancelled.delete(pageNum)) {
-              invalidatePage(pageNum);
-            }
-            if (!renderSet.has(pageNum)) {
-              renderSet.add(pageNum);
-              changed = true;
-            }
-          } else {
-            if (!renderSet.has(pageNum)) continue;
-            // Pre-empt the in-flight PDF.js render immediately. The DOM
-            // teardown is still gated by the grace timer below, so a
-            // scrub-back within ~200 ms reuses the existing canvas/figure.
-            pageCancelHooks.get(pageNum)?.();
-            pageRenderCancelled.add(pageNum);
-            if (renderDropTimers.has(pageNum)) continue;
-            const timer = setTimeout(() => {
-              renderDropTimers.delete(pageNum);
-              pageRenderCancelled.delete(pageNum);
-              if (renderSet.delete(pageNum)) {
-                renderSetVersion += 1;
-              }
-            }, RENDER_DROP_DELAY_MS);
-            renderDropTimers.set(pageNum, timer);
-          }
-        }
-        if (changed) renderSetVersion += 1;
-      },
-      {
-        root: container,
-        rootMargin: RENDER_ROOT_MARGIN,
-        threshold: 0
-      }
-    );
-    pageRenderObserver = renderObserver;
-
-    // Observe after DOM updates so all page wrappers exist.
-    void tick().then(() => {
-      const targets = container?.querySelectorAll<HTMLElement>(
-        'figure[data-page-number]'
-      );
-      targets?.forEach((el) => {
-        visibilityObserver.observe(el);
-        renderObserver.observe(el);
-      });
-    });
-    return () => {
-      visibilityObserver.disconnect();
-      renderObserver.disconnect();
-      pageIntersectionObserver = null;
-      pageRenderObserver = null;
-      pageVisibility.clear();
-      renderSet.clear();
-      for (const t of renderDropTimers.values()) clearTimeout(t);
-      renderDropTimers.clear();
-      pageRenderCancelled.clear();
-    };
+    const root = container;
+    if (!root || pageNumbers.length === 0) return;
+    return untrack(() => pageWindow.observe(root, tick()));
   });
 
   onMount(async () => {
@@ -1914,16 +1752,7 @@
     unsubSession = null;
     viewerZoom.cancelPendingCentring();
     resizeObserver?.disconnect();
-    pageIntersectionObserver?.disconnect();
-    pageIntersectionObserver = null;
-    pageRenderObserver?.disconnect();
-    pageRenderObserver = null;
-    pageVisibility.clear();
-    renderSet.clear();
-    for (const t of renderDropTimers.values()) clearTimeout(t);
-    renderDropTimers.clear();
-    pageRenderCancelled.clear();
-    pageCancelHooks.clear();
+    pageWindow.destroy();
     void pdfDoc?.cleanup();
     pdfFieldObjectsPromise = null;
     undoManager?.destroy();
@@ -2010,7 +1839,7 @@
       return pageViewports;
     },
     get pageCancelHooks() {
-      return pageCancelHooks;
+      return pageWindow.cancelHooks;
     },
     get pdfFieldObjectsPromise() {
       return pdfFieldObjectsPromise;

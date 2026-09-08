@@ -8,24 +8,19 @@ export function createInkSaveController(options: {
   onStatus: (status: 'pending' | 'saving' | 'saved' | 'error') => void;
 }) {
   let updates: Uint8Array[] = [];
-  let active: Promise<void> | null = null;
   let closed = false;
   const scheduler = createSaveScheduler({
     canSave: options.canSave,
-    save: flush
+    capture: captureSave
   });
-  async function flush(): Promise<void> {
-    if (active) {
-      await active;
-      if (updates.length > 0) await flush();
-      return;
-    }
-    if (!options.canSave() || updates.length === 0) return;
+
+  function captureSave(): (() => Promise<void>) | null {
+    if (!options.canSave() || updates.length === 0) return null;
     const batch = updates;
     updates = [];
     const state = Array.from(Y.mergeUpdates(batch));
-    options.onStatus('saving');
-    active = (async () => {
+    return async () => {
+      options.onStatus('saving');
       try {
         await options.persist(state);
         options.onStatus(updates.length ? 'pending' : 'saved');
@@ -34,14 +29,10 @@ export function createInkSaveController(options: {
         options.onStatus('error');
         console.warn('[ink-canvas] failed to save note', error);
         throw error;
+      } finally {
+        if (updates.length && !closed) scheduler.schedule();
       }
-    })();
-    try {
-      await active;
-    } finally {
-      active = null;
-    }
-    if (updates.length && !closed) scheduler.schedule();
+    };
   }
   function queue(batch: Uint8Array[]) {
     if (closed || !options.canSave()) return;
