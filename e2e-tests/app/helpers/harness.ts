@@ -121,21 +121,102 @@ const FILE_TREE_CREATE_ACTIONS = new Set([
   'New from template'
 ]);
 
+/** Either shape a wdio query hands back. */
+type ElementLike = WebdriverIO.Element | ChainablePromiseElement;
+
+/**
+ * Is this element actually on screen, asked of the page rather than the driver?
+ *
+ * WebKitWebDriver's `isElementDisplayed` disagreed with reality on the ⋯ menu:
+ * a failure capture showed "New note" present as a `role="menuitem"`, painted,
+ * unclipped and plainly visible in the screenshot, while a 30-second poll built
+ * on `isDisplayed()` never matched it. The page's own geometry is the thing the
+ * assertions actually care about, so ask for that instead.
+ */
+async function isVisibleInPage(
+  element: ElementLike,
+  client: WebdriverIO.Browser = browser
+): Promise<boolean> {
+  const resolved = await element;
+  return client
+    .execute(
+      (node: HTMLElement) => {
+        if (!node) return false;
+        const rect = node.getBoundingClientRect();
+        const style = getComputedStyle(node);
+        return (
+          rect.width > 0 &&
+          rect.height > 0 &&
+          style.visibility !== 'hidden' &&
+          style.display !== 'none' &&
+          style.opacity !== '0'
+        );
+      },
+      resolved as unknown as HTMLElement
+    )
+    .catch(() => false);
+}
+
+/** Gate an interaction on the element being on screen, per the page. */
+async function waitUntilVisible(
+  element: ElementLike,
+  client: WebdriverIO.Browser = browser
+): Promise<void> {
+  const resolved = await element;
+  await client.waitUntil(() => isVisibleInPage(resolved, client), {
+    timeout: 30_000,
+    timeoutMsg: `element (${String(resolved.selector)}) never became visible`
+  });
+}
+
+/**
+ * A file-tree create action, wherever the toolbar decided to put it.
+ *
+ * The row renders what fits and moves the rest into the ⋯ menu, so an action is
+ * either a `button[aria-label]` in the toolbar or a `button[role="menuitem"]`
+ * in the popover. The menu branch matches by XPath — evaluated by the driver in
+ * one call — rather than reading every item's text back over the wire, because
+ * that round trip is what silently returned nothing on WebKitGTK.
+ */
 async function displayedByName(
   name: string
 ): Promise<ChainablePromiseElement | undefined> {
   const escaped = name.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const toolbarButton = $(`button[aria-label="${escaped}"]`);
-  if (await toolbarButton.isDisplayed().catch(() => false)) {
+  if (await isVisibleInPage(toolbarButton)) {
     return toolbarButton;
   }
-  const menuItems = await $$('button[role="menuitem"]');
-  for (const item of menuItems) {
-    if ((await item.isDisplayed()) && (await item.getText()).trim() === name) {
-      return item as unknown as ChainablePromiseElement;
-    }
+  if (name.includes('"')) {
+    throw new Error(`create action names must not contain a quote: ${name}`);
   }
+  const menuItem = $(
+    `//button[@role="menuitem"][normalize-space(.)="${name}"]`
+  );
+  if (await isVisibleInPage(menuItem)) return menuItem;
   return undefined;
+}
+
+/**
+ * What the ⋯ menu currently offers, as the page sees it.
+ *
+ * Only used to explain a failure: "did not become visible" is a useless message
+ * when the item is sitting right there in the screenshot, so the timeout says
+ * what the menu actually held.
+ */
+async function describeCreateActions(): Promise<string> {
+  return browser
+    .execute(() => {
+      const inRow = Array.from(document.querySelectorAll('button[aria-label]'))
+        .filter((button) =>
+          (button.getAttribute('aria-label') ?? '').startsWith('New ')
+        )
+        .map((button) => button.getAttribute('aria-label'));
+      const inMenu = Array.from(
+        document.querySelectorAll('button[role="menuitem"]')
+      ).map((button) => (button.textContent ?? '').trim());
+      return `toolbar: [${inRow.join(', ')}] menu: [${inMenu.join(', ')}]`;
+    })
+    .catch((error: unknown) => `unavailable (${String(error)})`);
 }
 
 export async function waitForClientReady(
@@ -229,7 +310,7 @@ export async function clickElement(
 ): Promise<void> {
   await waitForDefaultClientReady();
   const resolved = await element;
-  await resolved.waitForDisplayed({ timeout: 30_000 });
+  await waitUntilVisible(resolved);
   await browser.execute(
     (el: HTMLElement, button: 'left' | 'right') => {
       el.scrollIntoView({ block: 'center', inline: 'center' });
@@ -269,7 +350,7 @@ export async function setElementValue(
 ): Promise<void> {
   await waitForDefaultClientReady();
   const resolved = await element;
-  await resolved.waitForDisplayed({ timeout: 30_000 });
+  await waitUntilVisible(resolved);
   await browser.execute(
     (el: HTMLElement, next: string) => {
       // See clientHelpers.setValue: label-wrapped inputs mean `aria/<name>` can
@@ -301,7 +382,7 @@ export async function pressElementKey(
 ): Promise<void> {
   await waitForDefaultClientReady();
   const resolved = await element;
-  await resolved.waitForDisplayed({ timeout: 30_000 });
+  await waitUntilVisible(resolved);
   await browser.execute(
     (el: HTMLElement, pressed: string, ctrlKey: boolean) => {
       el.focus?.();
@@ -385,10 +466,16 @@ export async function revealFileTreeCreateAction(
   let action = await displayedByName(name);
   if (!action) {
     await openFileTreeCreateMore();
-    await browser.waitUntil(async () => Boolean(await displayedByName(name)), {
-      timeout: 30_000,
-      timeoutMsg: `file-tree create action did not become visible: ${name}`
-    });
+    await browser
+      .waitUntil(async () => Boolean(await displayedByName(name)), {
+        timeout: 30_000
+      })
+      .catch(async () => {
+        throw new Error(
+          `file-tree create action did not become visible: ${name} — ` +
+            (await describeCreateActions())
+        );
+      });
     action = await displayedByName(name);
   }
   if (!action) throw new Error(`missing file-tree create action: ${name}`);
@@ -928,7 +1015,7 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
 
   const setValue = async (name: string, value: string): Promise<void> => {
     const resolved = await byName(name);
-    await resolved.waitForDisplayed({ timeout: 30_000 });
+    await waitUntilVisible(resolved, client);
     await client.execute(
       (el: HTMLElement, next: string) => {
         // The app wraps inputs in a <label> whose text supplies the accessible
@@ -961,7 +1048,7 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
     opts: { ctrlKey?: boolean } = {}
   ): Promise<void> => {
     const resolved = await element;
-    await resolved.waitForDisplayed({ timeout: 30_000 });
+    await waitUntilVisible(resolved, client);
     await client.execute(
       (el: HTMLElement, pressed: string, ctrlKey: boolean) => {
         el.focus?.();
