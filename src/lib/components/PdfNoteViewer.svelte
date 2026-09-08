@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { createPdfSearchController } from '$lib/pdf/search-controller';
+  import { createSaveScheduler } from '$lib/editor/save-scheduler';
+  import { createCollabSession } from '$lib/editor/collab-session';
   import { onDestroy, onMount, tick, untrack } from 'svelte';
-  import { onAppSuspend } from '$lib/editor/suspend-flush';
   import { createHistoryCapture } from '$lib/history/capture-scheduler';
   import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
   import {
@@ -38,7 +40,6 @@
     getYjsRelayUrl,
     isTauri,
     loadNote,
-    noteRoomInfo,
     onSessionChange,
     pdfNoteNeedsText,
     saveNote as apiSaveNote,
@@ -46,11 +47,6 @@
   } from '$lib/api';
   import { listen, TauriEventName } from '$lib/api/events';
   import { extractTextFromDocument } from '$lib/pdf/extract-text';
-  import { base64ToBytes } from '$lib/editor/base64';
-  import {
-    collabAuthForRoom,
-    getOrCreateCollabSigningMaterial
-  } from '$lib/sync/collab-signing-key';
   import { otherPeerCount } from '$lib/editor/awareness-presence';
   import { pickCursorColor } from '$lib/editor/cursor-color';
   import {
@@ -78,12 +74,7 @@
     resolveDestinationPageIndex,
     type FlatOutlineItem
   } from '$lib/pdf/outline';
-  import {
-    buildPageTextIndex,
-    findMatchesInPage,
-    type PageTextIndex,
-    type PdfSearchMatch
-  } from '$lib/pdf/pdf-text-index';
+  import { type PdfSearchMatch } from '$lib/pdf/pdf-text-index';
   import {
     signatureLibrary,
     ensureSignaturesLoaded,
@@ -137,7 +128,6 @@
     QUICK_ZOOMS,
     RENDER_DROP_DELAY_MS,
     RENDER_ROOT_MARGIN,
-    SAVE_DEBOUNCE_MS,
     SEARCH_DEBOUNCE_MS,
     SIGNATURE_COLOR,
     type PageSize,
@@ -255,15 +245,10 @@
   // `activeSearchMatchId` flags the currently-focused hit.
   const searchMatchesByPage = new Map<number, PdfSearchMatch[]>();
   let activeSearchMatchId: string | null = null;
-  // Per-page text index, built lazily on first search and cached.
-  const textIndexCache = new Map<number, PageTextIndex>();
-  let searchGeneration = 0;
-  let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let pdfjsLib: PdfJs | null = null;
   let pdfViewerLib: PdfViewer | null = null;
   let yDoc: Y.Doc | null = null;
   let awareness: Awareness | null = null;
-  let provider: CollabProvider | null = null;
   let annotationsMap: Y.Map<PdfAnnotation> | null = null;
   let formValuesMap: Y.Map<PdfFormValue> | null = null;
   let yDocUpdateHandler: (() => void) | null = null;
@@ -275,7 +260,6 @@
     PdfDocument['getFieldObjects']
   > | null = null;
   let saveReady = false;
-  let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let restoringHistorySnapshot = false;
   let unregisterHistory: (() => void) | null = null;
   let unsubSync: (() => void) | null = null;
@@ -1054,11 +1038,7 @@
 
   function closeSearch() {
     searchOpen = false;
-    if (searchDebounceTimer) {
-      clearTimeout(searchDebounceTimer);
-      searchDebounceTimer = null;
-    }
-    searchGeneration += 1;
+    pdfSearch.clear();
     searchQuery = '';
     clearSearchResults();
   }
@@ -1072,13 +1052,22 @@
     searchVersion += 1;
   }
 
+  const pdfSearch = createPdfSearchController({
+    getDocument: () => pdfDoc,
+    onBusy: (busy) => {
+      searchBusy = busy;
+    },
+    onResults: (matches) => {
+      searchMatches = matches;
+      indexMatchesByPage(matches);
+      if (matches.length) focusMatch(0);
+      else clearSearchResults();
+    },
+    delayMs: SEARCH_DEBOUNCE_MS
+  });
   function handleSearchInput(value: string) {
     searchQuery = value;
-    if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
-    searchDebounceTimer = setTimeout(() => {
-      searchDebounceTimer = null;
-      void runSearch(value);
-    }, SEARCH_DEBOUNCE_MS);
+    pdfSearch.search(value);
   }
 
   function indexMatchesByPage(matches: PdfSearchMatch[]) {
@@ -1087,46 +1076,6 @@
       const list = searchMatchesByPage.get(match.pageIndex);
       if (list) list.push(match);
       else searchMatchesByPage.set(match.pageIndex, [match]);
-    }
-  }
-
-  async function runSearch(rawQuery: string) {
-    const query = rawQuery.trim();
-    const generation = ++searchGeneration;
-    if (!query || !pdfDoc) {
-      clearSearchResults();
-      return;
-    }
-    searchBusy = true;
-    const doc = pdfDoc;
-    const collected: PdfSearchMatch[] = [];
-    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
-      let index = textIndexCache.get(pageNumber - 1);
-      if (!index) {
-        try {
-          const page = await doc.getPage(pageNumber);
-          index = await buildPageTextIndex(page);
-        } catch (err) {
-          console.warn('[PdfNoteViewer] text index failed', pageNumber, err);
-          index = { text: '', segments: [] };
-        }
-        textIndexCache.set(pageNumber - 1, index);
-      }
-      // A newer query superseded this run — abandon it.
-      if (generation !== searchGeneration) return;
-      const pageMatches = findMatchesInPage(index, pageNumber - 1, query);
-      if (pageMatches.length) collected.push(...pageMatches);
-    }
-    if (generation !== searchGeneration) return;
-    searchBusy = false;
-    searchMatches = collected;
-    indexMatchesByPage(collected);
-    if (collected.length > 0) {
-      focusMatch(0);
-    } else {
-      activeMatchIndex = 0;
-      activeSearchMatchId = null;
-      searchVersion += 1;
     }
   }
 
@@ -1226,29 +1175,23 @@
     }
   }
 
-  // The OS can take the process down without unmounting us (Android kills
-  // backgrounded apps), so `onDestroy` alone can't protect the debounce
-  // window. Same guard the teardown flush uses.
-  $effect(() =>
-    onAppSuspend(() => {
-      if (saveTimer) void flushSave();
-    })
-  );
+  $effect(() => saveScheduler.subscribeSuspend());
 
+  const saveScheduler = createSaveScheduler({
+    canSave: () => !isTrashed && saveReady && !!yDoc,
+    save: flushSave,
+    onError: (error) => {
+      console.error('[PdfNoteViewer] save failed', error);
+    }
+  });
   function scheduleSave() {
-    if (isTrashed || !saveReady) return;
-    savingState = 'pending';
-    if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      void flushSave();
-    }, SAVE_DEBOUNCE_MS);
+    saveScheduler.schedule();
+    savingState = saveScheduler.pending ? 'pending' : 'idle';
   }
 
   async function flushSave() {
-    if (saveTimer) {
-      clearTimeout(saveTimer);
-      saveTimer = null;
-    }
+    if (isTrashed) return;
+    saveScheduler.cancel();
     const doc = yDoc;
     if (!doc) return;
     try {
@@ -1265,7 +1208,7 @@
       savingState = 'saved';
     } catch (err) {
       savingState = 'error';
-      console.error('[PdfNoteViewer] save failed', err);
+      throw err;
     }
   }
 
@@ -1566,47 +1509,24 @@
    * and the same per-note encryption key sourced from the Rust side
    * via noteRoomInfo.
    */
-  async function setupCollabProvider() {
-    if (provider) {
-      provider.destroy();
-      provider = null;
-      collabOnline = false;
+  const collabSession = createCollabSession({
+    getContext: () => {
+      const url = getYjsRelayUrl(
+        (getSettingValue('account.serverUrl') as string | undefined) ?? ''
+      );
+      if (!url || !(yDoc && awareness)) return null;
+      return { noteId, url, value: { doc: yDoc, awareness } };
+    },
+    create: (context, connection) =>
+      new CollabProvider({ ...connection, ...context }),
+    onConfigured: (configured) => {
+      collabConfigured = configured;
+    },
+    onStatusChange: (online) => {
+      collabOnline = online;
     }
-    collabConfigured = false;
-
-    // Derived from the single account.serverUrl setting: nginx routes
-    // /yjs to the yjs-relay upstream (see backend/nginx/nginx.conf).
-    const collabUrl = getYjsRelayUrl(
-      (getSettingValue('account.serverUrl') as string | undefined) ?? ''
-    );
-    if (!collabUrl) return;
-    if (!yDoc || !awareness) return;
-
-    try {
-      const signingMaterial = await getOrCreateCollabSigningMaterial();
-      const room = await noteRoomInfo(noteId, signingMaterial?.publicKeyB64);
-      if (!room) return;
-      collabConfigured = true;
-      provider = new CollabProvider({
-        url: collabUrl,
-        roomId: room.room_id,
-        joinPrivateKeyPkcs8B64: room.join_private_key_pkcs8_b64,
-        keyBytes: base64ToBytes(room.key_b64),
-        doc: yDoc,
-        awareness,
-        auth: collabAuthForRoom(room, signingMaterial),
-        requireSignedWrites: room.collab_epoch > 0,
-        onAuthStale: () => {
-          void setupCollabProvider();
-        },
-        onStatusChange: (online) => {
-          collabOnline = online;
-        }
-      });
-    } catch (err) {
-      console.debug('[PdfNoteViewer] collab provider init failed', err);
-    }
-  }
+  });
+  const setupCollabProvider = collabSession.setup;
 
   // Track which page the user is most likely looking at via
   // IntersectionObserver. Used as the awareness `pageIndex` so peers can
@@ -1973,20 +1893,13 @@
   });
 
   onDestroy(() => {
-    if (saveTimer) {
-      void flushSave();
-    }
+    void saveScheduler.destroy();
     historyCapture.cancel();
     void historyCapture.capture('edited');
     unregisterHistory?.();
     unregisterHistory = null;
     saveReady = false;
-    if (searchDebounceTimer) {
-      clearTimeout(searchDebounceTimer);
-      searchDebounceTimer = null;
-    }
-    searchGeneration += 1;
-    textIndexCache.clear();
+    pdfSearch.destroy();
     searchMatchesByPage.clear();
     pageViewports.clear();
     if (editorListener) {
@@ -2025,8 +1938,7 @@
     formValuesObserver = null;
     // CollabProvider must be torn down before awareness/yDoc so its
     // destroy() can broadcast the null-state cleanup frame to peers.
-    provider?.destroy();
-    provider = null;
+    collabSession.destroy();
     collabOnline = false;
     collabConfigured = false;
     awareness?.destroy();

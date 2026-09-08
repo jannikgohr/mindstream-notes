@@ -1,4 +1,8 @@
 <script lang="ts">
+  import { ancestorIsTrash } from '$lib/editor/trash';
+  import { base64ToBytes } from '$lib/editor/base64';
+
+  import { createSaveScheduler } from '$lib/editor/save-scheduler';
   /**
    * Freeform / drawing editor for `note_kind === 'freeform'` notes.
    *
@@ -31,7 +35,6 @@
 
   import { onDestroy, onMount, untrack } from 'svelte';
   import { createHistoryCapture } from '$lib/history/capture-scheduler';
-  import { onAppSuspend } from '$lib/editor/suspend-flush';
   import * as Y from 'yjs';
   import { Trash2 } from '@lucide/svelte';
   import { userPrefersMode } from 'mode-watcher';
@@ -95,7 +98,6 @@
   });
 
   /** Debounce window for save scheduling — same as NoteEditor. */
-  const SAVE_DEBOUNCE_MS = 800;
 
   /** Mount point for the React island. dockview gives us the full panel;
    *  the island fills it via `position: absolute; inset: 0`. */
@@ -111,7 +113,6 @@
   let collabOnline = $state(false);
   let collabConfigured = $state(false);
 
-  let saveTimer: ReturnType<typeof setTimeout> | null = null;
   // Excalidraw bumps element version nonces when it re-imports a scene on
   // mount, which flushes a benign LOCAL_ORIGIN write to the Y.Doc. Without a
   // gate that churn marks the note dirty and snapshots a "no-edit" version on
@@ -165,24 +166,16 @@
 
   // ---- Trash detection (mirrors NoteEditor) ----
 
-  function ancestorIsTrash(parentId: string | null): boolean {
-    let current = parentId;
-    const seen = new Set<string>();
-    while (current) {
-      if (current === TRASH_ID) return true;
-      if (seen.has(current)) return false;
-      seen.add(current);
-      current = tree.collectionsById[current]?.parent_collection_id ?? null;
-    }
-    return false;
-  }
-
   const isTrashed = $derived.by(() => {
     if (!tree.ready) return false;
     const n = tree.notesById[noteId];
     if (!n) return true;
     if (n.trashed === true) return true;
-    return ancestorIsTrash(n.parent_collection_id);
+    return ancestorIsTrash(
+      n.parent_collection_id,
+      tree.collectionsById,
+      TRASH_ID
+    );
   });
 
   /** Stylus / pen-mode preference, sourced from settings and re-evaluated
@@ -511,7 +504,7 @@
     // synchronously (encodeStateAsUpdate) and this teardown destroys it
     // further down. Only when a save is actually pending, so closing an
     // untouched canvas doesn't write.
-    if (saveTimer) void flushSave();
+    void saveScheduler.destroy();
     historyCapture.cancel();
     void historyCapture.capture('edited');
     unregisterHistory?.();
@@ -590,10 +583,8 @@
   }
 
   async function flushSave() {
-    if (saveTimer) {
-      clearTimeout(saveTimer);
-      saveTimer = null;
-    }
+    if (isTrashed) return;
+    saveScheduler.cancel();
     if (!yDoc || isTrashed) return;
     try {
       savingState = 'saving';
@@ -613,33 +604,22 @@
       savingState = 'saved';
     } catch (err) {
       savingState = 'error';
-      console.error('[FreeformNoteEditor] save failed', err);
+      throw err;
     }
   }
 
-  // The OS can take the process down without unmounting us (Android kills
-  // backgrounded apps), so `onDestroy` alone can't protect the debounce
-  // window. Same guard as the teardown flush: only when a save is pending.
-  $effect(() =>
-    onAppSuspend(() => {
-      if (saveTimer) void flushSave();
-    })
-  );
+  $effect(() => saveScheduler.subscribeSuspend());
 
+  const saveScheduler = createSaveScheduler({
+    canSave: () => !isTrashed && !!yDoc,
+    save: flushSave,
+    onError: (error) => {
+      console.error('[FreeformNoteEditor] save failed', error);
+    }
+  });
   function scheduleSave() {
-    if (isTrashed) return;
-    savingState = 'pending';
-    if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => void flushSave(), SAVE_DEBOUNCE_MS);
-  }
-
-  function base64ToBytes(b64: string): Uint8Array {
-    const standard = b64.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = standard + '='.repeat((4 - (standard.length % 4)) % 4);
-    const bin = atob(padded);
-    const out = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return out;
+    saveScheduler.schedule();
+    savingState = saveScheduler.pending ? 'pending' : 'idle';
   }
 
   // Mirror our reactive status into the global per-note store so the

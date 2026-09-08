@@ -1,6 +1,6 @@
 <script lang="ts">
+  import { createSaveScheduler } from '$lib/editor/save-scheduler';
   import { onDestroy, untrack } from 'svelte';
-  import { onAppSuspend } from '$lib/editor/suspend-flush';
   import type { EditorView } from '@codemirror/view';
   import { AlertTriangle, Loader2, RefreshCw } from '@lucide/svelte';
   import { loadNote } from '$lib/api';
@@ -103,7 +103,6 @@
   let previewData = $state<Uint8Array | null>(null);
   let diagnostics = $state<Diagnostic[]>([]);
   let dirty = false;
-  let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let renderTimer: ReturnType<typeof setTimeout> | null = null;
   let loadToken = 0;
   let renderToken = 0;
@@ -292,7 +291,9 @@
     // `setText` is tagged External, so it doesn't echo back as a user edit.
     sourceEditor?.setText(snapshot);
     dirty = true;
-    void flushSave();
+    void saveScheduler.flush().catch((error) => {
+      console.error('[plugin-note] save failed', error);
+    });
     if (serviceController) serviceController.updateBody(snapshot);
     else scheduleRender(0);
   }
@@ -694,28 +695,29 @@
     viewMode = nextViewMode(viewMode, splitAvailable());
   }
 
-  // The OS can take the process down without unmounting us (Android kills
-  // backgrounded apps), so `onDestroy` alone can't protect the debounce
-  // window. `flushSave` already no-ops when nothing is dirty.
-  $effect(() => onAppSuspend(() => void flushSave()));
+  $effect(() => saveScheduler.subscribeSuspend());
 
+  const saveScheduler = createSaveScheduler({
+    canSave: () => !isReadOnly,
+    save: flushSave,
+    onError: (error) => {
+      console.error('[PluginDocumentNoteEditor] save failed', error);
+    }
+  });
   function scheduleSave() {
+    saveScheduler.schedule();
     dirty = true;
-    if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      saveTimer = null;
-      void flushSave();
-    }, 400);
   }
 
   async function flushSave() {
-    if (!dirty) return;
+    if (!dirty || isReadOnly) return;
+    saveScheduler.cancel();
     dirty = false;
     try {
       await setNoteBody(noteId, source);
     } catch (err) {
       dirty = true;
-      console.warn('[plugin-note] save failed', err);
+      throw err;
     }
   }
 
@@ -1102,14 +1104,16 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
     renderToken += 1;
     sourceEditor?.flush();
     historyCapture.cancel();
-    if (saveTimer) clearTimeout(saveTimer);
+    void saveScheduler.destroy();
     if (renderTimer) clearTimeout(renderTimer);
     if (editorListener) {
       unregisterEditor(editorListener);
       editorListener = null;
     }
     window.removeEventListener('message', onWebviewMessage);
-    void flushSave();
+    void saveScheduler.flush().catch((error) => {
+      console.error('[plugin-note] save failed', error);
+    });
   });
 
   $effect(() => {

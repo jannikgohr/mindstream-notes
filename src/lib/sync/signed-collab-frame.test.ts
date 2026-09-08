@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   CollabReplayGuard,
@@ -365,6 +365,43 @@ describe('signed collab frames', () => {
 
 describe('CollabReplayGuard', () => {
   const sig = (fill: number) => new Uint8Array(64).fill(fill);
+
+  it('allows only thirty seconds of future clock skew', () => {
+    const guard = new CollabReplayGuard();
+    const now = 1_000_000;
+    expect(guard.accept(now + 30_000, sig(1), now)).toBe(true);
+    expect(guard.accept(now + 30_001, sig(2), now)).toBe(false);
+    expect(guard.accept(now - 300_000, sig(3), now)).toBe(false);
+    expect(guard.accept(now + 30_000, sig(1), now + 329_999)).toBe(false);
+  });
+
+  it('visits only the oldest unexpired entry per fresh frame', () => {
+    const iterator = Map.prototype[Symbol.iterator];
+    let visits = 0;
+    const spy = vi
+      .spyOn(Map.prototype, Symbol.iterator)
+      .mockImplementation(function* (this: Map<unknown, unknown>) {
+        for (const entry of iterator.call(this)) {
+          visits += 1;
+          yield entry;
+        }
+        return undefined;
+      });
+    try {
+      const guard = new CollabReplayGuard();
+      for (let i = 0; i < 2_000; i += 1) {
+        expect(
+          guard.accept(1_000_000, new Uint8Array([i & 255, i >> 8]), 1_000_000)
+        ).toBe(true);
+      }
+      expect(visits).toBeLessThanOrEqual(2_000);
+      // Expiration removes each old entry once. It does not scan retained entries.
+      expect(guard.accept(1_400_000, sig(4), 1_400_000)).toBe(true);
+      expect(visits).toBeLessThanOrEqual(4_000);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 
   it('accepts a fresh frame once and refuses the replay', () => {
     const guard = new CollabReplayGuard();
