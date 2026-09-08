@@ -7,7 +7,10 @@ describe('save scheduler', () => {
   afterEach(() => vi.useRealTimers());
   it('debounces edits and clears pending after saving', async () => {
     const save = vi.fn(async () => {});
-    const scheduler = createSaveScheduler({ canSave: () => true, save });
+    const scheduler = createSaveScheduler({
+      canSave: () => true,
+      capture: () => save
+    });
     scheduler.schedule();
     await vi.advanceTimersByTimeAsync(500);
     scheduler.schedule();
@@ -20,7 +23,10 @@ describe('save scheduler', () => {
   it('rechecks trash or read-only status when the timer fires', async () => {
     let writable = true;
     const save = vi.fn(async () => {});
-    const scheduler = createSaveScheduler({ canSave: () => writable, save });
+    const scheduler = createSaveScheduler({
+      canSave: () => writable,
+      capture: () => save
+    });
     scheduler.schedule();
     writable = false;
     await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS);
@@ -29,7 +35,10 @@ describe('save scheduler', () => {
   });
   it('flushes once for duplicate suspend events and removes subscriptions', async () => {
     const save = vi.fn(async () => {});
-    const scheduler = createSaveScheduler({ canSave: () => true, save });
+    const scheduler = createSaveScheduler({
+      canSave: () => true,
+      capture: () => save
+    });
     const stop = scheduler.subscribeSuspend();
     scheduler.schedule();
     window.dispatchEvent(new Event('pagehide'));
@@ -44,11 +53,13 @@ describe('save scheduler', () => {
   });
   it('captures before destroy returns and never schedules after teardown', async () => {
     const save = vi.fn(async () => {});
-    const scheduler = createSaveScheduler({ canSave: () => true, save });
+    const capture = vi.fn(() => save);
+    const scheduler = createSaveScheduler({ canSave: () => true, capture });
     scheduler.schedule();
     const closing = scheduler.destroy();
-    expect(save).toHaveBeenCalledTimes(1);
+    expect(capture).toHaveBeenCalledTimes(1);
     await closing;
+    expect(save).toHaveBeenCalledTimes(1);
     scheduler.schedule();
     await vi.advanceTimersByTimeAsync(5000);
     expect(save).toHaveBeenCalledTimes(1);
@@ -61,7 +72,10 @@ describe('save scheduler', () => {
           complete = resolve;
         })
     );
-    const scheduler = createSaveScheduler({ canSave: () => true, save });
+    const scheduler = createSaveScheduler({
+      canSave: () => true,
+      capture: () => save
+    });
     const stop = scheduler.subscribeSuspend();
     scheduler.schedule();
     const first = scheduler.flush();
@@ -69,6 +83,7 @@ describe('save scheduler', () => {
     const reload = flushPendingEditorSaves().then(() => {
       finished = true;
     });
+    await Promise.resolve();
     await Promise.resolve();
     expect(finished).toBe(false);
     complete();
@@ -85,7 +100,7 @@ describe('save scheduler', () => {
     const onError = vi.fn();
     const scheduler = createSaveScheduler({
       canSave: () => true,
-      save,
+      capture: () => save,
       onError
     });
     scheduler.schedule();
@@ -100,7 +115,7 @@ describe('save scheduler', () => {
     const save = vi.fn(async () => {});
     const scheduler = createSaveScheduler({
       canSave: () => enabled,
-      save,
+      capture: () => save,
       delayMs: () => 120
     });
     scheduler.schedule();
@@ -112,4 +127,51 @@ describe('save scheduler', () => {
     await vi.advanceTimersByTimeAsync(120);
     expect(save).toHaveBeenCalledTimes(1);
   });
+
+  it('captures immediately and persists overlapping saves in capture order', async () => {
+    const firstWrite = deferred<void>();
+    const persisted: string[] = [];
+    let value = 'first';
+    const scheduler = createSaveScheduler({
+      canSave: () => true,
+      capture: () => {
+        const captured = value;
+        return async () => {
+          if (captured === 'first') await firstWrite.promise;
+          persisted.push(captured);
+        };
+      }
+    });
+
+    scheduler.schedule();
+    const first = scheduler.flush();
+    value = 'second';
+    scheduler.schedule();
+    const second = scheduler.flush();
+
+    expect(persisted).toEqual([]);
+    firstWrite.resolve();
+    await Promise.all([first, second]);
+    expect(persisted).toEqual(['first', 'second']);
+  });
+
+  it('saves an explicit history restore without a pending debounce', async () => {
+    const save = vi.fn(async () => {});
+    const scheduler = createSaveScheduler({
+      canSave: () => true,
+      capture: () => save
+    });
+
+    await scheduler.saveNow();
+
+    expect(save).toHaveBeenCalledTimes(1);
+  });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}

@@ -102,7 +102,6 @@
   // instead of the srcdoc iframe. Null for text/svg/html previews.
   let previewData = $state<Uint8Array | null>(null);
   let diagnostics = $state<Diagnostic[]>([]);
-  let dirty = false;
   let renderTimer: ReturnType<typeof setTimeout> | null = null;
   let loadToken = 0;
   let renderToken = 0;
@@ -290,8 +289,7 @@
     source = snapshot;
     // `setText` is tagged External, so it doesn't echo back as a user edit.
     sourceEditor?.setText(snapshot);
-    dirty = true;
-    void saveScheduler.flush().catch((error) => {
+    void saveScheduler.saveNow().catch((error) => {
       console.error('[plugin-note] save failed', error);
     });
     if (serviceController) serviceController.updateBody(snapshot);
@@ -582,7 +580,6 @@
         const note = await loadNote(id);
         if (destroyed || token !== loadToken) return;
         source = note.body ?? '';
-        dirty = false;
         if (kind && note.note_kind !== kind) {
           loadError = `Expected ${kind}, found ${note.note_kind}.`;
           return;
@@ -699,26 +696,20 @@
 
   const saveScheduler = createSaveScheduler({
     canSave: () => !isReadOnly,
-    save: flushSave,
+    capture: captureSave,
     onError: (error) => {
       console.error('[PluginDocumentNoteEditor] save failed', error);
     }
   });
   function scheduleSave() {
     saveScheduler.schedule();
-    dirty = true;
   }
 
-  async function flushSave() {
-    if (!dirty || isReadOnly) return;
-    saveScheduler.cancel();
-    dirty = false;
-    try {
-      await setNoteBody(noteId, source);
-    } catch (err) {
-      dirty = true;
-      throw err;
-    }
+  function captureSave(): (() => Promise<void>) | null {
+    if (isReadOnly) return null;
+    const capturedNoteId = noteId;
+    const capturedSource = source;
+    return () => setNoteBody(capturedNoteId, capturedSource);
   }
 
   function scheduleRender(delay: number) {
@@ -1111,9 +1102,6 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
       editorListener = null;
     }
     window.removeEventListener('message', onWebviewMessage);
-    void saveScheduler.flush().catch((error) => {
-      console.error('[plugin-note] save failed', error);
-    });
   });
 
   $effect(() => {

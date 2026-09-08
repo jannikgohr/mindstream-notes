@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ancestorIsTrash } from '$lib/editor/trash';
+  import { createCanvasResizeLifecycle } from '$lib/ink/canvas-resize-lifecycle';
   import { createInkSaveController } from '$lib/ink/save-controller';
   import { createCollabSession } from '$lib/editor/collab-session';
   import {
@@ -144,7 +145,6 @@
     POINTER_BUTTON_SECONDARY,
     POINTER_BUTTON_STYLUS_PRIMARY,
     POINTER_BUTTON_STYLUS_SECONDARY,
-    RESIZE_SNAPSHOT_RESTORE_SUPPRESS_MS,
     resizeTransform,
     rotationTransform,
     sanitizePressure,
@@ -209,7 +209,6 @@
   let doc = $state<InkDocument | null>(null);
   let handle: WebInkHandleInstance | null = null;
   let provider: InkWebCollabProvider | null = null;
-  let resizeObserver: ResizeObserver | null = null;
   let disposed = false;
   let fullscreenAcquired = false;
   let immersiveInkModeActive = false;
@@ -283,9 +282,7 @@
   let queuedEraserSamples: QueuedEraserSample[] = [];
   let eraserFrame: number | null = null;
   let drawFrame: number | null = null;
-  let resizeSnapshotHideTimer: ReturnType<typeof setTimeout> | null = null;
   let resizeSnapshotVisible = $state(false);
-  let resizeSnapshotSuppressedUntil = 0;
   let hasDrawnFrame = false;
   let viewInitialized = false;
   const cssColorCache = new Map<number, string>();
@@ -294,6 +291,16 @@
   // and making the viewport reactive would re-run derived state on every
   // pan frame. Mutated in place for the same reason.
   const view = defaultView();
+  const canvasResize = createCanvasResizeLifecycle({
+    sourceCanvas: () => canvasEl,
+    snapshotCanvas: () => resizeSnapshotCanvasEl,
+    hasDrawnFrame: () => hasDrawnFrame,
+    resizeCanvas,
+    pushBounds: scheduleBoundsPush,
+    setSnapshotVisible: (visible) => {
+      resizeSnapshotVisible = visible;
+    }
+  });
 
   const pageDark = $derived(
     pageThemeMode === 'dark' || (pageThemeMode === 'system' && $mode === 'dark')
@@ -657,8 +664,8 @@
     const backingStoreChanged =
       canvasEl.width !== widthPx || canvasEl.height !== heightPx;
     if (backingStoreChanged) {
-      if (usableSize) captureResizeSnapshot();
-      else suppressResizeSnapshot();
+      if (usableSize) canvasResize.captureSnapshot();
+      else canvasResize.suppressSnapshot();
       canvasEl.width = widthPx;
       canvasEl.height = heightPx;
     }
@@ -692,97 +699,6 @@
     }
     updateLiveInkOverlayStyle();
     zoomUiVersion += 1;
-  }
-
-  function captureResizeSnapshot() {
-    if (
-      performance.now() < resizeSnapshotSuppressedUntil ||
-      document.visibilityState !== 'visible' ||
-      !hasDrawnFrame ||
-      !canvasEl ||
-      !resizeSnapshotCanvasEl ||
-      canvasEl.width <= 1 ||
-      canvasEl.height <= 1
-    ) {
-      return;
-    }
-    const ctx = resizeSnapshotCanvasEl.getContext('2d');
-    if (!ctx) return;
-    if (
-      resizeSnapshotCanvasEl.width !== canvasEl.width ||
-      resizeSnapshotCanvasEl.height !== canvasEl.height
-    ) {
-      resizeSnapshotCanvasEl.width = canvasEl.width;
-      resizeSnapshotCanvasEl.height = canvasEl.height;
-    }
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(
-      0,
-      0,
-      resizeSnapshotCanvasEl.width,
-      resizeSnapshotCanvasEl.height
-    );
-    ctx.drawImage(canvasEl, 0, 0);
-    resizeSnapshotVisible = true;
-    resizeSnapshotCanvasEl.style.opacity = '1';
-    if (resizeSnapshotHideTimer) {
-      clearTimeout(resizeSnapshotHideTimer);
-      resizeSnapshotHideTimer = null;
-    }
-  }
-
-  function clearResizeSnapshot() {
-    if (resizeSnapshotHideTimer) {
-      clearTimeout(resizeSnapshotHideTimer);
-      resizeSnapshotHideTimer = null;
-    }
-    resizeSnapshotVisible = false;
-    if (resizeSnapshotCanvasEl) {
-      resizeSnapshotCanvasEl.style.opacity = '';
-      const ctx = resizeSnapshotCanvasEl.getContext('2d');
-      ctx?.clearRect(
-        0,
-        0,
-        resizeSnapshotCanvasEl.width,
-        resizeSnapshotCanvasEl.height
-      );
-    }
-  }
-
-  function suppressResizeSnapshot(
-    duration = RESIZE_SNAPSHOT_RESTORE_SUPPRESS_MS
-  ) {
-    resizeSnapshotSuppressedUntil = Math.max(
-      resizeSnapshotSuppressedUntil,
-      performance.now() + duration
-    );
-    clearResizeSnapshot();
-  }
-
-  function handleWindowRestoreBoundary() {
-    suppressResizeSnapshot();
-    requestAnimationFrame(() => {
-      resizeCanvas();
-      scheduleBoundsPush();
-    });
-  }
-
-  function handleVisibilityChange() {
-    if (document.visibilityState === 'visible') {
-      handleWindowRestoreBoundary();
-    } else {
-      suppressResizeSnapshot(RESIZE_SNAPSHOT_RESTORE_SUPPRESS_MS * 2);
-    }
-  }
-
-  function scheduleResizeSnapshotHide() {
-    if (!resizeSnapshotVisible) return;
-    if (resizeSnapshotHideTimer) clearTimeout(resizeSnapshotHideTimer);
-    resizeSnapshotHideTimer = setTimeout(() => {
-      resizeSnapshotHideTimer = null;
-      resizeSnapshotVisible = false;
-      if (resizeSnapshotCanvasEl) resizeSnapshotCanvasEl.style.opacity = '';
-    }, 120);
   }
 
   // Default view: fill the column width with the A4 page, exactly like
@@ -872,7 +788,7 @@
     drawLassoOverlay(ctx);
     drawToolPreview(ctx);
     hasDrawnFrame = true;
-    scheduleResizeSnapshotHide();
+    canvasResize.scheduleSnapshotHide();
   }
 
   /** The scene the canvas painters (ink/canvas-painter.ts) draw into. */
@@ -2451,22 +2367,7 @@
       layout.pageCount,
       isAndroid()
     );
-    resizeObserver = new ResizeObserver(() => {
-      resizeCanvas();
-      scheduleBoundsPush();
-    });
-    if (canvasHostEl) resizeObserver.observe(canvasHostEl);
-    if (toolbarEl) resizeObserver.observe(toolbarEl);
-    // visualViewport tracks IME show/hide and orientation in the way
-    // the standard window `resize` event misses on mobile Chromium —
-    // keep both wired up so a software keyboard popping over the
-    // toolbar or a rotation reshapes the no-paint region promptly.
-    window.addEventListener('resize', scheduleBoundsPush);
-    window.addEventListener('focus', handleWindowRestoreBoundary);
-    window.addEventListener('pageshow', handleWindowRestoreBoundary);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.visualViewport?.addEventListener('resize', scheduleBoundsPush);
-    window.visualViewport?.addEventListener('scroll', scheduleBoundsPush);
+    canvasResize.start(canvasHostEl, toolbarEl);
     toolbarSettingsReady = true;
     lastSeenPushed = tree.notesById[noteId]?.pushed ?? false;
     await setupCollabProvider();
@@ -2515,12 +2416,7 @@
       'mindstream:android-stylus-eraser',
       handleAndroidStylusEraser
     );
-    window.removeEventListener('resize', scheduleBoundsPush);
-    window.removeEventListener('focus', handleWindowRestoreBoundary);
-    window.removeEventListener('pageshow', handleWindowRestoreBoundary);
-    document.removeEventListener('visibilitychange', handleVisibilityChange);
-    window.visualViewport?.removeEventListener('resize', scheduleBoundsPush);
-    window.visualViewport?.removeEventListener('scroll', scheduleBoundsPush);
+    canvasResize.destroy();
     if (boundsFrame !== null) {
       cancelAnimationFrame(boundsFrame);
       boundsFrame = null;
@@ -2538,10 +2434,6 @@
     if (drawFrame !== null) {
       cancelAnimationFrame(drawFrame);
       drawFrame = null;
-    }
-    if (resizeSnapshotHideTimer !== null) {
-      clearTimeout(resizeSnapshotHideTimer);
-      resizeSnapshotHideTimer = null;
     }
     if (isAndroid()) {
       // hideLiveInkOverlay resets bounds + offset on the Kotlin side,
@@ -2565,8 +2457,6 @@
     unsubCollabCredentials?.();
     unsubSession = null;
     unsubCollabCredentials = null;
-    resizeObserver?.disconnect();
-    resizeObserver = null;
     collabSession.destroy();
     collabConfigured = false;
     collabOnline = false;

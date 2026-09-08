@@ -35,6 +35,8 @@ describe('Ink save controller', () => {
     controller.queue([update(doc, ' second')]);
     const closing = controller.destroy();
     doc.destroy();
+    await Promise.resolve();
+    await Promise.resolve();
     release();
     await Promise.all([first, closing]);
     expect(restored.getText('body').toString()).toBe('first second');

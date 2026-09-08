@@ -9,26 +9,28 @@ import {
 
 /** Capture before the first await so closing the editor cannot discard its save.
  * Rendered descriptions belong to this snapshot and never overwrite newer edits. */
-export async function captureKanbanSave(
+export function captureKanbanSave(
   doc: Y.Doc
-): Promise<{ body: string; yrs_state: number[] }> {
+): () => Promise<{ body: string; yrs_state: number[] }> {
   const snapshotDoc = new Y.Doc();
   Y.applyUpdate(snapshotDoc, Y.encodeStateAsUpdate(doc));
-  try {
-    const snapshot = readBoardFromYDoc(snapshotDoc);
-    await Promise.all(
-      snapshot.cards.map(async (card) => {
-        card.descriptionHtml = card.description
-          ? await renderKanbanDescription(card.description)
-          : undefined;
-      })
-    );
-    upsertBoardIntoYDoc(snapshotDoc, snapshot, KANBAN_RENDER_ORIGIN);
-    return {
-      body: boardToPlainText(snapshot),
-      yrs_state: Array.from(Y.encodeStateAsUpdate(snapshotDoc))
-    };
-  } finally {
-    snapshotDoc.destroy();
-  }
+  return async () => {
+    try {
+      const snapshot = readBoardFromYDoc(snapshotDoc);
+      await Promise.all(
+        snapshot.cards.map(async (card) => {
+          card.descriptionHtml = card.description
+            ? await renderKanbanDescription(card.description)
+            : undefined;
+        })
+      );
+      upsertBoardIntoYDoc(snapshotDoc, snapshot, KANBAN_RENDER_ORIGIN);
+      return {
+        body: boardToPlainText(snapshot),
+        yrs_state: Array.from(Y.encodeStateAsUpdate(snapshotDoc))
+      };
+    } finally {
+      snapshotDoc.destroy();
+    }
+  };
 }
