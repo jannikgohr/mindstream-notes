@@ -126,6 +126,8 @@ type ElementLike = WebdriverIO.Element | ChainablePromiseElement;
 
 type ClickOptions = {
   button?: 'left' | 'right';
+  /** Use only for WebKit elements its displayedness endpoint misreports. */
+  visibility?: 'webdriver' | 'page';
 };
 
 /**
@@ -175,7 +177,13 @@ export async function isVisibleInPage(
  * A selector or a factory is re-resolved on every poll, which is what
  * `waitForDisplayed()` did before these gates replaced it.
  */
-export type VisibilityTarget = ElementLike | string | (() => ElementLike);
+type VisibilityTarget = ElementLike | string | (() => ElementLike);
+
+function describeTarget(target: VisibilityTarget): string {
+  return typeof target === 'string'
+    ? target
+    : String(resolveTarget(target).selector);
+}
 
 function resolveTarget(
   target: VisibilityTarget,
@@ -186,35 +194,18 @@ function resolveTarget(
   return target;
 }
 
-/**
- * A label for a target, for error messages only.
- *
- * Never resolves a factory: doing that to build a string costs a query and, on
- * a `ChainablePromiseElement`, reads `.selector` off a proxy that has not
- * settled. A factory names itself by its source, which in practice is the
- * selector spelt out.
- */
-async function describeTarget(target: VisibilityTarget): Promise<string> {
-  if (typeof target === 'string') return target;
-  if (typeof target === 'function') return `() => ${String(target)}`;
-  return String((await target).selector);
-}
-
 /** Gate an interaction on the element being on screen, per the page. */
 export async function waitUntilVisible(
   target: VisibilityTarget,
   client: WebdriverIO.Browser = browser
 ): Promise<void> {
-  try {
-    await client.waitUntil(
-      () => isVisibleInPage(resolveTarget(target, client), client),
-      { timeout: 30_000 }
-    );
-  } catch {
-    throw new Error(
-      `element (${await describeTarget(target)}) never became visible`
-    );
-  }
+  await client.waitUntil(
+    () => isVisibleInPage(resolveTarget(target, client), client),
+    {
+      timeout: 30_000,
+      timeoutMsg: `element (${describeTarget(target)}) never became visible`
+    }
+  );
 }
 
 /**
@@ -228,17 +219,13 @@ export async function waitUntilHidden(
   target: VisibilityTarget,
   client: WebdriverIO.Browser = browser
 ): Promise<void> {
-  try {
-    await client.waitUntil(
-      async () =>
-        !(await isVisibleInPage(resolveTarget(target, client), client)),
-      { timeout: 30_000 }
-    );
-  } catch {
-    throw new Error(
-      `element (${await describeTarget(target)}) never went away`
-    );
-  }
+  await client.waitUntil(
+    async () => !(await isVisibleInPage(resolveTarget(target, client), client)),
+    {
+      timeout: 30_000,
+      timeoutMsg: `element (${describeTarget(target)}) never went away`
+    }
+  );
 }
 
 /**
@@ -437,12 +424,12 @@ export async function clickElement(
   opts: ClickOptions = {}
 ): Promise<void> {
   await waitForDefaultClientReady();
-  // Gated on the page, not the driver. `isElementDisplayed` misreports on
-  // WebKitGTK (see isVisibleInPage), and its occlusion-awareness was gating
-  // nothing anyway: the click below is a synthetic event dispatched straight
-  // at the element, so what matters is that the element has a box.
-  await waitVisibleDiagnosed(browser, element);
   const resolved = await element;
+  if (opts.visibility === 'page') {
+    await waitUntilVisible(resolved);
+  } else {
+    await resolved.waitForDisplayed({ timeout: 30_000 });
+  }
   await browser.execute(
     (el: HTMLElement, button: 'left' | 'right') => {
       el.scrollIntoView({ block: 'center', inline: 'center' });
@@ -481,8 +468,8 @@ export async function setElementValue(
   value: string
 ): Promise<void> {
   await waitForDefaultClientReady();
-  await waitUntilVisible(element);
   const resolved = await element;
+  await resolved.waitForDisplayed({ timeout: 30_000 });
   await browser.execute(
     (el: HTMLElement, next: string) => {
       // See clientHelpers.setValue: label-wrapped inputs mean `aria/<name>` can
@@ -513,8 +500,8 @@ export async function pressElementKey(
   opts: { ctrlKey?: boolean } = {}
 ): Promise<void> {
   await waitForDefaultClientReady();
-  await waitUntilVisible(element);
   const resolved = await element;
+  await resolved.waitForDisplayed({ timeout: 30_000 });
   await browser.execute(
     (el: HTMLElement, pressed: string, ctrlKey: boolean) => {
       el.focus?.();
@@ -643,7 +630,9 @@ export async function revealFileTreeCreateAction(
 }
 
 export async function clickFileTreeCreateAction(name: string): Promise<void> {
-  await clickElement(await revealFileTreeCreateAction(name));
+  await clickElement(await revealFileTreeCreateAction(name), {
+    visibility: 'page'
+  });
 }
 
 export async function clickMenuItem(label: string): Promise<void> {
@@ -820,12 +809,12 @@ export async function describeClientState(
 }
 
 /**
- * `waitUntilVisible` with a diagnosis attached to the timeout.
+ * `waitForDisplayed` with a diagnosis attached to the timeout.
  *
- * The intermittent T4 failures are all "<element> never became visible" on
- * different elements, which tells us nothing about the mechanism. On timeout
- * this keeps polling for up to `probeMs` more and records whether the element
- * EVER appears — the single fact that splits the theories:
+ * The intermittent T4 failures are all "<element> still not displayed after
+ * 30000ms" on different elements, which tells us nothing about the mechanism.
+ * On timeout this keeps polling for up to `probeMs` more and records whether
+ * the element EVER appears — the single fact that splits the theories:
  *
  *   - appears late  → the app is just slow (contention / render stall); the fix
  *     is the wait strategy.
@@ -835,19 +824,20 @@ export async function describeClientState(
  * Plus an app-state + host-memory snapshot, so a "never appears" case shows
  * whether the shell was even mounted.
  */
-async function waitVisibleDiagnosed(
+async function waitDisplayedDiagnosed(
   client: WebdriverIO.Browser,
-  target: VisibilityTarget,
+  element: Awaited<ChainablePromiseElement>,
   probeMs = 60_000
 ): Promise<void> {
+  const selector = String(element.selector);
   try {
-    await waitUntilVisible(target, client);
+    await element.waitForDisplayed({ timeout: 30_000 });
     return;
   } catch (err) {
     const t0 = Date.now();
     let appearedAfterMs = -1;
     while (Date.now() - t0 < probeMs) {
-      if (await isVisibleInPage(resolveTarget(target, client), client)) {
+      if (await element.isDisplayed().catch(() => false)) {
         appearedAfterMs = 30_000 + (Date.now() - t0);
         break;
       }
@@ -862,7 +852,7 @@ async function waitVisibleDiagnosed(
     const totalGb = (totalmem() / 1024 ** 3).toFixed(1);
     throw new Error(
       `${err instanceof Error ? err.message : String(err)}\n` +
-        `[verdict] ${verdict} for ${await describeTarget(target)}\n` +
+        `[verdict] ${verdict} for ${selector}\n` +
         `[host] freeMem=${freeGb}GB/${totalGb}GB\n[app state] ${state}`
     );
   }
@@ -906,9 +896,9 @@ export async function loginClient(
   // "unsupported operation", so clicks/fills must be synthesized as DOM events.
   const h = clientHelpers(client);
 
-  // The first interaction of every T4 spec. Its "Open settings never became
-  // visible" timeout — like every clickElement wait — is diagnosed centrally
-  // by waitVisibleDiagnosed (app state + slow-vs-dead verdict).
+  // The first interaction of every T4 spec. Its "Open settings still not
+  // displayed" timeout — like every clickElement wait — is diagnosed centrally
+  // by waitDisplayedDiagnosed (app state + slow-vs-dead verdict).
   await h.click('Open settings');
   await h.click('Account & Sync');
   await selectSelfHosted(client);
@@ -1116,9 +1106,12 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
     opts: ClickOptions = {}
   ): Promise<void> => {
     await waitForClientReady(client);
-    // Page gate, not the driver's — see clickElement.
-    await waitVisibleDiagnosed(client, element);
     const resolved = await element;
+    if (opts.visibility === 'page') {
+      await waitUntilVisible(resolved, client);
+    } else {
+      await waitDisplayedDiagnosed(client, resolved);
+    }
     await client.execute(
       (el: HTMLElement, button: 'left' | 'right') => {
         el.scrollIntoView({ block: 'center', inline: 'center' });
@@ -1195,7 +1188,7 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
         action = await displayedByName(name);
       }
       if (!action) throw new Error(`missing file-tree create action: ${name}`);
-      await clickElement(action);
+      await clickElement(action, { visibility: 'page' });
       return;
     }
     await clickElement(byName(name), opts);
