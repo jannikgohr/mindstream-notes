@@ -1,7 +1,7 @@
 /**
  * Flush-on-suspend hook for note editors.
  *
- * Every editor debounces its save (800ms). That window is safe against a
+ * Editors debounce saves through createSaveScheduler. That window is safe against a
  * normal close because `onDestroy` flushes, but `onDestroy` never runs when
  * the OS takes the process down: Android kills backgrounded apps outright,
  * and a webview teardown doesn't unmount Svelte components first. Without
@@ -24,18 +24,40 @@
  * the debounce window" into "usually keep it", which is the most a
  * webview can do here.
  */
-export function onAppSuspend(flush: () => void): () => void {
+type SuspendFlush = () => void | Promise<void>;
+const pendingFlushes = new Set<SuspendFlush>();
+
+/** Save all mounted editors before an intentional full-page reload. */
+export async function flushPendingEditorSaves(): Promise<void> {
+  const flushes = [...pendingFlushes].map((flush) =>
+    Promise.resolve().then(() => flush())
+  );
+  await Promise.all(flushes);
+}
+
+export function onAppSuspend(flush: SuspendFlush): () => void {
   if (typeof document === 'undefined') return () => {};
+  pendingFlushes.add(flush);
+  const run = () => {
+    try {
+      void Promise.resolve(flush()).catch((error) => {
+        console.error('[editor] suspend save failed', error);
+      });
+    } catch (error) {
+      console.error('[editor] suspend save failed', error);
+    }
+  };
 
   const onVisibility = () => {
-    if (document.visibilityState === 'hidden') flush();
+    if (document.visibilityState === 'hidden') run();
   };
-  const onPageHide = () => flush();
+  const onPageHide = run;
 
   document.addEventListener('visibilitychange', onVisibility);
   window.addEventListener('pagehide', onPageHide);
 
   return () => {
+    pendingFlushes.delete(flush);
     document.removeEventListener('visibilitychange', onVisibility);
     window.removeEventListener('pagehide', onPageHide);
   };

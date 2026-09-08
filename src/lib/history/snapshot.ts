@@ -1,3 +1,5 @@
+export { base64ToBytes } from '$lib/editor/base64';
+import { base64ToBytes } from '$lib/editor/base64';
 import type { NoteKind } from '$lib/api';
 
 const ENVELOPE_MARKER = 'mindstream-history-snapshot';
@@ -27,15 +29,6 @@ export function bytesToBase64(bytes: Uint8Array | number[]): string {
   let binary = '';
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary);
-}
-
-export function base64ToBytes(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const out = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    out[i] = binary.charCodeAt(i);
-  }
-  return out;
 }
 
 export function serializeYjsSnapshot(

@@ -1,3 +1,4 @@
+import { base64ToBytes } from '$lib/editor/base64';
 /**
  * Relay join challenge — client half.
  *
@@ -22,27 +23,6 @@ const NONCE_LEN = 32;
 
 const textEncoder = new TextEncoder();
 const JOIN_CONTEXT = textEncoder.encode('mindstream-collab-join/v1');
-
-type NodeBufferShim = {
-  from(value: string, encoding: 'base64'): Uint8Array;
-};
-
-function nodeBuffer(): NodeBufferShim | undefined {
-  return (globalThis as { Buffer?: NodeBufferShim }).Buffer;
-}
-
-function base64ToBytes(value: string): Uint8Array {
-  const buffer = nodeBuffer();
-  if (typeof atob !== 'function' && buffer) {
-    return new Uint8Array(buffer.from(value, 'base64'));
-  }
-  const bin = atob(value);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) {
-    bytes[i] = bin.charCodeAt(i);
-  }
-  return bytes;
-}
 
 function concatBytes(parts: Uint8Array[]): Uint8Array {
   const total = parts.reduce((sum, part) => sum + part.byteLength, 0);

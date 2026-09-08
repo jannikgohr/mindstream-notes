@@ -57,7 +57,7 @@ export const PDF_PAGE_COLUMN_CLASS = `${PAGE_COLUMN_CLASS} pdf-page-column`;
 export const PDF_TO_CSS_UNITS = 96 / 72;
 export const MAX_CANVAS_DIM = 16384;
 export const MAX_CANVAS_PIXELS = 2 ** 25;
-export const SAVE_DEBOUNCE_MS = 800;
+export { SAVE_DEBOUNCE_MS } from '$lib/editor/save-scheduler';
 export const SEARCH_DEBOUNCE_MS = 220;
 export const HIGHLIGHT_COLOR = '#facc15';
 export const COMMENT_COLOR = '#3b82f6';

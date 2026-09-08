@@ -1,0 +1,26 @@
+# Editor audit fixes
+
+This branch addresses the editor and collaboration findings from the September
+2026 codebase audit. The finding IDs below match `docs/audit-2026-09.md` in the
+audit worktree.
+
+| ID  | Disposition                | Evidence                                                                                                                                                                                                                                                                                                                                                                             |
+| --- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| H1  | Fixed and tested           | `createCollabSession` owns connection generations and the mounted provider. It checks the generation after both room setup awaits, destroys replaced providers, and ignores stale authentication callbacks. The four collaborative editors now use it.                                                                                                                               |
+| H8  | Fixed and tested           | `CollabReplayGuard` expires entries in insertion order and stops at the first live entry, so a fresh frame no longer scans the full replay window. Awareness changes are coalesced into one send per animation frame.                                                                                                                                                                |
+| M1  | Fixed and tested           | `createSaveScheduler` supplies the debounce, suspend, reload, retry, and teardown contract for the markdown, freeform, Kanban, PDF, and plugin document editors. The Ink editor uses the same scheduler through `createInkSaveController`, which retains failed update batches and drains edits queued during a save.                                                                |
+| M4  | Fixed and tested           | Base64 decoding, trash ancestry, runtime record checks, required string validation, collaboration setup, and save scheduling now have shared implementations. Call-site wrappers remain where an editor also updates its visible save status.                                                                                                                                        |
+| M5  | Fixed in the audited paths | Ink update batching and persistence moved to `ink/save-controller.ts`. PDF search cancellation, generation checks, and page-index caching moved to `pdf/search-controller.ts`. Kanban save capture also moved to `kanban/save-snapshot.ts`, isolating asynchronous description rendering from the live document.                                                                     |
+| L4  | Accepted with evidence     | React and React DOM are required by Excalidraw. `FreeformNoteEditor` starts dynamic imports for `react`, `react-dom/client`, and `ExcalidrawIsland` only while mounting a freeform note. The React Vite plugin is restricted to `.tsx`, and the island is reachable through the already lazy note-kind loader. Removing the runtime dependencies would remove the Excalidraw editor. |
+| L8  | Fixed and tested           | Replay timestamps now reject frames older than the five-minute window and frames more than 30 seconds in the future. Tests cover the skew boundary and replay expiry.                                                                                                                                                                                                                |
+
+The save tests cover debounce replacement, disabled and read-only guards, suspend
+deduplication, teardown capture, active-save waits before reload, error reporting,
+and retries. The Kanban snapshot test mutates and destroys the live `Y.Doc` while
+description rendering is pending, then confirms that the captured state contains
+only the pre-render edit. Collaboration tests cover unmounts during both awaits,
+overlapping setup calls, pause cancellation, stale callbacks, awareness batching,
+and replay-window cleanup.
+
+Validation: all 2,815 frontend tests in 227 files passed. ESLint, Svelte type checking,
+web formatting, and the production build passed on Windows.
