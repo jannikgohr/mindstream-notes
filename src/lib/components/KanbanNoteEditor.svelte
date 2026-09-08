@@ -1121,7 +1121,7 @@
 
   const saveScheduler = createSaveScheduler({
     canSave: () => !isTrashed && saveReady && autoSaveEnabled && !!yDoc,
-    save: persist,
+    capture: captureSave,
     delayMs: () => saveDebounceMs,
     onError: (error) => {
       console.error('[KanbanNoteEditor] save failed', error);
@@ -1132,26 +1132,29 @@
     savingState = saveScheduler.pending ? 'pending' : 'idle';
   }
 
-  async function persist(): Promise<void> {
-    if (!yDoc || isTrashed) return;
-    const doc = yDoc;
-    try {
+  function captureSave(): (() => Promise<void>) | null {
+    if (!yDoc || isTrashed) return null;
+    const capturedNoteId = noteId;
+    const renderSnapshot = captureKanbanSave(yDoc);
+    return async () => {
       savingState = 'saving';
-      const captured = await captureKanbanSave(doc);
-      if (isTrashed) return;
-      await apiSaveNote({ id: noteId, ...captured });
-      const existing = tree.notesById[noteId];
-      if (existing) {
-        tree.notesById[noteId] = {
-          ...existing,
-          modified: new Date().toISOString()
-        };
+      try {
+        const captured = await renderSnapshot();
+        if (isTrashed) return;
+        await apiSaveNote({ id: capturedNoteId, ...captured });
+        const existing = tree.notesById[capturedNoteId];
+        if (existing) {
+          tree.notesById[capturedNoteId] = {
+            ...existing,
+            modified: new Date().toISOString()
+          };
+        }
+        savingState = 'saved';
+      } catch (err) {
+        savingState = 'error';
+        throw err;
       }
-      savingState = 'saved';
-    } catch (err) {
-      savingState = 'error';
-      throw err;
-    }
+    };
   }
 
   // ---- History ----

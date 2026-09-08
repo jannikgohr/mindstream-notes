@@ -582,37 +582,38 @@
     }
   }
 
-  async function flushSave() {
-    if (isTrashed) return;
-    saveScheduler.cancel();
-    if (!yDoc || isTrashed) return;
-    try {
+  function captureSave(): (() => Promise<void>) | null {
+    if (!yDoc || isTrashed) return null;
+    const capturedNoteId = noteId;
+    const yrsState = Array.from(Y.encodeStateAsUpdate(yDoc));
+    return async () => {
       savingState = 'saving';
-      const yrsState = Array.from(Y.encodeStateAsUpdate(yDoc));
-      await apiSaveNote({
-        id: noteId,
-        body: '',
-        yrs_state: yrsState
-      });
-      const existing = tree.notesById[noteId];
-      if (existing) {
-        tree.notesById[noteId] = {
-          ...existing,
-          modified: new Date().toISOString()
-        };
+      try {
+        await apiSaveNote({
+          id: capturedNoteId,
+          body: '',
+          yrs_state: yrsState
+        });
+        const existing = tree.notesById[capturedNoteId];
+        if (existing) {
+          tree.notesById[capturedNoteId] = {
+            ...existing,
+            modified: new Date().toISOString()
+          };
+        }
+        savingState = 'saved';
+      } catch (err) {
+        savingState = 'error';
+        throw err;
       }
-      savingState = 'saved';
-    } catch (err) {
-      savingState = 'error';
-      throw err;
-    }
+    };
   }
 
   $effect(() => saveScheduler.subscribeSuspend());
 
   const saveScheduler = createSaveScheduler({
     canSave: () => !isTrashed && !!yDoc,
-    save: flushSave,
+    capture: captureSave,
     onError: (error) => {
       console.error('[FreeformNoteEditor] save failed', error);
     }
