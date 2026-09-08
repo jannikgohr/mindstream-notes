@@ -163,16 +163,49 @@ export async function isVisibleInPage(
     .catch(() => false);
 }
 
+/**
+ * What a visibility wait can be pointed at.
+ *
+ * A already-resolved element is a snapshot, and waiting on a snapshot is a
+ * trap: Svelte replaces a node when the surface around it re-renders, and a
+ * detached node reports a zero-sized rect forever rather than throwing, so the
+ * wait cannot ever succeed. Flow 5.6 hit exactly that — the view-mode button
+ * was resolved while the previous note's editor was still mounted, and the
+ * poll then measured the detached copy for thirty seconds while the failure
+ * capture reported the live one as displayed and unclipped.
+ *
+ * A selector or a factory is re-resolved on every poll, which is what
+ * `waitForDisplayed()` did before these gates replaced it.
+ */
+type VisibilityTarget = ElementLike | string | (() => ElementLike);
+
+function describeTarget(target: VisibilityTarget): string {
+  return typeof target === 'string'
+    ? target
+    : String(resolveTarget(target).selector);
+}
+
+function resolveTarget(
+  target: VisibilityTarget,
+  client: WebdriverIO.Browser = browser
+): ElementLike {
+  if (typeof target === 'string') return client.$(target);
+  if (typeof target === 'function') return target();
+  return target;
+}
+
 /** Gate an interaction on the element being on screen, per the page. */
 export async function waitUntilVisible(
-  element: ElementLike,
+  target: VisibilityTarget,
   client: WebdriverIO.Browser = browser
 ): Promise<void> {
-  const resolved = await element;
-  await client.waitUntil(() => isVisibleInPage(resolved, client), {
-    timeout: 30_000,
-    timeoutMsg: `element (${String(resolved.selector)}) never became visible`
-  });
+  await client.waitUntil(
+    () => isVisibleInPage(resolveTarget(target, client), client),
+    {
+      timeout: 30_000,
+      timeoutMsg: `element (${describeTarget(target)}) never became visible`
+    }
+  );
 }
 
 /**
@@ -183,15 +216,14 @@ export async function waitUntilVisible(
  * appearance is.
  */
 export async function waitUntilHidden(
-  element: ElementLike,
+  target: VisibilityTarget,
   client: WebdriverIO.Browser = browser
 ): Promise<void> {
-  const resolved = await element;
   await client.waitUntil(
-    async () => !(await isVisibleInPage(resolved, client)),
+    async () => !(await isVisibleInPage(resolveTarget(target, client), client)),
     {
       timeout: 30_000,
-      timeoutMsg: `element (${String(resolved.selector)}) never went away`
+      timeoutMsg: `element (${describeTarget(target)}) never went away`
     }
   );
 }

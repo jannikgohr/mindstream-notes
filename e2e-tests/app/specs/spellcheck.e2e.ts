@@ -76,10 +76,10 @@ function seedDictionary(): void {
 async function createRootNote(title: string): Promise<void> {
   await clickName('New note');
   const draft = $('input[placeholder="New note"]');
-  await waitUntilVisible(draft);
+  await waitUntilVisible('input[placeholder="New note"]');
   await setElementValue(draft, title);
   await pressElementKey(draft, 'Enter');
-  await waitUntilVisible(byName(title));
+  await waitUntilVisible(() => byName(title));
 }
 
 /**
@@ -133,7 +133,7 @@ async function openPopoverOnFirstSquiggle(
   await clickElement($(`${selector} .diagnostic-spelling`), {
     button: 'right'
   });
-  await waitUntilVisible($('[data-diagnostic-popover]'));
+  await waitUntilVisible('[data-diagnostic-popover]');
 }
 
 /**
@@ -159,7 +159,7 @@ async function openSpellingSettings(): Promise<void> {
   // Spelling lives under Language, not Editor: it configures which languages
   // the vault is written in, and the Editor category was already full.
   await clickName('Language');
-  await waitUntilVisible(byName('Check spelling'));
+  await waitUntilVisible(() => byName('Check spelling'));
 }
 
 describe('T3 spellchecking', function () {
@@ -192,7 +192,7 @@ describe('T3 spellchecking', function () {
       // Proves `installed_dictionaries` read the pair off disk over IPC: the
       // panel only offers Remove for something it found.
       await openSpellingSettings();
-      await waitUntilVisible(byName(`Remove ${DICTIONARY_LABEL}`));
+      await waitUntilVisible(() => byName(`Remove ${DICTIONARY_LABEL}`));
       await closeSettings();
     });
 
@@ -260,7 +260,7 @@ describe('T3 spellchecking', function () {
 
     it('lists the accepted word and flags it again once removed', async () => {
       await openSpellingSettings();
-      await waitUntilVisible(byName(`Remove ${WORD}`));
+      await waitUntilVisible(() => byName(`Remove ${WORD}`));
       await clickName(`Remove ${WORD}`);
       await closeSettings();
 
@@ -305,7 +305,7 @@ describe('T3 spellchecking', function () {
 
       // The panel flips back to offering the download, and says why the
       // still-selected language now does nothing.
-      await waitUntilHidden(byName(`Remove ${DICTIONARY_LABEL}`));
+      await waitUntilHidden(() => byName(`Remove ${DICTIONARY_LABEL}`));
       await browser.waitUntil(
         async () => (await dictionaryRow(DICTIONARY_LABEL)).includes('Install'),
         {
@@ -322,7 +322,7 @@ describe('T3 spellchecking', function () {
       await waitForShell();
       await openSpellingSettings();
       // The files really left the disk — a fresh boot rescans the directory.
-      await waitUntilHidden(byName(`Remove ${DICTIONARY_LABEL}`));
+      await waitUntilHidden(() => byName(`Remove ${DICTIONARY_LABEL}`));
       expect(await dictionaryRow(DICTIONARY_LABEL)).toContain('Install');
       await closeSettings();
     });
@@ -335,12 +335,12 @@ describe('T3 spellchecking', function () {
  * pane itself is the condition rather than the mode name.
  */
 async function switchToSourceView(): Promise<void> {
-  const button = $('button[aria-label^="Editor view mode:"]');
-  await waitUntilVisible(button);
+  const viewMode = 'button[aria-label^="Editor view mode:"]';
+  await waitUntilVisible(viewMode);
   for (let attempt = 0; attempt < 3; attempt++) {
     if (await isVisibleInPage($('.cm-content'))) return;
-    await clickElement(button);
+    await clickElement($(viewMode));
     await browser.pause(250);
   }
-  await waitUntilVisible($('.cm-content'));
+  await waitUntilVisible('.cm-content');
 }
