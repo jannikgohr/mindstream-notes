@@ -21,6 +21,13 @@ findings from `docs/audit-2026-09.md`.
 - Translation checker and its four tests passed.
 - Repository ESLint passed with the expanded component rules.
 - Svelte type check and production build passed.
+- Linux Tauri single-client and both multiremote suites passed in [CI run 34249141578](https://github.com/jannikgohr/mindstream-notes/actions/runs/34249141578). The same run passed formatting, lint, frontend checks on all three desktop platforms, Rust tests on all three platforms, coverage, and Playwright.
+
+The first Linux runs exposed WebKitWebDriver failures in displayedness, text
+retrieval, stale element handles, and repeated keystrokes. The shared UI helpers
+now read the affected state in the page, resolve visibility targets on every
+poll, and verify typed text. Create actions still use the visible toolbar or
+overflow menu. Test failures remain fatal and include UI diagnostics.
 
 The original audit's line counts and assertion counts describe an earlier
 snapshot. Test counts here are runner results for this branch, not assertion
