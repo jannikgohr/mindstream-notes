@@ -19,13 +19,11 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
-use std::thread::{self, JoinHandle};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread;
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime, State};
 
@@ -44,14 +42,12 @@ const MAX_PLUGIN_PREVIEW_CSS_BYTES: usize = 64 * 1024;
 /// [`proxy_preview_html`]). Registered in `lib.rs`.
 pub const PREVIEW_SCHEME: &str = "msn-preview";
 
-/// Permissive CSP for the *proxied* preview document only (its own origin, not
-/// the app's). The upstream frontend is a single self-contained file that runs
-/// inlined scripts + WASM and talks to loopback sockets, so we allow exactly
-/// that and nothing that could reach off-device.
+/// CSP for the proxied preview document. Preview HTTP and WebSocket traffic
+/// stays on the gateway origin, whose session path authenticates each request.
 const PROXY_CSP: &str = "default-src 'none'; \
      script-src 'unsafe-inline' 'wasm-unsafe-eval' blob:; \
      style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:; \
-     connect-src ws://127.0.0.1:* http://127.0.0.1:* data: blob:; \
+     connect-src 'self' data: blob:; \
      worker-src blob:; base-uri 'none'";
 
 /// A declared preview service, or a "not declared" error.
@@ -72,11 +68,15 @@ struct Session {
     /// frontend HTML from.
     data_port: u16,
     proxy: Option<LoopbackPreviewProxy>,
+    control_proxy: Option<LoopbackPreviewProxy>,
 }
 
 impl Session {
     fn kill(&mut self) {
         if let Some(proxy) = self.proxy.take() {
+            proxy.shutdown();
+        }
+        if let Some(proxy) = self.control_proxy.take() {
             proxy.shutdown();
         }
         let _ = self.child.kill();
@@ -88,29 +88,105 @@ impl Session {
 
 struct LoopbackPreviewProxy {
     port: u16,
+    token: String,
     styles: PreviewProxyStyles,
-    stop: Arc<AtomicBool>,
-    join: Option<JoinHandle<()>>,
+}
+
+struct ProxyRoute {
+    data_port: u16,
+    styles: PreviewProxyStyles,
+}
+
+struct PreviewGateway {
+    port: u16,
+    routes: Arc<Mutex<HashMap<String, ProxyRoute>>>,
+}
+
+// One app-lifetime listener lets the document CSP allow one exact origin even
+// when preview sessions are started after the document has loaded.
+static PREVIEW_GATEWAY: OnceLock<PreviewGateway> = OnceLock::new();
+static GATEWAY_INIT: Mutex<()> = Mutex::new(());
+
+fn preview_gateway() -> AppResult<&'static PreviewGateway> {
+    let _init = GATEWAY_INIT
+        .lock()
+        .map_err(|_| AppError::InvalidArg("preview gateway poisoned".into()))?;
+    if let Some(gateway) = PREVIEW_GATEWAY.get() {
+        return Ok(gateway);
+    }
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    let port = listener.local_addr()?.port();
+    let routes = Arc::new(Mutex::new(HashMap::<String, ProxyRoute>::new()));
+    let connection_routes = routes.clone();
+    thread::spawn(move || {
+        for incoming in listener.incoming() {
+            let Ok(mut stream) = incoming else { continue };
+            let routes = connection_routes.clone();
+            thread::spawn(move || {
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+                let Ok(request) = read_http_head(&mut stream) else {
+                    return;
+                };
+                let Some(parsed) = parse_proxy_request(&request) else {
+                    write_simple_response(
+                        &mut stream,
+                        400,
+                        "Bad Request",
+                        "invalid preview request",
+                    );
+                    return;
+                };
+                let token = parsed
+                    .path
+                    .strip_prefix('/')
+                    .and_then(|path| path.split('/').next())
+                    .unwrap_or_default();
+                let route = routes.lock().ok().and_then(|routes| {
+                    routes
+                        .get(token)
+                        .map(|route| (route.data_port, route.styles.clone()))
+                });
+                let Some((data_port, styles)) = route else {
+                    write_simple_response(
+                        &mut stream,
+                        403,
+                        "Forbidden",
+                        "preview session required",
+                    );
+                    return;
+                };
+                handle_proxy_request(stream, &request, data_port, port, token, &styles);
+            });
+        }
+    });
+    let _ = PREVIEW_GATEWAY.set(PreviewGateway { port, routes });
+    PREVIEW_GATEWAY
+        .get()
+        .ok_or_else(|| AppError::InvalidArg("preview gateway initialization failed".into()))
+}
+
+pub fn gateway_port() -> AppResult<u16> {
+    Ok(preview_gateway()?.port)
 }
 
 #[derive(Clone, Default)]
 struct PreviewProxyStyles {
     plugin_css: Option<String>,
-    /// See [`manifest::PreviewIframeDecl::socket_rewrite_port`]. Drives the injected
-    /// WebSocket shim; `None` injects no shim.
+    /// Optional hardcoded socket port to redirect in addition to same-origin sockets.
     socket_rewrite_port: Option<u16>,
 }
 
 impl LoopbackPreviewProxy {
     fn url(&self) -> String {
-        format!("http://127.0.0.1:{}", self.port)
+        format!("http://127.0.0.1:{}/{}/", self.port, self.token)
     }
 
-    fn shutdown(mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        let _ = TcpStream::connect((Ipv4Addr::LOCALHOST, self.port));
-        if let Some(join) = self.join.take() {
-            let _ = join.join();
+    fn shutdown(self) {
+        if let Some(gateway) = PREVIEW_GATEWAY.get() {
+            if let Ok(mut routes) = gateway.routes.lock() {
+                routes.remove(&self.token);
+            }
         }
     }
 }
@@ -277,47 +353,70 @@ fn start_loopback_proxy(
     data_port: u16,
     styles: PreviewProxyStyles,
 ) -> AppResult<LoopbackPreviewProxy> {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
-    let port = listener.local_addr()?.port();
-    let stop = Arc::new(AtomicBool::new(false));
-    let thread_stop = Arc::clone(&stop);
-    let thread_styles = Arc::new(styles.clone());
-    let join = thread::spawn(move || {
-        for incoming in listener.incoming() {
-            if thread_stop.load(Ordering::Relaxed) {
-                break;
-            }
-            let Ok(stream) = incoming else {
-                continue;
-            };
-            let conn_stop = Arc::clone(&thread_stop);
-            let conn_styles = Arc::clone(&thread_styles);
-            thread::spawn(move || {
-                if !conn_stop.load(Ordering::Relaxed) {
-                    handle_proxy_connection(stream, data_port, &conn_styles);
-                }
-            });
-        }
-    });
+    let gateway = preview_gateway()?;
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    gateway
+        .routes
+        .lock()
+        .map_err(|_| AppError::InvalidArg("preview gateway poisoned".into()))?
+        .insert(
+            token.clone(),
+            ProxyRoute {
+                data_port,
+                styles: styles.clone(),
+            },
+        );
     Ok(LoopbackPreviewProxy {
-        port,
+        port: gateway.port,
+        token,
         styles,
-        stop,
-        join: Some(join),
     })
 }
 
-fn handle_proxy_connection(mut client: TcpStream, data_port: u16, styles: &PreviewProxyStyles) {
-    let Ok(request) = read_http_head(&mut client) else {
+fn handle_proxy_request(
+    mut client: TcpStream,
+    request: &[u8],
+    data_port: u16,
+    proxy_port: u16,
+    token: &str,
+    styles: &PreviewProxyStyles,
+) {
+    let Some(parsed) = parse_proxy_request(request) else {
         return;
     };
-    if request.is_empty() {
+    let prefix = format!("/{token}/");
+    let expected_host = format!("127.0.0.1:{proxy_port}");
+    let expected_origin = format!("http://{expected_host}");
+    if !parsed.path.starts_with(&prefix)
+        || parsed.headers.get("host").copied() != Some(expected_host.as_str())
+        || parsed.headers.get("origin").is_some_and(|origin| {
+            *origin != "null"
+                && *origin != expected_origin
+                && !matches!(
+                    *origin,
+                    "tauri://localhost" | "http://tauri.localhost" | "https://tauri.localhost"
+                )
+        })
+    {
+        write_simple_response(&mut client, 403, "Forbidden", "preview session required");
         return;
     }
-    if is_websocket_upgrade(&request) {
-        tunnel_websocket(client, request, data_port);
+    if parsed.headers.contains_key("upgrade") {
+        if !is_websocket_upgrade(&parsed) {
+            write_simple_response(
+                &mut client,
+                400,
+                "Bad Request",
+                "invalid websocket handshake",
+            );
+            return;
+        }
+        let path = format!("/{}", &parsed.path[prefix.len()..]);
+        let handshake = rewrite_ws_handshake(&parsed, &path, data_port);
+        let _ = client.set_read_timeout(None);
+        tunnel_websocket(client, handshake, data_port);
     } else {
-        serve_proxied_html(client, request, data_port, styles);
+        serve_proxied_html(client, request.to_vec(), data_port, styles);
     }
 }
 
@@ -337,15 +436,74 @@ fn read_http_head(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
     Ok(buf)
 }
 
-fn is_websocket_upgrade(request: &[u8]) -> bool {
-    let text = String::from_utf8_lossy(request);
-    text.lines().any(|line| {
-        let lower = line.to_ascii_lowercase();
-        lower.starts_with("upgrade:") && lower.contains("websocket")
-    })
+struct ProxyRequest<'a> {
+    path: &'a str,
+    headers: HashMap<String, &'a str>,
 }
 
-fn tunnel_websocket(mut client: TcpStream, request: Vec<u8>, data_port: u16) {
+fn parse_proxy_request(request: &[u8]) -> Option<ProxyRequest<'_>> {
+    let text = std::str::from_utf8(request)
+        .ok()?
+        .strip_suffix("\r\n\r\n")?;
+    let mut lines = text.split("\r\n");
+    let mut first = lines.next()?.split(' ');
+    if first.next()? != "GET" {
+        return None;
+    }
+    let path = first.next()?;
+    if !path.starts_with('/')
+        || path.starts_with("//")
+        || path.bytes().any(|b| b <= 32 || b == 127)
+        || first.next()? != "HTTP/1.1"
+        || first.next().is_some()
+    {
+        return None;
+    }
+    let mut headers = HashMap::new();
+    for line in lines {
+        let (name, value) = line.split_once(':')?;
+        if name.is_empty()
+            || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            || value.bytes().any(|b| b < 32 && b != b'\t' || b == 127)
+        {
+            return None;
+        }
+        if headers
+            .insert(name.to_ascii_lowercase(), value.trim())
+            .is_some()
+        {
+            return None;
+        }
+    }
+    if headers.contains_key("transfer-encoding")
+        || headers
+            .get("content-length")
+            .is_some_and(|value| *value != "0")
+    {
+        return None;
+    }
+    Some(ProxyRequest { path, headers })
+}
+
+fn is_websocket_upgrade(request: &ProxyRequest<'_>) -> bool {
+    request
+        .headers
+        .get("upgrade")
+        .is_some_and(|value| value.eq_ignore_ascii_case("websocket"))
+        && request.headers.get("connection").is_some_and(|value| {
+            value
+                .split(',')
+                .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
+        })
+        && request.headers.get("sec-websocket-version").copied() == Some("13")
+        && request.headers.get("sec-websocket-key").is_some_and(|key| {
+            base64::engine::general_purpose::STANDARD
+                .decode(key)
+                .is_ok_and(|bytes| bytes.len() == 16)
+        })
+}
+
+fn tunnel_websocket(mut client: TcpStream, handshake: String, data_port: u16) {
     let Ok(mut upstream) = TcpStream::connect((Ipv4Addr::LOCALHOST, data_port)) else {
         write_simple_response(
             &mut client,
@@ -362,8 +520,7 @@ fn tunnel_websocket(mut client: TcpStream, request: Vec<u8>, data_port: u16) {
     // so setting it here covers both directions.
     let _ = client.set_nodelay(true);
     let _ = upstream.set_nodelay(true);
-    let rewritten = rewrite_ws_handshake(&request, data_port);
-    if upstream.write_all(rewritten.as_bytes()).is_err() {
+    if upstream.write_all(handshake.as_bytes()).is_err() {
         return;
     }
 
@@ -385,27 +542,20 @@ fn tunnel_websocket(mut client: TcpStream, request: Vec<u8>, data_port: u16) {
     let _ = b.join();
 }
 
-fn rewrite_ws_handshake(request: &[u8], data_port: u16) -> String {
-    let text = String::from_utf8_lossy(request);
-    let upstream_origin = format!("http://127.0.0.1:{data_port}");
-    let upstream_host = format!("127.0.0.1:{data_port}");
-    let mut out = String::new();
-    for line in text.split("\r\n") {
-        let lower = line.to_ascii_lowercase();
-        if lower.starts_with("host:") {
-            out.push_str("Host: ");
-            out.push_str(&upstream_host);
-        } else if lower.starts_with("origin:") {
-            out.push_str("Origin: ");
-            out.push_str(&upstream_origin);
-        } else {
-            out.push_str(line);
-        }
-        out.push_str("\r\n");
-        if line.is_empty() {
-            break;
+fn rewrite_ws_handshake(request: &ProxyRequest<'_>, path: &str, data_port: u16) -> String {
+    let mut out = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{data_port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n");
+    for name in [
+        "origin",
+        "sec-websocket-key",
+        "sec-websocket-version",
+        "sec-websocket-protocol",
+        "sec-websocket-extensions",
+    ] {
+        if let Some(value) = request.headers.get(name) {
+            out.push_str(&format!("{name}: {value}\r\n"));
         }
     }
+    out.push_str("\r\n");
     out
 }
 
@@ -459,7 +609,7 @@ fn query_param_from_request(request: &[u8], key: &str) -> Option<String> {
 
 fn write_html_response(stream: &mut TcpStream, status: u16, reason: &str, body: &str) {
     let response = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Security-Policy: {PROXY_CSP}\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Security-Policy: {PROXY_CSP}\r\nReferrer-Policy: no-referrer\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     let _ = stream.write_all(response.as_bytes());
@@ -589,33 +739,34 @@ pub async fn plugins_preview_start(
             .args(&args)
             .current_dir(&cwd)
             .spawn()?;
-        let data_url = substitute(
-            &service.data_url,
-            data_port,
-            control_port,
-            &input_str,
-            &settings,
-        );
-        let control_url = substitute(
+        let proxy = start_loopback_proxy(data_port, proxy_styles.clone().unwrap_or_default())?;
+        let data_url = proxy.url();
+        let proxy_url = proxy_styles.map(|_| data_url.clone());
+        let control_proxy = start_loopback_proxy(control_port, PreviewProxyStyles::default())?;
+        let original_control = substitute(
             &service.control_url,
             data_port,
             control_port,
             &input_str,
             &settings,
         );
-        let (proxy, proxy_url) = match proxy_styles {
-            Some(styles) => {
-                let proxy = start_loopback_proxy(data_port, styles)?;
-                let proxy_url = proxy.url();
-                (Some(proxy), Some(proxy_url))
-            }
-            None => (None, None),
-        };
+        let control_path = reqwest::Url::parse(&original_control)
+            .map_err(|e| AppError::InvalidArg(format!("invalid preview control URL: {e}")))?;
+        let control_url = format!(
+            "{}{}{}",
+            control_proxy.url().replacen("http:", "ws:", 1),
+            control_path.path().trim_start_matches('/'),
+            control_path
+                .query()
+                .map(|q| format!("?{q}"))
+                .unwrap_or_default()
+        );
         let mut session = Session {
             child,
             input_path,
             data_port,
-            proxy,
+            proxy: Some(proxy),
+            control_proxy: Some(control_proxy),
         };
         if let Err(e) = wait_until_ready(data_port) {
             session.kill();
@@ -739,10 +890,10 @@ fn sanitize_css_length(value: &str) -> String {
 /// The host stays tool-agnostic: it exposes the app theme as `--ms-preview-*`
 /// custom properties and lets the plugin's `previewIframe.css` map them onto its
 /// frontend's DOM (so nothing here knows tinymist's markup). The only behavioural
-/// hook is a generic WebSocket shim, injected before the upstream scripts *only*
-/// when the plugin declares `socketRewritePort`: a frontend that hardcodes a
-/// default `ws://127.0.0.1:<port>` is redirected to this proxy origin, where the
-/// proxy rewrites the handshake Origin before tunneling upstream. The beacon lets
+/// hook is a WebSocket shim that carries the session URL path into same-origin
+/// sockets. A declared `socketRewritePort` also redirects a hardcoded local
+/// socket to this proxy origin, where the
+/// proxy authenticates the session before tunneling upstream. The beacon lets
 /// the client confirm scripts actually ran.
 fn inject_head(
     html: &str,
@@ -757,19 +908,28 @@ fn inject_head(
         .as_ref()
         .map(|css| format!("<style data-ms-plugin-preview-css>{css}</style>"))
         .unwrap_or_default();
-    let socket_shim = match styles.socket_rewrite_port {
-        Some(port) => format!(
+    let default_socket = styles
+        .socket_rewrite_port
+        .map(|port| {
+            format!(
+                "(next.hostname==='127.0.0.1'||next.hostname==='localhost')&&next.port==='{port}'"
+            )
+        })
+        .unwrap_or_else(|| "false".into());
+    let socket_shim = format!(
             "<script>(()=>{{\
              const NativeWebSocket=window.WebSocket;\
              if(!NativeWebSocket||NativeWebSocket.__msPreviewPatched)return;\
              function rewrite(url){{\
                try{{\
                  const next=new URL(String(url),window.location.href);\
-                 const isDefaultSocket=/^wss?:$/.test(next.protocol)&&(next.hostname==='127.0.0.1'||next.hostname==='localhost')&&next.port==='{port}';\
-                 if(!isDefaultSocket)return url;\
+                 if(!/^wss?:$/.test(next.protocol))return url;\
+                 const isDefaultSocket={default_socket};\
+                 if(!isDefaultSocket&&next.host!==window.location.host)return url;\
                  next.protocol='ws:';\
                  next.hostname=window.location.hostname;\
                  next.port=window.location.port;\
+                 if(!next.pathname.startsWith(window.location.pathname))next.pathname=window.location.pathname+next.pathname.replace(/^\\//,'');\
                  return next.href;\
                }}catch(_){{return url;}}\
              }}\
@@ -781,9 +941,7 @@ fn inject_head(
              Object.defineProperty(PatchedWebSocket,'__msPreviewPatched',{{value:true}});\
              window.WebSocket=PatchedWebSocket;\
              }})();</script>"
-        ),
-        None => String::new(),
-    };
+        );
     let inject = format!(
         "{socket_shim}\
          <style>:root{{--ms-preview-background:{bg};--ms-preview-foreground:{fg};\
@@ -1017,10 +1175,9 @@ mod tests {
             !out.contains("::-webkit-scrollbar"),
             "host injects no tool-specific scrollbar CSS"
         );
-        // No socketRewritePort → no WebSocket shim.
         assert!(
-            !out.contains("__msPreviewPatched"),
-            "no shim without a declared socket port"
+            out.contains("__msPreviewPatched"),
+            "same-origin sockets carry the session token"
         );
         assert!(out.contains("ms-preview-proxy-ready"), "beacon injected");
     }
@@ -1035,9 +1192,7 @@ mod tests {
             "rgba(255,255,255,0.3)",
             &PreviewProxyStyles::default(),
         );
-        // With no <head> and no shim, injection is prepended, starting with the
-        // theme-variable <style>.
-        assert!(out.starts_with("<style>"));
+        assert!(out.starts_with("<script>"));
         assert!(out.contains("hi"));
     }
 
@@ -1068,7 +1223,7 @@ mod tests {
     }
 
     #[test]
-    fn inject_head_omits_the_shim_when_no_socket_port_is_declared() {
+    fn inject_head_authenticates_same_origin_sockets_without_a_declared_port() {
         let out = inject_head(
             "<html><head></head></html>",
             "#444",
@@ -1077,7 +1232,9 @@ mod tests {
             "rgba(255,255,255,0.3)",
             &PreviewProxyStyles::default(),
         );
-        assert!(!out.contains("__msPreviewPatched"), "no shim by default");
+        assert!(out.contains("const isDefaultSocket=false;"));
+        assert!(out.contains("next.host!==window.location.host"));
+        assert!(out.contains("next.pathname.startsWith(window.location.pathname)"));
     }
 
     #[test]
@@ -1188,30 +1345,122 @@ mod tests {
         assert!(matches!(err, AppError::InvalidArg(_)));
     }
 
-    #[test]
-    fn is_websocket_upgrade_detects_the_upgrade_header() {
-        assert!(is_websocket_upgrade(
-            b"GET /ws HTTP/1.1\r\nUpgrade: websocket\r\n\r\n"
-        ));
-        // Case-insensitive on both the header name and value.
-        assert!(is_websocket_upgrade(
-            b"GET / HTTP/1.1\r\nupgrade: WebSocket\r\n\r\n"
-        ));
-        assert!(!is_websocket_upgrade(
-            b"GET / HTTP/1.1\r\nConnection: keep-alive\r\n\r\n"
-        ));
+    fn websocket_request(path: &str, host: &str, origin: &str) -> String {
+        format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n")
+    }
+
+    fn authenticated_request(proxy: &LoopbackPreviewProxy, query: &str, websocket: bool) -> String {
+        let path = format!("/{}/{query}", proxy.token);
+        let host = format!("127.0.0.1:{}", proxy.port);
+        if websocket {
+            websocket_request(&path, &host, &format!("http://{host}"))
+        } else {
+            format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n")
+        }
     }
 
     #[test]
-    fn rewrite_ws_handshake_retargets_host_and_origin_upstream() {
-        let request = b"GET /ws HTTP/1.1\r\nHost: 127.0.0.1:9999\r\nOrigin: http://127.0.0.1:9999\r\nUpgrade: websocket\r\n\r\n";
-        let out = rewrite_ws_handshake(request, 4321);
-        assert!(out.contains("Host: 127.0.0.1:4321"));
-        assert!(out.contains("Origin: http://127.0.0.1:4321"));
-        // Non host/origin lines are preserved verbatim; rewrite stops at the
-        // blank line that ends the handshake head.
-        assert!(out.contains("Upgrade: websocket"));
+    fn websocket_handshake_requires_complete_valid_headers() {
+        let valid = websocket_request("/ws", "127.0.0.1:9999", "null");
+        assert!(is_websocket_upgrade(
+            &parse_proxy_request(valid.as_bytes()).unwrap()
+        ));
+        for invalid in [
+            valid.replace("websocket", "notwebsocket"),
+            valid.replace("keep-alive, Upgrade", "keep-alive"),
+            valid.replace("Version: 13", "Version: 12"),
+            valid.replace("dGhlIHNhbXBsZSBub25jZQ==", "YWJj"),
+            valid.replace("dGhlIHNhbXBsZSBub25jZQ==", "invalid!"),
+            valid.replace("Sec-WebSocket-Version: 13\r\n", ""),
+        ] {
+            assert!(
+                !is_websocket_upgrade(&parse_proxy_request(invalid.as_bytes()).unwrap()),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn request_parser_rejects_ambiguous_and_body_bearing_requests() {
+        for request in [
+            "POST / HTTP/1.1\r\n\r\n",
+            "GET //evil.test HTTP/1.1\r\n\r\n",
+            "GET / HTTP/1.0\r\n\r\n",
+            "GET / HTTP/1.1\r\nHost: a\r\nhost: b\r\n\r\n",
+            "GET / HTTP/1.1\r\nOrigin : x\r\n\r\n",
+            "GET / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n",
+            "GET / HTTP/1.1\r\nContent-Length: 1\r\n\r\n",
+            "GET / HTTP/1.1\r\n\r\nextra",
+            "GET / HTTP/1.1\r\nHost: unfinished",
+        ] {
+            assert!(
+                parse_proxy_request(request.as_bytes()).is_none(),
+                "{request}"
+            );
+        }
+    }
+
+    #[test]
+    fn rewrite_ws_handshake_preserves_origin_and_only_forwards_websocket_headers() {
+        let request = websocket_request("/token/ws", "127.0.0.1:9999", "null").replace(
+            "\r\n\r\n",
+            "\r\nCookie: private\r\nAuthorization: private\r\nX-Forwarded-Host: evil.test\r\n\r\n",
+        );
+        let parsed = parse_proxy_request(request.as_bytes()).unwrap();
+        let out = rewrite_ws_handshake(&parsed, "/ws", 4321);
+        assert!(out.starts_with("GET /ws HTTP/1.1\r\nHost: 127.0.0.1:4321"));
+        assert!(out.contains("origin: null\r\n"));
+        assert!(out.contains("sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ=="));
+        assert!(!out.contains("private"));
+        assert!(!out.contains("evil.test"));
+        assert!(!out.contains("token"));
         assert!(out.ends_with("\r\n\r\n"));
+    }
+
+    #[test]
+    fn loopback_proxy_rejects_missing_wrong_and_previous_session_tokens_and_foreign_origins() {
+        let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        upstream.set_nonblocking(true).unwrap();
+        let proxy = start_loopback_proxy(
+            upstream.local_addr().unwrap().port(),
+            PreviewProxyStyles::default(),
+        )
+        .unwrap();
+        let previous = start_loopback_proxy(
+            upstream.local_addr().unwrap().port(),
+            PreviewProxyStyles::default(),
+        )
+        .unwrap();
+        assert_ne!(previous.token, proxy.token);
+        let previous_token = previous.token.clone();
+        previous.shutdown();
+        for websocket in [false, true] {
+            let valid = authenticated_request(&proxy, "", websocket);
+            for request in [
+                valid.replace(&format!("/{}/", proxy.token), "/"),
+                valid.replace(&proxy.token, "wrong"),
+                valid.replace(&proxy.token, &previous_token),
+                valid.replace("\r\nHost: 127.0.0.1:", "\r\nHost: attacker.test:"),
+                valid.replace(
+                    "\r\nConnection:",
+                    "\r\nOrigin: https://attacker.test\r\nConnection:",
+                ),
+            ] {
+                let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, proxy.port)).unwrap();
+                client.write_all(request.as_bytes()).unwrap();
+                let mut response = String::new();
+                client.read_to_string(&mut response).unwrap();
+                assert!(
+                    response.contains("403 Forbidden") || response.contains("400 Bad Request"),
+                    "{response}"
+                );
+                assert_eq!(
+                    upstream.accept().unwrap_err().kind(),
+                    std::io::ErrorKind::WouldBlock
+                );
+            }
+        }
+        proxy.shutdown();
     }
 
     #[test]
@@ -1275,19 +1524,22 @@ mod tests {
         let upstream_port =
             fake_upstream("<html><head><title>doc</title></head><body>doc</body></html>");
         let proxy = start_loopback_proxy(upstream_port, PreviewProxyStyles::default()).unwrap();
-        assert_eq!(proxy.url(), format!("http://127.0.0.1:{}", proxy.port));
+        assert_eq!(
+            proxy.url(),
+            format!("http://127.0.0.1:{}/{}/", proxy.port, proxy.token)
+        );
 
         let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, proxy.port)).unwrap();
         client
-            .write_all(
-                b"GET /?bg=%23222&gutter=10px HTTP/1.1\r\nHost: proxy\r\nConnection: close\r\n\r\n",
-            )
+            .write_all(authenticated_request(&proxy, "?bg=%23222&gutter=10px", false).as_bytes())
             .unwrap();
         let mut resp = String::new();
         client.read_to_string(&mut resp).unwrap();
 
         assert!(resp.contains("200 OK"), "proxy returns 200: {resp}");
         assert!(resp.contains(PROXY_CSP), "proxy sets its own CSP");
+        assert!(PROXY_CSP.contains("connect-src 'self' data: blob:"));
+        assert!(!PROXY_CSP.contains("127.0.0.1:*"));
         assert!(
             resp.contains("--ms-preview-background:#222"),
             "sanitized bg query param is injected"
@@ -1313,7 +1565,7 @@ mod tests {
 
         let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, proxy.port)).unwrap();
         client
-            .write_all(b"GET / HTTP/1.1\r\nHost: proxy\r\nConnection: close\r\n\r\n")
+            .write_all(authenticated_request(&proxy, "", false).as_bytes())
             .unwrap();
         let mut resp = String::new();
         client.read_to_string(&mut resp).unwrap();
@@ -1360,13 +1612,7 @@ mod tests {
 
         let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, proxy.port)).unwrap();
         client
-            .write_all(
-                format!(
-                    "GET / HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nOrigin: http://127.0.0.1:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
-                    proxy.port, proxy.port
-                )
-                .as_bytes(),
-            )
+            .write_all(authenticated_request(&proxy, "", true).as_bytes())
             .unwrap();
 
         let forwarded = handshakes
@@ -1378,7 +1624,7 @@ mod tests {
             "{forwarded}"
         );
         assert!(
-            forwarded.contains(&format!("Origin: http://127.0.0.1:{upstream_port}")),
+            forwarded.contains(&format!("origin: http://127.0.0.1:{}", proxy.port)),
             "{forwarded}"
         );
         assert!(forwarded
@@ -1412,7 +1658,7 @@ mod tests {
 
         let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, proxy.port)).unwrap();
         client
-            .write_all(b"GET / HTTP/1.1\r\nHost: proxy\r\nUpgrade: websocket\r\n\r\n")
+            .write_all(authenticated_request(&proxy, "", true).as_bytes())
             .unwrap();
         let mut response = String::new();
         client.read_to_string(&mut response).unwrap();
