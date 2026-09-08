@@ -1,3 +1,4 @@
+import { assertRequiredString } from '$lib/validation';
 /**
  * Data & Backup bridge — mirrors src-tauri/src/data.rs.
  *
@@ -209,12 +210,6 @@ export async function importMerge(token: string): Promise<MergeReport> {
   return parseMergeReport(
     await tauriInvoke<unknown>(TauriCommandName.ImportMerge, { token })
   );
-}
-
-function assertRequiredString(value: string, context: string): void {
-  if (value.trim().length === 0) {
-    throw new Error(`${context} must be a non-empty string`);
-  }
 }
 
 function assertNonNegativeInteger(value: number, context: string): void {

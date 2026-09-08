@@ -145,6 +145,8 @@ export class CollabProvider {
   /** False while we're waiting for (or answering) the relay's join
    *  challenge. Nothing is sent until it flips. */
   private joined = false;
+  private awarenessFrame: number | null = null;
+  private readonly pendingAwarenessClients = new Set<number>();
   private joinDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
 
   private readonly docUpdateHandler: (
@@ -172,8 +174,17 @@ export class CollabProvider {
       if (this.opts.auth && !canSignCollabFrame(this.opts.auth)) return;
       const changedClients = [...added, ...updated, ...removed];
       if (changedClients.length === 0) return;
-      const update = encodeAwarenessUpdate(this.opts.awareness, changedClients);
-      void this.send(FRAME_AWARENESS, update);
+      for (const client of changedClients)
+        this.pendingAwarenessClients.add(client);
+      if (this.awarenessFrame !== null) return;
+      this.awarenessFrame = requestAnimationFrame(() => {
+        this.awarenessFrame = null;
+        const clients = [...this.pendingAwarenessClients];
+        this.pendingAwarenessClients.clear();
+        if (this.destroyed) return;
+        const update = encodeAwarenessUpdate(this.opts.awareness, clients);
+        void this.send(FRAME_AWARENESS, update);
+      });
     };
 
     this.opts.doc.on('update', this.docUpdateHandler);
@@ -190,6 +201,9 @@ export class CollabProvider {
 
   destroy(): void {
     this.destroyed = true;
+    if (this.awarenessFrame !== null) cancelAnimationFrame(this.awarenessFrame);
+    this.awarenessFrame = null;
+    this.pendingAwarenessClients.clear();
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
