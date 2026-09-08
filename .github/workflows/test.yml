@@ -16,6 +16,14 @@
 #   - e2e      : Playwright drives the SvelteKit SPA (browser-fallback mode,
 #                mock store) on Linux to cover the Svelte components unit tests
 #                can't reach.
+#   - app-e2e  : wdio + tauri-driver against the packaged binary under Xvfb.
+#                By far the most expensive group, so it is scoped: `single`
+#                on any code change, the two collaboration suites only where
+#                they can tell you something (see the `changes` job).
+#
+# Everything except `format` is gated on the diff containing something other
+# than Markdown — see the `changes` job for why, and for the branch-protection
+# caveat that comes with it.
 #
 # Android isn't tested here — its build matrix lives in release.yml because
 # it needs the NDK (~1.5 GB) and a signing keystore.
@@ -33,9 +41,82 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # What this diff actually needs. A docs-only push used to run the whole
+  # matrix — the audit write-ups alone cost several full runs. `format` is
+  # deliberately not gated: prettier checks Markdown too, so a docs change
+  # still has a gate of its own.
+  #
+  # The same job decides which app-tier suites run. `single` covers general
+  # regressions and runs on every code change; the two collaboration suites
+  # are two thirds of the run's wall time and only exercise sync/sharing, so
+  # they are reserved for pushes to main, diffs that touch that code, and PRs
+  # labelled `ci:app-e2e`.
+  #
+  # NOTE: a gated-out job reports as "Skipped". `main` carries no branch
+  # protection today; if required checks are turned on later, confirm the
+  # merge gate treats a skipped job as passing before trusting this.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+      suites: ${{ steps.suites.outputs.list }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # Two traps live in this one pattern. The filters are OR-ed, so
+          # `!**/*.md` plus `!docs/**` would match every non-docs Markdown
+          # file and defeat the whole thing — it has to be a single negated
+          # group. And `!(**/*.md)` alone still selects a root-level
+          # `README.md`, because `**/` does not match an empty path segment;
+          # both spellings are needed. Verified against picomatch, which is
+          # what paths-filter matches with.
+          filters: |
+            code:
+              - '!(**/*.md|*.md)'
+            # The surfaces the two-client suites actually exercise. This is a
+            # heuristic, not a proof: the Yjs/editor code they also depend on
+            # is spread across src/lib/editor and friends, and listing that
+            # would re-select every PR. A change that breaks collaboration from
+            # somewhere else is caught by the label or by main.
+            collab:
+              - 'src/lib/sync/**'
+              - 'src-tauri/src/sync/**'
+              - 'src-tauri/src/sharing/**'
+              - 'src-tauri/src/collab_events.rs'
+              - 'backend/**'
+              - 'e2e-tests/app/specs/collab*'
+              - 'e2e-tests/app/specs/sharing*'
+              - 'e2e-tests/app/specs/sync-history*'
+              - 'e2e-tests/app/specs/seed-merge*'
+              - 'e2e-tests/app/wdio.multiremote*'
+              - '.github/workflows/test.yml'
+
+      - name: Pick app-tier suites
+        id: suites
+        env:
+          EVENT: ${{ github.event_name }}
+          COLLAB: ${{ steps.filter.outputs.collab }}
+          # Through the environment, not string-interpolated into the script:
+          # a label is user-supplied text.
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          if [ "$EVENT" = push ] || [ "$COLLAB" = true ] ||
+             printf '%s' "$LABELS" | grep -q '"ci:app-e2e"'; then
+            echo 'list=["single","multi","multi-a2"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'list=["single"]' >> "$GITHUB_OUTPUT"
+          fi
+
   js:
     name: JS check + test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     timeout-minutes: 12
     strategy:
       fail-fast: false
@@ -64,6 +145,8 @@ jobs:
   rust:
     name: Cargo test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -140,6 +223,8 @@ jobs:
   coverage:
     name: Coverage (Linux)
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     timeout-minutes: 30
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
@@ -225,6 +310,8 @@ jobs:
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     timeout-minutes: 10
     # Keep this tag in sync with @playwright/test in pnpm-lock.yaml.
     container:
@@ -297,11 +384,15 @@ jobs:
   app-e2e:
     name: Tauri E2E (${{ matrix.suite }})
     runs-on: ubuntu-24.04
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        suite: [single, multi, multi-a2]
+        # ["single"] on an ordinary PR; all three on main, on a diff that
+        # touches collaboration, or on a PR labelled `ci:app-e2e`.
+        suite: ${{ fromJSON(needs.changes.outputs.suites) }}
     env:
       MINDSTREAM_DOCKER_NO_SUDO: '1'
       WEBKIT_DISABLE_DMABUF_RENDERER: '1'
@@ -320,9 +411,20 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev webkit2gtk-driver xvfb xauth dbus-x11 gnome-keyring
+
+      # The suites all build the same crate with the same features, so they
+      # share one cache entry instead of keying on the job name and each
+      # compiling the dependency tree from scratch (~7 minutes a job).
+      #
+      # `cache-on-failure` matters more than it looks: the default drops the
+      # cache when the job fails, so a red suite never saves one — and then
+      # never has one to restore, which is exactly the state these jobs were
+      # in. A failed test run still compiled the dependencies correctly.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          shared-key: app-e2e
+          cache-on-failure: true
       - run: pnpm install --frozen-lockfile
       - run: cargo install tauri-driver --locked
       - name: Start disposable collaboration backend
