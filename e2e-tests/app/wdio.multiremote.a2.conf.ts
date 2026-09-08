@@ -31,7 +31,7 @@ import {
   installPageDiagnostics
 } from './helpers/failure-capture.js';
 import {
-  appBinaryForProfile,
+  appBinary as application,
   preflight,
   repoRoot,
   spawnTauriDriver,
@@ -54,31 +54,15 @@ interface ClientProc {
   port: number;
   nativePort: number;
   profileId: string;
-  application: string;
   profileDir?: string;
   driver?: ChildProcess;
   startTimer?: ReturnType<typeof setTimeout>;
 }
 
 const clients: Record<'browserA1' | 'browserA2' | 'browserB', ClientProc> = {
-  browserA1: {
-    port: 4444,
-    nativePort: 4445,
-    profileId: 'e2e-a1',
-    application: appBinaryForProfile('e2e-a1')
-  },
-  browserA2: {
-    port: 4448,
-    nativePort: 4449,
-    profileId: 'e2e-a2',
-    application: appBinaryForProfile('e2e-a2')
-  },
-  browserB: {
-    port: 4446,
-    nativePort: 4447,
-    profileId: 'e2e-b',
-    application: appBinaryForProfile('e2e-b')
-  }
+  browserA1: { port: 4444, nativePort: 4445, profileId: 'e2e-a1' },
+  browserA2: { port: 4448, nativePort: 4449, profileId: 'e2e-a2' },
+  browserB: { port: 4446, nativePort: 4447, profileId: 'e2e-b' }
 };
 
 const DRIVER_START_STAGGER_MS = 20_000;
@@ -118,21 +102,21 @@ export const config: WebdriverIO.Config = {
       hostname: '127.0.0.1',
       port: clients.browserA1.port,
       capabilities: {
-        'tauri:options': { application: clients.browserA1.application }
+        'tauri:options': { application }
       } as WebdriverIO.Capabilities
     },
     browserA2: {
       hostname: '127.0.0.1',
       port: clients.browserA2.port,
       capabilities: {
-        'tauri:options': { application: clients.browserA2.application }
+        'tauri:options': { application }
       } as WebdriverIO.Capabilities
     },
     browserB: {
       hostname: '127.0.0.1',
       port: clients.browserB.port,
       capabilities: {
-        'tauri:options': { application: clients.browserB.application }
+        'tauri:options': { application }
       } as WebdriverIO.Capabilities
     }
   } as unknown as WebdriverIO.Config['capabilities'],
@@ -150,11 +134,7 @@ export const config: WebdriverIO.Config = {
 
   // Requirement checks + the Tauri CLI build, same as the two-client config
   // (helpers/preflight.ts).
-  onPrepare: () =>
-    preflight({
-      backend: true,
-      buildProfiles: ['e2e-a1', 'e2e-a2', 'e2e-b']
-    }),
+  onPrepare: () => preflight({ backend: true }),
 
   // Buffer page-side errors on every client — WebKitWebDriver has no log
   // endpoint, so what the app logged is only recoverable from the page.

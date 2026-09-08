@@ -51,16 +51,19 @@ export const repoRoot = resolve(here, '../../..');
 const exeSuffix = process.platform === 'win32' ? '.exe' : '';
 
 /**
- * The cargo-built (not bundled/installer) binary. Cargo names it after the
- * package, `mindstream-notes`; on Windows it carries the .exe suffix.
- * tauri-driver reads this path to launch the app under WebDriver.
+ * The cargo-built (not bundled/installer) binary, copied aside under an e2e
+ * name so an ordinary `cargo build` can't quietly replace what
+ * `MINDSTREAM_E2E_SKIP_BUILD=1` then reuses. tauri-driver reads this path to
+ * launch the app under WebDriver.
+ *
+ * One binary serves every client of every suite — see `buildApp`.
  */
 export const appBinary = join(
   repoRoot,
   'src-tauri',
   'target',
   'release',
-  `mindstream-notes-e2e-single${exeSuffix}`
+  `mindstream-notes-e2e${exeSuffix}`
 );
 
 const cargoAppBinary = join(
@@ -70,19 +73,6 @@ const cargoAppBinary = join(
   'release',
   `mindstream-notes${exeSuffix}`
 );
-
-const tauriConf = join(repoRoot, 'src-tauri', 'tauri.conf.json');
-
-export function appBinaryForProfile(profileId: string): string {
-  const safeProfileId = profileId.replace(/[^a-z0-9-]/gi, '-');
-  return join(
-    repoRoot,
-    'src-tauri',
-    'target',
-    'release',
-    `mindstream-notes-e2e-${safeProfileId}${exeSuffix}`
-  );
-}
 
 export const tauriDriverPath = join(
   homedir(),
@@ -319,53 +309,21 @@ export async function stopTauriDriverTree(
 }
 
 /**
- * Build through the Tauri CLI, not plain Cargo. The CLI runs the frontend build
- * and injects the production asset config; a direct `cargo build` leaves the
- * binary pointing at the dev server, which renders as a blank webview when Vite
- * is not running.
+ * A `--config` overlay that stops the Tauri CLI running the frontend build.
  *
- * Multi-client suites need multiple app executables, each with a distinct
- * WebView2 dataDirectory embedded in Tauri's configured window. Runtime
- * MINDSTREAM_PROFILE_DIR isolates SQLite/keyring state, but Tauri's default
- * WebView2 folder remains the fixed OS local-data path for the app identifier;
- * two host processes sharing it can leave one renderer booted as blank/about:blank.
- * Building config variants keeps the normal auto-created window path intact.
+ * `buildFrontend()` already ran Vite with the e2e env (`VITE_MINDSTREAM_E2E`),
+ * and the CLI's own `beforeBuildCommand` would just repeat it.
  */
-function writeE2eConfig(profileId: string): string {
-  const baseConfig = JSON.parse(readFileSync(tauriConf, 'utf8')) as {
-    app?: {
-      windows?: Array<Record<string, unknown>>;
-    };
-  };
-  const mainWindow = baseConfig.app?.windows?.find(
-    (window) => window.label === 'main'
-  );
-  if (!mainWindow) {
-    fail('tauri.conf.json does not define a main window');
-  }
-
-  const safeProfileId = profileId.replace(/[^a-z0-9-]/gi, '-');
+function writeE2eBuildConfig(): string {
   const configDir = join(repoRoot, '.output', 'tauri-e2e');
   mkdirSync(configDir, { recursive: true });
-  const configPath = join(configDir, `tauri.${safeProfileId}.conf.json`);
+  const configPath = join(configDir, 'tauri.e2e.conf.json');
   writeFileSync(
     configPath,
     JSON.stringify(
       {
         $schema: 'https://schema.tauri.app/config/2',
-        build: {
-          // preflight runs Vite once per suite; profile-specific Tauri
-          // builds reuse that `.output/build` instead of rebuilding Vite.
-          beforeBuildCommand: ''
-        },
-        app: {
-          windows: [
-            {
-              ...mainWindow,
-              dataDirectory: `mindstream-e2e-webview-${safeProfileId}`
-            }
-          ]
-        }
+        build: { beforeBuildCommand: '' }
       },
       null,
       2
@@ -392,30 +350,44 @@ function buildFrontend(): void {
   }
 }
 
-function buildApp(profiles: string[]): void {
+/**
+ * Build through the Tauri CLI, not plain Cargo. The CLI injects the production
+ * asset config; a direct `cargo build` leaves the binary pointing at the dev
+ * server, which renders as a blank webview when Vite is not running.
+ *
+ * One build, reused by every client. The multi-client suites used to compile a
+ * binary each, differing only in the window's `dataDirectory` — meant to give
+ * each client its own WebView store, since that store sits outside the
+ * `MINDSTREAM_PROFILE_DIR` the rest of the isolation goes through.
+ *
+ * It never did anything. `impl From<&WindowConfig> for WebviewAttributes`
+ * (tauri-runtime 2.11.1) does not copy `data_directory`, so for a window Tauri
+ * creates from config the value is dropped and the manager falls back to
+ * `<local data dir>/<identifier>` for every process. Verified by launching the
+ * built binary directly: the override reached the config and the directory was
+ * still never created. So the extra builds bought four extra cargo compiles
+ * and identical behaviour.
+ */
+function buildApp(): void {
   buildFrontend();
-  for (const profile of profiles) {
-    const e2eConfig = writeE2eConfig(profile);
-    const targetBinary = appBinaryForProfile(profile);
-    const res = spawnSync(
-      process.execPath,
-      [
-        tauriScript,
-        'build',
-        '--no-bundle',
-        '--features',
-        'e2e-data-dir',
-        '--config',
-        e2eConfig
-      ],
-      { cwd: repoRoot, stdio: 'inherit', env: buildEnv }
-    );
-    if (res.status !== 0) {
-      fail(`tauri build (--features e2e-data-dir, profile ${profile}) failed`);
-    }
-    copyFileSync(cargoAppBinary, targetBinary);
-    assertAppBinaryReady(targetBinary);
+  const res = spawnSync(
+    process.execPath,
+    [
+      tauriScript,
+      'build',
+      '--no-bundle',
+      '--features',
+      'e2e-data-dir',
+      '--config',
+      writeE2eBuildConfig()
+    ],
+    { cwd: repoRoot, stdio: 'inherit', env: buildEnv }
+  );
+  if (res.status !== 0) {
+    fail('tauri build (--features e2e-data-dir) failed');
   }
+  copyFileSync(cargoAppBinary, appBinary);
+  assertAppBinaryReady(appBinary);
 }
 
 /**
@@ -427,13 +399,10 @@ function buildApp(profiles: string[]): void {
  * save you time without silently changing what is under test.
  */
 export async function preflight({
-  backend,
-  buildProfiles = ['single']
+  backend
 }: {
   /** T4 configs: require the collaboration stack to be answering. */
   backend: boolean;
-  /** Which per-WebView2-profile app binaries this config needs. */
-  buildProfiles?: string[];
 }): Promise<void> {
   sweepStaleProfileDirs();
   assertTauriDriver();
@@ -446,10 +415,8 @@ export async function preflight({
   }
 
   if (process.env.MINDSTREAM_E2E_SKIP_BUILD === '1') {
-    for (const profile of buildProfiles) {
-      assertAppBinaryReady(appBinaryForProfile(profile));
-    }
+    assertAppBinaryReady();
     return;
   }
-  buildApp(buildProfiles);
+  buildApp();
 }

@@ -57,6 +57,16 @@ The remaining variables are behaviour switches, not gates:
   `src-tauri/src/profiles.rs`, gated to dev builds and the `e2e-data-dir`
   feature — a shipped production binary can never be redirected by a stray env
   var.
+- **WebView store — not isolated, and not isolable from config.** The WebView
+  keeps localStorage and its cache outside the profile dir, under
+  `<local data dir>/<identifier>`, shared by every client of a run. The
+  window's `dataDirectory` config key looks like the fix and is not:
+  `impl From<&WindowConfig> for WebviewAttributes` (tauri-runtime 2.11.1)
+  never copies it, so Tauri drops the value for any window it creates from
+  config and falls back to the shared path. The multi-client suites used to
+  compile one binary per client to vary that key; the builds were collapsed to
+  one once this was confirmed by launching the binary directly and watching the
+  directory never appear.
 - **Native dialogs.** File/folder pickers (export, import, PDF import) can't be
   clicked over WebDriver — they need a Rust-side hook to pre-seed the path. The
   dialog-driven specs stay skipped until that seam exists.

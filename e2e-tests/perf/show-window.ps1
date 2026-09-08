@@ -1,6 +1,6 @@
 # Minimise/restore the app's top-level window from a spec, so a probe can ask
 # the page what it thinks its visibility is while the window is not on screen.
-param([Parameter(Mandatory = $true)][int]$Cmd, [string]$ProcName = "mindstream-notes-e2e-single")
+param([Parameter(Mandatory = $true)][int]$Cmd, [string]$ProcName = "mindstream-notes-e2e")
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;

@@ -25,7 +25,7 @@ import {
   installPageDiagnostics
 } from './helpers/failure-capture.js';
 import {
-  appBinaryForProfile,
+  appBinary as application,
   preflight,
   repoRoot,
   spawnTauriDriver,
@@ -47,25 +47,14 @@ interface ClientProc {
   port: number;
   nativePort: number;
   profileId: string;
-  application: string;
   profileDir?: string;
   driver?: ChildProcess;
   startTimer?: ReturnType<typeof setTimeout>;
 }
 
 const clients: Record<'browserA' | 'browserB', ClientProc> = {
-  browserA: {
-    port: 4444,
-    nativePort: 4445,
-    profileId: 'e2e-a',
-    application: appBinaryForProfile('e2e-a')
-  },
-  browserB: {
-    port: 4446,
-    nativePort: 4447,
-    profileId: 'e2e-b',
-    application: appBinaryForProfile('e2e-b')
-  }
+  browserA: { port: 4444, nativePort: 4445, profileId: 'e2e-a' },
+  browserB: { port: 4446, nativePort: 4447, profileId: 'e2e-b' }
 };
 
 const DRIVER_START_STAGGER_MS = 20_000;
@@ -116,14 +105,14 @@ export const config: WebdriverIO.Config = {
       hostname: '127.0.0.1',
       port: clients.browserA.port,
       capabilities: {
-        'tauri:options': { application: clients.browserA.application }
+        'tauri:options': { application }
       } as WebdriverIO.Capabilities
     },
     browserB: {
       hostname: '127.0.0.1',
       port: clients.browserB.port,
       capabilities: {
-        'tauri:options': { application: clients.browserB.application }
+        'tauri:options': { application }
       } as WebdriverIO.Capabilities
     }
   } as unknown as WebdriverIO.Config['capabilities'],
@@ -155,8 +144,7 @@ export const config: WebdriverIO.Config = {
   // Requirement checks + the Tauri CLI build (helpers/preflight.ts). T4 also
   // requires the backend stack, so a down stack fails here — once, before the
   // build — instead of five specs each timing out in their `before` hook.
-  onPrepare: () =>
-    preflight({ backend: true, buildProfiles: ['e2e-a', 'e2e-b'] }),
+  onPrepare: () => preflight({ backend: true }),
 
   // Buffer page-side errors on both clients — WebKitWebDriver has no log
   // endpoint, so what the app logged is only recoverable from the page.
