@@ -39,6 +39,7 @@
     "format:rust:check": "node src-tauri/scripts/format-rust.mjs --check",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "lint:ci": "node --test src-tauri/scripts/lint-ci-filters.test.mjs",
     "lint:i18n": "node --test src-tauri/scripts/lint-i18n.test.mjs && node src-tauri/scripts/lint-i18n.mjs",
     "lint:theme": "node src-tauri/scripts/lint-theme.mjs",
     "prepare": "husky"
@@ -72,6 +73,7 @@
     "happy-dom": "^15.11.0",
     "husky": "^9.1.7",
     "lint-staged": "^17.0.7",
+    "picomatch": "^4.0.7",
     "prettier": "^3.8.3",
     "prettier-plugin-svelte": "^4.1.0",
     "prosemirror-model": "1.25.9",
