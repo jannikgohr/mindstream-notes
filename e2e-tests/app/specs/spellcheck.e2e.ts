@@ -31,13 +31,19 @@ import {
   clickElement,
   clickName,
   closeSettings,
+  closeSettingsIfOpen,
   dictionaryDir,
   insertText,
+  isVisibleInPage,
   pressElementKey,
   restartApp,
   setElementValue,
+  textInPage,
   waitForSaved,
-  waitForShell
+  waitForShell,
+  waitForTextInPage,
+  waitUntilHidden,
+  waitUntilVisible
 } from '../helpers/harness.js';
 
 /** The default language selection is `["en_US"]`, so that is what we seed. */
@@ -70,10 +76,10 @@ function seedDictionary(): void {
 async function createRootNote(title: string): Promise<void> {
   await clickName('New note');
   const draft = $('input[placeholder="New note"]');
-  await draft.waitForDisplayed();
+  await waitUntilVisible(draft);
   await setElementValue(draft, title);
   await pressElementKey(draft, 'Enter');
-  await expect(byName(title)).toBeDisplayed();
+  await waitUntilVisible(byName(title));
 }
 
 /**
@@ -127,7 +133,7 @@ async function openPopoverOnFirstSquiggle(
   await clickElement($(`${selector} .diagnostic-spelling`), {
     button: 'right'
   });
-  await $('[data-diagnostic-popover]').waitForDisplayed({ timeout: 15_000 });
+  await waitUntilVisible($('[data-diagnostic-popover]'));
 }
 
 /**
@@ -153,7 +159,7 @@ async function openSpellingSettings(): Promise<void> {
   // Spelling lives under Language, not Editor: it configures which languages
   // the vault is written in, and the Editor category was already full.
   await clickName('Language');
-  await expect(byName('Check spelling')).toBeDisplayed();
+  await waitUntilVisible(byName('Check spelling'));
 }
 
 describe('T3 spellchecking', function () {
@@ -172,12 +178,21 @@ describe('T3 spellchecking', function () {
     await waitForShell();
   });
 
+  // A failed assertion inside a settings block skips the `closeSettings()`
+  // that would have followed it, and the dialog then sits over every click the
+  // next test makes. That is how one real failure in flow 5.2 was reported as
+  // six — so leave the shell in the state the next test expects, whatever this
+  // one did.
+  afterEach(async () => {
+    await closeSettingsIfOpen();
+  });
+
   describe('flow 5.1 — a seeded dictionary flags a misspelling', () => {
     it('reports the dictionary as installed', async () => {
       // Proves `installed_dictionaries` read the pair off disk over IPC: the
       // panel only offers Remove for something it found.
       await openSpellingSettings();
-      await expect(byName(`Remove ${DICTIONARY_LABEL}`)).toBeDisplayed();
+      await waitUntilVisible(byName(`Remove ${DICTIONARY_LABEL}`));
       await closeSettings();
     });
 
@@ -199,24 +214,21 @@ describe('T3 spellchecking', function () {
 
       // The popover names the word it is about, and offers corrections only
       // once `spellcheck_suggest` has answered — it is never precomputed.
-      await expect($('[data-diagnostic-popover]')).toHaveText(
-        expect.stringContaining('Helo')
-      );
+      await waitForTextInPage($('[data-diagnostic-popover]'), 'Helo');
       const suggestions = $$('[data-diagnostic-action="replace"]');
       await browser.waitUntil(async () => (await suggestions.length) > 0, {
         timeout: 30_000,
         timeoutMsg: 'the popover offered no corrections'
       });
 
-      const chosen = await suggestions[0].getText();
+      const chosen = await textInPage(suggestions[0]);
       await clickElement(suggestions[0]);
 
-      await expect($('.ProseMirror')).toHaveText(
-        expect.stringContaining(chosen)
-      );
-      await expect($('.ProseMirror')).not.toHaveText(
-        expect.stringContaining('Helo')
-      );
+      await waitForTextInPage($('.ProseMirror'), chosen);
+      // As a WORD, not as a substring: the correction on offer is `Hello`,
+      // which contains `Helo`, so a plain containment check asserts the
+      // opposite of what it reads as and can never pass.
+      expect(await textInPage($('.ProseMirror'))).not.toMatch(/\bHelo\b/);
       await waitForFlagged([]);
     });
   });
@@ -248,7 +260,7 @@ describe('T3 spellchecking', function () {
 
     it('lists the accepted word and flags it again once removed', async () => {
       await openSpellingSettings();
-      await expect(byName(`Remove ${WORD}`)).toBeDisplayed();
+      await waitUntilVisible(byName(`Remove ${WORD}`));
       await clickName(`Remove ${WORD}`);
       await closeSettings();
 
@@ -281,9 +293,7 @@ describe('T3 spellchecking', function () {
 
     it('offers the same popover on the source surface', async () => {
       await openPopoverOnFirstSquiggle('.cm-editor');
-      await expect($('[data-diagnostic-popover]')).toHaveText(
-        expect.stringContaining('Wrogn')
-      );
+      await waitForTextInPage($('[data-diagnostic-popover]'), 'Wrogn');
       await browser.keys('Escape');
     });
   });
@@ -295,7 +305,7 @@ describe('T3 spellchecking', function () {
 
       // The panel flips back to offering the download, and says why the
       // still-selected language now does nothing.
-      await expect(byName(`Remove ${DICTIONARY_LABEL}`)).not.toBeDisplayed();
+      await waitUntilHidden(byName(`Remove ${DICTIONARY_LABEL}`));
       await browser.waitUntil(
         async () => (await dictionaryRow(DICTIONARY_LABEL)).includes('Install'),
         {
@@ -312,7 +322,7 @@ describe('T3 spellchecking', function () {
       await waitForShell();
       await openSpellingSettings();
       // The files really left the disk — a fresh boot rescans the directory.
-      await expect(byName(`Remove ${DICTIONARY_LABEL}`)).not.toBeDisplayed();
+      await waitUntilHidden(byName(`Remove ${DICTIONARY_LABEL}`));
       expect(await dictionaryRow(DICTIONARY_LABEL)).toContain('Install');
       await closeSettings();
     });
@@ -326,11 +336,11 @@ describe('T3 spellchecking', function () {
  */
 async function switchToSourceView(): Promise<void> {
   const button = $('button[aria-label^="Editor view mode:"]');
-  await button.waitForDisplayed({ timeout: 15_000 });
+  await waitUntilVisible(button);
   for (let attempt = 0; attempt < 3; attempt++) {
-    if (await $('.cm-content').isDisplayed()) return;
+    if (await isVisibleInPage($('.cm-content'))) return;
     await clickElement(button);
     await browser.pause(250);
   }
-  await expect($('.cm-content')).toBeDisplayed();
+  await waitUntilVisible($('.cm-content'));
 }

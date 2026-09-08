@@ -139,7 +139,7 @@ type ClickOptions = {
  * on `isDisplayed()` never matched it. The page's own geometry is the thing the
  * assertions actually care about, so ask for that instead.
  */
-async function isVisibleInPage(
+export async function isVisibleInPage(
   element: ElementLike,
   client: WebdriverIO.Browser = browser
 ): Promise<boolean> {
@@ -164,7 +164,7 @@ async function isVisibleInPage(
 }
 
 /** Gate an interaction on the element being on screen, per the page. */
-async function waitUntilVisible(
+export async function waitUntilVisible(
   element: ElementLike,
   client: WebdriverIO.Browser = browser
 ): Promise<void> {
@@ -173,6 +173,81 @@ async function waitUntilVisible(
     timeout: 30_000,
     timeoutMsg: `element (${String(resolved.selector)}) never became visible`
   });
+}
+
+/**
+ * The counterpart: gone, or present but not on screen.
+ *
+ * `not.toBeDisplayed()` reads through the very endpoint `isVisibleInPage`
+ * exists to avoid, so a disappearance has to be asserted the same way an
+ * appearance is.
+ */
+export async function waitUntilHidden(
+  element: ElementLike,
+  client: WebdriverIO.Browser = browser
+): Promise<void> {
+  const resolved = await element;
+  await client.waitUntil(
+    async () => !(await isVisibleInPage(resolved, client)),
+    {
+      timeout: 30_000,
+      timeoutMsg: `element (${String(resolved.selector)}) never went away`
+    }
+  );
+}
+
+/**
+ * The text an element holds, read in the page rather than over the wire.
+ *
+ * WebKitWebDriver's text endpoint returns only PART of a subtree. The failure
+ * capture for flow 5.2 has the whole suggestion popover in the DOM — the word
+ * `Helo`, the message `Unknown word`, a `Hello` correction and
+ * `Add to dictionary` — while `getText()` answered `"Unknown word"`, the one
+ * paragraph in it that does not carry Tailwind's `truncate`
+ * (`overflow: hidden; text-overflow: ellipsis; white-space: nowrap`). Every
+ * assertion built on `getText()` or `toHaveText()` inherits that blind spot
+ * and fails against markup that is plainly correct.
+ *
+ * `textContent` with runs of whitespace collapsed: these assertions are about
+ * which words a surface shows, not about how it laid them out.
+ */
+export async function textInPage(
+  element: ElementLike,
+  client: WebdriverIO.Browser = browser
+): Promise<string> {
+  const resolved = await element;
+  return client.execute(
+    (node: HTMLElement) =>
+      (node?.textContent ?? '').replace(/\s+/g, ' ').trim(),
+    resolved as unknown as HTMLElement
+  );
+}
+
+/**
+ * Wait for an element's page-side text to contain `expected`.
+ *
+ * The message is composed after the wait rather than in `timeoutMsg`, which
+ * wdio builds eagerly — one written there reports the state the wait STARTED
+ * from, never the state it gave up in.
+ */
+export async function waitForTextInPage(
+  element: ElementLike,
+  expected: string,
+  client: WebdriverIO.Browser = browser
+): Promise<void> {
+  const resolved = await element;
+  try {
+    await client.waitUntil(
+      async () => (await textInPage(resolved, client)).includes(expected),
+      { timeout: 30_000 }
+    );
+  } catch {
+    throw new Error(
+      `expected ${String(resolved.selector)} to contain ` +
+        `${JSON.stringify(expected)}, still ` +
+        `${JSON.stringify(await textInPage(resolved, client))} after 30s`
+    );
+  }
 }
 
 /**
@@ -593,6 +668,30 @@ export async function setPluginEnabledByName(
  */
 export async function closeSettings(): Promise<void> {
   await closeSettingsDialog(browser);
+}
+
+/**
+ * Close the Settings dialog if one is open, and say nothing if none is.
+ *
+ * For teardown. An assertion that fails inside a settings block skips the
+ * `closeSettings()` that would have followed it, and the dialog then sits over
+ * every click the next test makes — which is how one real failure in flow 5.2
+ * was reported as six. Cleanup must not throw on "there was nothing to close",
+ * or it replaces the failure it was meant to contain.
+ */
+export async function closeSettingsIfOpen(
+  client: WebdriverIO.Browser = browser
+): Promise<void> {
+  await client
+    .execute(() => {
+      const dialog = Array.from(
+        document.querySelectorAll<HTMLElement>('[role="dialog"]')
+      ).find((candidate) => candidate.innerText.includes('Settings'));
+      dialog
+        ?.querySelector<HTMLButtonElement>('button[aria-label="Close"]')
+        ?.click();
+    })
+    .catch(() => undefined);
 }
 
 export async function closeSettingsDialog(
