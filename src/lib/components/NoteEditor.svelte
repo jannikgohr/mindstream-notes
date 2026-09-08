@@ -1091,9 +1091,9 @@
     collabSession.destroy();
     collabOnline = false;
     collabConfigured = false;
-    void crepe?.destroy().catch((error) => {
-      console.error('[NoteEditor] teardown failed', error);
-    });
+    void crepe
+      ?.destroy()
+      .catch((err: unknown) => console.error('[editor] destroy failed', err));
     crepe = null;
     awareness?.destroy();
     awareness = null;
