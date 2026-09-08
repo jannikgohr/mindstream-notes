@@ -1,3 +1,4 @@
+import { isRecord } from '$lib/validation';
 /**
  * Last-session dock layout. Stored in localStorage per vault/profile so
  * each vault reopens its own notes and split arrangement.
@@ -23,10 +24,6 @@ export interface SavedLayout {
 
 function storageKey(vaultId: string): string {
   return `${STORAGE_KEY_PREFIX}${encodeURIComponent(vaultId || DEFAULT_VAULT_ID)}`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function isIsoDateString(value: string): boolean {
