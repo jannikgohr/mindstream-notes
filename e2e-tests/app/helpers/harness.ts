@@ -124,6 +124,12 @@ const FILE_TREE_CREATE_ACTIONS = new Set([
 /** Either shape a wdio query hands back. */
 type ElementLike = WebdriverIO.Element | ChainablePromiseElement;
 
+type ClickOptions = {
+  button?: 'left' | 'right';
+  /** Use only for WebKit elements its displayedness endpoint misreports. */
+  visibility?: 'webdriver' | 'page';
+};
+
 /**
  * Is this element actually on screen, asked of the page rather than the driver?
  *
@@ -203,8 +209,10 @@ async function displayedByName(
  * when the item is sitting right there in the screenshot, so the timeout says
  * what the menu actually held.
  */
-async function describeCreateActions(): Promise<string> {
-  return browser
+async function describeCreateActions(
+  client: WebdriverIO.Browser = browser
+): Promise<string> {
+  return client
     .execute(() => {
       const inRow = Array.from(document.querySelectorAll('button[aria-label]'))
         .filter((button) =>
@@ -306,11 +314,15 @@ async function waitForDefaultClientReady(): Promise<void> {
 
 export async function clickElement(
   element: ChainablePromiseElement,
-  opts: { button?: 'left' | 'right' } = {}
+  opts: ClickOptions = {}
 ): Promise<void> {
   await waitForDefaultClientReady();
   const resolved = await element;
-  await waitUntilVisible(resolved);
+  if (opts.visibility === 'page') {
+    await waitUntilVisible(resolved);
+  } else {
+    await resolved.waitForDisplayed({ timeout: 30_000 });
+  }
   await browser.execute(
     (el: HTMLElement, button: 'left' | 'right') => {
       el.scrollIntoView({ block: 'center', inline: 'center' });
@@ -350,7 +362,7 @@ export async function setElementValue(
 ): Promise<void> {
   await waitForDefaultClientReady();
   const resolved = await element;
-  await waitUntilVisible(resolved);
+  await resolved.waitForDisplayed({ timeout: 30_000 });
   await browser.execute(
     (el: HTMLElement, next: string) => {
       // See clientHelpers.setValue: label-wrapped inputs mean `aria/<name>` can
@@ -382,7 +394,7 @@ export async function pressElementKey(
 ): Promise<void> {
   await waitForDefaultClientReady();
   const resolved = await element;
-  await waitUntilVisible(resolved);
+  await resolved.waitForDisplayed({ timeout: 30_000 });
   await browser.execute(
     (el: HTMLElement, pressed: string, ctrlKey: boolean) => {
       el.focus?.();
@@ -483,7 +495,9 @@ export async function revealFileTreeCreateAction(
 }
 
 export async function clickFileTreeCreateAction(name: string): Promise<void> {
-  await clickElement(await revealFileTreeCreateAction(name));
+  await clickElement(await revealFileTreeCreateAction(name), {
+    visibility: 'page'
+  });
 }
 
 export async function clickMenuItem(label: string): Promise<void> {
@@ -930,11 +944,15 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
 
   const clickElement = async (
     element: ChainablePromiseElement,
-    opts: { button?: 'left' | 'right' } = {}
+    opts: ClickOptions = {}
   ): Promise<void> => {
     await waitForClientReady(client);
     const resolved = await element;
-    await waitDisplayedDiagnosed(client, resolved);
+    if (opts.visibility === 'page') {
+      await waitUntilVisible(resolved, client);
+    } else {
+      await waitDisplayedDiagnosed(client, resolved);
+    }
     await client.execute(
       (el: HTMLElement, button: 'left' | 'right') => {
         el.scrollIntoView({ block: 'center', inline: 'center' });
@@ -971,18 +989,16 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
   ): Promise<ChainablePromiseElement | undefined> => {
     const escaped = name.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     const toolbarButton = client.$(`button[aria-label="${escaped}"]`);
-    if (await toolbarButton.isDisplayed().catch(() => false)) {
+    if (await isVisibleInPage(toolbarButton, client)) {
       return toolbarButton;
     }
-    const menuItems = await client.$$('button[role="menuitem"]');
-    for (const item of menuItems) {
-      if (
-        (await item.isDisplayed()) &&
-        (await item.getText()).trim() === name
-      ) {
-        return item as unknown as ChainablePromiseElement;
-      }
+    if (name.includes('"')) {
+      throw new Error(`create action names must not contain a quote: ${name}`);
     }
+    const menuItem = client.$(
+      `//button[@role="menuitem"][normalize-space(.)="${name}"]`
+    );
+    if (await isVisibleInPage(menuItem, client)) return menuItem;
     return undefined;
   };
 
@@ -996,18 +1012,24 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
     ) {
       let action = await displayedByName(name);
       if (!action) {
-        await clickElement(client.$('button[aria-label="More actions"]'));
-        await client.waitUntil(
-          async () => Boolean(await displayedByName(name)),
-          {
-            timeout: 30_000,
-            timeoutMsg: `file-tree create action did not become visible: ${name}`
-          }
-        );
+        const more = client.$('button[aria-label="More actions"]');
+        if ((await more.getAttribute('aria-expanded')) !== 'true') {
+          await clickElement(more);
+        }
+        await client
+          .waitUntil(async () => Boolean(await displayedByName(name)), {
+            timeout: 30_000
+          })
+          .catch(async () => {
+            throw new Error(
+              `file-tree create action did not become visible: ${name} — ` +
+                (await describeCreateActions(client))
+            );
+          });
         action = await displayedByName(name);
       }
       if (!action) throw new Error(`missing file-tree create action: ${name}`);
-      await clickElement(action);
+      await clickElement(action, { visibility: 'page' });
       return;
     }
     await clickElement(byName(name), opts);
@@ -1015,7 +1037,7 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
 
   const setValue = async (name: string, value: string): Promise<void> => {
     const resolved = await byName(name);
-    await waitUntilVisible(resolved, client);
+    await resolved.waitForDisplayed({ timeout: 30_000 });
     await client.execute(
       (el: HTMLElement, next: string) => {
         // The app wraps inputs in a <label> whose text supplies the accessible
@@ -1048,7 +1070,7 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
     opts: { ctrlKey?: boolean } = {}
   ): Promise<void> => {
     const resolved = await element;
-    await waitUntilVisible(resolved, client);
+    await resolved.waitForDisplayed({ timeout: 30_000 });
     await client.execute(
       (el: HTMLElement, pressed: string, ctrlKey: boolean) => {
         el.focus?.();
