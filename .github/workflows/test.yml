@@ -16,7 +16,8 @@
 #   - e2e      : Playwright drives the SvelteKit SPA (browser-fallback mode,
 #                mock store) on Linux to cover the Svelte components unit tests
 #                can't reach.
-#   - app-e2e  : wdio + tauri-driver against the packaged binary under Xvfb.
+#   - app-e2e  : wdio + tauri-driver against the packaged binary under Xvfb,
+#                built once by `app-e2e-build` and shared as an artifact.
 #                By far the most expensive group, so it is scoped: `single`
 #                on any code change, the two collaboration suites only where
 #                they can tell you something (see the `changes` job).
@@ -406,10 +407,74 @@ jobs:
       # lives in the one job no gate can skip.
       - run: pnpm lint:ci
 
+  # One build for all three suites.
+  #
+  # Each suite job used to compile the same crate itself: the rust-cache
+  # shared-key meant they didn't rebuild the dependency tree, but they each
+  # still linked the app (~3m25) and ran Vite (~55s), three times over, for a
+  # binary that is byte-for-byte the same in all three. Build it once here and
+  # pass it on, along with tauri-driver, so the suite jobs need no Rust
+  # toolchain at all.
+  #
+  # The trade is deliberate: this serialises a build in front of the suites,
+  # so it costs a little wall clock and saves a lot of billed minutes. The
+  # suites' own wall time is what the parallelism inside them addresses.
+  app-e2e-build:
+    name: Tauri E2E build
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    timeout-minutes: 60
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Build-time only: the suite jobs install the runtime half themselves.
+      - name: Install desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
+
+      # Same `shared-key` the suite jobs used, so this job inherits the cache
+      # they were populating. `cache-on-failure` matters more than it looks:
+      # the default drops the cache when the job fails, so a red build never
+      # saves one — and then never has one to restore.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: app-e2e
+          cache-on-failure: true
+      - run: pnpm install --frozen-lockfile
+      - run: cargo install tauri-driver --locked
+
+      # The suites' own build path (helpers/preflight.ts), not a second recipe
+      # that could drift from it.
+      - run: pnpm test:e2e:app:build
+
+      - name: Collect what the suites need
+        run: |
+          mkdir -p .output/app-e2e-bin
+          cp src-tauri/target/release/mindstream-notes-e2e .output/app-e2e-bin/
+          cp "$HOME/.cargo/bin/tauri-driver" .output/app-e2e-bin/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-e2e-bin
+          path: .output/app-e2e-bin
+          retention-days: 1
+
   app-e2e:
     name: Tauri E2E (${{ matrix.suite }})
     runs-on: ubuntu-24.04
-    needs: changes
+    needs: [changes, app-e2e-build]
     if: needs.changes.outputs.code == 'true'
     timeout-minutes: 90
     strategy:
@@ -431,33 +496,44 @@ jobs:
         with:
           node-version: 20
           cache: pnpm
-      - uses: dtolnay/rust-toolchain@stable
+
+      # Nothing here compiles: `app-e2e-build` did that and handed over the
+      # binary and tauri-driver, so this job needs no Rust toolchain and no
+      # cargo cache. The package list still names the -dev variants, which
+      # is the proven one — the runtime-only names differ on noble
+      # (libgtk-3-0 is libgtk-3-0t64 there) and the download they would save
+      # is not worth getting that wrong.
       - name: Install desktop test dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev webkit2gtk-driver xvfb xauth dbus-x11 gnome-keyring
-
-      # The suites all build the same crate with the same features, so they
-      # share one cache entry instead of keying on the job name and each
-      # compiling the dependency tree from scratch (~7 minutes a job).
-      #
-      # `cache-on-failure` matters more than it looks: the default drops the
-      # cache when the job fails, so a red suite never saves one — and then
-      # never has one to restore, which is exactly the state these jobs were
-      # in. A failed test run still compiled the dependencies correctly.
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-          shared-key: app-e2e
-          cache-on-failure: true
       - run: pnpm install --frozen-lockfile
-      - run: cargo install tauri-driver --locked
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-e2e-bin
+          path: .output/app-e2e-bin
+
+      # Where the harness looks for them: preflight.ts resolves the binary
+      # under src-tauri/target/release and tauri-driver under ~/.cargo/bin.
+      # The artifact does not carry the executable bit, so restore it.
+      - name: Restore the built binaries
+        run: |
+          mkdir -p src-tauri/target/release "$HOME/.cargo/bin"
+          mv .output/app-e2e-bin/mindstream-notes-e2e src-tauri/target/release/
+          mv .output/app-e2e-bin/tauri-driver "$HOME/.cargo/bin/"
+          chmod +x src-tauri/target/release/mindstream-notes-e2e "$HOME/.cargo/bin/tauri-driver"
+          rmdir .output/app-e2e-bin
+
       - name: Start disposable collaboration backend
         if: matrix.suite != 'single'
         run: pnpm backend:test:up
       - name: Run packaged app suite
         env:
           APP_SUITE: ${{ matrix.suite }}
+          # The binary came from app-e2e-build. preflight still verifies it
+          # carries `e2e-data-dir` before trusting it.
+          MINDSTREAM_E2E_SKIP_BUILD: '1'
         run: |
           case "$APP_SUITE" in
             single) export TEST_COMMAND=test:e2e:app ;;
@@ -496,7 +572,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always()
-    needs: [changes, js, rust, coverage, e2e, format, app-e2e]
+    needs: [changes, js, rust, coverage, e2e, format, app-e2e-build, app-e2e]
     steps:
       # Plain expressions, no jq or node: this job is the one that must never
       # be the thing that broke. `needs.*.result` is an array of every needed

@@ -368,7 +368,7 @@ function buildFrontend(): void {
  * still never created. So the extra builds bought four extra cargo compiles
  * and identical behaviour.
  */
-function buildApp(): void {
+export function buildApp(): void {
   buildFrontend();
   const res = spawnSync(
     process.execPath,
