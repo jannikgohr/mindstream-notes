@@ -1451,7 +1451,7 @@
 
   const saveScheduler = createSaveScheduler({
     canSave: () => !isReadOnly && autoSaveEnabled,
-    save: persistCurrentNote,
+    capture: captureCurrentNoteSave,
     delayMs: () => saveDebounceMs,
     onError: (error) => {
       savingState = 'error';
@@ -1463,10 +1463,10 @@
     savingState = saveScheduler.pending ? 'pending' : 'idle';
   }
 
-  async function persistCurrentNote(
+  function captureCurrentNoteSave(
     opts: { updateStatus?: boolean } = {}
-  ): Promise<void> {
-    if (isReadOnly) return;
+  ): (() => Promise<void>) | null {
+    if (isReadOnly) return null;
     const updateStatus = opts.updateStatus ?? true;
     // Capture the markdown + y-doc state synchronously while the editor still
     // exists. This also lets onDestroy flush a pending debounce before Crepe
@@ -1481,17 +1481,24 @@
     // Array.from is necessary because Tauri serialises Uint8Array as an empty
     // object via JSON.stringify.
     const yrsState = yDoc ? Array.from(Y.encodeStateAsUpdate(yDoc)) : undefined;
-    await apiSaveNote({ id: noteId, body: markdown, yrs_state: yrsState });
-    // Mirror the new modified timestamp in the local cache so the metadata
-    // panel reflects the save without a tree refetch.
-    const existing = tree.notesById[noteId];
-    if (existing) {
-      tree.notesById[noteId] = {
-        ...existing,
-        modified: new Date().toISOString()
-      };
-    }
-    if (updateStatus) savingState = 'saved';
+    const capturedNoteId = noteId;
+    return async () => {
+      await apiSaveNote({
+        id: capturedNoteId,
+        body: markdown,
+        yrs_state: yrsState
+      });
+      // Mirror the new modified timestamp in the local cache so the metadata
+      // panel reflects the save without a tree refetch.
+      const existing = tree.notesById[capturedNoteId];
+      if (existing) {
+        tree.notesById[capturedNoteId] = {
+          ...existing,
+          modified: new Date().toISOString()
+        };
+      }
+      if (updateStatus) savingState = 'saved';
+    };
   }
 
   // --- In-document find & replace -------------------------------------------
