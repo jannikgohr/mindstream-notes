@@ -39,6 +39,7 @@ import {
   restartApp,
   setElementValue,
   textInPage,
+  typeText,
   waitForSaved,
   waitForShell,
   waitForTextInPage,
@@ -281,12 +282,14 @@ describe('T3 spellchecking', function () {
       //
       // Typed through the keyboard rather than execCommand: CodeMirror builds
       // its document from key input, and the browser-tier source specs drive
-      // it the same way.
-      await clickElement($('.cm-content'));
+      // it the same way. `typeText` sends one key per call and reads the
+      // document back, because a single `browser.keys` drops repeated
+      // characters here and `hello` arrived as `helo`.
+      //
       // Everything around the target is in the fixture dictionary — with six
       // known words, an ordinary sentence would be flagged end to end and the
       // assertion would prove nothing about masking.
-      await browser.keys('hello `Helo` world Wrogn');
+      await typeText('.cm-content', 'hello `Helo` world Wrogn');
 
       await waitForFlagged(['Wrogn'], '.cm-editor');
     });

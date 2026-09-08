@@ -552,6 +552,34 @@ export async function insertText(
   );
 }
 
+/**
+ * Type into a surface that builds its document from key events.
+ *
+ * One character per call, then a read-back. A single `browser.keys(text)`
+ * drops REPEATED characters on WebKitWebDriver: flow 5.6 typed
+ * "hello `Helo` world Wrogn" and the editor held "helo `Helo` world Wrogn" —
+ * the doubled `l` collapsed, while every word in the sentence without a repeat
+ * arrived intact. That surfaced as a spellcheck assertion failing over a word
+ * the test never typed.
+ *
+ * The read-back is half the point. A dropped keystroke is a harness fault and
+ * has to say so, instead of being reported as a defect in the feature under
+ * test.
+ */
+export async function typeText(selector: string, text: string): Promise<void> {
+  await clickElement($(selector));
+  for (const character of text) {
+    await browser.keys(character);
+  }
+  const held = await textInPage($(selector));
+  if (!held.includes(text)) {
+    throw new Error(
+      `typing into ${selector} did not land: sent ${JSON.stringify(text)}, ` +
+        `surface holds ${JSON.stringify(held)}`
+    );
+  }
+}
+
 export async function clickName(
   name: string,
   opts: { button?: 'left' | 'right' } = {}
