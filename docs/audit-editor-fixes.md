@@ -22,5 +22,9 @@ only the pre-render edit. Collaboration tests cover unmounts during both awaits,
 overlapping setup calls, pause cancellation, stale callbacks, awareness batching,
 and replay-window cleanup. Rendering lifecycle tests cover quick scroll re-entry, stale observer callbacks, resize snapshot suppression, and timer/listener cleanup.
 
-Validation: all 2,815 frontend tests in 227 files passed. ESLint, Svelte type checking,
-web formatting, and the production build passed on Windows.
+Validation on Windows: with all four audit branches merged, all 2,844 frontend
+tests in 233 files passed with 83.31% line coverage under the expanded 80% gate.
+The combined ESLint and Svelte type checks passed with zero errors or warnings
+from the type checker. The editor branch also passed web formatting and the
+production build. Focused tests cover both extracted rendering controllers and
+the final synchronous-capture, ordered-persistence contract.
