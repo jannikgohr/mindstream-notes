@@ -1,3 +1,4 @@
+import { assertRequiredString } from '$lib/validation';
 /**
  * Etebase auth bridge. Mirror of src-tauri/src/auth/mod.rs.
  *
@@ -214,12 +215,6 @@ function assertLoginInput(input: LoginInput): void {
   }
   assertRequiredString(input.username, 'input.username');
   assertRequiredString(input.password, 'input.password');
-}
-
-function assertRequiredString(value: string, context: string): void {
-  if (value.trim().length === 0) {
-    throw new Error(`${context} must be a non-empty string`);
-  }
 }
 
 function parseSessionInfo(value: unknown): SessionInfo {
