@@ -6,6 +6,13 @@
 export function base64ToBytes(b64: string): Uint8Array {
   const standard = b64.replace(/-/g, '+').replace(/_/g, '/');
   const padded = standard + '='.repeat((4 - (standard.length % 4)) % 4);
+  const buffer = (
+    globalThis as {
+      Buffer?: { from(value: string, encoding: 'base64'): Uint8Array };
+    }
+  ).Buffer;
+  if (typeof atob !== 'function' && buffer)
+    return new Uint8Array(buffer.from(padded, 'base64'));
   const bin = atob(padded);
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);

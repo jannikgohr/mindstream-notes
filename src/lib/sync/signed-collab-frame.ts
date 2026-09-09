@@ -1,3 +1,4 @@
+import { base64ToBytes } from '$lib/editor/base64';
 const SIGNED_FRAME_MARKER = 0xff;
 const SIGNED_FRAME_VERSION = 1;
 const IV_LEN = 12;
@@ -78,19 +79,6 @@ function bytesToBase64(bytes: Uint8Array): string {
     bin += String.fromCharCode(bytes[i]);
   }
   return btoa(bin);
-}
-
-function base64ToBytes(value: string): Uint8Array {
-  const buffer = nodeBuffer();
-  if (typeof atob !== 'function' && buffer) {
-    return new Uint8Array(buffer.from(value, 'base64'));
-  }
-  const bin = atob(value);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) {
-    bytes[i] = bin.charCodeAt(i);
-  }
-  return bytes;
 }
 
 function concatBytes(parts: Uint8Array[]): Uint8Array {
@@ -189,25 +177,28 @@ const REPLAY_WINDOW_MS = 5 * 60_000;
  */
 export class CollabReplayGuard {
   private readonly seen = new Map<string, number>();
+  private lastNow = 0;
 
   constructor(private readonly windowMs: number = REPLAY_WINDOW_MS) {}
 
   /** True if the frame is fresh and unseen; recording it as seen. */
   accept(timestamp: number, signature: Uint8Array, now = Date.now()): boolean {
     if (!Number.isFinite(timestamp)) return false;
-    if (Math.abs(now - timestamp) > this.windowMs) return false;
+    if (now - timestamp >= this.windowMs || timestamp > now + 30_000)
+      return false;
+    // Keep insertion expiry ordered even if the wall clock moves backwards.
+    this.lastNow = Math.max(this.lastNow, now);
+    now = this.lastNow;
 
     const key = bytesToBase64(signature);
     const expiry = this.seen.get(key);
     if (expiry !== undefined && expiry > now) return false;
 
-    // Sweep on write: the map only ever holds one window's worth of frames.
-    if (this.seen.size > 0) {
-      for (const [seenKey, seenExpiry] of this.seen) {
-        if (seenExpiry <= now) this.seen.delete(seenKey);
-      }
+    for (const [seenKey, seenExpiry] of this.seen) {
+      if (seenExpiry > now) break;
+      this.seen.delete(seenKey);
     }
-    this.seen.set(key, now + this.windowMs);
+    this.seen.set(key, now + this.windowMs + 30_000);
     return true;
   }
 }

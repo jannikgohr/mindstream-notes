@@ -1,3 +1,4 @@
+import { assertRequiredString } from '$lib/validation';
 import {
   assertBoolean,
   assertRecord,
@@ -250,12 +251,6 @@ export function getCollectionShareState(
     }),
     parseCollectionShareState
   );
-}
-
-function assertRequiredString(value: string, context: string): void {
-  if (value.trim().length === 0) {
-    throw new Error(`${context} must be a non-empty string`);
-  }
 }
 
 function parseAccessLevel(

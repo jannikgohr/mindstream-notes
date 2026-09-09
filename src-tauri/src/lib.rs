@@ -51,6 +51,7 @@ pub mod tree;
 pub mod tree_batch;
 #[cfg(desktop)]
 pub mod webview_memory;
+pub mod webview_security;
 
 use std::borrow::Cow;
 
@@ -313,6 +314,38 @@ pub fn run() {
 
             #[cfg(desktop)]
             app.manage(desktop_settings::DesktopSettings::load(app)?);
+
+            // Create after profile selection so the first document gets the
+            // correct account's CSP. A fresh document after sign-in/sign-out
+            // reads the newly persisted session before allowing relay traffic.
+            let policy_app = app.handle().clone();
+            #[cfg(desktop)]
+            let preview_port = Some(plugins::preview_service::gateway_port()?);
+            #[cfg(not(desktop))]
+            let preview_port = None;
+            let config = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|window| window.label == "main")
+                .ok_or("main window configuration is missing")?;
+            tauri::WebviewWindowBuilder::from_config(app, config)?
+                .on_web_resource_request(move |_request, response| {
+                    if !response
+                        .headers()
+                        .contains_key(tauri::http::header::CONTENT_SECURITY_POLICY)
+                    {
+                        return;
+                    }
+                    let session = auth::read_session_info(&policy_app).ok().flatten();
+                    webview_security::apply_account_policy(
+                        response,
+                        session.as_ref().map(|session| session.server_url.as_str()),
+                        preview_port,
+                    );
+                })
+                .build()?;
 
             #[cfg(target_os = "macos")]
             native_menu::init(app)?;

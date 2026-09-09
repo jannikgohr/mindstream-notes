@@ -1,3 +1,4 @@
+import { assertRequiredString } from '$lib/validation';
 /**
  * Sync bridge. Mirror of src-tauri/src/sync/mod.rs.
  *
@@ -93,12 +94,6 @@ export async function noteRoomInfo(
       writerPublicKeyB64: writerPublicKeyB64 ?? null
     })
   );
-}
-
-function assertRequiredString(value: string, context: string): void {
-  if (value.trim().length === 0) {
-    throw new Error(`${context} must be a non-empty string`);
-  }
 }
 
 function assertSyncScheduleInput(input: SyncScheduleInput): void {

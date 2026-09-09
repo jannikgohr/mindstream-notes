@@ -1,3 +1,4 @@
+import { assertRequiredString } from '$lib/validation';
 /**
  * Etebase auth bridge. Mirror of src-tauri/src/auth/mod.rs.
  *
@@ -8,6 +9,7 @@
  */
 
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
+import { flushPendingEditorSaves } from '$lib/editor/suspend-flush';
 import {
   assertBoolean,
   assertNumber,
@@ -49,10 +51,9 @@ type AuthSessionState =
   | { status: 'signedIn'; session: SessionInfo };
 
 /**
- * Pub/sub for session-state transitions. Login + logout both dispatch
- * a 'change' event after the Rust side completes; long-lived consumers
- * (the collab provider in particular) listen so they can tear down or
- * re-init when the user signs in or out without forcing a route change.
+ * Pub/sub for session refreshes. Long-lived consumers can update after a
+ * session file change made by another window. Login and logout reload this
+ * window so its document receives a CSP for the new account before code runs.
  *
  * The bus lives at the module level so any caller sees the same target;
  * EventTarget is built-in and pulls in no dependencies.
@@ -77,9 +78,8 @@ function emitSessionChange() {
 /**
  * Reactive session store. Cheap to read from any Svelte component
  * (`authSession.current` in a `$derived`) without each one having to
- * keep its own `etebaseSession()` polling state. Hydrated lazily on
- * first read via `refreshAuthSession()` and re-fetched after every
- * login/logout below, so the value stays correct across windows that
+ * keep its own `etebaseSession()` polling state. Hydrated lazily on first read
+ * via `refreshAuthSession()`, so the value stays correct across windows that
  * share the underlying session file.
  *
  * `initialised` is false until the first refresh completes, which lets
@@ -114,6 +114,7 @@ export const authSession = new AuthSessionStore();
 export async function refreshAuthSession(): Promise<void> {
   try {
     authSession.current = await etebaseSession();
+    emitSessionChange();
   } catch (err) {
     console.warn('[auth] session refresh failed', err);
     authSession.current = null;
@@ -135,6 +136,7 @@ export async function etebaseLogin(input: LoginInput): Promise<SessionInfo> {
   if (!isTauri()) {
     throw new Error('Sign-in is only available in the desktop app.');
   }
+  await flushPendingEditorSaves();
   const session = parseSessionInfo(
     await tauriInvoke<unknown>(TauriCommandName.EtebaseLogin, {
       args: {
@@ -147,19 +149,20 @@ export async function etebaseLogin(input: LoginInput): Promise<SessionInfo> {
   );
   authSession.current = session;
   authSession.initialised = true;
-  emitSessionChange();
+  window.location.reload();
   return session;
 }
 
 export async function etebaseLogout(): Promise<void> {
   if (!isTauri()) return;
+  await flushPendingEditorSaves();
   assertVoid(
     await tauriInvoke<unknown>(TauriCommandName.EtebaseLogout),
     'etebase_logout response'
   );
   authSession.current = null;
   authSession.initialised = true;
-  emitSessionChange();
+  window.location.reload();
 }
 
 export async function etebaseSession(): Promise<SessionInfo | null> {
@@ -214,12 +217,6 @@ function assertLoginInput(input: LoginInput): void {
   }
   assertRequiredString(input.username, 'input.username');
   assertRequiredString(input.password, 'input.password');
-}
-
-function assertRequiredString(value: string, context: string): void {
-  if (value.trim().length === 0) {
-    throw new Error(`${context} must be a non-empty string`);
-  }
 }
 
 function parseSessionInfo(value: unknown): SessionInfo {

@@ -743,3 +743,36 @@ fn moving_a_note_out_of_a_share_rehomes_note_and_assets_and_tombstones() {
         "leaving a scope must delete the note + asset in that scope"
     );
 }
+
+#[test]
+fn purge_failure_rolls_back_note_and_asset_tombstones() {
+    let db = open_memory_for_tests();
+    let id = empty_note(&db, None).summary.id;
+    db.with_conn(|c| {
+        c.execute("UPDATE notes SET etebase_uid = 'remote-note' WHERE id = ?1", params![id])?;
+        c.execute_batch("CREATE TRIGGER refuse_delete BEFORE DELETE ON notes BEGIN SELECT RAISE(ABORT, 'simulated disk failure'); END;")?;
+        assert!(purge(c, &id).is_err());
+        assert!(load(c, &id).is_ok());
+        assert_eq!(c.query_row("SELECT count(*) FROM tombstones", [], |r| r.get::<_, i64>(0))?, 0);
+        Ok(())
+    }).unwrap();
+}
+
+#[test]
+fn direct_trash_and_restore_move_the_note_in_the_tree() {
+    let db = open_memory_for_tests();
+    let id = empty_note(&db, None).summary.id;
+    db.with_conn(|c| {
+        trash(c, &id)?;
+        assert_eq!(
+            load(c, &id)?.summary.parent_collection_id.as_deref(),
+            Some("trash")
+        );
+        restore(c, &id)?;
+        let note = load(c, &id)?;
+        assert!(note.summary.parent_collection_id.is_none());
+        assert!(!note.summary.trashed);
+        Ok(())
+    })
+    .unwrap();
+}

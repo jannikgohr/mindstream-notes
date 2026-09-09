@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { ancestorIsTrash } from '$lib/editor/trash';
+  import { createSaveScheduler } from '$lib/editor/save-scheduler';
+  import { createCollabSession } from '$lib/editor/collab-session';
   import { onDestroy, onMount, tick } from 'svelte';
-  import { onAppSuspend } from '$lib/editor/suspend-flush';
   import { Crepe } from '@milkdown/crepe';
   import {
     editorViewCtx,
@@ -16,7 +18,6 @@
     loadNote,
     saveNote as apiSaveNote,
     TRASH_ID,
-    noteRoomInfo,
     etebaseSession,
     authSession,
     getYjsRelayUrl,
@@ -64,13 +65,8 @@
   import { insertMarkdownAtSelection } from '$lib/editor/insert-markdown';
   import { ensureDropIndicatorAlignment } from '$lib/editor/drop-indicator-align';
   import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
-  import {
-    collabAuthForRoom,
-    getOrCreateCollabSigningMaterial
-  } from '$lib/sync/collab-signing-key';
   import { otherPeerCount } from '$lib/editor/awareness-presence';
   import { pickCursorColor } from '$lib/editor/cursor-color';
-  import { base64ToBytes } from '$lib/editor/base64';
   import {
     createWikilinkBridge,
     createMarkdownSearchBridge,
@@ -284,7 +280,6 @@
   let assetBridge: AssetBridge | null = null;
   let collabOnline = $state(false);
   let collabConfigured = $state(false);
-  let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let loading = $state(true);
   let savingState = $state<'idle' | 'pending' | 'saving' | 'saved' | 'error'>(
     'idle'
@@ -355,17 +350,6 @@
    * Cycle guard is defensive — the backend rejects parent cycles, but
    * a corrupt local cache shouldn't hang the editor.
    */
-  function ancestorIsTrash(parentId: string | null): boolean {
-    let current = parentId;
-    const seen = new Set<string>();
-    while (current) {
-      if (current === TRASH_ID) return true;
-      if (seen.has(current)) return false;
-      seen.add(current);
-      current = tree.collectionsById[current]?.parent_collection_id ?? null;
-    }
-    return false;
-  }
 
   // "Trashed" has four shapes the editor needs to recognise:
   //   1. The note is moved into the special 'trash' collection, but
@@ -384,7 +368,11 @@
     const n = tree.notesById[noteId];
     if (!n) return true;
     if (n.trashed === true) return true;
-    return ancestorIsTrash(n.parent_collection_id);
+    return ancestorIsTrash(
+      n.parent_collection_id,
+      tree.collectionsById,
+      TRASH_ID
+    );
   });
 
   // The note sits in a folder shared *with* this user at read-only access.
@@ -838,56 +826,32 @@
    * socket. Returns silently when prerequisites aren't met — no relay
    * URL configured, no session, or the note hasn't been pushed yet.
    */
-  async function setupCollabProvider() {
-    if (provider) {
-      provider.destroy();
-      provider = null;
-      collabOnline = false;
+  const collabSession = createCollabSession({
+    getContext: () => {
+      const url = getYjsRelayUrl(
+        (getSettingValue('account.serverUrl') as string | undefined) ?? ''
+      );
+      if (!url || !(yDoc && awareness) || e2eCollabPaused) return null;
+      return { noteId, url, value: { doc: yDoc, awareness } };
+    },
+    create: (context, connection) =>
+      new CollabProvider({ ...connection, ...context }),
+    onProvider: (next) => {
+      provider = next;
+    },
+    onConfigured: (configured) => {
+      collabConfigured = configured;
+    },
+    onStatusChange: (online) => {
+      collabOnline = online;
     }
-    collabConfigured = false;
-    if (e2eCollabPaused) return;
-
-    // Derived from the single account.serverUrl setting: nginx routes
-    // /yjs to the yjs-relay upstream (see backend/nginx/nginx.conf).
-    const collabUrl = getYjsRelayUrl(
-      (getSettingValue('account.serverUrl') as string | undefined) ?? ''
-    );
-    if (!collabUrl) return;
-    if (!yDoc || !awareness) return;
-
-    try {
-      const signingMaterial = await getOrCreateCollabSigningMaterial();
-      const room = await noteRoomInfo(noteId, signingMaterial?.publicKeyB64);
-      if (!room) return;
-      collabConfigured = true;
-      provider = new CollabProvider({
-        url: collabUrl,
-        roomId: room.room_id,
-        joinPrivateKeyPkcs8B64: room.join_private_key_pkcs8_b64,
-        keyBytes: base64ToBytes(room.key_b64),
-        doc: yDoc,
-        awareness,
-        auth: collabAuthForRoom(room, signingMaterial),
-        requireSignedWrites: room.collab_epoch > 0,
-        onAuthStale: () => {
-          void setupCollabProvider();
-        },
-        onStatusChange: (online) => {
-          collabOnline = online;
-        }
-      });
-    } catch (err) {
-      console.debug('[NoteEditor] collab provider init failed', err);
-    }
-  }
+  });
+  const setupCollabProvider = collabSession.setup;
 
   async function setE2eCollabPaused(paused: boolean): Promise<void> {
     e2eCollabPaused = paused;
     if (paused) {
-      if (provider) {
-        provider.destroy();
-        provider = null;
-      }
+      collabSession.disconnect();
       collabOnline = false;
       collabConfigured = false;
       return;
@@ -1061,13 +1025,7 @@
   });
 
   onDestroy(() => {
-    if (saveTimer) {
-      clearTimeout(saveTimer);
-      saveTimer = null;
-      void persistCurrentNote({ updateStatus: false }).catch((err) => {
-        console.error('[NoteEditor] final save failed', err);
-      });
-    }
+    void saveScheduler.destroy();
     // Flush a final history version for edits made since the last capture,
     // while the editor (and getMarkdown) is still alive. Fire-and-forget —
     // the backend dedups, so a no-op close is harmless.
@@ -1132,8 +1090,7 @@
       }
     }
 
-    provider?.destroy();
-    provider = null;
+    collabSession.destroy();
     collabOnline = false;
     collabConfigured = false;
     void crepe
@@ -1492,53 +1449,26 @@
     }
   }
 
-  // The OS can take the process down without unmounting us (Android kills
-  // backgrounded apps), so `onDestroy` alone can't protect the debounce
-  // window. Same guard and options the teardown flush uses.
-  $effect(() =>
-    onAppSuspend(() => {
-      if (!saveTimer) return;
-      void persistCurrentNote({ updateStatus: false }).catch((err) => {
-        console.error('[NoteEditor] suspend save failed', err);
-      });
-    })
-  );
+  $effect(() => saveScheduler.subscribeSuspend());
 
-  function scheduleSave() {
-    // setReadonly(true) already prevents user input, but yDoc 'update' can
-    // still fire from programmatic mutations or remote edits arriving on
-    // a note that just got trashed (or shared read-only) elsewhere. Drop
-    // those silently rather than persisting an edit we can't push anyway.
-    if (isReadOnly) return;
-    // Honour the user's auto-save toggle. We still cancel any in-flight
-    // debounce so a setting flip mid-debounce doesn't fire one last save
-    // after the user turned it off. yrs_state continues to mutate locally
-    // either way — the next manual save (or re-enabling auto-save with a
-    // fresh keystroke) will flush.
-    if (!autoSaveEnabled) {
-      if (saveTimer) {
-        clearTimeout(saveTimer);
-        saveTimer = null;
-      }
-      savingState = 'idle';
-      return;
+  const saveScheduler = createSaveScheduler({
+    canSave: () => !isReadOnly && autoSaveEnabled,
+    capture: captureCurrentNoteSave,
+    delayMs: () => saveDebounceMs,
+    onError: (error) => {
+      savingState = 'error';
+      console.error('[NoteEditor] save failed', error);
     }
-    savingState = 'pending';
-    if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(async () => {
-      try {
-        savingState = 'saving';
-        await persistCurrentNote();
-      } catch (err) {
-        savingState = 'error';
-        console.error('[NoteEditor] save failed', err);
-      }
-    }, saveDebounceMs);
+  });
+  function scheduleSave() {
+    saveScheduler.schedule();
+    savingState = saveScheduler.pending ? 'pending' : 'idle';
   }
 
-  async function persistCurrentNote(
+  function captureCurrentNoteSave(
     opts: { updateStatus?: boolean } = {}
-  ): Promise<void> {
+  ): (() => Promise<void>) | null {
+    if (isReadOnly) return null;
     const updateStatus = opts.updateStatus ?? true;
     // Capture the markdown + y-doc state synchronously while the editor still
     // exists. This also lets onDestroy flush a pending debounce before Crepe
@@ -1553,17 +1483,24 @@
     // Array.from is necessary because Tauri serialises Uint8Array as an empty
     // object via JSON.stringify.
     const yrsState = yDoc ? Array.from(Y.encodeStateAsUpdate(yDoc)) : undefined;
-    await apiSaveNote({ id: noteId, body: markdown, yrs_state: yrsState });
-    // Mirror the new modified timestamp in the local cache so the metadata
-    // panel reflects the save without a tree refetch.
-    const existing = tree.notesById[noteId];
-    if (existing) {
-      tree.notesById[noteId] = {
-        ...existing,
-        modified: new Date().toISOString()
-      };
-    }
-    if (updateStatus) savingState = 'saved';
+    const capturedNoteId = noteId;
+    return async () => {
+      await apiSaveNote({
+        id: capturedNoteId,
+        body: markdown,
+        yrs_state: yrsState
+      });
+      // Mirror the new modified timestamp in the local cache so the metadata
+      // panel reflects the save without a tree refetch.
+      const existing = tree.notesById[capturedNoteId];
+      if (existing) {
+        tree.notesById[capturedNoteId] = {
+          ...existing,
+          modified: new Date().toISOString()
+        };
+      }
+      if (updateStatus) savingState = 'saved';
+    };
   }
 
   // --- In-document find & replace -------------------------------------------

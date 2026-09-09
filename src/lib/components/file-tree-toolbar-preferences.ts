@@ -1,3 +1,4 @@
+import { isRecord } from '$lib/validation';
 export const FILE_TREE_TOOLBAR_STORAGE_KEY =
   'notes-app:file-tree-create-toolbar:v1';
 
@@ -69,10 +70,6 @@ export const LEGACY_FILE_TREE_TOOLBAR_PREFERENCES: FileTreeToolbarPreferences =
     toolbar: ['folder', 'drawing', 'ink', 'kanban', 'pdf', 'note'],
     more: []
   };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
 
 function uniqueStrings(value: unknown): string[] {
   if (!Array.isArray(value)) return [];

@@ -1,3 +1,4 @@
+import { assertRequiredString } from '$lib/validation';
 /**
  * Notes-as-files export bridge — mirror of `src-tauri/src/notes_export.rs`.
  *
@@ -40,12 +41,6 @@ export async function writeExportFile(
     }),
     'notes_export_write_file response'
   );
-}
-
-function assertRequiredString(value: string, context: string): void {
-  if (value.trim().length === 0) {
-    throw new Error(`${context} must be a non-empty string`);
-  }
 }
 
 function parseNullableString(value: unknown): string | null {
