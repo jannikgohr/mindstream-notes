@@ -33,7 +33,7 @@ import {
   setElementValue,
   setPluginEnabledByName,
   waitForShell
-} from '../helpers/harness.js';
+} from '../../helpers/harness.js';
 
 const PLUGIN_NAME = 'LanguageTool';
 const PROVIDER_ID = 'plugins.com.mindstream.languagetool.grammar';

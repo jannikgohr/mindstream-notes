@@ -15,7 +15,7 @@ import {
   setElementValue,
   waitForSaved,
   waitForShell
-} from '../helpers/harness.js';
+} from '../../helpers/harness.js';
 
 async function createRootNote(title: string): Promise<void> {
   await clickName('New note');

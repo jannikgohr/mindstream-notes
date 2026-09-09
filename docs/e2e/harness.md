@@ -80,6 +80,25 @@ The remaining variables are behaviour switches, not gates:
 
 ## Two-client harness (T4)
 
+### Adding app E2E tests
+
+Add a `*.e2e.ts` file in the directory for the clients it needs:
+
+| Directory under `e2e-tests/app/specs/` | Clients    | Command                      |
+| -------------------------------------- | ---------- | ---------------------------- |
+| `single/`                              | One app    | `pnpm test:e2e:app`          |
+| `multi/`                               | Two apps   | `pnpm test:e2e:app:multi`    |
+| `multi-a2/`                            | Three apps | `pnpm test:e2e:app:multi:a2` |
+
+Nested directories work too. No spec list, CI filter, port allocation or
+worker assignment needs editing. `pnpm lint:ci` checks that every app spec is
+discovered exactly once, so a file placed outside these directories fails the
+check instead of silently missing CI. Use the existing account helpers for
+fresh users and the client helpers for browser interactions. Keep shared
+state within a spec; separate files must be safe to run in parallel.
+
+### CI scheduling
+
 CI skips both Playwright and packaged-app E2E on draft PRs. Marking a PR ready
 enables E2E for code changes. Adding `ci:app-e2e` or starting a manual workflow
 run forces every suite, including on drafts and docs-only changes. Other labels

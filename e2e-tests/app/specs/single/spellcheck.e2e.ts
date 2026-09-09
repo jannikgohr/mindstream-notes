@@ -45,7 +45,7 @@ import {
   waitForTextInPage,
   waitUntilHidden,
   waitUntilVisible
-} from '../helpers/harness.js';
+} from '../../helpers/harness.js';
 
 /** The default language selection is `["en_US"]`, so that is what we seed. */
 const DICTIONARY_ID = 'en_US';

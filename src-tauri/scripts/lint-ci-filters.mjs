@@ -67,7 +67,7 @@ export const DOCS_ONLY = [
 export const CODE_FILES = [
   'src/lib/components/FileExplorer.svelte',
   'src-tauri/src/tree.rs',
-  'e2e-tests/app/specs/collab.e2e.ts',
+  'e2e-tests/app/specs/multi/collab.e2e.ts',
   '.github/workflows/test.yml',
   'package.json',
   'pnpm-lock.yaml',

@@ -92,14 +92,7 @@ function spawnDriver(client: ClientProc): ChildProcess {
 
 export const config: WebdriverIO.Config = {
   runner: 'local',
-  specs: [
-    // Start longer specs first so a long final spec doesn't leave a worker idle.
-    join(here, 'specs', 'collab.e2e.ts'),
-    join(here, 'specs', 'sharing.e2e.ts'),
-    join(here, 'specs', 'sync-history.e2e.ts'),
-    join(here, 'specs', 'seed-merge.e2e.ts'),
-    join(here, 'specs', 'collab-confirm.e2e.ts')
-  ],
+  specs: [join(here, 'specs', 'multi', '**', '*.e2e.ts')],
   // CI opts into two workers, each driving two apps. Local runs stay serial
   // unless explicitly enabled, since native startup is sensitive to host load.
   maxInstances: multiWorkers(),

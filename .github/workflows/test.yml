@@ -97,12 +97,10 @@ jobs:
               - 'src-tauri/src/sharing/**'
               - 'src-tauri/src/collab_events.rs'
               - 'backend/**'
-              - 'e2e-tests/app/specs/collab*'
-              - 'e2e-tests/app/specs/sharing*'
-              - 'e2e-tests/app/specs/sync-history*'
-              - 'e2e-tests/app/specs/seed-merge*'
+              - 'e2e-tests/app/specs/multi/**'
+              - 'e2e-tests/app/specs/multi-a2/**'
               - 'e2e-tests/app/wdio.multiremote*'
-              - 'e2e-tests/app/helpers/worker-isolation*'
+              - 'e2e-tests/app/helpers/**'
               - '.github/workflows/test.yml'
 
       - name: Decide what runs

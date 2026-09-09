@@ -61,14 +61,7 @@ export const config: WebdriverIO.Config = {
     // Windows-only, self-skipping elsewhere: guards the webview being left
     // marked invisible under a shown window, which paints nothing.
     join(here, '..', 'perf', 'hidden-visibility.e2e.ts'),
-    join(here, 'specs', 'backup.e2e.ts'),
-    join(here, 'specs', 'editor-roundtrip.e2e.ts'),
-    join(here, 'specs', 'history.e2e.ts'),
-    join(here, 'specs', 'plugins.e2e.ts'),
-    join(here, 'specs', 'settings-persist.e2e.ts'),
-    join(here, 'specs', 'spellcheck.e2e.ts'),
-    join(here, 'specs', 'text-checker.e2e.ts'),
-    join(here, 'specs', 'trash-retention.e2e.ts')
+    join(here, 'specs', 'single', '**', '*.e2e.ts')
   ],
   // Two spec files at a time. The suite is one app per worker, so this is
   // two app processes on the runner rather than the T4 tiers' two or three,

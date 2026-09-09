@@ -91,7 +91,7 @@ function spawnDriver(client: ClientProc): ChildProcess {
 
 export const config: WebdriverIO.Config = {
   runner: 'local',
-  specs: [join(here, 'specs', 'sharing-multi-device.e2e.ts')],
+  specs: [join(here, 'specs', 'multi-a2', '**', '*.e2e.ts')],
   maxInstances: 1,
   outputDir,
   // Multiremote: an OBJECT keyed by instance name, each with its own connection
