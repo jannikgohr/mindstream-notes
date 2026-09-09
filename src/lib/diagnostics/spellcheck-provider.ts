@@ -12,6 +12,7 @@
  */
 
 import type { CheckRequest, Diagnostic, DiagnosticProvider } from './types';
+import type { Token } from './tokenize';
 import { tokenizeWords } from './tokenize';
 
 export const SPELLCHECK_PROVIDER_ID = 'spellcheck';
@@ -69,34 +70,44 @@ export function createSpellcheckProvider(
       const tokens = tokenizeWords(text, 0, options.wordChars?.() ?? '');
       if (tokens.length === 0) return [];
 
+      const ignored = (form: string | undefined) =>
+        form !== undefined && options.isIgnored?.(form) === true;
+
       // A token is spelled correctly if EITHER form is accepted, so both
       // have to be offered wherever a verdict is reached — here for the
       // personal dictionary, and below for the engine.
-      const accepted = (token: (typeof tokens)[number]) =>
-        options.isIgnored?.(token.text) === true ||
-        (token.abbreviation !== undefined &&
-          options.isIgnored?.(token.abbreviation) === true);
+      const accepted = (token: Token) =>
+        ignored(token.text) || ignored(token.abbreviation);
 
       const candidates = options.isIgnored
         ? tokens.filter((token) => !accepted(token))
         : tokens;
       if (candidates.length === 0) return [];
 
+      // Every form that could settle a token: the joined token, its
+      // abbreviation, and its segments (plus theirs) for the fallback.
+      // Forms the user already accepted are left out — the answer is
+      // settled, and the personal dictionary is deliberately not something
+      // the backend knows about.
+      const forms = (token: Token) =>
+        [token.text, token.abbreviation].filter(
+          (form): form is string => form !== undefined && !ignored(form)
+        );
+
       // One IPC round trip per segment, not per word — and a paragraph
       // repeats words heavily, so dedupe before crossing the boundary.
-      // Every form that could settle a token, in one batch: the joined
-      // token, its abbreviation, and its segments for the fallback.
       const distinct = [
         ...new Set(
           candidates.flatMap((token) => [
-            token.text,
-            ...(token.abbreviation ? [token.abbreviation] : []),
-            ...(token.parts ?? []).map((part) => part.text)
+            ...forms(token),
+            ...(token.parts ?? []).flatMap(forms)
           ])
         )
       ];
+      if (distinct.length === 0) return [];
+
       const unknown = new Set(await options.unknownWords(languages, distinct));
-      if (signal.aborted || unknown.size === 0) return [];
+      if (signal.aborted) return [];
 
       // Map the verdict back onto every occurrence: the backend answered
       // about words, but a squiggle belongs to each position the word
@@ -115,19 +126,25 @@ export function createSpellcheckProvider(
         source: SPELLCHECK_PROVIDER_ID
       });
 
-      const knownAsWhole = (token: (typeof candidates)[number]) =>
-        !unknown.has(token.text) ||
-        (token.abbreviation !== undefined && !unknown.has(token.abbreviation));
+      // One predicate for both authorities, applied at every level either
+      // one is asked at. Consulting the personal dictionary only for whole
+      // tokens is what used to make an accepted `MindstreamNotes` fail: the
+      // fallback judged `Mindstream` against the engine alone.
+      const known = (form: string | undefined) =>
+        form !== undefined && (ignored(form) || !unknown.has(form));
+      const spelled = (token: Token) =>
+        known(token.text) || known(token.abbreviation);
 
       return candidates.flatMap((token) => {
-        if (knownAsWhole(token)) return [];
-        // Nothing known as a whole: judge the segments instead. This is what
-        // keeps a unioned WORDCHARS safe — enabling Dutch declares `/` for
-        // everyone, and `and/or` must not become one unknown word in English
-        // text. It also gives a precise range per bad segment rather than one
-        // squiggle over the lot.
+        if (spelled(token)) return [];
+        // Nothing accepted as a whole: judge the segments instead. This is
+        // what keeps a unioned WORDCHARS safe — enabling Dutch declares `/`
+        // for everyone, and `and/or` must not become one unknown word in
+        // English text — and what lets a camelCase identifier pass on the
+        // strength of its parts. It also gives a precise range per bad
+        // segment rather than one squiggle over the lot.
         if (token.parts) {
-          return token.parts.filter((part) => unknown.has(part.text)).map(flag);
+          return token.parts.filter((part) => !spelled(part)).map(flag);
         }
         return [flag(token)];
       });
