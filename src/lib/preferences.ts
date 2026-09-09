@@ -1,3 +1,4 @@
+import { isRecord } from '$lib/validation';
 /**
  * Persistent UI preferences.
  *
@@ -44,10 +45,6 @@ const VALID_SORTS = new Set<SortStrategy>([
 ]);
 
 const VALID_DIRECTIONS = new Set<SortDirection>(['asc', 'desc']);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
 
 function optionalBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;

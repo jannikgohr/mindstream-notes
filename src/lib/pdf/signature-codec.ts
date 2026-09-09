@@ -1,3 +1,4 @@
+import { isRecord } from '$lib/validation';
 /**
  * Pure mapping between a synced `SignatureRecord` (opaque JSON geometry on
  * the wire) and the `PdfSignatureSnapshot` the UI works with. Split out of
@@ -7,10 +8,6 @@
 
 import type { SignatureRecord } from '$lib/api/signatures';
 import type { PdfSignatureImage, PdfSignatureSnapshot } from './types';
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
 
 function isPositiveFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;

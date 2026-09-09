@@ -1,4 +1,10 @@
 <script lang="ts">
+  import { ancestorIsTrash } from '$lib/editor/trash';
+  import {
+    createSaveScheduler,
+    SAVE_DEBOUNCE_MS
+  } from '$lib/editor/save-scheduler';
+  import { createCollabSession } from '$lib/editor/collab-session';
   /**
    * Editor for `note_kind === 'kanban'` notes.
    *
@@ -22,7 +28,6 @@
    */
 
   import { onDestroy, onMount } from 'svelte';
-  import { onAppSuspend } from '$lib/editor/suspend-flush';
   import {
     setNoteStatus,
     clearNoteStatus
@@ -60,7 +65,6 @@
     loadNote,
     saveNote as apiSaveNote,
     TRASH_ID,
-    noteRoomInfo,
     getYjsRelayUrl,
     onSessionChange,
     authSession
@@ -79,11 +83,6 @@
   import { Toolbar, ToolbarButton } from '$lib/components/ui/toolbar';
   import { CollabProvider } from '$lib/sync/collab-provider';
   import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
-  import {
-    collabAuthForRoom,
-    getOrCreateCollabSigningMaterial
-  } from '$lib/sync/collab-signing-key';
-  import { base64ToBytes } from '$lib/editor/base64';
   import { pickCursorColor } from '$lib/editor/cursor-color';
   import { folderPathLabel } from '$lib/notes/folder-path';
   import { resolveShareScopeUsers } from '$lib/notes/share-users';
@@ -115,7 +114,6 @@
     KANBAN_LOCAL_ORIGIN,
     KANBAN_RENDER_ORIGIN,
     KANBAN_RESTORE_ORIGIN,
-    boardToPlainText,
     createKanbanUndoManager,
     isLocalOnly,
     observeBoard,
@@ -139,7 +137,7 @@
     type KanbanSearchFilters,
     type KanbanSearchLookups
   } from '$lib/kanban/kanban-search';
-  import { renderKanbanDescription } from '$lib/kanban/description-markdown';
+  import { captureKanbanSave } from '$lib/kanban/save-snapshot';
   import { isMobile } from '$lib/platform';
   import NameInputSheet from '$lib/mobile/NameInputSheet.svelte';
   import { closeNavOverlay, openNavOverlay } from '$lib/mobile/state.svelte';
@@ -173,7 +171,6 @@
     snapshotNowRequiresDirty: false
   });
 
-  const SAVE_DEBOUNCE_MS = 800;
   const LABEL_COLORS = [
     '#3b82f6',
     '#22c55e',
@@ -220,7 +217,6 @@
   const MOBILE_TAB_HOLD_DELAY_MS = 450;
   const MOBILE_TAB_HOLD_MOVE_TOLERANCE_PX = 8;
 
-  let provider: CollabProvider | null = null;
   let stopObserve: (() => void) | null = null;
   let unsubSession: (() => void) | null = null;
   let unsubSync: (() => void) | null = null;
@@ -231,7 +227,6 @@
   let saveReady = false;
   let collabReady = false;
   let lastSeenPushed = false;
-  let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let capturingHistory = false;
   let undoDepth = $state(0);
   let redoDepth = $state(0);
@@ -241,23 +236,16 @@
   });
 
   // ---- Trash detection (mirrors NoteEditor / FreeformNoteEditor) ----
-  function ancestorIsTrash(parentId: string | null): boolean {
-    let current = parentId;
-    const seen = new Set<string>();
-    while (current) {
-      if (current === TRASH_ID) return true;
-      if (seen.has(current)) return false;
-      seen.add(current);
-      current = tree.collectionsById[current]?.parent_collection_id ?? null;
-    }
-    return false;
-  }
   const isTrashed = $derived.by(() => {
     if (!tree.ready) return false;
     const n = tree.notesById[noteId];
     if (!n) return true;
     if (n.trashed === true) return true;
-    return ancestorIsTrash(n.parent_collection_id);
+    return ancestorIsTrash(
+      n.parent_collection_id,
+      tree.collectionsById,
+      TRASH_ID
+    );
   });
 
   const autoSaveEnabled = $derived(
@@ -736,14 +724,18 @@
     pressStartedInsideCardEditor = false;
     if (!api || isTrashed || e.button !== 0) return;
     if (startedInside || startsInsideCardEditor(e.target)) return;
-    api.exec('select-card', { id: null });
+    void api
+      .exec('select-card', { id: null })
+      .catch((err: unknown) => console.error('[kanban] deselect failed', err));
   }
 
   const MOBILE_CARD_EDITOR_NAV_ID = 'mobile-kanban-card-editor';
   const MOBILE_LIST_MANAGER_NAV_ID = 'mobile-kanban-list-manager';
 
   function closeMobileCardEditor(): void {
-    api?.exec('select-card', { id: null });
+    void api
+      ?.exec('select-card', { id: null })
+      .catch((err: unknown) => console.error('[kanban] deselect failed', err));
   }
 
   function handleCardEditorOpenChange(open: boolean): void {
@@ -831,7 +823,11 @@
   function closeKanbanSearch(): void {
     searchOpen = false;
     searchFilters = { ...EMPTY_KANBAN_SEARCH_FILTERS };
-    api?.exec('filter-cards', { tag: KANBAN_SEARCH_FILTER_TAG });
+    void api
+      ?.exec('filter-cards', { tag: KANBAN_SEARCH_FILTER_TAG })
+      .catch((err: unknown) =>
+        console.error('[kanban] filter reset failed', err)
+      );
   }
 
   function updateKanbanSearch(filters: KanbanSearchFilters): void {
@@ -1106,15 +1102,7 @@
   }
 
   // ---- Save ----
-  // The OS can take the process down without unmounting us (Android kills
-  // backgrounded apps), so `onDestroy` alone can't protect the debounce
-  // window. `persist` always writes, so gate on a pending save like the
-  // teardown flush does.
-  $effect(() =>
-    onAppSuspend(() => {
-      if (saveTimer && saveReady && !isTrashed) void persist();
-    })
-  );
+  $effect(() => saveScheduler.subscribeSuspend());
 
   // Mirror save state into the global per-note store so the dockview tab
   // header renders the saving/saved/error icons. Every other editor already
@@ -1131,59 +1119,42 @@
     });
   });
 
-  function scheduleSave(): void {
-    if (isTrashed) return;
-    if (!autoSaveEnabled) {
-      if (saveTimer) {
-        clearTimeout(saveTimer);
-        saveTimer = null;
-      }
-      savingState = 'idle';
-      return;
+  const saveScheduler = createSaveScheduler({
+    canSave: () => !isTrashed && saveReady && autoSaveEnabled && !!yDoc,
+    capture: captureSave,
+    delayMs: () => saveDebounceMs,
+    onError: (error) => {
+      console.error('[KanbanNoteEditor] save failed', error);
     }
-    savingState = 'pending';
-    if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      void persist();
-    }, saveDebounceMs);
+  });
+  function scheduleSave() {
+    saveScheduler.schedule();
+    savingState = saveScheduler.pending ? 'pending' : 'idle';
   }
 
-  async function persist(): Promise<void> {
-    if (!yDoc || isTrashed) return;
-    const doc = yDoc;
-    try {
+  function captureSave(): (() => Promise<void>) | null {
+    if (!yDoc || isTrashed) return null;
+    const capturedNoteId = noteId;
+    const renderSnapshot = captureKanbanSave(yDoc);
+    return async () => {
       savingState = 'saving';
-      const snapshot = readBoardFromYDoc(doc);
-      await Promise.all(
-        snapshot.cards.map(async (card) => {
-          card.descriptionHtml = card.description
-            ? await renderKanbanDescription(card.description)
-            : undefined;
-        })
-      );
-      if (yDoc !== doc || isTrashed) return;
-      upsertBoardIntoYDoc(doc, snapshot, KANBAN_RENDER_ORIGIN);
-      // Array.from: Tauri serialises a bare Uint8Array as `{}` over the IPC
-      // boundary, so hand Rust a plain number[].
-      const yrsState = Array.from(Y.encodeStateAsUpdate(doc));
-      await apiSaveNote({
-        id: noteId,
-        // Plaintext projection so full-text search / content-stats index cards.
-        body: boardToPlainText(snapshot),
-        yrs_state: yrsState
-      });
-      const existing = tree.notesById[noteId];
-      if (existing) {
-        tree.notesById[noteId] = {
-          ...existing,
-          modified: new Date().toISOString()
-        };
+      try {
+        const captured = await renderSnapshot();
+        if (isTrashed) return;
+        await apiSaveNote({ id: capturedNoteId, ...captured });
+        const existing = tree.notesById[capturedNoteId];
+        if (existing) {
+          tree.notesById[capturedNoteId] = {
+            ...existing,
+            modified: new Date().toISOString()
+          };
+        }
+        savingState = 'saved';
+      } catch (err) {
+        savingState = 'error';
+        throw err;
       }
-      savingState = 'saved';
-    } catch (err) {
-      savingState = 'error';
-      console.error('[KanbanNoteEditor] save failed', err);
-    }
+    };
   }
 
   // ---- History ----
@@ -1224,36 +1195,18 @@
   }
 
   // ---- Collab provider (yjs-relay, same as markdown notes) ----
-  async function setupCollabProvider(): Promise<void> {
-    if (provider) {
-      provider.destroy();
-      provider = null;
-    }
-    const collabUrl = getYjsRelayUrl(
-      (getSettingValue('account.serverUrl') as string | undefined) ?? ''
-    );
-    if (!collabUrl || !yDoc || !awareness) return;
-    try {
-      const signingMaterial = await getOrCreateCollabSigningMaterial();
-      const room = await noteRoomInfo(noteId, signingMaterial?.publicKeyB64);
-      if (!room) return;
-      provider = new CollabProvider({
-        url: collabUrl,
-        roomId: room.room_id,
-        joinPrivateKeyPkcs8B64: room.join_private_key_pkcs8_b64,
-        keyBytes: base64ToBytes(room.key_b64),
-        doc: yDoc,
-        awareness,
-        auth: collabAuthForRoom(room, signingMaterial),
-        requireSignedWrites: room.collab_epoch > 0,
-        onAuthStale: () => {
-          void setupCollabProvider();
-        }
-      });
-    } catch (err) {
-      console.debug('[KanbanNoteEditor] collab provider init failed', err);
-    }
-  }
+  const collabSession = createCollabSession({
+    getContext: () => {
+      const url = getYjsRelayUrl(
+        (getSettingValue('account.serverUrl') as string | undefined) ?? ''
+      );
+      if (!url || !(yDoc && awareness)) return null;
+      return { noteId, url, value: { doc: yDoc, awareness } };
+    },
+    create: (context, connection) =>
+      new CollabProvider({ ...connection, ...context })
+  });
+  const setupCollabProvider = collabSession.setup;
 
   onMount(async () => {
     if (!host) return;
@@ -1430,13 +1383,8 @@
       mobileListManagerNavHeld = false;
       closeNavOverlay(MOBILE_LIST_MANAGER_NAV_ID);
     }
-    if (saveTimer) {
-      clearTimeout(saveTimer);
-      saveTimer = null;
-    }
+    void saveScheduler.destroy();
     historyCapture.cancel();
-    // Flush a pending save synchronously-ish before teardown.
-    if (saveReady && !isTrashed) void persist();
     stopObserve?.();
     unsubSession?.();
     unsubSync?.();
@@ -1444,8 +1392,7 @@
     unsubCollabCredentials = null;
     unregisterHistory?.();
     if (editorListener) unregisterEditor(editorListener);
-    provider?.destroy();
-    provider = null;
+    collabSession.destroy();
     awareness?.destroy();
     awareness = null;
     undoManager?.destroy();
