@@ -79,6 +79,7 @@ pub fn upload(conn: &Connection, input: UploadAsset) -> AppResult<Asset> {
 }
 
 pub fn upload_with_id(conn: &Connection, id: String, input: UploadAsset) -> AppResult<Asset> {
+    crate::sharing::ensure_note_writable(conn, &input.owning_note_id)?;
     // Confirm the owning note exists first — the FK constraint would
     // surface as a generic SQLite error otherwise. A targeted NotFound
     // gives the JS side a useful message to relay if the user trashes

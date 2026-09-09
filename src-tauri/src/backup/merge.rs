@@ -68,6 +68,7 @@ pub(super) fn merge_into(live: &mut Connection, backup: &Connection) -> AppResul
     // up parents to whatever resolves in the merged DB; anything that
     // doesn't is left at root, matching the user's stated preference
     // for orphan-to-root.
+    let mut added_folder_ids = std::collections::HashSet::new();
     let mut folders_added = 0u32;
     for (id, _parent, name, position, created, modified) in &folder_rows {
         let exists: Option<i64> = tx
@@ -85,6 +86,7 @@ pub(super) fn merge_into(live: &mut Connection, backup: &Connection) -> AppResul
              VALUES (?1, NULL, ?2, ?3, ?4, ?5, 1)",
             params![id, name, position, created, modified],
         )?;
+        added_folder_ids.insert(id.clone());
         folders_added += 1;
     }
     for (id, parent, _name, _position, _created, _modified) in &folder_rows {
@@ -93,14 +95,7 @@ pub(super) fn merge_into(live: &mut Connection, backup: &Connection) -> AppResul
         };
         // Only re-parent folders we just added (don't touch pre-existing
         // ones whose parent might be intentionally different locally).
-        let was_added: Option<i64> = tx
-            .query_row(
-                "SELECT 1 FROM collections WHERE id = ?1 AND parent_collection_id IS NULL",
-                params![id],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if was_added.is_none() {
+        if !added_folder_ids.contains(id) {
             continue;
         }
         let parent_exists: Option<i64> = tx
@@ -111,6 +106,7 @@ pub(super) fn merge_into(live: &mut Connection, backup: &Connection) -> AppResul
             )
             .optional()?;
         if parent_exists.is_some() && parent_id != TRASH_ID {
+            crate::sharing::ensure_collection_writable(&tx, parent_id)?;
             tx.execute(
                 "UPDATE collections SET parent_collection_id = ?1 WHERE id = ?2",
                 params![parent_id, id],
@@ -122,7 +118,7 @@ pub(super) fn merge_into(live: &mut Connection, backup: &Connection) -> AppResul
     // ---- Notes ----
     let mut stmt = backup.prepare(
         "SELECT id, parent_collection_id, title, body, position, created, modified,
-                trashed_at, favourite, yrs_state, payload_schema, note_kind
+                trashed_at, favourite, yrs_state, payload_schema, note_kind, tags_state
          FROM notes",
     )?;
     let note_rows = stmt
@@ -140,6 +136,7 @@ pub(super) fn merge_into(live: &mut Connection, backup: &Connection) -> AppResul
                 r.get::<_, Option<Vec<u8>>>(9)?,
                 r.get::<_, i64>(10)?,
                 r.get::<_, String>(11)?,
+                r.get::<_, Option<Vec<u8>>>(12)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -160,6 +157,7 @@ pub(super) fn merge_into(live: &mut Connection, backup: &Connection) -> AppResul
         yrs_state,
         payload_schema,
         note_kind,
+        tags_state,
     ) in &note_rows
     {
         let exists: Option<i64> = tx
@@ -190,11 +188,12 @@ pub(super) fn merge_into(live: &mut Connection, backup: &Connection) -> AppResul
             None
         };
 
+        crate::sharing::ensure_parent_writable(&tx, resolved_parent.as_deref())?;
         tx.execute(
             "INSERT INTO notes(id, parent_collection_id, title, body, position,
                                 created, modified, dirty, note_kind, trashed_at,
-                                favourite, yrs_state, payload_schema)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9, ?10, ?11, ?12)",
+                                favourite, yrs_state, payload_schema, tags_state)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 id,
                 resolved_parent,
@@ -208,6 +207,7 @@ pub(super) fn merge_into(live: &mut Connection, backup: &Connection) -> AppResul
                 favourite,
                 yrs_state,
                 payload_schema,
+                tags_state,
             ],
         )?;
         notes_added += 1;
@@ -269,6 +269,7 @@ pub(super) fn merge_into(live: &mut Connection, backup: &Connection) -> AppResul
         if exists.is_some() {
             continue;
         }
+        crate::sharing::ensure_note_writable(&tx, owning_note_id)?;
         tx.execute(
             "INSERT INTO assets(id, owning_note_id, mime_type, bytes, size, created, modified, dirty)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)",

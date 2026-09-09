@@ -31,7 +31,14 @@ pub fn move_many_items(
 ) -> AppResult<BatchCounts> {
     let tx = conn.transaction()?;
     let items = normalize_items(&tx, items)?;
+    for item in &items {
+        match item {
+            TreeItemRef::Note { id } => crate::sharing::ensure_note_writable(&tx, id)?,
+            TreeItemRef::Folder { id } => crate::sharing::ensure_subtree_writable(&tx, id)?,
+        }
+    }
     validate_target(&tx, target_collection_id.as_deref())?;
+    crate::sharing::ensure_parent_writable(&tx, target_collection_id.as_deref())?;
     for item in &items {
         if let TreeItemRef::Folder { id } = item {
             validate_folder_move(&tx, id, target_collection_id.as_deref())?;
@@ -62,6 +69,12 @@ pub fn move_many_items(
 pub fn purge_many_items(conn: &mut Connection, items: Vec<TreeItemRef>) -> AppResult<BatchCounts> {
     let tx = conn.transaction()?;
     let items = normalize_items(&tx, items)?;
+    for item in &items {
+        match item {
+            TreeItemRef::Note { id } => crate::sharing::ensure_note_writable(&tx, id)?,
+            TreeItemRef::Folder { id } => crate::sharing::ensure_subtree_writable(&tx, id)?,
+        }
+    }
     let mut counts = BatchCounts {
         notes: 0,
         folders: 0,
@@ -142,7 +155,13 @@ fn move_note(
     if changed == 0 {
         return Err(AppError::NotFound(format!("note {id}")));
     }
-    collections::stamp_trashed_at_on_parent_change(conn, "notes", id, target_collection_id, now)?;
+    collections::stamp_trashed_at_on_parent_change(
+        conn,
+        crate::collections::TrashTable::Notes,
+        id,
+        target_collection_id,
+        now,
+    )?;
     rehome_note_if_scope_changed(conn, id, target_collection_id)?;
     Ok(())
 }
@@ -183,7 +202,7 @@ fn move_folder(
     }
     collections::stamp_trashed_at_on_parent_change(
         conn,
-        "collections",
+        crate::collections::TrashTable::Collections,
         id,
         target_collection_id,
         now,

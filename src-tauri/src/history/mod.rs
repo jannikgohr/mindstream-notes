@@ -300,6 +300,12 @@ fn prepare_version(
 /// lookups plus one insert. Denormalises the restore target's timestamp so a
 /// `reverted` label outlives its target being pruned.
 fn insert_prepared(conn: &Connection, prepared: PreparedVersion) -> AppResult<VersionSummary> {
+    if conn.is_autocommit() {
+        let tx = conn.unchecked_transaction()?;
+        let summary = insert_prepared(&tx, prepared)?;
+        tx.commit()?;
+        return Ok(summary);
+    }
     let ref_created: Option<String> = if prepared.action == VersionAction::Reverted {
         match prepared.ref_version_id.as_deref() {
             Some(target) => conn
