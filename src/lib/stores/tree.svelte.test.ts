@@ -148,6 +148,9 @@ beforeEach(() => {
   tree.notesById = {};
   tree.collectionsById = {};
   tree.tree = [];
+  tree.ready = false;
+  tree.loading = false;
+  tree.error = null;
 });
 
 afterEach(() => {
@@ -498,6 +501,35 @@ describe('reloads after an in-flight snapshot', () => {
 });
 
 describe('bounded mutation refreshes', () => {
+  it('recovers the full tree when a folder is created after a failed load', async () => {
+    const existingNote = seedNote();
+    const folder = {
+      id: 'coll_new',
+      name: 'New folder',
+      parent_collection_id: null,
+      position: 0,
+      created: 'now',
+      modified: 'now'
+    };
+    loadTreeMock.mockRejectedValueOnce(new Error('database is locked'));
+    await loadTree();
+    expect(tree.ready).toBe(true);
+    expect(tree.error).toBe('database is locked');
+
+    createCollectionMock.mockResolvedValueOnce(folder);
+    loadTreeMock.mockResolvedValueOnce({
+      tree: [],
+      notesById: { n1: existingNote },
+      collectionsById: { coll_new: folder }
+    });
+    expect(await createCollectionIn(null, folder.name)).toBe(folder.id);
+
+    expect(loadTreeMock).toHaveBeenCalledTimes(2);
+    expect(tree.error).toBeNull();
+    expect(tree.notesById.n1).toEqual(existingNote);
+    expect(tree.collectionsById.coll_new).toEqual(folder);
+  });
+
   it('applies a returned note without loading the vault again', async () => {
     tree.ready = true;
     await moveNoteTo('n1', 'trash');

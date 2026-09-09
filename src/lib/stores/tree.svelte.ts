@@ -464,8 +464,9 @@ async function applyNoteSummary(note: api.Note): Promise<void> {
 }
 
 async function finishLocalChange(): Promise<void> {
-  // An older read can overwrite this patch. Join its follow-up snapshot.
-  if (inFlight || !tree.ready) {
+  // Join an older read's follow-up, or recover a missing or failed snapshot.
+  // `ready` only means a load attempt completed, even if it failed.
+  if (inFlight || !tree.ready || tree.error !== null) {
     await loadTree();
     return;
   }
