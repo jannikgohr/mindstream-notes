@@ -697,3 +697,69 @@ fn merge_does_not_overwrite_existing_local_notes() {
         .unwrap();
     assert_eq!(title, "local", "local content must be preserved");
 }
+
+#[test]
+fn merge_keeps_existing_root_parent_and_preserves_tag_crdt() {
+    let live_db = open_memory_for_tests();
+    let mut backup = Connection::open_in_memory().unwrap();
+    migrations::run(&mut backup).unwrap();
+    seed_backup_db(&backup, "SAME");
+    seed_backup_db(&backup, "PARENT");
+    backup
+        .execute(
+            "UPDATE collections SET parent_collection_id = 'coll_PARENT' WHERE id = 'coll_SAME'",
+            [],
+        )
+        .unwrap();
+    let state = crate::sync::tags_crdt::init(&["tag-x".to_string()]);
+    backup
+        .execute(
+            "UPDATE notes SET tags_state = ?1 WHERE id = 'note_SAME'",
+            params![state],
+        )
+        .unwrap();
+    live_db
+        .with_conn(|c| {
+            seed_backup_db(c, "SAME");
+            c.execute("DELETE FROM notes WHERE id = 'note_SAME'", [])?;
+            Ok(())
+        })
+        .unwrap();
+    live_db.with_conn_mut(|c| merge_into(c, &backup)).unwrap();
+    live_db
+        .with_conn(|c| {
+            let parent: Option<String> = c.query_row(
+                "SELECT parent_collection_id FROM collections WHERE id = 'coll_SAME'",
+                [],
+                |r| r.get(0),
+            )?;
+            assert!(parent.is_none());
+            let imported: Vec<u8> = c.query_row(
+                "SELECT tags_state FROM notes WHERE id = 'note_SAME'",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(imported, state);
+            assert_eq!(crate::sync::tags_crdt::tags(&imported), vec!["tag-x"]);
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn merge_into_read_only_destination_rolls_back_every_import() {
+    let live_db = open_memory_for_tests();
+    let mut backup = Connection::open_in_memory().unwrap();
+    migrations::run(&mut backup).unwrap();
+    seed_backup_db(&backup, "SHARED");
+    seed_backup_db(&backup, "NEW");
+    live_db.with_conn_mut(|c| {
+        seed_backup_db(c, "SHARED");
+        c.execute("DELETE FROM notes WHERE id = 'note_SHARED'", [])?;
+        c.execute("UPDATE collections SET shared_role = 'read_only', share_scope_id = 'scope' WHERE id = 'coll_SHARED'", [])?;
+        assert!(merge_into(c, &backup).is_err());
+        assert_eq!(c.query_row("SELECT count(*) FROM notes", [], |r| r.get::<_, i64>(0))?, 0);
+        assert_eq!(c.query_row("SELECT count(*) FROM collections WHERE id = 'coll_NEW'", [], |r| r.get::<_, i64>(0))?, 0);
+        Ok(())
+    }).unwrap();
+}
