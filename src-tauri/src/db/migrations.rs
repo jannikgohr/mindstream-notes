@@ -595,6 +595,58 @@ const MIGRATIONS: &[Migration] = &[
             );
         "#,
     },
+    Migration {
+        to: 25,
+        sql: r#"
+            UPDATE notes SET parent_collection_id = 'trash', dirty = 1
+            WHERE trashed_at IS NOT NULL AND parent_collection_id IS NOT 'trash';
+
+            CREATE VIEW active_notes AS
+            WITH RECURSIVE trashed_folders(id) AS (
+                SELECT id FROM collections WHERE id = 'trash' OR trashed_at IS NOT NULL
+                UNION
+                SELECT c.id FROM collections c JOIN trashed_folders t ON c.parent_collection_id = t.id
+            )
+            SELECT n.* FROM notes n
+            WHERE n.trashed_at IS NULL
+              AND NOT EXISTS (SELECT 1 FROM trashed_folders t WHERE t.id = n.parent_collection_id);
+
+            CREATE VIRTUAL TABLE note_search USING fts5(
+                title, body, tags, tokenize='trigram'
+            );
+            INSERT INTO note_search(rowid, title, body, tags)
+            SELECT n.rowid, n.title,
+                   CASE WHEN n.note_kind = 'pdf' THEN COALESCE(n.pdf_text, '') ELSE n.body END,
+                   COALESCE((SELECT group_concat(tag, ' ') FROM note_tags WHERE note_id = n.id), '')
+            FROM notes n;
+            CREATE TRIGGER note_search_insert AFTER INSERT ON notes BEGIN
+                INSERT INTO note_search(rowid, title, body, tags)
+                VALUES (new.rowid, new.title, CASE WHEN new.note_kind = 'pdf' THEN COALESCE(new.pdf_text, '') ELSE new.body END, '');
+            END;
+            CREATE TRIGGER note_search_delete AFTER DELETE ON notes BEGIN
+                DELETE FROM note_search WHERE rowid = old.rowid;
+            END;
+            CREATE TRIGGER note_search_update AFTER UPDATE OF title, body, pdf_text, note_kind ON notes BEGIN
+                UPDATE note_search SET title = new.title,
+                    body = CASE WHEN new.note_kind = 'pdf' THEN COALESCE(new.pdf_text, '') ELSE new.body END
+                WHERE rowid = new.rowid;
+            END;
+            CREATE TRIGGER note_search_tag_insert AFTER INSERT ON note_tags BEGIN
+                UPDATE note_search SET tags = COALESCE((SELECT group_concat(tag, ' ') FROM note_tags WHERE note_id = new.note_id), '')
+                WHERE rowid = (SELECT rowid FROM notes WHERE id = new.note_id);
+            END;
+            CREATE TRIGGER note_search_tag_delete AFTER DELETE ON note_tags BEGIN
+                UPDATE note_search SET tags = COALESCE((SELECT group_concat(tag, ' ') FROM note_tags WHERE note_id = old.note_id), '')
+                WHERE rowid = (SELECT rowid FROM notes WHERE id = old.note_id);
+            END;
+            CREATE TRIGGER note_search_tag_update AFTER UPDATE ON note_tags BEGIN
+                UPDATE note_search SET tags = COALESCE((SELECT group_concat(tag, ' ') FROM note_tags WHERE note_id = old.note_id), '')
+                WHERE rowid = (SELECT rowid FROM notes WHERE id = old.note_id);
+                UPDATE note_search SET tags = COALESCE((SELECT group_concat(tag, ' ') FROM note_tags WHERE note_id = new.note_id), '')
+                WHERE rowid = (SELECT rowid FROM notes WHERE id = new.note_id);
+            END;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {
@@ -803,6 +855,42 @@ mod fk_check_tests {
 mod seed_tests {
     use super::*;
     use rusqlite::Connection;
+
+    #[test]
+    fn v25_upgrades_legacy_trash_and_indexes_existing_content() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for migration in MIGRATIONS.iter().filter(|m| m.to <= 24) {
+            conn.execute_batch(migration.sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 24).unwrap();
+        conn.execute_batch(
+            "INSERT INTO notes(id, title, body, created, modified, trashed_at, dirty)
+            VALUES ('legacy', 'Deleted', 'legacy text', 'old', 'old', 'deleted', 0),
+                   ('active', 'Existing', 'indexed content', 'old', 'old', NULL, 0);
+            INSERT INTO note_tags(note_id, tag) VALUES ('active', 'backfilled-tag');",
+        )
+        .unwrap();
+        run(&mut conn).unwrap();
+        let (parent, dirty): (String, i64) = conn
+            .query_row(
+                "SELECT parent_collection_id, dirty FROM notes WHERE id = 'legacy'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(parent, "trash");
+        assert_eq!(dirty, 1);
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM active_notes", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(crate::search::search(&conn, "indexed").unwrap().len(), 1);
+        assert_eq!(crate::search::search(&conn, "backfilled").unwrap().len(), 1);
+        assert!(crate::search::search(&conn, "legacy").unwrap().is_empty());
+        run(&mut conn).unwrap();
+    }
 
     fn seeded_conn() -> Connection {
         let mut conn = Connection::open_in_memory().expect("in-memory db");
