@@ -126,24 +126,62 @@ fn map_lua(chunk: &str, e: mlua::Error) -> AppError {
 /// Constructs and tears down the whole VM inside this call, so it is safe to
 /// dispatch onto a blocking worker (the VM never crosses a thread boundary).
 pub fn run(req: ScriptRequest) -> AppResult<serde_json::Value> {
+    run_with_native_budget(req, Duration::from_secs(30))
+}
+
+struct ExecutionBudget {
+    script_deadline: Cell<Instant>,
+    wall_deadline: Instant,
+}
+
+impl ExecutionBudget {
+    fn check(&self) -> mlua::Result<()> {
+        let now = Instant::now();
+        if now >= self.script_deadline.get() || now >= self.wall_deadline {
+            Err(mlua::Error::runtime("script exceeded its time budget"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn native_timeout_ms(&self, requested: Option<u64>) -> mlua::Result<u64> {
+        self.check()?;
+        let remaining = self
+            .wall_deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis() as u64;
+        // The process runner has a 100 ms minimum. Do not launch if that would
+        // exceed the invocation's remaining allowance.
+        if remaining < 100 {
+            return Err(mlua::Error::runtime("script exceeded its time budget"));
+        }
+        Ok(requested
+            .unwrap_or(10_000)
+            .clamp(100, 30_000)
+            .min(remaining))
+    }
+}
+
+fn run_with_native_budget(
+    req: ScriptRequest,
+    native_budget: Duration,
+) -> AppResult<serde_json::Value> {
     let lua = Lua::new();
     lua.set_memory_limit(req.limits.memory_bytes)
         .map_err(|e| map_lua(&req.chunk_name, e))?;
 
-    // Wall-clock deadline for the *script's own* execution. The interrupt fires
-    // on Luau back-edges/calls; returning an error aborts the running script.
-    // It's a shared cell so a legitimately-blocking host call (a native tool
-    // subprocess) can push it forward by the time it spent blocked — otherwise a
-    // multi-second `typst` compile would eat the whole budget and abort the
-    // script the instant control returns to Luau.
-    let deadline = Rc::new(Cell::new(Instant::now() + req.limits.timeout));
+    // Native tools may use up to 30 seconds per invocation, while script
+    // execution retains its separate budget. Repeated calls cannot extend the
+    // absolute deadline.
+    let started = Instant::now();
+    let deadline = Rc::new(ExecutionBudget {
+        script_deadline: Cell::new(started + req.limits.timeout),
+        wall_deadline: started + req.limits.timeout + native_budget,
+    });
     let interrupt_deadline = deadline.clone();
     lua.set_interrupt(move |_| {
-        if Instant::now() >= interrupt_deadline.get() {
-            Err(mlua::Error::runtime("script exceeded its time budget"))
-        } else {
-            Ok(VmState::Continue)
-        }
+        interrupt_deadline.check()?;
+        Ok(VmState::Continue)
     });
 
     install_host_api(
@@ -183,6 +221,7 @@ pub fn run(req: ScriptRequest) -> AppResult<serde_json::Value> {
         .call(MultiValue::from_iter([input]))
         .map_err(|e| map_lua(&req.chunk_name, e))?;
 
+    deadline.check().map_err(|e| map_lua(&req.chunk_name, e))?;
     lua.from_value(ret).map_err(|e| map_lua(&req.chunk_name, e))
 }
 
@@ -211,7 +250,7 @@ fn install_host_api(
     notes: &[NoteMeta],
     native_tools: &HashMap<String, Option<PathBuf>>,
     data_root: &Option<PathBuf>,
-    deadline: Rc<Cell<Instant>>,
+    deadline: Rc<ExecutionBudget>,
 ) -> mlua::Result<()> {
     let ms = lua.create_table()?;
     let granted = |p: &str| permissions.iter().any(|g| g == p);
@@ -275,7 +314,7 @@ fn native_tools_module(
     lua: &Lua,
     tools: &HashMap<String, Option<PathBuf>>,
     cwd: &Option<PathBuf>,
-    deadline: Rc<Cell<Instant>>,
+    deadline: Rc<ExecutionBudget>,
 ) -> mlua::Result<Table> {
     let table = lua.create_table()?;
     // Only the resolved (found-on-PATH) tools are runnable.
@@ -325,13 +364,14 @@ fn native_tools_module(
                 }
                 None => (Vec::new(), None, None, false),
             };
-            // Time spent blocked in the subprocess is not the script "running",
-            // so credit it back to the wall-clock budget — otherwise a slow
-            // compile would abort the script the moment control returns to Luau.
+            let timeout_ms = deadline.native_timeout_ms(timeout_ms)?;
             let started = Instant::now();
-            let output = super::run_native_tool_process(binary, cwd, args, stdin, timeout_ms)
-                .map_err(|e| mlua::Error::runtime(e.to_string()))?;
-            deadline.set(deadline.get() + started.elapsed());
+            let output = super::run_native_tool_process(binary, cwd, args, stdin, Some(timeout_ms));
+            deadline
+                .script_deadline
+                .set(deadline.script_deadline.get() + started.elapsed());
+            deadline.check()?;
+            let output = output.map_err(|e| mlua::Error::runtime(e.to_string()))?;
             let result = lua.create_table()?;
             result.set("statusCode", output.status_code)?;
             // stderr is diagnostic text; always expose it lossily.
@@ -1239,6 +1279,53 @@ mod tests {
             &[],
         ));
         assert!(e.is_err());
+    }
+
+    #[test]
+    fn native_time_credit_never_extends_the_absolute_deadline() {
+        let now = Instant::now();
+        let budget = ExecutionBudget {
+            script_deadline: Cell::new(now + Duration::from_millis(500)),
+            wall_deadline: now + Duration::from_millis(250),
+        };
+        assert!(budget.native_timeout_ms(Some(30_000)).unwrap() <= 250);
+        // Repeated native calls can return all their elapsed time to the
+        // script allowance, but cannot credit the invocation's wall deadline.
+        for _ in 0..1000 {
+            budget
+                .script_deadline
+                .set(budget.script_deadline.get() + Duration::from_secs(30));
+        }
+        assert!(budget.native_timeout_ms(None).unwrap() <= 250);
+        let expired = ExecutionBudget {
+            script_deadline: budget.script_deadline,
+            wall_deadline: now,
+        };
+        assert!(expired.check().is_err());
+        assert!(expired.native_timeout_ms(None).is_err());
+    }
+
+    #[test]
+    fn native_tool_loop_stops_at_the_invocation_deadline() {
+        let mut request = req(
+            "return { go = function() while true do pcall(function() ms.nativeTools.run('exit', { args = {'/c', 'exit', '0'} }) end) end end }",
+            "go",
+            serde_json::json!({}),
+            &["nativeTools.runDeclared"],
+        );
+        #[cfg(windows)]
+        let binary = PathBuf::from(std::env::var_os("COMSPEC").unwrap());
+        #[cfg(not(windows))]
+        let binary = PathBuf::from("/usr/bin/true");
+        request.native_tools.insert("exit".into(), Some(binary));
+        let root = storage_tmp();
+        request.data_root = Some(root.clone());
+        request.limits.timeout = Duration::from_millis(100);
+        let started = Instant::now();
+        let result = run_with_native_budget(request, Duration::from_millis(150));
+        assert!(result.unwrap_err().to_string().contains("time budget"));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]
