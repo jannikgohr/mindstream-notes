@@ -34,14 +34,21 @@ export interface Token extends TextRange {
    */
   abbreviation?: string;
   /**
-   * The token's segments, split at the non-letter characters that joined
-   * them — present only when it actually contains one.
+   * The token's segments — present only when it actually decomposes.
    *
-   * The safety net for `WORDCHARS`. That directive is unioned across every
-   * enabled language, so enabling Dutch (which declares `/`) would otherwise
-   * turn `and/or` into one unknown token in English text. A token is judged
-   * as a whole first; only if no whole form is known are the segments
-   * judged individually, which keeps over-inclusion harmless.
+   * Two splitters feed this: the non-letter characters a dictionary
+   * declared via `WORDCHARS`, and camelCase boundaries. Neither replaces
+   * the token, because a word the user has personally accepted
+   * (`MindstreamNotes`) or that a dictionary knows as a compound has to be
+   * recognisable in the form it was written in. A token is judged as a
+   * whole first; only if no whole form is accepted are the segments judged
+   * individually, which narrows the squiggle to the bad segment without
+   * ever producing one the whole-word check would not have.
+   *
+   * The `WORDCHARS` half also keeps a unioned directive safe: it is
+   * unioned across every enabled language, so enabling Dutch (which
+   * declares `/`) must not turn `and/or` into one unknown token in English
+   * text.
    */
   parts?: Token[];
 }
@@ -111,6 +118,12 @@ const DIGIT = /\p{N}/u;
  * dictionary — while a genuine typo in one part still gets flagged, with a
  * range covering just that part.
  *
+ * The split is a FALLBACK, recorded in `parts` rather than replacing the
+ * token. It used to replace it, and that made a personal-dictionary entry
+ * like `MindstreamNotes` unusable: the whole word was gone before anything
+ * could ask whether the user had accepted it, so `Mindstream` got flagged
+ * on its own.
+ *
  * Two boundaries: lower→Upper (`userName`) and the tail of an acronym run
  * (`HTMLParser` → `HTML` + `Parser`).
  */
@@ -162,30 +175,35 @@ function splitCamelCase(token: Token): Token[] {
 }
 
 /**
- * Attach the abbreviation variant to the final part of a token.
+ * Attach the abbreviation variant to a token and to its final segment.
  *
- * Only the last part: in `Bestellnr.` the period belongs to the whole
- * token, and after a camelCase split it is `nr` that may carry it, not
- * `Bestell`.
+ * Both levels, because both get asked: the whole `Bestellnr.` is checked
+ * first, and if that is unknown the fallback needs `nr.`. The period
+ * belongs to the end of the word either way, never to `Bestell`.
  */
-function withAbbreviation(parts: Token[], followedByPeriod: boolean): Token[] {
+function withAbbreviation(token: Token, followedByPeriod: boolean): Token {
+  if (!followedByPeriod) return token;
+  const abbreviated: Token = { ...token, abbreviation: `${token.text}.` };
+  const parts = abbreviated.parts;
+  if (!parts) return abbreviated;
   const last = parts[parts.length - 1];
-  if (!last || !followedByPeriod) return parts;
-  return [...parts.slice(0, -1), { ...last, abbreviation: `${last.text}.` }];
+  return {
+    ...abbreviated,
+    parts: [...parts.slice(0, -1), { ...last, abbreviation: `${last.text}.` }]
+  };
 }
 
 /**
- * Record the token's segments, split at the WORDCHARS-derived characters
- * that joined them.
+ * Split a token at the WORDCHARS-derived characters that joined it.
  *
  * Only those characters — never the built-in connectors. Splitting at
  * hyphens or apostrophes would undo two deliberate behaviours: `E-Mail`
  * stays whole because Hunspell's BREAK handles hyphens better than we can,
  * and `don't` must never fall back to `don` + `t`.
  */
-function splitAtExtras(token: Token, extra: Set<string>): Token | undefined {
+function splitAtExtras(token: Token, extra: Set<string>): Token[] {
   if (extra.size === 0 || ![...token.text].some((ch) => extra.has(ch))) {
-    return undefined;
+    return [token];
   }
 
   const parts: Token[] = [];
@@ -203,7 +221,19 @@ function splitAtExtras(token: Token, extra: Set<string>): Token | undefined {
     }
   }
 
-  return parts.length > 1 ? { ...token, parts } : undefined;
+  return parts.length > 1 ? parts : [token];
+}
+
+/**
+ * The segments a token decomposes into, or nothing when it does not.
+ *
+ * WORDCHARS first and camelCase inside each piece, so `z.BMeinWort` yields
+ * leaves rather than a nested tree — the consumer wants a flat list of
+ * forms it can ask the dictionary about.
+ */
+function segments(token: Token, extra: Set<string>): Token[] | undefined {
+  const parts = splitAtExtras(token, extra).flatMap(splitCamelCase);
+  return parts.length > 1 ? parts : undefined;
 }
 
 /**
@@ -264,18 +294,19 @@ export function tokenizeWords(
     // otherwise look like a perfectly ordinary (misspelled) word.
     const afterDigit = start > 0 && DIGIT.test(text[start - 1]);
     if (raw.length > 0 && !DIGIT.test(raw) && !afterDigit) {
-      const split = withAbbreviation(
-        splitCamelCase({
-          text: raw,
-          from: start + offset,
-          to: end + offset
-        }),
-        // Indexed locally: token positions carry `offset`, this string
-        // does not.
-        text[end] === '.'
-      );
+      const whole: Token = {
+        text: raw,
+        from: start + offset,
+        to: end + offset
+      };
+      const parts = segments(whole, extra);
       tokens.push(
-        ...split.map((token) => splitAtExtras(token, extra) ?? token)
+        withAbbreviation(
+          parts ? { ...whole, parts } : whole,
+          // Indexed locally: token positions carry `offset`, this string
+          // does not.
+          text[end] === '.'
+        )
       );
     }
   }

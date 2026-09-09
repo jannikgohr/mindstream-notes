@@ -735,10 +735,9 @@ pub async fn plugins_preview_start(
             .iter()
             .map(|a| substitute(a, data_port, control_port, &input_str, &settings))
             .collect();
-        let child = Command::new(&binary)
-            .args(&args)
-            .current_dir(&cwd)
-            .spawn()?;
+        let mut command = Command::new(&binary);
+        command.args(&args).current_dir(&cwd);
+        let child = super::hide_console_window(&mut command).spawn()?;
         let proxy = start_loopback_proxy(data_port, proxy_styles.clone().unwrap_or_default())?;
         let data_url = proxy.url();
         let proxy_url = proxy_styles.map(|_| data_url.clone());

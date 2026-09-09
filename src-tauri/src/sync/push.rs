@@ -55,7 +55,6 @@ pub(super) fn push_folders(
         prepared.push((item, row.id.clone()));
     }
 
-    let local_ids: Vec<String> = prepared.iter().map(|(_, id)| id.clone()).collect();
     let mut items: Vec<Item> = prepared.into_iter().map(|(i, _)| i).collect();
     transact_or_resolve(im, &mut items, &mut report.conflicts_resolved)
         .map_err(|e| AppError::InvalidArg(format!("transaction folders: {e}")))?;
@@ -64,12 +63,19 @@ pub(super) fn push_folders(
     // Persist new uids/etags + clear dirty flag.
     db.with_conn_mut(|c| {
         let tx = c.transaction()?;
-        for (item, local_id) in items.iter().zip(local_ids.iter()) {
-            tx.execute(
-                "UPDATE collections
-                 SET etebase_uid = ?1, etebase_etag = ?2, dirty = 0
-                 WHERE id = ?3",
-                params![item.uid(), item.etag(), local_id],
+        for (item, row) in items.iter().zip(&dirty) {
+            acknowledge_push(
+                &tx,
+                PushReceipt {
+                    kind: PushedKind::Folder,
+                    id: &row.id,
+                    modified: &row.modified,
+                    previous_uid: row.etebase_uid.as_deref(),
+                    scope,
+                    uid: item.uid(),
+                    etag: item.etag(),
+                    tags_state: &[],
+                },
             )?;
         }
         tx.commit()?;
@@ -157,8 +163,6 @@ pub(super) fn push_notes(
         prepared.push((item, row.id.clone()));
     }
 
-    let local_ids: Vec<String> = prepared.iter().map(|(_, id)| id.clone()).collect();
-    let local_tag_states: Vec<Vec<u8>> = dirty.iter().map(|row| row.tags_state.clone()).collect();
     let mut items: Vec<Item> = prepared.into_iter().map(|(i, _)| i).collect();
     transact_or_resolve(im, &mut items, &mut report.conflicts_resolved)
         .map_err(|e| AppError::InvalidArg(format!("transaction notes: {e}")))?;
@@ -166,23 +170,19 @@ pub(super) fn push_notes(
     let pushed = items.len();
     db.with_conn_mut(|c| {
         let tx = c.transaction()?;
-        for ((item, local_id), tags_state) in items
-            .iter()
-            .zip(local_ids.iter())
-            .zip(local_tag_states.iter())
-        {
-            tx.execute(
-                "UPDATE notes
-                 SET etebase_uid = ?1, etebase_etag = ?2, dirty = 0,
-                     payload_schema = ?3, tags_state = ?4
-                 WHERE id = ?5",
-                params![
-                    item.uid(),
-                    item.etag(),
-                    PAYLOAD_SCHEMA as i64,
-                    tags_state,
-                    local_id,
-                ],
+        for (item, row) in items.iter().zip(&dirty) {
+            acknowledge_push(
+                &tx,
+                PushReceipt {
+                    kind: PushedKind::Note,
+                    id: &row.id,
+                    modified: &row.modified,
+                    previous_uid: row.etebase_uid.as_deref(),
+                    scope,
+                    uid: item.uid(),
+                    etag: item.etag(),
+                    tags_state: &row.tags_state,
+                },
             )?;
         }
         tx.commit()?;
@@ -253,7 +253,6 @@ pub(super) fn push_assets(
         prepared.push((item, row.id.clone()));
     }
 
-    let local_ids: Vec<String> = prepared.iter().map(|(_, id)| id.clone()).collect();
     let mut items: Vec<Item> = prepared.into_iter().map(|(i, _)| i).collect();
     transact_or_resolve(im, &mut items, &mut report.conflicts_resolved)
         .map_err(|e| AppError::InvalidArg(format!("transaction assets: {e}")))?;
@@ -261,12 +260,19 @@ pub(super) fn push_assets(
     let pushed = items.len();
     db.with_conn_mut(|c| {
         let tx = c.transaction()?;
-        for (item, local_id) in items.iter().zip(local_ids.iter()) {
-            tx.execute(
-                "UPDATE assets
-                 SET etebase_uid = ?1, etebase_etag = ?2, dirty = 0
-                 WHERE id = ?3",
-                params![item.uid(), item.etag(), local_id],
+        for (item, row) in items.iter().zip(&dirty) {
+            acknowledge_push(
+                &tx,
+                PushReceipt {
+                    kind: PushedKind::Asset,
+                    id: &row.id,
+                    modified: &row.modified,
+                    previous_uid: row.etebase_uid.as_deref(),
+                    scope,
+                    uid: item.uid(),
+                    etag: item.etag(),
+                    tags_state: &[],
+                },
             )?;
         }
         tx.commit()?;
@@ -320,7 +326,6 @@ pub(super) fn push_signatures(db: &Db, im: &ItemManager, report: &mut SyncReport
         prepared.push((item, row.id.clone()));
     }
 
-    let local_ids: Vec<String> = prepared.iter().map(|(_, id)| id.clone()).collect();
     let mut items: Vec<Item> = prepared.into_iter().map(|(i, _)| i).collect();
     transact_or_resolve(im, &mut items, &mut report.conflicts_resolved)
         .map_err(|e| AppError::InvalidArg(format!("transaction signatures: {e}")))?;
@@ -328,12 +333,19 @@ pub(super) fn push_signatures(db: &Db, im: &ItemManager, report: &mut SyncReport
     let pushed = items.len();
     db.with_conn_mut(|c| {
         let tx = c.transaction()?;
-        for (item, local_id) in items.iter().zip(local_ids.iter()) {
-            tx.execute(
-                "UPDATE signatures
-                 SET etebase_uid = ?1, etebase_etag = ?2, dirty = 0
-                 WHERE id = ?3",
-                params![item.uid(), item.etag(), local_id],
+        for (item, row) in items.iter().zip(&dirty) {
+            acknowledge_push(
+                &tx,
+                PushReceipt {
+                    kind: PushedKind::Signature,
+                    id: &row.id,
+                    modified: &row.modified,
+                    previous_uid: row.etebase_uid.as_deref(),
+                    scope: None,
+                    uid: item.uid(),
+                    etag: item.etag(),
+                    tags_state: &[],
+                },
             )?;
         }
         tx.commit()?;
@@ -495,4 +507,197 @@ pub(super) fn drain_tombstones(
         Ok(())
     })?;
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum PushedKind {
+    Folder,
+    Note,
+    Asset,
+    Signature,
+}
+
+struct PushReceipt<'a> {
+    kind: PushedKind,
+    id: &'a str,
+    modified: &'a str,
+    previous_uid: Option<&'a str>,
+    scope: Option<&'a str>,
+    uid: &'a str,
+    etag: &'a str,
+    tags_state: &'a [u8],
+}
+
+fn acknowledge_push(conn: &Connection, receipt: PushReceipt<'_>) -> AppResult<()> {
+    let (table, kind) = match receipt.kind {
+        PushedKind::Folder => ("collections", "folder"),
+        PushedKind::Note => ("notes", "note"),
+        PushedKind::Asset => ("assets", "asset"),
+        PushedKind::Signature => ("signatures", "signature"),
+    };
+    let scope_guard = if matches!(receipt.kind, PushedKind::Signature) {
+        "?6 IS NULL"
+    } else {
+        "share_scope_id IS ?6"
+    };
+    // Always retain a newly assigned identity, even if a concurrent edit must
+    // remain dirty. Rehomed/deleted rows must not regain their old identity.
+    let sql = format!(
+        "UPDATE {table} SET etebase_uid = ?1, etebase_etag = ?2,
+        dirty = CASE WHEN modified = ?4 THEN 0 ELSE dirty END
+        WHERE id = ?3 AND etebase_uid IS ?5 AND {scope_guard}"
+    );
+    let changed = conn.execute(
+        &sql,
+        params![
+            receipt.uid,
+            receipt.etag,
+            receipt.id,
+            receipt.modified,
+            receipt.previous_uid,
+            receipt.scope
+        ],
+    )?;
+    if changed == 0 {
+        conn.execute(
+            "INSERT OR IGNORE INTO tombstones(kind, etebase_uid, share_scope_id, queued_at)
+            VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)",
+            params![kind, receipt.uid, receipt.scope],
+        )?;
+    } else if matches!(receipt.kind, PushedKind::Note) {
+        conn.execute(
+            "UPDATE notes SET payload_schema = ?1, tags_state = ?2
+            WHERE id = ?3 AND modified = ?4",
+            params![
+                PAYLOAD_SCHEMA as i64,
+                receipt.tags_state,
+                receipt.id,
+                receipt.modified
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod receipt_tests {
+    use super::*;
+
+    #[test]
+    fn concurrent_edits_keep_dirty_and_tags_but_receive_the_first_push_identity() {
+        let db = crate::db::open_memory_for_tests();
+        db.with_conn(|c| {
+            let note = crate::notes::create(
+                c,
+                crate::notes::CreateNote {
+                    title: None,
+                    body: None,
+                    parent_collection_id: None,
+                    note_kind: None,
+                },
+            )?;
+            c.execute(
+                "UPDATE notes SET modified = 'newer', tags_state = X'CAFE' WHERE id = ?1",
+                params![note.summary.id],
+            )?;
+            acknowledge_push(
+                c,
+                PushReceipt {
+                    kind: PushedKind::Note,
+                    id: &note.summary.id,
+                    modified: &note.summary.modified,
+                    previous_uid: None,
+                    scope: None,
+                    uid: "new-uid",
+                    etag: "new-etag",
+                    tags_state: &[1, 2],
+                },
+            )?;
+            let (dirty, uid, state): (i64, String, Vec<u8>) = c.query_row(
+                "SELECT dirty, etebase_uid, tags_state FROM notes WHERE id = ?1",
+                params![note.summary.id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?;
+            assert_eq!(dirty, 1);
+            assert_eq!(uid, "new-uid");
+            assert_eq!(state, vec![0xCA, 0xFE]);
+            acknowledge_push(
+                c,
+                PushReceipt {
+                    kind: PushedKind::Note,
+                    id: &note.summary.id,
+                    modified: "newer",
+                    previous_uid: Some("new-uid"),
+                    scope: None,
+                    uid: "new-uid",
+                    etag: "next-etag",
+                    tags_state: &[0xCA, 0xFE],
+                },
+            )?;
+            assert_eq!(
+                c.query_row(
+                    "SELECT dirty FROM notes WHERE id = ?1",
+                    params![note.summary.id],
+                    |r| r.get::<_, i64>(0)
+                )?,
+                0
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn completed_push_for_a_rehomed_or_deleted_note_queues_scoped_cleanup() {
+        let db = crate::db::open_memory_for_tests();
+        db.with_conn(|c| {
+            let note = crate::notes::create(
+                c,
+                crate::notes::CreateNote {
+                    title: None,
+                    body: None,
+                    parent_collection_id: None,
+                    note_kind: None,
+                },
+            )?;
+            c.execute(
+                "UPDATE notes SET share_scope_id = 'new-scope' WHERE id = ?1",
+                params![note.summary.id],
+            )?;
+            for (id, uid) in [
+                (note.summary.id.as_str(), "rehome-uid"),
+                ("deleted", "deleted-uid"),
+            ] {
+                acknowledge_push(
+                    c,
+                    PushReceipt {
+                        kind: PushedKind::Note,
+                        id,
+                        modified: &note.summary.modified,
+                        previous_uid: None,
+                        scope: Some("old-scope"),
+                        uid,
+                        etag: "etag",
+                        tags_state: &[],
+                    },
+                )?;
+            }
+            let uid: Option<String> = c.query_row(
+                "SELECT etebase_uid FROM notes WHERE id = ?1",
+                params![note.summary.id],
+                |r| r.get(0),
+            )?;
+            assert!(uid.is_none());
+            assert_eq!(
+                c.query_row(
+                    "SELECT count(*) FROM tombstones WHERE share_scope_id = 'old-scope'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )?,
+                2
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
 }
