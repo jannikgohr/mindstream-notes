@@ -80,6 +80,21 @@ The remaining variables are behaviour switches, not gates:
 
 ## Two-client harness (T4)
 
+CI skips both Playwright and packaged-app E2E on draft PRs. Marking a PR ready
+enables E2E for code changes. Adding `ci:app-e2e` or starting a manual workflow
+run forces every suite, including on drafts and docs-only changes. Other labels
+do not rerun the test jobs or cancel a code run. Unit tests, coverage, lint and
+type checks still run on draft code changes.
+
+The two-client suite runs two spec workers on one CI runner, sharing one
+backend. Each worker gets four distinct driver ports, separate keyring IDs,
+temporary profiles and dictionaries, and isolated WebView storage. Accounts
+are unique per spec; reusing cached accounts is rejected with parallel workers.
+Local runs default to one worker. Set `MINDSTREAM_E2E_MULTI_WORKERS=2` to try
+parallel runs, or set it to `1` in CI to reduce memory and CPU pressure.
+The three-client suite stays serial because its tests share one spec's setup.
+Measure a full Linux run before increasing concurrency beyond two workers.
+
 `e2e-tests/app/wdio.multiremote.conf.ts` spawns **two** tauri-driver processes,
 each launching the app against its own `MINDSTREAM_PROFILE_DIR`, driven as
 `browserA` / `browserB`. `wdio.multiremote.a2.conf.ts` adds a third instance for

@@ -21,6 +21,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  configureWorker,
+  multiWorkers,
+  webviewEnvironment
+} from './helpers/worker-isolation.js';
+import {
   captureFailureArtifacts,
   installPageDiagnostics
 } from './helpers/failure-capture.js';
@@ -78,7 +83,8 @@ function spawnDriver(client: ClientProc): ChildProcess {
       // OS keyring entry; without it both clients default to `e2e`.
       MINDSTREAM_PROFILE_DIR: client.profileDir,
       MINDSTREAM_PROFILE_ID: client.profileId,
-      MINDSTREAM_DICTIONARY_DIR: dictionaryDir
+      MINDSTREAM_DICTIONARY_DIR: dictionaryDir,
+      ...webviewEnvironment(client.profileDir)
     },
     join(outputDir, `tauri-driver-${client.profileId}.log`)
   );
@@ -87,14 +93,16 @@ function spawnDriver(client: ClientProc): ChildProcess {
 export const config: WebdriverIO.Config = {
   runner: 'local',
   specs: [
-    // Only the two-client specs. The rest run on wdio.conf.ts.
-    join(here, 'specs', 'collab-confirm.e2e.ts'),
-    join(here, 'specs', 'sharing.e2e.ts'),
+    // Start longer specs first so a long final spec doesn't leave a worker idle.
     join(here, 'specs', 'collab.e2e.ts'),
+    join(here, 'specs', 'sharing.e2e.ts'),
     join(here, 'specs', 'sync-history.e2e.ts'),
-    join(here, 'specs', 'seed-merge.e2e.ts')
+    join(here, 'specs', 'seed-merge.e2e.ts'),
+    join(here, 'specs', 'collab-confirm.e2e.ts')
   ],
-  maxInstances: 1,
+  // CI opts into two workers, each driving two apps. Local runs stay serial
+  // unless explicitly enabled, since native startup is sensitive to host load.
+  maxInstances: multiWorkers(),
   outputDir,
   // Multiremote: an OBJECT (not an array) keyed by instance name. Each entry
   // carries its own connection (port → its tauri-driver) plus capabilities.
@@ -168,7 +176,12 @@ export const config: WebdriverIO.Config = {
   // occasionally leaves one app process not responding before Svelte mounts.
   // Leaving later ports closed briefly makes wdio's normal connection retry
   // machinery serialize the expensive native app boot without changing specs.
-  beforeSession: () => {
+  beforeSession: (_config, capabilities, _specs, cid) => {
+    configureWorker(
+      clients,
+      capabilities as unknown as Record<string, { port?: number }>,
+      cid
+    );
     for (const [index, client] of Object.values(clients).entries()) {
       if (client.driver || client.startTimer) continue;
       if (index === 0) {

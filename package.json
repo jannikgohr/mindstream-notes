@@ -40,7 +40,7 @@
     "format:rust:check": "node src-tauri/scripts/format-rust.mjs --check",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "lint:ci": "node --test src-tauri/scripts/lint-ci-filters.test.mjs",
+    "lint:ci": "node --test src-tauri/scripts/lint-ci-filters.test.mjs src-tauri/scripts/ci-test-plan.test.mjs && tsx --test e2e-tests/app/helpers/worker-isolation.test.ts",
     "lint:i18n": "node --test src-tauri/scripts/lint-i18n.test.mjs && node src-tauri/scripts/lint-i18n.mjs",
     "lint:theme": "node src-tauri/scripts/lint-theme.mjs",
     "prepare": "husky"
