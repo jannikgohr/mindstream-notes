@@ -27,6 +27,7 @@
  */
 
 import { mkdtempSync } from 'node:fs';
+import { installPageDiagnostics } from './failure-capture.js';
 import { freemem, tmpdir, totalmem } from 'node:os';
 import { join } from 'node:path';
 
@@ -120,21 +121,217 @@ const FILE_TREE_CREATE_ACTIONS = new Set([
   'New from template'
 ]);
 
+/** Either shape a wdio query hands back. */
+type ElementLike = WebdriverIO.Element | ChainablePromiseElement;
+
+type ClickOptions = {
+  button?: 'left' | 'right';
+  /** Use only for WebKit elements its displayedness endpoint misreports. */
+  visibility?: 'webdriver' | 'page';
+};
+
+/**
+ * Is this element actually on screen, asked of the page rather than the driver?
+ *
+ * WebKitWebDriver's `isElementDisplayed` disagreed with reality on the ⋯ menu:
+ * a failure capture showed "New note" present as a `role="menuitem"`, painted,
+ * unclipped and plainly visible in the screenshot, while a 30-second poll built
+ * on `isDisplayed()` never matched it. The page's own geometry is the thing the
+ * assertions actually care about, so ask for that instead.
+ */
+export async function isVisibleInPage(
+  element: ElementLike,
+  client: WebdriverIO.Browser = browser
+): Promise<boolean> {
+  const resolved = await element;
+  return client
+    .execute(
+      (node: HTMLElement) => {
+        if (!node) return false;
+        const rect = node.getBoundingClientRect();
+        const style = getComputedStyle(node);
+        return (
+          rect.width > 0 &&
+          rect.height > 0 &&
+          style.visibility !== 'hidden' &&
+          style.display !== 'none' &&
+          style.opacity !== '0'
+        );
+      },
+      resolved as unknown as HTMLElement
+    )
+    .catch(() => false);
+}
+
+/**
+ * What a visibility wait can be pointed at.
+ *
+ * A already-resolved element is a snapshot, and waiting on a snapshot is a
+ * trap: Svelte replaces a node when the surface around it re-renders, and a
+ * detached node reports a zero-sized rect forever rather than throwing, so the
+ * wait cannot ever succeed. Flow 5.6 hit exactly that — the view-mode button
+ * was resolved while the previous note's editor was still mounted, and the
+ * poll then measured the detached copy for thirty seconds while the failure
+ * capture reported the live one as displayed and unclipped.
+ *
+ * A selector or a factory is re-resolved on every poll, which is what
+ * `waitForDisplayed()` did before these gates replaced it.
+ */
+type VisibilityTarget = ElementLike | string | (() => ElementLike);
+
+function describeTarget(target: VisibilityTarget): string {
+  return typeof target === 'string'
+    ? target
+    : String(resolveTarget(target).selector);
+}
+
+function resolveTarget(
+  target: VisibilityTarget,
+  client: WebdriverIO.Browser = browser
+): ElementLike {
+  if (typeof target === 'string') return client.$(target);
+  if (typeof target === 'function') return target();
+  return target;
+}
+
+/** Gate an interaction on the element being on screen, per the page. */
+export async function waitUntilVisible(
+  target: VisibilityTarget,
+  client: WebdriverIO.Browser = browser
+): Promise<void> {
+  await client.waitUntil(
+    () => isVisibleInPage(resolveTarget(target, client), client),
+    {
+      timeout: 30_000,
+      timeoutMsg: `element (${describeTarget(target)}) never became visible`
+    }
+  );
+}
+
+/**
+ * The counterpart: gone, or present but not on screen.
+ *
+ * `not.toBeDisplayed()` reads through the very endpoint `isVisibleInPage`
+ * exists to avoid, so a disappearance has to be asserted the same way an
+ * appearance is.
+ */
+export async function waitUntilHidden(
+  target: VisibilityTarget,
+  client: WebdriverIO.Browser = browser
+): Promise<void> {
+  await client.waitUntil(
+    async () => !(await isVisibleInPage(resolveTarget(target, client), client)),
+    {
+      timeout: 30_000,
+      timeoutMsg: `element (${describeTarget(target)}) never went away`
+    }
+  );
+}
+
+/**
+ * The text an element holds, read in the page rather than over the wire.
+ *
+ * WebKitWebDriver's text endpoint returns only PART of a subtree. The failure
+ * capture for flow 5.2 has the whole suggestion popover in the DOM — the word
+ * `Helo`, the message `Unknown word`, a `Hello` correction and
+ * `Add to dictionary` — while `getText()` answered `"Unknown word"`, the one
+ * paragraph in it that does not carry Tailwind's `truncate`
+ * (`overflow: hidden; text-overflow: ellipsis; white-space: nowrap`). Every
+ * assertion built on `getText()` or `toHaveText()` inherits that blind spot
+ * and fails against markup that is plainly correct.
+ *
+ * `textContent` with runs of whitespace collapsed: these assertions are about
+ * which words a surface shows, not about how it laid them out.
+ */
+export async function textInPage(
+  element: ElementLike,
+  client: WebdriverIO.Browser = browser
+): Promise<string> {
+  const resolved = await element;
+  return client.execute(
+    (node: HTMLElement) =>
+      (node?.textContent ?? '').replace(/\s+/g, ' ').trim(),
+    resolved as unknown as HTMLElement
+  );
+}
+
+/**
+ * Wait for an element's page-side text to contain `expected`.
+ *
+ * The message is composed after the wait rather than in `timeoutMsg`, which
+ * wdio builds eagerly — one written there reports the state the wait STARTED
+ * from, never the state it gave up in.
+ */
+export async function waitForTextInPage(
+  element: ElementLike,
+  expected: string,
+  client: WebdriverIO.Browser = browser
+): Promise<void> {
+  const resolved = await element;
+  try {
+    await client.waitUntil(
+      async () => (await textInPage(resolved, client)).includes(expected),
+      { timeout: 30_000 }
+    );
+  } catch {
+    throw new Error(
+      `expected ${String(resolved.selector)} to contain ` +
+        `${JSON.stringify(expected)}, still ` +
+        `${JSON.stringify(await textInPage(resolved, client))} after 30s`
+    );
+  }
+}
+
+/**
+ * A file-tree create action, wherever the toolbar decided to put it.
+ *
+ * The row renders what fits and moves the rest into the ⋯ menu, so an action is
+ * either a `button[aria-label]` in the toolbar or a `button[role="menuitem"]`
+ * in the popover. The menu branch matches by XPath — evaluated by the driver in
+ * one call — rather than reading every item's text back over the wire, because
+ * that round trip is what silently returned nothing on WebKitGTK.
+ */
 async function displayedByName(
   name: string
 ): Promise<ChainablePromiseElement | undefined> {
   const escaped = name.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const toolbarButton = $(`button[aria-label="${escaped}"]`);
-  if (await toolbarButton.isDisplayed().catch(() => false)) {
+  if (await isVisibleInPage(toolbarButton)) {
     return toolbarButton;
   }
-  const menuItems = await $$('button[role="menuitem"]');
-  for (const item of menuItems) {
-    if ((await item.isDisplayed()) && (await item.getText()).trim() === name) {
-      return item as unknown as ChainablePromiseElement;
-    }
+  if (name.includes('"')) {
+    throw new Error(`create action names must not contain a quote: ${name}`);
   }
+  const menuItem = $(
+    `//button[@role="menuitem"][normalize-space(.)="${name}"]`
+  );
+  if (await isVisibleInPage(menuItem)) return menuItem;
   return undefined;
+}
+
+/**
+ * What the ⋯ menu currently offers, as the page sees it.
+ *
+ * Only used to explain a failure: "did not become visible" is a useless message
+ * when the item is sitting right there in the screenshot, so the timeout says
+ * what the menu actually held.
+ */
+async function describeCreateActions(
+  client: WebdriverIO.Browser = browser
+): Promise<string> {
+  return client
+    .execute(() => {
+      const inRow = Array.from(document.querySelectorAll('button[aria-label]'))
+        .filter((button) =>
+          (button.getAttribute('aria-label') ?? '').startsWith('New ')
+        )
+        .map((button) => button.getAttribute('aria-label'));
+      const inMenu = Array.from(
+        document.querySelectorAll('button[role="menuitem"]')
+      ).map((button) => (button.textContent ?? '').trim());
+      return `toolbar: [${inRow.join(', ')}] menu: [${inMenu.join(', ')}]`;
+    })
+    .catch((error: unknown) => `unavailable (${String(error)})`);
 }
 
 export async function waitForClientReady(
@@ -224,11 +421,15 @@ async function waitForDefaultClientReady(): Promise<void> {
 
 export async function clickElement(
   element: ChainablePromiseElement,
-  opts: { button?: 'left' | 'right' } = {}
+  opts: ClickOptions = {}
 ): Promise<void> {
   await waitForDefaultClientReady();
   const resolved = await element;
-  await resolved.waitForDisplayed({ timeout: 30_000 });
+  if (opts.visibility === 'page') {
+    await waitUntilVisible(resolved);
+  } else {
+    await resolved.waitForDisplayed({ timeout: 30_000 });
+  }
   await browser.execute(
     (el: HTMLElement, button: 'left' | 'right') => {
       el.scrollIntoView({ block: 'center', inline: 'center' });
@@ -351,6 +552,34 @@ export async function insertText(
   );
 }
 
+/**
+ * Type into a surface that builds its document from key events.
+ *
+ * One character per call, then a read-back. A single `browser.keys(text)`
+ * drops REPEATED characters on WebKitWebDriver: flow 5.6 typed
+ * "hello `Helo` world Wrogn" and the editor held "helo `Helo` world Wrogn" —
+ * the doubled `l` collapsed, while every word in the sentence without a repeat
+ * arrived intact. That surfaced as a spellcheck assertion failing over a word
+ * the test never typed.
+ *
+ * The read-back is half the point. A dropped keystroke is a harness fault and
+ * has to say so, instead of being reported as a defect in the feature under
+ * test.
+ */
+export async function typeText(selector: string, text: string): Promise<void> {
+  await clickElement($(selector));
+  for (const character of text) {
+    await browser.keys(character);
+  }
+  const held = await textInPage($(selector));
+  if (!held.includes(text)) {
+    throw new Error(
+      `typing into ${selector} did not land: sent ${JSON.stringify(text)}, ` +
+        `surface holds ${JSON.stringify(held)}`
+    );
+  }
+}
+
 export async function clickName(
   name: string,
   opts: { button?: 'left' | 'right' } = {}
@@ -384,10 +613,16 @@ export async function revealFileTreeCreateAction(
   let action = await displayedByName(name);
   if (!action) {
     await openFileTreeCreateMore();
-    await browser.waitUntil(async () => Boolean(await displayedByName(name)), {
-      timeout: 30_000,
-      timeoutMsg: `file-tree create action did not become visible: ${name}`
-    });
+    await browser
+      .waitUntil(async () => Boolean(await displayedByName(name)), {
+        timeout: 30_000
+      })
+      .catch(async () => {
+        throw new Error(
+          `file-tree create action did not become visible: ${name} — ` +
+            (await describeCreateActions())
+        );
+      });
     action = await displayedByName(name);
   }
   if (!action) throw new Error(`missing file-tree create action: ${name}`);
@@ -395,7 +630,9 @@ export async function revealFileTreeCreateAction(
 }
 
 export async function clickFileTreeCreateAction(name: string): Promise<void> {
-  await clickElement(await revealFileTreeCreateAction(name));
+  await clickElement(await revealFileTreeCreateAction(name), {
+    visibility: 'page'
+  });
 }
 
 export async function clickMenuItem(label: string): Promise<void> {
@@ -424,6 +661,10 @@ export async function clickLastButtonText(
 /** Wait for the seeded shell to hydrate (the Welcome note in the tree). */
 export async function waitForShell(): Promise<void> {
   await byName('Welcome').waitForDisplayed({ timeout: 30_000 });
+  // A restart or reloadSession() drops the page-side error buffer the wdio
+  // `beforeTest` hook installed. Every spec waits for the shell after one, so
+  // re-arming here is what keeps post-restart failures diagnosable.
+  await installPageDiagnostics(browser);
 }
 
 export async function waitForSaved(): Promise<void> {
@@ -487,6 +728,30 @@ export async function setPluginEnabledByName(
  */
 export async function closeSettings(): Promise<void> {
   await closeSettingsDialog(browser);
+}
+
+/**
+ * Close the Settings dialog if one is open, and say nothing if none is.
+ *
+ * For teardown. An assertion that fails inside a settings block skips the
+ * `closeSettings()` that would have followed it, and the dialog then sits over
+ * every click the next test makes — which is how one real failure in flow 5.2
+ * was reported as six. Cleanup must not throw on "there was nothing to close",
+ * or it replaces the failure it was meant to contain.
+ */
+export async function closeSettingsIfOpen(
+  client: WebdriverIO.Browser = browser
+): Promise<void> {
+  await client
+    .execute(() => {
+      const dialog = Array.from(
+        document.querySelectorAll<HTMLElement>('[role="dialog"]')
+      ).find((candidate) => candidate.innerText.includes('Settings'));
+      dialog
+        ?.querySelector<HTMLButtonElement>('button[aria-label="Close"]')
+        ?.click();
+    })
+    .catch(() => undefined);
 }
 
 export async function closeSettingsDialog(
@@ -643,7 +908,11 @@ export async function loginClient(
     return;
   }
   if (await h.isDisplayed('Log out')) {
+    const previousDocument = await client.execute(() => performance.timeOrigin);
     await h.click('Log out');
+    await waitForAuthReload(client, previousDocument);
+    await h.click('Open settings');
+    await h.click('Account & Sync');
     await h.byName('Sign in').waitForDisplayed({ timeout: 30_000 });
     await selectSelfHosted(client);
   }
@@ -706,6 +975,7 @@ export async function loginClient(
     }
   );
 
+  const previousDocument = await client.execute(() => performance.timeOrigin);
   await client.execute(() => {
     const button = Array.from(document.querySelectorAll('button')).find(
       (candidate) => candidate.textContent?.trim() === 'Sign in'
@@ -714,8 +984,13 @@ export async function loginClient(
     button.click();
   });
 
-  // The signed-in card renders the username once the Rust login resolves.
+  // Login reloads the document to apply the account's CSP. The old document
+  // can briefly show the username before unloading, so wait for the new one
+  // before opening Settings and checking the persisted session.
   try {
+    await waitForAuthReload(client, previousDocument);
+    await h.click('Open settings');
+    await h.click('Account & Sync');
     await client
       .$(`aria/${input.username}`)
       .waitForDisplayed({ timeout: 60_000 });
@@ -745,6 +1020,24 @@ export async function loginClient(
     );
   }
   await closeSettingsDialog(client);
+}
+
+async function waitForAuthReload(
+  client: WebdriverIO.Browser,
+  previousDocument: number
+): Promise<void> {
+  await client.waitUntil(
+    () =>
+      client.execute(
+        (previous: number) => performance.timeOrigin !== previous,
+        previousDocument
+      ),
+    {
+      timeout: 60_000,
+      timeoutMsg: 'account change did not reload the document'
+    }
+  );
+  await waitForClientReady(client, 'account reload');
 }
 
 /** Run one manual sync through Settings → Account & Sync for a single client. */
@@ -838,11 +1131,15 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
 
   const clickElement = async (
     element: ChainablePromiseElement,
-    opts: { button?: 'left' | 'right' } = {}
+    opts: ClickOptions = {}
   ): Promise<void> => {
     await waitForClientReady(client);
     const resolved = await element;
-    await waitDisplayedDiagnosed(client, resolved);
+    if (opts.visibility === 'page') {
+      await waitUntilVisible(resolved, client);
+    } else {
+      await waitDisplayedDiagnosed(client, resolved);
+    }
     await client.execute(
       (el: HTMLElement, button: 'left' | 'right') => {
         el.scrollIntoView({ block: 'center', inline: 'center' });
@@ -879,18 +1176,16 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
   ): Promise<ChainablePromiseElement | undefined> => {
     const escaped = name.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     const toolbarButton = client.$(`button[aria-label="${escaped}"]`);
-    if (await toolbarButton.isDisplayed().catch(() => false)) {
+    if (await isVisibleInPage(toolbarButton, client)) {
       return toolbarButton;
     }
-    const menuItems = await client.$$('button[role="menuitem"]');
-    for (const item of menuItems) {
-      if (
-        (await item.isDisplayed()) &&
-        (await item.getText()).trim() === name
-      ) {
-        return item as unknown as ChainablePromiseElement;
-      }
+    if (name.includes('"')) {
+      throw new Error(`create action names must not contain a quote: ${name}`);
     }
+    const menuItem = client.$(
+      `//button[@role="menuitem"][normalize-space(.)="${name}"]`
+    );
+    if (await isVisibleInPage(menuItem, client)) return menuItem;
     return undefined;
   };
 
@@ -904,18 +1199,24 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
     ) {
       let action = await displayedByName(name);
       if (!action) {
-        await clickElement(client.$('button[aria-label="More actions"]'));
-        await client.waitUntil(
-          async () => Boolean(await displayedByName(name)),
-          {
-            timeout: 30_000,
-            timeoutMsg: `file-tree create action did not become visible: ${name}`
-          }
-        );
+        const more = client.$('button[aria-label="More actions"]');
+        if ((await more.getAttribute('aria-expanded')) !== 'true') {
+          await clickElement(more);
+        }
+        await client
+          .waitUntil(async () => Boolean(await displayedByName(name)), {
+            timeout: 30_000
+          })
+          .catch(async () => {
+            throw new Error(
+              `file-tree create action did not become visible: ${name} — ` +
+                (await describeCreateActions(client))
+            );
+          });
         action = await displayedByName(name);
       }
       if (!action) throw new Error(`missing file-tree create action: ${name}`);
-      await clickElement(action);
+      await clickElement(action, { visibility: 'page' });
       return;
     }
     await clickElement(byName(name), opts);

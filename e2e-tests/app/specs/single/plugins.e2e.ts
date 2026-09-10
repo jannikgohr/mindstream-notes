@@ -28,7 +28,7 @@ import {
   revealFileTreeCreateAction,
   setPluginEnabledByName,
   waitForShell
-} from '../helpers/harness.js';
+} from '../../helpers/harness.js';
 
 /** The bundled plugin whose toolbar contribution this spec asserts on. */
 const TEMPLATES_PLUGIN = 'Templates';

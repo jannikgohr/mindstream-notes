@@ -35,7 +35,7 @@ Two harnesses, deliberately separate:
 
   **Do not run the e2e harness while a long measurement is in flight.** All
   WebView2 hosts sharing a user-data folder share one browser process, and
-  `mindstream-notes.exe` and `mindstream-notes-e2e-single.exe` share
+  `mindstream-notes.exe` and `mindstream-notes-e2e.exe` share
   `%LOCALAPPDATA%\com.jannikgohr.mindstream-notes\EBWebView`. Killing the
   harness tree takes the other app's webview down with it — which looks
   exactly like the app under measurement having exited on its own.
@@ -214,7 +214,7 @@ regression from `--in-process-gpu`, which is why that flag is gone.
 
 A warning from getting this wrong once: `MINDSTREAM_E2E_SKIP_BUILD=1` skips
 preflight's binary _copy_ as well as its build, so the T3 harness will happily
-run a stale `mindstream-notes-e2e-single.exe` and report green. When using that
+run a stale `mindstream-notes-e2e.exe` and report green. When using that
 flag to iterate, copy `mindstream-notes.exe` over it yourself first — the first
 run of this probe measured the previous build and cleared a regression that was
 really there.

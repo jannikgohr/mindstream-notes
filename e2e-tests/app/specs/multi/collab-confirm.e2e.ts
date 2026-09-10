@@ -8,8 +8,8 @@
 
 import { expect } from '@wdio/globals';
 
-import { provisionTwoAccounts } from '../helpers/accounts.js';
-import { backendUrl } from '../helpers/backend.js';
+import { provisionTwoAccounts } from '../../helpers/accounts.js';
+import { backendUrl } from '../../helpers/backend.js';
 import {
   clientHelpers,
   clickLastButtonText,
@@ -17,7 +17,7 @@ import {
   syncClient,
   waitForClientsReady,
   type ClientHelpers
-} from '../helpers/harness.js';
+} from '../../helpers/harness.js';
 
 declare const browserA: WebdriverIO.Browser;
 declare const browserB: WebdriverIO.Browser;

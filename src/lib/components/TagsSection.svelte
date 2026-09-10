@@ -171,7 +171,9 @@
       closePicker();
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      handleSubmitInput();
+      void handleSubmitInput().catch((err: unknown) =>
+        console.error('[tags] submit failed', err)
+      );
     }
   }
 

@@ -53,6 +53,8 @@ if (outputPathIndex !== -1 && reportArgs[outputPathIndex + 1]) {
 const args = [
   'llvm-cov',
   '--locked',
+  '--fail-under-lines',
+  '80',
   '--ignore-filename-regex',
   IGNORE_REGEX,
   ...reportArgs

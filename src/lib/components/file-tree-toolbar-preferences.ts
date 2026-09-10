@@ -13,6 +13,47 @@ export const CORE_FILE_TREE_ACTION_IDS = [
 
 export type CoreFileTreeActionId = (typeof CORE_FILE_TREE_ACTION_IDS)[number];
 
+/**
+ * Geometry of one toolbar action, in px: a `size-7` icon button (28) in a
+ * `gap-1` row (4). The row lays out as `[action gap action gap … gap more]`,
+ * so n actions plus the overflow trigger need `n * (28 + 4) + 28`.
+ */
+export const FILE_TREE_ACTION_BUTTON_PX = 28;
+export const FILE_TREE_ACTION_GAP_PX = 4;
+
+/**
+ * Minimum width the create toolbar must keep: the overflow trigger plus one
+ * action. The row is `overflow-hidden` + `justify-end`, so anything narrower
+ * clips the *leading* buttons out of view — and a clipped action is worse than
+ * a hidden one, because it is neither clickable nor listed in the ⋯ menu. The
+ * component sets this as a CSS `min-width` so the flex row overflows instead,
+ * which is what makes the sibling sort control collapse and give the space
+ * back.
+ */
+export const FILE_TREE_TOOLBAR_MIN_PX =
+  FILE_TREE_ACTION_BUTTON_PX * 2 + FILE_TREE_ACTION_GAP_PX;
+
+/**
+ * How many actions fit inline, given the width of the whole toolbar row.
+ *
+ * Returns 0 when not even one action fits — every action then lives in the ⋯
+ * menu, which is reachable. The previous `Math.max(1, …)` floor guaranteed the
+ * opposite: on a narrow sidebar (a wider fallback font is enough — Linux CI
+ * renders the sort control in DejaVu Sans) it kept rendering an action that
+ * had no room, so the button was clipped to zero visible width *and* excluded
+ * from the menu, leaving "New note" unreachable.
+ */
+export function fileTreeToolbarCapacity(rowWidth: number): number {
+  if (!Number.isFinite(rowWidth) || rowWidth <= 0) return 0;
+  const forActions = rowWidth - FILE_TREE_ACTION_BUTTON_PX;
+  return Math.max(
+    0,
+    Math.floor(
+      forActions / (FILE_TREE_ACTION_BUTTON_PX + FILE_TREE_ACTION_GAP_PX)
+    )
+  );
+}
+
 export interface FileTreeToolbarPreferences {
   toolbar: string[];
   more: string[];

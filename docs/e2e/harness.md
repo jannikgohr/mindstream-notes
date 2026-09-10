@@ -57,6 +57,16 @@ The remaining variables are behaviour switches, not gates:
   `src-tauri/src/profiles.rs`, gated to dev builds and the `e2e-data-dir`
   feature — a shipped production binary can never be redirected by a stray env
   var.
+- **WebView store — not isolated, and not isolable from config.** The WebView
+  keeps localStorage and its cache outside the profile dir, under
+  `<local data dir>/<identifier>`, shared by every client of a run. The
+  window's `dataDirectory` config key looks like the fix and is not:
+  `impl From<&WindowConfig> for WebviewAttributes` (tauri-runtime 2.11.1)
+  never copies it, so Tauri drops the value for any window it creates from
+  config and falls back to the shared path. The multi-client suites used to
+  compile one binary per client to vary that key; the builds were collapsed to
+  one once this was confirmed by launching the binary directly and watching the
+  directory never appear.
 - **Native dialogs.** File/folder pickers (export, import, PDF import) can't be
   clicked over WebDriver — they need a Rust-side hook to pre-seed the path. The
   dialog-driven specs stay skipped until that seam exists.
@@ -69,6 +79,40 @@ The remaining variables are behaviour switches, not gates:
   semantics, traffic lights, or Dock reopen.
 
 ## Two-client harness (T4)
+
+### Adding app E2E tests
+
+Add a `*.e2e.ts` file in the directory for the clients it needs:
+
+| Directory under `e2e-tests/app/specs/` | Clients    | Command                      |
+| -------------------------------------- | ---------- | ---------------------------- |
+| `single/`                              | One app    | `pnpm test:e2e:app`          |
+| `multi/`                               | Two apps   | `pnpm test:e2e:app:multi`    |
+| `multi-a2/`                            | Three apps | `pnpm test:e2e:app:multi:a2` |
+
+Nested directories work too. No spec list, CI filter, port allocation or
+worker assignment needs editing. `pnpm lint:ci` checks that every app spec is
+discovered exactly once, so a file placed outside these directories fails the
+check instead of silently missing CI. Use the existing account helpers for
+fresh users and the client helpers for browser interactions. Keep shared
+state within a spec; separate files must be safe to run in parallel.
+
+### CI scheduling
+
+CI skips both Playwright and packaged-app E2E on draft PRs. Marking a PR ready
+enables E2E for code changes. Adding `ci:app-e2e` or starting a manual workflow
+run forces every suite, including on drafts and docs-only changes. Other labels
+do not rerun the test jobs or cancel a code run. Unit tests, coverage, lint and
+type checks still run on draft code changes.
+
+The two-client suite runs two spec workers on one CI runner, sharing one
+backend. Each worker gets four distinct driver ports, separate keyring IDs,
+temporary profiles and dictionaries, and isolated WebView storage. Accounts
+are unique per spec; reusing cached accounts is rejected with parallel workers.
+Local runs default to one worker. Set `MINDSTREAM_E2E_MULTI_WORKERS=2` to try
+parallel runs, or set it to `1` in CI to reduce memory and CPU pressure.
+The three-client suite stays serial because its tests share one spec's setup.
+Measure a full Linux run before increasing concurrency beyond two workers.
 
 `e2e-tests/app/wdio.multiremote.conf.ts` spawns **two** tauri-driver processes,
 each launching the app against its own `MINDSTREAM_PROFILE_DIR`, driven as

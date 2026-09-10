@@ -77,6 +77,7 @@ export enum TauriCommandName {
   ListProfiles = 'list_profiles',
   ListSignatures = 'list_signatures',
   LoadNote = 'load_note',
+  LoadTree = 'load_tree',
   LoadNoteVersion = 'load_note_version',
   MoveMany = 'move_many',
   NoteRoomInfo = 'note_room_info',

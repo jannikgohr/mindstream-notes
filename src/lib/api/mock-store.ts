@@ -264,6 +264,12 @@ function tokenMagnitude(
 })();
 
 export const mockApi = {
+  loadTree() {
+    return {
+      collections: structuredClone(collections),
+      notes: [...notes.values()].map(summary)
+    };
+  },
   // ---- Collections ----
   async listCollections(): Promise<Collection[]> {
     return [...collections];

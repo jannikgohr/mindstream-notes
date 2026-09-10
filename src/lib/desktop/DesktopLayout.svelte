@@ -162,7 +162,9 @@
 
     dispose(): void {
       if (this.instance) {
-        unmount(this.instance);
+        void unmount(this.instance).catch((err: unknown) =>
+          console.error('[desktop] unmount failed', err)
+        );
         this.instance = null;
       }
     }
