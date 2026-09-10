@@ -26,10 +26,10 @@
  *     skips the specs that depend on it until that lands.
  */
 
-import { mkdtempSync } from 'node:fs';
-import { installPageDiagnostics } from './failure-capture.js';
-import { freemem, tmpdir, totalmem } from 'node:os';
-import { join } from 'node:path';
+import { mkdtempSync } from "node:fs";
+import { installPageDiagnostics } from "./failure-capture.js";
+import { freemem, tmpdir, totalmem } from "node:os";
+import { join } from "node:path";
 
 /** A Mocha test context (`this`) — enough to call `.skip()`. */
 export interface Skippable {
@@ -47,7 +47,7 @@ export interface Skippable {
  * run (helpers/preflight.ts). This one marks specs whose production-side hook
  * does not exist yet, which no amount of environment setup can satisfy.
  */
-export const DIALOG_HOOK = process.env.MINDSTREAM_E2E_DIALOG_HOOK === '1';
+export const DIALOG_HOOK = process.env.MINDSTREAM_E2E_DIALOG_HOOK === "1";
 
 /** Skip suites that drive a native file dialog until the Rust hook lands. */
 export function requireDialogHook(ctx: Skippable): void {
@@ -61,7 +61,7 @@ export function requireDialogHook(ctx: Skippable): void {
  * dir respawns the driver with this value (see `restartAppWithProfile`).
  */
 export function freshProfileDir(): string {
-  return mkdtempSync(join(tmpdir(), 'mindstream-e2e-'));
+  return mkdtempSync(join(tmpdir(), "mindstream-e2e-"));
 }
 
 /**
@@ -78,7 +78,7 @@ export function dictionaryDir(): string {
   const dir = process.env.MINDSTREAM_DICTIONARY_DIR;
   if (!dir) {
     throw new Error(
-      'MINDSTREAM_DICTIONARY_DIR is unset — wdio.conf.ts beforeSession allocates it'
+      "MINDSTREAM_DICTIONARY_DIR is unset — wdio.conf.ts beforeSession allocates it",
     );
   }
   return dir;
@@ -92,7 +92,7 @@ export function dictionaryDir(): string {
 export async function restartApp(): Promise<void> {
   // `browser` is a wdio global available inside a session.
   await browser.reloadSession();
-  await waitForClientReady(browser, 'browser:restart');
+  await waitForClientReady(browser, "browser:restart");
 }
 
 // ---- Accessible-name selectors (mirror the browser-fallback role queries) ----
@@ -109,25 +109,25 @@ export function allByName(name: string): ChainablePromiseArray {
 }
 
 export function treeItem(name: string): ChainablePromiseElement {
-  return byName('File tree').$(`aria/${name}`);
+  return byName("File tree").$(`aria/${name}`);
 }
 
 const FILE_TREE_CREATE_ACTIONS = new Set([
-  'New folder',
-  'New note',
-  'New drawing canvas',
-  'New handwritten note',
-  'New Kanban board',
-  'New from template'
+  "New folder",
+  "New note",
+  "New drawing canvas",
+  "New handwritten note",
+  "New Kanban board",
+  "New from template",
 ]);
 
 /** Either shape a wdio query hands back. */
 type ElementLike = WebdriverIO.Element | ChainablePromiseElement;
 
 type ClickOptions = {
-  button?: 'left' | 'right';
+  button?: "left" | "right";
   /** Use only for WebKit elements its displayedness endpoint misreports. */
-  visibility?: 'webdriver' | 'page';
+  visibility?: "webdriver" | "page";
 };
 
 /**
@@ -141,7 +141,7 @@ type ClickOptions = {
  */
 export async function isVisibleInPage(
   element: ElementLike,
-  client: WebdriverIO.Browser = browser
+  client: WebdriverIO.Browser = browser,
 ): Promise<boolean> {
   const resolved = await element;
   return client
@@ -153,12 +153,12 @@ export async function isVisibleInPage(
         return (
           rect.width > 0 &&
           rect.height > 0 &&
-          style.visibility !== 'hidden' &&
-          style.display !== 'none' &&
-          style.opacity !== '0'
+          style.visibility !== "hidden" &&
+          style.display !== "none" &&
+          style.opacity !== "0"
         );
       },
-      resolved as unknown as HTMLElement
+      resolved as unknown as HTMLElement,
     )
     .catch(() => false);
 }
@@ -180,31 +180,31 @@ export async function isVisibleInPage(
 type VisibilityTarget = ElementLike | string | (() => ElementLike);
 
 function describeTarget(target: VisibilityTarget): string {
-  return typeof target === 'string'
+  return typeof target === "string"
     ? target
     : String(resolveTarget(target).selector);
 }
 
 function resolveTarget(
   target: VisibilityTarget,
-  client: WebdriverIO.Browser = browser
+  client: WebdriverIO.Browser = browser,
 ): ElementLike {
-  if (typeof target === 'string') return client.$(target);
-  if (typeof target === 'function') return target();
+  if (typeof target === "string") return client.$(target);
+  if (typeof target === "function") return target();
   return target;
 }
 
 /** Gate an interaction on the element being on screen, per the page. */
 export async function waitUntilVisible(
   target: VisibilityTarget,
-  client: WebdriverIO.Browser = browser
+  client: WebdriverIO.Browser = browser,
 ): Promise<void> {
   await client.waitUntil(
     () => isVisibleInPage(resolveTarget(target, client), client),
     {
       timeout: 30_000,
-      timeoutMsg: `element (${describeTarget(target)}) never became visible`
-    }
+      timeoutMsg: `element (${describeTarget(target)}) never became visible`,
+    },
   );
 }
 
@@ -217,14 +217,14 @@ export async function waitUntilVisible(
  */
 export async function waitUntilHidden(
   target: VisibilityTarget,
-  client: WebdriverIO.Browser = browser
+  client: WebdriverIO.Browser = browser,
 ): Promise<void> {
   await client.waitUntil(
     async () => !(await isVisibleInPage(resolveTarget(target, client), client)),
     {
       timeout: 30_000,
-      timeoutMsg: `element (${describeTarget(target)}) never went away`
-    }
+      timeoutMsg: `element (${describeTarget(target)}) never went away`,
+    },
   );
 }
 
@@ -245,13 +245,13 @@ export async function waitUntilHidden(
  */
 export async function textInPage(
   element: ElementLike,
-  client: WebdriverIO.Browser = browser
+  client: WebdriverIO.Browser = browser,
 ): Promise<string> {
   const resolved = await element;
   return client.execute(
     (node: HTMLElement) =>
-      (node?.textContent ?? '').replace(/\s+/g, ' ').trim(),
-    resolved as unknown as HTMLElement
+      (node?.textContent ?? "").replace(/\s+/g, " ").trim(),
+    resolved as unknown as HTMLElement,
   );
 }
 
@@ -265,19 +265,19 @@ export async function textInPage(
 export async function waitForTextInPage(
   element: ElementLike,
   expected: string,
-  client: WebdriverIO.Browser = browser
+  client: WebdriverIO.Browser = browser,
 ): Promise<void> {
   const resolved = await element;
   try {
     await client.waitUntil(
       async () => (await textInPage(resolved, client)).includes(expected),
-      { timeout: 30_000 }
+      { timeout: 30_000 },
     );
   } catch {
     throw new Error(
       `expected ${String(resolved.selector)} to contain ` +
         `${JSON.stringify(expected)}, still ` +
-        `${JSON.stringify(await textInPage(resolved, client))} after 30s`
+        `${JSON.stringify(await textInPage(resolved, client))} after 30s`,
     );
   }
 }
@@ -292,9 +292,9 @@ export async function waitForTextInPage(
  * that round trip is what silently returned nothing on WebKitGTK.
  */
 async function displayedByName(
-  name: string
+  name: string,
 ): Promise<ChainablePromiseElement | undefined> {
-  const escaped = name.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const escaped = name.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   const toolbarButton = $(`button[aria-label="${escaped}"]`);
   if (await isVisibleInPage(toolbarButton)) {
     return toolbarButton;
@@ -303,7 +303,7 @@ async function displayedByName(
     throw new Error(`create action names must not contain a quote: ${name}`);
   }
   const menuItem = $(
-    `//button[@role="menuitem"][normalize-space(.)="${name}"]`
+    `//button[@role="menuitem"][normalize-space(.)="${name}"]`,
   );
   if (await isVisibleInPage(menuItem)) return menuItem;
   return undefined;
@@ -317,29 +317,29 @@ async function displayedByName(
  * what the menu actually held.
  */
 async function describeCreateActions(
-  client: WebdriverIO.Browser = browser
+  client: WebdriverIO.Browser = browser,
 ): Promise<string> {
   return client
     .execute(() => {
-      const inRow = Array.from(document.querySelectorAll('button[aria-label]'))
+      const inRow = Array.from(document.querySelectorAll("button[aria-label]"))
         .filter((button) =>
-          (button.getAttribute('aria-label') ?? '').startsWith('New ')
+          (button.getAttribute("aria-label") ?? "").startsWith("New "),
         )
-        .map((button) => button.getAttribute('aria-label'));
+        .map((button) => button.getAttribute("aria-label"));
       const inMenu = Array.from(
-        document.querySelectorAll('button[role="menuitem"]')
-      ).map((button) => (button.textContent ?? '').trim());
-      return `toolbar: [${inRow.join(', ')}] menu: [${inMenu.join(', ')}]`;
+        document.querySelectorAll('button[role="menuitem"]'),
+      ).map((button) => (button.textContent ?? "").trim());
+      return `toolbar: [${inRow.join(", ")}] menu: [${inMenu.join(", ")}]`;
     })
     .catch((error: unknown) => `unavailable (${String(error)})`);
 }
 
 export async function waitForClientReady(
   client: WebdriverIO.Browser,
-  label = 'client',
-  timeout = 90_000
+  label = "client",
+  timeout = 90_000,
 ): Promise<void> {
-  let lastState = '<not probed yet>';
+  let lastState = "<not probed yet>";
   const started = Date.now();
   let reloadedBlankBoot = false;
   try {
@@ -348,25 +348,25 @@ export async function waitForClientReady(
         try {
           const state = await client.execute(() => {
             const buttonLabels = Array.from(
-              document.querySelectorAll('button')
+              document.querySelectorAll("button"),
             ).map(
               (button) =>
-                button.getAttribute('aria-label') ??
+                button.getAttribute("aria-label") ??
                 button.textContent?.trim() ??
-                ''
+                "",
             );
-            const bodyText = document.body?.innerText ?? '';
+            const bodyText = document.body?.innerText ?? "";
             return {
               readyState: document.readyState,
-              hasTauri: '__TAURI_INTERNALS__' in window,
-              hasShellText: bodyText.includes('Mindstream Notes'),
+              hasTauri: "__TAURI_INTERNALS__" in window,
+              hasShellText: bodyText.includes("Mindstream Notes"),
               buttonCount: buttonLabels.length,
               buttonLabels: buttonLabels.filter(Boolean).slice(0, 10),
               bodyText: bodyText.slice(0, 300),
               bootBlank:
-                bodyText.trim().length === 0 || bodyText.trim() === 'Loading…',
+                bodyText.trim().length === 0 || bodyText.trim() === "Loading…",
               url: window.location.href,
-              visibility: document.visibilityState
+              visibility: document.visibilityState,
             };
           });
           lastState = JSON.stringify(state);
@@ -381,7 +381,7 @@ export async function waitForClientReady(
           }
           return (
             state.hasTauri &&
-            state.readyState === 'complete' &&
+            state.readyState === "complete" &&
             state.hasShellText &&
             state.buttonCount > 0
           );
@@ -394,21 +394,21 @@ export async function waitForClientReady(
       {
         timeout,
         interval: 1_000,
-        timeoutMsg: `${label} did not become WebDriver-ready`
-      }
+        timeoutMsg: `${label} did not become WebDriver-ready`,
+      },
     );
   } catch (err) {
     throw new Error(
       `${err instanceof Error ? err.message : String(err)} ` +
         `within ${timeout}ms (elapsed=${Date.now() - started}ms, ` +
-        `last=${lastState})`
+        `last=${lastState})`,
     );
   }
 }
 
 export async function waitForClientsReady(
   clients: Record<string, WebdriverIO.Browser>,
-  timeout = 90_000
+  timeout = 90_000,
 ): Promise<void> {
   for (const [label, client] of Object.entries(clients)) {
     await waitForClientReady(client, label, timeout);
@@ -416,23 +416,23 @@ export async function waitForClientsReady(
 }
 
 async function waitForDefaultClientReady(): Promise<void> {
-  await waitForClientReady(browser, 'browser');
+  await waitForClientReady(browser, "browser");
 }
 
 export async function clickElement(
   element: ChainablePromiseElement,
-  opts: ClickOptions = {}
+  opts: ClickOptions = {},
 ): Promise<void> {
   await waitForDefaultClientReady();
   const resolved = await element;
-  if (opts.visibility === 'page') {
+  if (opts.visibility === "page") {
     await waitUntilVisible(resolved);
   } else {
     await resolved.waitForDisplayed({ timeout: 30_000 });
   }
   await browser.execute(
-    (el: HTMLElement, button: 'left' | 'right') => {
-      el.scrollIntoView({ block: 'center', inline: 'center' });
+    (el: HTMLElement, button: "left" | "right") => {
+      el.scrollIntoView({ block: "center", inline: "center" });
       const rect = el.getBoundingClientRect();
       const clientX = rect.left + rect.width / 2;
       const clientY = rect.top + rect.height / 2;
@@ -442,30 +442,30 @@ export async function clickElement(
         view: window,
         clientX,
         clientY,
-        button: button === 'right' ? 2 : 0,
-        buttons: button === 'right' ? 2 : 1
+        button: button === "right" ? 2 : 0,
+        buttons: button === "right" ? 2 : 1,
       };
 
       el.focus?.();
-      if (button === 'right') {
-        el.dispatchEvent(new MouseEvent('mousedown', base));
-        el.dispatchEvent(new MouseEvent('mouseup', { ...base, buttons: 0 }));
-        el.dispatchEvent(new MouseEvent('contextmenu', base));
+      if (button === "right") {
+        el.dispatchEvent(new MouseEvent("mousedown", base));
+        el.dispatchEvent(new MouseEvent("mouseup", { ...base, buttons: 0 }));
+        el.dispatchEvent(new MouseEvent("contextmenu", base));
         return;
       }
 
-      el.dispatchEvent(new MouseEvent('mousedown', base));
-      el.dispatchEvent(new MouseEvent('mouseup', { ...base, buttons: 0 }));
+      el.dispatchEvent(new MouseEvent("mousedown", base));
+      el.dispatchEvent(new MouseEvent("mouseup", { ...base, buttons: 0 }));
       el.click();
     },
     resolved,
-    opts.button ?? 'left'
+    opts.button ?? "left",
   );
 }
 
 export async function setElementValue(
   element: ChainablePromiseElement,
-  value: string
+  value: string,
 ): Promise<void> {
   await waitForDefaultClientReady();
   const resolved = await element;
@@ -475,29 +475,29 @@ export async function setElementValue(
       // See clientHelpers.setValue: label-wrapped inputs mean `aria/<name>` can
       // resolve to the <label>, so target the real control before assigning.
       const input = (
-        el.matches('input, textarea, select')
+        el.matches("input, textarea, select")
           ? el
-          : (el.querySelector('input, textarea, select') ??
-            el.closest('label')?.querySelector('input, textarea, select') ??
+          : (el.querySelector("input, textarea, select") ??
+            el.closest("label")?.querySelector("input, textarea, select") ??
             el)
       ) as HTMLInputElement | HTMLTextAreaElement;
-      input.scrollIntoView({ block: 'center', inline: 'center' });
+      input.scrollIntoView({ block: "center", inline: "center" });
       input.focus();
       input.value = next;
       input.dispatchEvent(
-        new InputEvent('input', { bubbles: true, data: next })
+        new InputEvent("input", { bubbles: true, data: next }),
       );
-      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
     },
     resolved,
-    value
+    value,
   );
 }
 
 export async function pressElementKey(
   element: ChainablePromiseElement,
   key: string,
-  opts: { ctrlKey?: boolean } = {}
+  opts: { ctrlKey?: boolean } = {},
 ): Promise<void> {
   await waitForDefaultClientReady();
   const resolved = await element;
@@ -510,20 +510,20 @@ export async function pressElementKey(
         code: pressed,
         bubbles: true,
         cancelable: true,
-        ctrlKey
+        ctrlKey,
       };
-      el.dispatchEvent(new KeyboardEvent('keydown', init));
-      el.dispatchEvent(new KeyboardEvent('keyup', init));
+      el.dispatchEvent(new KeyboardEvent("keydown", init));
+      el.dispatchEvent(new KeyboardEvent("keyup", init));
     },
     resolved,
     key,
-    opts.ctrlKey === true
+    opts.ctrlKey === true,
   );
 }
 
 export async function insertText(
   element: ChainablePromiseElement,
-  text: string
+  text: string,
 ): Promise<void> {
   const resolved = await element;
   await clickElement(resolved);
@@ -538,17 +538,17 @@ export async function insertText(
         selection.removeAllRanges();
         selection.addRange(range);
       }
-      document.execCommand('insertText', false, value);
+      document.execCommand("insertText", false, value);
       el.dispatchEvent(
-        new InputEvent('input', {
+        new InputEvent("input", {
           bubbles: true,
-          inputType: 'insertText',
-          data: value
-        })
+          inputType: "insertText",
+          data: value,
+        }),
       );
     },
     resolved,
-    text
+    text,
   );
 }
 
@@ -575,17 +575,17 @@ export async function typeText(selector: string, text: string): Promise<void> {
   if (!held.includes(text)) {
     throw new Error(
       `typing into ${selector} did not land: sent ${JSON.stringify(text)}, ` +
-        `surface holds ${JSON.stringify(held)}`
+        `surface holds ${JSON.stringify(held)}`,
     );
   }
 }
 
 export async function clickName(
   name: string,
-  opts: { button?: 'left' | 'right' } = {}
+  opts: { button?: "left" | "right" } = {},
 ): Promise<void> {
   if (
-    (opts.button ?? 'left') === 'left' &&
+    (opts.button ?? "left") === "left" &&
     FILE_TREE_CREATE_ACTIONS.has(name)
   ) {
     await clickFileTreeCreateAction(name);
@@ -596,31 +596,31 @@ export async function clickName(
 
 export async function openFileTreeCreateMore(): Promise<void> {
   const more = $('button[aria-label="More actions"]');
-  if ((await more.getAttribute('aria-expanded')) !== 'true') {
+  if ((await more.getAttribute("aria-expanded")) !== "true") {
     await clickElement(more);
   }
 }
 
 export async function isFileTreeCreateActionDisplayed(
-  name: string
+  name: string,
 ): Promise<boolean> {
   return Boolean(await displayedByName(name));
 }
 
 export async function revealFileTreeCreateAction(
-  name: string
+  name: string,
 ): Promise<ChainablePromiseElement> {
   let action = await displayedByName(name);
   if (!action) {
     await openFileTreeCreateMore();
     await browser
       .waitUntil(async () => Boolean(await displayedByName(name)), {
-        timeout: 30_000
+        timeout: 30_000,
       })
       .catch(async () => {
         throw new Error(
           `file-tree create action did not become visible: ${name} — ` +
-            (await describeCreateActions())
+            (await describeCreateActions()),
         );
       });
     action = await displayedByName(name);
@@ -631,7 +631,7 @@ export async function revealFileTreeCreateAction(
 
 export async function clickFileTreeCreateAction(name: string): Promise<void> {
   await clickElement(await revealFileTreeCreateAction(name), {
-    visibility: 'page'
+    visibility: "page",
   });
 }
 
@@ -639,18 +639,18 @@ export async function clickMenuItem(label: string): Promise<void> {
   const escaped = label.replace(/"/g, '\\"');
   await clickElement(
     $(
-      `//button[@role="menuitem" and .//*[normalize-space(text())="${escaped}"]]`
-    )
+      `//button[@role="menuitem" and .//*[normalize-space(text())="${escaped}"]]`,
+    ),
   );
 }
 
 export async function clickLastButtonText(
   client: WebdriverIO.Browser,
-  label: string
+  label: string,
 ): Promise<void> {
   await client.execute((text: string) => {
-    const buttons = Array.from(document.querySelectorAll('button')).filter(
-      (button) => button.textContent?.trim() === text
+    const buttons = Array.from(document.querySelectorAll("button")).filter(
+      (button) => button.textContent?.trim() === text,
     );
     const button = buttons.at(-1) as HTMLButtonElement | undefined;
     if (!button) throw new Error(`button not found: ${text}`);
@@ -660,7 +660,7 @@ export async function clickLastButtonText(
 
 /** Wait for the seeded shell to hydrate (the Welcome note in the tree). */
 export async function waitForShell(): Promise<void> {
-  await byName('Welcome').waitForDisplayed({ timeout: 30_000 });
+  await byName("Welcome").waitForDisplayed({ timeout: 30_000 });
   // A restart or reloadSession() drops the page-side error buffer the wdio
   // `beforeTest` hook installed. Every spec waits for the shell after one, so
   // re-arming here is what keeps post-restart failures diagnosable.
@@ -668,7 +668,7 @@ export async function waitForShell(): Promise<void> {
 }
 
 export async function waitForSaved(): Promise<void> {
-  await byName('Saved').waitForDisplayed({ timeout: 30_000 });
+  await byName("Saved").waitForDisplayed({ timeout: 30_000 });
 }
 
 /** Credentials for driving the Settings → Account sign-in form. */
@@ -688,12 +688,12 @@ export interface LoginInput {
  */
 export async function setPluginEnabledByName(
   name: string,
-  enabled: boolean
+  enabled: boolean,
 ): Promise<void> {
   await browser.execute(
     (pluginName: string, want: boolean) => {
       const toggles = Array.from(
-        document.querySelectorAll<HTMLButtonElement>('button[role="switch"]')
+        document.querySelectorAll<HTMLButtonElement>('button[role="switch"]'),
       );
       // Walk up only while the ancestor still holds exactly ONE switch: that
       // is this plugin's row. One level further is the list, whose text
@@ -710,11 +710,11 @@ export async function setPluginEnabledByName(
         return false;
       });
       if (!found) throw new Error(`no plugin row for ${pluginName}`);
-      if (found.getAttribute('aria-checked') === String(want)) return;
+      if (found.getAttribute("aria-checked") === String(want)) return;
       found.click();
     },
     name,
-    enabled
+    enabled,
   );
 }
 
@@ -740,13 +740,13 @@ export async function closeSettings(): Promise<void> {
  * or it replaces the failure it was meant to contain.
  */
 export async function closeSettingsIfOpen(
-  client: WebdriverIO.Browser = browser
+  client: WebdriverIO.Browser = browser,
 ): Promise<void> {
   await client
     .execute(() => {
       const dialog = Array.from(
-        document.querySelectorAll<HTMLElement>('[role="dialog"]')
-      ).find((candidate) => candidate.innerText.includes('Settings'));
+        document.querySelectorAll<HTMLElement>('[role="dialog"]'),
+      ).find((candidate) => candidate.innerText.includes("Settings"));
       dialog
         ?.querySelector<HTMLButtonElement>('button[aria-label="Close"]')
         ?.click();
@@ -755,16 +755,16 @@ export async function closeSettingsIfOpen(
 }
 
 export async function closeSettingsDialog(
-  client: WebdriverIO.Browser
+  client: WebdriverIO.Browser,
 ): Promise<void> {
   await client.execute(() => {
     const dialog = Array.from(
-      document.querySelectorAll<HTMLElement>('[role="dialog"]')
-    ).find((candidate) => candidate.innerText.includes('Settings'));
+      document.querySelectorAll<HTMLElement>('[role="dialog"]'),
+    ).find((candidate) => candidate.innerText.includes("Settings"));
     const close = dialog?.querySelector<HTMLButtonElement>(
-      'button[aria-label="Close"]'
+      'button[aria-label="Close"]',
     );
-    if (!close) throw new Error('missing Settings close button');
+    if (!close) throw new Error("missing Settings close button");
     close.click();
   });
 }
@@ -779,13 +779,13 @@ export async function closeSettingsDialog(
  * are already broken, so every field degrades to a marker rather than throwing.
  */
 export async function describeClientState(
-  client: WebdriverIO.Browser
+  client: WebdriverIO.Browser,
 ): Promise<string> {
   try {
     const state = await client.execute(() => {
-      const buttons = Array.from(document.querySelectorAll('button'))
+      const buttons = Array.from(document.querySelectorAll("button"))
         .map((b) =>
-          (b.getAttribute('aria-label') ?? b.textContent ?? '').trim()
+          (b.getAttribute("aria-label") ?? b.textContent ?? "").trim(),
         )
         .filter((label) => label.length > 0);
       return {
@@ -793,13 +793,13 @@ export async function describeClientState(
         url: location.href,
         title: document.title,
         bodyChars: document.body?.innerHTML.length ?? -1,
-        bodyText: (document.body?.innerText ?? '').slice(0, 200),
+        bodyText: (document.body?.innerText ?? "").slice(0, 200),
         buttonCount: buttons.length,
         buttons: buttons.slice(0, 25),
-        hasTauri: '__TAURI_INTERNALS__' in window,
+        hasTauri: "__TAURI_INTERNALS__" in window,
         // The app shell's own roots — present once Svelte has mounted.
-        hasAppRoot: !!document.querySelector('[data-sveltekit-hydrated], main'),
-        visibility: document.visibilityState
+        hasAppRoot: !!document.querySelector("[data-sveltekit-hydrated], main"),
+        visibility: document.visibilityState,
       };
     });
     return JSON.stringify(state);
@@ -827,7 +827,7 @@ export async function describeClientState(
 async function waitDisplayedDiagnosed(
   client: WebdriverIO.Browser,
   element: Awaited<ChainablePromiseElement>,
-  probeMs = 60_000
+  probeMs = 60_000,
 ): Promise<void> {
   const selector = String(element.selector);
   try {
@@ -853,17 +853,17 @@ async function waitDisplayedDiagnosed(
     throw new Error(
       `${err instanceof Error ? err.message : String(err)}\n` +
         `[verdict] ${verdict} for ${selector}\n` +
-        `[host] freeMem=${freeGb}GB/${totalGb}GB\n[app state] ${state}`
+        `[host] freeMem=${freeGb}GB/${totalGb}GB\n[app state] ${state}`,
     );
   }
 }
 
 async function selectSelfHosted(client: WebdriverIO.Browser): Promise<void> {
   await client.execute(() => {
-    const button = Array.from(document.querySelectorAll('button')).find(
-      (candidate) => candidate.textContent?.trim() === 'Self-hosted'
+    const button = Array.from(document.querySelectorAll("button")).find(
+      (candidate) => candidate.textContent?.trim() === "Self-hosted",
     ) as HTMLButtonElement | undefined;
-    if (!button) throw new Error('missing Self-hosted server type button');
+    if (!button) throw new Error("missing Self-hosted server type button");
     button.click();
   });
 }
@@ -887,7 +887,7 @@ async function selectSelfHosted(client: WebdriverIO.Browser): Promise<void> {
  */
 export async function loginClient(
   client: WebdriverIO.Browser,
-  input: LoginInput
+  input: LoginInput,
 ): Promise<void> {
   await waitForClientReady(client, `login:${input.username}`);
 
@@ -899,17 +899,21 @@ export async function loginClient(
   // The first interaction of every T4 spec. Its "Open settings still not
   // displayed" timeout — like every clickElement wait — is diagnosed centrally
   // by waitDisplayedDiagnosed (app state + slow-vs-dead verdict).
-  await h.click('Open settings');
-  await h.click('Account & Sync');
+  await h.click("Open settings");
+  await h.click("Account & Sync");
   await selectSelfHosted(client);
 
   if (await h.isDisplayed(input.username)) {
     await closeSettingsDialog(client);
     return;
   }
-  if (await h.isDisplayed('Log out')) {
-    await h.click('Log out');
-    await h.byName('Sign in').waitForDisplayed({ timeout: 30_000 });
+  if (await h.isDisplayed("Log out")) {
+    const previousDocument = await client.execute(() => performance.timeOrigin);
+    await h.click("Log out");
+    await waitForAuthReload(client, previousDocument);
+    await h.click("Open settings");
+    await h.click("Account & Sync");
+    await h.byName("Sign in").waitForDisplayed({ timeout: 30_000 });
     await selectSelfHosted(client);
   }
 
@@ -918,69 +922,75 @@ export async function loginClient(
       client.execute(() => {
         const inputByLabel = (labelText: string) =>
           document.querySelector(`input[aria-label="${labelText}"]`) ??
-          Array.from(document.querySelectorAll('label'))
+          Array.from(document.querySelectorAll("label"))
             .find((label) => label.textContent?.includes(labelText))
-            ?.querySelector('input');
-        return inputByLabel('Server URL') !== null;
+            ?.querySelector("input");
+        return inputByLabel("Server URL") !== null;
       }),
     {
       timeout: 30_000,
-      timeoutMsg: 'self-hosted sign-in form did not render'
-    }
+      timeoutMsg: "self-hosted sign-in form did not render",
+    },
   );
 
   await client.execute((formInput: LoginInput) => {
     const setInput = (label: string, value: string) => {
       const input =
         document.querySelector<HTMLInputElement>(
-          `input[aria-label="${label}"]`
+          `input[aria-label="${label}"]`,
         ) ??
-        (Array.from(document.querySelectorAll('label'))
+        (Array.from(document.querySelectorAll("label"))
           .find((candidate) => candidate.textContent?.includes(label))
-          ?.querySelector('input') as HTMLInputElement | null);
+          ?.querySelector("input") as HTMLInputElement | null);
       if (!input) throw new Error(`missing sign-in input: ${label}`);
-      input.scrollIntoView({ block: 'center', inline: 'center' });
+      input.scrollIntoView({ block: "center", inline: "center" });
       input.focus();
       input.value = value;
       input.dispatchEvent(
-        new InputEvent('input', {
+        new InputEvent("input", {
           bubbles: true,
-          inputType: 'insertReplacementText',
-          data: value
-        })
+          inputType: "insertReplacementText",
+          data: value,
+        }),
       );
-      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
     };
 
-    setInput('Server URL', formInput.serverUrl);
-    setInput('Username or email', formInput.username);
-    setInput('Password', formInput.password);
+    setInput("Server URL", formInput.serverUrl);
+    setInput("Username or email", formInput.username);
+    setInput("Password", formInput.password);
   }, input);
 
   await client.waitUntil(
     () =>
       client.execute(() => {
-        const button = Array.from(document.querySelectorAll('button')).find(
-          (candidate) => candidate.textContent?.trim() === 'Sign in'
+        const button = Array.from(document.querySelectorAll("button")).find(
+          (candidate) => candidate.textContent?.trim() === "Sign in",
         ) as HTMLButtonElement | undefined;
         return button !== undefined && !button.disabled;
       }),
     {
       timeout: 30_000,
-      timeoutMsg: 'sign-in button did not enable after filling credentials'
-    }
+      timeoutMsg: "sign-in button did not enable after filling credentials",
+    },
   );
 
+  const previousDocument = await client.execute(() => performance.timeOrigin);
   await client.execute(() => {
-    const button = Array.from(document.querySelectorAll('button')).find(
-      (candidate) => candidate.textContent?.trim() === 'Sign in'
+    const button = Array.from(document.querySelectorAll("button")).find(
+      (candidate) => candidate.textContent?.trim() === "Sign in",
     ) as HTMLButtonElement | undefined;
-    if (!button) throw new Error('missing Sign in button');
+    if (!button) throw new Error("missing Sign in button");
     button.click();
   });
 
-  // The signed-in card renders the username once the Rust login resolves.
+  // Login reloads the document to apply the account's CSP. The old document
+  // can briefly show the username before unloading, so wait for the new one
+  // before opening Settings and checking the persisted session.
   try {
+    await waitForAuthReload(client, previousDocument);
+    await h.click("Open settings");
+    await h.click("Account & Sync");
     await client
       .$(`aria/${input.username}`)
       .waitForDisplayed({ timeout: 60_000 });
@@ -990,35 +1000,53 @@ export async function loginClient(
         document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)
           ?.value ??
         (
-          Array.from(document.querySelectorAll('label'))
+          Array.from(document.querySelectorAll("label"))
             .find((candidate) => candidate.textContent?.includes(label))
-            ?.querySelector('input') as HTMLInputElement | null
+            ?.querySelector("input") as HTMLInputElement | null
         )?.value ??
         null;
       const text = document.body.innerText;
       return {
-        serverUrl: value('Server URL'),
-        username: value('Username or email'),
-        hasPassword: (value('Password') ?? '').length > 0,
-        visibleText: text.slice(0, 2_000)
+        serverUrl: value("Server URL"),
+        username: value("Username or email"),
+        hasPassword: (value("Password") ?? "").length > 0,
+        visibleText: text.slice(0, 2_000),
       };
     });
     throw new Error(
       `login did not reach signed-in state for ${input.username}: ${String(
-        err
-      )}\n${JSON.stringify(state, null, 2)}`
+        err,
+      )}\n${JSON.stringify(state, null, 2)}`,
     );
   }
   await closeSettingsDialog(client);
 }
 
+async function waitForAuthReload(
+  client: WebdriverIO.Browser,
+  previousDocument: number,
+): Promise<void> {
+  await client.waitUntil(
+    () =>
+      client.execute(
+        (previous: number) => performance.timeOrigin !== previous,
+        previousDocument,
+      ),
+    {
+      timeout: 60_000,
+      timeoutMsg: "account change did not reload the document",
+    },
+  );
+  await waitForClientReady(client, "account reload");
+}
+
 /** Run one manual sync through Settings → Account & Sync for a single client. */
 export async function syncClient(client: WebdriverIO.Browser): Promise<void> {
   const h = clientHelpers(client);
-  await h.click('Open settings');
-  await h.click('Account & Sync');
+  await h.click("Open settings");
+  await h.click("Account & Sync");
   await selectSelfHosted(client);
-  await h.click('Sync now');
+  await h.click("Sync now");
 
   // Confirm the sync actually STARTED before waiting for it to return to idle.
   // The button's accessible name flips "Sync now" → "Syncing…" → "Sync now"
@@ -1030,14 +1058,14 @@ export async function syncClient(client: WebdriverIO.Browser): Promise<void> {
   // performs a real, completed sync. A sync fast enough to finish before
   // "Syncing…" paints a frame already converged, so tolerate that timeout.
   await client
-    .waitUntil(() => h.isDisplayed('Syncing…', 500), {
+    .waitUntil(() => h.isDisplayed("Syncing…", 500), {
       timeout: 10_000,
-      timeoutMsg: 'sync did not start'
+      timeoutMsg: "sync did not start",
     })
     .catch(() => undefined);
-  await client.waitUntil(() => h.isDisplayed('Sync now', 1_000), {
+  await client.waitUntil(() => h.isDisplayed("Sync now", 1_000), {
     timeout: 60_000,
-    timeoutMsg: 'sync did not return to idle'
+    timeoutMsg: "sync did not return to idle",
   });
   await closeSettingsDialog(client);
 }
@@ -1063,17 +1091,17 @@ export interface ClientHelpers {
   allByName(name: string): ChainablePromiseArray;
   isDisplayed(name: string, timeout?: number): Promise<boolean>;
   treeItem(name: string): ChainablePromiseElement;
-  click(name: string, opts?: { button?: 'left' | 'right' }): Promise<void>;
+  click(name: string, opts?: { button?: "left" | "right" }): Promise<void>;
   clickElement(
     element: ChainablePromiseElement,
-    opts?: { button?: 'left' | 'right' }
+    opts?: { button?: "left" | "right" },
   ): Promise<void>;
   setValue(name: string, value: string): Promise<void>;
   insertText(element: ChainablePromiseElement, text: string): Promise<void>;
   pressKey(
     element: ChainablePromiseElement,
     key: string,
-    opts?: { ctrlKey?: boolean }
+    opts?: { ctrlKey?: boolean },
   ): Promise<void>;
   clickMenuItem(label: string): Promise<void>;
   openNotifications(): Promise<void>;
@@ -1088,10 +1116,10 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
   const byName = (name: string) => client.$(`aria/${name}`);
   const allByName = (name: string) => client.$$(`aria/${name}`);
   const treeItem = (name: string) =>
-    client.$('aria/File tree').$(`aria/${name}`);
+    client.$("aria/File tree").$(`aria/${name}`);
   const isDisplayed = async (
     name: string,
-    timeout = 1_000
+    timeout = 1_000,
   ): Promise<boolean> => {
     try {
       await byName(name).waitForDisplayed({ timeout });
@@ -1103,18 +1131,18 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
 
   const clickElement = async (
     element: ChainablePromiseElement,
-    opts: ClickOptions = {}
+    opts: ClickOptions = {},
   ): Promise<void> => {
     await waitForClientReady(client);
     const resolved = await element;
-    if (opts.visibility === 'page') {
+    if (opts.visibility === "page") {
       await waitUntilVisible(resolved, client);
     } else {
       await waitDisplayedDiagnosed(client, resolved);
     }
     await client.execute(
-      (el: HTMLElement, button: 'left' | 'right') => {
-        el.scrollIntoView({ block: 'center', inline: 'center' });
+      (el: HTMLElement, button: "left" | "right") => {
+        el.scrollIntoView({ block: "center", inline: "center" });
         const rect = el.getBoundingClientRect();
         const clientX = rect.left + rect.width / 2;
         const clientY = rect.top + rect.height / 2;
@@ -1124,29 +1152,29 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
           view: window,
           clientX,
           clientY,
-          button: button === 'right' ? 2 : 0,
-          buttons: button === 'right' ? 2 : 1
+          button: button === "right" ? 2 : 0,
+          buttons: button === "right" ? 2 : 1,
         };
         el.focus?.();
-        if (button === 'right') {
-          el.dispatchEvent(new MouseEvent('mousedown', base));
-          el.dispatchEvent(new MouseEvent('mouseup', { ...base, buttons: 0 }));
-          el.dispatchEvent(new MouseEvent('contextmenu', base));
+        if (button === "right") {
+          el.dispatchEvent(new MouseEvent("mousedown", base));
+          el.dispatchEvent(new MouseEvent("mouseup", { ...base, buttons: 0 }));
+          el.dispatchEvent(new MouseEvent("contextmenu", base));
           return;
         }
-        el.dispatchEvent(new MouseEvent('mousedown', base));
-        el.dispatchEvent(new MouseEvent('mouseup', { ...base, buttons: 0 }));
+        el.dispatchEvent(new MouseEvent("mousedown", base));
+        el.dispatchEvent(new MouseEvent("mouseup", { ...base, buttons: 0 }));
         el.click();
       },
       resolved,
-      opts.button ?? 'left'
+      opts.button ?? "left",
     );
   };
 
   const displayedByName = async (
-    name: string
+    name: string,
   ): Promise<ChainablePromiseElement | undefined> => {
-    const escaped = name.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const escaped = name.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
     const toolbarButton = client.$(`button[aria-label="${escaped}"]`);
     if (await isVisibleInPage(toolbarButton, client)) {
       return toolbarButton;
@@ -1155,7 +1183,7 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
       throw new Error(`create action names must not contain a quote: ${name}`);
     }
     const menuItem = client.$(
-      `//button[@role="menuitem"][normalize-space(.)="${name}"]`
+      `//button[@role="menuitem"][normalize-space(.)="${name}"]`,
     );
     if (await isVisibleInPage(menuItem, client)) return menuItem;
     return undefined;
@@ -1163,32 +1191,32 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
 
   const click = async (
     name: string,
-    opts: { button?: 'left' | 'right' } = {}
+    opts: { button?: "left" | "right" } = {},
   ): Promise<void> => {
     if (
-      (opts.button ?? 'left') === 'left' &&
+      (opts.button ?? "left") === "left" &&
       FILE_TREE_CREATE_ACTIONS.has(name)
     ) {
       let action = await displayedByName(name);
       if (!action) {
         const more = client.$('button[aria-label="More actions"]');
-        if ((await more.getAttribute('aria-expanded')) !== 'true') {
+        if ((await more.getAttribute("aria-expanded")) !== "true") {
           await clickElement(more);
         }
         await client
           .waitUntil(async () => Boolean(await displayedByName(name)), {
-            timeout: 30_000
+            timeout: 30_000,
           })
           .catch(async () => {
             throw new Error(
               `file-tree create action did not become visible: ${name} — ` +
-                (await describeCreateActions(client))
+                (await describeCreateActions(client)),
             );
           });
         action = await displayedByName(name);
       }
       if (!action) throw new Error(`missing file-tree create action: ${name}`);
-      await clickElement(action, { visibility: 'page' });
+      await clickElement(action, { visibility: "page" });
       return;
     }
     await clickElement(byName(name), opts);
@@ -1204,29 +1232,29 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
         // control. Drill down to the actual field before assigning its value —
         // setting `.value` on a <label> is a silent no-op.
         const input = (
-          el.matches('input, textarea, select')
+          el.matches("input, textarea, select")
             ? el
-            : (el.querySelector('input, textarea, select') ??
-              el.closest('label')?.querySelector('input, textarea, select') ??
+            : (el.querySelector("input, textarea, select") ??
+              el.closest("label")?.querySelector("input, textarea, select") ??
               el)
         ) as HTMLInputElement | HTMLTextAreaElement;
-        input.scrollIntoView({ block: 'center', inline: 'center' });
+        input.scrollIntoView({ block: "center", inline: "center" });
         input.focus();
         input.value = next;
         input.dispatchEvent(
-          new InputEvent('input', { bubbles: true, data: next })
+          new InputEvent("input", { bubbles: true, data: next }),
         );
-        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
       },
       resolved,
-      value
+      value,
     );
   };
 
   const pressKey = async (
     element: ChainablePromiseElement,
     key: string,
-    opts: { ctrlKey?: boolean } = {}
+    opts: { ctrlKey?: boolean } = {},
   ): Promise<void> => {
     const resolved = await element;
     await resolved.waitForDisplayed({ timeout: 30_000 });
@@ -1238,20 +1266,20 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
           code: pressed,
           bubbles: true,
           cancelable: true,
-          ctrlKey
+          ctrlKey,
         };
-        el.dispatchEvent(new KeyboardEvent('keydown', init));
-        el.dispatchEvent(new KeyboardEvent('keyup', init));
+        el.dispatchEvent(new KeyboardEvent("keydown", init));
+        el.dispatchEvent(new KeyboardEvent("keyup", init));
       },
       resolved,
       key,
-      opts.ctrlKey === true
+      opts.ctrlKey === true,
     );
   };
 
   const insertText = async (
     element: ChainablePromiseElement,
-    text: string
+    text: string,
   ): Promise<void> => {
     const resolved = await element;
     await clickElement(resolved);
@@ -1266,17 +1294,17 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
           selection.removeAllRanges();
           selection.addRange(range);
         }
-        document.execCommand('insertText', false, value);
+        document.execCommand("insertText", false, value);
         el.dispatchEvent(
-          new InputEvent('input', {
+          new InputEvent("input", {
             bubbles: true,
-            inputType: 'insertText',
-            data: value
-          })
+            inputType: "insertText",
+            data: value,
+          }),
         );
       },
       resolved,
-      text
+      text,
     );
   };
 
@@ -1284,103 +1312,103 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
     const escaped = label.replace(/"/g, '\\"');
     await clickElement(
       client.$(
-        `//button[@role="menuitem" and .//*[normalize-space(text())="${escaped}"]]`
-      )
+        `//button[@role="menuitem" and .//*[normalize-space(text())="${escaped}"]]`,
+      ),
     );
   };
 
-  const openNotifications = () => click('Open notifications');
+  const openNotifications = () => click("Open notifications");
 
   // Draft-input flow: a toolbar/context-menu action opens an inline <input>.
   // Prefer the placeholder because older packaged binaries may not expose the
   // draft as the expected accessible name under WebKit.
   const commitDraft = async (
     placeholder: string,
-    value: string
+    value: string,
   ): Promise<void> => {
     await client.waitUntil(
       () =>
         client.execute(
           (draftPlaceholder: string) =>
-            Array.from(document.querySelectorAll('input')).some(
-              (input) => input.placeholder === draftPlaceholder
+            Array.from(document.querySelectorAll("input")).some(
+              (input) => input.placeholder === draftPlaceholder,
             ),
-          placeholder
+          placeholder,
         ),
       {
         timeout: 30_000,
-        timeoutMsg: `draft input did not render: ${placeholder}`
-      }
+        timeoutMsg: `draft input did not render: ${placeholder}`,
+      },
     );
 
     await client.execute(
       (draftPlaceholder: string, next: string) => {
         const input = Array.from(
-          document.querySelectorAll<HTMLInputElement>('input')
+          document.querySelectorAll<HTMLInputElement>("input"),
         ).find((candidate) => candidate.placeholder === draftPlaceholder);
         if (!input) throw new Error(`missing draft input: ${draftPlaceholder}`);
-        input.scrollIntoView({ block: 'center', inline: 'center' });
+        input.scrollIntoView({ block: "center", inline: "center" });
         input.focus();
         input.value = next;
         input.dispatchEvent(
-          new InputEvent('input', {
+          new InputEvent("input", {
             bubbles: true,
-            inputType: 'insertReplacementText',
-            data: next
-          })
+            inputType: "insertReplacementText",
+            data: next,
+          }),
         );
-        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
         input.dispatchEvent(
-          new KeyboardEvent('keydown', {
-            key: 'Enter',
-            code: 'Enter',
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            code: "Enter",
             bubbles: true,
-            cancelable: true
-          })
+            cancelable: true,
+          }),
         );
         input.dispatchEvent(
-          new KeyboardEvent('keyup', {
-            key: 'Enter',
-            code: 'Enter',
+          new KeyboardEvent("keyup", {
+            key: "Enter",
+            code: "Enter",
             bubbles: true,
-            cancelable: true
-          })
+            cancelable: true,
+          }),
         );
         input.blur();
       },
       placeholder,
-      value
+      value,
     );
     await treeItem(value).waitForDisplayed({ timeout: 30_000 });
   };
 
   const newRootFolder = async (name: string): Promise<void> => {
-    await click('New folder');
-    await commitDraft('New folder', name);
+    await click("New folder");
+    await commitDraft("New folder", name);
   };
 
   const newRootNote = async (name: string): Promise<void> => {
-    await click('New note');
-    await commitDraft('New note', name);
+    await click("New note");
+    await commitDraft("New note", name);
   };
 
   const newRootDrawing = async (name: string): Promise<void> => {
-    await click('New drawing canvas');
-    await commitDraft('New drawing canvas', name);
+    await click("New drawing canvas");
+    await commitDraft("New drawing canvas", name);
   };
 
   const newRootInk = async (name: string): Promise<void> => {
-    await click('New handwritten note');
-    await commitDraft('New handwritten note', name);
+    await click("New handwritten note");
+    await commitDraft("New handwritten note", name);
   };
 
   const newNoteInFolder = async (
     folder: string,
-    note: string
+    note: string,
   ): Promise<void> => {
-    await clickElement(treeItem(folder), { button: 'right' });
-    await clickMenuItem('New note');
-    await commitDraft('New note', note);
+    await clickElement(treeItem(folder), { button: "right" });
+    await clickMenuItem("New note");
+    await commitDraft("New note", note);
   };
 
   return {
@@ -1399,6 +1427,6 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
     newRootDrawing,
     newRootInk,
     newRootFolder,
-    newNoteInFolder
+    newNoteInFolder,
   };
 }
