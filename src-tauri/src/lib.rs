@@ -16,6 +16,7 @@ pub mod app_restart;
 pub mod assets;
 pub mod auth;
 pub mod backup;
+pub mod client_errors;
 pub mod collab_events;
 pub mod collections;
 pub mod content_stats;
@@ -46,6 +47,7 @@ pub mod sync;
 pub mod system;
 #[cfg(desktop)]
 pub mod tray;
+pub mod tree;
 pub mod tree_batch;
 #[cfg(desktop)]
 pub mod webview_memory;
@@ -413,6 +415,8 @@ pub fn run() {
             collections::delete_collection,
             // Notes
             notes::list_notes,
+            tree::load_tree,
+            client_errors::report_client_error,
             notes::load_note,
             notes::create_note,
             notes::save_note,

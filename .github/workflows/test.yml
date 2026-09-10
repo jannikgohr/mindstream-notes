@@ -16,6 +16,14 @@
 #   - e2e      : Playwright drives the SvelteKit SPA (browser-fallback mode,
 #                mock store) on Linux to cover the Svelte components unit tests
 #                can't reach.
+#   - app-e2e  : wdio + tauri-driver against the packaged binary under Xvfb,
+#                built once by `app-e2e-build` and shared as an artifact.
+#                By far the most expensive group, so it is scoped: `single`
+#                on any code change, the two collaboration suites only where
+#                they can tell you something (see the `changes` job).
+#
+# Docs-only changes normally run formatting only. Draft code changes run the
+# code checks but defer E2E until ready. Manual runs and ci:app-e2e override both.
 #
 # Android isn't tested here — its build matrix lives in release.yml because
 # it needs the NDK (~1.5 GB) and a signing keystore.
@@ -26,16 +34,94 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  # Manual runs are the escape hatch from every gate below: "Run workflow"
+  # always runs the full matrix, on whichever branch you pick. If you are
+  # reaching for it, you don't want CI second-guessing which half to skip.
+  workflow_dispatch:
 
 # Cancel superseded runs on the same branch — saves minutes on rapid pushes.
 concurrency:
-  group: test-${{ github.ref }}
+  # Unrelated label events must not cancel an active code/test run.
+  group: test-${{ github.ref }}-${{ github.event.action == 'labeled' && github.event.label.name != 'ci:app-e2e' && 'ignored-label' || 'checks' }}
   cancel-in-progress: true
 
 jobs:
+  # Docs changes still get formatting; draft code changes get all code checks.
+  # ci-test-plan.mjs decides when to enable E2E and which suites to run.
+  #
+  # The same job decides which app-tier suites run. `single` covers general
+  # regressions on ready PRs; the two collaboration suites
+  # are two thirds of the run's wall time and only exercise sync/sharing, so
+  # they are reserved for pushes to main, diffs that touch that code, and PRs
+  # labelled `ci:app-e2e`.
+  #
+  # The final CI job aggregates failures while accepting intentionally skipped
+  # jobs. Use that aggregate check if branch protection is enabled.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.decide.outputs.code }}
+      e2e: ${{ steps.decide.outputs.e2e }}
+      suites: ${{ steps.decide.outputs.list }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Skipped entirely on a manual run — `decide` forces everything on, so
+      # there is nothing for a filter to say.
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name != 'workflow_dispatch'
+        with:
+          # Two traps live in this one pattern. The filters are OR-ed, so
+          # `!**/*.md` plus `!docs/**` would match every non-docs Markdown
+          # file and defeat the whole thing — it has to be a single negated
+          # group. And `!(**/*.md)` alone still selects a root-level
+          # `README.md`, because `**/` does not match an empty path segment;
+          # both spellings are needed. Verified against picomatch, which is
+          # what paths-filter matches with.
+          filters: |
+            code:
+              - '!(**/*.md|*.md)'
+            # The surfaces the two-client suites actually exercise. This is a
+            # heuristic, not a proof: the Yjs/editor code they also depend on
+            # is spread across src/lib/editor and friends, and listing that
+            # would re-select every PR. A change that breaks collaboration from
+            # somewhere else is caught by the label or by main.
+            collab:
+              - 'src-tauri/scripts/ci-test-plan*'
+              - 'src/lib/sync/**'
+              - 'src-tauri/src/sync/**'
+              - 'src-tauri/src/sharing/**'
+              - 'src-tauri/src/collab_events.rs'
+              - 'backend/**'
+              - 'e2e-tests/app/specs/multi/**'
+              - 'e2e-tests/app/specs/multi-a2/**'
+              - 'e2e-tests/app/wdio.multiremote*'
+              - 'e2e-tests/app/helpers/**'
+              - '.github/workflows/test.yml'
+
+      - name: Decide what runs
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          LABEL: ${{ github.event.label.name }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          CODE: ${{ steps.filter.outputs.code }}
+          COLLAB: ${{ steps.filter.outputs.collab }}
+          # Through the environment, not string-interpolated into the script:
+          # a label is user-supplied text.
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: node src-tauri/scripts/ci-test-plan.mjs
+
   js:
     name: JS check + test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     timeout-minutes: 12
     strategy:
       fail-fast: false
@@ -64,6 +150,8 @@ jobs:
   rust:
     name: Cargo test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -136,13 +224,12 @@ jobs:
         working-directory: src-tauri
         run: cargo test --locked
 
-  # Coverage runs once on Linux and uploads two lcov reports to Codecov,
-  # tagged with `flags` so the service tracks the frontend and Rust
-  # backend percentages independently. Coverage is informational while it
-  # ramps up: a Codecov hiccup shouldn't fail the build.
+  # Coverage thresholds fail CI; reports upload even when tests fail.
   coverage:
     name: Coverage (Linux)
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     timeout-minutes: 30
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
@@ -186,20 +273,11 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Frontend: vitest with the v8 provider emits .output/coverage/frontend/lcov.info.
-      # `continue-on-error` so a sub-threshold run (vitest.config.ts thresholds)
-      # still leaves the already-written lcov.info in place and lets the Codecov
-      # upload below run — coverage is published regardless of the percentage.
       - name: JS coverage
-        continue-on-error: true
         run: pnpm test:coverage
 
-      # Backend: cargo-llvm-cov emits .output/coverage/rust/lcov.info. The helper applies
-      # the shared ignore-regex (integration/IPC/network/UI surfaces). Also
-      # non-fatal so the upload always runs even if the previous step reported low
-      # coverage.
       - name: Rust coverage
-        continue-on-error: true
+        if: ${{ !cancelled() }}
         run: node src-tauri/scripts/rust-coverage.mjs --lcov --output-path ../.output/coverage/rust/lcov.info
 
       - name: Note skipped Codecov upload
@@ -211,7 +289,7 @@ jobs:
       # frontend and backend reports, cross-contaminating the flags. We name the
       # single report explicitly via `files:` instead.
       - name: Upload frontend coverage
-        if: ${{ env.CODECOV_TOKEN != '' }}
+        if: ${{ !cancelled() && env.CODECOV_TOKEN != '' }}
         uses: codecov/codecov-action@v5
         with:
           files: ./.output/coverage/frontend/lcov.info
@@ -221,7 +299,7 @@ jobs:
           token: ${{ env.CODECOV_TOKEN }}
 
       - name: Upload backend coverage
-        if: ${{ env.CODECOV_TOKEN != '' }}
+        if: ${{ !cancelled() && env.CODECOV_TOKEN != '' }}
         uses: codecov/codecov-action@v5
         with:
           files: ./.output/coverage/rust/lcov.info
@@ -237,6 +315,8 @@ jobs:
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
     timeout-minutes: 10
     # Keep this tag in sync with @playwright/test in pnpm-lock.yaml.
     container:
@@ -273,6 +353,7 @@ jobs:
   # formatting drift — including broken/unformatted Markdown docs — in CI rather
   # than relying on the hook alone. Linux-only; formatting is platform-agnostic.
   format:
+    if: github.event.action != 'labeled' || github.event.label.name == 'ci:app-e2e'
     name: Prettier + ESLint (web + docs)
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -305,3 +386,188 @@ jobs:
       # silently fallen 19 keys behind `en.json` — those settings rendered
       # as raw key ids for German users.
       - run: pnpm lint:i18n
+
+      # The path filters that decide which jobs run, checked against the
+      # matcher paths-filter itself uses. A wrong glob here doesn't fail
+      # anything — it just quietly stops running tests, which is why the guard
+      # lives in the one job no gate can skip.
+      - run: pnpm lint:ci
+
+  # One build for all three suites.
+  #
+  # Each suite job used to compile the same crate itself: the rust-cache
+  # shared-key meant they didn't rebuild the dependency tree, but they each
+  # still linked the app (~3m25) and ran Vite (~55s), three times over, for a
+  # binary that is byte-for-byte the same in all three. Build it once here and
+  # pass it on, along with tauri-driver, so the suite jobs need no Rust
+  # toolchain at all.
+  #
+  # The trade is deliberate: this serialises a build in front of the suites,
+  # so it costs a little wall clock and saves a lot of billed minutes. The
+  # suites' own wall time is what the parallelism inside them addresses.
+  app-e2e-build:
+    name: Tauri E2E build
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
+    timeout-minutes: 60
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Build-time only: the suite jobs install the runtime half themselves.
+      - name: Install desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
+
+      # Same `shared-key` the suite jobs used, so this job inherits the cache
+      # they were populating. `cache-on-failure` matters more than it looks:
+      # the default drops the cache when the job fails, so a red build never
+      # saves one — and then never has one to restore.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: app-e2e
+          cache-on-failure: true
+      - run: pnpm install --frozen-lockfile
+      - run: cargo install tauri-driver --locked
+
+      # The suites' own build path (helpers/preflight.ts), not a second recipe
+      # that could drift from it.
+      - run: pnpm test:e2e:app:build
+
+      - name: Collect what the suites need
+        run: |
+          mkdir -p .output/app-e2e-bin
+          cp src-tauri/target/release/mindstream-notes-e2e .output/app-e2e-bin/
+          cp "$HOME/.cargo/bin/tauri-driver" .output/app-e2e-bin/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-e2e-bin
+          path: .output/app-e2e-bin
+          retention-days: 1
+
+  app-e2e:
+    name: Tauri E2E (${{ matrix.suite }})
+    runs-on: ubuntu-24.04
+    needs: [changes, app-e2e-build]
+    if: needs.changes.outputs.e2e == 'true'
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ${{ fromJSON(needs.changes.outputs.suites) }}
+    env:
+      MINDSTREAM_DOCKER_NO_SUDO: '1'
+      WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      # Nothing here compiles: `app-e2e-build` did that and handed over the
+      # binary and tauri-driver, so this job needs no Rust toolchain and no
+      # cargo cache. The package list still names the -dev variants, which
+      # is the proven one — the runtime-only names differ on noble
+      # (libgtk-3-0 is libgtk-3-0t64 there) and the download they would save
+      # is not worth getting that wrong.
+      - name: Install desktop test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev webkit2gtk-driver xvfb xauth dbus-x11 gnome-keyring
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-e2e-bin
+          path: .output/app-e2e-bin
+
+      # Where the harness looks for them: preflight.ts resolves the binary
+      # under src-tauri/target/release and tauri-driver under ~/.cargo/bin.
+      # The artifact does not carry the executable bit, so restore it.
+      - name: Restore the built binaries
+        run: |
+          mkdir -p src-tauri/target/release "$HOME/.cargo/bin"
+          mv .output/app-e2e-bin/mindstream-notes-e2e src-tauri/target/release/
+          mv .output/app-e2e-bin/tauri-driver "$HOME/.cargo/bin/"
+          chmod +x src-tauri/target/release/mindstream-notes-e2e "$HOME/.cargo/bin/tauri-driver"
+          rmdir .output/app-e2e-bin
+
+      - name: Start disposable collaboration backend
+        if: matrix.suite != 'single'
+        run: pnpm backend:test:up
+      - name: Run packaged app suite
+        env:
+          APP_SUITE: ${{ matrix.suite }}
+          MINDSTREAM_E2E_MULTI_WORKERS: '2'
+          # The binary came from app-e2e-build. preflight still verifies it
+          # carries `e2e-data-dir` before trusting it.
+          MINDSTREAM_E2E_SKIP_BUILD: '1'
+        run: |
+          case "$APP_SUITE" in
+            single) export TEST_COMMAND=test:e2e:app ;;
+            multi) export TEST_COMMAND=test:e2e:app:multi ;;
+            multi-a2) export TEST_COMMAND=test:e2e:app:multi:a2 ;;
+          esac
+          dbus-run-session -- bash -eu -c '
+            eval "$(printf %s ci-test-keyring | gnome-keyring-daemon --unlock --components=secrets)"
+            xvfb-run -a pnpm "$TEST_COMMAND"
+          '
+      - name: Capture backend logs
+        if: ${{ !cancelled() && matrix.suite != 'single' }}
+        run: |
+          mkdir -p .output/wdio
+          docker compose -f backend/docker-compose.yml -f backend/docker-compose.test.yml --env-file backend/.env.test -p mindstream-test logs --no-color > .output/wdio/backend.log
+      - name: Stop disposable backend
+        if: ${{ always() && matrix.suite != 'single' }}
+        run: pnpm backend:test:down
+      - name: Upload app test logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: wdio-${{ matrix.suite }}
+          path: .output/wdio
+          retention-days: 7
+
+  # One check that is always reported, whatever the gates decided.
+  #
+  # A gated-out job reports as "Skipped", and how a branch-protection rule
+  # treats that is a footgun nobody should have to remember: make `CI` the
+  # single required check and the question never comes up. Skipped is a pass
+  # here — that is the whole point of the gates — while a failure or a
+  # cancellation anywhere fails this job by name.
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always() && (github.event.action != 'labeled' || github.event.label.name == 'ci:app-e2e')
+    needs: [changes, js, rust, coverage, e2e, format, app-e2e-build, app-e2e]
+    steps:
+      # Plain expressions, no jq or node: this job is the one that must never
+      # be the thing that broke. `needs.*.result` is an array of every needed
+      # job's outcome, and "skipped" is deliberately not in the failure list.
+      - name: Job results
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: echo "$RESULTS"
+
+      - name: Fail if any job failed or was cancelled
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo "::error::CI failed — see the failing job in this run."
+          exit 1

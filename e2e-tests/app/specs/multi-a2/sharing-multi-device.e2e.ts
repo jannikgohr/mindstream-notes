@@ -34,15 +34,18 @@
 
 import { expect } from '@wdio/globals';
 
-import { provisionTwoAccounts, type TwoAccounts } from '../helpers/accounts.js';
-import { backendUrl } from '../helpers/backend.js';
+import {
+  provisionTwoAccounts,
+  type TwoAccounts
+} from '../../helpers/accounts.js';
+import { backendUrl } from '../../helpers/backend.js';
 import {
   clientHelpers,
   loginClient,
   syncClient,
   waitForClientsReady,
   type ClientHelpers
-} from '../helpers/harness.js';
+} from '../../helpers/harness.js';
 
 // wdio multiremote exposes each capability key as a global browser instance.
 // `browserA1`/`browserA2` = account A's two devices, `browserB` = account B.

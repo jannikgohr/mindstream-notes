@@ -54,6 +54,21 @@ pub(in crate::sync) fn apply_folder_payload(
     scope: Option<&str>,
     preserve_dirty_local_edits: bool,
 ) -> AppResult<Option<FolderPayload>> {
+    // A local delete or re-home has already retired this remote identity.
+    // Pull runs before the queued delete is pushed, so the server can still
+    // return its old copy. Reattaching that copy would undo the new scope and
+    // let the subsequent vault tombstone delete the re-homed folder.
+    let retired = db.with_conn(|c| {
+        Ok(c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tombstones
+             WHERE kind = 'folder' AND etebase_uid = ?1 AND share_scope_id IS ?2)",
+            params![uid, scope],
+            |r| r.get::<_, bool>(0),
+        )?)
+    })?;
+    if retired {
+        return Ok(None);
+    }
     let now = Utc::now().to_rfc3339();
 
     // Folder metadata (parent / name / position) is last-write-wins, not a

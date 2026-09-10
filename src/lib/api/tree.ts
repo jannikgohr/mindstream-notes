@@ -1,13 +1,15 @@
 /**
- * Tree shape composed from listCollections + listNotes. The renderer
+ * Tree shape composed from one database snapshot. The renderer
  * doesn't need ordered SQL — it just wants a tree it can map.
  */
 
 import type { Collection } from './collections';
 import type { NoteSummary } from './notes';
 import { TRASH_ID } from './index';
-import { listCollections } from './collections';
-import { listNotes } from './notes';
+import { parseCollection } from './collections';
+import { parseNoteSummary } from './notes';
+import { assertRecord, invokeOrFallback, TauriCommandName } from './core';
+import { mockApi } from './mock-store';
 
 export interface FolderNode {
   kind: 'folder';
@@ -36,10 +38,21 @@ export interface LoadedTree {
 
 /** Load both lists from Rust and weave them into a tree. */
 export async function loadTree(): Promise<LoadedTree> {
-  const [collections, notes] = await Promise.all([
-    listCollections(),
-    listNotes(true)
-  ]);
+  const { collections, notes } = await invokeOrFallback(
+    TauriCommandName.LoadTree,
+    {},
+    () => mockApi.loadTree(),
+    (value) => {
+      const raw = assertRecord(value, 'tree');
+      if (!Array.isArray(raw.collections) || !Array.isArray(raw.notes)) {
+        throw new Error('tree collections and notes must be arrays');
+      }
+      return {
+        collections: raw.collections.map(parseCollection),
+        notes: raw.notes.map(parseNoteSummary)
+      };
+    }
+  );
   return composeTree(collections, notes);
 }
 

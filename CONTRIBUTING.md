@@ -121,6 +121,8 @@ those tests are about, and only a stub can assert what it received.
 Every push to `main` and every pull request runs
 [`.github/workflows/test.yml`](.github/workflows/test.yml): the `js` and `rust`
 unit tests (on Linux, Windows, and macOS), `coverage`, `e2e` (the Playwright
-browser-fallback suite), and `format` (prettier in check mode). The real-app e2e
-tiers (T3 and T4) aren't wired into CI yet; see
+browser-fallback suite), and `format` (prettier in check mode). The `app-e2e`
+Linux matrix runs the single-client and both multiremote Tauri suites under
+Xvfb, with a disposable collaboration backend for T4. Coverage thresholds fail
+CI even when Codecov uploads are unavailable. See
 [docs/e2e/status.md](docs/e2e/status.md).

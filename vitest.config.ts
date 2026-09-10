@@ -41,7 +41,7 @@ export default defineConfig({
   },
   test: {
     environment: 'happy-dom',
-    include: ['src/**/*.{test,spec}.ts'],
+    include: ['src/**/*.{test,spec}.ts', 'packages/**/*.{test,spec}.ts'],
     globals: false,
     coverage: {
       provider: 'v8',
@@ -49,25 +49,17 @@ export default defineConfig({
       // (lcov feeds coverage services; json-summary drives the PR comment).
       reporter: ['text', 'json-summary', 'lcov'],
       reportsDirectory: './.output/coverage/frontend',
-      include: ['src/**/*.ts'],
-      // The unit-coverage metric measures the *logic* layer. Three classes
-      // of code are deliberately out of scope here because they're proven by
-      // end-to-end tests instead of unit tests (see e2e/ and docs/e2e/flows.md):
-      //
-      //   1. UI components (*.svelte) — rendered and driven by Playwright.
-      //   2. Tauri IPC wrappers (api/* thin `invoke` shells, window/system/
-      //      asset bridges) — the IPC round-trip is an integration concern;
-      //      their browser-fallback behaviour is already exercised through
-      //      the mock store + e2e.
-      //   3. Editor / canvas / collab framework glue (Milkdown & ProseMirror
-      //      plugins, Excalidraw, Yjs collab providers, Dockview actions) —
-      //      these only have meaning attached to a live editor/document and
-      //      are covered by e2e.
-      //
-      // Everything with standalone, branching logic stays in scope and is
-      // unit-tested.
+      include: ['src/**/*.ts', 'packages/svelte-kanban/src/**/*.ts'],
+      // Enforce coverage of TypeScript logic, including editor plugins,
+      // collaboration providers, desktop controllers and the Kanban package.
+      // Svelte rendering and native bridges run in Playwright and Tauri E2E.
       exclude: [
         'src/**/*.{test,spec}.ts',
+        'packages/**/*.{test,spec}.ts',
+        'packages/**/types.ts',
+        'packages/**/env.d.ts',
+        'packages/**/index.ts',
+        'packages/**/export.ts',
         'src/**/*.d.ts',
         'src/**/index.ts',
         'src/app.d.ts',
@@ -101,16 +93,9 @@ export default defineConfig({
         'src/hooks.client.ts',
         'src/lib/mocks.ts',
 
-        // 3. Editor / canvas / collab framework glue.
-        'src/lib/editor/plugins/**',
+        // Framework construction and native rendering bridges.
         'src/lib/editor/crepe-setup.ts',
-        'src/lib/freeform/**',
-        'src/lib/sync/collab-provider.ts',
-        'src/lib/sync/ink-web-collab-provider.ts',
-        'src/lib/ink/editor-helpers.ts',
-        'src/lib/desktop/**',
         'src/lib/actions/tooltip.ts',
-        'src/lib/components/note-editor/lazy-components.ts',
 
         // pdf-lib / pdf.js rendering pipelines — heavy binary I/O, e2e-only.
         'src/lib/notes-export/ink-pdf.ts',
