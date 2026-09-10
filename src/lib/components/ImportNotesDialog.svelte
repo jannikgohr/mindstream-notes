@@ -24,12 +24,12 @@
   import { tUi } from '$lib/settings/i18n.svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { formatBytes } from '$lib/utils';
+  import { importNotesQueue } from './import-notes-dialog.svelte';
   import {
     folderOptions,
-    importNotesQueue,
     sourceKindLabelKey,
     uniqueFolderName
-  } from './import-notes-dialog.svelte';
+  } from './import-notes-helpers';
 
   type Stage = 'choose-source' | 'configure' | 'running';
 
