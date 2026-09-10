@@ -963,3 +963,143 @@ mod seed_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod asset_refcount_upgrade_tests {
+    //! Migration 25 rebuilds `assets`, which existing vaults are full of. The
+    //! fresh-database tests elsewhere never exercise that: they migrate an
+    //! empty file. These start from a real v24 schema with rows in it.
+
+    use super::*;
+
+    /// Apply migrations up to and including `version`, the way `run` does.
+    fn migrate_to(conn: &mut Connection, version: u32) {
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        for m in MIGRATIONS.iter().filter(|m| m.to <= version) {
+            let tx = conn.transaction().unwrap();
+            tx.execute_batch(m.sql).unwrap();
+            tx.pragma_update(None, "user_version", m.to).unwrap();
+            tx.commit().unwrap();
+        }
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+    }
+
+    fn v24_vault() -> Connection {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate_to(&mut conn, 24);
+        conn.execute_batch(
+            "INSERT INTO notes (id, title, body, created, modified)
+                 VALUES ('n1', 'Owner', '![a](asset:mindstream/a1)', '2025-01-01', '2025-01-01');
+             INSERT INTO assets (id, owning_note_id, mime_type, bytes, size, created, modified,
+                                 etebase_uid, etebase_etag, dirty, share_scope_id)
+                 VALUES ('a1', 'n1', 'image/png', X'01020304', 4, '2025-01-01', '2025-01-02',
+                         'remote-uid', 'etag-1', 0, 'scope_x');",
+        )
+        .unwrap();
+        // An asset whose owner is already gone. The v24 cascade should have
+        // prevented this, but a damaged or hand-edited file can hold one, and
+        // the post-migration foreign-key check refuses to open the database
+        // at all if the rebuild carries a dangling reference forward.
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        conn.execute(
+            "INSERT INTO assets (id, owning_note_id, mime_type, bytes, size, created, modified)
+             VALUES ('a_orphan', 'missing-note', 'image/png', X'09', 1, '2025-01-01', '2025-01-01')",
+            [],
+        )
+        .unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        conn
+    }
+
+    #[test]
+    fn upgrading_a_v24_vault_preserves_assets_and_backfills_refs_and_hashes() {
+        let mut conn = v24_vault();
+
+        run(&mut conn).expect("upgrade to v25 opens cleanly");
+
+        let version: u32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert!(version >= 25);
+
+        // Every column the sync engine relies on survives the rebuild.
+        struct Row {
+            owner: Option<String>,
+            uid: Option<String>,
+            etag: Option<String>,
+            dirty: i64,
+            scope: Option<String>,
+            bytes: Vec<u8>,
+            hash: Option<String>,
+        }
+        let row = conn
+            .query_row(
+                "SELECT owning_note_id, etebase_uid, etebase_etag, dirty, share_scope_id,
+                        bytes, content_hash
+                 FROM assets WHERE id = 'a1'",
+                [],
+                |r| {
+                    Ok(Row {
+                        owner: r.get(0)?,
+                        uid: r.get(1)?,
+                        etag: r.get(2)?,
+                        dirty: r.get(3)?,
+                        scope: r.get(4)?,
+                        bytes: r.get(5)?,
+                        hash: r.get(6)?,
+                    })
+                },
+            )
+            .unwrap();
+        assert_eq!(row.owner.as_deref(), Some("n1"));
+        assert_eq!(row.uid.as_deref(), Some("remote-uid"));
+        assert_eq!(row.etag.as_deref(), Some("etag-1"));
+        assert_eq!(row.dirty, 0, "an already-synced asset must not re-push");
+        assert_eq!(row.scope.as_deref(), Some("scope_x"));
+        assert_eq!(row.bytes, vec![1, 2, 3, 4]);
+        assert_eq!(
+            row.hash.as_deref(),
+            Some(crate::assets::content_hash(&[1, 2, 3, 4]).as_str()),
+            "the Rust backfill runs straight after the SQL migration"
+        );
+
+        // The owner becomes the first reference.
+        let refs: Vec<String> = conn
+            .prepare("SELECT note_id FROM asset_refs WHERE asset_id = 'a1'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(refs, vec!["n1".to_string()]);
+    }
+
+    #[test]
+    fn a_dangling_owner_is_nulled_rather_than_blocking_the_upgrade() {
+        let mut conn = v24_vault();
+
+        run(&mut conn).expect("a dangling owner must not stop the vault opening");
+
+        let owner: Option<String> = conn
+            .query_row(
+                "SELECT owning_note_id FROM assets WHERE id = 'a_orphan'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(owner, None);
+        let refs: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM asset_refs WHERE asset_id = 'a_orphan'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(refs, 0, "no reference to a note that does not exist");
+        // And the next sweep collects it, since nothing points at it.
+        assert_eq!(
+            crate::assets::sweep_unreferenced_markdown_assets_inner(&conn).unwrap(),
+            1
+        );
+    }
+}
