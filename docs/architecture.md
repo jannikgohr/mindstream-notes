@@ -96,8 +96,11 @@ thread pool, holding the lock only for a single query.
 - **Persistence.** [`notes/`](../src-tauri/src/notes/mod.rs) (a `Note` =
   `NoteSummary` + body; soft-delete via `trashed_at`),
   [`collections/`](../src-tauri/src/collections/mod.rs) (folders),
-  [`assets/`](../src-tauri/src/assets/mod.rs) (drawing image blobs, addressed as
-  `mindstream-asset://<id>`), `signatures/`.
+  [`assets/`](../src-tauri/src/assets/mod.rs) (attachment blobs for drawings,
+  markdown images and PDFs), `signatures/`. An asset is kept while any note
+  references it — the `asset_refs` table, not the note that created it — and is
+  stored by content hash, so identical bytes within one share scope are stored
+  once.
 - **Note history — [`history/`](../src-tauri/src/history/mod.rs).** Point-in-time
   DEFLATE-compressed snapshots of a note's markdown in `note_versions`.
   Deliberately **local and never synced** — each device keeps its own timeline.
@@ -126,6 +129,13 @@ thread pool, holding the lock only for a single query.
   `manifest.json` (version, account identity via `etebase_collection_uid`,
   counts) + `data.db` (a `VACUUM INTO` snapshot). Import supports preview,
   staged-restart restore, and in-process merge.
+- **Import — [`import/`](../src-tauri/src/import/mod.rs).** Brings in
+  Markdown folders, Obsidian vaults, Joplin exports and Evernote `.enex` files.
+  Each format implements a two-phase source: list every item and assign its
+  note id first, then parse one item at a time and rewrite its links against
+  the full list, so links between notes survive whatever order they are read
+  in. Runs entirely in Rust because the target is a million-note vault. See
+  [import.md](import.md).
 - **Also here:** PDF annotate/export (`pdf_export.rs`, `pdf_text.rs`), vault
   export (`notes_export.rs`), the macOS native menu (`native_menu.rs`), tray,
   hotkeys, and desktop settings.
