@@ -147,6 +147,15 @@
     "data.importNotes.chip.errors.one": "{count} item",
     "data.importNotes.chip.errors.other": "{count} items",
     "data.importNotes.chip.errors.status": "could not be read",
+    "data.convertLegacyLinks.none.title": "Nothing to convert",
+    "data.convertLegacyLinks.none.message": "No note contains a [[Title]] link.",
+    "data.convertLegacyLinks.confirm.title": "Convert legacy links?",
+    "data.convertLegacyLinks.confirm.message": "{count} notes contain [[Title]] links. Each link that matches a note by title becomes a link to that note. The changed notes sync like any other edit.",
+    "data.convertLegacyLinks.confirm.button": "Convert",
+    "data.convertLegacyLinks.done.title": "Links converted",
+    "data.convertLegacyLinks.done.message": "Converted {links} links in {notes} notes. {unresolved} links matched no note and were left unchanged.",
+    "data.convertLegacyLinks.failed.title": "Could not convert links",
+    "data.convertLegacyLinks.failed.message": "{error}",
     "data.import.restart.title": "Restart to finish restore",
     "data.import.restart.message": "Mindstream Notes will close and reopen so the backup can be swapped in cleanly. Any unsaved changes are already on disk.",
     "data.import.restart.button": "Restart now",
@@ -1007,6 +1016,9 @@
     "data.backup": {
       "label": "Backup, import & export"
     },
+    "data.maintenance": {
+      "label": "Maintenance"
+    },
     "language.locale": {
       "label": "Language"
     },
@@ -1212,6 +1224,10 @@
     "data.importNotes": {
       "label": "Import notes",
       "description": "Bring in an Obsidian vault, a Joplin or Evernote export, or any folder of Markdown files. Links between notes are reconnected as you import."
+    },
+    "data.convertLegacyLinks": {
+      "label": "Convert legacy links",
+      "description": "Turn [[Title]] links written before note links used IDs into links that keep working when a note is renamed. Links whose title matches no note are left as they are."
     },
     "language.code": {
       "label": "Display language"

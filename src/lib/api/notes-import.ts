@@ -80,6 +80,15 @@ export interface ImportProgress {
   total: number;
 }
 
+/** Outcome of converting bare `[[Title]]` spans into ID-backed links. */
+export interface LegacyLinkReport {
+  notes_scanned: number;
+  notes_converted: number;
+  links_converted: number;
+  /** Spans left as written because no note has that title. */
+  links_unresolved: number;
+}
+
 /** Default per-file attachment ceiling, matching the Rust constant. */
 export const DEFAULT_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
@@ -123,6 +132,43 @@ export async function runImport(
 export async function cancelImport(): Promise<void> {
   if (!isTauri()) return;
   await tauriInvoke<unknown>(TauriCommandName.NotesImportCancel);
+}
+
+/** How many notes still contain a `[[…]]` span. `0` outside Tauri. */
+export async function legacyWikilinkCount(): Promise<number> {
+  if (!isTauri()) return 0;
+  return assertNumber(
+    await tauriInvoke<unknown>(TauriCommandName.LegacyWikilinkCount),
+    'legacy_wikilink_count response'
+  );
+}
+
+/**
+ * Rewrite every resolvable `[[Title]]` in the vault as an ID-backed link.
+ * Rewrites note bodies — each one is a CRDT edit and a sync push — which is
+ * why the settings action asks first.
+ */
+export async function convertLegacyWikilinks(): Promise<LegacyLinkReport | null> {
+  if (!isTauri()) return null;
+  const raw = assertRecord(
+    await tauriInvoke<unknown>(TauriCommandName.ConvertLegacyWikilinks),
+    'legacy link report'
+  );
+  return {
+    notes_scanned: assertNumber(raw.notes_scanned, 'legacy.notes_scanned'),
+    notes_converted: assertNumber(
+      raw.notes_converted,
+      'legacy.notes_converted'
+    ),
+    links_converted: assertNumber(
+      raw.links_converted,
+      'legacy.links_converted'
+    ),
+    links_unresolved: assertNumber(
+      raw.links_unresolved,
+      'legacy.links_unresolved'
+    )
+  };
 }
 
 function parseNullableString(value: unknown): string | null {

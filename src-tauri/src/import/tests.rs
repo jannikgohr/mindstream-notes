@@ -267,6 +267,7 @@ fn rewrite(body: &str, index: &mut LinkIndex) -> (String, RewriteStats) {
                 markdown_links: true,
                 id_links: true,
                 evernote_links: false,
+                keep_unresolved_wikilinks: false,
             },
             base_dir: String::new(),
         },
@@ -1435,4 +1436,125 @@ fn xml_entities_in_a_title_are_decoded() {
     import(&db, enex_options(&vault, "export.enex"));
 
     assert!(!note_id_of(&db, "Tom & Jerry").is_empty());
+}
+
+// ---------- legacy wikilink conversion ----------
+
+fn make_markdown_note(db: &Db, title: &str, body: &str) -> String {
+    db.with_conn(|c| {
+        crate::notes::create(
+            c,
+            crate::notes::CreateNote {
+                title: Some(title.to_string()),
+                body: Some(body.to_string()),
+                parent_collection_id: None,
+                note_kind: Some(crate::notes::NoteKind::Markdown),
+            },
+        )
+    })
+    .unwrap()
+    .summary
+    .id
+}
+
+#[test]
+fn legacy_wikilinks_are_converted_to_id_backed_links() {
+    let db = open_memory_for_tests();
+    let target = make_markdown_note(&db, "Design doc", "the target");
+    make_markdown_note(&db, "Index", "See [[Design doc]] for details.");
+
+    let report = super::legacy_links::convert_legacy_wikilinks(&db).unwrap();
+
+    assert_eq!(report.notes_converted, 1);
+    assert_eq!(report.links_converted, 1);
+    assert_eq!(
+        body_of(&db, "Index"),
+        format!("See [Design doc](mindstream://note/{target}) for details.")
+    );
+}
+
+#[test]
+fn an_unmatched_legacy_wikilink_is_left_exactly_as_written() {
+    // Reducing `[[Some note]]` to plain text would destroy the author's
+    // intent for a note they might still create.
+    let db = open_memory_for_tests();
+    make_markdown_note(&db, "Index", "See [[Never written]].");
+
+    let report = super::legacy_links::convert_legacy_wikilinks(&db).unwrap();
+
+    assert_eq!(report.notes_converted, 0);
+    assert_eq!(report.links_unresolved, 1);
+    assert_eq!(body_of(&db, "Index"), "See [[Never written]].");
+}
+
+#[test]
+fn a_trashed_note_cannot_claim_a_title() {
+    // Otherwise a link would resolve into the trash, where the user cannot
+    // see it.
+    let db = open_memory_for_tests();
+    let live = make_markdown_note(&db, "Notes", "live one");
+    let trashed = make_markdown_note(&db, "Notes", "trashed one");
+    db.with_conn(|c| crate::notes::trash(c, &trashed)).unwrap();
+    make_markdown_note(&db, "Index", "[[Notes]]");
+
+    super::legacy_links::convert_legacy_wikilinks(&db).unwrap();
+
+    assert_eq!(
+        body_of(&db, "Index"),
+        format!("[Notes](mindstream://note/{live})")
+    );
+}
+
+#[test]
+fn conversion_leaves_existing_id_backed_links_alone() {
+    let db = open_memory_for_tests();
+    let target = make_markdown_note(&db, "Target", "x");
+    let body = format!("Already [Target](mindstream://note/{target}).");
+    make_markdown_note(&db, "Index", &body);
+
+    let report = super::legacy_links::convert_legacy_wikilinks(&db).unwrap();
+
+    assert_eq!(report.notes_scanned, 0, "no `[[` means nothing to scan");
+    assert_eq!(body_of(&db, "Index"), body);
+}
+
+#[test]
+fn the_count_matches_what_conversion_would_examine() {
+    let db = open_memory_for_tests();
+    make_markdown_note(&db, "One", "[[Something]]");
+    make_markdown_note(&db, "Two", "no links here");
+    make_markdown_note(&db, "Three", "also [[Something]]");
+
+    let count = super::legacy_links::count_legacy_wikilink_notes(&db).unwrap();
+    let report = super::legacy_links::convert_legacy_wikilinks(&db).unwrap();
+
+    assert_eq!(count, 2);
+    assert_eq!(report.notes_scanned, 2);
+}
+
+#[test]
+fn conversion_marks_rewritten_notes_for_sync() {
+    // The rewrite goes through notes::update so it reaches the CRDT and the
+    // sync queue, exactly as a user edit would.
+    let db = open_memory_for_tests();
+    make_markdown_note(&db, "Target", "x");
+    let index = make_markdown_note(&db, "Index", "[[Target]]");
+    db.with_conn(|c| {
+        c.execute("UPDATE notes SET dirty = 0", [])?;
+        Ok::<(), AppError>(())
+    })
+    .unwrap();
+
+    super::legacy_links::convert_legacy_wikilinks(&db).unwrap();
+
+    let dirty: i64 = db
+        .with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT dirty FROM notes WHERE id = ?1",
+                params![index],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(dirty, 1);
 }

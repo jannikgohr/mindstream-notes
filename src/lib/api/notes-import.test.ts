@@ -7,7 +7,9 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 import {
   cancelImport,
+  convertLegacyWikilinks,
   detectImportSource,
+  legacyWikilinkCount,
   pickImportFile,
   pickImportFolder,
   runImport,
@@ -118,5 +120,42 @@ describe('notes-import — inside Tauri', () => {
   it('a cancelled picker comes back as null', async () => {
     invoke.mockResolvedValue(null);
     await expect(pickImportFolder()).resolves.toBeNull();
+  });
+});
+
+describe('legacy wikilink conversion', () => {
+  it('reports nothing to do outside Tauri', async () => {
+    await expect(legacyWikilinkCount()).resolves.toBe(0);
+    await expect(convertLegacyWikilinks()).resolves.toBeNull();
+  });
+
+  describe('inside Tauri', () => {
+    beforeEach(() => {
+      setTauri(true);
+      invoke.mockReset();
+    });
+    afterEach(() => setTauri(false));
+
+    it('parses the conversion report', async () => {
+      const report = {
+        notes_scanned: 4,
+        notes_converted: 3,
+        links_converted: 7,
+        links_unresolved: 1
+      };
+      invoke.mockResolvedValue(report);
+      await expect(convertLegacyWikilinks()).resolves.toEqual(report);
+      expect(invoke).toHaveBeenCalledWith(
+        'convert_legacy_wikilinks_command',
+        undefined
+      );
+    });
+
+    it('rejects a non-numeric count', async () => {
+      invoke.mockResolvedValue('many');
+      await expect(legacyWikilinkCount()).rejects.toThrow(
+        /legacy_wikilink_count/
+      );
+    });
   });
 });

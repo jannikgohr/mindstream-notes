@@ -169,6 +169,14 @@ pub struct RewriteOptions {
     pub id_links: bool,
     /// Evernote's `[text](evernote:///view/<user>/<shard>/<guid>/<guid>/)`.
     pub evernote_links: bool,
+    /// Leave a `[[Target]]` untouched when nothing matches, instead of
+    /// reducing it to its text.
+    ///
+    /// Off for an import, where a target that isn't in the source will never
+    /// arrive and a dead `[[…]]` is just noise. On for the legacy-link
+    /// maintenance pass, which runs over the user's own notes: there, a link
+    /// to a note they have not written yet is intent worth keeping.
+    pub keep_unresolved_wikilinks: bool,
 }
 
 /// Everything the rewrite needs about *where* the body came from.
@@ -222,7 +230,12 @@ pub fn rewrite_links(
 ) -> String {
     let mut out = body.to_string();
     if context.options.wikilinks {
-        out = rewrite_wikilinks(&out, index, stats);
+        out = rewrite_wikilinks(
+            &out,
+            index,
+            context.options.keep_unresolved_wikilinks,
+            stats,
+        );
     }
     if context.options.id_links {
         out = rewrite_id_links(&out, index, stats);
@@ -275,7 +288,12 @@ fn rewrite_id_links(body: &str, index: &mut LinkIndex, stats: &mut RewriteStats)
 /// source has already swapped out the ones that pointed at files. Mindstream
 /// has no transclusion, so they degrade to a plain link to the same note,
 /// which is the closest thing that still works.
-fn rewrite_wikilinks(body: &str, index: &mut LinkIndex, stats: &mut RewriteStats) -> String {
+fn rewrite_wikilinks(
+    body: &str,
+    index: &mut LinkIndex,
+    keep_unresolved: bool,
+    stats: &mut RewriteStats,
+) -> String {
     let mut out = String::with_capacity(body.len());
     let bytes = body.as_bytes();
     let mut i = 0usize;
@@ -324,7 +342,11 @@ fn rewrite_wikilinks(body: &str, index: &mut LinkIndex, stats: &mut RewriteStats
             }
             None => {
                 stats.unresolved += 1;
-                out.push_str(display);
+                if keep_unresolved {
+                    out.push_str(&body[i..open + 2 + close_rel + 2]);
+                } else {
+                    out.push_str(display);
+                }
             }
         }
         i = open + 2 + close_rel + 2;

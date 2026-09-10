@@ -507,6 +507,8 @@ pub fn run() {
             backup::import_cleanup,
             backup::import_restore,
             backup::import_merge,
+            import::legacy_links::legacy_wikilink_count,
+            import::legacy_links::convert_legacy_wikilinks_command,
             import::notes_import_pick_folder,
             import::notes_import_pick_file,
             import::notes_import_detect,

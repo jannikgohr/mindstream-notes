@@ -40,6 +40,7 @@ use crate::db::Db;
 use crate::error::{AppError, AppResult, CommandResult};
 
 pub mod detect;
+pub mod legacy_links;
 pub mod links;
 pub mod markdown;
 pub mod mime;

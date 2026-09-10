@@ -724,6 +724,15 @@
     "data.importNotes.chip.errors.one": "{count} Element",
     "data.importNotes.chip.errors.other": "{count} Elemente",
     "data.importNotes.chip.errors.status": "konnte nicht gelesen werden",
+    "data.convertLegacyLinks.none.title": "Nichts umzuwandeln",
+    "data.convertLegacyLinks.none.message": "Keine Notiz enthält einen [[Titel]]-Link.",
+    "data.convertLegacyLinks.confirm.title": "Alte Links umwandeln?",
+    "data.convertLegacyLinks.confirm.message": "{count} Notizen enthalten [[Titel]]-Links. Jeder Link, dessen Titel zu einer Notiz passt, wird zu einem Link auf diese Notiz. Die geänderten Notizen werden wie jede andere Bearbeitung synchronisiert.",
+    "data.convertLegacyLinks.confirm.button": "Umwandeln",
+    "data.convertLegacyLinks.done.title": "Links umgewandelt",
+    "data.convertLegacyLinks.done.message": "{links} Links in {notes} Notizen umgewandelt. {unresolved} Links passten zu keiner Notiz und wurden nicht geändert.",
+    "data.convertLegacyLinks.failed.title": "Links konnten nicht umgewandelt werden",
+    "data.convertLegacyLinks.failed.message": "{error}",
     "data.import.restart.title": "Neu starten, um Wiederherstellung abzuschließen",
     "data.import.restart.message": "Mindstream Notes wird beendet und erneut gestartet, um das Backup sauber einzuspielen. Ungespeicherte Änderungen sind bereits auf der Festplatte.",
     "data.import.restart.button": "Jetzt neu starten",
@@ -1007,6 +1016,9 @@
     "data.backup": {
       "label": "Sicherung, Import & Export"
     },
+    "data.maintenance": {
+      "label": "Wartung"
+    },
     "language.locale": {
       "label": "Sprache"
     },
@@ -1203,6 +1215,10 @@
     "data.importNotes": {
       "label": "Notizen importieren",
       "description": "Übernimm einen Obsidian-Tresor, einen Joplin- oder Evernote-Export oder einen beliebigen Ordner mit Markdown-Dateien. Links zwischen Notizen werden beim Import wieder verknüpft."
+    },
+    "data.convertLegacyLinks": {
+      "label": "Alte Links umwandeln",
+      "description": "Wandelt [[Titel]]-Links aus der Zeit, bevor Notizlinks IDs verwendeten, in Links um, die auch nach dem Umbenennen einer Notiz funktionieren. Links, deren Titel zu keiner Notiz passt, bleiben unverändert."
     },
     "language.code": {
       "label": "Anzeigesprache"

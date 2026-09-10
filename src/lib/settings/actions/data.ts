@@ -9,10 +9,12 @@
 
 import {
   backupNow,
+  convertLegacyWikilinks,
   importBegin,
   importCleanup,
   importMerge,
   importRestore,
+  legacyWikilinkCount,
   openDataFolder,
   pickExportDir,
   trashCounts
@@ -167,6 +169,61 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
     // is what the file explorer renders from.
     await loadTree();
     await showImportResult(report);
+  },
+  'convert-legacy-links': async () => {
+    let count: number;
+    try {
+      count = await legacyWikilinkCount();
+    } catch (err) {
+      console.error('[settings] legacy_wikilink_count failed', err);
+      await alert({
+        title: tUi('data.convertLegacyLinks.failed.title'),
+        message: tUi('data.convertLegacyLinks.failed.message').replace(
+          '{error}',
+          toErrorMessage(err)
+        )
+      });
+      return;
+    }
+    if (count === 0) {
+      await alert({
+        title: tUi('data.convertLegacyLinks.none.title'),
+        message: tUi('data.convertLegacyLinks.none.message')
+      });
+      return;
+    }
+    // Ask first: this rewrites note bodies, and each rewrite is a CRDT edit
+    // that syncs like any other change.
+    const ok = await confirm({
+      title: tUi('data.convertLegacyLinks.confirm.title'),
+      message: tUi('data.convertLegacyLinks.confirm.message').replace(
+        '{count}',
+        String(count)
+      ),
+      confirmLabel: tUi('data.convertLegacyLinks.confirm.button')
+    });
+    if (!ok) return;
+    try {
+      const report = await convertLegacyWikilinks();
+      if (report === null) return;
+      await loadTree();
+      await alert({
+        title: tUi('data.convertLegacyLinks.done.title'),
+        message: tUi('data.convertLegacyLinks.done.message')
+          .replace('{links}', String(report.links_converted))
+          .replace('{notes}', String(report.notes_converted))
+          .replace('{unresolved}', String(report.links_unresolved))
+      });
+    } catch (err) {
+      console.error('[settings] convert_legacy_wikilinks failed', err);
+      await alert({
+        title: tUi('data.convertLegacyLinks.failed.title'),
+        message: tUi('data.convertLegacyLinks.failed.message').replace(
+          '{error}',
+          toErrorMessage(err)
+        )
+      });
+    }
   },
   'restore-backup': async () => {
     let preview;

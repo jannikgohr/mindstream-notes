@@ -226,18 +226,21 @@ impl ImportSource for MarkdownVaultSource {
                 markdown_links: true,
                 id_links: false,
                 evernote_links: false,
+                keep_unresolved_wikilinks: false,
             },
             Flavour::Obsidian => RewriteOptions {
                 wikilinks: true,
                 markdown_links: true,
                 id_links: false,
                 evernote_links: false,
+                keep_unresolved_wikilinks: false,
             },
             Flavour::JoplinMarkdown => RewriteOptions {
                 wikilinks: false,
                 markdown_links: true,
                 id_links: true,
                 evernote_links: false,
+                keep_unresolved_wikilinks: false,
             },
         }
     }

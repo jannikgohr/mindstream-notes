@@ -235,6 +235,7 @@ impl ImportSource for EvernoteSource {
             markdown_links: false,
             id_links: false,
             evernote_links: true,
+            keep_unresolved_wikilinks: false,
         }
     }
 }

@@ -31,7 +31,9 @@ export * from './sharing';
 export { pickExportDir, writeExportFile } from './notes-export';
 export {
   cancelImport,
+  convertLegacyWikilinks,
   detectImportSource,
+  legacyWikilinkCount,
   pickImportFile,
   pickImportFolder,
   runImport,
@@ -44,6 +46,7 @@ export type {
   ImportProgress,
   ImportReport,
   ImportSourceKind,
+  LegacyLinkReport,
   UnresolvedLinksPolicy
 } from './notes-import';
 export {

@@ -52,7 +52,6 @@ export { createWikilinkBridge } from '../../wikilink-bridge.svelte';
 // here so wikilink consumers can still reach everything through this module.
 export { noteHref, parseNoteHref } from '../../wikilink-href';
 
-export { resolveNoteIdByTitle } from './note-resolve';
 export {
   wikilinkDecorationPlugin,
   type WikilinkPluginOptions
