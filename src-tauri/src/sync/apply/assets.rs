@@ -55,6 +55,21 @@ pub(in crate::sync) fn apply_asset(
     let etag = item.etag().to_string();
     let uid = item.uid().to_string();
 
+    apply_asset_payload(db, &payload, &uid, &etag, scope)
+}
+
+/// Apply a decoded asset payload to local SQLite. Split out from `apply_asset`
+/// so reference reconciliation can be tested without constructing an Etebase
+/// item.
+pub(in crate::sync) fn apply_asset_payload(
+    db: &Db,
+    payload: &AssetPayload,
+    uid: &str,
+    etag: &str,
+    scope: Option<&str>,
+) -> AppResult<ApplyAssetOutcome> {
+    let content_hash = crate::assets::content_hash(&payload.bytes);
+
     db.with_conn_mut(|c| {
         let tx = c.transaction()?;
 
@@ -96,8 +111,9 @@ pub(in crate::sync) fn apply_asset(
                 "UPDATE assets
                  SET owning_note_id = ?1, mime_type = ?2, bytes = ?3,
                      size = ?4, modified = ?5, etebase_uid = ?6,
-                     etebase_etag = ?7, dirty = 0, share_scope_id = ?8
-                 WHERE id = ?9",
+                     etebase_etag = ?7, dirty = 0, share_scope_id = ?8,
+                     content_hash = ?9
+                 WHERE id = ?10",
                 params![
                     payload.owning_note_id,
                     payload.mime_type,
@@ -107,6 +123,7 @@ pub(in crate::sync) fn apply_asset(
                     uid,
                     etag,
                     scope,
+                    content_hash,
                     payload.id,
                 ],
             )?;
@@ -114,8 +131,9 @@ pub(in crate::sync) fn apply_asset(
             tx.execute(
                 "INSERT INTO assets(id, owning_note_id, mime_type, bytes,
                                     size, created, modified, etebase_uid,
-                                    etebase_etag, dirty, share_scope_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10)",
+                                    etebase_etag, dirty, share_scope_id,
+                                    content_hash)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11)",
                 params![
                     payload.id,
                     payload.owning_note_id,
@@ -127,6 +145,7 @@ pub(in crate::sync) fn apply_asset(
                     uid,
                     etag,
                     scope,
+                    content_hash,
                 ],
             )?;
         }
@@ -135,7 +154,27 @@ pub(in crate::sync) fn apply_asset(
         // delete what we just downloaded. The payload's owning note is
         // confirmed to exist by the FK gate above.
         crate::assets::add_ref(&tx, &payload.id, &payload.owning_note_id)?;
+
+        // Notes and assets live in separate remote collections. Notes are
+        // normally pulled first, so every already-present body that names this
+        // asset must gain its reference now. The LIKE probe avoids parsing
+        // every note for every blob; register_body_refs performs the exact
+        // markdown/PDF parse and harmlessly rejects false candidates.
+        let candidate_notes = {
+            let pattern = format!("%{}%", payload.id);
+            let mut stmt = tx.prepare(
+                "SELECT id, body FROM notes
+                 WHERE body LIKE ?1 AND share_scope_id IS ?2",
+            )?;
+            let rows = stmt.query_map(params![pattern, scope], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        for (note_id, body) in candidate_notes {
+            crate::assets::register_body_refs(&tx, &note_id, &body)?;
+        }
         tx.commit()?;
-        Ok(ApplyAssetOutcome::Applied(payload.id))
+        Ok(ApplyAssetOutcome::Applied(payload.id.clone()))
     })
 }

@@ -14,7 +14,7 @@ import {
   requireDialogHook,
   restartApp,
   waitForShell
-} from '../helpers/harness.js';
+} from '../../helpers/harness.js';
 
 describe('T3 backup export / import', function () {
   before(function () {

@@ -778,6 +778,16 @@
     sourceChipsCollapsed = needed > sourceChipRow.clientWidth;
   }
 
+  /**
+   * Collapse the sort control to its icon when the header row can't hold it
+   * next to the create toolbar.
+   *
+   * This reads `scrollWidth > clientWidth`, which only means anything because
+   * FileTreeCreateToolbar carries a `min-width` (FILE_TREE_TOOLBAR_MIN_PX). It
+   * is the only shrinkable item here, so without that floor it would absorb
+   * every pixel of overflow, the row would always measure as fitting, and the
+   * sort control would stay expanded while the create buttons got clipped.
+   */
   function updateSortControlCollapse() {
     if (!toolbarRow) return;
     if (!sortControlCollapsed) {

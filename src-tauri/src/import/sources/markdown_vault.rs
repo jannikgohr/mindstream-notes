@@ -293,6 +293,10 @@ impl MarkdownVaultSource {
     /// which is a width, not an alias.
     fn expand_embeds(&self, note_relative: &str, body: &str) -> String {
         let base_dir = parent_dir(note_relative).unwrap_or("");
+        links::rewrite_outside_code(body, |plain| self.expand_embeds_in_prose(base_dir, plain))
+    }
+
+    fn expand_embeds_in_prose(&self, base_dir: &str, body: &str) -> String {
         let mut out = String::with_capacity(body.len());
         let mut rest = body;
         while let Some(at) = rest.find("![[") {

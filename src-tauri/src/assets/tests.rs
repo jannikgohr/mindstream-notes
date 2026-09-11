@@ -876,3 +876,83 @@ fn backfill_hashes_rows_that_predate_content_addressing() {
     // Second run has nothing left to do.
     assert_eq!(db.with_conn(backfill_content_hashes).unwrap(), 0);
 }
+
+#[test]
+fn stale_save_after_scope_move_uses_remap_after_original_blob_is_purged() {
+    let db = open_memory_for_tests();
+    let moving = make_markdown_note(&db);
+    let staying = make_markdown_note(&db);
+    db.with_conn(|c| {
+        c.execute(
+            "INSERT INTO collections(id, name, position, created, modified, share_scope_id)
+             VALUES ('shared_folder', 'Shared', 0, 't', 't', 'scope_x')",
+            [],
+        )?;
+        Ok::<(), AppError>(())
+    })
+    .unwrap();
+    let old_id = db
+        .with_conn(|c| store_deduped(c, &moving, "image/png", b"shared bytes"))
+        .unwrap()
+        .id;
+    db.with_conn(|c| add_ref(c, &old_id, &staying)).unwrap();
+    let stale_body = format!("![old](asset:mindstream/{old_id})");
+    let stale_state = crate::sync::yrs_doc::init_with_markdown(&stale_body);
+
+    db.with_conn_mut(|c| {
+        update_note(
+            c,
+            UpdateNote {
+                id: moving.clone(),
+                title: None,
+                body: Some(stale_body.clone()),
+                parent_collection_id: Some(Some("shared_folder".into())),
+                position: None,
+                tags: None,
+                yrs_state: Some(stale_state.clone()),
+                favourite: None,
+            },
+        )
+    })
+    .unwrap();
+
+    let new_id: String = db
+        .with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT new_asset_id FROM asset_id_remaps
+                  WHERE note_id = ?1 AND old_asset_id = ?2",
+                params![moving, old_id],
+                |row| row.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_ne!(new_id, old_id);
+
+    db.with_conn(|c| crate::notes::purge(c, &staying)).unwrap();
+    assert!(db.with_conn(|c| load(c, &old_id)).is_err());
+
+    db.with_conn_mut(|c| {
+        update_note(
+            c,
+            UpdateNote {
+                id: moving.clone(),
+                title: None,
+                body: Some(stale_body.clone()),
+                parent_collection_id: None,
+                position: None,
+                tags: None,
+                yrs_state: Some(stale_state.clone()),
+                favourite: None,
+            },
+        )
+    })
+    .unwrap();
+
+    let saved = db.with_conn(|c| crate::notes::load(c, &moving)).unwrap();
+    assert!(saved.body.contains(&new_id));
+    assert!(!saved.body.contains(&old_id));
+    let saved_markdown = crate::sync::yrs_doc::to_markdown(&saved.yrs_state);
+    assert!(saved_markdown.contains(&new_id));
+    assert!(!saved_markdown.contains(&old_id));
+    assert!(db.with_conn(|c| load(c, &new_id)).is_ok());
+}

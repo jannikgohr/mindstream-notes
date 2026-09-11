@@ -295,8 +295,7 @@ pub fn list(conn: &Connection, include_trashed: bool) -> AppResult<Vec<NoteSumma
     } else {
         "SELECT id, parent_collection_id, title, position, created, modified,
                 trashed_at, favourite, etebase_uid, note_kind
-         FROM notes
-         WHERE trashed_at IS NULL
+         FROM active_notes
          ORDER BY parent_collection_id IS NOT NULL, parent_collection_id, position, title"
     };
     let mut stmt = conn.prepare(sql)?;
@@ -327,6 +326,7 @@ pub fn list(conn: &Connection, include_trashed: bool) -> AppResult<Vec<NoteSumma
 /// debounce was pending). Returns `Ok(true)` on a successful row
 /// update.
 pub fn save_yrs_state(conn: &mut Connection, id: &str, bytes: &[u8]) -> AppResult<bool> {
+    crate::sharing::ensure_note_writable(conn, id)?;
     let now = chrono::Utc::now().to_rfc3339();
     let tx = conn.transaction()?;
     let existing_row: Option<Option<Vec<u8>>> = tx
@@ -405,6 +405,7 @@ pub fn load(conn: &Connection, id: &str) -> AppResult<Note> {
 }
 
 pub fn create(conn: &Connection, input: CreateNote) -> AppResult<Note> {
+    crate::sharing::ensure_parent_writable(conn, input.parent_collection_id.as_deref())?;
     let id = format!("note_{}", uuid::Uuid::new_v4());
     let now = Utc::now().to_rfc3339();
     let position = next_position(conn, input.parent_collection_id.as_deref())?;
@@ -454,6 +455,10 @@ pub fn create(conn: &Connection, input: CreateNote) -> AppResult<Note> {
 }
 
 pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
+    crate::sharing::ensure_note_writable(conn, &input.id)?;
+    if let Some(parent) = &input.parent_collection_id {
+        crate::sharing::ensure_parent_writable(conn, parent.as_deref())?;
+    }
     let now = Utc::now().to_rfc3339();
     let tx = conn.transaction()?;
 
@@ -464,6 +469,12 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
         )?;
     }
     if let Some(new_body) = &input.body {
+        let (new_body, supplied_state) = crate::assets::normalize_asset_ids_for_note(
+            &tx,
+            &input.id,
+            new_body,
+            input.yrs_state.as_deref(),
+        )?;
         // Two paths converge here:
         //   * The live-collab editor supplies its own yrs_state — it
         //     already owns the Doc, has applied the user's keystrokes
@@ -473,7 +484,7 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
         //     send the new markdown body. We diff old → new at byte
         //     granularity and replay against the v1 Y.Text Doc for CRDT
         //     correctness on offline-edit reconciliation.
-        if let Some(supplied_state) = &input.yrs_state {
+        if let Some(supplied_state) = &supplied_state {
             tx.execute(
                 "UPDATE notes
                  SET body = ?1, yrs_state = ?2, modified = ?3, payload_schema = 2
@@ -490,7 +501,7 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
                 Some(s) if !s.is_empty() => s,
                 _ => yrs_doc::init_with_markdown(&old_body),
             };
-            let new_state = yrs_doc::apply_local_edit(&base_state, &old_body, new_body);
+            let new_state = yrs_doc::apply_local_edit(&base_state, &old_body, &new_body);
             // The diff path produces a Y.Text "body" doc — the v1 NotePayload
             // shape — so any row that gets here has to be marked v1, even if
             // it was previously a v2 (y-prosemirror) row. Otherwise the next
@@ -510,7 +521,7 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
         // reconciliation sweep, because the authoritative check also has to
         // read the note's history snapshots and that is far too expensive to
         // do on a save. See assets::register_body_refs.
-        crate::assets::register_body_refs(&tx, &input.id, new_body)?;
+        crate::assets::register_body_refs(&tx, &input.id, &new_body)?;
     } else if let Some(supplied_state) = &input.yrs_state {
         // Editor supplies a fresh yrs_state but no body — used by
         // note kinds whose document content lives entirely in the
@@ -519,11 +530,22 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
         // trust the supplied bytes verbatim; nothing about the
         // payload_schema discriminator (markdown v1 / v2) applies
         // here so we leave it alone.
+        let body: String = tx.query_row(
+            "SELECT body FROM notes WHERE id = ?1",
+            params![input.id],
+            |r| r.get(0),
+        )?;
+        let (_, normalized_state) = crate::assets::normalize_asset_ids_for_note(
+            &tx,
+            &input.id,
+            &body,
+            Some(supplied_state),
+        )?;
         tx.execute(
             "UPDATE notes
              SET yrs_state = ?1, modified = ?2
              WHERE id = ?3",
-            params![supplied_state, now, input.id],
+            params![normalized_state, now, input.id],
         )?;
     }
     if let Some(parent) = &input.parent_collection_id {
@@ -537,7 +559,7 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
         // `trashed_at` without moving) for direct-trash operations.
         crate::collections::stamp_trashed_at_on_parent_change(
             &tx,
-            "notes",
+            crate::collections::TrashTable::Notes,
             &input.id,
             parent.as_deref(),
             &now,
@@ -603,9 +625,10 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
 }
 
 pub fn trash(conn: &Connection, id: &str) -> AppResult<()> {
+    crate::sharing::ensure_note_writable(conn, id)?;
     let now = Utc::now().to_rfc3339();
     let n = conn.execute(
-        "UPDATE notes SET trashed_at = ?1, modified = ?1, dirty = 1 WHERE id = ?2",
+        "UPDATE notes SET parent_collection_id = 'trash', trashed_at = ?1, modified = ?1, dirty = 1 WHERE id = ?2",
         params![now, id],
     )?;
     if n == 0 {
@@ -615,9 +638,10 @@ pub fn trash(conn: &Connection, id: &str) -> AppResult<()> {
 }
 
 pub fn restore(conn: &Connection, id: &str) -> AppResult<()> {
+    crate::sharing::ensure_note_writable(conn, id)?;
     let now = Utc::now().to_rfc3339();
     let n = conn.execute(
-        "UPDATE notes SET trashed_at = NULL, modified = ?1, dirty = 1 WHERE id = ?2",
+        "UPDATE notes SET parent_collection_id = NULL, trashed_at = NULL, modified = ?1, dirty = 1 WHERE id = ?2",
         params![now, id],
     )?;
     if n == 0 {
@@ -627,10 +651,13 @@ pub fn restore(conn: &Connection, id: &str) -> AppResult<()> {
 }
 
 pub fn purge(conn: &Connection, id: &str) -> AppResult<()> {
-    // If the note had been pushed already, queue a server-side delete for
-    // the next sync. We do tombstone-then-delete on a plain &Connection
-    // (no transaction): tombstones is INSERT OR IGNORE and a stray
-    // tombstone for a never-deleted row is harmless.
+    crate::sharing::ensure_note_writable(conn, id)?;
+    if conn.is_autocommit() {
+        let tx = conn.unchecked_transaction()?;
+        purge(&tx, id)?;
+        tx.commit()?;
+        return Ok(());
+    }
     let etebase_uid: Option<String> = conn
         .query_row(
             "SELECT etebase_uid FROM notes WHERE id = ?1",

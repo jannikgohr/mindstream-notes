@@ -162,7 +162,7 @@ has not been written.
 
 ### Existing duplicate attachments are not merged — _by design_
 
-Attachments are stored by content hash since migration 25, so new uploads and
+Attachments are stored by content hash since migration 26, so new uploads and
 imports reuse identical bytes. Duplicates already in a vault before that stay
 as separate rows: merging them would mean rewriting the `asset:mindstream/<id>`
 URLs inside note bodies from within a database migration. The dedup index is

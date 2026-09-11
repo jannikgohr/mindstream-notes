@@ -679,6 +679,25 @@ fn path_extensions(binary_name: &str) -> Vec<OsString> {
     }
 }
 
+/// Windows `CREATE_NO_WINDOW`. A console-subsystem child (`tinymist`, `typst`,
+/// …) gets a console allocated purely because of its subsystem — redirecting
+/// stdio does *not* suppress it — so a GUI parent with no console of its own
+/// pops a terminal window beside the app. For a one-shot tool that flashes; for
+/// a long-lived preview server it sits there for the life of the note.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Keep a spawned child's console window hidden. No-op off Windows, where
+/// nothing is allocated in the first place.
+pub(super) fn hide_console_window(command: &mut Command) -> &mut Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
+
 fn resolve_path_binary(binary_name: &str) -> AppResult<Option<PathBuf>> {
     validate_binary_name(binary_name)?;
     let Some(path_var) = std::env::var_os("PATH") else {
@@ -784,7 +803,8 @@ fn run_native_tool_process(
     validate_native_tool_args(&args, &stdin)?;
     fs::create_dir_all(&cwd)?;
     let timeout = std::time::Duration::from_millis(timeout_ms.unwrap_or(10_000).clamp(100, 30_000));
-    let mut child = Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .args(args)
         .current_dir(cwd)
         .stdin(if stdin.is_some() {
@@ -793,8 +813,8 @@ fn run_native_tool_process(
             Stdio::null()
         })
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stderr(Stdio::piped());
+    let mut child = hide_console_window(&mut command).spawn()?;
 
     // Feed stdin and drain stdout/stderr on their own threads so all three
     // pipes make progress concurrently. If we instead wrote the whole of stdin

@@ -228,6 +228,17 @@ pub fn rewrite_links(
     context: &RewriteContext,
     stats: &mut RewriteStats,
 ) -> String {
+    rewrite_outside_code(body, |plain| {
+        rewrite_links_in_plain_text(plain, index, context, stats)
+    })
+}
+
+fn rewrite_links_in_plain_text(
+    body: &str,
+    index: &mut LinkIndex,
+    context: &RewriteContext,
+    stats: &mut RewriteStats,
+) -> String {
     let mut out = body.to_string();
     if context.options.wikilinks {
         out = rewrite_wikilinks(
@@ -247,6 +258,161 @@ pub fn rewrite_links(
         out = rewrite_markdown_links(&out, index, &context.base_dir, stats);
     }
     out
+}
+
+/// Apply a rewrite only to Markdown prose. Code spans and fenced code blocks
+/// carry literal examples, while a backslash makes the following delimiter
+/// literal. Import must preserve all three byte-for-byte.
+pub(crate) fn rewrite_outside_code(body: &str, mut rewrite: impl FnMut(&str) -> String) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut plain_start = 0usize;
+    let mut i = 0usize;
+    let mut fence: Option<(u8, usize)> = None;
+
+    while i < body.len() {
+        let line_start = i == 0 || body.as_bytes()[i - 1] == b'\n';
+        if line_start {
+            let line_end = body[i..]
+                .find('\n')
+                .map_or(body.len(), |offset| i + offset + 1);
+            let line = &body[i..line_end];
+            let content = markdown_line_content(line);
+            let indent = content.bytes().take_while(|b| *b == b' ').count();
+            if indent <= 3 || fence.is_some() {
+                let at = i + line.len() - content.len() + indent;
+                let marker = body.as_bytes().get(at).copied();
+                if matches!(marker, Some(b'`' | b'~')) {
+                    let marker = marker.unwrap_or_default();
+                    let run = body[at..].bytes().take_while(|b| *b == marker).count();
+                    let toggles = match fence {
+                        None => {
+                            run >= 3 && (marker != b'`' || !body[at + run..line_end].contains('`'))
+                        }
+                        Some((open_marker, open_len)) => {
+                            marker == open_marker
+                                && run >= open_len
+                                && body[at + run..line_end].trim().is_empty()
+                        }
+                    };
+                    if toggles {
+                        out.push_str(&rewrite(&body[plain_start..i]));
+                        let line_end = body[i..]
+                            .find('\n')
+                            .map_or(body.len(), |offset| i + offset + 1);
+                        out.push_str(&body[i..line_end]);
+                        fence = if fence.is_some() {
+                            None
+                        } else {
+                            Some((marker, run))
+                        };
+                        i = line_end;
+                        plain_start = i;
+                        continue;
+                    }
+                }
+            }
+            if fence.is_none() && (indent >= 4 || content.starts_with('\t')) {
+                out.push_str(&rewrite(&body[plain_start..i]));
+                out.push_str(line);
+                i = line_end;
+                plain_start = i;
+                continue;
+            }
+        }
+        if fence.is_some() {
+            let line_end = body[i..]
+                .find('\n')
+                .map_or(body.len(), |offset| i + offset + 1);
+            out.push_str(&body[i..line_end]);
+            i = line_end;
+            plain_start = i;
+            continue;
+        }
+
+        if body.as_bytes()[i] == b'`' {
+            let run = body[i..].bytes().take_while(|b| *b == b'`').count();
+            let mut search = i + run;
+            let mut close = None;
+            while let Some(offset) = body[search..].find('`') {
+                let at = search + offset;
+                let closing_run = body[at..].bytes().take_while(|b| *b == b'`').count();
+                if closing_run == run {
+                    close = Some(at + run);
+                    break;
+                }
+                search = at + closing_run;
+            }
+            if let Some(end) = close {
+                out.push_str(&rewrite(&body[plain_start..i]));
+                out.push_str(&body[i..end]);
+                i = end;
+                plain_start = i;
+                continue;
+            }
+        }
+
+        if body.as_bytes()[i] == b'\\' {
+            let protected_len = if body[i + 1..].starts_with("![[") {
+                4
+            } else if body[i + 1..].starts_with("[[") {
+                3
+            } else {
+                body[i + 1..]
+                    .chars()
+                    .next()
+                    .map_or(1, |ch| 1 + ch.len_utf8())
+            };
+            out.push_str(&rewrite(&body[plain_start..i]));
+            let mut end = (i + protected_len).min(body.len());
+            let escaped = &body[i + 1..];
+            if escaped.starts_with("[[") || escaped.starts_with("![[") {
+                if let Some(close) = escaped.find("]]") {
+                    end = i + 1 + close + 2;
+                }
+            } else if escaped.starts_with('[') || escaped.starts_with("![") {
+                let open_len = if escaped.starts_with("![") { 2 } else { 1 };
+                if let Some((_, _, consumed)) = split_inline_link(&escaped[open_len..]) {
+                    end = i + 1 + open_len + consumed;
+                }
+            }
+            out.push_str(&body[i..end]);
+            i = end;
+            plain_start = i;
+            continue;
+        }
+
+        i += body[i..].chars().next().map_or(1, char::len_utf8);
+    }
+    out.push_str(&rewrite(&body[plain_start..]));
+    out
+}
+
+/// Strip blockquote/list container markers only for detecting code boundaries.
+fn markdown_line_content(mut line: &str) -> &str {
+    loop {
+        let trimmed = line.trim_start_matches(' ');
+        if line.len() - trimmed.len() <= 3 && trimmed.starts_with('>') {
+            line = trimmed[1..].strip_prefix(' ').unwrap_or(&trimmed[1..]);
+        } else {
+            break;
+        }
+    }
+    let trimmed = line.trim_start_matches(' ');
+    if line.len() - trimmed.len() <= 3 {
+        for marker in ["- ", "+ ", "* "] {
+            if let Some(rest) = trimmed.strip_prefix(marker) {
+                return rest;
+            }
+        }
+        let digits = trimmed.bytes().take_while(u8::is_ascii_digit).count();
+        if (1..=9).contains(&digits) {
+            let tail = &trimmed[digits..];
+            if tail.starts_with(". ") || tail.starts_with(") ") {
+                return &tail[2..];
+            }
+        }
+    }
+    line
 }
 
 /// `[text](:/<32-hex-id>)` — Joplin's internal link form.
@@ -466,9 +632,10 @@ fn rewrite_markdown_links(
         // paths while a human writes `../Sibling/note.md`.
         let key = strip_anchor(&percent_decode(target));
         let rebased = rebase(base_dir, &key);
-        let resolved = index
-            .resolve(&key)
-            .or_else(|| rebased.as_deref().and_then(|k| index.resolve(k)))
+        let resolved = rebased
+            .as_deref()
+            .and_then(|k| index.resolve(k))
+            .or_else(|| index.resolve(&key))
             .map(str::to_string);
         match resolved {
             Some(note_id) => {
@@ -492,6 +659,14 @@ fn rewrite_markdown_links(
 /// caller has to substring-replace it in the body afterwards.
 pub fn inline_link_targets(body: &str) -> Vec<String> {
     let mut targets = Vec::new();
+    let _ = rewrite_outside_code(body, |plain| {
+        collect_inline_link_targets(plain, &mut targets);
+        plain.to_string()
+    });
+    targets
+}
+
+fn collect_inline_link_targets(body: &str, targets: &mut Vec<String>) {
     let mut rest = body;
     while let Some(open) = rest.find('[') {
         rest = &rest[open + 1..];
@@ -502,7 +677,6 @@ pub fn inline_link_targets(body: &str) -> Vec<String> {
             rest = &rest[consumed.min(rest.len())..];
         }
     }
-    targets
 }
 
 /// Parse `text](target)` starting just after the opening bracket. Returns the

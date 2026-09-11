@@ -21,7 +21,16 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  appBinaryForProfile,
+  configureWorker,
+  multiWorkers,
+  webviewEnvironment
+} from './helpers/worker-isolation.js';
+import {
+  captureFailureArtifacts,
+  installPageDiagnostics
+} from './helpers/failure-capture.js';
+import {
+  appBinary as application,
   preflight,
   repoRoot,
   spawnTauriDriver,
@@ -29,6 +38,7 @@ import {
 } from './helpers/preflight.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const outputDir = join(repoRoot, '.output', 'wdio', 'multi');
 
 /**
  * One tauri-driver process per client. `port` is what wdio connects to;
@@ -42,25 +52,14 @@ interface ClientProc {
   port: number;
   nativePort: number;
   profileId: string;
-  application: string;
   profileDir?: string;
   driver?: ChildProcess;
   startTimer?: ReturnType<typeof setTimeout>;
 }
 
 const clients: Record<'browserA' | 'browserB', ClientProc> = {
-  browserA: {
-    port: 4444,
-    nativePort: 4445,
-    profileId: 'e2e-a',
-    application: appBinaryForProfile('e2e-a')
-  },
-  browserB: {
-    port: 4446,
-    nativePort: 4447,
-    profileId: 'e2e-b',
-    application: appBinaryForProfile('e2e-b')
-  }
+  browserA: { port: 4444, nativePort: 4445, profileId: 'e2e-a' },
+  browserB: { port: 4446, nativePort: 4447, profileId: 'e2e-b' }
 };
 
 const DRIVER_START_STAGGER_MS = 20_000;
@@ -84,23 +83,20 @@ function spawnDriver(client: ClientProc): ChildProcess {
       // OS keyring entry; without it both clients default to `e2e`.
       MINDSTREAM_PROFILE_DIR: client.profileDir,
       MINDSTREAM_PROFILE_ID: client.profileId,
-      MINDSTREAM_DICTIONARY_DIR: dictionaryDir
-    }
+      MINDSTREAM_DICTIONARY_DIR: dictionaryDir,
+      ...webviewEnvironment(client.profileDir)
+    },
+    join(outputDir, `tauri-driver-${client.profileId}.log`)
   );
 }
 
 export const config: WebdriverIO.Config = {
   runner: 'local',
-  specs: [
-    // Only the two-client specs. The rest run on wdio.conf.ts.
-    join(here, 'specs', 'collab-confirm.e2e.ts'),
-    join(here, 'specs', 'sharing.e2e.ts'),
-    join(here, 'specs', 'collab.e2e.ts'),
-    join(here, 'specs', 'sync-history.e2e.ts'),
-    join(here, 'specs', 'seed-merge.e2e.ts')
-  ],
-  maxInstances: 1,
-  outputDir: join(repoRoot, '.output', 'wdio', 'multi'),
+  specs: [join(here, 'specs', 'multi', '**', '*.e2e.ts')],
+  // CI opts into two workers, each driving two apps. Local runs stay serial
+  // unless explicitly enabled, since native startup is sensitive to host load.
+  maxInstances: multiWorkers(),
+  outputDir,
   // Multiremote: an OBJECT (not an array) keyed by instance name. Each entry
   // carries its own connection (port → its tauri-driver) plus capabilities.
   // `WebdriverIO.Config['capabilities']` is typed as the standalone array, so
@@ -110,14 +106,14 @@ export const config: WebdriverIO.Config = {
       hostname: '127.0.0.1',
       port: clients.browserA.port,
       capabilities: {
-        'tauri:options': { application: clients.browserA.application }
+        'tauri:options': { application }
       } as WebdriverIO.Capabilities
     },
     browserB: {
       hostname: '127.0.0.1',
       port: clients.browserB.port,
       capabilities: {
-        'tauri:options': { application: clients.browserB.application }
+        'tauri:options': { application }
       } as WebdriverIO.Capabilities
     }
   } as unknown as WebdriverIO.Config['capabilities'],
@@ -149,8 +145,23 @@ export const config: WebdriverIO.Config = {
   // Requirement checks + the Tauri CLI build (helpers/preflight.ts). T4 also
   // requires the backend stack, so a down stack fails here — once, before the
   // build — instead of five specs each timing out in their `before` hook.
-  onPrepare: () =>
-    preflight({ backend: true, buildProfiles: ['e2e-a', 'e2e-b'] }),
+  onPrepare: () => preflight({ backend: true }),
+
+  // Buffer page-side errors on both clients — WebKitWebDriver has no log
+  // endpoint, so what the app logged is only recoverable from the page.
+  beforeTest: () => installPageDiagnostics(browser),
+
+  // Screenshot + DOM per client on failure — a two-client failure is usually
+  // about what one client sees and the other doesn't (see helpers/failure-capture.ts).
+  afterTest: async (test, _context, { passed, error }) => {
+    if (passed) return;
+    await captureFailureArtifacts({
+      client: browser,
+      outputDir,
+      title: `${test.parent} ${test.title}`,
+      error
+    });
+  },
 
   // Bring up tauri-driver processes on a stagger. wdio opens multiremote
   // sessions concurrently; if both driver ports are already listening, that
@@ -158,7 +169,12 @@ export const config: WebdriverIO.Config = {
   // occasionally leaves one app process not responding before Svelte mounts.
   // Leaving later ports closed briefly makes wdio's normal connection retry
   // machinery serialize the expensive native app boot without changing specs.
-  beforeSession: () => {
+  beforeSession: (_config, capabilities, _specs, cid) => {
+    configureWorker(
+      clients,
+      capabilities as unknown as Record<string, { port?: number }>,
+      cid
+    );
     for (const [index, client] of Object.values(clients).entries()) {
       if (client.driver || client.startTimer) continue;
       if (index === 0) {

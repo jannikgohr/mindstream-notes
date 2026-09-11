@@ -10,7 +10,7 @@
 //!
 //! An asset's lifetime is driven by the `asset_refs` table — the set of notes
 //! that reference it — and NOT by `owning_note_id`. That distinction is the
-//! whole point of the design: until migration 25 the owning note cascaded the
+//! whole point of the design: until migration 26 the owning note cascaded the
 //! blob away on delete, so an image pasted into two notes died with the first
 //! one purged.
 //!
@@ -107,7 +107,7 @@ fn row_to_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<AssetSummary> {
 }
 
 /// sha256 of an asset's bytes, lowercase hex. The dedup key (paired with the
-/// share scope) and what the migration-25 backfill writes.
+/// share scope) and what the migration-26 backfill writes.
 pub(crate) fn content_hash(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     let digest = Sha256::digest(bytes);
@@ -144,6 +144,7 @@ pub fn store_deduped(
     mime_type: &str,
     bytes: &[u8],
 ) -> AppResult<StoredAsset> {
+    crate::sharing::ensure_note_writable(conn, note_id)?;
     require_note(conn, note_id)?;
 
     // Inherit the owning note's share scope so an image dropped into a shared
@@ -205,6 +206,7 @@ pub fn upload(conn: &Connection, input: UploadAsset) -> AppResult<Asset> {
 /// different (deduped) id would leave the body pointing at nothing. Callers
 /// that can accept any id should use [`store_deduped`] instead.
 pub fn upload_with_id(conn: &Connection, id: String, input: UploadAsset) -> AppResult<Asset> {
+    crate::sharing::ensure_note_writable(conn, &input.owning_note_id)?;
     require_note(conn, &input.owning_note_id)?;
     let share_scope_id = crate::sharing::note_scope(conn, &input.owning_note_id)?;
     let hash = content_hash(&input.bytes);
@@ -308,6 +310,35 @@ pub fn register_body_refs(conn: &Connection, note_id: &str, body: &str) -> AppRe
     Ok(())
 }
 
+/// Rewrite stale asset ids from another scope to the matching blob in this
+/// note's current scope. An editor can stay open while its note moves across a
+/// share boundary, then save the pre-move Yjs document. Scope moves record
+/// per-note redirects so that late save resolves to the blob's current id.
+pub(crate) fn normalize_asset_ids_for_note(
+    conn: &Connection,
+    note_id: &str,
+    body: &str,
+    state: Option<&[u8]>,
+) -> AppResult<(String, Option<Vec<u8>>)> {
+    let aliases: Vec<(String, String)> = {
+        let mut remaps = conn
+            .prepare("SELECT old_asset_id, new_asset_id FROM asset_id_remaps WHERE note_id = ?1")?;
+        let rows = remaps.query_map(params![note_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let mut body = body.to_string();
+    let mut state = state.map(ToOwned::to_owned);
+    for (old_id, new_id) in aliases {
+        body = body.replace(&old_id, &new_id);
+        if let Some(bytes) = state.as_mut() {
+            *bytes = crate::sync::yrs_doc::replace_asset_id(bytes, &old_id, &new_id);
+        }
+    }
+    Ok((body, state))
+}
+
 /// Drop `note_id`'s claim on every asset and delete the ones nothing else
 /// references. Returns how many blobs were freed.
 ///
@@ -351,10 +382,12 @@ pub fn release_note_assets(conn: &Connection, note_id: &str) -> AppResult<usize>
             // Still referenced. Re-anchor if we were the creator so the sync
             // payload keeps a live owning_note_id.
             Some(other_note) => {
+                let now = Utc::now().to_rfc3339();
                 conn.execute(
-                    "UPDATE assets SET owning_note_id = ?1
+                    "UPDATE assets
+                     SET owning_note_id = ?1, modified = ?4, dirty = 1
                      WHERE id = ?2 AND owning_note_id = ?3",
-                    params![other_note, asset_id, note_id],
+                    params![other_note, asset_id, note_id, now],
                 )?;
             }
             None => removed += delete_asset(conn, &asset_id)?,
@@ -619,7 +652,7 @@ pub(crate) fn sweep_unreferenced_markdown_assets_inner(conn: &Connection) -> App
     Ok(removed)
 }
 
-/// Fill in `content_hash` for rows that predate migration 25.
+/// Fill in `content_hash` for rows that predate migration 26.
 ///
 /// SQLite has no hashing function, so the migration leaves the column NULL and
 /// this runs once afterwards. Until a row is hashed it simply never matches a

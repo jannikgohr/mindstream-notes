@@ -1,4 +1,8 @@
 import type { HandleClientError, Reroute } from '@sveltejs/kit';
+import {
+  installRuntimeErrorReporting,
+  reportRuntimeError
+} from '$lib/runtime-errors';
 
 /**
  * Tauri opens spawned WebviewWindows by file path (e.g. `index.html?...`).
@@ -21,10 +25,12 @@ export const reroute: Reroute = ({ url }) => {
  * pass-throughs — silences the "not exported" rollup warning and gives
  * us a single place to add real client-error reporting later.
  */
-export const init = () => {};
+export const init = () => {
+  installRuntimeErrorReporting();
+};
 
-export const handleError: HandleClientError = ({ error, event }) => {
-  console.error('[hooks.client] uncaught', { error, event });
+export const handleError: HandleClientError = ({ error }) => {
+  reportRuntimeError(error);
 };
 
 /**

@@ -622,6 +622,76 @@ fn merge_reroutes_orphan_note_parents_to_root() {
 }
 
 #[test]
+fn merge_preserves_assets_with_a_deleted_creator_and_skips_unreferenced_blobs() {
+    let live_db = open_memory_for_tests();
+    let mut backup = Connection::open_in_memory().unwrap();
+    migrations::run(&mut backup).unwrap();
+    seed_backup_db(&backup, "BACKUP");
+    backup
+        .execute_batch(
+            "INSERT INTO notes(id, title, body, created, modified)
+         VALUES ('survivor', 'Survivor', '![pic](asset:mindstream/asset_BACKUP)', 'old', 'old');
+         INSERT INTO asset_refs(asset_id, note_id) VALUES ('asset_BACKUP', 'survivor');
+         DELETE FROM notes WHERE id = 'note_BACKUP';
+         INSERT INTO assets(id, owning_note_id, mime_type, bytes, size, created, modified)
+         VALUES ('orphan', NULL, 'image/png', X'01', 1, 'old', 'old');",
+        )
+        .unwrap();
+    live_db
+        .with_conn_mut(|c| {
+            let report = merge_into(c, &backup)?;
+            assert_eq!(report.notes_added, 1);
+            assert_eq!(report.assets_added, 1);
+            let owner: String = c.query_row(
+                "SELECT owning_note_id FROM assets WHERE id = 'asset_BACKUP'",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(owner, "survivor");
+            assert_eq!(
+                crate::assets::sweep_unreferenced_markdown_assets_inner(c)?,
+                0
+            );
+            assert_eq!(
+                crate::assets::load(c, "asset_BACKUP")?.bytes,
+                vec![0x89, 0x50]
+            );
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn merge_restores_every_referrer_of_a_deduplicated_asset() {
+    let live_db = open_memory_for_tests();
+    let mut backup = Connection::open_in_memory().unwrap();
+    migrations::run(&mut backup).unwrap();
+    seed_backup_db(&backup, "BACKUP");
+    backup
+        .execute_batch(
+            "INSERT INTO notes(id, title, body, created, modified)
+         VALUES ('survivor', 'Survivor', '![pic](asset:mindstream/asset_BACKUP)', 'old', 'old');
+         INSERT INTO asset_refs(asset_id, note_id) VALUES ('asset_BACKUP', 'survivor');",
+        )
+        .unwrap();
+    live_db
+        .with_conn_mut(|c| {
+            merge_into(c, &backup)?;
+            // A second merge can restore a note while its blob already exists.
+            crate::notes::purge(c, "survivor")?;
+            let report = merge_into(c, &backup)?;
+            assert_eq!(report.assets_added, 0);
+            crate::notes::purge(c, "note_BACKUP")?;
+            assert_eq!(
+                crate::assets::load(c, "asset_BACKUP")?.bytes,
+                vec![0x89, 0x50]
+            );
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
 fn merge_skips_assets_whose_owner_isnt_present() {
     // Backup has an asset, but the owning note didn't come over
     // (and isn't already present locally either — truly orphaned).
@@ -696,4 +766,70 @@ fn merge_does_not_overwrite_existing_local_notes() {
         })
         .unwrap();
     assert_eq!(title, "local", "local content must be preserved");
+}
+
+#[test]
+fn merge_keeps_existing_root_parent_and_preserves_tag_crdt() {
+    let live_db = open_memory_for_tests();
+    let mut backup = Connection::open_in_memory().unwrap();
+    migrations::run(&mut backup).unwrap();
+    seed_backup_db(&backup, "SAME");
+    seed_backup_db(&backup, "PARENT");
+    backup
+        .execute(
+            "UPDATE collections SET parent_collection_id = 'coll_PARENT' WHERE id = 'coll_SAME'",
+            [],
+        )
+        .unwrap();
+    let state = crate::sync::tags_crdt::init(&["tag-x".to_string()]);
+    backup
+        .execute(
+            "UPDATE notes SET tags_state = ?1 WHERE id = 'note_SAME'",
+            params![state],
+        )
+        .unwrap();
+    live_db
+        .with_conn(|c| {
+            seed_backup_db(c, "SAME");
+            c.execute("DELETE FROM notes WHERE id = 'note_SAME'", [])?;
+            Ok(())
+        })
+        .unwrap();
+    live_db.with_conn_mut(|c| merge_into(c, &backup)).unwrap();
+    live_db
+        .with_conn(|c| {
+            let parent: Option<String> = c.query_row(
+                "SELECT parent_collection_id FROM collections WHERE id = 'coll_SAME'",
+                [],
+                |r| r.get(0),
+            )?;
+            assert!(parent.is_none());
+            let imported: Vec<u8> = c.query_row(
+                "SELECT tags_state FROM notes WHERE id = 'note_SAME'",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(imported, state);
+            assert_eq!(crate::sync::tags_crdt::tags(&imported), vec!["tag-x"]);
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn merge_into_read_only_destination_rolls_back_every_import() {
+    let live_db = open_memory_for_tests();
+    let mut backup = Connection::open_in_memory().unwrap();
+    migrations::run(&mut backup).unwrap();
+    seed_backup_db(&backup, "SHARED");
+    seed_backup_db(&backup, "NEW");
+    live_db.with_conn_mut(|c| {
+        seed_backup_db(c, "SHARED");
+        c.execute("DELETE FROM notes WHERE id = 'note_SHARED'", [])?;
+        c.execute("UPDATE collections SET shared_role = 'read_only', share_scope_id = 'scope' WHERE id = 'coll_SHARED'", [])?;
+        assert!(merge_into(c, &backup).is_err());
+        assert_eq!(c.query_row("SELECT count(*) FROM notes", [], |r| r.get::<_, i64>(0))?, 0);
+        assert_eq!(c.query_row("SELECT count(*) FROM collections WHERE id = 'coll_NEW'", [], |r| r.get::<_, i64>(0))?, 0);
+        Ok(())
+    }).unwrap();
 }

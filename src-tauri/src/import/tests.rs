@@ -696,6 +696,55 @@ fn obsidian_wikilinks_resolve_by_bare_name_across_folders() {
 }
 
 #[test]
+fn markdown_links_prefer_the_source_relative_note() {
+    let vault = TempVault::new();
+    vault
+        .write("Target.md", "root")
+        .write("Sub/Target.md", "nearby")
+        .write("Sub/Source.md", "[go](Target.md)");
+    let db = open_memory_for_tests();
+
+    import(&db, options(&vault));
+
+    let nearby = db
+        .with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT n.id FROM notes n JOIN collections c ON n.parent_collection_id = c.id
+                 WHERE n.title = 'Target' AND c.name = 'Sub'",
+                [],
+                |r| r.get::<_, String>(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(
+        body_of(&db, "Source"),
+        format!("[go](mindstream://note/{nearby})")
+    );
+}
+
+#[test]
+fn obsidian_link_syntax_inside_code_or_escaped_prose_stays_literal() {
+    let vault = TempVault::new();
+    as_obsidian_vault(&vault);
+    vault.write("Target.md", "target").write(
+        "Source.md",
+        "`[[Target]]`\n```md\n[[Target]]\n[go](Target.md)\n![[pic.png]]\n```\n\\[[Target]]\n[[Target]]",
+    );
+    let db = open_memory_for_tests();
+
+    let report = import(&db, obsidian_options(&vault));
+
+    let target = note_id_of(&db, "Target");
+    assert_eq!(report.links_resolved, 1);
+    assert_eq!(
+        body_of(&db, "Source"),
+        format!(
+            "`[[Target]]`\n```md\n[[Target]]\n[go](Target.md)\n![[pic.png]]\n```\n\\[[Target]]\n[Target](mindstream://note/{target})"
+        )
+    );
+}
+
+#[test]
 fn obsidian_mutual_wikilinks_resolve_both_ways() {
     let vault = TempVault::new();
     as_obsidian_vault(&vault);
@@ -1012,6 +1061,18 @@ fn a_joplin_body_containing_colon_lines_keeps_them() {
     import(&db, joplin_options(&vault));
 
     assert_eq!(body_of(&db, "Recipe"), "ingredients: flour\n\nMix well.");
+}
+
+#[test]
+fn a_joplin_body_keeps_a_trailing_field_shaped_paragraph() {
+    let vault = TempVault::new();
+    let raw = format!("Recipe\n\nKeep this\n\nfoo: bar\n\nid: {NOTE_A}\ntype_: 1\n");
+    vault.write(&format!("{NOTE_A}.md"), &raw);
+    let db = open_memory_for_tests();
+
+    import(&db, joplin_options(&vault));
+
+    assert_eq!(body_of(&db, "Recipe"), "Keep this\n\nfoo: bar");
 }
 
 #[test]
@@ -1471,6 +1532,115 @@ fn legacy_wikilinks_are_converted_to_id_backed_links() {
         body_of(&db, "Index"),
         format!("See [Design doc](mindstream://note/{target}) for details.")
     );
+}
+
+#[test]
+fn legacy_conversion_skips_code_and_escaped_wikilinks() {
+    let db = open_memory_for_tests();
+    let target = make_markdown_note(&db, "Target", "x");
+    make_markdown_note(
+        &db,
+        "Index",
+        "`[[Target]]`\n~~~\n[[Target]]\n~~~\n\\[[Target]]\n[[Target]]",
+    );
+
+    let report = super::legacy_links::convert_legacy_wikilinks(&db).unwrap();
+
+    assert_eq!(report.links_converted, 1);
+    assert_eq!(
+        body_of(&db, "Index"),
+        format!("`[[Target]]`\n~~~\n[[Target]]\n~~~\n\\[[Target]]\n[Target](mindstream://note/{target})")
+    );
+}
+
+#[test]
+fn code_boundaries_preserve_nested_fences_and_exact_backtick_runs() {
+    let protected = "`one `` [[Target]] `` two`\n\n```md\n```still-code\n[[Target]]\n```\n\n> ~~~md\n> [[Target]]\n> ~~~\n\n- ```md\n  [[Target]]\n  ```\n\n    [[Target]]\n\t[[Target]]\n";
+    let db = open_memory_for_tests();
+    let target = make_markdown_note(&db, "Target", "x");
+    make_markdown_note(&db, "Index", &format!("{protected}\n[[Target]]"));
+    let report = super::legacy_links::convert_legacy_wikilinks(&db).unwrap();
+    assert_eq!(report.links_converted, 1);
+    assert_eq!(
+        body_of(&db, "Index"),
+        format!("{protected}\n[Target](mindstream://note/{target})")
+    );
+}
+
+#[test]
+fn storing_a_prose_attachment_leaves_the_same_target_in_code_and_escapes_alone() {
+    let db = open_memory_for_tests();
+    let vault = TempVault::new();
+    let protected =
+        "`![pic](pic.png)`\n```\n![pic](pic.png)\n```\n\\[pic](pic.png)\n\\![[pic.png]]";
+    vault
+        .write(
+            "Source.md",
+            &format!("# Source\n{protected}\n![pic](pic.png)"),
+        )
+        .write_bytes("pic.png", &[1, 2, 3]);
+    let report = import(&db, options(&vault));
+    assert_eq!(report.attachments_imported, 1);
+    let body = body_of(&db, "Source");
+    assert!(body.contains(protected));
+    assert_eq!(body.matches("asset:mindstream/").count(), 1);
+}
+
+#[test]
+fn escaped_joplin_links_are_not_rewritten_by_the_id_pass() {
+    let db = open_memory_for_tests();
+    let vault = TempVault::new();
+    let body = format!("\\[Target](:/{NOTE_B})\n[Target](:/{NOTE_B})");
+    vault
+        .write(
+            &format!("{NOTE_A}.md"),
+            &joplin_item("Source", &body, &[("id", NOTE_A), ("type_", "1")]),
+        )
+        .write(
+            &format!("{NOTE_B}.md"),
+            &joplin_item("Target", "x", &[("id", NOTE_B), ("type_", "1")]),
+        );
+    import(&db, joplin_options(&vault));
+    assert_eq!(
+        body_of(&db, "Source"),
+        format!(
+            "\\[Target](:/{NOTE_B})\n[Target](mindstream://note/{})",
+            note_id_of(&db, "Target")
+        )
+    );
+}
+
+#[test]
+fn importing_directly_into_a_read_only_share_writes_nothing() {
+    let db = open_memory_for_tests();
+    let vault = TempVault::new();
+    vault
+        .write("Sub/Source.md", "# Source\n![pic](pic.png)")
+        .write_bytes("Sub/pic.png", &[1, 2, 3]);
+    db.with_conn(|c| {
+        c.execute("INSERT INTO collections(id, name, created, modified, share_scope_id, shared_role, shared_by_me) VALUES ('locked', 'Read only', 'old', 'old', 'scope', 'read_only', 0)", [])?;
+        Ok(())
+    }).unwrap();
+    let counts = || {
+        db.with_conn(|c| {
+        Ok(c.query_row("SELECT (SELECT COUNT(*) FROM notes), (SELECT COUNT(*) FROM collections), (SELECT COUNT(*) FROM assets)", [], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))?)
+    }).unwrap()
+    };
+    let before = counts();
+    for folder in [None, Some("New import".to_string())] {
+        let result = run_import(
+            &db,
+            ImportOptions {
+                destination_collection_id: Some("locked".to_string()),
+                create_folder_named: folder,
+                ..options(&vault)
+            },
+            &AtomicBool::new(false),
+            |_| {},
+        );
+        assert!(result.unwrap_err().to_string().contains("read-only"));
+        assert_eq!(counts(), before);
+    }
 }
 
 #[test]

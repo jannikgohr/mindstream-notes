@@ -4,6 +4,44 @@ use super::fixtures::*;
 use super::*;
 
 #[test]
+fn stale_vault_pull_does_not_undo_a_local_folder_rehome() {
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        c.execute(
+            "INSERT INTO collections(id, name, position, created, modified, etebase_uid, dirty)
+             VALUES ('rehome', 'Renamed Offline', 0, 't', 't', 'old-vault-uid', 1)",
+            [],
+        )?;
+        crate::sharing::rehome_folder_subtree(c, "rehome", Some("new-scope"))
+    })
+    .unwrap();
+
+    let repaired = apply_folder_payload(
+        &db,
+        remote_folder("rehome", None, "Original Name"),
+        "old-vault-uid",
+        "old-etag",
+        None,
+        true,
+    )
+    .unwrap();
+    assert!(repaired.is_none());
+    db.with_conn(|c| {
+        let state: (String, Option<String>, Option<String>, i64) = c.query_row(
+            "SELECT name, share_scope_id, etebase_uid, dirty FROM collections WHERE id = 'rehome'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?;
+        assert_eq!(
+            state,
+            ("Renamed Offline".into(), Some("new-scope".into()), None, 1)
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
 fn apply_folder_keeps_local_metadata_when_dirty() {
     // An offline folder rename (dirty=1) must not revert to the remote's
     // older name on pull — mirrors the note metadata-preservation path.

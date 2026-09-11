@@ -26,6 +26,8 @@
   import {
     CORE_FILE_TREE_ACTION_IDS,
     DEFAULT_FILE_TREE_TOOLBAR_PREFERENCES,
+    FILE_TREE_TOOLBAR_MIN_PX,
+    fileTreeToolbarCapacity,
     loadFileTreeToolbarPreferences,
     moveFileTreeToolbarAction,
     normalizeFileTreeToolbarPreferences,
@@ -183,13 +185,7 @@
     preferencesLoaded = true;
 
     const observer = new ResizeObserver(([entry]) => {
-      const width = entry.contentRect.width;
-      const moreButtonWidth = 32;
-      const actionWidth = 32;
-      visibleCapacity = Math.max(
-        1,
-        Math.floor((width - moreButtonWidth) / actionWidth)
-      );
+      visibleCapacity = fileTreeToolbarCapacity(entry.contentRect.width);
     });
     if (root) observer.observe(root);
     return () => {
@@ -462,12 +458,23 @@
   {/if}
 {/snippet}
 
+<!--
+  The `min-width` is a floor of "overflow trigger + one action". This row is
+  the only shrinkable thing in the file-tree header (the sort control beside it
+  is `shrink-0`), so without a floor a wide sort control squeezes it to nothing
+  and `justify-end` + `overflow-hidden` clip the leading create buttons out of
+  view — unreachable, and not in the ⋯ menu either, because as far as the
+  capacity maths was concerned they were "shown". Overflowing the header
+  instead is what tells FileExplorer to collapse the sort control and hand the
+  space back.
+-->
 <div
   bind:this={root}
   data-file-tree-drop-container="top"
   data-section="toolbar"
   data-orientation="horizontal"
-  class="flex min-w-0 flex-1 justify-end gap-1"
+  class="flex flex-1 justify-end gap-1"
+  style="min-width: {FILE_TREE_TOOLBAR_MIN_PX}px;"
 >
   <div class="flex min-w-0 flex-1 justify-end gap-1 overflow-hidden">
     {#each renderedTopActions as action, index (action.id)}

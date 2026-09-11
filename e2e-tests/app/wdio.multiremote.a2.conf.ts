@@ -27,7 +27,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  appBinaryForProfile,
+  captureFailureArtifacts,
+  installPageDiagnostics
+} from './helpers/failure-capture.js';
+import {
+  appBinary as application,
   preflight,
   repoRoot,
   spawnTauriDriver,
@@ -35,6 +39,7 @@ import {
 } from './helpers/preflight.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const outputDir = join(repoRoot, '.output', 'wdio', 'multi-a2');
 
 /**
  * One tauri-driver process per client. `port` is what wdio connects to;
@@ -49,31 +54,15 @@ interface ClientProc {
   port: number;
   nativePort: number;
   profileId: string;
-  application: string;
   profileDir?: string;
   driver?: ChildProcess;
   startTimer?: ReturnType<typeof setTimeout>;
 }
 
 const clients: Record<'browserA1' | 'browserA2' | 'browserB', ClientProc> = {
-  browserA1: {
-    port: 4444,
-    nativePort: 4445,
-    profileId: 'e2e-a1',
-    application: appBinaryForProfile('e2e-a1')
-  },
-  browserA2: {
-    port: 4448,
-    nativePort: 4449,
-    profileId: 'e2e-a2',
-    application: appBinaryForProfile('e2e-a2')
-  },
-  browserB: {
-    port: 4446,
-    nativePort: 4447,
-    profileId: 'e2e-b',
-    application: appBinaryForProfile('e2e-b')
-  }
+  browserA1: { port: 4444, nativePort: 4445, profileId: 'e2e-a1' },
+  browserA2: { port: 4448, nativePort: 4449, profileId: 'e2e-a2' },
+  browserB: { port: 4446, nativePort: 4447, profileId: 'e2e-b' }
 };
 
 const DRIVER_START_STAGGER_MS = 20_000;
@@ -95,15 +84,16 @@ function spawnDriver(client: ClientProc): ChildProcess {
       MINDSTREAM_PROFILE_DIR: client.profileDir,
       MINDSTREAM_PROFILE_ID: client.profileId,
       MINDSTREAM_DICTIONARY_DIR: dictionaryDir
-    }
+    },
+    join(outputDir, `tauri-driver-${client.profileId}.log`)
   );
 }
 
 export const config: WebdriverIO.Config = {
   runner: 'local',
-  specs: [join(here, 'specs', 'sharing-multi-device.e2e.ts')],
+  specs: [join(here, 'specs', 'multi-a2', '**', '*.e2e.ts')],
   maxInstances: 1,
-  outputDir: join(repoRoot, '.output', 'wdio', 'multi-a2'),
+  outputDir,
   // Multiremote: an OBJECT keyed by instance name, each with its own connection
   // (port → its tauri-driver) plus capabilities. Cast as the two-client config
   // does — the multiremote object shape isn't the standalone array type.
@@ -112,21 +102,21 @@ export const config: WebdriverIO.Config = {
       hostname: '127.0.0.1',
       port: clients.browserA1.port,
       capabilities: {
-        'tauri:options': { application: clients.browserA1.application }
+        'tauri:options': { application }
       } as WebdriverIO.Capabilities
     },
     browserA2: {
       hostname: '127.0.0.1',
       port: clients.browserA2.port,
       capabilities: {
-        'tauri:options': { application: clients.browserA2.application }
+        'tauri:options': { application }
       } as WebdriverIO.Capabilities
     },
     browserB: {
       hostname: '127.0.0.1',
       port: clients.browserB.port,
       capabilities: {
-        'tauri:options': { application: clients.browserB.application }
+        'tauri:options': { application }
       } as WebdriverIO.Capabilities
     }
   } as unknown as WebdriverIO.Config['capabilities'],
@@ -144,11 +134,22 @@ export const config: WebdriverIO.Config = {
 
   // Requirement checks + the Tauri CLI build, same as the two-client config
   // (helpers/preflight.ts).
-  onPrepare: () =>
-    preflight({
-      backend: true,
-      buildProfiles: ['e2e-a1', 'e2e-a2', 'e2e-b']
-    }),
+  onPrepare: () => preflight({ backend: true }),
+
+  // Buffer page-side errors on every client — WebKitWebDriver has no log
+  // endpoint, so what the app logged is only recoverable from the page.
+  beforeTest: () => installPageDiagnostics(browser),
+
+  // Screenshot + DOM per client on failure, same as the two-client config.
+  afterTest: async (test, _context, { passed, error }) => {
+    if (passed) return;
+    await captureFailureArtifacts({
+      client: browser,
+      outputDir,
+      title: `${test.parent} ${test.title}`,
+      error
+    });
+  },
 
   beforeSession: () => {
     for (const [index, client] of Object.values(clients).entries()) {

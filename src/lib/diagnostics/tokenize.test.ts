@@ -102,33 +102,65 @@ describe('tokenizeWords', () => {
   });
 
   describe('camelCase identifiers', () => {
-    it('splits camelCase so each part can be checked', () => {
-      expect(words('getUserName')).toEqual(['get', 'User', 'Name']);
+    it('keeps the identifier whole and records its parts', () => {
+      // Whole first: a personal-dictionary entry is written the way the
+      // user typed it, so the joined form has to survive tokenization.
+      const [token] = tokenizeWords('getUserName');
+      expect(token.text).toBe('getUserName');
+      expect(token.parts?.map((p) => p.text)).toEqual(['get', 'User', 'Name']);
     });
 
     it('splits an acronym prefix at the last capital', () => {
-      expect(words('HTMLParser')).toEqual(['HTML', 'Parser']);
+      const [token] = tokenizeWords('HTMLParser');
+      expect(token.parts?.map((p) => p.text)).toEqual(['HTML', 'Parser']);
     });
 
     it('leaves ordinary capitalized words alone', () => {
       expect(words('Berlin')).toEqual(['Berlin']);
+      expect(tokenizeWords('Berlin')[0].parts).toBeUndefined();
     });
 
     it('leaves all-caps acronyms alone', () => {
       expect(words('NASA')).toEqual(['NASA']);
+      expect(tokenizeWords('NASA')[0].parts).toBeUndefined();
     });
 
     it('reports correct offsets for split parts', () => {
       expect(tokenizeWords('getUser')).toEqual([
-        { text: 'get', from: 0, to: 3 },
-        { text: 'User', from: 3, to: 7 }
+        {
+          text: 'getUser',
+          from: 0,
+          to: 7,
+          parts: [
+            { text: 'get', from: 0, to: 3 },
+            { text: 'User', from: 3, to: 7 }
+          ]
+        }
       ]);
+    });
+
+    it('rebases part offsets by the segment offset', () => {
+      expect(
+        tokenizeWords('getUser', 100)[0].parts?.map((p) => p.from)
+      ).toEqual([100, 103]);
     });
 
     it('leaves German capitalized nouns intact', () => {
       // Leading capital is not a camelCase boundary — otherwise every
       // German noun would be split.
       expect(words('Das Haus')).toEqual(['Das', 'Haus']);
+    });
+
+    it('splits inside a WORDCHARS-joined token too', () => {
+      // Both splitters feed one flat part list; neither nests.
+      const [token] = tokenizeWords('z.BMeinWort', 0, '.');
+      expect(token.text).toBe('z.BMeinWort');
+      expect(token.parts?.map((p) => p.text)).toEqual([
+        'z',
+        'B',
+        'Mein',
+        'Wort'
+      ]);
     });
   });
 
@@ -194,10 +226,12 @@ describe('trailing periods', () => {
     expect(abbrev('Nr .')).toEqual([undefined]);
   });
 
-  it('attaches it to the last part of a split token only', () => {
-    const tokens = tokenizeWords('getUser.');
-    expect(tokens.map((t) => t.text)).toEqual(['get', 'User']);
-    expect(tokens.map((t) => t.abbreviation)).toEqual([undefined, 'User.']);
+  it('attaches it to the whole token and to its last part', () => {
+    // Both levels get asked: `Bestellnr.` is checked whole first, and the
+    // fallback needs `nr.` — which is the form the dictionary stores.
+    const [token] = tokenizeWords('BestellNr.');
+    expect(token.abbreviation).toBe('BestellNr.');
+    expect(token.parts?.map((p) => p.abbreviation)).toEqual([undefined, 'Nr.']);
   });
 
   it('keeps positions covering the word, not the period', () => {

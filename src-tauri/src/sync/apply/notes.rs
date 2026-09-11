@@ -348,6 +348,12 @@ pub(in crate::sync) fn apply_note_payload(
         }
         drop(stmt);
 
+        // Asset and note collections are pulled independently. If the blob
+        // arrived first, register this note's markdown/PDF references as soon
+        // as its final body is available. Missing assets are skipped here and
+        // reconciled by apply_asset_payload when their bytes arrive later.
+        crate::assets::register_body_refs(&tx, &payload.id, &body)?;
+
         tx.commit()?;
         Ok(Some(payload.id.clone()))
     })

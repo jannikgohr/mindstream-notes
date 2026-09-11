@@ -331,6 +331,12 @@ fn prepare_item(
 /// Work out the collection everything lands under, creating the default
 /// "one new folder named after the source" when asked.
 fn resolve_destination(db: &Db, options: &ImportOptions) -> AppResult<Option<String>> {
+    // Check before the source folder tree is written. The raw import writer is
+    // intentionally fast and assumes its destination was already authorised;
+    // delaying this check can leave a partial import in a read-only share.
+    db.with_conn(|conn| {
+        crate::sharing::ensure_parent_writable(conn, options.destination_collection_id.as_deref())
+    })?;
     let Some(name) = options.create_folder_named.as_deref() else {
         return Ok(options.destination_collection_id.clone());
     };

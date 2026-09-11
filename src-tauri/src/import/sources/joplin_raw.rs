@@ -214,23 +214,26 @@ impl ImportSource for JoplinRawSource {
         // Resource references are `:/<id>` just like note links; which one it
         // is depends purely on whether the id names a resource.
         let mut attachments: Vec<AttachmentRef> = Vec::new();
-        for (at, _) in raw.body.match_indices(":/") {
-            let id: String = raw.body[at + 2..]
-                .chars()
-                .take_while(char::is_ascii_alphanumeric)
-                .collect();
-            let Some(resource) = self.resources.get(&id) else {
-                continue;
-            };
-            if attachments.iter().any(|a| a.locator == id) {
-                continue;
+        let _ = links::rewrite_outside_code(&raw.body, |prose| {
+            for (at, _) in prose.match_indices(":/") {
+                let id: String = prose[at + 2..]
+                    .chars()
+                    .take_while(char::is_ascii_alphanumeric)
+                    .collect();
+                let Some(resource) = self.resources.get(&id) else {
+                    continue;
+                };
+                if attachments.iter().any(|a| a.locator == id) {
+                    continue;
+                }
+                attachments.push(AttachmentRef {
+                    placeholder: format!(":/{id}"),
+                    locator: id,
+                    mime_type: resource.mime_type.clone(),
+                });
             }
-            attachments.push(AttachmentRef {
-                placeholder: format!(":/{id}"),
-                locator: id,
-                mime_type: resource.mime_type.clone(),
-            });
-        }
+            prose.to_string()
+        });
 
         Ok(LoadedItem {
             note: StagedNote {
@@ -295,13 +298,11 @@ fn parse_item(raw: &str) -> Option<RawItem> {
 
     let mut fields = HashMap::new();
     let mut first_meta = lines.len();
-    for (idx, line) in lines.iter().enumerate().rev() {
-        if line.trim().is_empty() && idx + 1 == first_meta {
-            // A trailing newline leaves an empty final element; step past it
-            // without ending the scan.
-            first_meta = idx;
-            continue;
-        }
+    while first_meta > 0 && lines[first_meta - 1].trim().is_empty() {
+        first_meta -= 1;
+    }
+    for idx in (0..first_meta).rev() {
+        let line = lines[idx];
         match split_field(line) {
             Some((key, value)) => {
                 fields.insert(key, value);

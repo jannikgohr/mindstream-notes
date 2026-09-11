@@ -20,12 +20,14 @@ const backend = (...unknown: string[]) =>
 
 const provider = (
   unknownWords: ReturnType<typeof backend>,
-  isIgnored?: (word: string) => boolean
+  isIgnored?: (word: string) => boolean,
+  wordChars?: () => string
 ) =>
   createSpellcheckProvider({
     unknownWords,
     message: (word) => `unknown: ${word}`,
-    isIgnored
+    isIgnored,
+    wordChars
   });
 
 describe('createSpellcheckProvider', () => {
@@ -117,11 +119,88 @@ describe('createSpellcheckProvider', () => {
   });
 
   it('checks identifiers part by part', async () => {
-    // camelCase is split by the tokenizer, so only the misspelled part is
-    // flagged and the range covers just that part.
-    const out = await provider(backend('Naem')).check(request('getUserNaem'));
+    // The joined form is asked about first and rejected, so the segments
+    // decide: only the misspelled one is flagged, with a range covering
+    // just that part.
+    const out = await provider(backend('getUserNaem', 'Naem')).check(
+      request('getUserNaem')
+    );
     expect(out).toHaveLength(1);
     expect(out[0]).toMatchObject({ from: 7, to: 11 });
+  });
+
+  it('accepts an identifier the engine knows as a whole', async () => {
+    // Nothing is decomposed until the joined form has been rejected, so a
+    // compound the dictionary recognises is never second-guessed.
+    const out = await provider(backend('Mindstream')).check(
+      request('MindstreamNotes')
+    );
+    expect(out).toEqual([]);
+  });
+});
+
+/**
+ * The reported bug: adding `MindstreamNotes` to the personal dictionary
+ * left it underlined, because the tokenizer split it before anything asked
+ * whether the user had accepted it and the engine then rejected
+ * `Mindstream` on its own. The LanguageTool provider was unaffected — it
+ * matches whole ranges — which is what made the two checkers disagree.
+ */
+describe('personal dictionary and compound words', () => {
+  const compound = (isIgnored: (word: string) => boolean) =>
+    provider(backend('Mindstream', 'MindstreamNotes'), isIgnored);
+
+  it('accepts a compound the user added as a whole', async () => {
+    const out = await compound((word) => word === 'MindstreamNotes').check(
+      request('MindstreamNotes ist gut')
+    );
+    expect(out).toEqual([]);
+  });
+
+  it('matches an added compound case-insensitively at the call site', async () => {
+    // Folding lives in the personal dictionary; the provider must pass the
+    // word through untouched for it to work.
+    const seen: string[] = [];
+    await compound((word) => {
+      seen.push(word);
+      return false;
+    }).check(request('MindstreamNotes'));
+    expect(seen).toContain('MindstreamNotes');
+  });
+
+  it('never sends an accepted compound to the backend', async () => {
+    const check = backend('Mindstream', 'MindstreamNotes');
+    await provider(check, (word) => word === 'MindstreamNotes').check(
+      request('MindstreamNotes')
+    );
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  it('accepts a compound whose unknown segment the user added', async () => {
+    // Adding the word from the squiggle accepts the segment, not the
+    // compound — that has to clear the compound too.
+    const out = await compound((word) => word === 'Mindstream').check(
+      request('MindstreamNotes')
+    );
+    expect(out).toEqual([]);
+  });
+
+  it('still flags the segment the user has not added', async () => {
+    const out = await provider(
+      backend('Mindstream', 'Naem', 'MindstreamNaem'),
+      (word) => word === 'Mindstream'
+    ).check(request('MindstreamNaem'));
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ from: 10, to: 14 });
+  });
+
+  it('accepts a segment the user added inside a WORDCHARS-joined token', async () => {
+    const out = await provider(
+      backend('foo', 'foo/bar'),
+      (word) => word === 'foo',
+      () => '/'
+    ).check(request('foo/bar'));
+    expect(out).toEqual([]);
   });
 });
 
@@ -195,9 +274,12 @@ describe('WORDCHARS-joined tokens', () => {
   });
 
   it('offers the whole form, its abbreviation and its segments', async () => {
+    // The last segment carries an abbreviation of its own: in `BestellNr.`
+    // it is `Nr.` that the dictionary stores, and the fallback can only use
+    // a form that was asked about.
     const check = backend('nothing');
     await withChars(check, '.').check(request('z.B.'));
-    expect(check.mock.calls[0][1]).toEqual(['z.B', 'z.B.', 'z', 'B']);
+    expect(check.mock.calls[0][1]).toEqual(['z.B', 'z.B.', 'z', 'B', 'B.']);
   });
 
   it('falls back to segments when no whole form is known', async () => {

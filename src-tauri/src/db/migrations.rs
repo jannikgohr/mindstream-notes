@@ -597,6 +597,58 @@ const MIGRATIONS: &[Migration] = &[
     },
     Migration {
         to: 25,
+        sql: r#"
+            UPDATE notes SET parent_collection_id = 'trash', dirty = 1
+            WHERE trashed_at IS NOT NULL AND parent_collection_id IS NOT 'trash';
+
+            CREATE VIEW active_notes AS
+            WITH RECURSIVE trashed_folders(id) AS (
+                SELECT id FROM collections WHERE id = 'trash' OR trashed_at IS NOT NULL
+                UNION
+                SELECT c.id FROM collections c JOIN trashed_folders t ON c.parent_collection_id = t.id
+            )
+            SELECT n.* FROM notes n
+            WHERE n.trashed_at IS NULL
+              AND NOT EXISTS (SELECT 1 FROM trashed_folders t WHERE t.id = n.parent_collection_id);
+
+            CREATE VIRTUAL TABLE note_search USING fts5(
+                title, body, tags, tokenize='trigram'
+            );
+            INSERT INTO note_search(rowid, title, body, tags)
+            SELECT n.rowid, n.title,
+                   CASE WHEN n.note_kind = 'pdf' THEN COALESCE(n.pdf_text, '') ELSE n.body END,
+                   COALESCE((SELECT group_concat(tag, ' ') FROM note_tags WHERE note_id = n.id), '')
+            FROM notes n;
+            CREATE TRIGGER note_search_insert AFTER INSERT ON notes BEGIN
+                INSERT INTO note_search(rowid, title, body, tags)
+                VALUES (new.rowid, new.title, CASE WHEN new.note_kind = 'pdf' THEN COALESCE(new.pdf_text, '') ELSE new.body END, '');
+            END;
+            CREATE TRIGGER note_search_delete AFTER DELETE ON notes BEGIN
+                DELETE FROM note_search WHERE rowid = old.rowid;
+            END;
+            CREATE TRIGGER note_search_update AFTER UPDATE OF title, body, pdf_text, note_kind ON notes BEGIN
+                UPDATE note_search SET title = new.title,
+                    body = CASE WHEN new.note_kind = 'pdf' THEN COALESCE(new.pdf_text, '') ELSE new.body END
+                WHERE rowid = new.rowid;
+            END;
+            CREATE TRIGGER note_search_tag_insert AFTER INSERT ON note_tags BEGIN
+                UPDATE note_search SET tags = COALESCE((SELECT group_concat(tag, ' ') FROM note_tags WHERE note_id = new.note_id), '')
+                WHERE rowid = (SELECT rowid FROM notes WHERE id = new.note_id);
+            END;
+            CREATE TRIGGER note_search_tag_delete AFTER DELETE ON note_tags BEGIN
+                UPDATE note_search SET tags = COALESCE((SELECT group_concat(tag, ' ') FROM note_tags WHERE note_id = old.note_id), '')
+                WHERE rowid = (SELECT rowid FROM notes WHERE id = old.note_id);
+            END;
+            CREATE TRIGGER note_search_tag_update AFTER UPDATE ON note_tags BEGIN
+                UPDATE note_search SET tags = COALESCE((SELECT group_concat(tag, ' ') FROM note_tags WHERE note_id = old.note_id), '')
+                WHERE rowid = (SELECT rowid FROM notes WHERE id = old.note_id);
+                UPDATE note_search SET tags = COALESCE((SELECT group_concat(tag, ' ') FROM note_tags WHERE note_id = new.note_id), '')
+                WHERE rowid = (SELECT rowid FROM notes WHERE id = new.note_id);
+            END;
+        "#,
+    },
+    Migration {
+        to: 26,
         // Attachments become content-addressed and reference-counted.
         //
         // Before this migration an asset's lifetime was tied to exactly one
@@ -681,6 +733,17 @@ const MIGRATIONS: &[Migration] = &[
 
             INSERT INTO asset_refs(asset_id, note_id)
                 SELECT id, owning_note_id FROM assets WHERE owning_note_id IS NOT NULL;
+
+            -- An editor opened before a scope move can still save the old id.
+            -- Keep redirects after the original asset is purged; the destination
+            -- and note FKs clean them up when they are no longer usable.
+            CREATE TABLE asset_id_remaps (
+                note_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+                old_asset_id TEXT NOT NULL,
+                new_asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+                PRIMARY KEY (note_id, old_asset_id)
+            );
+            CREATE INDEX idx_asset_id_remaps_target ON asset_id_remaps(new_asset_id);
         "#,
     },
 ];
@@ -710,7 +773,7 @@ pub fn run(conn: &mut Connection) -> AppResult<()> {
     // the next CRUD call.
     check_foreign_keys(conn)?;
 
-    // Migration 25 adds assets.content_hash but can't populate it — SQLite
+    // Migration 26 adds assets.content_hash but can't populate it — SQLite
     // has no hashing function. Do it here, once; the column is only a dedup
     // lookup key, so a row that stays NULL costs storage, never correctness.
     crate::assets::backfill_content_hashes(conn)?;
@@ -897,6 +960,42 @@ mod seed_tests {
     use super::*;
     use rusqlite::Connection;
 
+    #[test]
+    fn v25_upgrades_legacy_trash_and_indexes_existing_content() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for migration in MIGRATIONS.iter().filter(|m| m.to <= 24) {
+            conn.execute_batch(migration.sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 24).unwrap();
+        conn.execute_batch(
+            "INSERT INTO notes(id, title, body, created, modified, trashed_at, dirty)
+            VALUES ('legacy', 'Deleted', 'legacy text', 'old', 'old', 'deleted', 0),
+                   ('active', 'Existing', 'indexed content', 'old', 'old', NULL, 0);
+            INSERT INTO note_tags(note_id, tag) VALUES ('active', 'backfilled-tag');",
+        )
+        .unwrap();
+        run(&mut conn).unwrap();
+        let (parent, dirty): (String, i64) = conn
+            .query_row(
+                "SELECT parent_collection_id, dirty FROM notes WHERE id = 'legacy'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(parent, "trash");
+        assert_eq!(dirty, 1);
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM active_notes", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(crate::search::search(&conn, "indexed").unwrap().len(), 1);
+        assert_eq!(crate::search::search(&conn, "backfilled").unwrap().len(), 1);
+        assert!(crate::search::search(&conn, "legacy").unwrap().is_empty());
+        run(&mut conn).unwrap();
+    }
+
     fn seeded_conn() -> Connection {
         let mut conn = Connection::open_in_memory().expect("in-memory db");
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
@@ -966,7 +1065,7 @@ mod seed_tests {
 
 #[cfg(test)]
 mod asset_refcount_upgrade_tests {
-    //! Migration 25 rebuilds `assets`, which existing vaults are full of. The
+    //! Migration 26 rebuilds `assets`, which existing vaults are full of. The
     //! fresh-database tests elsewhere never exercise that: they migrate an
     //! empty file. These start from a real v24 schema with rows in it.
 
@@ -974,8 +1073,14 @@ mod asset_refcount_upgrade_tests {
 
     /// Apply migrations up to and including `version`, the way `run` does.
     fn migrate_to(conn: &mut Connection, version: u32) {
+        let current: u32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
         conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
-        for m in MIGRATIONS.iter().filter(|m| m.to <= version) {
+        for m in MIGRATIONS
+            .iter()
+            .filter(|m| m.to > current && m.to <= version)
+        {
             let tx = conn.transaction().unwrap();
             tx.execute_batch(m.sql).unwrap();
             tx.pragma_update(None, "user_version", m.to).unwrap();
@@ -1012,15 +1117,53 @@ mod asset_refcount_upgrade_tests {
     }
 
     #[test]
+    fn upgrading_a_main_v25_vault_preserves_search_and_adds_asset_refs() {
+        let mut conn = v24_vault();
+        migrate_to(&mut conn, 25);
+        run(&mut conn).expect("upgrade main v25 to v26");
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM asset_refs WHERE asset_id = 'a1' AND note_id = 'n1'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row("SELECT bytes FROM assets WHERE id = 'a1'", [], |r| r
+                .get::<_, Vec<u8>>(0))
+                .unwrap(),
+            vec![1, 2, 3, 4]
+        );
+        conn.execute(
+            "UPDATE notes SET body = 'searchable upgrade' WHERE id = 'n1'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(crate::search::search(&conn, "searchable").unwrap().len(), 1);
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM active_notes WHERE id = 'n1'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        run(&mut conn).expect("reopening the upgraded vault is idempotent");
+    }
+
+    #[test]
     fn upgrading_a_v24_vault_preserves_assets_and_backfills_refs_and_hashes() {
         let mut conn = v24_vault();
 
-        run(&mut conn).expect("upgrade to v25 opens cleanly");
+        run(&mut conn).expect("upgrade to v26 opens cleanly");
 
         let version: u32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert!(version >= 25);
+        assert!(version >= 26);
 
         // Every column the sync engine relies on survives the rebuild.
         struct Row {

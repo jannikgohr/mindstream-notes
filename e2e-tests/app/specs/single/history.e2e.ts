@@ -16,7 +16,7 @@ import {
   restartApp,
   setElementValue,
   waitForShell
-} from '../helpers/harness.js';
+} from '../../helpers/harness.js';
 
 async function createHistoryNote(): Promise<string> {
   const title = `History ${Date.now()}-${Math.random().toString(16).slice(2)}`;

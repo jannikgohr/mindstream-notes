@@ -30,7 +30,9 @@
   });
 
   onDestroy(() => {
-    crepe?.destroy();
+    void crepe
+      ?.destroy()
+      .catch((err: unknown) => console.error('[history] destroy failed', err));
     crepe = null;
   });
 </script>

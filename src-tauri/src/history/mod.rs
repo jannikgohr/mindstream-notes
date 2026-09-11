@@ -129,6 +129,53 @@ fn compress(md: &str) -> AppResult<Vec<u8>> {
     Ok(enc.finish()?)
 }
 
+pub(crate) fn rewrite_asset_id_in_snapshots(
+    conn: &Connection,
+    note_id: &str,
+    old_id: &str,
+    new_id: &str,
+) -> AppResult<()> {
+    let versions: Vec<(String, NoteKind, Vec<u8>)> = {
+        let mut stmt =
+            conn.prepare("SELECT id, note_kind, body FROM note_versions WHERE note_id = ?1")?;
+        let rows = stmt.query_map(params![note_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (id, kind, blob) in versions {
+        let snapshot = decompress_snapshot(&blob)?;
+        let rewritten = if kind.is_markdown() {
+            snapshot.replace(old_id, new_id)
+        } else {
+            rewrite_yjs_snapshot_asset_id(&snapshot, old_id, new_id)?
+        };
+        if rewritten != snapshot {
+            let compressed = compress(&rewritten)?;
+            conn.execute(
+                "UPDATE note_versions SET body = ?1, size = ?2 WHERE id = ?3",
+                params![compressed, rewritten.len() as i64, id],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn rewrite_yjs_snapshot_asset_id(snapshot: &str, old_id: &str, new_id: &str) -> AppResult<String> {
+    let mut envelope: serde_json::Value = serde_json::from_str(snapshot)
+        .map_err(|err| AppError::InvalidArg(format!("invalid history snapshot: {err}")))?;
+    let Some(encoded) = envelope.get("data").and_then(|v| v.as_str()) else {
+        return Ok(snapshot.to_string());
+    };
+    let bytes = BASE64_STANDARD
+        .decode(encoded)
+        .map_err(|err| AppError::InvalidArg(format!("invalid history Yjs snapshot: {err}")))?;
+    let rewritten = crate::sync::yrs_doc::replace_asset_id(&bytes, old_id, new_id);
+    if rewritten == bytes {
+        return Ok(snapshot.to_string());
+    }
+    envelope["data"] = serde_json::Value::String(BASE64_STANDARD.encode(rewritten));
+    Ok(envelope.to_string())
+}
+
 pub(crate) fn decompress_snapshot(bytes: &[u8]) -> AppResult<String> {
     let mut out = String::new();
     DeflateDecoder::new(bytes).read_to_string(&mut out)?;
@@ -300,6 +347,12 @@ fn prepare_version(
 /// lookups plus one insert. Denormalises the restore target's timestamp so a
 /// `reverted` label outlives its target being pruned.
 fn insert_prepared(conn: &Connection, prepared: PreparedVersion) -> AppResult<VersionSummary> {
+    if conn.is_autocommit() {
+        let tx = conn.unchecked_transaction()?;
+        let summary = insert_prepared(&tx, prepared)?;
+        tx.commit()?;
+        return Ok(summary);
+    }
     let ref_created: Option<String> = if prepared.action == VersionAction::Reverted {
         match prepared.ref_version_id.as_deref() {
             Some(target) => conn

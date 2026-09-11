@@ -230,6 +230,12 @@ fn store_attachments(
 ///
 /// Every occurrence is replaced, since a note may embed the same image twice.
 fn replace_link_target(body: &str, target: &str, replacement: &str) -> String {
+    super::links::rewrite_outside_code(body, |prose| {
+        replace_prose_link_target(prose, target, replacement)
+    })
+}
+
+fn replace_prose_link_target(body: &str, target: &str, replacement: &str) -> String {
     if target.is_empty() {
         return body.to_string();
     }

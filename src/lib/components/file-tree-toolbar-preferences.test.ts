@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_FILE_TREE_TOOLBAR_PREFERENCES,
+  FILE_TREE_ACTION_BUTTON_PX,
+  FILE_TREE_ACTION_GAP_PX,
+  FILE_TREE_TOOLBAR_MIN_PX,
   FILE_TREE_TOOLBAR_STORAGE_KEY,
+  fileTreeToolbarCapacity,
   LEGACY_FILE_TREE_TOOLBAR_PREFERENCES,
   loadFileTreeToolbarPreferences,
   moveFileTreeToolbarAction,
@@ -127,5 +131,36 @@ describe('file tree toolbar preferences', () => {
       '[file-tree-toolbar] save failed',
       expect.any(Error)
     );
+  });
+});
+
+describe('file tree toolbar capacity', () => {
+  const slot = FILE_TREE_ACTION_BUTTON_PX + FILE_TREE_ACTION_GAP_PX;
+
+  it('fits as many actions as the row has room for beside the ⋯ trigger', () => {
+    expect(fileTreeToolbarCapacity(FILE_TREE_ACTION_BUTTON_PX + slot)).toBe(1);
+    expect(fileTreeToolbarCapacity(FILE_TREE_ACTION_BUTTON_PX + slot * 3)).toBe(
+      3
+    );
+  });
+
+  it('keeps one action at the documented minimum width', () => {
+    expect(fileTreeToolbarCapacity(FILE_TREE_TOOLBAR_MIN_PX)).toBe(1);
+  });
+
+  it('overflows everything rather than clipping a button that does not fit', () => {
+    // Regression: the old maths floored at 1, so a squeezed row rendered an
+    // action with no room for it. `justify-end` + `overflow-hidden` clipped
+    // that button out of view while the capacity maths still counted it as
+    // shown, so it appeared in neither the row nor the ⋯ menu.
+    expect(fileTreeToolbarCapacity(FILE_TREE_TOOLBAR_MIN_PX - 1)).toBe(0);
+    expect(fileTreeToolbarCapacity(FILE_TREE_ACTION_BUTTON_PX)).toBe(0);
+    expect(fileTreeToolbarCapacity(0)).toBe(0);
+  });
+
+  it('survives a row it was never measured against', () => {
+    expect(fileTreeToolbarCapacity(-10)).toBe(0);
+    expect(fileTreeToolbarCapacity(Number.NaN)).toBe(0);
+    expect(fileTreeToolbarCapacity(Number.POSITIVE_INFINITY)).toBe(0);
   });
 });

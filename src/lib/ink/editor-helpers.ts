@@ -1,3 +1,4 @@
+export { base64ToBytes } from '$lib/editor/base64';
 import {
   DEFAULT_WIDTH,
   type InkStrokeInput,
@@ -8,7 +9,7 @@ import type { InkPoint } from './page';
 
 export type { StrokeTransform };
 
-export const SAVE_DEBOUNCE_MS = 800;
+export { SAVE_DEBOUNCE_MS } from '$lib/editor/save-scheduler';
 /**
  * Legacy fixed eraser radius, kept as the reference point for the
  * width-derived radius: the default brush width (4) maps back to it.
@@ -388,15 +389,6 @@ export function pointInPolygon(
     if (intersects) inside = !inside;
   }
   return inside;
-}
-
-export function base64ToBytes(b64: string): Uint8Array {
-  const standard = b64.replace(/-/g, '+').replace(/_/g, '/');
-  const padded = standard + '='.repeat((4 - (standard.length % 4)) % 4);
-  const bin = atob(padded);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
 }
 
 function clampUnit(value: number): number {
