@@ -1,0 +1,190 @@
+/**
+ * T3 vault import through the packaged app. The source picker is fed by the
+ * e2e-only Rust seam, then every other step uses the real UI, IPC and SQLite.
+ */
+
+import { expect } from '@wdio/globals';
+import {
+  IMPORT_BODY_CANARY,
+  IMPORT_DESTINATION,
+  IMPORT_HOME,
+  IMPORT_PLACEHOLDER,
+  IMPORT_PLAN,
+  IMPORT_PNG_BYTES,
+  IMPORT_TAG
+} from '../../helpers/import-fixture.js';
+import {
+  byName,
+  clickLastButtonText,
+  clickName,
+  closeSettings,
+  restartApp,
+  setElementValue,
+  textInPage,
+  waitForShell
+} from '../../helpers/harness.js';
+
+interface CollectionRow {
+  id: string;
+  name: string;
+  parent_collection_id: string | null;
+}
+
+interface NoteRow {
+  id: string;
+  title: string;
+  body: string;
+  parent_collection_id: string | null;
+  tags: string[];
+}
+
+interface AssetRow {
+  id: string;
+  mime_type: string;
+  bytes: number[];
+}
+
+async function invokeTauri<T>(
+  command: string,
+  args?: Record<string, unknown>
+): Promise<T> {
+  return browser.execute(
+    async (cmd: string, invokeArgs: Record<string, unknown> | undefined) => {
+      const tauri = window as unknown as {
+        __TAURI_INTERNALS__?: {
+          invoke?: <R>(
+            command: string,
+            args?: Record<string, unknown>
+          ) => Promise<R>;
+        };
+      };
+      const invoke = tauri.__TAURI_INTERNALS__?.invoke;
+      if (!invoke) throw new Error('Tauri invoke is not exposed in WebView');
+      return invoke(cmd, invokeArgs);
+    },
+    command,
+    args
+  ) as Promise<T>;
+}
+
+async function importedNotes(): Promise<NoteRow[]> {
+  const summaries = await invokeTauri<Array<{ id: string; title: string }>>(
+    'list_notes',
+    { includeTrashed: false }
+  );
+  const wanted = new Set([IMPORT_HOME, IMPORT_PLAN, IMPORT_PLACEHOLDER]);
+  return Promise.all(
+    summaries
+      .filter((note) => wanted.has(note.title))
+      .map((note) => invokeTauri<NoteRow>('load_note', { id: note.id }))
+  );
+}
+
+describe('T3 notes importer', function () {
+  this.timeout(180_000);
+
+  beforeEach(async () => {
+    await waitForShell();
+  });
+
+  it('imports an Obsidian vault with correct data and restart persistence', async () => {
+    await clickName('Open settings');
+    await clickName('Data & Backup');
+    await clickLastButtonText(browser, 'Import notes');
+    await clickName('Choose a folder');
+
+    await byName('Format').waitForDisplayed({ timeout: 30_000 });
+    const detectedFormat = await browser.execute(
+      (label: HTMLElement) => {
+        const select = label.matches('select')
+          ? label
+          : (label.querySelector('select') ??
+            label.closest('label')?.querySelector('select'));
+        return (select as HTMLSelectElement | null)?.value ?? null;
+      },
+      await byName('Format')
+    );
+    expect(detectedFormat).toBe('obsidian');
+    await setElementValue(
+      byName('Import into a new folder called'),
+      IMPORT_DESTINATION
+    );
+    await setElementValue(
+      byName("Links to notes that aren't in the import"),
+      'create-placeholder'
+    );
+    await clickName('Import');
+
+    await byName('Import finished').waitForDisplayed({ timeout: 30_000 });
+    const resultText = await textInPage($('[role="alertdialog"]'));
+    expect(resultText).toContain('2 Notes imported');
+    expect(resultText).toContain('1 Folder created');
+    expect(resultText).toContain('3 links connected');
+    expect(resultText).toContain(
+      '1 empty note created for missing link targets'
+    );
+    expect(resultText).toContain('1 Attachment imported');
+    expect(resultText).toContain(
+      '1 Attachment already stored, so not duplicated'
+    );
+
+    await clickLastButtonText(browser, 'Close');
+    await closeSettings();
+
+    const collections = await invokeTauri<CollectionRow[]>('list_collections');
+    const destination = collections.find(
+      (collection) => collection.name === IMPORT_DESTINATION
+    );
+    const projects = collections.find(
+      (collection) =>
+        collection.name === 'Projects' &&
+        collection.parent_collection_id === destination?.id
+    );
+    expect(destination?.parent_collection_id).toBeNull();
+    expect(projects).toBeDefined();
+
+    const notes = await importedNotes();
+    expect(notes).toHaveLength(3);
+    const home = notes.find((note) => note.title === IMPORT_HOME);
+    const plan = notes.find((note) => note.title === IMPORT_PLAN);
+    const placeholder = notes.find((note) => note.title === IMPORT_PLACEHOLDER);
+    expect(home?.parent_collection_id).toBe(destination?.id);
+    expect(plan?.parent_collection_id).toBe(projects?.id);
+    expect(placeholder?.parent_collection_id).toBe(destination?.id);
+    expect(placeholder?.body).toBe('');
+    expect(home?.tags).toContain(IMPORT_TAG);
+    expect(home?.body).toContain(IMPORT_BODY_CANARY);
+    expect(home?.body).toContain(`[the plan](mindstream://note/${plan?.id})`);
+    expect(home?.body).toContain(
+      `[Missing Note](mindstream://note/${placeholder?.id})`
+    );
+    expect(plan?.body).toContain(`[Home](mindstream://note/${home?.id})`);
+
+    const homeAssetId = home?.body.match(
+      /asset:mindstream\/(asset_[A-Za-z0-9_-]+)/
+    )?.[1];
+    const planAssetId = plan?.body.match(
+      /asset:mindstream\/(asset_[A-Za-z0-9_-]+)/
+    )?.[1];
+    expect(homeAssetId).toBeDefined();
+    expect(planAssetId).toBe(homeAssetId);
+    if (!homeAssetId) throw new Error('Imported home note has no asset ID');
+    const asset = await invokeTauri<AssetRow>('fetch_drawing_asset', {
+      id: homeAssetId
+    });
+    expect(asset.mime_type).toBe('image/png');
+    expect(asset.bytes).toEqual([...IMPORT_PNG_BYTES]);
+
+    await expect(byName(IMPORT_DESTINATION)).toBeDisplayed();
+    await clickName(IMPORT_DESTINATION);
+    await expect(byName(IMPORT_HOME)).toBeDisplayed();
+    await expect(byName('Projects')).toBeDisplayed();
+    await clickName('Projects');
+    await expect(byName(IMPORT_PLAN)).toBeDisplayed();
+
+    await restartApp();
+    await waitForShell();
+    expect(await importedNotes()).toHaveLength(3);
+    await expect(byName(IMPORT_DESTINATION)).toBeDisplayed();
+  });
+});

@@ -21,6 +21,7 @@ import {
   captureFailureArtifacts,
   installPageDiagnostics
 } from './helpers/failure-capture.js';
+import { createImportVaultFixture } from './helpers/import-fixture.js';
 import {
   appBinary as application,
   preflight,
@@ -122,6 +123,7 @@ export const config: WebdriverIO.Config = {
     const runDictionaryDir = mkdtempSync(
       join(tmpdir(), 'mindstream-e2e-dict-')
     );
+    const importSourceDir = createImportVaultFixture();
     process.env.MINDSTREAM_DICTIONARY_DIR = runDictionaryDir;
     tauriDriver = spawnTauriDriver(
       ['--port', String(port), '--native-port', String(nativePort)],
@@ -131,7 +133,8 @@ export const config: WebdriverIO.Config = {
         // Namespaces the OS keyring entry. Without it every worker writes to
         // the one `e2e` slot, which concurrent specs would race over.
         MINDSTREAM_PROFILE_ID: `e2e-${cid}`,
-        MINDSTREAM_DICTIONARY_DIR: runDictionaryDir
+        MINDSTREAM_DICTIONARY_DIR: runDictionaryDir,
+        MINDSTREAM_E2E_IMPORT_FOLDER: importSourceDir
       },
       join(outputDir, `tauri-driver-${cid}.log`)
     );

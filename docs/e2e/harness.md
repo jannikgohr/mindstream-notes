@@ -46,6 +46,8 @@ The remaining variables are behaviour switches, not gates:
 | `MINDSTREAM_E2E_REUSE_ACCOUNTS=1` | Reuse the cached `.t4-accounts.json` instead of fresh signups.                           |
 | `MINDSTREAM_E2E_EDGE_LIMITS=1`    | Opt into the rate-limit specs (they drain the shared auth bucket).                       |
 | `MINDSTREAM_E2E_DIALOG_HOOK=1`    | Enable specs pending the native-dialog Rust seam.                                        |
+| `MINDSTREAM_E2E_IMPORT_FOLDER`    | Pre-seed the notes-import folder picker in `e2e-data-dir` builds.                        |
+| `MINDSTREAM_E2E_IMPORT_FILE`      | Pre-seed the notes-import file picker in `e2e-data-dir` builds.                          |
 | `MINDSTREAM_PROFILE_DIR`          | Per-test data dir (the isolation/restart seam, see below).                               |
 | `MINDSTREAM_PROFILE_ID`           | Namespace the run's keyring entry.                                                       |
 
@@ -67,9 +69,9 @@ The remaining variables are behaviour switches, not gates:
   compile one binary per client to vary that key; the builds were collapsed to
   one once this was confirmed by launching the binary directly and watching the
   directory never appear.
-- **Native dialogs.** File/folder pickers (export, import, PDF import) can't be
-  clicked over WebDriver — they need a Rust-side hook to pre-seed the path. The
-  dialog-driven specs stay skipped until that seam exists.
+- **Native dialogs.** WebDriver can't click native pickers. Notes import has
+  feature-gated folder/file path overrides; backup, export and PDF flows still
+  need equivalent seams.
 - **Session injection (not yet built).** T4 specs log each client in through the
   app's own `etebase_login` (drives the Account UI / IPC). Seeding a
   pre-authenticated session blob into each profile dir would skip that per run,

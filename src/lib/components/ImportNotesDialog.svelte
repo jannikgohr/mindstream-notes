@@ -46,6 +46,8 @@
   let errorMessage = $state<string | null>(null);
   let progress = $state<{ done: number; total: number } | null>(null);
   let cancelling = $state(false);
+  let cancelButton = $state<HTMLButtonElement | null>(null);
+  let returnFocus: HTMLElement | null = null;
 
   const folders = $derived(folderOptions(tree.collectionsById));
 
@@ -156,6 +158,21 @@
     return err instanceof Error ? err.message : String(err);
   }
 
+  function focusDialog(event: Event) {
+    event.preventDefault();
+    returnFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    cancelButton?.focus();
+  }
+
+  function restoreDialogFocus(event: Event) {
+    event.preventDefault();
+    returnFocus?.focus();
+    returnFocus = null;
+  }
+
   const percent = $derived(
     progress && progress.total > 0
       ? Math.min(100, Math.round((progress.done / progress.total) * 100))
@@ -176,7 +193,9 @@
       class="fixed inset-0 z-[400] bg-scrim backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
     />
     <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-[400] w-[min(560px,94vw)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-card p-5 text-card-foreground shadow-xl focus:outline-none"
+      onOpenAutoFocus={focusDialog}
+      onCloseAutoFocus={restoreDialogFocus}
+      class="fixed left-1/2 top-1/2 z-[400] max-h-[calc(100vh-1.5rem)] w-[min(560px,94vw)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border border-border bg-card p-5 text-card-foreground shadow-xl focus:outline-none"
     >
       <AlertDialog.Title class="text-base font-semibold">
         {tUi('data.importNotes.title')}
@@ -189,27 +208,35 @@
         <div class="mt-4 grid gap-2 sm:grid-cols-2">
           <Button
             variant="outline"
-            class="h-auto flex-col items-start gap-1 p-3 text-left"
+            class="h-auto w-full min-w-0 flex-col items-start gap-1 whitespace-normal p-3 text-left"
             onclick={() => choose(api.pickImportFolder)}
           >
-            <span class="flex items-center gap-2 font-medium">
+            <span
+              class="flex min-w-0 items-center gap-2 whitespace-normal font-medium"
+            >
               <FolderOpen class="size-4" />
               {tUi('data.importNotes.chooseSource.folder')}
             </span>
-            <span class="text-xs font-normal text-muted-foreground">
+            <span
+              class="min-w-0 whitespace-normal break-words text-xs font-normal text-muted-foreground"
+            >
               {tUi('data.importNotes.chooseSource.folderHint')}
             </span>
           </Button>
           <Button
             variant="outline"
-            class="h-auto flex-col items-start gap-1 p-3 text-left"
+            class="h-auto w-full min-w-0 flex-col items-start gap-1 whitespace-normal p-3 text-left"
             onclick={() => choose(api.pickImportFile)}
           >
-            <span class="flex items-center gap-2 font-medium">
+            <span
+              class="flex min-w-0 items-center gap-2 whitespace-normal font-medium"
+            >
               <FileText class="size-4" />
               {tUi('data.importNotes.chooseSource.file')}
             </span>
-            <span class="text-xs font-normal text-muted-foreground">
+            <span
+              class="min-w-0 whitespace-normal break-words text-xs font-normal text-muted-foreground"
+            >
               {tUi('data.importNotes.chooseSource.fileHint')}
             </span>
           </Button>
@@ -341,7 +368,11 @@
             {tUi('data.importNotes.button.stop')}
           </Button>
         {:else}
-          <Button variant="ghost" onclick={() => finish(null)}>
+          <Button
+            bind:ref={cancelButton}
+            variant="ghost"
+            onclick={() => finish(null)}
+          >
             {tUi('data.importNotes.button.cancel')}
           </Button>
           {#if stage === 'configure'}

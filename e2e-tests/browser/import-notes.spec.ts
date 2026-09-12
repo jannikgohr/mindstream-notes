@@ -47,9 +47,42 @@ test('Import notes opens a dialog offering a folder or a file', async ({
   await expect(
     dialog.getByRole('button', { name: /Choose a file/ })
   ).toBeVisible();
+  await expect(
+    dialog.getByRole('button', { name: 'Cancel', exact: true })
+  ).toBeFocused();
+
+  await page.keyboard.press('Tab');
+  await expect
+    .poll(() =>
+      dialog.evaluate((node) => node.contains(document.activeElement))
+    )
+    .toBe(true);
 
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(dialog).toBeHidden();
+});
+
+test('source choices stay inside the dialog on a narrow window', async ({
+  page
+}) => {
+  const settings = await openDataSettings(page);
+  await settings
+    .getByRole('button', { name: 'Import notes', exact: true })
+    .click();
+  await page.setViewportSize({ width: 360, height: 640 });
+
+  const dialog = page.getByRole('alertdialog');
+  const contained = await dialog.evaluate((node) => {
+    const dialogRect = node.getBoundingClientRect();
+    return (
+      node.scrollWidth <= node.clientWidth &&
+      [...node.querySelectorAll('button')].every((button) => {
+        const rect = button.getBoundingClientRect();
+        return rect.left >= dialogRect.left && rect.right <= dialogRect.right;
+      })
+    );
+  });
+  expect(contained).toBe(true);
 });
 
 test('a cancelled source picker keeps the dialog on its first step', async ({

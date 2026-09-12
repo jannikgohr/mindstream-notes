@@ -354,6 +354,20 @@ fn resolve_destination(db: &Db, options: &ImportOptions) -> AppResult<Option<Str
 
 // ---------- Source pickers ----------
 
+#[cfg(feature = "e2e-data-dir")]
+fn e2e_picker_override(key: &str) -> Option<AppResult<Option<String>>> {
+    let raw = std::env::var_os(key)?;
+    if raw.is_empty() {
+        return Some(Ok(None));
+    }
+    let path = PathBuf::from(raw);
+    Some(
+        path.to_str()
+            .map(|value| Some(value.to_string()))
+            .ok_or_else(|| AppError::InvalidArg(format!("{key} is not valid UTF-8"))),
+    )
+}
+
 /// Two pickers rather than one, because a native file dialog cannot offer
 /// files and folders in the same list on any of our platforms. Obsidian and
 /// GFM vaults are folders; Evernote and Joplin ship a single file. The import
@@ -371,6 +385,10 @@ pub async fn notes_import_pick_file(app: AppHandle) -> CommandResult<Option<Stri
 #[cfg(desktop)]
 async fn pick_folder_inner(app: AppHandle) -> AppResult<Option<String>> {
     use tauri_plugin_dialog::DialogExt;
+    #[cfg(feature = "e2e-data-dir")]
+    if let Some(result) = e2e_picker_override("MINDSTREAM_E2E_IMPORT_FOLDER") {
+        return result;
+    }
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
@@ -384,6 +402,10 @@ async fn pick_folder_inner(app: AppHandle) -> AppResult<Option<String>> {
 #[cfg(desktop)]
 async fn pick_file_inner(app: AppHandle) -> AppResult<Option<String>> {
     use tauri_plugin_dialog::DialogExt;
+    #[cfg(feature = "e2e-data-dir")]
+    if let Some(result) = e2e_picker_override("MINDSTREAM_E2E_IMPORT_FILE") {
+        return result;
+    }
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
