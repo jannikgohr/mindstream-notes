@@ -182,6 +182,11 @@ describe('T3 notes importer', function () {
     await clickName('Choose a folder');
 
     step('wait for the detected format');
+    for (let poll = 0; poll < 20; poll += 1) {
+      await browser.pause(1_000);
+      await traceDialog(`poll ${poll + 1}`);
+      if (await byName('Format').isDisplayed()) break;
+    }
     await byName('Format').waitForDisplayed({ timeout: 30_000 });
     const detectedFormat = await browser.execute(
       (label: HTMLElement) => {
