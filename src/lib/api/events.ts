@@ -9,6 +9,7 @@ export enum TauriEventName {
   CollabCredentialsChanged = 'collab-credentials-changed',
   CustomWindowDecorationsChanged = 'custom-window-decorations-changed',
   FullscreenNote = 'fullscreen-note',
+  ImportProgress = 'import-progress',
   NativeMenuCommand = 'native-menu-command',
   ShowApp = 'show-app',
   SignaturesChanged = 'signatures-changed',
@@ -61,6 +62,12 @@ export type TauriEvents = {
    * Mirrors `app_events::AppEvent::SyncUnreachable`.
    */
   'sync-unreachable': { server_url: string; detail: string };
+  /**
+   * Progress of a running vault import. Emitted from Rust at most a few times
+   * a second — the run is batched, not per-note, precisely so a fast import
+   * can't flood this channel. Mirrors `app_events::AppEvent::ImportProgress`.
+   */
+  'import-progress': { phase: string; done: number; total: number };
   'tray-note-created': { note_id: string };
   'show-app': null;
   /**

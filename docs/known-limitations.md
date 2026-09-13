@@ -134,6 +134,52 @@ pool) if this ever becomes a bottleneck.
 
 ---
 
+## Import
+
+The importer and its format mapping are described in [import.md](import.md).
+
+### Evernote links between notes are matched by title — _known limitation_
+
+Evernote writes note links as `evernote:///view/<user>/<shard>/<guid>/<guid>/`,
+but most `.enex` exports leave out the `<guid>` element on the notes
+themselves, so the guid in a link usually has nothing to match. The importer
+falls back to the link text, which Evernote fills with the target's title
+(`rewrite_evernote_links` in `src-tauri/src/import/links.rs`). Two notes with
+the same title can be confused. Exports that do carry guids resolve exactly. A
+link that matches nothing keeps its text and loses the dead `evernote:` URL.
+
+### Obsidian note embeds become plain links — _by design_
+
+`![[Some note]]` shows one note inside another in Obsidian. Mindstream has no
+equivalent, so the embed becomes an ordinary link to the same note. Image and
+file embeds (`![[diagram.png]]`) are imported as attachments as expected.
+
+### Canvas and Excalidraw files are not imported as drawings — _planned_
+
+Obsidian `.canvas` files and the Excalidraw plugin's drawings are skipped. They
+could map onto the freeform note kind, which uses Excalidraw, but that mapping
+has not been written.
+
+### Existing duplicate attachments are not merged — _by design_
+
+Attachments are stored by content hash since migration 26, so new uploads and
+imports reuse identical bytes. Duplicates already in a vault before that stay
+as separate rows: merging them would mean rewriting the `asset:mindstream/<id>`
+URLs inside note bodies from within a database migration. The dedup index is
+deliberately not unique for the same reason (`src-tauri/src/db/migrations.rs`).
+
+### Title-resolved `[[wikilinks]]` still work until converted — _deprecated_
+
+Bodies written before note links carried ids can contain a bare `[[Title]]`,
+which the editor resolves by title when clicked (`resolveNoteIdByTitle`, now
+deprecated). On a title collision it picks the most recently modified note, so
+the target can change as titles are edited. **Settings → Data → Maintenance →
+Convert legacy links** rewrites them as id-based links; the runtime fallback can
+be removed once that has run. Links whose title matches no note are left as
+written.
+
+---
+
 ## Planned / not yet implemented
 
 ### Collab confirmation prompt before restore — _partially implemented_

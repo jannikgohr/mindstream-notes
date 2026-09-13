@@ -9,10 +9,12 @@
 
 import {
   backupNow,
+  convertLegacyWikilinks,
   importBegin,
   importCleanup,
   importMerge,
   importRestore,
+  legacyWikilinkCount,
   openDataFolder,
   pickExportDir,
   trashCounts
@@ -26,9 +28,11 @@ import { alert, confirm } from '$lib/components/confirm-dialog.svelte';
 import {
   showBackupResult,
   showExportResult,
+  showImportResult,
   showMergeResult,
   showRestoreReadyResult
 } from '$lib/components/export-result-dialog.svelte';
+import { openImportDialog } from '$lib/components/import-notes-dialog.svelte';
 import { tUi } from '../i18n.svelte';
 import { toErrorMessage } from '$lib/api/errors';
 
@@ -154,13 +158,72 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
       });
     }
   },
-  'import-notes': () => {
-    // No logic yet — placeholder for the upcoming "import markdown /
-    // Obsidian / external sources" flow. The settings-dialog button
-    // is wired through this action so the button at least renders
-    // without throwing; replace with the real implementation when
-    // that slice lands.
-    console.info('[settings] action: import-notes (stub, not yet wired)');
+  'import-notes': async () => {
+    // The dialog owns the whole flow — picking a source, detecting its
+    // format, and running the import — because it has to render progress
+    // while the run is in flight. It resolves with the report, or null if
+    // the user backed out before starting.
+    const report = await openImportDialog();
+    if (report === null) return;
+    // Imported notes and folders are only in SQLite so far; the tree store
+    // is what the file explorer renders from.
+    await loadTree();
+    await showImportResult(report);
+  },
+  'convert-legacy-links': async () => {
+    let count: number;
+    try {
+      count = await legacyWikilinkCount();
+    } catch (err) {
+      console.error('[settings] legacy_wikilink_count failed', err);
+      await alert({
+        title: tUi('data.convertLegacyLinks.failed.title'),
+        message: tUi('data.convertLegacyLinks.failed.message').replace(
+          '{error}',
+          toErrorMessage(err)
+        )
+      });
+      return;
+    }
+    if (count === 0) {
+      await alert({
+        title: tUi('data.convertLegacyLinks.none.title'),
+        message: tUi('data.convertLegacyLinks.none.message')
+      });
+      return;
+    }
+    // Ask first: this rewrites note bodies, and each rewrite is a CRDT edit
+    // that syncs like any other change.
+    const ok = await confirm({
+      title: tUi('data.convertLegacyLinks.confirm.title'),
+      message: tUi('data.convertLegacyLinks.confirm.message').replace(
+        '{count}',
+        String(count)
+      ),
+      confirmLabel: tUi('data.convertLegacyLinks.confirm.button')
+    });
+    if (!ok) return;
+    try {
+      const report = await convertLegacyWikilinks();
+      if (report === null) return;
+      await loadTree();
+      await alert({
+        title: tUi('data.convertLegacyLinks.done.title'),
+        message: tUi('data.convertLegacyLinks.done.message')
+          .replace('{links}', String(report.links_converted))
+          .replace('{notes}', String(report.notes_converted))
+          .replace('{unresolved}', String(report.links_unresolved))
+      });
+    } catch (err) {
+      console.error('[settings] convert_legacy_wikilinks failed', err);
+      await alert({
+        title: tUi('data.convertLegacyLinks.failed.title'),
+        message: tUi('data.convertLegacyLinks.failed.message').replace(
+          '{error}',
+          toErrorMessage(err)
+        )
+      });
+    }
   },
   'restore-backup': async () => {
     let preview;

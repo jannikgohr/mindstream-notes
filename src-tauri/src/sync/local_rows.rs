@@ -164,9 +164,14 @@ pub(super) struct DirtyAsset {
 pub(super) fn load_dirty_assets(db: &Db, scope: Option<&str>) -> AppResult<Vec<DirtyAsset>> {
     db.with_conn(|c| {
         let mut stmt = c.prepare(
+            // owning_note_id IS NOT NULL filters out assets orphaned by a
+            // note delete that hasn't been swept yet. AssetPayload requires a
+            // live anchor, and an orphan is about to be freed anyway — the
+            // sweep queues its tombstone when it goes.
             "SELECT id, owning_note_id, mime_type, bytes, size,
                     created, modified, etebase_uid
              FROM assets WHERE dirty = 1
+               AND owning_note_id IS NOT NULL
                AND ((?1 IS NULL AND share_scope_id IS NULL) OR share_scope_id = ?1)",
         )?;
         let rows = stmt.query_map(params![scope], |r| {

@@ -205,7 +205,8 @@ type DataActionId =
   | 'backup-now'
   | 'restore-backup'
   | 'export-vault'
-  | 'import-notes';
+  | 'import-notes'
+  | 'convert-legacy-links';
 
 async function runDataAction(id: DataActionId) {
   const { DATA_ACTIONS } = await import('./actions/data');
@@ -220,6 +221,7 @@ export const SETTING_ACTIONS: Record<string, () => void | Promise<void>> = {
   'restore-backup': () => runDataAction('restore-backup'),
   'export-vault': () => runDataAction('export-vault'),
   'import-notes': () => runDataAction('import-notes'),
+  'convert-legacy-links': () => runDataAction('convert-legacy-links'),
   'check-updates': async () => {
     const { checkForUpdatesInteractively } = await import('$lib/updater');
     await checkForUpdatesInteractively();

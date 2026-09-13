@@ -227,14 +227,16 @@ pub(super) fn merge_into(live: &mut Connection, backup: &Connection) -> AppResul
 
     // ---- Assets ----
     let mut stmt = backup.prepare(
-        "SELECT id, owning_note_id, mime_type, bytes, size, created, modified
-         FROM assets",
+        "SELECT a.id, COALESCE(a.owning_note_id,
+                    (SELECT r.note_id FROM asset_refs r WHERE r.asset_id = a.id ORDER BY r.note_id LIMIT 1)),
+                a.mime_type, a.bytes, a.size, a.created, a.modified
+         FROM assets a",
     )?;
     let asset_rows = stmt
         .query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(1)?,
                 r.get::<_, String>(2)?,
                 r.get::<_, Vec<u8>>(3)?,
                 r.get::<_, i64>(4)?,
@@ -247,6 +249,11 @@ pub(super) fn merge_into(live: &mut Connection, backup: &Connection) -> AppResul
 
     let mut assets_added = 0u32;
     for (id, owning_note_id, mime, bytes, size, created, modified) in &asset_rows {
+        let Some(owning_note_id) = owning_note_id else {
+            // A purged creator can leave an unreferenced blob pending the
+            // next sweep. It must not prevent the rest of a backup merging.
+            continue;
+        };
         // Skip assets whose owning note didn't make it (either it
         // already existed locally with different content, or the user
         // chose merge mode and the note collided). Don't import an
@@ -267,14 +274,30 @@ pub(super) fn merge_into(live: &mut Connection, backup: &Connection) -> AppResul
             })
             .optional()?;
         if exists.is_some() {
+            restore_asset_refs(&tx, backup, id)?;
             continue;
         }
         crate::sharing::ensure_note_writable(&tx, owning_note_id)?;
         tx.execute(
-            "INSERT INTO assets(id, owning_note_id, mime_type, bytes, size, created, modified, dirty)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)",
-            params![id, owning_note_id, mime, bytes, size, created, modified],
+            "INSERT INTO assets(id, owning_note_id, mime_type, bytes, size,
+                                created, modified, dirty, content_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8)",
+            params![
+                id,
+                owning_note_id,
+                mime,
+                bytes,
+                size,
+                created,
+                modified,
+                crate::assets::content_hash(bytes),
+            ],
         )?;
+        // Lifetime is driven by asset_refs, not by owning_note_id — without a
+        // row here the next sweep would free everything the merge just
+        // restored.
+        crate::assets::add_ref(&tx, id, owning_note_id)?;
+        restore_asset_refs(&tx, backup, id)?;
         assets_added += 1;
     }
 
@@ -318,4 +341,16 @@ pub(super) fn merge_into(live: &mut Connection, backup: &Connection) -> AppResul
         assets_added,
         notes_orphaned,
     })
+}
+
+fn restore_asset_refs(live: &Connection, backup: &Connection, asset_id: &str) -> AppResult<()> {
+    let mut refs = backup.prepare("SELECT note_id FROM asset_refs WHERE asset_id = ?1")?;
+    for referrer in refs.query_map(params![asset_id], |r| r.get::<_, String>(0))? {
+        live.execute(
+            "INSERT OR IGNORE INTO asset_refs(asset_id, note_id)
+             SELECT ?1, id FROM notes WHERE id = ?2",
+            params![asset_id, referrer?],
+        )?;
+    }
+    Ok(())
 }
