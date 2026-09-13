@@ -65,13 +65,15 @@ export const config: WebdriverIO.Config = {
     join(here, '..', 'perf', 'hidden-visibility.e2e.ts'),
     join(here, 'specs', 'single', '**', '*.e2e.ts')
   ],
-  // Two spec files at a time. Each worker gets separate WebView storage below,
-  // as well as its own SQLite profile, driver ports and keyring namespace.
-  maxInstances: 2,
+  // Keep packaged WebViews serial. Even with separate SQLite and WebView
+  // storage, Linux WebKitWebDriver can drop one session when two native apps
+  // perform heavier IPC work at the same time (the importer exposed this in
+  // CI as an empty socket followed by Mocha's timeout).
+  maxInstances: 1,
   outputDir,
   capabilities: [
     {
-      maxInstances: 2,
+      maxInstances: 1,
       // tauri-driver reads this to launch the app under WebDriver.
       'tauri:options': { application }
     } as WebdriverIO.Capabilities
