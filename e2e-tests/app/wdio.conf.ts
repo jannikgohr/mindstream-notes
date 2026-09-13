@@ -29,6 +29,7 @@ import {
   spawnTauriDriver,
   stopTauriDriverTree
 } from './helpers/preflight.js';
+import { webviewEnvironment } from './helpers/worker-isolation.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const outputDir = join(repoRoot, '.output', 'wdio', 'single');
@@ -64,9 +65,8 @@ export const config: WebdriverIO.Config = {
     join(here, '..', 'perf', 'hidden-visibility.e2e.ts'),
     join(here, 'specs', 'single', '**', '*.e2e.ts')
   ],
-  // Two spec files at a time. The suite is one app per worker, so this is
-  // two app processes on the runner rather than the T4 tiers' two or three,
-  // and the wall clock floors out at the longest single spec file.
+  // Two spec files at a time. Each worker gets separate WebView storage below,
+  // as well as its own SQLite profile, driver ports and keyring namespace.
   maxInstances: 2,
   outputDir,
   capabilities: [
@@ -129,6 +129,7 @@ export const config: WebdriverIO.Config = {
       ['--port', String(port), '--native-port', String(nativePort)],
       {
         ...process.env,
+        ...webviewEnvironment(runProfileDir),
         MINDSTREAM_PROFILE_DIR: runProfileDir,
         // Namespaces the OS keyring entry. Without it every worker writes to
         // the one `e2e` slot, which concurrent specs would race over.
