@@ -82,6 +82,13 @@ export const config: WebdriverIO.Config = {
   framework: 'mocha',
   reporters: ['spec'],
   mochaOpts: { ui: 'bdd', timeout: 120_000 },
+  // Linux WebKitWebDriver can occasionally stop answering during a long IPC
+  // command even though the app stays healthy and later specs pass. Retry the
+  // whole failed file with a fresh driver, app and profile, matching the
+  // multiremote suites; a product regression still has to pass its assertions
+  // on the second attempt.
+  specFileRetries: 1,
+  specFileRetriesDeferred: true,
   // Two apps cold-starting at once take longer to answer than one did, and a
   // session that gives up here fails the whole spec file before it runs.
   connectionRetryTimeout: 180_000,
