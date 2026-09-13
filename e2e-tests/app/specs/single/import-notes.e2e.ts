@@ -44,12 +44,36 @@ interface AssetRow {
   bytes: number[];
 }
 
+const startedAt = Date.now();
+
+/**
+ * Timestamped progress, because this spec's only CI failure mode so far has
+ * been a silent 180s hang: the spec reporter prints nothing but the Mocha
+ * timeout, so the log has to say which step was in flight.
+ */
+function step(label: string): void {
+  console.log(
+    `[import-e2e +${((Date.now() - startedAt) / 1000).toFixed(1)}s] ${label}`
+  );
+}
+
+/** Ceiling for one page-side IPC round trip. */
+const INVOKE_TIMEOUT_MS = 30_000;
+
 async function invokeTauri<T>(
   command: string,
   args?: Record<string, unknown>
 ): Promise<T> {
-  return browser.execute(
-    async (cmd: string, invokeArgs: Record<string, unknown> | undefined) => {
+  step(`invoke ${command}`);
+  // The race runs inside the page: an IPC call that never answers would
+  // otherwise leave the WebDriver `execute` outstanding until Mocha's own
+  // timeout, which reports nothing about where the run stopped.
+  const result = (await browser.execute(
+    async (
+      cmd: string,
+      invokeArgs: Record<string, unknown> | undefined,
+      timeoutMs: number
+    ) => {
       const tauri = window as unknown as {
         __TAURI_INTERNALS__?: {
           invoke?: <R>(
@@ -60,11 +84,22 @@ async function invokeTauri<T>(
       };
       const invoke = tauri.__TAURI_INTERNALS__?.invoke;
       if (!invoke) throw new Error('Tauri invoke is not exposed in WebView');
-      return invoke(cmd, invokeArgs);
+      return Promise.race([
+        invoke(cmd, invokeArgs),
+        new Promise((_resolve, reject) => {
+          setTimeout(
+            () => reject(new Error(`invoke ${cmd} did not answer`)),
+            timeoutMs
+          );
+        })
+      ]);
     },
     command,
-    args
-  ) as Promise<T>;
+    args,
+    INVOKE_TIMEOUT_MS
+  )) as T;
+  step(`invoke ${command} answered`);
+  return result;
 }
 
 async function importedNotes(): Promise<NoteRow[]> {
@@ -88,15 +123,20 @@ describe('T3 notes importer', function () {
   this.timeout(180_000);
 
   beforeEach(async () => {
+    step('wait for the shell');
     await waitForShell();
+    step('shell ready');
   });
 
   it('imports an Obsidian vault with correct data and restart persistence', async () => {
+    step('open the import dialog');
     await clickName('Open settings');
     await clickName('Data & Backup');
     await clickLastButtonText(browser, 'Import notes');
+    step('pick the source folder (e2e seam, no native dialog)');
     await clickName('Choose a folder');
 
+    step('wait for the detected format');
     await byName('Format').waitForDisplayed({ timeout: 30_000 });
     const detectedFormat = await browser.execute(
       (label: HTMLElement) => {
@@ -117,8 +157,10 @@ describe('T3 notes importer', function () {
       byName("Links to notes that aren't in the import"),
       'create-placeholder'
     );
+    step('start the import');
     await clickName('Import');
 
+    step('wait for the import report');
     await byName('Import finished').waitForDisplayed({ timeout: 30_000 });
     const resultText = await textInPage($('[role="alertdialog"]'));
     expect(resultText).toContain('2 Notes imported');
@@ -132,6 +174,7 @@ describe('T3 notes importer', function () {
       '1 Attachment already stored, so not duplicated'
     );
 
+    step('close the report and settings');
     await clickLastButtonText(browser, 'Close');
     await closeSettings();
 
@@ -179,6 +222,7 @@ describe('T3 notes importer', function () {
     expect(asset.mime_type).toBe('image/png');
     expect(asset.bytes).toEqual([...IMPORT_PNG_BYTES]);
 
+    step('walk the imported tree');
     await expect(byName(IMPORT_DESTINATION)).toBeDisplayed();
     await clickName(IMPORT_DESTINATION);
     await expect(byName(IMPORT_HOME)).toBeDisplayed();
@@ -186,9 +230,12 @@ describe('T3 notes importer', function () {
     await clickName('Projects');
     await expect(byName(IMPORT_PLAN)).toBeDisplayed();
 
+    step('restart the app');
     await restartApp();
+    step('app restarted, wait for the shell');
     await waitForShell();
     expect(await importedNotes()).toHaveLength(3);
     await expect(byName(IMPORT_DESTINATION)).toBeDisplayed();
+    step('done');
   });
 });
