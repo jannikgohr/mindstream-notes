@@ -73,11 +73,15 @@ async function importedNotes(): Promise<NoteRow[]> {
     { includeTrashed: false }
   );
   const wanted = new Set([IMPORT_HOME, IMPORT_PLAN, IMPORT_PLACEHOLDER]);
-  return Promise.all(
-    summaries
-      .filter((note) => wanted.has(note.title))
-      .map((note) => invokeTauri<NoteRow>('load_note', { id: note.id }))
-  );
+  const notes: NoteRow[] = [];
+  for (const note of summaries.filter((item) => wanted.has(item.title))) {
+    // One WebDriver session is one protocol connection. WebView2 happens to
+    // queue concurrent execute commands, while WebKitWebDriver can leave one
+    // waiting forever. Read each imported note in order so this verification
+    // behaves the same on Windows and Linux.
+    notes.push(await invokeTauri<NoteRow>('load_note', { id: note.id }));
+  }
+  return notes;
 }
 
 describe('T3 notes importer', function () {
