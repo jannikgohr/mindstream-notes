@@ -119,6 +119,51 @@ async function importedNotes(): Promise<NoteRow[]> {
   return notes;
 }
 
+/**
+ * Click without waiting for the handler.
+ *
+ * Every other click in this suite goes through `clickElement`, which
+ * dispatches the synthetic events inside a `browser.execute`. On WebKitGTK the
+ * IPC that "Import" kicks off runs in the same main-thread callback as the
+ * script, so that one execute never came back and the whole spec sat there
+ * until Mocha's timeout. Handing the dispatch to a timer lets the script
+ * return first; the import then starts on its own.
+ */
+async function clickDeferred(name: string): Promise<void> {
+  const element = await byName(name);
+  await element.waitForDisplayed({ timeout: 30_000 });
+  await browser.execute((el: HTMLElement) => {
+    setTimeout(() => {
+      el.scrollIntoView({ block: 'center', inline: 'center' });
+      const rect = el.getBoundingClientRect();
+      const base = {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: rect.left + rect.width / 2,
+        clientY: rect.top + rect.height / 2,
+        button: 0
+      };
+      el.dispatchEvent(new MouseEvent('mousedown', base));
+      el.dispatchEvent(new MouseEvent('mouseup', base));
+      el.dispatchEvent(new MouseEvent('click', base));
+    }, 0);
+  }, element);
+}
+
+/** Log what the dialog is showing, to place a stall inside the import. */
+async function traceDialog(label: string): Promise<void> {
+  const text = await browser.execute(
+    () =>
+      document
+        .querySelector('[role="alertdialog"]')
+        ?.textContent?.replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 120) ?? '(no dialog)'
+  );
+  step(`${label}: ${text}`);
+}
+
 describe('T3 notes importer', function () {
   this.timeout(180_000);
 
@@ -158,7 +203,11 @@ describe('T3 notes importer', function () {
       'create-placeholder'
     );
     step('start the import');
-    await clickName('Import');
+    await clickDeferred('Import');
+    for (let poll = 0; poll < 5; poll += 1) {
+      await browser.pause(2_000);
+      await traceDialog(`poll ${poll + 1}`);
+    }
 
     step('wait for the import report');
     await byName('Import finished').waitForDisplayed({ timeout: 30_000 });
