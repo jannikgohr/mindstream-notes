@@ -1,13 +1,15 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use rusqlite::params;
 
 use super::links::{self, LinkIndex, RewriteContext, RewriteOptions, RewriteStats};
 use super::markdown;
 use super::model::{AliasTier, UnresolvedLinks};
-use super::{run_import, ImportOptions, ImportSourceKind, DEFAULT_MAX_ATTACHMENT_BYTES};
+use super::{
+    run_import, ImportOptions, ImportSourceKind, ImportState, DEFAULT_MAX_ATTACHMENT_BYTES,
+};
 use crate::db::{open_memory_for_tests, Db};
 use crate::error::AppError;
 
@@ -86,6 +88,28 @@ fn body_of(db: &Db, title: &str) -> String {
         )?)
     })
     .unwrap()
+}
+
+#[test]
+fn omitted_import_options_use_safe_defaults() {
+    let options: ImportOptions =
+        serde_json::from_str(r#"{"source_path":"C:/vault"}"#).expect("options");
+
+    assert!(options.import_attachments);
+    assert_eq!(options.max_attachment_bytes, DEFAULT_MAX_ATTACHMENT_BYTES);
+    assert_eq!(options.unresolved_links, UnresolvedLinks::PlainText);
+    assert_eq!(options.kind, None);
+    assert_eq!(options.destination_collection_id, None);
+    assert_eq!(options.create_folder_named, None);
+}
+
+#[test]
+fn beginning_an_import_clears_an_earlier_cancellation() {
+    let state = ImportState::default();
+    state.cancel();
+    let cancelled = state.begin();
+
+    assert!(!cancelled.load(Ordering::SeqCst));
 }
 
 fn note_id_of(db: &Db, title: &str) -> String {

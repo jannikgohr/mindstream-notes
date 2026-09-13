@@ -46,3 +46,66 @@ pub fn is_markdown(path: &str) -> bool {
         .unwrap_or_default();
     matches!(extension.as_str(), "md" | "markdown" | "mdown" | "mkd")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{from_path, is_markdown};
+
+    #[test]
+    fn maps_supported_attachment_extensions_case_insensitively() {
+        let cases = [
+            ("image.png", "image/png"),
+            ("image.jpg", "image/jpeg"),
+            ("image.JPEG", "image/jpeg"),
+            ("image.gif", "image/gif"),
+            ("image.webp", "image/webp"),
+            ("image.avif", "image/avif"),
+            ("image.bmp", "image/bmp"),
+            ("image.svg", "image/svg+xml"),
+            ("image.ico", "image/x-icon"),
+            ("image.tif", "image/tiff"),
+            ("image.tiff", "image/tiff"),
+            ("document.pdf", "application/pdf"),
+            ("audio.mp3", "audio/mpeg"),
+            ("audio.wav", "audio/wav"),
+            ("audio.ogg", "audio/ogg"),
+            ("audio.m4a", "audio/mp4"),
+            ("video.mp4", "video/mp4"),
+            ("video.webm", "video/webm"),
+            ("video.mov", "video/quicktime"),
+            ("notes.txt", "text/plain"),
+            ("table.csv", "text/csv"),
+            ("data.json", "application/json"),
+            ("archive.zip", "application/zip"),
+        ];
+
+        for (path, expected) in cases {
+            assert_eq!(from_path(path), expected, "wrong MIME type for {path}");
+        }
+    }
+
+    #[test]
+    fn unknown_or_missing_extensions_use_the_binary_fallback() {
+        for path in ["archive.7z", "README", "", ".hidden"] {
+            assert_eq!(
+                from_path(path),
+                "application/octet-stream",
+                "wrong fallback for {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn recognises_all_supported_markdown_extensions_case_insensitively() {
+        for path in ["note.md", "note.markdown", "note.mdown", "NOTE.MKD"] {
+            assert!(is_markdown(path), "expected markdown path: {path}");
+        }
+    }
+
+    #[test]
+    fn rejects_non_markdown_and_extensionless_paths() {
+        for path in ["note.md.txt", "note", "", ".markdown-file"] {
+            assert!(!is_markdown(path), "unexpected markdown path: {path}");
+        }
+    }
+}

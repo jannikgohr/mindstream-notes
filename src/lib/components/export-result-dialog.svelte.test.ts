@@ -4,12 +4,14 @@ import {
   showBackupResult,
   showDataResult,
   showExportResult,
+  showImportResult,
   showMergeResult,
   showRestoreReadyResult,
   type DataResultChip
 } from './export-result-dialog.svelte';
 import type {
   BackupReport,
+  ImportReport,
   ImportPreview,
   MergeReport,
   RestoreStaged
@@ -31,6 +33,9 @@ const exportReport = (over: Partial<ExportReport> = {}): ExportReport => ({
 
 const chipByIcon = (chips: DataResultChip[], icon: DataResultChip['icon']) =>
   chips.find((c) => c.icon === icon);
+
+const chipByStatus = (chips: DataResultChip[], statusKey: string) =>
+  chips.find((c) => c.statusKey === statusKey);
 
 beforeEach(() => {
   exportResultQueue.items = [];
@@ -163,6 +168,73 @@ describe('showMergeResult', () => {
     expect(
       chipByIcon(exportResultQueue.items[0].chips, 'alertTriangle')?.tone
     ).toBe('warning');
+  });
+});
+
+describe('showImportResult', () => {
+  const report = (over: Partial<ImportReport> = {}): ImportReport => ({
+    notes_created: 4,
+    folders_created: 2,
+    placeholders_created: 0,
+    attachments_imported: 0,
+    attachments_deduplicated: 0,
+    attachments_too_large: 0,
+    links_resolved: 3,
+    links_unresolved: 0,
+    errors: 0,
+    cancelled: false,
+    ...over
+  });
+
+  it('presents a clean import as a successful result', () => {
+    void showImportResult(report());
+    const opts = exportResultQueue.items[0];
+
+    expect(opts.titleKey).toBe('data.importNotes.result.success.title');
+    expect(opts.headerIcon).toBe('partyPopper');
+    expect(opts.tone).toBe('success');
+    expect(opts.primaryAction?.value).toBe('close');
+    expect(
+      chipByStatus(opts.chips, 'data.importNotes.chip.links.status')?.count
+    ).toBe(3);
+    expect(
+      chipByStatus(opts.chips, 'data.importNotes.chip.unresolved.status')?.show
+    ).toBe(false);
+  });
+
+  it('shows every non-zero recovery and attachment metric', () => {
+    void showImportResult(
+      report({
+        placeholders_created: 1,
+        attachments_imported: 5,
+        attachments_deduplicated: 2,
+        attachments_too_large: 1,
+        links_unresolved: 2,
+        errors: 1
+      })
+    );
+    const opts = exportResultQueue.items[0];
+
+    expect(opts.tone).toBe('warning');
+    for (const statusKey of [
+      'data.importNotes.chip.unresolved.status',
+      'data.importNotes.chip.placeholders.status',
+      'data.importNotes.chip.attachments.status',
+      'data.importNotes.chip.deduplicated.status',
+      'data.importNotes.chip.tooLarge.status',
+      'data.importNotes.chip.errors.status'
+    ]) {
+      expect(chipByStatus(opts.chips, statusKey)?.show, statusKey).toBe(true);
+    }
+  });
+
+  it('uses the stopped warning presentation for a cancelled import', () => {
+    void showImportResult(report({ cancelled: true }));
+    const opts = exportResultQueue.items[0];
+
+    expect(opts.titleKey).toBe('data.importNotes.result.stopped.title');
+    expect(opts.headerIcon).toBe('alertTriangle');
+    expect(opts.tone).toBe('warning');
   });
 });
 

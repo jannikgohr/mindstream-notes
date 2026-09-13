@@ -304,3 +304,57 @@ pub fn write_placeholders(
         Ok(placeholders.len())
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::replace_link_target;
+
+    #[test]
+    fn replaces_every_exact_target_without_changing_link_text() {
+        let body = "![pic.png](pic.png) and [download](pic.png)";
+
+        assert_eq!(
+            replace_link_target(body, "pic.png", "asset:mindstream/asset-1"),
+            "![pic.png](asset:mindstream/asset-1) and [download](asset:mindstream/asset-1)"
+        );
+    }
+
+    #[test]
+    fn preserves_an_optional_markdown_link_title() {
+        assert_eq!(
+            replace_link_target(
+                "![diagram](diagram.svg \"Architecture\")",
+                "diagram.svg",
+                "asset:mindstream/asset-2"
+            ),
+            "![diagram](asset:mindstream/asset-2 \"Architecture\")"
+        );
+    }
+
+    #[test]
+    fn does_not_replace_a_longer_target_with_the_same_prefix() {
+        let body = "![small](pic.png) ![large](pic.png.large)";
+
+        assert_eq!(
+            replace_link_target(body, "pic.png", "asset:mindstream/asset-3"),
+            "![small](asset:mindstream/asset-3) ![large](pic.png.large)"
+        );
+    }
+
+    #[test]
+    fn leaves_code_and_escaped_links_untouched() {
+        let body = "`![inline](pic.png)`\n```md\n![fenced](pic.png)\n```\n\\![escaped](pic.png)\n![prose](pic.png)";
+
+        assert_eq!(
+            replace_link_target(body, "pic.png", "asset:mindstream/asset-4"),
+            "`![inline](pic.png)`\n```md\n![fenced](pic.png)\n```\n\\![escaped](pic.png)\n![prose](asset:mindstream/asset-4)"
+        );
+    }
+
+    #[test]
+    fn an_empty_target_is_a_no_op() {
+        let body = "[empty]() and [other](file.txt)";
+
+        assert_eq!(replace_link_target(body, "", "replacement"), body);
+    }
+}
