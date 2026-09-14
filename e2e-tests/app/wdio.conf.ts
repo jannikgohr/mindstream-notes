@@ -13,7 +13,7 @@
  */
 
 import type { ChildProcess } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,6 +35,22 @@ const here = dirname(fileURLToPath(import.meta.url));
 const outputDir = join(repoRoot, '.output', 'wdio', 'single');
 
 let tauriDriver: ChildProcess | undefined;
+let traceImporterCommands = false;
+
+function traceCommand(phase: string, command: string, details?: unknown): void {
+  if (!traceImporterCommands) return;
+  mkdirSync(outputDir, { recursive: true });
+  appendFileSync(
+    join(outputDir, 'import-webdriver.jsonl'),
+    JSON.stringify({
+      at: new Date().toISOString(),
+      pid: process.pid,
+      phase,
+      command,
+      details
+    }) + '\n'
+  );
+}
 
 /**
  * The first of the two ports one worker needs: wdio talks to `port`,
@@ -100,6 +116,12 @@ export const config: WebdriverIO.Config = {
   // Start buffering page-side errors. WebKitWebDriver serves no log endpoint,
   // so what the app logged is only recoverable if the page kept it.
   beforeTest: () => installPageDiagnostics(browser),
+  beforeCommand: (name, args) => {
+    traceCommand('start', name, /findElement/.test(name) ? args : undefined);
+  },
+  afterCommand: (name, _args, _result, error) => {
+    traceCommand('end', name, error ? String(error) : undefined);
+  },
 
   // A failed app-tier test leaves nothing behind to look at — the app is
   // headless in CI and gone by the time the log is read. Drop a screenshot,
@@ -120,6 +142,9 @@ export const config: WebdriverIO.Config = {
   // env, so restart-persistence assertions still relaunch against the same
   // data directory without leaking state across unrelated specs.
   beforeSession: (sessionConfig, _capabilities, _specs, cid) => {
+    traceImporterCommands = _specs.some((spec) =>
+      spec.includes('import-notes.e2e.ts')
+    );
     const { port, nativePort } = portsForRunner(cid);
     // wdio reads this back when it opens the session, so the client lands on
     // the driver this hook is about to start rather than the config default.

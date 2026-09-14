@@ -4,6 +4,9 @@
  */
 
 import { expect } from '@wdio/globals';
+import { join } from 'node:path';
+import { captureFailureArtifacts } from '../../helpers/failure-capture.js';
+import { repoRoot } from '../../helpers/preflight.js';
 import {
   IMPORT_BODY_CANARY,
   IMPORT_DESTINATION,
@@ -45,6 +48,17 @@ interface AssetRow {
 }
 
 const startedAt = Date.now();
+
+async function checkpoint(label: string): Promise<void> {
+  step(`capture ${label}`);
+  await captureFailureArtifacts({
+    client: browser,
+    outputDir: join(repoRoot, '.output', 'wdio', 'single'),
+    title: `import-checkpoint-${label}`,
+    error: 'Pre-step diagnostic snapshot'
+  });
+  step(`captured ${label}`);
+}
 
 /**
  * Timestamped progress, because this spec's only CI failure mode so far has
@@ -178,6 +192,7 @@ describe('T3 notes importer', function () {
     await clickName('Open settings');
     await clickName('Data & Backup');
     await clickLastButtonText(browser, 'Import notes');
+    await checkpoint('01-before-source-picker');
     step('pick the source folder (e2e seam, no native dialog)');
     await clickName('Choose a folder');
 
@@ -185,6 +200,7 @@ describe('T3 notes importer', function () {
     for (let poll = 0; poll < 20; poll += 1) {
       await browser.pause(1_000);
       await traceDialog(`poll ${poll + 1}`);
+      if (poll === 0) await checkpoint('02-before-format-lookup');
       if (await byName('Format').isDisplayed()) break;
     }
     await byName('Format').waitForDisplayed({ timeout: 30_000 });
@@ -199,6 +215,7 @@ describe('T3 notes importer', function () {
       await byName('Format')
     );
     expect(detectedFormat).toBe('obsidian');
+    await checkpoint('03-before-configuration');
     await setElementValue(
       byName('Import into a new folder called'),
       IMPORT_DESTINATION
@@ -208,7 +225,9 @@ describe('T3 notes importer', function () {
       'create-placeholder'
     );
     step('start the import');
+    await checkpoint('04-before-import-click');
     await clickDeferred('Import');
+    await checkpoint('05-after-import-click');
     for (let poll = 0; poll < 5; poll += 1) {
       await browser.pause(2_000);
       await traceDialog(`poll ${poll + 1}`);
