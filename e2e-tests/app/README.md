@@ -2,8 +2,8 @@
 
 This suite drives the **packaged Tauri binary** over WebDriver (`tauri-driver`)
 — the T3/T4 tiers. It's separate from the Playwright browser-fallback suite in
-[`../browser/`](../browser/) and **never runs in the default `pnpm test:e2e` or
-in CI**.
+[`../browser/`](../browser/) and runs separately from the default `pnpm test:e2e`.
+CI runs the packaged Linux suites according to the filters in `test.yml`.
 
 - **How to run it** → [../README.md](../README.md)
 - **Toolchain, env flags, test seams, harness gotchas** → [docs/e2e/harness.md](../../docs/e2e/harness.md)

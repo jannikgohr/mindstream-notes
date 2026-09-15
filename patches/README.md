@@ -21,3 +21,10 @@ stale cleanup reduced the two field operations to two focus calls in WebKit.
 `e2e-tests/browser/import-notes.spec.ts` covers configuration field focus,
 returning to Settings, and reopening the importer in Chromium and WebKit.
 The packaged-app suite continues to verify the real import.
+
+The patched CI run at commit `7242d278` passed the importer in 25.5 seconds,
+all ten native single-client specs, both collaboration suites, and 91 browser
+tests. [CI result](https://github.com/jannikgohr/mindstream-notes/actions/runs/34989840515)
+
+See [Bits UI maintenance](../docs/bits-ui.md) for upgrade validation and the
+dialog behavior tests required before removing this patch.

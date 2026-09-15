@@ -1,4 +1,14 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import {
+  completeImport,
+  failImport,
+  importRuns,
+  installImportIpc
+} from './import-ipc';
+
+// Focus regressions must fail on their first attempt and leave useful evidence.
+test.describe.configure({ retries: 0, timeout: 20_000 });
+test.use({ trace: 'retain-on-failure', screenshot: 'only-on-failure' });
 
 /**
  * Settings → Data & Backup: the vault importer and the legacy-link
@@ -21,6 +31,37 @@ async function openDataSettings(page: Page): Promise<Locator> {
     .first()
     .click();
   return settings;
+}
+
+async function expectFocusInside(dialog: Locator): Promise<void> {
+  await expect
+    .poll(() =>
+      dialog.evaluate((node) => node.contains(document.activeElement))
+    )
+    .toBe(true);
+}
+
+async function openConfiguredImport(
+  page: Page,
+  instant = false
+): Promise<{ settings: Locator; dialog: Locator; errors: string[] }> {
+  const settings = await openDataSettings(page);
+  await installImportIpc(page, instant);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await settings
+    .getByRole('button', { name: 'Import notes', exact: true })
+    .click();
+  const dialog = page.getByRole('alertdialog');
+  await expect(
+    dialog.getByRole('button', { name: 'Cancel', exact: true })
+  ).toBeFocused();
+  await dialog.getByRole('button', { name: /Choose a folder/ }).click();
+  await expect(
+    dialog.getByRole('combobox', { name: 'Format', exact: true })
+  ).toHaveValue('obsidian');
+  await expectFocusInside(dialog);
+  return { settings, dialog, errors };
 }
 
 test('Import notes opens a dialog offering a folder or a file', async ({
@@ -107,43 +148,11 @@ test('a cancelled source picker keeps the dialog on its first step', async ({
 test('configuration fields keep focus above Settings after source detection', async ({
   page
 }) => {
-  const settings = await openDataSettings(page);
+  const { settings, dialog, errors } = await openConfiguredImport(page);
   const trigger = settings.getByRole('button', {
     name: 'Import notes',
     exact: true
   });
-  await trigger.click();
-  const dialog = page.getByRole('alertdialog');
-  await expect(dialog).toBeVisible();
-
-  await page.evaluate(() => {
-    const host = window as unknown as {
-      __TAURI_INTERNALS__?: {
-        transformCallback: () => number;
-        invoke: (command: string) => Promise<unknown>;
-      };
-    };
-    host.__TAURI_INTERNALS__ = {
-      transformCallback: () => 1,
-      invoke: async (command) => {
-        if (command.startsWith('plugin:event|')) return 1;
-        if (command === 'notes_import_pick_folder') return '/test/vault';
-        if (command === 'notes_import_detect') {
-          return {
-            path: '/test/vault',
-            kind: 'obsidian',
-            suggested_name: 'Vault'
-          };
-        }
-        throw new Error(`Unexpected test IPC: ${command}`);
-      }
-    };
-  });
-  await dialog.getByRole('button', { name: /Choose a folder/ }).click();
-  await expect(
-    dialog.getByRole('combobox', { name: 'Format', exact: true })
-  ).toHaveValue('obsidian');
-
   const folder = dialog.getByRole('textbox', {
     name: 'Import into a new folder called'
   });
@@ -158,18 +167,125 @@ test('configuration fields keep focus above Settings after source detection', as
   await links.selectOption('create-placeholder');
   await expect(links).toHaveValue('create-placeholder');
 
+  // The last and first controls must wrap without reaching Settings.
+  const submit = dialog.getByRole('button', { name: 'Import', exact: true });
+  await submit.focus();
+  await page.keyboard.press('Tab');
+  const format = dialog.getByRole('combobox', { name: 'Format', exact: true });
+  await expect(format).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(submit).toBeFocused();
+
   // A genuine close must still remove the scope and allow Settings to focus.
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(dialog).toBeHidden();
-  await trigger.focus();
   await expect(trigger).toBeFocused();
   await trigger.click();
   await expect(
     dialog.getByRole('button', { name: /Choose a folder/ })
   ).toBeVisible();
   const cancel = dialog.getByRole('button', { name: 'Cancel', exact: true });
-  await cancel.focus();
   await expect(cancel).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
+test('running, failure, and retry preserve focus and submitted choices', async ({
+  page
+}) => {
+  const { settings, dialog, errors } = await openConfiguredImport(page);
+  const trigger = settings.getByRole('button', {
+    name: 'Import notes',
+    exact: true
+  });
+  const folder = dialog.getByRole('textbox', {
+    name: 'Import into a new folder called'
+  });
+  await folder.fill('Retry Vault');
+  await dialog
+    .getByRole('combobox', { name: "Links to notes that aren't in the import" })
+    .selectOption('create-placeholder');
+  await dialog.getByRole('button', { name: 'Import', exact: true }).click();
+  const stop = dialog.getByRole('button', { name: 'Stop', exact: true });
+  await expect(stop).toBeVisible();
+  await expectFocusInside(dialog);
+  await stop.focus();
+  await page.keyboard.press('Tab');
+  await expect(stop).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(stop).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeVisible();
+
+  await failImport(page);
+  await expect(
+    dialog.getByText('Import failed for test', { exact: true })
+  ).toBeVisible();
+  await expectFocusInside(dialog);
+  await folder.focus();
+  await expect(folder).toBeFocused();
+  await expect(folder).toHaveValue('Retry Vault');
+  await folder.fill('Retried Vault');
+  await dialog.getByRole('button', { name: 'Import', exact: true }).click();
+  await expect(stop).toBeVisible();
+  await completeImport(page);
+  await expect(
+    dialog.getByRole('heading', { name: 'Import finished' })
+  ).toBeVisible();
+  const close = dialog.getByRole('button', { name: 'Close', exact: true });
+  await close.focus();
+  await expect(close).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(close).toBeFocused();
+  await close.click();
+  await expect(dialog).toBeHidden();
+  await expect(trigger).toBeFocused();
+  expect(
+    (await importRuns(page)).map((run) => ({
+      folder: run.create_folder_named,
+      links: run.unresolved_links
+    }))
+  ).toEqual([
+    { folder: 'Retry Vault', links: 'create-placeholder' },
+    { folder: 'Retried Vault', links: 'create-placeholder' }
+  ]);
+  expect(errors).toEqual([]);
+});
+
+test('an immediate import result can close and return focus to Settings', async ({
+  page
+}) => {
+  const { settings, dialog, errors } = await openConfiguredImport(page, true);
+  await dialog.getByRole('button', { name: 'Import', exact: true }).click();
+  await expect(
+    dialog.getByRole('heading', { name: 'Import finished' })
+  ).toBeVisible();
+  await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(
+    settings.getByRole('button', { name: 'Import notes', exact: true })
+  ).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
+test('Stop keeps the running dialog open until the partial report arrives', async ({
+  page
+}) => {
+  const { settings, dialog, errors } = await openConfiguredImport(page);
+  await dialog.getByRole('button', { name: 'Import', exact: true }).click();
+  const stop = dialog.getByRole('button', { name: 'Stop', exact: true });
+  await stop.click();
+  await expect(stop).toBeDisabled();
+  await expect(dialog).toBeVisible();
+  await completeImport(page, true);
+  await expect(
+    dialog.getByRole('heading', { name: 'Import stopped' })
+  ).toBeVisible();
+  await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(
+    settings.getByRole('button', { name: 'Import notes', exact: true })
+  ).toBeFocused();
+  expect(errors).toEqual([]);
 });
 
 test('Convert legacy links says when there is nothing to convert', async ({

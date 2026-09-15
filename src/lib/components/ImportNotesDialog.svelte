@@ -12,6 +12,7 @@
    */
 
   import { AlertDialog } from 'bits-ui';
+  import { tick } from 'svelte';
   import { FileText, FolderOpen, Loader2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import * as api from '$lib/api';
@@ -113,7 +114,7 @@
         tree.collectionsById,
         null
       );
-      stage = 'configure';
+      await enterStage('configure');
     } catch (err) {
       errorMessage = toMessage(err);
     }
@@ -121,9 +122,9 @@
 
   async function start() {
     if (!detected) return;
-    stage = 'running';
     errorMessage = null;
     progress = { done: 0, total: 0 };
+    await enterStage('running');
     try {
       const report = await api.runImport({
         source_path: detected.path,
@@ -139,7 +140,7 @@
       finish(report);
     } catch (err) {
       errorMessage = toMessage(err);
-      stage = 'configure';
+      await enterStage('configure');
     }
   }
 
@@ -158,9 +159,17 @@
     return err instanceof Error ? err.message : String(err);
   }
 
+  async function enterStage(next: Stage): Promise<void> {
+    stage = next;
+    await tick();
+    // The source picker and Import controls disappear during transitions.
+    // Keep focus on the persistent Cancel/Stop control after the DOM updates.
+    if (current && stage === next) cancelButton?.focus();
+  }
+
   function focusDialog(event: Event) {
     event.preventDefault();
-    returnFocus =
+    returnFocus ??=
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
@@ -169,6 +178,9 @@
 
   function restoreDialogFocus(event: Event) {
     event.preventDefault();
+    // Bits UI can invoke cleanup when its content ref changes while open.
+    // Preserve the original trigger until the workflow really closes.
+    if (current) return;
     returnFocus?.focus();
     returnFocus = null;
   }
@@ -195,6 +207,9 @@
     <AlertDialog.Content
       onOpenAutoFocus={focusDialog}
       onCloseAutoFocus={restoreDialogFocus}
+      onEscapeKeydown={(event) => {
+        if (stage === 'running') event.preventDefault();
+      }}
       class="fixed left-1/2 top-1/2 z-[400] max-h-[calc(100vh-1.5rem)] w-[min(560px,94vw)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border border-border bg-card p-5 text-card-foreground shadow-xl focus:outline-none"
     >
       <AlertDialog.Title class="text-base font-semibold">
@@ -360,26 +375,25 @@
       {/if}
 
       <div class="mt-5 flex flex-wrap justify-end gap-2">
-        {#if stage === 'running'}
-          <Button variant="ghost" disabled={cancelling} onclick={cancelRun}>
-            {#if cancelling}
-              <Loader2 class="mr-1 size-3.5 animate-spin" />
-            {/if}
-            {tUi('data.importNotes.button.stop')}
-          </Button>
-        {:else}
-          <Button
-            bind:ref={cancelButton}
-            variant="ghost"
-            onclick={() => finish(null)}
-          >
-            {tUi('data.importNotes.button.cancel')}
-          </Button>
-          {#if stage === 'configure'}
-            <Button variant="default" onclick={start}>
-              {tUi('data.importNotes.button.import')}
-            </Button>
+        <Button
+          bind:ref={cancelButton}
+          variant="ghost"
+          disabled={stage === 'running' && cancelling}
+          onclick={stage === 'running' ? cancelRun : () => finish(null)}
+        >
+          {#if stage === 'running' && cancelling}
+            <Loader2 class="mr-1 size-3.5 animate-spin" />
           {/if}
+          {tUi(
+            stage === 'running'
+              ? 'data.importNotes.button.stop'
+              : 'data.importNotes.button.cancel'
+          )}
+        </Button>
+        {#if stage === 'configure'}
+          <Button variant="default" onclick={start}>
+            {tUi('data.importNotes.button.import')}
+          </Button>
         {/if}
       </div>
     </AlertDialog.Content>

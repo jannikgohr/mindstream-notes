@@ -73,7 +73,8 @@ export default defineConfig({
   webServer: {
     command: `pnpm build && pnpm preview --port ${PORT} --strictPort`,
     url: `http://localhost:${PORT}`,
-    reuseExistingServer: !process.env.CI,
+    // A reused preview can serve an older build and hide a regression locally.
+    reuseExistingServer: false,
     timeout: 240_000,
     env: {
       FORCE_COLOR: '0',

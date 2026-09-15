@@ -7,6 +7,7 @@
  * own all the picker / confirm / toast choreography for the data section.
  */
 
+import { tick } from 'svelte';
 import {
   backupNow,
   convertLegacyWikilinks,
@@ -163,12 +164,21 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
     // format, and running the import — because it has to render progress
     // while the run is in flight. It resolves with the report, or null if
     // the user backed out before starting.
-    const report = await openImportDialog();
-    if (report === null) return;
-    // Imported notes and folders are only in SQLite so far; the tree store
-    // is what the file explorer renders from.
-    await loadTree();
-    await showImportResult(report);
+    const trigger = document.activeElement;
+    try {
+      const report = await openImportDialog();
+      if (report === null) return;
+      // Imported notes and folders are only in SQLite so far; the tree store
+      // is what the file explorer renders from.
+      await loadTree();
+      await showImportResult(report);
+    } finally {
+      // The result replaces the importer, whose focused controls are removed.
+      // Restore the workflow's original trigger after the last dialog unmounts.
+      await tick();
+      if (trigger instanceof HTMLElement && trigger.isConnected)
+        trigger.focus();
+    }
   },
   'convert-legacy-links': async () => {
     let count: number;

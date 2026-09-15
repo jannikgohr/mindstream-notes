@@ -92,10 +92,16 @@
     void resetSettingValue(setting.id).catch(() => {});
   }
 
-  function fireAction() {
+  function fireAction(event: MouseEvent) {
     if (setting.type !== 'button' || !setting.actionId) return;
     const fn = SETTING_ACTIONS[setting.actionId];
-    if (fn) void fn();
+    if (fn) {
+      // WebKit does not always focus buttons on pointer clicks. Establish the
+      // action's trigger before a dialog snapshots where focus should return.
+      if (event.currentTarget instanceof HTMLElement)
+        event.currentTarget.focus();
+      void fn();
+    }
   }
 
   // Slider-only: while the user drags, mirror the live position locally so
