@@ -1,0 +1,28 @@
+diff --git a/dist/bits/utilities/focus-scope/use-focus-scope.svelte.js b/dist/bits/utilities/focus-scope/use-focus-scope.svelte.js
+--- a/dist/bits/utilities/focus-scope/use-focus-scope.svelte.js
++++ b/dist/bits/utilities/focus-scope/use-focus-scope.svelte.js
+@@ -113,7 +113,11 @@ export function useFocusScope({ id, loop, enabled, onOpenAutoFocus, onCloseAutoFocus
+             handleDestroy(prevFocusedElement);
+         };
+     });
++    // A ref update can mount this scope again before its deferred cleanup runs.
++    // That cleanup must not remove the new registration and resume a lower dialog.
++    let mountGeneration = 0;
+     function handleMount(container, prevFocusedElement) {
++        mountGeneration++;
+         if (!container)
+             container = document.getElementById(id.current);
+         if (!container)
+@@ -135,9 +139,12 @@ export function useFocusScope({ id, loop, enabled, onOpenAutoFocus, onCloseAutoFocus
+         }
+     }
+     function handleDestroy(prevFocusedElement) {
++        const generation = mountGeneration;
+         const destroyEvent = AutoFocusOnDestroyEvent.createEvent();
+         onCloseAutoFocus.current(destroyEvent);
+         afterSleep(0, () => {
++            if (generation !== mountGeneration)
++                return;
+             if (!destroyEvent.defaultPrevented && prevFocusedElement) {
+                 focus(prevFocusedElement ?? document.body, { select: true });
+             }

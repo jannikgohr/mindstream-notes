@@ -63,6 +63,11 @@ export default defineConfig({
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] }
+    },
+    {
+      name: 'importer-webkit',
+      testMatch: 'import-notes.spec.ts',
+      use: { ...devices['Desktop Safari'] }
     }
   ],
   webServer: {
