@@ -6,6 +6,7 @@ import {
   SETTING_BINDINGS,
   SETTING_OPTION_FILTERS
 } from './registry.svelte';
+import schema from './schema.json';
 import {
   DesktopThemeMode,
   getCloseToTray,
@@ -56,7 +57,8 @@ vi.mock('./actions/data', () => ({
     'backup-now': dataAction,
     'restore-backup': dataAction,
     'export-vault': dataAction,
-    'import-notes': dataAction
+    'import-notes': dataAction,
+    'convert-legacy-links': dataAction
   }
 }));
 vi.mock('$lib/updater', () => ({ checkForUpdatesInteractively }));
@@ -264,9 +266,33 @@ describe('SETTING_ACTIONS', () => {
       'restore-backup',
       'export-vault',
       'import-notes',
+      'convert-legacy-links',
       'check-updates'
     ]) {
       expect(typeof SETTING_ACTIONS[id]).toBe('function');
+    }
+  });
+
+  it('has a handler for every button the schema declares', () => {
+    // SettingControl looks the actionId up in SETTING_ACTIONS and silently
+    // does nothing on a miss, so a button added to schema.json without a
+    // matching entry here renders fine and is dead on click. The list above is
+    // maintained by hand and cannot catch that; reading the schema can.
+    const actionIds = new Set<string>();
+    const collect = (node: unknown) => {
+      if (Array.isArray(node)) {
+        node.forEach(collect);
+      } else if (node && typeof node === 'object') {
+        const record = node as Record<string, unknown>;
+        if (typeof record.actionId === 'string') actionIds.add(record.actionId);
+        Object.values(record).forEach(collect);
+      }
+    };
+    collect(schema);
+
+    expect(actionIds.size).toBeGreaterThan(0);
+    for (const id of actionIds) {
+      expect(typeof SETTING_ACTIONS[id], id).toBe('function');
     }
   });
 
@@ -284,7 +310,8 @@ describe('SETTING_ACTIONS', () => {
       'backup-now',
       'restore-backup',
       'export-vault',
-      'import-notes'
+      'import-notes',
+      'convert-legacy-links'
     ]) {
       dataAction.mockClear().mockResolvedValue(undefined);
       await SETTING_ACTIONS[id]();

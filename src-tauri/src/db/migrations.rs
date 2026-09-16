@@ -647,6 +647,105 @@ const MIGRATIONS: &[Migration] = &[
             END;
         "#,
     },
+    Migration {
+        to: 26,
+        // Attachments become content-addressed and reference-counted.
+        //
+        // Before this migration an asset's lifetime was tied to exactly one
+        // note: `owning_note_id` was NOT NULL ... ON DELETE CASCADE, and
+        // `purge_unreferenced_markdown_assets` only looked for
+        // `asset:mindstream/<id>` inside the *owning* note's body and
+        // history. An asset referenced from any OTHER note was therefore
+        // invisible to that scan — purge the owner and the cascade took the
+        // blob with it, silently breaking the second note's image. Copying a
+        // note that contains an image reaches this today.
+        //
+        // Two changes fix it:
+        //
+        //   asset_refs      the authoritative "which notes reference this
+        //                   asset" set, many-to-many. Deletion is now driven
+        //                   by this being empty, not by one FK.
+        //
+        //   content_hash    sha256 of `bytes`, so re-uploading identical
+        //                   content reuses the existing row instead of
+        //                   storing a second copy. Backfilled in Rust right
+        //                   after this migration (see backfill_content_hashes)
+        //                   because SQLite has no hashing function.
+        //
+        // `owning_note_id` survives as a nullable *creator anchor*: it is
+        // still on the sync wire (AssetPayload in src/sync/payloads.rs), so
+        // it cannot be dropped, but ON DELETE SET NULL means it no longer
+        // decides when the blob dies.
+        //
+        // idx_assets_scope_hash is deliberately NOT UNIQUE. Existing vaults
+        // already hold duplicate blobs, and collapsing them here would mean
+        // rewriting the asset URLs embedded in note bodies from inside a
+        // migration. Dedup applies to new writes; the duplicates already on
+        // disk stay addressable.
+        //
+        // The dedup lookup is keyed on (share_scope_id, content_hash), never
+        // on the hash alone: matching globally would let a vault-local asset
+        // be reused inside a shared collection and pushed to that scope's
+        // recipients, which crosses an E2EE boundary.
+        sql: r#"
+            CREATE TABLE assets_v2 (
+                id               TEXT PRIMARY KEY,
+                owning_note_id   TEXT REFERENCES notes(id) ON DELETE SET NULL,
+                mime_type        TEXT NOT NULL,
+                bytes            BLOB NOT NULL,
+                size             INTEGER NOT NULL,
+                created          TEXT NOT NULL,
+                modified         TEXT NOT NULL,
+                etebase_uid      TEXT,
+                etebase_etag     TEXT,
+                dirty            INTEGER NOT NULL DEFAULT 1,
+                share_scope_id   TEXT,
+                content_hash     TEXT
+            );
+            INSERT INTO assets_v2(id, owning_note_id, mime_type, bytes, size,
+                                  created, modified, etebase_uid, etebase_etag,
+                                  dirty, share_scope_id, content_hash)
+                SELECT a.id,
+                       CASE WHEN n.id IS NULL THEN NULL ELSE a.owning_note_id END,
+                       a.mime_type, a.bytes, a.size, a.created, a.modified,
+                       a.etebase_uid, a.etebase_etag, a.dirty, a.share_scope_id,
+                       NULL
+                FROM assets a
+                LEFT JOIN notes n ON n.id = a.owning_note_id;
+            DROP TABLE assets;
+            ALTER TABLE assets_v2 RENAME TO assets;
+
+            CREATE INDEX idx_assets_owning_note ON assets(owning_note_id);
+            CREATE INDEX idx_assets_dirty       ON assets(dirty)       WHERE dirty = 1;
+            CREATE INDEX idx_assets_etebase_uid ON assets(etebase_uid) WHERE etebase_uid IS NOT NULL;
+            CREATE INDEX idx_assets_share_scope ON assets(share_scope_id) WHERE share_scope_id IS NOT NULL;
+            CREATE INDEX idx_assets_scope_hash  ON assets(share_scope_id, content_hash);
+            -- Lets the post-migration backfill probe for remaining work with
+            -- an index hit instead of a table scan on every app start.
+            CREATE INDEX idx_assets_unhashed    ON assets(id) WHERE content_hash IS NULL;
+
+            CREATE TABLE asset_refs (
+                asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+                note_id  TEXT NOT NULL REFERENCES notes(id)  ON DELETE CASCADE,
+                PRIMARY KEY (asset_id, note_id)
+            );
+            CREATE INDEX idx_asset_refs_note ON asset_refs(note_id);
+
+            INSERT INTO asset_refs(asset_id, note_id)
+                SELECT id, owning_note_id FROM assets WHERE owning_note_id IS NOT NULL;
+
+            -- An editor opened before a scope move can still save the old id.
+            -- Keep redirects after the original asset is purged; the destination
+            -- and note FKs clean them up when they are no longer usable.
+            CREATE TABLE asset_id_remaps (
+                note_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+                old_asset_id TEXT NOT NULL,
+                new_asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+                PRIMARY KEY (note_id, old_asset_id)
+            );
+            CREATE INDEX idx_asset_id_remaps_target ON asset_id_remaps(new_asset_id);
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {
@@ -673,6 +772,11 @@ pub fn run(conn: &mut Connection) -> AppResult<()> {
     // Surface integrity violations early instead of letting them bite at
     // the next CRUD call.
     check_foreign_keys(conn)?;
+
+    // Migration 26 adds assets.content_hash but can't populate it — SQLite
+    // has no hashing function. Do it here, once; the column is only a dedup
+    // lookup key, so a row that stays NULL costs storage, never correctness.
+    crate::assets::backfill_content_hashes(conn)?;
 
     Ok(())
 }
@@ -955,6 +1059,190 @@ mod seed_tests {
             crate::sync::yrs_doc::to_markdown(&merged),
             crate::sync::yrs_doc::to_markdown(&a),
             "merging two identical seed origins must not duplicate content"
+        );
+    }
+}
+
+#[cfg(test)]
+mod asset_refcount_upgrade_tests {
+    //! Migration 26 rebuilds `assets`, which existing vaults are full of. The
+    //! fresh-database tests elsewhere never exercise that: they migrate an
+    //! empty file. These start from a real v24 schema with rows in it.
+
+    use super::*;
+
+    /// Apply migrations up to and including `version`, the way `run` does.
+    fn migrate_to(conn: &mut Connection, version: u32) {
+        let current: u32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        for m in MIGRATIONS
+            .iter()
+            .filter(|m| m.to > current && m.to <= version)
+        {
+            let tx = conn.transaction().unwrap();
+            tx.execute_batch(m.sql).unwrap();
+            tx.pragma_update(None, "user_version", m.to).unwrap();
+            tx.commit().unwrap();
+        }
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+    }
+
+    fn v24_vault() -> Connection {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate_to(&mut conn, 24);
+        conn.execute_batch(
+            "INSERT INTO notes (id, title, body, created, modified)
+                 VALUES ('n1', 'Owner', '![a](asset:mindstream/a1)', '2025-01-01', '2025-01-01');
+             INSERT INTO assets (id, owning_note_id, mime_type, bytes, size, created, modified,
+                                 etebase_uid, etebase_etag, dirty, share_scope_id)
+                 VALUES ('a1', 'n1', 'image/png', X'01020304', 4, '2025-01-01', '2025-01-02',
+                         'remote-uid', 'etag-1', 0, 'scope_x');",
+        )
+        .unwrap();
+        // An asset whose owner is already gone. The v24 cascade should have
+        // prevented this, but a damaged or hand-edited file can hold one, and
+        // the post-migration foreign-key check refuses to open the database
+        // at all if the rebuild carries a dangling reference forward.
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        conn.execute(
+            "INSERT INTO assets (id, owning_note_id, mime_type, bytes, size, created, modified)
+             VALUES ('a_orphan', 'missing-note', 'image/png', X'09', 1, '2025-01-01', '2025-01-01')",
+            [],
+        )
+        .unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        conn
+    }
+
+    #[test]
+    fn upgrading_a_main_v25_vault_preserves_search_and_adds_asset_refs() {
+        let mut conn = v24_vault();
+        migrate_to(&mut conn, 25);
+        run(&mut conn).expect("upgrade main v25 to v26");
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM asset_refs WHERE asset_id = 'a1' AND note_id = 'n1'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row("SELECT bytes FROM assets WHERE id = 'a1'", [], |r| r
+                .get::<_, Vec<u8>>(0))
+                .unwrap(),
+            vec![1, 2, 3, 4]
+        );
+        conn.execute(
+            "UPDATE notes SET body = 'searchable upgrade' WHERE id = 'n1'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(crate::search::search(&conn, "searchable").unwrap().len(), 1);
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM active_notes WHERE id = 'n1'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        run(&mut conn).expect("reopening the upgraded vault is idempotent");
+    }
+
+    #[test]
+    fn upgrading_a_v24_vault_preserves_assets_and_backfills_refs_and_hashes() {
+        let mut conn = v24_vault();
+
+        run(&mut conn).expect("upgrade to v26 opens cleanly");
+
+        let version: u32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert!(version >= 26);
+
+        // Every column the sync engine relies on survives the rebuild.
+        struct Row {
+            owner: Option<String>,
+            uid: Option<String>,
+            etag: Option<String>,
+            dirty: i64,
+            scope: Option<String>,
+            bytes: Vec<u8>,
+            hash: Option<String>,
+        }
+        let row = conn
+            .query_row(
+                "SELECT owning_note_id, etebase_uid, etebase_etag, dirty, share_scope_id,
+                        bytes, content_hash
+                 FROM assets WHERE id = 'a1'",
+                [],
+                |r| {
+                    Ok(Row {
+                        owner: r.get(0)?,
+                        uid: r.get(1)?,
+                        etag: r.get(2)?,
+                        dirty: r.get(3)?,
+                        scope: r.get(4)?,
+                        bytes: r.get(5)?,
+                        hash: r.get(6)?,
+                    })
+                },
+            )
+            .unwrap();
+        assert_eq!(row.owner.as_deref(), Some("n1"));
+        assert_eq!(row.uid.as_deref(), Some("remote-uid"));
+        assert_eq!(row.etag.as_deref(), Some("etag-1"));
+        assert_eq!(row.dirty, 0, "an already-synced asset must not re-push");
+        assert_eq!(row.scope.as_deref(), Some("scope_x"));
+        assert_eq!(row.bytes, vec![1, 2, 3, 4]);
+        assert_eq!(
+            row.hash.as_deref(),
+            Some(crate::assets::content_hash(&[1, 2, 3, 4]).as_str()),
+            "the Rust backfill runs straight after the SQL migration"
+        );
+
+        // The owner becomes the first reference.
+        let refs: Vec<String> = conn
+            .prepare("SELECT note_id FROM asset_refs WHERE asset_id = 'a1'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(refs, vec!["n1".to_string()]);
+    }
+
+    #[test]
+    fn a_dangling_owner_is_nulled_rather_than_blocking_the_upgrade() {
+        let mut conn = v24_vault();
+
+        run(&mut conn).expect("a dangling owner must not stop the vault opening");
+
+        let owner: Option<String> = conn
+            .query_row(
+                "SELECT owning_note_id FROM assets WHERE id = 'a_orphan'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(owner, None);
+        let refs: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM asset_refs WHERE asset_id = 'a_orphan'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(refs, 0, "no reference to a note that does not exist");
+        // And the next sweep collects it, since nothing points at it.
+        assert_eq!(
+            crate::assets::sweep_unreferenced_markdown_assets_inner(&conn).unwrap(),
+            1
         );
     }
 }

@@ -13,7 +13,7 @@
  */
 
 import type { ChildProcess } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +21,7 @@ import {
   captureFailureArtifacts,
   installPageDiagnostics
 } from './helpers/failure-capture.js';
+import { createImportVaultFixture } from './helpers/import-fixture.js';
 import {
   appBinary as application,
   preflight,
@@ -28,11 +29,28 @@ import {
   spawnTauriDriver,
   stopTauriDriverTree
 } from './helpers/preflight.js';
+import { webviewEnvironment } from './helpers/worker-isolation.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const outputDir = join(repoRoot, '.output', 'wdio', 'single');
 
 let tauriDriver: ChildProcess | undefined;
+let traceImporterCommands = false;
+
+function traceCommand(phase: string, command: string, details?: unknown): void {
+  if (!traceImporterCommands) return;
+  mkdirSync(outputDir, { recursive: true });
+  appendFileSync(
+    join(outputDir, 'import-webdriver.jsonl'),
+    JSON.stringify({
+      at: new Date().toISOString(),
+      pid: process.pid,
+      phase,
+      command,
+      details
+    }) + '\n'
+  );
+}
 
 /**
  * The first of the two ports one worker needs: wdio talks to `port`,
@@ -63,14 +81,15 @@ export const config: WebdriverIO.Config = {
     join(here, '..', 'perf', 'hidden-visibility.e2e.ts'),
     join(here, 'specs', 'single', '**', '*.e2e.ts')
   ],
-  // Two spec files at a time. The suite is one app per worker, so this is
-  // two app processes on the runner rather than the T4 tiers' two or three,
-  // and the wall clock floors out at the longest single spec file.
-  maxInstances: 2,
+  // Keep packaged WebViews serial. Even with separate SQLite and WebView
+  // storage, Linux WebKitWebDriver can drop one session when two native apps
+  // perform heavier IPC work at the same time (the importer exposed this in
+  // CI as an empty socket followed by Mocha's timeout).
+  maxInstances: 1,
   outputDir,
   capabilities: [
     {
-      maxInstances: 2,
+      maxInstances: 1,
       // tauri-driver reads this to launch the app under WebDriver.
       'tauri:options': { application }
     } as WebdriverIO.Capabilities
@@ -79,6 +98,13 @@ export const config: WebdriverIO.Config = {
   framework: 'mocha',
   reporters: ['spec'],
   mochaOpts: { ui: 'bdd', timeout: 120_000 },
+  // Linux WebKitWebDriver can occasionally stop answering during a long IPC
+  // command even though the app stays healthy and later specs pass. Retry the
+  // whole failed file with a fresh driver, app and profile, matching the
+  // multiremote suites; a product regression still has to pass its assertions
+  // on the second attempt.
+  specFileRetries: 1,
+  specFileRetriesDeferred: true,
   // Two apps cold-starting at once take longer to answer than one did, and a
   // session that gives up here fails the whole spec file before it runs.
   connectionRetryTimeout: 180_000,
@@ -90,6 +116,12 @@ export const config: WebdriverIO.Config = {
   // Start buffering page-side errors. WebKitWebDriver serves no log endpoint,
   // so what the app logged is only recoverable if the page kept it.
   beforeTest: () => installPageDiagnostics(browser),
+  beforeCommand: (name, args) => {
+    traceCommand('start', name, /findElement/.test(name) ? args : undefined);
+  },
+  afterCommand: (name, _args, _result, error) => {
+    traceCommand('end', name, error ? String(error) : undefined);
+  },
 
   // A failed app-tier test leaves nothing behind to look at — the app is
   // headless in CI and gone by the time the log is read. Drop a screenshot,
@@ -110,6 +142,9 @@ export const config: WebdriverIO.Config = {
   // env, so restart-persistence assertions still relaunch against the same
   // data directory without leaking state across unrelated specs.
   beforeSession: (sessionConfig, _capabilities, _specs, cid) => {
+    traceImporterCommands = _specs.some((spec) =>
+      spec.includes('import-notes.e2e.ts')
+    );
     const { port, nativePort } = portsForRunner(cid);
     // wdio reads this back when it opens the session, so the client lands on
     // the driver this hook is about to start rather than the config default.
@@ -122,16 +157,19 @@ export const config: WebdriverIO.Config = {
     const runDictionaryDir = mkdtempSync(
       join(tmpdir(), 'mindstream-e2e-dict-')
     );
+    const importSourceDir = createImportVaultFixture();
     process.env.MINDSTREAM_DICTIONARY_DIR = runDictionaryDir;
     tauriDriver = spawnTauriDriver(
       ['--port', String(port), '--native-port', String(nativePort)],
       {
         ...process.env,
+        ...webviewEnvironment(runProfileDir),
         MINDSTREAM_PROFILE_DIR: runProfileDir,
         // Namespaces the OS keyring entry. Without it every worker writes to
         // the one `e2e` slot, which concurrent specs would race over.
         MINDSTREAM_PROFILE_ID: `e2e-${cid}`,
-        MINDSTREAM_DICTIONARY_DIR: runDictionaryDir
+        MINDSTREAM_DICTIONARY_DIR: runDictionaryDir,
+        MINDSTREAM_E2E_IMPORT_FOLDER: importSourceDir
       },
       join(outputDir, `tauri-driver-${cid}.log`)
     );

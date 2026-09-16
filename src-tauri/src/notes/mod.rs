@@ -469,6 +469,12 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
         )?;
     }
     if let Some(new_body) = &input.body {
+        let (new_body, supplied_state) = crate::assets::normalize_asset_ids_for_note(
+            &tx,
+            &input.id,
+            new_body,
+            input.yrs_state.as_deref(),
+        )?;
         // Two paths converge here:
         //   * The live-collab editor supplies its own yrs_state — it
         //     already owns the Doc, has applied the user's keystrokes
@@ -478,7 +484,7 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
         //     send the new markdown body. We diff old → new at byte
         //     granularity and replay against the v1 Y.Text Doc for CRDT
         //     correctness on offline-edit reconciliation.
-        if let Some(supplied_state) = &input.yrs_state {
+        if let Some(supplied_state) = &supplied_state {
             tx.execute(
                 "UPDATE notes
                  SET body = ?1, yrs_state = ?2, modified = ?3, payload_schema = 2
@@ -495,7 +501,7 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
                 Some(s) if !s.is_empty() => s,
                 _ => yrs_doc::init_with_markdown(&old_body),
             };
-            let new_state = yrs_doc::apply_local_edit(&base_state, &old_body, new_body);
+            let new_state = yrs_doc::apply_local_edit(&base_state, &old_body, &new_body);
             // The diff path produces a Y.Text "body" doc — the v1 NotePayload
             // shape — so any row that gets here has to be marked v1, even if
             // it was previously a v2 (y-prosemirror) row. Otherwise the next
@@ -510,6 +516,12 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
                 params![new_body, new_state, now, input.id],
             )?;
         }
+        // Claim every asset the new body mentions. Additive only — an image
+        // the user just deleted keeps its (now stale) row until the
+        // reconciliation sweep, because the authoritative check also has to
+        // read the note's history snapshots and that is far too expensive to
+        // do on a save. See assets::register_body_refs.
+        crate::assets::register_body_refs(&tx, &input.id, &new_body)?;
     } else if let Some(supplied_state) = &input.yrs_state {
         // Editor supplies a fresh yrs_state but no body — used by
         // note kinds whose document content lives entirely in the
@@ -518,11 +530,22 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
         // trust the supplied bytes verbatim; nothing about the
         // payload_schema discriminator (markdown v1 / v2) applies
         // here so we leave it alone.
+        let body: String = tx.query_row(
+            "SELECT body FROM notes WHERE id = ?1",
+            params![input.id],
+            |r| r.get(0),
+        )?;
+        let (_, normalized_state) = crate::assets::normalize_asset_ids_for_note(
+            &tx,
+            &input.id,
+            &body,
+            Some(supplied_state),
+        )?;
         tx.execute(
             "UPDATE notes
              SET yrs_state = ?1, modified = ?2
              WHERE id = ?3",
-            params![supplied_state, now, input.id],
+            params![normalized_state, now, input.id],
         )?;
     }
     if let Some(parent) = &input.parent_collection_id {
@@ -647,21 +670,14 @@ pub fn purge(conn: &Connection, id: &str) -> AppResult<()> {
         crate::sync::queue_tombstone(conn, "note", &uid)?;
     }
 
-    // Tombstone every asset that's been pushed for this note BEFORE the
-    // DELETE — once the FK ON DELETE CASCADE fires, the asset rows are
-    // gone and we can't recover their etebase_uids. Locally-only assets
-    // (never pushed, etebase_uid IS NULL) need no server delete; the
-    // cascade handles them.
-    {
-        let mut stmt = conn.prepare(
-            "SELECT etebase_uid FROM assets
-             WHERE owning_note_id = ?1 AND etebase_uid IS NOT NULL",
-        )?;
-        let rows = stmt.query_map(params![id], |r| r.get::<_, String>(0))?;
-        for uid in rows {
-            crate::sync::queue_tombstone(conn, "asset", &uid?)?;
-        }
-    }
+    // Release this note's claim on its assets BEFORE the DELETE, while both
+    // the reference rows and the assets' etebase_uids are still readable.
+    //
+    // Assets no longer cascade off the owning note (see the assets module
+    // docs): an image pasted into two notes has to survive the first one
+    // being purged. `release_note_assets` deletes only what nothing else
+    // references, tombstones those, and re-anchors the survivors.
+    crate::assets::release_note_assets(conn, id)?;
 
     let n = conn.execute("DELETE FROM notes WHERE id = ?1", params![id])?;
     if n == 0 {

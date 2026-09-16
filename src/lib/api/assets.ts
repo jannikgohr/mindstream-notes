@@ -18,14 +18,21 @@ import {
   assertRecord,
   assertString,
   TauriCommandName,
-  invokeOrFallback
+  invokeOrFallback,
+  optionalString
 } from './core';
 import { mockApi } from './mock-store';
 import { parseNote, type Note } from './notes';
 
 export interface AssetSummary {
   id: string;
-  owning_note_id: string;
+  /**
+   * The note that created this asset — an anchor, not a lifetime. An asset's
+   * bytes are freed when nothing references it any more (Rust's `asset_refs`
+   * table), so this is `null` for a blob whose creator was deleted while
+   * another note still uses it.
+   */
+  owning_note_id: string | null;
   mime_type: string;
   size: number;
   created: string;
@@ -97,7 +104,7 @@ function parseAsset(value: unknown): Asset {
   const raw = assertRecord(value, 'asset');
   return {
     id: assertString(raw.id, 'asset.id'),
-    owning_note_id: assertString(raw.owning_note_id, 'asset.owning_note_id'),
+    owning_note_id: optionalString(raw.owning_note_id, 'asset.owning_note_id'),
     mime_type: assertString(raw.mime_type, 'asset.mime_type'),
     size: assertNumber(raw.size, 'asset.size'),
     created: assertString(raw.created, 'asset.created'),

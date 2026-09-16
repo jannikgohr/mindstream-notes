@@ -63,12 +63,18 @@ export default defineConfig({
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] }
+    },
+    {
+      name: 'importer-webkit',
+      testMatch: 'import-notes.spec.ts',
+      use: { ...devices['Desktop Safari'] }
     }
   ],
   webServer: {
     command: `pnpm build && pnpm preview --port ${PORT} --strictPort`,
     url: `http://localhost:${PORT}`,
-    reuseExistingServer: !process.env.CI,
+    // A reused preview can serve an older build and hide a regression locally.
+    reuseExistingServer: false,
     timeout: 240_000,
     env: {
       FORCE_COLOR: '0',

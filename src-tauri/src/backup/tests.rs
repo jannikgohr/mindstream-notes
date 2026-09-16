@@ -622,6 +622,76 @@ fn merge_reroutes_orphan_note_parents_to_root() {
 }
 
 #[test]
+fn merge_preserves_assets_with_a_deleted_creator_and_skips_unreferenced_blobs() {
+    let live_db = open_memory_for_tests();
+    let mut backup = Connection::open_in_memory().unwrap();
+    migrations::run(&mut backup).unwrap();
+    seed_backup_db(&backup, "BACKUP");
+    backup
+        .execute_batch(
+            "INSERT INTO notes(id, title, body, created, modified)
+         VALUES ('survivor', 'Survivor', '![pic](asset:mindstream/asset_BACKUP)', 'old', 'old');
+         INSERT INTO asset_refs(asset_id, note_id) VALUES ('asset_BACKUP', 'survivor');
+         DELETE FROM notes WHERE id = 'note_BACKUP';
+         INSERT INTO assets(id, owning_note_id, mime_type, bytes, size, created, modified)
+         VALUES ('orphan', NULL, 'image/png', X'01', 1, 'old', 'old');",
+        )
+        .unwrap();
+    live_db
+        .with_conn_mut(|c| {
+            let report = merge_into(c, &backup)?;
+            assert_eq!(report.notes_added, 1);
+            assert_eq!(report.assets_added, 1);
+            let owner: String = c.query_row(
+                "SELECT owning_note_id FROM assets WHERE id = 'asset_BACKUP'",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(owner, "survivor");
+            assert_eq!(
+                crate::assets::sweep_unreferenced_markdown_assets_inner(c)?,
+                0
+            );
+            assert_eq!(
+                crate::assets::load(c, "asset_BACKUP")?.bytes,
+                vec![0x89, 0x50]
+            );
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn merge_restores_every_referrer_of_a_deduplicated_asset() {
+    let live_db = open_memory_for_tests();
+    let mut backup = Connection::open_in_memory().unwrap();
+    migrations::run(&mut backup).unwrap();
+    seed_backup_db(&backup, "BACKUP");
+    backup
+        .execute_batch(
+            "INSERT INTO notes(id, title, body, created, modified)
+         VALUES ('survivor', 'Survivor', '![pic](asset:mindstream/asset_BACKUP)', 'old', 'old');
+         INSERT INTO asset_refs(asset_id, note_id) VALUES ('asset_BACKUP', 'survivor');",
+        )
+        .unwrap();
+    live_db
+        .with_conn_mut(|c| {
+            merge_into(c, &backup)?;
+            // A second merge can restore a note while its blob already exists.
+            crate::notes::purge(c, "survivor")?;
+            let report = merge_into(c, &backup)?;
+            assert_eq!(report.assets_added, 0);
+            crate::notes::purge(c, "note_BACKUP")?;
+            assert_eq!(
+                crate::assets::load(c, "asset_BACKUP")?.bytes,
+                vec![0x89, 0x50]
+            );
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
 fn merge_skips_assets_whose_owner_isnt_present() {
     // Backup has an asset, but the owning note didn't come over
     // (and isn't already present locally either — truly orphaned).

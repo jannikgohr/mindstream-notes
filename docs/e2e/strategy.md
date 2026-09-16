@@ -36,31 +36,33 @@ on device B" is T4.
 
 ### In CI today (`.github/workflows/test.yml`, on push to `main` + PRs)
 
-| Job        | Tier | Runs on                 | Needs       |
-| ---------- | ---- | ----------------------- | ----------- |
-| `js`       | T1   | Linux + Windows + macOS | Node only   |
-| `rust`     | T1   | Linux + Windows + macOS | Rust        |
-| `coverage` | T1   | Linux                   | Node + Rust |
-| `e2e`      | T2   | Linux                   | Node only   |
+| Job             | Tier  | Runs on                 | Needs                                          |
+| --------------- | ----- | ----------------------- | ---------------------------------------------- |
+| `js`            | T1    | Linux + Windows + macOS | Node only                                      |
+| `rust`          | T1    | Linux + Windows + macOS | Rust                                           |
+| `coverage`      | T1    | Linux                   | Node + Rust                                    |
+| `e2e`           | T2    | Linux                   | Node only                                      |
+| `app-e2e-build` | T3/T4 | Linux                   | Rust + Tauri system dependencies               |
+| `app-e2e`       | T3/T4 | Linux + Xvfb            | packaged build + native driver; backend for T4 |
 
-**T3 and T4 do not run in CI yet** — no `e2e-app`/`e2e-collab` job exists in
-`test.yml`, and `release.yml` runs no e2e at all. Both tiers are **local/manual
-only** for now (`MINDSTREAM_E2E_*` flags, run on demand). This is the biggest
-open gap; see [status.md](status.md).
+Code changes run T1 checks on all three desktop systems. Ready code PRs also
+run T2 and native T3. Draft PRs defer E2E unless labelled `ci:app-e2e`.
+T4 runs for collaboration changes, pushes to main, and explicit overrides.
+Manual Test workflow runs and the `ci:app-e2e` label enable all suites.
+`src-tauri/scripts/ci-test-plan.mjs` defines those decisions.
 
-### Where they should run (proposal)
+### Dialog and dependency regressions
 
-| Tier | Suggested trigger  | Needs                                     |
-| ---- | ------------------ | ----------------------------------------- |
-| T3   | every PR / push    | packaged binary + `tauri-driver` + xvfb   |
-| T4   | **release** (tags) | the above **+** the backend compose stack |
+Use `pnpm test:e2e:dialogs` for the importer lifecycle in Chromium and WebKit.
+Stub native responses to reach configuration, running, failure/retry, Stop,
+and immediate completion. Exercise actual keyboard focus and assert automatic
+restoration after close. These tests run without retries and retain traces
+and screenshots on failure. See [Bits UI maintenance](../bits-ui.md).
 
-T4 belongs on the release path, not every push: it's the slowest tier and the
-only one needing Docker and a network peer, so gating a release on it (rather
-than running it nightly or per-push) catches sync/collab regressions before they
-ship without taxing routine PRs. The `MINDSTREAM_E2E_*` env flags already let the
-same specs skip cleanly when their prerequisites aren't up, so wiring them in is
-a workflow change, not a spec change.
+T3 checks the same importer with real IPC, disk, SQLite, and restart
+persistence in the packaged Linux app. Browser WebKit complements this check;
+it does not stand in for WebKitGTK. CI uploads bounded HTML/JSON captures,
+screenshots, driver logs, and independent X11 frames for native failures.
 
 Current coverage and the open gaps are tracked in [status.md](status.md); the
 queue of tests still to write is [backlog.md](backlog.md).

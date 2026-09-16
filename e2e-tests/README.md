@@ -1,8 +1,9 @@
 # Running the end-to-end tests
 
-Three suites live here. Only the **browser** suite runs by default and in CI;
-the rest are opt-in behind an env flag so they skip cleanly when their
-prerequisites (a packaged app build, a backend stack) aren't present.
+Three suites live here. The browser suite runs by default. CI also builds the
+packaged Linux app and runs native tests: single-client tests on ready code
+PRs, and collaboration tests when the change filter selects them. A manual
+Test workflow run or the `ci:app-e2e` PR label enables all suites.
 
 | Suite                  | Command                   | Needs                             |
 | ---------------------- | ------------------------- | --------------------------------- |
@@ -30,7 +31,15 @@ mock store backs every IPC call). No native app, no backend.
 ```sh
 pnpm test:e2e          # headless
 pnpm test:e2e:ui       # interactive Playwright runner
+pnpm test:e2e:dialogs  # importer lifecycle in Chromium and WebKit, no retries
 ```
+
+Dialog tests use production assets and retain traces and screenshots on
+failure. They cover configuration focus, keyboard trapping, failure/retry,
+Stop, immediate completion, and automatic return to Settings. Native IPC is
+stubbed in these browser tests; the packaged-app suite verifies real data.
+See [Bits UI maintenance](../docs/bits-ui.md) before changing the dialog library
+or custom autofocus behavior.
 
 ## Backend health (T4 prerequisite)
 

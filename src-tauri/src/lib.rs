@@ -29,6 +29,7 @@ pub mod error;
 pub mod history;
 pub mod hotkeys;
 pub mod i18n;
+pub mod import;
 #[cfg(desktop)]
 pub mod native_menu;
 pub mod notes;
@@ -399,6 +400,7 @@ pub fn run() {
             // preview`). Reaped on exit below so nothing is orphaned.
             app.manage(plugins::preview_service::PreviewServiceRegistry::default());
             app.manage(spellcheck::SpellcheckState::default());
+            app.manage(import::ImportState::default());
             // Hunspell tables are ~21 MB resident for a bilingual user and
             // stay warm for the life of the process otherwise. Hands them
             // back once the user stops typing; the next check reloads in
@@ -542,6 +544,13 @@ pub fn run() {
             backup::import_cleanup,
             backup::import_restore,
             backup::import_merge,
+            import::legacy_links::legacy_wikilink_count,
+            import::legacy_links::convert_legacy_wikilinks_command,
+            import::notes_import_pick_folder,
+            import::notes_import_pick_file,
+            import::notes_import_detect,
+            import::notes_import_run,
+            import::notes_import_cancel,
             notes_export::notes_export_pick_dir,
             notes_export::notes_export_write_file,
             // PDF export

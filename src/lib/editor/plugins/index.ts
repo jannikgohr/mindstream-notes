@@ -71,7 +71,7 @@ export {
   renderMermaidPreview,
   type SlashMenuBuilder
 } from './prose/mermaid';
-export { resolveNoteIdByTitle, wikilinkPlugins } from './prose/wikilink';
+export { wikilinkPlugins } from './prose/wikilink';
 export {
   refreshMentionDecorations,
   userMentionPlugins,

@@ -52,6 +52,20 @@ export default ts.config(
       // React/Excalidraw, so the rule matches intent that was already there.
       '@typescript-eslint/no-explicit-any': 'warn',
 
+      // Fixes to library internals belong in a versioned dependency patch.
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['bits-ui/*'],
+              message:
+                'Use the public bits-ui entry point; keep internal fixes in patches/.'
+            }
+          ]
+        }
+      ],
+
       // TypeScript resolves identifiers, including DOM lib types like
       // `ScrollBehavior` and `MutationObserverInit` that ESLint's browser
       // globals list doesn't carry. Leaving this on only produces false
