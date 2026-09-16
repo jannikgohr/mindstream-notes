@@ -5,6 +5,7 @@ use super::*;
 use crate::db::open_memory_for_tests;
 use p256::pkcs8::DecodePrivateKey;
 
+mod apply_assets;
 mod apply_folders;
 mod apply_notes;
 mod collab_room;

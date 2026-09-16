@@ -2,8 +2,8 @@
 
 This suite drives the **packaged Tauri binary** over WebDriver (`tauri-driver`)
 — the T3/T4 tiers. It's separate from the Playwright browser-fallback suite in
-[`../browser/`](../browser/) and **never runs in the default `pnpm test:e2e` or
-in CI**.
+[`../browser/`](../browser/) and runs separately from the default `pnpm test:e2e`.
+CI runs the packaged Linux suites according to the filters in `test.yml`.
 
 - **How to run it** → [../README.md](../README.md)
 - **Toolchain, env flags, test seams, harness gotchas** → [docs/e2e/harness.md](../../docs/e2e/harness.md)
@@ -16,22 +16,25 @@ dialog-driven backup specs still self-skip, pending the native-dialog Rust seam.
 
 ## What's here
 
-| File                                         | Tier | Covers                                                                 |
-| -------------------------------------------- | ---- | ---------------------------------------------------------------------- |
-| `specs/single/editor-roundtrip.e2e.ts`       | T3   | flow 1.1 through real `save_note` + SQLite + restart                   |
-| `specs/single/history.e2e.ts`                | T3   | capture / restore / Undo / editor-undo isolation / restart persistence |
-| `specs/single/trash-retention.e2e.ts`        | T3   | flows 1.5 + 3.3 (retention sweep on boot)                              |
-| `specs/single/settings-persist.e2e.ts`       | T3   | flows 3.1 / 3.2                                                        |
-| `specs/single/backup.e2e.ts`                 | T3   | flows 1.2–1.4 (pending a native-dialog hook)                           |
-| `specs/multi/collab.e2e.ts`                  | T4   | markdown live-edit propagation (pending a deterministic relay hook)    |
-| `specs/multi/collab-confirm.e2e.ts`          | T4   | solo no-prompt; peer prompt + ink/freeform (partly pending)            |
-| `specs/multi/sync-history.e2e.ts`            | T4   | per-device-history negative assertion; 4.10 edit-wins-over-delete      |
-| `specs/multi/sharing.e2e.ts`                 | T4   | sharing flows 4.1–4.4 + 4.7/4.7b                                       |
-| `specs/multi-a2/sharing-multi-device.e2e.ts` | T4   | owner-second-device 4.8–4.9 re-home cases                              |
+| File                                         | Tier | Covers                                                                  |
+| -------------------------------------------- | ---- | ----------------------------------------------------------------------- |
+| `specs/single/editor-roundtrip.e2e.ts`       | T3   | flow 1.1 through real `save_note` + SQLite + restart                    |
+| `specs/single/history.e2e.ts`                | T3   | capture / restore / Undo / editor-undo isolation / restart persistence  |
+| `specs/single/import-notes.e2e.ts`           | T3   | real vault import, links/assets, hierarchy, counts, restart persistence |
+| `specs/single/trash-retention.e2e.ts`        | T3   | flows 1.5 + 3.3 (retention sweep on boot)                               |
+| `specs/single/settings-persist.e2e.ts`       | T3   | flows 3.1 / 3.2                                                         |
+| `specs/single/backup.e2e.ts`                 | T3   | flows 1.2–1.4 (pending a native-dialog hook)                            |
+| `specs/multi/collab.e2e.ts`                  | T4   | markdown live-edit propagation (pending a deterministic relay hook)     |
+| `specs/multi/collab-confirm.e2e.ts`          | T4   | solo no-prompt; peer prompt + ink/freeform (partly pending)             |
+| `specs/multi/sync-history.e2e.ts`            | T4   | per-device-history negative assertion; 4.10 edit-wins-over-delete       |
+| `specs/multi/sharing.e2e.ts`                 | T4   | sharing flows 4.1–4.4 + 4.7/4.7b                                        |
+| `specs/multi-a2/sharing-multi-device.e2e.ts` | T4   | owner-second-device 4.8–4.9 re-home cases                               |
 
 `helpers/harness.ts` owns capability gating, the `MINDSTREAM_PROFILE_DIR`
 isolation/restart seam, and the accessible-name selectors (the same names the
 Playwright T2 specs use — the identical SvelteKit UI renders inside the WebView).
+`helpers/import-fixture.ts` creates the disposable vault used by the importer
+spec; the config passes it through the feature-gated native-picker test seam.
 `helpers/backend.ts` is the T4 backend-readiness gate. `helpers/accounts.ts`
 provisions the two distinct users the sharing flows need
 ([backend-stack.md](../../docs/e2e/backend-stack.md#account-provisioning)).

@@ -30,6 +30,26 @@ export * from './server-urls';
 export * from './sharing';
 export { pickExportDir, writeExportFile } from './notes-export';
 export {
+  cancelImport,
+  convertLegacyWikilinks,
+  detectImportSource,
+  legacyWikilinkCount,
+  pickImportFile,
+  pickImportFolder,
+  runImport,
+  DEFAULT_MAX_ATTACHMENT_BYTES,
+  IMPORT_SOURCE_KINDS
+} from './notes-import';
+export type {
+  DetectedSource,
+  ImportOptions,
+  ImportProgress,
+  ImportReport,
+  ImportSourceKind,
+  LegacyLinkReport,
+  UnresolvedLinksPolicy
+} from './notes-import';
+export {
   openDataFolder,
   openFolder,
   trashCounts,

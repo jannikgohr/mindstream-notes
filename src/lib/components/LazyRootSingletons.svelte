@@ -2,6 +2,7 @@
   import { confirmQueue } from './confirm-dialog.svelte';
   import { exportResultQueue } from './export-result-dialog.svelte';
   import { importChoiceQueue } from './import-choice-dialog.svelte';
+  import { importNotesQueue } from './import-notes-dialog.svelte';
   import { shortcutHelp } from '$lib/hotkeys/help.svelte';
   import { searchDialog } from '$lib/search/store.svelte';
   import { commandPalette } from '$lib/command-palette/store.svelte';
@@ -13,6 +14,7 @@
   let ConfirmDialog = $state<any | null>(null);
   let ExportResultDialog = $state<any | null>(null);
   let ImportChoiceDialog = $state<any | null>(null);
+  let ImportNotesDialog = $state<any | null>(null);
   let UpdaterProgressDialog = $state<any | null>(null);
   let ShortcutHelpDialog = $state<any | null>(null);
   let SearchDialog = $state<any | null>(null);
@@ -24,6 +26,7 @@
   let confirmToken = 0;
   let exportToken = 0;
   let importToken = 0;
+  let importNotesToken = 0;
   let updaterToken = 0;
   let shortcutToken = 0;
   let searchToken = 0;
@@ -56,6 +59,20 @@
     void import('./ImportChoiceDialog.svelte').then((mod) => {
       if (token === importToken && importChoiceQueue.items.length > 0) {
         ImportChoiceDialog = mod.default;
+      }
+    });
+  });
+
+  $effect(() => {
+    const active = importNotesQueue.items.length > 0;
+    const token = ++importNotesToken;
+    if (!active) {
+      ImportNotesDialog = null;
+      return;
+    }
+    void import('./ImportNotesDialog.svelte').then((mod) => {
+      if (token === importNotesToken && importNotesQueue.items.length > 0) {
+        ImportNotesDialog = mod.default;
       }
     });
   });
@@ -190,6 +207,9 @@
 {/if}
 {#if ImportChoiceDialog}
   <ImportChoiceDialog />
+{/if}
+{#if ImportNotesDialog}
+  <ImportNotesDialog />
 {/if}
 {#if ExportResultDialog}
   <ExportResultDialog />

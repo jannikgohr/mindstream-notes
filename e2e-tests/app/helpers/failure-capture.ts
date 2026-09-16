@@ -67,6 +67,7 @@ export interface PageProbe {
   console: string[];
   storage: Record<string, string>;
   html: string;
+  activeElement: string | null;
 }
 
 interface FailureReport extends Omit<PageProbe, 'html'> {
@@ -240,7 +241,8 @@ export function probePage(): PageProbe {
     names,
     console: Array.isArray(buffer) ? (buffer as string[]) : [],
     storage,
-    html: document.documentElement.outerHTML
+    html: document.documentElement.outerHTML,
+    activeElement: document.activeElement?.outerHTML.slice(0, 2_000) ?? null
   };
 }
 
@@ -255,38 +257,67 @@ async function captureClient(
   client: CapturableClient,
   outputDir: string,
   stem: string,
-  report: Pick<FailureReport, 'test' | 'client' | 'error'>
+  report: Pick<FailureReport, 'test' | 'client' | 'error'>,
+  timeoutMs: number
 ): Promise<void> {
-  await client
-    .saveScreenshot(join(outputDir, `${stem}.png`))
-    .catch((err: unknown) =>
-      console.warn(`[capture] screenshot failed for ${stem}:`, err)
+  const captureErrors: string[] = [];
+  const reportPath = join(outputDir, `${stem}.json`);
+  // Persist the failure even if the very first WebDriver command never answers.
+  const saveReport = (state: object = {}) =>
+    writeFileSync(
+      reportPath,
+      JSON.stringify({ ...report, captureErrors, ...state }, null, 2),
+      'utf8'
     );
+  saveReport({ captureStatus: 'pending' });
+  const capture = async <T>(label: string, operation: () => Promise<T>) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      // This bounds our wait, not the underlying WebDriver request. Independent
+      // X11 capture in CI remains available when that session is wedged.
+      return await Promise.race([
+        operation(),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+            timeoutMs
+          );
+        })
+      ]);
+    } catch (error) {
+      const message = `${label}: ${describeError(error).message}`;
+      captureErrors.push(message);
+      console.warn(`[capture] ${stem}: ${message}`);
+      return undefined;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
 
-  const probe = await client
-    .execute(probePage)
-    .catch((err: unknown) =>
-      console.warn(`[capture] page probe failed for ${stem}:`, err)
-    );
-  if (!probe) return;
-
-  const { html, ...rest } = probe;
-  const header = [
-    '<!--',
-    `  test:      ${report.test}`,
-    `  url:       ${probe.url}`,
-    `  viewport:  ${probe.viewport.innerWidth}x${probe.viewport.innerHeight} @ dpr ${probe.viewport.devicePixelRatio}`,
-    `  userAgent: ${probe.userAgent}`,
-    `  error:     ${report.error.message}`,
-    '-->',
-    ''
-  ].join('\n');
-  writeFileSync(join(outputDir, `${stem}.html`), header + html, 'utf8');
-  writeFileSync(
-    join(outputDir, `${stem}.json`),
-    JSON.stringify({ ...report, ...rest }, null, 2),
-    'utf8'
+  // Save HTML before asking the renderer for a screenshot.
+  const probe = await capture('page probe', () => client.execute(probePage));
+  const { html, ...rest } = probe ?? { html: '' };
+  if (probe) {
+    const header = [
+      '<!--',
+      `  test:      ${report.test}`,
+      `  url:       ${probe.url}`,
+      `  viewport:  ${probe.viewport.innerWidth}x${probe.viewport.innerHeight} @ dpr ${probe.viewport.devicePixelRatio}`,
+      `  userAgent: ${probe.userAgent}`,
+      `  error:     ${report.error.message}`,
+      '-->',
+      ''
+    ].join('\n');
+    writeFileSync(join(outputDir, `${stem}.html`), header + html, 'utf8');
+  }
+  saveReport({ ...rest, captureStatus: 'screenshot-pending' });
+  await capture('screenshot', () =>
+    client.saveScreenshot(join(outputDir, `${stem}.png`))
   );
+  saveReport({
+    ...rest,
+    captureStatus: captureErrors.length ? 'partial' : 'complete'
+  });
 }
 
 /**
@@ -301,8 +332,9 @@ export async function captureFailureArtifacts(options: {
   outputDir: string;
   title: string;
   error?: unknown;
+  timeoutMs?: number;
 }): Promise<void> {
-  const { client, outputDir, title, error } = options;
+  const { client, outputDir, title, error, timeoutMs = 5_000 } = options;
   try {
     mkdirSync(outputDir, { recursive: true });
     const stem = `${slugify(title)}-${Date.now()}`;
@@ -313,12 +345,19 @@ export async function captureFailureArtifacts(options: {
           client.getInstance(name),
           outputDir,
           `${stem}-${name}`,
-          { ...base, client: name }
+          { ...base, client: name },
+          timeoutMs
         );
       }
       return;
     }
-    await captureClient(client as CapturableClient, outputDir, stem, base);
+    await captureClient(
+      client as CapturableClient,
+      outputDir,
+      stem,
+      base,
+      timeoutMs
+    );
   } catch (err) {
     console.warn('[capture] failure artifacts unavailable:', err);
   }

@@ -295,6 +295,203 @@ fn rehome_folder_subtree_stamps_detaches_and_tombstones() {
     .unwrap();
 }
 
+fn insert_rehome_note(conn: &rusqlite::Connection, id: &str, folder: Option<&str>) {
+    conn.execute(
+        "INSERT INTO notes(id, parent_collection_id, title, body, position, created, modified, dirty)
+         VALUES (?1, ?2, ?1, '', 0, 't', 't', 0)",
+        params![id, folder],
+    )
+    .unwrap();
+}
+
+fn asset_row(
+    conn: &rusqlite::Connection,
+    id: &str,
+) -> (Option<String>, Option<String>, i64, Vec<u8>) {
+    conn.query_row(
+        "SELECT owning_note_id, share_scope_id, dirty, bytes FROM assets WHERE id = ?1",
+        params![id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )
+    .unwrap()
+}
+
+#[test]
+fn moving_asset_owner_across_scope_keeps_both_notes_assets_accessible() {
+    let db = crate::db::open_memory_for_tests();
+    db.with_conn(|conn| {
+        insert_rehome_note(conn, "owner", None);
+        insert_rehome_note(conn, "staying", None);
+        let asset = crate::assets::store_deduped(conn, "owner", "image/png", b"shared")?;
+        crate::assets::add_ref(conn, &asset.id, "staying")?;
+        conn.execute(
+            "UPDATE notes SET body = 'asset:mindstream/' || ?1 WHERE id IN ('owner', 'staying')",
+            params![asset.id],
+        )?;
+
+        rehome_note_subtree(conn, "owner", Some("scope_x"))?;
+
+        let original = asset_row(conn, &asset.id);
+        assert_eq!(original.0.as_deref(), Some("staying"));
+        assert_eq!(original.1, None);
+        assert_eq!(original.2, 1, "re-anchored assets must be pushed again");
+        assert_eq!(original.3, b"shared");
+
+        let moved_id: String = conn.query_row(
+            "SELECT asset_id FROM asset_refs WHERE note_id = 'owner'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_ne!(moved_id, asset.id);
+        let moved = asset_row(conn, &moved_id);
+        assert_eq!(moved.0.as_deref(), Some("owner"));
+        assert_eq!(moved.1.as_deref(), Some("scope_x"));
+        assert_eq!(moved.3, b"shared");
+
+        let staying_body: String =
+            conn.query_row("SELECT body FROM notes WHERE id = 'staying'", [], |row| {
+                row.get(0)
+            })?;
+        let moved_body: String =
+            conn.query_row("SELECT body FROM notes WHERE id = 'owner'", [], |row| {
+                row.get(0)
+            })?;
+        assert!(staying_body.contains(&asset.id));
+        assert!(moved_body.contains(&moved_id));
+        Ok::<(), AppError>(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn moving_non_owner_across_scope_leaves_original_blob_unchanged() {
+    let db = crate::db::open_memory_for_tests();
+    db.with_conn(|conn| {
+        insert_rehome_note(conn, "owner", None);
+        insert_rehome_note(conn, "moving", None);
+        let asset = crate::assets::store_deduped(conn, "owner", "image/png", b"shared")?;
+        crate::assets::add_ref(conn, &asset.id, "moving")?;
+        conn.execute(
+            "UPDATE notes SET body = 'asset:mindstream/' || ?1 WHERE id IN ('owner', 'moving')",
+            params![asset.id],
+        )?;
+
+        rehome_note_subtree(conn, "moving", Some("scope_x"))?;
+
+        let original = asset_row(conn, &asset.id);
+        assert_eq!(original.0.as_deref(), Some("owner"));
+        assert_eq!(original.1, None);
+        assert_eq!(
+            original.2, 1,
+            "the original asset remains independently syncable"
+        );
+        assert_eq!(original.3, b"shared");
+        let moved_id: String = conn.query_row(
+            "SELECT asset_id FROM asset_refs WHERE note_id = 'moving'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_ne!(moved_id, asset.id);
+        assert_eq!(asset_row(conn, &moved_id).1.as_deref(), Some("scope_x"));
+        Ok::<(), AppError>(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn moving_entire_folder_keeps_asset_id_and_unrelated_blobs() {
+    let db = crate::db::open_memory_for_tests();
+    db.with_conn(|conn| {
+        conn.execute(
+            "INSERT INTO collections(id, name, position, created, modified, dirty)
+             VALUES ('moving_folder', 'Moving', 0, 't', 't', 0)",
+            [],
+        )?;
+        insert_rehome_note(conn, "first", Some("moving_folder"));
+        insert_rehome_note(conn, "second", Some("moving_folder"));
+        insert_rehome_note(conn, "target_note", None);
+        insert_rehome_note(conn, "unrelated_note", None);
+        conn.execute(
+            "UPDATE notes SET share_scope_id = 'scope_x' WHERE id = 'target_note'",
+            [],
+        )?;
+        let original = crate::assets::store_deduped(conn, "first", "image/png", b"shared")?;
+        crate::assets::add_ref(conn, &original.id, "second")?;
+        let duplicate = crate::assets::store_deduped(conn, "target_note", "image/png", b"shared")?;
+        let unrelated =
+            crate::assets::store_deduped(conn, "unrelated_note", "image/png", b"other")?;
+
+        rehome_folder_subtree(conn, "moving_folder", Some("scope_x"))?;
+
+        for note_id in ["first", "second"] {
+            let referenced: String = conn.query_row(
+                "SELECT asset_id FROM asset_refs WHERE note_id = ?1",
+                params![note_id],
+                |row| row.get(0),
+            )?;
+            assert_eq!(
+                referenced, original.id,
+                "a wholly moving reference set keeps its id"
+            );
+        }
+        assert_eq!(asset_row(conn, &original.id).1.as_deref(), Some("scope_x"));
+        assert_eq!(asset_row(conn, &duplicate.id).3, b"shared");
+        assert_eq!(asset_row(conn, &unrelated.id).3, b"other");
+        Ok::<(), AppError>(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn scope_split_preserves_history_and_normalizes_late_saves_after_creator_purge() {
+    let db = crate::db::open_memory_for_tests();
+    db.with_conn(|conn| {
+        insert_rehome_note(conn, "creator", None);
+        insert_rehome_note(conn, "moving", None);
+        let original = crate::assets::store_deduped(conn, "creator", "image/png", b"shared")?;
+        crate::assets::add_ref(conn, &original.id, "moving")?;
+        let body = format!("![image](asset:mindstream/{})", original.id);
+        let state = crate::sync::yrs_doc::init_with_markdown(&body);
+        crate::history::capture(conn, "moving", "markdown", "edited", None, &body)?;
+        conn.execute(
+            "UPDATE notes SET body = ?1, yrs_state = ?2 WHERE id IN ('creator', 'moving')",
+            params![body, state],
+        )?;
+        rehome_note_subtree(conn, "moving", Some("scope_x"))?;
+        let moved_id: String = conn.query_row(
+            "SELECT asset_id FROM asset_refs WHERE note_id = 'moving'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_ne!(moved_id, original.id);
+        let history: Vec<u8> = conn.query_row(
+            "SELECT body FROM note_versions WHERE note_id = 'moving'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(
+            crate::history::decompress_snapshot(&history)?,
+            body.replace(&original.id, &moved_id)
+        );
+        crate::assets::release_note_assets(conn, "creator")?;
+        conn.execute("DELETE FROM notes WHERE id = 'creator'", [])?;
+        assert!(crate::assets::load(conn, &original.id).is_err());
+        let (normalized_body, normalized_state) =
+            crate::assets::normalize_asset_ids_for_note(conn, "moving", &body, Some(&state))?;
+        assert_eq!(normalized_body, body.replace(&original.id, &moved_id));
+        assert_eq!(
+            crate::sync::yrs_doc::to_markdown(&normalized_state.unwrap()),
+            normalized_body
+        );
+        rehome_note_subtree(conn, "moving", None)?;
+        let (again, _) = crate::assets::normalize_asset_ids_for_note(conn, "moving", &body, None)?;
+        assert_eq!(again, normalized_body);
+        assert_eq!(asset_row(conn, &moved_id).1, None);
+        Ok::<(), AppError>(())
+    })
+    .unwrap();
+}
+
 #[test]
 fn profile_lookup_error_is_friendly_for_missing_user() {
     let friendly = profile_lookup_error("bob", "UserInfo matching query does not exist.");

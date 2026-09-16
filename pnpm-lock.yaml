@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  bits-ui@1.0.0-next.78:
+    hash: 0cfd6988099c7240c1225af45b7eb6373d76f56c747697407df5c2452959f569
+    path: patches/bits-ui@1.0.0-next.78.patch
+
 importers:
 
   .:
@@ -85,7 +90,7 @@ importers:
         version: 2.10.1
       bits-ui:
         specifier: 1.0.0-next.78
-        version: 1.0.0-next.78(svelte@5.55.5(@typescript-eslint/types@8.69.0))
+        version: 1.0.0-next.78(patch_hash=0cfd6988099c7240c1225af45b7eb6373d76f56c747697407df5c2452959f569)(svelte@5.55.5(@typescript-eslint/types@8.69.0))
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
@@ -9262,7 +9267,7 @@ snapshots:
 
   binary-search@1.3.6: {}
 
-  bits-ui@1.0.0-next.78(svelte@5.55.5(@typescript-eslint/types@8.69.0)):
+  bits-ui@1.0.0-next.78(patch_hash=0cfd6988099c7240c1225af45b7eb6373d76f56c747697407df5c2452959f569)(svelte@5.55.5(@typescript-eslint/types@8.69.0)):
     dependencies:
       '@floating-ui/core': 1.7.5
       '@floating-ui/dom': 1.7.6

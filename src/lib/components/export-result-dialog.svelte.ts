@@ -8,6 +8,7 @@
 import type {
   BackupReport,
   ImportPreview,
+  ImportReport,
   MergeReport,
   RestoreStaged
 } from '$lib/api';
@@ -239,6 +240,98 @@ export function showMergeResult(report: MergeReport): Promise<string> {
         icon: 'alertTriangle',
         tone: report.notes_orphaned > 0 ? 'warning' : 'success',
         show: true
+      }
+    ]
+  });
+}
+
+/**
+ * Summary for a finished vault import.
+ *
+ * Link counts are the headline, not the note count: whether a migrated vault
+ * is usable comes down to whether its cross-references survived, and that is
+ * the one number the user cannot check by eye.
+ */
+export function showImportResult(report: ImportReport): Promise<string> {
+  const clean = report.errors === 0 && !report.cancelled;
+  return showDataResult({
+    titleKey: report.cancelled
+      ? 'data.importNotes.result.stopped.title'
+      : 'data.importNotes.result.success.title',
+    headerIcon: report.cancelled ? 'alertTriangle' : 'partyPopper',
+    tone: clean ? 'success' : 'warning',
+    primaryAction: {
+      labelKey: 'data.result.close',
+      value: 'close'
+    },
+    chips: [
+      notesChip(report.notes_created, 'data.importNotes.chip.notes.status'),
+      foldersChip(
+        report.folders_created,
+        'data.importNotes.chip.folders.status'
+      ),
+      {
+        count: report.links_resolved,
+        oneKey: 'data.importNotes.chip.links.one',
+        otherKey: 'data.importNotes.chip.links.other',
+        statusKey: 'data.importNotes.chip.links.status',
+        icon: 'gitMerge',
+        tone: 'success',
+        show: true
+      },
+      {
+        count: report.links_unresolved,
+        oneKey: 'data.importNotes.chip.unresolved.one',
+        otherKey: 'data.importNotes.chip.unresolved.other',
+        statusKey: 'data.importNotes.chip.unresolved.status',
+        icon: 'alertTriangle',
+        tone: 'warning',
+        show: report.links_unresolved > 0
+      },
+      {
+        count: report.placeholders_created,
+        oneKey: 'data.importNotes.chip.placeholders.one',
+        otherKey: 'data.importNotes.chip.placeholders.other',
+        statusKey: 'data.importNotes.chip.placeholders.status',
+        icon: 'feather',
+        tone: 'neutral',
+        show: report.placeholders_created > 0
+      },
+      {
+        count: report.attachments_imported,
+        oneKey: 'data.result.chip.attachments.one',
+        otherKey: 'data.result.chip.attachments.other',
+        statusKey: 'data.importNotes.chip.attachments.status',
+        icon: 'paperclip',
+        tone: 'neutral',
+        show: report.attachments_imported > 0
+      },
+      {
+        count: report.attachments_deduplicated,
+        oneKey: 'data.result.chip.attachments.one',
+        otherKey: 'data.result.chip.attachments.other',
+        statusKey: 'data.importNotes.chip.deduplicated.status',
+        icon: 'hardDrive',
+        tone: 'success',
+        show: report.attachments_deduplicated > 0
+      },
+      {
+        count: report.attachments_too_large,
+        oneKey: 'data.result.chip.attachments.one',
+        otherKey: 'data.result.chip.attachments.other',
+        statusKey: 'data.importNotes.chip.tooLarge.status',
+        icon: 'alertTriangle',
+        tone: 'warning',
+        show: report.attachments_too_large > 0
+      },
+      {
+        count: report.errors,
+        oneKey: 'data.importNotes.chip.errors.one',
+        otherKey: 'data.importNotes.chip.errors.other',
+        statusKey: 'data.importNotes.chip.errors.status',
+        icon: 'alertTriangle',
+        tone: 'destructive',
+        show: report.errors > 0
       }
     ]
   });

@@ -1,6 +1,9 @@
 packages:
   - packages/*
 
+patchedDependencies:
+  bits-ui@1.0.0-next.78: patches/bits-ui@1.0.0-next.78.patch
+
 allowBuilds:
   edgedriver: true
   esbuild: true

@@ -542,6 +542,17 @@
           ]
         },
         {
+          "id": "data.maintenance",
+          "settings": [
+            {
+              "id": "data.convertLegacyLinks",
+              "scope": "V",
+              "type": "button",
+              "actionId": "convert-legacy-links"
+            }
+          ]
+        },
+        {
           "id": "data.history",
           "settings": [
             {

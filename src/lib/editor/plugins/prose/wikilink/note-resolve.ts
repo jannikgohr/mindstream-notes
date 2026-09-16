@@ -26,9 +26,15 @@ export function resolveNoteTitleById(id: string, fallback: string): string {
  * real note with the same name.
  *
  * Same-title collisions: returns the most-recently-modified match.
- * That's arbitrary but stable per snapshot of the tree, and in practice
- * users notice the conflict quickly because the popup itself shows
- * both entries.
+ *
+ * @deprecated Note links are `[Title](mindstream://note/<id>)`; nothing
+ * produces a bare `[[Title]]` any more. The importer resolves links once, at
+ * import time, and Settings → Data → "Convert legacy links" rewrites the ones
+ * already in the vault. This remains only so pre-existing bodies keep working
+ * until that has run: resolving at click time is guesswork — the same link can
+ * lead to different notes as titles are edited, and a rename breaks it
+ * silently. Do not add new callers; delete it once the decoration pass no
+ * longer needs it.
  */
 export function resolveNoteIdByTitle(title: string): string | null {
   const wanted = title.trim().toLowerCase();

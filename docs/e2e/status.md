@@ -15,6 +15,7 @@ Tests we know we want but haven't written — the account/token-lifecycle flows
 | ----------------------------- | ---- | --------------------------------------------------------------------------------------------- |
 | `editor-roundtrip.e2e.ts`     | T3   | flow 1.1 through real `save_note` + SQLite + restart                                          |
 | `history.e2e.ts`              | T3   | capture / restore / Undo / editor-undo isolation / restart persistence                        |
+| `import-notes.e2e.ts`         | T3   | real vault import, hierarchy, note bodies, links/assets, counts, and restart persistence      |
 | `plugins.e2e.ts`              | T3   | `plugins_discover` off disk + toolbar contribution; disable persists across restart           |
 | `trash-retention.e2e.ts`      | T3   | flows 1.5 + 3.3 (retention sweep on boot)                                                     |
 | `settings-persist.e2e.ts`     | T3   | flows 3.1 / 3.2                                                                               |
@@ -96,9 +97,9 @@ pending because their providers don't report presence (see
       are local/manual only. The plan ([strategy.md](strategy.md#ci-shape)) is
       T3 per PR and T4 on release — a workflow change, since the specs already
       gate themselves on `MINDSTREAM_E2E_*`.
-- [ ] **Native-dialog hook.** Export/import/PDF pickers can't be driven over
-      WebDriver; a Rust-side hook to pre-seed the path would unskip `backup.e2e.ts`
-      and the PDF flows.
+- [ ] **Remaining native-dialog hooks.** Notes import now has a feature-gated
+      path-injection seam. Backup, export and PDF pickers still need equivalents
+      to unskip `backup.e2e.ts` and the PDF flows.
 - [ ] **`trashed_at` backdating hook.** The retention-sweep spec needs a way to
       age an item past the retention window.
 - [ ] **Session-injection hook.** Specs log in via the app's own `etebase_login`

@@ -18,8 +18,12 @@
 //! both ops survive the merge instead of one steamrolling the other.
 
 use similar::{ChangeTag, TextDiff};
+use yrs::types::Attrs;
 use yrs::updates::decoder::Decode;
-use yrs::{Doc, GetString, ReadTxn, StateVector, Text, Transact, Update};
+use yrs::{
+    Any, Doc, GetString, Map, Out, ReadTxn, StateVector, Text, Transact, Update, Xml, XmlFragment,
+    XmlOut,
+};
 
 const TEXT_KEY: &str = "body";
 
@@ -145,6 +149,190 @@ fn load(state: &[u8]) -> Doc {
 fn encode_state(doc: &Doc) -> Vec<u8> {
     let txn = doc.transact();
     txn.encode_state_as_update_v1(&StateVector::default())
+}
+
+/// Replace an asset id everywhere the editors can persist it in a Yjs document.
+/// This covers the legacy `body` Y.Text, y-prosemirror XML text and attributes,
+/// and Excalidraw file metadata stored as plain `Any::Map` values.
+pub(crate) fn replace_asset_id(state: &[u8], old_id: &str, new_id: &str) -> Vec<u8> {
+    if state.is_empty() || old_id.is_empty() || old_id == new_id {
+        return state.to_vec();
+    }
+    let doc = load(state);
+    // Applying an update into an empty Doc leaves root types unresolved until
+    // they are opened under the type expected by the writer. Open the three
+    // editor-owned roots explicitly before reading them.
+    let body = doc.get_or_insert_text(TEXT_KEY);
+    let prosemirror = doc.get_or_insert_xml_fragment("prosemirror");
+    let files = doc.get_or_insert_map("excalidraw:files");
+
+    let mut text_changes = Vec::new();
+    let mut xml_text_changes = Vec::new();
+    let mut xml_attr_changes = Vec::new();
+    let mut map_changes = Vec::new();
+    {
+        let txn = doc.transact();
+        let current = body.get_string(&txn);
+        let replacement = current.replace(old_id, new_id);
+        if replacement != current {
+            text_changes.push((body, current, replacement));
+        }
+        for node in prosemirror.successors(&txn) {
+            match node {
+                XmlOut::Text(text) => {
+                    let changes = collect_xml_text_changes(&text, &txn, old_id, new_id);
+                    if !changes.text.is_empty() || !changes.formats.is_empty() {
+                        xml_text_changes.push((text, changes));
+                    }
+                }
+                XmlOut::Element(element) => {
+                    for (key, value) in element.attributes(&txn) {
+                        let current = value.to_string(&txn);
+                        let replacement = current.replace(old_id, new_id);
+                        if replacement != current {
+                            xml_attr_changes.push((element.clone(), key.to_string(), replacement));
+                        }
+                    }
+                }
+                XmlOut::Fragment(_) => {}
+            }
+        }
+        for (key, value) in files.iter(&txn) {
+            if let yrs::Out::Any(any) = value {
+                let replacement = replace_in_any(&any, old_id, new_id);
+                if replacement != any {
+                    map_changes.push((files.clone(), key.to_string(), replacement));
+                }
+            }
+        }
+    }
+
+    if text_changes.is_empty()
+        && xml_text_changes.is_empty()
+        && xml_attr_changes.is_empty()
+        && map_changes.is_empty()
+    {
+        return state.to_vec();
+    }
+    {
+        let mut txn = doc.transact_mut();
+        for (text, current, replacement) in text_changes {
+            replay_diff(&text, &mut txn, &current, &replacement);
+        }
+        for (text, changes) in xml_text_changes {
+            for change in changes.formats {
+                text.format(&mut txn, change.index, change.len, change.attributes);
+            }
+            for change in changes.text.into_iter().rev() {
+                text.remove_range(&mut txn, change.index, change.old_len);
+                text.insert_with_attributes(
+                    &mut txn,
+                    change.index,
+                    &change.replacement,
+                    change.attributes,
+                );
+            }
+        }
+        for (element, key, replacement) in xml_attr_changes {
+            element.insert_attribute(&mut txn, key, replacement);
+        }
+        for (map, key, replacement) in map_changes {
+            map.insert(&mut txn, key, replacement);
+        }
+    }
+    encode_state(&doc)
+}
+
+#[derive(Default)]
+struct XmlTextChanges {
+    text: Vec<XmlTextChange>,
+    formats: Vec<XmlFormatChange>,
+}
+
+struct XmlTextChange {
+    index: u32,
+    old_len: u32,
+    replacement: String,
+    attributes: Attrs,
+}
+
+struct XmlFormatChange {
+    index: u32,
+    len: u32,
+    attributes: Attrs,
+}
+
+fn collect_xml_text_changes<T: ReadTxn>(
+    text: &yrs::XmlTextRef,
+    txn: &T,
+    old_id: &str,
+    new_id: &str,
+) -> XmlTextChanges {
+    let mut changes = XmlTextChanges::default();
+    let mut offset = 0;
+    for segment in text.diff(txn, |_| ()) {
+        let attributes = segment.attributes.as_deref().cloned().unwrap_or_default();
+        let (updated_attributes, changed_attributes) =
+            replace_in_attrs(&attributes, old_id, new_id);
+        let segment_len = match &segment.insert {
+            Out::Any(Any::String(value)) => value.len() as u32,
+            _ => 1,
+        };
+
+        if !changed_attributes.is_empty() && segment_len > 0 {
+            changes.formats.push(XmlFormatChange {
+                index: offset,
+                len: segment_len,
+                attributes: changed_attributes,
+            });
+        }
+        if let Out::Any(Any::String(value)) = &segment.insert {
+            changes
+                .text
+                .extend(value.match_indices(old_id).map(|(index, _)| XmlTextChange {
+                    index: offset + index as u32,
+                    old_len: old_id.len() as u32,
+                    replacement: new_id.to_string(),
+                    attributes: updated_attributes.clone(),
+                }));
+        }
+        offset += segment_len;
+    }
+    changes
+}
+
+fn replace_in_attrs(attrs: &Attrs, old_id: &str, new_id: &str) -> (Attrs, Attrs) {
+    let mut updated = attrs.clone();
+    let mut changed = Attrs::new();
+    for (key, value) in attrs {
+        let replacement = replace_in_any(value, old_id, new_id);
+        if replacement != *value {
+            updated.insert(key.clone(), replacement.clone());
+            changed.insert(key.clone(), replacement);
+        }
+    }
+    (updated, changed)
+}
+
+fn replace_in_any(value: &Any, old_id: &str, new_id: &str) -> Any {
+    match value {
+        Any::String(value) => Any::from(value.replace(old_id, new_id)),
+        Any::Array(values) => Any::Array(
+            values
+                .iter()
+                .map(|value| replace_in_any(value, old_id, new_id))
+                .collect::<Vec<_>>()
+                .into(),
+        ),
+        Any::Map(values) => Any::Map(
+            values
+                .iter()
+                .map(|(key, value)| (key.clone(), replace_in_any(value, old_id, new_id)))
+                .collect::<std::collections::HashMap<_, _>>()
+                .into(),
+        ),
+        _ => value.clone(),
+    }
 }
 
 /// Walk a `similar` diff and emit Y.Text inserts/deletes against the live
@@ -323,3 +511,6 @@ mod tests {
         assert!(final_md.ends_with('!'));
     }
 }
+
+#[cfg(test)]
+mod asset_id_tests;
