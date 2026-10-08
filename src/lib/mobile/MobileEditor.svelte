@@ -11,6 +11,8 @@
   import NoteStatusIcons from '$lib/desktop/NoteStatusIcons.svelte';
   import LazyNoteSidebar from '$lib/components/LazyNoteSidebar.svelte';
   import NoteKindRenderer from '$lib/components/NoteKindRenderer.svelte';
+  import EditorModeToggle from '$lib/editor/source/EditorModeToggle.svelte';
+  import { getNoteViewMode } from '$lib/stores/note-view-mode.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { ui } from '$lib/state.svelte';
@@ -19,6 +21,9 @@
   const noteId = $derived(ui.activeNoteId);
   const note = $derived(noteId ? tree.notesById[noteId] : null);
   const fav = $derived(noteId ? isFavourite(noteId) : false);
+  // Published by the note's editor once it is ready; null for note kinds
+  // without view modes, which then render no toggle.
+  const viewModeControl = $derived(getNoteViewMode(noteId));
   let metadataOpen = $state(false);
 
   function back() {
@@ -62,6 +67,12 @@
       {@const currentNoteId = noteId}
       <NoteStatusIcons {noteId} />
       <span class="mx-1 h-5 w-px shrink-0 bg-border" aria-hidden="true"></span>
+      {#if viewModeControl}
+        <EditorModeToggle
+          value={viewModeControl.value}
+          onCycle={viewModeControl.onCycle}
+        />
+      {/if}
       <Button
         variant="ghost"
         size="icon"

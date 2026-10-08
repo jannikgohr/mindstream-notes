@@ -20,6 +20,8 @@
     FolderInput,
     Loader2,
     MoreVertical,
+    Pencil,
+    RotateCcw,
     Trash2,
     X
   } from '@lucide/svelte';
@@ -476,8 +478,16 @@
   function menuItems(): (MenuItem | 'separator')[] {
     const t = menuTarget;
     if (!t) return [];
+    // Every item names its icon. ContextMenu can guess one from the label
+    // text, but that guess has no match for "Select" and stops working the
+    // moment a label is translated into wording it doesn't know.
+    //
+    // The select icon mirrors the row checkbox: it shows the state the tap
+    // leads to.
+    const selected = isMobileBatchSelected(t);
     const selectItem: MenuItem = {
-      label: isMobileBatchSelected(t) ? 'Unselect' : 'Select',
+      label: tUi(selected ? 'mobile.menu.unselect' : 'mobile.menu.select'),
+      icon: selected ? Circle : CircleCheck,
       onSelect: () => toggleMobileBatchItem(t)
     };
     // Inside the trash bucket the only meaningful actions are
@@ -487,10 +497,15 @@
       return [
         selectItem,
         'separator',
-        { label: 'Restore', onSelect: () => startRestore(t) },
+        {
+          label: tUi('mobile.menu.restore'),
+          icon: RotateCcw,
+          onSelect: () => startRestore(t)
+        },
         'separator',
         {
-          label: 'Delete permanently',
+          label: tUi('mobile.menu.deletePermanently'),
+          icon: Trash2,
           destructive: true,
           onSelect: () => void startPurge(t)
         }
@@ -499,11 +514,20 @@
     return [
       selectItem,
       'separator',
-      { label: 'Rename', onSelect: () => startRename(t) },
-      { label: 'Move to…', onSelect: () => startMove(t) },
+      {
+        label: tUi('mobile.menu.rename'),
+        icon: Pencil,
+        onSelect: () => startRename(t)
+      },
+      {
+        label: tUi('mobile.menu.moveTo'),
+        icon: FolderInput,
+        onSelect: () => startMove(t)
+      },
       'separator',
       {
-        label: 'Delete',
+        label: tUi('mobile.menu.delete'),
+        icon: Trash2,
         destructive: true,
         onSelect: () => void startTrash(t)
       }
