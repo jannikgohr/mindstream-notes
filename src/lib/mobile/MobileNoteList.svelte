@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tUi } from '$lib/settings/i18n.svelte';
+  import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
   /**
    * Note browser body: filters the tree by the active view + folder,
    * applies the search query, then renders as either a vertical list or
@@ -268,17 +268,21 @@
   function emptyStateMessage(): string {
     switch (mobileState.view) {
       case 'shared':
-        return 'Shared folders will appear here once you collaborate with someone.';
+        return tUi('mobile.empty.shared');
       case 'favourite':
-        return 'Tap the star on a note to add it to your favourites.';
+        return tUi('mobile.empty.favourite');
       case 'trash':
-        return mobileState.currentFolderId
-          ? 'This folder is empty.'
-          : 'Trash is empty.';
+        return tUi(
+          mobileState.currentFolderId
+            ? 'mobile.empty.trashFolder'
+            : 'mobile.empty.trash'
+        );
       default:
-        return mobileState.currentFolderId
-          ? 'This folder is empty. Use the + button to add a note.'
-          : 'No notes yet. Use the + button to create one.';
+        return tUi(
+          mobileState.currentFolderId
+            ? 'mobile.empty.folder'
+            : 'mobile.empty.home'
+        );
     }
   }
 
@@ -324,8 +328,8 @@
 
   function nameFor(t: NodeRef): string {
     return t.kind === 'note'
-      ? (tree.notesById[t.id]?.title ?? 'note')
-      : (tree.collectionsById[t.id]?.name ?? 'folder');
+      ? (tree.notesById[t.id]?.title ?? tUi('mobile.fallback.note'))
+      : (tree.collectionsById[t.id]?.name ?? tUi('mobile.fallback.folder'));
   }
 
   function currentParentOf(t: NodeRef): string | null {
@@ -388,10 +392,13 @@
     const label = nameFor(t);
     if (
       !(await confirm({
-        title:
-          t.kind === 'note' ? 'Move note to trash' : 'Move folder to trash',
-        message: `"${label}" will move to the trash. You can restore it from there later.`,
-        confirmLabel: 'Move to trash',
+        title: tUi(
+          t.kind === 'note'
+            ? 'mobile.confirm.trashNoteTitle'
+            : 'mobile.confirm.trashFolderTitle'
+        ),
+        message: tUiFormat('mobile.confirm.trashItem', { name: label }),
+        confirmLabel: tUi('fileTree.deleteTrash.confirm'),
         destructive: true
       }))
     ) {
@@ -405,12 +412,14 @@
     const label = nameFor(t);
     if (
       !(await confirm({
-        title: 'Delete permanently',
-        message:
+        title: tUi('fileTree.confirm.purge.title'),
+        message: tUiFormat(
           t.kind === 'folder'
-            ? `Folder "${label}" and everything inside will be removed. This cannot be undone.`
-            : `"${label}" will be removed. This cannot be undone.`,
-        confirmLabel: 'Delete',
+            ? 'fileTree.confirm.purge.folder'
+            : 'fileTree.confirm.purge.note',
+          { name: label }
+        ),
+        confirmLabel: tUi('fileTree.menu.delete'),
         destructive: true
       }))
     ) {
@@ -427,11 +436,18 @@
     const inTrash = mobileState.view === 'trash';
     if (
       !(await confirm({
-        title: inTrash ? 'Delete permanently' : 'Move to trash',
-        message: inTrash
-          ? `${count} item(s) will be removed. This cannot be undone.`
-          : `${count} item(s) will move to the trash. You can restore them from there later.`,
-        confirmLabel: inTrash ? 'Delete' : 'Move to trash',
+        title: tUi(
+          inTrash
+            ? 'fileTree.confirm.purge.title'
+            : 'fileTree.deleteTrash.confirm'
+        ),
+        message: tUiFormat(
+          inTrash ? 'mobile.confirm.purgeBatch' : 'mobile.confirm.trashBatch',
+          { count }
+        ),
+        confirmLabel: tUi(
+          inTrash ? 'fileTree.menu.delete' : 'fileTree.deleteTrash.confirm'
+        ),
         destructive: true
       }))
     ) {
@@ -446,10 +462,9 @@
     if (emptyTrashPending || trashRootEmpty) return;
     if (
       !(await confirm({
-        title: 'Delete all permanently',
-        message:
-          'Everything in Trash will be removed. This includes items inside trashed folders and cannot be undone.',
-        confirmLabel: 'Delete all',
+        title: tUi('mobile.deleteAllPermanently'),
+        message: tUi('mobile.confirm.emptyTrash'),
+        confirmLabel: tUi('mobile.confirm.deleteAll'),
         destructive: true
       }))
     ) {
@@ -462,7 +477,7 @@
     } catch (err) {
       console.error('[mobile] empty trash failed', err);
       await alert({
-        title: "Couldn't empty Trash",
+        title: tUi('data.emptyTrash.failed.title'),
         message: toErrorMessage(err)
       });
     } finally {
@@ -542,24 +557,32 @@
 >
   {#if tree.error}
     <p class="px-1 py-2 text-sm text-destructive">
-      Couldn't load notes: {tree.error}
+      {tUi('fileTree.error')}: {tree.error}
     </p>
   {:else if !tree.ready}
-    <p class="px-1 py-2 text-sm text-muted-foreground">Loading…</p>
+    <p class="px-1 py-2 text-sm text-muted-foreground">
+      {tUi('fileTree.loading')}
+    </p>
   {:else}
     {#if batchMode}
       <div
         class="sticky top-0 z-20 mb-3 flex items-center gap-2 rounded-md border border-border bg-card/95 px-3 py-2 shadow-sm backdrop-blur"
       >
         <span class="min-w-0 flex-1 truncate text-sm font-semibold">
-          {mobileBatchSelection.items.length} selected
+          {tUiFormat('mobile.batch.selected', {
+            count: mobileBatchSelection.items.length
+          })}
         </span>
         <button
           type="button"
           class="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-accent"
           onclick={toggleVisibleSelection}
         >
-          {allVisibleSelected ? 'Unselect all' : 'Select all'}
+          {tUi(
+            allVisibleSelected
+              ? 'mobile.batch.unselectAll'
+              : 'mobile.batch.selectAll'
+          )}
         </button>
         <button
           type="button"
@@ -588,7 +611,7 @@
           {:else}
             <Trash2 class="size-3.5" />
           {/if}
-          <span class="truncate">Delete all permanently</span>
+          <span class="truncate">{tUi('mobile.deleteAllPermanently')}</span>
         </button>
       </div>
     {/if}
@@ -651,10 +674,8 @@
                     class="rounded p-1 text-muted-foreground hover:text-foreground"
                     onclick={() => toggleFavourite(node.id)}
                     aria-pressed={fav}
-                    aria-label={fav
-                      ? 'Remove from favourites'
-                      : 'Add to favourites'}
-                    title={fav ? 'Remove from favourites' : 'Add to favourites'}
+                    aria-label={tUi(fav ? 'favourite.remove' : 'favourite.add')}
+                    title={tUi(fav ? 'favourite.remove' : 'favourite.add')}
                   >
                     <FavouriteStar size={16} favourited={fav} />
                   </button>
@@ -721,10 +742,8 @@
                 class="shrink-0 rounded p-2 text-muted-foreground hover:text-foreground"
                 onclick={() => toggleFavourite(node.id)}
                 aria-pressed={fav}
-                aria-label={fav
-                  ? 'Remove from favourites'
-                  : 'Add to favourites'}
-                title={fav ? 'Remove from favourites' : 'Add to favourites'}
+                aria-label={tUi(fav ? 'favourite.remove' : 'favourite.add')}
+                title={tUi(fav ? 'favourite.remove' : 'favourite.add')}
               >
                 <FavouriteStar size={16} favourited={fav} />
               </button>
@@ -759,7 +778,11 @@
       disabled={!hasBatchSelection}
     >
       <FolderInput class="size-4" />
-      {mobileState.view === 'trash' ? 'Restore' : 'Move to…'}
+      {tUi(
+        mobileState.view === 'trash'
+          ? 'mobile.menu.restore'
+          : 'mobile.menu.moveTo'
+      )}
     </button>
     <button
       type="button"
@@ -768,7 +791,7 @@
       disabled={!hasBatchSelection}
     >
       <Trash2 class="size-4" />
-      Delete
+      {tUi('mobile.menu.delete')}
     </button>
   </div>
 {/if}
@@ -780,7 +803,10 @@
     class:selected
     role="checkbox"
     aria-checked={selected}
-    aria-label={selected ? `Unselect ${node.name}` : `Select ${node.name}`}
+    aria-label={tUiFormat(
+      selected ? 'mobile.batch.unselectItem' : 'mobile.batch.selectItem',
+      { name: node.name }
+    )}
     onclick={(e) => {
       e.stopPropagation();
       toggleNodeSelection(node);
@@ -814,10 +840,17 @@
 
 {#if renameTarget}
   <NameInputSheet
-    title={renameTarget.kind === 'note' ? 'Rename note' : 'Rename folder'}
-    placeholder={renameTarget.kind === 'note' ? 'Note title' : 'Folder name'}
+    title={tUi(
+      renameTarget.kind === 'note'
+        ? 'mobile.rename.note'
+        : 'mobile.rename.folder'
+    )}
+    placeholder={tUi(
+      renameTarget.kind === 'note'
+        ? 'fab.placeholder.noteTitle'
+        : 'fab.placeholder.folderName'
+    )}
     initialValue={nameFor(renameTarget)}
-    submitLabel="Save"
     onSubmit={(n) => void commitRename(n)}
     onClose={() => (renameTarget = null)}
   />

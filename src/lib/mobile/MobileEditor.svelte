@@ -55,7 +55,7 @@
       <ArrowLeft class="size-5" />
     </Button>
     <span class="min-w-0 flex-1 truncate text-sm font-medium">
-      {note?.title ?? 'Note'}
+      {note?.title ?? tUi('mobile.editor.fallbackTitle')}
     </span>
     {#if noteId}
       <!-- Snapshot the (non-null inside this block) noteId so the click
@@ -78,8 +78,8 @@
         size="icon"
         onclick={() => toggleFavourite(currentNoteId)}
         aria-pressed={fav}
-        aria-label={fav ? 'Remove from favourites' : 'Add to favourites'}
-        title={fav ? 'Remove from favourites' : 'Add to favourites'}
+        aria-label={tUi(fav ? 'favourite.remove' : 'favourite.add')}
+        title={tUi(fav ? 'favourite.remove' : 'favourite.add')}
       >
         <FavouriteStar size={20} favourited={fav} />
       </Button>
@@ -98,7 +98,7 @@
   <main class="min-h-0 flex-1 overflow-hidden fullscreen-note">
     {#if !noteId}
       <p class="p-6 text-center text-sm text-muted-foreground">
-        No note selected.
+        {tUi('metadata.noNote')}
       </p>
     {:else if !note}
       <!-- Tree hasn't hydrated this note yet — show a placeholder
@@ -106,7 +106,9 @@
            kind. The mobile list calls openNote() which awaits the
            post-create loadTree, but a deep-link / restore-on-launch
            could race the initial hydration. -->
-      <p class="p-6 text-center text-sm text-muted-foreground">Loading note…</p>
+      <p class="p-6 text-center text-sm text-muted-foreground">
+        {tUi('mobile.editor.loading')}
+      </p>
     {:else}
       <NoteKindRenderer {noteId} noteKind={note.note_kind} />
     {/if}

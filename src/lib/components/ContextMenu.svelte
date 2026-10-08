@@ -8,18 +8,7 @@
    * default is suppressed in step 3.
    */
   import { onMount } from 'svelte';
-  import {
-    ChevronRight,
-    Download,
-    ExternalLink,
-    FolderInput,
-    FolderPlus,
-    Pencil,
-    Plus,
-    RotateCcw,
-    Share2,
-    Trash2
-  } from '@lucide/svelte';
+  import { ChevronRight } from '@lucide/svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import PluginIcon from '$lib/plugins/PluginIcon.svelte';
   import { noteKindIcon } from './note-kind-icon';
@@ -53,20 +42,6 @@
   const showIcons = $derived(
     getSettingValue('appearance.contextMenuIcons') !== false
   );
-
-  function fallbackIcon(item: MenuItem) {
-    const label = item.label.toLocaleLowerCase();
-    if (/delete|trash|remove|löschen|papierkorb/.test(label)) return Trash2;
-    if (/restore|wiederherstellen/.test(label)) return RotateCcw;
-    if (/rename|umbenennen/.test(label)) return Pencil;
-    if (/export|download/.test(label)) return Download;
-    if (/share|freigab/.test(label)) return Share2;
-    if (/move|verschieben/.test(label)) return FolderInput;
-    if (/folder|ordner/.test(label) && /new|neu/.test(label)) return FolderPlus;
-    if (/new|add|neu|hinzufügen/.test(label)) return Plus;
-    if (/open|öffnen/.test(label)) return ExternalLink;
-    return null;
-  }
 
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -140,7 +115,7 @@
     {#if item === 'separator'}
       <div class="my-1 h-px bg-border"></div>
     {:else}
-      {@const Icon = showIcons ? (item.icon ?? fallbackIcon(item)) : null}
+      {@const Icon = showIcons ? (item.icon ?? null) : null}
       {@const KindIcon =
         showIcons && item.noteKind ? noteKindIcon(item.noteKind) : null}
       <div
@@ -204,9 +179,7 @@
               : 'left-full ml-1'}"
           >
             {#each item.children as child, childIndex (child.id ?? child.label ?? childIndex)}
-              {@const ChildIcon = showIcons
-                ? (child.icon ?? fallbackIcon(child))
-                : null}
+              {@const ChildIcon = showIcons ? (child.icon ?? null) : null}
               {@const ChildKindIcon =
                 showIcons && child.noteKind
                   ? noteKindIcon(child.noteKind)

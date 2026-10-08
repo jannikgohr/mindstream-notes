@@ -41,7 +41,7 @@ import {
   trashNote
 } from '$lib/stores/tree.svelte';
 import { authSession } from '$lib/api/auth.svelte';
-import { tUi } from '$lib/settings/i18n.svelte';
+import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
 import {
   collectionIsSharedByMe,
   collectionUserCanManageSharing,
@@ -63,7 +63,16 @@ import type {
 import type { DesktopNoteSource } from '$lib/stores/note-source.svelte';
 import type { TreeNode } from '$lib/api';
 import { noteKindIcon } from './note-kind-icon';
-import { FolderPlus, Share2 } from '@lucide/svelte';
+import {
+  Download,
+  ExternalLink,
+  FolderInput,
+  FolderPlus,
+  Pencil,
+  RotateCcw,
+  Share2,
+  Trash2
+} from '@lucide/svelte';
 
 /**
  * The explorer state and commands the menu builder reads.
@@ -190,6 +199,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
     const children: MenuItem[] = [
       {
         label: tUi('sharing.menu.shareFolder'),
+        icon: Share2,
         onSelect: () => openCollectionShareDialog(id, 'invite')
       }
     ];
@@ -209,31 +219,30 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
     return [{ label: tUi('sharing.menu.group'), icon: Share2, children }];
   }
 
-  function batchLabel(items: TreeItemRef[]): string {
-    return `${items.length} item${items.length === 1 ? '' : 's'}`;
-  }
-
   async function menuItemsForBatch(
     items: TreeItemRef[]
   ): Promise<(MenuItem | 'separator')[]> {
     if (items.length <= 1) return [];
-    const label = batchLabel(items);
+    // A batch is two or more items, so the bundle's plural wording always fits.
+    const count = { count: items.length };
 
     if (ctx.source === 'trash') {
       return [
         {
-          label: `Restore ${label}`,
+          label: tUiFormat('fileTree.menu.batch.restore', count),
+          icon: RotateCcw,
           onSelect: () => void restoreManyItems(items)
         },
         {
-          label: `Delete ${label} permanently`,
+          label: tUiFormat('fileTree.menu.batch.deletePermanently', count),
+          icon: Trash2,
           destructive: true,
           onSelect: async () => {
             if (
               await confirm({
-                title: 'Delete permanently',
-                message: `${label} will be removed. This cannot be undone.`,
-                confirmLabel: 'Delete',
+                title: tUi('fileTree.confirm.purge.title'),
+                message: tUiFormat('fileTree.confirm.purge.batch', count),
+                confirmLabel: tUi('fileTree.menu.delete'),
                 destructive: true
               })
             ) {
@@ -244,16 +253,18 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
       ];
     }
 
+    const deleteBatchLabel = tUiFormat('fileTree.menu.batch.delete', count);
     const deleteBatchItem: MenuItem = {
-      label: `Delete ${label}`,
+      label: deleteBatchLabel,
+      icon: Trash2,
       shortcut: 'Del',
       destructive: true,
       onSelect: async () => {
         if (
           await confirm({
-            title: `Delete ${label}`,
-            message: `${label} will be moved to trash.`,
-            confirmLabel: 'Delete',
+            title: deleteBatchLabel,
+            message: tUiFormat('fileTree.confirm.trash.batch', count),
+            confirmLabel: tUi('fileTree.menu.delete'),
             destructive: true
           })
         ) {
@@ -282,7 +293,8 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
 
     return [
       {
-        label: `Move ${label} to root`,
+        label: tUiFormat('fileTree.menu.batch.moveToRoot', count),
+        icon: FolderInput,
         onSelect: () => void moveManyTo(items, null)
       },
       'separator',
@@ -299,14 +311,14 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
     const pluginItems = await pluginCreateMenuItems(ctx, id);
     return [
       {
-        label: 'New note',
+        label: tUi('fileTree.newNote'),
         icon: noteKindIcon('markdown'),
         onSelect: () => ctx.startDraft('note', id)
       },
       ...(noteTypeEnabled('freeform')
         ? [
             {
-              label: 'New drawing canvas',
+              label: tUi('fileTree.newDrawing'),
               icon: noteKindIcon('freeform'),
               onSelect: () => ctx.startDraft('drawing', id)
             }
@@ -315,7 +327,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
       ...(noteTypeEnabled('ink')
         ? [
             {
-              label: 'New handwritten note',
+              label: tUi('fileTree.newInk'),
               icon: noteKindIcon('ink'),
               onSelect: () => ctx.startDraft('ink', id)
             }
@@ -324,7 +336,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
       ...(noteTypeEnabled('pdf')
         ? [
             {
-              label: 'Import PDF',
+              label: tUi('fileTree.importPdf'),
               icon: noteKindIcon('pdf'),
               onSelect: () => ctx.startPdfImport(id)
             }
@@ -346,7 +358,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
           )[])
         : []),
       {
-        label: 'New folder',
+        label: tUi('fileTree.newFolder'),
         icon: FolderPlus,
         onSelect: () => ctx.startDraft('folder', id)
       }
@@ -366,18 +378,29 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
         (note && noteIsUnderTrash(note, tree.collectionsById))
       ) {
         return [
-          { label: 'Open', onSelect: () => ctx.onOpenNote(id) },
-          'separator',
-          { label: 'Restore', onSelect: () => void restoreNote(id) },
           {
-            label: 'Delete permanently',
+            label: tUi('fileTree.menu.open'),
+            icon: ExternalLink,
+            onSelect: () => ctx.onOpenNote(id)
+          },
+          'separator',
+          {
+            label: tUi('fileTree.menu.restore'),
+            icon: RotateCcw,
+            onSelect: () => void restoreNote(id)
+          },
+          {
+            label: tUi('fileTree.menu.deletePermanently'),
+            icon: Trash2,
             destructive: true,
             onSelect: async () => {
               if (
                 await confirm({
-                  title: 'Delete permanently',
-                  message: `"${note?.title ?? 'this note'}" will be removed. This cannot be undone.`,
-                  confirmLabel: 'Delete',
+                  title: tUi('fileTree.confirm.purge.title'),
+                  message: tUiFormat('fileTree.confirm.purge.note', {
+                    name: note?.title ?? tUi('fileTree.fallback.note')
+                  }),
+                  confirmLabel: tUi('fileTree.menu.delete'),
                   destructive: true
                 })
               ) {
@@ -389,26 +412,33 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
       }
 
       const items: (MenuItem | 'separator')[] = [
-        { label: 'Open', onSelect: () => ctx.onOpenNote(id) }
+        {
+          label: tUi('fileTree.menu.open'),
+          icon: ExternalLink,
+          onSelect: () => ctx.onOpenNote(id)
+        }
       ];
       const openRight = ctx.onOpenNoteRight;
       if (openRight) {
         items.push({
-          label: 'Open to the right',
+          label: tUi('fileTree.menu.openRight'),
+          icon: ExternalLink,
           onSelect: () => openRight(id)
         });
       }
       const openBelow = ctx.onOpenNoteBelow;
       if (openBelow) {
         items.push({
-          label: 'Open below',
+          label: tUi('fileTree.menu.openBelow'),
+          icon: ExternalLink,
           onSelect: () => openBelow(id)
         });
       }
       const openInNewWindow = ctx.onOpenInNewWindow;
       if (openInNewWindow) {
         items.push({
-          label: 'Open in new window',
+          label: tUi('fileTree.menu.openNewWindow'),
+          icon: ExternalLink,
           onSelect: () => openInNewWindow(id)
         });
       }
@@ -417,7 +447,8 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
         : [];
       if (exporters.length > 0) {
         items.push('separator', {
-          label: 'Export',
+          label: tUi('fileTree.menu.export'),
+          icon: Download,
           children: exporters.map((exporter) => ({
             id: exporter.id,
             label: exporter.label,
@@ -441,13 +472,19 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
           items.push(
             'separator',
             {
-              label: 'Rename…',
+              label: tUi('fileTree.menu.rename'),
+              icon: Pencil,
               shortcut: 'F2',
               onSelect: () =>
-                ctx.startRename('note', id, note?.title ?? 'Untitled')
+                ctx.startRename(
+                  'note',
+                  id,
+                  note?.title ?? tUi('fileTree.fallback.noteTitle')
+                )
             },
             {
-              label: 'Delete',
+              label: tUi('fileTree.menu.delete'),
+              icon: Trash2,
               shortcut: 'Del',
               destructive: true,
               onSelect: () => void trashNote(id)
@@ -459,14 +496,25 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
       items.push(
         'separator',
         {
-          label: 'Rename…',
+          label: tUi('fileTree.menu.rename'),
+          icon: Pencil,
           shortcut: 'F2',
-          onSelect: () => ctx.startRename('note', id, note?.title ?? 'Untitled')
+          onSelect: () =>
+            ctx.startRename(
+              'note',
+              id,
+              note?.title ?? tUi('fileTree.fallback.noteTitle')
+            )
         },
-        { label: 'Move to root', onSelect: () => void moveNoteTo(id, null) },
+        {
+          label: tUi('fileTree.menu.moveToRoot'),
+          icon: FolderInput,
+          onSelect: () => void moveNoteTo(id, null)
+        },
         'separator',
         {
-          label: 'Delete',
+          label: tUi('fileTree.menu.delete'),
+          icon: Trash2,
           shortcut: 'Del',
           destructive: true,
           onSelect: () => void trashNote(id)
@@ -485,16 +533,23 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
         collectionIsUnderTrash(id, tree.collectionsById)
       ) {
         return [
-          { label: 'Restore', onSelect: () => void restoreCollection(id) },
           {
-            label: 'Delete permanently',
+            label: tUi('fileTree.menu.restore'),
+            icon: RotateCcw,
+            onSelect: () => void restoreCollection(id)
+          },
+          {
+            label: tUi('fileTree.menu.deletePermanently'),
+            icon: Trash2,
             destructive: true,
             onSelect: async () => {
               if (
                 await confirm({
-                  title: 'Delete folder permanently',
-                  message: `Folder "${folder?.name ?? 'this folder'}" and everything inside will be removed. This cannot be undone.`,
-                  confirmLabel: 'Delete',
+                  title: tUi('fileTree.confirm.purge.folderTitle'),
+                  message: tUiFormat('fileTree.confirm.purge.folder', {
+                    name: folder?.name ?? tUi('fileTree.fallback.folder')
+                  }),
+                  confirmLabel: tUi('fileTree.menu.delete'),
                   destructive: true
                 })
               ) {
@@ -527,6 +582,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
               children: [
                 {
                   label: tUi('sharing.menu.shareFolder'),
+                  icon: Share2,
                   onSelect: () => openCollectionShareDialog(id, 'invite')
                 },
                 {
@@ -539,6 +595,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
           }
           items.push({
             label: tUi('sharing.menu.leaveFolder'),
+            icon: Share2,
             destructive: true,
             onSelect: () => void ctx.leaveShared(id)
           });
@@ -549,13 +606,19 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
           ...(await folderCreateMenuItems(id)),
           'separator',
           {
-            label: 'Rename folder…',
+            label: tUi('fileTree.menu.renameFolder'),
+            icon: Pencil,
             shortcut: 'F2',
             onSelect: () =>
-              ctx.startRename('folder', id, folder?.name ?? 'Folder')
+              ctx.startRename(
+                'folder',
+                id,
+                folder?.name ?? tUi('fileTree.fallback.folderName')
+              )
           },
           {
-            label: 'Delete',
+            label: tUi('fileTree.menu.delete'),
+            icon: Trash2,
             shortcut: 'Del',
             destructive: true,
             onSelect: () => void trashCollection(id)
@@ -569,19 +632,26 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
         ...(await folderCreateMenuItems(id)),
         'separator',
         {
-          label: 'Rename folder…',
+          label: tUi('fileTree.menu.renameFolder'),
+          icon: Pencil,
           shortcut: 'F2',
           onSelect: () =>
-            ctx.startRename('folder', id, folder?.name ?? 'Folder')
+            ctx.startRename(
+              'folder',
+              id,
+              folder?.name ?? tUi('fileTree.fallback.folderName')
+            )
         },
         {
-          label: 'Move to root',
+          label: tUi('fileTree.menu.moveToRoot'),
+          icon: FolderInput,
           onSelect: () => void moveCollectionTo(id, null)
         },
         ...sharingMenuGroup(id, folder),
         'separator',
         {
-          label: 'Delete',
+          label: tUi('fileTree.menu.delete'),
+          icon: Trash2,
           shortcut: 'Del',
           destructive: true,
           onSelect: () => void trashCollection(id)
@@ -592,7 +662,10 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
     if (ctx.source === 'trash') {
       return [
         {
-          label: `Empty trash (${ctx.trashItemCount})`,
+          label: tUiFormat('fileTree.menu.emptyTrash', {
+            count: ctx.trashItemCount
+          }),
+          icon: Trash2,
           destructive: true,
           disabled: ctx.trashItemCount === 0 || ctx.emptyTrashPending,
           onSelect: () => void ctx.startEmptyTrash()
@@ -605,14 +678,14 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
     const pluginItems = await pluginCreateMenuItems(ctx, null);
     return [
       {
-        label: 'New note',
+        label: tUi('fileTree.newNote'),
         icon: noteKindIcon('markdown'),
         onSelect: () => ctx.startDraft('note', null)
       },
       ...(noteTypeEnabled('freeform')
         ? [
             {
-              label: 'New drawing canvas',
+              label: tUi('fileTree.newDrawing'),
               icon: noteKindIcon('freeform'),
               onSelect: () => ctx.startDraft('drawing', null)
             }
@@ -621,7 +694,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
       ...(noteTypeEnabled('ink')
         ? [
             {
-              label: 'New handwritten note',
+              label: tUi('fileTree.newInk'),
               icon: noteKindIcon('ink'),
               onSelect: () => ctx.startDraft('ink', null)
             }
@@ -630,7 +703,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
       ...(noteTypeEnabled('pdf')
         ? [
             {
-              label: 'Import PDF',
+              label: tUi('fileTree.importPdf'),
               icon: noteKindIcon('pdf'),
               onSelect: () => ctx.startPdfImport(null)
             }
@@ -652,7 +725,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
           )[])
         : []),
       {
-        label: 'New folder',
+        label: tUi('fileTree.newFolder'),
         icon: FolderPlus,
         onSelect: () => ctx.startDraft('folder', null)
       }

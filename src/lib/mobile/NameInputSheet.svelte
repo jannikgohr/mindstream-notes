@@ -35,7 +35,7 @@
     placeholder?: string;
     /** Pre-filled value. Empty = create flow; non-empty = rename flow. */
     initialValue?: string;
-    /** Confirm-button label. */
+    /** Confirm-button label. Defaults to the translated "Save". */
     submitLabel?: string;
     onSubmit: (name: string) => void;
     onClose: () => void;
@@ -44,7 +44,7 @@
     title,
     placeholder,
     initialValue = '',
-    submitLabel = 'Save',
+    submitLabel,
     onSubmit,
     onClose
   }: Props = $props();
@@ -153,8 +153,10 @@
     />
 
     <div class="flex justify-end gap-2">
-      <Button variant="ghost" onclick={onClose}>Cancel</Button>
-      <Button onclick={submit} disabled={!canSubmit}>{submitLabel}</Button>
+      <Button variant="ghost" onclick={onClose}>{tUi('mobile.cancel')}</Button>
+      <Button onclick={submit} disabled={!canSubmit}>
+        {submitLabel ?? tUi('mobile.save')}
+      </Button>
     </div>
   </div>
 </div>

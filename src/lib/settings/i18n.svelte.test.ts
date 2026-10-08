@@ -6,6 +6,7 @@ import {
   tDescription,
   tLabel,
   tUi,
+  tUiFormat,
   tValue
 } from './i18n.svelte';
 
@@ -48,5 +49,41 @@ describe('lookups', () => {
 
   it('tDescription is undefined for an unknown id', () => {
     expect(tDescription('categories', 'no.such.category')).toBeUndefined();
+  });
+});
+
+describe('tUiFormat', () => {
+  it('fills every placeholder from the vars', () => {
+    expect(tUiFormat('fileTree.menu.batch.delete', { count: 3 })).toBe(
+      'Delete 3 items'
+    );
+    expect(tUiFormat('mobile.moveTo.target', { name: 'Work' })).toBe(
+      'Move to Work'
+    );
+  });
+
+  it('uses the active language', () => {
+    setLanguage('de');
+    expect(tUiFormat('fileTree.menu.batch.delete', { count: 3 })).toBe(
+      '3 Elemente löschen'
+    );
+  });
+
+  // The values are user text. A plain-string replacement would expand
+  // these patterns instead of inserting them.
+  it('inserts replacement patterns in a value literally', () => {
+    expect(tUiFormat('mobile.moveTo.target', { name: 'Costs $& $1 $$' })).toBe(
+      'Move to Costs $& $1 $$'
+    );
+  });
+
+  it('leaves a placeholder with no matching var as written', () => {
+    expect(tUiFormat('mobile.moveTo.target', {})).toBe('Move to {name}');
+  });
+
+  it('falls back to the key when it is unknown', () => {
+    expect(tUiFormat('nonexistent.ui.key' as never, { count: 1 })).toBe(
+      'nonexistent.ui.key'
+    );
   });
 });

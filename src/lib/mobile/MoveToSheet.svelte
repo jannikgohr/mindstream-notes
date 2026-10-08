@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tUi } from '$lib/settings/i18n.svelte';
+  import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
   /**
    * Folder picker rendered as a full-bleed bottom sheet. The collection
    * tree is rendered recursively from a synthetic "Root" node so the
@@ -143,9 +143,9 @@
     // harmless no-op and the alternative (greying it out) makes it look
     // like a section header instead of a destination.
     if (id !== null && target.currentParent === id)
-      return 'Already in this folder';
+      return tUi('mobile.moveTo.alreadyHere');
     if (id !== null && forbidden.has(id)) {
-      return 'Cannot move a folder into itself or one of its children';
+      return tUi('mobile.moveTo.intoItself');
     }
     return null;
   }
@@ -172,7 +172,7 @@
   <header
     class="flex h-12 shrink-0 items-center justify-between border-b border-border px-3"
   >
-    <span class="text-sm font-semibold">Move to…</span>
+    <span class="text-sm font-semibold">{tUi('mobile.menu.moveTo')}</span>
     <Button
       variant="ghost"
       size="icon"
@@ -191,7 +191,7 @@
   >
     {@render row({
       id: null,
-      name: 'Root',
+      name: tUi('metadata.folder.root'),
       depth: 0,
       hasChildren: forest.length > 0,
       isRoot: true,
@@ -244,8 +244,12 @@
         type="button"
         class="flex w-7 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
         onclick={() => toggle(args.id as string)}
-        aria-label={args.open ? 'Collapse folder' : 'Expand folder'}
-        title={args.open ? 'Collapse' : 'Expand'}
+        aria-label={tUi(
+          args.open
+            ? 'mobile.moveTo.collapseFolder'
+            : 'mobile.moveTo.expandFolder'
+        )}
+        title={tUi(args.open ? 'tags.collapse' : 'tags.expand')}
       >
         <ChevronRight
           class="size-4 transition-transform {args.open ? 'rotate-90' : ''}"
@@ -263,7 +267,10 @@
       type="button"
       class="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
       disabled={isDisabled}
-      title={reason ?? (args.isRoot ? 'Move to root' : `Move to ${args.name}`)}
+      title={reason ??
+        (args.isRoot
+          ? tUi('fileTree.menu.moveToRoot')
+          : tUiFormat('mobile.moveTo.target', { name: args.name }))}
       onclick={() => pick(args.id)}
     >
       {#if args.isRoot}
