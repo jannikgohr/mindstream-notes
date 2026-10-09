@@ -294,6 +294,16 @@ export function insertSourceMarkdown(view: EditorView, markdown: string): void {
   view.focus();
 }
 
+/**
+ * Undo/redo availability of the source editor. It keeps its own CodeMirror
+ * history, separate from the WYSIWYG pane's ProseMirror one, so SourceEditor
+ * reports it and the toolbar reads it while this surface is active.
+ */
+export interface SourceHistoryState {
+  canUndo: boolean;
+  canRedo: boolean;
+}
+
 const doUndo = (view: EditorView) => {
   undo(view);
   view.focus();

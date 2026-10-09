@@ -20,8 +20,13 @@
 import { describe, expect, it } from 'vitest';
 import { Schema, type Node as ProseNode } from 'prosemirror-model';
 import { EditorState, TextSelection } from 'prosemirror-state';
+import { editorStateCtx } from '@milkdown/kit/core';
+import type { Ctx } from '@milkdown/kit/ctx';
+import { history, redo, undo } from '@milkdown/kit/prose/history';
 import {
   applyListAction,
+  canApplyListAction,
+  isInCodeOrList,
   TOOLBAR_ITEMS,
   type ListActionTypes
 } from './commands';
@@ -552,5 +557,146 @@ describe('applyListAction — round-trip', () => {
       types
     );
     expect(structure(final.doc)).toBe('p(one) p(two) p(three) p(four)');
+  });
+});
+
+// -- Enabled-state predicates -----------------------------------------------
+
+describe('isInCodeOrList', () => {
+  it('is false in a paragraph or heading', () => {
+    const inParagraph = withCursorAt(stateOf(makeDoc(p('hello'))), 2);
+    const inHeading = withCursorAt(stateOf(makeDoc(h(2, 'title'))), 2);
+    expect(isInCodeOrList(inParagraph)).toBe(false);
+    expect(isInCodeOrList(inHeading)).toBe(false);
+  });
+
+  it('is true in a code block', () => {
+    const inCode = withCursorAt(stateOf(makeDoc(code('x = 1'))), 2);
+    expect(isInCodeOrList(inCode)).toBe(true);
+  });
+
+  it('is true anywhere inside a list', () => {
+    // doc > bullet_list > list_item > paragraph: the caret is three levels in.
+    const inList = withCursorAt(stateOf(makeDoc(ul('one'))), 4);
+    expect(isInCodeOrList(inList)).toBe(true);
+  });
+});
+
+describe('canApplyListAction', () => {
+  it('is true for a caret in a paragraph, heading or list', () => {
+    const inParagraph = withCursorAt(stateOf(makeDoc(p('hello'))), 2);
+    const inHeading = withCursorAt(stateOf(makeDoc(h(1, 'title'))), 2);
+    const inList = withCursorAt(stateOf(makeDoc(ol('one'))), 4);
+    expect(canApplyListAction(inParagraph)).toBe(true);
+    expect(canApplyListAction(inHeading)).toBe(true);
+    expect(canApplyListAction(inList)).toBe(true);
+  });
+
+  it('is false with the caret in a code block', () => {
+    const inCode = withCursorAt(stateOf(makeDoc(code('x = 1'))), 2);
+    expect(canApplyListAction(inCode)).toBe(false);
+  });
+
+  it('is false when the selection crosses a code block', () => {
+    const acrossCode = withSelectionAll(
+      stateOf(makeDoc(p('before'), code('x'), p('after')))
+    );
+    expect(canApplyListAction(acrossCode)).toBe(false);
+  });
+
+  // The predicate decides whether the list buttons render enabled, so it
+  // must never promise an action the transform then declines (or the
+  // reverse). Compare the two over the shapes the buttons actually meet.
+  it.each([
+    ['paragraph', () => withCursorAt(stateOf(makeDoc(p('hello'))), 2)],
+    ['heading', () => withCursorAt(stateOf(makeDoc(h(3, 'title'))), 2)],
+    ['bullet list', () => withCursorAt(stateOf(makeDoc(ul('one', 'two'))), 4)],
+    ['ordered list', () => withCursorAt(stateOf(makeDoc(ol('one', 'two'))), 4)],
+    ['code block', () => withCursorAt(stateOf(makeDoc(code('x = 1'))), 2)],
+    [
+      'mixed selection',
+      () => withSelectionAll(stateOf(makeDoc(p('a'), ul('b'), ol('c'))))
+    ],
+    [
+      'selection across code',
+      () => withSelectionAll(stateOf(makeDoc(p('a'), code('b'), p('c'))))
+    ]
+  ] as const)('agrees with applyListAction for a %s', (_label, build) => {
+    const state = build();
+    for (const target of ['bullet', 'ordered', 'task'] as const) {
+      expect(canApplyListAction(state)).toBe(
+        applyListAction(state, undefined, target, types)
+      );
+    }
+  });
+});
+
+describe('undo / redo enabled state', () => {
+  /** Find a top-level toolbar leaf. */
+  function topLeaf(id: string) {
+    const item = TOOLBAR_ITEMS.find((entry) => entry.id === id);
+    if (item?.kind !== 'leaf') throw new Error(`no top-level leaf "${id}"`);
+    return item;
+  }
+  /** The slice of a Milkdown Ctx the predicates read. */
+  function ctxFor(state: EditorState): Ctx {
+    return {
+      get(key: unknown) {
+        if (key === editorStateCtx) return state;
+        throw new Error('unexpected ctx key');
+      }
+    } as unknown as Ctx;
+  }
+  const enabled = (id: string, state: EditorState) =>
+    topLeaf(id).isEnabled?.(ctxFor(state));
+
+  // Real prosemirror-history, the plugin Crepe installs: the buttons must
+  // track the same stacks the undo/redo commands pop.
+  it('follows the history stacks through edit, undo and redo', () => {
+    const fresh = EditorState.create({
+      doc: makeDoc(p('hello')),
+      plugins: [history()]
+    });
+    expect(enabled('undo', fresh)).toBe(false);
+    expect(enabled('redo', fresh)).toBe(false);
+
+    const edited = fresh.apply(fresh.tr.insertText('!', 6));
+    expect(enabled('undo', edited)).toBe(true);
+    expect(enabled('redo', edited)).toBe(false);
+
+    let undone = edited;
+    undo(edited, (tr) => {
+      undone = edited.apply(tr);
+    });
+    expect(undone.doc.textContent).toBe('hello');
+    expect(enabled('undo', undone)).toBe(false);
+    expect(enabled('redo', undone)).toBe(true);
+
+    let redone = undone;
+    redo(undone, (tr) => {
+      redone = undone.apply(tr);
+    });
+    expect(enabled('undo', redone)).toBe(true);
+    expect(enabled('redo', redone)).toBe(false);
+  });
+
+  // A history restore is applied with addToHistory: false so Ctrl+Z can't
+  // roll it back (see NoteEditor.applyMarkdown). The button must agree.
+  it('stays disabled after a change kept off the history', () => {
+    const fresh = EditorState.create({
+      doc: makeDoc(p('hello')),
+      plugins: [history()]
+    });
+    const restored = fresh.apply(
+      fresh.tr.insertText('!', 6).setMeta('addToHistory', false)
+    );
+    expect(restored.doc.textContent).toBe('hello!');
+    expect(enabled('undo', restored)).toBe(false);
+  });
+
+  it('is disabled in an editor without the history plugin', () => {
+    const state = stateOf(makeDoc(p('hello')));
+    expect(enabled('undo', state)).toBe(false);
+    expect(enabled('redo', state)).toBe(false);
   });
 });

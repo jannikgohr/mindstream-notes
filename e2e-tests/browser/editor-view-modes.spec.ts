@@ -250,10 +250,31 @@ test.describe('resizing across the threshold', () => {
 test.describe('mobile phone', () => {
   test.use(emulate('Pixel 5'));
 
-  test('exposes the mode toggle in the editor header', async ({ page }) => {
+  test('exposes the mode toggle in the note header', async ({ page }) => {
     // Previously mobile was locked to WYSIWYG with no toggle at all.
     await boot(page);
     await expect(modeButton(page)).toBeVisible();
+
+    // It shares the line with the back button, title and favourite star.
+    // Formatting lives in the floating pill on a phone, so inside the editor
+    // the toggle would have a full-width row to itself.
+    const header = page
+      .locator('header')
+      .filter({ has: page.getByRole('button', { name: 'Back to notes' }) });
+    await expect(
+      header.getByRole('button', { name: /^Editor view mode:/ })
+    ).toBeVisible();
+    await expect(modeButton(page)).toHaveCount(1);
+
+    // So the editor pane starts directly under the header.
+    const headerBox = await header.boundingBox();
+    const paneBox = await page
+      .locator('main .themed-scrollbar')
+      .first()
+      .boundingBox();
+    expect(headerBox).not.toBeNull();
+    expect(paneBox).not.toBeNull();
+    expect(paneBox!.y).toBeCloseTo(headerBox!.y + headerBox!.height, 0);
   });
 
   /**

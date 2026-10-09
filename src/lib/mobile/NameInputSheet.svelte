@@ -14,11 +14,19 @@
    *   - Backdrop tap or the X button closes the sheet without saving.
    *   - safe-bottom + safe-x padding so the sheet doesn't paint under
    *     the Android gesture bar with edge-to-edge enabled.
+   *   - Rides on top of the soft keyboard. The sheet is `position: fixed`,
+   *     and edge-to-edge Android keeps the layout viewport at full height
+   *     when the keyboard opens, so `bottom: 0` alone leaves it underneath
+   *     and the WebView pans the whole page to reveal the field.
+   *   - Holds the app shell at full height while open. The shell normally
+   *     shrinks to the visible area (see $lib/layout/app-height), which
+   *     would rearrange the screen behind the scrim as the keyboard opens.
    */
   import { onMount, untrack } from 'svelte';
   import { X } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
+  import { holdAppHeight, keyboardInset } from '$lib/layout/app-height';
 
   interface Props {
     /** Header label shown above the input. */
@@ -27,7 +35,7 @@
     placeholder?: string;
     /** Pre-filled value. Empty = create flow; non-empty = rename flow. */
     initialValue?: string;
-    /** Confirm-button label. */
+    /** Confirm-button label. Defaults to the translated "Save". */
     submitLabel?: string;
     onSubmit: (name: string) => void;
     onClose: () => void;
@@ -36,7 +44,7 @@
     title,
     placeholder,
     initialValue = '',
-    submitLabel = 'Save',
+    submitLabel,
     onSubmit,
     onClose
   }: Props = $props();
@@ -48,11 +56,24 @@
   const startingValue = untrack(() => initialValue);
   let value = $state(startingValue);
   let inputEl: HTMLInputElement | null = $state(null);
+  let keyboardOffset = $state(0);
 
   const trimmed = $derived(value.trim());
   const canSubmit = $derived(trimmed.length > 0);
 
   onMount(() => {
+    // Hold before focusing: the hold has to be in place when the keyboard
+    // starts to open.
+    const releaseAppHeight = holdAppHeight();
+    const syncKeyboardOffset = () => {
+      keyboardOffset = keyboardInset();
+    };
+    syncKeyboardOffset();
+    const vv = window.visualViewport;
+    vv?.addEventListener('resize', syncKeyboardOffset);
+    vv?.addEventListener('scroll', syncKeyboardOffset);
+    window.addEventListener('resize', syncKeyboardOffset);
+
     // Focus inside a microtask so the sheet's mount animation doesn't
     // race the focus call and re-scroll the page on Android.
     queueMicrotask(() => {
@@ -68,7 +89,13 @@
       }
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      vv?.removeEventListener('resize', syncKeyboardOffset);
+      vv?.removeEventListener('scroll', syncKeyboardOffset);
+      window.removeEventListener('resize', syncKeyboardOffset);
+      releaseAppHeight();
+    };
   });
 
   function submit() {
@@ -93,7 +120,8 @@
 ></button>
 
 <div
-  class="safe-bottom safe-x fixed inset-x-0 bottom-0 z-50 flex flex-col rounded-t-xl border border-border bg-card shadow-2xl"
+  class="safe-bottom safe-x fixed inset-x-0 z-50 flex flex-col rounded-t-xl border border-border bg-card shadow-2xl"
+  style="bottom: {keyboardOffset}px;"
   role="dialog"
   aria-modal="true"
   aria-label={title}
@@ -125,8 +153,10 @@
     />
 
     <div class="flex justify-end gap-2">
-      <Button variant="ghost" onclick={onClose}>Cancel</Button>
-      <Button onclick={submit} disabled={!canSubmit}>{submitLabel}</Button>
+      <Button variant="ghost" onclick={onClose}>{tUi('mobile.cancel')}</Button>
+      <Button onclick={submit} disabled={!canSubmit}>
+        {submitLabel ?? tUi('mobile.save')}
+      </Button>
     </div>
   </div>
 </div>

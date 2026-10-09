@@ -37,6 +37,10 @@
     setNoteStatus,
     clearNoteStatus
   } from '$lib/stores/note-status.svelte';
+  import {
+    setNoteViewMode,
+    clearNoteViewMode
+  } from '$lib/stores/note-view-mode.svelte';
   import { getSettingValue, settings } from '$lib/settings/store.svelte';
   import {
     checkSegments,
@@ -79,7 +83,8 @@
   import EditorModeToggle from '$lib/editor/source/EditorModeToggle.svelte';
   import {
     SOURCE_ACTIONS,
-    insertSourceMarkdown
+    insertSourceMarkdown,
+    type SourceHistoryState
   } from '$lib/editor/source/source-actions';
   import {
     coerceViewMode,
@@ -247,6 +252,13 @@
   // ProseMirror commands, Source runs markdown text transforms). In Split it
   // tracks the pane the user last interacted with.
   let activeSurface = $state<'wysiwyg' | 'source'>('wysiwyg');
+  // Undo/redo availability of the source editor's own history, reported by
+  // SourceEditor. The toolbar reads it while that surface is active, where
+  // ProseMirror's history says nothing about what Undo would do.
+  let sourceHistory = $state<SourceHistoryState>({
+    canUndo: false,
+    canRedo: false
+  });
   // Wrapper around BOTH panes, registered as the command-bus listener host so
   // the hotkey manager treats the source editor's contenteditable as part of
   // this editor (otherwise its keystrokes would be filtered as blocked input).
@@ -1062,6 +1074,7 @@
     // Drop our row from the global status store so the dockview
     // header doesn't keep showing stale icons after the panel closes.
     clearNoteStatus(noteId);
+    clearNoteViewMode(noteId);
     saveReady = false;
     if (yDoc && yDocUpdateHandler) {
       yDoc.off('update', yDocUpdateHandler);
@@ -1607,10 +1620,22 @@
   // editable notes. Read-only notes keep the mode toggle inline with their
   // explanatory banner instead.
   //
-  // Mobile gets it too, holding the mode toggle alone: formatting there lives
-  // in the floating pill, but the pill is hidden on read-only notes and is
-  // already crowded, so the toggle belongs in the header on both platforms.
-  const showEditorHeader = $derived(crepeReady && !isReadOnly);
+  // Desktop only. On mobile formatting lives in the floating pill, so this
+  // header would be a full-width row holding the toggle alone. The toggle goes
+  // to the note header instead (see the effect below), which already carries
+  // the title, status icons and favourite star.
+  const showEditorHeader = $derived(!mobile && crepeReady && !isReadOnly);
+  const showInlineModeToggle = $derived(!mobile && crepeReady);
+
+  // Mobile: publish the mode toggle for MobileEditor's header. Read-only notes
+  // publish it too, so the toggle sits in one place whatever the note's state.
+  $effect(() => {
+    if (!mobile || !crepeReady) {
+      clearNoteViewMode(noteId);
+      return;
+    }
+    setNoteViewMode(noteId, { value: viewMode, onCycle: cycleViewMode });
+  });
 
   // Mirror our reactive status into the global per-note store so the
   // dockview right-header (NoteStatusIcons.svelte) can render the
@@ -1638,6 +1663,7 @@
           <EditorToolbar
             {crepe}
             {activeSurface}
+            {sourceHistory}
             menuPlacement="bottom"
             dense
             class="bg-background"
@@ -1649,13 +1675,13 @@
   {/if}
   {#if isTrashed}
     <TrashBanner>
-      {#if crepeReady}
+      {#if showInlineModeToggle}
         <EditorModeToggle value={viewMode} onCycle={cycleViewMode} />
       {/if}
     </TrashBanner>
   {:else if isReadOnlyScope}
     <ViewOnlyBanner>
-      {#if crepeReady}
+      {#if showInlineModeToggle}
         <EditorModeToggle value={viewMode} onCycle={cycleViewMode} />
       {/if}
     </ViewOnlyBanner>
@@ -1732,6 +1758,7 @@
             readonly={isReadOnly}
             tabSize={sourceTabSize}
             onInput={handleSourceInput}
+            onHistoryChange={(history) => (sourceHistory = history)}
             {autoPairEnabled}
             {wikilinksEnabled}
             wikilinkBridge={sourceWikilinkBridge}
@@ -1771,7 +1798,7 @@
        in Source the same command ids run the markdown text transforms via the
        bus. Without it the pill would run ProseMirror commands against the
        hidden WYSIWYG doc while the user edits raw markdown. -->
-  <MobileEditorToolbar {crepe} {activeSurface} />
+  <MobileEditorToolbar {crepe} {activeSurface} {sourceHistory} />
 {/if}
 
 <!--

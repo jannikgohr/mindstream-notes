@@ -171,7 +171,7 @@
    * linters, dev tools) the property exists so `var(...)` references
    * don't show "cannot resolve" warnings. */
   --mobile-toolbar-height: 0px;
-  /* Visible viewport height — set live by hooks.client.ts from
+  /* Visible viewport height — set live by $lib/layout/app-height from
    * window.visualViewport so the root layout shrinks when the Android
    * soft keyboard opens (see the long comment on html, body below).
    * The 100% default matches the prior `height: 100%` behaviour on
@@ -336,7 +336,7 @@ html {
  * pull-to-refresh that some platforms still attach to the document even
  * when overflow is hidden.
  *
- * --app-h is published by hooks.client.ts from window.visualViewport
+ * --app-h is published by $lib/layout/app-height from window.visualViewport
  * so that when the Android soft keyboard opens, the layout viewport
  * shrinks with it. Without this, edge-to-edge Android keeps the WebView
  * at full window height, the keyboard floats over the bottom, and

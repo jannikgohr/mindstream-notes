@@ -1,3 +1,4 @@
+import { Trash2 } from '@lucide/svelte';
 import { cleanup, render } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ContextMenu from './ContextMenu.svelte';
@@ -134,7 +135,9 @@ describe('ContextMenu shortcuts and destructive styling', () => {
       props: {
         x: 10,
         y: 10,
-        items: [{ label: 'Delete', shortcut: 'Del', destructive: true }],
+        items: [
+          { label: 'Delete', icon: Trash2, shortcut: 'Del', destructive: true }
+        ],
         onClose: vi.fn()
       }
     });
