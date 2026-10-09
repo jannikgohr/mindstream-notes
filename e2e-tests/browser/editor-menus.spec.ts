@@ -327,6 +327,98 @@ test.describe('formatting toolbar', () => {
       page.getByRole('heading', { name: text, level: 2 })
     ).toBeVisible();
   });
+
+  test('undo and redo are available only while there is history', async ({
+    page
+  }) => {
+    const text = `Toolbar history ${Date.now()}`;
+    await createNote(page, `Bar history ${Date.now()}`);
+    const undo = formattingToolbar(page).getByRole('button', { name: 'Undo' });
+    const redo = formattingToolbar(page).getByRole('button', { name: 'Redo' });
+
+    // Nobody has typed in this note yet, so neither button has work to do.
+    await expect(undo).toHaveAttribute('aria-disabled', 'true');
+    await expect(redo).toHaveAttribute('aria-disabled', 'true');
+
+    const ed = await focusEditor(page);
+    await page.keyboard.type(text);
+    await expect(ed).toContainText(text);
+    await expect(undo).not.toHaveAttribute('aria-disabled');
+    await expect(redo).toHaveAttribute('aria-disabled', 'true');
+
+    await undo.click();
+    await expect(ed).not.toContainText(text);
+    await expect(redo).not.toHaveAttribute('aria-disabled');
+
+    await redo.click();
+    await expect(ed).toContainText(text);
+    await expect(redo).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  test('a disabled button keeps the caret in the editor', async ({ page }) => {
+    const text = `Toolbar focus ${Date.now()}`;
+    await createNote(page, `Bar focus ${Date.now()}`);
+    const ed = await focusEditor(page);
+    await page.keyboard.type(text);
+
+    // Redo has nothing to redo. It is disabled through aria-disabled rather
+    // than the native attribute so the press still reaches the handler that
+    // holds focus: on a phone, a press that blurs the editor also collapses
+    // the soft keyboard. `force` because Playwright refuses to click what
+    // it considers disabled.
+    const redo = formattingToolbar(page).getByRole('button', { name: 'Redo' });
+    await expect(redo).toHaveAttribute('aria-disabled', 'true');
+    await redo.click({ force: true });
+
+    await expect(ed).toHaveClass(/ProseMirror-focused/);
+    await page.keyboard.type(' still typing');
+    await expect(ed).toContainText(`${text} still typing`);
+  });
+
+  test('text styles and lists are disabled inside a code block', async ({
+    page
+  }) => {
+    await createNote(page, `Bar code ${Date.now()}`);
+    await focusEditor(page);
+    await page.keyboard.type('before the code');
+    const toolbar = formattingToolbar(page);
+    const bold = toolbar.getByRole('button', { name: 'Bold' });
+    await expect(bold).not.toHaveAttribute('aria-disabled');
+
+    // Inserting a code block leaves the caret inside it.
+    await toolbar.getByRole('button', { name: 'Advanced' }).click();
+    await page
+      .getByRole('menu')
+      .getByRole('menuitem', { name: 'Code block' })
+      .click();
+
+    // A code block takes no marks, no headings and no lists. Each of these
+    // used to look available and then ignore the click.
+    await expect(bold).toHaveAttribute('aria-disabled', 'true');
+    await expect(
+      toolbar.getByRole('button', { name: 'Italic' })
+    ).toHaveAttribute('aria-disabled', 'true');
+
+    await toolbar.getByRole('button', { name: 'Text' }).click();
+    const textMenu = page.getByRole('menu');
+    for (const name of ['Normal text', 'Heading 1', 'Heading 6']) {
+      await expect(textMenu.getByRole('menuitem', { name })).toHaveAttribute(
+        'aria-disabled',
+        'true'
+      );
+    }
+    // A tap on a disabled row does nothing, so the menu stays open.
+    await textMenu
+      .getByRole('menuitem', { name: 'Heading 1' })
+      .click({ force: true });
+    await expect(textMenu).toBeVisible();
+    await page.keyboard.press('Escape');
+
+    await toolbar.getByRole('button', { name: 'List' }).click();
+    await expect(
+      page.getByRole('menu').getByRole('menuitem', { name: 'Bullet list' })
+    ).toHaveAttribute('aria-disabled', 'true');
+  });
 });
 
 test('clicking past the end of the text puts the caret at the end', async ({

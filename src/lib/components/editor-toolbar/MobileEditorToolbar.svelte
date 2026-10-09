@@ -4,10 +4,9 @@
    * the soft keyboard, or above the safe-area at the bottom of the page
    * when no keyboard is shown.
    *
-   * Positioning: read `window.visualViewport.height` and subtract it from
-   * `window.innerHeight` to find the keyboard's height, then offset the
-   * bar by that much from the page bottom. Plus env(safe-area-inset-bottom)
-   * for the home-indicator gap on iOS/Android.
+   * Positioning: offset the bar from the page bottom by the keyboard's
+   * height (`keyboardInset`, from the visual viewport). Plus
+   * env(safe-area-inset-bottom) for the home-indicator gap on iOS/Android.
    *
    * Sizing: the EditorToolbar runs in `fitContent` mode and sets its own
    * width via inline style to `min(naturalContent, 100%)`. The chrome
@@ -25,15 +24,23 @@
 
   import { onDestroy, onMount } from 'svelte';
   import type { Crepe } from '@milkdown/crepe';
+  import { keyboardInset } from '$lib/layout/app-height';
   import EditorToolbar from './EditorToolbar.svelte';
+  import type { SourceHistoryState } from '$lib/editor/source/source-actions';
 
   interface Props {
     crepe: Crepe | null;
     /** Which surface the buttons act on — forwarded to EditorToolbar, which
      *  skips ProseMirror mark state (and the crepe fallback) for 'source'. */
     activeSurface?: 'wysiwyg' | 'source';
+    /** Source-editor undo/redo availability — forwarded to EditorToolbar. */
+    sourceHistory?: SourceHistoryState | null;
   }
-  let { crepe, activeSurface = 'wysiwyg' }: Props = $props();
+  let {
+    crepe,
+    activeSurface = 'wysiwyg',
+    sourceHistory = null
+  }: Props = $props();
 
   /** Gap between the pill and the keyboard (or screen edge). */
   const FLOAT_GAP_PX = 12;
@@ -42,15 +49,7 @@
   let host: HTMLDivElement | null = $state(null);
 
   function syncOffset() {
-    const vv = window.visualViewport;
-    if (!vv) {
-      bottomOffset = 0;
-      return;
-    }
-    // Keyboard height = layoutViewport.height − visualViewport.height.
-    // vv.offsetTop covers Android variants that scroll the layout viewport
-    // instead of resizing the visual one.
-    bottomOffset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    bottomOffset = keyboardInset();
   }
 
   function publishHeight() {
@@ -102,6 +101,7 @@
     <EditorToolbar
       {crepe}
       {activeSurface}
+      {sourceHistory}
       menuPlacement="top"
       fitContent
       class="pointer-events-auto overflow-hidden rounded-full border border-border bg-popover/95 shadow-lg backdrop-blur"

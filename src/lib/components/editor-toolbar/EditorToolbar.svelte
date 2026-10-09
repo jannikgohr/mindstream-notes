@@ -37,6 +37,7 @@
     type ToolbarLeaf,
     type ToolbarGroup
   } from './commands';
+  import type { SourceHistoryState } from '$lib/editor/source/source-actions';
   import ToolbarMenu, { type MenuEntry } from './ToolbarMenu.svelte';
 
   interface Props {
@@ -49,6 +50,12 @@
      * back to `crepe.editor.action` (which would mutate the hidden WYSIWYG doc).
      */
     activeSurface?: 'wysiwyg' | 'source';
+    /**
+     * Undo/redo availability of the source editor, which keeps its own
+     * history. Read only while `activeSurface` is `'source'`; without it the
+     * history buttons stay enabled there.
+     */
+    sourceHistory?: SourceHistoryState | null;
     menuPlacement?: 'top' | 'bottom';
     /** Extra classes merged onto the outer bar (e.g. the desktop variant
      *  adds `border-b border-border bg-background`; the mobile variant
@@ -79,6 +86,7 @@
   let {
     crepe,
     activeSurface = 'wysiwyg',
+    sourceHistory = null,
     menuPlacement = 'bottom',
     class: className = '',
     fitContent = false,
@@ -174,7 +182,7 @@
   }
 
   function invokeLeaf(item: ToolbarLeaf) {
-    if (!crepe) return;
+    if (!crepe || !leafEnabled(item)) return;
     // Route through the command bus when this button corresponds to a
     // catalogued hotkey id. Two reasons:
     //
@@ -215,7 +223,7 @@
     // empty selection only mutate `state.storedMarks` — doc and selection
     // are unchanged — so neither selectionUpdated nor updated would fire,
     // and the button visual would stay one click behind without this.
-    recomputeActive();
+    recomputeButtonState();
   }
 
   /**
@@ -227,33 +235,68 @@
    */
   let activeMap = $state<Record<string, boolean>>({});
 
-  function recomputeActive() {
+  /**
+   * Enabled-state map keyed by leaf id, filled from each leaf's `isEnabled`
+   * predicate. Only a literal `false` disables: leaves without a predicate
+   * stay absent and render enabled, as does everything before the first
+   * recompute.
+   */
+  let enabledMap = $state<Record<string, boolean>>({});
+
+  function recomputeButtonState() {
     if (!crepe) return;
-    // Source surface: ProseMirror marks don't reflect the raw-text caret, so
-    // there's no meaningful toggled state to show.
+    // Source surface: ProseMirror marks and history don't reflect the
+    // raw-text editor, so there's no meaningful state to read from it.
+    // `leafEnabled` answers from `sourceHistory` there instead.
     if (activeSurface === 'source') {
       activeMap = {};
+      enabledMap = {};
       return;
     }
     crepe.editor.action((ctx) => {
-      const next: Record<string, boolean> = {};
-      // Compute predicates only for items we'll actually render — no
-      // point asking ProseMirror about a hidden Math button. Reads the
-      // current value of the derived (not subscribed) since this runs
-      // from editor event callbacks, not inside an $effect.
-      for (const item of visibleItems) {
-        if (item.kind === 'leaf' && item.isActive) {
+      const nextActive: Record<string, boolean> = {};
+      const nextEnabled: Record<string, boolean> = {};
+      const visit = (leaf: ToolbarLeaf) => {
+        if (leaf.isActive) {
           try {
-            next[item.id] = item.isActive(ctx);
+            nextActive[leaf.id] = leaf.isActive(ctx);
           } catch {
             // Predicates may throw if the editor is mid-teardown; treat
             // an error as "inactive" rather than crashing the toolbar.
-            next[item.id] = false;
+            nextActive[leaf.id] = false;
           }
         }
+        if (leaf.isEnabled) {
+          try {
+            nextEnabled[leaf.id] = leaf.isEnabled(ctx);
+          } catch {
+            // Same teardown case. Fail open: a button that wrongly looks
+            // enabled no-ops on click, one that wrongly looks disabled
+            // locks the user out of a working command.
+            nextEnabled[leaf.id] = true;
+          }
+        }
+      };
+      // Compute predicates only for items we'll actually render — no
+      // point asking ProseMirror about a hidden Math button. Group items
+      // count too: they render as menu rows. Reads the current value of
+      // the derived (not subscribed) since this runs from editor event
+      // callbacks, not inside an $effect.
+      for (const item of visibleItems) {
+        if (item.kind === 'leaf') visit(item);
+        else item.items.forEach(visit);
       }
-      activeMap = next;
+      activeMap = nextActive;
+      enabledMap = nextEnabled;
     });
+  }
+
+  function leafEnabled(leaf: ToolbarLeaf): boolean {
+    if (activeSurface === 'source') {
+      if (!leaf.isEnabledInSource || !sourceHistory) return true;
+      return leaf.isEnabledInSource(sourceHistory);
+    }
+    return enabledMap[leaf.id] !== false;
   }
 
   // Subscribe to editor lifecycle so the active state refreshes on every
@@ -268,12 +311,12 @@
       if (cancelled) return;
       const manager = ctx.get(listenerCtx);
       const onChange = () => {
-        if (!cancelled) recomputeActive();
+        if (!cancelled) recomputeButtonState();
       };
       manager.selectionUpdated(onChange);
       manager.updated(onChange);
     });
-    recomputeActive();
+    recomputeButtonState();
     return () => {
       cancelled = true;
     };
@@ -284,7 +327,7 @@
   // fires on editor transactions, which a surface switch isn't.
   $effect(() => {
     void activeSurface;
-    recomputeActive();
+    recomputeButtonState();
   });
 
   function toggleGroup(item: ToolbarGroup, btn: HTMLElement | null) {
@@ -437,6 +480,7 @@
       labelKey: leaf.labelKey,
       icon: leaf.icon,
       hotkeyId: leaf.hotkeyId,
+      disabled: !leafEnabled(leaf),
       onSelect: () => invokeLeaf(leaf)
     }));
   }
@@ -451,6 +495,7 @@
           labelKey: item.labelKey,
           icon: item.icon,
           hotkeyId: item.hotkeyId,
+          disabled: !leafEnabled(item),
           onSelect: () => invokeLeaf(item)
         });
       } else {
@@ -466,6 +511,7 @@
             labelKey: leaf.labelKey,
             icon: leaf.icon,
             hotkeyId: leaf.hotkeyId,
+            disabled: !leafEnabled(leaf),
             onSelect: () => invokeLeaf(leaf)
           });
         }
@@ -503,6 +549,7 @@
           active={isActive}
           holdFocus
           disabled={!crepe}
+          unavailable={!leafEnabled(item)}
           onclick={() => invokeLeaf(item)}
           aria-pressed={item.isActive ? isActive : undefined}
           title={leafTitle(item)}

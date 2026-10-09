@@ -31,6 +31,11 @@
      * items with no keyboard equivalent.
      */
     hotkeyId?: string;
+    /**
+     * The action has nothing to do right now. The row dims and ignores taps,
+     * and the menu stays open so the tap doesn't read as a successful pick.
+     */
+    disabled?: boolean;
   }
   export interface MenuSection {
     kind: 'section';
@@ -108,6 +113,7 @@
   );
 
   function invoke(item: MenuItem) {
+    if (item.disabled) return;
     item.onSelect();
     onClose();
   }
@@ -165,9 +171,12 @@
         <button
           type="button"
           role="menuitem"
-          class="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
+          class="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors {entry.disabled
+            ? 'cursor-default opacity-50'
+            : 'hover:bg-accent hover:text-accent-foreground'}"
           onpointerdown={holdFocus}
           onclick={() => invoke(entry)}
+          aria-disabled={entry.disabled || undefined}
           aria-keyshortcuts={ariaShortcut || undefined}
         >
           <Icon class="size-4 shrink-0" aria-hidden="true" />

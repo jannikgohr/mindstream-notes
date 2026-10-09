@@ -58,6 +58,17 @@ vi.mock('@milkdown/kit/plugin/history', () => ({
   undoCommand: { key: 'undo' },
   redoCommand: { key: 'redo' }
 }));
+// The enabled-state predicates read history depth and dry-run toggleMark.
+// Faked off plain fields on the state so each case states its own answer.
+vi.mock('@milkdown/kit/prose/history', () => ({
+  undoDepth: (state: { undoDepth?: number }) => state.undoDepth ?? 0,
+  redoDepth: (state: { redoDepth?: number }) => state.redoDepth ?? 0
+}));
+vi.mock('@milkdown/kit/prose/commands', () => ({
+  toggleMark:
+    (type: { name: string }) => (state: { allowedMarks?: string[] }) =>
+      state.allowedMarks?.includes(type.name) ?? false
+}));
 
 import { commandsCtx, editorStateCtx, editorViewCtx } from '@milkdown/kit/core';
 import { TOOLBAR_ITEMS, type ToolbarLeaf } from './commands';
@@ -172,6 +183,76 @@ describe('history + inline-mark recipes', () => {
     };
     const { ctx } = makeCtx({ state });
     expect(leaf('bold').isActive?.(ctx)).toBe(true);
+  });
+});
+
+describe('enabled state', () => {
+  it('undo / redo are enabled only while their stack has entries', () => {
+    const empty = makeCtx({ state: { undoDepth: 0, redoDepth: 0 } });
+    expect(leaf('undo').isEnabled?.(empty.ctx)).toBe(false);
+    expect(leaf('redo').isEnabled?.(empty.ctx)).toBe(false);
+
+    const edited = makeCtx({ state: { undoDepth: 2, redoDepth: 0 } });
+    expect(leaf('undo').isEnabled?.(edited.ctx)).toBe(true);
+    expect(leaf('redo').isEnabled?.(edited.ctx)).toBe(false);
+
+    const undone = makeCtx({ state: { undoDepth: 0, redoDepth: 1 } });
+    expect(leaf('undo').isEnabled?.(undone.ctx)).toBe(false);
+    expect(leaf('redo').isEnabled?.(undone.ctx)).toBe(true);
+  });
+
+  it('undo / redo read the source editor history on the source surface', () => {
+    const history = { canUndo: true, canRedo: false };
+    expect(leaf('undo').isEnabledInSource?.(history)).toBe(true);
+    expect(leaf('redo').isEnabledInSource?.(history)).toBe(false);
+  });
+
+  it('only the history buttons depend on the source history', () => {
+    const dependent: string[] = [];
+    for (const item of TOOLBAR_ITEMS) {
+      const leaves = item.kind === 'leaf' ? [item] : item.items;
+      for (const entry of leaves) {
+        if (entry.isEnabledInSource) dependent.push(entry.id);
+      }
+    }
+    expect(dependent).toEqual(['undo', 'redo']);
+  });
+
+  it('bold / italic are disabled where the mark cannot apply', () => {
+    // A code block allows no marks; a paragraph allows both.
+    const inCode = makeCtx({ state: { allowedMarks: [] } });
+    expect(leaf('bold').isEnabled?.(inCode.ctx)).toBe(false);
+    expect(leaf('italic').isEnabled?.(inCode.ctx)).toBe(false);
+
+    const inParagraph = makeCtx({
+      state: { allowedMarks: ['strong', 'emphasis'] }
+    });
+    expect(leaf('bold').isEnabled?.(inParagraph.ctx)).toBe(true);
+    expect(leaf('italic').isEnabled?.(inParagraph.ctx)).toBe(true);
+  });
+
+  it.each(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'])(
+    '%s is disabled inside a code block and enabled in a paragraph',
+    (id) => {
+      const inCode = makeCtx({ state: codeBlockView.state });
+      expect(leaf(id).isEnabled?.(inCode.ctx)).toBe(false);
+      const inParagraph = makeCtx({ state: paragraphView.state });
+      expect(leaf(id).isEnabled?.(inParagraph.ctx)).toBe(true);
+    }
+  );
+
+  it.each(['ordered', 'bullet', 'task'])(
+    '%s is disabled when the selection holds no list-able block',
+    (id) => {
+      const { ctx } = makeCtx({ state: emptyListView.state });
+      expect(leaf(id).isEnabled?.(ctx)).toBe(false);
+    }
+  );
+
+  it('inserts have no predicate, so they are always enabled', () => {
+    for (const id of ['image', 'code', 'table', 'math', 'mermaid']) {
+      expect(leaf(id).isEnabled).toBeUndefined();
+    }
   });
 });
 

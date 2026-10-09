@@ -32,7 +32,9 @@
     defaultKeymap,
     history,
     historyKeymap,
-    indentWithTab
+    indentWithTab,
+    redoDepth,
+    undoDepth
   } from '@codemirror/commands';
   import {
     HighlightStyle,
@@ -49,6 +51,7 @@
   import type { SourceDiagnosticsOptions } from '$lib/editor/plugins';
   import type { WikilinkBridge } from '$lib/editor/plugins/wikilink-bridge.svelte';
   import type { UserMentionBridge } from '$lib/editor/plugins/user-mention-bridge.svelte';
+  import type { SourceHistoryState } from './source-actions';
   import {
     sourcePresence,
     setSourcePresence,
@@ -77,6 +80,9 @@
     /** Fired when the source editor gains focus — NoteEditor uses it to mark
      *  the source pane as the active surface for toolbar/hotkey routing. */
     onFocusSurface?: () => void;
+    /** Fired on mount and whenever undo or redo becomes available or runs
+     *  out, so the toolbar can disable the button that has nothing to do. */
+    onHistoryChange?: (history: SourceHistoryState) => void;
     /** `editor.autoPair` — auto-close brackets. Reactive. */
     autoPairEnabled?: boolean;
     /**
@@ -114,6 +120,7 @@
     placeholderText = '',
     onInput,
     onFocusSurface,
+    onHistoryChange = undefined,
     language = 'markdown',
     autoPairEnabled = false,
     wikilinksEnabled = false,
@@ -141,6 +148,23 @@
 
   let inputTimer: ReturnType<typeof setTimeout> | null = null;
   const INPUT_DEBOUNCE_MS = 150;
+
+  let reportedHistory: SourceHistoryState | null = null;
+
+  /** Report undo/redo availability, but only when it flips: this runs on
+   *  every view update, and the answer changes on very few of them. */
+  function reportHistory(state: EditorState) {
+    const canUndo = undoDepth(state) > 0;
+    const canRedo = redoDepth(state) > 0;
+    if (
+      reportedHistory?.canUndo === canUndo &&
+      reportedHistory.canRedo === canRedo
+    ) {
+      return;
+    }
+    reportedHistory = { canUndo, canRedo };
+    onHistoryChange?.(reportedHistory);
+  }
 
   function scheduleInput() {
     if (inputTimer) clearTimeout(inputTimer);
@@ -391,6 +415,7 @@
         if (u.transactions.some((tr) => tr.annotation(External))) return;
         scheduleInput();
       }),
+      EditorView.updateListener.of((u) => reportHistory(u.state)),
       EditorView.domEventHandlers({
         focus: () => {
           onFocusSurface?.();
@@ -409,6 +434,7 @@
         extensions: baseExtensions()
       })
     });
+    reportHistory(view.state);
   });
 
   onDestroy(() => {

@@ -103,6 +103,25 @@ export function tUi(key: keyof I18nBundle['ui']): string {
   return i18n.bundle.ui?.[key] ?? FALLBACK.ui?.[key] ?? key;
 }
 
+/**
+ * `tUi` with the bundle's `{placeholder}` slots filled from `vars`. A slot
+ * with no matching var is left as written, so a missing value shows up in the
+ * UI instead of vanishing.
+ *
+ * Substitution goes through a replacer function on purpose. With a plain
+ * string, `String.replace` expands `$&`, `$1` and friends in the replacement,
+ * and the values here are user text: a note titled "Costs $& fees" would come
+ * out mangled.
+ */
+export function tUiFormat(
+  key: keyof I18nBundle['ui'],
+  vars: Record<string, string | number>
+): string {
+  return tUi(key).replace(/\{(\w+)\}/g, (slot, name: string) =>
+    name in vars ? String(vars[name]) : slot
+  );
+}
+
 // Initialize language from localStorage on first load (browser-only).
 if (typeof localStorage !== 'undefined') {
   const stored = localStorage.getItem('notes-app:language');

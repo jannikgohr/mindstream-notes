@@ -47,7 +47,7 @@
     trashNote
   } from '$lib/stores/tree.svelte';
   import { setSortDirection, setSortStrategy, ui } from '$lib/state.svelte';
-  import { i18n, tUi } from '$lib/settings/i18n.svelte';
+  import { i18n, tUi, tUiFormat } from '$lib/settings/i18n.svelte';
   import type { TreeNode } from '$lib/api';
   import {
     collectionIsSharedByMe,
@@ -400,7 +400,7 @@
     } catch (err) {
       console.error('[FileExplorer] note export failed', id, err);
       await alert({
-        title: `${label} export failed`,
+        title: tUiFormat('fileTree.exportFailed', { label }),
         message: toErrorMessage(err)
       });
     }
@@ -410,9 +410,11 @@
     if (emptyTrashPending || trashItemCount === 0) return;
     if (
       await confirm({
-        title: 'Empty trash',
-        message: `${trashItemCount} item(s) will be removed permanently. This cannot be undone.`,
-        confirmLabel: 'Empty trash',
+        title: tUi('fileTree.emptyTrash'),
+        message: tUiFormat('fileTree.confirm.emptyTrash', {
+          count: trashItemCount
+        }),
+        confirmLabel: tUi('fileTree.emptyTrash'),
         destructive: true
       })
     ) {

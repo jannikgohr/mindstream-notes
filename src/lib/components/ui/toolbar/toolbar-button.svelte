@@ -31,6 +31,14 @@
      * and collapse the mobile soft keyboard).
      */
     holdFocus?: boolean;
+    /**
+     * The action has nothing to do right now (Undo with an empty history).
+     * Looks and announces as disabled and ignores clicks, but stays a live
+     * pointer target. Editor toolbars need that instead of `disabled`: a
+     * natively disabled button never runs the `holdFocus` handler, so tapping
+     * it would blur the editor and collapse the mobile soft keyboard.
+     */
+    unavailable?: boolean;
     children: Snippet;
   };
 
@@ -38,10 +46,12 @@
     active = false,
     wide = false,
     holdFocus = false,
+    unavailable = false,
     class: className,
     ref = $bindable(null),
     children,
     onpointerdown,
+    onclick,
     ...rest
   }: Props = $props();
 
@@ -51,14 +61,26 @@
     if (holdFocus) event.preventDefault();
     (onpointerdown as ((e: PointerEvent) => void) | null | undefined)?.(event);
   }
+
+  function handleClick(event: MouseEvent) {
+    if (unavailable) return;
+    (onclick as ((e: MouseEvent) => void) | null | undefined)?.(event);
+  }
 </script>
 
 <Button
   bind:ref
   variant={active ? 'secondary' : 'ghost'}
   size={wide ? 'sm' : 'icon'}
-  class={cn(wide ? 'h-9 shrink-0 gap-1 px-2' : 'size-9 shrink-0', className)}
+  class={cn(
+    wide ? 'h-9 shrink-0 gap-1 px-2' : 'size-9 shrink-0',
+    unavailable &&
+      'cursor-default opacity-50 hover:bg-transparent hover:text-inherit',
+    className
+  )}
+  aria-disabled={unavailable || undefined}
   onpointerdown={handlePointerDown}
+  onclick={handleClick}
   {...rest}
 >
   {@render children()}

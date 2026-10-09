@@ -44,9 +44,10 @@ import {
 import { createTable } from '@milkdown/kit/preset/gfm';
 import { imageBlockSchema } from '@milkdown/kit/component/image-block';
 import { undoCommand, redoCommand } from '@milkdown/kit/plugin/history';
+import { toggleMark } from '@milkdown/kit/prose/commands';
+import { redoDepth, undoDepth } from '@milkdown/kit/prose/history';
 import { Fragment } from '@milkdown/kit/prose/model';
 import type { Ctx } from '@milkdown/kit/ctx';
-import type { EditorView } from '@milkdown/kit/prose/view';
 import type { EditorState, Transaction } from '@milkdown/kit/prose/state';
 import type {
   MarkType,
@@ -78,6 +79,7 @@ import {
   Workflow
 } from '@lucide/svelte';
 import type { Component } from 'svelte';
+import type { SourceHistoryState } from '$lib/editor/source/source-actions';
 
 export interface ToolbarLeaf {
   kind: 'leaf';
@@ -85,6 +87,19 @@ export interface ToolbarLeaf {
   labelKey: string;
   icon: Component;
   action: (ctx: Ctx) => void;
+  /**
+   * Optional predicate: false means the action would do nothing right now,
+   * so the button renders disabled instead of silently ignoring the click
+   * (Undo with an empty history, a heading inside a code block). Evaluated
+   * in the same pass as `isActive`. Omitted = always enabled.
+   */
+  isEnabled?: (ctx: Ctx) => boolean;
+  /**
+   * The same question while the source surface is active. There the buttons
+   * run plain text transforms that always apply, so only the history
+   * buttons need it. Omitted = always enabled.
+   */
+  isEnabledInSource?: (history: SourceHistoryState) => boolean;
   /**
    * Optional predicate: true means the button should render in its
    * "toggled" state. Used for bold/italic so the icon stays highlighted
@@ -139,8 +154,8 @@ export type ToolbarItem = ToolbarLeaf | ToolbarGroup;
 /** True when the caret sits inside a code block or any list — places where
  *  changing to a heading would be semantically wrong (CommonMark headings
  *  can't be nested in code or lists). */
-function isInCodeOrList(view: EditorView): boolean {
-  const { $from } = view.state.selection;
+export function isInCodeOrList(state: EditorState): boolean {
+  const { $from } = state.selection;
   for (let d = $from.depth; d >= 0; d--) {
     const name = $from.node(d).type.name;
     if (
@@ -210,6 +225,16 @@ function inspectSelectionBlocks(state: EditorState): {
     return true;
   });
   return { blocks, hasCodeBlock };
+}
+
+/**
+ * Whether a list button can act on the current selection. Mirrors the
+ * bail-out at the top of `applyListAction` without building a transaction,
+ * so it is cheap enough to run on every selection change.
+ */
+export function canApplyListAction(state: EditorState): boolean {
+  const { blocks, hasCodeBlock } = inspectSelectionBlocks(state);
+  return !hasCodeBlock && blocks.length > 0;
 }
 
 export interface ListActionTypes {
@@ -551,6 +576,10 @@ const undo = (ctx: Ctx) => {
 const redo = (ctx: Ctx) => {
   ctx.get(commandsCtx).call(redoCommand.key);
 };
+// Depth of the same prosemirror-history stacks the two commands above pop,
+// so a button is enabled exactly when its command has something to do.
+const canUndo = (ctx: Ctx) => undoDepth(ctx.get(editorStateCtx)) > 0;
+const canRedo = (ctx: Ctx) => redoDepth(ctx.get(editorStateCtx)) > 0;
 
 const toggleBold = (ctx: Ctx) => {
   ctx.get(commandsCtx).call(toggleStrongCommand.key);
@@ -562,22 +591,31 @@ const isBoldActive = (ctx: Ctx) =>
   markIsActive(ctx.get(editorStateCtx), strongSchema.type(ctx));
 const isItalicActive = (ctx: Ctx) =>
   markIsActive(ctx.get(editorStateCtx), emphasisSchema.type(ctx));
+// The toggle commands are `toggleMark` underneath; called without a dispatch
+// it only reports whether the mark may apply here (it may not in a code
+// block, which allows no marks).
+const canToggleBold = (ctx: Ctx) =>
+  toggleMark(strongSchema.type(ctx))(ctx.get(editorStateCtx));
+const canToggleItalic = (ctx: Ctx) =>
+  toggleMark(emphasisSchema.type(ctx))(ctx.get(editorStateCtx));
 
 const turnIntoParagraph = (ctx: Ctx) => {
   const view = ctx.get(editorViewCtx);
-  if (isInCodeOrList(view)) return;
+  if (isInCodeOrList(view.state)) return;
   ctx.get(commandsCtx).call(setBlockTypeCommand.key, {
     nodeType: paragraphSchema.type(ctx)
   });
 };
 const turnIntoHeading = (level: number) => (ctx: Ctx) => {
   const view = ctx.get(editorViewCtx);
-  if (isInCodeOrList(view)) return;
+  if (isInCodeOrList(view.state)) return;
   ctx.get(commandsCtx).call(setBlockTypeCommand.key, {
     nodeType: headingSchema.type(ctx),
     attrs: { level }
   });
 };
+const canChangeTextStyle = (ctx: Ctx) =>
+  !isInCodeOrList(ctx.get(editorStateCtx));
 
 /**
  * Milkdown wrapper: pulls the editor view and schema types out of `ctx`,
@@ -599,6 +637,7 @@ function switchListAction(target: ListKind) {
 const turnIntoBulletList = switchListAction('bullet');
 const turnIntoOrderedList = switchListAction('ordered');
 const turnIntoTaskList = switchListAction('task');
+const canSwitchList = (ctx: Ctx) => canApplyListAction(ctx.get(editorStateCtx));
 
 // Advanced actions all use `addBlockTypeCommand`, which inserts a fresh
 // empty block after the current line (rather than overwriting it). The
@@ -650,6 +689,8 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
     labelKey: 'editor.toolbar.undo',
     icon: Undo2,
     action: undo,
+    isEnabled: canUndo,
+    isEnabledInSource: (history) => history.canUndo,
     hotkeyId: 'global.undo'
   },
   {
@@ -658,6 +699,8 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
     labelKey: 'editor.toolbar.redo',
     icon: Redo2,
     action: redo,
+    isEnabled: canRedo,
+    isEnabledInSource: (history) => history.canRedo,
     hotkeyId: 'global.redo'
   },
   {
@@ -666,6 +709,7 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
     labelKey: 'editor.toolbar.bold',
     icon: Bold,
     action: toggleBold,
+    isEnabled: canToggleBold,
     isActive: isBoldActive,
     hotkeyId: 'editor.markdown.bold'
   },
@@ -675,6 +719,7 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
     labelKey: 'editor.toolbar.italic',
     icon: Italic,
     action: toggleItalic,
+    isEnabled: canToggleItalic,
     isActive: isItalicActive,
     hotkeyId: 'editor.markdown.italic'
   },
@@ -690,6 +735,7 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
         labelKey: 'editor.toolbar.text.normal',
         icon: Pilcrow,
         action: turnIntoParagraph,
+        isEnabled: canChangeTextStyle,
         hotkeyId: 'editor.markdown.paragraph'
       },
       {
@@ -698,6 +744,7 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
         labelKey: 'editor.toolbar.text.h1',
         icon: Heading1,
         action: turnIntoHeading(1),
+        isEnabled: canChangeTextStyle,
         hotkeyId: 'editor.markdown.h1'
       },
       {
@@ -706,6 +753,7 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
         labelKey: 'editor.toolbar.text.h2',
         icon: Heading2,
         action: turnIntoHeading(2),
+        isEnabled: canChangeTextStyle,
         hotkeyId: 'editor.markdown.h2'
       },
       {
@@ -714,6 +762,7 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
         labelKey: 'editor.toolbar.text.h3',
         icon: Heading3,
         action: turnIntoHeading(3),
+        isEnabled: canChangeTextStyle,
         hotkeyId: 'editor.markdown.h3'
       },
       {
@@ -722,6 +771,7 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
         labelKey: 'editor.toolbar.text.h4',
         icon: Heading4,
         action: turnIntoHeading(4),
+        isEnabled: canChangeTextStyle,
         hotkeyId: 'editor.markdown.h4'
       },
       {
@@ -730,6 +780,7 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
         labelKey: 'editor.toolbar.text.h5',
         icon: Heading5,
         action: turnIntoHeading(5),
+        isEnabled: canChangeTextStyle,
         hotkeyId: 'editor.markdown.h5'
       },
       {
@@ -738,6 +789,7 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
         labelKey: 'editor.toolbar.text.h6',
         icon: Heading6,
         action: turnIntoHeading(6),
+        isEnabled: canChangeTextStyle,
         hotkeyId: 'editor.markdown.h6'
       }
     ]
@@ -754,6 +806,7 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
         labelKey: 'editor.toolbar.list.ordered',
         icon: ListOrdered,
         action: turnIntoOrderedList,
+        isEnabled: canSwitchList,
         hotkeyId: 'editor.markdown.orderedList'
       },
       {
@@ -762,6 +815,7 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
         labelKey: 'editor.toolbar.list.bullet',
         icon: List,
         action: turnIntoBulletList,
+        isEnabled: canSwitchList,
         hotkeyId: 'editor.markdown.bulletList'
       },
       {
@@ -770,6 +824,7 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
         labelKey: 'editor.toolbar.list.task',
         icon: ListTodo,
         action: turnIntoTaskList,
+        isEnabled: canSwitchList,
         hotkeyId: 'editor.markdown.taskList'
       }
     ]
