@@ -71,7 +71,9 @@ import {
   Pencil,
   RotateCcw,
   Share2,
-  Trash2
+  Trash2,
+  Unlink,
+  UserRoundCog
 } from '@lucide/svelte';
 
 /**
@@ -207,10 +209,12 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
       children.push(
         {
           label: tUi('sharing.menu.manageAccess'),
+          icon: UserRoundCog,
           onSelect: () => openCollectionShareDialog(id, 'access')
         },
         {
           label: tUi('sharing.menu.stopSharing'),
+          icon: Unlink,
           destructive: true,
           onSelect: () => void ctx.stopSharing(id)
         }
@@ -587,6 +591,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
                 },
                 {
                   label: tUi('sharing.menu.manageAccess'),
+                  icon: UserRoundCog,
                   onSelect: () => openCollectionShareDialog(id, 'access')
                 }
               ]
