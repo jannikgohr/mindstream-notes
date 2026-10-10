@@ -19,6 +19,8 @@
   import ResizeHandle from '$lib/components/ResizeHandle.svelte';
   import WindowControls from '$lib/components/WindowControls.svelte';
   import { loadNote, openNoteWindow, type NoteKind } from '$lib/api';
+  import { pushToast } from '$lib/components/toast.svelte';
+  import { installFileDropRouter } from '$lib/file-drop';
   import { loadTree, tree } from '$lib/stores/tree.svelte';
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
@@ -101,6 +103,17 @@
       void openNoteWindow(id, target?.title ?? 'Note', null, null);
     });
   });
+
+  // Files dragged in from the OS reach the editor when it declares it can
+  // use them (see $lib/file-drop). PDFs aren't imported from here: the new
+  // note would land in the vault without the main window's tree seeing it.
+  onMount(() =>
+    installFileDropRouter(window, {
+      importPdfs: () => pushToast(tUi('fileDrop.importInMainWindow')),
+      onUnusable: () =>
+        pushToast(tUi('fileDrop.unsupported'), { variant: 'error' })
+    })
+  );
 
   async function closeCurrentWindow() {
     if (typeof window === 'undefined') return;

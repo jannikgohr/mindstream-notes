@@ -47,7 +47,7 @@
     setRightSidebarWidth,
     ui
   } from '$lib/state.svelte';
-  import { importPdfIn, loadTree, tree } from '$lib/stores/tree.svelte';
+  import { loadTree, tree } from '$lib/stores/tree.svelte';
   import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
   import { loadProfiles, profilesState } from '$lib/stores/profiles.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
@@ -58,9 +58,9 @@
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
   import { runSync } from '$lib/sync/runner';
   import { pluginNoteKind } from '$lib/plugins/registry.svelte';
-  import { droppedPdfFiles, isFileDrag } from '$lib/file-drop';
+  import { installFileDropRouter } from '$lib/file-drop';
+  import { importDroppedPdfs } from '$lib/file-drop-import';
   import { pushToast } from '$lib/components/toast.svelte';
-  import { toErrorMessage } from '$lib/api/errors';
 
   let dockHost: HTMLDivElement | null = $state(null);
   let dock: DockviewApi | null = null;
@@ -691,38 +691,6 @@
     dock?.getPanel(panelId)?.api.close();
   }
 
-  function handleFileDragOver(event: DragEvent) {
-    if (!isFileDrag(event)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
-  }
-
-  async function importDroppedFiles(event: DragEvent) {
-    if (!isFileDrag(event)) return;
-    event.preventDefault();
-    event.stopPropagation();
-
-    const files = droppedPdfFiles(event);
-    if (files.length === 0) {
-      pushToast(tUi('fileDrop.pdfOnly'), { variant: 'error' });
-      return;
-    }
-
-    let lastImportedId: string | null = null;
-    try {
-      for (const file of files) {
-        lastImportedId = await importPdfIn(null, file);
-      }
-      if (lastImportedId) await openNote(lastImportedId);
-    } catch (err) {
-      pushToast(
-        tUi('fileDrop.failed').replace('{error}', toErrorMessage(err)),
-        { variant: 'error' }
-      );
-    }
-  }
-
   onMount(() => {
     // Load the tree independently of the dockview bootstrap. The two used to
     // be coupled (loadTree lived inside setupDockview), so any failure or
@@ -760,8 +728,15 @@
     //     dragend we still want the class gone.
     window.addEventListener('dragend', clearDragging, true);
     window.addEventListener('drop', clearDragging, true);
-    window.addEventListener('dragover', handleFileDragOver, true);
-    window.addEventListener('drop', importDroppedFiles, true);
+    // Files dragged in from the OS: editors and the file tree take what they
+    // declare (see $lib/file-drop); a PDF dropped anywhere else becomes a
+    // note at the vault root.
+    const removeFileDropRouter = installFileDropRouter(window, {
+      importPdfs: (files) =>
+        void importDroppedPdfs(files, null, (id) => openNote(id)),
+      onUnusable: () =>
+        pushToast(tUi('fileDrop.unsupported'), { variant: 'error' })
+    });
     // Pointer drags (dndStrategy: 'pointer') don't emit a DOM `dragend`/`drop`,
     // so the drag terminates on pointerup/pointercancel. clearDragging is
     // idempotent, so firing it on unrelated pointerups is harmless.
@@ -797,8 +772,7 @@
       window.removeEventListener('resize', onResize);
       window.removeEventListener('dragend', clearDragging, true);
       window.removeEventListener('drop', clearDragging, true);
-      window.removeEventListener('dragover', handleFileDragOver, true);
-      window.removeEventListener('drop', importDroppedFiles, true);
+      removeFileDropRouter();
       window.removeEventListener(
         'pointermove',
         updatePointerTabDropTarget,
