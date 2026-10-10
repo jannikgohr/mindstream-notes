@@ -70,6 +70,16 @@ plugin action IDs. Required malformed inputs stop the import without a partial
 root update. Existing values win; browser sources remain intact. Native consumers
 refresh from canonical snapshots and failed edits restore canonical UI state.
 
+Native signature/favourite migration now pins the first selected legacy vault in
+root `legacy-content-owner.json`, including its canonical directory. Deleting that
+vault does not reassign its unscoped browser content. Required malformed sources
+are retained and refused. Signature rows and favourite changes commit with a
+vault DB `local_migrations` receipt. Existing signatures win; absent signature
+IDs receive stable content hashes. A receipt prevents later retries from undoing
+edits/deletions. Favourites use the normal write-access guard and sync dirty flag.
+Both browser sources remain unchanged. Browser previews keep their old behavior.
+This completes the two native consumers, not the full legacy-store export.
+
 On 2026-10-10 native collaboration signing material moved to
 `<vault>/collab-signing-credentials.json`, encrypted with ChaCha20-Poly1305 and
 a vault master key in the environment's OS keystore. The authenticated context

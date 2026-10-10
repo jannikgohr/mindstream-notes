@@ -32,6 +32,7 @@ pub mod history;
 pub mod hotkeys;
 pub mod i18n;
 pub mod import;
+pub mod legacy_content;
 #[cfg(desktop)]
 pub mod native_menu;
 pub mod notes;
@@ -298,6 +299,7 @@ pub fn run() {
             };
             log::info!("[boot] active profile = {active_id}");
             let app_data = ownership.directory.clone();
+            legacy_content::initialize_owner(&app_data_root, &active_id, &app_data)?;
             app.manage(paths::ActiveProfile {
                 id: active_id,
                 dir: app_data.clone(),
@@ -541,6 +543,7 @@ pub fn run() {
             signing_credentials::get_vault_collab_signing_material,
             signing_credentials::store_vault_collab_signing_material,
             ui_settings::initialize_ui_settings,
+            legacy_content::migrate_legacy_content,
             ui_settings::load_ui_settings,
             ui_settings::patch_ui_setting,
             auth::check_etebase_server_url,

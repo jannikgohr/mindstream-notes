@@ -6,7 +6,8 @@
  * notes/folders/assets (see src-tauri/src/signatures + sync/mod.rs). They
  * previously lived in per-origin `localStorage`, so on first run this module
  * migrates any locally-stored signatures into the synced store and then
- * drops the old keys.
+ * keeps the original browser keys in native builds. A backend receipt prevents
+ * repeated imports. Browser previews retain their old migration behavior.
  *
  * On the wire a signature is a `SignatureRecord` whose `data` is the opaque
  * JSON geometry (`PdfSignatureSnapshot` minus its `id`); this module maps
@@ -19,6 +20,8 @@ import {
   deleteSignature as apiDeleteSignature
 } from '$lib/api/signatures';
 import type { PdfSignatureSnapshot } from './types';
+import { isTauri } from '$lib/api/core';
+import { migrateLegacyContent } from '$lib/api/legacy-content';
 import {
   normaliseSignatureSnapshot,
   recordToSnapshot,
@@ -27,8 +30,7 @@ import {
 
 // Pre-sync localStorage keys. v1 stored a single signature under
 // LEGACY_SINGLE_KEY; a later migration moved it into an array under
-// LEGACY_ARRAY_KEY. Both are read once, pushed to the synced store, then
-// removed.
+// LEGACY_ARRAY_KEY. Native imports retain both sources for recovery.
 const LEGACY_ARRAY_KEY = 'mindstream.pdf.signatures.v1';
 const LEGACY_SINGLE_KEY = 'mindstream.pdf.signature.v1';
 
@@ -70,6 +72,15 @@ async function migrateLegacyOnce(): Promise<void> {
     localStorage.getItem(LEGACY_ARRAY_KEY) !== null ||
     localStorage.getItem(LEGACY_SINGLE_KEY) !== null;
   if (!hasLegacy) return;
+
+  if (isTauri()) {
+    await migrateLegacyContent(
+      'signatures',
+      localStorage.getItem(LEGACY_ARRAY_KEY),
+      localStorage.getItem(LEGACY_SINGLE_KEY)
+    );
+    return;
+  }
 
   // upsert is keyed by id and writes to the local DB synchronously (sync to
   // the server happens later), so this is safe offline and idempotent if a

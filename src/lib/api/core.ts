@@ -85,6 +85,7 @@ export enum TauriCommandName {
   LoadUiSettings = 'load_ui_settings',
   LoadNoteVersion = 'load_note_version',
   MoveMany = 'move_many',
+  MigrateLegacyContent = 'migrate_legacy_content',
   PatchUiSetting = 'patch_ui_setting',
   NoteRoomInfo = 'note_room_info',
   NoteWordCount = 'note_word_count',

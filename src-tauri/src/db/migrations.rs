@@ -746,6 +746,18 @@ const MIGRATIONS: &[Migration] = &[
             CREATE INDEX idx_asset_id_remaps_target ON asset_id_remaps(new_asset_id);
         "#,
     },
+    Migration {
+        to: 27,
+        // Local receipts must commit with imported rows and survive restores.
+        // They contain no browser values and are never synced to an account.
+        sql: r#"
+            CREATE TABLE local_migrations (
+                id TEXT PRIMARY KEY,
+                completed TEXT NOT NULL,
+                source_hash TEXT NOT NULL
+            );
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

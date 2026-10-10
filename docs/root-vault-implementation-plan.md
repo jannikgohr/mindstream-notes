@@ -284,6 +284,19 @@ diagnostics are clean. Affected ESLint has no errors and reports the pre-existin
 mobile `Set` warning.
 Rust fmt/clippy and the serial full suite pass 766 unit tests and one integration
 test; three tests remain ignored.
+
+Legacy content slice on 2026-10-11: startup pins unscoped browser content to one
+vault ID and canonical directory. Native signatures/favourites import only into
+that owner and retain browser sources. A new local DB receipt commits with all
+imported rows. Existing signature edits win; stable generated IDs and receipts
+prevent replay after crashes or later deletions. Invalid JSON/geometry, conflicting
+signature IDs and failed DB writes leave the receipt absent. Favourite imports
+check write access, mark sync changes dirty, and patch only committed frontend
+IDs. Tests exercise a simulated failure on the second DB insert, full rollback
+and retry, malformed evidence, later deletion/unfavourite, and deleted owners.
+Windows Rust fmt/clippy and the serial full suite pass 772 unit tests and one
+integration test, with three ignored tests. Focused frontend checks pass 56 tests;
+Svelte diagnostics are clean and affected ESLint has no errors.
 Older binaries without locks remain unsafe against the same physical vault.
 
 Mixed UI preferences slice on 2026-10-10: sidebar widths now use root document
