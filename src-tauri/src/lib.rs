@@ -26,6 +26,7 @@ pub mod db;
 #[cfg(desktop)]
 pub mod desktop_settings;
 pub mod drawing;
+pub mod environment;
 pub mod error;
 pub mod history;
 pub mod hotkeys;
@@ -45,6 +46,7 @@ pub mod serde_helpers;
 pub mod sharing;
 pub mod signatures;
 pub mod spellcheck;
+pub mod storage_locks;
 pub mod sync;
 pub mod system;
 #[cfg(desktop)]
@@ -155,45 +157,7 @@ pub fn run() {
 
     #[cfg(desktop)]
     let app_handle = tauri::Builder::default()
-        .plugin(
-            tauri_plugin_log::Builder::new()
-                .level(if cfg!(debug_assertions) {
-                    log::LevelFilter::Trace
-                } else {
-                    log::LevelFilter::Info
-                })
-                // Silence noisy third-party crates that emit DEBUG/TRACE
-                // at high volume during normal operation — webview/window
-                // backend (wry/tao) and HTTP/TLS (hyper/reqwest/rustls).
-                // Our own modules stay at the global level.
-                .level_for("wry", log::LevelFilter::Warn)
-                .level_for("tao", log::LevelFilter::Warn)
-                .level_for("hyper", log::LevelFilter::Warn)
-                .level_for("hyper_util", log::LevelFilter::Warn)
-                .level_for("reqwest", log::LevelFilter::Warn)
-                .level_for("rustls", log::LevelFilter::Warn)
-                .level_for("keyring_core", log::LevelFilter::Info)
-                .targets([
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
-                        file_name: Some("Mindstream".into()),
-                    }),
-                ])
-                .build(),
-        )
-        .plugin(
-            tauri_plugin_autostart::Builder::new()
-                .arg(AUTOSTART_ARG)
-                .build(),
-        )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(
-            tauri_plugin_window_state::Builder::new()
-                .with_state_flags(WINDOW_STATE_FLAGS)
-                .skip_initial_state("main")
-                .build(),
-        )
-        .plugin(tauri_plugin_updater::Builder::new().build())
         // Powers the relaunch-into-new-vault switch and the
         // restore-relaunch flow (frontend calls `relaunch()` from
         // @tauri-apps/plugin-process). Desktop-only; gated by
@@ -243,6 +207,19 @@ pub fn run() {
     #[cfg(not(desktop))]
     let app_handle = tauri::Builder::default();
 
+    #[cfg(desktop)]
+    let app_handle = if environment::os_integrations_enabled() {
+        app_handle
+            .plugin(
+                tauri_plugin_autostart::Builder::new()
+                    .arg(AUTOSTART_ARG)
+                    .build(),
+            )
+            .plugin(tauri_plugin_updater::Builder::new().build())
+    } else {
+        app_handle
+    };
+
     let app = app_handle
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -261,6 +238,42 @@ pub fn run() {
             },
         )
         .setup(|app| {
+            let os_root = app.path().app_data_dir()?;
+            let environment = environment::Environment::resolve(os_root)?;
+            environment.validate_browser_isolation(&app.config().identifier)?;
+            app.manage(environment);
+            #[cfg(desktop)]
+            {
+                let environment = app.state::<environment::Environment>();
+                let folder = if environment.kind == environment::Kind::Release {
+                    app.path().app_log_dir()?
+                } else {
+                    environment.root.join("logs")
+                };
+                app.handle().plugin(
+                    tauri_plugin_log::Builder::new()
+                        .level(if cfg!(debug_assertions) {
+                            log::LevelFilter::Trace
+                        } else {
+                            log::LevelFilter::Info
+                        })
+                        .level_for("wry", log::LevelFilter::Warn)
+                        .level_for("tao", log::LevelFilter::Warn)
+                        .level_for("hyper", log::LevelFilter::Warn)
+                        .level_for("hyper_util", log::LevelFilter::Warn)
+                        .level_for("reqwest", log::LevelFilter::Warn)
+                        .level_for("rustls", log::LevelFilter::Warn)
+                        .level_for("keyring_core", log::LevelFilter::Info)
+                        .targets([
+                            tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                            tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Folder {
+                                path: folder,
+                                file_name: Some(format!("Mindstream-{}", std::process::id())),
+                            }),
+                        ])
+                        .build(),
+                )?;
+            }
             // Register a credential store before any auth code can hit
             // it — Entry::new() returns Error::NoDefaultStore otherwise.
             init_keyring();
@@ -272,22 +285,32 @@ pub fn run() {
             // decides, migrating a pre-profiles vault into a "default"
             // profile first so notes aren't orphaned.
             let app_data_root = paths::app_data_root(app.handle())?;
-            let (active_id, app_data) = match profiles::dir_override() {
-                Some(over) => over,
-                None => {
-                    if let Err(e) = profiles::migrate_legacy_if_needed(&app_data_root) {
-                        log::error!("[profiles] legacy migration failed: {e}");
-                    }
-                    let index = profiles::load_or_init(&app_data_root)?;
-                    let dir = profiles::profile_dir(&app_data_root, &index.active);
-                    (index.active, dir)
+            let (active_id, ownership) = match profiles::dir_override() {
+                Some((id, dir)) => {
+                    let _root_lock = storage_locks::RootLock::acquire(&app_data_root)?;
+                    (id, storage_locks::VaultLock::acquire(&dir)?)
                 }
+                None => profiles::resolve_startup(&app_data_root)?,
             };
             log::info!("[boot] active profile = {active_id}");
+            let app_data = ownership.directory.clone();
             app.manage(paths::ActiveProfile {
                 id: active_id,
                 dir: app_data.clone(),
             });
+            #[cfg(desktop)]
+            app.handle().plugin(
+                tauri_plugin_window_state::Builder::new()
+                    .with_state_flags(WINDOW_STATE_FLAGS)
+                    .with_filename(
+                        app_data
+                            .join("window-state.json")
+                            .to_string_lossy()
+                            .to_string(),
+                    )
+                    .skip_initial_state("main")
+                    .build(),
+            )?;
 
             // Apply any pending restore the user staged in a previous
             // session BEFORE opening the live DB. If the sentinel
@@ -298,7 +321,7 @@ pub fn run() {
             let db_path = app_data.join("mindstream.db");
             log::info!("[boot] db path = {}", db_path.display());
 
-            let db = Db::open(&db_path)?;
+            let db = Db::open_owned(&db_path, ownership)?;
 
             // First-run seed.
             db.with_conn(|c| {
@@ -333,6 +356,13 @@ pub fn run() {
                 .find(|window| window.label == "main")
                 .ok_or("main window configuration is missing")?;
             tauri::WebviewWindowBuilder::from_config(app, config)?
+                .title(
+                    if app.state::<environment::Environment>().kind == environment::Kind::Dev {
+                        "Mindstream Notes Dev"
+                    } else {
+                        "Mindstream Notes"
+                    },
+                )
                 .on_web_resource_request(move |_request, response| {
                     if !response
                         .headers()

@@ -15,7 +15,11 @@ use crate::error::AppResult;
 
 pub mod migrations;
 
-pub struct Db(pub Mutex<Connection>);
+// Fields drop in declaration order: close SQLite before releasing ownership.
+pub struct Db(
+    pub Mutex<Connection>,
+    Option<crate::storage_locks::VaultLock>,
+);
 
 impl Db {
     /// Open or create the SQLite database at `path`, run migrations, and
@@ -28,7 +32,13 @@ impl Db {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         migrations::run(&mut conn)?;
-        Ok(Self(Mutex::new(conn)))
+        Ok(Self(Mutex::new(conn), None))
+    }
+
+    pub fn open_owned(path: &Path, ownership: crate::storage_locks::VaultLock) -> AppResult<Self> {
+        let mut db = Self::open(path)?;
+        db.1 = Some(ownership);
+        Ok(db)
     }
 
     /// Run a closure against the connection (read).
@@ -82,7 +92,7 @@ pub fn open_memory_for_tests() -> Db {
     let mut conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
     conn.pragma_update(None, "foreign_keys", "ON").unwrap();
     migrations::run(&mut conn).expect("migrations");
-    Db(std::sync::Mutex::new(conn))
+    Db(std::sync::Mutex::new(conn), None)
 }
 
 #[cfg(test)]

@@ -82,6 +82,7 @@ function spawnDriver(client: ClientProc): ChildProcess {
     {
       ...process.env,
       MINDSTREAM_PROFILE_DIR: client.profileDir,
+      MINDSTREAM_ROOT_DIR: join(client.profileDir, '.app-root'),
       MINDSTREAM_PROFILE_ID: client.profileId,
       MINDSTREAM_DICTIONARY_DIR: dictionaryDir
     },

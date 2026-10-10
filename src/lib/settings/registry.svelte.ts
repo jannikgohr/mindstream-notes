@@ -149,13 +149,10 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
         typeof localStorage === 'undefined'
           ? 'en'
           : localStorage.getItem('notes-app:language');
-      if (!code && isTauri() && !isMobile()) {
+      if (isTauri() && !isMobile()) {
         code = await getDesktopLanguage();
       }
       code = code ?? 'en';
-      if (isTauri() && !isMobile()) {
-        await setDesktopLanguage(code);
-      }
       if (typeof localStorage !== 'undefined') {
         localStorage.setItem('notes-app:language', code);
       }

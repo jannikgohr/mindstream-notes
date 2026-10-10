@@ -1,5 +1,110 @@
 use super::*;
 
+#[test]
+fn migration_preserves_conflicting_wal_copies_without_publishing_index() {
+    let root = tmp_root();
+    let destination = profile_dir(&root, DEFAULT_PROFILE_ID);
+    fs::create_dir_all(&destination).unwrap();
+    fs::write(destination.join(LEGACY_DB_FILE), b"moved database").unwrap();
+    fs::write(root.join("mindstream.db-wal"), b"source commits").unwrap();
+    fs::write(destination.join("mindstream.db-wal"), b"other commits").unwrap();
+    assert!(migrate_legacy_if_needed(&root).is_err());
+    assert!(!index_path(&root).exists());
+    assert_eq!(
+        fs::read(root.join("mindstream.db-wal")).unwrap(),
+        b"source commits"
+    );
+    assert_eq!(
+        fs::read(destination.join("mindstream.db-wal")).unwrap(),
+        b"other commits"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn concurrent_profile_creates_preserve_all_index_entries() {
+    let root = tmp_root();
+    std::thread::scope(|scope| {
+        for worker in 0..8 {
+            let root = &root;
+            scope.spawn(move || add_profile(root, &format!("Vault {worker}")).unwrap());
+        }
+    });
+    let index = load(&root).unwrap().unwrap();
+    assert_eq!(index.profiles.len(), 9);
+    validate_index(&index).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn migration_resumes_after_database_move_before_index_publication() {
+    let root = tmp_root();
+    let dest = profile_dir(&root, DEFAULT_PROFILE_ID);
+    fs::create_dir_all(&dest).unwrap();
+    fs::write(dest.join("mindstream.db"), b"moved database").unwrap();
+    fs::write(root.join("mindstream.db-wal"), b"remaining WAL").unwrap();
+    assert!(migrate_legacy_if_needed(&root).unwrap());
+    assert_eq!(
+        fs::read(dest.join("mindstream.db-wal")).unwrap(),
+        b"remaining WAL"
+    );
+    assert!(load(&root).unwrap().is_some());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn deletion_refuses_another_instances_open_vault() {
+    let root = tmp_root();
+    let profile = add_profile(&root, "Other").unwrap();
+    let owner = VaultLock::acquire(&profile_dir(&root, &profile.id)).unwrap();
+    assert!(delete(&root, &profile.id, DEFAULT_PROFILE_ID).is_err());
+    assert_eq!(load(&root).unwrap().unwrap().profiles.len(), 2);
+    drop(owner);
+    delete(&root, &profile.id, DEFAULT_PROFILE_ID).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn deletion_recovery_resumes_before_and_after_index_removal() {
+    for removed in [false, true] {
+        let root = tmp_root();
+        let profile = add_profile(&root, "Other").unwrap();
+        let dir = profile_dir(&root, &profile.id);
+        fs::write(dir.join("note"), b"content").unwrap();
+        crate::atomic_file::write(
+            &root.join(format!(".vault-delete-{}.json", profile.id)),
+            &serde_json::to_vec(&profile.id).unwrap(),
+        )
+        .unwrap();
+        fs::write(dir.join(".vault-deleting"), b"pending").unwrap();
+        assert!(VaultLock::acquire(&dir).is_err());
+        if removed {
+            let mut index = load(&root).unwrap().unwrap();
+            index.profiles.retain(|entry| entry.id != profile.id);
+            save(&root, &index).unwrap();
+        }
+        let index = load_or_init(&root).unwrap();
+        assert_eq!(index.profiles.len(), 1);
+        assert!(!dir.exists());
+        assert_eq!(load_or_init(&root).unwrap(), index);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn unsafe_index_or_delete_records_are_retained_and_rejected() {
+    let root = tmp_root();
+    let mut index = Index::default_single();
+    index.profiles[0].id = "../outside".into();
+    index.active = "../outside".into();
+    assert!(save(&root, &index).is_err());
+    let record = root.join(".vault-delete-unsafe.json");
+    fs::write(&record, br#""../outside""#).unwrap();
+    assert!(load_or_init(&root).is_err());
+    assert!(record.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn tmp_root() -> PathBuf {
     let dir = std::env::temp_dir().join(format!("ms-profiles-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&dir).unwrap();
@@ -77,12 +182,15 @@ fn migrate_moves_legacy_vault_into_default_profile() {
         "mindstream.db-wal",
         "mindstream.db-shm",
         "etebase.session",
-        "desktop-settings.json",
     ] {
         assert!(dest.join(name).exists(), "{name} should move into profile");
         assert!(!root.join(name).exists(), "{name} should leave the root");
     }
     assert!(dest.join("backups").join("b.zip").exists());
+    assert!(
+        root.join("desktop-settings.json").exists(),
+        "device settings stay at root"
+    );
 
     // A valid index now exists with a single active default profile.
     let index = load(&root).unwrap().unwrap();
@@ -92,7 +200,7 @@ fn migrate_moves_legacy_vault_into_default_profile() {
 }
 
 #[test]
-fn migrate_preserves_existing_destination_entries_on_rerun() {
+fn migrate_refuses_conflicting_source_and_destination_databases() {
     let root = tmp_root();
     let dest = profile_dir(&root, DEFAULT_PROFILE_ID);
     fs::create_dir_all(&dest).unwrap();
@@ -100,16 +208,14 @@ fn migrate_preserves_existing_destination_entries_on_rerun() {
     fs::write(dest.join("mindstream.db"), b"existing-db").unwrap();
     fs::write(root.join("notes.txt"), b"leave me").unwrap();
 
-    let migrated = migrate_legacy_if_needed(&root).unwrap();
-    assert!(migrated);
-
     assert_eq!(
         fs::read(dest.join("mindstream.db")).unwrap(),
         b"existing-db"
     );
     assert_eq!(fs::read(root.join("mindstream.db")).unwrap(), b"source-db");
     assert_eq!(fs::read(root.join("notes.txt")).unwrap(), b"leave me");
-    assert!(load(&root).unwrap().is_some());
+    assert!(migrate_legacy_if_needed(&root).is_err());
+    assert!(load(&root).unwrap().is_none());
     fs::remove_dir_all(&root).ok();
 }
 

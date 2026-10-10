@@ -13,11 +13,16 @@ use tauri::{App, AppHandle, Emitter, Manager, State};
 use crate::app_events::AppEvent;
 use crate::error::{CommandError, CommandErrorCode, CommandResult};
 use crate::i18n;
+use crate::storage_locks::RootLock;
 
 const SETTINGS_FILE: &str = "desktop-settings.json";
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct DesktopSettingsFile {
+    #[serde(default)]
+    revision: u64,
+    #[serde(flatten)]
+    extra: serde_json::Map<String, serde_json::Value>,
     #[serde(default)]
     close_to_tray: bool,
     #[serde(default)]
@@ -49,29 +54,40 @@ pub struct DesktopSettings {
 }
 
 impl DesktopSettings {
+    fn current_file(&self) -> Option<DesktopSettingsFile> {
+        serde_json::from_slice(&fs::read(&self.path).ok()?).ok()
+    }
     pub fn load(app: &App) -> CommandResult<Self> {
-        let path = crate::paths::app_data_dir(app)
-            .map_err(CommandError::from)?
-            .join(SETTINGS_FILE);
-        Self::load_from_path(path)
+        let root = crate::paths::app_data_root(app)?;
+        let vault = crate::paths::app_data_dir(app)?;
+        Self::load_at(&root, &vault)
+    }
+
+    fn load_at(root: &std::path::Path, vault: &std::path::Path) -> CommandResult<Self> {
+        let _lock = RootLock::acquire(root)?;
+        let path = root.join(SETTINGS_FILE);
+        let marker = root.join(".desktop-settings-migrated");
+        if !path.try_exists()? {
+            if marker.try_exists()? {
+                return Err(CommandError::new(
+                    CommandErrorCode::Io,
+                    "root desktop settings are missing after migration; recovery required",
+                ));
+            }
+            let file = Self::read_file(&vault.join(SETTINGS_FILE))?;
+            crate::atomic_file::write(
+                &path,
+                &serde_json::to_vec_pretty(&file)
+                    .map_err(|err| CommandError::new(CommandErrorCode::Unknown, err.to_string()))?,
+            )?;
+        }
+        let settings = Self::load_from_path(path)?;
+        crate::atomic_file::write(&marker, b"1")?;
+        Ok(settings)
     }
 
     fn load_from_path(path: PathBuf) -> CommandResult<Self> {
-        let file = match fs::read(&path) {
-            Ok(raw) => serde_json::from_slice::<DesktopSettingsFile>(&raw).map_err(|e| {
-                CommandError::new(
-                    CommandErrorCode::InvalidArgument,
-                    format!("desktop settings corrupt at {}: {e}", path.display()),
-                )
-            })?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => DesktopSettingsFile::default(),
-            Err(e) => {
-                return Err(CommandError::new(
-                    CommandErrorCode::Io,
-                    format!("read desktop settings at {}: {e}", path.display()),
-                ));
-            }
-        };
+        let file = Self::read_file(&path)?;
         Ok(Self {
             close_to_tray: AtomicBool::new(file.close_to_tray),
             start_in_tray: AtomicBool::new(file.start_in_tray),
@@ -87,67 +103,118 @@ impl DesktopSettings {
         })
     }
 
+    fn read_file(path: &std::path::Path) -> CommandResult<DesktopSettingsFile> {
+        match fs::read(path) {
+            Ok(raw) => serde_json::from_slice::<DesktopSettingsFile>(&raw).map_err(|e| {
+                CommandError::new(
+                    CommandErrorCode::InvalidArgument,
+                    format!("desktop settings corrupt at {}: {e}", path.display()),
+                )
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Ok(DesktopSettingsFile::default())
+            }
+            Err(e) => Err(CommandError::new(
+                CommandErrorCode::Io,
+                format!("read desktop settings at {}: {e}", path.display()),
+            )),
+        }
+    }
+
     fn close_to_tray(&self) -> bool {
+        if let Some(file) = self.current_file() {
+            return file.close_to_tray;
+        }
         self.close_to_tray.load(Ordering::Relaxed)
     }
 
-    fn set_close_to_tray(&self, value: bool) {
+    fn set_close_to_tray(&self, value: bool) -> CommandResult<()> {
+        self.update(|file| file.close_to_tray = value)?;
         self.close_to_tray.store(value, Ordering::Relaxed);
+        Ok(())
     }
 
     fn start_in_tray(&self) -> bool {
+        if let Some(file) = self.current_file() {
+            return file.start_in_tray;
+        }
         self.start_in_tray.load(Ordering::Relaxed)
     }
 
-    fn set_start_in_tray(&self, value: bool) {
+    fn set_start_in_tray(&self, value: bool) -> CommandResult<()> {
+        self.update(|file| file.start_in_tray = value)?;
         self.start_in_tray.store(value, Ordering::Relaxed);
+        Ok(())
     }
 
     pub fn custom_window_decorations(&self) -> bool {
+        if let Some(file) = self.current_file() {
+            return file
+                .custom_window_decorations
+                .unwrap_or_else(default_custom_window_decorations);
+        }
         self.custom_window_decorations.load(Ordering::Relaxed)
     }
 
-    fn set_custom_window_decorations(&self, value: bool) {
+    fn set_custom_window_decorations(&self, value: bool) -> CommandResult<()> {
+        self.update(|file| file.custom_window_decorations = Some(value))?;
         self.custom_window_decorations
             .store(value, Ordering::Relaxed);
+        Ok(())
     }
 
     pub fn language_code(&self) -> String {
+        if let Some(file) = self.current_file() {
+            return i18n::normalize_language_code(&file.language_code).to_string();
+        }
         self.language_code
             .lock()
             .map(|code| code.clone())
             .unwrap_or_else(|_| default_language_code())
     }
 
-    fn set_language_code(&self, value: &str) {
+    fn set_language_code(&self, value: &str) -> CommandResult<()> {
+        self.update(|file| file.language_code = i18n::normalize_language_code(value).to_string())?;
         if let Ok(mut code) = self.language_code.lock() {
             *code = i18n::normalize_language_code(value).to_string();
         }
+        Ok(())
     }
 
     pub fn theme_mode(&self) -> DesktopThemeMode {
+        if let Some(file) = self.current_file() {
+            return file.theme_mode;
+        }
         self.theme_mode.lock().map(|mode| *mode).unwrap_or_default()
     }
 
-    fn set_theme_mode(&self, value: DesktopThemeMode) {
+    fn set_theme_mode(&self, value: DesktopThemeMode) -> CommandResult<()> {
+        self.update(|file| file.theme_mode = value)?;
         if let Ok(mut mode) = self.theme_mode.lock() {
             *mode = value;
         }
+        Ok(())
     }
 
-    fn save(&self) -> CommandResult<()> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|e| {
-                CommandError::new(CommandErrorCode::Io, format!("create settings dir: {e}"))
-            })?;
+    fn update(&self, patch: impl FnOnce(&mut DesktopSettingsFile)) -> CommandResult<()> {
+        let parent = self.path.parent().ok_or_else(|| {
+            CommandError::new(CommandErrorCode::Io, "settings path has no parent")
+        })?;
+        let _lock = RootLock::acquire(parent)?;
+        let mut file = Self::read_file(&self.path)?;
+        if parent.join(".desktop-settings-migrated").try_exists()? && !self.path.try_exists()? {
+            return Err(CommandError::new(
+                CommandErrorCode::Io,
+                "root settings disappeared; recovery required",
+            ));
         }
-        let file = DesktopSettingsFile {
-            close_to_tray: self.close_to_tray(),
-            start_in_tray: self.start_in_tray(),
-            custom_window_decorations: Some(self.custom_window_decorations()),
-            language_code: self.language_code(),
-            theme_mode: self.theme_mode(),
-        };
+        patch(&mut file);
+        file.revision = file.revision.checked_add(1).ok_or_else(|| {
+            CommandError::new(
+                CommandErrorCode::InvalidArgument,
+                "desktop settings revision exhausted",
+            )
+        })?;
         let json = serde_json::to_string_pretty(&file).map_err(|e| {
             CommandError::new(
                 CommandErrorCode::Unknown,
@@ -210,8 +277,7 @@ pub fn set_close_to_tray(
     settings: State<'_, DesktopSettings>,
     value: bool,
 ) -> CommandResult<()> {
-    settings.set_close_to_tray(value);
-    settings.save()
+    settings.set_close_to_tray(value)
 }
 
 #[tauri::command]
@@ -225,8 +291,7 @@ pub fn set_start_in_tray(
     settings: State<'_, DesktopSettings>,
     value: bool,
 ) -> CommandResult<()> {
-    settings.set_start_in_tray(value);
-    settings.save()
+    settings.set_start_in_tray(value)
 }
 
 #[tauri::command]
@@ -240,8 +305,7 @@ pub fn set_custom_window_decorations(
     settings: State<'_, DesktopSettings>,
     value: bool,
 ) -> CommandResult<()> {
-    settings.set_custom_window_decorations(value);
-    settings.save()?;
+    settings.set_custom_window_decorations(value)?;
     apply_window_decorations(&app, value)?;
     app.emit(AppEvent::CustomWindowDecorationsChanged.as_str(), value)
         .map_err(|e| {
@@ -263,8 +327,7 @@ pub fn set_desktop_language(
     settings: State<'_, DesktopSettings>,
     code: String,
 ) -> CommandResult<()> {
-    settings.set_language_code(&code);
-    settings.save()?;
+    settings.set_language_code(&code)?;
     #[cfg(target_os = "macos")]
     crate::native_menu::set_language(&app);
     crate::tray::set_language(&app, &settings.language_code());
@@ -281,13 +344,66 @@ pub fn set_desktop_theme_mode(
     settings: State<'_, DesktopSettings>,
     mode: DesktopThemeMode,
 ) -> CommandResult<()> {
-    settings.set_theme_mode(mode);
-    settings.save()
+    settings.set_theme_mode(mode)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn root() -> PathBuf {
+        let root = std::env::temp_dir().join(format!("ms-desktop-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn migration_seeds_selected_vault_once_and_root_wins_on_switch() {
+        let root = root();
+        let vault = root.join("vault");
+        fs::create_dir_all(&vault).unwrap();
+        fs::write(
+            vault.join(SETTINGS_FILE),
+            br#"{"close_to_tray":true,"future":{"keep":1}}"#,
+        )
+        .unwrap();
+        let first = DesktopSettings::load_at(&root, &vault).unwrap();
+        assert!(first.close_to_tray());
+        first.set_start_in_tray(true).unwrap();
+        fs::write(vault.join(SETTINGS_FILE), br#"{"close_to_tray":false}"#).unwrap();
+        let switched = DesktopSettings::load_at(&root, &root.join("another")).unwrap();
+        assert!(switched.close_to_tray() && switched.start_in_tray());
+        let file = DesktopSettings::read_file(&root.join(SETTINGS_FILE)).unwrap();
+        assert_eq!(file.extra["future"]["keep"], 1);
+        assert_eq!(file.revision, 1);
+        assert!(vault.join(SETTINGS_FILE).exists());
+        fs::remove_file(root.join(SETTINGS_FILE)).unwrap();
+        assert!(DesktopSettings::load_at(&root, &vault).is_err());
+        assert!(first.set_close_to_tray(false).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn independent_settings_instances_merge_field_patches_and_get_latest_values() {
+        let root = root();
+        let a = DesktopSettings::load_at(&root, &root.join("a")).unwrap();
+        let b = DesktopSettings::load_at(&root, &root.join("b")).unwrap();
+        std::thread::scope(|scope| {
+            scope.spawn(|| a.set_close_to_tray(true).unwrap());
+            scope.spawn(|| b.set_start_in_tray(true).unwrap());
+        });
+        assert!(a.start_in_tray() && b.close_to_tray());
+        assert_eq!(
+            DesktopSettings::read_file(&root.join(SETTINGS_FILE))
+                .unwrap()
+                .revision,
+            2
+        );
+        fs::write(root.join(SETTINGS_FILE), b"{broken").unwrap();
+        assert!(a.set_theme_mode(DesktopThemeMode::Dark).is_err());
+        assert_eq!(fs::read(root.join(SETTINGS_FILE)).unwrap(), b"{broken");
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn corrupt_settings_are_reported_without_overwriting_them() {
@@ -307,8 +423,7 @@ mod tests {
         let path = root.join(SETTINGS_FILE);
         let settings = DesktopSettings::load_from_path(path.clone()).unwrap();
         assert!(!settings.close_to_tray());
-        settings.set_close_to_tray(true);
-        settings.save().unwrap();
+        settings.set_close_to_tray(true).unwrap();
         let loaded = DesktopSettings::load_from_path(path).unwrap();
         assert!(loaded.close_to_tray());
         fs::remove_dir_all(root).unwrap();

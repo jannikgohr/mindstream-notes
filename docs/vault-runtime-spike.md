@@ -2,7 +2,7 @@
 
 Status on 2026-10-10: Windows browser isolation and native popout checks pass.
 The macOS lifecycle, Linux WebKit, and `tauri dev` host checks are pending.
-This is a partial spike, not approval of process-per-vault.
+The owner accepted proceeding with macOS risk on 2026-10-10; macOS results remain unverified.
 
 ## Reproduce the browser checks
 
@@ -65,19 +65,17 @@ still need measurement with the real editor workload.
 
 ## macOS compatibility decision
 
-The production config has no explicit minimum macOS version; the pinned Tauri
-config defaults to 10.13. `data_directory` is unavailable for WKWebView.
-Persistent store identifiers are available on macOS 14+ and iOS 17+, according
-to the [Tauri WebView API](https://docs.rs/tauri/2.11.1/tauri/webview/struct.WebviewWindowBuilder.html#method.data_store_identifier).
+The owner approved macOS 14+ on 2026-10-10. The production config now sets
+`minimumSystemVersion` to `14.0`. Persistent store identifiers require macOS 14+,
+according to the [Tauri WebView API](https://docs.rs/tauri/2.11.1/tauri/webview/struct.WebviewWindowBuilder.html#method.data_store_identifier).
+`data_directory` is unavailable for WKWebView. Incognito stores discard persisted
+browser state and cannot replace persistent vault stores.
 
-Before choosing this design, decide whether concurrent vaults must support
-macOS 13 and older. Supporting them requires another storage strategy or an
-explicit feature restriction. Incognito stores discard persisted browser state
-and are not a drop-in substitute. Do not silently fall back to shared storage.
-
-Access to a macOS desktop is also needed for the packaged app gate. The current
-session exposes Windows desktop automation; device-host access is disabled.
-The example's direct executable launches cannot prove signed `.app` behavior.
+No macOS machine is available in this session. The owner will check a new
+packaged release and accepts macOS breaking changes because there are currently
+no real macOS users. Implementation may proceed. Dock/menu/Reopen behavior is
+an explicit release test obligation, not verified evidence. The direct executable
+probe cannot prove signed `.app` behavior.
 
 ## Remaining gate checks
 
@@ -94,5 +92,5 @@ The example's direct executable launches cannot prove signed `.app` behavior.
 - Implement and test the [browser-storage migration](vault-browser-storage-audit.md)
   before new workers use isolated stores.
 
-Keep the architecture gate in the [implementation plan](root-vault-implementation-plan.md)
-closed until these results and the macOS support decision are recorded.
+Track the remaining checks in the [implementation plan](root-vault-implementation-plan.md).
+The macOS support decision is recorded; the deferred lifecycle test still needs results.

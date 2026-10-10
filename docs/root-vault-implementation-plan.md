@@ -1,8 +1,9 @@
 # Root storage and concurrent vault implementation plan
 
 Status: the first independent restore and document-write fixes are implemented
-and pass the Windows Rust checks. Process-per-vault remains conditional on the
-platform spike; environments, ownership locks, and concurrent workers are pending.
+and pass the Windows Rust checks. Environment identity, vault ownership, root
+desktop-settings migration, and recoverable deletion are in implementation.
+Concurrent workers and browser-store migration remain pending.
 
 Global plugin packages and theme presets are separate follow-up projects:
 
@@ -46,7 +47,7 @@ Account remains vault-specific. Mode and preset selection are independent. The
 appearance follow-up moves accent and UI font size to device scope; editor font
 size and line height remain vault preferences.
 
-## Architecture gate before environment changes
+## Architecture checks and accepted platform risk
 
 Run a two-day spike before committing to process-per-vault. Use disposable data
 and record OS/build versions, commands, observations, and unresolved behavior.
@@ -55,8 +56,11 @@ Assumed platform behavior does not count as verification.
 Progress: [Windows spike results and runnable probe](vault-runtime-spike.md)
 confirm shared browser ownership/storage and separate-folder isolation, including
 native popouts and worker restart. The [browser storage audit](vault-browser-storage-audit.md)
-records the broader migration scope. macOS/Linux, supervised dev-host behavior,
-and the minimum-macOS support decision remain open; the gate has not passed.
+records the broader migration scope. On 2026-10-10 the owner accepted macOS 14+
+and proceeding without an accessible Mac test machine. The packaged Dock/menu/
+Reopen check is deferred to their next release test. This is accepted unverified
+platform risk, not a successful macOS spike. Linux and supervised dev-host checks
+remain required during implementation.
 
 ### macOS process and lifecycle spike
 
@@ -129,12 +133,12 @@ and desktop-settings publication, and corrupt-settings errors. Regression tests
 cover a terminated WAL writer, busy readers, interrupted move boundaries,
 unexpected replacement WAL content, and concurrent document readers. Windows
 `cargo test`, `cargo clippy -- -D warnings`, and `cargo fmt -- --check` pass.
-Desktop settings remain vault-located until Phase 1 migration. macOS/Linux and
+Desktop settings move to the root in the Phase 1 slice below. macOS/Linux and
 reboot durability checks are still pending.
 
 ## Phase 1: environments, ownership, and storage migration
 
-Estimate: 3 to 4 working days, after the spike passes.
+Estimate: 3 to 4 working days. Proceed with the accepted macOS risk above.
 
 Primary areas: paths/profiles/auth, launcher/config, WebView setup, frontend
 persistence consumers, and all three WDIO real-app configs.
@@ -166,6 +170,40 @@ persistence consumers, and all three WDIO real-app configs.
 Acceptance: browser/environment isolation and credential migration pass;
 duplicate physical-vault ownership is rejected; concurrent root edits preserve
 both changes; concurrent dictionary operations are safe.
+
+Phase 1 implementation slice on 2026-10-10:
+
+- Explicit dev feature and bundle identity, stable dev root, gated test roots,
+  per-root test credentials, isolated logs, and disabled dev/test autostart,
+  updater and global shortcut registration. Release keyring entries retain
+  their historical service and per-vault account names.
+- Canonical vault OS locks acquired before restore/SQLite and retained until
+  the database connection closes. Root locks serialize index mutations and
+  individual revisioned desktop-settings edits. Existing lock files are reused.
+- One-time desktop-settings migration from the selected vault. Valid root
+  settings win; source files and unknown fields survive. Missing settings after
+  the completion marker and corrupt documents require recovery.
+- Journaled deletion blocks open vaults, removes the index entry, releases the
+  in-directory lock before Windows deletion, and resumes interrupted deletion.
+  Legacy migration resumes interrupted moves and rejects conflicting copies.
+- All three real-app harnesses now set root overrides alongside their existing
+  isolated WebView folders. macOS minimum is explicitly 14.0.
+
+Windows validation for this slice: Rust fmt/clippy pass; serial full Rust suite
+passes 731 unit tests and one integration test, with two existing ignored tests.
+Focused frontend tests pass 35 checks; Svelte diagnostics and affected ESLint
+files pass. The native app was launched through the dev wrapper with disposable
+root/vault/browser folders. A duplicate launch refused ownership before SQLite,
+a UI close-to-tray edit persisted root revision 1, and forced termination plus
+restart reused the surviving lock file and retained the setting. Raw logs are
+under `.output/ownership-app-check`. These are process-crash checks, not reboot
+durability evidence. Serial Rust execution avoids the existing ts-rs export/read
+race in generated-binding tests.
+
+Still pending in Phase 1: legacy browser-store migration, root recovery copies,
+shared dictionary operation locks, and worker cache broadcasts. Duplicate vault
+launches currently refuse startup; focusing an existing owner requires Phase 2.
+Older binaries without locks remain unsafe against the same physical vault.
 
 ## Phase 2: coordination and simultaneous vaults
 

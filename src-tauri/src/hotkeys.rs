@@ -149,6 +149,9 @@ pub fn sync_global_shortcuts(
     state: State<'_, DesktopGlobalShortcuts>,
     registrations: Vec<GlobalShortcutRegistration>,
 ) -> CommandResult<()> {
+    if !crate::environment::os_integrations_enabled() {
+        return Ok(());
+    }
     eprintln!(
         "[global-shortcuts] sync_global_shortcuts called with {} registration(s): {:?}",
         registrations.len(),

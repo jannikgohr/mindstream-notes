@@ -90,24 +90,42 @@ fn keyring_account_name(profile_id: &str) -> String {
 /// Resolve the keyring account key for the currently-active profile.
 /// Falls back to the default (un-namespaced) key if profile state isn't
 /// managed yet — matches the boot fallback in [`crate::paths`].
-fn active_keyring_account(app: &AppHandle) -> String {
+#[derive(Clone)]
+struct CredentialIdentity {
+    service: String,
+    account: String,
+}
+
+fn credential_identity(app: &AppHandle, id: &str) -> CredentialIdentity {
+    let service = app
+        .try_state::<crate::environment::Environment>()
+        .map(|environment| environment.credential_service.clone())
+        .unwrap_or_else(|| KEYRING_SERVICE.to_string());
+    CredentialIdentity {
+        service,
+        account: keyring_account_name(id),
+    }
+}
+
+fn active_keyring_account(app: &AppHandle) -> CredentialIdentity {
     let id = app
         .try_state::<crate::paths::ActiveProfile>()
         .map(|p| p.id.clone())
         .unwrap_or_else(|| crate::profiles::DEFAULT_PROFILE_ID.to_string());
-    keyring_account_name(&id)
+    credential_identity(app, &id)
 }
 
-fn keyring_entry(account: &str) -> AppResult<Entry> {
-    Entry::new(KEYRING_SERVICE, account).map_err(|e| AppError::InvalidArg(format!("keyring: {e}")))
+fn keyring_entry(identity: &CredentialIdentity) -> AppResult<Entry> {
+    Entry::new(&identity.service, &identity.account)
+        .map_err(|e| AppError::InvalidArg(format!("keyring: {e}")))
 }
 
 /// Best-effort removal of a profile's stored Etebase session key. Called
 /// when a vault is deleted so its credential doesn't outlive its data.
 /// Silent on any failure — the entry may simply not exist (the vault was
 /// never signed in).
-pub fn forget_profile_keyring(profile_id: &str) {
-    if let Ok(entry) = keyring_entry(&keyring_account_name(profile_id)) {
+pub fn forget_profile_keyring(app: &AppHandle, profile_id: &str) {
+    if let Ok(entry) = keyring_entry(&credential_identity(app, profile_id)) {
         let _ = entry.delete_credential();
     }
 }
@@ -155,7 +173,10 @@ fn read_stored(path: &Path) -> AppResult<Option<StoredSession>> {
     Ok(Some(stored))
 }
 
-fn restore_account(stored: &StoredSession, keyring_account: &str) -> AppResult<Account> {
+fn restore_account(
+    stored: &StoredSession,
+    keyring_account: &CredentialIdentity,
+) -> AppResult<Account> {
     let key_b64 = keyring_entry(keyring_account)?
         .get_password()
         .map_err(|e| AppError::InvalidArg(format!("keyring read: {e}")))?;
@@ -167,7 +188,7 @@ fn restore_account(stored: &StoredSession, keyring_account: &str) -> AppResult<A
         .map_err(|e| AppError::InvalidArg(format!("etebase restore: {e}")))
 }
 
-fn clear_local_state(path: &Path, keyring_account: &str) {
+fn clear_local_state(path: &Path, keyring_account: &CredentialIdentity) {
     let _ = fs::remove_file(path);
     if let Ok(entry) = keyring_entry(keyring_account) {
         let _ = entry.delete_credential();

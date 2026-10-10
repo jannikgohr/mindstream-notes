@@ -255,6 +255,14 @@ describe('SETTING_BINDINGS — Tauri (desktop) branches', () => {
     await SETTING_BINDINGS['language.code'].set('en');
     expect(setDesktopLanguage).toHaveBeenCalledWith('en');
   });
+
+  it('language hydration prefers device settings over a stale browser value', async () => {
+    localStorage.setItem('notes-app:language', 'en');
+    vi.mocked(setDesktopLanguage).mockClear();
+    expect(await SETTING_BINDINGS['language.code'].get()).toBe('de');
+    expect(setDesktopLanguage).not.toHaveBeenCalled();
+    localStorage.clear();
+  });
 });
 
 describe('SETTING_ACTIONS', () => {

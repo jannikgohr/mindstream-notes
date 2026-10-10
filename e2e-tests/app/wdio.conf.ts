@@ -165,6 +165,7 @@ export const config: WebdriverIO.Config = {
         ...process.env,
         ...webviewEnvironment(runProfileDir),
         MINDSTREAM_PROFILE_DIR: runProfileDir,
+        MINDSTREAM_ROOT_DIR: join(runProfileDir, '.app-root'),
         // Namespaces the OS keyring entry. Without it every worker writes to
         // the one `e2e` slot, which concurrent specs would race over.
         MINDSTREAM_PROFILE_ID: `e2e-${cid}`,
