@@ -52,6 +52,12 @@ Run a two-day spike before committing to process-per-vault. Use disposable data
 and record OS/build versions, commands, observations, and unresolved behavior.
 Assumed platform behavior does not count as verification.
 
+Progress: [Windows spike results and runnable probe](vault-runtime-spike.md)
+confirm shared browser ownership/storage and separate-folder isolation, including
+native popouts and worker restart. The [browser storage audit](vault-browser-storage-audit.md)
+records the broader migration scope. macOS/Linux, supervised dev-host behavior,
+and the minimum-macOS support decision remain open; the gate has not passed.
+
 ### macOS process and lifecycle spike
 
 - Launch a packaged app with two workers and a coordinator. Check Dock icons,
