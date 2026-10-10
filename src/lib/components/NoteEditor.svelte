@@ -78,6 +78,7 @@
     refreshMentionDecorations,
     type MentionUser
   } from '$lib/editor/plugins';
+  import { IMAGE_ACCEPT } from '$lib/file-drop';
   import { MARKDOWN_ACTIONS } from '$lib/hotkeys/markdown-actions';
   import SourceEditor from '$lib/editor/source/SourceEditor.svelte';
   import EditorModeToggle from '$lib/editor/source/EditorModeToggle.svelte';
@@ -1775,9 +1776,13 @@
       <!--
         WYSIWYG pane: always mounted — Crepe is the Yjs authority in every mode.
         Hidden in Source-only mode, half-width (right) in Split.
+
+        Dropped images belong to Crepe's upload plugin (see $lib/file-drop);
+        a read-only editor ignores drops, so it doesn't claim them.
       -->
       <div
         bind:this={wysiwygPaneEl}
+        data-file-drop-accept={isReadOnly ? undefined : IMAGE_ACCEPT}
         class="themed-scrollbar h-full overflow-y-auto {viewMode === 'source'
           ? 'hidden'
           : ''} {viewMode === 'split' ? 'w-1/2' : 'w-full'}"

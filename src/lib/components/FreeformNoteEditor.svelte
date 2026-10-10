@@ -99,6 +99,24 @@
 
   /** Debounce window for save scheduling — same as NoteEditor. */
 
+  /**
+   * What Excalidraw's own drop handler can place on the canvas — its
+   * `IMAGE_MIME_TYPES`. It treats any other file as a scene to load and
+   * raises an error dialog when it isn't one, so those never reach it (see
+   * $lib/file-drop).
+   */
+  const FILE_DROP_ACCEPT = [
+    'image/png',
+    'image/jpeg',
+    'image/svg+xml',
+    'image/gif',
+    'image/webp',
+    'image/bmp',
+    'image/x-icon',
+    'image/avif',
+    'image/jfif'
+  ].join(',');
+
   /** Mount point for the React island. dockview gives us the full panel;
    *  the island fills it via `position: absolute; inset: 0`. */
   let mountEl: HTMLDivElement | null = $state(null);
@@ -674,10 +692,14 @@
     <!--
       `freeform-canvas-host` gives app.css one stable, editor-agnostic
       hook for dockview drag routing and local canvas tweaks.
+
+      Excalidraw only ever reads the first dropped file, hence `single`.
     -->
     <div
       bind:this={mountEl}
       class="freeform-canvas-host absolute inset-0"
+      data-file-drop-accept={isTrashed ? undefined : FILE_DROP_ACCEPT}
+      data-file-drop-single
     ></div>
   </div>
 </div>
