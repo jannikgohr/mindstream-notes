@@ -1,6 +1,98 @@
 use super::*;
 
 #[test]
+fn startup_recovers_previous_index_and_preserves_unindexed_vaults_and_corrupt_bytes() {
+    let root = tmp_root();
+    load_or_init(&root).unwrap();
+    let other = add_profile(&root, "Other").unwrap();
+    fs::write(index_path(&root), b"broken latest index").unwrap();
+    let (id, owner) = resolve_startup(&root).unwrap();
+    assert_eq!(id, DEFAULT_PROFILE_ID);
+    drop(owner);
+    assert!(profile_dir(&root, &other.id).is_dir());
+    assert!(fs::read_dir(&root).unwrap().any(|entry| {
+        let path = entry.unwrap().path();
+        path.file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("profiles.json.corrupt-")
+            && fs::read(path).unwrap() == b"broken latest index"
+    }));
+    assert_eq!(load(&root).unwrap().unwrap().profiles.len(), 1);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn recovery_does_not_recreate_a_vault_deleted_after_the_previous_index() {
+    let root = tmp_root();
+    let other = add_profile(&root, "Other").unwrap();
+    delete(&root, &other.id, DEFAULT_PROFILE_ID).unwrap();
+    fs::write(index_path(&root), b"broken current").unwrap();
+    assert!(resolve_startup(&root).is_err());
+    assert!(!profile_dir(&root, &other.id).exists());
+    assert_eq!(fs::read(index_path(&root)).unwrap(), b"broken current");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn missing_index_with_vault_data_and_missing_selected_directory_stop_startup() {
+    let root = tmp_root();
+    let default = profile_dir(&root, DEFAULT_PROFILE_ID);
+    fs::create_dir_all(&default).unwrap();
+    fs::write(default.join("mindstream.db"), b"existing notes").unwrap();
+    // Interrupted legacy migration remains a valid recovery path.
+    assert!(resolve_startup(&root).is_ok());
+    fs::remove_file(index_path(&root)).unwrap();
+    assert!(load_or_init(&root).is_err());
+    assert!(!index_path(&root).exists());
+    fs::remove_dir_all(&default).unwrap();
+    save(&root, &Index::default_single()).unwrap();
+    assert!(resolve_startup(&root).is_err());
+    assert!(!default.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn recovered_old_index_reconciles_an_interrupted_deletion_before_ownership() {
+    let root = tmp_root();
+    let other = add_profile(&root, "Other").unwrap();
+    let mut index = load(&root).unwrap().unwrap();
+    index.profiles.retain(|profile| profile.id != other.id);
+    save(&root, &index).unwrap();
+    crate::atomic_file::write(
+        &root.join(format!(".vault-delete-{}.json", other.id)),
+        &serde_json::to_vec(&other.id).unwrap(),
+    )
+    .unwrap();
+    fs::remove_dir_all(profile_dir(&root, &other.id)).unwrap();
+    fs::write(index_path(&root), b"broken").unwrap();
+    let (_, owner) = resolve_startup(&root).unwrap();
+    drop(owner);
+    assert_eq!(load(&root).unwrap().unwrap().profiles.len(), 1);
+    assert!(!profile_dir(&root, &other.id).exists());
+    assert!(resolve_startup(&root).is_ok());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn missing_index_with_multiple_vault_directories_cannot_be_mistaken_for_legacy_migration() {
+    let root = tmp_root();
+    let default = profile_dir(&root, DEFAULT_PROFILE_ID);
+    fs::create_dir_all(&default).unwrap();
+    fs::write(default.join("mindstream.db"), b"existing default").unwrap();
+    let other = profile_dir(&root, "other");
+    fs::create_dir_all(&other).unwrap();
+    fs::write(other.join("mindstream.db"), b"existing other").unwrap();
+    assert!(resolve_startup(&root).is_err());
+    assert!(!index_path(&root).exists());
+    assert_eq!(
+        fs::read(other.join("mindstream.db")).unwrap(),
+        b"existing other"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn migration_preserves_conflicting_wal_copies_without_publishing_index() {
     let root = tmp_root();
     let destination = profile_dir(&root, DEFAULT_PROFILE_ID);
@@ -127,8 +219,10 @@ fn load_or_init_writes_fresh_index_without_migrating() {
     assert_eq!(index.active, DEFAULT_PROFILE_ID);
     assert_eq!(index.profiles.len(), 1);
     assert!(index_path(&root).exists());
-    // No legacy DB, so nothing should have been moved.
-    assert!(!profile_dir(&root, DEFAULT_PROFILE_ID).exists());
+    // Reserve the empty directory before publishing its new index entry.
+    let reserved = profile_dir(&root, DEFAULT_PROFILE_ID);
+    assert!(reserved.is_dir());
+    assert_eq!(fs::read_dir(reserved).unwrap().count(), 0);
     fs::remove_dir_all(&root).ok();
 }
 

@@ -17,7 +17,7 @@ use crate::storage_locks::RootLock;
 
 const SETTINGS_FILE: &str = "desktop-settings.json";
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct DesktopSettingsFile {
     #[serde(default)]
     revision: u64,
@@ -33,6 +33,28 @@ struct DesktopSettingsFile {
     language_code: String,
     #[serde(default)]
     theme_mode: DesktopThemeMode,
+}
+
+impl Default for DesktopSettingsFile {
+    fn default() -> Self {
+        Self {
+            revision: 0,
+            extra: serde_json::Map::new(),
+            close_to_tray: false,
+            start_in_tray: false,
+            custom_window_decorations: None,
+            language_code: default_language_code(),
+            theme_mode: DesktopThemeMode::default(),
+        }
+    }
+}
+
+fn validate_settings_bytes(raw: &[u8]) -> crate::error::AppResult<()> {
+    serde_json::from_slice::<DesktopSettingsFile>(raw)
+        .map(|_| ())
+        .map_err(|err| {
+            crate::error::AppError::InvalidArg(format!("desktop settings corrupt: {err}"))
+        })
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -67,6 +89,13 @@ impl DesktopSettings {
         let _lock = RootLock::acquire(root)?;
         let path = root.join(SETTINGS_FILE);
         let marker = root.join(".desktop-settings-migrated");
+        if marker.try_exists()? && fs::read(&marker)? != b"1" {
+            return Err(CommandError::new(
+                CommandErrorCode::InvalidArgument,
+                "desktop settings migration marker is corrupt; recovery required",
+            ));
+        }
+        crate::root_documents::recover(&path, validate_settings_bytes, validate_settings_bytes)?;
         if !path.try_exists()? {
             if marker.try_exists()? {
                 return Err(CommandError::new(
@@ -75,14 +104,17 @@ impl DesktopSettings {
                 ));
             }
             let file = Self::read_file(&vault.join(SETTINGS_FILE))?;
-            crate::atomic_file::write(
+            crate::root_documents::write(
                 &path,
                 &serde_json::to_vec_pretty(&file)
                     .map_err(|err| CommandError::new(CommandErrorCode::Unknown, err.to_string()))?,
+                validate_settings_bytes,
             )?;
         }
         let settings = Self::load_from_path(path)?;
-        crate::atomic_file::write(&marker, b"1")?;
+        if !marker.try_exists()? {
+            crate::atomic_file::write(&marker, b"1")?;
+        }
         Ok(settings)
     }
 
@@ -221,9 +253,11 @@ impl DesktopSettings {
                 format!("serialize desktop settings: {e}"),
             )
         })?;
-        crate::atomic_file::write(&self.path, json.as_bytes()).map_err(|e| {
-            CommandError::new(CommandErrorCode::Io, format!("write desktop settings: {e}"))
-        })
+        Ok(crate::root_documents::write(
+            &self.path,
+            json.as_bytes(),
+            validate_settings_bytes,
+        )?)
     }
 }
 
@@ -351,6 +385,44 @@ pub fn set_desktop_theme_mode(
 mod tests {
     use super::*;
 
+    #[test]
+    fn root_recovery_uses_previous_copy_and_never_reseeds_from_a_stale_vault() {
+        let root =
+            std::env::temp_dir().join(format!("ms-desktop-recover-{}", uuid::Uuid::new_v4()));
+        let vault = root.join("vault");
+        fs::create_dir_all(&vault).unwrap();
+        let settings = DesktopSettings::load_at(&root, &vault).unwrap();
+        settings.set_close_to_tray(true).unwrap();
+        settings.set_theme_mode(DesktopThemeMode::Dark).unwrap();
+        fs::write(root.join(SETTINGS_FILE), b"broken latest settings").unwrap();
+        fs::write(vault.join(SETTINGS_FILE), b"{\"close_to_tray\":false}").unwrap();
+        let recovered = DesktopSettings::load_at(&root, &vault).unwrap();
+        assert!(recovered.close_to_tray());
+        assert_eq!(recovered.theme_mode(), DesktopThemeMode::System);
+        fs::remove_file(root.join(SETTINGS_FILE)).unwrap();
+        assert!(DesktopSettings::load_at(&root, &vault)
+            .unwrap()
+            .close_to_tray());
+        assert!(fs::read_dir(&root).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("desktop-settings.json.corrupt-")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn invalid_completion_marker_is_preserved_and_refused() {
+        let root = std::env::temp_dir().join(format!("ms-desktop-marker-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let marker = root.join(".desktop-settings-migrated");
+        fs::write(&marker, b"bad marker").unwrap();
+        assert!(DesktopSettings::load_at(&root, &root.join("vault")).is_err());
+        assert_eq!(fs::read(marker).unwrap(), b"bad marker");
+        assert!(!root.join(SETTINGS_FILE).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn root() -> PathBuf {
         let root = std::env::temp_dir().join(format!("ms-desktop-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
@@ -378,8 +450,13 @@ mod tests {
         assert_eq!(file.revision, 1);
         assert!(vault.join(SETTINGS_FILE).exists());
         fs::remove_file(root.join(SETTINGS_FILE)).unwrap();
-        assert!(DesktopSettings::load_at(&root, &vault).is_err());
         assert!(first.set_close_to_tray(false).is_err());
+        let recovered = DesktopSettings::load_at(&root, &vault).unwrap();
+        assert!(recovered.close_to_tray());
+        assert!(!recovered.start_in_tray());
+        fs::remove_file(root.join(SETTINGS_FILE)).unwrap();
+        fs::remove_file(root.join("desktop-settings.json.previous")).unwrap();
+        assert!(DesktopSettings::load_at(&root, &vault).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -41,6 +41,7 @@ pub mod pdf_export;
 pub mod pdf_text;
 pub mod plugins;
 pub mod profiles;
+pub mod root_documents;
 pub mod search;
 pub mod serde_helpers;
 pub mod sharing;
@@ -288,6 +289,7 @@ pub fn run() {
             let (active_id, ownership) = match profiles::dir_override() {
                 Some((id, dir)) => {
                     let _root_lock = storage_locks::RootLock::acquire(&app_data_root)?;
+                    profiles::reconcile_root_locked(&app_data_root)?;
                     (id, storage_locks::VaultLock::acquire(&dir)?)
                 }
                 None => profiles::resolve_startup(&app_data_root)?,
@@ -311,6 +313,9 @@ pub fn run() {
                     .skip_initial_state("main")
                     .build(),
             )?;
+
+            #[cfg(desktop)]
+            app.manage(desktop_settings::DesktopSettings::load(app)?);
 
             // Apply any pending restore the user staged in a previous
             // session BEFORE opening the live DB. If the sentinel
@@ -336,9 +341,6 @@ pub fn run() {
             app.manage(hotkeys::NativeHotkeyDisplays::default());
             #[cfg(desktop)]
             app.manage(hotkeys::DesktopGlobalShortcuts::default());
-
-            #[cfg(desktop)]
-            app.manage(desktop_settings::DesktopSettings::load(app)?);
 
             // Create after profile selection so the first document gets the
             // correct account's CSP. A fresh document after sign-in/sign-out

@@ -130,6 +130,41 @@ fn validate_index(index: &Index) -> AppResult<()> {
     Ok(())
 }
 
+fn validate_index_bytes(raw: &[u8]) -> AppResult<()> {
+    let index: Index = serde_json::from_slice(raw)
+        .map_err(|err| AppError::InvalidArg(format!("profiles index corrupt: {err}")))?;
+    validate_index(&index)
+}
+
+fn recover_index_locked(root: &Path) -> AppResult<()> {
+    crate::root_documents::recover(&index_path(root), validate_index_bytes, |raw| {
+        validate_index_bytes(raw)?;
+        let index: Index =
+            serde_json::from_slice(raw).map_err(|err| AppError::InvalidArg(err.to_string()))?;
+        for profile in index.profiles {
+            if !profile_dir(root, &profile.id).is_dir() {
+                // A deletion may have committed after the previous index copy.
+                // Only its still-present operation record permits reconciliation.
+                let record = root.join(format!(".vault-delete-{}.json", profile.id));
+                let deleting = if record.try_exists()? {
+                    serde_json::from_slice::<String>(&fs::read(record)?)
+                        .map_err(|err| AppError::InvalidArg(err.to_string()))?
+                        == profile.id
+                } else {
+                    false
+                };
+                if !deleting || profile.id == index.active {
+                    return Err(AppError::InvalidArg(format!(
+                        "previous vault index references missing vault {}; recovery requires a selection",
+                        profile.id
+                    )));
+                }
+            }
+        }
+        Ok(())
+    })
+}
+
 /// Persist the index to `<root>/profiles.json` (pretty-printed). Creates
 /// the root directory if it doesn't exist yet.
 pub fn save(root: &Path, index: &Index) -> AppResult<()> {
@@ -142,7 +177,7 @@ fn save_locked(root: &Path, index: &Index) -> AppResult<()> {
     fs::create_dir_all(root)?;
     let json = serde_json::to_vec_pretty(index)
         .map_err(|e| AppError::InvalidArg(format!("serialize profiles index: {e}")))?;
-    crate::atomic_file::write(&index_path(root), &json)?;
+    crate::root_documents::write(&index_path(root), &json, validate_index_bytes)?;
     Ok(())
 }
 
@@ -158,7 +193,21 @@ fn load_or_init_locked(root: &Path) -> AppResult<Index> {
     if let Some(index) = load(root)? {
         return Ok(index);
     }
+    if profiles_dir(root).try_exists()? {
+        for entry in fs::read_dir(profiles_dir(root))? {
+            let entry = entry?;
+            if entry.file_name() != DEFAULT_PROFILE_ID
+                || !entry.path().is_dir()
+                || fs::read_dir(entry.path())?.next().is_some()
+            {
+                return Err(AppError::InvalidArg(
+                    "vault index missing with existing vault data; recovery required".into(),
+                ));
+            }
+        }
+    }
     let index = Index::default_single();
+    fs::create_dir_all(profile_dir(root, DEFAULT_PROFILE_ID))?;
     save_locked(root, &index)?;
     Ok(index)
 }
@@ -205,6 +254,15 @@ fn migrate_legacy_locked(root: &Path) -> AppResult<bool> {
     if !root.join(LEGACY_DB_FILE).try_exists()? && !dest.join(LEGACY_DB_FILE).try_exists()? {
         return Ok(false);
     }
+    if !root.join(LEGACY_DB_FILE).try_exists()? {
+        for entry in fs::read_dir(profiles_dir(root))? {
+            if entry?.file_name() != DEFAULT_PROFILE_ID {
+                return Err(AppError::InvalidArg(
+                    "missing vault index with multiple vault directories; recovery required".into(),
+                ));
+            }
+        }
+    }
     let _legacy_owner = if root.join(LEGACY_DB_FILE).try_exists()? {
         Some(VaultLock::acquire(root)?)
     } else {
@@ -239,11 +297,25 @@ fn migrate_legacy_locked(root: &Path) -> AppResult<bool> {
 /// Selection and ownership are one root transaction, including deletion recovery.
 pub fn resolve_startup(root: &Path) -> AppResult<(String, VaultLock)> {
     let _lock = RootLock::acquire(root)?;
-    reconcile_deletions(root)?;
+    reconcile_root_locked(root)?;
     migrate_legacy_locked(root)?;
     let index = load_or_init_locked(root)?;
-    let owner = VaultLock::acquire(&profile_dir(root, &index.active))?;
+    let selected = profile_dir(root, &index.active);
+    if !selected.is_dir() {
+        return Err(AppError::InvalidArg(format!(
+            "selected vault {} is missing; refusing to create an empty replacement",
+            index.active
+        )));
+    }
+    let owner = VaultLock::acquire(&selected)?;
     Ok((index.active, owner))
+}
+
+/// Also used for gated harness profile overrides, which skip vault selection
+/// but still share root documents and unfinished operations.
+pub(crate) fn reconcile_root_locked(root: &Path) -> AppResult<()> {
+    recover_index_locked(root)?;
+    reconcile_deletions(root)
 }
 
 /// Whether the data-dir env override is permitted in this build. Dev

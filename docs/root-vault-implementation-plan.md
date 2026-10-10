@@ -212,8 +212,21 @@ cleanup. Concurrent pair readers, interrupted publication/removal, unsafe IDs,
 missing/corrupt manifests, and two worker caches are tested. Windows Rust gates
 pass 737 unit tests and one integration test, with two existing ignored tests.
 
-Still pending in Phase 1: legacy browser-store migration, root recovery copies,
-and root worker cache broadcasts. Duplicate vault
+Root recovery slice on 2026-10-10: index/settings saves preserve a validated
+`.previous` copy under the root lock. Startup validates current documents first,
+quarantines corrupt bytes before promoting a valid previous copy, and stops when
+both copies are invalid. Index recovery checks referenced directories and pending
+deletion records before selecting a vault. Missing selected directories cannot
+be recreated as empty replacements. Missing indexes with multiple existing
+vault directories require recovery. Desktop settings recover before restore or
+SQLite mutation, and an invalid migration marker is preserved and refused.
+Windows Rust gates pass 747 unit tests and one integration test, with two existing
+ignored tests. Recovery selection UI and orphan-vault index salvage remain work
+for the coordinator/picker. [Ownership and recovery rules](storage-ownership-and-recovery.md)
+record lock ordering and filesystem limits.
+
+Still pending in Phase 1: legacy browser-store migration and root worker cache
+broadcasts. Duplicate vault
 launches currently refuse startup; focusing an existing owner requires Phase 2.
 Older binaries without locks remain unsafe against the same physical vault.
 
