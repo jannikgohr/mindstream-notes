@@ -225,6 +225,20 @@ ignored tests. Recovery selection UI and orphan-vault index salvage remain work
 for the coordinator/picker. [Ownership and recovery rules](storage-ownership-and-recovery.md)
 record lock ordering and filesystem limits.
 
+Signing credential slice on 2026-10-10: collaboration identities are now owned
+by a vault encrypted file with a separate vault key in the environment's OS
+keystore. Native reads prefer the vault credential, then import only the matching
+legacy browser account key without changing it. Sources are retained. Main and
+note window create races return one persisted identity. Missing/locked keystore
+keys, corrupt credentials and malformed legacy keys cannot silently generate a
+replacement. Deleting a vault also attempts to remove its signing master key.
+Windows fmt/clippy and the full Rust suite pass 753 unit tests and one integration
+test. Three tests are ignored in the normal suite; the new Windows native keystore
+test was run explicitly and passed with disposable entries. WebCrypto compatibility,
+cryptographic scope binding and tamper rejection are tested. Affected frontend
+checks pass, including 35 signing/frame/API tests. Legacy export for unopened
+vaults still must preserve signing identities before isolated stores launch.
+
 Still pending in Phase 1: legacy browser-store migration and root worker cache
 broadcasts. Duplicate vault
 launches currently refuse startup; focusing an existing owner requires Phase 2.

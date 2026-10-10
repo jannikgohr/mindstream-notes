@@ -46,6 +46,7 @@ pub mod search;
 pub mod serde_helpers;
 pub mod sharing;
 pub mod signatures;
+pub mod signing_credentials;
 pub mod spellcheck;
 pub mod storage_locks;
 pub mod sync;
@@ -536,6 +537,8 @@ pub fn run() {
             auth::etebase_login,
             auth::etebase_logout,
             auth::etebase_session,
+            signing_credentials::get_vault_collab_signing_material,
+            signing_credentials::store_vault_collab_signing_material,
             auth::check_etebase_server_url,
             // Sync
             sync::sync_now,

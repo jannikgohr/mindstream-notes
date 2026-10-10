@@ -17,6 +17,20 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('$lib/api', () => api);
 
+const native = vi.hoisted(() => ({
+  isTauri: vi.fn(() => false),
+  get: vi.fn(),
+  store: vi.fn()
+}));
+vi.mock('$lib/api/core', async (original) => ({
+  ...(await original<typeof import('$lib/api/core')>()),
+  isTauri: native.isTauri
+}));
+vi.mock('$lib/api/signing-credentials', () => ({
+  getVaultCollabSigningMaterial: native.get,
+  storeVaultCollabSigningMaterial: native.store
+}));
+
 function session(
   username: string,
   server_url = 'https://etebase.example/'
@@ -109,6 +123,11 @@ describe('getOrCreateCollabSigningMaterial', () => {
     api.authSession.current = null;
     api.etebaseSession.mockReset();
     api.etebaseSession.mockResolvedValue(null);
+    native.isTauri.mockReturnValue(false);
+    native.get.mockReset().mockResolvedValue(null);
+    native.store
+      .mockReset()
+      .mockImplementation(async (_server, material) => material);
   });
 
   it('has no material while signed out', async () => {
@@ -197,5 +216,80 @@ describe('getOrCreateCollabSigningMaterial', () => {
     const afterWrongTypes = await getOrCreateCollabSigningMaterial();
     expect(afterWrongTypes?.publicKeyB64).toBeTruthy();
     expect(afterWrongTypes?.privateKeyPkcs8B64).not.toBe('wrong');
+  });
+
+  describe('native vault credentials', () => {
+    beforeEach(() => {
+      native.isTauri.mockReturnValue(true);
+      api.authSession.current = session('alice');
+    });
+
+    const legacyKey =
+      'mindstream:collab-signing-key:v1:https%3A%2F%2Fetebase.example%2F:alice';
+    const stored = {
+      username: 'alice',
+      publicKeyB64: 'existing-public',
+      privateKeyPkcs8B64: 'existing-private'
+    };
+
+    it('uses the vault key before looking at legacy browser storage', async () => {
+      native.get.mockResolvedValue(stored);
+      window.localStorage.setItem(legacyKey, 'broken stale cache');
+      expect(await getOrCreateCollabSigningMaterial()).toEqual(stored);
+      expect(native.get).toHaveBeenCalledWith(
+        'https://etebase.example/',
+        'alice'
+      );
+      expect(native.store).not.toHaveBeenCalled();
+    });
+
+    it('imports the matching legacy identity and retains the source for recovery', async () => {
+      const raw = JSON.stringify({
+        publicKeyB64: stored.publicKeyB64,
+        privateKeyPkcs8B64: stored.privateKeyPkcs8B64
+      });
+      window.localStorage.setItem(legacyKey, raw);
+      expect(await getOrCreateCollabSigningMaterial()).toEqual(stored);
+      expect(native.store).toHaveBeenCalledWith(
+        'https://etebase.example/',
+        stored
+      );
+      expect(window.localStorage.getItem(legacyKey)).toBe(raw);
+    });
+
+    it('does not regenerate keys or fall back when the secure store is unavailable', async () => {
+      native.get.mockRejectedValue(new Error('keystore locked'));
+      await expect(getOrCreateCollabSigningMaterial()).rejects.toThrow(
+        'keystore locked'
+      );
+      expect(native.store).not.toHaveBeenCalled();
+      expect(window.localStorage.length).toBe(0);
+    });
+
+    it('preserves malformed legacy identity instead of generating a replacement', async () => {
+      window.localStorage.setItem(legacyKey, '{broken');
+      await expect(getOrCreateCollabSigningMaterial()).rejects.toThrow(
+        'needs recovery'
+      );
+      expect(native.store).not.toHaveBeenCalled();
+      expect(window.localStorage.getItem(legacyKey)).toBe('{broken');
+    });
+
+    it('retains the legacy source when importing into the vault fails', async () => {
+      const raw = JSON.stringify(stored);
+      window.localStorage.setItem(legacyKey, raw);
+      native.store.mockRejectedValue(new Error('credential write failed'));
+      await expect(getOrCreateCollabSigningMaterial()).rejects.toThrow(
+        'credential write failed'
+      );
+      expect(window.localStorage.getItem(legacyKey)).toBe(raw);
+    });
+
+    it('uses the backend winner when another note window creates the key first', async () => {
+      native.store.mockResolvedValue(stored);
+      expect(await getOrCreateCollabSigningMaterial()).toEqual(stored);
+      expect(native.store).toHaveBeenCalledOnce();
+      expect(window.localStorage.length).toBe(0);
+    });
   });
 });

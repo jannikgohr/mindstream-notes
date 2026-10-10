@@ -50,6 +50,8 @@ etebase = { git = "https://github.com/jannikgohr/etebase-rs", features = ["netwo
 # from run() in this file so the right store is registered before any
 # auth code touches an Entry.
 keyring-core = "1"
+chacha20poly1305 = "0.10"
+zeroize = "1"
 
 # Sync — yrs CRDT for offline-merge-safe documents, similar for diffing
 # the editor's "full body" save back into Y.Text ops, rmp-serde for the

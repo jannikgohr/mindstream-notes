@@ -1,5 +1,10 @@
 import { authSession, etebaseSession, type SessionInfo } from '$lib/api';
 import type { RoomInfo } from '$lib/api/sync';
+import { isTauri } from '$lib/api/core';
+import {
+  getVaultCollabSigningMaterial,
+  storeVaultCollabSigningMaterial
+} from '$lib/api/signing-credentials';
 import {
   generateCollabSigningKeyPair,
   type CollabFrameAuth
@@ -51,6 +56,27 @@ export async function getOrCreateCollabSigningMaterial(): Promise<CollabSigningM
   const session = await currentSession();
   if (!session) return null;
   const key = storageKey(session);
+  if (isTauri()) {
+    const stored = await getVaultCollabSigningMaterial(
+      session.server_url,
+      session.username
+    );
+    if (stored) return stored;
+    const legacyRaw = window.localStorage.getItem(key);
+    const legacy = parseStored(legacyRaw);
+    if (legacyRaw !== null && !legacy) {
+      throw new Error('Legacy collaboration signing key needs recovery');
+    }
+    const material = legacy
+      ? { ...legacy, username: session.username }
+      : {
+          username: session.username,
+          ...(await generateCollabSigningKeyPair())
+        };
+    // The backend returns an existing identity if another note window won the
+    // create race. Keep legacy bytes until browser migration is verified.
+    return await storeVaultCollabSigningMaterial(session.server_url, material);
+  }
   const existing = parseStored(window.localStorage.getItem(key));
   if (existing) return { ...existing, username: session.username };
 

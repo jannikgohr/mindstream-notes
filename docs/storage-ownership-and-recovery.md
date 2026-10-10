@@ -80,6 +80,21 @@ interrupted cleanup cannot resurrect them. Caches refresh generations once per
 request. Old/unpublished generations are retained pending bounded cleanup.
 Malformed manifests or missing referenced files are preserved and refused.
 
+## Collaboration identities
+
+Native collaboration signing credentials live in an encrypted vault file. A
+separate vault master key lives in the environment's OS keystore; authenticated
+encryption binds file contents to both environment and vault identity. Server
+and username determine the account entry. Reads/writes require the vault's active
+account. Main and note windows serialize creation and retain the winning identity.
+
+Existing browser keys import unchanged only for a matching account. Their source
+remains until browser migration is verified. A missing keystore key with an
+existing encrypted file, corrupt file, or malformed legacy key is a recovery
+error. These conditions must never create a replacement signing identity. Vault
+deletion attempts removal of both session and signing master keys. Full portable
+credential/settings backup remains outside the current concurrency plan.
+
 ## Verification limits
 
 Windows tests cover killed owners, leftover lock files, interrupted restore and

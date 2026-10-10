@@ -125,7 +125,12 @@ fn keyring_entry(identity: &CredentialIdentity) -> AppResult<Entry> {
 /// Silent on any failure — the entry may simply not exist (the vault was
 /// never signed in).
 pub fn forget_profile_keyring(app: &AppHandle, profile_id: &str) {
-    if let Ok(entry) = keyring_entry(&credential_identity(app, profile_id)) {
+    let mut identity = credential_identity(app, profile_id);
+    if let Ok(entry) = keyring_entry(&identity) {
+        let _ = entry.delete_credential();
+    }
+    identity.account = crate::signing_credentials::keyring_account(profile_id);
+    if let Ok(entry) = keyring_entry(&identity) {
         let _ = entry.delete_credential();
     }
 }

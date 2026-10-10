@@ -36,6 +36,23 @@ vault-scoped settings, with additional action/custom entries. Dynamic account
 and hotkey/plugin IDs require their existing resolver rules. Counting schema
 entries is not proof that browser state is isolated.
 
+## Credential migration progress
+
+On 2026-10-10 native collaboration signing material moved to
+`<vault>/collab-signing-credentials.json`, encrypted with ChaCha20-Poly1305 and
+a vault master key in the environment's OS keystore. The authenticated context
+binds it to that environment and vault. Username/server account IDs are separate
+inside the encrypted vault map. The backend checks the active account before
+serving credentials and validates matching P-256 public/private keys.
+
+Native reads prefer stored vault material. If none exists, they import only the
+matching legacy browser key and retain its source. Corrupt legacy/native keys
+and unavailable keystore keys stop migration rather than regenerate identities.
+Native writes no longer put new private keys in localStorage. Browser-only mode
+keeps its existing localStorage fallback. Export of legacy keys for accounts in
+unopened vaults remains required before WebView store isolation; this lazy import
+does not complete that export. Generic root snapshots must exclude private keys.
+
 ## Migration sequence
 
 1. Acquire environment/root migration ownership before opening the legacy

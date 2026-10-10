@@ -24,6 +24,7 @@ export * from './auth.svelte';
 export * from './sync';
 export * from './system';
 export * from './desktop-settings';
+export * from './signing-credentials';
 export * from './profiles';
 export * from './hotkeys';
 export * from './server-urls';
