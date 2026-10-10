@@ -61,6 +61,6 @@ and stale first-paint caches. Fixtures must not contain real credentials.
 
 The WDIO harness already overrides WebView2 folders on Windows and XDG data/cache
 paths on Linux through `helpers/worker-isolation.ts`. Those protect simulated
-devices, but the app root and default credential service still need Phase 1
-isolation. Shared-root concurrent-vault tests and isolated-device tests must be
+devices. Phase 1 now also gives each simulated device an explicit root and
+root-specific credential service. Shared-root concurrent-vault tests and isolated-device tests must be
 separate modes. Keep both multiremote configurations.

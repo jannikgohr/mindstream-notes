@@ -178,36 +178,14 @@ pub fn source_url(entry: &CatalogueEntry) -> String {
 
 /// Download a dictionary pair and install it into `dir`.
 ///
-/// Writes to temporary files first and only publishes them once the pair has
-/// been loaded successfully, so an interrupted or corrupt download can never
-/// leave a half-installed dictionary that fails at check time instead of at
-/// install time.
+/// Publishes a validated immutable pair through one atomic manifest. Network
+/// work does not hold the shared dictionary lock.
 pub async fn install(dir: &Path, id: &str) -> AppResult<()> {
     let entry = find(id).ok_or_else(|| AppError::NotFound(format!("dictionary {id}")))?;
 
-    std::fs::create_dir_all(dir)?;
     let aff_bytes = fetch(&file_url(entry, "aff")).await?;
     let dic_bytes = fetch(&file_url(entry, "dic")).await?;
-
-    let staged_aff = dir.join(format!("{id}.aff.part"));
-    let staged_dic = dir.join(format!("{id}.dic.part"));
-    std::fs::write(&staged_aff, &aff_bytes)?;
-    std::fs::write(&staged_dic, &dic_bytes)?;
-
-    // Prove it works before it counts as installed. This subsumes a checksum:
-    // it catches truncation, a moved upstream path serving an HTML error page,
-    // and an encoding we cannot handle — all of which would otherwise surface
-    // much later as "the spellchecker thinks every word is wrong".
-    let validation = super::dictionary::load_dictionary(&staged_aff, &staged_dic);
-    if let Err(err) = validation {
-        let _ = std::fs::remove_file(&staged_aff);
-        let _ = std::fs::remove_file(&staged_dic);
-        return Err(err);
-    }
-
-    std::fs::rename(&staged_aff, dir.join(format!("{id}.aff")))?;
-    std::fs::rename(&staged_dic, dir.join(format!("{id}.dic")))?;
-    Ok(())
+    super::storage::publish(dir, id, &aff_bytes, &dic_bytes)
 }
 
 async fn fetch(url: &str) -> AppResult<Vec<u8>> {
@@ -231,15 +209,7 @@ async fn fetch(url: &str) -> AppResult<Vec<u8>> {
 
 /// Remove an installed dictionary's files.
 pub fn remove(dir: &Path, id: &str) -> AppResult<()> {
-    for extension in ["aff", "dic"] {
-        let path = dir.join(format!("{id}.{extension}"));
-        match std::fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => return Err(err.into()),
-        }
-    }
-    Ok(())
+    super::storage::remove(dir, id)
 }
 
 #[cfg(test)]

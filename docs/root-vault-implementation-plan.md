@@ -200,8 +200,20 @@ under `.output/ownership-app-check`. These are process-crash checks, not reboot
 durability evidence. Serial Rust execution avoids the existing ts-rs export/read
 race in generated-binding tests.
 
+Shared dictionary slice on 2026-10-10: unique immutable `.aff`/`.dic`
+generations publish through one atomic versioned manifest under a dictionary
+operation lock. Network and validation run outside that lock. Legacy flat pairs
+remain readable until replacement; removal tombstones override leftover flat
+files. Readers and installed-list/WORDCHARS queries use the same ownership rule.
+Resident caches check the published generation once per request. Corrupt or
+missing referenced pairs are retained for recovery. Interrupted unpublished
+generations are ignored, and old generations are retained pending bounded
+cleanup. Concurrent pair readers, interrupted publication/removal, unsafe IDs,
+missing/corrupt manifests, and two worker caches are tested. Windows Rust gates
+pass 737 unit tests and one integration test, with two existing ignored tests.
+
 Still pending in Phase 1: legacy browser-store migration, root recovery copies,
-shared dictionary operation locks, and worker cache broadcasts. Duplicate vault
+and root worker cache broadcasts. Duplicate vault
 launches currently refuse startup; focusing an existing owner requires Phase 2.
 Older binaries without locks remain unsafe against the same physical vault.
 
