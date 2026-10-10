@@ -1,11 +1,12 @@
 <script lang="ts">
   import '../app.css';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { ModeWatcher } from 'mode-watcher';
   import {
     getSettingValue,
     isModified,
-    setSettingValue
+    setSettingValue,
+    settings
   } from '$lib/settings/store.svelte';
   import { authSession, serverTypeForSession } from '$lib/api/auth.svelte';
   import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
@@ -24,7 +25,10 @@
     HOTKEY_COMMANDS,
     isGlobalShortcutCommand
   } from '$lib/hotkeys/catalogue';
-  import { getBinding } from '$lib/hotkeys/store.svelte';
+  import {
+    getBinding,
+    hydrateBindingsFromSettings
+  } from '$lib/hotkeys/store.svelte';
   import { initHotkeys } from '$lib/hotkeys/manager.svelte';
   import {
     displayBinding,
@@ -47,6 +51,13 @@
   import { syncPluginTextCheckers } from '$lib/diagnostics/plugin-checkers.svelte';
 
   let { children } = $props();
+
+  // Document initialization and cross-window refresh replace the snapshot.
+  // Hydration also renames legacy keys, so keep those mutations untracked.
+  $effect(() => {
+    settings.values;
+    untrack(hydrateBindingsFromSettings);
+  });
 
   // Suppress the webview's default right-click menu in production builds.
   // We have our own context menus (file tree); the webview's default just

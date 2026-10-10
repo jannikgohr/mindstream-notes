@@ -1,5 +1,23 @@
 # Storage ownership and recovery
 
+Native schema settings use root `ui-settings.json` for device preferences and
+vault `content-settings.json` for content/account preferences. Each versioned
+document has a revision, a validated `.previous` copy and a `.migrated` record.
+Initial migration retains raw browser buckets. Valid documents win over those
+inputs; malformed required inputs refuse migration. Only the default vault can
+inherit content from the old unscoped bucket. Unknown/plugin entries stay in
+the vault, while dynamic `hotkey.*` bindings stay at the root. Plugin settings
+with an external store continue to use the vault database.
+
+All document operations hold the root OS lock. Set/reset operations patch one
+field after rereading the document; they never save a whole frontend cache.
+The caller's expected vault ID must match the running worker. Frontend profile
+readiness waits for migration, and failed writes surface to callers. Focus and
+same-worker popout notifications refresh caches from disk. A recovery can reduce
+the revision, so caches accept that refreshed snapshot. Cross-worker broadcast
+is pending coordinator implementation. Other browser persistence consumers
+still need migration before each worker can use an isolated WebView store.
+
 Release retains its historical data root and credential service. Dev uses the
 `.dev` bundle identity and a persistent separate root. Test roots and browser
 folders are explicit; all three real-app harnesses set both. Accounts remain

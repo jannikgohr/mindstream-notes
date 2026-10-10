@@ -39,12 +39,12 @@ let loadPromise: Promise<void> | null = null;
 export async function loadProfiles(): Promise<void> {
   if (!loadPromise) {
     loadPromise = listProfiles()
-      .then((view) => {
+      .then(async (view) => {
+        await setSettingsVaultId(view.active);
         profilesState.active = view.active;
         profilesState.indexActive = view.index_active;
         profilesState.profiles = view.profiles;
         profilesState.loaded = true;
-        setSettingsVaultId(view.active);
       })
       .catch((err) => {
         console.warn('[profiles] load failed', err);

@@ -1,0 +1,184 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { UiSettingsSnapshot } from '$lib/api/ui-settings';
+
+const api = vi.hoisted(() => ({
+  initialize: vi.fn(),
+  load: vi.fn(),
+  patch: vi.fn(),
+  listen: vi.fn()
+}));
+vi.mock('$lib/api/core', () => ({ isTauri: () => true }));
+vi.mock('$lib/api/ui-settings', () => ({
+  initializeUiSettings: api.initialize,
+  loadUiSettings: api.load,
+  patchUiSetting: api.patch
+}));
+vi.mock('$lib/api/events', () => ({
+  TauriEventName: { UiSettingsChanged: 'ui-settings-changed' },
+  listen: api.listen
+}));
+vi.mock('./registry.svelte', () => ({ SETTING_BINDINGS: {} }));
+
+const snapshot = (
+  values: Record<string, unknown> = {},
+  revision = 0
+): UiSettingsSnapshot => ({
+  deviceRevision: revision,
+  vaultRevision: revision,
+  values
+});
+
+beforeEach(() => {
+  vi.resetModules();
+  vi.restoreAllMocks();
+  vi.clearAllMocks();
+  localStorage.clear();
+  vi.spyOn(window, 'addEventListener').mockImplementation(() => {});
+  api.initialize.mockResolvedValue(snapshot());
+  api.load.mockResolvedValue(snapshot());
+  api.patch.mockResolvedValue(snapshot());
+  api.listen.mockResolvedValue(() => {});
+});
+
+describe('native settings documents', () => {
+  it('initializes even the default vault, loads canonical values, and retains raw migration inputs', async () => {
+    const raw = '{"appearance.reduceMotion":"on"}';
+    localStorage.setItem('notes-app:settings:v1', raw);
+    localStorage.setItem(
+      'notes-app:settings:v1:vault:default',
+      'corrupt legacy'
+    );
+    api.initialize.mockResolvedValue(
+      snapshot({ 'appearance.reduceMotion': 'off' })
+    );
+    const store = await import('./store.svelte');
+    expect(store.settings.values).toEqual({});
+    await store.setSettingsVaultId('default');
+    expect(api.initialize).toHaveBeenCalledWith(
+      'default',
+      raw,
+      'corrupt legacy'
+    );
+    expect(store.getSettingValue('appearance.reduceMotion')).toBe('off');
+    await store.setSettingsVaultId('default');
+    expect(api.initialize).toHaveBeenCalledTimes(1);
+    api.patch.mockResolvedValue(
+      snapshot({ 'appearance.reduceMotion': 'on' }, 1)
+    );
+    await store.setSettingValue('appearance.reduceMotion', 'on');
+    expect(api.patch).toHaveBeenCalledWith(
+      'default',
+      'appearance.reduceMotion',
+      'on',
+      false
+    );
+    expect(localStorage.getItem('notes-app:settings:v1')).toBe(raw);
+    expect(localStorage.getItem('notes-app:settings:v1:vault:default')).toBe(
+      'corrupt legacy'
+    );
+  });
+
+  it('serializes writes while keeping the latest optimistic value and pending status', async () => {
+    const store = await import('./store.svelte');
+    await store.setSettingsVaultId('default');
+    let finishFirst!: (value: UiSettingsSnapshot) => void;
+    api.patch.mockImplementationOnce(
+      () =>
+        new Promise<UiSettingsSnapshot>((resolve) => {
+          finishFirst = resolve;
+        })
+    );
+    api.patch.mockResolvedValueOnce(
+      snapshot(
+        {
+          'appearance.reduceMotion': 'off',
+          'account.serverUrl': 'https://worker.example'
+        },
+        2
+      )
+    );
+    const first = store.setSettingValue('appearance.reduceMotion', 'on');
+    await vi.waitFor(() => expect(api.patch).toHaveBeenCalledTimes(1));
+    const second = store.setSettingValue('appearance.reduceMotion', 'off');
+    await vi.waitFor(() =>
+      expect(store.getSettingValue('appearance.reduceMotion')).toBe('off')
+    );
+    expect(store.isPending('appearance.reduceMotion')).toBe(true);
+    finishFirst(snapshot({ 'appearance.reduceMotion': 'on' }, 1));
+    await first;
+    expect(store.getSettingValue('appearance.reduceMotion')).toBe('off');
+    await second;
+    expect(store.isPending('appearance.reduceMotion')).toBe(false);
+    expect(store.getSettingValue('account.serverUrl')).toBe(
+      'https://worker.example'
+    );
+  });
+
+  it('reports a failed write and restores the latest canonical value', async () => {
+    const store = await import('./store.svelte');
+    await store.setSettingsVaultId('default');
+    const failure = new Error('root busy');
+    api.patch.mockRejectedValueOnce(failure);
+    api.load.mockResolvedValueOnce(
+      snapshot({ 'appearance.reduceMotion': 'off' }, 3)
+    );
+    await expect(
+      store.setSettingValue('appearance.reduceMotion', 'on')
+    ).rejects.toBe(failure);
+    expect(store.getSettingValue('appearance.reduceMotion')).toBe('off');
+    expect(store.isPending('appearance.reduceMotion')).toBe(false);
+    api.patch.mockRejectedValueOnce(failure);
+    api.load.mockRejectedValueOnce(new Error('unreadable document'));
+    await expect(
+      store.setSettingValue('appearance.reduceMotion', 'on')
+    ).rejects.toBe(failure);
+    expect(store.getSettingValue('appearance.reduceMotion')).toBe('off');
+  });
+
+  it('blocks writes when migration fails, preserves inputs, and permits an explicit retry', async () => {
+    localStorage.setItem('notes-app:settings:v1', 'corrupt');
+    const store = await import('./store.svelte');
+    api.initialize.mockRejectedValueOnce(
+      new Error('malformed migration input')
+    );
+    await expect(store.setSettingsVaultId('default')).rejects.toThrow(
+      'malformed'
+    );
+    await expect(
+      store.setSettingValue('appearance.reduceMotion', 'on')
+    ).rejects.toThrow('not initialized');
+    expect(api.patch).not.toHaveBeenCalled();
+    expect(localStorage.getItem('notes-app:settings:v1')).toBe('corrupt');
+    await store.setSettingsVaultId('default');
+    await expect(store.setSettingsVaultId('other')).rejects.toThrow(
+      'cannot change'
+    );
+  });
+
+  it('refreshes on focus and popout events, including a recovered older revision', async () => {
+    api.initialize.mockResolvedValue(
+      snapshot({ 'appearance.reduceMotion': 'on' }, 8)
+    );
+    const store = await import('./store.svelte');
+    await store.setSettingsVaultId('default');
+    api.load.mockResolvedValue(
+      snapshot({ 'appearance.reduceMotion': 'off' }, 2)
+    );
+    await store.refreshNativeSettings();
+    expect(store.getSettingValue('appearance.reduceMotion')).toBe('off');
+    expect(window.addEventListener).toHaveBeenCalledWith(
+      'focus',
+      expect.any(Function)
+    );
+    const eventHandler = api.listen.mock.calls[0][1] as () => void;
+    api.load.mockResolvedValue(
+      snapshot({ 'account.serverUrl': 'https://changed.example' }, 3)
+    );
+    eventHandler();
+    await vi.waitFor(() =>
+      expect(store.getSettingValue('account.serverUrl')).toBe(
+        'https://changed.example'
+      )
+    );
+  });
+});

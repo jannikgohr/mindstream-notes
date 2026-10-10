@@ -1,9 +1,10 @@
 # Root storage and concurrent vault implementation plan
 
-Status: the first independent restore and document-write fixes are implemented
-and pass the Windows Rust checks. Environment identity, vault ownership, root
-desktop-settings migration, and recoverable deletion are in implementation.
-Concurrent workers and browser-store migration remain pending.
+Status: restore safety, atomic document writes, environment identity, vault
+ownership, root desktop settings, dictionary publication, root recovery, and
+vault signing credentials are implemented and pass the Windows checks.
+Schema settings now use root/vault documents. Concurrent worker coordination
+and the remaining browser-store migration are pending.
 
 Global plugin packages and theme presets are separate follow-up projects:
 
@@ -239,7 +240,32 @@ cryptographic scope binding and tamper rejection are tested. Affected frontend
 checks pass, including 35 signing/frame/API tests. Legacy export for unopened
 vaults still must preserve signing identities before isolated stores launch.
 
-Still pending in Phase 1: legacy browser-store migration and root worker cache
+Schema-settings slice on 2026-10-10: native device settings live in root
+`ui-settings.json`; content/account preferences live in vault
+`content-settings.json`. The backend derives scope from the bundled schema,
+keeps dynamic `hotkey.*` bindings at the root, and preserves unknown/plugin
+entries with the vault. Existing documents win over browser migration inputs.
+Only the default vault inherits content from the old unscoped bucket; another
+vault requires its own bucket. Original browser bytes remain intact. Malformed
+inputs stop migration before either candidate is published; completion records
+prevent reseeding lost documents. Individual field edits reread under the root
+lock, increment revisions and retain validated previous copies. Native caches
+initialize before profile readiness, serialize writes, report failed saves, and
+refresh on focus and same-worker popout events, including recovered older
+revisions. Browser preview persistence remains unchanged. Cross-process
+notifications still require the coordinator. Windows Rust gates pass 757 unit
+tests and one integration test; three tests remain ignored. Focused frontend
+settings/event/profile and hotkey checks pass 134 tests, with Svelte and affected
+ESLint checks clean.
+
+Native Windows verification for schema settings used disposable root/vault/
+WebView folders through the dev wrapper. A UI edit saved Reduce motion to root
+revision 1 and editor font size 18 to vault revision 1. After forced termination
+and restart, the settings panel restored both values and the documents retained
+their revisions. Logs are under `.output/ui-settings-app-check`. This verifies
+process restart; it does not establish reboot durability.
+
+Still pending in Phase 1: remaining legacy browser-store migration and root worker cache
 broadcasts. Duplicate vault
 launches currently refuse startup; focusing an existing owner requires Phase 2.
 Older binaries without locks remain unsafe against the same physical vault.

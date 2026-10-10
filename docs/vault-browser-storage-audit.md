@@ -38,6 +38,15 @@ entries is not proof that browser state is isolated.
 
 ## Credential migration progress
 
+Native schema settings now migrate to root `ui-settings.json` and vault
+`content-settings.json`, with individual locked edits and validated recovery
+copies. Dynamic `hotkey.*` bindings use the root; unknown/plugin entries remain
+with the vault until their persistence owner migrates them. Raw browser buckets
+remain intact. Account preferences require the matching vault bucket, except
+the default vault's historical unscoped fallback. Focus and same-worker events
+reload canonical settings; cross-worker broadcast remains pending. This covers
+the schema store only, not the other browser consumers listed above.
+
 On 2026-10-10 native collaboration signing material moved to
 `<vault>/collab-signing-credentials.json`, encrypted with ChaCha20-Poly1305 and
 a vault master key in the environment's OS keystore. The authenticated context

@@ -55,6 +55,7 @@ pub mod system;
 pub mod tray;
 pub mod tree;
 pub mod tree_batch;
+pub mod ui_settings;
 #[cfg(desktop)]
 pub mod webview_memory;
 pub mod webview_security;
@@ -539,6 +540,9 @@ pub fn run() {
             auth::etebase_session,
             signing_credentials::get_vault_collab_signing_material,
             signing_credentials::store_vault_collab_signing_material,
+            ui_settings::initialize_ui_settings,
+            ui_settings::load_ui_settings,
+            ui_settings::patch_ui_setting,
             auth::check_etebase_server_url,
             // Sync
             sync::sync_now,

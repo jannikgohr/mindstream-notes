@@ -12,6 +12,7 @@ pub enum AppEvent {
     SyncCompleted,
     SyncUnreachable,
     TrayNoteCreated,
+    UiSettingsChanged,
 }
 
 impl AppEvent {
@@ -26,6 +27,7 @@ impl AppEvent {
             Self::SyncCompleted => "sync-completed",
             Self::SyncUnreachable => "sync-unreachable",
             Self::TrayNoteCreated => "tray-note-created",
+            Self::UiSettingsChanged => "ui-settings-changed",
         }
     }
 }
@@ -52,6 +54,7 @@ mod tests {
             (AppEvent::SyncCompleted, "sync-completed"),
             (AppEvent::SyncUnreachable, "sync-unreachable"),
             (AppEvent::TrayNoteCreated, "tray-note-created"),
+            (AppEvent::UiSettingsChanged, "ui-settings-changed"),
         ];
 
         for (event, expected) in cases {

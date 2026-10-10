@@ -15,7 +15,8 @@ export enum TauriEventName {
   SignaturesChanged = 'signatures-changed',
   SyncCompleted = 'sync-completed',
   SyncUnreachable = 'sync-unreachable',
-  TrayNoteCreated = 'tray-note-created'
+  TrayNoteCreated = 'tray-note-created',
+  UiSettingsChanged = 'ui-settings-changed'
 }
 
 export type TauriEventKey = `${TauriEventName}`;
@@ -77,6 +78,7 @@ export type TauriEvents = {
    * (already-persisted) library when this fires. See stores/signatures.svelte.
    */
   'signatures-changed': null;
+  'ui-settings-changed': null;
 };
 
 export function emit<K extends keyof TauriEvents>(
