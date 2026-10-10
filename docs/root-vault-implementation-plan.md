@@ -268,6 +268,22 @@ process restart; it does not establish reboot durability.
 Still pending in Phase 1: remaining legacy browser-store migration and root worker cache
 broadcasts. Duplicate vault
 launches currently refuse startup; focusing an existing owner requires Phase 2.
+
+Toolbar/mobile device preference slice on 2026-10-11: file-tree toolbar order
+and mobile list/grid preference use root fields with a one-time receipt. Unknown
+plugin toolbar IDs and the old installation's default arrangement survive import.
+Raw browser inputs are retained. Native saves patch one locked field; canonical
+refresh and failed-write rollback update the rendered controls. Signature and
+favourite source retention/assignment and full browser export remain pending.
+
+Windows native verification used the existing disposable vault/root/browser
+folders. Dragging "New note" ahead of "New folder" saved root revision 5 and
+the toolbar retained that order after a WebView reload. Logs are under
+`.output/toolbar-app-check`. Focused frontend checks pass 51 tests; Svelte
+diagnostics are clean. Affected ESLint has no errors and reports the pre-existing
+mobile `Set` warning.
+Rust fmt/clippy and the serial full suite pass 766 unit tests and one integration
+test; three tests remain ignored.
 Older binaries without locks remain unsafe against the same physical vault.
 
 Mixed UI preferences slice on 2026-10-10: sidebar widths now use root document

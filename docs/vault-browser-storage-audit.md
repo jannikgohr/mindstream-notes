@@ -63,6 +63,13 @@ and clear tombstones win. A vault completion record and retained browser bytes
 make retries safe. Native reads use the backend snapshot; writes patch the vault
 document and leave the browser bucket untouched.
 
+Native file-tree toolbar order and mobile list/grid display now use root fields
+`ui.fileTreeToolbar` and `ui.mobileDisplayMode`. A root receipt records their
+one-time import. The toolbar keeps its existing-installation fallback and unknown
+plugin action IDs. Required malformed inputs stop the import without a partial
+root update. Existing values win; browser sources remain intact. Native consumers
+refresh from canonical snapshots and failed edits restore canonical UI state.
+
 On 2026-10-10 native collaboration signing material moved to
 `<vault>/collab-signing-credentials.json`, encrypted with ChaCha20-Poly1305 and
 a vault master key in the environment's OS keystore. The authenticated context

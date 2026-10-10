@@ -30,6 +30,14 @@ import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { isTauri } from '$lib/api/core';
 import { UI_PREFERENCE_IDS } from '$lib/preferences';
 import {
+  FILE_TREE_TOOLBAR_STORAGE_KEY,
+  hasExistingAppData
+} from '$lib/components/file-tree-toolbar-preferences';
+import {
+  applyNativeDeviceUi,
+  registerNativeDeviceUiWriter
+} from '$lib/native-device-ui.svelte';
+import {
   applyNativeSavedLayout,
   legacyLayoutRaw,
   registerNativeLayoutWriter
@@ -254,6 +262,7 @@ function applyNativeSnapshot(snapshot: UiSettingsSnapshot): void {
     activeSettingsVaultId,
     snapshot.values['ui.dockLayout']
   );
+  applyNativeDeviceUi(snapshot.values);
 }
 
 export async function refreshNativeSettings(): Promise<void> {
@@ -296,7 +305,12 @@ export async function setSettingsVaultId(id: string): Promise<void> {
         localStorage.getItem(DEVICE_STORAGE_KEY),
         localStorage.getItem(vaultStorageKey(next)),
         localStorage.getItem('notes-app:preferences:v1'),
-        legacyLayoutRaw(next)
+        legacyLayoutRaw(next),
+        {
+          toolbarRaw: localStorage.getItem(FILE_TREE_TOOLBAR_STORAGE_KEY),
+          hadExistingData: hasExistingAppData(),
+          displayModeRaw: localStorage.getItem('notes-app:mobile:displayMode')
+        }
       );
       applyNativeSnapshot(snapshot);
       startNativeListeners();
@@ -385,6 +399,15 @@ registerNativeLayoutWriter(async (vaultId, value) => {
   if (vaultId !== activeSettingsVaultId)
     throw new Error('layout vault does not match the running worker');
   await writeNativeSetting('ui.dockLayout', value);
+});
+
+registerNativeDeviceUiWriter(async (id, value) => {
+  try {
+    await writeNativeSetting(id, value);
+  } catch (err) {
+    applyNativeDeviceUi(settings.values);
+    throw err;
+  }
 });
 
 /**

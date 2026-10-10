@@ -34,7 +34,10 @@ static SCOPES: LazyLock<BTreeMap<String, bool>> = LazyLock::new(|| {
 fn device_scope(id: &str) -> bool {
     if matches!(
         id,
-        "appearance.leftSidebarWidth" | "appearance.rightSidebarWidth"
+        "appearance.leftSidebarWidth"
+            | "appearance.rightSidebarWidth"
+            | "ui.fileTreeToolbar"
+            | "ui.mobileDisplayMode"
     ) {
         return true;
     }
@@ -303,6 +306,19 @@ fn initialize_with_browser_state(
 
 fn validate_preference(id: &str, value: &Value) -> AppResult<()> {
     let valid = match id {
+        "ui.mobileDisplayMode" => matches!(value.as_str(), Some("list" | "grid")),
+        "ui.fileTreeToolbar" => {
+            value.is_object()
+                && ["toolbar", "more"].iter().all(|key| {
+                    value[*key].as_array().is_some_and(|ids| {
+                        ids.len() <= 512
+                            && ids.iter().all(|id| {
+                                id.as_str()
+                                    .is_some_and(|id| !id.is_empty() && id.len() <= 512)
+                            })
+                    })
+                })
+        }
         "appearance.leftSidebarWidth" | "appearance.rightSidebarWidth" => value
             .as_f64()
             .is_some_and(|v| v.is_finite() && (0.0..=10000.0).contains(&v)),
@@ -335,6 +351,63 @@ fn validate_preference(id: &str, value: &Value) -> AppResult<()> {
     } else {
         Err(invalid())
     }
+}
+
+/// Inputs remain raw until the backend has checked the root's migration receipt.
+/// A completed migration must not be blocked or overwritten by stale browser bytes.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeviceBrowserState {
+    toolbar_raw: Option<String>,
+    had_existing_data: bool,
+    display_mode_raw: Option<String>,
+}
+
+fn migrate_device_ui(root: &Path, input: &DeviceBrowserState) -> AppResult<()> {
+    let _lock = RootLock::acquire(root)?;
+    let receipt = root.join(".device-ui-migrated");
+    match fs::read(&receipt) {
+        Ok(raw) if raw == b"1" => return Ok(()),
+        Ok(_) => return Err(invalid()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
+    }
+    let path = root.join("ui-settings.json");
+    recover(&path, true)?;
+    let mut document = read(&path, true)?;
+    let mut changed = false;
+    if !document.values.contains_key("ui.fileTreeToolbar") {
+        let value = if let Some(raw) = &input.toolbar_raw {
+            if raw.len() > MAX_BYTES {
+                return Err(invalid());
+            }
+            serde_json::from_str(raw).map_err(|_| invalid())?
+        } else if input.had_existing_data {
+            serde_json::json!({"toolbar": ["folder", "drawing", "ink", "kanban", "pdf", "note"], "more": []})
+        } else {
+            serde_json::json!({"toolbar": ["note", "folder", "drawing"], "more": ["ink", "pdf", "kanban"]})
+        };
+        validate_preference("ui.fileTreeToolbar", &value)?;
+        document.values.insert("ui.fileTreeToolbar".into(), value);
+        changed = true;
+    }
+    if !document.values.contains_key("ui.mobileDisplayMode") {
+        let value = Value::String(
+            input
+                .display_mode_raw
+                .clone()
+                .unwrap_or_else(|| "list".into()),
+        );
+        validate_preference("ui.mobileDisplayMode", &value)?;
+        document.values.insert("ui.mobileDisplayMode".into(), value);
+        changed = true;
+    }
+    if changed {
+        document.revision = document.revision.checked_add(1).ok_or_else(invalid)?;
+        save(&path, &document, true)?;
+    }
+    crate::atomic_file::write(&receipt, b"1")?;
+    Ok(())
 }
 
 fn access(
@@ -399,10 +472,11 @@ pub async fn initialize_ui_settings(
     vault_raw: Option<String>,
     preferences_raw: Option<String>,
     layout_raw: Option<String>,
+    device_ui: Option<DeviceBrowserState>,
 ) -> CommandResult<Snapshot> {
     let (root, vault) = context(&app, &expected_vault_id)?;
     Ok(tauri::async_runtime::spawn_blocking(move || {
-        initialize_with_browser_state(
+        let snapshot = initialize_with_browser_state(
             &root,
             &vault,
             &expected_vault_id,
@@ -410,7 +484,13 @@ pub async fn initialize_ui_settings(
             vault_raw.as_deref(),
             preferences_raw.as_deref(),
             layout_raw.as_deref(),
-        )
+        )?;
+        if let Some(input) = device_ui {
+            migrate_device_ui(&root, &input)?;
+            access(&root, &vault, None)
+        } else {
+            Ok(snapshot)
+        }
     })
     .await
     .map_err(|_| invalid())??)
@@ -452,6 +532,111 @@ pub async fn patch_ui_setting(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn device_ui_migration_preserves_custom_plugin_ids_and_never_reseeds() {
+        let dirs = TestDirs::new();
+        initialize(&dirs.root, &dirs.a, "default", None, None).unwrap();
+        initialize(&dirs.root, &dirs.b, "other", None, None).unwrap();
+        let input = DeviceBrowserState {
+            toolbar_raw: Some(r#"{"toolbar":["plugins.test.action"],"more":["note"]}"#.into()),
+            had_existing_data: true,
+            display_mode_raw: Some("grid".into()),
+        };
+        migrate_device_ui(&dirs.root, &input).unwrap();
+        let snapshot = access(&dirs.root, &dirs.b, None).unwrap();
+        assert_eq!(
+            snapshot.values["ui.fileTreeToolbar"]["toolbar"][0],
+            "plugins.test.action"
+        );
+        assert_eq!(snapshot.values["ui.mobileDisplayMode"], "grid");
+        assert!(!read(&dirs.a.join("content-settings.json"), false)
+            .unwrap()
+            .values
+            .contains_key("ui.fileTreeToolbar"));
+        access(
+            &dirs.root,
+            &dirs.a,
+            Some((
+                "ui.mobileDisplayMode".into(),
+                Some(Value::String("list".into())),
+            )),
+        )
+        .unwrap();
+        migrate_device_ui(
+            &dirs.root,
+            &DeviceBrowserState {
+                toolbar_raw: Some("broken stale bytes".into()),
+                had_existing_data: false,
+                display_mode_raw: Some("broken".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            access(&dirs.root, &dirs.b, None).unwrap().values["ui.mobileDisplayMode"],
+            "list"
+        );
+    }
+
+    #[test]
+    fn device_ui_bad_input_cannot_publish_partial_candidates() {
+        let dirs = TestDirs::new();
+        initialize(&dirs.root, &dirs.a, "default", None, None).unwrap();
+        let path = dirs.root.join("ui-settings.json");
+        let bytes = fs::read(&path).unwrap();
+        for (toolbar, display) in [
+            (Some("broken"), None),
+            (Some(r#"{"toolbar":[],"more":[2]}"#), None),
+            (None, Some("bad")),
+        ] {
+            assert!(migrate_device_ui(
+                &dirs.root,
+                &DeviceBrowserState {
+                    toolbar_raw: toolbar.map(str::to_owned),
+                    had_existing_data: false,
+                    display_mode_raw: display.map(str::to_owned)
+                }
+            )
+            .is_err());
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            assert!(!dirs.root.join(".device-ui-migrated").exists());
+        }
+        fs::write(dirs.root.join(".device-ui-migrated"), b"bad receipt").unwrap();
+        assert!(migrate_device_ui(
+            &dirs.root,
+            &DeviceBrowserState {
+                toolbar_raw: None,
+                had_existing_data: false,
+                display_mode_raw: None
+            }
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn device_ui_defaults_keep_the_existing_installation_toolbar() {
+        for existing in [false, true] {
+            let dirs = TestDirs::new();
+            initialize(&dirs.root, &dirs.a, "default", None, None).unwrap();
+            migrate_device_ui(
+                &dirs.root,
+                &DeviceBrowserState {
+                    toolbar_raw: None,
+                    had_existing_data: existing,
+                    display_mode_raw: None,
+                },
+            )
+            .unwrap();
+            let snapshot = access(&dirs.root, &dirs.a, None).unwrap();
+            assert_eq!(
+                snapshot.values["ui.fileTreeToolbar"]["toolbar"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                if existing { 6 } else { 3 }
+            );
+            assert_eq!(snapshot.values["ui.mobileDisplayMode"], "list");
+        }
+    }
     fn initialize_with_preferences(
         root: &Path,
         vault: &Path,

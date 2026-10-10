@@ -49,6 +49,66 @@ beforeEach(() => {
 });
 
 describe('native settings documents', () => {
+  it('shares canonical toolbar preferences, retains browser evidence, and rolls back a failed edit', async () => {
+    const toolbar = { toolbar: ['folder'], more: ['note'] };
+    const raw = JSON.stringify(toolbar);
+    localStorage.setItem('notes-app:file-tree-create-toolbar:v1', raw);
+    localStorage.setItem('notes-app:mobile:displayMode', 'grid');
+    api.initialize.mockResolvedValue(
+      snapshot({
+        'ui.fileTreeToolbar': toolbar,
+        'ui.mobileDisplayMode': 'grid'
+      })
+    );
+    const store = await import('./store.svelte');
+    const device = await import('$lib/native-device-ui.svelte');
+    const prefs = await import('$lib/components/file-tree-toolbar-preferences');
+    await store.setSettingsVaultId('default');
+    expect(api.initialize.mock.calls[0][5]).toEqual({
+      toolbarRaw: raw,
+      hadExistingData: true,
+      displayModeRaw: 'grid'
+    });
+    expect(prefs.loadFileTreeToolbarPreferences(['note', 'folder'])).toEqual(
+      toolbar
+    );
+    expect(device.nativeDeviceUi.displayMode).toBe('grid');
+    api.patch.mockRejectedValueOnce(new Error('disk full'));
+    api.load.mockResolvedValue(
+      snapshot({
+        'ui.fileTreeToolbar': toolbar,
+        'ui.mobileDisplayMode': 'grid'
+      })
+    );
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(
+      prefs.saveFileTreeToolbarPreferences({
+        toolbar: ['note'],
+        more: ['folder']
+      })
+    ).rejects.toThrow('disk full');
+    expect(prefs.loadFileTreeToolbarPreferences(['note', 'folder'])).toEqual(
+      toolbar
+    );
+    expect(localStorage.getItem('notes-app:file-tree-create-toolbar:v1')).toBe(
+      raw
+    );
+    api.load.mockResolvedValue(
+      snapshot(
+        {
+          'ui.fileTreeToolbar': { toolbar: ['note'], more: ['folder'] },
+          'ui.mobileDisplayMode': 'list'
+        },
+        8
+      )
+    );
+    await store.refreshNativeSettings();
+    expect(
+      prefs.loadFileTreeToolbarPreferences(['note', 'folder']).toolbar
+    ).toEqual(['note']);
+    expect(device.nativeDeviceUi.displayMode).toBe('list');
+    warning.mockRestore();
+  });
   it('initializes even the default vault, loads canonical values, and retains raw migration inputs', async () => {
     const raw = '{"appearance.reduceMotion":"on"}';
     localStorage.setItem('notes-app:settings:v1', raw);
@@ -67,7 +127,8 @@ describe('native settings documents', () => {
       raw,
       'corrupt legacy',
       null,
-      null
+      null,
+      { toolbarRaw: null, hadExistingData: true, displayModeRaw: null }
     );
     expect(store.getSettingValue('appearance.reduceMotion')).toBe('off');
     await store.setSettingsVaultId('default');

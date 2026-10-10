@@ -17,6 +17,8 @@ import { pushState } from '$app/navigation';
 import { setNoteFavourite } from '$lib/stores/tree.svelte';
 import { tree } from '$lib/stores/tree.svelte';
 import { setActiveNote } from '$lib/state.svelte';
+import { isTauri } from '$lib/api/core';
+import { writeNativeDeviceUi } from '$lib/native-device-ui.svelte';
 
 const DISPLAY_MODE_KEY = 'notes-app:mobile:displayMode';
 const LEGACY_FAVOURITES_KEY = 'notes-app:mobile:favourites';
@@ -55,6 +57,7 @@ interface MobileState {
 }
 
 function loadDisplayMode(): DisplayMode {
+  if (isTauri()) return 'list';
   if (typeof localStorage === 'undefined') return 'list';
   const raw = localStorage.getItem(DISPLAY_MODE_KEY);
   return raw === 'grid' ? 'grid' : 'list';
@@ -435,6 +438,7 @@ export function setCurrentFolder(id: string | null) {
 
 export function setDisplayMode(mode: DisplayMode) {
   mobileState.displayMode = mode;
+  if (isTauri()) return writeNativeDeviceUi('ui.mobileDisplayMode', mode);
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem(DISPLAY_MODE_KEY, mode);
   }
