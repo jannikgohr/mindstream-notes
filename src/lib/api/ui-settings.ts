@@ -28,11 +28,12 @@ export function initializeUiSettings(
   expectedVaultId: string,
   deviceRaw: string | null,
   vaultRaw: string | null,
-  preferencesRaw: string | null
+  preferencesRaw: string | null,
+  layoutRaw: string | null
 ): Promise<UiSettingsSnapshot> {
   return invokeOrFallback(
     TauriCommandName.InitializeUiSettings,
-    { expectedVaultId, deviceRaw, vaultRaw, preferencesRaw },
+    { expectedVaultId, deviceRaw, vaultRaw, preferencesRaw, layoutRaw },
     nativeOnly,
     parseSnapshot
   );

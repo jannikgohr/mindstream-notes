@@ -290,6 +290,24 @@ the right sidebar to 330 pixels updated the root. A WebView reload restored the
 hidden left sidebar and shared width. Logs are under
 `.output/preferences-app-check`; this is not a reboot durability check.
 
+Dock-layout slice on 2026-10-10: saved notes/splits now use vault field
+`ui.dockLayout`. Migration reads the matching encoded bucket; only the default
+vault inherits the historical unscoped layout. Existing values win, malformed
+required inputs stop publication, and source bytes remain intact. A vault
+completion record plus explicit clear tombstone prevent old layouts from
+reappearing. Native reads return a copy of the canonical snapshot, and writes
+check the running vault ID and patch the content document. Windows Rust gates
+pass 763 unit tests and one integration test, with three ignored tests. Focused
+layout/settings/profile tests pass 49 frontend checks, and Svelte/affected ESLint
+checks pass. Other browser consumers and full WebView export/isolation remain
+pending.
+
+Native dock-layout verification used the dev wrapper with disposable folders.
+The legacy Welcome tab migrated into the vault document. Creating a second note
+and dragging it into a split produced two saved groups and two panels. Reloading
+the WebView restored both note panes from the canonical document. Logs are under
+`.output/layout-app-check`; the original browser bucket remains retained.
+
 ## Phase 2: coordination and simultaneous vaults
 
 Estimate: 5 to 7 working days, plus changes required by the spike.

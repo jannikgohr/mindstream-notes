@@ -66,6 +66,7 @@ describe('native settings documents', () => {
       'default',
       raw,
       'corrupt legacy',
+      null,
       null
     );
     expect(store.getSettingValue('appearance.reduceMotion')).toBe('off');
@@ -252,5 +253,47 @@ describe('native settings documents', () => {
     await expect(state.setLeftSidebarWidth(330)).rejects.toThrow('root busy');
     expect(state.ui.leftSidebarWidth).toBe(310);
     expect(toasts.items.at(-1)?.variant).toBe('error');
+  });
+
+  it('owns the native dock layout by vault and leaves its migration bucket unchanged', async () => {
+    const saved = {
+      version: 1,
+      dock: { panels: { a: { title: 'A' } } },
+      activeNoteId: 'a',
+      savedAt: '2026-10-10T00:00:00.000Z'
+    };
+    const raw = JSON.stringify(saved);
+    localStorage.setItem('notes-app:dock-layout:v1:vault:default', raw);
+    api.initialize.mockResolvedValue(snapshot({ 'ui.dockLayout': saved }));
+    const store = await import('./store.svelte');
+    const layout = await import('$lib/api/layout');
+    await store.setSettingsVaultId('default');
+    expect(api.initialize.mock.calls[0][4]).toBe(raw);
+    expect(layout.loadSavedLayout('default')).toEqual(saved);
+    expect(layout.loadSavedLayout('other')).toBeNull();
+    api.patch.mockResolvedValue(snapshot({ 'ui.dockLayout': saved }));
+    await layout.saveLayout('default', saved.dock, 'a');
+    expect(layout.loadSavedLayout('default')).toEqual(saved);
+    const loaded = layout.loadSavedLayout('default')!;
+    (loaded.dock as typeof saved.dock).panels.a.title = 'local mutation';
+    expect(layout.loadSavedLayout('default')).toEqual(saved);
+    expect(api.patch).toHaveBeenCalledWith(
+      'default',
+      'ui.dockLayout',
+      expect.objectContaining({ activeNoteId: 'a' }),
+      false
+    );
+    expect(localStorage.getItem('notes-app:dock-layout:v1:vault:default')).toBe(
+      raw
+    );
+    api.patch.mockResolvedValue(snapshot({ 'ui.dockLayout': null }));
+    await layout.clearSavedLayout('default');
+    expect(layout.loadSavedLayout('default')).toBeNull();
+    expect(localStorage.getItem('notes-app:dock-layout:v1:vault:default')).toBe(
+      raw
+    );
+    await expect(layout.saveLayout('other', saved.dock, 'a')).rejects.toThrow(
+      'does not match'
+    );
   });
 });

@@ -144,13 +144,14 @@ fn snapshot(device: Document, vault: Document) -> Snapshot {
     }
 }
 
-fn initialize_with_preferences(
+fn initialize_with_browser_state(
     root: &Path,
     vault: &Path,
     vault_id: &str,
     device_raw: Option<&str>,
     vault_raw: Option<&str>,
     preferences_raw: Option<&str>,
+    layout_raw: Option<&str>,
 ) -> AppResult<Snapshot> {
     let _lock = RootLock::acquire(root)?;
     let device_path = root.join("ui-settings.json");
@@ -212,6 +213,31 @@ fn initialize_with_preferences(
     };
     let mut device_changed = false;
     let mut vault_changed = false;
+    let layout_marker = vault.join(".dock-layout-migrated");
+    let need_layout = match fs::read(&layout_marker) {
+        Ok(raw) if raw == b"1" => false,
+        Ok(_) => {
+            return Err(AppError::InvalidArg(
+                "invalid dock layout migration record".into(),
+            ))
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
+        Err(err) => return Err(err.into()),
+    };
+    if need_layout && !vault_doc.values.contains_key("ui.dockLayout") {
+        if let Some(raw) = layout_raw {
+            if raw.len() > MAX_BYTES {
+                return Err(invalid());
+            }
+            let value: Value = serde_json::from_str(raw).map_err(|_| invalid())?;
+            validate_preference("ui.dockLayout", &value)?;
+            if value.is_null() {
+                return Err(invalid());
+            }
+            vault_doc.values.insert("ui.dockLayout".into(), value);
+            vault_changed = true;
+        }
+    }
     if let Some(sort) = device.values.remove("appearance.sortStrategy") {
         device_changed = true;
         if need_preferences && !vault_doc.values.contains_key("appearance.sortStrategy") {
@@ -269,6 +295,9 @@ fn initialize_with_preferences(
     if need_preferences {
         crate::atomic_file::write(&preferences_marker, b"1")?;
     }
+    if need_layout {
+        crate::atomic_file::write(&layout_marker, b"1")?;
+    }
     Ok(snapshot(device, vault_doc))
 }
 
@@ -283,6 +312,22 @@ fn validate_preference(id: &str, value: &Value) -> AppResult<()> {
             Some("alphabetical" | "modified" | "created")
         ),
         "ui.sortDirection" => matches!(value.as_str(), Some("asc" | "desc")),
+        "ui.dockLayout" => {
+            value.is_null()
+                || (value.is_object()
+                    && value["version"].as_u64() == Some(1)
+                    && value["dock"].is_object()
+                    && value.get("activeNoteId").is_some_and(|v| {
+                        v.is_null() || v.as_str().is_some_and(|id| id.len() <= 1024)
+                    })
+                    && value["savedAt"].as_str().is_some_and(|date| {
+                        chrono::DateTime::parse_from_rfc3339(date).is_ok_and(|t| {
+                            t.with_timezone(&chrono::Utc)
+                                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                                == date
+                        })
+                    }))
+        }
         _ => true,
     };
     if valid {
@@ -353,16 +398,18 @@ pub async fn initialize_ui_settings(
     device_raw: Option<String>,
     vault_raw: Option<String>,
     preferences_raw: Option<String>,
+    layout_raw: Option<String>,
 ) -> CommandResult<Snapshot> {
     let (root, vault) = context(&app, &expected_vault_id)?;
     Ok(tauri::async_runtime::spawn_blocking(move || {
-        initialize_with_preferences(
+        initialize_with_browser_state(
             &root,
             &vault,
             &expected_vault_id,
             device_raw.as_deref(),
             vault_raw.as_deref(),
             preferences_raw.as_deref(),
+            layout_raw.as_deref(),
         )
     })
     .await
@@ -405,6 +452,16 @@ pub async fn patch_ui_setting(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn initialize_with_preferences(
+        root: &Path,
+        vault: &Path,
+        id: &str,
+        device: Option<&str>,
+        content: Option<&str>,
+        preferences: Option<&str>,
+    ) -> AppResult<Snapshot> {
+        initialize_with_browser_state(root, vault, id, device, content, preferences, None)
+    }
     fn initialize(
         root: &Path,
         vault: &Path,
@@ -686,5 +743,90 @@ mod tests {
             .unwrap()
             .values
             .contains_key("appearance.sortStrategy"));
+    }
+
+    #[test]
+    fn migrate_layout_into_one_vault_and_preserve_clear_tombstone_on_restart() {
+        let dirs = TestDirs::new();
+        let raw = r#"{"version":1,"dock":{"panels":{"a":{"title":"A"}}},"activeNoteId":"a","savedAt":"2026-10-10T00:00:00.000Z"}"#;
+        let a = initialize_with_browser_state(
+            &dirs.root,
+            &dirs.a,
+            "default",
+            None,
+            None,
+            None,
+            Some(raw),
+        )
+        .unwrap();
+        assert_eq!(a.values["ui.dockLayout"]["activeNoteId"], "a");
+        let b = initialize(&dirs.root, &dirs.b, "other", None, None).unwrap();
+        assert!(!b.values.contains_key("ui.dockLayout"));
+        access(
+            &dirs.root,
+            &dirs.a,
+            Some(("ui.dockLayout".into(), Some(Value::Null))),
+        )
+        .unwrap();
+        let a = initialize_with_browser_state(
+            &dirs.root,
+            &dirs.a,
+            "default",
+            None,
+            None,
+            None,
+            Some("malformed stale source"),
+        )
+        .unwrap();
+        assert!(a.values["ui.dockLayout"].is_null());
+    }
+
+    #[test]
+    fn malformed_layout_refuses_initialization_before_other_candidates_are_published() {
+        let dirs = TestDirs::new();
+        for raw in [
+            "broken",
+            "null",
+            "[]",
+            r#"{"version":1,"dock":{},"activeNoteId":"a","savedAt":"2026-10-10T00:00:00Z"}"#,
+        ] {
+            assert!(initialize_with_browser_state(
+                &dirs.root,
+                &dirs.a,
+                "default",
+                None,
+                None,
+                None,
+                Some(raw)
+            )
+            .is_err());
+            assert!(!dirs.root.join("ui-settings.json").exists());
+            assert!(!dirs.a.join("content-settings.json").exists());
+            assert!(!dirs.a.join(".dock-layout-migrated").exists());
+        }
+    }
+
+    #[test]
+    fn invalid_layout_updates_and_migration_record_cannot_replace_canonical_state() {
+        let dirs = TestDirs::new();
+        initialize(&dirs.root, &dirs.a, "default", None, None).unwrap();
+        let path = dirs.a.join("content-settings.json");
+        let previous = fs::read(&path).unwrap();
+        assert!(access(
+            &dirs.root,
+            &dirs.a,
+            Some((
+                "ui.dockLayout".into(),
+                Some(serde_json::json!({"version": 1, "dock": null}))
+            ))
+        )
+        .is_err());
+        assert_eq!(fs::read(&path).unwrap(), previous);
+        fs::write(dirs.a.join(".dock-layout-migrated"), b"broken").unwrap();
+        assert!(initialize(&dirs.root, &dirs.a, "default", None, None).is_err());
+        assert_eq!(
+            fs::read(dirs.a.join(".dock-layout-migrated")).unwrap(),
+            b"broken"
+        );
     }
 }

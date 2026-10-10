@@ -30,6 +30,11 @@ import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { isTauri } from '$lib/api/core';
 import { UI_PREFERENCE_IDS } from '$lib/preferences';
 import {
+  applyNativeSavedLayout,
+  legacyLayoutRaw,
+  registerNativeLayoutWriter
+} from '$lib/api/layout';
+import {
   applyNativeUiPreferences,
   registerNativeUiPreferenceWriter
 } from '$lib/state.svelte';
@@ -245,6 +250,10 @@ function applyNativeSnapshot(snapshot: UiSettingsSnapshot): void {
   }
   settings.values = values;
   applyNativeUiPreferences(values);
+  applyNativeSavedLayout(
+    activeSettingsVaultId,
+    snapshot.values['ui.dockLayout']
+  );
 }
 
 export async function refreshNativeSettings(): Promise<void> {
@@ -286,7 +295,8 @@ export async function setSettingsVaultId(id: string): Promise<void> {
         next,
         localStorage.getItem(DEVICE_STORAGE_KEY),
         localStorage.getItem(vaultStorageKey(next)),
-        localStorage.getItem('notes-app:preferences:v1')
+        localStorage.getItem('notes-app:preferences:v1'),
+        legacyLayoutRaw(next)
       );
       applyNativeSnapshot(snapshot);
       startNativeListeners();
@@ -369,6 +379,12 @@ registerNativeUiPreferenceWriter(async (id, value) => {
     applyNativeUiPreferences(settings.values);
     throw err;
   }
+});
+
+registerNativeLayoutWriter(async (vaultId, value) => {
+  if (vaultId !== activeSettingsVaultId)
+    throw new Error('layout vault does not match the running worker');
+  await writeNativeSetting('ui.dockLayout', value);
 });
 
 /**

@@ -56,6 +56,13 @@ with the canonical snapshot; failed writes roll back and show feedback. The
 schema's sort-strategy scope changed from device to vault, with compatibility
 for the preceding root document and recovery copies.
 
+Native dock layouts now use vault field `ui.dockLayout`. Initialization reads
+only that vault's encoded bucket, with the historical unscoped fallback limited
+to the default vault. Malformed required input blocks migration; existing values
+and clear tombstones win. A vault completion record and retained browser bytes
+make retries safe. Native reads use the backend snapshot; writes patch the vault
+document and leave the browser bucket untouched.
+
 On 2026-10-10 native collaboration signing material moved to
 `<vault>/collab-signing-credentials.json`, encrypted with ChaCha20-Poly1305 and
 a vault master key in the environment's OS keystore. The authenticated context

@@ -30,6 +30,15 @@ Recovery of that old root copy cannot reseed another vault's sorting preference.
 Native UI setters patch one field, refreshes update the live sidebar/sort state,
 and failed saves restore canonical values and show an error toast.
 
+Saved dock layouts now use vault field `ui.dockLayout`. Native initialization
+imports the matching encoded vault bucket; only the default vault can fall back
+to the historical unscoped layout. JSON shape/version, note ID and timestamp are
+validated before publishing either settings candidate. A vault
+`.dock-layout-migrated` record prevents reseeding, and explicit `null` preserves
+a cleared layout across restarts. Existing values win and source browser bytes
+remain intact. Layout writes require the running vault ID and report failures.
+The cache returns a copy so dockview cannot mutate the canonical snapshot.
+
 Release retains its historical data root and credential service. Dev uses the
 `.dev` bundle identity and a persistent separate root. Test roots and browser
 folders are explicit; all three real-app harnesses set both. Accounts remain
