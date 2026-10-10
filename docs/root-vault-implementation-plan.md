@@ -1,0 +1,267 @@
+# Root storage and concurrent vault implementation plan
+
+Status: the first independent restore and document-write fixes are implemented
+and pass the Windows Rust checks. Process-per-vault remains conditional on the
+platform spike; environments, ownership locks, and concurrent workers are pending.
+
+Global plugin packages and theme presets are separate follow-up projects:
+
+- [Global plugins plan](global-plugins-implementation-plan.md)
+- [Theme presets plan](theme-presets-implementation-plan.md)
+
+## Required behavior
+
+| Action                                              | Result                                                                               |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Normal launch with open workers in this environment | Restore and focus the most recently used vault window, including a hidden window.    |
+| Normal launch with no workers                       | Open the last-used vault, or show a picker if unavailable.                           |
+| Select a closed vault without a preference          | Offer "Open in this window" and "Open in new window", with "Remember this decision". |
+| Select a closed vault with a preference             | Use it; explicit alternative actions remain available.                               |
+| Ctrl + left click a vault                           | Request a new window regardless of the preference.                                   |
+| Request an already-open vault                       | Focus its existing window and keep the source vault running.                         |
+| Change the opening preference                       | Device settings offer "Ask every time", "This window", and "New window".             |
+| Open two vaults using one account                   | Allow. Account identity is not a local ownership key.                                |
+| Delete an open or hidden vault                      | Refuse, including ownership by another worker.                                       |
+| Reboot after a crash                                | Acquire OS locks and reconcile operations without manual lock-file removal.          |
+
+"Open in this window" means worker handoff. Prepare the target at the source
+window's geometry, flush the source, then activate the target and exit the
+source. The native window may be replaced. Failed preparation or flushing keeps
+the source open. Preserving the exact native window is outside this plan.
+
+Concurrent-window UI is desktop-only. Mobile retains its single-vault/restart
+flow and adopts compatible storage and recovery fixes.
+
+## Ownership
+
+| Shared root within an environment                                             | Vault                                                                                     |
+| ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Desktop settings, language, opening preference, device appearance preferences | Content/editor settings, selected spellcheck languages, custom words                      |
+| Downloaded dictionaries                                                       | Database, notes, assets, backups, imports, restore records                                |
+| Vault index and last-used startup preference                                  | Account session, sync state, credential identity                                          |
+| Root transaction and coordinator records                                      | Lifetime ownership and vault recovery records                                             |
+| Eventually global plugin packages, artifacts, presets, device plugin settings | Plugin enablement, accepted hashes/signers/grants, vault settings, writable `plugin-data` |
+
+Account remains vault-specific. Mode and preset selection are independent. The
+appearance follow-up moves accent and UI font size to device scope; editor font
+size and line height remain vault preferences.
+
+## Architecture gate before environment changes
+
+Run a two-day spike before committing to process-per-vault. Use disposable data
+and record OS/build versions, commands, observations, and unresolved behavior.
+Assumed platform behavior does not count as verification.
+
+### macOS process and lifecycle spike
+
+- Launch a packaged app with two workers and a coordinator. Check Dock icons,
+  menu bars, Cmd + Q, Dock Reopen, hide/show, worker crashes, and focus.
+- Verify worker activation policy, normal desktop windows, deterministic Reopen
+  forwarding, signing, `.app` executable launches, and updater/shutdown behavior.
+- If acceptable app identity and routing cannot be achieved, stop and revise the
+  architecture before implementing Windows/Linux coordination. A single app
+  host with vault contexts requires a separately estimated backend refactor.
+  It is not an automatic fallback hidden in this plan.
+
+### WebView stores and migration spike
+
+- Default to a WebView data directory per vault and environment. Verify Tauri
+  support on Windows/Linux and available macOS store isolation. Workers cannot
+  rely on unsupported sharing of a WebKitGTK data directory.
+- Check WebView2 browser-process ownership and `--renderer-process-limit=1`
+  across simultaneous windows. Scope or revise the setting using measurements.
+  Harness cleanup must not kill another worker's browser process.
+- Decide legacy storage migration before concurrency: serialize legacy-store
+  export/classification, or move vault-owned values to backend storage first.
+  New workers cannot fall back silently to the shared legacy store.
+- Audit every localStorage consumer, including `preferences.ts`, collaboration
+  signing keys, hotkeys, dock/layout preferences, plugins, settings, and startup
+  appearance. Classify root, vault, ephemeral, and credential state and define
+  migration ownership. Preserve keys and existing values without copying
+  unrelated vault/account state into new vaults.
+- Verify restart and separation across vaults, dev/release origins, and test
+  devices. Database-path isolation alone does not isolate browser state.
+
+### Development launcher lifetime
+
+The process owned by `tauri dev` must stay alive across worker handoffs and
+closure. Prototype a long-lived host/coordinator that spawns workers. Verify
+the CLI preserves Vite and sibling workers. Packaged/dev launch routing uses
+explicit targets. Do not launch the coordinator as a disposable child of a
+worker that exits on handoff, or retain the manual-restart workaround.
+
+## Phase 0: independent data-safety fixes
+
+Estimate: 2 to 3 working days. Implementation starts here before the spike.
+
+Primary areas: `backup/restore.rs`, backup tests, `profiles.rs`,
+`desktop_settings.rs`, `lib.rs`, and a shared atomic-file helper.
+
+- Preserve committed WAL content before moving the live DB to its safety copy.
+  Check checkpoint results, refuse unsafe preservation when another connection
+  holds SQLite locks, and validate pending data before altering live files.
+- Propagate restore failure to startup. Retain inputs and stop before opening
+  an ambiguous or newly created database.
+- Record repeatable restore steps so crashes after preserving the old database
+  or installing the replacement can resume. Preserve ambiguous recovery state.
+- Replace plain index/settings writes with same-folder temporary writes,
+  flushing, and replace-without-delete publication. Corrupt/unreadable existing
+  settings must not silently become defaults.
+- Test real WAL commits, busy readers, replacement failures, and restore
+  interruption boundaries. Byte-only DB fixtures do not prove content safety.
+- Document limits: atomic replacement does not serialize read/modify/write;
+  full vault ownership and concurrent merging follow below. Reboot durability
+  needs platform flush tests beyond process termination.
+
+Acceptance: safety DB contains WAL commits; ambiguous/failed restore stops boot
+with inputs intact; replacement never deletes the old document first; invalid
+settings remain intact.
+
+Initial slice implemented on 2026-10-10: checkpointed safety copies, versioned
+restore records with replacement hashes, startup error propagation, atomic index
+and desktop-settings publication, and corrupt-settings errors. Regression tests
+cover a terminated WAL writer, busy readers, interrupted move boundaries,
+unexpected replacement WAL content, and concurrent document readers. Windows
+`cargo test`, `cargo clippy -- -D warnings`, and `cargo fmt -- --check` pass.
+Desktop settings remain vault-located until Phase 1 migration. macOS/Linux and
+reboot durability checks are still pending.
+
+## Phase 1: environments, ownership, and storage migration
+
+Estimate: 3 to 4 working days, after the spike passes.
+
+Primary areas: paths/profiles/auth, launcher/config, WebView setup, frontend
+persistence consumers, and all three WDIO real-app configs.
+
+- Add release/dev/test identity independent of debug/optimized builds. Preserve
+  production root and historical credential entries. Dev gets a persistent
+  separate root and visible Dev identity; optionally namespace worktrees.
+- Add gated root overrides for debug and `e2e-data-dir`. Isolate browser storage,
+  credentials, logs, IPC/ports, and coordinator names. Harness restarts retain
+  identity; simulated devices get separate identities. Disable dev/test updater,
+  autostart, and global shortcuts by default; root names do not isolate those
+  OS resources.
+- Add lifetime OS vault locks using canonical physical vault identity across
+  environments. Prevent lock-handle inheritance. File presence, PIDs, and
+  heartbeat age are diagnostic only. Document that older binaries without
+  ownership locks cannot be made safe by the new binary alone.
+- Complete WebView migration and the full frontend scope audit. Root device
+  state becomes backend-owned, with revisioned worker caches.
+- Move desktop settings once: valid root values win; otherwise seed from the
+  selected vault and journal completion. Never reseed on vault changes.
+- Add locked root read/modify/write transactions, validation, previous-copy
+  recovery, and explicit lock ordering/filesystem support.
+- Recover interrupted legacy profile migration, including a moved root database
+  whose index was never committed.
+- Add dictionary locking before concurrent workers ship. Publish `.aff`/`.dic`
+  together as a validated installation, recover interrupted operations, and
+  invalidate resident dictionaries on remove/replace.
+
+Acceptance: browser/environment isolation and credential migration pass;
+duplicate physical-vault ownership is rejected; concurrent root edits preserve
+both changes; concurrent dictionary operations are safe.
+
+## Phase 2: coordination and simultaneous vaults
+
+Estimate: 5 to 7 working days, plus changes required by the spike.
+
+Keep one vault per worker for its lifetime. Use the validated long-lived
+host/coordinator arrangement. Do not add in-process session swapping.
+
+- Add protected local IPC, coordinator election, readiness registration,
+  request IDs, bounded retries, and stale-registration reconciliation. Real
+  locks determine ownership; unresponsive processes do not lose their locks.
+  Avoid general root locks across IPC waits or network work.
+- Launch explicit vault targets. Convert `profiles.json.active` to last-used
+  startup preference, separate from live ownership.
+- Implement normal launch, new-window requests, duplicates, and racing requests.
+  Transfer Windows foreground permission with `AllowSetForegroundWindow` and
+  propagate Wayland activation tokens where available. Verify menu, taskbar,
+  Dock, and tray activation.
+- Register worker main windows and note popouts labelled by note ID. Include
+  them in focus, restoration, geometry, close-to-tray, and shutdown rules.
+  Geometry is scoped by environment, vault, and window identity.
+- Make root hotkey bindings authoritative. Migrate JS bindings; workers submit
+  edits rather than registering globally. Tray/new-note actions target the most
+  recent vault. With none open, launch the last-used vault and await readiness,
+  or show a picker if unavailable. Define no-worker coordinator lifetime using
+  tray/autostart preferences.
+- Centralize tray and updates. Tray Quit flushes/closes this environment's
+  workers. Update installation waits for workers, popouts, and services to stop.
+- Broadcast device revisions and apply language/theme/decorations/tray changes.
+  Recover coordinator crashes through election and worker re-registration.
+- Deletion obtains exclusive vault ownership, journals/tombstones the vault,
+  removes it from the index under the root lock, releases the in-directory
+  lock handle, then deletes files on Windows. Tombstones and launch checks block
+  reopening during deletion. Resume failures without reviving the index or
+  deleting unrelated paths.
+
+Acceptance: independent concurrent vaults, deterministic duplicate/focus
+routing, correct popout lifecycle, one tray/shortcut owner, propagated device
+changes, and recoverable deletion/shutdown.
+
+## Phase 3: menu UI and worker handoff
+
+Estimate: 4 to 6 working days including persistence/shutdown verification.
+
+Primary areas: `VaultSwitcher.svelte`, profile APIs/stores, coordinator launch,
+editor persistence, and secondary-window lifecycle.
+
+- Add opening actions, remember checkbox, three-choice device preference,
+  Ctrl + left click override, and accessible alternatives. Apply the same rules
+  to newly created vaults; consider Command + click on macOS.
+- Reserve/start the target as a prepared worker at source geometry. Ready means
+  locks, recovery, settings, and account policy succeeded. Then flush main and
+  popout editors and stop source services. Activation is a separate commit step.
+  Cancel the prepared target when source persistence cannot finish.
+- Keep the source alive on target failure, cancellation, or failed flush. Handle
+  crashes/lost acknowledgements with operation IDs and repeatable handoff state.
+  Target preparation cannot perform source-session-derived writes.
+- Focus an existing target without closing the source, including Ctrl + click.
+  Suppress repeated requests during handoff.
+- Remove desktop global-active/relaunch/manual-restart switching. Retain browser
+  fallback and mobile restart compatibility. Dev's supervised host stays alive.
+
+Acceptance: handoff keeps geometry/content, failure leaves a usable source,
+new-window leaves it running, preference/Ctrl + click work, and no backend
+session swap or `State<Db>` refactor is required.
+
+## Phase 4: recovery, platform checks, and documentation
+
+Estimate: 3 to 4 working days. Add focused tests with each earlier change.
+
+- Test shared-root/different-vault workers separately from isolated devices
+  sharing a remote account. Preserve both existing multiremote suites.
+- Race launches/root edits; test hung owners, PID reuse, crash-released locks,
+  missing/corrupt documents, and last-used fallback. Keep ownership rules enabled
+  in tests.
+- Interrupt restore/migration/deletion/dictionary publication at every phase;
+  reopen repeatedly. Use VM/reboot tests for durability. Never sweep DB WAL files.
+- Startup routes launch, recovers locked root operations, acquires vault
+  ownership, reconciles restore, lets SQLite recover, checks schema/unclean
+  integrity, then registers ready and starts services. Preserve dirty rows and
+  tombstones during recovery.
+- Verify foreground grants, Wayland activation, macOS app identity/Reopen,
+  `tauri dev`, popouts, tray, and multi-window shutdown.
+- Harness cleanup tracks only its root's host/workers/browser processes and
+  waits for lock release before restart. Add isolation preflight checks and
+  readiness/focus failure artifacts.
+- Run required Rust gates and affected frontend/real-app checks. Update build,
+  architecture, recovery, storage-scope, and harness documentation.
+
+## Estimate and delivery
+
+Core work is roughly 19 to 26 working days including the spike and safety slice,
+about four to six weeks. The original combined scope with plugins/themes needs
+five to seven weeks or more if the spike rejects process-per-vault. These are
+planning ranges; platform constraints remain to be tested.
+
+Ship safety fixes independently, then spike findings and an explicit architecture
+decision, environments/ownership, coordination, and UI handoff. Keep migrations
+and recovery tests in the same reviewable change. Commit automatically after
+required checks using scoped Conventional Commit messages.
+
+Out of scope: exact native-window preservation through backend session swapping,
+multiple local writers, full previous-session reopening, network-filesystem
+vaults, full settings/plugin-data backup portability, and the separate plugins
+and themes projects.
