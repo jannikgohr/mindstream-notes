@@ -156,6 +156,41 @@ fn initialize_with_browser_state(
     preferences_raw: Option<&str>,
     layout_raw: Option<&str>,
 ) -> AppResult<Snapshot> {
+    initialize_classified(
+        root,
+        vault,
+        vault_id,
+        BrowserState {
+            device_raw,
+            vault_raw,
+            preferences_raw,
+            layout_raw,
+            archive_owner: None,
+        },
+    )
+}
+
+struct BrowserState<'a> {
+    device_raw: Option<&'a str>,
+    vault_raw: Option<&'a str>,
+    preferences_raw: Option<&'a str>,
+    layout_raw: Option<&'a str>,
+    archive_owner: Option<bool>,
+}
+
+fn initialize_classified(
+    root: &Path,
+    vault: &Path,
+    vault_id: &str,
+    input: BrowserState<'_>,
+) -> AppResult<Snapshot> {
+    let BrowserState {
+        device_raw,
+        vault_raw,
+        preferences_raw,
+        layout_raw,
+        archive_owner,
+    } = input;
     let _lock = RootLock::acquire(root)?;
     let device_path = root.join("ui-settings.json");
     let vault_path = vault.join("content-settings.json");
@@ -204,15 +239,29 @@ fn initialize_with_browser_state(
         read(&vault_path, false)?
     };
     let preferences_marker = root.join(".ui-preferences-migrated");
-    let need_preferences = match fs::read(&preferences_marker) {
-        Ok(raw) if raw == b"1" => false,
+    let preferences_receipt = match fs::read(&preferences_marker) {
+        Ok(raw) if raw == b"1" || raw == b"2" => Some(raw),
         Ok(_) => {
             return Err(AppError::InvalidArg(
                 "invalid UI preferences migration record".into(),
             ))
         }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
         Err(err) => return Err(err.into()),
+    };
+    let need_preferences = preferences_receipt.is_none();
+    let content_preferences_marker = vault.join(".ui-content-preferences-migrated");
+    let need_content_preferences = match archive_owner {
+        None => need_preferences,
+        Some(false) => false,
+        // Version 1 already imported all preferences in the live legacy store.
+        Some(true) if preferences_receipt.as_deref() == Some(b"1") => false,
+        Some(true) => match fs::read(&content_preferences_marker) {
+            Ok(raw) if raw == b"1" => false,
+            Ok(_) => return Err(invalid()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
+            Err(err) => return Err(err.into()),
+        },
     };
     let mut device_changed = false;
     let mut vault_changed = false;
@@ -243,14 +292,14 @@ fn initialize_with_browser_state(
     }
     if let Some(sort) = device.values.remove("appearance.sortStrategy") {
         device_changed = true;
-        if need_preferences && !vault_doc.values.contains_key("appearance.sortStrategy") {
+        if need_content_preferences && !vault_doc.values.contains_key("appearance.sortStrategy") {
             vault_doc
                 .values
                 .insert("appearance.sortStrategy".into(), sort);
             vault_changed = true;
         }
     }
-    if need_preferences {
+    if need_preferences || need_content_preferences {
         let preferences = legacy(preferences_raw)?;
         for (key, id, is_device) in [
             ("leftSidebarWidth", "appearance.leftSidebarWidth", true),
@@ -260,6 +309,9 @@ fn initialize_with_browser_state(
             ("sortStrategy", "appearance.sortStrategy", false),
             ("sortDirection", "ui.sortDirection", false),
         ] {
+            if (is_device && !need_preferences) || (!is_device && !need_content_preferences) {
+                continue;
+            }
             if let Some(value) = preferences.get(key) {
                 validate_preference(id, value)?;
                 let document = if is_device {
@@ -296,7 +348,13 @@ fn initialize_with_browser_state(
         }
     }
     if need_preferences {
-        crate::atomic_file::write(&preferences_marker, b"1")?;
+        crate::atomic_file::write(
+            &preferences_marker,
+            if archive_owner.is_some() { b"2" } else { b"1" },
+        )?;
+    }
+    if need_content_preferences && archive_owner == Some(true) {
+        crate::atomic_file::write(&content_preferences_marker, b"1")?;
     }
     if need_layout {
         crate::atomic_file::write(&layout_marker, b"1")?;
@@ -476,6 +534,34 @@ pub async fn initialize_ui_settings(
 ) -> CommandResult<Snapshot> {
     let (root, vault) = context(&app, &expected_vault_id)?;
     Ok(tauri::async_runtime::spawn_blocking(move || {
+        if let Some(source) = app.try_state::<crate::browser_migration::Source>() {
+            let owner = crate::legacy_content::is_owner(&root, &expected_vault_id, &vault)?;
+            initialize_classified(
+                &root,
+                &vault,
+                &expected_vault_id,
+                BrowserState {
+                    device_raw: source.raw("notes-app:settings:v1"),
+                    vault_raw: source.vault_settings(&expected_vault_id),
+                    preferences_raw: source.raw("notes-app:preferences:v1"),
+                    layout_raw: source.layout(&expected_vault_id),
+                    archive_owner: Some(owner),
+                },
+            )?;
+            migrate_device_ui(
+                &root,
+                &DeviceBrowserState {
+                    toolbar_raw: source
+                        .raw("notes-app:file-tree-create-toolbar:v1")
+                        .map(str::to_owned),
+                    had_existing_data: source.had_existing_data(),
+                    display_mode_raw: source
+                        .raw("notes-app:mobile:displayMode")
+                        .map(str::to_owned),
+                },
+            )?;
+            return access(&root, &vault, None);
+        }
         let snapshot = initialize_with_browser_state(
             &root,
             &vault,
@@ -532,6 +618,122 @@ pub async fn patch_ui_setting(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn archive_owner_imports_content_even_when_another_vault_opens_first() {
+        let dirs = TestDirs::new();
+        let raw = r#"{"leftSidebarWidth":350,"sortStrategy":"modified","leftSidebarOpen":false}"#;
+        let initialize = |vault: &Path, id: &str, owner, preferences| {
+            initialize_classified(
+                &dirs.root,
+                vault,
+                id,
+                BrowserState {
+                    device_raw: Some(r#"{"appearance.reduceMotion":"on"}"#),
+                    vault_raw: None,
+                    preferences_raw: preferences,
+                    layout_raw: None,
+                    archive_owner: Some(owner),
+                },
+            )
+        };
+        let other = initialize(&dirs.b, "other", false, Some(raw)).unwrap();
+        assert_eq!(other.values["appearance.leftSidebarWidth"], 350);
+        assert!(!other.values.contains_key("ui.leftSidebarOpen"));
+        assert!(!other.values.contains_key("appearance.sortStrategy"));
+        assert_eq!(
+            fs::read(dirs.root.join(".ui-preferences-migrated")).unwrap(),
+            b"2"
+        );
+        assert!(!dirs.a.join(".ui-content-preferences-migrated").exists());
+        access(
+            &dirs.root,
+            &dirs.b,
+            Some(("appearance.leftSidebarWidth".into(), Some(Value::from(400)))),
+        )
+        .unwrap();
+        let owner = initialize(&dirs.a, "default", true, Some(raw)).unwrap();
+        assert_eq!(owner.values["appearance.leftSidebarWidth"], 400);
+        assert_eq!(owner.values["appearance.sortStrategy"], "modified");
+        assert_eq!(owner.values["ui.leftSidebarOpen"], false);
+        assert_eq!(
+            fs::read(dirs.a.join(".ui-content-preferences-migrated")).unwrap(),
+            b"1"
+        );
+        access(
+            &dirs.root,
+            &dirs.a,
+            Some(("ui.leftSidebarOpen".into(), None)),
+        )
+        .unwrap();
+        let retry = initialize(&dirs.a, "default", true, Some("malformed stale source")).unwrap();
+        assert!(!retry.values.contains_key("ui.leftSidebarOpen"));
+    }
+
+    #[test]
+    fn completed_live_preferences_do_not_reseed_from_archive_and_failed_owner_import_stays_pending()
+    {
+        let dirs = TestDirs::new();
+        initialize_with_preferences(
+            &dirs.root,
+            &dirs.a,
+            "default",
+            None,
+            None,
+            Some(r#"{"sortStrategy":"modified"}"#),
+        )
+        .unwrap();
+        access(
+            &dirs.root,
+            &dirs.a,
+            Some(("appearance.sortStrategy".into(), None)),
+        )
+        .unwrap();
+        let result = initialize_classified(
+            &dirs.root,
+            &dirs.a,
+            "default",
+            BrowserState {
+                device_raw: None,
+                vault_raw: None,
+                preferences_raw: Some("malformed stale source"),
+                layout_raw: None,
+                archive_owner: Some(true),
+            },
+        )
+        .unwrap();
+        assert!(!result.values.contains_key("appearance.sortStrategy"));
+
+        let fresh = TestDirs::new();
+        initialize_classified(
+            &fresh.root,
+            &fresh.b,
+            "other",
+            BrowserState {
+                device_raw: None,
+                vault_raw: None,
+                preferences_raw: Some(r#"{"sortStrategy":"invalid"}"#),
+                layout_raw: None,
+                archive_owner: Some(false),
+            },
+        )
+        .unwrap();
+        assert!(initialize_classified(
+            &fresh.root,
+            &fresh.a,
+            "default",
+            BrowserState {
+                device_raw: None,
+                vault_raw: None,
+                preferences_raw: Some(r#"{"sortStrategy":"invalid"}"#),
+                layout_raw: None,
+                archive_owner: Some(true),
+            }
+        )
+        .is_err());
+        assert!(!fresh.a.join(".ui-content-preferences-migrated").exists());
+        assert!(!fresh.a.join("content-settings.json").exists());
+    }
     #[test]
     fn device_ui_migration_preserves_custom_plugin_ids_and_never_reseeds() {
         let dirs = TestDirs::new();

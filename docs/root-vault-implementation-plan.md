@@ -390,6 +390,20 @@ full serial suite pass 793 unit tests and one integration test, with five ignore
 tests. Seven focused frontend tests and Svelte checks pass. Affected ESLint has
 no errors; the route retains its existing dynamic-component `any` warning.
 
+Archive classification slice on 2026-10-11: a worker with a verified retained
+source reads only its settings/layout bucket and matching server/username signing
+key. Signature and favourite imports still check the physical legacy owner.
+Unknown values remain in the encrypted archive. Backend initialization uses
+these raw sources rather than a fresh worker's empty browser store. Version 2
+of the root preference receipt records device migration separately from the
+owner vault's content receipt, so opening another vault first cannot consume
+sidebar/sort preferences. Existing version 1 receipts prevent reseeding. Native
+signing import prefers an existing vault identity, then the matching retained
+identity, then newly supplied material. Malformed candidates cannot create a
+replacement identity. Rust gates pass 797 unit tests and one integration test;
+five tests remain ignored. The supervisor still must load/register the verified
+source before opening isolated workers.
+
 Estimate: 5 to 7 working days, plus changes required by the spike.
 
 Keep one vault per worker for its lifetime. Use the validated long-lived

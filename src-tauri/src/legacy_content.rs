@@ -67,7 +67,7 @@ pub fn initialize_owner(root: &Path, vault_id: &str, vault: &Path) -> AppResult<
     Ok(())
 }
 
-fn is_owner(root: &Path, vault_id: &str, vault: &Path) -> AppResult<bool> {
+pub(crate) fn is_owner(root: &Path, vault_id: &str, vault: &Path) -> AppResult<bool> {
     let _lock = RootLock::acquire(root)?;
     let owner = decode_owner(&fs::read(root.join(OWNER_FILE))?)?;
     Ok(owner.vault_id == vault_id && owner.directory == fs::canonicalize(vault)?)
@@ -221,8 +221,20 @@ pub async fn migrate_legacy_content(
         if !is_owner(&root, &vault_id, &vault)? {
             return Ok(Vec::new());
         }
+        let source = app.try_state::<crate::browser_migration::Source>();
+        let (array_raw, single_raw) = if let Some(source) = source.as_ref() {
+            match kind {
+                Kind::Signatures => (
+                    source.raw("mindstream.pdf.signatures.v1"),
+                    source.raw("mindstream.pdf.signature.v1"),
+                ),
+                Kind::Favourites => (source.raw("notes-app:mobile:favourites"), None),
+            }
+        } else {
+            (array_raw.as_deref(), single_raw.as_deref())
+        };
         app.state::<crate::db::Db>()
-            .with_conn_mut(|conn| import(conn, kind, array_raw.as_deref(), single_raw.as_deref()))
+            .with_conn_mut(|conn| import(conn, kind, array_raw, single_raw))
     })
     .await
     .map_err(|_| invalid())??)

@@ -108,6 +108,16 @@ when ciphertext or completion receipts exist. This is the storage component;
 coordinator-driven legacy WebView export and per-vault classification are still
 pending. Production startup continues to use its existing browser store.
 
+Per-vault classification is now implemented in `browser_migration.rs` and wired
+into the native settings, content and signing consumers when a worker has a
+verified `Source`. Settings/layout buckets remain raw until validated by their
+destination. Unscoped content checks the pinned physical owner; signing keys
+match the exact legacy encoded server/username key and stay outside settings
+snapshots. Existing vault credentials win over stale retained bytes. The archive
+preference path has separate device and owner-content receipts, including when a
+different vault opens first. The supervisor/export integration remains pending;
+normal startup does not yet manage a `Source` or isolate its browser store.
+
 ## Migration sequence
 
 1. Acquire environment/root migration ownership before opening the legacy

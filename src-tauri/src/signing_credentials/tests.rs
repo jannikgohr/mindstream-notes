@@ -25,6 +25,60 @@ fn root() -> std::path::PathBuf {
 }
 
 #[test]
+fn retained_identity_wins_new_generated_material_and_existing_identity_wins_stale_archive() {
+    let root = root();
+    let path = root.join(FILE_NAME);
+    let entry = entry();
+    let aad = associated_data("test", "retained");
+    let archived = material("old embedded username", 7);
+    let raw = serde_json::to_string(&archived).unwrap();
+    let imported = access_file_with_legacy(
+        &path,
+        &entry,
+        &aad,
+        "https://one.example/",
+        "alice",
+        Some(material("alice", 8)),
+        Some(&raw),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(imported.username, "alice");
+    assert_eq!(imported.public_key_b64, archived.public_key_b64);
+    let restored = access_file_with_legacy(
+        &path,
+        &entry,
+        &aad,
+        "https://one.example/",
+        "alice",
+        None,
+        Some("malformed stale bytes"),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        restored.private_key_pkcs8_b64,
+        archived.private_key_pkcs8_b64
+    );
+    assert!(access_file_with_legacy(
+        &path,
+        &entry,
+        &aad,
+        "https://two.example/",
+        "alice",
+        None,
+        Some("malformed candidate")
+    )
+    .is_err());
+    assert!(
+        access_file(&path, &entry, &aad, "https://two.example/", "alice", None)
+            .unwrap()
+            .is_none()
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn webcrypto_pkcs8_material_is_imported_without_changing_the_signing_identity() {
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("webcrypto-fixture.json")).unwrap();

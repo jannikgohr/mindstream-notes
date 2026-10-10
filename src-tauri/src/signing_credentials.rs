@@ -222,9 +222,14 @@ fn access(
     )
     .map_err(|_| AppError::InvalidArg("vault signing keystore unavailable".into()))?;
     let path = profile.dir.join(FILE_NAME);
-    access_file(&path, &entry, &aad, server_url, username, incoming)
+    let source = app.try_state::<crate::browser_migration::Source>();
+    let raw = source
+        .as_ref()
+        .and_then(|source| source.signing_raw(server_url, username));
+    access_file_with_legacy(&path, &entry, &aad, server_url, username, incoming, raw)
 }
 
+#[cfg(test)]
 fn access_file(
     path: &Path,
     entry: &Entry,
@@ -232,6 +237,18 @@ fn access_file(
     server_url: &str,
     username: &str,
     incoming: Option<Material>,
+) -> AppResult<Option<Material>> {
+    access_file_with_legacy(path, entry, aad, server_url, username, incoming, None)
+}
+
+fn access_file_with_legacy(
+    path: &Path,
+    entry: &Entry,
+    aad: &[u8],
+    server_url: &str,
+    username: &str,
+    incoming: Option<Material>,
+    legacy_raw: Option<&str>,
 ) -> AppResult<Option<Material>> {
     let _guard = ACCESS
         .lock()
@@ -246,6 +263,33 @@ fn access_file(
         }
         return Ok(Some(existing.clone()));
     }
+    // Check stored material first: stale/corrupt retained browser bytes cannot
+    // overwrite or block an identity already imported into this vault.
+    let incoming = if let Some(raw) = legacy_raw {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct LegacyMaterial {
+            public_key_b64: String,
+            private_key_pkcs8_b64: String,
+        }
+        impl Drop for LegacyMaterial {
+            fn drop(&mut self) {
+                self.private_key_pkcs8_b64.zeroize();
+            }
+        }
+        let invalid = || AppError::InvalidArg("retained signing key needs recovery".into());
+        if raw.len() > 16384 {
+            return Err(invalid());
+        }
+        let legacy: LegacyMaterial = serde_json::from_str(raw).map_err(|_| invalid())?;
+        Some(Material {
+            username: username.into(),
+            public_key_b64: legacy.public_key_b64.clone(),
+            private_key_pkcs8_b64: legacy.private_key_pkcs8_b64.clone(),
+        })
+    } else {
+        incoming
+    };
     let Some(incoming) = incoming else {
         return Ok(None);
     };

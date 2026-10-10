@@ -20,6 +20,7 @@ pub mod backup;
 pub mod browser_archive;
 #[cfg(desktop)]
 pub mod browser_identity;
+pub mod browser_migration;
 pub mod client_errors;
 pub mod collab_events;
 pub mod collections;
