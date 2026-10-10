@@ -17,7 +17,15 @@ vi.mock('$lib/api/events', () => ({
   TauriEventName: { UiSettingsChanged: 'ui-settings-changed' },
   listen: api.listen
 }));
-vi.mock('./registry.svelte', () => ({ SETTING_BINDINGS: {} }));
+vi.mock('./registry.svelte', () => ({
+  SETTING_BINDINGS: {
+    'appearance.leftSidebarWidth': {
+      get: async () => (await import('$lib/state.svelte')).ui.leftSidebarWidth,
+      set: async (value: unknown) =>
+        (await import('$lib/state.svelte')).setLeftSidebarWidth(Number(value))
+    }
+  }
+}));
 
 const snapshot = (
   values: Record<string, unknown> = {},
@@ -52,12 +60,13 @@ describe('native settings documents', () => {
       snapshot({ 'appearance.reduceMotion': 'off' })
     );
     const store = await import('./store.svelte');
-    expect(store.settings.values).toEqual({});
+    expect(store.settings.values['appearance.reduceMotion']).toBeUndefined();
     await store.setSettingsVaultId('default');
     expect(api.initialize).toHaveBeenCalledWith(
       'default',
       raw,
-      'corrupt legacy'
+      'corrupt legacy',
+      null
     );
     expect(store.getSettingValue('appearance.reduceMotion')).toBe('off');
     await store.setSettingsVaultId('default');
@@ -180,5 +189,68 @@ describe('native settings documents', () => {
         'https://changed.example'
       )
     );
+  });
+
+  it('hydrates mixed UI preferences and patches only the changed field', async () => {
+    localStorage.setItem(
+      'notes-app:preferences:v1',
+      '{"leftSidebarWidth":360}'
+    );
+    api.initialize.mockResolvedValue(
+      snapshot({
+        'appearance.leftSidebarWidth': 320,
+        'appearance.sortStrategy': 'modified',
+        'ui.leftSidebarOpen': false
+      })
+    );
+    const store = await import('./store.svelte');
+    const state = await import('$lib/state.svelte');
+    await store.setSettingsVaultId('default');
+    expect(api.initialize.mock.calls[0][3]).toBe('{"leftSidebarWidth":360}');
+    expect(state.ui.leftSidebarWidth).toBe(320);
+    expect(state.ui.leftSidebarOpen).toBe(false);
+    expect(state.ui.sortStrategy).toBe('modified');
+    api.patch.mockResolvedValue(
+      snapshot({
+        'appearance.leftSidebarWidth': 330,
+        'appearance.sortStrategy': 'modified',
+        'ui.leftSidebarOpen': false
+      })
+    );
+    await state.setLeftSidebarWidth(330);
+    expect(api.patch).toHaveBeenCalledWith(
+      'default',
+      'appearance.leftSidebarWidth',
+      330,
+      false
+    );
+    expect(localStorage.getItem('notes-app:preferences:v1')).toBe(
+      '{"leftSidebarWidth":360}'
+    );
+    api.load.mockResolvedValue(
+      snapshot({
+        'appearance.leftSidebarWidth': 300,
+        'appearance.sortStrategy': 'created',
+        'ui.leftSidebarOpen': true
+      })
+    );
+    await store.refreshNativeSettings();
+    expect(state.ui.leftSidebarWidth).toBe(300);
+    expect(state.ui.leftSidebarOpen).toBe(true);
+    expect(state.ui.sortStrategy).toBe('created');
+  });
+
+  it('restores canonical sidebar state and shows feedback after a failed save', async () => {
+    const store = await import('./store.svelte');
+    const state = await import('$lib/state.svelte');
+    const { toasts } = await import('$lib/components/toast.svelte');
+    await store.setSettingsVaultId('default');
+    api.patch.mockRejectedValueOnce(new Error('root busy'));
+    api.load.mockResolvedValueOnce(
+      snapshot({ 'appearance.leftSidebarWidth': 310 })
+    );
+    await expect(state.setLeftSidebarWidth(330)).rejects.toThrow('root busy');
+    expect(state.ui.leftSidebarWidth).toBe(310);
+    expect(toasts.items.at(-1)?.variant).toBe('error');
   });
 });

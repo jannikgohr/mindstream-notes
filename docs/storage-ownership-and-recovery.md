@@ -18,6 +18,18 @@ the revision, so caches accept that refreshed snapshot. Cross-worker broadcast
 is pending coordinator implementation. Other browser persistence consumers
 still need migration before each worker can use an isolated WebView store.
 
+Native sidebar widths use root fields `appearance.leftSidebarWidth` and
+`appearance.rightSidebarWidth`. Sorting, direction, and sidebar open/closed
+state use vault fields. The legacy unscoped preferences bucket seeds those vault
+fields only for the selected legacy vault; a root `.ui-preferences-migrated`
+record prevents later vaults from inheriting it. Existing fields win. Required
+malformed inputs or invalid records block initialization. The original browser
+bucket remains unchanged. A former root sort-strategy value moves to the
+selected vault before removing it from the root, retaining a previous copy.
+Recovery of that old root copy cannot reseed another vault's sorting preference.
+Native UI setters patch one field, refreshes update the live sidebar/sort state,
+and failed saves restore canonical values and show an error toast.
+
 Release retains its historical data root and credential service. Dev uses the
 `.dev` bundle identity and a persistent separate root. Test roots and browser
 folders are explicit; all three real-app harnesses set both. Accounts remain

@@ -32,6 +32,12 @@ static SCOPES: LazyLock<BTreeMap<String, bool>> = LazyLock::new(|| {
 });
 
 fn device_scope(id: &str) -> bool {
+    if matches!(
+        id,
+        "appearance.leftSidebarWidth" | "appearance.rightSidebarWidth"
+    ) {
+        return true;
+    }
     // Dynamic command bindings are device preferences. Unknown/plugin entries
     // stay with their vault until their separate persistence owner migrates them.
     SCOPES
@@ -73,7 +79,15 @@ fn decode(raw: &[u8], device: bool) -> AppResult<Document> {
     }
     let document: Document = serde_json::from_slice(raw).map_err(|_| invalid())?;
     validate_values(&document.values)?;
-    if document.version != 1 || document.values.keys().any(|id| device_scope(id) != device) {
+    for (id, value) in &document.values {
+        validate_preference(id, value)?;
+    }
+    if document.version != 1
+        || document
+            .values
+            .keys()
+            .any(|id| device_scope(id) != device && !(device && id == "appearance.sortStrategy"))
+    {
         return Err(invalid());
     }
     Ok(document)
@@ -130,12 +144,13 @@ fn snapshot(device: Document, vault: Document) -> Snapshot {
     }
 }
 
-fn initialize(
+fn initialize_with_preferences(
     root: &Path,
     vault: &Path,
     vault_id: &str,
     device_raw: Option<&str>,
     vault_raw: Option<&str>,
+    preferences_raw: Option<&str>,
 ) -> AppResult<Snapshot> {
     let _lock = RootLock::acquire(root)?;
     let device_path = root.join("ui-settings.json");
@@ -152,7 +167,7 @@ fn initialize(
         } else {
             Values::new()
         };
-    let device = if need_device {
+    let mut device = if need_device {
         Document {
             version: 1,
             revision: 0,
@@ -165,7 +180,7 @@ fn initialize(
     } else {
         read(&device_path, true)?
     };
-    let vault_doc = if need_vault {
+    let mut vault_doc = if need_vault {
         let values = if vault_raw.is_some() {
             legacy(vault_raw)?
         } else if vault_id == "default" {
@@ -184,18 +199,97 @@ fn initialize(
     } else {
         read(&vault_path, false)?
     };
-    if need_device {
-        save(&device_path, &device, true)?;
+    let preferences_marker = root.join(".ui-preferences-migrated");
+    let need_preferences = match fs::read(&preferences_marker) {
+        Ok(raw) if raw == b"1" => false,
+        Ok(_) => {
+            return Err(AppError::InvalidArg(
+                "invalid UI preferences migration record".into(),
+            ))
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
+        Err(err) => return Err(err.into()),
+    };
+    let mut device_changed = false;
+    let mut vault_changed = false;
+    if let Some(sort) = device.values.remove("appearance.sortStrategy") {
+        device_changed = true;
+        if need_preferences && !vault_doc.values.contains_key("appearance.sortStrategy") {
+            vault_doc
+                .values
+                .insert("appearance.sortStrategy".into(), sort);
+            vault_changed = true;
+        }
     }
-    if need_vault {
+    if need_preferences {
+        let preferences = legacy(preferences_raw)?;
+        for (key, id, is_device) in [
+            ("leftSidebarWidth", "appearance.leftSidebarWidth", true),
+            ("rightSidebarWidth", "appearance.rightSidebarWidth", true),
+            ("leftSidebarOpen", "ui.leftSidebarOpen", false),
+            ("rightSidebarOpen", "ui.rightSidebarOpen", false),
+            ("sortStrategy", "appearance.sortStrategy", false),
+            ("sortDirection", "ui.sortDirection", false),
+        ] {
+            if let Some(value) = preferences.get(key) {
+                validate_preference(id, value)?;
+                let document = if is_device {
+                    &mut device
+                } else {
+                    &mut vault_doc
+                };
+                if !document.values.contains_key(id) {
+                    document.values.insert(id.into(), value.clone());
+                    if is_device {
+                        device_changed = true;
+                    } else {
+                        vault_changed = true;
+                    }
+                }
+            }
+        }
+    }
+    if device_changed && !need_device {
+        device.revision = device.revision.checked_add(1).ok_or_else(invalid)?;
+    }
+    if vault_changed && !need_vault {
+        vault_doc.revision = vault_doc.revision.checked_add(1).ok_or_else(invalid)?;
+    }
+    if need_vault || vault_changed {
         save(&vault_path, &vault_doc, false)?;
+    }
+    if need_device || device_changed {
+        save(&device_path, &device, true)?;
     }
     for path in [&device_path, &vault_path] {
         if !marker(path).try_exists()? {
             crate::atomic_file::write(&marker(path), b"1")?;
         }
     }
+    if need_preferences {
+        crate::atomic_file::write(&preferences_marker, b"1")?;
+    }
     Ok(snapshot(device, vault_doc))
+}
+
+fn validate_preference(id: &str, value: &Value) -> AppResult<()> {
+    let valid = match id {
+        "appearance.leftSidebarWidth" | "appearance.rightSidebarWidth" => value
+            .as_f64()
+            .is_some_and(|v| v.is_finite() && (0.0..=10000.0).contains(&v)),
+        "ui.leftSidebarOpen" | "ui.rightSidebarOpen" => value.is_boolean(),
+        "appearance.sortStrategy" => matches!(
+            value.as_str(),
+            Some("alphabetical" | "modified" | "created")
+        ),
+        "ui.sortDirection" => matches!(value.as_str(), Some("asc" | "desc")),
+        _ => true,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(invalid())
+    }
 }
 
 fn access(
@@ -210,6 +304,13 @@ fn access(
     recover(&vault_path, false)?;
     let mut device = read(&device_path, true)?;
     let mut content = read(&vault_path, false)?;
+    // A previous root copy can predate the completed scope correction. Keep
+    // that legacy field out of all snapshots; the one-time migration already
+    // copied it to its owner. The recovery copy retains its original bytes.
+    if device.values.remove("appearance.sortStrategy").is_some() {
+        device.revision = device.revision.checked_add(1).ok_or_else(invalid)?;
+        save(&device_path, &device, true)?;
+    }
     if let Some((id, value)) = patch {
         if id.is_empty() || id.len() > 512 {
             return Err(invalid());
@@ -217,6 +318,7 @@ fn access(
         let is_device = device_scope(&id);
         let document = if is_device { &mut device } else { &mut content };
         if let Some(value) = value {
+            validate_preference(&id, &value)?;
             document.values.insert(id, value);
         } else {
             document.values.remove(&id);
@@ -250,15 +352,17 @@ pub async fn initialize_ui_settings(
     expected_vault_id: String,
     device_raw: Option<String>,
     vault_raw: Option<String>,
+    preferences_raw: Option<String>,
 ) -> CommandResult<Snapshot> {
     let (root, vault) = context(&app, &expected_vault_id)?;
     Ok(tauri::async_runtime::spawn_blocking(move || {
-        initialize(
+        initialize_with_preferences(
             &root,
             &vault,
             &expected_vault_id,
             device_raw.as_deref(),
             vault_raw.as_deref(),
+            preferences_raw.as_deref(),
         )
     })
     .await
@@ -301,6 +405,15 @@ pub async fn patch_ui_setting(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn initialize(
+        root: &Path,
+        vault: &Path,
+        id: &str,
+        device: Option<&str>,
+        content: Option<&str>,
+    ) -> AppResult<Snapshot> {
+        initialize_with_preferences(root, vault, id, device, content, None)
+    }
     struct TestDirs {
         root: std::path::PathBuf,
         a: std::path::PathBuf,
@@ -440,5 +553,138 @@ mod tests {
         )
         .is_err());
         assert!(!dirs.root.join("ui-settings.json").exists());
+    }
+
+    #[test]
+    fn unscoped_preferences_seed_only_selected_legacy_vault_and_widths_are_shared() {
+        let dirs = TestDirs::new();
+        let raw = r#"{"leftSidebarWidth":320,"rightSidebarWidth":280,"leftSidebarOpen":false,"rightSidebarOpen":true,"sortStrategy":"modified","sortDirection":"desc","unknown":"retained in browser"}"#;
+        let a = initialize_with_preferences(&dirs.root, &dirs.a, "default", None, None, Some(raw))
+            .unwrap();
+        assert_eq!(a.values["appearance.leftSidebarWidth"], 320);
+        assert_eq!(a.values["appearance.sortStrategy"], "modified");
+        assert_eq!(a.values["ui.leftSidebarOpen"], false);
+        let b = initialize_with_preferences(
+            &dirs.root,
+            &dirs.b,
+            "other",
+            None,
+            None,
+            Some("corrupt ignored source"),
+        )
+        .unwrap();
+        assert_eq!(b.values["appearance.leftSidebarWidth"], 320);
+        assert!(!b.values.contains_key("appearance.sortStrategy"));
+        assert!(!b.values.contains_key("ui.leftSidebarOpen"));
+        access(
+            &dirs.root,
+            &dirs.b,
+            Some((
+                "appearance.rightSidebarWidth".into(),
+                Some(Value::from(300)),
+            )),
+        )
+        .unwrap();
+        access(
+            &dirs.root,
+            &dirs.b,
+            Some((
+                "appearance.sortStrategy".into(),
+                Some(Value::from("created")),
+            )),
+        )
+        .unwrap();
+        let a = access(&dirs.root, &dirs.a, None).unwrap();
+        assert_eq!(a.values["appearance.rightSidebarWidth"], 300);
+        assert_eq!(a.values["appearance.sortStrategy"], "modified");
+        assert_eq!(a.values["ui.sortDirection"], "desc");
+    }
+
+    #[test]
+    fn malformed_preferences_and_marker_refuse_publication_and_invalid_patches_preserve_values() {
+        let dirs = TestDirs::new();
+        for raw in [
+            "broken",
+            "[]",
+            r#"{"leftSidebarOpen":"false"}"#,
+            r#"{"sortStrategy":"invalid"}"#,
+        ] {
+            assert!(initialize_with_preferences(
+                &dirs.root,
+                &dirs.a,
+                "default",
+                None,
+                None,
+                Some(raw)
+            )
+            .is_err());
+            assert!(!dirs.root.join("ui-settings.json").exists());
+            assert!(!dirs.a.join("content-settings.json").exists());
+            assert!(!dirs.root.join(".ui-preferences-migrated").exists());
+        }
+        initialize(&dirs.root, &dirs.a, "default", None, None).unwrap();
+        let previous = fs::read(dirs.a.join("content-settings.json")).unwrap();
+        assert!(access(
+            &dirs.root,
+            &dirs.a,
+            Some((
+                "appearance.sortStrategy".into(),
+                Some(Value::from("invalid"))
+            ))
+        )
+        .is_err());
+        assert_eq!(
+            fs::read(dirs.a.join("content-settings.json")).unwrap(),
+            previous
+        );
+        fs::write(dirs.root.join(".ui-preferences-migrated"), b"broken marker").unwrap();
+        assert!(initialize(&dirs.root, &dirs.a, "default", None, None).is_err());
+        assert_eq!(
+            fs::read(dirs.root.join(".ui-preferences-migrated")).unwrap(),
+            b"broken marker"
+        );
+    }
+
+    #[test]
+    fn existing_documents_win_and_previous_root_sort_scope_is_corrected_without_leaking() {
+        let dirs = TestDirs::new();
+        let device_path = dirs.root.join("ui-settings.json");
+        let mut values = Values::new();
+        values.insert("appearance.sortStrategy".into(), Value::from("created"));
+        values.insert("appearance.leftSidebarWidth".into(), Value::from(290));
+        save(
+            &device_path,
+            &Document {
+                version: 1,
+                revision: 4,
+                values,
+            },
+            true,
+        )
+        .unwrap();
+        let raw = r#"{"leftSidebarWidth":350,"sortStrategy":"modified"}"#;
+        let a = initialize_with_preferences(&dirs.root, &dirs.a, "default", None, None, Some(raw))
+            .unwrap();
+        assert_eq!(a.values["appearance.sortStrategy"], "created");
+        assert_eq!(a.values["appearance.leftSidebarWidth"], 290);
+        assert_eq!(a.device_revision, 5);
+        assert!(!read(&device_path, true)
+            .unwrap()
+            .values
+            .contains_key("appearance.sortStrategy"));
+        let b = initialize(&dirs.root, &dirs.b, "other", None, None).unwrap();
+        assert!(!b.values.contains_key("appearance.sortStrategy"));
+        // Recovery of the old root copy must pass through scope correction.
+        fs::write(&device_path, b"corrupt").unwrap();
+        let recovered = access(&dirs.root, &dirs.b, None).unwrap();
+        assert!(!recovered.values.contains_key("appearance.sortStrategy"));
+        assert_eq!(
+            access(&dirs.root, &dirs.a, None).unwrap().values["appearance.sortStrategy"],
+            "created"
+        );
+        assert!(!read(&device_path, true)
+            .unwrap()
+            .values
+            .contains_key("appearance.sortStrategy"));
     }
 }

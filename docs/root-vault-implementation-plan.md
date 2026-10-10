@@ -270,6 +270,26 @@ broadcasts. Duplicate vault
 launches currently refuse startup; focusing an existing owner requires Phase 2.
 Older binaries without locks remain unsafe against the same physical vault.
 
+Mixed UI preferences slice on 2026-10-10: sidebar widths now use root document
+fields; sorting and sidebar open/closed state use vault fields. Migration seeds
+unscoped content preferences only into the selected legacy vault and records
+completion at the root, retaining the browser source. Existing fields win and
+malformed inputs/records refuse initialization. The schema's old device scope
+for sort strategy is corrected; an existing root value moves to the selected
+vault before source removal, and a recovered old root copy cannot leak sorting
+into a different vault. Native sidebar/sort setters patch individual fields;
+canonical snapshot refresh updates the live UI, and failures restore values and
+show localized feedback. Browser preview behavior remains unchanged.
+
+Windows validation for mixed preferences: Rust fmt/clippy and the full serial
+suite pass 760 unit tests and one integration test, with three ignored tests.
+Focused settings/preferences/state/profile/registry/hotkey checks pass 167
+frontend tests. Svelte, affected ESLint, and localization checks pass. The native
+dev app saved sort strategy and sidebar visibility to the vault while resizing
+the right sidebar to 330 pixels updated the root. A WebView reload restored the
+hidden left sidebar and shared width. Logs are under
+`.output/preferences-app-check`; this is not a reboot durability check.
+
 ## Phase 2: coordination and simultaneous vaults
 
 Estimate: 5 to 7 working days, plus changes required by the spike.

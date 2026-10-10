@@ -1,6 +1,7 @@
 {
   "language": "en",
   "ui": {
+    "preferences.saveFailed": "Could not save this preference. Please try again.",
     "boot.loading": "Loading…",
     "boot.error.title": "Couldn't load the app",
     "boot.error.message": "Something went wrong while starting Mindstream Notes.",

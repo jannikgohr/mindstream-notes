@@ -1,6 +1,7 @@
 {
   "language": "de",
   "ui": {
+    "preferences.saveFailed": "Diese Einstellung konnte nicht gespeichert werden. Bitte versuche es erneut.",
     "boot.loading": "Wird geladen…",
     "boot.error.title": "App konnte nicht geladen werden",
     "boot.error.message": "Beim Starten von Mindstream Notes ist ein Fehler aufgetreten.",

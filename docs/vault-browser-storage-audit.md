@@ -31,7 +31,7 @@ application sources. Browser libraries/caches still need a runtime inventory.
 | Hotkey settings, including dynamic command bindings                       | `hotkeys/store.svelte.ts`, `hotkeys/migrations.ts`, settings store                                  | Device settings. Migrate legacy command IDs, publish one root revision, and give the coordinator authoritative bindings. No per-window global registration.                                                                                                                   |
 | Plugin settings                                                           | `plugins/settings-store.svelte.ts`, `plugins/settings-bridge.ts`, `api/plugins.ts`                  | Already stored in the vault DB. Device-scoped plugin values move in the separate global-plugins project. Preserve enabled/approved state per vault.                                                                                                                           |
 
-The pinned schema currently declares 29 device-scoped settings and 41
+The pinned schema currently declares 28 device-scoped settings and 42
 vault-scoped settings, with additional action/custom entries. Dynamic account
 and hotkey/plugin IDs require their existing resolver rules. Counting schema
 entries is not proof that browser state is isolated.
@@ -46,6 +46,15 @@ remain intact. Account preferences require the matching vault bucket, except
 the default vault's historical unscoped fallback. Focus and same-worker events
 reload canonical settings; cross-worker broadcast remains pending. This covers
 the schema store only, not the other browser consumers listed above.
+
+The mixed `notes-app:preferences:v1` bucket is also migrated in native builds.
+Sidebar widths use root fields; sort strategy/direction and sidebar open state
+use vault fields. Existing documents win, and the unscoped content preferences
+seed only the first selected legacy vault. Native writes leave that browser
+bucket intact and patch individual document fields. Live UI state refreshes
+with the canonical snapshot; failed writes roll back and show feedback. The
+schema's sort-strategy scope changed from device to vault, with compatibility
+for the preceding root document and recovery copies.
 
 On 2026-10-10 native collaboration signing material moved to
 `<vault>/collab-signing-credentials.json`, encrypted with ChaCha20-Poly1305 and

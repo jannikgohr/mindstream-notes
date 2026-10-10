@@ -7,8 +7,14 @@
 import {
   DEFAULT_PREFERENCES,
   loadPreferences,
-  savePreferences
+  savePreferences,
+  normalizePreferences,
+  UI_PREFERENCE_IDS,
+  type Preferences
 } from './preferences';
+import { isTauri } from '$lib/api/core';
+import { pushToast } from '$lib/components/toast.svelte';
+import { tUi } from '$lib/settings/i18n.svelte';
 import type { SortDirection, SortStrategy } from './sort';
 
 const initialPrefs = loadPreferences();
@@ -34,48 +40,85 @@ export const ui = $state<UiState>({
   activeNoteId: null
 });
 
+let nativeWriter: ((id: string, value: unknown) => Promise<void>) | null = null;
+
+export function registerNativeUiPreferenceWriter(
+  writer: (id: string, value: unknown) => Promise<void>
+): void {
+  nativeWriter = writer;
+}
+
+export function applyNativeUiPreferences(
+  values: Record<string, unknown>
+): void {
+  const raw = Object.fromEntries(
+    Object.entries(UI_PREFERENCE_IDS).map(([key, id]) => [key, values[id]])
+  );
+  Object.assign(ui, normalizePreferences(raw));
+}
+
+function setPreference<K extends keyof Preferences>(
+  key: K,
+  value: Preferences[K]
+): Promise<void> {
+  const preferences: Preferences = ui;
+  const previous = preferences[key];
+  preferences[key] = value;
+  if (!isTauri()) {
+    persistUi();
+    return Promise.resolve();
+  }
+  const task = nativeWriter
+    ? nativeWriter(UI_PREFERENCE_IDS[key], value)
+    : Promise.reject(new Error('UI preferences have not initialized'));
+  // Event callbacks can ignore the returned promise; bindings await it. Both
+  // paths get rollback and visible feedback without an unhandled rejection.
+  void task.catch((err) => {
+    if (!nativeWriter && preferences[key] === value)
+      preferences[key] = previous;
+    console.error('[preferences] field save failed', key, err);
+    pushToast(tUi('preferences.saveFailed'), {
+      variant: 'error'
+    });
+  });
+  return task;
+}
+
 export function setActiveNote(id: string | null) {
   ui.activeNoteId = id;
 }
 
 export function toggleLeftSidebar() {
-  ui.leftSidebarOpen = !ui.leftSidebarOpen;
-  persistUi();
+  return setPreference('leftSidebarOpen', !ui.leftSidebarOpen);
 }
 
 export function toggleRightSidebar() {
-  ui.rightSidebarOpen = !ui.rightSidebarOpen;
-  persistUi();
+  return setPreference('rightSidebarOpen', !ui.rightSidebarOpen);
 }
 
 export function openRightSidebar() {
   if (ui.rightSidebarOpen) return;
-  ui.rightSidebarOpen = true;
-  persistUi();
+  return setPreference('rightSidebarOpen', true);
 }
 
 export function setLeftSidebarWidth(px: number) {
-  ui.leftSidebarWidth = px;
-  persistUi();
+  return setPreference('leftSidebarWidth', px);
 }
 
 export function setRightSidebarWidth(px: number) {
-  ui.rightSidebarWidth = px;
-  persistUi();
+  return setPreference('rightSidebarWidth', px);
 }
 
 export function setSortStrategy(s: SortStrategy) {
-  ui.sortStrategy = s;
-  persistUi();
+  return setPreference('sortStrategy', s);
 }
 
 export function setSortDirection(d: SortDirection) {
-  ui.sortDirection = d;
-  persistUi();
+  return setPreference('sortDirection', d);
 }
 
 export function toggleSortDirection() {
-  setSortDirection(ui.sortDirection === 'asc' ? 'desc' : 'asc');
+  return setSortDirection(ui.sortDirection === 'asc' ? 'desc' : 'asc');
 }
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;

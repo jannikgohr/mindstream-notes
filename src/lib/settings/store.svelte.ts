@@ -28,6 +28,11 @@
 
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { isTauri } from '$lib/api/core';
+import { UI_PREFERENCE_IDS } from '$lib/preferences';
+import {
+  applyNativeUiPreferences,
+  registerNativeUiPreferenceWriter
+} from '$lib/state.svelte';
 import { listen, TauriEventName } from '$lib/api/events';
 import {
   initializeUiSettings,
@@ -228,13 +233,18 @@ function applyNativeSnapshot(snapshot: UiSettingsSnapshot): void {
   // Bindings and optimistic writes keep their own in-flight state. A refresh
   // can restore an older revision after recovery, so do not reject it by number.
   for (const id of Object.keys(previous)) {
-    if (id in SETTING_BINDINGS || nativePending.has(id))
+    if (
+      (id in SETTING_BINDINGS &&
+        !Object.values(UI_PREFERENCE_IDS).includes(id)) ||
+      nativePending.has(id)
+    )
       values[id] = previous[id];
   }
   for (const id of nativePending.keys()) {
     if (!(id in previous)) delete values[id];
   }
   settings.values = values;
+  applyNativeUiPreferences(values);
 }
 
 export async function refreshNativeSettings(): Promise<void> {
@@ -275,7 +285,8 @@ export async function setSettingsVaultId(id: string): Promise<void> {
       const snapshot = await initializeUiSettings(
         next,
         localStorage.getItem(DEVICE_STORAGE_KEY),
-        localStorage.getItem(vaultStorageKey(next))
+        localStorage.getItem(vaultStorageKey(next)),
+        localStorage.getItem('notes-app:preferences:v1')
       );
       applyNativeSnapshot(snapshot);
       startNativeListeners();
@@ -350,6 +361,15 @@ async function writeNativeSetting(
     }
   }
 }
+
+registerNativeUiPreferenceWriter(async (id, value) => {
+  try {
+    await writeNativeSetting(id, value);
+  } catch (err) {
+    applyNativeUiPreferences(settings.values);
+    throw err;
+  }
+});
 
 /**
  * Pull binding-backed settings into the cache. Errors are logged and

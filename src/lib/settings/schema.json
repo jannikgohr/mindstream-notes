@@ -174,7 +174,7 @@
           "settings": [
             {
               "id": "appearance.sortStrategy",
-              "scope": "D",
+              "scope": "V",
               "type": "radio",
               "default": "alphabetical",
               "options": ["alphabetical", "modified", "created"]

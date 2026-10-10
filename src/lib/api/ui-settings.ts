@@ -27,11 +27,12 @@ function nativeOnly(): never {
 export function initializeUiSettings(
   expectedVaultId: string,
   deviceRaw: string | null,
-  vaultRaw: string | null
+  vaultRaw: string | null,
+  preferencesRaw: string | null
 ): Promise<UiSettingsSnapshot> {
   return invokeOrFallback(
     TauriCommandName.InitializeUiSettings,
-    { expectedVaultId, deviceRaw, vaultRaw },
+    { expectedVaultId, deviceRaw, vaultRaw, preferencesRaw },
     nativeOnly,
     parseSnapshot
   );
