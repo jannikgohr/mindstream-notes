@@ -17,6 +17,7 @@ pub mod assets;
 mod atomic_file;
 pub mod auth;
 pub mod backup;
+pub mod browser_archive;
 pub mod client_errors;
 pub mod collab_events;
 pub mod collections;

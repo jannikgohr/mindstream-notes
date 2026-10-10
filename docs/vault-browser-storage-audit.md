@@ -95,6 +95,19 @@ keeps its existing localStorage fallback. Export of legacy keys for accounts in
 unopened vaults remains required before WebView store isolation; this lazy import
 does not complete that export. Generic root snapshots must exclude private keys.
 
+Encrypted export storage is implemented in `browser_archive.rs`. It preserves
+raw values from known app origins in one versioned ciphertext archive, including
+unknown keys and unopened accounts. The OS keystore holds a separate migration
+key; both its identity and authenticated encryption bind to the environment and
+canonical root. Private values have no Debug implementation and serialized
+plaintext/key buffers are zeroed. Root locking, atomic publication and validated
+previous copies cover updates before an origin is sealed. An immutable receipt
+binds each sealed origin to its capture checksum. Recovery refuses an older
+archive that lacks a completed capture. A missing keystore key cannot be replaced
+when ciphertext or completion receipts exist. This is the storage component;
+coordinator-driven legacy WebView export and per-vault classification are still
+pending. Production startup continues to use its existing browser store.
+
 ## Migration sequence
 
 1. Acquire environment/root migration ownership before opening the legacy

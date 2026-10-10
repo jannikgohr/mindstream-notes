@@ -297,6 +297,20 @@ and retry, malformed evidence, later deletion/unfavourite, and deleted owners.
 Windows Rust fmt/clippy and the serial full suite pass 772 unit tests and one
 integration test, with three ignored tests. Focused frontend checks pass 56 tests;
 Svelte diagnostics are clean and affected ESLint has no errors.
+
+Browser archive storage slice on 2026-10-11: root storage retains encrypted raw
+WebView exports, with a separate OS-keystore migration key bound to environment
+and canonical root. Captures are origin-specific and retain unopened accounts,
+unknown plugin values and malformed bytes. Immutable per-origin completion
+receipts prevent recapture after isolation. Atomic updates and recovery validate
+checksums and every completed capture; missing keys, missing completed archives,
+invalid receipts and incompatible previous copies require recovery. Key creation
+before first publication, export-before-seal interruption and retries are tested.
+The hidden export window and coordinator hookup remain pending; production
+startup still uses its existing browser store.
+Windows Rust fmt/clippy and the serial full suite pass 779 unit tests and one
+integration test, with four ignored tests. The new real-keystore export test was
+run explicitly and passed using disposable Windows Credential Manager entries.
 Older binaries without locks remain unsafe against the same physical vault.
 
 Mixed UI preferences slice on 2026-10-10: sidebar widths now use root document
