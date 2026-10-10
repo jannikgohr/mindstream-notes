@@ -295,23 +295,246 @@ fn apply_pending_restore_swaps_db_and_saves_a_safety_copy() {
     let live = app_data.join("mindstream.db");
     let pending = app_data.join(PENDING_DB_FILE);
     let sentinel = app_data.join(SENTINEL_FILE);
-    fs::write(&live, b"old").unwrap();
-    fs::write(&pending, b"new").unwrap();
+    restore_fixture(&app_data, "mindstream.db", "old")
+        .close()
+        .unwrap();
+    restore_fixture(&app_data, PENDING_DB_FILE, "new")
+        .close()
+        .unwrap();
     fs::write(&sentinel, b"").unwrap();
 
     apply_pending_restore(&app_data, &pending, &sentinel).unwrap();
 
-    assert_eq!(fs::read(&live).unwrap(), b"new", "pending DB is now live");
+    assert_eq!(restore_probe(&live), "new", "pending DB is now live");
     assert!(!pending.exists(), "pending consumed");
     assert!(!sentinel.exists(), "sentinel cleared");
-    let safety = fs::read_dir(&app_data).unwrap().flatten().any(|e| {
+    let safety = fs::read_dir(&app_data).unwrap().flatten().find(|e| {
         e.file_name()
             .to_string_lossy()
             .starts_with("mindstream-pre-restore-")
     });
-    assert!(safety, "a timestamped safety copy of the old DB was made");
+    assert_eq!(restore_probe(&safety.unwrap().path()), "old");
 
     fs::remove_dir_all(&app_data).ok();
+}
+
+fn restore_fixture(dir: &Path, filename: &str, value: &str) -> Connection {
+    let conn = open_fresh_disk_db(dir, filename);
+    conn.execute("CREATE TABLE restore_probe (value TEXT NOT NULL)", [])
+        .unwrap();
+    conn.execute("INSERT INTO restore_probe VALUES (?1)", params![value])
+        .unwrap();
+    conn
+}
+
+fn restore_probe(path: &Path) -> String {
+    Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .unwrap()
+        .query_row("SELECT value FROM restore_probe", [], |row| row.get(0))
+        .unwrap()
+}
+
+fn restore_root() -> PathBuf {
+    let root = std::env::temp_dir().join(format!("ms-restore-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&root).unwrap();
+    root
+}
+
+#[test]
+fn crashed_restore_wal_writer() {
+    // Invoked in a subprocess below. Exit skips Connection::drop, leaving the
+    // committed WAL in place exactly as an application crash would.
+    let Some(root) = std::env::var_os("MINDSTREAM_TEST_RESTORE_WAL_DIR") else {
+        return;
+    };
+    let conn = restore_fixture(Path::new(&root), "mindstream.db", "before");
+    conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+    conn.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+    conn.execute("UPDATE restore_probe SET value = 'committed in WAL'", [])
+        .unwrap();
+    std::process::exit(0);
+}
+
+#[test]
+fn restore_safety_copy_preserves_commits_from_a_crashed_wal_writer() {
+    let root = restore_root();
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "backup::tests::crashed_restore_wal_writer",
+            "--nocapture",
+        ])
+        .env("MINDSTREAM_TEST_RESTORE_WAL_DIR", &root)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert!(fs::metadata(root.join("mindstream.db-wal")).unwrap().len() > 0);
+    restore_fixture(&root, PENDING_DB_FILE, "replacement")
+        .close()
+        .unwrap();
+    fs::write(root.join(SENTINEL_FILE), b"pending").unwrap();
+    reconcile_pending_restore(&root).unwrap();
+    assert_eq!(restore_probe(&root.join("mindstream.db")), "replacement");
+    let safety = fs::read_dir(&root)
+        .unwrap()
+        .flatten()
+        .find(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("mindstream-pre-restore-")
+        })
+        .unwrap()
+        .path();
+    assert_eq!(restore_probe(&safety), "committed in WAL");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn restore_refuses_a_busy_database_without_moving_live_data() {
+    let root = restore_root();
+    let writer = restore_fixture(&root, "mindstream.db", "before");
+    writer.pragma_update(None, "journal_mode", "WAL").unwrap();
+    let reader = Connection::open(root.join("mindstream.db")).unwrap();
+    reader
+        .execute_batch("BEGIN; SELECT * FROM restore_probe;")
+        .unwrap();
+    writer
+        .execute("UPDATE restore_probe SET value = 'uncheckpointed'", [])
+        .unwrap();
+    restore_fixture(&root, PENDING_DB_FILE, "replacement")
+        .close()
+        .unwrap();
+    fs::write(root.join(SENTINEL_FILE), b"pending").unwrap();
+    assert!(reconcile_pending_restore(&root).is_err());
+    assert!(root.join("mindstream.db").exists());
+    assert!(root.join(PENDING_DB_FILE).exists());
+    assert!(root.join(SENTINEL_FILE).exists());
+    assert_eq!(restore_probe(&root.join("mindstream.db")), "uncheckpointed");
+    reader.execute_batch("ROLLBACK").unwrap();
+    reader.close().unwrap();
+    writer.close().unwrap();
+    reconcile_pending_restore(&root).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn invalid_pending_restore_preserves_live_database_and_marker() {
+    let root = restore_root();
+    restore_fixture(&root, "mindstream.db", "original")
+        .close()
+        .unwrap();
+    fs::write(root.join(PENDING_DB_FILE), b"not SQLite").unwrap();
+    fs::write(root.join(SENTINEL_FILE), b"pending").unwrap();
+    assert!(reconcile_pending_restore(&root).is_err());
+    assert_eq!(restore_probe(&root.join("mindstream.db")), "original");
+    assert_eq!(fs::read(root.join(SENTINEL_FILE)).unwrap(), b"pending");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn missing_pending_restore_does_not_clear_marker_or_create_database() {
+    let root = restore_root();
+    fs::write(root.join(SENTINEL_FILE), b"pending").unwrap();
+    assert!(reconcile_pending_restore(&root).is_err());
+    assert!(root.join(SENTINEL_FILE).exists());
+    assert!(!root.join("mindstream.db").exists());
+    assert!(!root.join(PENDING_DB_FILE).exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn restore_resumes_after_each_database_move_and_phase_write() {
+    use super::restore::{restore_file_hash, RestoreOperation, RestorePhase};
+
+    // Crashes before/after writing OldPreserved, and before/after Installed.
+    for boundary in 0..4 {
+        let root = restore_root();
+        let safety_filename = "mindstream-pre-restore-interrupted.db";
+        restore_fixture(&root, safety_filename, "original")
+            .close()
+            .unwrap();
+        restore_fixture(&root, PENDING_DB_FILE, "replacement")
+            .close()
+            .unwrap();
+        let hash = restore_file_hash(&root.join(PENDING_DB_FILE)).unwrap();
+        if boundary >= 2 {
+            fs::rename(root.join(PENDING_DB_FILE), root.join("mindstream.db")).unwrap();
+        }
+        let phase = match boundary {
+            0 => RestorePhase::Prepared,
+            1 | 2 => RestorePhase::OldPreserved,
+            _ => RestorePhase::Installed,
+        };
+        RestoreOperation {
+            format_version: 1,
+            phase,
+            safety_filename: Some(safety_filename.into()),
+            pending_sha256: hash,
+        }
+        .save(&root.join(SENTINEL_FILE))
+        .unwrap();
+        reconcile_pending_restore(&root).unwrap();
+        reconcile_pending_restore(&root).unwrap();
+        assert_eq!(restore_probe(&root.join("mindstream.db")), "replacement");
+        assert_eq!(restore_probe(&root.join(safety_filename)), "original");
+        assert!(!root.join(SENTINEL_FILE).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn restore_rejects_mismatched_installed_database_without_clearing_recovery_state() {
+    use super::restore::{restore_file_hash, RestoreOperation, RestorePhase};
+    let root = restore_root();
+    restore_fixture(&root, "mindstream.db", "unexpected")
+        .close()
+        .unwrap();
+    restore_fixture(&root, "expected.db", "expected")
+        .close()
+        .unwrap();
+    RestoreOperation {
+        format_version: 1,
+        phase: RestorePhase::OldPreserved,
+        safety_filename: None,
+        pending_sha256: restore_file_hash(&root.join("expected.db")).unwrap(),
+    }
+    .save(&root.join(SENTINEL_FILE))
+    .unwrap();
+    assert!(reconcile_pending_restore(&root).is_err());
+    assert!(root.join(SENTINEL_FILE).exists());
+    assert_eq!(restore_probe(&root.join("mindstream.db")), "unexpected");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn restore_retains_unexpected_wal_even_when_main_file_hash_matches() {
+    use super::restore::{restore_file_hash, RestoreOperation, RestorePhase};
+    let root = restore_root();
+    let writer = restore_fixture(&root, "mindstream.db", "expected");
+    writer.pragma_update(None, "journal_mode", "WAL").unwrap();
+    let hash = restore_file_hash(&root.join("mindstream.db")).unwrap();
+    writer
+        .execute("UPDATE restore_probe SET value = 'later WAL commit'", [])
+        .unwrap();
+    RestoreOperation {
+        format_version: 1,
+        phase: RestorePhase::Installed,
+        safety_filename: None,
+        pending_sha256: hash.clone(),
+    }
+    .save(&root.join(SENTINEL_FILE))
+    .unwrap();
+    assert_eq!(
+        restore_file_hash(&root.join("mindstream.db")).unwrap(),
+        hash
+    );
+    let wal = fs::read(root.join("mindstream.db-wal")).unwrap();
+    assert!(reconcile_pending_restore(&root).is_err());
+    assert!(root.join(SENTINEL_FILE).exists());
+    assert_eq!(fs::read(root.join("mindstream.db-wal")).unwrap(), wal);
+    writer.close().unwrap();
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

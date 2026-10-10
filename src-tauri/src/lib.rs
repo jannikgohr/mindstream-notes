@@ -14,6 +14,7 @@
 pub mod app_events;
 pub mod app_restart;
 pub mod assets;
+mod atomic_file;
 pub mod auth;
 pub mod backup;
 pub mod client_errors;
@@ -292,7 +293,7 @@ pub fn run() {
             // session BEFORE opening the live DB. If the sentinel
             // file is present, we move the live DB aside and swap the
             // staged copy into place. No-op when nothing's pending.
-            backup::apply_pending_restore_if_any(app.handle());
+            backup::apply_pending_restore_if_any(app.handle())?;
 
             let db_path = app_data.join("mindstream.db");
             log::info!("[boot] db path = {}", db_path.display());

@@ -53,10 +53,25 @@ impl DesktopSettings {
         let path = crate::paths::app_data_dir(app)
             .map_err(CommandError::from)?
             .join(SETTINGS_FILE);
-        let file = fs::read_to_string(&path)
-            .ok()
-            .and_then(|raw| serde_json::from_str::<DesktopSettingsFile>(&raw).ok())
-            .unwrap_or_default();
+        Self::load_from_path(path)
+    }
+
+    fn load_from_path(path: PathBuf) -> CommandResult<Self> {
+        let file = match fs::read(&path) {
+            Ok(raw) => serde_json::from_slice::<DesktopSettingsFile>(&raw).map_err(|e| {
+                CommandError::new(
+                    CommandErrorCode::InvalidArgument,
+                    format!("desktop settings corrupt at {}: {e}", path.display()),
+                )
+            })?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => DesktopSettingsFile::default(),
+            Err(e) => {
+                return Err(CommandError::new(
+                    CommandErrorCode::Io,
+                    format!("read desktop settings at {}: {e}", path.display()),
+                ));
+            }
+        };
         Ok(Self {
             close_to_tray: AtomicBool::new(file.close_to_tray),
             start_in_tray: AtomicBool::new(file.start_in_tray),
@@ -139,7 +154,7 @@ impl DesktopSettings {
                 format!("serialize desktop settings: {e}"),
             )
         })?;
-        fs::write(&self.path, json).map_err(|e| {
+        crate::atomic_file::write(&self.path, json.as_bytes()).map_err(|e| {
             CommandError::new(CommandErrorCode::Io, format!("write desktop settings: {e}"))
         })
     }
@@ -268,4 +283,44 @@ pub fn set_desktop_theme_mode(
 ) -> CommandResult<()> {
     settings.set_theme_mode(mode);
     settings.save()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn corrupt_settings_are_reported_without_overwriting_them() {
+        let root = std::env::temp_dir().join(format!("ms-desktop-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(SETTINGS_FILE);
+        fs::write(&path, b"{broken").unwrap();
+        let err = DesktopSettings::load_from_path(path.clone()).err().unwrap();
+        assert_eq!(err.code, CommandErrorCode::InvalidArgument);
+        assert_eq!(fs::read(path).unwrap(), b"{broken");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn only_missing_settings_use_defaults() {
+        let root = std::env::temp_dir().join(format!("ms-desktop-{}", uuid::Uuid::new_v4()));
+        let path = root.join(SETTINGS_FILE);
+        let settings = DesktopSettings::load_from_path(path.clone()).unwrap();
+        assert!(!settings.close_to_tray());
+        settings.set_close_to_tray(true);
+        settings.save().unwrap();
+        let loaded = DesktopSettings::load_from_path(path).unwrap();
+        assert!(loaded.close_to_tray());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unreadable_settings_are_not_treated_as_missing() {
+        let root = std::env::temp_dir().join(format!("ms-desktop-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let err = DesktopSettings::load_from_path(root.clone()).err().unwrap();
+        assert_eq!(err.code, CommandErrorCode::Io);
+        assert!(root.is_dir());
+        fs::remove_dir_all(root).unwrap();
+    }
 }

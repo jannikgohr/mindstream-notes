@@ -5,6 +5,8 @@
 //! live one, drop a sentinel, and let the next launch move it in.
 
 use super::*;
+use rusqlite::OpenFlags;
+use sha2::{Digest, Sha256};
 
 /// Restore-replace: sanitize sync metadata if the account mismatches,
 /// then move the staged DB into `<app_data>/pending-restore.db` and
@@ -44,7 +46,9 @@ pub fn import_restore(
         fs::remove_file(&pending_db)?;
     }
     fs::rename(&staged, &pending_db)?;
-    fs::write(&sentinel, b"pending")?;
+    crate::atomic_file::sync_file(&pending_db)?;
+    crate::atomic_file::sync_directory(&app_data)?;
+    crate::atomic_file::write(&sentinel, b"pending")?;
 
     // The staging dir's now empty of its data.db; drop the dir
     // entirely so a future import_begin doesn't sweep it later.
@@ -112,28 +116,172 @@ pub(super) fn sweep_staging_root(root: &Path) {
 }
 
 /// Run at startup *before* `Db::open`. If a previous session staged a
-/// restore, swap the pending DB into place and move the old one to a
-/// timestamped safety copy. Errors are logged but non-fatal so a
-/// botched restore doesn't keep the app from booting at all.
-pub fn apply_pending_restore_if_any(app: &AppHandle) {
-    let Ok(app_data) = crate::paths::app_data_dir(app) else {
-        return;
-    };
+/// restore, preserve the old DB and install the replacement. An unresolved
+/// restore stops boot so Db::open cannot create or migrate an ambiguous DB.
+pub fn apply_pending_restore_if_any(app: &AppHandle) -> AppResult<()> {
+    reconcile_pending_restore(&crate::paths::app_data_dir(app)?)
+}
+
+pub(super) fn reconcile_pending_restore(app_data: &Path) -> AppResult<()> {
     let sentinel = app_data.join(SENTINEL_FILE);
     let pending = app_data.join(PENDING_DB_FILE);
-    if !sentinel.exists() {
-        return;
+    match fs::metadata(&sentinel) {
+        Ok(_) => apply_pending_restore(app_data, &pending, &sentinel),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.into()),
     }
-    if !pending.exists() {
-        // Sentinel without pending — corrupted state. Clear the
-        // sentinel so we don't loop on it next boot.
-        log::warn!("[restore] sentinel present but no pending DB; clearing");
-        let _ = fs::remove_file(&sentinel);
-        return;
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum RestorePhase {
+    Prepared,
+    OldPreserved,
+    Installed,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) struct RestoreOperation {
+    pub format_version: u32,
+    pub phase: RestorePhase,
+    pub safety_filename: Option<String>,
+    pub pending_sha256: String,
+}
+
+impl RestoreOperation {
+    pub(super) fn save(&self, sentinel: &Path) -> AppResult<()> {
+        let bytes = serde_json::to_vec_pretty(self)
+            .map_err(|err| AppError::InvalidArg(format!("serialize restore operation: {err}")))?;
+        crate::atomic_file::write(sentinel, &bytes)?;
+        Ok(())
     }
-    if let Err(err) = apply_pending_restore(&app_data, &pending, &sentinel) {
-        log::error!("[restore] failed to apply pending restore: {err}");
+
+    fn validate(&self) -> AppResult<()> {
+        if self.format_version != 1
+            || self.pending_sha256.len() != 64
+            || !self
+                .pending_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(AppError::InvalidArg(
+                "unsupported or invalid restore operation".into(),
+            ));
+        }
+        if let Some(name) = &self.safety_filename {
+            if !name.starts_with("mindstream-pre-restore-")
+                || !name.ends_with(".db")
+                || name.contains(['/', '\\', ':'])
+                || name.contains("..")
+            {
+                return Err(AppError::InvalidArg(
+                    "unsafe restore safety filename".into(),
+                ));
+            }
+        }
+        Ok(())
     }
+}
+
+pub(super) fn restore_file_hash(path: &Path) -> AppResult<String> {
+    let mut file = fs::File::open(path)?;
+    let mut hash = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+fn validate_restore_database(path: &Path) -> AppResult<()> {
+    // Never create a missing file during recovery, and never migrate inputs.
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    validate_looks_like_mindstream_db(&conn)?;
+    let mut statement = conn.prepare("PRAGMA quick_check")?;
+    let results = statement.query_map([], |row| row.get::<_, String>(0))?;
+    for result in results {
+        let result = result?;
+        if result != "ok" {
+            return Err(AppError::InvalidArg(format!(
+                "restore database {} failed validation: {result}",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn checkpoint_for_move(path: &Path) -> AppResult<()> {
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    conn.busy_timeout(std::time::Duration::ZERO)?;
+    conn.pragma_update(None, "locking_mode", "EXCLUSIVE")?;
+    // Force recovery and obtain SQLite ownership before the checkpoint. A busy
+    // connection must prevent the rename, not merely produce a warning.
+    conn.query_row("SELECT count(*) FROM sqlite_schema", [], |row| {
+        row.get::<_, i64>(0)
+    })?;
+    let busy: i64 = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+    if busy != 0 {
+        return Err(AppError::InvalidArg(format!(
+            "cannot preserve {} while its WAL is busy; close other vault instances and retry",
+            path.display()
+        )));
+    }
+    conn.close().map_err(|(_, err)| AppError::Db(err))?;
+    crate::atomic_file::sync_file(path)?;
+    Ok(())
+}
+
+fn remove_checkpointed_sidecars(app_data: &Path) -> AppResult<()> {
+    let wal = app_data.join("mindstream.db-wal");
+    match fs::metadata(&wal) {
+        Ok(metadata) if metadata.len() > 0 => {
+            return Err(AppError::InvalidArg(
+                "restore found a non-empty live WAL after preservation; recovery files retained"
+                    .into(),
+            ));
+        }
+        Ok(_) => fs::remove_file(wal)?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
+    }
+    match fs::remove_file(app_data.join("mindstream.db-shm")) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
+    }
+    crate::atomic_file::sync_directory(app_data)?;
+    Ok(())
+}
+
+fn require_restore_input(path: &Path, expected_hash: &str) -> AppResult<()> {
+    // The journal identifies a standalone, checkpointed replacement. A later
+    // WAL means somebody changed it; hashing only the main file would miss that.
+    let mut wal = path.as_os_str().to_os_string();
+    wal.push("-wal");
+    match fs::metadata(Path::new(&wal)) {
+        Ok(metadata) if metadata.len() > 0 => {
+            return Err(AppError::InvalidArg(format!(
+                "restore input {} has an unexpected WAL; recovery files retained",
+                path.display()
+            )));
+        }
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
+    }
+    validate_restore_database(path)?;
+    if restore_file_hash(path)? != expected_hash {
+        return Err(AppError::InvalidArg(format!(
+            "restore input {} changed; recovery files retained",
+            path.display()
+        )));
+    }
+    Ok(())
 }
 
 pub(super) fn apply_pending_restore(
@@ -142,23 +290,88 @@ pub(super) fn apply_pending_restore(
     sentinel: &Path,
 ) -> AppResult<()> {
     let live = app_data.join("mindstream.db");
-    let live_wal = app_data.join("mindstream.db-wal");
-    let live_shm = app_data.join("mindstream.db-shm");
+    let raw = fs::read(sentinel)?;
+    let mut operation = if raw.is_empty() || raw == b"pending" {
+        // Upgrade the old sentinel only after proving its replacement exists
+        // and is valid. Missing inputs remain an error, not a cleared flag.
+        validate_restore_database(pending)?;
+        checkpoint_for_move(pending)?;
+        let operation = RestoreOperation {
+            format_version: 1,
+            phase: RestorePhase::Prepared,
+            safety_filename: live.exists().then(|| {
+                format!(
+                    "mindstream-pre-restore-{}-{}.db",
+                    chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S"),
+                    uuid::Uuid::new_v4()
+                )
+            }),
+            pending_sha256: restore_file_hash(pending)?,
+        };
+        operation.save(sentinel)?;
+        operation
+    } else {
+        serde_json::from_slice::<RestoreOperation>(&raw)
+            .map_err(|err| AppError::InvalidArg(format!("restore operation corrupt: {err}")))?
+    };
+    operation.validate()?;
+    let safety = operation
+        .safety_filename
+        .as_ref()
+        .map(|name| app_data.join(name));
 
-    if live.exists() {
-        let ts = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S").to_string();
-        let safety = app_data.join(format!("mindstream-pre-restore-{ts}.db"));
-        fs::rename(&live, &safety)?;
-        log::info!("[restore] previous DB saved to {}", safety.display());
+    if operation.phase == RestorePhase::Prepared {
+        require_restore_input(pending, &operation.pending_sha256)?;
+        if let Some(safety) = &safety {
+            match (live.exists(), safety.exists()) {
+                (true, false) => {
+                    checkpoint_for_move(&live)?;
+                    fs::rename(&live, safety)?;
+                    crate::atomic_file::sync_directory(app_data)?;
+                }
+                (false, true) => validate_restore_database(safety)?,
+                _ => {
+                    return Err(AppError::InvalidArg(
+                        "ambiguous restore preservation state".into(),
+                    ))
+                }
+            }
+        } else if live.exists() {
+            return Err(AppError::InvalidArg(
+                "unexpected live DB during restore".into(),
+            ));
+        }
+        operation.phase = RestorePhase::OldPreserved;
+        operation.save(sentinel)?;
     }
-    // WAL/SHM belong to the old DB. The pending DB carries its own
-    // consistent state (or none — fresh open will create one), so
-    // discarding these is safe.
-    let _ = fs::remove_file(&live_wal);
-    let _ = fs::remove_file(&live_shm);
 
-    fs::rename(pending, &live)?;
+    if operation.phase == RestorePhase::OldPreserved {
+        if safety.as_ref().is_some_and(|path| !path.is_file()) {
+            return Err(AppError::InvalidArg(
+                "restore safety copy is missing".into(),
+            ));
+        }
+        match (pending.exists(), live.exists()) {
+            (true, false) => {
+                require_restore_input(pending, &operation.pending_sha256)?;
+                remove_checkpointed_sidecars(app_data)?;
+                fs::rename(pending, &live)?;
+                crate::atomic_file::sync_directory(app_data)?;
+            }
+            (false, true) => require_restore_input(&live, &operation.pending_sha256)?,
+            _ => {
+                return Err(AppError::InvalidArg(
+                    "ambiguous restore installation state".into(),
+                ))
+            }
+        }
+        operation.phase = RestorePhase::Installed;
+        operation.save(sentinel)?;
+    }
+
+    require_restore_input(&live, &operation.pending_sha256)?;
     fs::remove_file(sentinel)?;
+    crate::atomic_file::sync_directory(app_data)?;
     log::info!("[restore] pending restore applied");
     Ok(())
 }

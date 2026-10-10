@@ -109,7 +109,7 @@ pub fn save(root: &Path, index: &Index) -> AppResult<()> {
     fs::create_dir_all(root)?;
     let json = serde_json::to_vec_pretty(index)
         .map_err(|e| AppError::InvalidArg(format!("serialize profiles index: {e}")))?;
-    fs::write(index_path(root), json)?;
+    crate::atomic_file::write(&index_path(root), &json)?;
     Ok(())
 }
 
