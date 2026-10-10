@@ -106,7 +106,7 @@ pub fn load(root: &Path) -> AppResult<Option<Index>> {
     Ok(Some(index))
 }
 
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
         && id
@@ -309,6 +309,35 @@ pub fn resolve_startup(root: &Path) -> AppResult<(String, VaultLock)> {
     }
     let owner = VaultLock::acquire(&selected)?;
     Ok((index.active, owner))
+}
+
+/// Coordinator selection reads the index without claiming an already-open
+/// vault. Only a worker owns its DB; a restarted host can adopt live workers.
+pub fn prepare_coordinator_index(root: &Path) -> AppResult<Index> {
+    let _lock = RootLock::acquire(root)?;
+    reconcile_root_locked(root)?;
+    migrate_legacy_locked(root)?;
+    load_or_init_locked(root)
+}
+
+/// Explicit worker selection never changes the last-used startup preference.
+pub fn resolve_worker(root: &Path, id: &str) -> AppResult<VaultLock> {
+    if !valid_id(id) {
+        return Err(AppError::InvalidArg("invalid worker vault ID".into()));
+    }
+    let _lock = RootLock::acquire(root)?;
+    reconcile_root_locked(root)?;
+    let index = load_or_init_locked(root)?;
+    if !index.profiles.iter().any(|profile| profile.id == id) {
+        return Err(AppError::NotFound("worker vault is not indexed".into()));
+    }
+    let directory = profile_dir(root, id);
+    if !directory.is_dir() {
+        return Err(AppError::NotFound(
+            "worker vault directory is missing".into(),
+        ));
+    }
+    VaultLock::acquire(&directory)
 }
 
 /// Also used for gated harness profile overrides, which skip vault selection

@@ -1,6 +1,35 @@
 use super::*;
 
 #[test]
+fn explicit_workers_keep_the_startup_preference_and_host_can_read_an_open_vault() {
+    let root = tmp_root();
+    let index = prepare_coordinator_index(&root).unwrap();
+    let other = add_profile(&root, "Other").unwrap();
+    let owner = resolve_worker(&root, &other.id).unwrap();
+    assert_eq!(load(&root).unwrap().unwrap().active, index.active);
+    assert!(resolve_worker(&root, &other.id).is_err());
+    assert_eq!(prepare_coordinator_index(&root).unwrap().profiles.len(), 2);
+    let default = resolve_worker(&root, DEFAULT_PROFILE_ID).unwrap();
+    drop(default);
+    drop(owner);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn explicit_worker_refuses_unindexed_or_missing_directories_without_recreating_them() {
+    let root = tmp_root();
+    prepare_coordinator_index(&root).unwrap();
+    let other = add_profile(&root, "Missing").unwrap();
+    fs::remove_dir_all(profile_dir(&root, &other.id)).unwrap();
+    assert!(resolve_worker(&root, &other.id).is_err());
+    assert!(!profile_dir(&root, &other.id).exists());
+    assert!(resolve_worker(&root, "unindexed").is_err());
+    assert!(!profile_dir(&root, "unindexed").exists());
+    assert!(resolve_worker(&root, "../unsafe").is_err());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn startup_recovers_previous_index_and_preserves_unindexed_vaults_and_corrupt_bytes() {
     let root = tmp_root();
     load_or_init(&root).unwrap();

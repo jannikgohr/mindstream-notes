@@ -18,6 +18,8 @@ mod atomic_file;
 pub mod auth;
 pub mod backup;
 pub mod browser_archive;
+#[cfg(desktop)]
+pub mod browser_identity;
 pub mod client_errors;
 pub mod collab_events;
 pub mod collections;
@@ -60,6 +62,8 @@ pub mod tray;
 pub mod tree;
 pub mod tree_batch;
 pub mod ui_settings;
+#[cfg(desktop)]
+pub mod vault_runtime;
 #[cfg(desktop)]
 pub mod webview_memory;
 pub mod webview_security;
@@ -136,6 +140,12 @@ fn init_keyring() {
     if let Err(e) = result {
         log::warn!("[boot] keyring init failed: {e} — sign-in/out will error");
     }
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+fn get_worker_browser_options() -> crate::error::CommandResult<Option<()>> {
+    Ok(None)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -546,6 +556,10 @@ pub fn run() {
             signing_credentials::get_vault_collab_signing_material,
             signing_credentials::store_vault_collab_signing_material,
             ui_settings::initialize_ui_settings,
+            #[cfg(desktop)]
+            browser_identity::get_worker_browser_options,
+            #[cfg(not(desktop))]
+            get_worker_browser_options,
             legacy_content::migrate_legacy_content,
             ui_settings::load_ui_settings,
             ui_settings::patch_ui_setting,

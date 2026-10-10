@@ -369,6 +369,27 @@ Windows Rust fmt/clippy and the serial full suite pass 788 unit tests and one
 integration test, with five ignored tests including the coordinator subprocess
 fixture. That fixture runs automatically through its parent crash test.
 
+Startup contracts slice on 2026-10-11: explicit workers resolve an indexed vault
+under the root lock without changing the last-used preference. Coordinators can
+read/reconcile the index while workers hold vault ownership. Launch arguments
+carry separate launch/coordinator identities; existing test devices retain direct
+mode, while shared-root tests opt into supervision. Browser identities derive
+from canonical root, vault ID and physical directory. Main/popout windows have a
+native bridge for the same directory or macOS persistent store ID. This defines
+the contracts; role selection and browser isolation are not activated in startup
+until export and supervisor integration are complete.
+
+This slice also fixes native popouts: all windows sharing a WebView2 environment
+receive the main window's browser arguments. Tabs detach only after the SDK's
+successful creation event. Seeded/imported note IDs receive the `note_*`
+capability namespace and an explicit editor URL. The Windows native check opened
+Welcome in a single-note popout, removed the source tab, then returned it with
+Pop in and confirmed that only the main window remained. Disposable test logs
+are in `.output/popout-browser-app-check-capability`. Rust fmt/clippy and the
+full serial suite pass 793 unit tests and one integration test, with five ignored
+tests. Seven focused frontend tests and Svelte checks pass. Affected ESLint has
+no errors; the route retains its existing dynamic-component `any` warning.
+
 Estimate: 5 to 7 working days, plus changes required by the spike.
 
 Keep one vault per worker for its lifetime. Use the validated long-lived

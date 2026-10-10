@@ -8,6 +8,7 @@
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { isTauri } from './core';
 import { getCustomWindowDecorations } from './desktop-settings';
+import { getWorkerBrowserOptions } from './browser-identity';
 import {
   type DockviewApi,
   type IDockviewGroupPanel,
@@ -42,7 +43,7 @@ function themedWindowBackground(): {
 }
 
 /**
- * Note popout windows use the note id as their Tauri label. When one is
+ * Note popout windows use the note_* capability's label namespace. When one is
  * already alive, bring that window forward instead of opening a second editor
  * for the same note.
  */
@@ -50,7 +51,7 @@ export async function focusExistingNoteWindow(id: string): Promise<boolean> {
   if (!isTauri()) return false;
 
   try {
-    const win = await WebviewWindow.getByLabel(id);
+    const win = await WebviewWindow.getByLabel(noteWindowLabel(id));
     if (!win) return false;
 
     if (await win.isMinimized()) {
@@ -62,6 +63,10 @@ export async function focusExistingNoteWindow(id: string): Promise<boolean> {
     console.warn('[focusExistingNoteWindow] failed', id, err);
     return false;
   }
+}
+
+function noteWindowLabel(id: string): string {
+  return id.startsWith('note_') ? id : `note_${id}`;
 }
 
 export async function focusMainWindow(): Promise<void> {
@@ -109,8 +114,29 @@ export async function openNoteWindow(
     return;
   }
 
+  const activePanel: IDockviewPanel | undefined = panelGroup?.activePanel;
+  if (
+    panelGroup &&
+    (!activePanel || !dock || activePanel.params?.noteId !== id)
+  ) {
+    console.error('[openNoteWindow] source panel is unavailable', id);
+    return;
+  }
+  // Snapshot before async settings reads; the active tab can change while waiting.
+  const panelConfig = activePanel && {
+    id: activePanel.id,
+    component: activePanel.api.component,
+    params: { ...activePanel.params },
+    title: activePanel.title
+  };
+  const originalGroupId = panelGroup?.id;
+  let detached = false;
+
   const customWindowDecorations = await getCustomWindowDecorations();
-  const win = new WebviewWindow(id, {
+  const browserOptions = await getWorkerBrowserOptions();
+  const win = new WebviewWindow(noteWindowLabel(id), {
+    ...browserOptions,
+    url: `?window=editor&id=${encodeURIComponent(id)}`,
     title,
     width: 900,
     height: 700,
@@ -141,49 +167,31 @@ export async function openNoteWindow(
       );
     });
 
-  if (panelGroup) {
-    const activePanel: IDockviewPanel | undefined = panelGroup?.activePanel;
-
-    if (!activePanel || !dock) {
-      console.error(
-        '[openNoteWindow] failed to spawn because activePanel or dockApi was null',
-        id,
-        activePanel,
-        dock
-      );
-      return;
-    }
-
-    // 1. Snapshot the panel state before it vanishes
-    const panelConfig = {
-      id: activePanel.id,
-      component: activePanel.api.component,
-      params: { ...activePanel.params },
-      title: activePanel.title
-    };
-
-    const originalGroupId = panelGroup.id;
-
-    // 2. Close the original panel once the window is ready
-    await win.once('tauri://webview-created', () => {
-      dock.removePanel(activePanel);
+  if (activePanel && dock && panelConfig && originalGroupId) {
+    // The native webview-created event can precede a failed WebView2 build.
+    // The SDK emits created only after create_webview_window succeeds.
+    await win.once('tauri://created', () => {
+      if (dock.getPanel(panelConfig.id) === activePanel) {
+        dock.removePanel(activePanel);
+        detached = true;
+      }
     });
 
     // 3. Re-open the panel when the popout window is closed
     await win.once('tauri://close-requested', async () => {
-      console.info('[openNoteWindow] close requested');
       // Check if the group still exists, otherwise it defaults to a sensible location
       const targetGroup = dock.getGroup(originalGroupId);
 
-      dock.addPanel({
-        id: panelConfig.id,
-        component: panelConfig.component,
-        params: panelConfig.params,
-        title: panelConfig.title,
-        ...(targetGroup
-          ? { position: { referenceGroup: originalGroupId } }
-          : {})
-      });
+      if (detached && !dock.getPanel(panelConfig.id))
+        dock.addPanel({
+          id: panelConfig.id,
+          component: panelConfig.component,
+          params: panelConfig.params,
+          title: panelConfig.title,
+          ...(targetGroup
+            ? { position: { referenceGroup: originalGroupId } }
+            : {})
+        });
 
       // Close the Tauri window
       await win.close();

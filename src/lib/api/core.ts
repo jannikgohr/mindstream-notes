@@ -55,6 +55,7 @@ export enum TauriCommandName {
   GetCloseToTray = 'get_close_to_tray',
   GetCollectionShareState = 'get_collection_share_state',
   GetCustomWindowDecorations = 'get_custom_window_decorations',
+  GetWorkerBrowserOptions = 'get_worker_browser_options',
   GetDesktopLanguage = 'get_desktop_language',
   GetDesktopThemeMode = 'get_desktop_theme_mode',
   GetHotkeyDisplay = 'get_hotkey_display',
