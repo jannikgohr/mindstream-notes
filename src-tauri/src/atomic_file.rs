@@ -20,16 +20,32 @@ impl Drop for TemporaryFile {
 }
 
 pub fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
+    write_with_privacy(path, contents, false)
+}
+
+/// Endpoint records carry an IPC secret. Unix publication starts with mode
+/// 0600; Windows inherits the application data directory's user ACL.
+pub fn write_private(path: &Path, contents: &[u8]) -> io::Result<()> {
+    write_with_privacy(path, contents, true)
+}
+
+fn write_with_privacy(path: &Path, contents: &[u8], private: bool) -> io::Result<()> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
     let temporary_path = parent.join(format!(".write-{}.tmp", uuid::Uuid::new_v4()));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary_path)?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    if private {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    #[cfg(not(unix))]
+    let _ = private;
+    let mut file = options.open(&temporary_path)?;
     // A create_new failure must not remove a pre-existing path.
     let temporary = TemporaryFile(temporary_path);
     file.write_all(contents)?;

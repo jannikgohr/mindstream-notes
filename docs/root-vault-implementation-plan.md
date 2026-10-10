@@ -353,6 +353,22 @@ the WebView restored both note panes from the canonical document. Logs are under
 
 ## Phase 2: coordination and simultaneous vaults
 
+Coordinator transport slice on 2026-10-11: `.coordinator.lock` grants ownership
+through the OS only. Its owner publishes a private, versioned loopback endpoint
+with a random authentication secret. Requests/replies are length-bounded and
+correlated by operation/instance IDs, with whole-message deadlines and limited
+incoming connections. Discovery retries preserve operation IDs; the runtime
+dispatcher still must deduplicate mutations. Worker replies use separate
+listeners and retain vault ownership. Shutdown holds the root coordinator lease
+until accepted calls finish. Tests cover election races, independent roots,
+authentication/version/size rejection, partial frames, live ownership during
+shutdown, and force-terminating a real child process with stale records retained.
+Unix endpoint files use owner-only mode; Windows inherits app-data ACLs. Runtime
+worker registration, launch/focus routing and the supervised dev host are pending.
+Windows Rust fmt/clippy and the serial full suite pass 788 unit tests and one
+integration test, with five ignored tests including the coordinator subprocess
+fixture. That fixture runs automatically through its parent crash test.
+
 Estimate: 5 to 7 working days, plus changes required by the spike.
 
 Keep one vault per worker for its lifetime. Use the validated long-lived

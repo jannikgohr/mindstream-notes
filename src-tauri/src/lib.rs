@@ -22,6 +22,8 @@ pub mod client_errors;
 pub mod collab_events;
 pub mod collections;
 pub mod content_stats;
+#[cfg(desktop)]
+pub mod coordinator_ipc;
 pub mod data;
 pub mod db;
 #[cfg(desktop)]
