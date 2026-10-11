@@ -89,6 +89,25 @@ start timing out or behaving oddly, reset the stack (`pnpm backend:test:reset`)
 See [app/README.md](app/README.md) for the two-client harness specifics and the
 full env-flag reference in [docs/e2e/harness.md](../docs/e2e/harness.md).
 
+## Backend benchmark
+
+Replays the app's sync and live-collab traffic against a running stack and
+reports wall time, request count and bytes for each scenario. Nothing passes or
+fails. It produces numbers for comparing servers or changes.
+
+```sh
+pnpm backend:test:up
+pnpm bench:backend                 # about a minute
+pnpm bench:backend --scale full    # 1000-note pushes, 8 MiB assets
+pnpm bench:backend --label new --url http://localhost:9000 \
+  --compare .output/bench/backend/etebase.json
+```
+
+Results are saved to `.output/bench/backend/<label>.json`. It speaks the
+Etebase protocol, so it runs unchanged against any server that serves it. The
+header of [perf/backend-bench/run.mjs](perf/backend-bench/run.mjs) lists the
+flags and what the numbers do and don't cover.
+
 ## Going deeper
 
 - **Why these tiers exist / what each proves** — [docs/e2e/strategy.md](../docs/e2e/strategy.md)
