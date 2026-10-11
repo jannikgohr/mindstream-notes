@@ -29,6 +29,7 @@ pub mod content_stats;
 pub mod coordinator_ipc;
 #[cfg(desktop)]
 mod coordinator_shortcuts;
+mod coordinator_shutdown;
 pub mod data;
 pub mod db;
 #[cfg(desktop)]

@@ -78,6 +78,15 @@ export function installWorkerCloseBridge(): () => void {
   const subscription = listen(TauriEventName.VaultWorkerClose, (notice) => {
     void participant.receive(notice);
   });
+  const quitFailure = listen(TauriEventName.EnvironmentQuitFailed, (notice) => {
+    pushToast(`${tUi('vault.closeFailed')} ${notice.message}`, {
+      variant: 'error',
+      durationMs: 0
+    });
+  });
+  void quitFailure.catch((error) =>
+    console.warn('[vaults] quit listener unavailable', error)
+  );
   // Register only after the event listener exists. A loading window cannot be
   // mistaken for a saved window by the native worker.
   void subscription
@@ -99,6 +108,7 @@ export function installWorkerCloseBridge(): () => void {
   return () => {
     stopped = true;
     participant.dispose();
+    void quitFailure.then((unlisten) => unlisten()).catch(() => {});
     void subscription.then((unlisten) => unlisten()).catch(() => {});
   };
 }

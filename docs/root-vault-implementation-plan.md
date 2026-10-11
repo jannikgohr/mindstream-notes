@@ -9,8 +9,9 @@ workers after a coordinator restart. Coordinator shortcut registration and
 eligible-vault action dispatch are implemented. Platform checks, automatic host
 revival, shared tray/updater integration and the vault-opening UI remain pending;
 normal startup and existing isolated test devices still use direct mode.
-Supervised worker close now waits for content-window persistence; coordinated
-whole-app shutdown and source/target handoff are still pending.
+Supervised worker close waits for content-window persistence. Whole-app Quit
+orchestration passes the Windows app checks; source/target
+handoff remains pending.
 
 Global plugin packages and theme presets are separate follow-up projects:
 
@@ -912,6 +913,45 @@ close requests and status polling while workers remain reachable. Socket loss is
 never treated as exit; every fixture worker actually exited before cleanup. This
 adds the close tracking needed by whole-app Quit and handoff; their coordinator
 orchestration remains the next implementation step.
+
+Whole-app Quit slice on 2026-10-12: native menu and tray Quit now route to
+this environment's coordinator. The headless macOS coordinator installs an app
+menu with Quit; editor menus/settings remain in workers. One repeatable operation
+fences new launches,
+activation and shortcut actions. Concurrent Quit requests join that operation
+and retain its failure on retries. Previously reserved workers may still
+register and become ready, and final settings/focus notices can finish.
+
+The coordinator suspends OS shortcuts, authenticates each worker's current
+launch/root/physical directory and closes workers in bounded parallel batches.
+Queued/pending/committing close status never proves exit. Launched workers need
+the actual child-exit observer and a free physical vault lease; adopted workers
+need that free OS lease. Socket errors, PIDs and file presence never release
+ownership. After workers exit, the coordinator drains accepted root background
+work before exiting. No root/document lock crosses IPC or a save wait.
+
+Cancellation, unknown owners or a timeout keep the coordinator and remaining
+workers running, retain the failed operation, resume shortcut registration and
+notify reachable windows. Some workers may already have saved and exited when
+another cancels. Main-window close remains an individual vault close. Direct
+mode keeps its existing Quit behavior. Runtime protocol 5 includes authenticated
+whole-app failure notices. Native platform behavior and dirty/popout shutdown
+QA still gate default supervised startup.
+
+Validation: Rust formatting/clippy and the full serial suite pass 858 unit tests
+and one integration test, with five ignored tests. Fifteen focused frontend
+close/shortcut tests, affected lint, type checks and production/embedded native
+builds pass. The fresh Windows app smoke check passes shortcut routing again and
+whole-app Quit with two vaults. Computer use entered disposable markdown in the
+main window and a note popout. Authenticated coordinator Quit closed both main
+windows and the popout, and exited the host. The check acquired every physical
+vault/coordinator lease afterward, and SQLite retained both main/popout edits.
+No owned fixture processes remained. Test roots keep OS integrations disabled.
+
+The smoke helper supports `--wait-for-external-quit`, exposing `quit-ready.json`
+before waiting for external menu or authenticated IPC Quit. Windows has no native
+app menu in this build; macOS menu, Windows tray and real OS keyboard checks remain
+pending. The coordinator IPC path was used for this native UI save check.
 
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.

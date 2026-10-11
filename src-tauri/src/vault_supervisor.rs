@@ -39,6 +39,7 @@ enum HostCommand {
         accelerator: Option<String>,
     },
     ShortcutRegistrationStatus,
+    Quit,
     DeviceSettingsChanged {
         vault_id: String,
         launch_id: Uuid,
@@ -85,6 +86,10 @@ enum WorkerCommand {
     Close {
         launch_id: Uuid,
     },
+    QuitFailed {
+        launch_id: Uuid,
+        message: String,
+    },
     CloseStatus {
         launch_id: Uuid,
         operation_id: Uuid,
@@ -123,6 +128,7 @@ enum OpenProgress {
 #[derive(Default)]
 struct Book {
     exported: bool,
+    quitting: Option<Uuid>,
     last: Option<String>,
     workers: BTreeMap<String, Launch>,
     operations: BTreeMap<Uuid, Operation>,
@@ -132,6 +138,7 @@ struct Book {
 }
 
 enum Action {
+    Quit,
     Open(String),
     ActivateLast,
     Remember { vault_id: String, revision: u64 },
@@ -144,7 +151,7 @@ impl Book {
         let operation = self.operations.get(&operation_id).ok_or_else(invalid)?;
         if !matches!(
             operation.input["command"].as_str(),
-            Some("open" | "shortcut")
+            Some("open" | "shortcut" | "quit")
         ) {
             return Err(invalid());
         }
@@ -158,13 +165,19 @@ impl Book {
     }
 
     fn complete_open(&mut self, operation_id: Uuid, result: AppResult<()>) {
-        if let Some(operation) = self.operations.get_mut(&operation_id) {
-            if matches!(
-                operation.input["command"].as_str(),
-                Some("open" | "shortcut")
-            ) && operation.open_result.is_none()
+        let result = result.map_err(|error| error.to_string());
+        let id = operation_id.to_string();
+        for (request_id, operation) in &mut self.operations {
+            let quit_alias = operation.input["command"].as_str() == Some("quit")
+                && operation.reply["operation_id"].as_str() == Some(id.as_str());
+            if (*request_id == operation_id || quit_alias)
+                && matches!(
+                    operation.input["command"].as_str(),
+                    Some("open" | "shortcut" | "quit")
+                )
+                && operation.open_result.is_none()
             {
-                operation.open_result = Some(result.map_err(|error| error.to_string()));
+                operation.open_result = Some(result.clone());
             }
         }
     }
@@ -239,6 +252,32 @@ impl Book {
                 None,
             ));
         }
+        if let Some(operation_id) = self.quitting {
+            if matches!(command, HostCommand::Quit) {
+                if self.operations.len() >= 1024 {
+                    return Err(invalid());
+                }
+                let reply = json!({"accepted":true,"operation_id":operation_id});
+                self.operations.insert(
+                    request.id,
+                    Operation {
+                        input: request.payload,
+                        reply: reply.clone(),
+                        at: Instant::now(),
+                        open_result: None,
+                    },
+                );
+                return Ok((reply, None));
+            }
+            if matches!(
+                command,
+                HostCommand::Open { .. } | HostCommand::Activate | HostCommand::Shortcut { .. }
+            ) {
+                return Err(AppError::InvalidArg(
+                    "the app is quitting; no new vault action was started".into(),
+                ));
+            }
+        }
         if let HostCommand::DeviceSettingsChanged { vault_id, .. } = &command {
             // Slider/toolbar edits must not consume the mutation replay budget.
             // Retain the latest notice per source; older repeats are harmless
@@ -253,6 +292,13 @@ impl Book {
         }
         let mut action = None;
         match command {
+            HostCommand::Quit => {
+                if !self.exported {
+                    return Err(invalid());
+                }
+                self.quitting = Some(request.id);
+                action = Some(Action::Quit);
+            }
             HostCommand::OpenStatus { .. } | HostCommand::ShortcutRegistrationStatus => {
                 unreachable!()
             }
@@ -267,7 +313,7 @@ impl Book {
             }
             HostCommand::Status => {
                 return Ok((
-                    json!({"contract":RuntimeContract::current(),"initialized":self.exported,"active":self.last,"workers":self.workers.iter().map(|(id, launch)| json!({
+                    json!({"contract":RuntimeContract::current(),"initialized":self.exported,"active":self.last,"quitting":self.quitting,"workers":self.workers.iter().map(|(id, launch)| json!({
                     "id":id,"ready":launch.ready,"window":launch.focused_window,"error":launch.error,
                 })).collect::<Vec<_>>()}),
                     None,
@@ -395,17 +441,23 @@ impl Book {
                     launch.ready = true;
                     // Tracked requests perform their own authenticated activation
                     // before publishing success. Startup still activates here.
-                    if !self.operations.values().any(|operation| {
-                        operation.input["command"].as_str() == Some("open")
-                            && operation.input["vault_id"].as_str() == Some(vault_id.as_str())
-                            && operation.open_result.is_none()
-                    }) {
+                    if self.quitting.is_none()
+                        && !self.operations.values().any(|operation| {
+                            operation.input["command"].as_str() == Some("open")
+                                && operation.input["vault_id"].as_str() == Some(vault_id.as_str())
+                                && operation.open_result.is_none()
+                        })
+                    {
                         action = Some(Action::Open(vault_id));
                     }
                 }
             }
         }
-        let reply = json!({"accepted":true});
+        let reply = if self.quitting == Some(request.id) {
+            json!({"accepted":true,"operation_id":request.id})
+        } else {
+            json!({"accepted":true})
+        };
         self.operations.insert(
             request.id,
             Operation {
@@ -422,6 +474,7 @@ pub struct Host {
     instance: Uuid,
     endpoint: Endpoint,
     book: Mutex<Book>,
+    jobs: crate::vault_jobs::Jobs,
     device_notifications: crate::device_notifications::Notifications,
     _server: Running,
 }
@@ -639,18 +692,25 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
         instance,
         endpoint,
         book: Mutex::new(Book::default()),
+        jobs: crate::vault_jobs::Jobs::default(),
         device_notifications: crate::device_notifications::Notifications::default(),
         _server: server,
     });
+    #[cfg(target_os = "macos")]
+    crate::native_menu::init(app)?;
     let initial = index.active;
     crate::legacy_export::begin(
         app,
         initial.clone(),
         Box::new(move |app| {
             let task_app = app.clone();
+            let Ok(job) = app.state::<Host>().jobs.enter() else {
+                return;
+            };
             if let Err(error) = std::thread::Builder::new()
                 .name("vault-recovery".into())
                 .spawn(move || {
+                    let _job = job;
                     if let Err(error) = recover_workers(&task_app) {
                         log::error!("[vaults] worker discovery failed: {error}");
                         return;
@@ -806,10 +866,7 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
     if matches!(command, HostCommand::ShortcutRegistrationStatus) {
         return serde_json::to_value(host_shortcut_status(app)?).map_err(|_| invalid());
     }
-    let settings_notice = matches!(
-        command,
-        HostCommand::DeviceSettingsChanged { .. } | HostCommand::Ready { .. }
-    );
+    let settings_notice = matches!(command, HostCommand::Ready { .. });
     let tracked_open = matches!(
         command,
         HostCommand::Open { .. } | HostCommand::Shortcut { .. }
@@ -827,11 +884,23 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
     // Replies are acknowledgements. Root filesystem work and worker IPC run
     // after this short critical section, never under the root document lock.
     let request_id = request.id;
-    let (mut reply, action) = host
-        .book
-        .lock()
-        .map_err(|_| invalid())?
-        .accept(host.instance, request)?;
+    let (mut reply, action, job, refresh_job) = {
+        let mut book = host.book.lock().map_err(|_| invalid())?;
+        let (reply, action) = book.accept(host.instance, request)?;
+        // Register work while acceptance still holds Book. Quit cannot finish
+        // draining before a previously accepted filesystem task starts.
+        let job = if action.as_ref().is_some_and(|a| !matches!(a, Action::Quit)) {
+            Some(host.jobs.enter()?)
+        } else {
+            None
+        };
+        let refresh_job = if settings_notice {
+            Some(host.jobs.enter()?)
+        } else {
+            None
+        };
+        (reply, action, job, refresh_job)
+    };
     if status_request {
         // Disk reads happen after releasing Book. No general root lock crosses
         // worker IPC, and a bad settings file never hides ownership status.
@@ -853,7 +922,12 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
         if let Err(error) = std::thread::Builder::new()
             .name("vault-open".into())
             .spawn(move || {
+                let _job = job;
                 let target = match action {
+                    Action::Quit => {
+                        finish_quit(&task_app, request_id);
+                        return;
+                    }
                     Action::Open(id) => Ok(id),
                     Action::ActivateLast => crate::paths::app_data_root(&task_app)
                         .and_then(|root| crate::profiles::prepare_coordinator_index(&root))
@@ -916,6 +990,9 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
         {
             if let Ok(mut book) = host.book.lock() {
                 book.operations.remove(&request_id);
+                if book.quitting == Some(request_id) {
+                    book.quitting = None;
+                }
             }
             return Err(error.into());
         }
@@ -924,15 +1001,246 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
         let refresh = app.clone();
         let _ = std::thread::Builder::new()
             .name("shortcut-refresh".into())
-            .spawn(move || crate::coordinator_shortcuts::refresh(&refresh));
+            .spawn(move || {
+                let _job = refresh_job;
+                crate::coordinator_shortcuts::refresh(&refresh);
+            });
     }
     Ok(reply)
+}
+
+/// Menu/tray Quit is environment-wide. Individual window close stays local.
+/// Native callbacks only schedule IPC; they never wait for saves or OS work.
+pub(crate) fn request_quit(app: &AppHandle) {
+    if app.try_state::<Host>().is_none() && app.try_state::<Worker>().is_none() {
+        app.exit(0);
+        return;
+    }
+    let app = app.clone();
+    let notification = app.clone();
+    if let Err(error) = std::thread::Builder::new()
+        .name("environment-quit".into())
+        .spawn(move || {
+            let result = (|| -> AppResult<()> {
+                let request = request(&HostCommand::Quit)?;
+                if let Some(worker) = app.try_state::<Worker>() {
+                    let endpoint = worker.host.lock().map_err(|_| invalid())?.clone();
+                    endpoint
+                        .retry_call(&request)?
+                        .map_err(AppError::InvalidArg)?;
+                } else {
+                    handle_host(&app, request)?;
+                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                notify_quit_failure(&app, &error.to_string());
+            }
+        })
+    {
+        notify_quit_failure(&notification, &error.to_string());
+    }
+}
+
+fn notify_quit_failure(app: &AppHandle, message: &str) {
+    log::error!("[vaults] whole-app quit failed: {message}");
+    let _ = app.emit(
+        crate::app_events::AppEvent::EnvironmentQuitFailed.as_str(),
+        json!({"message":message}),
+    );
+}
+
+fn close_owner(
+    book: &Mutex<Book>,
+    root: &std::path::Path,
+    id: &str,
+    launch_id: Uuid,
+) -> AppResult<crate::coordinator_shutdown::Owner> {
+    use crate::coordinator_shutdown::Owner;
+    let launch = book
+        .lock()
+        .map_err(|_| invalid())?
+        .workers
+        .get(id)
+        .map(|launch| (launch.id, launch.adopted));
+    if let Some((current, _)) = launch {
+        if current != launch_id {
+            return Ok(Owner::Changed);
+        }
+    }
+    if launch.is_some_and(|(_, adopted)| !adopted) {
+        return Ok(Owner::Present);
+    }
+    let directory = crate::profiles::profile_dir(root, id);
+    if !directory.is_dir() {
+        return Err(invalid());
+    }
+    // A child wait proves process exit; its physical lease must also be free.
+    // An adopted worker has no wait handle, so its OS lease is the evidence.
+    if let Some(_lease) = crate::storage_locks::VaultLock::try_acquire(&directory)? {
+        book.lock()
+            .map_err(|_| invalid())?
+            .remove_launch(id, launch_id);
+        Ok(Owner::Released)
+    } else if launch.is_none() {
+        Ok(Owner::Changed)
+    } else {
+        Ok(Owner::Present)
+    }
+}
+
+fn close_for_quit(
+    app: &AppHandle,
+    root: &std::path::Path,
+    id: &str,
+    launch_id: Uuid,
+    operation_id: Uuid,
+    deadline: Instant,
+) -> AppResult<()> {
+    use crate::coordinator_shutdown::Owner;
+    let host = app.state::<Host>();
+    let ownership = || close_owner(&host.book, root, id, launch_id);
+    let endpoint = loop {
+        match ownership()? {
+            Owner::Released => return Ok(()),
+            Owner::Changed => return Err(invalid()),
+            Owner::Present => {}
+        }
+        let ready = host
+            .book
+            .lock()
+            .map_err(|_| invalid())?
+            .ready_endpoint(id, launch_id);
+        match ready {
+            Ok(Some((endpoint, _))) => break endpoint,
+            Ok(None) => {}
+            Err(error) => {
+                return if ownership()? == Owner::Released {
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(AppError::InvalidArg(
+                "vault did not become ready to save before quit timed out".into(),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    };
+    let identified = (|| -> AppResult<()> {
+        let reply = endpoint
+            .retry_call(&request(&WorkerCommand::Identify { launch_id })?)?
+            .map_err(AppError::InvalidArg)?;
+        let identity: crate::worker_registration::Identity =
+            serde_json::from_value(reply).map_err(|_| invalid())?;
+        identity.require_compatible()?;
+        if identity.launch_id != launch_id
+            || identity.vault_id != id
+            || !identity.ready
+            || identity.root != std::fs::canonicalize(root)?
+            || identity.directory != std::fs::canonicalize(crate::profiles::profile_dir(root, id))?
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    })();
+    if let Err(error) = identified {
+        return if ownership()? == Owner::Released {
+            Ok(())
+        } else {
+            Err(error)
+        };
+    }
+    crate::coordinator_shutdown::close(&endpoint, launch_id, operation_id, deadline, ownership)
+}
+
+fn finish_quit(app: &AppHandle, operation_id: Uuid) {
+    let host = app.state::<Host>();
+    crate::coordinator_shortcuts::suspend(app, true);
+    let result = (|| -> AppResult<()> {
+        let root = crate::paths::app_data_root(app)?;
+        let deadline = Instant::now() + Duration::from_secs(180);
+        let targets: Vec<_> = host
+            .book
+            .lock()
+            .map_err(|_| invalid())?
+            .workers
+            .iter()
+            .map(|(id, launch)| (id.clone(), launch.id))
+            .collect();
+        let mut errors = Vec::new();
+        // Start independent close/save requests together, with bounded threads.
+        // No Book/root-document lock crosses a worker IPC call or wait.
+        for chunk in targets.chunks(8) {
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = chunk
+                    .iter()
+                    .map(|(id, launch)| {
+                        let root = &root;
+                        scope.spawn(move || {
+                            close_for_quit(app, root, id, *launch, operation_id, deadline)
+                                .map_err(|error| format!("{id}: {error}"))
+                        })
+                    })
+                    .collect();
+                for handle in handles {
+                    match handle.join() {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => errors.push(error),
+                        Err(_) => {
+                            errors.push("worker close task failed; ownership retained".into())
+                        }
+                    }
+                }
+            });
+        }
+        if !errors.is_empty() {
+            return Err(AppError::InvalidArg(errors.join("; ")));
+        }
+        let pause = host.jobs.pause()?;
+        pause.wait(deadline.saturating_duration_since(Instant::now()))?;
+        let mut book = host.book.lock().map_err(|_| invalid())?;
+        if book.quitting != Some(operation_id) || !book.workers.is_empty() {
+            return Err(invalid());
+        }
+        crate::vault_jobs::Pause::commit_all(vec![pause])?;
+        book.complete_open(operation_id, Ok(()));
+        Ok(())
+    })();
+    match result {
+        Ok(()) => app.exit(0),
+        Err(error) => {
+            if let Ok(mut book) = host.book.lock() {
+                book.complete_open(operation_id, Err(AppError::InvalidArg(error.to_string())));
+                if book.quitting == Some(operation_id) {
+                    book.quitting = None;
+                }
+            }
+            crate::coordinator_shortcuts::suspend(app, false);
+            notify_quit_failure(app, &error.to_string());
+            let targets = host
+                .book
+                .lock()
+                .map(|book| book.device_targets())
+                .unwrap_or_default();
+            for (launch_id, endpoint) in targets {
+                if let Ok(request) = request(&WorkerCommand::QuitFailed {
+                    launch_id,
+                    message: error.to_string(),
+                }) {
+                    let _ = endpoint.retry_call(&request);
+                }
+            }
+        }
+    }
 }
 
 pub(crate) fn shortcut_destination_available(app: &AppHandle) -> AppResult<bool> {
     let host = app.state::<Host>();
     let book = host.book.lock().map_err(|_| invalid())?;
-    if !book.exported {
+    if !book.exported || book.quitting.is_some() {
         return Ok(false);
     }
     let recent = book.shortcut_order.clone();
@@ -1111,7 +1419,7 @@ fn open(app: &AppHandle, vault_id: &str, activate: bool) -> AppResult<Uuid> {
     let executable = std::env::current_exe()?;
     let host = app.state::<Host>();
     let mut book = host.book.lock().map_err(|_| invalid())?;
-    if !book.exported {
+    if !book.exported || book.quitting.is_some() {
         return Err(invalid());
     }
     if let Some(launch) = book.workers.get(vault_id) {
@@ -1473,6 +1781,18 @@ pub fn register_worker(
                     .map_err(|_| "worker close unavailable".to_string())?;
                 Ok(json!({"accepted":true}))
             }
+            WorkerCommand::QuitFailed { launch_id, message } => {
+                if launch_id != registration.launch_id {
+                    return Err("worker identity mismatch".into());
+                }
+                handle
+                    .emit(
+                        crate::app_events::AppEvent::EnvironmentQuitFailed.as_str(),
+                        json!({"message":message}),
+                    )
+                    .map_err(|_| "quit failure notification unavailable".to_string())?;
+                Ok(json!({"accepted":true}))
+            }
             WorkerCommand::CloseStatus {
                 launch_id,
                 operation_id,
@@ -1605,6 +1925,118 @@ fn await_open_result(host: &Endpoint, operation_id: Uuid, deadline: Instant) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quit_is_one_retryable_intent_and_fences_new_actions_until_failure() {
+        let mut book = Book {
+            exported: true,
+            ..Book::default()
+        };
+        let instance = Uuid::new_v4();
+        let quit = request(&HostCommand::Quit).unwrap();
+        let (reply, action) = book.accept(instance, quit.clone()).unwrap();
+        assert!(matches!(action, Some(Action::Quit)));
+        assert_eq!(reply["operation_id"], quit.id.to_string());
+        assert_eq!(book.open_status(quit.id).unwrap(), OpenProgress::Pending);
+        assert!(book.accept(instance, quit.clone()).unwrap().1.is_none());
+        let alias = request(&HostCommand::Quit).unwrap();
+        let retry = book.accept(instance, alias.clone()).unwrap();
+        assert_eq!(retry.0, reply);
+        assert!(retry.1.is_none());
+        for command in [
+            HostCommand::Activate,
+            HostCommand::Open {
+                vault_id: "capture".into(),
+            },
+            HostCommand::Shortcut {
+                command_id: crate::hotkeys::GlobalShortcutCommandId::NewDrawing,
+                accelerator: None,
+            },
+        ] {
+            assert!(book.accept(instance, request(&command).unwrap()).is_err());
+        }
+        assert!(book
+            .accept(instance, request(&HostCommand::Status).unwrap())
+            .is_ok());
+        book.complete_open(quit.id, Err(AppError::InvalidArg("save cancelled".into())));
+        book.quitting = None;
+        assert!(matches!(
+            book.open_status(quit.id).unwrap(),
+            OpenProgress::Failed { .. }
+        ));
+        assert!(book.accept(instance, quit).unwrap().1.is_none());
+        assert!(book.accept(instance, alias.clone()).unwrap().1.is_none());
+        assert!(matches!(
+            book.open_status(alias.id).unwrap(),
+            OpenProgress::Failed { .. }
+        ));
+        assert!(matches!(
+            book.accept(instance, request(&HostCommand::Quit).unwrap())
+                .unwrap()
+                .1,
+            Some(Action::Quit)
+        ));
+    }
+
+    #[test]
+    fn quit_owner_waits_for_child_exit_and_the_physical_lease() {
+        use crate::coordinator_shutdown::Owner;
+        let root = std::env::temp_dir().join(format!("ms-quit-owner-{}", Uuid::new_v4()));
+        let directory = crate::profiles::profile_dir(&root, "capture");
+        std::fs::create_dir_all(&directory).unwrap();
+        let launch_id = Uuid::new_v4();
+        let book = Mutex::new(Book::default());
+        book.lock().unwrap().workers.insert(
+            "capture".into(),
+            Launch {
+                id: launch_id,
+                endpoint: None,
+                ready: false,
+                error: None,
+                adopted: false,
+                focused_window: None,
+            },
+        );
+        // Before the child starts there is no OS lease, but the reservation is live.
+        assert_eq!(
+            close_owner(&book, &root, "capture", launch_id).unwrap(),
+            Owner::Present
+        );
+        let owner = crate::storage_locks::VaultLock::acquire(&directory).unwrap();
+        book.lock().unwrap().remove_launch("capture", launch_id);
+        assert_eq!(
+            close_owner(&book, &root, "capture", launch_id).unwrap(),
+            Owner::Changed
+        );
+        drop(owner);
+        assert_eq!(
+            close_owner(&book, &root, "capture", launch_id).unwrap(),
+            Owner::Released
+        );
+        book.lock().unwrap().workers.insert(
+            "capture".into(),
+            Launch {
+                id: launch_id,
+                endpoint: None,
+                ready: false,
+                error: None,
+                adopted: true,
+                focused_window: None,
+            },
+        );
+        let owner = crate::storage_locks::VaultLock::acquire(&directory).unwrap();
+        assert_eq!(
+            close_owner(&book, &root, "capture", launch_id).unwrap(),
+            Owner::Present
+        );
+        drop(owner);
+        assert_eq!(
+            close_owner(&book, &root, "capture", launch_id).unwrap(),
+            Owner::Released
+        );
+        assert!(book.lock().unwrap().workers.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn shortcut_requests_replay_without_redispatch_and_keep_terminal_failure() {

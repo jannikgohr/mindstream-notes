@@ -55,6 +55,7 @@ struct Registry {
 pub(crate) struct Shortcuts {
     generation: AtomicU64,
     running: AtomicBool,
+    suspended: AtomicBool,
     registry: Mutex<Registry>,
 }
 
@@ -266,7 +267,9 @@ impl Registration for Native<'_> {
 }
 
 fn desired(app: &AppHandle) -> AppResult<Vec<Binding>> {
-    if !crate::environment::os_integrations_enabled() {
+    if app.state::<Shortcuts>().suspended.load(Ordering::Acquire)
+        || !crate::environment::os_integrations_enabled()
+    {
         return Ok(Vec::new());
     }
     if !crate::vault_supervisor::shortcut_destination_available(app)? {
@@ -275,6 +278,13 @@ fn desired(app: &AppHandle) -> AppResult<Vec<Binding>> {
     let root = crate::paths::app_data_root(app)?;
     let _lock = crate::storage_locks::RootLock::acquire(&root)?;
     bindings(&crate::ui_settings::shortcut_bindings(&root)?)
+}
+
+pub(crate) fn suspend(app: &AppHandle, suspended: bool) {
+    app.state::<Shortcuts>()
+        .suspended
+        .store(suspended, Ordering::Release);
+    refresh(app);
 }
 
 pub(crate) fn status(app: &AppHandle) -> AppResult<Status> {

@@ -83,6 +83,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--exe", type=Path, default=Path(__file__).resolve().parents[1] / "target/debug/mindstream-notes.exe")
+    parser.add_argument("--wait-for-external-quit", action="store_true", help="wait for external menu or IPC Quit after writing quit-ready.json")
     args = parser.parse_args()
     assert os.name == "nt", "this fixture checks Windows native workers"
     output = args.output.resolve()
@@ -169,7 +170,7 @@ def main():
         try:
             peer = wait(endpoint)
             wait(lambda: status()["initialized"] and any(entry["id"] == "other" and entry["ready"] for entry in status()["workers"]))
-            assert status()["contract"]["protocol"] == 4
+            assert status()["contract"]["protocol"] == 5
             assert status()["shortcuts"]["vault_id"] == "capture"
             assert not status()["shortcutRegistration"]["registered"], "test root registered OS shortcuts"
             completed("shortcut", command_id="showApp")
@@ -219,7 +220,22 @@ def main():
             completed("shortcut", command_id="newInkNote")
             assert counts("other")["ink"] == before.get("ink", 0) + 1
             print("Zero eligibility fails visibly; closed eligible MRU routing passed")
-            close_all()
+            completed("open", vault_id="capture")
+            wait(lambda: len(status()["workers"]) == 2 and all(entry["ready"] for entry in status()["workers"]))
+            if args.wait_for_external_quit:
+                (output / "quit-ready.json").write_text(json.dumps({"host_pid": host.pid, "vaults": vaults}), encoding="utf-8")
+                print("Both workers ready for external Quit", flush=True)
+            else:
+                quit_id = str(uuid.uuid4())
+                assert call(peer, {"command": "quit"}, quit_id)["Ok"] == {"accepted": True, "operation_id": quit_id}
+            # Actual coordinator exit is required, then acquire every physical
+            # vault lease. Lost IPC replies alone prove neither condition.
+            assert host.wait(timeout=190) == 0
+            with lease(root / ".coordinator.lock"):
+                for vault_id in vaults:
+                    with lease(root / "profiles" / vault_id / ".vault.lock"):
+                        pass
+            print("Whole-app Quit closed both workers and released coordinator/vault leases")
             clean = True
         finally:
             # Graceful close retains every worker's real ownership until it exits.
@@ -231,10 +247,10 @@ def main():
                     clean = True
                 except (OSError, AssertionError, KeyError):
                     pass
-            if clean:
+            if clean and host.poll() is None:
                 host.terminate()
                 host.wait(timeout=10)
-            else:
+            elif not clean:
                 print(f"Fixture retained for inspection; owned coordinator PID {host.pid}")
         print(f"Native shortcut checks passed; workers exited and artifacts retained at {output}")
 

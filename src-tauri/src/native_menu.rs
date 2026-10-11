@@ -82,11 +82,7 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
     let item_id = event.id().as_ref();
     match item_id {
         ID_QUIT => {
-            if app.try_state::<crate::vault_supervisor::Worker>().is_some() {
-                crate::worker_shutdown::request_close(app);
-            } else {
-                app.exit(0);
-            }
+            crate::vault_supervisor::request_quit(app);
         }
         ID_CLOSE_WINDOW => close_focused_window(app),
         ID_MAIN_WINDOW => crate::tray::focus_main_window(app),
@@ -112,6 +108,11 @@ pub fn refresh_window_menu(app: &AppHandle) {
 
 fn build_menu(app: &AppHandle, labels: &NativeMenuLabels) -> tauri::Result<Menu<tauri::Wry>> {
     let app_menu = build_app_menu(app, labels)?;
+    if app.try_state::<crate::vault_supervisor::Host>().is_some() {
+        // The coordinator has no editor. Its own macOS menu still needs Quit
+        // while every worker is closed or hidden.
+        return Menu::with_items(app, &[&app_menu]);
+    }
     let file_menu = build_file_menu(app, labels)?;
     let edit_menu = build_edit_menu(app, labels)?;
     let view_menu = build_view_menu(app, labels)?;
@@ -143,6 +144,7 @@ fn build_app_menu(
     };
     let about = PredefinedMenuItem::about(app, Some(&labels.about), Some(about_metadata))?;
     let settings = item(app, ID_SETTINGS, &labels.settings, Some("CmdOrCtrl+,"))?;
+    settings.set_enabled(app.try_state::<crate::vault_supervisor::Host>().is_none())?;
     let services = PredefinedMenuItem::services(app, Some(&labels.services))?;
     let hide = PredefinedMenuItem::hide(app, Some(&labels.hide))?;
     let hide_others = PredefinedMenuItem::hide_others(app, Some(&labels.hide_others))?;

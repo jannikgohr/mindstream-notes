@@ -142,7 +142,7 @@ pub fn sync_hotkey_displays(app: &AppHandle) {
 
 fn handle_menu_event(app: &AppHandle, item_id: &str) {
     if item_id == QUIT_ID {
-        app.exit(0);
+        crate::vault_supervisor::request_quit(app);
         return;
     }
 

@@ -9,6 +9,7 @@ export enum TauriEventName {
   CollabCredentialsChanged = 'collab-credentials-changed',
   CustomWindowDecorationsChanged = 'custom-window-decorations-changed',
   DesktopSettingsChanged = 'desktop-settings-changed',
+  EnvironmentQuitFailed = 'environment-quit-failed',
   FullscreenNote = 'fullscreen-note',
   ImportProgress = 'import-progress',
   NativeMenuCommand = 'native-menu-command',
@@ -47,6 +48,7 @@ export interface CollabCredentialsChangedPayload {
 }
 
 export type TauriEvents = {
+  'environment-quit-failed': { message: string };
   'fullscreen-note': { noteId: string; title: string };
   'custom-window-decorations-changed': boolean;
   'native-menu-command': unknown;
