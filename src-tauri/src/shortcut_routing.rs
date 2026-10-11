@@ -119,6 +119,13 @@ pub(crate) fn remember(
 }
 
 pub(crate) fn select(root: &Path, live_recency: &[String]) -> AppResult<Selection> {
+    select_with_directory(root, live_recency).map(|(selection, _)| selection)
+}
+
+pub(crate) fn select_with_directory(
+    root: &Path,
+    live_recency: &[String],
+) -> AppResult<(Selection, Option<PathBuf>)> {
     let _lock = RootLock::acquire(root)?;
     let index = crate::profiles::load(root)?.ok_or_else(invalid)?;
     let doc = read(root)?;
@@ -152,13 +159,17 @@ pub(crate) fn select(root: &Path, live_recency: &[String]) -> AppResult<Selectio
         })
         .or_else(|| eligible.iter().find(|entry| entry.vault_id == index.active))
         .or_else(|| eligible.first());
-    Ok(match chosen {
-        None => Selection::None,
-        Some(entry) => Selection::Target {
-            vault_id: entry.vault_id.clone(),
-            eligible: eligible.into_iter().map(|entry| entry.vault_id).collect(),
+    let directory = chosen.map(|entry| entry.directory.clone());
+    Ok((
+        match chosen {
+            None => Selection::None,
+            Some(entry) => Selection::Target {
+                vault_id: entry.vault_id.clone(),
+                eligible: eligible.into_iter().map(|entry| entry.vault_id).collect(),
+            },
         },
-    })
+        directory,
+    ))
 }
 
 #[cfg(test)]

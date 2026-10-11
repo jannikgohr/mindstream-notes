@@ -27,6 +27,8 @@ pub mod collections;
 pub mod content_stats;
 #[cfg(desktop)]
 pub mod coordinator_ipc;
+#[cfg(desktop)]
+mod coordinator_shortcuts;
 pub mod data;
 pub mod db;
 #[cfg(desktop)]
@@ -58,6 +60,8 @@ pub mod root_documents;
 pub mod search;
 pub mod serde_helpers;
 pub mod sharing;
+#[cfg(desktop)]
+mod shortcut_actions;
 #[cfg(desktop)]
 mod shortcut_routing;
 pub mod signatures;
@@ -437,6 +441,8 @@ pub fn run() {
             app.manage(hotkeys::NativeHotkeyDisplays::default());
             #[cfg(desktop)]
             app.manage(hotkeys::DesktopGlobalShortcuts::default());
+            #[cfg(desktop)]
+            app.manage(shortcut_actions::Actions::default());
 
             // Create after profile selection so the first document gets the
             // correct account's CSP. A fresh document after sign-in/sign-out
@@ -755,6 +761,7 @@ pub fn run() {
                 hotkeys::set_hotkey_displays,
                 #[cfg(desktop)]
                 hotkeys::sync_global_shortcuts,
+                hotkeys::get_global_shortcut_status,
                 #[cfg(desktop)]
                 desktop_settings::get_close_to_tray,
                 #[cfg(desktop)]

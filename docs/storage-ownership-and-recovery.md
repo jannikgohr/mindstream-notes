@@ -34,17 +34,38 @@ This identifies a destination and does not itself authorize note creation.
 Startup recovers a damaged recency document from a validated previous copy.
 Unrecoverable history makes shortcut selection unavailable while retaining both
 copies; manual vault opening remains usable. Runtime reads never overwrite
-corrupt vault settings or silently choose another destination. Actual dispatch
-still needs execution-time eligibility, readiness and closing checks.
+corrupt vault settings or silently choose another destination. Dispatch pins the selected physical directory, waits for an authenticated ready
+worker, then rechecks eligibility, index membership, current binding and service
+admission. Failure never silently chooses a different destination.
+
+The root coordinator owns system-wide registrations. Defaults and supported
+keys come from `src/lib/hotkeys/global-shortcuts.json`, also consumed by the
+frontend. Root bindings are read under RootLock; OS calls and worker IPC happen
+after releasing it. Readiness, eligibility edits, device edits and vault deletion
+invalidate registrations. Unchanged bindings remain registered. Failed removals
+stay tracked; callbacks must still match the current canonical binding. Failed
+registrations/removals and the latest failed action appear in shortcut settings.
+Workers never unregister a peer's bindings when their window closes.
+
+Authenticated action requests use the same UUID through bounded socket retries.
+The root retains terminal operation results; the target worker retains action
+receipts for ten minutes, with a capacity of 1024. Reused IDs with changed inputs
+are rejected. DB success remains cached even when focus/notification delivery
+fails, so a lost response cannot create a second note. Frontend key dispatch
+queries current coordinator ownership before invoking the same local command;
+unknown or settling ownership suppresses local execution. Dev/test registration
+remains disabled. The worker protocol is 3, with the shared shortcut manifest
+included in the runtime compatibility hash. Whole-app shutdown and real OS
+keyboard checks remain required before enabling supervision by default.
 
 All document operations hold the root OS lock. Set/reset operations patch one
 field after rereading the document; they never save a whole frontend cache.
 The caller's expected vault ID must match the running worker. Frontend profile
 readiness waits for migration, and failed writes surface to callers. Focus and
 same-worker popout notifications refresh caches from disk. A recovery can reduce
-the revision, so caches accept that refreshed snapshot. Cross-worker broadcast
-is pending coordinator implementation. Other browser persistence consumers
-still need migration before each worker can use an isolated WebView store.
+the revision, so caches accept that refreshed snapshot. Cross-worker invalidations reload each worker's own canonical documents.
+Remaining browser-persistence audit and platform checks are tracked in the
+implementation plan before supervision becomes the default.
 
 Native sidebar widths use root fields `appearance.leftSidebarWidth` and
 `appearance.rightSidebarWidth`. Sorting, direction, and sidebar open/closed

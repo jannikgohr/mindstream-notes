@@ -53,11 +53,16 @@ pub struct RuntimeContract {
 impl RuntimeContract {
     pub fn current() -> &'static Self {
         static CONTRACT: LazyLock<RuntimeContract> = LazyLock::new(|| RuntimeContract {
-            protocol: 2,
+            protocol: 3,
             storage: 2,
             settings_schema: format!(
                 "{:x}",
-                Sha256::digest(include_bytes!("../../src/lib/settings/schema.json"))
+                Sha256::new()
+                    .chain_update(include_bytes!("../../src/lib/settings/schema.json"))
+                    .chain_update(include_bytes!(
+                        "../../src/lib/hotkeys/global-shortcuts.json"
+                    ))
+                    .finalize()
             ),
         });
         &CONTRACT

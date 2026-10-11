@@ -30,6 +30,7 @@
     hydrateBindingsFromSettings
   } from '$lib/hotkeys/store.svelte';
   import { initHotkeys } from '$lib/hotkeys/manager.svelte';
+  import { watchGlobalShortcutOwnership } from '$lib/hotkeys/global-ownership.svelte';
   import {
     displayBinding,
     globalShortcutAccelerator,
@@ -104,6 +105,7 @@
   onMount(() => {
     void loadProfiles();
     initHotkeys();
+    const stopShortcutOwnership = watchGlobalShortcutOwnership();
     initNativeMenuCommands();
     // Route plugin-contributed settings through the core store + i18n before
     // any plugin loads, then discover + register plugins from disk (backend)
@@ -132,6 +134,7 @@
     window.addEventListener('wheel', blockTouchZoom, { passive: false });
     return () => {
       window.removeEventListener('wheel', blockTouchZoom);
+      stopShortcutOwnership();
       teardownSyncStatus();
       teardownTreeRefresh();
       void teardownGlobalShortcuts();

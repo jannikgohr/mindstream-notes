@@ -102,6 +102,23 @@ fn read(path: &Path, device: bool) -> AppResult<Document> {
     decode(&fs::read(path)?, device)
 }
 
+/// Caller holds RootLock. The coordinator never imports browser defaults or
+/// repairs a vault document while deciding which OS shortcuts to register.
+#[cfg(desktop)]
+pub(crate) fn shortcut_bindings(root: &Path) -> AppResult<Values> {
+    let path = root.join("ui-settings.json");
+    match fs::read(&path) {
+        Ok(raw) => Ok(decode(&raw, true)?.values),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if marker(&path).try_exists()? || root.join("ui-settings.json.previous").try_exists()? {
+                return Err(invalid());
+            }
+            Ok(Values::new())
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn marker(path: &Path) -> std::path::PathBuf {
     path.with_extension("migrated")
 }
@@ -767,6 +784,7 @@ pub async fn patch_ui_setting(
     let (root, vault) = context(&app, &expected_vault_id)?;
     let job = app.state::<crate::vault_jobs::Saves>().enter()?;
     let device_changed = device_scope(&id);
+    let shortcut_changed = id == GLOBAL_SHORTCUTS;
     let blocking_job = job.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let _job = blocking_job;
@@ -778,11 +796,11 @@ pub async fn patch_ui_setting(
         log::warn!("UI settings persisted but window notification failed: {err}");
     }
     #[cfg(desktop)]
-    if device_changed {
+    if device_changed || shortcut_changed {
         crate::vault_supervisor::device_settings_changed(&app);
     }
     #[cfg(not(desktop))]
-    let _ = device_changed;
+    let _ = (device_changed, shortcut_changed);
     Ok(result)
 }
 

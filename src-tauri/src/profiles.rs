@@ -647,6 +647,8 @@ pub fn delete_profile(app: tauri::AppHandle, id: String) -> CommandResult<()> {
         .map(|p| p.id.clone())
         .unwrap_or_else(|| DEFAULT_PROFILE_ID.to_string());
     delete(&root, &id, &active)?;
+    #[cfg(desktop)]
+    crate::vault_supervisor::device_settings_changed(&app);
     // Best-effort: drop the deleted vault's keyring session so no stale
     // credential lingers after its files are gone.
     crate::auth::forget_profile_keyring(&app, &id);

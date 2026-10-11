@@ -163,6 +163,7 @@ export enum TauriCommandName {
   SweepUnreferencedMarkdownAssets = 'sweep_unreferenced_markdown_assets',
   SwitchProfile = 'switch_profile',
   SyncGlobalShortcuts = 'sync_global_shortcuts',
+  GetGlobalShortcutStatus = 'get_global_shortcut_status',
   SyncNow = 'sync_now',
   StoreVaultCollabSigningMaterial = 'store_vault_collab_signing_material',
   TrashCounts = 'trash_counts',

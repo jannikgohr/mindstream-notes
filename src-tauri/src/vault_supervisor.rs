@@ -33,6 +33,12 @@ enum HostCommand {
     OpenStatus {
         operation_id: Uuid,
     },
+    Shortcut {
+        command_id: crate::hotkeys::GlobalShortcutCommandId,
+        #[serde(default)]
+        accelerator: Option<String>,
+    },
+    ShortcutRegistrationStatus,
     DeviceSettingsChanged {
         vault_id: String,
         launch_id: Uuid,
@@ -82,6 +88,11 @@ enum WorkerCommand {
     RefreshDeviceSettings {
         launch_id: Uuid,
     },
+    Shortcut {
+        launch_id: Uuid,
+        command_id: crate::hotkeys::GlobalShortcutCommandId,
+        accelerator: Option<String>,
+    },
 }
 
 struct Launch {
@@ -121,12 +132,16 @@ enum Action {
     ActivateLast,
     Remember { vault_id: String, revision: u64 },
     RefreshDeviceSettings,
+    Shortcut(crate::hotkeys::GlobalShortcutCommandId, Option<String>),
 }
 
 impl Book {
     fn open_status(&self, operation_id: Uuid) -> AppResult<OpenProgress> {
         let operation = self.operations.get(&operation_id).ok_or_else(invalid)?;
-        if operation.input["command"].as_str() != Some("open") {
+        if !matches!(
+            operation.input["command"].as_str(),
+            Some("open" | "shortcut")
+        ) {
             return Err(invalid());
         }
         Ok(match &operation.open_result {
@@ -140,8 +155,10 @@ impl Book {
 
     fn complete_open(&mut self, operation_id: Uuid, result: AppResult<()>) {
         if let Some(operation) = self.operations.get_mut(&operation_id) {
-            if operation.input["command"].as_str() == Some("open")
-                && operation.open_result.is_none()
+            if matches!(
+                operation.input["command"].as_str(),
+                Some("open" | "shortcut")
+            ) && operation.open_result.is_none()
             {
                 operation.open_result = Some(result.map_err(|error| error.to_string()));
             }
@@ -232,7 +249,18 @@ impl Book {
         }
         let mut action = None;
         match command {
-            HostCommand::OpenStatus { .. } => unreachable!(),
+            HostCommand::OpenStatus { .. } | HostCommand::ShortcutRegistrationStatus => {
+                unreachable!()
+            }
+            HostCommand::Shortcut {
+                command_id,
+                accelerator,
+            } => {
+                if !self.exported {
+                    return Err(invalid());
+                }
+                action = Some(Action::Shortcut(command_id, accelerator));
+            }
             HostCommand::Status => {
                 return Ok((
                     json!({"contract":RuntimeContract::current(),"initialized":self.exported,"active":self.last,"workers":self.workers.iter().map(|(id, launch)| json!({
@@ -602,6 +630,7 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
         handle_host(&handle, request)
             .map_err(|_| "vault request unavailable; ownership retained".into())
     })?;
+    app.manage(crate::coordinator_shortcuts::Shortcuts::default());
     app.manage(Host {
         instance,
         endpoint,
@@ -654,6 +683,7 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
                         log::error!("[vaults] initial launch failed: {error}");
                     }
                     broadcast_device_settings(&task_app);
+                    crate::coordinator_shortcuts::refresh(&task_app);
                 })
             {
                 log::error!("[vaults] recovery thread unavailable: {error}");
@@ -769,11 +799,24 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
     };
     let command: HostCommand =
         serde_json::from_value(request.payload.clone()).map_err(|_| invalid())?;
-    let tracked_open = matches!(command, HostCommand::Open { .. });
+    if matches!(command, HostCommand::ShortcutRegistrationStatus) {
+        return serde_json::to_value(host_shortcut_status(app)?).map_err(|_| invalid());
+    }
+    let settings_notice = matches!(
+        command,
+        HostCommand::DeviceSettingsChanged { .. } | HostCommand::Ready { .. }
+    );
+    let tracked_open = matches!(
+        command,
+        HostCommand::Open { .. } | HostCommand::Shortcut { .. }
+    );
     let status_request = matches!(command, HostCommand::Status);
     if matches!(
         command,
-        HostCommand::Status | HostCommand::Activate | HostCommand::Open { .. }
+        HostCommand::Status
+            | HostCommand::Activate
+            | HostCommand::Open { .. }
+            | HostCommand::Shortcut { .. }
     ) {
         reconcile_adopted(&host.book, &crate::paths::app_data_root(app)?)?;
     }
@@ -798,6 +841,8 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
             .and_then(|root| crate::shortcut_routing::select(&root, &recent))
             .and_then(|selection| serde_json::to_value(selection).map_err(|_| invalid()))
             .unwrap_or_else(|_| json!({"state":"unavailable"}));
+        reply["shortcutRegistration"] =
+            serde_json::to_value(host_shortcut_status(app)?).map_err(|_| invalid())?;
     }
     if let Some(action) = action {
         let task_app = app.clone();
@@ -833,7 +878,18 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
                         return;
                     }
                     Action::RefreshDeviceSettings => {
+                        crate::coordinator_shortcuts::refresh(&task_app);
                         broadcast_device_settings(&task_app);
+                        return;
+                    }
+                    Action::Shortcut(command, accelerator) => {
+                        let result = dispatch_shortcut(&task_app, request_id, command, accelerator);
+                        if let Err(error) = &result {
+                            log::error!("[shortcuts] action failed: {error}");
+                        }
+                        if let Ok(mut book) = task_app.state::<Host>().book.lock() {
+                            book.complete_open(request_id, result);
+                        }
                         return;
                     }
                 };
@@ -860,7 +916,142 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
             return Err(error.into());
         }
     }
+    if settings_notice {
+        let refresh = app.clone();
+        let _ = std::thread::Builder::new()
+            .name("shortcut-refresh".into())
+            .spawn(move || crate::coordinator_shortcuts::refresh(&refresh));
+    }
     Ok(reply)
+}
+
+pub(crate) fn shortcut_destination_available(app: &AppHandle) -> AppResult<bool> {
+    let host = app.state::<Host>();
+    let book = host.book.lock().map_err(|_| invalid())?;
+    if !book.exported {
+        return Ok(false);
+    }
+    let recent = book.shortcut_order.clone();
+    drop(book);
+    Ok(matches!(
+        crate::shortcut_routing::select(&crate::paths::app_data_root(app)?, &recent)?,
+        crate::shortcut_routing::Selection::Target { .. }
+    ))
+}
+
+pub(crate) fn shortcut_registration_status(
+    app: &AppHandle,
+) -> AppResult<crate::coordinator_shortcuts::Status> {
+    let worker = app.state::<Worker>();
+    let host = worker.host.lock().map_err(|_| invalid())?.clone();
+    let value = host
+        .retry_call(&request(&HostCommand::ShortcutRegistrationStatus)?)?
+        .map_err(AppError::InvalidArg)?;
+    serde_json::from_value(value).map_err(|_| invalid())
+}
+
+fn host_shortcut_status(app: &AppHandle) -> AppResult<crate::coordinator_shortcuts::Status> {
+    let mut status = crate::coordinator_shortcuts::status(app)?;
+    if status.error.is_none() {
+        let host = app.state::<Host>();
+        let book = host.book.lock().map_err(|_| invalid())?;
+        status.error = book
+            .operations
+            .values()
+            .filter(|operation| operation.input["command"].as_str() == Some("shortcut"))
+            .max_by_key(|operation| operation.at)
+            .and_then(|operation| match &operation.open_result {
+                Some(Err(message)) => Some(message.clone()),
+                _ => None,
+            });
+    }
+    Ok(status)
+}
+
+pub(crate) fn run_shortcut(
+    app: &AppHandle,
+    command_id: crate::hotkeys::GlobalShortcutCommandId,
+    accelerator: String,
+) {
+    let app = app.clone();
+    let _ = std::thread::Builder::new()
+        .name("global-shortcut".into())
+        .spawn(move || {
+            if let Ok(request) = request(&HostCommand::Shortcut {
+                command_id,
+                accelerator: Some(accelerator),
+            }) {
+                if let Err(error) = handle_host(&app, request) {
+                    log::error!("[shortcuts] request rejected: {error}");
+                }
+            }
+        });
+}
+
+fn dispatch_shortcut(
+    app: &AppHandle,
+    request_id: Uuid,
+    command_id: crate::hotkeys::GlobalShortcutCommandId,
+    accelerator: Option<String>,
+) -> AppResult<()> {
+    let root = crate::paths::app_data_root(app)?;
+    {
+        let _lock = crate::storage_locks::RootLock::acquire(&root)?;
+        crate::coordinator_shortcuts::require_current_binding(
+            &root,
+            command_id,
+            accelerator.as_deref(),
+        )?;
+    }
+    let recent = app
+        .state::<Host>()
+        .book
+        .lock()
+        .map_err(|_| invalid())?
+        .shortcut_order
+        .clone();
+    let (selection, directory) = crate::shortcut_routing::select_with_directory(&root, &recent)?;
+    let crate::shortcut_routing::Selection::Target { vault_id, .. } = selection else {
+        return Err(AppError::InvalidArg(
+            "no vault has global shortcuts enabled".into(),
+        ));
+    };
+    let directory = directory.ok_or_else(invalid)?;
+    let launch_id = open(app, &vault_id, false)?;
+    let (endpoint, _) = wait_for_ready(
+        &app.state::<Host>().book,
+        &vault_id,
+        launch_id,
+        Instant::now() + OPEN_TIMEOUT,
+    )?;
+    let identity = endpoint
+        .retry_call(&request(&WorkerCommand::Identify { launch_id })?)?
+        .map_err(AppError::InvalidArg)?;
+    let identity: crate::worker_registration::Identity =
+        serde_json::from_value(identity).map_err(|_| invalid())?;
+    identity.require_compatible()?;
+    if !identity.ready
+        || identity.launch_id != launch_id
+        || identity.vault_id != vault_id
+        || identity.directory != directory
+        || identity.root != std::fs::canonicalize(&root)?
+    {
+        return Err(invalid());
+    }
+    crate::foreground::transfer(&endpoint);
+    let request = Request {
+        id: request_id,
+        payload: serde_json::to_value(WorkerCommand::Shortcut {
+            launch_id,
+            command_id,
+            accelerator,
+        })
+        .map_err(|_| invalid())?,
+    };
+    endpoint
+        .retry_call(&request)?
+        .map(|_| ())
+        .map_err(AppError::InvalidArg)
 }
 
 /// Adopted workers have no child wait handle in this host. Status and launch
@@ -1211,9 +1402,20 @@ pub fn register_worker(
     let worker_host = host.clone();
     let handle = app.clone();
     let server = listener.serve(move |request| {
+        let request_id = request.id;
         let command: WorkerCommand = serde_json::from_value(request.payload)
             .map_err(|_| "invalid worker request".to_string())?;
         match command {
+            WorkerCommand::Shortcut {
+                launch_id,
+                command_id,
+                accelerator,
+            } => {
+                if launch_id != registration.launch_id || !worker_ready.load(Ordering::Acquire) {
+                    return Err("shortcut destination identity or readiness changed".into());
+                }
+                crate::shortcut_actions::execute(&handle, request_id, command_id, accelerator)
+            }
             WorkerCommand::Activate { window } => {
                 let label = window.unwrap_or_else(|| "main".into());
                 if !valid_window(&label) {
@@ -1392,6 +1594,39 @@ fn await_open_result(host: &Endpoint, operation_id: Uuid, deadline: Instant) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shortcut_requests_replay_without_redispatch_and_keep_terminal_failure() {
+        let mut book = Book {
+            exported: true,
+            ..Book::default()
+        };
+        let instance = Uuid::new_v4();
+        let request = request(&HostCommand::Shortcut {
+            command_id: crate::hotkeys::GlobalShortcutCommandId::NewDrawing,
+            accelerator: None,
+        })
+        .unwrap();
+        assert!(matches!(
+            book.accept(instance, request.clone()).unwrap().1,
+            Some(Action::Shortcut(
+                crate::hotkeys::GlobalShortcutCommandId::NewDrawing,
+                None
+            ))
+        ));
+        assert!(book.accept(instance, request.clone()).unwrap().1.is_none());
+        book.complete_open(
+            request.id,
+            Err(AppError::InvalidArg("capture vault is disabled".into())),
+        );
+        assert!(
+            matches!(book.open_status(request.id).unwrap(), OpenProgress::Failed { message } if message.contains("disabled"))
+        );
+        let mut changed = request.clone();
+        changed.payload["command_id"] = json!("newInkNote");
+        assert!(book.accept(instance, changed).is_err());
+        assert!(book.accept(instance, request).unwrap().1.is_none());
+    }
 
     #[test]
     fn open_results_are_repeatable_and_status_polls_do_not_consume_replay_capacity() {

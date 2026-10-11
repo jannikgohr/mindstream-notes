@@ -5,9 +5,10 @@ ownership, root desktop settings, dictionary publication, root recovery, and
 vault signing credentials are implemented and pass the Windows checks.
 Schema settings now use root/vault documents. Opt-in supervision exports legacy
 browser state before opening isolated vault workers and can adopt surviving
-workers after a coordinator restart. Platform activation, automatic host revival,
-shared OS integrations and the vault-opening UI remain
-pending; normal startup and existing isolated test devices still use direct mode.
+workers after a coordinator restart. Coordinator shortcut registration and
+eligible-vault action dispatch are implemented. Platform checks, automatic host
+revival, shared tray/updater integration and the vault-opening UI remain pending;
+normal startup and existing isolated test devices still use direct mode.
 Supervised worker close now waits for content-window persistence; coordinated
 whole-app shutdown and source/target handoff are still pending.
 
@@ -861,6 +862,39 @@ Rust fmt/clippy and the full serial suite pass 836 unit tests and one integratio
 test, with five ignored tests. A real subprocess fixture verifies that dropping
 an unclaimed startup result releases its OS lease, removes both proxy routes and
 the input, and permits the service drain to complete.
+
+Coordinator shortcut execution slice on 2026-10-11: the coordinator registers
+from canonical root bindings and a shared frontend/native manifest of defaults
+and supported keys. Workers submit invalidations and never register or remove
+peer shortcuts. Enablement edits, readiness and vault deletion trigger refresh.
+Unchanged registrations are retained. Failed additions/removals remain visible
+and retry on the next invalidation; invalid settings disable the desired plan.
+A failed removal remains tracked, and stale callbacks cannot execute a binding
+that has since changed. Held-key repeats do not start another action.
+
+Each action selects one eligible physical vault, opens it if closed, waits for
+readiness, authenticates its launch/storage identity and transfers foreground
+permission. The worker rechecks index membership, eligibility, current binding
+and service admission before writing. Root and worker request receipts preserve
+success/failure during bounded retries; a lost reply or notification cannot
+create a second note. Failure never selects another vault. Only the main window
+receives the created-note notification. Native ownership is checked before local
+frontend dispatch, including in disabled foreground vaults. Registration and
+latest action failures are visible in the shortcut settings panel. The runtime
+protocol advances to 3; compatibility hashing includes the shortcut manifest.
+
+Validation: Rust formatting/clippy and the full serial suite pass 851 unit tests
+and one integration test, with five ignored tests. Six focused frontend suites
+pass 98 tests; affected lint, type checks and frontend/embedded native builds
+pass. The repeatable Windows smoke check is
+`python src-tauri/scripts/supervised-shortcuts-check.py --output <fresh-directory>`.
+It verified closed capture startup, all note kinds, Show app without note writes,
+disabled foreground isolation, root/private request retries, wrong launch and
+stale binding rejection, zero eligibility with visible failure, closed eligible
+MRU routing and actual worker exits. OS integrations remain disabled in these
+fresh test roots; real keyboard/registration platform QA is still required.
+Whole-app Quit, tray/updater ownership and default supervised startup remain
+pending. Individual worker closure deliberately retains closed capture routing.
 
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.
