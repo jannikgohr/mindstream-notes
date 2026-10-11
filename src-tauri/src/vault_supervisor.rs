@@ -30,6 +30,9 @@ enum HostCommand {
     Open {
         vault_id: String,
     },
+    OpenStatus {
+        operation_id: Uuid,
+    },
     DeviceSettingsChanged {
         vault_id: String,
         launch_id: Uuid,
@@ -93,6 +96,14 @@ struct Operation {
     input: Value,
     reply: Value,
     at: Instant,
+    open_result: Option<Result<(), String>>,
+}
+#[derive(Deserialize, Serialize, Debug, PartialEq, Eq)]
+#[serde(tag = "state", rename_all = "camelCase", deny_unknown_fields)]
+enum OpenProgress {
+    Pending,
+    Ready,
+    Failed { message: String },
 }
 #[derive(Default)]
 struct Book {
@@ -112,6 +123,55 @@ enum Action {
 }
 
 impl Book {
+    fn open_status(&self, operation_id: Uuid) -> AppResult<OpenProgress> {
+        let operation = self.operations.get(&operation_id).ok_or_else(invalid)?;
+        if operation.input["command"].as_str() != Some("open") {
+            return Err(invalid());
+        }
+        Ok(match &operation.open_result {
+            None => OpenProgress::Pending,
+            Some(Ok(())) => OpenProgress::Ready,
+            Some(Err(message)) => OpenProgress::Failed {
+                message: message.clone(),
+            },
+        })
+    }
+
+    fn complete_open(&mut self, operation_id: Uuid, result: AppResult<()>) {
+        if let Some(operation) = self.operations.get_mut(&operation_id) {
+            if operation.input["command"].as_str() == Some("open")
+                && operation.open_result.is_none()
+            {
+                operation.open_result = Some(result.map_err(|error| error.to_string()));
+            }
+        }
+    }
+
+    fn ready_endpoint(
+        &self,
+        vault_id: &str,
+        launch_id: Uuid,
+    ) -> AppResult<Option<(Endpoint, Option<String>)>> {
+        let launch = self.workers.get(vault_id).ok_or_else(|| {
+            AppError::InvalidArg("vault worker exited before opening completed".into())
+        })?;
+        if launch.id != launch_id {
+            return Err(AppError::InvalidArg(
+                "vault worker changed during opening".into(),
+            ));
+        }
+        if let Some(error) = &launch.error {
+            return Err(AppError::InvalidArg(error.clone()));
+        }
+        if !launch.ready {
+            return Ok(None);
+        }
+        Ok(Some((
+            launch.endpoint.clone().ok_or_else(invalid)?,
+            launch.focused_window.clone(),
+        )))
+    }
+
     fn device_targets(&self) -> Vec<(Uuid, Endpoint)> {
         self.workers
             .values()
@@ -151,6 +211,12 @@ impl Book {
             }
             return Ok((operation.reply.clone(), None));
         }
+        if let HostCommand::OpenStatus { operation_id } = command {
+            return Ok((
+                serde_json::to_value(self.open_status(operation_id)?).map_err(|_| invalid())?,
+                None,
+            ));
+        }
         if let HostCommand::DeviceSettingsChanged { vault_id, .. } = &command {
             // Slider/toolbar edits must not consume the mutation replay budget.
             // Retain the latest notice per source; older repeats are harmless
@@ -165,6 +231,7 @@ impl Book {
         }
         let mut action = None;
         match command {
+            HostCommand::OpenStatus { .. } => unreachable!(),
             HostCommand::Status => {
                 return Ok((
                     json!({"contract":RuntimeContract::current(),"initialized":self.exported,"active":self.last,"workers":self.workers.iter().map(|(id, launch)| json!({
@@ -288,7 +355,15 @@ impl Book {
                 }
                 if !launch.ready {
                     launch.ready = true;
-                    action = Some(Action::Open(vault_id));
+                    // Tracked requests perform their own authenticated activation
+                    // before publishing success. Startup still activates here.
+                    if !self.operations.values().any(|operation| {
+                        operation.input["command"].as_str() == Some("open")
+                            && operation.input["vault_id"].as_str() == Some(vault_id.as_str())
+                            && operation.open_result.is_none()
+                    }) {
+                        action = Some(Action::Open(vault_id));
+                    }
                 }
             }
         }
@@ -299,6 +374,7 @@ impl Book {
                 input: request.payload,
                 reply: reply.clone(),
                 at: Instant::now(),
+                open_result: None,
             },
         );
         Ok((reply, action))
@@ -386,7 +462,7 @@ pub fn activate(app: &AppHandle) {
     }
 }
 
-fn request(command: &HostCommand) -> AppResult<Request> {
+fn request(command: &impl Serialize) -> AppResult<Request> {
     Ok(Request {
         id: Uuid::new_v4(),
         payload: serde_json::to_value(command).map_err(|_| invalid())?,
@@ -563,7 +639,7 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
                             }
                         }
                     }
-                    if let Err(error) = open(&task_app, &target) {
+                    if let Err(error) = open(&task_app, &target, true) {
                         log::error!("[vaults] initial launch failed: {error}");
                     }
                     broadcast_device_settings(&task_app);
@@ -682,7 +758,11 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
     };
     let command: HostCommand =
         serde_json::from_value(request.payload.clone()).map_err(|_| invalid())?;
-    if matches!(command, HostCommand::Status | HostCommand::Activate) {
+    let tracked_open = matches!(command, HostCommand::Open { .. });
+    if matches!(
+        command,
+        HostCommand::Status | HostCommand::Activate | HostCommand::Open { .. }
+    ) {
         reconcile_adopted(&host.book, &crate::paths::app_data_root(app)?)?;
     }
     // Replies are acknowledgements. Root filesystem work and worker IPC run
@@ -721,8 +801,20 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
                         return;
                     }
                 };
-                if let Err(error) = target.and_then(|vault_id| open(&task_app, &vault_id)) {
+                let result = target.and_then(|vault_id| {
+                    if tracked_open {
+                        open_and_wait(&task_app, &vault_id)
+                    } else {
+                        open(&task_app, &vault_id, true).map(|_| ())
+                    }
+                });
+                if let Err(error) = &result {
                     log::error!("[vaults] open request failed: {error}");
+                }
+                if tracked_open {
+                    if let Ok(mut book) = task_app.state::<Host>().book.lock() {
+                        book.complete_open(request_id, result);
+                    }
                 }
             })
         {
@@ -771,7 +863,7 @@ fn reconcile_adopted(book: &Mutex<Book>, root: &std::path::Path) -> AppResult<()
     Ok(())
 }
 
-fn open(app: &AppHandle, vault_id: &str) -> AppResult<()> {
+fn open(app: &AppHandle, vault_id: &str, activate: bool) -> AppResult<Uuid> {
     let root = crate::paths::app_data_root(app)?;
     let index = crate::profiles::prepare_coordinator_index(&root)?;
     if !index.profiles.iter().any(|vault| vault.id == vault_id) {
@@ -805,6 +897,7 @@ fn open(app: &AppHandle, vault_id: &str) -> AppResult<()> {
                 vault_id,
                 launch_id,
                 AppError::InvalidArg(error),
+                activate,
             );
         }
         if adopted_pending {
@@ -817,51 +910,24 @@ fn open(app: &AppHandle, vault_id: &str) -> AppResult<()> {
                     .lock()
                     .map_err(|_| invalid())?
                     .remove_launch(vault_id, launch_id);
-                return open(app, vault_id);
+                return open(app, vault_id, activate);
             }
         }
-        if let Some(endpoint) = endpoint {
-            let probe = endpoint
-                .retry_call(&Request {
-                    id: Uuid::new_v4(),
-                    payload: serde_json::to_value(WorkerCommand::Identify { launch_id })
-                        .map_err(|_| invalid())?,
-                })
-                .and_then(|reply| reply.map_err(AppError::InvalidArg));
-            let identity = probe.and_then(|reply| {
-                serde_json::from_value::<crate::worker_registration::Identity>(reply)
-                    .map_err(|_| invalid())
-            });
-            let result = identity.and_then(|identity| {
-                identity.require_compatible()?;
-                if identity.launch_id != launch_id
-                    || identity.vault_id != vault_id
-                    || !identity.ready
-                    || identity.root != std::fs::canonicalize(&root)?
-                    || identity.directory != std::fs::canonicalize(&directory)?
-                {
-                    return Err(invalid());
-                }
-                crate::foreground::transfer(&endpoint);
-                Ok(())
-            });
-            if let Err(error) = result {
-                return retry_after_released_owner(app, &root, vault_id, launch_id, error);
-            }
-            let result = endpoint
-                .call(&Request {
-                    id: Uuid::new_v4(),
-                    payload: serde_json::to_value(WorkerCommand::Activate {
-                        window: focused_window,
-                    })
-                    .map_err(|_| invalid())?,
-                })
-                .and_then(|reply| reply.map_err(AppError::InvalidArg));
-            if let Err(error) = result {
-                return retry_after_released_owner(app, &root, vault_id, launch_id, error);
+        if let Some(endpoint) = endpoint.filter(|_| activate) {
+            if let Err(error) = activate_worker(
+                &root,
+                &directory,
+                vault_id,
+                launch_id,
+                &endpoint,
+                focused_window,
+            ) {
+                return retry_after_released_owner(
+                    app, &root, vault_id, launch_id, error, activate,
+                );
             }
         }
-        return Ok(());
+        return Ok(launch_id);
     }
     let launch_id = Uuid::new_v4();
     book.workers.insert(
@@ -936,7 +1002,77 @@ fn open(app: &AppHandle, vault_id: &str) -> AppResult<()> {
             .remove_launch(vault_id, launch_id);
         return Err(error.into());
     }
-    Ok(())
+    Ok(launch_id)
+}
+
+const OPEN_TIMEOUT: Duration = Duration::from_secs(90);
+
+fn wait_for_ready(
+    book: &Mutex<Book>,
+    vault_id: &str,
+    launch_id: Uuid,
+    deadline: Instant,
+) -> AppResult<(Endpoint, Option<String>)> {
+    loop {
+        if let Some(endpoint) = book
+            .lock()
+            .map_err(|_| invalid())?
+            .ready_endpoint(vault_id, launch_id)?
+        {
+            return Ok(endpoint);
+        }
+        if Instant::now() >= deadline {
+            return Err(AppError::InvalidArg(
+                "vault opening timed out; any running worker has been left intact".into(),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
+}
+
+fn open_and_wait(app: &AppHandle, vault_id: &str) -> AppResult<()> {
+    let deadline = Instant::now() + OPEN_TIMEOUT;
+    let launch_id = open(app, vault_id, false)?;
+    let host = app.state::<Host>();
+    let (endpoint, window) = wait_for_ready(&host.book, vault_id, launch_id, deadline)?;
+    let root = crate::paths::app_data_root(app)?;
+    activate_worker(
+        &root,
+        &crate::profiles::profile_dir(&root, vault_id),
+        vault_id,
+        launch_id,
+        &endpoint,
+        window,
+    )
+}
+
+fn activate_worker(
+    root: &std::path::Path,
+    directory: &std::path::Path,
+    vault_id: &str,
+    launch_id: Uuid,
+    endpoint: &Endpoint,
+    window: Option<String>,
+) -> AppResult<()> {
+    let reply = endpoint
+        .retry_call(&request(&WorkerCommand::Identify { launch_id })?)?
+        .map_err(AppError::InvalidArg)?;
+    let identity: crate::worker_registration::Identity =
+        serde_json::from_value(reply).map_err(|_| invalid())?;
+    identity.require_compatible()?;
+    if identity.launch_id != launch_id
+        || identity.vault_id != vault_id
+        || !identity.ready
+        || identity.root != std::fs::canonicalize(root)?
+        || identity.directory != std::fs::canonicalize(directory)?
+    {
+        return Err(invalid());
+    }
+    crate::foreground::transfer(endpoint);
+    endpoint
+        .retry_call(&request(&WorkerCommand::Activate { window })?)?
+        .map(|_| ())
+        .map_err(AppError::InvalidArg)
 }
 
 fn retry_after_released_owner(
@@ -945,7 +1081,8 @@ fn retry_after_released_owner(
     id: &str,
     launch_id: Uuid,
     error: AppError,
-) -> AppResult<()> {
+    activate: bool,
+) -> AppResult<Uuid> {
     // An adopted process has no child wait handle in this host. A failed RPC
     // only permits retry after the OS grants ownership; a hung worker keeps it.
     let directory = crate::profiles::profile_dir(root, id);
@@ -957,7 +1094,7 @@ fn retry_after_released_owner(
                 .lock()
                 .map_err(|_| invalid())?
                 .remove_launch(id, launch_id);
-            open(app, id)
+            open(app, id, activate)
         }
     }
 }
@@ -1187,15 +1324,200 @@ pub async fn open_profile_window(app: AppHandle, id: String) -> CommandResult<()
         crate::foreground::after_probe(&host, &probe)?;
         host.retry_call(&request)?
             .map(|_| ())
-            .map_err(AppError::InvalidArg)
+            .map_err(AppError::InvalidArg)?;
+        await_open_result(
+            &host,
+            request.id,
+            Instant::now() + OPEN_TIMEOUT + Duration::from_secs(10),
+        )
     })
     .await
     .map_err(|_| invalid())??)
 }
 
+fn await_open_result(host: &Endpoint, operation_id: Uuid, deadline: Instant) -> AppResult<()> {
+    let poll = request(&HostCommand::OpenStatus { operation_id })?;
+    loop {
+        let reply = host.retry_call(&poll)?.map_err(AppError::InvalidArg)?;
+        match serde_json::from_value::<OpenProgress>(reply).map_err(|_| invalid())? {
+            OpenProgress::Ready => return Ok(()),
+            OpenProgress::Failed { message } => return Err(AppError::InvalidArg(message)),
+            OpenProgress::Pending => {}
+        }
+        if Instant::now() >= deadline {
+            return Err(AppError::InvalidArg(
+                "vault opening result is unavailable; source remains open".into(),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn open_results_are_repeatable_and_status_polls_do_not_consume_replay_capacity() {
+        let instance = Uuid::new_v4();
+        let mut book = Book {
+            exported: true,
+            ..Book::default()
+        };
+        let open = request(&HostCommand::Open {
+            vault_id: "a".into(),
+        })
+        .unwrap();
+        let (ack, action) = book.accept(instance, open.clone()).unwrap();
+        assert!(matches!(action, Some(Action::Open(id)) if id == "a"));
+        let poll = request(&HostCommand::OpenStatus {
+            operation_id: open.id,
+        })
+        .unwrap();
+        for _ in 0..1100 {
+            assert_eq!(
+                book.accept(instance, poll.clone()).unwrap().0,
+                json!({"state":"pending"})
+            );
+        }
+        assert_eq!(book.operations.len(), 1);
+        assert!(book.accept(instance, open.clone()).unwrap().1.is_none());
+        book.complete_open(open.id, Err(AppError::NotFound("target missing".into())));
+        book.complete_open(open.id, Ok(()));
+        assert!(
+            matches!(book.open_status(open.id).unwrap(), OpenProgress::Failed { message } if message.contains("target missing"))
+        );
+        assert_eq!(book.accept(instance, open).unwrap().0, ack);
+        assert_eq!(book.accept(instance, poll).unwrap().0["state"], "failed");
+        assert!(book.open_status(Uuid::new_v4()).is_err());
+        let activate = request(&HostCommand::Activate).unwrap();
+        book.accept(instance, activate.clone()).unwrap();
+        assert!(book.open_status(activate.id).is_err());
+        let success = request(&HostCommand::Open {
+            vault_id: "b".into(),
+        })
+        .unwrap();
+        book.accept(instance, success.clone()).unwrap();
+        book.complete_open(success.id, Ok(()));
+        book.complete_open(success.id, Err(invalid()));
+        assert_eq!(book.open_status(success.id).unwrap(), OpenProgress::Ready);
+        book.operations.get_mut(&success.id).unwrap().at =
+            Instant::now() - Duration::from_secs(601);
+        assert!(book
+            .accept(
+                instance,
+                request(&HostCommand::OpenStatus {
+                    operation_id: success.id
+                })
+                .unwrap()
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn readiness_wait_rejects_exit_replacement_failure_and_timeout_without_releasing_owner() {
+        let root = std::env::temp_dir().join(format!("ms-open-wait-{}", Uuid::new_v4()));
+        let owner = crate::storage_locks::VaultLock::acquire(&root).unwrap();
+        let listener = ipc::Coordinator::for_worker(&owner).unwrap();
+        let launch_id = Uuid::new_v4();
+        let mut state = Book {
+            exported: true,
+            ..Book::default()
+        };
+        state.workers.insert("a".into(), pending(launch_id));
+        let opening = request(&HostCommand::Open {
+            vault_id: "a".into(),
+        })
+        .unwrap();
+        let instance = Uuid::new_v4();
+        state.accept(instance, opening).unwrap();
+        let book = Arc::new(Mutex::new(state));
+        assert!(wait_for_ready(&book, "a", launch_id, Instant::now()).is_err());
+        assert!(crate::storage_locks::VaultLock::try_acquire(&root)
+            .unwrap()
+            .is_none());
+        assert!(book.lock().unwrap().workers.contains_key("a"));
+        assert!(wait_for_ready(&book, "missing", launch_id, Instant::now()).is_err());
+        assert!(wait_for_ready(&book, "a", Uuid::new_v4(), Instant::now()).is_err());
+        book.lock().unwrap().workers.get_mut("a").unwrap().error = Some("restore failed".into());
+        assert!(wait_for_ready(&book, "a", launch_id, Instant::now())
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("restore failed"));
+        book.lock().unwrap().workers.get_mut("a").unwrap().error = None;
+        let waiting_book = book.clone();
+        let waiter = std::thread::spawn(move || {
+            wait_for_ready(
+                &waiting_book,
+                "a",
+                launch_id,
+                Instant::now() + Duration::from_secs(2),
+            )
+            .map(|(endpoint, window)| (endpoint.instance(), window))
+        });
+        {
+            let mut state = book.lock().unwrap();
+            let launch = state.workers.get_mut("a").unwrap();
+            launch.endpoint = Some(listener.endpoint().clone());
+            launch.focused_window = Some("note_test".into());
+            let ready = request(&HostCommand::Ready {
+                vault_id: "a".into(),
+                launch_id,
+            })
+            .unwrap();
+            assert!(state.accept(instance, ready).unwrap().1.is_none());
+        }
+        assert_eq!(
+            waiter.join().unwrap().unwrap(),
+            (listener.endpoint().instance(), Some("note_test".into()))
+        );
+        book.lock().unwrap().remove_launch("a", launch_id);
+        assert!(wait_for_ready(&book, "a", launch_id, Instant::now()).is_err());
+        drop(listener);
+        drop(owner);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn opening_client_waits_for_terminal_result_and_propagates_failure() {
+        use std::sync::atomic::AtomicUsize;
+        let root = std::env::temp_dir().join(format!("ms-open-client-{}", Uuid::new_v4()));
+        let owner = crate::storage_locks::VaultLock::acquire(&root).unwrap();
+        let listener = ipc::Coordinator::for_worker(&owner).unwrap();
+        let endpoint = listener.endpoint().clone();
+        let operation_id = Uuid::new_v4();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let failure = Arc::new(AtomicBool::new(false));
+        let counter = calls.clone();
+        let fail = failure.clone();
+        let server = listener.serve(move |request| {
+            assert!(matches!(serde_json::from_value::<HostCommand>(request.payload).unwrap(), HostCommand::OpenStatus { operation_id: requested } if requested == operation_id));
+            let progress = if fail.load(Ordering::Acquire) {
+                OpenProgress::Failed { message: "target startup failed".into() }
+            } else if counter.fetch_add(1, Ordering::AcqRel) == 0 {
+                OpenProgress::Pending
+            } else {
+                OpenProgress::Ready
+            };
+            Ok(serde_json::to_value(progress).unwrap())
+        }).unwrap();
+        await_open_result(
+            &endpoint,
+            operation_id,
+            Instant::now() + Duration::from_secs(2),
+        )
+        .unwrap();
+        assert!(calls.load(Ordering::Acquire) >= 2);
+        failure.store(true, Ordering::Release);
+        assert!(await_open_result(&endpoint, operation_id, Instant::now())
+            .unwrap_err()
+            .to_string()
+            .contains("target startup failed"));
+        server.stop();
+        drop(owner);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn worker_bootstrap_and_registration_require_the_same_host_contract() {

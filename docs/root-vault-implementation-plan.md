@@ -684,6 +684,23 @@ probe needed the same bounded transport retries used by the production client
 after a Windows socket abort. Visual UI checks remain open because the native
 computer-use helper is unavailable in this session.
 
+Opening-result slice on 2026-10-11: `open_profile_window` waits for a terminal
+result rather than treating request acceptance as success. The host pins each
+request to a worker launch ID, waits for readiness, checks authenticated worker
+identity and compatibility, then requests activation. Errors from validation,
+startup, replacement, exit or activation reach the caller. A bounded timeout
+leaves live owners intact. Result polls reuse the operation ID and do not use
+the mutation replay budget. Completed results cannot be changed by a later
+completion or replay. This prepares the menu API; source shutdown and prepared
+handoff are still separate work.
+
+Validation: formatting, clippy and the full Rust suite pass, with 830 unit
+tests, one integration test and five ignored tests. The embedded Windows app
+returned ready results for two vaults and a failed result for a missing target.
+Replaying each request retained its result and both live workers remained ready.
+Both workers then closed through their save handshake. Native focus was
+requested successfully; visual foreground behavior remains unverified.
+
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.
 
