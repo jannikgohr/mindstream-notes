@@ -89,8 +89,6 @@ Start the Tauri desktop app:
 pnpm tauri-dev
 ```
 
-The Tauri config runs `pnpm setup-android-cargo` before dev and build commands so Android cargo configuration stays in sync.
-
 ## Desktop Builds
 
 Build a production frontend bundle:
@@ -117,12 +115,6 @@ Use Java 21, then run:
 
 ```shell
 pnpm tauri android build
-```
-
-If Android cargo setup needs to be refreshed manually:
-
-```shell
-pnpm setup-android-cargo
 ```
 
 ## Verification
