@@ -67,6 +67,7 @@ enum WorkerCommand {
     Adopt {
         launch_id: Uuid,
         host: Endpoint,
+        contract: crate::worker_registration::RuntimeContract,
     },
     Close {
         launch_id: Uuid,
@@ -484,6 +485,7 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
         }
         ipc::Election::Owner(coordinator) => coordinator,
     };
+    crate::worker_registration::preflight(&root)?;
     let index = crate::profiles::prepare_coordinator_index(&root)?;
     let vault = crate::profiles::profile_dir(&root, &index.active);
     crate::legacy_content::initialize_owner(&root, &index.active, &vault)?;
@@ -587,7 +589,7 @@ fn recover_worker(app: &AppHandle, root: &std::path::Path, id: &str) -> AppResul
     };
     // Endpoint correlation/authentication and the canonical physical identity
     // are both required. Never infer ownership from a PID or an open socket.
-    record.identify()?;
+    record.identify()?.require_compatible()?;
     let host = app.state::<Host>();
     {
         let mut book = host.book.lock().map_err(|_| invalid())?;
@@ -613,6 +615,7 @@ fn recover_worker(app: &AppHandle, root: &std::path::Path, id: &str) -> AppResul
             payload: serde_json::to_value(WorkerCommand::Adopt {
                 launch_id: record.launch_id,
                 host: host.endpoint.clone(),
+                contract: crate::worker_registration::RuntimeContract::current().clone(),
             })
             .map_err(|_| invalid())?,
         })?
@@ -621,6 +624,7 @@ fn recover_worker(app: &AppHandle, root: &std::path::Path, id: &str) -> AppResul
     if !record.matches(&identity) {
         return Err(invalid());
     }
+    identity.require_compatible()?;
     if identity
         .window
         .as_ref()
@@ -767,6 +771,7 @@ fn open(app: &AppHandle, vault_id: &str) -> AppResult<()> {
                     .map_err(|_| invalid())
             });
             let result = identity.and_then(|identity| {
+                identity.require_compatible()?;
                 if identity.launch_id != launch_id
                     || identity.vault_id != vault_id
                     || !identity.ready
@@ -986,8 +991,15 @@ pub fn register_worker(
                     .clone();
                 serde_json::to_value(identity).map_err(|_| "worker identity unavailable".into())
             }
-            WorkerCommand::Adopt { launch_id, host } => {
+            WorkerCommand::Adopt {
+                launch_id,
+                host,
+                contract,
+            } => {
                 let adopted = (|| -> AppResult<Value> {
+                    if &contract != crate::worker_registration::RuntimeContract::current() {
+                        return Err(invalid());
+                    }
                     adopt_host(&registration, &worker_host, launch_id, host)?;
                     let mut identity = registration.identity(worker_ready.load(Ordering::Acquire));
                     identity.window = worker_window.lock().map_err(|_| invalid())?.clone();

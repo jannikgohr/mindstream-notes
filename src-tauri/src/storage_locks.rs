@@ -50,6 +50,25 @@ pub struct VaultLock {
 }
 
 impl VaultLock {
+    /// Read-only ownership probe for startup preflight. Does not create a
+    /// directory/lock file or interpret deletion markers before reconciliation.
+    pub(crate) fn is_owned(directory: &Path) -> AppResult<bool> {
+        let file = match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(directory.join(".vault.lock"))
+        {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(err) => return Err(err.into()),
+        };
+        match file.try_lock() {
+            Ok(()) => Ok(false),
+            Err(TryLockError::WouldBlock) => Ok(true),
+            Err(TryLockError::Error(err)) => Err(err.into()),
+        }
+    }
+
     pub(crate) fn retain_lease(&self) -> Arc<File> {
         self.file.clone()
     }
@@ -91,6 +110,26 @@ impl VaultLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn preflight_probe_observes_os_ownership_without_creating_or_reconciling_files() {
+        let root = std::env::temp_dir().join(format!("ms-probe-{}", uuid::Uuid::new_v4()));
+        assert!(!VaultLock::is_owned(&root).unwrap());
+        assert!(!root.exists());
+        fs::create_dir_all(&root).unwrap();
+        assert!(!VaultLock::is_owned(&root).unwrap());
+        assert!(!root.join(".vault.lock").exists());
+        let owner = VaultLock::acquire(&root).unwrap();
+        fs::write(root.join(".vault-deleting"), b"retained journal").unwrap();
+        assert!(VaultLock::is_owned(&root).unwrap());
+        drop(owner);
+        assert!(!VaultLock::is_owned(&root).unwrap());
+        assert_eq!(
+            fs::read(root.join(".vault-deleting")).unwrap(),
+            b"retained journal"
+        );
+        assert!(root.join(".vault.lock").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn ownership_uses_physical_directory_and_survives_stale_files() {
         let root = std::env::temp_dir().join(format!("ms-owner-{}", uuid::Uuid::new_v4()));

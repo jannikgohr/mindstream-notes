@@ -6,6 +6,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::sync::LazyLock;
 use uuid::Uuid;
 
 use crate::coordinator_ipc::Endpoint;
@@ -34,6 +36,43 @@ pub struct Identity {
     pub ready: bool,
     #[serde(default)]
     pub window: Option<String>,
+    #[serde(default)]
+    pub contract: Option<RuntimeContract>,
+}
+
+/// Bump these versions before incompatible IPC or shared-document changes.
+/// Hashing the bundled settings schema also catches accidental ownership edits.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeContract {
+    pub protocol: u32,
+    pub storage: u32,
+    pub settings_schema: String,
+}
+
+impl RuntimeContract {
+    pub fn current() -> &'static Self {
+        static CONTRACT: LazyLock<RuntimeContract> = LazyLock::new(|| RuntimeContract {
+            protocol: 1,
+            storage: 1,
+            settings_schema: format!(
+                "{:x}",
+                Sha256::digest(include_bytes!("../../src/lib/settings/schema.json"))
+            ),
+        });
+        &CONTRACT
+    }
+}
+
+impl Identity {
+    pub fn require_compatible(&self) -> AppResult<()> {
+        if self.contract.as_ref() != Some(RuntimeContract::current()) {
+            return Err(AppError::InvalidArg(
+                "an open vault uses an incompatible app build; close its app windows before restarting this build".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 pub enum Recovery {
@@ -95,6 +134,7 @@ impl Registration {
             launch_id: self.launch_id,
             ready,
             window: None,
+            contract: Some(RuntimeContract::current().clone()),
         }
     }
 
@@ -127,6 +167,46 @@ impl Registration {
         crate::atomic_file::write_private(&path(&self.root, &self.vault_id)?, &raw)?;
         Ok(())
     }
+}
+
+/// Runs after coordinator election and before index/document migration. Probe
+/// every physical profile, including unindexed directories, without trusting
+/// discovery-file presence. No IPC runs while the root transaction is held.
+pub fn preflight(root: &Path) -> AppResult<()> {
+    let directories = {
+        let _lock = RootLock::acquire(root)?;
+        let mut directories = Vec::new();
+        if VaultLock::is_owned(root)? {
+            // Legacy/direct root owners have no supervised identity protocol.
+            return Err(invalid());
+        }
+        match fs::read_dir(root.join("profiles")) {
+            Ok(entries) => {
+                for entry in entries {
+                    let entry = entry?;
+                    if entry.path().is_dir() && VaultLock::is_owned(&entry.path())? {
+                        let id = entry
+                            .file_name()
+                            .to_str()
+                            .filter(|id| crate::profiles::valid_id(id))
+                            .ok_or_else(invalid)?
+                            .to_owned();
+                        directories.push((id, entry.path()));
+                    }
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+        directories
+    };
+    for (id, directory) in directories {
+        match reconcile(root, &id, &directory)? {
+            Recovery::Vacant => {}
+            Recovery::Held(record) => record.identify()?.require_compatible()?,
+        }
+    }
+    Ok(())
 }
 
 pub fn reconcile(root: &Path, id: &str, directory: &Path) -> AppResult<Recovery> {
@@ -162,6 +242,88 @@ pub fn reconcile(root: &Path, id: &str, directory: &Path) -> AppResult<Recovery>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn startup_requires_compatible_authenticated_owners_before_document_reconciliation() {
+        let (root, directory, owner) = fixture();
+        let listener = Coordinator::for_worker(&owner).unwrap();
+        let record = Registration::new(
+            &root,
+            "a",
+            &owner,
+            Uuid::new_v4(),
+            listener.endpoint().clone(),
+        )
+        .unwrap();
+        record.publish(&owner).unwrap();
+        let identity = Arc::new(Mutex::new(record.identity(true)));
+        let reply = identity.clone();
+        let server = listener
+            .serve(move |_| Ok(serde_json::to_value(&*reply.lock().unwrap()).unwrap()))
+            .unwrap();
+        // Inventory uses physical ownership even with a broken/missing index.
+        let documents = [
+            "profiles.json",
+            "ui-settings.json",
+            "ui-settings.json.previous",
+            "desktop-settings.json",
+        ];
+        for file in documents {
+            fs::write(root.join(file), b"retained bytes").unwrap();
+        }
+        preflight(&root).unwrap();
+        for incompatible in [
+            None,
+            Some(RuntimeContract {
+                protocol: 2,
+                ..RuntimeContract::current().clone()
+            }),
+            Some(RuntimeContract {
+                storage: 2,
+                ..RuntimeContract::current().clone()
+            }),
+            Some(RuntimeContract {
+                settings_schema: "older ownership schema".into(),
+                ..RuntimeContract::current().clone()
+            }),
+        ] {
+            identity.lock().unwrap().contract = incompatible;
+            assert!(preflight(&root).is_err());
+            assert!(VaultLock::try_acquire(&directory).unwrap().is_none());
+            for file in documents {
+                assert_eq!(fs::read(root.join(file)).unwrap(), b"retained bytes");
+            }
+        }
+        // Old replies have the same physical identity but no compatibility proof.
+        let mut old = serde_json::to_value(record.identity(true)).unwrap();
+        old.as_object_mut().unwrap().remove("contract");
+        let old: Identity = serde_json::from_value(old).unwrap();
+        assert!(record.matches(&old));
+        assert!(old.require_compatible().is_err());
+        server.stop();
+        drop(owner);
+        preflight(&root).unwrap();
+        for file in documents {
+            assert_eq!(fs::read(root.join(file)).unwrap(), b"retained bytes");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unidentified_direct_owners_block_preflight_until_the_os_releases_ownership() {
+        let (root, directory, owner) = fixture();
+        assert!(preflight(&root).is_err());
+        assert!(!root.join("profiles.json").exists());
+        assert!(VaultLock::try_acquire(&directory).unwrap().is_none());
+        drop(owner);
+        preflight(&root).unwrap();
+        let legacy = VaultLock::acquire(&root).unwrap();
+        assert!(preflight(&root).is_err());
+        drop(legacy);
+        preflight(&root).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
     use crate::coordinator_ipc::Coordinator;
 
     fn fixture() -> (PathBuf, PathBuf, VaultLock) {

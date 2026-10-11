@@ -592,6 +592,40 @@ identities, and controlled close still succeeded. This verifies native dispatch
 and lifecycle behavior; it does not replace a visual theme/decoration check.
 Fixture scripts and logs remain in `.output/supervised-startup-app-check/desktop-*`.
 
+Worker compatibility slice on 2026-10-11: identity replies include IPC/storage
+versions and a SHA-256 hash of the bundled settings schema. After election, a
+replacement coordinator probes physical vault ownership before index recovery,
+legacy export or settings migration. Every live owner must identify itself over
+authenticated IPC and match the current contract. Unknown/direct owners and
+older replies without a contract stop startup; stale files and released locks
+do not. The preflight includes unindexed profile directories and legacy root
+ownership and neither creates vault-lock files nor interprets deletion markers.
+It releases the root transaction before any IPC request. Adoption is gated in
+both directions, and later focus probes recheck compatibility.
+
+This is deliberately conservative: even a schema text change requires surviving
+workers to close before a coordinator using the changed schema can start.
+Incompatible workers keep running with their OS leases and existing files intact.
+Close their windows, then restart; no process is force-terminated. Developers
+must bump the IPC version for incompatible wire changes and the storage version
+for shared-document formats, native ownership rules or validation changes not
+covered by the bundled schema hash. This guard cannot retrofit compatibility
+checks into older binaries or the temporary direct startup path. Production
+enablement still requires completing the supervised routing and upgrade gates.
+
+Validation: tests cover compatible replies, missing contracts, each contract
+mismatch, unidentified/direct owners, released ownership, deletion markers,
+and retained document bytes. Rust fmt/clippy and 823 unit tests plus one
+integration test pass, with five ignored tests; the embedded-app build passes.
+The Windows fixture recovered two compatible workers after force-stopping only
+its coordinator. Both workers retained their launch/endpoint identities and
+closed through their save handshake after adoption. The replacement host's
+status book retained their ready entries after exit; open requests already
+recheck ownership, but status needs reconciliation before the vault menu uses it.
+One Python identity probe hit a
+transient Windows socket abort; retry succeeded. Logs remain in
+`.output/supervised-startup-app-check/compat-*`.
+
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.
 
@@ -600,7 +634,7 @@ host/coordinator arrangement. Do not add in-process session swapping.
   locks determine ownership; unresponsive processes do not lose their locks.
   Avoid general root locks across IPC waits or network work.
 - Before adding incompatible shared-document fields or ownership migrations,
-  add a worker protocol/storage compatibility check during coordinator recovery.
+  extend the worker protocol/storage compatibility check during coordinator recovery.
   Surviving workers from an older binary must not recover a newer valid document
   as corrupt or publish an older schema over it. Refuse incompatible adoption
   and new writers before root migrations while retaining the old owner's OS
