@@ -665,6 +665,25 @@ document remained intact. Both closed through the save handshake. The embedded
 build passes; fixture logs remain in
 `.output/coordinator-desktop-migration-check/`.
 
+Worker-admission compatibility slice on 2026-10-11: workers now verify the
+authenticated coordinator status contract before vault ownership or settings
+migration. Authorization, registration and adoption authorization carry the
+worker's own contract, which the host must match before admitting it. This also
+covers a live host spawning a changed executable at the same path during an
+upgrade; checking recovery alone was insufficient. The IPC contract version is
+now 2 because admission packets require the new field. Older packets cannot
+bypass the gate. No file formats changed. Dev schema edits require restarting
+the host and all workers; frontend hot reload cannot update the native schema.
+
+Validation: Rust formatting and clippy pass. The full Rust suite passes 827
+unit tests and one integration test, with five tests ignored. The embedded
+Windows app ran two ready workers; matching admission succeeded, while missing
+and mismatched protocol/storage/schema contracts were rejected without changing
+the live workers. Both workers closed through their save handshake. The local
+probe needed the same bounded transport retries used by the production client
+after a Windows socket abort. Visual UI checks remain open because the native
+computer-use helper is unavailable in this session.
+
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.
 

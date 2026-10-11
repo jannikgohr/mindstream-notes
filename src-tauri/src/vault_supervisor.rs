@@ -15,6 +15,7 @@ use uuid::Uuid;
 use crate::coordinator_ipc::{self as ipc, Endpoint, Request, Running};
 use crate::error::{AppError, AppResult, CommandResult};
 use crate::vault_runtime::Role;
+use crate::worker_registration::RuntimeContract;
 
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "command", rename_all = "camelCase", deny_unknown_fields)]
@@ -37,16 +38,19 @@ enum HostCommand {
         vault_id: String,
         launch_id: Uuid,
         coordinator_id: Uuid,
+        contract: RuntimeContract,
     },
     AuthorizeAdoption {
         vault_id: String,
         launch_id: Uuid,
         coordinator_id: Uuid,
+        contract: RuntimeContract,
     },
     Register {
         vault_id: String,
         launch_id: Uuid,
         endpoint: Endpoint,
+        contract: RuntimeContract,
     },
     Ready {
         vault_id: String,
@@ -163,7 +167,7 @@ impl Book {
         match command {
             HostCommand::Status => {
                 return Ok((
-                    json!({"initialized":self.exported,"active":self.last,"workers":self.workers.iter().map(|(id, launch)| json!({
+                    json!({"contract":RuntimeContract::current(),"initialized":self.exported,"active":self.last,"workers":self.workers.iter().map(|(id, launch)| json!({
                     "id":id,"ready":launch.ready,"window":launch.focused_window,"error":launch.error,
                 })).collect::<Vec<_>>()}),
                     None,
@@ -223,8 +227,10 @@ impl Book {
                 vault_id,
                 launch_id,
                 coordinator_id,
+                contract,
             } => {
-                if coordinator_id != instance
+                if &contract != RuntimeContract::current()
+                    || coordinator_id != instance
                     || !self.exported
                     || !self.workers.get(&vault_id).is_some_and(|launch| {
                         launch.id == launch_id && !launch.ready && launch.error.is_none()
@@ -237,7 +243,11 @@ impl Book {
                 vault_id,
                 launch_id,
                 endpoint,
+                contract,
             } => {
+                if &contract != RuntimeContract::current() {
+                    return Err(invalid());
+                }
                 let launch = self.workers.get_mut(&vault_id).ok_or_else(invalid)?;
                 if launch.id != launch_id || launch.ready || launch.error.is_some() {
                     return Err(invalid());
@@ -255,8 +265,10 @@ impl Book {
                 vault_id,
                 launch_id,
                 coordinator_id,
+                contract,
             } => {
-                if coordinator_id != instance
+                if &contract != RuntimeContract::current()
+                    || coordinator_id != instance
                     || !self.workers.get(&vault_id).is_some_and(|launch| {
                         launch.id == launch_id
                             && launch.endpoint.is_some()
@@ -442,6 +454,7 @@ fn adopt_host(
             vault_id: registration.vault_id.clone(),
             launch_id,
             coordinator_id: candidate.instance(),
+            contract: RuntimeContract::current().clone(),
         })?)?
         .map_err(AppError::InvalidArg)?;
     *current.lock().map_err(|_| invalid())? = candidate;
@@ -660,7 +673,9 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
         return match serde_json::from_value::<HostCommand>(request.payload)
             .map_err(|_| invalid())?
         {
-            HostCommand::Status => Ok(json!({"initialized":false,"active":null,"workers":[]})),
+            HostCommand::Status => Ok(
+                json!({"contract":RuntimeContract::current(),"initialized":false,"active":null,"workers":[]}),
+            ),
             HostCommand::Activate => Ok(json!({"accepted":true})),
             _ => Err(invalid()),
         };
@@ -960,12 +975,29 @@ pub fn authorize_worker(app: &AppHandle, role: &Role) -> AppResult<()> {
     if host.instance() != *coordinator_id {
         return Err(invalid());
     }
+    let status = host
+        .retry_call(&request(&HostCommand::Status)?)?
+        .map_err(AppError::InvalidArg)?;
+    require_host_contract(&status)?;
     host.retry_call(&request(&HostCommand::Authorize {
         vault_id: vault_id.clone(),
         launch_id: *launch_id,
         coordinator_id: *coordinator_id,
+        contract: RuntimeContract::current().clone(),
     })?)?
     .map_err(AppError::InvalidArg)?;
+    Ok(())
+}
+
+fn require_host_contract(status: &Value) -> AppResult<()> {
+    let contract: RuntimeContract =
+        serde_json::from_value(status["contract"].clone()).map_err(|_| invalid())?;
+    if &contract != RuntimeContract::current() {
+        return Err(AppError::InvalidArg(
+            "app coordinator uses an incompatible build; close existing app windows and restart"
+                .into(),
+        ));
+    }
     Ok(())
 }
 
@@ -1092,6 +1124,7 @@ pub fn register_worker(
             vault_id: vault_id.clone(),
             launch_id: *launch_id,
             endpoint,
+            contract: RuntimeContract::current().clone(),
         })?)?
         .map_err(AppError::InvalidArg)?;
     app.manage(crate::worker_shutdown::Shutdown::default());
@@ -1163,6 +1196,99 @@ pub async fn open_profile_window(app: AppHandle, id: String) -> CommandResult<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_bootstrap_and_registration_require_the_same_host_contract() {
+        let current = RuntimeContract::current().clone();
+        require_host_contract(&json!({"contract":current})).unwrap();
+        assert!(require_host_contract(&json!({"initialized":true})).is_err());
+        assert!(require_host_contract(&json!({"contract":"invalid"})).is_err());
+        let instance = Uuid::new_v4();
+        let launch_id = Uuid::new_v4();
+        let root = std::env::temp_dir().join(format!("ms-authorize-contract-{}", Uuid::new_v4()));
+        let owner = crate::storage_locks::VaultLock::acquire(&root).unwrap();
+        let listener = ipc::Coordinator::for_worker(&owner).unwrap();
+        let mut book = Book {
+            exported: true,
+            ..Book::default()
+        };
+        book.workers.insert("a".into(), pending(launch_id));
+        for contract in [
+            RuntimeContract {
+                protocol: current.protocol + 1,
+                ..current.clone()
+            },
+            RuntimeContract {
+                storage: current.storage + 1,
+                ..current.clone()
+            },
+            RuntimeContract {
+                settings_schema: "different schema".into(),
+                ..current.clone()
+            },
+        ] {
+            assert!(require_host_contract(&json!({"contract":contract})).is_err());
+            for command in [
+                HostCommand::Authorize {
+                    vault_id: "a".into(),
+                    launch_id,
+                    coordinator_id: instance,
+                    contract: contract.clone(),
+                },
+                HostCommand::Register {
+                    vault_id: "a".into(),
+                    launch_id,
+                    endpoint: listener.endpoint().clone(),
+                    contract: contract.clone(),
+                },
+            ] {
+                assert!(book.accept(instance, request(&command).unwrap()).is_err());
+                assert!(book.workers["a"].endpoint.is_none());
+                assert!(!book.workers["a"].ready);
+            }
+            book.workers.get_mut("a").unwrap().endpoint = Some(listener.endpoint().clone());
+            let adoption = HostCommand::AuthorizeAdoption {
+                vault_id: "a".into(),
+                launch_id,
+                coordinator_id: instance,
+                contract: contract.clone(),
+            };
+            assert!(book.accept(instance, request(&adoption).unwrap()).is_err());
+            assert_eq!(
+                book.workers["a"].endpoint.as_ref().unwrap().instance(),
+                listener.endpoint().instance()
+            );
+            book.workers.get_mut("a").unwrap().endpoint = None;
+        }
+        // Old launch packets cannot silently bypass the new admission check.
+        for command in [
+            HostCommand::Authorize {
+                vault_id: "a".into(),
+                launch_id,
+                coordinator_id: instance,
+                contract: current.clone(),
+            },
+            HostCommand::Register {
+                vault_id: "a".into(),
+                launch_id,
+                endpoint: listener.endpoint().clone(),
+                contract: current.clone(),
+            },
+            HostCommand::AuthorizeAdoption {
+                vault_id: "a".into(),
+                launch_id,
+                coordinator_id: instance,
+                contract: current.clone(),
+            },
+        ] {
+            let mut legacy = serde_json::to_value(command).unwrap();
+            legacy.as_object_mut().unwrap().remove("contract");
+            assert!(serde_json::from_value::<HostCommand>(legacy).is_err());
+        }
+        drop(listener);
+        drop(owner);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn adopted_status_prunes_only_released_os_owners_and_keeps_launch_reservations() {
@@ -1424,9 +1550,11 @@ mod tests {
                         vault_id,
                         launch_id: requested,
                         coordinator_id,
+                        contract,
                     } if vault_id == "a"
                         && requested == launch_id
                         && coordinator_id == instance
+                        && &contract == RuntimeContract::current()
                         && gate.load(Ordering::Acquire) =>
                     {
                         Ok(json!({"accepted":true}))
@@ -1462,6 +1590,7 @@ mod tests {
                 vault_id: "a".into(),
                 launch_id,
                 coordinator_id: instance,
+                contract: RuntimeContract::current().clone(),
             })
             .unwrap()
         };
@@ -1514,6 +1643,7 @@ mod tests {
                 vault_id: vault_id.into(),
                 launch_id,
                 coordinator_id,
+                contract: RuntimeContract::current().clone(),
             })
             .unwrap()
         };
@@ -1566,6 +1696,7 @@ mod tests {
                     vault_id: id.into(),
                     launch_id: launch,
                     endpoint: endpoint.clone(),
+                    contract: RuntimeContract::current().clone(),
                 })
                 .unwrap(),
             )
@@ -1629,6 +1760,7 @@ mod tests {
                     vault_id: "a".into(),
                     launch_id: a,
                     endpoint,
+                    contract: RuntimeContract::current().clone(),
                 })
                 .unwrap()
             )
