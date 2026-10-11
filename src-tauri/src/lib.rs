@@ -31,6 +31,8 @@ pub mod data;
 pub mod db;
 #[cfg(desktop)]
 pub mod desktop_settings;
+#[cfg(desktop)]
+mod device_notifications;
 pub mod drawing;
 pub mod environment;
 pub mod error;

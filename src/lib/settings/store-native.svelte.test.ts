@@ -49,6 +49,37 @@ beforeEach(() => {
 });
 
 describe('native settings documents', () => {
+  it('handles root invalidation by loading its own vault alongside new device values', async () => {
+    api.initialize.mockResolvedValue(
+      snapshot({
+        'account.serverUrl': 'https://work.example',
+        'appearance.reduceMotion': 'off'
+      })
+    );
+    const store = await import('./store.svelte');
+    await store.setSettingsVaultId('work');
+    api.load.mockResolvedValue(
+      snapshot(
+        {
+          'account.serverUrl': 'https://work.example',
+          'appearance.reduceMotion': 'on'
+        },
+        5
+      )
+    );
+    const handler = api.listen.mock.calls.find(
+      ([event]) => event === 'ui-settings-changed'
+    )?.[1] as () => void;
+    handler();
+    await vi.waitFor(() =>
+      expect(store.getSettingValue('appearance.reduceMotion')).toBe('on')
+    );
+    expect(api.load).toHaveBeenCalledWith('work');
+    expect(store.getSettingValue('account.serverUrl')).toBe(
+      'https://work.example'
+    );
+    expect(api.patch).not.toHaveBeenCalled();
+  });
   it('shares canonical toolbar preferences, retains browser evidence, and rolls back a failed edit', async () => {
     const toolbar = { toolbar: ['folder'], more: ['note'] };
     const raw = JSON.stringify(toolbar);

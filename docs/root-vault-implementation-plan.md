@@ -541,6 +541,33 @@ five ignored tests. The 45 focused frontend tests, Svelte checks, frontend and
 embedded-app builds pass. Affected ESLint checks have no errors and retain 13
 existing warnings in the dock and Kanban components.
 
+Root UI-document notification slice on 2026-10-11: successful device-scoped
+patches now notify the coordinator, which invalidates every ready worker's UI
+settings snapshot. Vault-only patches retain their local window notification.
+Messages contain launch identity and a refresh command, never document values;
+each receiver reloads the shared document with its own vault/account document.
+Delivery holds neither a root transaction lock nor the coordinator book mutex.
+It fans out to at most eight peers at once and coalesces edits during delivery.
+Only the latest device notice per source occupies the lifecycle replay cache,
+so frequent slider/toolbar edits cannot exhaust it. A new worker reloads once
+more after readiness, and a replacement coordinator invalidates adopted workers.
+Focus refresh remains the fallback when the coordinator is unavailable.
+
+Authenticated IPC tests prove that a blocked peer does not delay a healthy peer
+in its delivery group, concurrent notices coalesce, stale/unregistered launches
+and payload values are rejected, and unavailable/loading workers are excluded.
+The frontend test verifies that invalidation reloads the worker's own vault
+without issuing another write. Rust fmt/clippy, 819 unit tests and one
+integration test pass, with five ignored tests. The 16 focused frontend tests,
+Svelte checks, affected ESLint checks and the embedded-app build pass. The
+embedded Windows fixture accepted a notice with two ready vaults, rejected a
+mismatched launch identity, and accepted refresh in each worker without changing
+focus. Logs remain in `.output/supervised-startup-app-check/device-*.log`.
+Visible cross-worker UI refresh still needs a native interaction check.
+Desktop-settings bindings for theme,
+language and decoration changes use a separate document and still need their
+runtime notification path; OS shortcut/tray coordination remains pending.
+
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.
 

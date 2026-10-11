@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use uuid::Uuid;
 
 use crate::coordinator_ipc::{self as ipc, Endpoint, Request, Running};
@@ -28,6 +28,10 @@ enum HostCommand {
     },
     Open {
         vault_id: String,
+    },
+    DeviceSettingsChanged {
+        vault_id: String,
+        launch_id: Uuid,
     },
     Authorize {
         vault_id: String,
@@ -67,6 +71,9 @@ enum WorkerCommand {
     Close {
         launch_id: Uuid,
     },
+    RefreshDeviceSettings {
+        launch_id: Uuid,
+    },
 }
 
 struct Launch {
@@ -96,9 +103,24 @@ enum Action {
     Open(String),
     ActivateLast,
     Remember { vault_id: String, revision: u64 },
+    RefreshDeviceSettings,
 }
 
 impl Book {
+    fn device_targets(&self) -> Vec<(Uuid, Endpoint)> {
+        self.workers
+            .values()
+            .filter_map(|launch| {
+                if !launch.ready || launch.error.is_some() {
+                    return None;
+                }
+                launch
+                    .endpoint
+                    .clone()
+                    .map(|endpoint| (launch.id, endpoint))
+            })
+            .collect()
+    }
     fn remove_launch(&mut self, vault_id: &str, launch_id: Uuid) {
         if self
             .workers
@@ -123,6 +145,15 @@ impl Book {
                 return Err(invalid());
             }
             return Ok((operation.reply.clone(), None));
+        }
+        if let HostCommand::DeviceSettingsChanged { vault_id, .. } = &command {
+            // Slider/toolbar edits must not consume the mutation replay budget.
+            // Retain the latest notice per source; older repeats are harmless
+            // invalidations that reload canonical documents.
+            self.operations.retain(|_, operation| {
+                operation.input["command"].as_str() != Some("deviceSettingsChanged")
+                    || operation.input["vault_id"].as_str() != Some(vault_id.as_str())
+            });
         }
         if self.operations.len() >= 1024 {
             return Err(invalid());
@@ -176,6 +207,16 @@ impl Book {
                     return Err(invalid());
                 }
                 action = Some(Action::Open(vault_id));
+            }
+            HostCommand::DeviceSettingsChanged {
+                vault_id,
+                launch_id,
+            } => {
+                let launch = self.workers.get(&vault_id).ok_or_else(invalid)?;
+                if launch.id != launch_id || launch.endpoint.is_none() || launch.error.is_some() {
+                    return Err(invalid());
+                }
+                action = Some(Action::RefreshDeviceSettings);
             }
             HostCommand::Authorize {
                 vault_id,
@@ -254,6 +295,7 @@ pub struct Host {
     instance: Uuid,
     endpoint: Endpoint,
     book: Mutex<Book>,
+    device_notifications: crate::device_notifications::Notifications,
     _server: Running,
 }
 pub struct Worker {
@@ -338,6 +380,53 @@ fn request(command: &HostCommand) -> AppResult<Request> {
     })
 }
 
+/// Send invalidation only. Each worker reloads the root and its own vault;
+/// content/account values never travel between vault processes.
+pub fn device_settings_changed(app: &AppHandle) {
+    let Some(worker) = app.try_state::<Worker>() else {
+        return;
+    };
+    let Ok(host) = worker.host.lock().map(|host| host.clone()) else {
+        return;
+    };
+    let Ok(request) = request(&HostCommand::DeviceSettingsChanged {
+        vault_id: worker.vault_id.clone(),
+        launch_id: worker.launch_id,
+    }) else {
+        return;
+    };
+    if std::thread::Builder::new()
+        .name("device-settings-notify".into())
+        .spawn(move || {
+            if !matches!(host.retry_call(&request), Ok(Ok(_))) {
+                log::warn!(
+                    "[vaults] device settings notification unavailable; values remain persisted"
+                );
+            }
+        })
+        .is_err()
+    {
+        log::warn!("[vaults] device settings notification thread unavailable");
+    }
+}
+
+fn broadcast_device_settings(app: &AppHandle) {
+    let Some(host) = app.try_state::<Host>() else {
+        return;
+    };
+    // Targets are copied under the short book mutex. Delivery never holds it
+    // or a root document lock while contacting another worker.
+    host.device_notifications.changed(|| {
+        host.book
+            .lock()
+            .map(|book| book.device_targets())
+            .unwrap_or_else(|_| {
+                log::warn!("[vaults] worker settings targets unavailable");
+                Vec::new()
+            })
+    });
+}
+
 fn adopt_host(
     registration: &crate::worker_registration::Registration,
     current: &Mutex<Endpoint>,
@@ -409,6 +498,7 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
         instance,
         endpoint,
         book: Mutex::new(Book::default()),
+        device_notifications: crate::device_notifications::Notifications::default(),
         _server: server,
     });
     let initial = index.active;
@@ -455,6 +545,7 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
                     if let Err(error) = open(&task_app, &target) {
                         log::error!("[vaults] initial launch failed: {error}");
                     }
+                    broadcast_device_settings(&task_app);
                 })
             {
                 log::error!("[vaults] recovery thread unavailable: {error}");
@@ -593,6 +684,10 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
                         if let Err(error) = result {
                             log::warn!("[vaults] last-used persistence failed: {error}");
                         }
+                        return;
+                    }
+                    Action::RefreshDeviceSettings => {
+                        broadcast_device_settings(&task_app);
                         return;
                     }
                 };
@@ -912,6 +1007,15 @@ pub fn register_worker(
                     .map_err(|_| "worker close unavailable".to_string())?;
                 Ok(json!({"accepted":true}))
             }
+            WorkerCommand::RefreshDeviceSettings { launch_id } => {
+                if launch_id != registration.launch_id || !worker_ready.load(Ordering::Acquire) {
+                    return Err("worker settings refresh unavailable".into());
+                }
+                handle
+                    .emit(crate::app_events::AppEvent::UiSettingsChanged.as_str(), ())
+                    .map_err(|_| "worker settings notification unavailable".to_string())?;
+                Ok(json!({"accepted":true}))
+            }
         }
     })?;
     host.lock()
@@ -949,13 +1053,22 @@ pub async fn vault_worker_ready(app: AppHandle, window: WebviewWindow) -> Comman
         launch_id: worker.launch_id,
     })?;
     let host = worker.host.lock().map_err(|_| invalid())?.clone();
-    Ok(tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         host.retry_call(&request)?
             .map(|_| ())
             .map_err(AppError::InvalidArg)
     })
     .await
-    .map_err(|_| invalid())??)
+    .map_err(|_| invalid())??;
+    // A peer may have saved after this worker's initial snapshot but before
+    // host registration marked it ready for invalidations.
+    if app
+        .emit(crate::app_events::AppEvent::UiSettingsChanged.as_str(), ())
+        .is_err()
+    {
+        log::warn!("[vaults] readiness settings refresh unavailable");
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -987,6 +1100,83 @@ mod tests {
             adopted: false,
             focused_window: None,
         }
+    }
+
+    #[test]
+    fn device_notices_require_registration_reject_data_and_deduplicate_replays() {
+        let root = std::env::temp_dir().join(format!("ms-device-book-{}", Uuid::new_v4()));
+        let ownership = crate::storage_locks::VaultLock::acquire(&root).unwrap();
+        let listener = ipc::Coordinator::for_worker(&ownership).unwrap();
+        let instance = Uuid::new_v4();
+        let launch_id = Uuid::new_v4();
+        let mut book = Book::default();
+        book.workers.insert("a".into(), pending(launch_id));
+        let notice = request(&HostCommand::DeviceSettingsChanged {
+            vault_id: "a".into(),
+            launch_id,
+        })
+        .unwrap();
+        assert!(book.accept(instance, notice.clone()).is_err());
+        book.workers.get_mut("a").unwrap().endpoint = Some(listener.endpoint().clone());
+        let wrong = request(&HostCommand::DeviceSettingsChanged {
+            vault_id: "a".into(),
+            launch_id: Uuid::new_v4(),
+        })
+        .unwrap();
+        assert!(book.accept(instance, wrong).is_err());
+        let mut with_data = notice.clone();
+        with_data.payload["values"] =
+            json!({"account.serverUrl":"https://must-not-travel.example"});
+        assert!(book.accept(instance, with_data).is_err());
+        // Startup notices are permitted once registration succeeds. Receivers
+        // are selected separately and must have completed readiness.
+        assert!(matches!(
+            book.accept(instance, notice.clone()).unwrap().1,
+            Some(Action::RefreshDeviceSettings)
+        ));
+        assert!(book.accept(instance, notice).unwrap().1.is_none());
+        for _ in 0..1100 {
+            let changed = request(&HostCommand::DeviceSettingsChanged {
+                vault_id: "a".into(),
+                launch_id,
+            })
+            .unwrap();
+            assert!(matches!(
+                book.accept(instance, changed).unwrap().1,
+                Some(Action::RefreshDeviceSettings)
+            ));
+        }
+        assert_eq!(book.operations.len(), 1);
+        // Ordinary lifecycle requests still have room after frequent edits.
+        book.accept(instance, request(&HostCommand::Activate).unwrap())
+            .unwrap();
+        assert_eq!(book.operations.len(), 2);
+        drop(listener);
+        drop(ownership);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn device_targets_exclude_loading_failed_and_missing_endpoints() {
+        let root = std::env::temp_dir().join(format!("ms-device-targets-{}", Uuid::new_v4()));
+        let ownership = crate::storage_locks::VaultLock::acquire(&root).unwrap();
+        let listener = ipc::Coordinator::for_worker(&ownership).unwrap();
+        let mut book = Book::default();
+        let id = Uuid::new_v4();
+        for name in ["ready", "loading", "failed", "missing"] {
+            let mut launch = pending(if name == "ready" { id } else { Uuid::new_v4() });
+            launch.ready = name != "loading";
+            launch.endpoint = (name != "missing").then(|| listener.endpoint().clone());
+            launch.error = (name == "failed").then(|| "unavailable".into());
+            book.workers.insert(name.into(), launch);
+        }
+        let targets = book.device_targets();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].0, id);
+        assert!(targets[0].1 == *listener.endpoint());
+        drop(listener);
+        drop(ownership);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

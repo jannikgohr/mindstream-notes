@@ -604,6 +604,7 @@ pub async fn patch_ui_setting(
     remove: bool,
 ) -> CommandResult<Snapshot> {
     let (root, vault) = context(&app, &expected_vault_id)?;
+    let device_changed = device_scope(&id);
     let result = tauri::async_runtime::spawn_blocking(move || {
         access(&root, &vault, Some((id, (!remove).then_some(value))))
     })
@@ -612,6 +613,12 @@ pub async fn patch_ui_setting(
     if let Err(err) = app.emit(crate::app_events::AppEvent::UiSettingsChanged.as_str(), ()) {
         log::warn!("UI settings persisted but window notification failed: {err}");
     }
+    #[cfg(desktop)]
+    if device_changed {
+        crate::vault_supervisor::device_settings_changed(&app);
+    }
+    #[cfg(not(desktop))]
+    let _ = device_changed;
     Ok(result)
 }
 
