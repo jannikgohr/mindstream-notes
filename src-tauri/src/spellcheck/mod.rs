@@ -275,6 +275,7 @@ pub async fn spellcheck_unknown_words(
     languages: Vec<String>,
     words: Vec<String>,
 ) -> CommandResult<Vec<String>> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let dir = dictionary_dir(&app)?;
     let resident = app.state::<SpellcheckState>().inner.clone();
 
@@ -282,6 +283,7 @@ pub async fn spellcheck_unknown_words(
     // tables is CPU-bound, so keep it off the async runtime's threads.
     let unknown = tauri::async_runtime::spawn_blocking({
         move || -> AppResult<Vec<String>> {
+            let _job = job;
             let mut guard = resident
                 .lock()
                 .map_err(|_| AppError::InvalidArg("spellcheck state poisoned".into()))?;
@@ -305,10 +307,12 @@ pub async fn spellcheck_suggest(
     languages: Vec<String>,
     word: String,
 ) -> CommandResult<Vec<String>> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let dir = dictionary_dir(&app)?;
     let resident = app.state::<SpellcheckState>().inner.clone();
 
     let suggestions = tauri::async_runtime::spawn_blocking(move || -> AppResult<Vec<String>> {
+        let _job = job;
         let mut guard = resident
             .lock()
             .map_err(|_| AppError::InvalidArg("spellcheck state poisoned".into()))?;
@@ -776,6 +780,7 @@ pub async fn spellcheck_available_dictionaries(
 /// never touches the network.
 #[tauri::command]
 pub async fn spellcheck_install_dictionary(app: AppHandle, id: String) -> CommandResult<()> {
+    let _job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let dir = dictionary_dir(&app)?;
     catalogue::install(&dir, &id).await?;
     Ok(())
@@ -783,6 +788,7 @@ pub async fn spellcheck_install_dictionary(app: AppHandle, id: String) -> Comman
 
 #[tauri::command]
 pub async fn spellcheck_remove_dictionary(app: AppHandle, id: String) -> CommandResult<()> {
+    let _job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let dir = dictionary_dir(&app)?;
     catalogue::remove(&dir, &id)?;
 

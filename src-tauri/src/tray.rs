@@ -192,6 +192,14 @@ fn create_note_and_emit(
     note_kind: NoteKind,
     source: &str,
 ) {
+    let Some(jobs) = app.try_state::<crate::vault_jobs::Jobs>() else {
+        log::warn!("[{source}] vault services are unavailable");
+        return;
+    };
+    let Ok(_job) = jobs.enter() else {
+        log::warn!("[{source}] vault is closing; note was not created");
+        return;
+    };
     focus_main_window(app);
 
     let db = app.state::<Db>();

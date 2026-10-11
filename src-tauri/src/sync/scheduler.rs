@@ -118,6 +118,9 @@ pub fn spawn(app: AppHandle) {
 /// no difference between scheduler-triggered and user-triggered
 /// syncs.
 async fn tick(app: &AppHandle) -> Result<(), String> {
+    let Ok(job) = app.state::<crate::vault_jobs::Jobs>().enter() else {
+        return Ok(());
+    };
     // Signed out is an ordinary resting state — a local-only vault never
     // has a session — not a failure worth logging every cycle. The JS side
     // gates the schedule on the session too, but this is the authoritative
@@ -139,7 +142,9 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
     }
 
     let app_for_blocking = app.clone();
+    let blocking_job = job.clone();
     let delta = tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         catch_blocking_panic("sync-scheduler", || {
             let mut account = auth::try_restore(&app_for_blocking)
                 .map_err(|e| format!("restore session: {e}"))?

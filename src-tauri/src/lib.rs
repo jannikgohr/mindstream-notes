@@ -69,6 +69,7 @@ pub mod tray;
 pub mod tree;
 pub mod tree_batch;
 pub mod ui_settings;
+pub mod vault_jobs;
 #[cfg(desktop)]
 pub mod vault_runtime;
 #[cfg(desktop)]
@@ -538,6 +539,7 @@ pub fn run() {
             // in +layout.svelte. Starts disabled; the JS settings
             // effect calls `set_sync_schedule` once on mount with the
             // restored preference, which is what actually flips it on.
+            app.manage(vault_jobs::Jobs::default());
             app.manage(sync::scheduler::SyncScheduler::new());
             sync::scheduler::spawn(app.handle().clone());
 

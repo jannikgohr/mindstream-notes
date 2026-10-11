@@ -1293,6 +1293,7 @@ fn note_snapshot(conn: &Connection) -> AppResult<Vec<luau::NoteMeta>> {
 #[rustfmt::skip]
 mod tauri_commands {
 use super::*;
+    use tauri::Manager;
 
 #[tauri::command]
 pub fn plugins_list(db: tauri::State<'_, Db>) -> CommandResult<Vec<PluginRecord>> {
@@ -1454,6 +1455,7 @@ pub async fn plugins_download_artifact(
     id: String,
     artifact_id: String,
 ) -> CommandResult<PluginArtifactStatus> {
+    let _job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
     let (_, plugin) = db.with_conn(|c| {
         load_runnable(
@@ -1542,6 +1544,7 @@ pub async fn plugins_run_native_tool(
     stdin: Option<String>,
     timeout_ms: Option<u64>,
 ) -> CommandResult<PluginNativeToolOutput> {
+    let _job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     if cfg!(mobile) {
         return Err(AppError::InvalidArg("native tools are desktop-only".into()).into());
     }
@@ -1562,7 +1565,9 @@ pub async fn plugins_run_native_tool(
         ))
     })?;
     let cwd = plugin_data_root(&app, &id)?;
+    let blocking_job = _job.clone();
     let raw = tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         run_native_tool_process(binary, cwd, args, stdin, timeout_ms)
     })
     .await
@@ -1622,6 +1627,7 @@ pub async fn plugins_run_script(
     export: String,
     input: serde_json::Value,
 ) -> CommandResult<serde_json::Value> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
 
     // Enabled, unmodified since approval, and running under the permissions the
@@ -1654,7 +1660,9 @@ pub async fn plugins_run_script(
     // and are just surfaced to the user; a `JoinError` means the host runtime
     // itself panicked — a crash — so we disable the plugin before returning.
     let export_label = export.clone();
+    let blocking_job = job.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         run_plugin_script(&files, &manifest, granted, &export, input, notes, data_root)
     })
     .await;

@@ -701,6 +701,26 @@ Replaying each request retained its result and both live workers remained ready.
 Both workers then closed through their save handshake. Native focus was
 requested successfully; visual foreground behavior remains unverified.
 
+Service-draining slice on 2026-10-11: controlled close pauses admission for
+manual/scheduled sync, imports, retention sweeps, hotkey note creation, plugin
+artifact downloads, native tools/scripts, preview startup/update, spellchecking
+and dictionary changes. Accepted blocking tasks retain their job registration
+even if an async caller disappears. Close requests import cancellation and
+waits up to 30 seconds for these jobs before asking content windows to save.
+Admission stays paused through the save decision and resumes on cancellation;
+only a successful close leaves it stopped. The vault OS lease stays held.
+This covers the listed services. Account/sharing commands, backup operations
+and other delayed writes still need the shutdown audit before handoff ships.
+Known preview servers continue to use the existing registry exit cleanup.
+
+Validation: formatting, clippy and the full Rust suite pass, with 832 unit
+tests, one integration test and five ignored tests. Tests hold a detached job
+through caller cancellation, reject admission while paused, and verify timeout
+recovery and permanent stop after commit. The embedded Windows app opened two
+ready workers and closed both through the drain/save path; the host then
+reported no workers. This native check exercised an idle drain. Busy-job
+timeouts are covered by unit tests, not a visual app test.
+
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.
 

@@ -11,6 +11,7 @@ use crate::error::{AppError, AppResult, CommandResult};
 
 const CLOSE_EVENT: &str = "vault-worker-close";
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(15);
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
 struct Book {
@@ -61,10 +62,14 @@ impl Book {
             .is_none_or(|batch| batch.id != id || batch.failed || batch.waiting.is_empty())
     }
 
-    fn commit(&mut self, id: Uuid, windows: &BTreeSet<String>) -> bool {
-        let succeeds = self.pending.as_ref().is_some_and(|batch| {
+    fn can_commit(&self, id: Uuid, windows: &BTreeSet<String>) -> bool {
+        self.pending.as_ref().is_some_and(|batch| {
             batch.id == id && !batch.failed && batch.waiting.is_empty() && &batch.windows == windows
-        });
+        })
+    }
+
+    fn commit(&mut self, id: Uuid, windows: &BTreeSet<String>) -> bool {
+        let succeeds = self.can_commit(id, windows);
         if succeeds {
             self.committed = true;
         }
@@ -214,6 +219,24 @@ pub fn request_close(app: &AppHandle) {
     let spawned = std::thread::Builder::new()
         .name("vault-close".into())
         .spawn(move || {
+            let Some(jobs) = handle.try_state::<crate::vault_jobs::Jobs>() else {
+                cancel(&handle, id);
+                return;
+            };
+            let Ok(paused) = jobs.pause() else {
+                cancel(&handle, id);
+                return;
+            };
+            if let Some(import) = handle.try_state::<crate::import::ImportState>() {
+                import.cancel();
+            }
+            if let Err(error) = paused.wait(DRAIN_TIMEOUT) {
+                log::warn!("[vaults] service drain failed: {error}");
+                cancel(&handle, id);
+                return;
+            }
+            // Services have emitted their final updates before editor saves.
+            // Keep admission paused through the save/commit decision.
             for label in participants {
                 let sent = handle.get_webview_window(&label).is_some_and(|_| {
                     handle
@@ -255,10 +278,12 @@ pub fn request_close(app: &AppHandle) {
                         return;
                     };
                     let current_windows = windows(&final_handle);
-                    let committed = state
-                        .book
-                        .lock()
-                        .is_ok_and(|mut book| book.commit(id, &current_windows));
+                    let committed = state.book.lock().is_ok_and(|mut book| {
+                        if !book.can_commit(id, &current_windows) || paused.commit().is_err() {
+                            return false;
+                        }
+                        book.commit(id, &current_windows)
+                    });
                     if committed {
                         log::info!("[vaults] every content window saved; closing worker");
                         final_handle.exit(0);

@@ -677,6 +677,7 @@ pub async fn plugins_preview_start(
     input: String,
     settings: Option<HashMap<String, String>>,
 ) -> CommandResult<PreviewServiceHandle> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     if cfg!(mobile) {
         return Err(AppError::InvalidArg("preview services are desktop-only".into()).into());
     }
@@ -725,7 +726,9 @@ pub async fn plugins_preview_start(
     // Stop any prior server for this session before starting a fresh one.
     stop_session(&registry, &session_key);
 
+    let blocking_job = job.clone();
     let handle = tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         std::fs::write(&input_path, input.as_bytes())?;
         let input_str = input_path.to_string_lossy().into_owned();
         let data_port = free_port()?;
@@ -794,10 +797,12 @@ pub async fn plugins_preview_start(
 /// Rewrite the materialized source file so the watching server recompiles.
 #[tauri::command]
 pub async fn plugins_preview_update(
+    jobs: State<'_, crate::vault_jobs::Jobs>,
     registry: State<'_, PreviewServiceRegistry>,
     session_key: String,
     input: String,
 ) -> CommandResult<()> {
+    let job = jobs.enter()?;
     let path = {
         let sessions = registry
             .sessions
@@ -810,6 +815,7 @@ pub async fn plugins_preview_update(
     };
     // Write atomically-ish (truncate + write) off the async runtime.
     tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
+        let _job = job;
         let mut file = std::fs::File::create(&path)?;
         file.write_all(input.as_bytes())?;
         Ok(())
