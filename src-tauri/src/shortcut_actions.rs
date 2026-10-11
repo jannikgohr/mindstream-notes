@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
@@ -11,9 +12,23 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::hotkeys::GlobalShortcutCommandId;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum TrayCommand {
+    MarkdownNote,
+    Drawing,
+    InkNote,
+    Diagram,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Input {
+    Shortcut(GlobalShortcutCommandId, Option<String>),
+    Tray(TrayCommand),
+}
+
 struct Receipt {
-    command: GlobalShortcutCommandId,
-    accelerator: Option<String>,
+    input: Input,
     result: Result<Value, String>,
     at: Instant,
 }
@@ -29,17 +44,26 @@ impl Actions {
         accelerator: Option<String>,
         execute: impl FnOnce() -> AppResult<Value>,
     ) -> Result<Value, String> {
-        let mut receipts = self.0.lock().map_err(|_| "shortcut receipts unavailable")?;
+        self.once_input(id, Input::Shortcut(command, accelerator), execute)
+    }
+
+    fn once_input(
+        &self,
+        id: Uuid,
+        input: Input,
+        execute: impl FnOnce() -> AppResult<Value>,
+    ) -> Result<Value, String> {
+        let mut receipts = self.0.lock().map_err(|_| "capture receipts unavailable")?;
         receipts.retain(|_, receipt| receipt.at.elapsed() < Duration::from_secs(600));
         if let Some(receipt) = receipts.get(&id) {
-            return if receipt.command == command && receipt.accelerator == accelerator {
+            return if receipt.input == input {
                 receipt.result.clone()
             } else {
-                Err("shortcut request ID was reused for another command".into())
+                Err("capture request ID was reused for another command".into())
             };
         }
         if receipts.len() >= 1024 {
-            return Err("shortcut replay capacity exceeded; action was not started".into());
+            return Err("capture replay capacity exceeded; action was not started".into());
         }
         // Serialize only this worker's action admission. No coordinator/IPC or
         // process-wide Book mutex is held through the operation.
@@ -47,8 +71,7 @@ impl Actions {
         receipts.insert(
             id,
             Receipt {
-                command,
-                accelerator,
+                input,
                 result: result.clone(),
                 at: Instant::now(),
             },
@@ -65,90 +88,115 @@ pub(crate) fn execute(
 ) -> Result<Value, String> {
     app.state::<Actions>()
         .once(request_id, command, accelerator.clone(), || {
-            if crate::worker_shutdown::closing(app) {
+            perform(app, Input::Shortcut(command, accelerator))
+        })
+}
+
+pub(crate) fn execute_tray(
+    app: &AppHandle,
+    request_id: Uuid,
+    command: TrayCommand,
+) -> Result<Value, String> {
+    app.state::<Actions>()
+        .once_input(request_id, Input::Tray(command), || {
+            perform(app, Input::Tray(command))
+        })
+}
+
+fn perform(app: &AppHandle, input: Input) -> AppResult<Value> {
+    if crate::worker_shutdown::closing(app) {
+        return Err(AppError::InvalidArg(
+            "capture destination is closing".into(),
+        ));
+    }
+    let _job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let root = crate::paths::app_data_root(app)?;
+    let vault = crate::paths::app_data_dir(app)?;
+    let active = app.state::<crate::paths::ActiveProfile>();
+    {
+        let _lock = crate::storage_locks::RootLock::acquire(&root)?;
+        let index = crate::profiles::load(&root)?
+            .ok_or_else(|| AppError::InvalidArg("capture vault index is unavailable".into()))?;
+        if !index.profiles.iter().any(|profile| profile.id == active.id)
+            || vault.join(".vault-deleting").try_exists()?
+        {
+            return Err(AppError::InvalidArg(
+                "capture destination was removed".into(),
+            ));
+        }
+        if let Input::Shortcut(command, accelerator) = &input {
+            crate::coordinator_shortcuts::require_current_binding(
+                &root,
+                *command,
+                accelerator.as_deref(),
+            )?;
+            if !crate::ui_settings::shortcut_eligible(&root, &active.id, &vault)? {
                 return Err(AppError::InvalidArg(
-                    "shortcut destination is closing".into(),
+                    "shortcut destination is no longer enabled".into(),
                 ));
             }
-            let _job = app.state::<crate::vault_jobs::Jobs>().enter()?;
-            let root = crate::paths::app_data_root(app)?;
-            let vault = crate::paths::app_data_dir(app)?;
-            let active = app.state::<crate::paths::ActiveProfile>();
-            {
-                let _lock = crate::storage_locks::RootLock::acquire(&root)?;
-                let index = crate::profiles::load(&root)?.ok_or_else(|| {
-                    AppError::InvalidArg("shortcut vault index is unavailable".into())
-                })?;
-                if !index.profiles.iter().any(|profile| profile.id == active.id) {
-                    return Err(AppError::InvalidArg(
-                        "shortcut destination was removed".into(),
-                    ));
-                }
-                crate::coordinator_shortcuts::require_current_binding(
-                    &root,
-                    command,
-                    accelerator.as_deref(),
-                )?;
-                if vault.join(".vault-deleting").try_exists()?
-                    || !crate::ui_settings::shortcut_eligible(&root, &active.id, &vault)?
-                {
-                    return Err(AppError::InvalidArg(
-                        "shortcut destination is no longer enabled".into(),
-                    ));
-                }
-            }
-            let note_id = if command == GlobalShortcutCommandId::ShowApp {
-                None
-            } else {
-                let (title, kind) = match command {
-                    GlobalShortcutCommandId::NewMarkdownNote => {
-                        ("Untitled", crate::notes::NoteKind::Markdown)
-                    }
-                    GlobalShortcutCommandId::NewDrawing => {
-                        ("Untitled drawing canvas", crate::notes::NoteKind::Freeform)
-                    }
-                    GlobalShortcutCommandId::NewInkNote => {
-                        ("Untitled handwritten note", crate::notes::NoteKind::Ink)
-                    }
-                    GlobalShortcutCommandId::ShowApp => unreachable!(),
-                };
-                let note = app.state::<crate::db::Db>().with_conn(|conn| {
-                    crate::notes::create(
-                        conn,
-                        crate::notes::CreateNote {
-                            title: Some(title.into()),
-                            body: None,
-                            parent_collection_id: None,
-                            note_kind: Some(kind),
-                        },
-                    )
-                })?;
-                Some(note.summary.id)
-            };
-            let focus = app.clone();
-            // Never wait for the main thread while holding a root lock. The admitted
-            // service job keeps the DB alive until creation and notification finish.
-            if let Err(error) =
-                app.run_on_main_thread(move || crate::tray::focus_main_window(&focus))
-            {
-                if note_id.is_none() {
-                    return Err(error.into());
-                }
-                log::warn!("[shortcuts] note committed but focus failed: {error}");
-            }
-            if let Some(id) = &note_id {
-                if let Err(error) = app.emit_to(
-                    "main",
-                    crate::app_events::AppEvent::TrayNoteCreated.as_str(),
-                    json!({"note_id":id}),
-                ) {
-                    // The commit already happened. Cache success so delivery failure
-                    // or a lost socket reply cannot cause a second DB write.
-                    log::warn!("[shortcuts] note committed but notification failed: {error}");
-                }
-            }
-            Ok(json!({"completed":true,"note_id":note_id}))
-        })
+        }
+    }
+    let template = match input {
+        Input::Shortcut(GlobalShortcutCommandId::ShowApp, _) => None,
+        Input::Shortcut(GlobalShortcutCommandId::NewMarkdownNote, _)
+        | Input::Tray(TrayCommand::MarkdownNote) => {
+            Some(("Untitled", None, crate::notes::NoteKind::Markdown))
+        }
+        Input::Shortcut(GlobalShortcutCommandId::NewDrawing, _)
+        | Input::Tray(TrayCommand::Drawing) => Some((
+            "Untitled drawing canvas",
+            None,
+            crate::notes::NoteKind::Freeform,
+        )),
+        Input::Shortcut(GlobalShortcutCommandId::NewInkNote, _)
+        | Input::Tray(TrayCommand::InkNote) => Some((
+            "Untitled handwritten note",
+            None,
+            crate::notes::NoteKind::Ink,
+        )),
+        Input::Tray(TrayCommand::Diagram) => Some((
+            "Untitled diagram",
+            Some("```mermaid\nflowchart TD\n  A[Start] --> B[Next]\n```\n"),
+            crate::notes::NoteKind::Markdown,
+        )),
+    };
+    let note_id = if let Some((title, body, kind)) = template {
+        let note = app.state::<crate::db::Db>().with_conn(|conn| {
+            crate::notes::create(
+                conn,
+                crate::notes::CreateNote {
+                    title: Some(title.into()),
+                    body: body.map(str::to_string),
+                    parent_collection_id: None,
+                    note_kind: Some(kind),
+                },
+            )
+        })?;
+        Some(note.summary.id)
+    } else {
+        None
+    };
+    let focus = app.clone();
+    // The admitted service job keeps the DB alive until creation/notification.
+    // No root lock crosses main-thread scheduling or a database write.
+    if let Err(error) = app.run_on_main_thread(move || crate::tray::focus_main_window(&focus)) {
+        if note_id.is_none() {
+            return Err(error.into());
+        }
+        log::warn!("[capture] note committed but focus failed: {error}");
+    }
+    if let Some(id) = &note_id {
+        if let Err(error) = app.emit_to(
+            "main",
+            crate::app_events::AppEvent::TrayNoteCreated.as_str(),
+            json!({"note_id":id}),
+        ) {
+            // Cache success after commit, even if notification delivery fails.
+            log::warn!("[capture] note committed but notification failed: {error}");
+        }
+    }
+    Ok(json!({"completed":true,"note_id":note_id}))
 }
 
 #[cfg(test)]
@@ -188,6 +236,38 @@ mod tests {
         assert!(actions
             .once(id, GlobalShortcutCommandId::NewDrawing, None, || panic!(
                 "reused input"
+            ))
+            .is_err());
+    }
+
+    #[test]
+    fn tray_and_shortcut_requests_cannot_reuse_each_others_receipts() {
+        let actions = Actions::default();
+        let id = Uuid::new_v4();
+        actions
+            .once_input(id, Input::Tray(TrayCommand::MarkdownNote), || {
+                Ok(json!({"note_id":"tray"}))
+            })
+            .unwrap();
+        assert_eq!(
+            actions
+                .once_input(id, Input::Tray(TrayCommand::MarkdownNote), || panic!(
+                    "tray retry"
+                ))
+                .unwrap(),
+            json!({"note_id":"tray"})
+        );
+        assert!(actions
+            .once(
+                id,
+                GlobalShortcutCommandId::NewMarkdownNote,
+                None,
+                || panic!("cross-origin retry")
+            )
+            .is_err());
+        assert!(actions
+            .once_input(id, Input::Tray(TrayCommand::Diagram), || panic!(
+                "changed tray kind"
             ))
             .is_err());
     }

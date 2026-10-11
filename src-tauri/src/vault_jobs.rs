@@ -74,6 +74,16 @@ fn unavailable() -> AppError {
 }
 
 impl Jobs {
+    /// The coordinator checks this while holding its action-admission mutex.
+    /// A poisoned or paused gate cannot authorize an automatic exit.
+    #[cfg(desktop)]
+    pub(crate) fn is_idle(&self) -> bool {
+        self.0
+            .book
+            .lock()
+            .is_ok_and(|book| book.active == 0 && book.pause.is_none())
+    }
+
     pub fn enter(&self) -> AppResult<Job> {
         let mut book = self.0.book.lock().map_err(|_| unavailable())?;
         if book.pause.is_some() {

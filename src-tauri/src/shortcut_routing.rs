@@ -127,6 +127,14 @@ pub(crate) fn select_with_directory(
     live_recency: &[String],
 ) -> AppResult<(Selection, Option<PathBuf>)> {
     let _lock = RootLock::acquire(root)?;
+    select_locked(root, live_recency)
+}
+
+/// Caller holds RootLock, including any final coordinator admission decision.
+pub(crate) fn select_locked(
+    root: &Path,
+    live_recency: &[String],
+) -> AppResult<(Selection, Option<PathBuf>)> {
     let index = crate::profiles::load(root)?.ok_or_else(invalid)?;
     let doc = read(root)?;
     let mut eligible = Vec::new();

@@ -17,6 +17,19 @@ use crate::storage_locks::RootLock;
 
 const SETTINGS_FILE: &str = "desktop-settings.json";
 
+/// Caller holds RootLock. Lifetime decisions must never use cached defaults
+/// when the canonical document is unavailable or corrupt.
+#[cfg(desktop)]
+pub(crate) fn coordinator_keep_alive_locked(
+    root: &std::path::Path,
+) -> crate::error::AppResult<bool> {
+    let raw = fs::read(root.join(SETTINGS_FILE))?;
+    validate_settings_bytes(&raw)?;
+    let file: DesktopSettingsFile = serde_json::from_slice(&raw)
+        .map_err(|error| crate::error::AppError::InvalidArg(error.to_string()))?;
+    Ok(file.close_to_tray)
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct DesktopSettingsFile {
     #[serde(default)]

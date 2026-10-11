@@ -6,8 +6,9 @@ vault signing credentials are implemented and pass the Windows checks.
 Schema settings now use root/vault documents. Opt-in supervision exports legacy
 browser state before opening isolated vault workers and can adopt surviving
 workers after a coordinator restart. Coordinator shortcut registration and
-eligible-vault action dispatch are implemented. Platform checks, automatic host
-revival, shared tray/updater integration and the vault-opening UI remain pending;
+eligible-vault action dispatch, shared tray routing and last-window coordinator
+exit pass Windows checks. Platform checks, automatic host revival, updater
+integration and the vault-opening UI remain pending;
 normal startup and existing isolated test devices still use direct mode.
 Supervised worker close waits for content-window persistence. Whole-app Quit
 orchestration passes the Windows app checks; source/target
@@ -952,6 +953,48 @@ The smoke helper supports `--wait-for-external-quit`, exposing `quit-ready.json`
 before waiting for external menu or authenticated IPC Quit. Windows has no native
 app menu in this build; macOS menu, Windows tray and real OS keyboard checks remain
 pending. The coordinator IPC path was used for this native UI save check.
+
+Coordinator tray slice on 2026-10-12: one tray belongs to the coordinator;
+workers create none. Tray left click activates the last-used open worker or
+opens the persisted last-used vault when all workers are closed. Tray Quit uses
+the coordinated shutdown flow. Tray note/drawing/ink/diagram actions pin the
+overall most recent vault independently of shortcut eligibility. With all workers
+closed, in-memory focus history avoids a race with asynchronous recency writes.
+Unavailable destinations fail without writing in another vault.
+
+Tray actions await readiness and authenticate the launch/root/physical directory.
+Workers recheck index/deletion state and closing/service admission. Typed tray and
+shortcut receipts cannot be reused across origins or note kinds. Creation and
+notification share the existing at-most-once worker receipt, including diagram
+content. Capture failures produce persistent window toasts or a coordinator
+dialog when no window can receive them. Root device notices refresh tray/menu
+language. Runtime protocol 6 includes private tray capture and failure notices.
+The coordinator shutdown module is desktop-gated to retain mobile compilation.
+
+The user confirmed the lifetime policy on 2026-10-12. After the last worker
+actually exits, the coordinator exits when no vault enables global shortcuts
+and close-to-tray is off. An eligible closed capture vault or close-to-tray
+keeps it available. A background monitor also reconciles adopted workers using
+their physical OS leases. Failed startup, unavailable canonical settings and
+unknown ownership retain the coordinator. Accepted launch/capture/root-write
+jobs prevent an idle exit until they finish. The final eligibility/settings
+read and Quit admission share RootLock; worker IPC and job draining run after
+releasing it.
+
+Validation on 2026-10-12: Rust fmt/clippy and the full serial suite passed,
+862 unit tests plus one integration test, with five opt-in tests ignored.
+Frontend check, affected ESLint, 15 close/shortcut tests and the production
+frontend/embedded Windows builds passed. The fresh-root native fixture verified
+all tray templates into a disabled overall MRU vault, closed-vault tray capture,
+cross-origin receipt rejection, eligible shortcut routing, whole-app Quit and
+automatic last-worker exit. Coordinator/vault leases were reacquired after exit.
+Computer use clicked both vault title-bar Close buttons in a separate fixture.
+The first close left the other worker and coordinator alive; the final close
+exited the coordinator and released every lease. Artifacts remain under
+`.output/coordinator-tray-app-check` and `.output/coordinator-idle-ui-check`.
+The actual Windows tray menu input, real OS shortcut registration and macOS
+Dock/menu behavior remain unverified. Updater centralization and autostart
+behavior remain separate work before default supervision.
 
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.

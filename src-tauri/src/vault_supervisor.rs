@@ -38,6 +38,9 @@ enum HostCommand {
         #[serde(default)]
         accelerator: Option<String>,
     },
+    Tray {
+        action: crate::shortcut_actions::TrayCommand,
+    },
     ShortcutRegistrationStatus,
     Quit,
     DeviceSettingsChanged {
@@ -86,6 +89,14 @@ enum WorkerCommand {
     Close {
         launch_id: Uuid,
     },
+    CaptureFailed {
+        launch_id: Uuid,
+        message: String,
+    },
+    Tray {
+        launch_id: Uuid,
+        action: crate::shortcut_actions::TrayCommand,
+    },
     QuitFailed {
         launch_id: Uuid,
         message: String,
@@ -128,6 +139,7 @@ enum OpenProgress {
 #[derive(Default)]
 struct Book {
     exported: bool,
+    had_ready_worker: bool,
     quitting: Option<Uuid>,
     last: Option<String>,
     workers: BTreeMap<String, Launch>,
@@ -144,14 +156,23 @@ enum Action {
     Remember { vault_id: String, revision: u64 },
     RefreshDeviceSettings,
     Shortcut(crate::hotkeys::GlobalShortcutCommandId, Option<String>),
+    Tray(crate::shortcut_actions::TrayCommand),
 }
 
 impl Book {
+    fn idle_exit_candidate(&self, jobs: &crate::vault_jobs::Jobs) -> bool {
+        self.exported
+            && self.had_ready_worker
+            && self.workers.is_empty()
+            && self.quitting.is_none()
+            && jobs.is_idle()
+    }
+
     fn open_status(&self, operation_id: Uuid) -> AppResult<OpenProgress> {
         let operation = self.operations.get(&operation_id).ok_or_else(invalid)?;
         if !matches!(
             operation.input["command"].as_str(),
-            Some("open" | "shortcut" | "quit")
+            Some("open" | "shortcut" | "tray" | "quit")
         ) {
             return Err(invalid());
         }
@@ -173,7 +194,7 @@ impl Book {
             if (*request_id == operation_id || quit_alias)
                 && matches!(
                     operation.input["command"].as_str(),
-                    Some("open" | "shortcut" | "quit")
+                    Some("open" | "shortcut" | "tray" | "quit")
                 )
                 && operation.open_result.is_none()
             {
@@ -271,7 +292,10 @@ impl Book {
             }
             if matches!(
                 command,
-                HostCommand::Open { .. } | HostCommand::Activate | HostCommand::Shortcut { .. }
+                HostCommand::Open { .. }
+                    | HostCommand::Activate
+                    | HostCommand::Shortcut { .. }
+                    | HostCommand::Tray { .. }
             ) {
                 return Err(AppError::InvalidArg(
                     "the app is quitting; no new vault action was started".into(),
@@ -301,6 +325,12 @@ impl Book {
             }
             HostCommand::OpenStatus { .. } | HostCommand::ShortcutRegistrationStatus => {
                 unreachable!()
+            }
+            HostCommand::Tray { action: tray } => {
+                if !self.exported {
+                    return Err(invalid());
+                }
+                action = Some(Action::Tray(tray));
             }
             HostCommand::Shortcut {
                 command_id,
@@ -439,6 +469,7 @@ impl Book {
                 }
                 if !launch.ready {
                     launch.ready = true;
+                    self.had_ready_worker = true;
                     // Tracked requests perform their own authenticated activation
                     // before publishing success. Startup still activates here.
                     if self.quitting.is_none()
@@ -698,6 +729,10 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
     });
     #[cfg(target_os = "macos")]
     crate::native_menu::init(app)?;
+    // Workers never create a tray. As with direct test devices, isolated roots
+    // may have their own icon, while system shortcuts/updaters remain gated.
+    crate::tray::init(app)?;
+    start_lifetime_monitor(app.handle())?;
     let initial = index.active;
     crate::legacy_export::begin(
         app,
@@ -719,6 +754,8 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
                     if let Some(host) = task_app.try_state::<Host>() {
                         if let Ok(mut book) = host.book.lock() {
                             book.exported = true;
+                            book.had_ready_worker |=
+                                book.workers.values().any(|launch| launch.ready);
                             if book.last.is_none() {
                                 let recovered = book
                                     .workers
@@ -846,6 +883,68 @@ fn recover_worker(app: &AppHandle, root: &std::path::Path, id: &str) -> AppResul
     Ok(())
 }
 
+/// Also observes adopted workers, which have no child-wait handle in this
+/// coordinator. Only a released physical OS lease removes an adopted owner.
+fn start_lifetime_monitor(app: &AppHandle) -> AppResult<()> {
+    let app = app.clone();
+    std::thread::Builder::new()
+        .name("vault-lifetime".into())
+        .spawn(move || {
+            let mut last_error = None;
+            loop {
+                std::thread::sleep(Duration::from_secs(1));
+                let result = reconcile_lifetime(&app);
+                let error = result.err().map(|error| error.to_string());
+                if error != last_error {
+                    if let Some(error) = &error {
+                        log::warn!("[vaults] idle exit unavailable; coordinator retained: {error}");
+                    }
+                    last_error = error;
+                }
+            }
+        })?;
+    Ok(())
+}
+
+fn reconcile_lifetime(app: &AppHandle) -> AppResult<()> {
+    let host = app.state::<Host>();
+    let root = crate::paths::app_data_root(app)?;
+    reconcile_adopted(&host.book, &root)?;
+    if !host
+        .book
+        .lock()
+        .map_err(|_| invalid())?
+        .idle_exit_candidate(&host.jobs)
+    {
+        return Ok(());
+    }
+    let quit = {
+        // Root -> Book is the established lock order. No Book lock crosses a
+        // filesystem read, and no root lock crosses shutdown IPC or draining.
+        let _root_lock = crate::storage_locks::RootLock::acquire(&root)?;
+        if crate::desktop_settings::coordinator_keep_alive_locked(&root)?
+            || !matches!(
+                crate::shortcut_routing::select_locked(&root, &[])?.0,
+                crate::shortcut_routing::Selection::None
+            )
+        {
+            return Ok(());
+        }
+        let mut book = host.book.lock().map_err(|_| invalid())?;
+        // Accepted Open/Activate/capture tasks register their job before
+        // releasing Book. They win this race even before reserving a worker.
+        if !book.idle_exit_candidate(&host.jobs) {
+            return Ok(());
+        }
+        let quit = request(&HostCommand::Quit)?;
+        book.accept(host.instance, quit.clone())?;
+        quit.id
+    };
+    log::info!("[vaults] last vault closed without background capture; exiting");
+    finish_quit(app, quit);
+    Ok(())
+}
+
 fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
     let Some(host) = app.try_state::<Host>() else {
         // The authenticated listener may receive a launch in the small interval
@@ -869,7 +968,7 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
     let settings_notice = matches!(command, HostCommand::Ready { .. });
     let tracked_open = matches!(
         command,
-        HostCommand::Open { .. } | HostCommand::Shortcut { .. }
+        HostCommand::Open { .. } | HostCommand::Shortcut { .. } | HostCommand::Tray { .. }
     );
     let status_request = matches!(command, HostCommand::Status);
     if matches!(
@@ -878,6 +977,7 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
             | HostCommand::Activate
             | HostCommand::Open { .. }
             | HostCommand::Shortcut { .. }
+            | HostCommand::Tray { .. }
     ) {
         reconcile_adopted(&host.book, &crate::paths::app_data_root(app)?)?;
     }
@@ -957,7 +1057,23 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
                     }
                     Action::RefreshDeviceSettings => {
                         crate::coordinator_shortcuts::refresh(&task_app);
+                        let runtime = task_app.clone();
+                        let _ = task_app.run_on_main_thread(move || {
+                            if let Err(error) = crate::desktop_settings::refresh_runtime(&runtime) {
+                                log::warn!("[vaults] coordinator settings refresh failed: {error}");
+                            }
+                        });
                         broadcast_device_settings(&task_app);
+                        return;
+                    }
+                    Action::Tray(command) => {
+                        let result = dispatch_tray(&task_app, request_id, command);
+                        if let Err(error) = &result {
+                            report_capture_failure(&task_app, &error.to_string());
+                        }
+                        if let Ok(mut book) = task_app.state::<Host>().book.lock() {
+                            book.complete_open(request_id, result);
+                        }
                         return;
                     }
                     Action::Shortcut(command, accelerator) => {
@@ -1278,6 +1394,120 @@ fn host_shortcut_status(app: &AppHandle) -> AppResult<crate::coordinator_shortcu
             });
     }
     Ok(status)
+}
+
+pub(crate) fn run_tray(app: &AppHandle, action: crate::shortcut_actions::TrayCommand) {
+    let app = app.clone();
+    let _ = std::thread::Builder::new()
+        .name("tray-capture".into())
+        .spawn(move || {
+            if let Ok(request) = request(&HostCommand::Tray { action }) {
+                if let Err(error) = handle_host(&app, request) {
+                    report_capture_failure(&app, &error.to_string());
+                }
+            }
+        });
+}
+
+fn report_capture_failure(app: &AppHandle, message: &str) {
+    log::error!("[tray] capture failed: {message}");
+    let _ = app.emit(
+        crate::app_events::AppEvent::CaptureFailed.as_str(),
+        json!({"message":message}),
+    );
+    let targets = app
+        .state::<Host>()
+        .book
+        .lock()
+        .map(|book| book.device_targets())
+        .unwrap_or_default();
+    if targets.is_empty() {
+        use tauri_plugin_dialog::DialogExt;
+        app.dialog()
+            .message(message)
+            .title("Mindstream Notes")
+            .show(|_| {});
+    } else {
+        for (launch_id, endpoint) in targets {
+            if let Ok(request) = request(&WorkerCommand::CaptureFailed {
+                launch_id,
+                message: message.into(),
+            }) {
+                let _ = endpoint.retry_call(&request);
+            }
+        }
+    }
+}
+
+fn tray_destination(book: &Book, index: &crate::profiles::Index) -> AppResult<String> {
+    if !book.exported || book.quitting.is_some() {
+        return Err(invalid());
+    }
+    // Keep the latest known closed-vault focus until its asynchronous root
+    // persistence finishes. Last-open focus still wins while workers exist.
+    let recent_closed = book
+        .shortcut_order
+        .iter()
+        .rev()
+        .find(|id| index.profiles.iter().any(|vault| vault.id == **id));
+    let id = book
+        .last
+        .as_ref()
+        .or(recent_closed)
+        .unwrap_or(&index.active);
+    if !index.profiles.iter().any(|vault| vault.id == *id) {
+        return Err(AppError::InvalidArg(
+            "the last-used tray vault is unavailable".into(),
+        ));
+    }
+    Ok(id.clone())
+}
+
+fn dispatch_tray(
+    app: &AppHandle,
+    request_id: Uuid,
+    action: crate::shortcut_actions::TrayCommand,
+) -> AppResult<()> {
+    let root = crate::paths::app_data_root(app)?;
+    let index = crate::profiles::prepare_coordinator_index(&root)?;
+    let vault_id = {
+        let host = app.state::<Host>();
+        let book = host.book.lock().map_err(|_| invalid())?;
+        tray_destination(&book, &index)?
+    };
+    let directory = std::fs::canonicalize(crate::profiles::profile_dir(&root, &vault_id))?;
+    // Pin this destination before startup. Focus changes and failures never
+    // turn the same request into a write in another vault.
+    let launch_id = open(app, &vault_id, false)?;
+    let (endpoint, _) = wait_for_ready(
+        &app.state::<Host>().book,
+        &vault_id,
+        launch_id,
+        Instant::now() + OPEN_TIMEOUT,
+    )?;
+    let reply = endpoint
+        .retry_call(&request(&WorkerCommand::Identify { launch_id })?)?
+        .map_err(AppError::InvalidArg)?;
+    let identity: crate::worker_registration::Identity =
+        serde_json::from_value(reply).map_err(|_| invalid())?;
+    identity.require_compatible()?;
+    if !identity.ready
+        || identity.launch_id != launch_id
+        || identity.vault_id != vault_id
+        || identity.directory != directory
+        || identity.root != std::fs::canonicalize(&root)?
+    {
+        return Err(invalid());
+    }
+    crate::foreground::transfer(&endpoint);
+    endpoint
+        .retry_call(&Request {
+            id: request_id,
+            payload: serde_json::to_value(WorkerCommand::Tray { launch_id, action })
+                .map_err(|_| invalid())?,
+        })?
+        .map(|_| ())
+        .map_err(AppError::InvalidArg)
 }
 
 pub(crate) fn run_shortcut(
@@ -1718,6 +1948,24 @@ pub fn register_worker(
         let command: WorkerCommand = serde_json::from_value(request.payload)
             .map_err(|_| "invalid worker request".to_string())?;
         match command {
+            WorkerCommand::Tray { launch_id, action } => {
+                if launch_id != registration.launch_id || !worker_ready.load(Ordering::Acquire) {
+                    return Err("tray destination identity or readiness changed".into());
+                }
+                crate::shortcut_actions::execute_tray(&handle, request_id, action)
+            }
+            WorkerCommand::CaptureFailed { launch_id, message } => {
+                if launch_id != registration.launch_id {
+                    return Err("worker identity mismatch".into());
+                }
+                handle
+                    .emit(
+                        crate::app_events::AppEvent::CaptureFailed.as_str(),
+                        json!({"message":message}),
+                    )
+                    .map_err(|_| "capture failure notification unavailable".to_string())?;
+                Ok(json!({"accepted":true}))
+            }
             WorkerCommand::Shortcut {
                 launch_id,
                 command_id,
@@ -1925,6 +2173,106 @@ fn await_open_result(host: &Endpoint, operation_id: Uuid, deadline: Instant) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_exit_waits_for_ready_session_and_every_accepted_launch_job() {
+        let jobs = crate::vault_jobs::Jobs::default();
+        let mut book = Book {
+            exported: true,
+            ..Book::default()
+        };
+        assert!(
+            !book.idle_exit_candidate(&jobs),
+            "failed startup must remain inspectable"
+        );
+        book.had_ready_worker = true;
+        assert!(book.idle_exit_candidate(&jobs));
+        let instance = Uuid::new_v4();
+        let (_, action) = book
+            .accept(
+                instance,
+                request(&HostCommand::Open {
+                    vault_id: "a".into(),
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        assert!(matches!(action, Some(Action::Open(_))));
+        let job = jobs.enter().unwrap();
+        assert!(
+            !book.idle_exit_candidate(&jobs),
+            "accepted launch owns admission before reservation"
+        );
+        drop(job);
+        assert!(book.idle_exit_candidate(&jobs));
+        book.accept(instance, request(&HostCommand::Quit).unwrap())
+            .unwrap();
+        assert!(!book.idle_exit_candidate(&jobs));
+        assert!(book
+            .accept(instance, request(&HostCommand::Activate).unwrap())
+            .is_err());
+    }
+
+    #[test]
+    fn tray_targets_overall_recent_vault_and_never_falls_back_on_failure() {
+        let index = crate::profiles::Index {
+            active: "capture".into(),
+            profiles: ["capture", "other"]
+                .into_iter()
+                .map(|id| crate::profiles::Profile {
+                    id: id.into(),
+                    name: id.into(),
+                    created_at: String::new(),
+                })
+                .collect(),
+        };
+        let mut book = Book {
+            exported: true,
+            ..Book::default()
+        };
+        assert_eq!(tray_destination(&book, &index).unwrap(), "capture");
+        book.last = Some("other".into());
+        assert_eq!(tray_destination(&book, &index).unwrap(), "other");
+        book.last = Some("missing".into());
+        assert!(tray_destination(&book, &index).is_err());
+        book.last = None;
+        book.shortcut_order = vec!["capture".into(), "other".into()];
+        assert_eq!(tray_destination(&book, &index).unwrap(), "other");
+        book.quitting = Some(Uuid::new_v4());
+        assert!(tray_destination(&book, &index).is_err());
+    }
+
+    #[test]
+    fn tray_replays_and_quit_fences_capture_without_redispatch() {
+        let mut book = Book {
+            exported: true,
+            ..Book::default()
+        };
+        let instance = Uuid::new_v4();
+        let tray = request(&HostCommand::Tray {
+            action: crate::shortcut_actions::TrayCommand::Diagram,
+        })
+        .unwrap();
+        assert!(matches!(
+            book.accept(instance, tray.clone()).unwrap().1,
+            Some(Action::Tray(crate::shortcut_actions::TrayCommand::Diagram))
+        ));
+        assert!(book.accept(instance, tray.clone()).unwrap().1.is_none());
+        book.complete_open(tray.id, Ok(()));
+        assert_eq!(book.open_status(tray.id).unwrap(), OpenProgress::Ready);
+        book.accept(instance, request(&HostCommand::Quit).unwrap())
+            .unwrap();
+        assert!(book
+            .accept(
+                instance,
+                request(&HostCommand::Tray {
+                    action: crate::shortcut_actions::TrayCommand::Drawing
+                })
+                .unwrap()
+            )
+            .is_err());
+        assert!(book.accept(instance, tray).unwrap().1.is_none());
+    }
 
     #[test]
     fn quit_is_one_retryable_intent_and_fences_new_actions_until_failure() {

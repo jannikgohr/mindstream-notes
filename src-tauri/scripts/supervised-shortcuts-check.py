@@ -84,6 +84,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--exe", type=Path, default=Path(__file__).resolve().parents[1] / "target/debug/mindstream-notes.exe")
     parser.add_argument("--wait-for-external-quit", action="store_true", help="wait for external menu or IPC Quit after writing quit-ready.json")
+    parser.add_argument("--wait-for-window-close", action="store_true", help="start two vaults without background capture and wait for native window closure")
     args = parser.parse_args()
     assert os.name == "nt", "this fixture checks Windows native workers"
     output = args.output.resolve()
@@ -95,9 +96,12 @@ def main():
         directory = root / "profiles" / vault_id
         directory.mkdir(parents=True)
         (directory / "content-settings.json").write_text(json.dumps({"version": 1, "revision": 1,
-            "values": {"hotkeys.globalShortcuts": vault_id == "capture"}}), encoding="utf-8")
+            "values": {"hotkeys.globalShortcuts": vault_id == "capture" and not args.wait_for_window_close}}), encoding="utf-8")
     (root / "profiles.json").write_text(json.dumps({"active": "other", "profiles": [
         {"id": vault_id, "name": vault_id, "created_at": "2026-10-11T00:00:00Z"} for vault_id in vaults]}), encoding="utf-8")
+    # Keep the coordinator for the deliberate zero-eligibility tray scenarios.
+    # A second launch below checks the user's normal last-window exit policy.
+    (root / "desktop-settings.json").write_text(json.dumps({"close_to_tray": not args.wait_for_window_close}), encoding="utf-8")
     env = os.environ.copy()
     env["MINDSTREAM_ROOT_DIR"] = str(root)
     env["WEBVIEW2_USER_DATA_FOLDER"] = str(output / "legacy-webview")
@@ -170,9 +174,42 @@ def main():
         try:
             peer = wait(endpoint)
             wait(lambda: status()["initialized"] and any(entry["id"] == "other" and entry["ready"] for entry in status()["workers"]))
-            assert status()["contract"]["protocol"] == 5
+            assert status()["contract"]["protocol"] == 6
+            if args.wait_for_window_close:
+                completed("open", vault_id="capture")
+                wait(lambda: len(status()["workers"]) == 2 and all(entry["ready"] for entry in status()["workers"]))
+                assert status()["shortcuts"] == {"state": "none"}
+                (output / "close-ready.json").write_text(json.dumps({"host_pid": host.pid, "vaults": vaults}), encoding="utf-8")
+                print("Both workers ready for native window-close checks", flush=True)
+                assert host.wait(timeout=190) == 0
+                with lease(root / ".coordinator.lock"):
+                    for vault_id in vaults:
+                        with lease(root / "profiles" / vault_id / ".vault.lock"):
+                            pass
+                print("Native window closure exited coordinator and released every lease")
+                clean = True
+                return
             assert status()["shortcuts"]["vault_id"] == "capture"
             assert not status()["shortcutRegistration"]["registered"], "test root registered OS shortcuts"
+            # Tray follows the disabled overall most-recent vault, independent
+            # of the sole eligible capture vault selected by system shortcuts.
+            recent = worker("other")
+            assert "Ok" in call(peer, {"command": "focused", "vault_id": "other", "launch_id": recent["launch_id"], "window": "main"})
+            before_tray = counts("other")
+            for action, kind in [("markdownNote", "markdown"), ("drawing", "freeform"), ("inkNote", "ink")]:
+                before_kind = counts("other").get(kind, 0)
+                completed("tray", action=action)
+                assert counts("other")[kind] == before_kind + 1
+            completed("tray", action="diagram")
+            with sqlite3.connect(root / "profiles" / "other" / "mindstream.db") as db:
+                assert db.execute("SELECT COUNT(*) FROM notes WHERE title='Untitled diagram' AND body LIKE '%flowchart TD%'").fetchone()[0] == 1
+            private_tray = str(uuid.uuid4())
+            tray_payload = {"command": "tray", "launch_id": recent["launch_id"], "action": "diagram"}
+            first_tray = call(recent["endpoint"], tray_payload, private_tray)
+            assert "Ok" in first_tray and first_tray == call(recent["endpoint"], tray_payload, private_tray)
+            assert "Err" in call(recent["endpoint"], {"command": "shortcut", "launch_id": recent["launch_id"], "command_id": "newMarkdownNote", "accelerator": None}, private_tray)
+            assert counts("other")["markdown"] == before_tray.get("markdown", 0) + 3
+            print("Tray targets disabled overall MRU; all templates and private retry isolation passed")
             completed("shortcut", command_id="showApp")
             baseline = {vault_id: counts(vault_id) for vault_id in vaults}
             completed("shortcut", command_id="showApp")
@@ -203,6 +240,13 @@ def main():
             print("Closed capture routing, all note kinds, Show app and root/worker retry checks passed")
             close_all()
             enabled("capture", False)
+            # With zero shortcut eligibility and no open windows, tray capture
+            # still reopens the overall last-used vault.
+            recent_closed = json.loads((root / "profiles.json").read_text())["active"]
+            before_closed = counts(recent_closed).get("markdown", 0)
+            completed("tray", action="markdownNote")
+            assert counts(recent_closed)["markdown"] == before_closed + 1
+            close_all()
             failed_id = str(uuid.uuid4())
             assert "Ok" in call(peer, {"command": "shortcut", "command_id": "newMarkdownNote"}, failed_id)
             failure = wait(lambda: (progress if (progress := call(peer, {"command": "openStatus", "operation_id": failed_id})["Ok"])["state"] != "pending" else None))
@@ -236,6 +280,36 @@ def main():
                     with lease(root / "profiles" / vault_id / ".vault.lock"):
                         pass
             print("Whole-app Quit closed both workers and released coordinator/vault leases")
+            if not args.wait_for_external_quit:
+                for vault_id in vaults:
+                    enabled(vault_id, False)
+                with lease(root / ".root.lock"):
+                    path = root / "desktop-settings.json"
+                    document = json.loads(path.read_text())
+                    document["close_to_tray"] = False
+                    document["revision"] = document.get("revision", 0) + 1
+                    temporary = path.with_suffix(".fixture-next")
+                    temporary.write_text(json.dumps(document), encoding="utf-8")
+                    temporary.replace(path)
+                host = subprocess.Popen([str(args.exe.resolve()), "--supervised-vaults"], env=env,
+                    stdout=log, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW)
+                (output / "host.pid").write_text(str(host.pid), encoding="utf-8")
+                peer = wait(endpoint)
+                wait(lambda: status()["initialized"] and any(entry["ready"] for entry in status()["workers"]))
+                completed("open", vault_id="capture")
+                completed("open", vault_id="other")
+                for vault_id in vaults:
+                    record = worker(vault_id)
+                    assert call(record["endpoint"], {"command": "close", "launch_id": record["launch_id"]})["Ok"]["accepted"]
+                    if vault_id == "capture":
+                        wait(lambda: all(entry["id"] != vault_id for entry in status()["workers"]))
+                        assert host.poll() is None, "coordinator exited with another vault still open"
+                assert host.wait(timeout=190) == 0
+                with lease(root / ".coordinator.lock"):
+                    for vault_id in vaults:
+                        with lease(root / "profiles" / vault_id / ".vault.lock"):
+                            pass
+                print("Last vault close exits coordinator with no eligible shortcuts and close-to-tray off")
             clean = True
         finally:
             # Graceful close retains every worker's real ownership until it exits.

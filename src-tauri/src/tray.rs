@@ -20,8 +20,8 @@ const NEW_INK_ID: &str = "new_ink";
 const NEW_DIAGRAM_ID: &str = "new_diagram";
 const QUIT_ID: &str = "quit";
 
-// Tray item id -> hotkey command id. The JS side owns bindings; Rust only
-// mirrors their native accelerator strings into the tray menu.
+// Direct-mode windows publish accelerator hints through the frontend. The
+// coordinator tray has no editor-local binding cache and leaves these unset.
 const TRAY_HOTKEY_COMMANDS: &[(&str, GlobalShortcutCommandId)] = &[
     (NEW_NOTE_ID, GlobalShortcutCommandId::NewMarkdownNote),
     (NEW_DRAWING_ID, GlobalShortcutCommandId::NewDrawing),
@@ -81,7 +81,15 @@ pub fn init(app: &App) -> tauri::Result<()> {
                     ..
                 }
             ) {
-                focus_main_window(tray.app_handle());
+                if tray
+                    .app_handle()
+                    .try_state::<crate::vault_supervisor::Host>()
+                    .is_some()
+                {
+                    crate::vault_supervisor::activate(tray.app_handle());
+                } else {
+                    focus_main_window(tray.app_handle());
+                }
             }
         });
 
@@ -143,6 +151,21 @@ pub fn sync_hotkey_displays(app: &AppHandle) {
 fn handle_menu_event(app: &AppHandle, item_id: &str) {
     if item_id == QUIT_ID {
         crate::vault_supervisor::request_quit(app);
+        return;
+    }
+
+    if app.try_state::<crate::vault_supervisor::Host>().is_some() {
+        use crate::shortcut_actions::TrayCommand;
+        let action = match item_id {
+            NEW_NOTE_ID => Some(TrayCommand::MarkdownNote),
+            NEW_DRAWING_ID => Some(TrayCommand::Drawing),
+            NEW_INK_ID => Some(TrayCommand::InkNote),
+            NEW_DIAGRAM_ID => Some(TrayCommand::Diagram),
+            _ => None,
+        };
+        if let Some(action) = action {
+            crate::vault_supervisor::run_tray(app, action);
+        }
         return;
     }
 

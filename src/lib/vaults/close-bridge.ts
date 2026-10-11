@@ -78,6 +78,12 @@ export function installWorkerCloseBridge(): () => void {
   const subscription = listen(TauriEventName.VaultWorkerClose, (notice) => {
     void participant.receive(notice);
   });
+  const captureFailure = listen(TauriEventName.CaptureFailed, (notice) => {
+    pushToast(notice.message, { variant: 'error', durationMs: 0 });
+  });
+  void captureFailure.catch((error) =>
+    console.warn('[vaults] capture listener unavailable', error)
+  );
   const quitFailure = listen(TauriEventName.EnvironmentQuitFailed, (notice) => {
     pushToast(`${tUi('vault.closeFailed')} ${notice.message}`, {
       variant: 'error',
@@ -108,6 +114,7 @@ export function installWorkerCloseBridge(): () => void {
   return () => {
     stopped = true;
     participant.dispose();
+    void captureFailure.then((unlisten) => unlisten()).catch(() => {});
     void quitFailure.then((unlisten) => unlisten()).catch(() => {});
     void subscription.then((unlisten) => unlisten()).catch(() => {});
   };

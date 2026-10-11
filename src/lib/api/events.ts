@@ -6,6 +6,7 @@ import {
 import type { SyncReport } from './sync';
 
 export enum TauriEventName {
+  CaptureFailed = 'capture-failed',
   CollabCredentialsChanged = 'collab-credentials-changed',
   CustomWindowDecorationsChanged = 'custom-window-decorations-changed',
   DesktopSettingsChanged = 'desktop-settings-changed',
@@ -48,6 +49,7 @@ export interface CollabCredentialsChangedPayload {
 }
 
 export type TauriEvents = {
+  'capture-failed': { message: string };
   'environment-quit-failed': { message: string };
   'fullscreen-note': { noteId: string; title: string };
   'custom-window-decorations-changed': boolean;
