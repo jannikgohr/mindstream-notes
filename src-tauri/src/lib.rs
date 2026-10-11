@@ -196,6 +196,9 @@ pub fn run() {
         .enable_macos_default_menu(false)
         .on_menu_event(native_menu::handle_menu_event)
         .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Focused(true)) {
+                vault_supervisor::window_focused(window.app_handle(), window.label());
+            }
             #[cfg(target_os = "macos")]
             if matches!(
                 event,
@@ -793,7 +796,7 @@ pub fn run() {
         }
         #[cfg(target_os = "macos")]
         if matches!(event, tauri::RunEvent::Reopen { .. }) {
-            crate::tray::focus_main_window(app);
+            crate::vault_supervisor::activate(app);
         }
         #[cfg(not(target_os = "macos"))]
         let _ = app;

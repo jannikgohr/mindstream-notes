@@ -427,9 +427,30 @@ pub fn add_profile(root: &Path, name: &str) -> AppResult<Profile> {
 /// takes effect on the next launch — the caller relaunches.
 pub fn set_active(root: &Path, id: &str) -> AppResult<()> {
     let _lock = RootLock::acquire(root)?;
+    set_active_locked(root, id)
+}
+
+/// Check the latest focus revision after acquiring the root transaction lock.
+/// The predicate must be a short in-memory check, without filesystem/IPC work.
+pub(crate) fn remember_active_if(
+    root: &Path,
+    id: &str,
+    current: impl FnOnce() -> AppResult<bool>,
+) -> AppResult<()> {
+    let _lock = RootLock::acquire(root)?;
+    if current()? {
+        set_active_locked(root, id)?;
+    }
+    Ok(())
+}
+
+fn set_active_locked(root: &Path, id: &str) -> AppResult<()> {
     let mut index = load_or_init_locked(root)?;
     if !index.profiles.iter().any(|p| p.id == id) {
         return Err(AppError::NotFound(format!("unknown vault: {id}")));
+    }
+    if index.active == id {
+        return Ok(());
     }
     index.active = id.to_string();
     save_locked(root, &index)?;

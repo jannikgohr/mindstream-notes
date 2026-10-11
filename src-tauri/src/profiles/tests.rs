@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn delayed_focus_persistence_cannot_overwrite_a_newer_vault_selection() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let root = tmp_root();
+    load_or_init(&root).unwrap();
+    let a = add_profile(&root, "A").unwrap();
+    let b = add_profile(&root, "B").unwrap();
+    let revision = AtomicU64::new(2);
+    remember_active_if(&root, &b.id, || Ok(revision.load(Ordering::Acquire) == 2)).unwrap();
+    // The older writer acquires the transaction lock after the newer writer.
+    remember_active_if(&root, &a.id, || Ok(revision.load(Ordering::Acquire) == 1)).unwrap();
+    assert_eq!(load(&root).unwrap().unwrap().active, b.id);
+    revision.store(3, Ordering::Release);
+    remember_active_if(&root, &a.id, || Ok(revision.load(Ordering::Acquire) == 3)).unwrap();
+    assert_eq!(load(&root).unwrap().unwrap().active, a.id);
+    assert_eq!(load(&root).unwrap().unwrap().profiles.len(), 3);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn explicit_workers_keep_the_startup_preference_and_host_can_read_an_open_vault() {
     let root = tmp_root();
     let index = prepare_coordinator_index(&root).unwrap();

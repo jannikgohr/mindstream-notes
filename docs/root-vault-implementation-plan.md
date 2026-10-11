@@ -468,6 +468,27 @@ tests and one integration test, with five ignored tests. The embedded frontend
 build passes. Native recovery checks do not depend on the unavailable
 computer-use connection.
 
+Focus routing slice on 2026-10-11: native focus notifications identify the vault,
+authorized launch and main/note window. Readiness does not mark a vault as used.
+The host tracks focus order, removes exited workers from that order and routes
+activation to the last focused window, falling back to main when a popout has
+closed. Adoption retains a surviving worker's last window. Startup seeds recency
+from the persisted last-used vault when native focus order is unavailable.
+Last-used writes check the latest focus revision after acquiring the root lock;
+an older queued notification cannot overwrite a newer selection. macOS Reopen
+events now route through the coordinator from either host or worker; packaged
+Dock/menu behavior still requires the owner's release test.
+
+The embedded Windows fixture delivered native main-window focus events for
+Default and Second. Host status and `profiles.json.active` changed to Second.
+A second supervised launch exited successfully and left exactly one host and two
+workers; it reused the latest vault. Logs remain in
+`.output/supervised-startup-app-check/focus-*.log`. Popout routing and close-order
+fallback pass unit tests; native popout focus across the coordinator is still
+unverified. Windows foreground grants and Wayland activation remain pending.
+Rust fmt/clippy and the full serial suite pass 811 unit tests and one integration
+test, with five ignored tests. This remains an opt-in startup path.
+
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.
 

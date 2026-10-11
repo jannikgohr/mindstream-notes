@@ -32,6 +32,8 @@ pub struct Identity {
     pub directory: PathBuf,
     pub launch_id: Uuid,
     pub ready: bool,
+    #[serde(default)]
+    pub window: Option<String>,
 }
 
 pub enum Recovery {
@@ -92,6 +94,7 @@ impl Registration {
             directory: self.directory.clone(),
             launch_id: self.launch_id,
             ready,
+            window: None,
         }
     }
 

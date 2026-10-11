@@ -20,6 +20,12 @@ use crate::vault_runtime::Role;
 #[serde(tag = "command", rename_all = "camelCase", deny_unknown_fields)]
 enum HostCommand {
     Activate,
+    Status,
+    Focused {
+        vault_id: String,
+        launch_id: Uuid,
+        window: String,
+    },
     Open {
         vault_id: String,
     },
@@ -47,9 +53,17 @@ enum HostCommand {
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "command", rename_all = "camelCase", deny_unknown_fields)]
 enum WorkerCommand {
-    Activate,
-    Identify { launch_id: Uuid },
-    Adopt { launch_id: Uuid, host: Endpoint },
+    Activate {
+        #[serde(default)]
+        window: Option<String>,
+    },
+    Identify {
+        launch_id: Uuid,
+    },
+    Adopt {
+        launch_id: Uuid,
+        host: Endpoint,
+    },
 }
 
 struct Launch {
@@ -58,6 +72,7 @@ struct Launch {
     ready: bool,
     error: Option<String>,
     adopted: bool,
+    focused_window: Option<String>,
 }
 struct Operation {
     input: Value,
@@ -70,11 +85,14 @@ struct Book {
     last: Option<String>,
     workers: BTreeMap<String, Launch>,
     operations: BTreeMap<Uuid, Operation>,
+    focus_order: Vec<String>,
+    focus_revision: u64,
 }
 
 enum Action {
     Open(String),
     ActivateLast,
+    Remember { vault_id: String, revision: u64 },
 }
 
 impl Book {
@@ -85,8 +103,9 @@ impl Book {
             .is_some_and(|launch| launch.id == launch_id)
         {
             self.workers.remove(vault_id);
+            self.focus_order.retain(|id| id != vault_id);
             if self.last.as_deref() == Some(vault_id) {
-                self.last = None;
+                self.last = self.focus_order.last().cloned();
             }
         }
     }
@@ -107,6 +126,38 @@ impl Book {
         }
         let mut action = None;
         match command {
+            HostCommand::Status => {
+                return Ok((
+                    json!({"initialized":self.exported,"active":self.last,"workers":self.workers.iter().map(|(id, launch)| json!({
+                    "id":id,"ready":launch.ready,"window":launch.focused_window,"error":launch.error,
+                })).collect::<Vec<_>>()}),
+                    None,
+                ));
+            }
+            HostCommand::Focused {
+                vault_id,
+                launch_id,
+                window,
+            } => {
+                if !valid_window(&window) {
+                    return Err(invalid());
+                }
+                let launch = self.workers.get_mut(&vault_id).ok_or_else(invalid)?;
+                if launch.id != launch_id
+                    || !launch.ready
+                    || launch.endpoint.is_none()
+                    || launch.error.is_some()
+                {
+                    return Err(invalid());
+                }
+                let revision = self.focus_revision.checked_add(1).ok_or_else(invalid)?;
+                launch.focused_window = Some(window);
+                self.focus_revision = revision;
+                self.focus_order.retain(|id| id != &vault_id);
+                self.focus_order.push(vault_id.clone());
+                self.last = Some(vault_id.clone());
+                action = Some(Action::Remember { vault_id, revision });
+            }
             HostCommand::Activate => {
                 if self.exported {
                     action = Some(
@@ -180,7 +231,6 @@ impl Book {
                 }
                 if !launch.ready {
                     launch.ready = true;
-                    self.last = Some(vault_id.clone());
                     action = Some(Action::Open(vault_id));
                 }
             }
@@ -208,11 +258,69 @@ pub struct Worker {
     launch_id: Uuid,
     host: Arc<Mutex<Endpoint>>,
     ready: Arc<AtomicBool>,
+    last_window: Arc<Mutex<Option<String>>>,
     _server: Running,
 }
 
 fn invalid() -> AppError {
     AppError::InvalidArg("vault coordinator request could not be completed".into())
+}
+
+fn valid_window(label: &str) -> bool {
+    label == "main" || (label.starts_with("note_") && label.len() > 5 && label.len() <= 256)
+}
+
+pub fn window_focused(app: &AppHandle, label: &str) {
+    if !valid_window(label) {
+        return;
+    }
+    let Some(worker) = app.try_state::<Worker>() else {
+        return;
+    };
+    if !worker.ready.load(Ordering::Acquire) {
+        return;
+    }
+    if let Ok(mut last_window) = worker.last_window.lock() {
+        *last_window = Some(label.into());
+    }
+    let Ok(host) = worker.host.lock().map(|host| host.clone()) else {
+        return;
+    };
+    let Ok(request) = request(&HostCommand::Focused {
+        vault_id: worker.vault_id.clone(),
+        launch_id: worker.launch_id,
+        window: label.into(),
+    }) else {
+        return;
+    };
+    let _ = std::thread::Builder::new()
+        .name("vault-focus".into())
+        .spawn(move || {
+            if !matches!(host.retry_call(&request), Ok(Ok(_))) {
+                log::warn!("[vaults] focus notification unavailable");
+            }
+        });
+}
+
+pub fn activate(app: &AppHandle) {
+    if app.try_state::<Host>().is_some() {
+        if let Ok(request) = request(&HostCommand::Activate) {
+            let _ = handle_host(app, request);
+        }
+    } else if let Some(worker) = app.try_state::<Worker>() {
+        let Ok(host) = worker.host.lock().map(|host| host.clone()) else {
+            return;
+        };
+        if let Ok(request) = request(&HostCommand::Activate) {
+            let _ = std::thread::Builder::new()
+                .name("vault-activate".into())
+                .spawn(move || {
+                    let _ = host.retry_call(&request);
+                });
+        }
+    } else {
+        crate::tray::focus_main_window(app);
+    }
 }
 
 fn request(command: &HostCommand) -> AppResult<Request> {
@@ -303,12 +411,35 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
                         log::error!("[vaults] worker discovery failed: {error}");
                         return;
                     }
+                    let mut target = initial;
                     if let Some(host) = task_app.try_state::<Host>() {
                         if let Ok(mut book) = host.book.lock() {
                             book.exported = true;
+                            if book.last.is_none() {
+                                let recovered = book
+                                    .workers
+                                    .get(&target)
+                                    .filter(|launch| launch.ready && launch.error.is_none())
+                                    .map(|_| target.clone())
+                                    .or_else(|| {
+                                        book.workers
+                                            .iter()
+                                            .find(|(_, launch)| {
+                                                launch.ready && launch.error.is_none()
+                                            })
+                                            .map(|(id, _)| id.clone())
+                                    });
+                                if let Some(id) = recovered {
+                                    book.focus_order.push(id.clone());
+                                    book.last = Some(id);
+                                }
+                            }
+                            if let Some(id) = &book.last {
+                                target = id.clone();
+                            }
                         }
                     }
-                    if let Err(error) = open(&task_app, &initial) {
+                    if let Err(error) = open(&task_app, &target) {
                         log::error!("[vaults] initial launch failed: {error}");
                     }
                 })
@@ -334,6 +465,7 @@ fn recover_workers(app: &AppHandle) -> AppResult<()> {
                     ready: false,
                     error: Some("vault owner could not be identified; ownership retained".into()),
                     adopted: true,
+                    focused_window: None,
                 },
             );
             log::warn!("[vaults] worker discovery refused: {error}");
@@ -366,6 +498,7 @@ fn recover_worker(app: &AppHandle, root: &std::path::Path, id: &str) -> AppResul
                 ready: false,
                 error: None,
                 adopted: true,
+                focused_window: None,
             },
         );
     }
@@ -384,12 +517,24 @@ fn recover_worker(app: &AppHandle, root: &std::path::Path, id: &str) -> AppResul
     if !record.matches(&identity) {
         return Err(invalid());
     }
+    if identity
+        .window
+        .as_ref()
+        .is_some_and(|label| !valid_window(label))
+    {
+        return Err(invalid());
+    }
     let mut book = host.book.lock().map_err(|_| invalid())?;
     let launch = book.workers.get_mut(id).ok_or_else(invalid)?;
     if launch.id != record.launch_id {
         return Err(invalid());
     }
     launch.ready |= identity.ready;
+    // A focus notification may have raced the adoption reply. Preserve its
+    // newer window selection when present.
+    if launch.focused_window.is_none() {
+        launch.focused_window = identity.window;
+    }
     Ok(())
 }
 
@@ -413,6 +558,19 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
                     Action::ActivateLast => crate::paths::app_data_root(&task_app)
                         .and_then(|root| crate::profiles::prepare_coordinator_index(&root))
                         .map(|index| index.active),
+                    Action::Remember { vault_id, revision } => {
+                        let result = crate::paths::app_data_root(&task_app).and_then(|root| {
+                            crate::profiles::remember_active_if(&root, &vault_id, || {
+                                let host = task_app.state::<Host>();
+                                let book = host.book.lock().map_err(|_| invalid())?;
+                                Ok(book.focus_revision == revision)
+                            })
+                        });
+                        if let Err(error) = result {
+                            log::warn!("[vaults] last-used persistence failed: {error}");
+                        }
+                        return;
+                    }
                 };
                 if let Err(error) = target.and_then(|vault_id| open(&task_app, &vault_id)) {
                     log::error!("[vaults] open request failed: {error}");
@@ -452,6 +610,7 @@ fn open(app: &AppHandle, vault_id: &str) -> AppResult<()> {
         let launch_id = launch.id;
         let error = launch.error.clone();
         let adopted_pending = launch.adopted && !launch.ready;
+        let focused_window = launch.focused_window.clone();
         let endpoint = launch.ready.then(|| launch.endpoint.clone()).flatten();
         drop(book);
         if let Some(error) = error {
@@ -480,20 +639,14 @@ fn open(app: &AppHandle, vault_id: &str) -> AppResult<()> {
             let result = endpoint
                 .call(&Request {
                     id: Uuid::new_v4(),
-                    payload: serde_json::to_value(WorkerCommand::Activate)
-                        .map_err(|_| invalid())?,
+                    payload: serde_json::to_value(WorkerCommand::Activate {
+                        window: focused_window,
+                    })
+                    .map_err(|_| invalid())?,
                 })
                 .and_then(|reply| reply.map_err(AppError::InvalidArg));
             if let Err(error) = result {
                 return retry_after_released_owner(app, &root, vault_id, launch_id, error);
-            }
-            let mut book = host.book.lock().map_err(|_| invalid())?;
-            if book
-                .workers
-                .get(vault_id)
-                .is_some_and(|launch| launch.id == launch_id && launch.ready)
-            {
-                book.last = Some(vault_id.into());
             }
         }
         return Ok(());
@@ -507,6 +660,7 @@ fn open(app: &AppHandle, vault_id: &str) -> AppResult<()> {
             ready: false,
             error: None,
             adopted: false,
+            focused_window: None,
         },
     );
     drop(book);
@@ -648,18 +802,31 @@ pub fn register_worker(
     registration.publish(ownership)?;
     let registration = Arc::new(registration);
     let ready = Arc::new(AtomicBool::new(false));
+    let last_window = Arc::new(Mutex::new(None));
     let host = Arc::new(Mutex::new(host));
     let worker_ready = ready.clone();
+    let worker_window = last_window.clone();
     let worker_host = host.clone();
     let handle = app.clone();
     let server = listener.serve(move |request| {
         let command: WorkerCommand = serde_json::from_value(request.payload)
             .map_err(|_| "invalid worker request".to_string())?;
         match command {
-            WorkerCommand::Activate => {
+            WorkerCommand::Activate { window } => {
+                let label = window.unwrap_or_else(|| "main".into());
+                if !valid_window(&label) {
+                    return Err("invalid worker window".into());
+                }
                 let app = handle.clone();
                 handle
-                    .run_on_main_thread(move || crate::tray::focus_main_window(&app))
+                    .run_on_main_thread(move || {
+                        let target = app
+                            .get_webview_window(&label)
+                            .or_else(|| app.get_webview_window("main"));
+                        if let Some(window) = target {
+                            crate::tray::focus_vault_window(&app, &window);
+                        }
+                    })
                     .map_err(|_| "worker activation unavailable".to_string())?;
                 Ok(json!({"accepted":true}))
             }
@@ -667,16 +834,19 @@ pub fn register_worker(
                 if launch_id != registration.launch_id {
                     return Err("worker identity mismatch".into());
                 }
-                serde_json::to_value(registration.identity(worker_ready.load(Ordering::Acquire)))
-                    .map_err(|_| "worker identity unavailable".into())
+                let mut identity = registration.identity(worker_ready.load(Ordering::Acquire));
+                identity.window = worker_window
+                    .lock()
+                    .map_err(|_| "worker window unavailable".to_string())?
+                    .clone();
+                serde_json::to_value(identity).map_err(|_| "worker identity unavailable".into())
             }
             WorkerCommand::Adopt { launch_id, host } => {
                 let adopted = (|| -> AppResult<Value> {
                     adopt_host(&registration, &worker_host, launch_id, host)?;
-                    serde_json::to_value(
-                        registration.identity(worker_ready.load(Ordering::Acquire)),
-                    )
-                    .map_err(|_| invalid())
+                    let mut identity = registration.identity(worker_ready.load(Ordering::Acquire));
+                    identity.window = worker_window.lock().map_err(|_| invalid())?.clone();
+                    serde_json::to_value(identity).map_err(|_| invalid())
                 })();
                 adopted.map_err(|_| "worker adoption unavailable; ownership retained".into())
             }
@@ -696,6 +866,7 @@ pub fn register_worker(
         launch_id: *launch_id,
         host,
         ready,
+        last_window,
         _server: server,
     });
     Ok(())
@@ -749,7 +920,96 @@ mod tests {
             ready: false,
             error: None,
             adopted: false,
+            focused_window: None,
         }
+    }
+
+    #[test]
+    fn native_focus_tracks_popouts_and_closed_workers_are_removed_from_recency() {
+        let root = std::env::temp_dir().join(format!("ms-focus-book-{}", Uuid::new_v4()));
+        let owner = crate::storage_locks::VaultLock::acquire(&root).unwrap();
+        let listener = ipc::Coordinator::for_worker(&owner).unwrap();
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        let instance = Uuid::new_v4();
+        let mut book = Book {
+            exported: true,
+            ..Book::default()
+        };
+        for (id, launch) in [("a", a), ("b", b)] {
+            let mut worker = pending(launch);
+            worker.ready = true;
+            worker.endpoint = Some(listener.endpoint().clone());
+            book.workers.insert(id.into(), worker);
+        }
+        let focus = |id: &str, launch, label: &str| {
+            request(&HostCommand::Focused {
+                vault_id: id.into(),
+                launch_id: launch,
+                window: label.into(),
+            })
+            .unwrap()
+        };
+        let old_a = focus("a", a, "main");
+        book.accept(instance, old_a.clone()).unwrap();
+        book.accept(instance, focus("b", b, "main")).unwrap();
+        assert!(book.accept(instance, old_a).unwrap().1.is_none());
+        assert_eq!(book.last.as_deref(), Some("b"));
+        assert!(
+            matches!(book.accept(instance, focus("a", a, "note_seed_welcome")).unwrap().1,
+            Some(Action::Remember { vault_id, revision: 3 }) if vault_id == "a")
+        );
+        assert_eq!(
+            book.workers["a"].focused_window.as_deref(),
+            Some("note_seed_welcome")
+        );
+        assert!(
+            matches!(book.accept(instance, request(&HostCommand::Activate).unwrap()).unwrap().1, Some(Action::Open(id)) if id == "a")
+        );
+        book.remove_launch("a", a);
+        assert_eq!(book.last.as_deref(), Some("b"));
+        book.remove_launch("b", b);
+        assert!(book.last.is_none());
+
+        // Closing an older worker first must remove it from the fallback list.
+        book.workers.insert("a".into(), pending(a));
+        book.workers.insert("b".into(), pending(b));
+        book.focus_order = vec!["a".into(), "b".into()];
+        book.last = Some("b".into());
+        book.remove_launch("a", a);
+        book.remove_launch("b", b);
+        assert!(book.last.is_none());
+        drop(listener);
+        drop(owner);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn focus_rejects_unready_wrong_launch_and_non_vault_windows() {
+        let instance = Uuid::new_v4();
+        let launch_id = Uuid::new_v4();
+        let mut book = Book::default();
+        book.workers.insert("a".into(), pending(launch_id));
+        for (launch, window) in [
+            (launch_id, "main"),
+            (Uuid::new_v4(), "main"),
+            (launch_id, "legacy-browser-export"),
+            (launch_id, "plugin-preview"),
+        ] {
+            assert!(book
+                .accept(
+                    instance,
+                    request(&HostCommand::Focused {
+                        vault_id: "a".into(),
+                        launch_id: launch,
+                        window: window.into()
+                    })
+                    .unwrap()
+                )
+                .is_err());
+        }
+        assert!(book.last.is_none());
+        assert_eq!(book.focus_revision, 0);
     }
 
     #[test]
@@ -947,6 +1207,16 @@ mod tests {
             request(&HostCommand::Ready {
                 vault_id: "b".into(),
                 launch_id: b,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        book.accept(
+            instance,
+            request(&HostCommand::Focused {
+                vault_id: "b".into(),
+                launch_id: b,
+                window: "main".into(),
             })
             .unwrap(),
         )

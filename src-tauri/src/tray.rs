@@ -286,6 +286,20 @@ pub(crate) fn focus_main_window(app: &AppHandle) {
     crate::webview_memory::sync_to_visibility(app);
 }
 
+pub(crate) fn focus_vault_window(app: &AppHandle, window: &tauri::WebviewWindow) {
+    if window.label() == "main" {
+        focus_main_window(app);
+        return;
+    }
+    if let Err(error) = window
+        .unminimize()
+        .and_then(|_| window.show())
+        .and_then(|_| window.set_focus())
+    {
+        log::warn!("[vaults] note window activation failed: {error}");
+    }
+}
+
 struct TrayLabels {
     new_note: String,
     new_drawing: String,
