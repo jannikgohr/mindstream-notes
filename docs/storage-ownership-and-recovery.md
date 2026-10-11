@@ -9,6 +9,18 @@ inherit content from the old unscoped bucket. Unknown/plugin entries stay in
 the vault, while dynamic `hotkey.*` bindings stay at the root. Plugin settings
 with an external store continue to use the vault database.
 
+`hotkeys.globalShortcuts` is a vault boolean, defaulting to false. It determines
+eligibility for system-wide actions; it does not move the shared key bindings
+into the vault. A root `global-shortcuts-migration.json` intent pins the former
+root value to the recorded legacy owner, or the selected migration vault when
+no owner exists. Existing vault choices win. A vault `.global-shortcuts-migrated`
+receipt is published after its settings and before removing the root source.
+Retries and recovered old root copies cannot re-enable a cleared owner or seed
+another vault. Unscoped browser values follow that same owner; explicit vault
+buckets preserve their own choice. Invalid booleans or migration records stop
+initialization with evidence intact. The worker storage contract is version 2;
+incompatible live workers block adoption and shared-document migration.
+
 All document operations hold the root OS lock. Set/reset operations patch one
 field after rereading the document; they never save a whole frontend cache.
 The caller's expected vault ID must match the running worker. Frontend profile

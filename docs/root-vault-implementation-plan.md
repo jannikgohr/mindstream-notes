@@ -800,6 +800,29 @@ Keep supervised mode opt-in until busy-job, dirty-editor and handoff checks
 are complete. The full lint run also found an unhandled sidebar-opening
 promise in the hotkey catalogue; its rejection is now handled.
 
+Vault shortcut eligibility slice on 2026-10-11: `hotkeys.globalShortcuts` is now
+vault-scoped in the schema and native content settings. Bindings stay at the
+root. The migration records one physical legacy owner before publication,
+preserves an explicit vault choice and publishes a vault receipt before removing
+the root source. Recovered old root copies cannot re-enable a cleared owner or
+leak enablement into another vault. Unscoped browser input follows the recorded
+owner; explicit vault buckets keep their own choice. Invalid flags and receipts
+stop initialization with evidence intact. The worker storage contract is now 2;
+the schema fingerprint also changed. Supervised workers refuse OS registration
+until coordinator-owned registration and routing are implemented.
+
+Validation: Rust fmt/clippy and the full serial suite pass 840 unit tests and one
+integration test, with five ignored tests. The affected settings and hotkey
+suites pass 72 frontend tests. Type checks, affected lint, localization and both
+frontend/native builds pass. The native fixture opened Second before the
+recorded Default owner: Second remained ineligible, the root source remained
+pending, then Default alone imported it. The shared binding stayed at the root,
+both vault receipts were published and both workers closed cleanly. This tests
+eligibility storage and migration; test roots keep real OS shortcuts disabled.
+Coordinator registration, eligible-vault recency and system-wide action dispatch
+remain pending. The checks also corrected an earlier sidebar hotkey call to
+handle the already-open case, where no promise is returned.
+
 Preview-service cleanup slice on 2026-10-11: a session owns its child, input and
 proxy routes immediately during startup. Dropping a partial session, failed
 startup, replaced session or an abandoned async result reaps those resources.

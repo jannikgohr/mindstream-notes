@@ -1249,7 +1249,7 @@
     },
     "hotkeys.globalShortcuts": {
       "label": "Globale Tastenkürzel aktivieren",
-      "description": "Anwendungsweite Tastenkürzel auch auslösen, wenn Mindstream Notes im Hintergrund ist. Formatierungs-Tastenkürzel bleiben auf die App beschränkt."
+      "description": "Erlaubt diesem Tresor, systemweite Tastenkürzel zu empfangen. Sind mehrere Tresore aktiviert, erhält sie der zuletzt verwendete aktivierte Tresor. Die Tastenbelegungen gelten für alle Tresore."
     },
     "editor.autoSaveDebounce": {
       "label": "Auto-Speichern-Verzögerung"

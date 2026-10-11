@@ -1255,7 +1255,7 @@
     },
     "hotkeys.globalShortcuts": {
       "label": "Enable global shortcuts",
-      "description": "Let application-level shortcuts fire while Mindstream Notes is in the background. Editor formatting shortcuts stay in-app only."
+      "description": "Allow this vault to receive system-wide shortcuts. With several vaults enabled, the most recently used enabled vault receives them. Key bindings are shared across vaults."
     },
     "editor.autoSaveDebounce": {
       "label": "Auto-save debounce"

@@ -73,6 +73,18 @@ pub(crate) fn is_owner(root: &Path, vault_id: &str, vault: &Path) -> AppResult<b
     Ok(owner.vault_id == vault_id && owner.directory == fs::canonicalize(vault)?)
 }
 
+/// Caller holds RootLock. A deleted owner remains the owner; never reassign it.
+pub(crate) fn settings_owner(root: &Path) -> AppResult<Option<(String, std::path::PathBuf)>> {
+    match fs::read(root.join(OWNER_FILE)) {
+        Ok(raw) => {
+            let owner = decode_owner(&raw)?;
+            Ok(Some((owner.vault_id, owner.directory)))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Kind {

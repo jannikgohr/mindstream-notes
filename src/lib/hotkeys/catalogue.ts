@@ -97,7 +97,7 @@ function runCreateRootNote(kind: RootNoteKind) {
 const ADD_TAG_HOTKEY_EVENT = 'mindstream:hotkeys:add-tag';
 
 function requestAddTag() {
-  void openRightSidebar().catch((error) => {
+  void openRightSidebar()?.catch((error) => {
     console.error('[hotkeys] failed to open metadata panel', error);
   });
   if (!ui.activeNoteId || typeof window === 'undefined') return;

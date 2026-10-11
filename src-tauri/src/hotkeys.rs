@@ -152,6 +152,22 @@ pub fn sync_global_shortcuts(
     if !crate::environment::os_integrations_enabled() {
         return Ok(());
     }
+    if app
+        .try_state::<crate::vault_runtime::Role>()
+        .is_some_and(|role| matches!(role.inner(), crate::vault_runtime::Role::Worker { .. }))
+    {
+        // Workers may publish their eligibility but never compete with the
+        // coordinator for OS registrations. Coordinated registration follows
+        // before supervised mode can become the normal startup path.
+        return if registrations.is_empty() {
+            Ok(())
+        } else {
+            Err(CommandError::new(
+                CommandErrorCode::Tauri,
+                "system-wide shortcuts are not yet available in supervised mode",
+            ))
+        };
+    }
     eprintln!(
         "[global-shortcuts] sync_global_shortcuts called with {} registration(s): {:?}",
         registrations.len(),

@@ -14,6 +14,8 @@ use crate::storage_locks::RootLock;
 
 type Values = BTreeMap<String, Value>;
 const MAX_BYTES: usize = 1024 * 1024;
+const GLOBAL_SHORTCUTS: &str = "hotkeys.globalShortcuts";
+const SHORTCUT_RECEIPT: &str = ".global-shortcuts-migrated";
 static SCOPES: LazyLock<BTreeMap<String, bool>> = LazyLock::new(|| {
     let schema: Value = serde_json::from_str(include_str!("../../src/lib/settings/schema.json"))
         .expect("bundled settings schema");
@@ -86,10 +88,10 @@ fn decode(raw: &[u8], device: bool) -> AppResult<Document> {
         validate_preference(id, value)?;
     }
     if document.version != 1
-        || document
-            .values
-            .keys()
-            .any(|id| device_scope(id) != device && !(device && id == "appearance.sortStrategy"))
+        || document.values.keys().any(|id| {
+            device_scope(id) != device
+                && !(device && (id == "appearance.sortStrategy" || id == GLOBAL_SHORTCUTS))
+        })
     {
         return Err(invalid());
     }
@@ -139,12 +141,101 @@ fn save(path: &Path, document: &Document, device: bool) -> AppResult<()> {
 
 fn snapshot(device: Document, vault: Document) -> Snapshot {
     let mut values = device.values;
+    // An old root recovery copy may still carry this former device flag. Its
+    // pinned migration owner must import it; it never affects another vault.
+    values.remove(GLOBAL_SHORTCUTS);
     values.extend(vault.values);
     Snapshot {
         device_revision: device.revision,
         vault_revision: vault.revision,
         values,
     }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ShortcutMigration {
+    version: u32,
+    vault_id: String,
+    directory: std::path::PathBuf,
+    enabled: bool,
+}
+
+fn decode_shortcut_migration(raw: &[u8]) -> AppResult<ShortcutMigration> {
+    if raw.len() > 16384 {
+        return Err(invalid());
+    }
+    let record: ShortcutMigration = serde_json::from_slice(raw).map_err(|_| invalid())?;
+    if record.version != 1
+        || !crate::profiles::valid_id(&record.vault_id)
+        || !record.directory.is_absolute()
+    {
+        return Err(invalid());
+    }
+    Ok(record)
+}
+
+/// Called under RootLock after both candidates and all browser inputs validate.
+/// The immutable intent pins one owner before either document is changed.
+fn migrate_shortcut_scope(
+    root: &Path,
+    vault: &Path,
+    vault_id: &str,
+    device: &mut Document,
+    content: &mut Document,
+) -> AppResult<(bool, bool)> {
+    let migrated = match fs::read(vault.join(SHORTCUT_RECEIPT)) {
+        Ok(raw) if raw == b"1" => true,
+        Ok(_) => return Err(invalid()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.into()),
+    };
+    let path = root.join("global-shortcuts-migration.json");
+    crate::root_documents::recover(
+        &path,
+        |raw| decode_shortcut_migration(raw).map(|_| ()),
+        |raw| decode_shortcut_migration(raw).map(|_| ()),
+    )?;
+    let intent = match fs::read(&path) {
+        Ok(raw) => Some(decode_shortcut_migration(&raw)?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if let Some(value) = device.values.get(GLOBAL_SHORTCUTS) {
+                let enabled = value.as_bool().ok_or_else(invalid)?;
+                let (owner_id, directory) = crate::legacy_content::settings_owner(root)?
+                    .unwrap_or((vault_id.into(), fs::canonicalize(vault)?));
+                let record = ShortcutMigration {
+                    version: 1,
+                    vault_id: owner_id,
+                    directory,
+                    enabled,
+                };
+                let raw = serde_json::to_vec(&record).map_err(|_| invalid())?;
+                crate::root_documents::write(&path, &raw, |raw| {
+                    decode_shortcut_migration(raw).map(|_| ())
+                })?;
+                Some(record)
+            } else {
+                None
+            }
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let Some(intent) = intent else {
+        return Ok((false, false));
+    };
+    if intent.vault_id != vault_id || intent.directory != fs::canonicalize(vault)? {
+        return Ok((false, false));
+    }
+    let content_changed = !migrated && !content.values.contains_key(GLOBAL_SHORTCUTS);
+    if content_changed {
+        content
+            .values
+            .insert(GLOBAL_SHORTCUTS.into(), Value::Bool(intent.enabled));
+    }
+    Ok((
+        device.values.remove(GLOBAL_SHORTCUTS).is_some(),
+        content_changed,
+    ))
 }
 
 fn initialize_with_browser_state(
@@ -212,7 +303,9 @@ fn initialize_classified(
             revision: 0,
             values: legacy_device
                 .iter()
-                .filter(|(id, _)| device_scope(id))
+                // Retain the former device toggle until the pinned owner has
+                // imported it, even if another vault initializes first.
+                .filter(|(id, _)| device_scope(id) || id.as_str() == GLOBAL_SHORTCUTS)
                 .map(|(id, v)| (id.clone(), v.clone()))
                 .collect(),
         }
@@ -232,7 +325,9 @@ fn initialize_classified(
             revision: 0,
             values: values
                 .into_iter()
-                .filter(|(id, _)| !device_scope(id))
+                .filter(|(id, _)| {
+                    !device_scope(id) && (id != GLOBAL_SHORTCUTS || vault_raw.is_some())
+                })
                 .collect(),
         }
     } else {
@@ -330,6 +425,10 @@ fn initialize_classified(
             }
         }
     }
+    let (shortcut_device_changed, shortcut_vault_changed) =
+        migrate_shortcut_scope(root, vault, vault_id, &mut device, &mut vault_doc)?;
+    device_changed |= shortcut_device_changed;
+    vault_changed |= shortcut_vault_changed;
     if device_changed && !need_device {
         device.revision = device.revision.checked_add(1).ok_or_else(invalid)?;
     }
@@ -338,6 +437,11 @@ fn initialize_classified(
     }
     if need_vault || vault_changed {
         save(&vault_path, &vault_doc, false)?;
+    }
+    // Publish the owner value and completion before removing the root source.
+    // If root publication fails, retry cannot resurrect a later cleared value.
+    if !vault.join(SHORTCUT_RECEIPT).try_exists()? {
+        crate::atomic_file::write(&vault.join(SHORTCUT_RECEIPT), b"1")?;
     }
     if need_device || device_changed {
         save(&device_path, &device, true)?;
@@ -380,7 +484,7 @@ fn validate_preference(id: &str, value: &Value) -> AppResult<()> {
         "appearance.leftSidebarWidth" | "appearance.rightSidebarWidth" => value
             .as_f64()
             .is_some_and(|v| v.is_finite() && (0.0..=10000.0).contains(&v)),
-        "ui.leftSidebarOpen" | "ui.rightSidebarOpen" => value.is_boolean(),
+        "ui.leftSidebarOpen" | "ui.rightSidebarOpen" | GLOBAL_SHORTCUTS => value.is_boolean(),
         "appearance.sortStrategy" => matches!(
             value.as_str(),
             Some("alphabetical" | "modified" | "created")
@@ -632,6 +736,117 @@ pub async fn patch_ui_setting(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn old_shortcut_root(dirs: &TestDirs) {
+        fs::write(
+            dirs.root.join("ui-settings.json"),
+            r#"{"version":1,"revision":7,"values":{"hotkeys.globalShortcuts":true,"hotkey.global.newMarkdownNote":"mod+alt+n"}}"#,
+        )
+        .unwrap();
+        crate::legacy_content::initialize_owner(&dirs.root, "default", &dirs.a).unwrap();
+    }
+
+    #[test]
+    fn global_shortcut_enablement_is_vault_specific_but_bindings_are_shared() {
+        let dirs = TestDirs::new();
+        old_shortcut_root(&dirs);
+        let other = initialize(&dirs.root, &dirs.b, "other", None, None).unwrap();
+        assert!(!other.values.contains_key(GLOBAL_SHORTCUTS));
+        assert_eq!(other.values["hotkey.global.newMarkdownNote"], "mod+alt+n");
+        assert!(read(&dirs.root.join("ui-settings.json"), true)
+            .unwrap()
+            .values
+            .contains_key(GLOBAL_SHORTCUTS));
+        let owner = initialize(&dirs.root, &dirs.a, "default", None, None).unwrap();
+        assert_eq!(owner.values[GLOBAL_SHORTCUTS], true);
+        assert!(!read(&dirs.root.join("ui-settings.json"), true)
+            .unwrap()
+            .values
+            .contains_key(GLOBAL_SHORTCUTS));
+        access(
+            &dirs.root,
+            &dirs.b,
+            Some((GLOBAL_SHORTCUTS.into(), Some(Value::Bool(false)))),
+        )
+        .unwrap();
+        assert_eq!(
+            access(&dirs.root, &dirs.a, None).unwrap().values[GLOBAL_SHORTCUTS],
+            true
+        );
+        assert_eq!(
+            access(&dirs.root, &dirs.b, None).unwrap().values[GLOBAL_SHORTCUTS],
+            false
+        );
+    }
+
+    #[test]
+    fn shortcut_scope_retry_and_old_root_recovery_do_not_reenable_cleared_owner() {
+        let dirs = TestDirs::new();
+        old_shortcut_root(&dirs);
+        initialize(&dirs.root, &dirs.a, "default", None, None).unwrap();
+        access(&dirs.root, &dirs.a, Some((GLOBAL_SHORTCUTS.into(), None))).unwrap();
+        // Simulate interruption before removing the root source, or recovery
+        // of a previous root document that still contains the old enable flag.
+        old_shortcut_root(&dirs);
+        let owner = initialize(&dirs.root, &dirs.a, "default", None, None).unwrap();
+        assert!(!owner.values.contains_key(GLOBAL_SHORTCUTS));
+        let other = initialize(&dirs.root, &dirs.b, "other", None, None).unwrap();
+        assert!(!other.values.contains_key(GLOBAL_SHORTCUTS));
+        assert!(!read(&dirs.root.join("ui-settings.json"), true)
+            .unwrap()
+            .values
+            .contains_key(GLOBAL_SHORTCUTS));
+    }
+
+    #[test]
+    fn explicit_vault_shortcut_choice_wins_and_invalid_migration_stops_before_publication() {
+        let dirs = TestDirs::new();
+        old_shortcut_root(&dirs);
+        let owner = initialize(
+            &dirs.root,
+            &dirs.a,
+            "default",
+            None,
+            Some(r#"{"hotkeys.globalShortcuts":false}"#),
+        )
+        .unwrap();
+        assert_eq!(owner.values[GLOBAL_SHORTCUTS], false);
+        assert!(access(
+            &dirs.root,
+            &dirs.a,
+            Some((GLOBAL_SHORTCUTS.into(), Some(Value::from("true"))))
+        )
+        .is_err());
+        let prior = fs::read(dirs.a.join("content-settings.json")).unwrap();
+        fs::write(dirs.a.join(SHORTCUT_RECEIPT), b"invalid").unwrap();
+        assert!(initialize(&dirs.root, &dirs.a, "default", None, None).is_err());
+        assert_eq!(
+            fs::read(dirs.a.join("content-settings.json")).unwrap(),
+            prior
+        );
+        assert_eq!(fs::read(dirs.a.join(SHORTCUT_RECEIPT)).unwrap(), b"invalid");
+    }
+
+    #[test]
+    fn unscoped_browser_shortcut_toggle_belongs_to_recorded_owner_even_if_other_opens_first() {
+        let dirs = TestDirs::new();
+        crate::legacy_content::initialize_owner(&dirs.root, "other", &dirs.b).unwrap();
+        let first = initialize(
+            &dirs.root,
+            &dirs.a,
+            "default",
+            Some(r#"{"hotkeys.globalShortcuts":true}"#),
+            None,
+        )
+        .unwrap();
+        assert!(!first.values.contains_key(GLOBAL_SHORTCUTS));
+        let owner = initialize(&dirs.root, &dirs.b, "other", None, None).unwrap();
+        assert_eq!(owner.values[GLOBAL_SHORTCUTS], true);
+        assert!(!access(&dirs.root, &dirs.a, None)
+            .unwrap()
+            .values
+            .contains_key(GLOBAL_SHORTCUTS));
+    }
 
     #[test]
     fn archive_owner_imports_content_even_when_another_vault_opens_first() {

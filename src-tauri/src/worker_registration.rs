@@ -54,7 +54,7 @@ impl RuntimeContract {
     pub fn current() -> &'static Self {
         static CONTRACT: LazyLock<RuntimeContract> = LazyLock::new(|| RuntimeContract {
             protocol: 2,
-            storage: 1,
+            storage: 2,
             settings_schema: format!(
                 "{:x}",
                 Sha256::digest(include_bytes!("../../src/lib/settings/schema.json"))
@@ -280,7 +280,7 @@ mod tests {
                 ..RuntimeContract::current().clone()
             }),
             Some(RuntimeContract {
-                storage: 2,
+                storage: RuntimeContract::current().storage + 1,
                 ..RuntimeContract::current().clone()
             }),
             Some(RuntimeContract {
