@@ -363,6 +363,8 @@
   interface OpenNoteOptions {
     splitDirection?: SplitDirection;
     referenceNoteId?: string;
+    /** Add the tab without bringing it to the front. */
+    background?: boolean;
   }
 
   export async function openNote(id: string, opts: OpenNoteOptions = {}) {
@@ -411,12 +413,13 @@
       component: componentForNoteKind(note.note_kind),
       title: note.title,
       params: { noteId: id, noteKind: note.note_kind },
-      ...(position ? { position } : {})
+      ...(position ? { position } : {}),
+      ...(opts.background ? { inactive: true } : {})
     });
 
     openPanels.set(id, panel);
     openPanelCount = openPanels.size;
-    setActiveNote(id);
+    if (!opts.background) setActiveNote(id);
   }
 
   /**
@@ -730,10 +733,14 @@
     window.addEventListener('drop', clearDragging, true);
     // Files dragged in from the OS: editors and the file tree take what they
     // declare (see $lib/file-drop); a PDF dropped anywhere else becomes a
-    // note at the vault root.
+    // note at the vault root. It opens behind an editor that took part of the
+    // same drop: Excalidraw sizes a dropped image by its canvas, and gives it
+    // no size at all if the canvas is hidden before the image has loaded.
     const removeFileDropRouter = installFileDropRouter(window, {
-      importPdfs: (files) =>
-        void importDroppedPdfs(files, null, (id) => openNote(id)),
+      importPdfs: (files, alongsideZone) =>
+        void importDroppedPdfs(files, null, (id) =>
+          openNote(id, { background: alongsideZone })
+        ),
       onUnusable: () =>
         pushToast(tUi('fileDrop.unsupported'), { variant: 'error' })
     });

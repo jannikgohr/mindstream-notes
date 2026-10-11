@@ -3,12 +3,19 @@ import {
   FILE_DROP_ACCEPT_ATTR,
   FILE_DROP_SINGLE_ATTR,
   IMAGE_ACCEPT,
+  IMAGE_EXTENSIONS,
   PDF_ACCEPT,
   droppedPdfFiles,
   fileDropZoneFor,
   fileMatchesAccept,
+  filesClaimedByZone,
+  inferredImageMimeType,
   installFileDropRouter,
   isFileDrag,
+  isImageFile,
+  isReplayedFileDrop,
+  normalizeImageFile,
+  replayFileDrop,
   routeFileDrop,
   type FileDropZone
 } from './file-drop';
@@ -59,6 +66,33 @@ describe('file drop helpers', () => {
     );
     expect(fileMatchesAccept(txt(), [])).toBe(false);
   });
+
+  it('accepts supported image extensions when the MIME type is absent', () => {
+    for (const extension of IMAGE_EXTENSIONS) {
+      const file = new File(['image'], `photo${extension.toUpperCase()}`);
+      expect(fileMatchesAccept(file, IMAGE_ACCEPT.split(','))).toBe(true);
+      expect(isImageFile(file)).toBe(true);
+    }
+    expect(isImageFile(new File(['text'], 'notes.txt'))).toBe(false);
+  });
+
+  it('normalises a MIME-less image before an editor receives it', () => {
+    const file = new File(['image'], 'photo.JPEG', { lastModified: 123 });
+    const normalized = normalizeImageFile(file);
+    expect(inferredImageMimeType(file)).toBe('image/jpeg');
+    expect(normalized).not.toBe(file);
+    expect(normalized.type).toBe('image/jpeg');
+    expect(normalized.name).toBe(file.name);
+    expect(normalized.lastModified).toBe(file.lastModified);
+
+    const typed = png();
+    expect(normalizeImageFile(typed)).toBe(typed);
+
+    const generic = new File(['image'], 'photo.png', {
+      type: 'application/octet-stream'
+    });
+    expect(normalizeImageFile(generic).type).toBe('image/png');
+  });
 });
 
 describe('fileDropZoneFor', () => {
@@ -82,7 +116,7 @@ describe('fileDropZoneFor', () => {
        <p id="outside">text</p>`
     );
     expect(fileDropZoneFor(root.querySelector('#inner'))).toEqual({
-      accept: ['image/*'],
+      accept: IMAGE_ACCEPT.split(','),
       single: true
     });
     expect(fileDropZoneFor(root.querySelector('#outer'))).toEqual({
@@ -98,7 +132,7 @@ describe('fileDropZoneFor', () => {
       `<div ${FILE_DROP_ACCEPT_ATTR}="${IMAGE_ACCEPT}"><p id="p">text</p></div>`
     );
     const text = root.querySelector('#p')!.firstChild;
-    expect(fileDropZoneFor(text)?.accept).toEqual(['image/*']);
+    expect(fileDropZoneFor(text)?.accept).toEqual(IMAGE_ACCEPT.split(','));
   });
 
   it('treats an empty accept list as no zone', () => {
@@ -143,14 +177,24 @@ describe('routeFileDrop', () => {
     });
   });
 
-  it('judges a single-file zone by the first file alone', () => {
+  it('gives a single-file zone the first file it accepts, wherever it sits', () => {
     const [image, doc] = [png(), pdf()];
     expect(routeFileDrop([image, doc], singleImageZone).zoneClaims).toBe(true);
-    // The zone would read the PDF and choke on it, so it gets nothing.
+    // The drag source chose the order; a PDF listed first still imports and
+    // the image still reaches the zone.
     expect(routeFileDrop([doc, image], singleImageZone)).toEqual({
-      zoneClaims: false,
+      zoneClaims: true,
       pdfs: [doc],
-      unusable: [image]
+      unusable: []
+    });
+  });
+
+  it('leaves a single-file zone only one of several files it could take', () => {
+    const [first, second] = [png(), png()];
+    expect(routeFileDrop([first, second], singleImageZone)).toEqual({
+      zoneClaims: true,
+      pdfs: [],
+      unusable: [second]
     });
   });
 
@@ -161,6 +205,42 @@ describe('routeFileDrop', () => {
       pdfs: [],
       unusable: [image]
     });
+  });
+});
+
+describe('filesClaimedByZone', () => {
+  it('claims nothing without a zone', () => {
+    expect(filesClaimedByZone([png(), pdf()], null)).toEqual([]);
+  });
+
+  it('claims every file a multi-file zone accepts', () => {
+    const [first, doc, second] = [png(), pdf(), png()];
+    expect(filesClaimedByZone([first, doc, second], imageZone)).toEqual([
+      first,
+      second
+    ]);
+  });
+
+  it('claims the first accepted file for a single-file zone', () => {
+    const [doc, first, second] = [pdf(), png(), png()];
+    expect(filesClaimedByZone([doc, first, second], singleImageZone)).toEqual([
+      first
+    ]);
+    expect(filesClaimedByZone([doc], singleImageZone)).toEqual([]);
+  });
+});
+
+describe('replayFileDrop', () => {
+  it('dispatches a drop its sender can tell from the original', () => {
+    const target = document.createElement('div');
+    const seen: Event[] = [];
+    target.addEventListener('drop', (event) => seen.push(event));
+
+    replayFileDrop(target, [png()], { clientX: 4, clientY: 8 });
+
+    expect(seen).toHaveLength(1);
+    expect(isReplayedFileDrop(seen[0]!)).toBe(true);
+    expect(isReplayedFileDrop(new Event('drop'))).toBe(false);
   });
 });
 
@@ -218,7 +298,7 @@ describe('installFileDropRouter', () => {
     const doc = pdf();
     const { event, reached } = fire(editor, 'drop', [doc]);
     expect(reached).toBe(false);
-    expect(importPdfs).toHaveBeenCalledWith([doc]);
+    expect(importPdfs).toHaveBeenCalledWith([doc], false);
     expect(onUnusable).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(true);
   });
@@ -228,7 +308,8 @@ describe('installFileDropRouter', () => {
     const doc = pdf();
     const { reached } = fire(editor, 'drop', [png(), doc]);
     expect(reached).toBe(true);
-    expect(importPdfs).toHaveBeenCalledWith([doc]);
+    // Flagged, so the importer keeps the editor in front.
+    expect(importPdfs).toHaveBeenCalledWith([doc], true);
   });
 
   it('reports a drop nothing can use', () => {

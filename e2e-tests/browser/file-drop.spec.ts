@@ -1,3 +1,4 @@
+import { deflateSync } from 'node:zlib';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { clickFileTreeCreateAction } from './file-tree-toolbar';
 
@@ -42,6 +43,76 @@ const PDF_BYTES = Array.from(
     ].join('\n')
   )
 );
+
+const SVG_PICTURE =
+  '<rect width="40" height="20" fill="#0c8599"/><circle cx="20" cy="10" r="6"/>';
+
+const svgBytes = (extra = ''): number[] =>
+  Array.from(
+    Buffer.from(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20">${extra}${SVG_PICTURE}</svg>`
+    )
+  );
+
+/**
+ * An SVG the way Excalidraw exports one with "Embed scene" on: the picture,
+ * plus the scene that drew it, deflated into a metadata comment. Dropped on a
+ * canvas as it is, Excalidraw loads that scene over whatever is open.
+ */
+function excalidrawExportSvg(): DroppedFile {
+  const scene = {
+    type: 'excalidraw',
+    version: 2,
+    source: 'https://excalidraw.com',
+    elements: [
+      {
+        id: 'embedded-rect',
+        type: 'rectangle',
+        x: 0,
+        y: 0,
+        width: 320,
+        height: 160,
+        angle: 0,
+        strokeColor: '#e03131',
+        backgroundColor: 'transparent',
+        fillStyle: 'solid',
+        strokeWidth: 2,
+        strokeStyle: 'solid',
+        roughness: 1,
+        opacity: 100,
+        groupIds: [],
+        frameId: null,
+        roundness: null,
+        seed: 1,
+        version: 1,
+        versionNonce: 1,
+        isDeleted: false,
+        boundElements: null,
+        updated: 1,
+        link: null,
+        locked: false
+      }
+    ],
+    appState: { viewBackgroundColor: '#ffffff' },
+    files: {}
+  };
+  // excalidraw/data/encode.ts: the deflated JSON as a byte string, in a JSON
+  // envelope, base64-encoded between the payload markers.
+  const envelope = JSON.stringify({
+    version: '1',
+    encoding: 'bstring',
+    compressed: true,
+    encoded: deflateSync(Buffer.from(JSON.stringify(scene))).toString('latin1')
+  });
+  const payload = Buffer.from(envelope, 'latin1').toString('base64');
+  return {
+    name: 'sketch.excalidraw.svg',
+    type: 'image/svg+xml',
+    bytes: svgBytes(
+      `<!-- svg-source:excalidraw --><metadata><!-- payload-type:application/vnd.excalidraw+json --><!-- payload-version:2 --><!-- payload-start -->${payload}<!-- payload-end --></metadata>`
+    )
+  };
+}
 
 const png = (name = 'photo.png'): DroppedFile => ({
   name,
@@ -100,6 +171,22 @@ async function openWelcomeNote(page: Page): Promise<Locator> {
   return editor;
 }
 
+async function openNewDrawing(
+  page: Page
+): Promise<{ canvas: Locator; cropImage: Locator }> {
+  await clickFileTreeCreateAction(page, 'New drawing canvas');
+  const draft = page.getByRole('textbox', { name: 'New drawing canvas' });
+  await draft.fill(`Drop canvas ${Date.now()}`);
+  await draft.press('Enter');
+  const canvas = page.locator('.freeform-canvas-host .excalidraw');
+  await expect(canvas).toBeVisible();
+  // Excalidraw selects an image as it inserts it, and offers "Crop image"
+  // only while an image element is selected.
+  const cropImage = canvas.getByRole('button', { name: 'Crop image' });
+  await expect(cropImage).toHaveCount(0);
+  return { canvas, cropImage };
+}
+
 test.beforeEach(async ({ page }) => {
   await boot(page);
 });
@@ -117,25 +204,88 @@ test('an image dropped on a markdown note is inserted into it', async ({
   await expect(page.getByText(UNSUPPORTED)).toHaveCount(0);
 });
 
+test('an image dropped beside the text of a note still lands in it', async ({
+  page
+}) => {
+  const editor = await openWelcomeNote(page);
+  const images = editor.locator('.milkdown-image-block');
+  const before = await images.count();
+  // The scrolling pane around the text column. A drop in its empty space has
+  // the pane for a target, which ProseMirror never hears about.
+  const pane = editor.locator('xpath=ancestor::*[@data-file-drop-accept][1]');
+
+  await dropFiles(page, pane, [png()]);
+
+  await expect(images).toHaveCount(before + 1);
+  await expect(page.getByText(UNSUPPORTED)).toHaveCount(0);
+});
+
 test('an image dropped on a drawing is placed on the canvas', async ({
   page
 }) => {
-  const title = `Drop canvas ${Date.now()}`;
-  await clickFileTreeCreateAction(page, 'New drawing canvas');
-  const draft = page.getByRole('textbox', { name: 'New drawing canvas' });
-  await draft.fill(title);
-  await draft.press('Enter');
-  const canvas = page.locator('.freeform-canvas-host .excalidraw');
-  await expect(canvas).toBeVisible();
-  // Excalidraw selects an image as it inserts it, and offers "Crop image"
-  // only while an image element is selected.
-  const cropImage = canvas.getByRole('button', { name: 'Crop image' });
-  await expect(cropImage).toHaveCount(0);
+  const { canvas, cropImage } = await openNewDrawing(page);
 
   await dropFiles(page, canvas, [png()]);
 
   await expect(cropImage).toBeVisible();
   await expect(page.getByText(UNSUPPORTED)).toHaveCount(0);
+});
+
+test('a dropped Excalidraw export is placed as a picture, not loaded as a scene', async ({
+  page
+}) => {
+  const { canvas, cropImage } = await openNewDrawing(page);
+
+  await dropFiles(page, canvas, [excalidrawExportSvg()]);
+
+  // Loading the embedded scene would swap the canvas for the export's own
+  // shapes and leave no image selected.
+  await expect(cropImage).toBeVisible();
+});
+
+test('an image the desktop gave no type is still placed on a drawing', async ({
+  page
+}) => {
+  const { canvas, cropImage } = await openNewDrawing(page);
+
+  // Excalidraw can't tell an SVG from its bytes, and says so in a dialog.
+  await dropFiles(page, canvas, [
+    { name: 'diagram.svg', type: '', bytes: svgBytes() }
+  ]);
+
+  await expect(cropImage).toBeVisible();
+  await expect(page.getByText("Couldn't load invalid file")).toHaveCount(0);
+});
+
+test('a drawing takes the image from a drop that lists a PDF first', async ({
+  page
+}) => {
+  const name = `Canvas mixed ${Date.now()}`;
+  const { canvas, cropImage } = await openNewDrawing(page);
+
+  await dropFiles(page, canvas, [pdf(`${name}.pdf`), png()]);
+
+  await expect(cropImage).toBeVisible();
+  // The PDF is imported behind the drawing. Opened in front it would hide the
+  // canvas, and Excalidraw gives an image it sizes while hidden no size.
+  await expect(treeItem(page, name)).toBeVisible();
+  await expect(canvas).toBeVisible();
+});
+
+test('an image and a PDF dropped together on a note each find their place', async ({
+  page
+}) => {
+  const name = `Note mixed ${Date.now()}`;
+  const editor = await openWelcomeNote(page);
+  const images = editor.locator('.milkdown-image-block');
+  const before = await images.count();
+
+  await dropFiles(page, editor, [png(), pdf(`${name}.pdf`)]);
+
+  await expect(images).toHaveCount(before + 1);
+  await expect(treeItem(page, name)).toBeVisible();
+  // The note that took the image stays in front of the imported PDF.
+  await expect(editor).toBeVisible();
 });
 
 test('a PDF dropped outside any editor becomes a note at the root', async ({

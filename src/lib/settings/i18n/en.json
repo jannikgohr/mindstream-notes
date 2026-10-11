@@ -221,6 +221,7 @@
     "fileDrop.unsupported": "Nothing here can use those files. Drop images onto a note or drawing, or drop PDFs to import them.",
     "fileDrop.importInMainWindow": "Drop PDFs on the main window to import them.",
     "fileDrop.failed": "Couldn't import the dropped PDF: {error}",
+    "fileDrop.imageFailed": "Couldn't add the dropped image.",
     "fileTree.newFolder": "New folder",
     "fileTree.toolbar.more": "More actions",
     "fileTree.toolbar.customize": "Reorder actions",

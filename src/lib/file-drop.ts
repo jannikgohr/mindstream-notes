@@ -19,16 +19,77 @@
  * because the editors can't be relied on to turn away what they can't use:
  * Milkdown's upload plugin claims every file drop and then discards whatever
  * isn't an image, and Excalidraw answers a non-image with an error dialog.
+ *
+ * A zone whose editor can't take the event as it arrived (the drop missed the
+ * editor's own element, or the editor would read the wrong file) picks its
+ * files with `filesClaimedByZone` and hands them on with `replayFileDrop`.
  */
 
 /** Marks a drop zone. Value uses the `<input accept>` grammar. */
 export const FILE_DROP_ACCEPT_ATTR = 'data-file-drop-accept';
-/** Marks a zone whose handler only ever reads the first dropped file. */
+/** Marks a zone that takes one file per drop: the first it accepts. */
 export const FILE_DROP_SINGLE_ATTR = 'data-file-drop-single';
 
 /** By MIME type, or by extension for the platforms that report no type. */
 export const PDF_ACCEPT = 'application/pdf,.pdf';
-export const IMAGE_ACCEPT = 'image/*';
+
+const IMAGE_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.svg': 'image/svg+xml',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.avif': 'image/avif',
+  '.jfif': 'image/jfif'
+};
+
+export const IMAGE_EXTENSIONS = Object.freeze(
+  Object.keys(IMAGE_MIME_BY_EXTENSION)
+);
+
+/** Images Milkdown accepts, including the no-MIME desktop drag fallback. */
+export const IMAGE_ACCEPT = ['image/*', ...IMAGE_EXTENSIONS].join(',');
+
+/** Image formats Excalidraw 0.18 can insert on a canvas. */
+export const EXCALIDRAW_IMAGE_ACCEPT = [
+  'image/png',
+  'image/jpeg',
+  'image/svg+xml',
+  'image/gif',
+  'image/webp',
+  'image/bmp',
+  'image/x-icon',
+  'image/avif',
+  'image/jfif',
+  ...IMAGE_EXTENSIONS
+].join(',');
+
+/** Infer an image MIME type when the desktop drag event omitted it. */
+export function inferredImageMimeType(file: File): string | null {
+  const name = file.name.toLowerCase();
+  const extension = IMAGE_EXTENSIONS.find((candidate) =>
+    name.endsWith(candidate)
+  );
+  return extension ? IMAGE_MIME_BY_EXTENSION[extension] : null;
+}
+
+export function isImageFile(file: File): boolean {
+  return (
+    file.type.toLowerCase().startsWith('image/') ||
+    inferredImageMimeType(file) !== null
+  );
+}
+
+/** Give MIME-less or generically typed images a type before editor upload. */
+export function normalizeImageFile(file: File): File {
+  if (file.type.toLowerCase().startsWith('image/')) return file;
+  const type = inferredImageMimeType(file);
+  if (!type) return file;
+  return new File([file], file.name, { type, lastModified: file.lastModified });
+}
 
 /** True when an HTML drag carries files from outside the app. */
 export function isFileDrag(event: DragEvent): boolean {
@@ -74,7 +135,7 @@ export function fileMatchesAccept(
 
 export interface FileDropZone {
   accept: string[];
-  /** The zone's handler reads only the first file (Excalidraw). */
+  /** The zone places one file per drop (Excalidraw). */
   single: boolean;
 }
 
@@ -108,16 +169,25 @@ export interface FileDropRoute {
   unusable: File[];
 }
 
+/**
+ * The files a zone's own handler takes from a drop. A single-file zone takes
+ * the first one it accepts, wherever that sits in the list: the order is the
+ * drag source's, and a PDF listed ahead of an image must not cost the image.
+ */
+export function filesClaimedByZone(
+  files: readonly File[],
+  zone: FileDropZone | null
+): File[] {
+  if (!zone) return [];
+  const accepted = files.filter((file) => fileMatchesAccept(file, zone.accept));
+  return zone.single ? accepted.slice(0, 1) : accepted;
+}
+
 export function routeFileDrop(
   files: readonly File[],
   zone: FileDropZone | null
 ): FileDropRoute {
-  // A single-file zone never looks past the first file, so it can't claim on
-  // the strength of a later one: it would read the first and choke on it.
-  const offered = zone ? (zone.single ? files.slice(0, 1) : files) : [];
-  const claimed = new Set(
-    zone ? offered.filter((file) => fileMatchesAccept(file, zone.accept)) : []
-  );
+  const claimed = new Set(filesClaimedByZone(files, zone));
   const rest = files.filter((file) => !claimed.has(file));
   return {
     zoneClaims: claimed.size > 0,
@@ -126,9 +196,43 @@ export function routeFileDrop(
   };
 }
 
+const replayedDrops = new WeakSet<Event>();
+
+/** True for a drop a zone dispatched itself through `replayFileDrop`. */
+export function isReplayedFileDrop(event: Event): boolean {
+  return replayedDrops.has(event);
+}
+
+/**
+ * Dispatch a fresh `drop` on `target` that carries `files` and nothing else.
+ *
+ * The window router routes the replay like any other drop, so pass only what
+ * the zone claimed: a PDF left in the list would be imported a second time.
+ */
+export function replayFileDrop(
+  target: EventTarget,
+  files: readonly File[],
+  point: Pick<MouseEventInit, 'clientX' | 'clientY' | 'screenX' | 'screenY'>
+): void {
+  const transfer = new DataTransfer();
+  for (const file of files) transfer.items.add(file);
+  const replay = new DragEvent('drop', {
+    bubbles: true,
+    cancelable: true,
+    dataTransfer: transfer,
+    ...point
+  });
+  replayedDrops.add(replay);
+  target.dispatchEvent(replay);
+}
+
 export interface FileDropRouterOptions {
-  /** PDFs no drop zone claimed. */
-  importPdfs: (files: File[]) => void;
+  /**
+   * PDFs no drop zone claimed. `alongsideZone` says the same drop also left
+   * files with the zone under the pointer, whose editor is about to place
+   * them and has to stay in front while it does.
+   */
+  importPdfs: (files: File[], alongsideZone: boolean) => void;
   /** The drop held nothing any target could use. */
   onUnusable: (files: File[]) => void;
 }
@@ -159,7 +263,7 @@ export function installFileDropRouter(
       event.preventDefault();
       event.stopPropagation();
     }
-    if (route.pdfs.length > 0) options.importPdfs(route.pdfs);
+    if (route.pdfs.length > 0) options.importPdfs(route.pdfs, route.zoneClaims);
     else if (!route.zoneClaims) options.onUnusable(route.unusable);
   };
 
