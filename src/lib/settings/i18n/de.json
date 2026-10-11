@@ -7,6 +7,7 @@
     "boot.error.message": "Beim Starten von Mindstream Notes ist ein Fehler aufgetreten.",
     "boot.error.reload": "Neu laden",
     "vault.title": "Tresore",
+    "vault.closeFailed": "Das Speichern konnte nicht abgeschlossen werden. Der Tresor bleibt geöffnet. Versuche ihn nach dem Speichern deiner Änderungen erneut zu schließen.",
     "vault.switch": "Tresor wechseln",
     "vault.unknown": "Unbekannter Tresor",
     "vault.create": "Tresor erstellen",

@@ -1,0 +1,341 @@
+//! A supervised worker exits only after every content window acknowledges saves.
+use std::collections::BTreeSet;
+use std::sync::{Condvar, Mutex};
+use std::time::Duration;
+
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
+use uuid::Uuid;
+
+use crate::error::{AppError, AppResult, CommandResult};
+
+const CLOSE_EVENT: &str = "vault-worker-close";
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(15);
+
+#[derive(Default)]
+struct Book {
+    ready: BTreeSet<String>,
+    pending: Option<Batch>,
+    committed: bool,
+}
+
+struct Batch {
+    id: Uuid,
+    windows: BTreeSet<String>,
+    waiting: BTreeSet<String>,
+    failed: bool,
+}
+
+impl Book {
+    fn begin(&mut self, windows: BTreeSet<String>) -> AppResult<Option<Uuid>> {
+        if self.pending.is_some() || self.committed {
+            return Ok(None);
+        }
+        if !windows.contains("main") || !windows.is_subset(&self.ready) {
+            return Err(unavailable());
+        }
+        let id = Uuid::new_v4();
+        self.pending = Some(Batch {
+            id,
+            waiting: windows.clone(),
+            windows,
+            failed: false,
+        });
+        Ok(Some(id))
+    }
+
+    fn ack(&mut self, id: Uuid, window: &str, saved: bool) -> AppResult<()> {
+        let batch = self.pending.as_mut().ok_or_else(unavailable)?;
+        if batch.id != id || !batch.windows.contains(window) || self.committed {
+            return Err(unavailable());
+        }
+        batch.waiting.remove(window);
+        // A later successful retry cannot erase an earlier failure in this close.
+        batch.failed |= !saved;
+        Ok(())
+    }
+
+    fn finished(&self, id: Uuid) -> bool {
+        self.pending
+            .as_ref()
+            .is_none_or(|batch| batch.id != id || batch.failed || batch.waiting.is_empty())
+    }
+
+    fn commit(&mut self, id: Uuid, windows: &BTreeSet<String>) -> bool {
+        let succeeds = self.pending.as_ref().is_some_and(|batch| {
+            batch.id == id && !batch.failed && batch.waiting.is_empty() && &batch.windows == windows
+        });
+        if succeeds {
+            self.committed = true;
+        }
+        succeeds
+    }
+
+    fn cancel(&mut self, id: Uuid) -> bool {
+        if self.committed || !self.pending.as_ref().is_some_and(|batch| batch.id == id) {
+            return false;
+        }
+        self.pending = None;
+        true
+    }
+}
+
+#[derive(Default)]
+pub struct Shutdown {
+    book: Mutex<Book>,
+    changed: Condvar,
+}
+
+#[derive(Clone, Serialize)]
+struct Notice {
+    id: Uuid,
+    phase: &'static str,
+}
+
+fn unavailable() -> AppError {
+    AppError::InvalidArg("vault close could not be completed; the vault remains open".into())
+}
+
+fn content_window(label: &str) -> bool {
+    label == "main" || label.starts_with("note_")
+}
+
+fn windows(app: &AppHandle) -> BTreeSet<String> {
+    app.webview_windows()
+        .into_keys()
+        .filter(|label| content_window(label))
+        .collect()
+}
+
+#[tauri::command]
+pub fn vault_window_close_ready(app: AppHandle, window: WebviewWindow) -> CommandResult<bool> {
+    let Some(state) = app.try_state::<Shutdown>() else {
+        return Ok(false);
+    };
+    if !content_window(window.label()) {
+        return Err(unavailable().into());
+    }
+    let mut book = state.book.lock().map_err(|_| unavailable())?;
+    if book.pending.is_some() || book.committed {
+        return Err(unavailable().into());
+    }
+    book.ready.insert(window.label().into());
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn vault_window_close_ack(
+    app: AppHandle,
+    window: WebviewWindow,
+    id: Uuid,
+    saved: bool,
+) -> CommandResult<()> {
+    let state = app.try_state::<Shutdown>().ok_or_else(unavailable)?;
+    state
+        .book
+        .lock()
+        .map_err(|_| unavailable())?
+        .ack(id, window.label(), saved)?;
+    state.changed.notify_all();
+    Ok(())
+}
+
+/// Prevent secondary windows disappearing while another window is saving.
+pub fn closing(app: &AppHandle) -> bool {
+    app.try_state::<Shutdown>().is_some_and(|state| {
+        state
+            .book
+            .lock()
+            .map(|book| book.pending.is_some() && !book.committed)
+            .unwrap_or(true)
+    })
+}
+
+pub fn window_destroyed(app: &AppHandle, label: &str) {
+    if let Some(state) = app.try_state::<Shutdown>() {
+        if let Ok(mut book) = state.book.lock() {
+            book.ready.remove(label);
+            if let Some(batch) = &mut book.pending {
+                batch.failed |= batch.windows.contains(label);
+            }
+            state.changed.notify_all();
+        }
+    }
+}
+
+fn cancel(app: &AppHandle, id: Uuid) {
+    let Some(state) = app.try_state::<Shutdown>() else {
+        return;
+    };
+    if state.book.lock().is_ok_and(|mut book| book.cancel(id)) {
+        log::warn!("[vaults] controlled close cancelled; worker retained");
+        let _ = app.emit(
+            CLOSE_EVENT,
+            Notice {
+                id,
+                phase: "cancel",
+            },
+        );
+    }
+}
+
+/// Called from the native close event; all waits happen off the event-loop thread.
+pub fn request_close(app: &AppHandle) {
+    let Some(state) = app.try_state::<Shutdown>() else {
+        return;
+    };
+    let participants = windows(app);
+    let started = state
+        .book
+        .lock()
+        .map_err(|_| unavailable())
+        .and_then(|mut book| {
+            if !crate::vault_supervisor::ready_for_close(app) {
+                return Err(unavailable());
+            }
+            book.begin(participants.clone())
+        });
+    let id = match started {
+        Ok(Some(id)) => id,
+        Ok(None) => return,
+        Err(_) => {
+            log::warn!("[vaults] content windows are not ready for close");
+            let _ = app.emit(
+                CLOSE_EVENT,
+                Notice {
+                    id: Uuid::nil(),
+                    phase: "cancel",
+                },
+            );
+            return;
+        }
+    };
+    let handle = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("vault-close".into())
+        .spawn(move || {
+            for label in participants {
+                let sent = handle.get_webview_window(&label).is_some_and(|_| {
+                    handle
+                        .emit_to(
+                            label,
+                            CLOSE_EVENT,
+                            Notice {
+                                id,
+                                phase: "prepare",
+                            },
+                        )
+                        .is_ok()
+                });
+                if !sent {
+                    cancel(&handle, id);
+                    return;
+                }
+            }
+            let Some(state) = handle.try_state::<Shutdown>() else {
+                return;
+            };
+            let Ok(book) = state.book.lock() else {
+                cancel(&handle, id);
+                return;
+            };
+            let waited = state
+                .changed
+                .wait_timeout_while(book, CLOSE_TIMEOUT, |book| !book.finished(id));
+            // Release the book before scheduling work on the native event loop.
+            if waited.is_err() {
+                cancel(&handle, id);
+                return;
+            }
+            drop(waited);
+            let final_handle = handle.clone();
+            if handle
+                .run_on_main_thread(move || {
+                    let Some(state) = final_handle.try_state::<Shutdown>() else {
+                        return;
+                    };
+                    let current_windows = windows(&final_handle);
+                    let committed = state
+                        .book
+                        .lock()
+                        .is_ok_and(|mut book| book.commit(id, &current_windows));
+                    if committed {
+                        log::info!("[vaults] every content window saved; closing worker");
+                        final_handle.exit(0);
+                    } else {
+                        cancel(&final_handle, id);
+                    }
+                })
+                .is_err()
+            {
+                cancel(&handle, id);
+            }
+        });
+    if spawned.is_err() {
+        cancel(app, id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ready() -> (Book, BTreeSet<String>) {
+        let windows = BTreeSet::from(["main".into(), "note_seed_welcome".into()]);
+        (
+            Book {
+                ready: windows.clone(),
+                ..Book::default()
+            },
+            windows,
+        )
+    }
+
+    #[test]
+    fn main_ack_cannot_exit_before_popout_and_duplicate_close_reuses_batch() {
+        let (mut book, windows) = ready();
+        let id = book.begin(windows.clone()).unwrap().unwrap();
+        assert_eq!(book.begin(windows.clone()).unwrap(), None);
+        book.ack(id, "main", true).unwrap();
+        assert!(!book.finished(id));
+        assert!(!book.commit(id, &windows));
+        book.ack(id, "note_seed_welcome", true).unwrap();
+        assert!(book.commit(id, &windows));
+        assert!(!book.cancel(id));
+    }
+
+    #[test]
+    fn failure_stale_ack_and_changed_window_set_never_allow_exit() {
+        let (mut book, windows) = ready();
+        let id = book.begin(windows.clone()).unwrap().unwrap();
+        assert!(book.ack(id, "plugin_export", true).is_err());
+        assert!(book.ack(Uuid::new_v4(), "main", true).is_err());
+        book.ack(id, "main", false).unwrap();
+        book.ack(id, "main", true).unwrap();
+        book.ack(id, "note_seed_welcome", true).unwrap();
+        assert!(!book.commit(id, &windows));
+        assert!(book.cancel(id));
+        assert!(book.ack(id, "main", true).is_err());
+        let retry = book.begin(windows.clone()).unwrap().unwrap();
+        assert_ne!(retry, id);
+        for window in &windows {
+            book.ack(retry, window, true).unwrap();
+        }
+        assert!(!book.commit(retry, &BTreeSet::from(["main".into()])));
+        let mut added = windows.clone();
+        added.insert("note_new".into());
+        assert!(!book.commit(retry, &added));
+        assert!(book.commit(retry, &windows));
+    }
+
+    #[test]
+    fn loading_or_missing_main_window_cannot_be_declared_saved() {
+        let (mut book, mut windows) = ready();
+        windows.insert("note_loading".into());
+        assert!(book.begin(windows).is_err());
+        assert!(book
+            .begin(BTreeSet::from(["note_seed_welcome".into()]))
+            .is_err());
+        assert!(book.pending.is_none());
+    }
+}

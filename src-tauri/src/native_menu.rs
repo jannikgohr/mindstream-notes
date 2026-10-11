@@ -81,7 +81,13 @@ pub fn set_language(app: &AppHandle) {
 pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
     let item_id = event.id().as_ref();
     match item_id {
-        ID_QUIT => app.exit(0),
+        ID_QUIT => {
+            if app.try_state::<crate::vault_supervisor::Worker>().is_some() {
+                crate::worker_shutdown::request_close(app);
+            } else {
+                app.exit(0);
+            }
+        }
         ID_CLOSE_WINDOW => close_focused_window(app),
         ID_MAIN_WINDOW => crate::tray::focus_main_window(app),
         _ if item_id.starts_with(WINDOW_ITEM_PREFIX) => {

@@ -16,7 +16,8 @@ export enum TauriEventName {
   SyncCompleted = 'sync-completed',
   SyncUnreachable = 'sync-unreachable',
   TrayNoteCreated = 'tray-note-created',
-  UiSettingsChanged = 'ui-settings-changed'
+  UiSettingsChanged = 'ui-settings-changed',
+  VaultWorkerClose = 'vault-worker-close'
 }
 
 export type TauriEventKey = `${TauriEventName}`;
@@ -79,6 +80,7 @@ export type TauriEvents = {
    */
   'signatures-changed': null;
   'ui-settings-changed': null;
+  'vault-worker-close': { id: string; phase: 'prepare' | 'cancel' };
 };
 
 export function emit<K extends keyof TauriEvents>(

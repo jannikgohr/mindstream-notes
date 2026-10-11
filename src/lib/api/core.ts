@@ -57,6 +57,8 @@ export enum TauriCommandName {
   GetCustomWindowDecorations = 'get_custom_window_decorations',
   GetWorkerBrowserOptions = 'get_worker_browser_options',
   VaultWorkerReady = 'vault_worker_ready',
+  VaultWindowCloseReady = 'vault_window_close_ready',
+  VaultWindowCloseAck = 'vault_window_close_ack',
   GetDesktopLanguage = 'get_desktop_language',
   GetDesktopThemeMode = 'get_desktop_theme_mode',
   GetHotkeyDisplay = 'get_hotkey_display',

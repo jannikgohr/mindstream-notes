@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { onAppSuspend } from './suspend-flush';
+import { flushBeforeAppClose, onAppClose, onAppSuspend } from './suspend-flush';
 
 function setVisibility(state: 'visible' | 'hidden') {
   Object.defineProperty(document, 'visibilityState', {
@@ -12,6 +12,33 @@ function setVisibility(state: 'visible' | 'hidden') {
 afterEach(() => setVisibility('visible'));
 
 describe('onAppSuspend', () => {
+  it('awaits the remaining close saves after one participant fails', async () => {
+    let finish!: () => void;
+    const other = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const stopFail = onAppClose(async () => {
+      throw new Error('disk full');
+    });
+    const stopOther = onAppClose(() => other);
+    let settled = false;
+    const close = flushBeforeAppClose();
+    const assertion = expect(close).rejects.toThrow('disk full');
+    void close.catch(() => {
+      settled = true;
+    });
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      finish();
+      await assertion;
+    } finally {
+      stopFail();
+      stopOther();
+    }
+    await flushBeforeAppClose();
+  });
   it('flushes when the document becomes hidden', () => {
     const flush = vi.fn();
     const stop = onAppSuspend(flush);

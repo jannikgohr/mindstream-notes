@@ -76,6 +76,8 @@ pub mod webview_memory;
 pub mod webview_security;
 #[cfg(desktop)]
 pub mod worker_registration;
+#[cfg(desktop)]
+pub mod worker_shutdown;
 
 use std::borrow::Cow;
 
@@ -198,6 +200,15 @@ pub fn run() {
         .enable_macos_default_menu(false)
         .on_menu_event(native_menu::handle_menu_event)
         .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                worker_shutdown::window_destroyed(window.app_handle(), window.label());
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if worker_shutdown::closing(window.app_handle()) {
+                    api.prevent_close();
+                    return;
+                }
+            }
             if matches!(event, tauri::WindowEvent::Focused(true)) {
                 vault_supervisor::window_focused(window.app_handle(), window.label());
             }
@@ -220,7 +231,12 @@ pub fn run() {
                             webview_memory::sync_to_visibility(app_handle);
                             return;
                         }
-                        app_handle.exit(0);
+                        if app_handle.try_state::<vault_supervisor::Worker>().is_some() {
+                            api.prevent_close();
+                            worker_shutdown::request_close(app_handle);
+                        } else {
+                            app_handle.exit(0);
+                        }
                     }
                     tauri::WindowEvent::Destroyed => {
                         let app_handle = window.app_handle();
@@ -664,6 +680,10 @@ pub fn run() {
                 vault_supervisor::vault_worker_ready,
                 #[cfg(desktop)]
                 vault_supervisor::open_profile_window,
+                #[cfg(desktop)]
+                worker_shutdown::vault_window_close_ready,
+                #[cfg(desktop)]
+                worker_shutdown::vault_window_close_ack,
                 #[cfg(not(desktop))]
                 vault_worker_ready,
                 legacy_content::migrate_legacy_content,

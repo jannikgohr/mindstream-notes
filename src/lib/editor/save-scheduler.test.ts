@@ -1,8 +1,50 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSaveScheduler, SAVE_DEBOUNCE_MS } from './save-scheduler';
-import { flushPendingEditorSaves } from './suspend-flush';
+import { flushBeforeAppClose, flushPendingEditorSaves } from './suspend-flush';
 
 describe('save scheduler', () => {
+  it('saves manual edits on explicit close without enabling autosave', async () => {
+    const save = vi.fn(async () => {});
+    const scheduler = createSaveScheduler({
+      canSave: () => false,
+      canSaveOnClose: () => true,
+      capture: () => save
+    });
+    const stop = scheduler.subscribeSuspend();
+    try {
+      scheduler.schedule();
+      await scheduler.flush();
+      expect(save).not.toHaveBeenCalled();
+      expect(scheduler.pending).toBe(true);
+      await flushBeforeAppClose();
+      expect(save).toHaveBeenCalledTimes(1);
+      expect(scheduler.pending).toBe(false);
+    } finally {
+      stop();
+    }
+  });
+
+  it('flushes source input before testing whether an editor save is pending', async () => {
+    const save = vi.fn(async () => {});
+    let sourcePending = true;
+    const scheduler = createSaveScheduler({
+      canSave: () => true,
+      capture: () => save,
+      beforeFlush: () => {
+        if (sourcePending) {
+          sourcePending = false;
+          scheduler.schedule();
+        }
+      }
+    });
+    const stop = scheduler.subscribeSuspend();
+    try {
+      await flushBeforeAppClose();
+      expect(save).toHaveBeenCalledTimes(1);
+    } finally {
+      stop();
+    }
+  });
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
   it('debounces edits and clears pending after saving', async () => {

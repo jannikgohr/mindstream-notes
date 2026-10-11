@@ -41,6 +41,7 @@
   } from '$lib/hotkeys/global.svelte';
   import { initNativeMenuCommands } from '$lib/native-menu.svelte';
   import { loadProfiles, profilesState } from '$lib/stores/profiles.svelte';
+  import { installWorkerCloseBridge } from '$lib/vaults/close-bridge';
   import { installSyncStatusBridge } from '$lib/notifications/sync-status';
   import { installSyncTreeRefreshBridge } from '$lib/sync/tree-refresh-bridge';
   import { loadPlugins } from '$lib/plugins/load';
@@ -51,6 +52,8 @@
   import { syncPluginTextCheckers } from '$lib/diagnostics/plugin-checkers.svelte';
 
   let { children } = $props();
+
+  onMount(installWorkerCloseBridge);
 
   // Document initialization and cross-window refresh replace the snapshot.
   // Hydration also renames legacy keys, so keep those mutations untracked.

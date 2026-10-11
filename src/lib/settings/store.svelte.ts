@@ -28,6 +28,7 @@
 
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { isTauri } from '$lib/api/core';
+import { createPersistenceDrain } from '$lib/persistence/drain';
 import { UI_PREFERENCE_IDS } from '$lib/preferences';
 import {
   FILE_TREE_TOOLBAR_STORAGE_KEY,
@@ -230,6 +231,13 @@ export const settings = $state<SettingsState>({
 });
 
 let nativeReady: Promise<void> | null = null;
+const acceptedWrites = createPersistenceDrain();
+
+export async function flushSettingsWrites(): Promise<void> {
+  await nativeReady;
+  await acceptedWrites.flush();
+  persistNow();
+}
 let nativeQueue: Promise<unknown> = Promise.resolve();
 const nativePending = new SvelteMap<string, number>();
 let nativeListenersStarted = false;
@@ -331,7 +339,15 @@ export async function setSettingsVaultId(id: string): Promise<void> {
   void hydrateSettings('startup');
 }
 
-async function writeNativeSetting(
+function writeNativeSetting(
+  id: string,
+  value: unknown,
+  remove = false
+): Promise<void> {
+  return acceptedWrites.track(persistNativeSetting(id, value, remove));
+}
+
+async function persistNativeSetting(
   id: string,
   value: unknown,
   remove = false
@@ -478,10 +494,11 @@ export function hasSettingValue(id: string): boolean {
  * binding to pick up whatever value actually stuck. Rolls back the cache
  * if the binding throws so a failed Tauri call doesn't leave the UI lying.
  */
-export async function setSettingValue(
-  id: string,
-  value: unknown
-): Promise<void> {
+export function setSettingValue(id: string, value: unknown): Promise<void> {
+  return acceptedWrites.track(persistSettingValue(id, value));
+}
+
+async function persistSettingValue(id: string, value: unknown): Promise<void> {
   if (externalStore?.owns(id)) {
     await externalStore.write(id, value);
     return;
@@ -517,7 +534,11 @@ export async function setSettingValue(
   persist();
 }
 
-export async function resetSettingValue(id: string): Promise<void> {
+export function resetSettingValue(id: string): Promise<void> {
+  return acceptedWrites.track(persistResetSettingValue(id));
+}
+
+async function persistResetSettingValue(id: string): Promise<void> {
   const def = settingDef(id);
   if (!def) return;
   if (externalStore?.owns(id)) {

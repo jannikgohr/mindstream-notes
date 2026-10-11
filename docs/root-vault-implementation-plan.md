@@ -8,6 +8,8 @@ browser state before opening isolated vault workers and can adopt surviving
 workers after a coordinator restart. Platform activation, automatic host revival,
 shared OS integrations and the vault-opening UI remain
 pending; normal startup and existing isolated test devices still use direct mode.
+Supervised worker close now waits for content-window persistence; coordinated
+whole-app shutdown and source/target handoff are still pending.
 
 Global plugin packages and theme presets are separate follow-up projects:
 
@@ -507,6 +509,37 @@ One background open logged a denied grant and still opened its vault. Logs are i
 taskbar/Explorer, popout and denied-grant attention behavior still need native UI
 checks; Wayland activation remains pending. Rust fmt/clippy and the full serial
 suite pass 813 unit tests and one integration test, with five ignored tests.
+
+Controlled worker-close slice on 2026-10-11: main-window exit and a worker's
+native Quit action now prepare every main/popout WebView, block input, and wait
+for editor saves, dock layout, and accepted settings writes. Markdown source
+debounce is flushed before capture. Markdown/Kanban retain manual edits when
+autosave is disabled and save them on explicit close or editor teardown;
+read-only/trash guards still apply. Readiness is registered only after the
+close listener exists. Missing/loading windows, failed saves, changed window
+sets, and a 15-second timeout cancel exit and keep the worker alive. Correlated
+acknowledgements cannot close a later attempt. A lost success reply does not
+unfreeze input before the native decision, and a cancelled preparation is
+ignored even when its notification arrives late.
+
+The embedded Windows fixture rejected a mismatched launch identity. With both
+disposable root UI-settings copies made invalid under the root transaction lock,
+the real WebView close handshake cancelled and retained the worker. Restoring
+the documents and retrying closed it after native save acknowledgement, with
+the host still alive after its last worker exited. With Default and Second
+open, closing Default left Second's process and launch identity unchanged;
+closing Second then left only the host. Logs remain in
+`.output/supervised-startup-app-check/close-*.log` and the fixture's per-process
+root logs. Native main/popout pending-edit interaction and the saving/failure UI
+still need computer-use checks; the native pipe is unavailable in this session.
+Root tray quit, updater restart, coordinated source/target handoff, and backend
+service quiescence remain separate work. This does not make a worker's Quit a
+whole-app Quit yet. Normal/direct test launches remain compatible.
+
+Validation: Rust fmt/clippy, 816 unit tests and one integration test pass, with
+five ignored tests. The 45 focused frontend tests, Svelte checks, frontend and
+embedded-app builds pass. Affected ESLint checks have no errors and retain 13
+existing warnings in the dock and Kanban components.
 
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.

@@ -64,6 +64,9 @@ enum WorkerCommand {
         launch_id: Uuid,
         host: Endpoint,
     },
+    Close {
+        launch_id: Uuid,
+    },
 }
 
 struct Launch {
@@ -260,6 +263,11 @@ pub struct Worker {
     ready: Arc<AtomicBool>,
     last_window: Arc<Mutex<Option<String>>>,
     _server: Running,
+}
+
+pub(crate) fn ready_for_close(app: &AppHandle) -> bool {
+    app.try_state::<Worker>()
+        .is_some_and(|worker| worker.ready.load(Ordering::Acquire))
 }
 
 fn invalid() -> AppError {
@@ -892,6 +900,18 @@ pub fn register_worker(
                 })();
                 adopted.map_err(|_| "worker adoption unavailable; ownership retained".into())
             }
+            WorkerCommand::Close { launch_id } => {
+                if launch_id != registration.launch_id {
+                    return Err("worker identity mismatch".into());
+                }
+                let app = handle.clone();
+                handle
+                    .run_on_main_thread(move || {
+                        crate::worker_shutdown::request_close(&app);
+                    })
+                    .map_err(|_| "worker close unavailable".to_string())?;
+                Ok(json!({"accepted":true}))
+            }
         }
     })?;
     host.lock()
@@ -903,6 +923,7 @@ pub fn register_worker(
             endpoint,
         })?)?
         .map_err(AppError::InvalidArg)?;
+    app.manage(crate::worker_shutdown::Shutdown::default());
     app.manage(Worker {
         vault_id: vault_id.clone(),
         launch_id: *launch_id,
