@@ -7,7 +7,10 @@ use super::*;
 pub async fn list_collection_invitations(
     app: AppHandle,
 ) -> CommandResult<Vec<CollectionInvitation>> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let blocking_job = job.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         let account = restore_required(&app)?;
         let manager = account
             .invitation_manager()
@@ -32,7 +35,10 @@ pub async fn list_collection_invitations(
 pub async fn list_incoming_share_bundles(
     app: AppHandle,
 ) -> CommandResult<IncomingShareInvitations> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let blocking_job = job.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         let account = restore_required(&app)?;
         let inv_manager = account
             .invitation_manager()
@@ -65,7 +71,10 @@ pub async fn accept_share_bundle(
     app: AppHandle,
     manifest_collection_uid: String,
 ) -> CommandResult<()> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let blocking_job = job.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         let account = restore_required(&app)?;
         let inv_manager = account
             .invitation_manager()
@@ -181,7 +190,10 @@ pub async fn decline_share_bundle(
     app: AppHandle,
     manifest_collection_uid: String,
 ) -> CommandResult<()> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let blocking_job = job.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         let account = restore_required(&app)?;
         let inv_manager = account
             .invitation_manager()

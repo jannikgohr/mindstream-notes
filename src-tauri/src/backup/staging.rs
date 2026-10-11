@@ -79,9 +79,11 @@ pub(super) async fn import_begin_inner(app: AppHandle) -> AppResult<Option<Impor
         .into_path()
         .map_err(|e| AppError::InvalidArg(format!("path conversion: {e}")))?;
 
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let session = auth::read_session_info(&app)?;
     let app_for_blocking = app.clone();
     let preview = tauri::async_runtime::spawn_blocking(move || {
+        let _job = job;
         let db = app_for_blocking.state::<Db>();
         db.with_conn(|live_conn| {
             stage_import(&app_for_blocking, &source, live_conn, session.as_ref())

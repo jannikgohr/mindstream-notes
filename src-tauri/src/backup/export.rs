@@ -55,12 +55,14 @@ pub(super) async fn backup_now_inner(app: AppHandle) -> AppResult<Option<BackupR
         .into_path()
         .map_err(|e| AppError::InvalidArg(format!("path conversion: {e}")))?;
 
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let session = auth::read_session_info(&app)?;
     // The DB lock is sync; run the export on a blocking thread so the
     // async dialog future stays cooperative. Reach for the Db state
     // inside the closure since `tauri::State` isn't `Send`.
     let app_for_blocking = app.clone();
     let report = tauri::async_runtime::spawn_blocking(move || {
+        let _job = job;
         let db = app_for_blocking.state::<Db>();
         db.with_conn_mut(|conn| run_backup(&app_for_blocking, conn, &destination, session.as_ref()))
     })

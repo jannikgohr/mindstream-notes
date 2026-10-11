@@ -8,7 +8,10 @@ pub async fn invite_collection(
     app: AppHandle,
     input: InviteCollectionInput,
 ) -> CommandResult<CollectionShareState> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let blocking_job = job.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         let InviteCollectionInput {
             collection_id,
             username,
@@ -143,7 +146,10 @@ pub async fn e2e_create_standalone_collection_invite(
     app: AppHandle,
     input: E2eStandaloneInviteInput,
 ) -> CommandResult<E2eStandaloneInviteResult> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let blocking_job = job.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         let E2eStandaloneInviteInput {
             username,
             collection_type,
@@ -202,7 +208,10 @@ pub async fn e2e_create_incomplete_share_bundle(
     app: AppHandle,
     input: E2eIncompleteBundleInput,
 ) -> CommandResult<E2eIncompleteBundleResult> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let blocking_job = job.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         let E2eIncompleteBundleInput {
             username,
             name,
@@ -293,7 +302,10 @@ pub async fn e2e_accept_share_manifest_only(
     app: AppHandle,
     manifest_collection_uid: String,
 ) -> CommandResult<()> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let blocking_job = job.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         let account = restore_required(&app)?;
         let inv_manager = account
             .invitation_manager()

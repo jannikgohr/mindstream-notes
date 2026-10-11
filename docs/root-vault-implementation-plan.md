@@ -721,6 +721,20 @@ ready workers and closed both through the drain/save path; the host then
 reported no workers. This native check exercised an idle drain. Busy-job
 timeouts are covered by unit tests, not a visual app test.
 
+Account/sharing drain audit on 2026-10-11: login/logout, sharing commands,
+collaboration room lookups, remote repair and backup export/staging now enter the
+same service gate. Blocking closures keep a registration until their account,
+network and database work finishes. Login/logout also retain the outer
+registration through local session updates. A file dialog does not itself hold
+a job; after choosing a file, backup work must pass admission before starting.
+History and settings writes used by the editor save phase still need a separate
+final drain, so they can finish after service admission has stopped.
+
+Validation: formatting, clippy and the full Rust suite pass, with 832 unit
+tests, one integration test and five ignored tests. No account actions were
+performed against a real server or keyring during this audit. Clippy also passes
+with `e2e-data-dir`, including the isolated-account harness commands.
+
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.
 

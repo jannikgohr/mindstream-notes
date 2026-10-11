@@ -387,7 +387,9 @@ pub async fn note_room_info(
     // closure returns just the encoded key + room id so no etebase-
     // owned value escapes the blocking pool.
     let app_for_blocking = app.clone();
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     Ok(tauri::async_runtime::spawn_blocking(move || -> Result<Option<RoomInfo>, String> {
+        let _job = job;
         catch_blocking_panic("room_info", || {
             let writer_public_key_b64 = writer_public_key_b64
                 .map(|key| key.trim().to_string())

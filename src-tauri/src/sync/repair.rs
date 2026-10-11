@@ -67,9 +67,11 @@ struct AssetPayloadLite {
 pub async fn audit_corrupt_remote_items(app: AppHandle) -> CommandResult<CorruptAudit> {
     let scheduler_state = app.state::<scheduler::SyncScheduler>();
     let _guard = scheduler_state.acquire_in_flight().await;
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let app_for_blocking = app.clone();
     Ok(
         tauri::async_runtime::spawn_blocking(move || -> Result<CorruptAudit, String> {
+            let _job = job;
             catch_blocking_panic("audit", || {
                 let account = auth::try_restore(&app_for_blocking)
                     .map_err(|e| format!("restore session: {e}"))?
@@ -233,9 +235,11 @@ pub async fn purge_corrupt_remote_note(
 ) -> CommandResult<PurgeReport> {
     let scheduler_state = app.state::<scheduler::SyncScheduler>();
     let _guard = scheduler_state.acquire_in_flight().await;
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let app_for_blocking = app.clone();
     Ok(
         tauri::async_runtime::spawn_blocking(move || -> Result<PurgeReport, String> {
+            let _job = job;
             catch_blocking_panic("purge", || {
                 let account = auth::try_restore(&app_for_blocking)
                     .map_err(|e| format!("restore session: {e}"))?

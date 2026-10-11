@@ -39,7 +39,10 @@ pub async fn list_collection_members(
     app: AppHandle,
     collection_id: String,
 ) -> CommandResult<Vec<CollectionMember>> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let blocking_job = job.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         let account = restore_required(&app)?;
         let db = app.state::<Db>();
         let Some(scope_id) = local_share_scope_id(&db, &collection_id)? else {
@@ -92,7 +95,10 @@ pub async fn set_collection_member_access(
     app: AppHandle,
     input: SetMemberAccessInput,
 ) -> CommandResult<()> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let blocking_job = job.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         let SetMemberAccessInput {
             collection_id,
             username,
@@ -150,7 +156,10 @@ pub async fn remove_collection_member(
     app: AppHandle,
     input: RemoveMemberInput,
 ) -> CommandResult<()> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let blocking_job = job.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         let RemoveMemberInput {
             collection_id,
             username,
@@ -198,7 +207,10 @@ pub(super) fn scope_member_remove_error(
 
 #[tauri::command]
 pub async fn accept_collection_invitation(app: AppHandle, id: String) -> CommandResult<()> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let blocking_job = job.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         let account = restore_required(&app)?;
         let manager = account
             .invitation_manager()
@@ -224,7 +236,10 @@ pub async fn accept_collection_invitation(app: AppHandle, id: String) -> Command
 
 #[tauri::command]
 pub async fn reject_collection_invitation(app: AppHandle, id: String) -> CommandResult<()> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let blocking_job = job.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         let account = restore_required(&app)?;
         let manager = account
             .invitation_manager()

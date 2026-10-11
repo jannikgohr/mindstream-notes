@@ -375,6 +375,7 @@ pub fn has_session(app: &AppHandle) -> bool {
 
 #[tauri::command]
 pub async fn etebase_login(args: LoginArgs, app: AppHandle) -> CommandResult<SessionInfo> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let server_url = resolve_server_url(&args).map_err(String::from)?;
     let path = session_path(&app).map_err(String::from)?;
     let keyring_account = active_keyring_account(&app);
@@ -391,7 +392,9 @@ pub async fn etebase_login(args: LoginArgs, app: AppHandle) -> CommandResult<Ses
     // blocking is not allowed".
     let key = randombytes(32);
     let key_for_save = key.clone();
+    let blocking_job = job.clone();
     let blob = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let _job = blocking_job;
         let client = Client::new(CLIENT_NAME, &server_for_login)
             .map_err(|e| format!("etebase client: {e}"))?;
         let account =
@@ -431,6 +434,7 @@ pub async fn etebase_login(args: LoginArgs, app: AppHandle) -> CommandResult<Ses
 
 #[tauri::command]
 pub async fn etebase_logout(app: AppHandle) -> CommandResult<()> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let path = session_path(&app).map_err(String::from)?;
     let stored = read_stored(&path).map_err(String::from)?;
     let keyring_account = active_keyring_account(&app);
@@ -448,7 +452,9 @@ pub async fn etebase_logout(app: AppHandle) -> CommandResult<()> {
         // server gone) we still wipe local state below — that's the
         // user's clear intent.
         let keyring_account = keyring_account.clone();
+        let blocking_job = job.clone();
         let logout_result = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+            let _job = blocking_job;
             let account = restore_account(&stored, &keyring_account)
                 .map_err(|e| format!("restore session: {e}"))?;
             account.logout().map_err(|e| format!("logout: {e}"))?;
