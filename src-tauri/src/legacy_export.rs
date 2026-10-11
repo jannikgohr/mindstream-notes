@@ -69,6 +69,11 @@ pub fn begin(app: &tauri::App, vault_id: String, complete: Completion) -> AppRes
         complete(app.handle().clone());
         return Ok(());
     }
+    if crate::coordinator_revival::background_launch() {
+        return Err(AppError::InvalidArg(
+            "legacy browser export requires a normal app launch before background recovery".into(),
+        ));
+    }
     app.manage(Export {
         origin,
         vault_id,

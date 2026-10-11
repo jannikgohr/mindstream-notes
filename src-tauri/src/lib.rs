@@ -30,6 +30,8 @@ pub mod coordinator_autostart;
 #[cfg(desktop)]
 pub mod coordinator_ipc;
 #[cfg(desktop)]
+pub mod coordinator_revival;
+#[cfg(desktop)]
 mod coordinator_shortcuts;
 #[cfg(desktop)]
 mod coordinator_shutdown;

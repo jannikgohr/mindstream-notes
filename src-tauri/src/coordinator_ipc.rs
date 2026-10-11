@@ -97,6 +97,20 @@ pub enum Election {
     Existing,
 }
 
+/// Probe the physical OS lease without changing endpoint discovery. Socket
+/// failure and stale endpoint bytes never authorize another coordinator.
+pub(crate) fn is_owned(root: &Path) -> AppResult<bool> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(root.join(".coordinator.lock"))?;
+    match file.try_lock() {
+        Ok(()) => Ok(false),
+        Err(TryLockError::WouldBlock) => Ok(true),
+        Err(TryLockError::Error(error)) => Err(error.into()),
+    }
+}
+
 pub fn elect(root: &Path) -> AppResult<Election> {
     fs::create_dir_all(root)?;
     let ownership = OpenOptions::new()

@@ -38,9 +38,20 @@ impl Role {
                 coordinator_id,
             });
         }
+        if args.iter().any(|arg| {
+            !matches!(
+                arg.as_str(),
+                crate::AUTOSTART_ARG
+                    | "--supervised-vaults"
+                    | crate::coordinator_revival::BACKGROUND_ARG
+            )
+        }) {
+            return Err(invalid());
+        }
         if args
             .iter()
-            .any(|arg| !matches!(arg.as_str(), crate::AUTOSTART_ARG | "--supervised-vaults"))
+            .any(|arg| arg == crate::coordinator_revival::BACKGROUND_ARG)
+            && !args.iter().any(|arg| arg == "--supervised-vaults")
         {
             return Err(invalid());
         }
@@ -87,6 +98,29 @@ mod tests {
             Role::Host
         );
     }
+    #[test]
+    fn background_recovery_requires_explicit_supervision_and_cannot_be_a_worker_flag() {
+        assert!(Role::parse(
+            Kind::Test,
+            &[crate::coordinator_revival::BACKGROUND_ARG.into()]
+        )
+        .is_err());
+        assert_eq!(
+            Role::parse(
+                Kind::Test,
+                &[
+                    "--supervised-vaults".into(),
+                    crate::coordinator_revival::BACKGROUND_ARG.into()
+                ]
+            )
+            .unwrap(),
+            Role::Host
+        );
+        let mut worker = Role::worker_arguments("vault", Uuid::new_v4(), Uuid::new_v4()).unwrap();
+        worker.push(crate::coordinator_revival::BACKGROUND_ARG.into());
+        assert!(Role::parse(Kind::Release, &worker).is_err());
+    }
+
     #[test]
     fn explicit_target_keeps_launch_and_coordinator_identity_and_refuses_ambiguous_args() {
         let launch = Uuid::new_v4();

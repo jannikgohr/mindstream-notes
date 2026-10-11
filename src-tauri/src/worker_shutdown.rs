@@ -45,6 +45,15 @@ struct Batch {
 }
 
 impl Book {
+    fn permits_coordinator_revival(&self) -> bool {
+        self.pending.is_none()
+            && !self.committed
+            && !self
+                .requests
+                .values()
+                .any(|request| request.progress == CloseProgress::Queued)
+    }
+
     fn enqueue(&mut self, request_id: Uuid) -> AppResult<bool> {
         self.requests.retain(|_, request| {
             !matches!(request.progress, CloseProgress::Failed { .. })
@@ -269,6 +278,17 @@ pub fn closing(app: &AppHandle) -> bool {
     })
 }
 
+/// A queued or committed close must not revive a crashed environment. A
+/// cancelled/failed close resumes recovery together with the worker services.
+pub(crate) fn coordinator_revival_allowed(app: &AppHandle) -> bool {
+    app.try_state::<Shutdown>().is_some_and(|state| {
+        state
+            .book
+            .lock()
+            .is_ok_and(|book| book.permits_coordinator_revival())
+    })
+}
+
 pub fn window_destroyed(app: &AppHandle, label: &str) {
     if let Some(state) = app.try_state::<Shutdown>() {
         if let Ok(mut book) = state.book.lock() {
@@ -489,6 +509,26 @@ fn request_close_inner(app: &AppHandle, request_id: Option<Uuid>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_stops_before_close_callback_and_resumes_only_after_cancellation() {
+        let (mut book, windows) = ready();
+        assert!(book.permits_coordinator_revival());
+        let request = Uuid::new_v4();
+        book.enqueue(request).unwrap();
+        assert!(!book.permits_coordinator_revival());
+        let batch = book.begin(windows.clone()).unwrap().unwrap();
+        assert!(!book.permits_coordinator_revival());
+        assert!(book.cancel(batch));
+        assert!(book.permits_coordinator_revival());
+        let request = Uuid::new_v4();
+        book.enqueue(request).unwrap();
+        let batch = book.begin(windows.clone()).unwrap().unwrap();
+        book.ack(batch, "main", true).unwrap();
+        book.ack(batch, "note_seed_welcome", true).unwrap();
+        assert!(book.commit(batch, &windows));
+        assert!(!book.permits_coordinator_revival());
+    }
 
     #[test]
     fn tracked_close_retries_preserve_cancelled_outcome_and_new_requests_can_retry() {

@@ -79,6 +79,19 @@ def lease(path):
             msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
 
 
+def owned(path):
+    import msvcrt
+    with path.open("r+b") as handle:
+        try:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return True
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
@@ -86,9 +99,12 @@ def main():
     parser.add_argument("--wait-for-external-quit", action="store_true", help="wait for external menu or IPC Quit after writing quit-ready.json")
     parser.add_argument("--wait-for-window-close", action="store_true", help="start two vaults without background capture and wait for native window closure")
     parser.add_argument("--autostart-hidden", action="store_true", help="check hidden autostart before the window-close UI fixture; create activate-now to continue")
+    parser.add_argument("--check-revival", action="store_true", help="crash the owned coordinator and check automatic worker adoption without a manual launch")
     args = parser.parse_args()
     if args.autostart_hidden:
         args.wait_for_window_close = True
+    if args.check_revival and (args.wait_for_window_close or args.wait_for_external_quit):
+        parser.error("revival check cannot be combined with interactive close/quit modes")
     assert os.name == "nt", "this fixture checks Windows native workers"
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -178,6 +194,7 @@ def main():
                 path.write_text(json.dumps(document), encoding="utf-8")
 
         clean = False
+        revival_started = False
         try:
             peer = wait(endpoint)
             wait(lambda: status()["initialized"] and any(entry["id"] == "other" and entry["ready"] for entry in status()["workers"]))
@@ -228,6 +245,46 @@ def main():
                 assert "Err" in call(peer, {"command": "open", "vault_id": "capture"}, request_id)
             assert "Err" in call(peer, {"command": "autostart", "vault_id": "other", "launch_id": str(uuid.uuid4()), "enabled": None})
             print("Coordinator autostart read/retry/identity and disabled test-root writes passed")
+            if args.check_revival:
+                completed("open", vault_id="capture")
+                wait(lambda: len(status()["workers"]) == 2 and all(entry["ready"] for entry in status()["workers"]))
+                launches = {vault_id: worker(vault_id)["launch_id"] for vault_id in vaults}
+                old_instance = peer["instance"]
+                before = counts("capture").get("markdown", 0)
+                host.terminate()  # Deliberate crash of this fixture's owned Popen.
+                assert host.wait(timeout=10) != 0
+                revival_started = True
+                for vault_id in vaults:
+                    assert owned(root / "profiles" / vault_id / ".vault.lock"), "coordinator crash released a live vault lease"
+                def replacement():
+                    try:
+                        record = json.loads((root / "coordinator-endpoint.json").read_text())
+                        if record["instance"] == old_instance:
+                            return None
+                        reply = call(record, {"command": "status"})["Ok"]
+                        return record if reply["initialized"] and len(reply["workers"]) == 2 and all(entry["ready"] for entry in reply["workers"]) else None
+                    except (OSError, KeyError, FileNotFoundError, json.JSONDecodeError):
+                        return None
+                peer = wait(replacement)
+                assert owned(root / ".coordinator.lock")
+                assert {vault_id: worker(vault_id)["launch_id"] for vault_id in vaults} == launches
+                for vault_id in vaults:
+                    record = worker(vault_id)
+                    identity = call(record["endpoint"], {"command": "identify", "launch_id": launches[vault_id]})["Ok"]
+                    assert identity["ready"] and identity["vault_id"] == vault_id
+                completed("shortcut", command_id="newMarkdownNote")
+                assert counts("capture")["markdown"] == before + 1
+                print("Automatic coordinator revival adopted both original workers and restored capture")
+                quit_id = str(uuid.uuid4())
+                assert call(peer, {"command": "quit"}, quit_id)["Ok"]["operation_id"] == quit_id
+                wait(lambda: not owned(root / ".coordinator.lock"), 190)
+                with lease(root / ".coordinator.lock"):
+                    for vault_id in vaults:
+                        with lease(root / "profiles" / vault_id / ".vault.lock"):
+                            pass
+                print("Revived coordinator Quit released every coordinator/vault lease")
+                clean = True
+                return
             # Tray follows the disabled overall most-recent vault, independent
             # of the sole eligible capture vault selected by system shortcuts.
             recent = worker("other")
@@ -354,7 +411,11 @@ def main():
             # from PIDs or force-releasing another process's vault lease.
             if peer and not clean:
                 try:
-                    close_all()
+                    if revival_started:
+                        call(peer, {"command": "quit"})
+                        wait(lambda: not owned(root / ".coordinator.lock"), 190)
+                    else:
+                        close_all()
                     clean = True
                 except (OSError, AssertionError, KeyError):
                     pass

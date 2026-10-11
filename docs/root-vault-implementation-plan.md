@@ -8,7 +8,8 @@ browser state before opening isolated vault workers and can adopt surviving
 workers after a coordinator restart. Coordinator shortcut registration and
 eligible-vault action dispatch, shared tray routing and last-window coordinator
 exit pass Windows checks. Coordinator autostart registration ownership is
-implemented. Platform checks, automatic host revival, updater
+implemented. Packaged/embedded coordinator revival passes Windows checks.
+Platform checks, updater
 integration and the vault-opening UI remain pending;
 normal startup and existing isolated test devices still use direct mode.
 Supervised worker close waits for content-window persistence. Whole-app Quit
@@ -1038,6 +1039,35 @@ Both native title-bar closes exited the app and released every lease. Artifacts
 remain under `.output/coordinator-autostart-owner-app-check` and
 `.output/coordinator-autostart-owner-ui-check`. Real OS registration changes
 remain unverified.
+
+Automatic coordinator revival slice on 2026-10-12: packaged/embedded workers
+probe the existing coordinator OS lease and take a separate OS launch lease
+before starting a replacement. Stale file contents and failed sockets grant
+no ownership. Missing/unreadable lease evidence fails closed. Simultaneous
+workers coalesce their launch attempts; a racing normal launch still elects
+only one coordinator. Replacement startup uses background recovery, adopts
+existing physical vault owners and does not open another vault or activate a
+window. Worker vault leases and original launch IDs remain unchanged.
+
+Recovery keeps bounded child observers and retries, skips queued, pending and
+committed worker closes, and resumes after a cancelled close. It never
+force-releases a lease. It uses a separate Windows
+recovery browser folder and refuses to export an unsealed legacy store from a
+background launch. Vite/dev sessions require a normal manual dev launch after
+the CLI/native host crashes; automatic native restart cannot restore Vite.
+When no workers survive a crash, a normal app launch remains necessary.
+Rust fmt/clippy and 868 enabled Rust tests passed, five ignored. The first
+embedded Windows crash check terminated the fixture's owned coordinator,
+observed both vault leases still held, and automatically adopted both original
+launch IDs in a replacement without a manual app launch. Capture then wrote to
+the expected vault. Quit released every coordinator/vault lease. The complete
+autostart/tray/shortcut/shutdown regression also passed. The final embedded build
+and repeated crash/adoption/capture/Quit check passed with the shutdown guard.
+Its queued, pending, cancelled and committed states are covered by a lifecycle
+unit test. Artifacts remain under `.output/coordinator-revival-final-app-check`
+and `.output/coordinator-revival-regression-check`. No fixture app processes
+remained after cleanup. Real packaged macOS/Linux lifecycle and focus checks
+remain outstanding.
 
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.

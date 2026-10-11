@@ -734,10 +734,11 @@ fn adopt_host(
 /// supervised path passes its release gates. Explicit workers cannot fall back.
 pub fn startup_role(kind: crate::environment::Kind) -> AppResult<Role> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    if args
-        .iter()
-        .any(|a| a == "--supervised-vaults" || a == "--vault-worker")
-    {
+    if args.iter().any(|a| {
+        a == "--supervised-vaults"
+            || a == "--vault-worker"
+            || a == crate::coordinator_revival::BACKGROUND_ARG
+    }) {
         Role::parse(kind, &args)
     } else {
         Ok(Role::Direct)
@@ -758,7 +759,9 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
             let (endpoint, reply) =
                 ipc::request_with_endpoint(&root, &request(&HostCommand::Status)?)?;
             reply.map_err(AppError::InvalidArg)?;
-            if !crate::was_started_by_autostart() {
+            if !crate::was_started_by_autostart()
+                && !crate::coordinator_revival::background_launch()
+            {
                 crate::foreground::transfer(&endpoint);
                 endpoint
                     .retry_call(&request(&HostCommand::Activate)?)?
@@ -807,8 +810,10 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
     crate::tray::init(app)?;
     start_lifetime_monitor(app.handle())?;
     let initial = index.active;
-    let activate_initial = !crate::was_started_by_autostart()
-        || !crate::desktop_settings::should_start_in_tray(app.handle());
+    let background_recovery = crate::coordinator_revival::background_launch();
+    let activate_initial = !background_recovery
+        && (!crate::was_started_by_autostart()
+            || !crate::desktop_settings::should_start_in_tray(app.handle()));
     crate::legacy_export::begin(
         app,
         initial.clone(),
@@ -829,8 +834,8 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
                     if let Some(host) = task_app.try_state::<Host>() {
                         if let Ok(mut book) = host.book.lock() {
                             book.exported = true;
-                            book.had_ready_worker |=
-                                book.workers.values().any(|launch| launch.ready);
+                            book.had_ready_worker |= background_recovery
+                                || book.workers.values().any(|launch| launch.ready);
                             if book.last.is_none() {
                                 let recovered = book
                                     .workers
@@ -855,8 +860,10 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
                             }
                         }
                     }
-                    if let Err(error) = open(&task_app, &target, activate_initial) {
-                        log::error!("[vaults] initial launch failed: {error}");
+                    if !background_recovery {
+                        if let Err(error) = open(&task_app, &target, activate_initial) {
+                            log::error!("[vaults] initial launch failed: {error}");
+                        }
                     }
                     broadcast_device_settings(&task_app);
                     crate::coordinator_shortcuts::refresh(&task_app);
@@ -2178,6 +2185,7 @@ pub fn register_worker(
         last_window,
         _server: server,
     });
+    crate::coordinator_revival::start(app)?;
     Ok(())
 }
 
