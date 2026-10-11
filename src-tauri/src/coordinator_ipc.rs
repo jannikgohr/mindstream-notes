@@ -26,7 +26,7 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_CONNECTIONS: usize = 16;
 
 // Do not derive Debug: the endpoint/wire contain a credential, not diagnostics.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Endpoint {
     version: u32,
@@ -199,8 +199,29 @@ impl Endpoint {
         Ok(endpoint)
     }
 
+    pub(crate) fn validate(&self) -> AppResult<()> {
+        validate_endpoint(self)
+    }
+
     pub fn call(&self, request: &Request) -> AppResult<Result<Value, String>> {
         self.call_until(request, Instant::now() + SOCKET_TIMEOUT)
+    }
+
+    /// Retry transient transport failure against the same authenticated
+    /// instance. Preserve the operation ID; an explicit rejection is final.
+    pub fn retry_call(&self, request: &Request) -> AppResult<Result<Value, String>> {
+        let deadline = Instant::now() + STARTUP_TIMEOUT;
+        loop {
+            if let Ok(reply) =
+                self.call_until(request, deadline.min(Instant::now() + SOCKET_TIMEOUT))
+            {
+                return Ok(reply);
+            }
+            if Instant::now() >= deadline {
+                return Err(unavailable());
+            }
+            thread::sleep(Duration::from_millis(40));
+        }
     }
 
     fn call_until(&self, request: &Request, deadline: Instant) -> AppResult<Result<Value, String>> {
@@ -285,11 +306,13 @@ impl Coordinator {
         })
     }
 
-    /// Worker replies use their own listener. The worker must retain its vault
-    /// lease until this server is stopped; its endpoint is registered over root
+    /// Worker replies use their own listener and retain the physical vault
+    /// lease until accepted calls finish; its endpoint is registered over root
     /// IPC rather than overwriting the coordinator's endpoint document.
-    pub fn for_worker(_ownership: &crate::storage_locks::VaultLock) -> AppResult<Self> {
-        Self::bind()
+    pub fn for_worker(ownership: &crate::storage_locks::VaultLock) -> AppResult<Self> {
+        let mut coordinator = Self::bind()?;
+        coordinator._ownership = Some(ownership.retain_lease());
+        Ok(coordinator)
     }
 
     pub fn endpoint(&self) -> &Endpoint {

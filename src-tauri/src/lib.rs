@@ -72,6 +72,8 @@ pub mod vault_supervisor;
 #[cfg(desktop)]
 pub mod webview_memory;
 pub mod webview_security;
+#[cfg(desktop)]
+pub mod worker_registration;
 
 use std::borrow::Cow;
 

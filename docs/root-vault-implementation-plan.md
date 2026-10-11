@@ -4,8 +4,9 @@ Status: restore safety, atomic document writes, environment identity, vault
 ownership, root desktop settings, dictionary publication, root recovery, and
 vault signing credentials are implemented and pass the Windows checks.
 Schema settings now use root/vault documents. Opt-in supervision exports legacy
-browser state before opening isolated vault workers. Coordinator recovery,
-platform activation, shared OS integrations and the vault-opening UI remain
+browser state before opening isolated vault workers and can adopt surviving
+workers after a coordinator restart. Platform activation, automatic host revival,
+shared OS integrations and the vault-opening UI remain
 pending; normal startup and existing isolated test devices still use direct mode.
 
 Global plugin packages and theme presets are separate follow-up projects:
@@ -437,6 +438,35 @@ Rust fmt, clippy with warnings denied, and the full serial suite pass 801 unit
 tests and one integration test, with five ignored tests. The affected frontend
 checks pass 23 tests, including delayed/failed native settings readiness. Svelte
 checks and affected ESLint pass without errors.
+
+Worker recovery slice on 2026-10-11: workers publish private discovery records
+while holding their physical vault lease. Records bind the canonical root,
+indexed vault ID, physical directory, launch identity and authenticated endpoint.
+Startup clears stale records only after acquiring the vault's OS lock. With a
+live owner, the new host requires an authenticated matching identity reply and
+authorizes adoption of that exact launch. The worker verifies the current root
+endpoint before changing its host connection. Corrupt, oversized, mismatched or
+unresponsive live records retain ownership. An unavailable vault does not prevent
+other indexed vaults from opening. Accepted worker IPC retains the physical lease
+through shutdown even if database state drops first. Transport retries preserve
+operation IDs and stop on explicit rejection.
+
+The Windows embedded-frontend fixture force-stopped its host while Default and
+Second remained alive. A replacement host adopted both with unchanged worker
+PIDs, launch identities and endpoints. Opening Second reused its worker. After
+force-stopping the adopted Default worker, an open request acquired the released
+OS lock, removed its stale registration and launched a new Default worker;
+Second retained its PID and launch identity. Logs are in
+`.output/supervised-startup-app-check/embedded-*.log` and `recovery-*.log`.
+Fixture process cleanup verified executable/launch identities before stopping
+only its workers and host. These checks cover process crashes, not power-loss
+durability or foreground activation. A normal launch can recover a crashed host;
+automatic host revival without a launch remains pending. The supervised path
+stays opt-in while OS integrations, focus events and handoff are implemented.
+Rust fmt, clippy with warnings denied, and the full serial suite pass 808 unit
+tests and one integration test, with five ignored tests. The embedded frontend
+build passes. Native recovery checks do not depend on the unavailable
+computer-use connection.
 
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.

@@ -29,6 +29,48 @@ fn operation(payload: Value) -> Request {
 }
 
 #[test]
+fn endpoint_retries_preserve_the_operation_and_explicit_rejection_is_not_retried() {
+    let fixture = Fixture::new();
+    let owner = fixture.owner();
+    let endpoint = owner.endpoint().clone();
+    let request = operation(serde_json::json!({"probe":true}));
+    let expected_id = request.id;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    let server = owner
+        .serve(move |request| {
+            assert_eq!(request.id, expected_id);
+            if seen.fetch_add(1, Ordering::AcqRel) == 0 {
+                // Let the first reply miss its deadline. The retry must remain the
+                // same operation, since that first handler may already have acted.
+                thread::sleep(SOCKET_TIMEOUT + Duration::from_millis(100));
+            }
+            Ok(serde_json::json!({"accepted":true}))
+        })
+        .unwrap();
+    assert_eq!(
+        endpoint.retry_call(&request).unwrap().unwrap()["accepted"],
+        true
+    );
+    assert_eq!(calls.load(Ordering::Acquire), 2);
+    server.stop();
+
+    let owner = fixture.owner();
+    let endpoint = owner.endpoint().clone();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    let server = owner
+        .serve(move |_| {
+            seen.fetch_add(1, Ordering::AcqRel);
+            Err("explicitly rejected".into())
+        })
+        .unwrap();
+    assert!(endpoint.retry_call(&request).unwrap().is_err());
+    assert_eq!(calls.load(Ordering::Acquire), 1);
+    server.stop();
+}
+
+#[test]
 fn ownership_ignores_stale_files_and_replaces_endpoint_only_after_release() {
     let fixture = Fixture::new();
     fs::write(

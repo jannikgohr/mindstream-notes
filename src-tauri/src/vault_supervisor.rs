@@ -2,6 +2,8 @@
 //! activation, coordinator recovery and OS integrations are being completed.
 use std::collections::BTreeMap;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -26,6 +28,11 @@ enum HostCommand {
         launch_id: Uuid,
         coordinator_id: Uuid,
     },
+    AuthorizeAdoption {
+        vault_id: String,
+        launch_id: Uuid,
+        coordinator_id: Uuid,
+    },
     Register {
         vault_id: String,
         launch_id: Uuid,
@@ -41,6 +48,8 @@ enum HostCommand {
 #[serde(tag = "command", rename_all = "camelCase", deny_unknown_fields)]
 enum WorkerCommand {
     Activate,
+    Identify { launch_id: Uuid },
+    Adopt { launch_id: Uuid, host: Endpoint },
 }
 
 struct Launch {
@@ -48,6 +57,7 @@ struct Launch {
     endpoint: Option<Endpoint>,
     ready: bool,
     error: Option<String>,
+    adopted: bool,
 }
 struct Operation {
     input: Value,
@@ -145,6 +155,21 @@ impl Book {
                 }
                 launch.endpoint = Some(endpoint);
             }
+            HostCommand::AuthorizeAdoption {
+                vault_id,
+                launch_id,
+                coordinator_id,
+            } => {
+                if coordinator_id != instance
+                    || !self.workers.get(&vault_id).is_some_and(|launch| {
+                        launch.id == launch_id
+                            && launch.endpoint.is_some()
+                            && launch.error.is_none()
+                    })
+                {
+                    return Err(invalid());
+                }
+            }
             HostCommand::Ready {
                 vault_id,
                 launch_id,
@@ -174,13 +199,15 @@ impl Book {
 }
 pub struct Host {
     instance: Uuid,
+    endpoint: Endpoint,
     book: Mutex<Book>,
     _server: Running,
 }
 pub struct Worker {
     vault_id: String,
     launch_id: Uuid,
-    host: Endpoint,
+    host: Arc<Mutex<Endpoint>>,
+    ready: Arc<AtomicBool>,
     _server: Running,
 }
 
@@ -193,6 +220,26 @@ fn request(command: &HostCommand) -> AppResult<Request> {
         id: Uuid::new_v4(),
         payload: serde_json::to_value(command).map_err(|_| invalid())?,
     })
+}
+
+fn adopt_host(
+    registration: &crate::worker_registration::Registration,
+    current: &Mutex<Endpoint>,
+    launch_id: Uuid,
+    candidate: Endpoint,
+) -> AppResult<()> {
+    if launch_id != registration.launch_id || candidate != Endpoint::read(&registration.root)? {
+        return Err(invalid());
+    }
+    candidate
+        .retry_call(&request(&HostCommand::AuthorizeAdoption {
+            vault_id: registration.vault_id.clone(),
+            launch_id,
+            coordinator_id: candidate.instance(),
+        })?)?
+        .map_err(AppError::InvalidArg)?;
+    *current.lock().map_err(|_| invalid())? = candidate;
+    Ok(())
 }
 
 /// Preserve existing direct e2e devices and normal startup until the full
@@ -231,6 +278,7 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
     let vault = crate::profiles::profile_dir(&root, &index.active);
     crate::legacy_content::initialize_owner(&root, &index.active, &vault)?;
     let instance = coordinator.endpoint().instance();
+    let endpoint = coordinator.endpoint().clone();
     let handle = app.handle().clone();
     let server = coordinator.serve(move |request| {
         handle_host(&handle, request)
@@ -238,6 +286,7 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
     })?;
     app.manage(Host {
         instance,
+        endpoint,
         book: Mutex::new(Book::default()),
         _server: server,
     });
@@ -246,16 +295,101 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
         app,
         initial.clone(),
         Box::new(move |app| {
-            if let Some(host) = app.try_state::<Host>() {
-                if let Ok(mut book) = host.book.lock() {
-                    book.exported = true;
-                }
-            }
-            if let Err(error) = open(&app, &initial) {
-                log::error!("[vaults] initial launch failed: {error}");
+            let task_app = app.clone();
+            if let Err(error) = std::thread::Builder::new()
+                .name("vault-recovery".into())
+                .spawn(move || {
+                    if let Err(error) = recover_workers(&task_app) {
+                        log::error!("[vaults] worker discovery failed: {error}");
+                        return;
+                    }
+                    if let Some(host) = task_app.try_state::<Host>() {
+                        if let Ok(mut book) = host.book.lock() {
+                            book.exported = true;
+                        }
+                    }
+                    if let Err(error) = open(&task_app, &initial) {
+                        log::error!("[vaults] initial launch failed: {error}");
+                    }
+                })
+            {
+                log::error!("[vaults] recovery thread unavailable: {error}");
             }
         }),
     )?;
+    Ok(())
+}
+
+fn recover_workers(app: &AppHandle) -> AppResult<()> {
+    let root = crate::paths::app_data_root(app)?;
+    let index = crate::profiles::prepare_coordinator_index(&root)?;
+    for vault in index.profiles {
+        if let Err(error) = recover_worker(app, &root, &vault.id) {
+            let host = app.state::<Host>();
+            host.book.lock().map_err(|_| invalid())?.workers.insert(
+                vault.id,
+                Launch {
+                    id: Uuid::nil(),
+                    endpoint: None,
+                    ready: false,
+                    error: Some("vault owner could not be identified; ownership retained".into()),
+                    adopted: true,
+                },
+            );
+            log::warn!("[vaults] worker discovery refused: {error}");
+        }
+    }
+    Ok(())
+}
+
+fn recover_worker(app: &AppHandle, root: &std::path::Path, id: &str) -> AppResult<()> {
+    use crate::worker_registration::{Identity, Recovery};
+    let directory = crate::profiles::profile_dir(root, id);
+    let Recovery::Held(record) = crate::worker_registration::reconcile(root, id, &directory)?
+    else {
+        return Ok(());
+    };
+    // Endpoint correlation/authentication and the canonical physical identity
+    // are both required. Never infer ownership from a PID or an open socket.
+    record.identify()?;
+    let host = app.state::<Host>();
+    {
+        let mut book = host.book.lock().map_err(|_| invalid())?;
+        if book.workers.contains_key(id) {
+            return Err(invalid());
+        }
+        book.workers.insert(
+            id.into(),
+            Launch {
+                id: record.launch_id,
+                endpoint: Some(record.endpoint.clone()),
+                ready: false,
+                error: None,
+                adopted: true,
+            },
+        );
+    }
+    let reply = record
+        .endpoint
+        .retry_call(&Request {
+            id: Uuid::new_v4(),
+            payload: serde_json::to_value(WorkerCommand::Adopt {
+                launch_id: record.launch_id,
+                host: host.endpoint.clone(),
+            })
+            .map_err(|_| invalid())?,
+        })?
+        .map_err(AppError::InvalidArg)?;
+    let identity: Identity = serde_json::from_value(reply).map_err(|_| invalid())?;
+    if !record.matches(&identity) {
+        return Err(invalid());
+    }
+    let mut book = host.book.lock().map_err(|_| invalid())?;
+    let launch = book.workers.get_mut(id).ok_or_else(invalid)?;
+    if launch.id != record.launch_id {
+        return Err(invalid());
+    }
+    launch.ready |= identity.ready;
     Ok(())
 }
 
@@ -315,19 +449,52 @@ fn open(app: &AppHandle, vault_id: &str) -> AppResult<()> {
         return Err(invalid());
     }
     if let Some(launch) = book.workers.get(vault_id) {
-        if let Some(error) = &launch.error {
-            return Err(AppError::InvalidArg(error.clone()));
-        }
+        let launch_id = launch.id;
+        let error = launch.error.clone();
+        let adopted_pending = launch.adopted && !launch.ready;
         let endpoint = launch.ready.then(|| launch.endpoint.clone()).flatten();
         drop(book);
+        if let Some(error) = error {
+            return retry_after_released_owner(
+                app,
+                &root,
+                vault_id,
+                launch_id,
+                AppError::InvalidArg(error),
+            );
+        }
+        if adopted_pending {
+            let directory = crate::profiles::profile_dir(&root, vault_id);
+            if matches!(
+                crate::worker_registration::reconcile(&root, vault_id, &directory)?,
+                crate::worker_registration::Recovery::Vacant
+            ) {
+                host.book
+                    .lock()
+                    .map_err(|_| invalid())?
+                    .remove_launch(vault_id, launch_id);
+                return open(app, vault_id);
+            }
+        }
         if let Some(endpoint) = endpoint {
-            endpoint
+            let result = endpoint
                 .call(&Request {
                     id: Uuid::new_v4(),
                     payload: serde_json::to_value(WorkerCommand::Activate)
                         .map_err(|_| invalid())?,
-                })?
-                .map_err(AppError::InvalidArg)?;
+                })
+                .and_then(|reply| reply.map_err(AppError::InvalidArg));
+            if let Err(error) = result {
+                return retry_after_released_owner(app, &root, vault_id, launch_id, error);
+            }
+            let mut book = host.book.lock().map_err(|_| invalid())?;
+            if book
+                .workers
+                .get(vault_id)
+                .is_some_and(|launch| launch.id == launch_id && launch.ready)
+            {
+                book.last = Some(vault_id.into());
+            }
         }
         return Ok(());
     }
@@ -339,6 +506,7 @@ fn open(app: &AppHandle, vault_id: &str) -> AppResult<()> {
             endpoint: None,
             ready: false,
             error: None,
+            adopted: false,
         },
     );
     drop(book);
@@ -405,6 +573,29 @@ fn open(app: &AppHandle, vault_id: &str) -> AppResult<()> {
     Ok(())
 }
 
+fn retry_after_released_owner(
+    app: &AppHandle,
+    root: &std::path::Path,
+    id: &str,
+    launch_id: Uuid,
+    error: AppError,
+) -> AppResult<()> {
+    // An adopted process has no child wait handle in this host. A failed RPC
+    // only permits retry after the OS grants ownership; a hung worker keeps it.
+    let directory = crate::profiles::profile_dir(root, id);
+    match crate::worker_registration::reconcile(root, id, &directory)? {
+        crate::worker_registration::Recovery::Held(_) => Err(error),
+        crate::worker_registration::Recovery::Vacant => {
+            app.state::<Host>()
+                .book
+                .lock()
+                .map_err(|_| invalid())?
+                .remove_launch(id, launch_id);
+            open(app, id)
+        }
+    }
+}
+
 pub fn authorize_worker(app: &AppHandle, role: &Role) -> AppResult<()> {
     let Role::Worker {
         vault_id,
@@ -418,7 +609,7 @@ pub fn authorize_worker(app: &AppHandle, role: &Role) -> AppResult<()> {
     if host.instance() != *coordinator_id {
         return Err(invalid());
     }
-    host.call(&request(&HostCommand::Authorize {
+    host.retry_call(&request(&HostCommand::Authorize {
         vault_id: vault_id.clone(),
         launch_id: *launch_id,
         coordinator_id: *coordinator_id,
@@ -446,26 +637,65 @@ pub fn register_worker(
     }
     let listener = ipc::Coordinator::for_worker(ownership)?;
     let endpoint = listener.endpoint().clone();
+    let root = crate::paths::app_data_root(app)?;
+    let registration = crate::worker_registration::Registration::new(
+        &root,
+        vault_id,
+        ownership,
+        *launch_id,
+        endpoint.clone(),
+    )?;
+    registration.publish(ownership)?;
+    let registration = Arc::new(registration);
+    let ready = Arc::new(AtomicBool::new(false));
+    let host = Arc::new(Mutex::new(host));
+    let worker_ready = ready.clone();
+    let worker_host = host.clone();
     let handle = app.clone();
     let server = listener.serve(move |request| {
-        let _: WorkerCommand = serde_json::from_value(request.payload)
+        let command: WorkerCommand = serde_json::from_value(request.payload)
             .map_err(|_| "invalid worker request".to_string())?;
-        let app = handle.clone();
-        handle
-            .run_on_main_thread(move || crate::tray::focus_main_window(&app))
-            .map_err(|_| "worker activation unavailable".to_string())?;
-        Ok(json!({"accepted":true}))
+        match command {
+            WorkerCommand::Activate => {
+                let app = handle.clone();
+                handle
+                    .run_on_main_thread(move || crate::tray::focus_main_window(&app))
+                    .map_err(|_| "worker activation unavailable".to_string())?;
+                Ok(json!({"accepted":true}))
+            }
+            WorkerCommand::Identify { launch_id } => {
+                if launch_id != registration.launch_id {
+                    return Err("worker identity mismatch".into());
+                }
+                serde_json::to_value(registration.identity(worker_ready.load(Ordering::Acquire)))
+                    .map_err(|_| "worker identity unavailable".into())
+            }
+            WorkerCommand::Adopt { launch_id, host } => {
+                let adopted = (|| -> AppResult<Value> {
+                    adopt_host(&registration, &worker_host, launch_id, host)?;
+                    serde_json::to_value(
+                        registration.identity(worker_ready.load(Ordering::Acquire)),
+                    )
+                    .map_err(|_| invalid())
+                })();
+                adopted.map_err(|_| "worker adoption unavailable; ownership retained".into())
+            }
+        }
     })?;
-    host.call(&request(&HostCommand::Register {
-        vault_id: vault_id.clone(),
-        launch_id: *launch_id,
-        endpoint,
-    })?)?
-    .map_err(AppError::InvalidArg)?;
+    host.lock()
+        .map_err(|_| invalid())?
+        .clone()
+        .retry_call(&request(&HostCommand::Register {
+            vault_id: vault_id.clone(),
+            launch_id: *launch_id,
+            endpoint,
+        })?)?
+        .map_err(AppError::InvalidArg)?;
     app.manage(Worker {
         vault_id: vault_id.clone(),
         launch_id: *launch_id,
         host,
+        ready,
         _server: server,
     });
     Ok(())
@@ -479,13 +709,14 @@ pub async fn vault_worker_ready(app: AppHandle, window: WebviewWindow) -> Comman
     let Some(worker) = app.try_state::<Worker>() else {
         return Ok(());
     };
+    worker.ready.store(true, Ordering::Release);
     let request = request(&HostCommand::Ready {
         vault_id: worker.vault_id.clone(),
         launch_id: worker.launch_id,
     })?;
-    let host = worker.host.clone();
+    let host = worker.host.lock().map_err(|_| invalid())?.clone();
     Ok(tauri::async_runtime::spawn_blocking(move || {
-        host.call(&request)?
+        host.retry_call(&request)?
             .map(|_| ())
             .map_err(AppError::InvalidArg)
     })
@@ -497,9 +728,9 @@ pub async fn vault_worker_ready(app: AppHandle, window: WebviewWindow) -> Comman
 pub async fn open_profile_window(app: AppHandle, id: String) -> CommandResult<()> {
     let worker = app.try_state::<Worker>().ok_or_else(invalid)?;
     let request = request(&HostCommand::Open { vault_id: id })?;
-    let host = worker.host.clone();
+    let host = worker.host.lock().map_err(|_| invalid())?.clone();
     Ok(tauri::async_runtime::spawn_blocking(move || {
-        host.call(&request)?
+        host.retry_call(&request)?
             .map(|_| ())
             .map_err(AppError::InvalidArg)
     })
@@ -517,7 +748,105 @@ mod tests {
             endpoint: None,
             ready: false,
             error: None,
+            adopted: false,
         }
+    }
+
+    #[test]
+    fn replacement_host_must_be_current_and_authorize_the_exact_discovered_launch() {
+        let root = std::env::temp_dir().join(format!("ms-adopt-host-{}", Uuid::new_v4()));
+        let owner = crate::storage_locks::VaultLock::acquire(&root.join("profiles/a")).unwrap();
+        let listener = ipc::Coordinator::for_worker(&owner).unwrap();
+        let record = crate::worker_registration::Registration::new(
+            &root,
+            "a",
+            &owner,
+            Uuid::new_v4(),
+            listener.endpoint().clone(),
+        )
+        .unwrap();
+        let ipc::Election::Owner(old) = ipc::elect(&root).unwrap() else {
+            panic!("new root");
+        };
+        let old_endpoint = old.endpoint().clone();
+        let current = Mutex::new(old_endpoint.clone());
+        drop(old);
+        let ipc::Election::Owner(new) = ipc::elect(&root).unwrap() else {
+            panic!("released root");
+        };
+        let new_endpoint = new.endpoint().clone();
+        let permitted = Arc::new(AtomicBool::new(false));
+        let gate = permitted.clone();
+        let launch_id = record.launch_id;
+        let instance = new_endpoint.instance();
+        let server = new
+            .serve(move |request| {
+                let command: HostCommand = serde_json::from_value(request.payload).unwrap();
+                match command {
+                    HostCommand::AuthorizeAdoption {
+                        vault_id,
+                        launch_id: requested,
+                        coordinator_id,
+                    } if vault_id == "a"
+                        && requested == launch_id
+                        && coordinator_id == instance
+                        && gate.load(Ordering::Acquire) =>
+                    {
+                        Ok(json!({"accepted":true}))
+                    }
+                    _ => Err("not authorized".into()),
+                }
+            })
+            .unwrap();
+        assert!(adopt_host(&record, &current, launch_id, old_endpoint.clone()).is_err());
+        assert!(adopt_host(&record, &current, launch_id, new_endpoint.clone()).is_err());
+        assert_eq!(current.lock().unwrap().instance(), old_endpoint.instance());
+        permitted.store(true, Ordering::Release);
+        assert!(adopt_host(&record, &current, Uuid::new_v4(), new_endpoint.clone()).is_err());
+        adopt_host(&record, &current, launch_id, new_endpoint.clone()).unwrap();
+        adopt_host(&record, &current, launch_id, new_endpoint.clone()).unwrap();
+        assert_eq!(current.lock().unwrap().instance(), new_endpoint.instance());
+        server.stop();
+        drop(listener);
+        drop(owner);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn adoption_authorization_requires_discovery_and_does_not_enable_normal_opens_early() {
+        let root = std::env::temp_dir().join(format!("ms-adopt-book-{}", Uuid::new_v4()));
+        let owner = crate::storage_locks::VaultLock::acquire(&root).unwrap();
+        let listener = ipc::Coordinator::for_worker(&owner).unwrap();
+        let instance = Uuid::new_v4();
+        let launch_id = Uuid::new_v4();
+        let mut book = Book::default();
+        let authorize = || {
+            request(&HostCommand::AuthorizeAdoption {
+                vault_id: "a".into(),
+                launch_id,
+                coordinator_id: instance,
+            })
+            .unwrap()
+        };
+        assert!(book.accept(instance, authorize()).is_err());
+        book.workers.insert("a".into(), pending(launch_id));
+        assert!(book.accept(instance, authorize()).is_err());
+        book.workers.get_mut("a").unwrap().endpoint = Some(listener.endpoint().clone());
+        assert!(book.accept(instance, authorize()).is_ok());
+        assert!(book
+            .accept(
+                instance,
+                request(&HostCommand::Open {
+                    vault_id: "a".into()
+                })
+                .unwrap()
+            )
+            .is_err());
+        book.workers.get_mut("a").unwrap().error = Some("unidentified".into());
+        assert!(book.accept(instance, authorize()).is_err());
+        drop(listener);
+        drop(owner);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

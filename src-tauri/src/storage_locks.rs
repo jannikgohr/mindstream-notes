@@ -1,6 +1,7 @@
 //! OS ownership, never lock-file presence or process liveness heuristics.
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::error::{AppError, AppResult};
@@ -45,37 +46,45 @@ impl RootLock {
 
 pub struct VaultLock {
     pub directory: PathBuf,
-    _file: File,
+    file: Arc<File>,
 }
 
 impl VaultLock {
+    pub(crate) fn retain_lease(&self) -> Arc<File> {
+        self.file.clone()
+    }
     pub fn acquire(directory: &Path) -> AppResult<Self> {
+        Self::try_acquire(directory)?.ok_or_else(|| Self::busy(directory))
+    }
+
+    /// Probe ownership through the OS. None means a live lock owner, never a
+    /// stale file, PID, timeout or heartbeat decision.
+    pub fn try_acquire(directory: &Path) -> AppResult<Option<Self>> {
         Self::acquire_inner(directory, false)
     }
 
     pub(crate) fn acquire_for_delete(directory: &Path) -> AppResult<Self> {
-        Self::acquire_inner(directory, true)
+        Self::acquire_inner(directory, true)?.ok_or_else(|| Self::busy(directory))
     }
 
-    fn acquire_inner(directory: &Path, deleting: bool) -> AppResult<Self> {
+    fn busy(directory: &Path) -> AppError {
+        AppError::InvalidArg(format!("vault is already open: {}", directory.display()))
+    }
+
+    fn acquire_inner(directory: &Path, deleting: bool) -> AppResult<Option<Self>> {
         let (directory, file) = open_lock(directory, ".vault.lock")?;
         match file.try_lock() {
             Ok(()) => {}
-            Err(TryLockError::WouldBlock) => {
-                return Err(AppError::InvalidArg(format!(
-                    "vault is already open: {}",
-                    directory.display()
-                )))
-            }
+            Err(TryLockError::WouldBlock) => return Ok(None),
             Err(TryLockError::Error(err)) => return Err(err.into()),
         }
         if !deleting && directory.join(".vault-deleting").try_exists()? {
             return Err(AppError::InvalidArg("vault deletion is pending".into()));
         }
-        Ok(Self {
+        Ok(Some(Self {
             directory,
-            _file: file,
-        })
+            file: Arc::new(file),
+        }))
     }
 }
 
