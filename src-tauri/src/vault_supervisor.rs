@@ -85,6 +85,10 @@ enum WorkerCommand {
     Close {
         launch_id: Uuid,
     },
+    CloseStatus {
+        launch_id: Uuid,
+        operation_id: Uuid,
+    },
     RefreshDeviceSettings {
         launch_id: Uuid,
     },
@@ -1465,13 +1469,20 @@ pub fn register_worker(
                 if launch_id != registration.launch_id {
                     return Err("worker identity mismatch".into());
                 }
-                let app = handle.clone();
-                handle
-                    .run_on_main_thread(move || {
-                        crate::worker_shutdown::request_close(&app);
-                    })
+                crate::worker_shutdown::queue_close(&handle, request_id)
                     .map_err(|_| "worker close unavailable".to_string())?;
                 Ok(json!({"accepted":true}))
+            }
+            WorkerCommand::CloseStatus {
+                launch_id,
+                operation_id,
+            } => {
+                if launch_id != registration.launch_id {
+                    return Err("worker identity mismatch".into());
+                }
+                let progress = crate::worker_shutdown::close_progress(&handle, operation_id)
+                    .map_err(|error| error.to_string())?;
+                serde_json::to_value(progress).map_err(|_| "worker close status unavailable".into())
             }
             WorkerCommand::RefreshDeviceSettings { launch_id } => {
                 if launch_id != registration.launch_id || !worker_ready.load(Ordering::Acquire) {

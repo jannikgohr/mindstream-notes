@@ -54,7 +54,7 @@ are rejected. DB success remains cached even when focus/notification delivery
 fails, so a lost response cannot create a second note. Frontend key dispatch
 queries current coordinator ownership before invoking the same local command;
 unknown or settling ownership suppresses local execution. Dev/test registration
-remains disabled. The worker protocol is 3, with the shared shortcut manifest
+remains disabled. The worker protocol is 4, with the shared shortcut manifest
 included in the runtime compatibility hash. Whole-app shutdown and real OS
 keyboard checks remain required before enabling supervision by default.
 
@@ -182,6 +182,16 @@ existing encrypted file, corrupt file, or malformed legacy key is a recovery
 error. These conditions must never create a replacement signing identity. Vault
 deletion attempts removal of both session and signing master keys. Full portable
 credential/settings backup remains outside the current concurrency plan.
+
+Private worker close commands retain request IDs and expose queued, pending,
+committing or failed status. Repeated IDs never start another save attempt.
+Queued aliases attach before native dispatch, so cancellation cannot turn a
+late callback into an unintended retry. Cancelled outcomes remain queryable for
+ten minutes; unknown status reads do not allocate requests. An existing close
+can be observed through a new alias. Committing proves the save/drain decision,
+not process exit or ownership release. Coordinators must still observe actual
+child exit or acquire the physical vault's OS lease before considering it closed.
+Whole-app Quit and handoff orchestration are still pending.
 
 ## Verification limits
 

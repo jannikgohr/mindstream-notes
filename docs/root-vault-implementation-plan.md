@@ -896,6 +896,23 @@ fresh test roots; real keyboard/registration platform QA is still required.
 Whole-app Quit, tray/updater ownership and default supervised startup remain
 pending. Individual worker closure deliberately retains closed capture routing.
 
+Tracked worker-close slice on 2026-10-12: private close requests now expose
+queued, pending, committing and failed status by request ID. Repeated requests
+reuse their result. Requests queued before native dispatch join one save batch;
+a delayed callback cannot restart a cancelled close. Existing in-progress closes
+also accept aliases. Failure survives cancellation and a later independent
+attempt, and success remains committing until the process/OS ownership observer
+confirms exit. Unknown status reads do not mutate the request budget. The worker
+protocol advances to 4 before using this new private command.
+
+Validation: Rust formatting/clippy and the full serial suite pass 854 unit tests
+and one integration test, with five ignored tests. The embedded native build and
+Windows shortcut smoke check pass again, including unknown close status, repeated
+close requests and status polling while workers remain reachable. Socket loss is
+never treated as exit; every fixture worker actually exited before cleanup. This
+adds the close tracking needed by whole-app Quit and handoff; their coordinator
+orchestration remains the next implementation step.
+
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.
 

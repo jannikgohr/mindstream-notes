@@ -141,7 +141,19 @@ def main():
         def close_all():
             for entry in status()["workers"]:
                 record = worker(entry["id"])
-                assert call(record["endpoint"], {"command": "close", "launch_id": record["launch_id"]})["Ok"]["accepted"]
+                operation_id = str(uuid.uuid4())
+                unknown = {"command": "closeStatus", "launch_id": record["launch_id"], "operation_id": str(uuid.uuid4())}
+                assert "Err" in call(record["endpoint"], unknown)
+                payload = {"command": "close", "launch_id": record["launch_id"]}
+                assert call(record["endpoint"], payload, operation_id)["Ok"]["accepted"]
+                try:
+                    assert call(record["endpoint"], payload, operation_id)["Ok"]["accepted"]
+                    progress = call(record["endpoint"], {**unknown, "operation_id": operation_id})["Ok"]
+                    assert progress["state"] in ["queued", "pending", "committing"], progress
+                except OSError:
+                    # A lost socket never counts as exit. The coordinator still
+                    # must observe its child's actual exit below.
+                    pass
             wait(lambda: not status()["workers"])
 
         def enabled(vault_id, enabled):
@@ -157,7 +169,7 @@ def main():
         try:
             peer = wait(endpoint)
             wait(lambda: status()["initialized"] and any(entry["id"] == "other" and entry["ready"] for entry in status()["workers"]))
-            assert status()["contract"]["protocol"] == 3
+            assert status()["contract"]["protocol"] == 4
             assert status()["shortcuts"]["vault_id"] == "capture"
             assert not status()["shortcutRegistration"]["registered"], "test root registered OS shortcuts"
             completed("shortcut", command_id="showApp")
