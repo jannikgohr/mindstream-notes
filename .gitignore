@@ -27,7 +27,6 @@ node_modules
 # Generated at install / before each build by src-tauri/scripts/setup-android-cargo.mjs.
 # It needs absolute paths (cargo doesn't resolve relative paths in build-script overrides),
 # so it can't be committed.
-/src-tauri/.cargo/config.toml
 /src-tauri/.pkgconfig
 ## Tauri signer
 .tauri
