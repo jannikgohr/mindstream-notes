@@ -489,6 +489,25 @@ unverified. Windows foreground grants and Wayland activation remain pending.
 Rust fmt/clippy and the full serial suite pass 811 unit tests and one integration
 test, with five ignored tests. This remains an opt-in startup path.
 
+Windows foreground transfer slice on 2026-10-11: endpoints include optional
+process IDs solely as activation metadata. Zero and broadcast targets are
+rejected; PID presence never grants vault/coordinator ownership. A relaunching
+process authenticates the existing host, transfers foreground permission to it,
+then sends activation. The `open_profile_window` bridge for the future vault menu
+similarly transfers from its worker to the host. Before granting a worker, the host authenticates its endpoint and
+checks the canonical root, physical vault, launch identity and readiness.
+`AllowSetForegroundWindow` denial does not prevent opening a window. The OS
+continues to decide foreground activation. See the
+[Microsoft API contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-allowsetforegroundwindow).
+
+The embedded Windows fixture logged successful permission transfer on both legs
+of a duplicate launch, which exited without creating another host or worker.
+One background open logged a denied grant and still opened its vault. Logs are in
+`.output/supervised-startup-app-check/foreground-*.log`. Interactive vault-menu,
+taskbar/Explorer, popout and denied-grant attention behavior still need native UI
+checks; Wayland activation remains pending. Rust fmt/clippy and the full serial
+suite pass 813 unit tests and one integration test, with five ignored tests.
+
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.
 

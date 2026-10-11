@@ -29,6 +29,33 @@ fn operation(payload: Value) -> Request {
 }
 
 #[test]
+fn activation_metadata_excludes_broadcast_grants_and_never_controls_ownership() {
+    let fixture = Fixture::new();
+    let owner = fixture.owner();
+    let endpoint = owner.endpoint().clone();
+    assert_eq!(endpoint.activation_process_id(), Some(std::process::id()));
+    for id in [0, u32::MAX] {
+        let mut unsafe_target = endpoint.clone();
+        unsafe_target.process_id = Some(id);
+        assert!(validate_endpoint(&unsafe_target).is_err());
+        assert!(unsafe_target.activation_process_id().is_none());
+    }
+    let mut legacy = serde_json::to_value(&endpoint).unwrap();
+    legacy.as_object_mut().unwrap().remove("process_id");
+    let legacy: Endpoint = serde_json::from_value(legacy).unwrap();
+    validate_endpoint(&legacy).unwrap();
+    assert!(legacy.activation_process_id().is_none());
+    fs::write(
+        fixture.0.join(ENDPOINT),
+        serde_json::to_vec(&legacy).unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(elect(&fixture.0).unwrap(), Election::Existing));
+    drop(owner);
+    assert!(matches!(elect(&fixture.0).unwrap(), Election::Owner(_)));
+}
+
+#[test]
 fn endpoint_retries_preserve_the_operation_and_explicit_rejection_is_not_retried() {
     let fixture = Fixture::new();
     let owner = fixture.owner();

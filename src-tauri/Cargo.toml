@@ -158,6 +158,7 @@ windows-native-keyring-store = "1"
 # here for `Interface::cast`.
 webview2-com = "0.38"
 windows-core = "0.61"
+windows = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Matches the v3 `sync-secret-service` feature we were using before.

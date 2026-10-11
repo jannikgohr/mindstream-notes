@@ -375,7 +375,12 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
     let root = crate::paths::app_data_root(app)?;
     let coordinator = match ipc::elect(&root)? {
         ipc::Election::Existing => {
-            ipc::request(&root, &request(&HostCommand::Activate)?)?
+            let (endpoint, reply) =
+                ipc::request_with_endpoint(&root, &request(&HostCommand::Status)?)?;
+            reply.map_err(AppError::InvalidArg)?;
+            crate::foreground::transfer(&endpoint);
+            endpoint
+                .retry_call(&request(&HostCommand::Activate)?)?
                 .map_err(AppError::InvalidArg)?;
             app.handle().exit(0);
             return Ok(());
@@ -539,7 +544,18 @@ fn recover_worker(app: &AppHandle, root: &std::path::Path, id: &str) -> AppResul
 }
 
 fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
-    let host = app.try_state::<Host>().ok_or_else(invalid)?;
+    let Some(host) = app.try_state::<Host>() else {
+        // The authenticated listener may receive a launch in the small interval
+        // before managed state is installed. Initial startup already schedules
+        // the last-used vault; no worker mutation is permitted here.
+        return match serde_json::from_value::<HostCommand>(request.payload)
+            .map_err(|_| invalid())?
+        {
+            HostCommand::Status => Ok(json!({"initialized":false,"active":null,"workers":[]})),
+            HostCommand::Activate => Ok(json!({"accepted":true})),
+            _ => Err(invalid()),
+        };
+    };
     // Replies are acknowledgements. Root filesystem work and worker IPC run
     // after this short critical section, never under the root document lock.
     let request_id = request.id;
@@ -636,6 +652,32 @@ fn open(app: &AppHandle, vault_id: &str) -> AppResult<()> {
             }
         }
         if let Some(endpoint) = endpoint {
+            let probe = endpoint
+                .retry_call(&Request {
+                    id: Uuid::new_v4(),
+                    payload: serde_json::to_value(WorkerCommand::Identify { launch_id })
+                        .map_err(|_| invalid())?,
+                })
+                .and_then(|reply| reply.map_err(AppError::InvalidArg));
+            let identity = probe.and_then(|reply| {
+                serde_json::from_value::<crate::worker_registration::Identity>(reply)
+                    .map_err(|_| invalid())
+            });
+            let result = identity.and_then(|identity| {
+                if identity.launch_id != launch_id
+                    || identity.vault_id != vault_id
+                    || !identity.ready
+                    || identity.root != std::fs::canonicalize(&root)?
+                    || identity.directory != std::fs::canonicalize(&directory)?
+                {
+                    return Err(invalid());
+                }
+                crate::foreground::transfer(&endpoint);
+                Ok(())
+            });
+            if let Err(error) = result {
+                return retry_after_released_owner(app, &root, vault_id, launch_id, error);
+            }
             let result = endpoint
                 .call(&Request {
                     id: Uuid::new_v4(),
@@ -900,7 +942,9 @@ pub async fn open_profile_window(app: AppHandle, id: String) -> CommandResult<()
     let worker = app.try_state::<Worker>().ok_or_else(invalid)?;
     let request = request(&HostCommand::Open { vault_id: id })?;
     let host = worker.host.lock().map_err(|_| invalid())?.clone();
+    let probe = self::request(&HostCommand::Status)?;
     Ok(tauri::async_runtime::spawn_blocking(move || {
+        crate::foreground::after_probe(&host, &probe)?;
         host.retry_call(&request)?
             .map(|_| ())
             .map_err(AppError::InvalidArg)

@@ -34,6 +34,8 @@ pub mod desktop_settings;
 pub mod drawing;
 pub mod environment;
 pub mod error;
+#[cfg(desktop)]
+pub mod foreground;
 pub mod history;
 pub mod hotkeys;
 pub mod i18n;

@@ -2996,6 +2996,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "webview2-com",
+ "windows",
  "windows-core 0.61.2",
  "windows-native-keyring-store",
  "yaml-rust2",

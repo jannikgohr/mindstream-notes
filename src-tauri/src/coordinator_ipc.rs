@@ -33,6 +33,10 @@ pub struct Endpoint {
     address: SocketAddr,
     instance: Uuid,
     secret: String,
+    // Activation metadata only. OS locks and authenticated identity determine
+    // ownership; this PID must never participate in stale-owner decisions.
+    #[serde(default)]
+    process_id: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -67,6 +71,9 @@ fn validate_endpoint(endpoint: &Endpoint) -> AppResult<()> {
     if endpoint.version != 1
         || endpoint.address.ip() != std::net::IpAddr::V4(Ipv4Addr::LOCALHOST)
         || endpoint.address.port() == 0
+        || endpoint
+            .process_id
+            .is_some_and(|id| id == 0 || id == u32::MAX)
         || endpoint.secret.len() != 44
         || STANDARD
             .decode(&endpoint.secret)
@@ -181,6 +188,9 @@ fn socket_options(stream: &TcpStream) -> AppResult<()> {
 }
 
 impl Endpoint {
+    pub fn activation_process_id(&self) -> Option<u32> {
+        self.process_id.filter(|id| *id != 0 && *id != u32::MAX)
+    }
     pub fn instance(&self) -> Uuid {
         self.instance
     }
@@ -248,13 +258,22 @@ impl Endpoint {
 /// Retain the operation ID across retries. The dispatcher must deduplicate
 /// mutations by this ID; transport failure does not prove a request was unapplied.
 pub fn request(root: &Path, request: &Request) -> AppResult<Result<Value, String>> {
+    request_with_endpoint(root, request).map(|(_, reply)| reply)
+}
+
+/// Return the endpoint that actually authenticated and correlated the reply,
+/// so foreground transfer never trusts discovery-file presence alone.
+pub fn request_with_endpoint(
+    root: &Path,
+    request: &Request,
+) -> AppResult<(Endpoint, Result<Value, String>)> {
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     loop {
         if let Ok(endpoint) = Endpoint::read(root) {
             if let Ok(reply) =
                 endpoint.call_until(request, deadline.min(Instant::now() + SOCKET_TIMEOUT))
             {
-                return Ok(reply);
+                return Ok((endpoint, reply));
             }
         }
         if Instant::now() >= deadline {
@@ -298,6 +317,7 @@ impl Coordinator {
             address: listener.local_addr()?,
             instance: Uuid::new_v4(),
             secret: STANDARD.encode(key),
+            process_id: Some(std::process::id()),
         };
         Ok(Self {
             _ownership: None,
