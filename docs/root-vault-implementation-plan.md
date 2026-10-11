@@ -823,6 +823,34 @@ Coordinator registration, eligible-vault recency and system-wide action dispatch
 remain pending. The checks also corrected an earlier sidebar hotkey call to
 handle the already-open case, where no promise is returned.
 
+Coordinator shortcut selection slice on 2026-10-11: authenticated native focus
+updates an independent root recency document, including disabled vaults so a
+later enablement change can use real usage order. Live focus history takes
+precedence while its queued disk write is pending; closed vaults remain in the
+shortcut history. Selection reads canonical vault eligibility under the root
+lock without repairing vault documents or opening a DB. A sole closed capture
+vault can be selected before its pending legacy migration finishes. Disabled
+vaults and pending deletions are excluded. Persisted identities include the
+physical directory, and stale focus jobs cannot overwrite newer recency.
+When no eligible usage history exists, the eligible last-used vault wins, then
+stable index order. Selection is exposed in authenticated coordinator status.
+
+Corrupt history is recovered from a validated previous copy on coordinator
+startup. If neither copy is usable, files stay intact and selection reports
+unavailable; manual vault opening and ownership status continue working.
+Corrupt vault settings similarly prevent selecting an uncertain destination.
+The selected vault still must pass readiness, eligibility and close-state checks
+at action execution. This slice does not register shortcuts or execute actions.
+
+Validation: Rust fmt/clippy and the serial suite pass 846 unit tests and one
+integration test, with five ignored tests. Native fixtures verified zero/one/
+multiple eligibility, authenticated focus notices from a disabled vault, closed
+capture selection, and recency across coordinator restart. Fixture setting edits
+obtained actual root and vault OS locks after worker exit. A second restart with
+both recency copies invalid retained their exact bytes, reported no shortcut
+destination, still opened both vaults manually and closed both workers cleanly.
+Real OS shortcut registration remains disabled for these disposable test roots.
+
 Preview-service cleanup slice on 2026-10-11: a session owns its child, input and
 proxy routes immediately during startup. Dropping a partial session, failed
 startup, replaced session or an abandoned async result reaps those resources.

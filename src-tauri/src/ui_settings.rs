@@ -238,6 +238,59 @@ fn migrate_shortcut_scope(
     ))
 }
 
+/// Read-only coordinator lookup. Caller holds RootLock. Never repair a vault
+/// document here: only its lifetime owner may publish its settings/recovery.
+#[cfg(desktop)]
+pub(crate) fn shortcut_eligible(root: &Path, vault_id: &str, vault: &Path) -> AppResult<bool> {
+    let path = vault.join("content-settings.json");
+    let content = match fs::read(&path) {
+        Ok(raw) => Some(decode(&raw, false)?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if marker(&path).try_exists()? || vault.join(SHORTCUT_RECEIPT).try_exists()? {
+                return Err(invalid());
+            }
+            None
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let migrated = match fs::read(vault.join(SHORTCUT_RECEIPT)) {
+        Ok(raw) if raw == b"1" => true,
+        Ok(_) => return Err(invalid()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.into()),
+    };
+    if let Some(value) = content
+        .as_ref()
+        .and_then(|doc| doc.values.get(GLOBAL_SHORTCUTS))
+    {
+        return value.as_bool().ok_or_else(invalid);
+    }
+    if migrated {
+        return Ok(false);
+    }
+    let directory = fs::canonicalize(vault)?;
+    match fs::read(root.join("global-shortcuts-migration.json")) {
+        Ok(raw) => {
+            let intent = decode_shortcut_migration(&raw)?;
+            Ok(intent.vault_id == vault_id && intent.directory == directory && intent.enabled)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let device = match fs::read(root.join("ui-settings.json")) {
+                Ok(raw) => decode(&raw, true)?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(error) => return Err(error.into()),
+            };
+            let Some(value) = device.values.get(GLOBAL_SHORTCUTS) else {
+                return Ok(false);
+            };
+            Ok(value.as_bool().ok_or_else(invalid)?
+                && crate::legacy_content::settings_owner(root)?
+                    .is_some_and(|(id, path)| id == vault_id && path == directory))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn initialize_with_browser_state(
     root: &Path,
     vault: &Path,
@@ -752,6 +805,13 @@ mod tests {
         old_shortcut_root(&dirs);
         let other = initialize(&dirs.root, &dirs.b, "other", None, None).unwrap();
         assert!(!other.values.contains_key(GLOBAL_SHORTCUTS));
+        #[cfg(desktop)]
+        {
+            let _lock = RootLock::acquire(&dirs.root).unwrap();
+            assert!(shortcut_eligible(&dirs.root, "default", &dirs.a).unwrap());
+            assert!(!shortcut_eligible(&dirs.root, "other", &dirs.b).unwrap());
+            assert!(!dirs.a.join("content-settings.json").exists());
+        }
         assert_eq!(other.values["hotkey.global.newMarkdownNote"], "mod+alt+n");
         assert!(read(&dirs.root.join("ui-settings.json"), true)
             .unwrap()

@@ -58,6 +58,8 @@ pub mod root_documents;
 pub mod search;
 pub mod serde_helpers;
 pub mod sharing;
+#[cfg(desktop)]
+mod shortcut_routing;
 pub mod signatures;
 pub mod signing_credentials;
 pub mod spellcheck;

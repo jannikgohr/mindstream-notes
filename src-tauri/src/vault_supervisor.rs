@@ -112,6 +112,7 @@ struct Book {
     workers: BTreeMap<String, Launch>,
     operations: BTreeMap<Uuid, Operation>,
     focus_order: Vec<String>,
+    shortcut_order: Vec<String>,
     focus_revision: u64,
 }
 
@@ -261,6 +262,11 @@ impl Book {
                 self.focus_revision = revision;
                 self.focus_order.retain(|id| id != &vault_id);
                 self.focus_order.push(vault_id.clone());
+                self.shortcut_order.retain(|id| id != &vault_id);
+                self.shortcut_order.push(vault_id.clone());
+                if self.shortcut_order.len() > 4096 {
+                    self.shortcut_order.remove(0);
+                }
                 self.last = Some(vault_id.clone());
                 action = Some(Action::Remember { vault_id, revision });
             }
@@ -576,6 +582,11 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
     };
     crate::worker_registration::preflight(&root)?;
     let index = crate::profiles::prepare_coordinator_index(&root)?;
+    if let Err(error) = crate::shortcut_routing::prepare(&root) {
+        // Optional shortcut history must not prevent manual vault access. Its
+        // corrupt evidence stays intact and shortcut selection fails closed.
+        log::warn!("[vaults] shortcut history unavailable: {error}");
+    }
     // Seed/recover device settings before a second worker can win the first
     // migration race. The startup-selected vault is the sole legacy source.
     app.manage(
@@ -759,6 +770,7 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
     let command: HostCommand =
         serde_json::from_value(request.payload.clone()).map_err(|_| invalid())?;
     let tracked_open = matches!(command, HostCommand::Open { .. });
+    let status_request = matches!(command, HostCommand::Status);
     if matches!(
         command,
         HostCommand::Status | HostCommand::Activate | HostCommand::Open { .. }
@@ -768,11 +780,25 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
     // Replies are acknowledgements. Root filesystem work and worker IPC run
     // after this short critical section, never under the root document lock.
     let request_id = request.id;
-    let (reply, action) = host
+    let (mut reply, action) = host
         .book
         .lock()
         .map_err(|_| invalid())?
         .accept(host.instance, request)?;
+    if status_request {
+        // Disk reads happen after releasing Book. No general root lock crosses
+        // worker IPC, and a bad settings file never hides ownership status.
+        let recent = host
+            .book
+            .lock()
+            .map_err(|_| invalid())?
+            .shortcut_order
+            .clone();
+        reply["shortcuts"] = crate::paths::app_data_root(app)
+            .and_then(|root| crate::shortcut_routing::select(&root, &recent))
+            .and_then(|selection| serde_json::to_value(selection).map_err(|_| invalid()))
+            .unwrap_or_else(|_| json!({"state":"unavailable"}));
+    }
     if let Some(action) = action {
         let task_app = app.clone();
         if let Err(error) = std::thread::Builder::new()
@@ -793,6 +819,16 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
                         });
                         if let Err(error) = result {
                             log::warn!("[vaults] last-used persistence failed: {error}");
+                        }
+                        let remembered = crate::paths::app_data_root(&task_app).and_then(|root| {
+                            crate::shortcut_routing::remember(&root, &vault_id, || {
+                                let host = task_app.state::<Host>();
+                                let book = host.book.lock().map_err(|_| invalid())?;
+                                Ok(book.focus_revision == revision)
+                            })
+                        });
+                        if let Err(error) = remembered {
+                            log::warn!("[vaults] shortcut recency persistence failed: {error}");
                         }
                         return;
                     }

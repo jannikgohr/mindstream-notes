@@ -21,6 +21,22 @@ buckets preserve their own choice. Invalid booleans or migration records stop
 initialization with evidence intact. The worker storage contract is version 2;
 incompatible live workers block adoption and shared-document migration.
 
+The coordinator records vault focus in root `shortcut-recency.json`, separately
+from overall last-used startup selection. Entries bind vault IDs to canonical
+directories and include closed vaults. Live focus history wins while disk writes
+are pending; persisted history survives coordinator restart. Selection reads
+vault eligibility under RootLock without repairing a vault document. Disabled
+vaults and pending deletions are excluded. A pending legacy owner can remain the
+sole closed capture destination until its worker completes migration. With no
+eligible usage history, the eligible startup preference wins, then index order.
+This identifies a destination and does not itself authorize note creation.
+
+Startup recovers a damaged recency document from a validated previous copy.
+Unrecoverable history makes shortcut selection unavailable while retaining both
+copies; manual vault opening remains usable. Runtime reads never overwrite
+corrupt vault settings or silently choose another destination. Actual dispatch
+still needs execution-time eligibility, readiness and closing checks.
+
 All document operations hold the root OS lock. Set/reset operations patch one
 field after rereading the document; they never save a whole frontend cache.
 The caller's expected vault ID must match the running worker. Frontend profile
