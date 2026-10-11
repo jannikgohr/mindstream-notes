@@ -659,6 +659,11 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
             _ => Err(invalid()),
         };
     };
+    let command: HostCommand =
+        serde_json::from_value(request.payload.clone()).map_err(|_| invalid())?;
+    if matches!(command, HostCommand::Status | HostCommand::Activate) {
+        reconcile_adopted(&host.book, &crate::paths::app_data_root(app)?)?;
+    }
     // Replies are acknowledgements. Root filesystem work and worker IPC run
     // after this short critical section, never under the root document lock.
     let request_id = request.id;
@@ -707,6 +712,42 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
         }
     }
     Ok(reply)
+}
+
+/// Adopted workers have no child wait handle in this host. Status and launch
+/// routing prune only launches whose physical vault OS lease can be acquired.
+/// A failed socket, PID or stale registration file never removes an owner.
+fn reconcile_adopted(book: &Mutex<Book>, root: &std::path::Path) -> AppResult<()> {
+    let candidates: Vec<_> = book
+        .lock()
+        .map_err(|_| invalid())?
+        .workers
+        .iter()
+        .filter(|(_, launch)| launch.adopted)
+        .map(|(id, launch)| (id.clone(), launch.id))
+        .collect();
+    for (id, launch_id) in candidates {
+        let directory = crate::profiles::profile_dir(root, &id);
+        if !directory.is_dir() {
+            continue;
+        }
+        // Do not recreate a deleted vault or touch root documents here. Keep
+        // unknown/pending-deletion owners for their explicit recovery path.
+        let released = match crate::storage_locks::VaultLock::try_acquire(&directory) {
+            Ok(Some(_owner)) => true,
+            Ok(None) => false,
+            Err(error) => {
+                log::warn!("[vaults] adopted ownership reconciliation unavailable: {error}");
+                false
+            }
+        };
+        if released {
+            book.lock()
+                .map_err(|_| invalid())?
+                .remove_launch(&id, launch_id);
+        }
+    }
+    Ok(())
 }
 
 fn open(app: &AppHandle, vault_id: &str) -> AppResult<()> {
@@ -1116,6 +1157,55 @@ pub async fn open_profile_window(app: AppHandle, id: String) -> CommandResult<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adopted_status_prunes_only_released_os_owners_and_keeps_launch_reservations() {
+        let root = std::env::temp_dir().join(format!("ms-adopted-status-{}", Uuid::new_v4()));
+        let owner_a = crate::storage_locks::VaultLock::acquire(&root.join("profiles/a")).unwrap();
+        let owner_b = crate::storage_locks::VaultLock::acquire(&root.join("profiles/b")).unwrap();
+        let mut state = Book::default();
+        for id in ["a", "b", "missing", "launching", "deleting"] {
+            let mut launch = pending(Uuid::new_v4());
+            launch.adopted = id != "launching";
+            launch.ready = matches!(id, "a" | "b");
+            state.workers.insert(id.into(), launch);
+        }
+        state.last = Some("b".into());
+        state.focus_order = vec!["a".into(), "b".into()];
+        let book = Mutex::new(state);
+        std::fs::create_dir_all(root.join("profiles/launching")).unwrap();
+        std::fs::create_dir_all(root.join("profiles/deleting")).unwrap();
+        std::fs::write(root.join("profiles/deleting/.vault-deleting"), b"retained").unwrap();
+        drop(owner_b);
+        // A has no listening endpoint or discovery record, but still owns its
+        // physical lease. Neither absence can make it available for opening.
+        reconcile_adopted(&book, &root).unwrap();
+        {
+            let state = book.lock().unwrap();
+            assert!(state.workers.contains_key("a"));
+            assert!(!state.workers.contains_key("b"));
+            assert!(state.workers.contains_key("missing"));
+            assert!(state.workers.contains_key("launching"));
+            assert!(state.workers.contains_key("deleting"));
+            assert_eq!(state.last.as_deref(), Some("a"));
+        }
+        assert!(!root.join("profiles/missing").exists());
+        assert!(!root.join("profiles/launching/.vault.lock").exists());
+        assert!(root.join("profiles/b/.vault.lock").exists());
+        assert!(
+            crate::storage_locks::VaultLock::try_acquire(&root.join("profiles/a"))
+                .unwrap()
+                .is_none()
+        );
+        drop(owner_a);
+        reconcile_adopted(&book, &root).unwrap();
+        assert!(book.lock().unwrap().last.is_none());
+        assert_eq!(
+            std::fs::read(root.join("profiles/deleting/.vault-deleting")).unwrap(),
+            b"retained"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn pending(id: Uuid) -> Launch {
         Launch {

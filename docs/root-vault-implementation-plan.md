@@ -626,6 +626,24 @@ One Python identity probe hit a
 transient Windows socket abort; retry succeeded. Logs remain in
 `.output/supervised-startup-app-check/compat-*`.
 
+Adopted-worker status slice on 2026-10-11: status and normal activation now
+reconcile adopted launches without child wait handles. A launch is removed only
+after the OS grants its physical vault lease; unavailable endpoints and missing
+discovery records do not free an owner. Reconciliation copies candidates under
+the short book mutex, probes outside it, and removes the exact launch generation
+while retaining new launch reservations and explicit recovery for missing or
+deleting vaults. It updates the live focus fallback without changing the
+last-used startup document. Regression tests cover held/released owners,
+reservations, missing directories and retained deletion markers. Rust fmt/clippy
+and 824 unit tests plus one integration test pass, with five ignored tests;
+the embedded-app build passes.
+
+The disposable Windows fixture adopted two live workers after a coordinator
+crash, closed one and reported only the remaining ready vault, then closed the
+other and reported no live workers or focus target. The host remained alive
+until fixture cleanup. Logs remain in
+`.output/supervised-startup-app-check/status-*`.
+
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.
 
