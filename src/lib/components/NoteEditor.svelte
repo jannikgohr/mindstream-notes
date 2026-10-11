@@ -78,6 +78,15 @@
     refreshMentionDecorations,
     type MentionUser
   } from '$lib/editor/plugins';
+  import {
+    IMAGE_ACCEPT,
+    droppedFiles,
+    fileDropZoneFor,
+    filesClaimedByZone,
+    isFileDrag,
+    isReplayedFileDrop,
+    replayFileDrop
+  } from '$lib/file-drop';
   import { MARKDOWN_ACTIONS } from '$lib/hotkeys/markdown-actions';
   import SourceEditor from '$lib/editor/source/SourceEditor.svelte';
   import EditorModeToggle from '$lib/editor/source/EditorModeToggle.svelte';
@@ -1548,6 +1557,40 @@
     }
   }
 
+  /**
+   * The WYSIWYG pane claims dropped images for Crepe (see $lib/file-drop), but
+   * ProseMirror only hears a drop that lands on its own element: the text
+   * column, no taller than the note. Replay one that lands in the space around
+   * it at the nearest point of the text, so the whole pane takes the image.
+   */
+  function forwardFileDropToEditor(event: DragEvent) {
+    if (!crepe || !isFileDrag(event) || isReplayedFileDrop(event)) return;
+    const images = filesClaimedByZone(
+      droppedFiles(event),
+      fileDropZoneFor(event.currentTarget)
+    );
+    if (images.length === 0) return;
+    try {
+      const { dom } = crepe.editor.action((ctx) => ctx.get(editorViewCtx));
+      if (event.target instanceof Node && dom.contains(event.target)) return;
+      event.preventDefault();
+      const box = dom.getBoundingClientRect();
+      replayFileDrop(dom, images, {
+        clientX: Math.min(Math.max(event.clientX, box.left + 1), box.right - 1),
+        clientY: Math.min(Math.max(event.clientY, box.top + 1), box.bottom - 1)
+      });
+    } catch (err) {
+      console.debug('[NoteEditor] forward file drop failed', err);
+    }
+  }
+
+  $effect(() => {
+    const pane = wysiwygPaneEl;
+    if (!pane) return;
+    pane.addEventListener('drop', forwardFileDropToEditor);
+    return () => pane.removeEventListener('drop', forwardFileDropToEditor);
+  });
+
   function openSearch() {
     searchOpen = true;
     // Restore the modifiers (a prior close cleared the plugin's copy) and
@@ -1775,9 +1818,14 @@
       <!--
         WYSIWYG pane: always mounted — Crepe is the Yjs authority in every mode.
         Hidden in Source-only mode, half-width (right) in Split.
+
+        Dropped images belong to Crepe's upload plugin (see $lib/file-drop);
+        a read-only editor ignores drops, so it doesn't claim them. The pane
+        is wider and taller than the text, so it passes on a drop that missed.
       -->
       <div
         bind:this={wysiwygPaneEl}
+        data-file-drop-accept={isReadOnly ? undefined : IMAGE_ACCEPT}
         class="themed-scrollbar h-full overflow-y-auto {viewMode === 'source'
           ? 'hidden'
           : ''} {viewMode === 'split' ? 'w-1/2' : 'w-full'}"
