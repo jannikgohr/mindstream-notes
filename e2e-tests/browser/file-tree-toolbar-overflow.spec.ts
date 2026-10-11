@@ -75,6 +75,9 @@ test('keeps every create action reachable in the narrowest sidebar', async ({
     // clipping actually registers.
     await expect(control).toBeInViewport();
     await page.keyboard.press('Escape');
+    // The ⋯ menu stays mounted for a frame after it closes. Wait for it to
+    // go, or the next lookup matches an item that is about to be removed.
+    await expect(page.getByRole('menuitem')).toHaveCount(0);
   }
 });
 

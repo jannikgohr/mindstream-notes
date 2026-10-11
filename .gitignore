@@ -24,10 +24,9 @@ node_modules
 # crate (the app), and reproducible builds need a pinned dependency
 # graph. The "don't commit Cargo.lock" guidance applies to libraries
 # only — see https://doc.rust-lang.org/cargo/faq.html#why-do-binaries-have-cargolock-in-version-control-but-not-libraries
-# Generated at install / before each build by src-tauri/scripts/setup-android-cargo.mjs.
-# It needs absolute paths (cargo doesn't resolve relative paths in build-script overrides),
-# so it can't be committed.
-/src-tauri/.cargo/config.toml
+# Linux tray pkg-config shim, written by src-tauri/scripts/tauri.mjs when the
+# AppIndicator library is installed without its .pc file. It holds the
+# machine's library path, so it can't be committed.
 /src-tauri/.pkgconfig
 ## Tauri signer
 .tauri

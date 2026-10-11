@@ -48,7 +48,6 @@
   let progress = $state<{ done: number; total: number } | null>(null);
   let cancelling = $state(false);
   let cancelButton = $state<HTMLButtonElement | null>(null);
-  let returnFocus: HTMLElement | null = null;
 
   const folders = $derived(folderOptions(tree.collectionsById));
 
@@ -167,22 +166,11 @@
     if (current && stage === next) cancelButton?.focus();
   }
 
+  // Cancel/Stop is the only control present at every stage, so it takes the
+  // initial focus. Closing leaves focus restoration to the library.
   function focusDialog(event: Event) {
     event.preventDefault();
-    returnFocus ??=
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
     cancelButton?.focus();
-  }
-
-  function restoreDialogFocus(event: Event) {
-    event.preventDefault();
-    // Bits UI can invoke cleanup when its content ref changes while open.
-    // Preserve the original trigger until the workflow really closes.
-    if (current) return;
-    returnFocus?.focus();
-    returnFocus = null;
   }
 
   const percent = $derived(
@@ -206,7 +194,6 @@
     />
     <AlertDialog.Content
       onOpenAutoFocus={focusDialog}
-      onCloseAutoFocus={restoreDialogFocus}
       onEscapeKeydown={(event) => {
         if (stage === 'running') event.preventDefault();
       }}
