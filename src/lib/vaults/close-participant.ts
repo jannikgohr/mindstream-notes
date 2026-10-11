@@ -8,9 +8,13 @@ export function createCloseParticipant(options: {
 }) {
   let active: string | null = null;
   let restore: (() => void) | null = null;
+  let preparing = false;
   let disposed = false;
   const cancelled = new Set<string>();
-  async function receive(notice: { id: string; phase: 'prepare' | 'cancel' }) {
+  async function receive(notice: {
+    id: string;
+    phase: 'waiting' | 'prepare' | 'cancel';
+  }) {
     if (disposed) return;
     if (notice.phase === 'cancel') {
       cancelled.add(notice.id);
@@ -20,6 +24,7 @@ export function createCloseParticipant(options: {
         options.failed();
       } else if (active === notice.id) {
         active = null;
+        preparing = false;
         restore?.();
         restore = null;
         options.failed();
@@ -27,11 +32,21 @@ export function createCloseParticipant(options: {
       return;
     }
     // Cancellation may reach a window before its queued prepare notification.
-    if (cancelled.has(notice.id) || active === notice.id) return;
-    restore?.();
-    active = notice.id;
+    if (cancelled.has(notice.id)) return;
+    if (notice.phase !== 'waiting' && notice.phase !== 'prepare') return;
+    if (active === notice.id && (preparing || notice.phase === 'waiting'))
+      return;
     try {
-      restore = options.freeze();
+      if (active !== notice.id) {
+        restore?.();
+        active = notice.id;
+        preparing = false;
+        restore = options.freeze();
+      }
+      // Freeze immediately, but take the final editor snapshot only after
+      // services have completed and emitted their last content updates.
+      if (notice.phase === 'waiting') return;
+      preparing = true;
       await options.flush();
       if (active === notice.id && !disposed) {
         await options.acknowledge(notice.id, true);
@@ -53,6 +68,7 @@ export function createCloseParticipant(options: {
     disposed = true;
     const id = active;
     active = null;
+    preparing = false;
     restore?.();
     restore = null;
     if (id) void options.acknowledge(id, false).catch(options.onError);

@@ -22,6 +22,21 @@ struct Shared {
 #[derive(Default)]
 pub struct Jobs(Arc<Shared>);
 
+/// Editor history and settings remain writable during the editor save phase.
+/// Their separate admission gate is paused only after all windows acknowledge.
+#[derive(Default)]
+pub struct Saves(Jobs);
+
+impl Saves {
+    pub fn enter(&self) -> AppResult<Job> {
+        self.0.enter()
+    }
+
+    pub fn pause(&self) -> AppResult<Pause> {
+        self.0.pause()
+    }
+}
+
 struct Active(Arc<Shared>);
 
 /// Clones share one job registration. A blocking task keeps its clone even if
@@ -103,9 +118,15 @@ impl Pause {
         Ok(())
     }
 
-    pub fn commit(mut self) -> AppResult<()> {
-        self.wait(Duration::ZERO)?;
-        self.committed = true;
+    pub fn commit_all(mut pauses: Vec<Self>) -> AppResult<()> {
+        // Check every gate before making any stop permanent. Failure drops
+        // all uncommitted pauses, so the source resumes both kinds of work.
+        for pause in &pauses {
+            pause.wait(Duration::ZERO)?;
+        }
+        for pause in &mut pauses {
+            pause.committed = true;
+        }
         Ok(())
     }
 }
@@ -156,14 +177,34 @@ mod tests {
         let jobs = Jobs::default();
         let job = jobs.enter().unwrap();
         let pause = jobs.pause().unwrap();
-        assert!(pause.commit().is_err());
+        assert!(Pause::commit_all(vec![pause]).is_err());
         let next_job = jobs.enter().unwrap();
         let pause = jobs.pause().unwrap();
         drop(job);
         assert!(pause.wait(Duration::ZERO).is_err());
         drop(next_job);
-        pause.commit().unwrap();
+        Pause::commit_all(vec![pause]).unwrap();
         assert!(jobs.enter().is_err());
         assert!(jobs.pause().is_err());
+    }
+
+    #[test]
+    fn editor_saves_finish_after_services_stop_and_a_failed_commit_resumes_both() {
+        let services = Jobs::default();
+        let saves = Saves::default();
+        let paused = services.pause().unwrap();
+        assert!(services.enter().is_err());
+        let last_save = saves.enter().unwrap();
+        let saved = saves.pause().unwrap();
+        assert!(saves.enter().is_err());
+        assert!(Pause::commit_all(vec![paused, saved]).is_err());
+        assert!(services.enter().is_ok());
+        assert!(saves.enter().is_ok());
+        drop(last_save);
+        let paused = services.pause().unwrap();
+        let saved = saves.pause().unwrap();
+        Pause::commit_all(vec![paused, saved]).unwrap();
+        assert!(services.enter().is_err());
+        assert!(saves.enter().is_err());
     }
 }

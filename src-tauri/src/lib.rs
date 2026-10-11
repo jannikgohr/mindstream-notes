@@ -540,6 +540,7 @@ pub fn run() {
             // effect calls `set_sync_schedule` once on mount with the
             // restored preference, which is what actually flips it on.
             app.manage(vault_jobs::Jobs::default());
+            app.manage(vault_jobs::Saves::default());
             app.manage(sync::scheduler::SyncScheduler::new());
             sync::scheduler::spawn(app.handle().clone());
 

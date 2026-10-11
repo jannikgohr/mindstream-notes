@@ -24,6 +24,50 @@ function participant(flush: () => Promise<void>) {
 }
 
 describe('controlled worker close', () => {
+  it('freezes while services drain and flushes only once preparation begins', async () => {
+    const window = participant(vi.fn(async () => {}));
+    await window.receive({ id: 'first', phase: 'waiting' });
+    await window.receive({ id: 'first', phase: 'waiting' });
+    expect(window.freeze).toHaveBeenCalledTimes(1);
+    expect(window.flush).not.toHaveBeenCalled();
+    expect(window.acknowledge).not.toHaveBeenCalled();
+    await window.receive({ id: 'first', phase: 'prepare' });
+    await window.receive({ id: 'first', phase: 'waiting' });
+    await window.receive({ id: 'first', phase: 'prepare' });
+    expect(window.freeze).toHaveBeenCalledTimes(1);
+    expect(window.flush).toHaveBeenCalledTimes(1);
+    expect(window.acknowledge.mock.calls).toEqual([['first', true]]);
+    expect(window.restore).not.toHaveBeenCalled();
+  });
+
+  it('resumes on a service-drain cancellation and ignores late waiting/preparation', async () => {
+    const window = participant(vi.fn(async () => {}));
+    await window.receive({ id: 'first', phase: 'waiting' });
+    await window.receive({ id: 'first', phase: 'cancel' });
+    await window.receive({ id: 'first', phase: 'waiting' });
+    await window.receive({ id: 'first', phase: 'prepare' });
+    expect(window.restore).toHaveBeenCalledTimes(1);
+    expect(window.failed).toHaveBeenCalledTimes(1);
+    expect(window.flush).not.toHaveBeenCalled();
+    expect(window.acknowledge).not.toHaveBeenCalled();
+    await window.receive({ id: 'next', phase: 'waiting' });
+    await window.receive({ id: 'next', phase: 'prepare' });
+    expect(window.acknowledge.mock.calls).toEqual([['next', true]]);
+  });
+
+  it('ignores a late waiting phase from a cancelled batch during a newer save', async () => {
+    const saving = deferred();
+    const window = participant(vi.fn(() => saving.promise));
+    await window.receive({ id: 'first', phase: 'waiting' });
+    await window.receive({ id: 'first', phase: 'cancel' });
+    const next = window.receive({ id: 'next', phase: 'prepare' });
+    await window.receive({ id: 'first', phase: 'waiting' });
+    expect(window.freeze).toHaveBeenCalledTimes(2);
+    saving.resolve();
+    await next;
+    expect(window.acknowledge.mock.calls).toEqual([['next', true]]);
+  });
+
   it('ignores preparation delivered after its cancellation', async () => {
     const window = participant(vi.fn(async () => {}));
     await window.receive({ id: 'first', phase: 'cancel' });

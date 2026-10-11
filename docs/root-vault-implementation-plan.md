@@ -735,6 +735,35 @@ tests, one integration test and five ignored tests. No account actions were
 performed against a real server or keyring during this audit. Clippy also passes
 with `e2e-data-dir`, including the isolated-account harness commands.
 
+Final-save drain on 2026-10-11: history and UI settings use a separate gate that
+remains open while editors save. After every content window acknowledges, native
+close stops admission to that gate and drains its accepted writes before exit.
+Both gates must validate before either stop becomes permanent; a failed commit
+resumes both. Signing-material access, legacy content/link migrations and PDF
+export writes also enter service admission. Preview stop is allowed during the
+save phase and tracked by the final gate.
+
+Windows receive a waiting notice as soon as services pause, which freezes input
+without taking an editor snapshot yet. Only the subsequent prepare notice
+flushes and acknowledges. Native menu commands also respect the close freeze.
+The frontend close protocol is now 2 and must be supplied when registering a
+content window. A missing or old protocol cannot mark a window ready; this
+prevents an older frontend from interpreting waiting as an early save request.
+The coordinator IPC contract and stored documents did not change.
+
+Validation: Rust formatting and clippy pass. The full Rust suite passes 834
+unit tests and one integration test, with five ignored tests. The close/event
+and hotkey catalogue suites pass all 26 frontend tests. Frontend type checks,
+lint and the production frontend build pass. Embedded native checks opened
+both vaults and observed both worker exits on a fresh root, then twice on an
+existing test root, including reversed close order. These checks exercised
+idle services and editors. One earlier native run accepted close while a
+worker remained unresponsive; its cause is unresolved and it did not recur
+in these three checks. Close milestones are logged for the next reproduction.
+Keep supervised mode opt-in until busy-job, dirty-editor and handoff checks
+are complete. The full lint run also found an unhandled sidebar-opening
+promise in the hotkey catalogue; its rejection is now handled.
+
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.
 

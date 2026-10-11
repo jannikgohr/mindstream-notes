@@ -88,7 +88,7 @@ export function installWorkerCloseBridge(): () => void {
       }
       await invokeOrFallback(
         TauriCommandName.VaultWindowCloseReady,
-        undefined,
+        { protocol: 2 },
         () => false,
         (value) => assertBoolean(value, 'vault close participant')
       );

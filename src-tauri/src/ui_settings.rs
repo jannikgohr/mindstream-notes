@@ -533,7 +533,9 @@ pub async fn initialize_ui_settings(
     device_ui: Option<DeviceBrowserState>,
 ) -> CommandResult<Snapshot> {
     let (root, vault) = context(&app, &expected_vault_id)?;
+    let job = app.state::<crate::vault_jobs::Saves>().enter()?;
     Ok(tauri::async_runtime::spawn_blocking(move || {
+        let _job = job;
         if let Some(source) = app.try_state::<crate::browser_migration::Source>() {
             let owner = crate::legacy_content::is_owner(&root, &expected_vault_id, &vault)?;
             initialize_classified(
@@ -588,11 +590,13 @@ pub async fn load_ui_settings(
     expected_vault_id: String,
 ) -> CommandResult<Snapshot> {
     let (root, vault) = context(&app, &expected_vault_id)?;
-    Ok(
-        tauri::async_runtime::spawn_blocking(move || access(&root, &vault, None))
-            .await
-            .map_err(|_| invalid())??,
-    )
+    let job = app.state::<crate::vault_jobs::Saves>().enter()?;
+    Ok(tauri::async_runtime::spawn_blocking(move || {
+        let _job = job;
+        access(&root, &vault, None)
+    })
+    .await
+    .map_err(|_| invalid())??)
 }
 
 #[tauri::command]
@@ -604,8 +608,11 @@ pub async fn patch_ui_setting(
     remove: bool,
 ) -> CommandResult<Snapshot> {
     let (root, vault) = context(&app, &expected_vault_id)?;
+    let job = app.state::<crate::vault_jobs::Saves>().enter()?;
     let device_changed = device_scope(&id);
+    let blocking_job = job.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         access(&root, &vault, Some((id, (!remove).then_some(value))))
     })
     .await

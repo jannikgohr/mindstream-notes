@@ -217,7 +217,9 @@ pub async fn migrate_legacy_content(
     let active = app.state::<crate::paths::ActiveProfile>();
     let vault_id = active.id.clone();
     let vault = active.dir.clone();
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     Ok(tauri::async_runtime::spawn_blocking(move || {
+        let _job = job;
         if !is_owner(&root, &vault_id, &vault)? {
             return Ok(Vec::new());
         }

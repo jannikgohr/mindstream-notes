@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult, CommandResult};
 
 const CLOSE_EVENT: &str = "vault-worker-close";
+const CLOSE_PROTOCOL: u32 = 2;
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(15);
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -28,6 +29,17 @@ struct Batch {
 }
 
 impl Book {
+    fn window_ready(&mut self, label: &str, protocol: u32) -> AppResult<()> {
+        if protocol != CLOSE_PROTOCOL
+            || !content_window(label)
+            || self.pending.is_some()
+            || self.committed
+        {
+            return Err(unavailable());
+        }
+        self.ready.insert(label.into());
+        Ok(())
+    }
     fn begin(&mut self, windows: BTreeSet<String>) -> AppResult<Option<Uuid>> {
         if self.pending.is_some() || self.committed {
             return Ok(None);
@@ -113,18 +125,16 @@ fn windows(app: &AppHandle) -> BTreeSet<String> {
 }
 
 #[tauri::command]
-pub fn vault_window_close_ready(app: AppHandle, window: WebviewWindow) -> CommandResult<bool> {
+pub fn vault_window_close_ready(
+    app: AppHandle,
+    window: WebviewWindow,
+    protocol: u32,
+) -> CommandResult<bool> {
     let Some(state) = app.try_state::<Shutdown>() else {
         return Ok(false);
     };
-    if !content_window(window.label()) {
-        return Err(unavailable().into());
-    }
     let mut book = state.book.lock().map_err(|_| unavailable())?;
-    if book.pending.is_some() || book.committed {
-        return Err(unavailable().into());
-    }
-    book.ready.insert(window.label().into());
+    book.window_ready(window.label(), protocol)?;
     Ok(true)
 }
 
@@ -184,8 +194,18 @@ fn cancel(app: &AppHandle, id: Uuid) {
     }
 }
 
+fn notify(app: &AppHandle, participants: &BTreeSet<String>, id: Uuid, phase: &'static str) -> bool {
+    participants.iter().all(|label| {
+        app.get_webview_window(label).is_some_and(|_| {
+            app.emit_to(label.clone(), CLOSE_EVENT, Notice { id, phase })
+                .is_ok()
+        })
+    })
+}
+
 /// Called from the native close event; all waits happen off the event-loop thread.
 pub fn request_close(app: &AppHandle) {
+    log::debug!("[vaults] controlled close callback started");
     let Some(state) = app.try_state::<Shutdown>() else {
         return;
     };
@@ -219,6 +239,7 @@ pub fn request_close(app: &AppHandle) {
     let spawned = std::thread::Builder::new()
         .name("vault-close".into())
         .spawn(move || {
+            log::debug!("[vaults] controlled close drain started");
             let Some(jobs) = handle.try_state::<crate::vault_jobs::Jobs>() else {
                 cancel(&handle, id);
                 return;
@@ -227,6 +248,10 @@ pub fn request_close(app: &AppHandle) {
                 cancel(&handle, id);
                 return;
             };
+            if !notify(&handle, &participants, id, "waiting") {
+                cancel(&handle, id);
+                return;
+            }
             if let Some(import) = handle.try_state::<crate::import::ImportState>() {
                 import.cancel();
             }
@@ -235,25 +260,12 @@ pub fn request_close(app: &AppHandle) {
                 cancel(&handle, id);
                 return;
             }
+            log::debug!("[vaults] services drained; preparing content saves");
             // Services have emitted their final updates before editor saves.
             // Keep admission paused through the save/commit decision.
-            for label in participants {
-                let sent = handle.get_webview_window(&label).is_some_and(|_| {
-                    handle
-                        .emit_to(
-                            label,
-                            CLOSE_EVENT,
-                            Notice {
-                                id,
-                                phase: "prepare",
-                            },
-                        )
-                        .is_ok()
-                });
-                if !sent {
-                    cancel(&handle, id);
-                    return;
-                }
+            if !notify(&handle, &participants, id, "prepare") {
+                cancel(&handle, id);
+                return;
             }
             let Some(state) = handle.try_state::<Shutdown>() else {
                 return;
@@ -271,6 +283,21 @@ pub fn request_close(app: &AppHandle) {
                 return;
             }
             drop(waited);
+            log::debug!("[vaults] content acknowledgement wait finished");
+            let Some(saves) = handle.try_state::<crate::vault_jobs::Saves>() else {
+                cancel(&handle, id);
+                return;
+            };
+            let Ok(saved) = saves.pause() else {
+                cancel(&handle, id);
+                return;
+            };
+            if let Err(error) = saved.wait(DRAIN_TIMEOUT) {
+                log::warn!("[vaults] final save drain failed: {error}");
+                cancel(&handle, id);
+                return;
+            }
+            log::debug!("[vaults] final writes drained; scheduling close decision");
             let final_handle = handle.clone();
             if handle
                 .run_on_main_thread(move || {
@@ -279,7 +306,9 @@ pub fn request_close(app: &AppHandle) {
                     };
                     let current_windows = windows(&final_handle);
                     let committed = state.book.lock().is_ok_and(|mut book| {
-                        if !book.can_commit(id, &current_windows) || paused.commit().is_err() {
+                        if !book.can_commit(id, &current_windows)
+                            || crate::vault_jobs::Pause::commit_all(vec![paused, saved]).is_err()
+                        {
                             return false;
                         }
                         book.commit(id, &current_windows)
@@ -304,6 +333,18 @@ pub fn request_close(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_frontend_without_the_wait_phase_cannot_authorize_close() {
+        let mut book = Book::default();
+        assert!(book.window_ready("main", 1).is_err());
+        assert!(book.ready.is_empty());
+        assert!(book.begin(BTreeSet::from(["main".into()])).is_err());
+        assert!(book.window_ready("plugin_preview", CLOSE_PROTOCOL).is_err());
+        book.window_ready("main", CLOSE_PROTOCOL).unwrap();
+        book.begin(BTreeSet::from(["main".into()])).unwrap();
+        assert!(book.window_ready("main", CLOSE_PROTOCOL).is_err());
+    }
 
     fn ready() -> (Book, BTreeSet<String>) {
         let windows = BTreeSet::from(["main".into(), "note_seed_welcome".into()]);

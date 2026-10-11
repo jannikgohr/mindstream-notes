@@ -835,9 +835,11 @@ fn stop_session(registry: &PreviewServiceRegistry, session_key: &str) {
 
 #[tauri::command]
 pub async fn plugins_preview_stop(
+    saves: State<'_, crate::vault_jobs::Saves>,
     registry: State<'_, PreviewServiceRegistry>,
     session_key: String,
 ) -> CommandResult<()> {
+    let _job = saves.enter()?;
     stop_session(&registry, &session_key);
     Ok(())
 }

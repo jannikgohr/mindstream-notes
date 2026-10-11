@@ -312,11 +312,13 @@ pub async fn get_vault_collab_signing_material(
     server_url: String,
     username: String,
 ) -> CommandResult<Option<Material>> {
-    Ok(
-        tauri::async_runtime::spawn_blocking(move || access(&app, &server_url, &username, None))
-            .await
-            .map_err(|_| AppError::InvalidArg("load signing credentials task failed".into()))??,
-    )
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    Ok(tauri::async_runtime::spawn_blocking(move || {
+        let _job = job;
+        access(&app, &server_url, &username, None)
+    })
+    .await
+    .map_err(|_| AppError::InvalidArg("load signing credentials task failed".into()))??)
 }
 
 #[tauri::command]
@@ -325,7 +327,9 @@ pub async fn store_vault_collab_signing_material(
     server_url: String,
     material: Material,
 ) -> CommandResult<Material> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     Ok(tauri::async_runtime::spawn_blocking(move || {
+        let _job = job;
         let username = material.username.clone();
         access(&app, &server_url, &username, Some(material))?
             .ok_or_else(|| AppError::InvalidArg("signing credentials were not stored".into()))

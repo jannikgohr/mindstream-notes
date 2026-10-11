@@ -95,6 +95,9 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
         }
         _ => {
             if let Some(command) = command_for_item(item_id) {
+                if crate::worker_shutdown::closing(app) {
+                    return;
+                }
                 emit_command_to_focused_window(app, command);
             }
         }

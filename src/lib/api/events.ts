@@ -82,7 +82,7 @@ export type TauriEvents = {
   'signatures-changed': null;
   'ui-settings-changed': null;
   'desktop-settings-changed': null;
-  'vault-worker-close': { id: string; phase: 'prepare' | 'cancel' };
+  'vault-worker-close': { id: string; phase: 'waiting' | 'prepare' | 'cancel' };
 };
 
 export function emit<K extends keyof TauriEvents>(
