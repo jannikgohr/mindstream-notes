@@ -85,7 +85,10 @@ def main():
     parser.add_argument("--exe", type=Path, default=Path(__file__).resolve().parents[1] / "target/debug/mindstream-notes.exe")
     parser.add_argument("--wait-for-external-quit", action="store_true", help="wait for external menu or IPC Quit after writing quit-ready.json")
     parser.add_argument("--wait-for-window-close", action="store_true", help="start two vaults without background capture and wait for native window closure")
+    parser.add_argument("--autostart-hidden", action="store_true", help="check hidden autostart before the window-close UI fixture; create activate-now to continue")
     args = parser.parse_args()
+    if args.autostart_hidden:
+        args.wait_for_window_close = True
     assert os.name == "nt", "this fixture checks Windows native workers"
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -101,12 +104,16 @@ def main():
         {"id": vault_id, "name": vault_id, "created_at": "2026-10-11T00:00:00Z"} for vault_id in vaults]}), encoding="utf-8")
     # Keep the coordinator for the deliberate zero-eligibility tray scenarios.
     # A second launch below checks the user's normal last-window exit policy.
-    (root / "desktop-settings.json").write_text(json.dumps({"close_to_tray": not args.wait_for_window_close}), encoding="utf-8")
+    (root / "desktop-settings.json").write_text(json.dumps({"close_to_tray": not args.wait_for_window_close,
+        "start_in_tray": args.autostart_hidden}), encoding="utf-8")
     env = os.environ.copy()
     env["MINDSTREAM_ROOT_DIR"] = str(root)
     env["WEBVIEW2_USER_DATA_FOLDER"] = str(output / "legacy-webview")
     with (output / "native.log").open("w", encoding="utf-8") as log:
-        host = subprocess.Popen([str(args.exe.resolve()), "--supervised-vaults"], env=env,
+        initial_args = [str(args.exe.resolve()), "--supervised-vaults"]
+        if args.autostart_hidden:
+            initial_args.append("--mindstream-autostart")
+        host = subprocess.Popen(initial_args, env=env,
             stdout=log, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW)
         (output / "host.pid").write_text(str(host.pid), encoding="utf-8")
         peer = None
@@ -176,6 +183,18 @@ def main():
             wait(lambda: status()["initialized"] and any(entry["id"] == "other" and entry["ready"] for entry in status()["workers"]))
             assert status()["contract"]["protocol"] == 6
             if args.wait_for_window_close:
+                if args.autostart_hidden:
+                    assert status()["active"] is None, "hidden worker incorrectly took focus recency"
+                    (output / "autostart-ready.json").write_text(json.dumps({"host_pid": host.pid}), encoding="utf-8")
+                    print("Autostart worker ready; inspect hidden windows and create activate-now", flush=True)
+                    wait(lambda: (output / "activate-now").exists())
+                    # Normal executable launch must route through the existing
+                    # coordinator and show its ready hidden worker.
+                    launcher = subprocess.Popen([str(args.exe.resolve()), "--supervised-vaults"], env=env,
+                        stdout=log, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW)
+                    assert launcher.wait(timeout=30) == 0
+                    wait(lambda: status()["active"] == "other")
+                    print("Normal duplicate launch activated the hidden autostart worker")
                 completed("open", vault_id="capture")
                 wait(lambda: len(status()["workers"]) == 2 and all(entry["ready"] for entry in status()["workers"]))
                 assert status()["shortcuts"] == {"state": "none"}

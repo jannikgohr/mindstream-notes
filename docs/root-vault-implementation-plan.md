@@ -996,6 +996,21 @@ The actual Windows tray menu input, real OS shortcut registration and macOS
 Dock/menu behavior remain unverified. Updater centralization and autostart
 behavior remain separate work before default supervision.
 
+Supervised autostart visibility slice on 2026-10-12: readiness no longer implies
+activation. Each reserved worker records whether startup requested activation;
+tracked opens and captures activate only after their own readiness/identity
+checks. Autostart respects root start-in-tray, while a normal duplicate launch
+focuses the existing hidden worker. A duplicate autostart launch does not steal
+focus. Manual activation during startup can still request activation on ready.
+This also allows the handoff path to prepare a target without showing it.
+
+Rust fmt/clippy and all 864 enabled Rust tests passed, five tests ignored.
+The embedded Windows build passed. In `.output/coordinator-autostart-ui-check`,
+computer use found no visible windows while the autostart worker was ready.
+A normal executable launch activated that worker, then two title-bar closes
+released every lease and exited the coordinator. OS autostart registration
+ownership is still pending along with updater centralization.
+
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.
 

@@ -119,6 +119,7 @@ struct Launch {
     id: Uuid,
     endpoint: Option<Endpoint>,
     ready: bool,
+    activate_on_ready: bool,
     error: Option<String>,
     adopted: bool,
     focused_window: Option<String>,
@@ -472,7 +473,8 @@ impl Book {
                     self.had_ready_worker = true;
                     // Tracked requests perform their own authenticated activation
                     // before publishing success. Startup still activates here.
-                    if self.quitting.is_none()
+                    if launch.activate_on_ready
+                        && self.quitting.is_none()
                         && !self.operations.values().any(|operation| {
                             operation.input["command"].as_str() == Some("open")
                                 && operation.input["vault_id"].as_str() == Some(vault_id.as_str())
@@ -687,10 +689,12 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
             let (endpoint, reply) =
                 ipc::request_with_endpoint(&root, &request(&HostCommand::Status)?)?;
             reply.map_err(AppError::InvalidArg)?;
-            crate::foreground::transfer(&endpoint);
-            endpoint
-                .retry_call(&request(&HostCommand::Activate)?)?
-                .map_err(AppError::InvalidArg)?;
+            if !crate::was_started_by_autostart() {
+                crate::foreground::transfer(&endpoint);
+                endpoint
+                    .retry_call(&request(&HostCommand::Activate)?)?
+                    .map_err(AppError::InvalidArg)?;
+            }
             app.handle().exit(0);
             return Ok(());
         }
@@ -734,6 +738,8 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
     crate::tray::init(app)?;
     start_lifetime_monitor(app.handle())?;
     let initial = index.active;
+    let activate_initial = !crate::was_started_by_autostart()
+        || !crate::desktop_settings::should_start_in_tray(app.handle());
     crate::legacy_export::begin(
         app,
         initial.clone(),
@@ -780,7 +786,7 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
                             }
                         }
                     }
-                    if let Err(error) = open(&task_app, &target, true) {
+                    if let Err(error) = open(&task_app, &target, activate_initial) {
                         log::error!("[vaults] initial launch failed: {error}");
                     }
                     broadcast_device_settings(&task_app);
@@ -806,6 +812,7 @@ fn recover_workers(app: &AppHandle) -> AppResult<()> {
                     id: Uuid::nil(),
                     endpoint: None,
                     ready: false,
+                    activate_on_ready: false,
                     error: Some("vault owner could not be identified; ownership retained".into()),
                     adopted: true,
                     focused_window: None,
@@ -839,6 +846,7 @@ fn recover_worker(app: &AppHandle, root: &std::path::Path, id: &str) -> AppResul
                 id: record.launch_id,
                 endpoint: Some(record.endpoint.clone()),
                 ready: false,
+                activate_on_ready: false,
                 error: None,
                 adopted: true,
                 focused_window: None,
@@ -1652,7 +1660,10 @@ fn open(app: &AppHandle, vault_id: &str, activate: bool) -> AppResult<Uuid> {
     if !book.exported || book.quitting.is_some() {
         return Err(invalid());
     }
-    if let Some(launch) = book.workers.get(vault_id) {
+    if let Some(launch) = book.workers.get_mut(vault_id) {
+        if activate && !launch.ready {
+            launch.activate_on_ready = true;
+        }
         let launch_id = launch.id;
         let error = launch.error.clone();
         let adopted_pending = launch.adopted && !launch.ready;
@@ -1705,6 +1716,7 @@ fn open(app: &AppHandle, vault_id: &str, activate: bool) -> AppResult<Uuid> {
             id: launch_id,
             endpoint: None,
             ready: false,
+            activate_on_ready: activate,
             error: None,
             adopted: false,
             focused_window: None,
@@ -2340,6 +2352,7 @@ mod tests {
                 id: launch_id,
                 endpoint: None,
                 ready: false,
+                activate_on_ready: false,
                 error: None,
                 adopted: false,
                 focused_window: None,
@@ -2367,6 +2380,7 @@ mod tests {
                 id: launch_id,
                 endpoint: None,
                 ready: false,
+                activate_on_ready: false,
                 error: None,
                 adopted: true,
                 focused_window: None,
@@ -2728,10 +2742,49 @@ mod tests {
             id,
             endpoint: None,
             ready: false,
+            activate_on_ready: true,
             error: None,
             adopted: false,
             focused_window: None,
         }
+    }
+
+    #[test]
+    fn a_prepared_worker_becomes_ready_without_activation_and_manual_launch_can_show_it() {
+        let root = std::env::temp_dir().join(format!("ms-hidden-ready-{}", Uuid::new_v4()));
+        let owner = crate::storage_locks::VaultLock::acquire(&root).unwrap();
+        let listener = ipc::Coordinator::for_worker(&owner).unwrap();
+        let instance = Uuid::new_v4();
+        let launch_id = Uuid::new_v4();
+        let mut book = Book {
+            exported: true,
+            ..Book::default()
+        };
+        let mut launch = pending(launch_id);
+        launch.activate_on_ready = false;
+        launch.endpoint = Some(listener.endpoint().clone());
+        book.workers.insert("a".into(), launch);
+        let ready = request(&HostCommand::Ready {
+            vault_id: "a".into(),
+            launch_id,
+        })
+        .unwrap();
+        assert!(book.accept(instance, ready.clone()).unwrap().1.is_none());
+        assert!(book.workers["a"].ready && book.had_ready_worker);
+        assert!(
+            book.last.is_none(),
+            "hidden readiness must not become focus recency"
+        );
+        assert!(matches!(
+            book.accept(instance, request(&HostCommand::Activate).unwrap())
+                .unwrap()
+                .1,
+            Some(Action::ActivateLast)
+        ));
+        assert!(book.accept(instance, ready).unwrap().1.is_none());
+        drop(listener);
+        drop(owner);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
