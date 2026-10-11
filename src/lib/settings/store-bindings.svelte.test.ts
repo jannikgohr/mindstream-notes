@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const binding = vi.hoisted(() => ({
   get: vi.fn(async (): Promise<unknown> => true),
   set: vi.fn(async (_value: unknown): Promise<void> => {}),
+  apply: vi.fn(),
   onDemand: {
     get: vi.fn(async (): Promise<unknown> => 'lazy'),
     set: vi.fn(async (_value: unknown): Promise<void> => {})
@@ -23,7 +24,12 @@ const LAZY = 'general.startOnLogin';
 
 vi.mock('./registry.svelte', () => ({
   SETTING_BINDINGS: {
-    [BOUND]: { get: binding.get, set: binding.set },
+    [BOUND]: {
+      get: binding.get,
+      set: binding.set,
+      apply: binding.apply,
+      document: 'desktop'
+    },
     [LAZY]: {
       hydrate: 'on-demand',
       get: binding.onDemand.get,
@@ -47,6 +53,7 @@ beforeEach(() => {
   binding.get.mockResolvedValue(true);
   binding.set.mockReset();
   binding.set.mockResolvedValue(undefined);
+  binding.apply.mockReset();
   binding.onDemand.get.mockReset();
   binding.onDemand.get.mockResolvedValue('lazy');
 });
@@ -83,6 +90,53 @@ describe('hydration', () => {
 });
 
 describe('refreshSetting', () => {
+  it('ignores a delayed read after a newer write, including runtime effects', async () => {
+    const store = await load();
+    await store.hydrateSettings();
+    let resolveRead!: (value: unknown) => void;
+    binding.get.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRead = resolve;
+        })
+    );
+    const refresh = store.refreshSetting(BOUND);
+    binding.get.mockResolvedValue(true);
+    await store.setSettingValue(BOUND, true);
+    binding.apply.mockClear();
+    resolveRead(false);
+    await refresh;
+    expect(store.getSettingValue(BOUND)).toBe(true);
+    expect(binding.apply).not.toHaveBeenCalled();
+  });
+
+  it('ignores an older refresh that finishes after the latest refresh', async () => {
+    const store = await load();
+    await store.hydrateSettings();
+    let resolveRead!: (value: unknown) => void;
+    binding.get.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRead = resolve;
+        })
+    );
+    const old = store.refreshSetting(BOUND);
+    binding.get.mockResolvedValue(false);
+    await store.refreshSetting(BOUND);
+    binding.apply.mockClear();
+    resolveRead(true);
+    await old;
+    expect(store.getSettingValue(BOUND)).toBe(false);
+    expect(binding.apply).not.toHaveBeenCalled();
+  });
+
+  it('refreshes desktop bindings without consulting the OS autostart plugin', async () => {
+    const store = await load();
+    binding.get.mockResolvedValue(false);
+    await store.hydrateSettings('desktop');
+    expect(store.getSettingValue(BOUND)).toBe(false);
+    expect(binding.onDemand.get).not.toHaveBeenCalled();
+  });
   it('re-reads one binding, for an out-of-band change', async () => {
     const store = await load();
     binding.get.mockResolvedValue(false);
@@ -114,6 +168,55 @@ describe('refreshSetting', () => {
 });
 
 describe('setSettingValue through a binding', () => {
+  it('serializes overlapping writes and keeps newer cache, runtime, and pending state', async () => {
+    const store = await load();
+    await store.hydrateSettings();
+    let finishFirst!: () => void;
+    let finishSecond!: () => void;
+    binding.set.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishFirst = resolve;
+        })
+    );
+    binding.set.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSecond = resolve;
+        })
+    );
+    binding.get.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const first = store.setSettingValue(BOUND, true);
+    await vi.waitFor(() => expect(binding.set).toHaveBeenCalledTimes(1));
+    const second = store.setSettingValue(BOUND, false);
+    binding.apply.mockClear();
+    finishFirst();
+    await first;
+    await vi.waitFor(() => expect(binding.set).toHaveBeenCalledTimes(2));
+    expect(store.getSettingValue(BOUND)).toBe(false);
+    expect(binding.apply).not.toHaveBeenCalled();
+    expect(store.isPending(BOUND)).toBe(true);
+    finishSecond();
+    await second;
+    expect(binding.apply).toHaveBeenLastCalledWith(false);
+    expect(store.isPending(BOUND)).toBe(false);
+  });
+
+  it('restores runtime effects from the last confirmed value when write and reread fail', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const store = await load();
+    await store.hydrateSettings();
+    binding.set.mockRejectedValue(new Error('denied'));
+    binding.get.mockRejectedValue(new Error('unreadable'));
+    await expect(store.setSettingValue(BOUND, false)).rejects.toThrow('denied');
+    expect(store.getSettingValue(BOUND)).toBe(true);
+    expect(binding.apply.mock.calls.map(([value]) => value).slice(-2)).toEqual([
+      false,
+      true
+    ]);
+    expect(store.isPending(BOUND)).toBe(false);
+    error.mockRestore();
+  });
   it('writes through and adopts what the source ended up with', async () => {
     // Autostart can silently stay disabled when the OS denies permission,
     // so the value that counts is the one read back.

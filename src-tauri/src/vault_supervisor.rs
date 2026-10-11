@@ -1014,6 +1014,14 @@ pub fn register_worker(
                 handle
                     .emit(crate::app_events::AppEvent::UiSettingsChanged.as_str(), ())
                     .map_err(|_| "worker settings notification unavailable".to_string())?;
+                let app = handle.clone();
+                handle
+                    .run_on_main_thread(move || {
+                        if let Err(err) = crate::desktop_settings::refresh_runtime(&app) {
+                            log::warn!("[vaults] desktop settings refresh failed: {err}");
+                        }
+                    })
+                    .map_err(|_| "worker desktop settings refresh unavailable".to_string())?;
                 Ok(json!({"accepted":true}))
             }
         }
@@ -1068,6 +1076,12 @@ pub async fn vault_worker_ready(app: AppHandle, window: WebviewWindow) -> Comman
     {
         log::warn!("[vaults] readiness settings refresh unavailable");
     }
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        if let Err(err) = crate::desktop_settings::refresh_runtime(&handle) {
+            log::warn!("[vaults] readiness desktop settings refresh failed: {err}");
+        }
+    })?;
     Ok(())
 }
 

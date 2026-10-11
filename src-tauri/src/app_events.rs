@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum AppEvent {
     CollabCredentialsChanged,
     CustomWindowDecorationsChanged,
+    DesktopSettingsChanged,
     ImportProgress,
     NativeMenuCommand,
     ShowApp,
@@ -20,6 +21,7 @@ impl AppEvent {
         match self {
             Self::CollabCredentialsChanged => "collab-credentials-changed",
             Self::CustomWindowDecorationsChanged => "custom-window-decorations-changed",
+            Self::DesktopSettingsChanged => "desktop-settings-changed",
             Self::ImportProgress => "import-progress",
             Self::NativeMenuCommand => "native-menu-command",
             Self::ShowApp => "show-app",
@@ -48,6 +50,7 @@ mod tests {
                 "custom-window-decorations-changed",
             ),
             (AppEvent::ImportProgress, "import-progress"),
+            (AppEvent::DesktopSettingsChanged, "desktop-settings-changed"),
             (AppEvent::NativeMenuCommand, "native-menu-command"),
             (AppEvent::ShowApp, "show-app"),
             (AppEvent::SignaturesChanged, "signatures-changed"),

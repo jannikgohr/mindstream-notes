@@ -170,9 +170,11 @@ describe('SETTING_BINDINGS — appearance', () => {
 });
 
 describe('SETTING_BINDINGS — language', () => {
-  it('get defaults to en and persists to localStorage', async () => {
+  it('reads without changing language, then applies an accepted value', async () => {
     const code = await SETTING_BINDINGS['language.code'].get();
     expect(code).toBe('en');
+    expect(localStorage.getItem('notes-app:language')).toBeNull();
+    SETTING_BINDINGS['language.code'].apply?.(code);
     expect(localStorage.getItem('notes-app:language')).toBe('en');
   });
 
@@ -243,7 +245,11 @@ describe('SETTING_BINDINGS — Tauri (desktop) branches', () => {
   });
 
   it('appearance.mode reads the desktop theme and persists a change', async () => {
+    localStorage.setItem('mode-watcher-mode', 'light');
     expect(await SETTING_BINDINGS['appearance.mode'].get()).toBe('dark');
+    expect(localStorage.getItem('mode-watcher-mode')).toBe('light');
+    SETTING_BINDINGS['appearance.mode'].apply?.('dark');
+    expect(localStorage.getItem('mode-watcher-mode')).toBe('dark');
     await SETTING_BINDINGS['appearance.mode'].set('light');
     expect(setDesktopThemeMode).toHaveBeenCalledWith('light');
   });

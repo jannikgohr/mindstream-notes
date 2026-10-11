@@ -5,7 +5,10 @@ const api = vi.hoisted(() => ({
   initialize: vi.fn(),
   load: vi.fn(),
   patch: vi.fn(),
-  listen: vi.fn()
+  listen: vi.fn(),
+  desktopGet: vi.fn(),
+  desktopApply: vi.fn(),
+  desktopSet: vi.fn()
 }));
 vi.mock('$lib/api/core', () => ({ isTauri: () => true }));
 vi.mock('$lib/api/ui-settings', () => ({
@@ -14,11 +17,20 @@ vi.mock('$lib/api/ui-settings', () => ({
   patchUiSetting: api.patch
 }));
 vi.mock('$lib/api/events', () => ({
-  TauriEventName: { UiSettingsChanged: 'ui-settings-changed' },
+  TauriEventName: {
+    UiSettingsChanged: 'ui-settings-changed',
+    DesktopSettingsChanged: 'desktop-settings-changed'
+  },
   listen: api.listen
 }));
 vi.mock('./registry.svelte', () => ({
   SETTING_BINDINGS: {
+    'appearance.mode': {
+      document: 'desktop',
+      get: api.desktopGet,
+      apply: api.desktopApply,
+      set: api.desktopSet
+    },
     'appearance.leftSidebarWidth': {
       get: async () => (await import('$lib/state.svelte')).ui.leftSidebarWidth,
       set: async (value: unknown) =>
@@ -46,9 +58,27 @@ beforeEach(() => {
   api.load.mockResolvedValue(snapshot());
   api.patch.mockResolvedValue(snapshot());
   api.listen.mockResolvedValue(() => {});
+  api.desktopGet.mockResolvedValue('system');
 });
 
 describe('native settings documents', () => {
+  it('refreshes desktop runtime bindings from invalidation without writing or loading vault data', async () => {
+    const store = await import('./store.svelte');
+    await store.setSettingsVaultId('work');
+    api.desktopGet.mockResolvedValue('dark');
+    api.desktopApply.mockClear();
+    const handler = api.listen.mock.calls.find(
+      ([event]) => event === 'desktop-settings-changed'
+    )?.[1] as () => void;
+    handler();
+    await vi.waitFor(() =>
+      expect(store.getSettingValue('appearance.mode')).toBe('dark')
+    );
+    expect(api.desktopApply).toHaveBeenCalledWith('dark');
+    expect(api.desktopSet).not.toHaveBeenCalled();
+    expect(api.patch).not.toHaveBeenCalled();
+    expect(api.load).not.toHaveBeenCalled();
+  });
   it('handles root invalidation by loading its own vault alongside new device values', async () => {
     api.initialize.mockResolvedValue(
       snapshot({
@@ -215,6 +245,58 @@ describe('native settings documents', () => {
       'https://worker.example'
     );
   });
+
+  it.each(['ui.fileTreeToolbar', 'ui.dockLayout'])(
+    'keeps the latest queued %s in the auxiliary cache after an older save',
+    async (id) => {
+      const store = await import('./store.svelte');
+      const device = await import('$lib/native-device-ui.svelte');
+      const layout = await import('$lib/api/layout');
+      await store.setSettingsVaultId('default');
+      const value = (name: string) =>
+        id === 'ui.fileTreeToolbar'
+          ? { toolbar: [name], more: [] }
+          : {
+              version: 1,
+              dock: { panels: {} },
+              activeNoteId: name,
+              savedAt: '2026-10-10T00:00:00.000Z'
+            };
+      const read = () =>
+        id === 'ui.fileTreeToolbar'
+          ? device.nativeDeviceUi.toolbar
+          : layout.loadSavedLayout('default');
+      let finishFirst!: (value: UiSettingsSnapshot) => void;
+      let finishSecond!: (value: UiSettingsSnapshot) => void;
+      api.patch.mockImplementationOnce(
+        () =>
+          new Promise<UiSettingsSnapshot>((resolve) => {
+            finishFirst = resolve;
+          })
+      );
+      api.patch.mockImplementationOnce(
+        () =>
+          new Promise<UiSettingsSnapshot>((resolve) => {
+            finishSecond = resolve;
+          })
+      );
+      const first = store.setSettingValue(id, value('first'));
+      await vi.waitFor(() => expect(api.patch).toHaveBeenCalledTimes(1));
+      const second = store.setSettingValue(id, value('second'));
+      await vi.waitFor(() =>
+        expect(store.getSettingValue(id)).toEqual(value('second'))
+      );
+      finishFirst(snapshot({ [id]: value('first') }, 1));
+      await first;
+      await vi.waitFor(() => expect(api.patch).toHaveBeenCalledTimes(2));
+      expect(read()).toEqual(value('second'));
+      expect(store.isPending(id)).toBe(true);
+      finishSecond(snapshot({ [id]: value('second') }, 2));
+      await second;
+      expect(read()).toEqual(value('second'));
+      expect(store.isPending(id)).toBe(false);
+    }
+  );
 
   it('reports a failed write and restores the latest canonical value', async () => {
     const store = await import('./store.svelte');

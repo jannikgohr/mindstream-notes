@@ -564,9 +564,33 @@ embedded Windows fixture accepted a notice with two ready vaults, rejected a
 mismatched launch identity, and accepted refresh in each worker without changing
 focus. Logs remain in `.output/supervised-startup-app-check/device-*.log`.
 Visible cross-worker UI refresh still needs a native interaction check.
-Desktop-settings bindings for theme,
-language and decoration changes use a separate document and still need their
-runtime notification path; OS shortcut/tray coordination remains pending.
+Desktop runtime notification slice on 2026-10-11: all desktop-setting writes
+now use the same authenticated invalidation route. Receivers read the canonical
+desktop document on the native event thread, release its root lock, then apply
+window decorations and native language changes and notify their WebViews.
+Unchanged decorations avoid another native update. Theme/language binding reads
+have no runtime side effects until the store accepts them. Focus and post-ready
+refresh cover missed notifications. Corrupt/missing refresh reads preserve the
+last valid cache and disk evidence without seeding defaults.
+
+Binding writes are serialized per field. Pending counts and read/write versions
+prevent an older read or completed save from overwriting a newer local edit;
+failed writes restore the canonical or last confirmed runtime value. Toolbar and
+dock-layout auxiliary caches now use the same merged snapshot as the settings
+store, including newer queued writes. The layout is unwrapped before caching so
+Svelte proxies cannot reach `structuredClone`. Regression checks cover overlapping
+writes, reordered reads, runtime rollback and desktop-only invalidation.
+Native cross-worker visual checks and OS shortcut/tray coordination remain pending.
+
+Validation: 84 focused frontend tests and the frontend/embedded-app builds pass.
+Rust fmt/clippy and 820 unit tests plus one integration test pass, with five
+ignored tests. In the disposable Windows fixture, two ready workers accepted
+desktop invalidation after theme/language/decoration edits under the root OS
+lock, then accepted invalidation after the original file bytes were restored.
+Neither worker logged a desktop-refresh failure, both retained their launch
+identities, and controlled close still succeeded. This verifies native dispatch
+and lifecycle behavior; it does not replace a visual theme/decoration check.
+Fixture scripts and logs remain in `.output/supervised-startup-app-check/desktop-*`.
 
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.
@@ -575,6 +599,12 @@ host/coordinator arrangement. Do not add in-process session swapping.
   request IDs, bounded retries, and stale-registration reconciliation. Real
   locks determine ownership; unresponsive processes do not lose their locks.
   Avoid general root locks across IPC waits or network work.
+- Before adding incompatible shared-document fields or ownership migrations,
+  add a worker protocol/storage compatibility check during coordinator recovery.
+  Surviving workers from an older binary must not recover a newer valid document
+  as corrupt or publish an older schema over it. Refuse incompatible adoption
+  and new writers before root migrations while retaining the old owner's OS
+  lease; never force ownership transfer or kill an unresponsive worker.
 - Launch explicit vault targets. Convert `profiles.json.active` to last-used
   startup preference, separate from live ownership.
 - Implement normal launch, new-window requests, duplicates, and racing requests.

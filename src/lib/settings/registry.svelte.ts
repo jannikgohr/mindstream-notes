@@ -45,6 +45,23 @@ export interface Binding {
   get: () => Promise<unknown>;
   set: (value: unknown) => Promise<void>;
   hydrate?: 'startup' | 'on-demand';
+  document?: 'desktop';
+  /** Apply only after the store has accepted a current read or local edit. */
+  apply?: (value: unknown) => void;
+}
+
+function applyMode(value: unknown): void {
+  if (!isDesktopThemeMode(value)) return;
+  localStorage.setItem('mode-watcher-mode', value);
+  setMode(value);
+}
+
+function applyLanguage(value: unknown): void {
+  const code = String(value ?? 'en');
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('notes-app:language', code);
+  }
+  setLanguage(code);
 }
 
 /**
@@ -77,6 +94,7 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
     }
   },
   'general.closeToTray': {
+    document: 'desktop',
     get: async () =>
       isTauri() && !isMobile() ? await getCloseToTray() : false,
     set: async (v) => {
@@ -85,6 +103,7 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
     }
   },
   'general.startInTray': {
+    document: 'desktop',
     get: async () =>
       isTauri() && !isMobile() ? await getStartInTray() : false,
     set: async (v) => {
@@ -98,6 +117,7 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
     }
   },
   'appearance.customWindowDecorations': {
+    document: 'desktop',
     get: async () =>
       isTauri() && !isMobile()
         ? await getCustomWindowDecorations()
@@ -108,12 +128,11 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
     }
   },
   'appearance.mode': {
+    document: 'desktop',
+    apply: applyMode,
     get: async () => {
       if (isTauri() && !isMobile()) {
-        const mode = await getDesktopThemeMode();
-        localStorage.setItem('mode-watcher-mode', mode);
-        setMode(mode);
-        return mode;
+        return await getDesktopThemeMode();
       }
       // mode-watcher writes/reads from localStorage; mirror its key here so
       // the radio reflects whatever the user's last choice was.
@@ -125,8 +144,8 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
         throw new Error('appearance.mode must be light, dark, or system');
       }
       const mode = v;
-      setMode(mode);
       if (isTauri() && !isMobile()) await setDesktopThemeMode(mode);
+      else applyMode(mode);
     }
   },
   'appearance.sortStrategy': {
@@ -144,6 +163,8 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
     set: async (v) => setRightSidebarWidth(Number(v))
   },
   'language.code': {
+    document: 'desktop',
+    apply: applyLanguage,
     get: async () => {
       let code =
         typeof localStorage === 'undefined'
@@ -152,22 +173,13 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
       if (isTauri() && !isMobile()) {
         code = await getDesktopLanguage();
       }
-      code = code ?? 'en';
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem('notes-app:language', code);
-      }
-      setLanguage(code);
-      return code;
+      return code ?? 'en';
     },
     set: async (v) => {
       const code = String(v);
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem('notes-app:language', code);
-      }
-      setLanguage(code);
       if (isTauri() && !isMobile()) {
         await setDesktopLanguage(code);
-      }
+      } else applyLanguage(code);
     }
   }
 };

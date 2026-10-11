@@ -240,7 +240,17 @@ export async function flushSettingsWrites(): Promise<void> {
 }
 let nativeQueue: Promise<unknown> = Promise.resolve();
 const nativePending = new SvelteMap<string, number>();
+const bindingPending = new SvelteMap<string, number>();
+const bindingVersions = new SvelteMap<string, number>();
+const bindingReads = new SvelteMap<string, number>();
+const bindingQueues = new SvelteMap<string, Promise<void>>();
+const bindingConfirmed = new SvelteMap<string, unknown>();
 let nativeListenersStarted = false;
+
+function updatePending(id: string): void {
+  if (nativePending.has(id) || bindingPending.has(id)) settings.pending.add(id);
+  else settings.pending.delete(id);
+}
 
 function enqueueNative<T>(work: () => Promise<T>): Promise<T> {
   const task = nativeQueue.then(work);
@@ -268,9 +278,9 @@ function applyNativeSnapshot(snapshot: UiSettingsSnapshot): void {
   applyNativeUiPreferences(values);
   applyNativeSavedLayout(
     activeSettingsVaultId,
-    snapshot.values['ui.dockLayout']
+    $state.snapshot(values['ui.dockLayout'])
   );
-  applyNativeDeviceUi(snapshot.values);
+  applyNativeDeviceUi(values);
 }
 
 export async function refreshNativeSettings(): Promise<void> {
@@ -292,6 +302,13 @@ function startNativeListeners(): void {
   window.addEventListener('focus', refresh);
   void listen(TauriEventName.UiSettingsChanged, refresh).catch((err) =>
     console.warn('[settings] document listener failed', err)
+  );
+  const refreshDesktop = () => {
+    void hydrateSettings('desktop');
+  };
+  window.addEventListener('focus', refreshDesktop);
+  void listen(TauriEventName.DesktopSettingsChanged, refreshDesktop).catch(
+    (err) => console.warn('[settings] desktop listener failed', err)
   );
 }
 
@@ -371,13 +388,13 @@ async function persistNativeSetting(
         );
         // Adopt the canonical response for this completed write unless a newer
         // local write to the same field is already queued.
-        if (nativePending.get(id) === 1) {
+        if (nativePending.get(id) === 1 && (bindingPending.get(id) ?? 0) <= 1) {
           if (id in snapshot.values) settings.values[id] = snapshot.values[id];
           else delete settings.values[id];
         }
         applyNativeSnapshot(snapshot);
       } catch (err) {
-        if (nativePending.get(id) === 1) {
+        if (nativePending.get(id) === 1 && (bindingPending.get(id) ?? 0) <= 1) {
           try {
             const snapshot = await loadUiSettings(activeSettingsVaultId);
             if (id in snapshot.values)
@@ -397,8 +414,8 @@ async function persistNativeSetting(
     if (remaining) nativePending.set(id, remaining);
     else {
       nativePending.delete(id);
-      settings.pending.delete(id);
     }
+    updatePending(id);
   }
 }
 
@@ -432,16 +449,13 @@ registerNativeDeviceUiWriter(async (id, value) => {
  * stripped-down build) doesn't poison the rest of the dialog.
  */
 export async function hydrateSettings(
-  scope: 'startup' | 'all' = 'startup'
+  scope: 'startup' | 'all' | 'desktop' = 'startup'
 ): Promise<void> {
   await Promise.all(
     Object.entries(SETTING_BINDINGS).map(async ([id, binding]) => {
       if (scope === 'startup' && binding.hydrate === 'on-demand') return;
-      try {
-        settings.values[id] = await binding.get();
-      } catch (err) {
-        console.warn('[settings] hydrate failed for', id, err);
-      }
+      if (scope === 'desktop' && binding.document !== 'desktop') return;
+      await refreshSetting(id);
     })
   );
 }
@@ -453,9 +467,21 @@ export async function hydrateSettings(
  */
 export async function refreshSetting(id: string): Promise<void> {
   const binding = SETTING_BINDINGS[id];
-  if (!binding) return;
+  if (!binding || bindingPending.has(id)) return;
+  const version = bindingVersions.get(id);
+  const read = (bindingReads.get(id) ?? 0) + 1;
+  bindingReads.set(id, read);
   try {
-    settings.values[id] = await binding.get();
+    const value = await binding.get();
+    if (
+      bindingPending.has(id) ||
+      bindingVersions.get(id) !== version ||
+      bindingReads.get(id) !== read
+    )
+      return;
+    bindingConfirmed.set(id, value);
+    settings.values[id] = value;
+    binding.apply?.(value);
   } catch (err) {
     console.warn('[settings] refresh failed for', id, err);
   }
@@ -506,23 +532,55 @@ async function persistSettingValue(id: string, value: unknown): Promise<void> {
   const binding = SETTING_BINDINGS[id];
   if (binding) {
     const prev = settings.values[id];
+    const version = (bindingVersions.get(id) ?? 0) + 1;
+    bindingVersions.set(id, version);
+    bindingPending.set(id, (bindingPending.get(id) ?? 0) + 1);
     settings.values[id] = value;
-    settings.pending.add(id);
-    try {
+    updatePending(id);
+    binding.apply?.(value);
+    const previous = bindingQueues.get(id) ?? Promise.resolve();
+    const task = previous.then(async () => {
       await binding.set(value);
-      // Re-read so we reflect any transformation the source did (autostart
-      // can silently end up disabled if the OS denies permission, etc.).
       try {
-        settings.values[id] = await binding.get();
+        const canonical = await binding.get();
+        bindingConfirmed.set(id, canonical);
+        if (bindingVersions.get(id) === version) {
+          settings.values[id] = canonical;
+          binding.apply?.(canonical);
+        }
       } catch {
-        /* fall through with optimistic value */
+        /* Keep the optimistic value when read-back is unavailable. */
       }
+    });
+    const tail = task.catch(() => {});
+    bindingQueues.set(id, tail);
+    try {
+      await task;
     } catch (err) {
       console.error('[settings] write failed for', id, err);
-      settings.values[id] = prev;
+      if (bindingVersions.get(id) === version) {
+        let canonical = bindingConfirmed.has(id)
+          ? bindingConfirmed.get(id)
+          : prev;
+        try {
+          canonical = await binding.get();
+          if (bindingVersions.get(id) === version)
+            bindingConfirmed.set(id, canonical);
+        } catch {
+          /* Use the last confirmed value. */
+        }
+        if (bindingVersions.get(id) === version) {
+          settings.values[id] = canonical;
+          binding.apply?.(canonical);
+        }
+      }
       throw err;
     } finally {
-      settings.pending.delete(id);
+      const remaining = (bindingPending.get(id) ?? 1) - 1;
+      if (remaining) bindingPending.set(id, remaining);
+      else bindingPending.delete(id);
+      updatePending(id);
+      if (bindingQueues.get(id) === tail) bindingQueues.delete(id);
     }
     return;
   }

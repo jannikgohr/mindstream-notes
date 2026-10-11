@@ -8,6 +8,7 @@ import type { SyncReport } from './sync';
 export enum TauriEventName {
   CollabCredentialsChanged = 'collab-credentials-changed',
   CustomWindowDecorationsChanged = 'custom-window-decorations-changed',
+  DesktopSettingsChanged = 'desktop-settings-changed',
   FullscreenNote = 'fullscreen-note',
   ImportProgress = 'import-progress',
   NativeMenuCommand = 'native-menu-command',
@@ -80,6 +81,7 @@ export type TauriEvents = {
    */
   'signatures-changed': null;
   'ui-settings-changed': null;
+  'desktop-settings-changed': null;
   'vault-worker-close': { id: string; phase: 'prepare' | 'cancel' };
 };
 

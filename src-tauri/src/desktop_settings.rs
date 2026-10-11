@@ -76,6 +76,37 @@ pub struct DesktopSettings {
 }
 
 impl DesktopSettings {
+    fn refresh(&self) -> CommandResult<DesktopSettingsFile> {
+        let parent = self.path.parent().ok_or_else(|| {
+            CommandError::new(CommandErrorCode::Io, "settings path has no parent")
+        })?;
+        let _lock = RootLock::acquire(parent)?;
+        // A refresh never replaces corrupt or missing documents with defaults.
+        let raw = fs::read(&self.path)?;
+        let file: DesktopSettingsFile = serde_json::from_slice(&raw).map_err(|_| {
+            CommandError::new(
+                CommandErrorCode::InvalidArgument,
+                "desktop settings corrupt",
+            )
+        })?;
+        self.close_to_tray
+            .store(file.close_to_tray, Ordering::Relaxed);
+        self.start_in_tray
+            .store(file.start_in_tray, Ordering::Relaxed);
+        self.custom_window_decorations.store(
+            file.custom_window_decorations
+                .unwrap_or_else(default_custom_window_decorations),
+            Ordering::Relaxed,
+        );
+        if let Ok(mut code) = self.language_code.lock() {
+            *code = i18n::normalize_language_code(&file.language_code).to_string();
+        }
+        if let Ok(mut mode) = self.theme_mode.lock() {
+            *mode = file.theme_mode;
+        }
+        Ok(file)
+    }
+
     fn current_file(&self) -> Option<DesktopSettingsFile> {
         serde_json::from_slice(&fs::read(&self.path).ok()?).ok()
     }
@@ -290,6 +321,9 @@ pub fn should_use_custom_window_decorations(app: &AppHandle) -> bool {
 pub fn apply_window_decorations(app: &AppHandle, custom_decorations: bool) -> CommandResult<()> {
     let native_decorations = !custom_decorations;
     for (label, window) in app.webview_windows() {
+        if window.is_decorated().ok() == Some(native_decorations) {
+            continue;
+        }
         window.set_decorations(native_decorations).map_err(|e| {
             CommandError::new(
                 CommandErrorCode::Tauri,
@@ -300,6 +334,31 @@ pub fn apply_window_decorations(app: &AppHandle, custom_decorations: bool) -> Co
     Ok(())
 }
 
+/// Call on the native event thread, reading after the callback is scheduled.
+/// No root transaction is held while changing windows or publishing events.
+pub fn refresh_runtime(app: &AppHandle) -> CommandResult<()> {
+    let settings = app.state::<DesktopSettings>();
+    let file = settings.refresh()?;
+    let custom = file
+        .custom_window_decorations
+        .unwrap_or_else(default_custom_window_decorations);
+    let decorations = apply_window_decorations(app, custom);
+    #[cfg(target_os = "macos")]
+    crate::native_menu::set_language(app);
+    crate::tray::set_language(app, i18n::normalize_language_code(&file.language_code));
+    app.emit(AppEvent::CustomWindowDecorationsChanged.as_str(), custom)?;
+    app.emit(AppEvent::DesktopSettingsChanged.as_str(), ())?;
+    decorations
+}
+
+fn changed(app: &AppHandle) -> CommandResult<()> {
+    let result = refresh_runtime(app);
+    // Persisted changes must reach peers even if a local native window failed.
+    #[cfg(desktop)]
+    crate::vault_supervisor::device_settings_changed(app);
+    result
+}
+
 #[tauri::command]
 pub fn get_close_to_tray(settings: State<'_, DesktopSettings>) -> bool {
     settings.close_to_tray()
@@ -307,11 +366,12 @@ pub fn get_close_to_tray(settings: State<'_, DesktopSettings>) -> bool {
 
 #[tauri::command]
 pub fn set_close_to_tray(
-    _app: AppHandle,
+    app: AppHandle,
     settings: State<'_, DesktopSettings>,
     value: bool,
 ) -> CommandResult<()> {
-    settings.set_close_to_tray(value)
+    settings.set_close_to_tray(value)?;
+    changed(&app)
 }
 
 #[tauri::command]
@@ -321,11 +381,12 @@ pub fn get_start_in_tray(settings: State<'_, DesktopSettings>) -> bool {
 
 #[tauri::command]
 pub fn set_start_in_tray(
-    _app: AppHandle,
+    app: AppHandle,
     settings: State<'_, DesktopSettings>,
     value: bool,
 ) -> CommandResult<()> {
-    settings.set_start_in_tray(value)
+    settings.set_start_in_tray(value)?;
+    changed(&app)
 }
 
 #[tauri::command]
@@ -340,14 +401,7 @@ pub fn set_custom_window_decorations(
     value: bool,
 ) -> CommandResult<()> {
     settings.set_custom_window_decorations(value)?;
-    apply_window_decorations(&app, value)?;
-    app.emit(AppEvent::CustomWindowDecorationsChanged.as_str(), value)
-        .map_err(|e| {
-            CommandError::new(
-                CommandErrorCode::Tauri,
-                format!("emit window decorations change: {e}"),
-            )
-        })
+    changed(&app)
 }
 
 #[tauri::command]
@@ -362,10 +416,7 @@ pub fn set_desktop_language(
     code: String,
 ) -> CommandResult<()> {
     settings.set_language_code(&code)?;
-    #[cfg(target_os = "macos")]
-    crate::native_menu::set_language(&app);
-    crate::tray::set_language(&app, &settings.language_code());
-    Ok(())
+    changed(&app)
 }
 
 #[tauri::command]
@@ -375,10 +426,12 @@ pub fn get_desktop_theme_mode(settings: State<'_, DesktopSettings>) -> DesktopTh
 
 #[tauri::command]
 pub fn set_desktop_theme_mode(
+    app: AppHandle,
     settings: State<'_, DesktopSettings>,
     mode: DesktopThemeMode,
 ) -> CommandResult<()> {
-    settings.set_theme_mode(mode)
+    settings.set_theme_mode(mode)?;
+    changed(&app)
 }
 
 #[cfg(test)]
@@ -427,6 +480,31 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ms-desktop-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn refresh_adopts_peer_values_but_preserves_cache_and_evidence_on_bad_reads() {
+        let root = root();
+        let a = DesktopSettings::load_at(&root, &root.join("a")).unwrap();
+        let b = DesktopSettings::load_at(&root, &root.join("b")).unwrap();
+        b.set_theme_mode(DesktopThemeMode::Dark).unwrap();
+        b.set_language_code("de").unwrap();
+        b.set_close_to_tray(true).unwrap();
+        let before = fs::read(root.join(SETTINGS_FILE)).unwrap();
+        let file = a.refresh().unwrap();
+        assert_eq!(file.theme_mode, DesktopThemeMode::Dark);
+        assert_eq!(a.language_code(), "de");
+        assert_eq!(fs::read(root.join(SETTINGS_FILE)).unwrap(), before);
+        fs::write(root.join(SETTINGS_FILE), b"broken").unwrap();
+        assert!(a.refresh().is_err());
+        assert_eq!(a.theme_mode(), DesktopThemeMode::Dark);
+        assert!(a.close_to_tray());
+        assert_eq!(fs::read(root.join(SETTINGS_FILE)).unwrap(), b"broken");
+        fs::remove_file(root.join(SETTINGS_FILE)).unwrap();
+        assert!(a.refresh().is_err());
+        assert!(!root.join(SETTINGS_FILE).exists());
+        assert_eq!(a.language_code(), "de");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
