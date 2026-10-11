@@ -81,6 +81,7 @@
     readSceneFromYDoc,
     replaceSceneInYDoc
   } from '$lib/freeform/excalidraw-yjs';
+  import { EXCALIDRAW_IMAGE_ACCEPT } from '$lib/file-drop';
   import { toErrorMessage } from '$lib/api/errors';
 
   interface Props {
@@ -674,10 +675,15 @@
     <!--
       `freeform-canvas-host` gives app.css one stable, editor-agnostic
       hook for dockview drag routing and local canvas tweaks.
+
+      Excalidraw places one file per drop, hence `single`; the island picks
+      which one and readies it (see ExcalidrawIsland).
     -->
     <div
       bind:this={mountEl}
       class="freeform-canvas-host absolute inset-0"
+      data-file-drop-accept={isTrashed ? undefined : EXCALIDRAW_IMAGE_ACCEPT}
+      data-file-drop-single
     ></div>
   </div>
 </div>

@@ -6,12 +6,10 @@
  * scene snapshot bridge into that Y.Doc.
  */
 
-import {
-  Excalidraw,
-  CaptureUpdateAction
-} from '@excalidraw/excalidraw';
+import { Excalidraw, CaptureUpdateAction } from '@excalidraw/excalidraw';
 import '@excalidraw/excalidraw/index.css';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { DragEvent as ReactDragEvent } from 'react';
 import type * as Y from 'yjs';
 import type {
   ExcalidrawInitialDataState,
@@ -23,6 +21,14 @@ import {
   readSceneFromYDoc,
   type BindHandle
 } from './excalidraw-yjs';
+import { prepareDroppedImage } from './excalidraw-image-drop';
+import {
+  fileDropZoneFor,
+  filesClaimedByZone,
+  isReplayedFileDrop,
+  replayFileDrop
+} from '$lib/file-drop';
+import { tUi } from '$lib/settings/i18n.svelte';
 
 export type PenModeSetting = 'auto' | 'always' | 'off';
 
@@ -38,7 +44,9 @@ export interface ExcalidrawIslandProps {
   onApiReady?: (api: ExcalidrawImperativeAPI | null) => void;
 }
 
-function resolveTheme(colorScheme: ExcalidrawIslandProps['colorScheme']): Theme {
+function resolveTheme(
+  colorScheme: ExcalidrawIslandProps['colorScheme']
+): Theme {
   if (colorScheme === 'light' || colorScheme === 'dark') return colorScheme;
   if (
     typeof window !== 'undefined' &&
@@ -188,9 +196,62 @@ export default function ExcalidrawIsland({
     return () => root.removeEventListener('pointerdown', onPointerDown, true);
   }, [apiReady, penMode]);
 
+  const handleDropCapture = useCallback(
+    (event: ReactDragEvent<HTMLDivElement>) => {
+      const nativeEvent = event.nativeEvent;
+      if (isReplayedFileDrop(nativeEvent)) return;
+
+      // The one file this canvas takes from the drop: the same one the window
+      // router left to it (see $lib/file-drop), which need not be the first.
+      const [file] = filesClaimedByZone(
+        Array.from(event.dataTransfer.files),
+        fileDropZoneFor(event.target)
+      );
+      if (!file) return;
+
+      // Excalidraw's drop handler reads the first file only, loads the scene
+      // a PNG or SVG export carries instead of inserting the picture, and
+      // can't place an image whose MIME type the desktop left blank. Stop the
+      // original event and replay a drop of just the prepared file at the
+      // same point.
+      event.preventDefault();
+      event.stopPropagation();
+      nativeEvent.stopImmediatePropagation();
+
+      const target = event.target;
+      const point = {
+        clientX: event.clientX,
+        clientY: event.clientY,
+        screenX: event.screenX,
+        screenY: event.screenY
+      };
+
+      void prepareDroppedImage(file)
+        .then((image) => {
+          if (
+            !(target instanceof Element) ||
+            !rootRef.current?.contains(target)
+          ) {
+            return;
+          }
+          replayFileDrop(target, [image], point);
+        })
+        .catch((error) => {
+          console.error('[freeform-drop] image preparation failed', error);
+          apiRef.current?.setToast({
+            message: tUi('fileDrop.imageFailed'),
+            closable: true,
+            duration: 5000
+          });
+        });
+    },
+    []
+  );
+
   return (
     <div
       ref={rootRef}
+      onDropCapture={handleDropCapture}
       className={`freeform-excalidraw-host${reduceMotion ? ' reduce-motion' : ''}`}
       style={{ position: 'absolute', inset: 0 }}
     >

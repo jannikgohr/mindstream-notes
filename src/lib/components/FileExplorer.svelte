@@ -84,6 +84,8 @@
     type TreeItemRef
   } from './file-explorer-helpers';
   import { toErrorMessage } from '$lib/api/errors';
+  import { droppedPdfFiles, isFileDrag, PDF_ACCEPT } from '$lib/file-drop';
+  import { importDroppedPdfs } from '$lib/file-drop-import';
 
   interface Props {
     source?: DesktopNoteSource;
@@ -127,6 +129,9 @@
   // into your vault, which is out of scope here).
   const canCreate = $derived(source === 'home');
   const canReorganize = $derived(source === 'home');
+  // Dropped PDFs import into the folder under the pointer, in Home only: the
+  // other views fall through to the window-level import at the vault root.
+  const fileDropAccept = $derived(canCreate ? PDF_ACCEPT : undefined);
   const trashItemCount = $derived(source === 'trash' ? sourceNodes.length : 0);
 
   // ---------- Per-scope edit capabilities (Shared view) ----------
@@ -679,8 +684,36 @@
       (item) => item.kind === 'folder' && targetFolderId === item.id
     );
   }
+  // Files dragged in from the OS. The tree only declares itself a drop zone
+  // (see `fileDropAccept`) where a note can be created, and the window-level
+  // router in $lib/file-drop only lets a drop through when it holds a PDF.
+  function onFileDragOver(e: DragEvent, parentId: string | null) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    dragOver = !canStartDraft(parentId)
+      ? null
+      : parentId
+        ? `f:${parentId}`
+        : 'root';
+  }
+  function onFileDrop(e: DragEvent, parentId: string | null) {
+    e.preventDefault();
+    e.stopPropagation();
+    dragOver = null;
+    const pdfs = droppedPdfFiles(e);
+    if (pdfs.length === 0 || !canStartDraft(parentId)) return;
+    if (parentId) expanded[parentId] = true;
+    void importDroppedPdfs(pdfs, parentId, onOpenNote);
+  }
+  /** A file dropped on a note lands next to it. */
+  function noteParentId(noteId: string): string | null {
+    return tree.notesById[noteId]?.parent_collection_id ?? null;
+  }
+
   function onDragOverFolder(e: DragEvent, folderId: string) {
     if (!e.dataTransfer) return;
+    if (isFileDrag(e)) return onFileDragOver(e, folderId);
     // In the Shared view we still accept the dragover for our own tree drags so
     // the drop handler can run and explain a blocked move, but the cursor
     // reflects legality (no-drop when illegal) and only legal targets highlight.
@@ -700,6 +733,7 @@
     dragOver = `f:${folderId}`;
   }
   function onDragOverRoot(e: DragEvent) {
+    if (isFileDrag(e)) return onFileDragOver(e, null);
     if (!canReorganize) return;
     if (!e.dataTransfer) return;
     e.preventDefault();
@@ -707,6 +741,7 @@
     dragOver = 'root';
   }
   function onDragOverNote(e: DragEvent, noteId: string) {
+    if (isFileDrag(e)) return onFileDragOver(e, noteParentId(noteId));
     if (!canReorganize) return;
     if (!e.dataTransfer) return;
     e.preventDefault();
@@ -723,7 +758,12 @@
     if (!payload) return [];
     return payload.items ?? [{ kind: payload.kind, id: payload.id }];
   }
+  // Note rows have no drop handler for tree drags (those bubble to the root).
+  function onDropOnNote(e: DragEvent, noteId: string) {
+    if (isFileDrag(e)) onFileDrop(e, noteParentId(noteId));
+  }
   async function onDropOnFolder(e: DragEvent, targetFolderId: string) {
+    if (isFileDrag(e)) return onFileDrop(e, targetFolderId);
     e.preventDefault();
     e.stopPropagation();
     const payload = readPayload(e);
@@ -748,6 +788,7 @@
     await moveManyTo(items, targetFolderId);
   }
   async function onDropOnRoot(e: DragEvent) {
+    if (isFileDrag(e)) return onFileDrop(e, null);
     if (!canReorganize) return;
     e.preventDefault();
     const payload = readPayload(e);
@@ -813,12 +854,19 @@
     const onDocumentKeyDown = (event: KeyboardEvent) => {
       void onTreeKeydown(event);
     };
+    // The file-drop router swallows a drop the tree can't use (no PDF in
+    // it) before any row handler runs, which would leave the hover
+    // highlight stuck. An OS drag fires no `dragend` here either.
+    const onWindowFileDrop = (event: DragEvent) => {
+      if (isFileDrag(event)) dragOver = null;
+    };
     if (sourceChipRow) sourceObserver.observe(sourceChipRow);
     if (toolbarRow) toolbarObserver.observe(toolbarRow);
     document.addEventListener('pointerdown', onDocumentPointerDown, {
       capture: true
     });
     document.addEventListener('keydown', onDocumentKeyDown);
+    window.addEventListener('drop', onWindowFileDrop, true);
     requestAnimationFrame(() => {
       updateSourceChipCollapse();
       updateSortControlCollapse();
@@ -830,6 +878,7 @@
         capture: true
       });
       document.removeEventListener('keydown', onDocumentKeyDown);
+      window.removeEventListener('drop', onWindowFileDrop, true);
     };
   });
 
@@ -947,6 +996,7 @@
     class="flex-1 overflow-y-auto px-1 pb-2 pt-3"
     class:ring-1={dragOver === 'root'}
     class:ring-ring={dragOver === 'root'}
+    data-file-drop-accept={fileDropAccept}
     ondragover={onDragOverRoot}
     ondragleave={onDragLeave}
     ondrop={onDropOnRoot}
@@ -1114,6 +1164,7 @@
       ondragend={onDragEnd}
       ondragover={(e) => onDragOverNote(e, node.id)}
       ondragleave={onDragLeave}
+      ondrop={(e) => onDropOnNote(e, node.id)}
     >
       <button
         type="button"
