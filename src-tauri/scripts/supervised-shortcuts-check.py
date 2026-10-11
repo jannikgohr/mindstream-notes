@@ -181,7 +181,7 @@ def main():
         try:
             peer = wait(endpoint)
             wait(lambda: status()["initialized"] and any(entry["id"] == "other" and entry["ready"] for entry in status()["workers"]))
-            assert status()["contract"]["protocol"] == 6
+            assert status()["contract"]["protocol"] == 7
             if args.wait_for_window_close:
                 if args.autostart_hidden:
                     assert status()["active"] is None, "hidden worker incorrectly took focus recency"
@@ -210,6 +210,24 @@ def main():
                 return
             assert status()["shortcuts"]["vault_id"] == "capture"
             assert not status()["shortcutRegistration"]["registered"], "test root registered OS shortcuts"
+            owner = worker("other")
+            for enabled_value in [None, True]:
+                request_id = str(uuid.uuid4())
+                payload = {"command": "autostart", "vault_id": "other", "launch_id": owner["launch_id"], "enabled": enabled_value}
+                assert call(peer, payload, request_id)["Ok"] == {"accepted": True}
+                def autostart_terminal():
+                    progress = call(peer, {"command": "autostartStatus", "operation_id": request_id})["Ok"]
+                    return progress if progress["state"] != "pending" else None
+                progress = wait(autostart_terminal)
+                if enabled_value is None:
+                    assert progress == {"state": "ready", "enabled": False}
+                else:
+                    assert progress["state"] == "failed" and "dev/test" in progress["message"]
+                assert call(peer, payload, request_id)["Ok"] == {"accepted": True}
+                assert call(peer, {"command": "autostartStatus", "operation_id": request_id})["Ok"] == progress
+                assert "Err" in call(peer, {"command": "open", "vault_id": "capture"}, request_id)
+            assert "Err" in call(peer, {"command": "autostart", "vault_id": "other", "launch_id": str(uuid.uuid4()), "enabled": None})
+            print("Coordinator autostart read/retry/identity and disabled test-root writes passed")
             # Tray follows the disabled overall most-recent vault, independent
             # of the sole eligible capture vault selected by system shortcuts.
             recent = worker("other")

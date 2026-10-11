@@ -7,7 +7,8 @@ Schema settings now use root/vault documents. Opt-in supervision exports legacy
 browser state before opening isolated vault workers and can adopt surviving
 workers after a coordinator restart. Coordinator shortcut registration and
 eligible-vault action dispatch, shared tray routing and last-window coordinator
-exit pass Windows checks. Platform checks, automatic host revival, updater
+exit pass Windows checks. Coordinator autostart registration ownership is
+implemented. Platform checks, automatic host revival, updater
 integration and the vault-opening UI remain pending;
 normal startup and existing isolated test devices still use direct mode.
 Supervised worker close waits for content-window persistence. Whole-app Quit
@@ -1010,6 +1011,33 @@ computer use found no visible windows while the autostart worker was ready.
 A normal executable launch activated that worker, then two title-bar closes
 released every lease and exited the coordinator. OS autostart registration
 ownership is still pending along with updater centralization.
+
+OS autostart ownership slice on 2026-10-12: supervised workers no longer load
+the autostart plugin. The typed desktop settings bridge asks the coordinator
+to read or update the environment's startup registration. It requires a ready,
+registered worker identity and rejects new settings work while quitting.
+Accepted jobs are tracked before releasing coordinator admission. OS calls run
+off the event loop under RootLock, without contacting workers from that lock.
+Operation receipts retain success/failure, reject reused IDs across commands,
+and prevent retries from applying an older setting after a newer one. Direct
+desktop mode uses the same backend bridge; browser/mobile fallback stays inert.
+Dev/test reads report disabled and mutations fail without changing OS state.
+The opt-in runtime flag is preserved in the login launch entry. Start-in-tray
+changes only the root document, so it no longer disables/re-enables OS login
+registration. Runtime protocol 7 adds autostart requests and terminal status.
+
+Validation: Rust fmt/clippy and 865 enabled Rust tests passed, five ignored.
+The frontend check, affected ESLint, 48 settings/close tests, production frontend
+and embedded Windows builds passed. The fresh-root native check verified
+autostart reads, terminal replay, changed command/worker rejection and failure
+of dev/test registration writes, followed by the full tray/shortcut/shutdown
+regression scenarios. Computer use opened General settings and attempted to
+enable start on login in the isolated test root. The switch reverted to disabled,
+the saved root setting remained absent, and a coordinator read reported false.
+Both native title-bar closes exited the app and released every lease. Artifacts
+remain under `.output/coordinator-autostart-owner-app-check` and
+`.output/coordinator-autostart-owner-ui-check`. Real OS registration changes
+remain unverified.
 
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.

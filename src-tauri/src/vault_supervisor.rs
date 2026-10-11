@@ -42,6 +42,14 @@ enum HostCommand {
         action: crate::shortcut_actions::TrayCommand,
     },
     ShortcutRegistrationStatus,
+    Autostart {
+        vault_id: String,
+        launch_id: Uuid,
+        enabled: Option<bool>,
+    },
+    AutostartStatus {
+        operation_id: Uuid,
+    },
     Quit,
     DeviceSettingsChanged {
         vault_id: String,
@@ -129,6 +137,14 @@ struct Operation {
     reply: Value,
     at: Instant,
     open_result: Option<Result<(), String>>,
+    autostart_result: Option<Result<bool, String>>,
+}
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "state", rename_all = "camelCase", deny_unknown_fields)]
+enum AutostartProgress {
+    Pending,
+    Ready { enabled: bool },
+    Failed { message: String },
 }
 #[derive(Deserialize, Serialize, Debug, PartialEq, Eq)]
 #[serde(tag = "state", rename_all = "camelCase", deny_unknown_fields)]
@@ -158,9 +174,34 @@ enum Action {
     RefreshDeviceSettings,
     Shortcut(crate::hotkeys::GlobalShortcutCommandId, Option<String>),
     Tray(crate::shortcut_actions::TrayCommand),
+    Autostart(Option<bool>),
 }
 
 impl Book {
+    fn autostart_status(&self, id: Uuid) -> AppResult<AutostartProgress> {
+        let operation = self.operations.get(&id).ok_or_else(invalid)?;
+        if operation.input["command"].as_str() != Some("autostart") {
+            return Err(invalid());
+        }
+        Ok(match &operation.autostart_result {
+            None => AutostartProgress::Pending,
+            Some(Ok(enabled)) => AutostartProgress::Ready { enabled: *enabled },
+            Some(Err(message)) => AutostartProgress::Failed {
+                message: message.clone(),
+            },
+        })
+    }
+
+    fn complete_autostart(&mut self, id: Uuid, result: AppResult<bool>) {
+        if let Some(operation) = self.operations.get_mut(&id) {
+            if operation.input["command"].as_str() == Some("autostart")
+                && operation.autostart_result.is_none()
+            {
+                operation.autostart_result = Some(result.map_err(|error| error.to_string()));
+            }
+        }
+    }
+
     fn idle_exit_candidate(&self, jobs: &crate::vault_jobs::Jobs) -> bool {
         self.exported
             && self.had_ready_worker
@@ -274,6 +315,13 @@ impl Book {
                 None,
             ));
         }
+        if let HostCommand::AutostartStatus { operation_id } = command {
+            return Ok((
+                serde_json::to_value(self.autostart_status(operation_id)?)
+                    .map_err(|_| invalid())?,
+                None,
+            ));
+        }
         if let Some(operation_id) = self.quitting {
             if matches!(command, HostCommand::Quit) {
                 if self.operations.len() >= 1024 {
@@ -287,6 +335,7 @@ impl Book {
                         reply: reply.clone(),
                         at: Instant::now(),
                         open_result: None,
+                        autostart_result: None,
                     },
                 );
                 return Ok((reply, None));
@@ -297,6 +346,7 @@ impl Book {
                     | HostCommand::Activate
                     | HostCommand::Shortcut { .. }
                     | HostCommand::Tray { .. }
+                    | HostCommand::Autostart { .. }
             ) {
                 return Err(AppError::InvalidArg(
                     "the app is quitting; no new vault action was started".into(),
@@ -324,8 +374,26 @@ impl Book {
                 self.quitting = Some(request.id);
                 action = Some(Action::Quit);
             }
-            HostCommand::OpenStatus { .. } | HostCommand::ShortcutRegistrationStatus => {
+            HostCommand::OpenStatus { .. }
+            | HostCommand::ShortcutRegistrationStatus
+            | HostCommand::AutostartStatus { .. } => {
                 unreachable!()
+            }
+            HostCommand::Autostart {
+                vault_id,
+                launch_id,
+                enabled,
+            } => {
+                let launch = self.workers.get(&vault_id).ok_or_else(invalid)?;
+                if !self.exported
+                    || launch.id != launch_id
+                    || !launch.ready
+                    || launch.endpoint.is_none()
+                    || launch.error.is_some()
+                {
+                    return Err(invalid());
+                }
+                action = Some(Action::Autostart(enabled));
             }
             HostCommand::Tray { action: tray } => {
                 if !self.exported {
@@ -498,6 +566,7 @@ impl Book {
                 reply: reply.clone(),
                 at: Instant::now(),
                 open_result: None,
+                autostart_result: None,
             },
         );
         Ok((reply, action))
@@ -1032,6 +1101,13 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
             .spawn(move || {
                 let _job = job;
                 let target = match action {
+                    Action::Autostart(enabled) => {
+                        let result = crate::coordinator_autostart::read_or_set(&task_app, enabled);
+                        if let Ok(mut book) = task_app.state::<Host>().book.lock() {
+                            book.complete_autostart(request_id, result);
+                        }
+                        return;
+                    }
                     Action::Quit => {
                         finish_quit(&task_app, request_id);
                         return;
@@ -2164,6 +2240,35 @@ pub async fn open_profile_window(app: AppHandle, id: String) -> CommandResult<()
     .map_err(|_| invalid())??)
 }
 
+pub(crate) fn autostart_setting(app: &AppHandle, enabled: Option<bool>) -> AppResult<bool> {
+    let worker = app.state::<Worker>();
+    let host = worker.host.lock().map_err(|_| invalid())?.clone();
+    let request = request(&HostCommand::Autostart {
+        vault_id: worker.vault_id.clone(),
+        launch_id: worker.launch_id,
+        enabled,
+    })?;
+    host.retry_call(&request)?.map_err(AppError::InvalidArg)?;
+    let poll = self::request(&HostCommand::AutostartStatus {
+        operation_id: request.id,
+    })?;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let progress = host.retry_call(&poll)?.map_err(AppError::InvalidArg)?;
+        match serde_json::from_value::<AutostartProgress>(progress).map_err(|_| invalid())? {
+            AutostartProgress::Ready { enabled } => return Ok(enabled),
+            AutostartProgress::Failed { message } => return Err(AppError::InvalidArg(message)),
+            AutostartProgress::Pending => {}
+        }
+        if Instant::now() >= deadline {
+            return Err(AppError::InvalidArg(
+                "startup registration result is unavailable; reload the setting".into(),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
+}
+
 fn await_open_result(host: &Endpoint, operation_id: Uuid, deadline: Instant) -> AppResult<()> {
     let poll = request(&HostCommand::OpenStatus { operation_id })?;
     loop {
@@ -2185,6 +2290,95 @@ fn await_open_result(host: &Endpoint, operation_id: Uuid, deadline: Instant) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn autostart_requires_ready_owner_and_replays_terminal_result_without_mutation() {
+        let root = std::env::temp_dir().join(format!("ms-autostart-book-{}", Uuid::new_v4()));
+        let owner = crate::storage_locks::VaultLock::acquire(&root).unwrap();
+        let listener = ipc::Coordinator::for_worker(&owner).unwrap();
+        let instance = Uuid::new_v4();
+        let launch_id = Uuid::new_v4();
+        let mut book = Book {
+            exported: true,
+            ..Book::default()
+        };
+        let mut launch = pending(launch_id);
+        launch.endpoint = Some(listener.endpoint().clone());
+        book.workers.insert("a".into(), launch);
+        let get = request(&HostCommand::Autostart {
+            vault_id: "a".into(),
+            launch_id,
+            enabled: None,
+        })
+        .unwrap();
+        assert!(book.accept(instance, get.clone()).is_err());
+        book.workers.get_mut("a").unwrap().ready = true;
+        assert!(matches!(
+            book.accept(instance, get.clone()).unwrap().1,
+            Some(Action::Autostart(None))
+        ));
+        assert_eq!(
+            book.autostart_status(get.id).unwrap(),
+            AutostartProgress::Pending
+        );
+        book.complete_autostart(get.id, Ok(false));
+        book.complete_autostart(get.id, Ok(true));
+        assert_eq!(
+            book.autostart_status(get.id).unwrap(),
+            AutostartProgress::Ready { enabled: false }
+        );
+        assert!(book.accept(instance, get.clone()).unwrap().1.is_none());
+        assert!(book
+            .accept(
+                instance,
+                Request {
+                    id: get.id,
+                    payload: request(&HostCommand::Open {
+                        vault_id: "a".into()
+                    })
+                    .unwrap()
+                    .payload
+                }
+            )
+            .is_err());
+        assert!(book.open_status(get.id).is_err());
+        assert!(book.autostart_status(Uuid::new_v4()).is_err());
+        let set = request(&HostCommand::Autostart {
+            vault_id: "a".into(),
+            launch_id,
+            enabled: Some(true),
+        })
+        .unwrap();
+        assert!(matches!(
+            book.accept(instance, set.clone()).unwrap().1,
+            Some(Action::Autostart(Some(true)))
+        ));
+        book.complete_autostart(
+            set.id,
+            Err(AppError::InvalidArg("OS rejected registration".into())),
+        );
+        assert!(matches!(
+            book.autostart_status(set.id).unwrap(),
+            AutostartProgress::Failed { .. }
+        ));
+        assert!(book.accept(instance, set).unwrap().1.is_none());
+        book.accept(instance, request(&HostCommand::Quit).unwrap())
+            .unwrap();
+        assert!(book
+            .accept(
+                instance,
+                request(&HostCommand::Autostart {
+                    vault_id: "a".into(),
+                    launch_id,
+                    enabled: Some(false)
+                })
+                .unwrap()
+            )
+            .is_err());
+        drop(listener);
+        drop(owner);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn idle_exit_waits_for_ready_session_and_every_accepted_launch_job() {

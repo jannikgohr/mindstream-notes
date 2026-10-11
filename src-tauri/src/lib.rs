@@ -26,6 +26,8 @@ pub mod collab_events;
 pub mod collections;
 pub mod content_stats;
 #[cfg(desktop)]
+pub mod coordinator_autostart;
+#[cfg(desktop)]
 pub mod coordinator_ipc;
 #[cfg(desktop)]
 mod coordinator_shortcuts;
@@ -271,13 +273,18 @@ pub fn run() {
 
     #[cfg(desktop)]
     let app_handle = if environment::os_integrations_enabled() {
-        app_handle
-            .plugin(
-                tauri_plugin_autostart::Builder::new()
-                    .arg(AUTOSTART_ARG)
-                    .build(),
-            )
-            .plugin(tauri_plugin_updater::Builder::new().build())
+        let app_handle = if std::env::args().any(|arg| arg == "--vault-worker") {
+            app_handle
+        } else {
+            let mut autostart = tauri_plugin_autostart::Builder::new().arg(AUTOSTART_ARG);
+            // Preserve the opt-in runtime across login while default startup
+            // remains direct. Never register a worker's private launch args.
+            if std::env::args().any(|arg| arg == "--supervised-vaults") {
+                autostart = autostart.arg("--supervised-vaults");
+            }
+            app_handle.plugin(autostart.build())
+        };
+        app_handle.plugin(tauri_plugin_updater::Builder::new().build())
     } else {
         app_handle
     };
@@ -695,6 +702,10 @@ pub fn run() {
                 vault_supervisor::vault_worker_ready,
                 #[cfg(desktop)]
                 vault_supervisor::open_profile_window,
+                #[cfg(desktop)]
+                coordinator_autostart::get_start_on_login,
+                #[cfg(desktop)]
+                coordinator_autostart::set_start_on_login,
                 #[cfg(desktop)]
                 worker_shutdown::vault_window_close_ready,
                 #[cfg(desktop)]

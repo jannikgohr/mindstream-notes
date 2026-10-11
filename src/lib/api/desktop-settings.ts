@@ -53,6 +53,24 @@ export function getStartInTray(): Promise<boolean> {
   );
 }
 
+export function getStartOnLogin(): Promise<boolean> {
+  return invokeOrFallback<boolean>(
+    TauriCommandName.GetStartOnLogin,
+    undefined,
+    () => false,
+    (value) => assertBoolean(value, 'get_start_on_login')
+  );
+}
+
+export function setStartOnLogin(value: boolean): Promise<void> {
+  return invokeOrFallback<void>(
+    TauriCommandName.SetStartOnLogin,
+    { value },
+    () => undefined,
+    (response) => assertVoid(response, 'set_start_on_login response')
+  );
+}
+
 export function setStartInTray(value: boolean): Promise<void> {
   return invokeOrFallback<void>(
     TauriCommandName.SetStartInTray,

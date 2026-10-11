@@ -11,19 +11,20 @@
 
 import type { Component } from 'svelte';
 import { setMode } from 'mode-watcher';
-import type * as autostartPlugin from '@tauri-apps/plugin-autostart';
 import {
   getCloseToTray,
   getCustomWindowDecorations,
   getDesktopLanguage,
   getDesktopThemeMode,
   getStartInTray,
+  getStartOnLogin,
   isDesktopThemeMode,
   setCloseToTray,
   setCustomWindowDecorations,
   setDesktopLanguage,
   setDesktopThemeMode,
-  setStartInTray
+  setStartInTray,
+  setStartOnLogin
 } from '$lib/api/desktop-settings';
 import { isTauri } from '$lib/api/core';
 import { splitAvailable } from '$lib/editor/source/split-available.svelte';
@@ -65,32 +66,21 @@ function applyLanguage(value: unknown): void {
 }
 
 /**
- * Autostart is a desktop-only Tauri plugin (see Cargo.toml's cfg-gated
- * dep). Outside Tauri — `vite preview` in a plain browser, or the
- * Android build — the plugin's invoke() crashes because
- * window.__TAURI_INTERNALS__ doesn't exist (or doesn't carry the
- * autostart command). Report 'false' / no-op instead of throwing so
- * the settings dialog hydrates cleanly.
+ * The coordinator owns OS startup registration. Browser/mobile settings report
+ * false and skip writes; desktop vaults use the same typed backend bridge.
  */
 const autostartAvailable = () => isTauri() && !isMobile();
-
-function loadAutostart(): Promise<typeof autostartPlugin> {
-  return import('@tauri-apps/plugin-autostart');
-}
 
 export const SETTING_BINDINGS: Record<string, Binding> = {
   'general.startOnLogin': {
     hydrate: 'on-demand',
     get: async () => {
       if (!autostartAvailable()) return false;
-      const { isEnabled } = await loadAutostart();
-      return await isEnabled();
+      return await getStartOnLogin();
     },
     set: async (v) => {
       if (!autostartAvailable()) return;
-      const { enable, disable } = await loadAutostart();
-      if (v) await enable();
-      else await disable();
+      await setStartOnLogin(v === true);
     }
   },
   'general.closeToTray': {
@@ -109,11 +99,6 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
     set: async (v) => {
       if (!isTauri() || isMobile()) return;
       await setStartInTray(v === true);
-      const { isEnabled, enable, disable } = await loadAutostart();
-      if (await isEnabled()) {
-        await disable();
-        await enable();
-      }
     }
   },
   'appearance.customWindowDecorations': {
