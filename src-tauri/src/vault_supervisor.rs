@@ -1,0 +1,664 @@
+//! Supervised runtime integration. Startup remains opt-in while platform
+//! activation, coordinator recovery and OS integrations are being completed.
+use std::collections::BTreeMap;
+use std::process::Command;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use tauri::{AppHandle, Manager, WebviewWindow};
+use uuid::Uuid;
+
+use crate::coordinator_ipc::{self as ipc, Endpoint, Request, Running};
+use crate::error::{AppError, AppResult, CommandResult};
+use crate::vault_runtime::Role;
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "command", rename_all = "camelCase", deny_unknown_fields)]
+enum HostCommand {
+    Activate,
+    Open {
+        vault_id: String,
+    },
+    Authorize {
+        vault_id: String,
+        launch_id: Uuid,
+        coordinator_id: Uuid,
+    },
+    Register {
+        vault_id: String,
+        launch_id: Uuid,
+        endpoint: Endpoint,
+    },
+    Ready {
+        vault_id: String,
+        launch_id: Uuid,
+    },
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "command", rename_all = "camelCase", deny_unknown_fields)]
+enum WorkerCommand {
+    Activate,
+}
+
+struct Launch {
+    id: Uuid,
+    endpoint: Option<Endpoint>,
+    ready: bool,
+    error: Option<String>,
+}
+struct Operation {
+    input: Value,
+    reply: Value,
+    at: Instant,
+}
+#[derive(Default)]
+struct Book {
+    exported: bool,
+    last: Option<String>,
+    workers: BTreeMap<String, Launch>,
+    operations: BTreeMap<Uuid, Operation>,
+}
+
+enum Action {
+    Open(String),
+    ActivateLast,
+}
+
+impl Book {
+    fn remove_launch(&mut self, vault_id: &str, launch_id: Uuid) {
+        if self
+            .workers
+            .get(vault_id)
+            .is_some_and(|launch| launch.id == launch_id)
+        {
+            self.workers.remove(vault_id);
+            if self.last.as_deref() == Some(vault_id) {
+                self.last = None;
+            }
+        }
+    }
+
+    fn accept(&mut self, instance: Uuid, request: Request) -> AppResult<(Value, Option<Action>)> {
+        let command: HostCommand =
+            serde_json::from_value(request.payload.clone()).map_err(|_| invalid())?;
+        self.operations
+            .retain(|_, operation| operation.at.elapsed() < Duration::from_secs(600));
+        if let Some(operation) = self.operations.get(&request.id) {
+            if operation.input != request.payload {
+                return Err(invalid());
+            }
+            return Ok((operation.reply.clone(), None));
+        }
+        if self.operations.len() >= 1024 {
+            return Err(invalid());
+        }
+        let mut action = None;
+        match command {
+            HostCommand::Activate => {
+                if self.exported {
+                    action = Some(
+                        self.last
+                            .clone()
+                            .map(Action::Open)
+                            .unwrap_or(Action::ActivateLast),
+                    );
+                }
+            }
+            HostCommand::Open { vault_id } => {
+                if !self.exported || !crate::profiles::valid_id(&vault_id) {
+                    return Err(invalid());
+                }
+                action = Some(Action::Open(vault_id));
+            }
+            HostCommand::Authorize {
+                vault_id,
+                launch_id,
+                coordinator_id,
+            } => {
+                if coordinator_id != instance
+                    || !self.exported
+                    || !self.workers.get(&vault_id).is_some_and(|launch| {
+                        launch.id == launch_id && !launch.ready && launch.error.is_none()
+                    })
+                {
+                    return Err(invalid());
+                }
+            }
+            HostCommand::Register {
+                vault_id,
+                launch_id,
+                endpoint,
+            } => {
+                let launch = self.workers.get_mut(&vault_id).ok_or_else(invalid)?;
+                if launch.id != launch_id || launch.ready || launch.error.is_some() {
+                    return Err(invalid());
+                }
+                if launch
+                    .endpoint
+                    .as_ref()
+                    .is_some_and(|old| old.instance() != endpoint.instance())
+                {
+                    return Err(invalid());
+                }
+                launch.endpoint = Some(endpoint);
+            }
+            HostCommand::Ready {
+                vault_id,
+                launch_id,
+            } => {
+                let launch = self.workers.get_mut(&vault_id).ok_or_else(invalid)?;
+                if launch.id != launch_id || launch.endpoint.is_none() || launch.error.is_some() {
+                    return Err(invalid());
+                }
+                if !launch.ready {
+                    launch.ready = true;
+                    self.last = Some(vault_id.clone());
+                    action = Some(Action::Open(vault_id));
+                }
+            }
+        }
+        let reply = json!({"accepted":true});
+        self.operations.insert(
+            request.id,
+            Operation {
+                input: request.payload,
+                reply: reply.clone(),
+                at: Instant::now(),
+            },
+        );
+        Ok((reply, action))
+    }
+}
+pub struct Host {
+    instance: Uuid,
+    book: Mutex<Book>,
+    _server: Running,
+}
+pub struct Worker {
+    vault_id: String,
+    launch_id: Uuid,
+    host: Endpoint,
+    _server: Running,
+}
+
+fn invalid() -> AppError {
+    AppError::InvalidArg("vault coordinator request could not be completed".into())
+}
+
+fn request(command: &HostCommand) -> AppResult<Request> {
+    Ok(Request {
+        id: Uuid::new_v4(),
+        payload: serde_json::to_value(command).map_err(|_| invalid())?,
+    })
+}
+
+/// Preserve existing direct e2e devices and normal startup until the full
+/// supervised path passes its release gates. Explicit workers cannot fall back.
+pub fn startup_role(kind: crate::environment::Kind) -> AppResult<Role> {
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    if args
+        .iter()
+        .any(|a| a == "--supervised-vaults" || a == "--vault-worker")
+    {
+        Role::parse(kind, &args)
+    } else {
+        Ok(Role::Direct)
+    }
+}
+
+pub fn start_host(app: &tauri::App) -> AppResult<()> {
+    // Direct harness devices may override their vault directory. A supervisor
+    // must resolve every worker through one root index instead.
+    if crate::profiles::dir_override().is_some() {
+        return Err(AppError::InvalidArg(
+            "supervised startup requires a root override without a vault-directory override".into(),
+        ));
+    }
+    let root = crate::paths::app_data_root(app)?;
+    let coordinator = match ipc::elect(&root)? {
+        ipc::Election::Existing => {
+            ipc::request(&root, &request(&HostCommand::Activate)?)?
+                .map_err(AppError::InvalidArg)?;
+            app.handle().exit(0);
+            return Ok(());
+        }
+        ipc::Election::Owner(coordinator) => coordinator,
+    };
+    let index = crate::profiles::prepare_coordinator_index(&root)?;
+    let vault = crate::profiles::profile_dir(&root, &index.active);
+    crate::legacy_content::initialize_owner(&root, &index.active, &vault)?;
+    let instance = coordinator.endpoint().instance();
+    let handle = app.handle().clone();
+    let server = coordinator.serve(move |request| {
+        handle_host(&handle, request)
+            .map_err(|_| "vault request unavailable; ownership retained".into())
+    })?;
+    app.manage(Host {
+        instance,
+        book: Mutex::new(Book::default()),
+        _server: server,
+    });
+    let initial = index.active;
+    crate::legacy_export::begin(
+        app,
+        initial.clone(),
+        Box::new(move |app| {
+            if let Some(host) = app.try_state::<Host>() {
+                if let Ok(mut book) = host.book.lock() {
+                    book.exported = true;
+                }
+            }
+            if let Err(error) = open(&app, &initial) {
+                log::error!("[vaults] initial launch failed: {error}");
+            }
+        }),
+    )?;
+    Ok(())
+}
+
+fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
+    let host = app.try_state::<Host>().ok_or_else(invalid)?;
+    // Replies are acknowledgements. Root filesystem work and worker IPC run
+    // after this short critical section, never under the root document lock.
+    let request_id = request.id;
+    let (reply, action) = host
+        .book
+        .lock()
+        .map_err(|_| invalid())?
+        .accept(host.instance, request)?;
+    if let Some(action) = action {
+        let task_app = app.clone();
+        if let Err(error) = std::thread::Builder::new()
+            .name("vault-open".into())
+            .spawn(move || {
+                let target = match action {
+                    Action::Open(id) => Ok(id),
+                    Action::ActivateLast => crate::paths::app_data_root(&task_app)
+                        .and_then(|root| crate::profiles::prepare_coordinator_index(&root))
+                        .map(|index| index.active),
+                };
+                if let Err(error) = target.and_then(|vault_id| open(&task_app, &vault_id)) {
+                    log::error!("[vaults] open request failed: {error}");
+                }
+            })
+        {
+            if let Ok(mut book) = host.book.lock() {
+                book.operations.remove(&request_id);
+            }
+            return Err(error.into());
+        }
+    }
+    Ok(reply)
+}
+
+fn open(app: &AppHandle, vault_id: &str) -> AppResult<()> {
+    let root = crate::paths::app_data_root(app)?;
+    let index = crate::profiles::prepare_coordinator_index(&root)?;
+    if !index.profiles.iter().any(|vault| vault.id == vault_id) {
+        return Err(invalid());
+    }
+    let directory = crate::profiles::profile_dir(&root, vault_id);
+    if !directory.is_dir() {
+        return Err(invalid());
+    }
+    // Complete fallible preparation before reserving the launch. A filesystem
+    // error must not leave a vault permanently marked as starting.
+    #[cfg(windows)]
+    let identity = crate::browser_identity::Identity::for_vault(&root, vault_id, &directory)?;
+    let executable = std::env::current_exe()?;
+    let host = app.state::<Host>();
+    let mut book = host.book.lock().map_err(|_| invalid())?;
+    if !book.exported {
+        return Err(invalid());
+    }
+    if let Some(launch) = book.workers.get(vault_id) {
+        if let Some(error) = &launch.error {
+            return Err(AppError::InvalidArg(error.clone()));
+        }
+        let endpoint = launch.ready.then(|| launch.endpoint.clone()).flatten();
+        drop(book);
+        if let Some(endpoint) = endpoint {
+            endpoint
+                .call(&Request {
+                    id: Uuid::new_v4(),
+                    payload: serde_json::to_value(WorkerCommand::Activate)
+                        .map_err(|_| invalid())?,
+                })?
+                .map_err(AppError::InvalidArg)?;
+        }
+        return Ok(());
+    }
+    let launch_id = Uuid::new_v4();
+    book.workers.insert(
+        vault_id.into(),
+        Launch {
+            id: launch_id,
+            endpoint: None,
+            ready: false,
+            error: None,
+        },
+    );
+    drop(book);
+    let mut command = Command::new(executable);
+    // The index and vault ID were validated above; worker arguments contain no
+    // filesystem operations. Release the reservation if validation ever fails.
+    let arguments = match Role::worker_arguments(vault_id, launch_id, host.instance) {
+        Ok(arguments) => arguments,
+        Err(error) => {
+            host.book
+                .lock()
+                .map_err(|_| invalid())?
+                .remove_launch(vault_id, launch_id);
+            return Err(error);
+        }
+    };
+    command.args(arguments);
+    // Override inherited test/legacy folders before WebView2 starts. Changing a
+    // process environment after the runtime creates threads would be unsafe.
+    #[cfg(windows)]
+    command.env("WEBVIEW2_USER_DATA_FOLDER", &identity.directory);
+    command
+        .env_remove(crate::profiles::PROFILE_DIR_ENV)
+        .env_remove(crate::profiles::PROFILE_ID_ENV);
+    // Start the monitor before creating the child, so thread creation failure
+    // cannot leave a live worker without its exit observer.
+    let task_app = app.clone();
+    let task_vault = vault_id.to_owned();
+    if let Err(error) = std::thread::Builder::new()
+        .name("vault-worker-exit".into())
+        .spawn(move || {
+            let (result, released) = match command.spawn() {
+                Ok(mut child) => {
+                    let result = child.wait();
+                    let released = result.is_ok();
+                    (result, released)
+                }
+                Err(error) => (Err(error), true),
+            };
+            // wait failure does not prove exit. Retain the launch rather than
+            // treating an unknown live owner as gone.
+            if released {
+                if let Some(host) = task_app.try_state::<Host>() {
+                    if let Ok(mut book) = host.book.lock() {
+                        book.remove_launch(&task_vault, launch_id);
+                    }
+                }
+            }
+            match result {
+                Ok(status) if !status.success() => {
+                    log::warn!("[vaults] worker exited unsuccessfully")
+                }
+                Err(error) => log::warn!("[vaults] worker launch or wait failed: {error}"),
+                _ => {}
+            }
+        })
+    {
+        host.book
+            .lock()
+            .map_err(|_| invalid())?
+            .remove_launch(vault_id, launch_id);
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+pub fn authorize_worker(app: &AppHandle, role: &Role) -> AppResult<()> {
+    let Role::Worker {
+        vault_id,
+        launch_id,
+        coordinator_id,
+    } = role
+    else {
+        return Err(invalid());
+    };
+    let host = Endpoint::read(&crate::paths::app_data_root(app)?)?;
+    if host.instance() != *coordinator_id {
+        return Err(invalid());
+    }
+    host.call(&request(&HostCommand::Authorize {
+        vault_id: vault_id.clone(),
+        launch_id: *launch_id,
+        coordinator_id: *coordinator_id,
+    })?)?
+    .map_err(AppError::InvalidArg)?;
+    Ok(())
+}
+
+pub fn register_worker(
+    app: &AppHandle,
+    role: &Role,
+    ownership: &crate::storage_locks::VaultLock,
+) -> AppResult<()> {
+    let Role::Worker {
+        vault_id,
+        launch_id,
+        coordinator_id,
+    } = role
+    else {
+        return Err(invalid());
+    };
+    let host = Endpoint::read(&crate::paths::app_data_root(app)?)?;
+    if host.instance() != *coordinator_id {
+        return Err(invalid());
+    }
+    let listener = ipc::Coordinator::for_worker(ownership)?;
+    let endpoint = listener.endpoint().clone();
+    let handle = app.clone();
+    let server = listener.serve(move |request| {
+        let _: WorkerCommand = serde_json::from_value(request.payload)
+            .map_err(|_| "invalid worker request".to_string())?;
+        let app = handle.clone();
+        handle
+            .run_on_main_thread(move || crate::tray::focus_main_window(&app))
+            .map_err(|_| "worker activation unavailable".to_string())?;
+        Ok(json!({"accepted":true}))
+    })?;
+    host.call(&request(&HostCommand::Register {
+        vault_id: vault_id.clone(),
+        launch_id: *launch_id,
+        endpoint,
+    })?)?
+    .map_err(AppError::InvalidArg)?;
+    app.manage(Worker {
+        vault_id: vault_id.clone(),
+        launch_id: *launch_id,
+        host,
+        _server: server,
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn vault_worker_ready(app: AppHandle, window: WebviewWindow) -> CommandResult<()> {
+    if window.label() != "main" {
+        return Ok(());
+    }
+    let Some(worker) = app.try_state::<Worker>() else {
+        return Ok(());
+    };
+    let request = request(&HostCommand::Ready {
+        vault_id: worker.vault_id.clone(),
+        launch_id: worker.launch_id,
+    })?;
+    let host = worker.host.clone();
+    Ok(tauri::async_runtime::spawn_blocking(move || {
+        host.call(&request)?
+            .map(|_| ())
+            .map_err(AppError::InvalidArg)
+    })
+    .await
+    .map_err(|_| invalid())??)
+}
+
+#[tauri::command]
+pub async fn open_profile_window(app: AppHandle, id: String) -> CommandResult<()> {
+    let worker = app.try_state::<Worker>().ok_or_else(invalid)?;
+    let request = request(&HostCommand::Open { vault_id: id })?;
+    let host = worker.host.clone();
+    Ok(tauri::async_runtime::spawn_blocking(move || {
+        host.call(&request)?
+            .map(|_| ())
+            .map_err(AppError::InvalidArg)
+    })
+    .await
+    .map_err(|_| invalid())??)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pending(id: Uuid) -> Launch {
+        Launch {
+            id,
+            endpoint: None,
+            ready: false,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn an_old_exit_cannot_remove_a_replacement_worker_and_failed_launches_can_retry() {
+        let old = Uuid::new_v4();
+        let replacement = Uuid::new_v4();
+        let mut book = Book::default();
+        book.workers.insert("a".into(), pending(replacement));
+        book.last = Some("a".into());
+        book.remove_launch("a", old);
+        assert_eq!(book.workers["a"].id, replacement);
+        assert_eq!(book.last.as_deref(), Some("a"));
+        book.remove_launch("a", replacement);
+        assert!(!book.workers.contains_key("a"));
+        assert!(book.last.is_none());
+        book.workers.insert("a".into(), pending(Uuid::new_v4()));
+        assert!(book.workers.contains_key("a"));
+    }
+
+    #[test]
+    fn workers_need_the_exact_pending_launch_and_cannot_register_ready_before_an_endpoint() {
+        let instance = Uuid::new_v4();
+        let launch = Uuid::new_v4();
+        let mut book = Book::default();
+        book.workers.insert("default".into(), pending(launch));
+        let authorize = |vault_id: &str, launch_id, coordinator_id| {
+            request(&HostCommand::Authorize {
+                vault_id: vault_id.into(),
+                launch_id,
+                coordinator_id,
+            })
+            .unwrap()
+        };
+        assert!(book
+            .accept(instance, authorize("default", launch, instance))
+            .is_err());
+        book.exported = true;
+        for wrong in [
+            authorize("other", launch, instance),
+            authorize("default", Uuid::new_v4(), instance),
+            authorize("default", launch, Uuid::new_v4()),
+        ] {
+            assert!(book.accept(instance, wrong).is_err());
+        }
+        assert!(book
+            .accept(instance, authorize("default", launch, instance))
+            .is_ok());
+        assert!(book
+            .accept(
+                instance,
+                request(&HostCommand::Ready {
+                    vault_id: "default".into(),
+                    launch_id: launch,
+                })
+                .unwrap()
+            )
+            .is_err());
+        assert!(!book.workers["default"].ready);
+        assert!(book.last.is_none());
+    }
+
+    #[test]
+    fn a_retried_old_ready_request_cannot_reactivate_it_after_another_vault_became_ready() {
+        let root = std::env::temp_dir().join(format!("ms-runtime-book-{}", Uuid::new_v4()));
+        let owner = crate::storage_locks::VaultLock::acquire(&root).unwrap();
+        let listener = ipc::Coordinator::for_worker(&owner).unwrap();
+        let endpoint = listener.endpoint().clone();
+        let instance = Uuid::new_v4();
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        let mut book = Book {
+            exported: true,
+            ..Book::default()
+        };
+        for (id, launch) in [("a", a), ("b", b)] {
+            book.workers.insert(id.into(), pending(launch));
+            book.accept(
+                instance,
+                request(&HostCommand::Register {
+                    vault_id: id.into(),
+                    launch_id: launch,
+                    endpoint: endpoint.clone(),
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let ready = request(&HostCommand::Ready {
+            vault_id: "a".into(),
+            launch_id: a,
+        })
+        .unwrap();
+        assert!(
+            matches!(book.accept(instance, ready.clone()).unwrap().1, Some(Action::Open(id)) if id == "a")
+        );
+        book.accept(
+            instance,
+            request(&HostCommand::Ready {
+                vault_id: "b".into(),
+                launch_id: b,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(book.accept(instance, ready.clone()).unwrap().1.is_none());
+        assert_eq!(book.last.as_deref(), Some("b"));
+        assert!(book
+            .accept(
+                instance,
+                request(&HostCommand::Ready {
+                    vault_id: "a".into(),
+                    launch_id: a,
+                })
+                .unwrap()
+            )
+            .unwrap()
+            .1
+            .is_none());
+        assert_eq!(book.last.as_deref(), Some("b"));
+        let changed = Request {
+            id: ready.id,
+            payload: request(&HostCommand::Open {
+                vault_id: "b".into(),
+            })
+            .unwrap()
+            .payload,
+        };
+        assert!(book.accept(instance, changed).is_err());
+        assert!(book
+            .accept(
+                instance,
+                request(&HostCommand::Register {
+                    vault_id: "a".into(),
+                    launch_id: a,
+                    endpoint,
+                })
+                .unwrap()
+            )
+            .is_err());
+        drop(listener);
+        drop(owner);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

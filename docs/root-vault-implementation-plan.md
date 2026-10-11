@@ -3,8 +3,10 @@
 Status: restore safety, atomic document writes, environment identity, vault
 ownership, root desktop settings, dictionary publication, root recovery, and
 vault signing credentials are implemented and pass the Windows checks.
-Schema settings now use root/vault documents. Concurrent worker coordination
-and the remaining browser-store migration are pending.
+Schema settings now use root/vault documents. Opt-in supervision exports legacy
+browser state before opening isolated vault workers. Coordinator recovery,
+platform activation, shared OS integrations and the vault-opening UI remain
+pending; normal startup and existing isolated test devices still use direct mode.
 
 Global plugin packages and theme presets are separate follow-up projects:
 
@@ -405,6 +407,36 @@ five tests remain ignored. The supervisor still must load/register the verified
 source before opening isolated workers.
 
 Estimate: 5 to 7 working days, plus changes required by the spike.
+
+Supervised startup slice on 2026-10-11: `--supervised-vaults` starts a long-lived
+host without a vault database. A hidden legacy-origin document snapshots raw
+localStorage before running any app code, retains it encrypted, and seals it
+before workers can launch. Original browser values remain intact. A restart
+between capture and sealing finishes the saved capture rather than exporting
+changed bytes. Workers require an authorized launch identity, own their physical
+vault before registering, load the verified migration source, and use isolated
+WebView stores. Main windows remain hidden until native settings initialization
+finishes. Repeated readiness reports do not reactivate old windows. Requests
+deduplicate by operation ID and reserve one launch per vault. Filesystem or
+spawn failure cannot leave a permanent starting reservation; an unknown worker
+exit retains ownership rather than assuming the worker died.
+
+The Windows native fixture opened Default and Second simultaneously with one
+host and two workers, two browser directories and two vault databases. Reopening
+Second reused its window. The host had no database. This verifies basic launch
+and visibility, not Windows foreground permission, most-recent focus routing,
+graceful editor shutdown or crash adoption. Logs remain in
+`.output/supervised-startup-app-check`. The computer-use connection subsequently
+failed with a missing native pipe, including after retry and kernel reset.
+Normal startup stays direct until the remaining coordination gates pass. Root
+hotkeys/tray/updater ownership, persisted worker registration and recovery,
+cross-process settings events, macOS lifecycle, Linux activation and the handoff
+UI remain required. Shared-root fixtures use only `MINDSTREAM_ROOT_DIR`; the
+existing vault-directory override is rejected in supervised mode.
+Rust fmt, clippy with warnings denied, and the full serial suite pass 801 unit
+tests and one integration test, with five ignored tests. The affected frontend
+checks pass 23 tests, including delayed/failed native settings readiness. Svelte
+checks and affected ESLint pass without errors.
 
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.

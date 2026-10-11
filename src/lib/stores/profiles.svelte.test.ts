@@ -1,11 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { listProfiles, setSettingsVaultId } = vi.hoisted(() => ({
+const { listProfiles, setSettingsVaultId, workerReady } = vi.hoisted(() => ({
   listProfiles: vi.fn(),
-  setSettingsVaultId: vi.fn()
+  setSettingsVaultId: vi.fn(),
+  workerReady: vi.fn()
 }));
 vi.mock('$lib/api/profiles', () => ({ listProfiles }));
 vi.mock('$lib/settings/store.svelte', () => ({ setSettingsVaultId }));
+vi.mock('$lib/api/core', async (original) => ({
+  ...(await original<typeof import('$lib/api/core')>()),
+  invokeOrFallback: workerReady
+}));
 
 import { currentProfile, loadProfiles, profilesState } from './profiles.svelte';
 
@@ -21,6 +26,7 @@ const VIEW = {
 beforeEach(() => {
   listProfiles.mockReset();
   setSettingsVaultId.mockReset();
+  workerReady.mockReset().mockResolvedValue(undefined);
   profilesState.active = 'default';
   profilesState.indexActive = 'default';
   profilesState.profiles = [];
@@ -28,6 +34,36 @@ beforeEach(() => {
 });
 
 describe('loadProfiles', () => {
+  it('reports worker readiness only after vault settings finish initializing', async () => {
+    let finishSettings: () => void = () => {};
+    listProfiles.mockResolvedValue(VIEW);
+    setSettingsVaultId.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finishSettings = resolve;
+      })
+    );
+    const loading = loadProfiles();
+    await vi.waitFor(() =>
+      expect(setSettingsVaultId).toHaveBeenCalledWith('work')
+    );
+    expect(workerReady).not.toHaveBeenCalled();
+    expect(profilesState.loaded).toBe(false);
+    finishSettings();
+    await loading;
+    expect(workerReady).toHaveBeenCalledOnce();
+    expect(workerReady.mock.calls[0][0]).toBe('vault_worker_ready');
+  });
+
+  it('does not report readiness when native vault settings cannot initialize', async () => {
+    listProfiles.mockResolvedValue(VIEW);
+    setSettingsVaultId.mockRejectedValue(
+      new Error('invalid retained settings')
+    );
+    await loadProfiles();
+    expect(workerReady).not.toHaveBeenCalled();
+    expect(profilesState.loaded).toBe(false);
+  });
+
   it('populates the reactive state and syncs the settings vault id', async () => {
     listProfiles.mockResolvedValue(VIEW);
     await loadProfiles();

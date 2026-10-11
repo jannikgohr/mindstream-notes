@@ -104,9 +104,9 @@ plaintext/key buffers are zeroed. Root locking, atomic publication and validated
 previous copies cover updates before an origin is sealed. An immutable receipt
 binds each sealed origin to its capture checksum. Recovery refuses an older
 archive that lacks a completed capture. A missing keystore key cannot be replaced
-when ciphertext or completion receipts exist. This is the storage component;
-coordinator-driven legacy WebView export and per-vault classification are still
-pending. Production startup continues to use its existing browser store.
+when ciphertext or completion receipts exist. Opt-in supervised startup now
+exports from the legacy origin before opening isolated workers. Normal startup
+continues to use its existing browser store while coordination is completed.
 
 Per-vault classification is now implemented in `browser_migration.rs` and wired
 into the native settings, content and signing consumers when a worker has a
@@ -115,8 +115,18 @@ destination. Unscoped content checks the pinned physical owner; signing keys
 match the exact legacy encoded server/username key and stay outside settings
 snapshots. Existing vault credentials win over stale retained bytes. The archive
 preference path has separate device and owner-content receipts, including when a
-different vault opens first. The supervisor/export integration remains pending;
-normal startup does not yet manage a `Source` or isolate its browser store.
+different vault opens first. Supervised workers now load a verified `Source`
+before database/frontend initialization. Normal startup still uses direct mode.
+
+`legacy_export.rs`, `legacy-export.js` and the standalone export page perform
+the host-side capture without loading app code, plugins or account sessions.
+All localStorage values are captured synchronously, including unknown and
+malformed strings. A read error stops worker startup and displays a migration
+failure window. The native command validates the window, page and origin before
+publication. Incoming private values are zeroed on validation failures and when
+a saved capture already exists. Interrupted capture/seal publication resumes
+from the encrypted saved capture; it cannot replace retained bytes by reopening
+the browser. Original localStorage is never removed by this migration.
 
 ## Migration sequence
 

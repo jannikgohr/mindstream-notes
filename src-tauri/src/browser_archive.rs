@@ -404,6 +404,41 @@ pub fn load(root: &Path, service: &str, origin: &str) -> AppResult<Option<Snapsh
     load_file(root, &entry, &aad, origin)
 }
 
+/// Finish a capture interrupted between ciphertext publication and sealing.
+/// The saved capture wins; reopening/exporting a browser store cannot replace
+/// bytes already captured before a crash. No key is created for an empty root.
+pub fn resume_export(root: &Path, service: &str, origin: &str) -> AppResult<bool> {
+    let (entry, aad) = identity(root, service)?;
+    resume_export_file(root, &entry, &aad, origin)
+}
+
+fn resume_export_file(root: &Path, entry: &Entry, aad: &[u8], origin: &str) -> AppResult<bool> {
+    if !valid_origin(origin) {
+        return Err(invalid());
+    }
+    let _lock = RootLock::acquire(root)?;
+    if !root.join(FILE).try_exists()? && !root.join(format!("{FILE}.previous")).try_exists()? {
+        if !seals(root)?.is_empty() {
+            return Err(invalid());
+        }
+        return Ok(false);
+    }
+    let Loaded { archive, seals, .. } = read(root, entry, aad)?;
+    let Some(snapshot) = archive.captures.get(origin) else {
+        return Ok(false);
+    };
+    if !seals.contains_key(origin) {
+        let raw = serde_json::to_vec(&Seal {
+            version: 1,
+            origin: origin.into(),
+            checksum: snapshot.checksum.clone(),
+        })
+        .map_err(|_| invalid())?;
+        crate::atomic_file::write(&seal_path(root, origin), &raw)?;
+    }
+    Ok(true)
+}
+
 fn load_file(root: &Path, entry: &Entry, aad: &[u8], origin: &str) -> AppResult<Option<Snapshot>> {
     let _lock = RootLock::acquire(root)?;
     if !root.join(FILE).try_exists()? && !root.join(format!("{FILE}.previous")).try_exists()? {

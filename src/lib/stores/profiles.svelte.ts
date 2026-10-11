@@ -10,6 +10,7 @@
 
 import { listProfiles, type Profile } from '$lib/api/profiles';
 import { setSettingsVaultId } from '$lib/settings/store.svelte';
+import { invokeOrFallback, TauriCommandName, assertVoid } from '$lib/api/core';
 
 interface ProfilesState {
   /** The vault loaded by this running process. */
@@ -45,6 +46,12 @@ export async function loadProfiles(): Promise<void> {
         profilesState.indexActive = view.index_active;
         profilesState.profiles = view.profiles;
         profilesState.loaded = true;
+        await invokeOrFallback(
+          TauriCommandName.VaultWorkerReady,
+          undefined,
+          () => undefined,
+          (value) => assertVoid(value, 'vault worker readiness')
+        );
       })
       .catch((err) => {
         console.warn('[profiles] load failed', err);

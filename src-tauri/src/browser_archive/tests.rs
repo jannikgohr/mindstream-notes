@@ -69,6 +69,23 @@ fn values() -> Values {
 }
 
 #[test]
+fn startup_seals_the_saved_capture_after_interruption_and_never_recaptures() {
+    let fixture = Fixture::new();
+    let aad = b"test environment and canonical root";
+    assert!(!resume_export_file(&fixture.root, &fixture.entry, aad, ORIGIN).unwrap());
+    let raw = values();
+    fixture.capture(ORIGIN, raw.clone()).unwrap();
+    assert!(fixture.load(ORIGIN).is_err());
+    assert!(resume_export_file(&fixture.root, &fixture.entry, aad, ORIGIN).unwrap());
+    assert_eq!(fixture.load(ORIGIN).unwrap().unwrap().values, raw);
+    assert!(fixture.capture(ORIGIN, Values::new()).is_err());
+    assert!(resume_export_file(&fixture.root, &fixture.entry, aad, ORIGIN).unwrap());
+    assert!(
+        !resume_export_file(&fixture.root, &fixture.entry, aad, "http://tauri.localhost").unwrap()
+    );
+}
+
+#[test]
 fn preserves_raw_unknown_credentials_and_origin_then_seals_against_changes() {
     let fixture = Fixture::new();
     let status = fixture.capture(ORIGIN, values()).unwrap();
