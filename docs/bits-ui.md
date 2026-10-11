@@ -6,17 +6,16 @@ adding a dialog or diagnosing a failure.
 
 ## Dependency changes
 
-The current dependency is pinned to `1.0.0-next.78` with a pnpm patch in
-[`patches/`](../patches/README.md). Frozen-lockfile installation applies the
-patch in local builds and CI. Do not edit installed files or import private
-`bits-ui/*` modules into app code; ESLint rejects those imports.
+The current dependency is pinned to `2.19.5` and carries no patch. Do not edit
+installed files or import private `bits-ui/*` modules into app code; ESLint
+rejects those imports. A fix to library internals belongs in a pnpm patch
+under `patches/`, listed in `patchedDependencies` in `pnpm-workspace.yaml`, so
+that frozen-lockfile installation applies it in local builds and CI.
 
-Move to a stable release in a dedicated migration. Bits UI's
-[migration guide](https://www.bits-ui.com/docs/migration-guide) warns that
-component APIs changed across the prerelease boundary. Review the components
+Move across a major version in a dedicated migration. Review the components
 we use: Dialog, AlertDialog, Select, Popover, Tabs, and Portal, plus the
-WithElementRef type. Check the guide and release notes for the candidate
-version, rather than applying examples for a different version.
+WithElementRef type. Check the release notes for the candidate version,
+rather than applying examples for a different version.
 
 For a Bits UI, Svelte, or supporting dependency update:
 
@@ -33,11 +32,37 @@ For a Bits UI, Svelte, or supporting dependency update:
    engine differences, but does not reproduce the WebKitGTK/native IPC
    environment completely. Ready PRs enable E2E; for a draft use the existing
    `ci:app-e2e` label or dispatch Test manually.
-5. Remove the patch only when these behavior tests pass without it, including
-   genuine close and reopen behavior. Update the patch notes with that result.
+5. Remove a patch only when these behavior tests pass without it, including
+   genuine close and reopen behavior. Record that result in this file.
 
 Do not combine a library migration with unrelated workflow changes. A green
 type check proves API compatibility, not correct focus behavior.
+
+## Library defaults we rely on
+
+AlertDialog focuses its content element on open, so that a screen reader
+announces the title and description. ConfirmDialog, ExportResultDialog, and
+ImportChoiceDialog take that default: Enter does nothing until the user tabs
+to a button. `1.0.0-next.78` focused the Cancel button instead.
+
+ImportNotesDialog overrides the default to focus its persistent Cancel/Stop
+button, because the other controls are replaced at every stage change.
+
+## Removed focus-scope patch
+
+Until the move to `2.19.5` the project pinned `1.0.0-next.78` with a patch to
+`use-focus-scope.svelte.js`. That version deferred a focus scope's removal by
+a zero-delay timer. The importer changes its content from source selection to
+configuration while Settings remains open, and its scope registered again
+before the timer ran. The stale callback then removed the live importer scope
+and resumed Settings, leaving both dialogs trapping focus. Focusing an import
+field bounced between the two until the stack overflowed. The patch made the
+callback skip a scope that had registered again.
+
+Bits UI `2.8.1` rewrote the focus scope. Removal is synchronous, and only the
+scope on top of the stack traps focus, so the patch has no code left to
+guard. `pnpm test:e2e:dialogs` passes on `2.19.5` without it in Chromium and
+WebKit.
 
 ## Dialog behavior to test
 
