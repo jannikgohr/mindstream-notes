@@ -26,6 +26,9 @@ Global plugin packages and theme presets are separate follow-up projects:
 | Select a closed vault with a preference             | Use it; explicit alternative actions remain available.                               |
 | Ctrl + left click a vault                           | Request a new window regardless of the preference.                                   |
 | Request an already-open vault                       | Focus its existing window and keep the source vault running.                         |
+| System-wide shortcut with one eligible vault        | Route to that vault, opening it first if needed.                                     |
+| System-wide shortcut with several eligible vaults   | Route to the most recently used eligible vault.                                      |
+| No vault enables system-wide shortcuts              | Register no system-wide shortcuts; window-local shortcuts continue to work.          |
 | Change the opening preference                       | Device settings offer "Ask every time", "This window", and "New window".             |
 | Open two vaults using one account                   | Allow. Account identity is not a local ownership key.                                |
 | Delete an open or hidden vault                      | Refuse, including ownership by another worker.                                       |
@@ -52,6 +55,39 @@ flow and adopts compatible storage and recovery fixes.
 Account remains vault-specific. Mode and preset selection are independent. The
 appearance follow-up moves accent and UI font size to device scope; editor font
 size and line height remain vault preferences.
+
+### Global shortcut decision on 2026-10-11
+
+The owner chose vault-specific `hotkeys.globalShortcuts` eligibility. Bindings
+remain device preferences at the root. Only the coordinator registers with the
+OS; a worker changing its eligibility never competes for registration itself.
+Keeping exactly one vault enabled makes it the capture vault without a separate
+capture-destination setting. Several enabled vaults use the most recently used
+eligible vault, excluding disabled vaults even when they have focus.
+
+Eligibility includes configured closed vaults. Open the chosen vault and await
+readiness before executing; do not create an empty replacement for a missing
+vault. Remember eligible-vault recency independently of the overall last-used
+vault. Pin the destination at keypress and recheck eligibility before writing.
+Failure, disablement or a closing target reports failure without silently
+rerouting to a different vault. Show app uses the same eligible-vault routing;
+tray and ordinary launch continue their overall last-used-vault behavior.
+
+With no eligible vaults, unregister OS shortcuts. Window-local commands remain
+available in every vault. When OS shortcuts are active, their chords route to
+the eligible destination even if a disabled vault is foreground. Coordinate
+native and frontend dispatch so one press cannot also execute a local duplicate.
+Keep the current shared bindings rather than introducing separate local/global
+bindings. Dev and test instances retain OS registration disabled. Explicit Quit
+releases registrations; shortcut use requires a running coordinator.
+
+Migrate the old root enable flag once to its recorded legacy owner, or the
+selected migration vault if no owner was recorded. Existing vault values win;
+retain recovery evidence and never copy an enabled flag into every new vault.
+Default eligibility remains false. The settings UI identifies this toggle as
+vault-specific and exposes actual registration failures separately from saved
+preferences. Test zero/one/multiple eligible vaults, closed capture vaults,
+disabled foreground vaults, recency, shutdown races and IPC retries.
 
 ## Architecture checks and accepted platform risk
 
@@ -764,6 +800,17 @@ Keep supervised mode opt-in until busy-job, dirty-editor and handoff checks
 are complete. The full lint run also found an unhandled sidebar-opening
 promise in the hotkey catalogue; its rejection is now handled.
 
+Preview-service cleanup slice on 2026-10-11: a session owns its child, input and
+proxy routes immediately during startup. Dropping a partial session, failed
+startup, replaced session or an abandoned async result reaps those resources.
+The queued startup result retains its service job until registration or cleanup,
+so close cannot finish its service drain before an abandoned child is reaped.
+Concurrent restarts use unique inputs and cannot delete each other's source file.
+Rust fmt/clippy and the full serial suite pass 836 unit tests and one integration
+test, with five ignored tests. A real subprocess fixture verifies that dropping
+an unclaimed startup result releases its OS lease, removes both proxy routes and
+the input, and permits the service drain to complete.
+
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.
 
@@ -786,11 +833,13 @@ host/coordinator arrangement. Do not add in-process session swapping.
 - Register worker main windows and note popouts labelled by note ID. Include
   them in focus, restoration, geometry, close-to-tray, and shutdown rules.
   Geometry is scoped by environment, vault, and window identity.
-- Make root hotkey bindings authoritative. Migrate JS bindings; workers submit
-  edits rather than registering globally. Tray/new-note actions target the most
-  recent vault. With none open, launch the last-used vault and await readiness,
-  or show a picker if unavailable. Define no-worker coordinator lifetime using
-  tray/autostart preferences.
+- Make root hotkey bindings authoritative and the enable flag vault-specific,
+  following the global shortcut decision above. Workers submit edits and
+  eligibility notifications rather than registering globally. Tray actions
+  target the overall most recent vault; shortcuts target the most recent
+  eligible vault, including a closed sole capture vault. Await readiness before
+  executing. Define no-worker coordinator lifetime using shortcut/tray/autostart
+  preferences and preserve failed requests without writing into another vault.
 - Centralize tray and updates. Tray Quit flushes/closes this environment's
   workers. Update installation waits for workers, popouts, and services to stop.
 - Broadcast device revisions and apply language/theme/decorations/tray changes.
