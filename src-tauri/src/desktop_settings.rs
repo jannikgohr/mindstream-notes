@@ -116,7 +116,26 @@ impl DesktopSettings {
         Self::load_at(&root, &vault)
     }
 
+    pub(crate) fn load_for_coordinator(root: &std::path::Path, id: &str) -> CommandResult<Self> {
+        if !crate::profiles::valid_id(id) {
+            return Err(CommandError::new(
+                CommandErrorCode::InvalidArgument,
+                "invalid startup vault",
+            ));
+        }
+        let vault = crate::profiles::profile_dir(root, id);
+        Self::load_document(root, &vault, true)
+    }
+
     fn load_at(root: &std::path::Path, vault: &std::path::Path) -> CommandResult<Self> {
+        Self::load_document(root, vault, false)
+    }
+
+    fn load_document(
+        root: &std::path::Path,
+        vault: &std::path::Path,
+        require_source: bool,
+    ) -> CommandResult<Self> {
         let _lock = RootLock::acquire(root)?;
         let path = root.join(SETTINGS_FILE);
         let marker = root.join(".desktop-settings-migrated");
@@ -132,6 +151,12 @@ impl DesktopSettings {
                 return Err(CommandError::new(
                     CommandErrorCode::Io,
                     "root desktop settings are missing after migration; recovery required",
+                ));
+            }
+            if require_source && !vault.is_dir() {
+                return Err(CommandError::new(
+                    CommandErrorCode::Io,
+                    "startup vault is missing; desktop settings migration refused",
                 ));
             }
             let file = Self::read_file(&vault.join(SETTINGS_FILE))?;
@@ -480,6 +505,68 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ms-desktop-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn coordinator_seeds_selected_vault_before_concurrent_worker_loads() {
+        let root = root();
+        let selected = crate::profiles::profile_dir(&root, "selected");
+        let other = crate::profiles::profile_dir(&root, "other");
+        fs::create_dir_all(&selected).unwrap();
+        fs::create_dir_all(&other).unwrap();
+        let selected_bytes = br#"{"language_code":"en","theme_mode":"dark","custom_window_decorations":true,"close_to_tray":true,"future":{"keep":1}}"#;
+        let other_bytes = br#"{"language_code":"de","theme_mode":"light","custom_window_decorations":false,"close_to_tray":false}"#;
+        fs::write(selected.join(SETTINGS_FILE), selected_bytes).unwrap();
+        fs::write(other.join(SETTINGS_FILE), other_bytes).unwrap();
+        let coordinator = DesktopSettings::load_for_coordinator(&root, "selected").unwrap();
+        let canonical = fs::read(root.join(SETTINGS_FILE)).unwrap();
+        // The other worker may be first to initialize its native settings.
+        std::thread::scope(|scope| {
+            for vault in [&other, &selected] {
+                let root = &root;
+                scope.spawn(move || {
+                    let worker = DesktopSettings::load_at(root, vault).unwrap();
+                    assert_eq!(worker.language_code(), "en");
+                    assert_eq!(worker.theme_mode(), DesktopThemeMode::Dark);
+                    assert!(worker.close_to_tray() && worker.custom_window_decorations());
+                });
+            }
+        });
+        assert_eq!(coordinator.theme_mode(), DesktopThemeMode::Dark);
+        assert_eq!(fs::read(root.join(SETTINGS_FILE)).unwrap(), canonical);
+        assert_eq!(
+            DesktopSettings::read_file(&root.join(SETTINGS_FILE))
+                .unwrap()
+                .extra["future"]["keep"],
+            1
+        );
+        assert_eq!(
+            fs::read(selected.join(SETTINGS_FILE)).unwrap(),
+            selected_bytes
+        );
+        assert_eq!(fs::read(other.join(SETTINGS_FILE)).unwrap(), other_bytes);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn coordinator_requires_a_real_source_only_for_first_migration() {
+        let root = root();
+        assert!(DesktopSettings::load_for_coordinator(&root, "../other").is_err());
+        assert!(DesktopSettings::load_for_coordinator(&root, "missing").is_err());
+        assert!(!root.join(SETTINGS_FILE).exists());
+        assert!(!root.join(".desktop-settings-migrated").exists());
+        assert!(!root.join("profiles").exists());
+        let selected = crate::profiles::profile_dir(&root, "selected");
+        fs::create_dir_all(&selected).unwrap();
+        fs::write(selected.join(SETTINGS_FILE), br#"{"theme_mode":"dark"}"#).unwrap();
+        DesktopSettings::load_for_coordinator(&root, "selected").unwrap();
+        let canonical = fs::read(root.join(SETTINGS_FILE)).unwrap();
+        // Existing root settings do not depend on the last-used vault still
+        // being available; the host can later focus another vault or a picker.
+        let loaded = DesktopSettings::load_for_coordinator(&root, "missing").unwrap();
+        assert_eq!(loaded.theme_mode(), DesktopThemeMode::Dark);
+        assert_eq!(fs::read(root.join(SETTINGS_FILE)).unwrap(), canonical);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -487,6 +487,12 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
     };
     crate::worker_registration::preflight(&root)?;
     let index = crate::profiles::prepare_coordinator_index(&root)?;
+    // Seed/recover device settings before a second worker can win the first
+    // migration race. The startup-selected vault is the sole legacy source.
+    app.manage(
+        crate::desktop_settings::DesktopSettings::load_for_coordinator(&root, &index.active)
+            .map_err(|error| AppError::InvalidArg(error.to_string()))?,
+    );
     let vault = crate::profiles::profile_dir(&root, &index.active);
     crate::legacy_content::initialize_owner(&root, &index.active, &vault)?;
     let instance = coordinator.endpoint().instance();

@@ -644,6 +644,27 @@ other and reported no live workers or focus target. The host remained alive
 until fixture cleanup. Logs remain in
 `.output/supervised-startup-app-check/status-*`.
 
+Coordinator desktop-migration slice on 2026-10-11: after compatibility preflight
+and index reconciliation, the host initializes root desktop settings from the
+startup-selected vault before browser export or any worker launch. Another
+worker cannot win the first-migration race by booting faster. The host owns its
+desktop-settings cache for the upcoming shared OS integrations. Existing root
+settings and their validated previous copy remain independent of the last-used
+vault's availability; only first migration requires an existing source directory.
+Invalid source IDs and missing initial sources do not create defaults or a
+completion marker. Tests cover concurrent worker loads, conflicting legacy
+preferences, unknown fields, retained legacy files and unavailable source vaults.
+Rust fmt/clippy and 826 unit tests plus one integration test pass, with five
+ignored tests.
+
+The fresh Windows fixture supplied conflicting desktop preferences in vaults
+`a` and `b`. Root settings already matched startup-selected `a` while its worker
+was still loading; a request opened `b` before `a` reported ready. Both became
+ready while the root retained `a`'s preferences and the conflicting `b` legacy
+document remained intact. Both closed through the save handshake. The embedded
+build passes; fixture logs remain in
+`.output/coordinator-desktop-migration-check/`.
+
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.
 
