@@ -114,3 +114,98 @@ async fn every_answer_carries_the_security_headers() {
         );
     }
 }
+
+/// An address may hold only so many sockets. They are what a caller can
+/// leave open for hours at no cost to itself, so the cap is checked before
+/// the socket exists and its place is given back when it closes.
+#[tokio::test]
+async fn sockets_are_capped_per_address_and_a_closed_one_frees_its_place() {
+    use common::raw::{Device, Socket};
+
+    let url = common::start_server(|config| config.max_connections_per_address = 2);
+    let device = Device::signup(&url, "sockets").await;
+    let first = device.feed().await;
+    let _second = device.feed().await;
+
+    let refused = Socket::try_open(&url, "/api/v1/mindstream/feed/", Some(&device.token)).await;
+    let refusal = refused.err().expect("a third socket was let in");
+    assert!(refusal.contains("429"), "{refusal}");
+    // A room socket counts against the same cap, ticket or no ticket.
+    let refused = Socket::try_open(&url, "/api/v1/room/", None).await;
+    assert!(refused.is_err());
+
+    drop(first);
+    let mut opened = None;
+    for _ in 0..50 {
+        match Socket::try_open(&url, "/api/v1/mindstream/feed/", Some(&device.token)).await {
+            Ok(socket) => {
+                opened = Some(socket);
+                break;
+            }
+            Err(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+        }
+    }
+    assert!(opened.is_some(), "the closed socket's place was not freed");
+}
+
+/// The same for plain connections, the way the proxy in front of the old
+/// stack capped them: one past the cap is closed before it is read from.
+/// A trusted proxy is exempt, so the test server has to stop trusting this
+/// machine first.
+#[tokio::test]
+async fn connections_are_capped_per_address() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    let url = common::start_server(|config| {
+        config.trusted_proxies.clear();
+        config.max_connections_per_address = 2;
+    });
+    let address = url.trim_start_matches("http://").to_owned();
+    let request = b"GET /healthz HTTP/1.1\r\nHost: test\r\n\r\n";
+
+    // Two connections that stay open after being answered.
+    let mut held = Vec::new();
+    for _ in 0..2 {
+        let mut stream = TcpStream::connect(&address).await.unwrap();
+        stream.write_all(request).await.unwrap();
+        let mut answer = [0u8; 15];
+        stream.read_exact(&mut answer).await.unwrap();
+        assert_eq!(&answer, b"HTTP/1.1 200 OK");
+        held.push(stream);
+    }
+
+    // The third is accepted by the system and closed by the server.
+    let mut third = TcpStream::connect(&address).await.unwrap();
+    let _ = third.write_all(request).await;
+    let mut answer = Vec::new();
+    let read = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        third.read_to_end(&mut answer),
+    )
+    .await
+    .expect("the connection past the cap was left open");
+    assert!(
+        read.is_err() || answer.is_empty(),
+        "the connection past the cap was answered: {:?}",
+        String::from_utf8_lossy(&answer)
+    );
+
+    // Closing one makes room.
+    held.pop();
+    let mut answered = false;
+    for _ in 0..50 {
+        let mut stream = TcpStream::connect(&address).await.unwrap();
+        let _ = stream.write_all(request).await;
+        let mut answer = [0u8; 15];
+        if stream.read_exact(&mut answer).await.is_ok() && &answer == b"HTTP/1.1 200 OK" {
+            answered = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        answered,
+        "closing a connection did not make room for another"
+    );
+}

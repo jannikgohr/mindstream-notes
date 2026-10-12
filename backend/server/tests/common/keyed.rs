@@ -464,7 +464,7 @@ impl Authenticator {
     }
 
     pub fn code_at(&self, step: u64) -> String {
-        format!("{:06}", totp::code_at(&self.secret, step))
+        totp::code_at(&self.secret, step)
     }
 
     /// A code the server has not seen yet. It accepts each time step once

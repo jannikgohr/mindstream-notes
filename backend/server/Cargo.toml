@@ -29,9 +29,15 @@ rmp-serde = "1"
 ed25519-dalek = "2"
 hmac = "0.12"
 sha2 = "0.10"
-# One-time passwords are HMAC-SHA1 by definition, and authenticator apps
-# offer nothing else.
-sha1 = "0.10"
+# One-time passwords: the arithmetic and the link an authenticator reads.
+# That a code is accepted once, the backup codes and the lockout are ours.
+totp-rs = { version = "6", default-features = false, features = ["std", "otpauth"] }
+# The encoding of an authenticator secret, which backup and signup codes
+# borrow. The same crate totp-rs uses.
+base32 = "0.5"
+# The bucket per caller behind the limit on sign-in attempts. Who the
+# caller is, looking through trusted proxies, stays ours.
+governor = { version = "0.10", default-features = false, features = ["std", "dashmap"] }
 # Seals the authenticator secrets, which the server has to read back.
 chacha20poly1305 = "0.10"
 subtle = "2"
@@ -42,6 +48,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive", "env"] }
 tower-http = { version = "0.6", features = ["trace", "set-header"] }
+# Blob storage. Its local filesystem can be told to sync a written file and
+# the directories the write touched, which is what makes an acknowledged
+# upload survive a power cut, and the same interface reaches S3 later.
+object_store = { version = "0.14", default-features = false, features = ["fs"] }
+futures-util = "0.3"
 
 [dev-dependencies]
 # The client the app ships. Driving the server with it in tests is what keeps
@@ -49,7 +60,6 @@ tower-http = { version = "0.6", features = ["trace", "set-header"] }
 etebase = { path = "../../vendor/etebase-rs", features = ["networking"] }
 # A WebSocket client, for the room and feed tests.
 tokio-tungstenite = "0.29"
-futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false }
 
 [profile.release]

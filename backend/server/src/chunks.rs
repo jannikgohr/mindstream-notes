@@ -29,7 +29,6 @@ pub(crate) const MAX_CHUNK_BYTES: usize = 1024 * 1024;
 #[derive(sqlx::FromRow)]
 struct ChunkRow {
     id: i64,
-    uid: String,
     size: i32,
     data: Option<Vec<u8>>,
     blob_key: Option<String>,
@@ -40,79 +39,150 @@ fn no_content() -> ApiError {
     ApiError::internal("chunk row holds no content")
 }
 
-/// The chunks a response needs, fetched together. Each is handed out as many
-/// times as it was asked for and only copied when it is needed again
-/// afterwards, which for most responses is never.
+/// How many of these sizes, taken in order from the first, fit a budget
+/// together.
+pub(crate) fn fitting(sizes: impl Iterator<Item = i64>, budget: i64) -> usize {
+    let mut total = 0i64;
+    sizes
+        .take_while(|size| {
+            total = total.saturating_add(*size);
+            total <= budget
+        })
+        .count()
+}
+
+/// The chunks of the revisions one response carries, and the content of as
+/// many of those revisions as it has room for.
+///
+/// A response is built in memory, so its content is held to a budget. The
+/// revisions are taken in order: those that fit together go out whole, and
+/// the rest go out as the uids of their chunks, which a client fetches one
+/// at a time. Without this a single request could ask for more than the
+/// process can hold.
 pub(crate) struct Loaded {
-    chunks: HashMap<i64, (String, Option<Vec<u8>>)>,
+    uids: HashMap<i64, String>,
+    content: HashMap<i64, Vec<u8>>,
+    /// How often each chunk is still to be handed out with its content. A
+    /// chunk is only copied when it is needed again afterwards, which for
+    /// most responses is never.
     uses_left: HashMap<i64, usize>,
+    /// How many of the revisions, from the first, go out with content.
+    with_content: usize,
+    taken: usize,
 }
 
 impl Loaded {
-    pub fn take(&mut self, id: i64) -> ApiResult<wire::Chunk> {
+    /// How many of the revisions, from the first, go out with content.
+    pub fn fitting(&self) -> usize {
+        self.with_content
+    }
+
+    /// The chunks of the next revision. Call it for the revisions in the
+    /// order they were given to [`load`].
+    pub fn revision(&mut self, chunk_ids: &[i64]) -> ApiResult<Vec<wire::Chunk>> {
         let missing = || ApiError::internal("revision refers to a missing chunk");
-        let uses = self.uses_left.get_mut(&id).ok_or_else(missing)?;
-        *uses = uses.saturating_sub(1);
-        let (uid, content) = if *uses == 0 {
-            self.chunks.remove(&id).ok_or_else(missing)?
-        } else {
-            self.chunks.get(&id).cloned().ok_or_else(missing)?
-        };
-        Ok(wire::Chunk(uid, content.map(ByteBuf::from)))
+        let with_content = self.taken < self.with_content;
+        self.taken += 1;
+        chunk_ids
+            .iter()
+            .map(|id| {
+                let uid = self.uids.get(id).ok_or_else(missing)?.clone();
+                if !with_content {
+                    return Ok(wire::Chunk(uid, None));
+                }
+                let uses = self.uses_left.get_mut(id).ok_or_else(missing)?;
+                *uses = uses.saturating_sub(1);
+                let content = if *uses == 0 {
+                    self.content.remove(id)
+                } else {
+                    self.content.get(id).cloned()
+                };
+                Ok(wire::Chunk(
+                    uid,
+                    Some(ByteBuf::from(content.ok_or_else(missing)?)),
+                ))
+            })
+            .collect()
     }
 }
 
-/// Fetch the chunks with the given row ids, once per time an id appears.
-/// Without content, only their uids come back and the client downloads what
-/// it wants later.
+/// Fetch what a response needs of these revisions' chunks. Each revision is
+/// the row ids of its chunks. Without content, only the uids are read.
 pub(crate) async fn load(
     conn: &mut PgConnection,
     blobs: &BlobStore,
-    ids: impl Iterator<Item = i64>,
+    revisions: &[&[i64]],
     with_content: bool,
+    budget: i64,
 ) -> ApiResult<Loaded> {
-    let mut uses_left: HashMap<i64, usize> = HashMap::new();
-    for id in ids {
-        *uses_left.entry(id).or_default() += 1;
+    let mut loaded = Loaded {
+        uids: HashMap::new(),
+        content: HashMap::new(),
+        uses_left: HashMap::new(),
+        with_content: 0,
+        taken: 0,
+    };
+    let referenced: Vec<i64> = revisions
+        .iter()
+        .flat_map(|ids| ids.iter().copied())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    if referenced.is_empty() {
+        // Nothing to read, so nothing to hold back.
+        loaded.with_content = if with_content { revisions.len() } else { 0 };
+        return Ok(loaded);
     }
-    let mut chunks = HashMap::with_capacity(uses_left.len());
-    if uses_left.is_empty() {
-        return Ok(Loaded { chunks, uses_left });
-    }
-    let wanted: Vec<i64> = uses_left.keys().copied().collect();
 
-    if !with_content {
-        let rows: Vec<(i64, String)> =
-            sqlx::query_as("SELECT id, uid FROM chunks WHERE id = ANY($1)")
-                .bind(&wanted)
-                .fetch_all(conn)
-                .await?;
-        chunks.extend(rows.into_iter().map(|(id, uid)| (id, (uid, None))));
-        return Ok(Loaded { chunks, uses_left });
+    let index: Vec<(i64, String, i32)> =
+        sqlx::query_as("SELECT id, uid, size FROM chunks WHERE id = ANY($1)")
+            .bind(&referenced)
+            .fetch_all(&mut *conn)
+            .await?;
+    let mut sizes: HashMap<i64, i64> = HashMap::with_capacity(index.len());
+    for (id, uid, size) in index {
+        sizes.insert(id, i64::from(size));
+        loaded.uids.insert(id, uid);
     }
+    if !with_content {
+        return Ok(loaded);
+    }
+
+    let size_of = |ids: &&[i64]| -> i64 {
+        ids.iter()
+            .map(|id| sizes.get(id).copied().unwrap_or(0))
+            .fold(0, i64::saturating_add)
+    };
+    loaded.with_content = fitting(revisions.iter().map(size_of), budget);
+    for ids in &revisions[..loaded.with_content] {
+        for id in ids.iter() {
+            *loaded.uses_left.entry(*id).or_default() += 1;
+        }
+    }
+    if loaded.uses_left.is_empty() {
+        return Ok(loaded);
+    }
+    let wanted: Vec<i64> = loaded.uses_left.keys().copied().collect();
 
     let rows: Vec<ChunkRow> = sqlx::query_as(
-        "SELECT id, uid, size, data, blob_key, blob_offset FROM chunks WHERE id = ANY($1)",
+        "SELECT id, size, data, blob_key, blob_offset FROM chunks WHERE id = ANY($1)",
     )
     .bind(&wanted)
     .fetch_all(conn)
     .await?;
     // Group what lives in the blob store by blob, so each is opened once.
-    let mut by_blob: HashMap<String, Vec<(i64, String, Range)>> = HashMap::new();
+    let mut by_blob: HashMap<String, Vec<(i64, Range)>> = HashMap::new();
     for row in rows {
         match (row.data, row.blob_key, row.blob_offset) {
             (Some(data), _, _) => {
-                chunks.insert(row.id, (row.uid, Some(data)));
+                loaded.content.insert(row.id, data);
             }
             (None, Some(key), Some(offset)) => {
                 let range = Range {
                     offset: offset as u64,
                     len: row.size as usize,
                 };
-                by_blob
-                    .entry(key)
-                    .or_default()
-                    .push((row.id, row.uid, range));
+                by_blob.entry(key).or_default().push((row.id, range));
             }
             _ => return Err(no_content()),
         }
@@ -120,16 +190,16 @@ pub(crate) async fn load(
     let (requests, owners): (Vec<_>, Vec<_>) = by_blob
         .into_iter()
         .map(|(key, parts)| {
-            let ranges = parts.iter().map(|part| part.2).collect();
+            let ranges = parts.iter().map(|part| part.1).collect();
             ((key, ranges), parts)
         })
         .unzip();
     for (parts, contents) in owners.into_iter().zip(blobs.get_many(requests).await?) {
-        for ((id, uid, _), content) in parts.into_iter().zip(contents) {
-            chunks.insert(id, (uid, Some(content)));
+        for ((id, _), content) in parts.into_iter().zip(contents) {
+            loaded.content.insert(id, content);
         }
     }
-    Ok(Loaded { chunks, uses_left })
+    Ok(loaded)
 }
 
 /// What storing these revisions' content would come to, without storing
@@ -372,7 +442,7 @@ pub async fn download_chunk(
     let mut conn = state.pool.acquire().await?;
     let collection = membership(&mut conn, user.account_id, &collection_uid, false).await?;
     let row: Option<ChunkRow> = sqlx::query_as(
-        "SELECT id, uid, size, data, blob_key, blob_offset FROM chunks
+        "SELECT id, size, data, blob_key, blob_offset FROM chunks
          WHERE collection_id = $1 AND uid = $2",
     )
     .bind(collection.id)
@@ -401,4 +471,25 @@ pub async fn download_chunk(
         content,
     )
         .into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn content_goes_out_for_the_revisions_that_fit_together_from_the_first() {
+        let fit = |sizes: &[i64], budget| fitting(sizes.iter().copied(), budget);
+        assert_eq!(fit(&[], 100), 0);
+        assert_eq!(fit(&[10, 20, 30], 100), 3);
+        assert_eq!(fit(&[60, 40, 1], 100), 2);
+        assert_eq!(fit(&[60, 41, 1], 100), 1);
+        // One larger than the whole budget does not go out whole, even
+        // first, and nothing after it does either.
+        assert_eq!(fit(&[500, 1], 100), 0);
+        // Revisions without content never use the budget up.
+        assert_eq!(fit(&[0, 0, 0, 0], 0), 4);
+        // Sizes that would overflow when added up do not wrap round to fit.
+        assert_eq!(fit(&[i64::MAX - 5, 10, 1], i64::MAX - 1), 1);
+    }
 }

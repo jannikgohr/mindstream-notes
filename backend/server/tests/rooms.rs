@@ -307,3 +307,27 @@ fn ticket_from_the_client_the_app_ships_opens_the_room() {
     assert_eq!(welcome["accessLevel"], ADMIN);
     assert!(welcome["you"].as_u64().is_some());
 }
+
+/// A frame may be larger than what a member is allowed to have waiting: a
+/// document's whole state is one frame. A member that is reading must get
+/// it, and must not be closed as one that cannot keep up.
+#[tokio::test]
+async fn frame_larger_than_the_backlog_allowance_reaches_a_member_that_is_reading() {
+    let (owner, collection, item) = space().await;
+    let (mut sender, _) = owner.enter(&collection, &item).await;
+    let (mut receiver, _) = owner.enter(&collection, &item).await;
+    assert!(matches!(sender.next().await, Frame::Control(JOINED, _)));
+
+    let state = vec![7u8; 5 * 1024 * 1024];
+    let (_, received) = tokio::join!(sender.send(UPDATE, &state), receiver.next());
+    match received {
+        Frame::Relayed { class, payload, .. } => {
+            assert_eq!(class, UPDATE);
+            assert_eq!(payload.len(), state.len());
+        }
+        other => panic!("expected the frame, got {other:?}"),
+    }
+    // And the room goes on as before.
+    sender.send(UPDATE, b"after").await;
+    assert!(matches!(receiver.next().await, Frame::Relayed { .. }));
+}

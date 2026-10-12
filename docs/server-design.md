@@ -215,6 +215,27 @@ this in one of two ways:
   downloaded once, memory stays at one batch, and every folder is in place
   before the first note is applied.
 
+### What is kept
+
+An item keeps its current revision and a set number before it, ten unless the
+operator says otherwise. Older revisions go when a new one arrives. The app's
+note history lives on each device and does not use them.
+
+A deleted item keeps only the record that it was deleted. The client sends
+that record without the item's chunks, which is where this fork of the client
+library departs from upstream: there the chunks stay on the tombstone and a
+server has to hold their content for as long as the tombstone lives.
+
+Content goes with the last revision that used it, from the database or the
+blob store, and stops counting against the owner in the same transaction.
+Chunks are shared between revisions, so a chunk is only removed once nothing
+refers to it. Files are removed after the transaction commits. A crash in
+between leaves a file nothing points to, never a row that points to nothing.
+
+The exception that lets deletions past a full or lapsed plan holds for
+deletions only. A revision that is marked deleted and still carries content
+is a write.
+
 ## Sync
 
 - **An idle check is one request.** The collection list accepts a stoken and
@@ -241,6 +262,25 @@ this in one of two ways:
   sent again. Commits are flushed to disk before they are acknowledged.
 - **Mixed pages.** A pull can deliver a note before its folder. The existing
   pass that re-parents orphans should cover this and needs checking.
+- **A list and its cursor come from one snapshot.** The collection list reads
+  what changed, what was removed and the cursor it hands back in several
+  statements. Under the default isolation a change committing between two of
+  them is behind the new cursor without being in the answer, and the device
+  never sees it. The list runs in one repeatable-read transaction.
+- **A response has a size.** A response is built in memory, so the content it
+  carries is held to a budget, 32 MiB unless set otherwise. A list ends its
+  page early. A request for named items answers with content for as many as
+  fit, from the first, and the uids of the chunks for the rest. The client
+  asks for those again, which puts one of them first, and fetches chunk by
+  chunk the item that comes first and still has no content. A fetch of one
+  item does that inside the client library. A revision may name a chunk once.
+- **What is acknowledged is on disk, files included.** A blob is written
+  under another name, synced, renamed, and its directory synced before the
+  upload is answered. The store is the `object_store` crate with syncing
+  turned on, which also leaves the way open to S3. The key that seals the
+  authenticator secrets is created the same way and by a hard link, which
+  fails if the name is taken, so two servers starting at once cannot each
+  write their own.
 
 ## Live rooms
 
@@ -262,6 +302,23 @@ a member at which access level.
 5. When a member is removed or downgraded, the server closes or downgrades
    their sockets immediately. When a session ends, the sockets it opened close
    with it.
+
+The server learns that a session or a membership ended from a notification
+on a database connection, and that connection can drop. So it does not rely
+on having heard:
+
+- When the connection comes back, it asks the database about the session and
+  the membership behind every open socket, room or feed.
+- A socket is asked about once more after it is registered, because a session
+  can end between being let in and being findable.
+- Everything is asked about again every five minutes regardless.
+- If nothing can be asked for a minute, every socket is closed with a code
+  that tells the client to come back.
+
+A peer that reads too slowly is dropped once more than a set amount is
+waiting for it. The amount waiting is judged before a frame is added, so one
+frame of the largest size the room accepts cannot by itself drop a peer that
+was keeping up.
 
 Frames stay encrypted under the per-note key. The server relays ciphertext and
 never reads it.
@@ -297,6 +354,12 @@ uses.
   pull at once.
 - **Member changes are one request** and take effect in open rooms
   immediately.
+- **An invitation is only as good as its sender.** It is accepted on the
+  authority of the admin who sent it. Accepting checks that the sender is
+  still an admin of the space on an account that is still enabled, under the
+  same lock that removing a member takes. An admin who is removed or
+  downgraded has their pending invitations withdrawn. A claim on an invite
+  link follows the same rule.
 - **Recipient keys are pinned.** The client remembers the public key first seen
   for a username and warns when it changes. Without this a server could swap in
   its own key when a folder is shared. This weakness exists today.
@@ -391,6 +454,13 @@ end sessions other than the caller's:
 
 A new password ends the other sessions because a password is often changed on
 the suspicion that someone else knows it.
+
+Everything that reads an account's credentials and then acts on them takes
+the account's row lock first: signing in, a new password, setting up or
+removing an authenticator, a reset with the recovery key, and the
+administrator's reset. Without it a sign-in that verified the old password
+could create its session after the password change had ended the others, and
+the old password would have outlived its replacement.
 
 ### Two-factor sign-in
 
@@ -550,6 +620,11 @@ Newly owned:
 - The auth endpoint, rate limits, size caps and every access check. All
   handlers go through one authorisation function, and its tests are generated
   from the route table.
+- How many connections it takes. nginx used to cap these per address. The
+  server now counts open connections and, separately, open sockets, per
+  address and in all. An IPv6 caller is its /64. A trusted proxy is exempt
+  from the connection count and the clients it forwards are not. An account
+  may hold 32 change feeds and a session 4.
 - TOTP secrets and session token hashes at rest.
 - The invite link claim path and the recovery path, the two places that grant
   access without the usual login.

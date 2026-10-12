@@ -65,6 +65,22 @@ pub struct Config {
     #[arg(long, env = "MINDSTREAM_AUTH_RATE_BURST", default_value_t = 20)]
     pub auth_rate_burst: u32,
 
+    /// Connections one address may hold open at once, and separately how
+    /// many sockets, the long-lived kind that rooms and the change feed
+    /// use. A connection past it is closed and a socket refused. A proxy
+    /// listed as trusted is exempt from the first, since every client
+    /// behind it shares its address. Zero turns the cap off.
+    #[arg(
+        long,
+        env = "MINDSTREAM_MAX_CONNECTIONS_PER_ADDRESS",
+        default_value_t = 128
+    )]
+    pub max_connections_per_address: usize,
+
+    /// The same for the whole server. Zero turns the cap off.
+    #[arg(long, env = "MINDSTREAM_MAX_CONNECTIONS", default_value_t = 10_000)]
+    pub max_connections: usize,
+
     /// Token for the admin interface another program uses to set account
     /// limits. The interface does not exist unless this is set.
     #[arg(long, env = "MINDSTREAM_ADMIN_TOKEN", hide_env_values = true)]
@@ -86,7 +102,8 @@ pub struct Config {
     #[arg(
         long,
         env = "MINDSTREAM_TOTP_ISSUER",
-        default_value = "Mindstream Notes"
+        default_value = "Mindstream Notes",
+        value_parser = issuer
     )]
     pub totp_issuer: String,
 
@@ -106,6 +123,14 @@ pub struct Config {
     #[arg(long, env = "MINDSTREAM_MAX_BODY_BYTES", default_value_t = 75 * 1024 * 1024)]
     pub max_body_bytes: usize,
 
+    /// How many earlier revisions of an item are kept besides its current
+    /// one. Older ones are deleted when a new one arrives, and their
+    /// content with them unless something else still uses it. What is kept
+    /// counts towards the owner's storage. A deleted item keeps none,
+    /// whatever this says.
+    #[arg(long, env = "MINDSTREAM_KEEP_REVISIONS", default_value_t = 10)]
+    pub keep_revisions: u32,
+
     /// Chunks up to this size are stored in the database; larger ones go to
     /// the blob directory. A note is nearly always a single chunk under the
     /// default.
@@ -120,6 +145,14 @@ pub struct Config {
     /// library's integration tests only; never enable it on a real server.
     #[arg(long, env = "MINDSTREAM_TEST_RESET", default_value_t = false)]
     pub test_reset: bool,
+}
+
+fn issuer(text: &str) -> Result<String, String> {
+    if crate::totp::valid_issuer(text) {
+        Ok(text.to_owned())
+    } else {
+        Err("a name without a colon, which an authenticator cannot show".into())
+    }
 }
 
 impl Config {
@@ -159,6 +192,9 @@ impl Config {
             trusted_proxies: vec!["127.0.0.0/8".parse().expect("a valid network")],
             auth_rate_per_minute: 0,
             auth_rate_burst: 1,
+            // Every test connects from this machine.
+            max_connections_per_address: 0,
+            max_connections: 0,
             admin_token: None,
             secret_key: None,
             secret_key_file: None,
@@ -166,6 +202,7 @@ impl Config {
             app_url: "https://example.com/app".into(),
             max_page_bytes: 32 * 1024 * 1024,
             max_body_bytes: 75 * 1024 * 1024,
+            keep_revisions: 10,
             inline_chunk_bytes: 20 * 1024,
             database_connections: 4,
             test_reset: true,

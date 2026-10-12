@@ -15,7 +15,8 @@ use axum::response::Response;
 use serde::Serialize;
 
 use crate::auth::{self, AuthUser};
-use crate::hub::{CLOSE_UNAUTHORIZED, CLOSE_UNAVAILABLE};
+use crate::edge::SocketPermit;
+use crate::hub::{CLOSE_TOO_MANY, CLOSE_UNAUTHORIZED, CLOSE_UNAVAILABLE};
 use crate::{AppState, PROTOCOL_LEVEL};
 
 const PING_INTERVAL: Duration = Duration::from_secs(30);
@@ -50,13 +51,33 @@ fn binary<T: Serialize>(body: &T) -> Message {
 pub async fn feed_socket(
     State(state): State<AppState>,
     user: AuthUser,
+    permit: SocketPermit,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    upgrade.on_upgrade(move |socket| serve(state, user, socket))
+    upgrade.on_upgrade(move |socket| async move {
+        serve(state, user, socket).await;
+        drop(permit);
+    })
+}
+
+async fn close(socket: &mut WebSocket, code: u16) {
+    let reason = match code {
+        CLOSE_UNAUTHORIZED => "not signed in",
+        CLOSE_TOO_MANY => "too many sockets",
+        _ => "try again later",
+    };
+    let frame = CloseFrame {
+        code,
+        reason: reason.into(),
+    };
+    let _ = socket.send(Message::Close(Some(frame))).await;
 }
 
 async fn serve(state: AppState, user: AuthUser, mut socket: WebSocket) {
-    let (id, signal) = state.hub.subscribe_feed(user.account_id, user.session_id);
+    let (id, signal) = match state.hub.subscribe_feed(user.account_id, user.session_id) {
+        Ok(subscribed) => subscribed,
+        Err(code) => return close(&mut socket, code).await,
+    };
     let mut ping = tokio::time::interval(PING_INTERVAL);
     ping.tick().await;
     let mut last_heard = Instant::now();
@@ -113,15 +134,6 @@ async fn serve(state: AppState, user: AuthUser, mut socket: WebSocket) {
 
     state.hub.unsubscribe_feed(user.account_id, id);
     if let Some(code) = close_with {
-        let reason = if code == CLOSE_UNAUTHORIZED {
-            "not signed in"
-        } else {
-            "try again later"
-        };
-        let frame = CloseFrame {
-            code,
-            reason: reason.into(),
-        };
-        let _ = socket.send(Message::Close(Some(frame))).await;
+        close(&mut socket, code).await;
     }
 }

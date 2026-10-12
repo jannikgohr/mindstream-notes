@@ -46,12 +46,18 @@ pub const CLOSE_TOO_MANY: u16 = 4429;
 /// standard code for "try again later".
 pub const CLOSE_UNAVAILABLE: u16 = 1013;
 
-/// A member whose socket has this much waiting to be written is not keeping
-/// up. Frames are ciphertext, so nothing can be merged or dropped for them;
-/// the socket is closed and the client reconnects and resyncs.
+/// A member whose socket already has this much waiting to be written when
+/// the next frame comes is not keeping up. Frames are ciphertext, so nothing
+/// can be merged or dropped for them; the socket is closed and the client
+/// reconnects and resyncs.
 const MAX_QUEUED_BYTES: usize = 4 * 1024 * 1024;
 /// Sockets one account may hold across all rooms.
 const MAX_ROOM_SOCKETS_PER_ACCOUNT: usize = 64;
+/// Change feeds one account may hold. A device needs one.
+const MAX_FEEDS_PER_ACCOUNT: usize = 32;
+/// Change feeds one session may hold: the one it uses, and room for the one
+/// it opens while the last is still closing.
+const MAX_FEEDS_PER_SESSION: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RoomKey {
@@ -90,9 +96,14 @@ struct Peer {
 
 impl Peer {
     /// Queue a frame, or report that the peer has fallen too far behind.
+    ///
+    /// Behind is judged by what was waiting before this frame. A frame may
+    /// be several times the backlog allowance, a document's whole state for
+    /// one, and a peer that is reading as fast as frames arrive must not be
+    /// dropped for having been sent a large one.
     fn push(&self, frame: &Bytes) -> bool {
-        let queued = self.queued.fetch_add(frame.len(), Ordering::Relaxed) + frame.len();
-        queued <= MAX_QUEUED_BYTES && self.frames.send(frame.clone()).is_ok()
+        let waiting = self.queued.fetch_add(frame.len(), Ordering::Relaxed);
+        waiting <= MAX_QUEUED_BYTES && self.frames.send(frame.clone()).is_ok()
     }
 }
 
@@ -484,15 +495,30 @@ impl Hub {
         pairs
     }
 
-    pub fn subscribe_feed(&self, account_id: i64, session_id: i64) -> (u32, Arc<FeedSignal>) {
+    /// Register a change feed, or refuse with a close code when the account
+    /// or the session already holds as many as it may.
+    pub fn subscribe_feed(
+        &self,
+        account_id: i64,
+        session_id: i64,
+    ) -> Result<(u32, Arc<FeedSignal>), u16> {
         let id = self.next_id();
         let signal = Arc::new(FeedSignal::default());
-        self.lock().feeds.entry(account_id).or_default().push(Feed {
+        let mut inner = self.lock();
+        let feeds = inner.feeds.entry(account_id).or_default();
+        let of_session = feeds
+            .iter()
+            .filter(|feed| feed.session_id == session_id)
+            .count();
+        if feeds.len() >= MAX_FEEDS_PER_ACCOUNT || of_session >= MAX_FEEDS_PER_SESSION {
+            return Err(CLOSE_TOO_MANY);
+        }
+        feeds.push(Feed {
             id,
             session_id,
             signal: Arc::clone(&signal),
         });
-        (id, signal)
+        Ok((id, signal))
     }
 
     pub fn unsubscribe_feed(&self, account_id: i64, id: u32) {
@@ -683,11 +709,47 @@ mod tests {
         let stuck = join(&hub, 2, ACCESS_READ_WRITE);
         // Nobody reads `stuck.frames`, so its queue only grows.
         let big = vec![0u8; 1024 * 1024];
-        for _ in 0..5 {
+        for _ in 0..6 {
             hub.relay(ROOM, sender.id, CLASS_UPDATE, &big, None);
         }
         assert_eq!(stuck.kick.fired().await, CLOSE_SLOW);
         assert_eq!(hub.room_memberships(), vec![(1, 1)]);
+    }
+
+    #[test]
+    fn large_frame_is_not_mistaken_for_a_slow_reader() {
+        let hub = Hub::default();
+        let sender = join(&hub, 1, ACCESS_ADMIN);
+        let mut reader = join(&hub, 2, ACCESS_READ_WRITE);
+        drain(&mut reader);
+        // Larger than the whole backlog allowance, and the reader has
+        // nothing waiting.
+        let state = vec![0u8; 3 * MAX_QUEUED_BYTES];
+        hub.relay(ROOM, sender.id, CLASS_REPLY, &state, Some(reader.id));
+        let frames = drain(&mut reader);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].0, CLASS_REPLY);
+        assert_eq!(hub.room_memberships(), vec![(1, 1), (1, 2)]);
+    }
+
+    #[test]
+    fn feeds_are_limited_per_session_and_per_account() {
+        let hub = Hub::default();
+        for _ in 0..MAX_FEEDS_PER_SESSION {
+            hub.subscribe_feed(1, 100).unwrap();
+        }
+        assert_eq!(hub.subscribe_feed(1, 100).err(), Some(CLOSE_TOO_MANY));
+        // Another device of the account still gets in, and so does anyone
+        // else.
+        hub.subscribe_feed(1, 101).unwrap();
+        hub.subscribe_feed(2, 200).unwrap();
+
+        let per_session = MAX_FEEDS_PER_SESSION as i64;
+        let hub = Hub::default();
+        for feed in 0..MAX_FEEDS_PER_ACCOUNT as i64 {
+            hub.subscribe_feed(1, 100 + feed / per_session).unwrap();
+        }
+        assert_eq!(hub.subscribe_feed(1, 999).err(), Some(CLOSE_TOO_MANY));
     }
 
     #[test]
@@ -710,8 +772,8 @@ mod tests {
         let hub = Hub::default();
         let laptop = hub.join(ROOM, 1, 100, "ann".into(), ACCESS_ADMIN).unwrap();
         let mut phone = hub.join(ROOM, 1, 101, "ann".into(), ACCESS_ADMIN).unwrap();
-        let (_, laptop_feed) = hub.subscribe_feed(1, 100);
-        let (_, phone_feed) = hub.subscribe_feed(1, 101);
+        let (_, laptop_feed) = hub.subscribe_feed(1, 100).unwrap();
+        let (_, phone_feed) = hub.subscribe_feed(1, 101).unwrap();
         drain(&mut phone);
 
         hub.session_closed(100);
@@ -733,9 +795,9 @@ mod tests {
         let mut stranger = hub
             .join(ROOM, 2, 200, "bob".into(), ACCESS_READ_WRITE)
             .unwrap();
-        let (_, kept_feed) = hub.subscribe_feed(1, 100);
-        let (_, ended_feed) = hub.subscribe_feed(1, 101);
-        let (_, stranger_feed) = hub.subscribe_feed(2, 200);
+        let (_, kept_feed) = hub.subscribe_feed(1, 100).unwrap();
+        let (_, ended_feed) = hub.subscribe_feed(1, 101).unwrap();
+        let (_, stranger_feed) = hub.subscribe_feed(2, 200).unwrap();
         drain(&mut stranger);
 
         hub.sessions_closed(1, Some(100));
@@ -756,9 +818,9 @@ mod tests {
     #[test]
     fn feed_skips_the_session_that_made_the_change() {
         let hub = Hub::default();
-        let (_, writer) = hub.subscribe_feed(1, 10);
-        let (other_id, other) = hub.subscribe_feed(1, 11);
-        let (_, stranger) = hub.subscribe_feed(2, 20);
+        let (_, writer) = hub.subscribe_feed(1, 10).unwrap();
+        let (other_id, other) = hub.subscribe_feed(1, 11).unwrap();
+        let (_, stranger) = hub.subscribe_feed(2, 20).unwrap();
 
         hub.signal_feeds(&[1], Some(10), FeedNews::Changed);
         assert!(!writer.changed.load(Ordering::SeqCst));

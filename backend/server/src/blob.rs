@@ -5,14 +5,21 @@
 //! chunks, so one blob per upload means one write and one flush to disk for
 //! it, not hundreds, and one object in a bucket once this runs on S3.
 //!
-//! Only the filesystem is implemented. Callers see a put and ranged gets on
-//! opaque keys, so another store can replace it without touching them.
+//! The storage itself is the `object_store` crate. Only its local filesystem
+//! is switched on, with the option that makes a finished write survive a
+//! power cut: the file is synced, and so is every directory whose entries
+//! the write changed, the ones it had to create included. Callers see a put,
+//! ranged gets and deletes on opaque keys, so a bucket can take the
+//! filesystem's place without touching them.
 
-use std::fs;
-use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::io;
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use futures_util::{StreamExt, TryStreamExt};
+use object_store::local::LocalFileSystem;
+use object_store::path::Path as Key;
+use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
@@ -30,10 +37,10 @@ pub struct Range {
 
 #[derive(Clone, Debug)]
 pub struct BlobStore {
-    root: Arc<PathBuf>,
+    store: Arc<dyn ObjectStore>,
 }
 
-fn join_error(err: tokio::task::JoinError) -> io::Error {
+fn failed(err: impl std::error::Error + Send + Sync + 'static) -> io::Error {
     io::Error::other(err)
 }
 
@@ -41,8 +48,18 @@ impl BlobStore {
     pub async fn open(root: impl Into<PathBuf>) -> io::Result<Self> {
         let root = root.into();
         tokio::fs::create_dir_all(&root).await?;
+        let local = LocalFileSystem::new_with_prefix(&root)
+            .map_err(failed)?
+            // A chunk row that commits must never outlive the bytes it
+            // points at, so a put has to be on disk when it returns, name
+            // and all. On Unix this syncs directories too. Elsewhere it
+            // cannot, which is fine for a development machine and nothing
+            // to deploy on.
+            .with_fsync(true)
+            // A collection whose last blob goes leaves no empty directory.
+            .with_automatic_cleanup(true);
         Ok(Self {
-            root: Arc::new(root),
+            store: Arc::new(local),
         })
     }
 
@@ -68,56 +85,72 @@ impl BlobStore {
     /// pointed into them are gone for good: a blob that outlives its rows
     /// wastes space, and rows that outlive their blob lose data.
     pub async fn remove_collection(&self, collection_uid: &str) -> io::Result<()> {
-        let dir = self.path(&Self::collection_dir(collection_uid));
-        tokio::task::spawn_blocking(move || match fs::remove_dir_all(&dir) {
-            Err(err) if err.kind() != io::ErrorKind::NotFound => Err(err),
-            _ => Ok(()),
-        })
-        .await
-        .map_err(join_error)?
+        let dir = Key::from(Self::collection_dir(collection_uid));
+        let blobs = self
+            .store
+            .list(Some(&dir))
+            .map_ok(|blob| blob.location)
+            .boxed();
+        self.remove_all(blobs).await
     }
 
-    fn path(&self, key: &str) -> PathBuf {
-        self.root.join(Path::new(key))
+    /// Remove blobs by key. One that is already gone is not an error.
+    pub async fn remove(&self, keys: Vec<String>) -> io::Result<()> {
+        let blobs = futures_util::stream::iter(keys.into_iter().map(|key| Ok(Key::from(key))));
+        self.remove_all(blobs.boxed()).await
+    }
+
+    async fn remove_all(
+        &self,
+        blobs: futures_util::stream::BoxStream<'static, object_store::Result<Key>>,
+    ) -> io::Result<()> {
+        let mut removed = self.store.delete_stream(blobs);
+        while let Some(outcome) = removed.next().await {
+            match outcome {
+                Ok(_) | Err(object_store::Error::NotFound { .. }) => {}
+                Err(err) => return Err(failed(err)),
+            }
+        }
+        Ok(())
     }
 
     /// Store `data` under `key`, durably: the database rows that will point
-    /// into it must never outlive it. Written to a temporary name and
-    /// renamed, so a reader sees the whole blob or none of it.
+    /// into it must never outlive it. A reader sees the whole blob or none
+    /// of it.
     pub async fn put(&self, key: &str, data: Vec<u8>) -> io::Result<()> {
-        let path = self.path(key);
-        tokio::task::spawn_blocking(move || {
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            let temp = path.with_extension("tmp");
-            let mut file = fs::File::create(&temp)?;
-            file.write_all(&data)?;
-            file.sync_all()?;
-            drop(file);
-            fs::rename(&temp, &path)
-        })
-        .await
-        .map_err(join_error)?
+        self.store
+            .put(&Key::from(key), PutPayload::from(data))
+            .await
+            .map(|_| ())
+            .map_err(failed)
     }
 
     /// Read several ranges of one blob, returned in the order asked for.
     pub async fn get_ranges(&self, key: &str, ranges: Vec<Range>) -> io::Result<Vec<Vec<u8>>> {
-        let path = self.path(key);
-        tokio::task::spawn_blocking(move || {
-            let mut file = fs::File::open(&path)?;
-            ranges
-                .into_iter()
-                .map(|range| {
-                    let mut buffer = vec![0u8; range.len];
-                    file.seek(SeekFrom::Start(range.offset))?;
-                    file.read_exact(&mut buffer)?;
-                    Ok(buffer)
-                })
-                .collect()
-        })
-        .await
-        .map_err(join_error)?
+        let wanted: Vec<std::ops::Range<u64>> = ranges
+            .iter()
+            .map(|range| range.offset..range.offset + range.len as u64)
+            .collect();
+        let parts = self
+            .store
+            .get_ranges(&Key::from(key), &wanted)
+            .await
+            .map_err(failed)?;
+        parts
+            .into_iter()
+            .zip(&ranges)
+            .map(|(part, range)| {
+                // A blob shorter than its rows say is damage, and must not
+                // go out as a chunk that is merely short.
+                if part.len() != range.len {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "a blob is shorter than the chunk it should hold",
+                    ));
+                }
+                Ok(Vec::from(part))
+            })
+            .collect()
     }
 
     /// Read ranges out of several blobs at once. The result lines up with
@@ -138,7 +171,7 @@ impl BlobStore {
         }
         let mut blobs = vec![Vec::new(); tasks.len()];
         while let Some(done) = tasks.join_next().await {
-            let (index, data) = done.map_err(join_error)??;
+            let (index, data) = done.map_err(io::Error::other)??;
             blobs[index] = data;
         }
         Ok(blobs)
@@ -149,12 +182,16 @@ impl BlobStore {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn ranges_come_back_in_the_order_asked() {
-        let dir = std::env::temp_dir().join(format!(
+    fn scratch_dir() -> PathBuf {
+        std::env::temp_dir().join(format!(
             "mindstream-blob-test-{}",
             to_base64(&random_bytes::<8>())
-        ));
+        ))
+    }
+
+    #[tokio::test]
+    async fn ranges_come_back_in_the_order_asked() {
+        let dir = scratch_dir();
         let store = BlobStore::open(&dir).await.unwrap();
         let key = BlobStore::new_key("AbCdEf");
         assert!(key.starts_with("Ab/AbCdEf/"));
@@ -172,6 +209,7 @@ mod tests {
 
         // Reading past the end is an error, never a short answer.
         assert!(store.get_ranges(&key, vec![read(8, 5)]).await.is_err());
+        assert!(store.get_ranges(&key, vec![read(40, 1)]).await.is_err());
 
         let many = store
             .get_many(vec![
@@ -187,11 +225,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn put_leaves_the_blob_and_nothing_else_behind() {
+        let dir = scratch_dir();
+        let store = BlobStore::open(&dir).await.unwrap();
+        let key = BlobStore::new_key("AbCdEf");
+        store.put(&key, vec![7; 100_000]).await.unwrap();
+
+        // No temporary file survives a finished write, where a reader or a
+        // later listing could take it for a blob.
+        let files: Vec<String> = std::fs::read_dir(dir.join("Ab").join("AbCdEf"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(files.len(), 1, "{files:?}");
+        assert!(key.ends_with(&files[0]));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn removing_a_collection_takes_its_blobs_and_no_others() {
-        let dir = std::env::temp_dir().join(format!(
-            "mindstream-blob-test-{}",
-            to_base64(&random_bytes::<8>())
-        ));
+        let dir = scratch_dir();
         let store = BlobStore::open(&dir).await.unwrap();
         // The two share a prefix directory.
         let gone = [BlobStore::new_key("AbCdEf"), BlobStore::new_key("AbCdEf")];
@@ -212,6 +266,32 @@ mod tests {
         // A collection that never had a blob, or has none left, is fine.
         store.remove_collection("AbCdEf").await.unwrap();
         store.remove_collection("never-stored").await.unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn removing_blobs_by_key_spares_the_rest_and_forgives_the_missing() {
+        let dir = scratch_dir();
+        let store = BlobStore::open(&dir).await.unwrap();
+        let gone = BlobStore::new_key("AbCdEf");
+        let kept = BlobStore::new_key("AbCdEf");
+        for key in [&gone, &kept] {
+            store.put(key, b"data".to_vec()).await.unwrap();
+        }
+        let whole = || vec![Range { offset: 0, len: 4 }];
+
+        store
+            .remove(vec![gone.clone(), BlobStore::new_key("AbCdEf")])
+            .await
+            .unwrap();
+        assert!(store.get_ranges(&gone, whole()).await.is_err());
+        assert_eq!(
+            store.get_ranges(&kept, whole()).await.unwrap(),
+            vec![b"data".to_vec()]
+        );
+        // Removing it again changes nothing and is no error.
+        store.remove(vec![gone]).await.unwrap();
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

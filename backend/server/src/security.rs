@@ -351,9 +351,11 @@ pub async fn enroll_totp(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+    let url = totp::provisioning_url(&state.config.totp_issuer, &account.username, &secret)
+        .map_err(ApiError::internal)?;
     Ok(Msgpack(Enrolment {
         secret: totp::base32(&secret),
-        url: totp::provisioning_url(&state.config.totp_issuer, &account.username, &secret),
+        url,
     }))
 }
 

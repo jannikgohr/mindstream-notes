@@ -32,7 +32,6 @@ pub mod totp;
 mod vault;
 mod wire;
 
-use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -56,6 +55,9 @@ pub struct Inner {
     pub(crate) keys: Keys,
     pub(crate) vault: vault::Vault,
     pub(crate) auth_limiter: edge::RateLimiter,
+    /// What caps open connections, and what caps open sockets.
+    pub(crate) connections: Arc<edge::Gate>,
+    pub(crate) sockets: Arc<edge::Gate>,
     pub(crate) code_limiter: security::CodeLimiter,
     pub(crate) hub: hub::Hub,
     pub(crate) config: Config,
@@ -115,17 +117,21 @@ impl AppState {
             .map_err(StartError::SecretKey)?;
         let auth_limiter =
             edge::RateLimiter::new(config.auth_rate_per_minute, config.auth_rate_burst);
+        let gate = || edge::Gate::new(config.max_connections_per_address, config.max_connections);
         let state = Self(Arc::new(Inner {
             pool,
             blobs,
             keys,
             vault,
             auth_limiter,
+            connections: gate(),
+            sockets: gate(),
             code_limiter: security::CodeLimiter::default(),
             hub: hub::Hub::default(),
             config,
         }));
         events::listen(state.clone());
+        edge::forget_idle_callers(state.clone());
         Ok(state)
     }
 }
@@ -320,8 +326,13 @@ pub async fn serve(
     state: AppState,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
+    let listener = edge::CappedListener::new(
+        listener,
+        Arc::clone(&state.connections),
+        state.config.trusted_proxies.clone(),
+    );
     // Handlers need the peer address to work out who is calling.
-    let service = router(state).into_make_service_with_connect_info::<SocketAddr>();
+    let service = router(state).into_make_service_with_connect_info::<edge::Peer>();
     axum::serve(listener, service)
         .with_graceful_shutdown(shutdown)
         .await

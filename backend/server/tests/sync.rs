@@ -309,14 +309,17 @@ fn page_of_large_items_ends_early_and_nothing_is_lost() {
         700 * KIB,
         &[9; 32],
     ));
+    let mut largest = String::new();
     for content in &contents {
         let item = items.create(&named("attachment"), content).unwrap();
         items.batch(iter::once(&item), None).unwrap();
+        largest = item.uid().to_owned();
     }
 
     let mut fetched = Vec::new();
     let mut cursor: Option<String> = None;
     let mut pages = 0;
+    let mut oversized = 0;
     loop {
         let options = FetchOptions::new().stoken(cursor.as_deref()).limit(50);
         let page = items.list(Some(&options)).unwrap();
@@ -325,6 +328,13 @@ fn page_of_large_items_ends_early_and_nothing_is_lost() {
         // Every page moves on, including the one holding the oversized item.
         assert_eq!(page.data().len(), 1, "page {pages}");
         for item in page.data() {
+            let mut item = item.clone();
+            // The item no page has room for arrives as the uids of its
+            // chunks, and the client fetches those one at a time.
+            if item.is_missing_content() {
+                oversized += 1;
+                items.download_content(&mut item).unwrap();
+            }
             fetched.push(item.content().unwrap());
         }
         cursor = page.stoken().map(str::to_owned);
@@ -334,6 +344,13 @@ fn page_of_large_items_ends_early_and_nothing_is_lost() {
     }
     assert_eq!(pages, 6);
     assert_eq!(fetched, contents);
+    assert_eq!(oversized, 1);
+
+    // Asked for by itself, the oversized item comes back whole: the client
+    // library goes and gets what the server held back.
+    let oversized = items.fetch(&largest, None).unwrap();
+    assert!(!oversized.is_missing_content());
+    assert_eq!(oversized.content().unwrap(), contents[5]);
 
     // Without content a page is not cut short: there is nothing to weigh.
     let lean = FetchOptions::new()

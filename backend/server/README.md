@@ -24,25 +24,28 @@ with the choice of who may sign up at the top. The table below is the full
 list. Under compose a variable only reaches the server if
 [compose.yml](compose.yml) passes it on.
 
-| Variable                          | Default           | Meaning                                                         |
-| --------------------------------- | ----------------- | --------------------------------------------------------------- |
-| `MINDSTREAM_DATABASE_URL`         | required          | Postgres connection string                                      |
-| `MINDSTREAM_LISTEN`               | 0.0.0.0:3735      | Address to listen on                                            |
-| `MINDSTREAM_BLOB_DIR`             | data/blobs        | Where large chunks are stored                                   |
-| `MINDSTREAM_SIGNUP`               | closed            | Who may sign up: `closed`, `invite` or `open`. See below        |
-| `MINDSTREAM_PUBLIC_HOSTS`         | empty             | Hostnames clients use, when the proxy rewrites the Host header  |
-| `MINDSTREAM_TRUSTED_PROXIES`      | see below         | Networks whose `X-Forwarded-For` is believed                    |
-| `MINDSTREAM_AUTH_RATE_PER_MINUTE` | 10                | Sign-in attempts per address per minute. 0 turns the limit off  |
-| `MINDSTREAM_AUTH_RATE_BURST`      | 20                | Attempts an address may make at once before the rate applies    |
-| `MINDSTREAM_ADMIN_TOKEN`          | unset             | Turns on the interface for setting account limits               |
-| `MINDSTREAM_SECRET_KEY`           | unset             | Key that seals authenticator secrets. See below                 |
-| `MINDSTREAM_SECRET_KEY_FILE`      | see below         | Where that key is created when none is given                    |
-| `MINDSTREAM_TOTP_ISSUER`          | Mindstream Notes  | Name an authenticator app shows for accounts here               |
-| `MINDSTREAM_APP_URL`              | the releases page | Where the invite page sends people without the app              |
-| `MINDSTREAM_MAX_PAGE_BYTES`       | 33554432          | Most content one page of a list carries                         |
-| `MINDSTREAM_MAX_BODY_BYTES`       | 78643200          | Largest request body accepted                                   |
-| `MINDSTREAM_INLINE_CHUNK_BYTES`   | 20480             | Chunks up to this size stay in the database                     |
-| `MINDSTREAM_TEST_RESET`           | false             | Serves a route that wipes accounts. For the client's tests only |
+| Variable                                 | Default           | Meaning                                                                             |
+| ---------------------------------------- | ----------------- | ----------------------------------------------------------------------------------- |
+| `MINDSTREAM_DATABASE_URL`                | required          | Postgres connection string                                                          |
+| `MINDSTREAM_LISTEN`                      | 0.0.0.0:3735      | Address to listen on                                                                |
+| `MINDSTREAM_BLOB_DIR`                    | data/blobs        | Where large chunks are stored                                                       |
+| `MINDSTREAM_SIGNUP`                      | closed            | Who may sign up: `closed`, `invite` or `open`. See below                            |
+| `MINDSTREAM_PUBLIC_HOSTS`                | empty             | Hostnames clients use, when the proxy rewrites the Host header                      |
+| `MINDSTREAM_TRUSTED_PROXIES`             | see below         | Networks whose `X-Forwarded-For` is believed                                        |
+| `MINDSTREAM_AUTH_RATE_PER_MINUTE`        | 10                | Sign-in attempts per address per minute. 0 turns the limit off                      |
+| `MINDSTREAM_AUTH_RATE_BURST`             | 20                | Attempts an address may make at once before the rate applies                        |
+| `MINDSTREAM_MAX_CONNECTIONS_PER_ADDRESS` | 128               | Connections, and separately sockets, one address may hold open. 0 turns the cap off |
+| `MINDSTREAM_MAX_CONNECTIONS`             | 10000             | The same for the whole server. 0 turns the cap off                                  |
+| `MINDSTREAM_ADMIN_TOKEN`                 | unset             | Turns on the interface for setting account limits                                   |
+| `MINDSTREAM_SECRET_KEY`                  | unset             | Key that seals authenticator secrets. See below                                     |
+| `MINDSTREAM_SECRET_KEY_FILE`             | see below         | Where that key is created when none is given                                        |
+| `MINDSTREAM_TOTP_ISSUER`                 | Mindstream Notes  | Name an authenticator app shows for accounts here                                   |
+| `MINDSTREAM_APP_URL`                     | the releases page | Where the invite page sends people without the app                                  |
+| `MINDSTREAM_MAX_PAGE_BYTES`              | 33554432          | Most content one response carries. See below                                        |
+| `MINDSTREAM_KEEP_REVISIONS`              | 10                | Earlier revisions kept per item besides the current one                             |
+| `MINDSTREAM_MAX_BODY_BYTES`              | 78643200          | Largest request body accepted                                                       |
+| `MINDSTREAM_INLINE_CHUNK_BYTES`          | 20480             | Chunks up to this size stay in the database                                         |
+| `MINDSTREAM_TEST_RESET`                  | false             | Serves a route that wipes accounts. For the client's tests only                     |
 
 A login names the host it was made for, and the server refuses one made for
 another host. If logins fail with `wrong_host` behind a proxy, set
@@ -55,8 +58,32 @@ reachable directly from private addresses you do not control, narrow
 `MINDSTREAM_TRUSTED_PROXIES`, or a caller there can pick the address it is
 counted under.
 
+The connection caps count the same way. An address may hold
+`MINDSTREAM_MAX_CONNECTIONS_PER_ADDRESS` connections open and as many live
+sockets, where a socket is an open note or the change feed of a device. An
+IPv6 address is counted with its whole /64. A trusted proxy is not held to
+the connection cap, since every client behind it arrives from its address,
+but the sockets it forwards are counted per client. If clients reach the
+server through something that hides their addresses and sends no
+`X-Forwarded-For`, such as a NAT, they share one allowance: raise the cap or
+set it to 0.
+
+A response is built in memory, so the content one response carries is held
+to `MINDSTREAM_MAX_PAGE_BYTES`. A list ends its page early when the next item
+would not fit. Anything else sends the items that fit with their content and
+the rest as the uids of their chunks, which the client then asks for again.
+The client library does that by itself.
+
 `GET /api/v1/mindstream/info/` returns the server's version, protocol level
 and signup policy as JSON.
+
+### What is on disk
+
+Chunks larger than `MINDSTREAM_INLINE_CHUNK_BYTES` are files under
+`MINDSTREAM_BLOB_DIR`, one file per upload. An upload is answered only after
+its file and the directories the write touched have been synced, so what the
+server acknowledged survives a power cut. Back the blob directory up together
+with the database: each is useless without the other.
 
 ## Administer
 
@@ -169,6 +196,14 @@ back under a limit.
 
 The server can only limit what it can count. It cannot tell a note from an
 attachment, so there is no limit on the number of notes.
+
+Storage that is no longer needed is given back. An item keeps its current
+revision and the `MINDSTREAM_KEEP_REVISIONS` before it. Older revisions go
+when a new one arrives, and a deleted item keeps only the record that it was
+deleted. Content goes with the last revision that used it, from the database
+or the blob directory, and stops counting against the owner at that moment.
+The exception for deletions covers deletions only: a write that calls itself
+one and carries content is held to the limits like any other.
 
 ### From another program
 

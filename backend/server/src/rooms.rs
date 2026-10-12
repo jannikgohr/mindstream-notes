@@ -19,6 +19,7 @@ use serde::Serialize;
 
 use crate::auth::AuthUser;
 use crate::collections::membership;
+use crate::edge::SocketPermit;
 use crate::error::{ApiError, ApiResult};
 use crate::hub::{
     Joined, RoomKey, CLASS_PRESENCE, CLASS_REPLY, CLASS_SYNC, CLASS_UPDATE, CLOSE_BAD_FRAME,
@@ -77,11 +78,21 @@ pub async fn room_ticket(
     }))
 }
 
-pub async fn room_socket(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> Response {
+/// A room socket is let in on a ticket it presents once it is open, so
+/// until then it is anybody's. The permit is what keeps one address from
+/// holding more of them than it may, and it is held until the socket closes.
+pub async fn room_socket(
+    State(state): State<AppState>,
+    permit: SocketPermit,
+    upgrade: WebSocketUpgrade,
+) -> Response {
     upgrade
         .max_message_size(MAX_FRAME_BYTES)
         .max_frame_size(MAX_FRAME_BYTES)
-        .on_upgrade(move |socket| serve(state, socket))
+        .on_upgrade(move |socket| async move {
+            serve(state, socket).await;
+            drop(permit);
+        })
 }
 
 fn close_reason(code: u16) -> &'static str {
