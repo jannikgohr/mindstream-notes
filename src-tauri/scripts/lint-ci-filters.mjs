@@ -72,7 +72,8 @@ export const CODE_FILES = [
   'package.json',
   'pnpm-lock.yaml',
   'LICENSE',
-  '.config/prettier/.prettierrc.json'
+  '.config/prettier/.prettierrc.json',
+  'vendor/etebase-rs/src/service.rs'
 ];
 
 /** Files of the sync server, which has a CI job of its own. */

@@ -1,28 +1,28 @@
 # Mindstream server.
 #
-# Built from this directory alone, so the image does not depend on the rest
-# of the repository:
+# Built from the repository root, because the manifest names the client
+# library in vendor/ that the tests use:
 #
-#   docker build -t mindstream-server backend/server
+#   docker build -t mindstream-server -f backend/server/Dockerfile .
+#
+# What reaches the build is listed in Dockerfile.dockerignore next to this
+# file.
 
 FROM rust:1-slim-bookworm AS build
-WORKDIR /src
-# The lockfile names the client library the tests use, a git dependency, so
-# cargo needs git to resolve it even though the release build never compiles
-# it.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates \
- && rm -rf /var/lib/apt/lists/*
-COPY Cargo.toml Cargo.lock ./
-COPY migrations ./migrations
-COPY src ./src
+WORKDIR /src/backend/server
+# Only the tests compile the client library, but cargo reads its manifest to
+# resolve the lockfile.
+COPY vendor/etebase-rs /src/vendor/etebase-rs
+COPY backend/server/Cargo.toml backend/server/Cargo.lock ./
+COPY backend/server/migrations ./migrations
+COPY backend/server/src ./src
 RUN cargo build --release --locked --bin mindstream-server
 
 FROM debian:bookworm-slim
 RUN useradd --system --uid 10001 --no-create-home mindstream \
  && mkdir -p /data/blobs \
  && chown -R mindstream /data
-COPY --from=build /src/target/release/mindstream-server /usr/local/bin/mindstream-server
+COPY --from=build /src/backend/server/target/release/mindstream-server /usr/local/bin/mindstream-server
 USER mindstream
 ENV MINDSTREAM_LISTEN=0.0.0.0:3735
 ENV MINDSTREAM_BLOB_DIR=/data/blobs

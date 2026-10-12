@@ -15,11 +15,17 @@ Licensed AGPL-3.0, unlike the app. See [LICENSE](LICENSE).
 
 ```sh
 cd backend/server
-POSTGRES_PASSWORD=<strong-random> docker compose up -d --build
+cp .env.example .env    # then set POSTGRES_PASSWORD in it
+docker compose up -d --build
 ```
 
 The server listens on port 3735 over plain HTTP. Put a TLS-terminating reverse
 proxy in front for anything but local use.
+
+[.env.example](.env.example) holds the settings most servers want to look at,
+with the choice of who may sign up at the top. The table below is the full
+list. Under compose a variable only reaches the server if
+[compose.yml](compose.yml) passes it on.
 
 | Variable                          | Default           | Meaning                                                         |
 | --------------------------------- | ----------------- | --------------------------------------------------------------- |
@@ -231,8 +237,8 @@ node scripts/conformance.mjs 127.0.0.1:13735
 ```
 
 The suite signs in far more often than the sign-in limit allows, which is why
-the limit is off above. The script checks out the client at the revision the
-app pins and runs its `service` tests. One of them, `signup_with_key`, is marked ignored upstream
+the limit is off above. The script runs the `service` tests of the client in
+[vendor/etebase-rs](../../vendor/etebase-rs), the copy the app ships. One of them, `signup_with_key`, is marked ignored upstream
 because it cannot pass against any server.
 
 ## Benchmark

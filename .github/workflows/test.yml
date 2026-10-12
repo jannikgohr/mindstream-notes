@@ -86,12 +86,15 @@ jobs:
           # what paths-filter matches with.
           # The sync server is a separate crate with its own job below, so
           # a change confined to it leaves the app matrix alone. That
-          # exclusion has to live inside the same negated group.
+          # exclusion has to live inside the same negated group. The client
+          # library in vendor/ is built into the app and drives the server's
+          # tests, so a change there runs both.
           filters: |
             code:
               - '!(**/*.md|*.md|backend/server/**)'
             server:
               - 'backend/server/**'
+              - 'vendor/etebase-rs/**'
               - '.github/workflows/test.yml'
             # The surfaces the two-client suites actually exercise. This is a
             # heuristic, not a proof: the Yjs/editor code they also depend on

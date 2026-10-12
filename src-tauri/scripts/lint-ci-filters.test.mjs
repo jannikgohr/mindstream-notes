@@ -66,8 +66,12 @@ test('a server-only change runs the server job and not the app jobs', () => {
   // against, so it still counts as app code.
   assert.equal(selectsCodeJobs('backend/docker-compose.yml'), true);
   assert.equal(selectsServerJob('backend/docker-compose.yml'), false);
-  // A workflow change can break either side.
+  // A workflow change can break either side, and so can a change to the
+  // client library: the app ships it and the server's tests are written
+  // with it.
   assert.equal(selectsServerJob('.github/workflows/test.yml'), true);
+  assert.equal(selectsServerJob('vendor/etebase-rs/src/service.rs'), true);
+  assert.equal(selectsCodeJobs('vendor/etebase-rs/src/service.rs'), true);
 });
 
 test('every collaboration pattern matches something in the tree', () => {

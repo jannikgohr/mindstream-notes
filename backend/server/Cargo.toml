@@ -46,7 +46,7 @@ tower-http = { version = "0.6", features = ["trace"] }
 [dev-dependencies]
 # The client the app ships. Driving the server with it in tests is what keeps
 # the two honest about the wire format.
-etebase = { git = "https://github.com/jannikgohr/etebase-rs", features = ["networking"] }
+etebase = { path = "../../vendor/etebase-rs", features = ["networking"] }
 # A WebSocket client, for the room and feed tests.
 tokio-tungstenite = "0.29"
 futures-util = "0.3"

@@ -575,7 +575,6 @@ dependencies = [
 [[package]]
 name = "etebase"
 version = "0.6.1"
-source = "git+https://github.com/jannikgohr/etebase-rs#6c8293f104a6b3beae1d8b009e854c51c459804d"
 dependencies = [
  "base64 0.21.7",
  "chacha20 0.9.1",

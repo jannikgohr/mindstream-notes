@@ -1,7 +1,8 @@
 # Mindstream server with its database.
 #
 #   cd backend/server
-#   POSTGRES_PASSWORD=<strong-random> docker compose up -d --build
+#   cp .env.example .env    # then set POSTGRES_PASSWORD in it
+#   docker compose up -d --build
 #
 # Plain HTTP on port 3735 of the `server` service. Put a TLS-terminating
 # reverse proxy in front for anything but local use.
@@ -11,7 +12,9 @@
 
 services:
   server:
-    build: .
+    build:
+      context: ../..
+      dockerfile: backend/server/Dockerfile
     restart: always
     depends_on:
       postgres:

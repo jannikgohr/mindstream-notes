@@ -10,12 +10,12 @@
  * at a time. It also signs in more often than the sign-in limit allows, so
  * start the server with MINDSTREAM_AUTH_RATE_PER_MINUTE=0.
  *
- * The client is checked out at the revision the app pins in
- * src-tauri/Cargo.lock, so the server is held to what the app actually ships.
+ * The client is the one in vendor/etebase-rs, the copy the app ships, so the
+ * server is held to what the app actually sends.
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -29,34 +29,14 @@ function run(command, args, options = {}) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
-/** The git source cargo recorded for the app's `etebase` dependency. */
-function pinnedClient() {
-  const lock = readFileSync(resolve(repoRoot, 'src-tauri/Cargo.lock'), 'utf8');
-  const match =
-    /name = "etebase"\r?\nversion = "[^"]+"\r?\nsource = "git\+([^#"]+)#([0-9a-f]+)"/.exec(
-      lock
-    );
-  if (!match) {
-    throw new Error(
-      'src-tauri/Cargo.lock does not pin etebase to a git revision'
-    );
-  }
-  return { url: match[1].replace(/\?.*$/, ''), revision: match[2] };
+const client = resolve(repoRoot, 'vendor/etebase-rs');
+if (!existsSync(resolve(client, 'Cargo.toml'))) {
+  throw new Error(`no client library at ${client}`);
 }
 
-const { url, revision } = pinnedClient();
-// Under target/ so it is ignored, and short enough for the Windows linker,
-// which gives up on paths much longer than this one.
-const checkout = resolve(serverDir, 'target/conformance-src');
-if (!existsSync(resolve(checkout, '.git'))) {
-  run('git', ['clone', '--quiet', url, checkout]);
-}
-run('git', ['-C', checkout, 'fetch', '--quiet', 'origin', revision]);
-run('git', ['-C', checkout, 'checkout', '--quiet', '--detach', revision]);
-
-console.log(`etebase-rs ${revision.slice(0, 10)} against ${host}`);
+console.log(`vendor/etebase-rs against ${host}`);
 run('cargo', ['test', '--test', 'service', '--', '--test-threads=1'], {
-  cwd: checkout,
+  cwd: client,
   env: {
     ...process.env,
     ETEBASE_TEST_HOST: host,

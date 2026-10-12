@@ -1,0 +1,41 @@
+[package]
+name = "etebase"
+description = "A Rust client library for Etebase"
+homepage = "https://www.etebase.com"
+repository = "https://github.com/etesync/etebase-rs/"
+version = "0.6.1"
+authors = ["Tom Hacohen <tom@stosb.com>"]
+edition = "2018"
+rust-version = "1.63.0"
+license = "BSD-3-Clause"
+readme = "README.md"
+keywords = ["encryption", "sync", "etesync", "cryptography", "firebase"]
+categories = ["cryptography", "api-bindings", "database", "development-tools"]
+include = [
+    "**/*.rs",
+    "Cargo.toml",
+    "LICENSE",
+    "README.md",
+]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+crate-type = ["lib"]
+
+[dependencies]
+base64 = "^0.21.7"
+chacha20 = "^0.9.1"
+chacha20poly1305 = "^0.10.1"
+dryoc = "^0.7.2"
+url = "^2.2.2"
+serde = { version = "^1.0.136", features = ["derive"] }
+serde_bytes = "^0.11.5"
+serde_repr = "^0.1.7"
+rmp-serde = "^1.1.0"
+reqwest = { version = "^0.12.0", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
+remove_dir_all = "^1.0.0"
+subtle = "^2.4.1"
+
+[features]
+default = ["networking"]
+networking = ["reqwest"]
