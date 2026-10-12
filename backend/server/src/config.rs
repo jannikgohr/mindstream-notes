@@ -95,6 +95,13 @@ pub struct Config {
     #[arg(long, env = "MINDSTREAM_APP_URL", default_value = DEFAULT_APP_URL)]
     pub app_url: String,
 
+    /// Most content one page of a list carries, in bytes. A client asks for
+    /// a number of items, not a number of bytes, and a page of attachments
+    /// could otherwise run to gigabytes. The client fetches the rest with
+    /// the cursor it is given, as it would after any other page.
+    #[arg(long, env = "MINDSTREAM_MAX_PAGE_BYTES", default_value_t = 32 * 1024 * 1024)]
+    pub max_page_bytes: i64,
+
     /// Largest request body accepted, in bytes.
     #[arg(long, env = "MINDSTREAM_MAX_BODY_BYTES", default_value_t = 75 * 1024 * 1024)]
     pub max_body_bytes: usize,
@@ -157,6 +164,7 @@ impl Config {
             secret_key_file: None,
             totp_issuer: "Mindstream Tests".into(),
             app_url: "https://example.com/app".into(),
+            max_page_bytes: 32 * 1024 * 1024,
             max_body_bytes: 75 * 1024 * 1024,
             inline_chunk_bytes: 20 * 1024,
             database_connections: 4,

@@ -280,3 +280,66 @@ fn chunk_uploaded_ahead_is_found_by_the_revision() {
         content
     );
 }
+
+/// A client asks for fifty items, not for fifty megabytes. A page that
+/// would carry too much ends early, and the client carries on from the
+/// cursor exactly as it does after a full page.
+#[test]
+fn page_of_large_items_ends_early_and_nothing_is_lost() {
+    const KIB: usize = 1024;
+    let url = common::start_server(|config| config.max_page_bytes = 300 * KIB as i64);
+    let account = common::signup_at(&url, "owner");
+    let collection = new_collection(&account, "attachments");
+    let items = account
+        .collection_manager()
+        .unwrap()
+        .item_manager(&collection)
+        .unwrap();
+
+    // Five of 200 KiB, so two never fit one page, and one larger than any
+    // page.
+    let mut contents = Vec::new();
+    for seed in 0..5u8 {
+        contents.push(etebase::utils::randombytes_deterministic(
+            200 * KIB,
+            &[seed; 32],
+        ));
+    }
+    contents.push(etebase::utils::randombytes_deterministic(
+        700 * KIB,
+        &[9; 32],
+    ));
+    for content in &contents {
+        let item = items.create(&named("attachment"), content).unwrap();
+        items.batch(iter::once(&item), None).unwrap();
+    }
+
+    let mut fetched = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut pages = 0;
+    loop {
+        let options = FetchOptions::new().stoken(cursor.as_deref()).limit(50);
+        let page = items.list(Some(&options)).unwrap();
+        pages += 1;
+        assert!(pages <= 10, "the list never finished");
+        // Every page moves on, including the one holding the oversized item.
+        assert_eq!(page.data().len(), 1, "page {pages}");
+        for item in page.data() {
+            fetched.push(item.content().unwrap());
+        }
+        cursor = page.stoken().map(str::to_owned);
+        if page.done() {
+            break;
+        }
+    }
+    assert_eq!(pages, 6);
+    assert_eq!(fetched, contents);
+
+    // Without content a page is not cut short: there is nothing to weigh.
+    let lean = FetchOptions::new()
+        .prefetch(&PrefetchOption::Medium)
+        .limit(50);
+    let page = items.list(Some(&lean)).unwrap();
+    assert_eq!(page.data().len(), 6);
+    assert!(page.done());
+}

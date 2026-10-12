@@ -39,6 +39,7 @@ list. Under compose a variable only reaches the server if
 | `MINDSTREAM_SECRET_KEY_FILE`      | see below         | Where that key is created when none is given                    |
 | `MINDSTREAM_TOTP_ISSUER`          | Mindstream Notes  | Name an authenticator app shows for accounts here               |
 | `MINDSTREAM_APP_URL`              | the releases page | Where the invite page sends people without the app              |
+| `MINDSTREAM_MAX_PAGE_BYTES`       | 33554432          | Most content one page of a list carries                         |
 | `MINDSTREAM_MAX_BODY_BYTES`       | 78643200          | Largest request body accepted                                   |
 | `MINDSTREAM_INLINE_CHUNK_BYTES`   | 20480             | Chunks up to this size stay in the database                     |
 | `MINDSTREAM_TEST_RESET`           | false             | Serves a route that wipes accounts. For the client's tests only |

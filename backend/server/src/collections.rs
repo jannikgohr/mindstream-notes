@@ -430,6 +430,47 @@ pub async fn create_collection(
 
 // ---------- reading items ----------
 
+/// How many of these sizes, taken in order, fit a budget. The first always
+/// counts, however large, so a list cannot get stuck on one big item.
+fn fitting(sizes: impl Iterator<Item = i64>, budget: i64) -> usize {
+    let mut total = 0i64;
+    let mut count = 0;
+    for size in sizes {
+        total = total.saturating_add(size);
+        if count > 0 && total > budget {
+            break;
+        }
+        count += 1;
+    }
+    count
+}
+
+/// How many of `rows`, in order, one page can carry with their content.
+async fn page_len(conn: &mut PgConnection, rows: &[ItemRow], budget: i64) -> ApiResult<usize> {
+    let ids: Vec<i64> = rows
+        .iter()
+        .flat_map(|row| row.chunk_ids.iter().copied())
+        .collect();
+    if ids.is_empty() {
+        return Ok(rows.len());
+    }
+    let sizes: HashMap<i64, i64> =
+        sqlx::query_as::<_, (i64, i32)>("SELECT id, size FROM chunks WHERE id = ANY($1)")
+            .bind(&ids)
+            .fetch_all(conn)
+            .await?
+            .into_iter()
+            .map(|(id, size)| (id, i64::from(size)))
+            .collect();
+    let content = |row: &ItemRow| -> i64 {
+        row.chunk_ids
+            .iter()
+            .map(|id| sizes.get(id).copied().unwrap_or(0))
+            .sum()
+    };
+    Ok(fitting(rows.iter().map(content), budget))
+}
+
 pub async fn list_items(
     State(state): State<AppState>,
     user: AuthUser,
@@ -452,8 +493,17 @@ pub async fn list_items(
     .bind(limit + 1)
     .fetch_all(&mut *conn)
     .await?;
-    let done = rows.len() as i64 <= limit;
+    let mut done = rows.len() as i64 <= limit;
     rows.truncate(limit as usize);
+    if query.with_content() {
+        // The page ends early when its content would outgrow the budget.
+        // To the client that is a short page like any other.
+        let fits = page_len(&mut conn, &rows, state.config.max_page_bytes).await?;
+        if fits < rows.len() {
+            rows.truncate(fits);
+            done = false;
+        }
+    }
     let stoken = rows
         .last()
         .map(|row| state.keys.stoken(row.stoken))
@@ -968,6 +1018,22 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    #[test]
+    fn page_holds_what_fits_and_always_at_least_one_item() {
+        let fit = |sizes: &[i64], budget| fitting(sizes.iter().copied(), budget);
+        assert_eq!(fit(&[], 100), 0);
+        assert_eq!(fit(&[10, 20, 30], 100), 3);
+        assert_eq!(fit(&[60, 40, 1], 100), 2);
+        assert_eq!(fit(&[60, 41], 100), 1);
+        // One item larger than the whole budget still goes out, alone.
+        assert_eq!(fit(&[500, 1], 100), 1);
+        assert_eq!(fit(&[500], 100), 1);
+        // Items without content never end a page.
+        assert_eq!(fit(&[0, 0, 0, 0], 0), 4);
+        // Sizes that would overflow when added up do not wrap round to fit.
+        assert_eq!(fit(&[i64::MAX, 1, 1], i64::MAX - 1), 1);
+    }
 
     /// The property every cursor depends on. If a second writer could take a
     /// number before the first committed, the second could commit first, a
