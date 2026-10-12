@@ -14,7 +14,7 @@ use std::time::Duration;
 use etebase::FeedEndpoint;
 use futures_util::StreamExt;
 use serde::Deserialize;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 use tokio_tungstenite::tungstenite::http::StatusCode;
@@ -174,6 +174,14 @@ async fn listen(app: &AppHandle) -> Result<(), String> {
                     log::warn!(
                         "[feed] the server speaks a newer feed protocol than this app knows"
                     );
+                }
+                if news.invitations {
+                    // Nothing to sync for an invitation that waits. The
+                    // notifications list them again.
+                    let event = crate::app_events::AppEvent::InvitationsChanged.as_str();
+                    if let Err(err) = app.emit(event, ()) {
+                        log::warn!("[feed] failed to emit {event}: {err}");
+                    }
                 }
                 if news.worth_a_sync() {
                     log::debug!(

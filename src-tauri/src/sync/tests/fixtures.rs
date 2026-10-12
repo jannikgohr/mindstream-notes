@@ -24,8 +24,6 @@ pub(super) fn remote_note(id: &str, parent: Option<&str>, trashed_at: Option<&st
 
 pub(super) fn collab_info(epoch: u64, salt: &[u8]) -> ShareScopeCollabInfo {
     ShareScopeCollabInfo {
-        notes_collection_uid: "scope_notes".into(),
-        assets_collection_uid: "scope_assets".into(),
         collab_epoch: epoch,
         collab_salt: salt.to_vec(),
     }

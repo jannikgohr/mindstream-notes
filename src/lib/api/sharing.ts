@@ -3,7 +3,6 @@ import {
   assertBoolean,
   assertRecord,
   assertString,
-  assertStringArray,
   assertVoid,
   TauriCommandName,
   invokeOrFallback,
@@ -12,46 +11,22 @@ import {
 
 export type CollectionShareAccessLevel = 'read_only' | 'read_write' | 'admin';
 
-export interface CollectionInvitation {
+/** An invitation to a shared folder that has not been answered. */
+export interface IncomingShare {
+  invitation_id: string;
+  /** The shared folder's collection on the server. */
+  collection_uid: string;
+  /** The folder's name. Null only when the server did not send it along. */
+  name: string | null;
+  sender_username: string | null;
+  access_level: CollectionShareAccessLevel;
+}
+
+/** An invitation this account sent that has not been answered. */
+export interface OutgoingInvitation {
   id: string;
   username: string;
-  sender_username: string | null;
-  collection_uid: string;
   access_level: CollectionShareAccessLevel;
-  collection_type: string | null;
-}
-
-export type ShareScopePart = 'folders' | 'notes' | 'assets';
-
-export interface IncomingShareBundlePart {
-  part: ShareScopePart;
-  collection_uid: string | null;
-  expected_collection_type: string;
-  required: boolean;
-  invitation: CollectionInvitation | null;
-}
-
-export interface IncomingShareBundle {
-  manifest_invitation_id: string;
-  manifest_collection_uid: string;
-  // True while the manifest invitation is unaccepted: the scan reads it by
-  // non-mutating preview only, so name/share_scope_id/root_folder_id/parts are
-  // unknown until the user accepts. Accept/decline still work by uid.
-  pending: boolean;
-  share_scope_id: string | null;
-  name: string | null;
-  root_folder_id: string | null;
-  owner_username: string | null;
-  sender_username: string | null;
-  access_level: CollectionShareAccessLevel | null;
-  complete: boolean;
-  parts: IncomingShareBundlePart[];
-  warnings: string[];
-}
-
-export interface IncomingShareInvitations {
-  bundles: IncomingShareBundle[];
-  unbundled_invitations: CollectionInvitation[];
 }
 
 export interface InviteCollectionInput {
@@ -72,55 +47,47 @@ export interface CollectionShareState {
   shared_owner: string | null;
   shared_by_me: boolean;
   members: CollectionMember[];
-  outgoing_invitations: CollectionInvitation[];
+  outgoing_invitations: OutgoingInvitation[];
 }
 
-export function listCollectionInvitations(): Promise<CollectionInvitation[]> {
-  return invokeOrFallback<CollectionInvitation[]>(
-    TauriCommandName.ListCollectionInvitations,
+/** The invitations to shared folders that wait for an answer. */
+export function listIncomingShares(): Promise<IncomingShare[]> {
+  return invokeOrFallback<IncomingShare[]>(
+    TauriCommandName.ListIncomingShares,
     undefined,
     async () => [],
-    parseCollectionInvitations
-  );
-}
-
-export function listIncomingShareBundles(): Promise<IncomingShareInvitations> {
-  return invokeOrFallback<IncomingShareInvitations>(
-    TauriCommandName.ListIncomingShareBundles,
-    undefined,
-    async () => ({ bundles: [], unbundled_invitations: [] }),
-    parseIncomingShareInvitations
-  );
-}
-
-export function acceptShareBundle(
-  manifestCollectionUid: string
-): Promise<void> {
-  assertRequiredString(manifestCollectionUid, 'manifestCollectionUid');
-  return invokeOrFallback<void>(
-    TauriCommandName.AcceptShareBundle,
-    { manifestCollectionUid },
-    async () => undefined,
-    (value) => assertVoid(value, 'accept_share_bundle response')
-  );
-}
-
-export function declineShareBundle(
-  manifestCollectionUid: string
-): Promise<void> {
-  assertRequiredString(manifestCollectionUid, 'manifestCollectionUid');
-  return invokeOrFallback<void>(
-    TauriCommandName.DeclineShareBundle,
-    { manifestCollectionUid },
-    async () => undefined,
-    (value) => assertVoid(value, 'decline_share_bundle response')
+    parseIncomingShares
   );
 }
 
 /**
- * Leave a folder shared *with* the current user. Relinquishes membership of the
- * scope's collections server-side and purges the locally-pulled subtree. No-op
- * fallback in browser mode (sharing is Tauri-only).
+ * Accept an invitation to a shared folder. Nothing appears at once: the next
+ * sync pulls the folder in.
+ */
+export function acceptShare(invitationId: string): Promise<void> {
+  assertRequiredString(invitationId, 'invitationId');
+  return invokeOrFallback<void>(
+    TauriCommandName.AcceptShare,
+    { invitationId },
+    async () => undefined,
+    (value) => assertVoid(value, 'accept_share response')
+  );
+}
+
+export function declineShare(invitationId: string): Promise<void> {
+  assertRequiredString(invitationId, 'invitationId');
+  return invokeOrFallback<void>(
+    TauriCommandName.DeclineShare,
+    { invitationId },
+    async () => undefined,
+    (value) => assertVoid(value, 'decline_share response')
+  );
+}
+
+/**
+ * Leave a folder shared *with* the current user. Gives up the membership on
+ * the server and removes the folder from this device. No-op fallback in
+ * browser mode (sharing is Tauri-only).
  */
 export function leaveSharedCollection(collectionId: string): Promise<void> {
   assertRequiredString(collectionId, 'collectionId');
@@ -133,10 +100,10 @@ export function leaveSharedCollection(collectionId: string): Promise<void> {
 }
 
 /**
- * Stop sharing a folder the current user owns. The owner keeps the folder (it
- * re-homes into their personal vault); the scope's collections are deleted
- * server-side so every recipient's device removes its copy on the next sync.
- * No-op fallback in browser mode (sharing is Tauri-only).
+ * Stop sharing a folder the current user owns. The owner keeps the folder,
+ * which goes back into their own vault. The shared collection is deleted on
+ * the server, so every other member's device removes its copy on its next
+ * sync. No-op fallback in browser mode (sharing is Tauri-only).
  */
 export function stopSharingCollection(collectionId: string): Promise<void> {
   assertRequiredString(collectionId, 'collectionId');
@@ -192,26 +159,6 @@ export function removeCollectionMember(input: {
     { input },
     async () => undefined,
     (value) => assertVoid(value, 'remove_collection_member response')
-  );
-}
-
-export function acceptCollectionInvitation(id: string): Promise<void> {
-  assertRequiredString(id, 'id');
-  return invokeOrFallback<void>(
-    TauriCommandName.AcceptCollectionInvitation,
-    { id },
-    async () => undefined,
-    (value) => assertVoid(value, 'accept_collection_invitation response')
-  );
-}
-
-export function rejectCollectionInvitation(id: string): Promise<void> {
-  assertRequiredString(id, 'id');
-  return invokeOrFallback<void>(
-    TauriCommandName.RejectCollectionInvitation,
-    { id },
-    async () => undefined,
-    (value) => assertVoid(value, 'reject_collection_invitation response')
   );
 }
 
@@ -278,138 +225,53 @@ function parseNullableAccessLevel(
   return parseAccessLevel(value, context);
 }
 
-function parseShareScopePart(value: unknown, context: string): ShareScopePart {
-  const part = assertString(value, context);
-  switch (part) {
-    case 'folders':
-    case 'notes':
-    case 'assets':
-      return part;
-    default: {
-      const _exhaustive: never = part as never;
-      throw new Error(`${context} has unknown share part: ${_exhaustive}`);
-    }
-  }
-}
-
-function parseCollectionInvitation(value: unknown): CollectionInvitation {
-  const raw = assertRecord(value, 'collection invitation');
+function parseIncomingShare(value: unknown): IncomingShare {
+  const raw = assertRecord(value, 'incoming share');
   return {
-    id: assertString(raw.id, 'collection invitation.id'),
-    username: assertString(raw.username, 'collection invitation.username'),
-    sender_username: optionalString(
-      raw.sender_username,
-      'collection invitation.sender_username'
+    invitation_id: assertString(
+      raw.invitation_id,
+      'incoming share.invitation_id'
     ),
     collection_uid: assertString(
       raw.collection_uid,
-      'collection invitation.collection_uid'
+      'incoming share.collection_uid'
+    ),
+    name: optionalString(raw.name, 'incoming share.name'),
+    sender_username: optionalString(
+      raw.sender_username,
+      'incoming share.sender_username'
     ),
     access_level: parseAccessLevel(
       raw.access_level,
-      'collection invitation.access_level'
-    ),
-    collection_type: optionalString(
-      raw.collection_type,
-      'collection invitation.collection_type'
+      'incoming share.access_level'
     )
   };
 }
 
-function parseCollectionInvitations(value: unknown): CollectionInvitation[] {
+function parseIncomingShares(value: unknown): IncomingShare[] {
   if (!Array.isArray(value)) {
-    throw new Error('collection invitations must be an array');
+    throw new Error('incoming shares must be an array');
   }
-  return value.map((item) => parseCollectionInvitation(item));
+  return value.map((item) => parseIncomingShare(item));
 }
 
-function parseIncomingShareBundlePart(value: unknown): IncomingShareBundlePart {
-  const raw = assertRecord(value, 'incoming share bundle part');
-  const invitation =
-    raw.invitation === null || raw.invitation === undefined
-      ? null
-      : parseCollectionInvitation(raw.invitation);
+function parseOutgoingInvitation(value: unknown): OutgoingInvitation {
+  const raw = assertRecord(value, 'outgoing invitation');
   return {
-    part: parseShareScopePart(raw.part, 'incoming share bundle part.part'),
-    collection_uid: optionalString(
-      raw.collection_uid,
-      'incoming share bundle part.collection_uid'
-    ),
-    expected_collection_type: assertString(
-      raw.expected_collection_type,
-      'incoming share bundle part.expected_collection_type'
-    ),
-    required: assertBoolean(
-      raw.required,
-      'incoming share bundle part.required'
-    ),
-    invitation
-  };
-}
-
-function parseIncomingShareBundleParts(
-  value: unknown
-): IncomingShareBundlePart[] {
-  if (!Array.isArray(value)) {
-    throw new Error('incoming share bundle parts must be an array');
-  }
-  return value.map((item) => parseIncomingShareBundlePart(item));
-}
-
-function parseIncomingShareBundle(value: unknown): IncomingShareBundle {
-  const raw = assertRecord(value, 'incoming share bundle');
-  return {
-    manifest_invitation_id: assertString(
-      raw.manifest_invitation_id,
-      'incoming share bundle.manifest_invitation_id'
-    ),
-    manifest_collection_uid: assertString(
-      raw.manifest_collection_uid,
-      'incoming share bundle.manifest_collection_uid'
-    ),
-    pending: assertBoolean(raw.pending, 'incoming share bundle.pending'),
-    share_scope_id: optionalString(
-      raw.share_scope_id,
-      'incoming share bundle.share_scope_id'
-    ),
-    name: optionalString(raw.name, 'incoming share bundle.name'),
-    root_folder_id: optionalString(
-      raw.root_folder_id,
-      'incoming share bundle.root_folder_id'
-    ),
-    owner_username: optionalString(
-      raw.owner_username,
-      'incoming share bundle.owner_username'
-    ),
-    sender_username: optionalString(
-      raw.sender_username,
-      'incoming share bundle.sender_username'
-    ),
-    access_level: parseNullableAccessLevel(
+    id: assertString(raw.id, 'outgoing invitation.id'),
+    username: assertString(raw.username, 'outgoing invitation.username'),
+    access_level: parseAccessLevel(
       raw.access_level,
-      'incoming share bundle.access_level'
-    ),
-    complete: assertBoolean(raw.complete, 'incoming share bundle.complete'),
-    parts: parseIncomingShareBundleParts(raw.parts),
-    warnings: assertStringArray(raw.warnings, 'incoming share bundle.warnings')
+      'outgoing invitation.access_level'
+    )
   };
 }
 
-function parseIncomingShareBundles(value: unknown): IncomingShareBundle[] {
+function parseOutgoingInvitations(value: unknown): OutgoingInvitation[] {
   if (!Array.isArray(value)) {
-    throw new Error('incoming share bundles must be an array');
+    throw new Error('outgoing invitations must be an array');
   }
-  return value.map((item) => parseIncomingShareBundle(item));
-}
-
-function parseIncomingShareInvitations(
-  value: unknown
-): IncomingShareInvitations {
-  const raw = assertRecord(value, 'incoming share invitations');
-  return {
-    bundles: parseIncomingShareBundles(raw.bundles),
-    unbundled_invitations: parseCollectionInvitations(raw.unbundled_invitations)
-  };
+  return value.map((item) => parseOutgoingInvitation(item));
 }
 
 function parseCollectionMember(value: unknown): CollectionMember {
@@ -451,6 +313,6 @@ function parseCollectionShareState(value: unknown): CollectionShareState {
       'collection share state.shared_by_me'
     ),
     members: parseCollectionMembers(raw.members),
-    outgoing_invitations: parseCollectionInvitations(raw.outgoing_invitations)
+    outgoing_invitations: parseOutgoingInvitations(raw.outgoing_invitations)
   };
 }

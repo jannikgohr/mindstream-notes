@@ -195,12 +195,27 @@ in its encrypted metadata. Two consequences follow.
 - Account limits can only use what the server can count: bytes, spaces, members
   per space, blob size and sessions. It cannot count notes.
 
-As built so far, the vault is one collection of type `mindstream.vault`. A
-shared folder is still a manifest and three part collections, until the rest
-of this step lands. An app that synced with the four vault collections of
-before starts over against the new one on its first sync: its rows are
-detached from their old items and uploaded again, and a row another device
-has already moved over is matched by its own id, not uploaded twice.
+As built, the vault is one collection of type `mindstream.vault` and a
+shared folder is one of type `mindstream.shared`. An app that synced with the
+four vault collections of before starts over against the new one on its
+first sync: its rows are detached from their old items and uploaded again,
+and a row another device has already moved over is matched by its own id,
+not uploaded twice.
+
+A shared folder made before this cannot sync any more, because nothing reads
+the four collections it was made of. A folder the account shared goes back
+into its vault and can be shared again. A folder shared with the account is
+removed from the device by its first sync, which finds that the server lists
+no such share. The old collections stay on the server unused.
+
+Locally a row belongs to a shared folder when its `share_scope_id` is the uid
+of the folder's collection. The collection is found by that uid, in one
+fetch, so there is no list of manifests to search and nothing a second
+collection could claim. That is what closes M5.
+
+The collection's own content is a small manifest: which folder is the root,
+who shared it, and the epoch and salt that live sessions mix into their
+keys. The folder's name is the collection's name.
 
 One stream of mixed items cannot be applied in the order it arrives. The
 server sends items in the order they last changed, so a folder renamed last
@@ -349,9 +364,24 @@ uses.
 
 - **The name is visible before accepting.** It lives in the collection's own
   metadata. The server returns that metadata with the invitation, and the key
-  inside the invitation decrypts it.
+  inside the invitation decrypts it. Built: the client library's invitation
+  preview carries the name, and the notification reads "Ann shared “Trip
+  plans” with you". Reading it accepts nothing.
 - **Invitations are pushed** over the change feed. Accepting triggers the first
-  pull at once.
+  pull at once. Built: the feed's invitation flag makes the app list its
+  invitations again, and accepting asks for a sync.
+- **Only a shared folder is offered.** An invitation to a collection of any
+  other type was made by another program. The app neither shows nor accepts
+  it, so nobody can put a collection of their choosing among a user's.
+- **The root is a claim.** The manifest names the folder at the top of the
+  share, and whoever shares writes the manifest. A device marks a folder as
+  the shared root only if that folder arrived through the share. Otherwise a
+  manifest naming someone's own folder would mark it as shared with them,
+  and on a read-only share lock them out of it.
+- **Inviting someone else moves nothing.** Sharing a folder moves its rows
+  into the folder's collection once. What is added later inherits the scope
+  as it is added, so a second invitation has nothing to move. It used to
+  delete and recreate every item for every member.
 - **Member changes are one request** and take effect in open rooms
   immediately.
 - **An invitation is only as good as its sender.** It is accepted on the
@@ -362,7 +392,20 @@ uses.
   link follows the same rule.
 - **Recipient keys are pinned.** The client remembers the public key first seen
   for a username and warns when it changes. Without this a server could swap in
-  its own key when a folder is shared. This weakness exists today.
+  its own key when a folder is shared. This weakness exists today. Not built
+  yet.
+
+One thing the move to one collection did not fix, and that still needs
+fixing. A pulled item says which local row it is by the id in its payload,
+and a row is looked up by that id alone. Someone who can write to a folder
+shared with a user, and who knows the id of one of that user's own notes,
+can put an item with that id into the shared folder and have it take the
+note over. Ids are random, so they have to be learned, for instance from a
+note that was once in a folder shared between the two. The rule that closes
+it: an item may claim a row that is already in its own space or in none,
+never one that is attached to another. That needs deletions to reach the
+server before the creations that replace them, across every space in one
+sync, so that a row moving between spaces is never in two at once.
 
 ### Invite links
 

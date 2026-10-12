@@ -10,6 +10,7 @@ export enum TauriEventName {
   CustomWindowDecorationsChanged = 'custom-window-decorations-changed',
   FullscreenNote = 'fullscreen-note',
   ImportProgress = 'import-progress',
+  InvitationsChanged = 'invitations-changed',
   NativeMenuCommand = 'native-menu-command',
   SessionEnded = 'session-ended',
   ShowApp = 'show-app',
@@ -69,6 +70,13 @@ export type TauriEvents = {
    * can't flood this channel. Mirrors `app_events::AppEvent::ImportProgress`.
    */
   'import-progress': { phase: string; done: number; total: number };
+  /**
+   * Fired from Rust when the server says an invitation to or from this
+   * account appeared or went away. The notification center lists the
+   * waiting invitations again, so a folder someone just shared shows up
+   * without a restart. Mirrors `app_events::AppEvent::InvitationsChanged`.
+   */
+  'invitations-changed': null;
   /**
    * Fired from Rust when the server has ended this device's session and
    * the device has signed itself out: it was signed out from another

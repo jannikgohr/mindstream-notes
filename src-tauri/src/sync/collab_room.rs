@@ -28,8 +28,8 @@ pub struct RoomInfo {
     pub key_b64: String,
 }
 
-/// HKDF the per-room AES-GCM wire key. `salt` is the share manifest's collab
-/// salt for a scoped room, `None` for a personal one. Either way the key that
+/// HKDF the per-room AES-GCM wire key. `salt` is the shared folder's collab
+/// salt for a room in one, `None` for a personal one. Either way the key that
 /// goes on the wire is domain-separated from the Etebase item key it derives
 /// from.
 pub(super) fn derive_live_collab_key(
@@ -188,32 +188,28 @@ pub async fn note_room_info(
                 let cm = account
                     .collection_manager()
                     .map_err(|e| format!("collection_manager: {e}"))?;
-                let (col_uid, scope_collab) = match share_scope_id.as_deref() {
-                    Some(scope_id) => {
-                        let scope_collab = match share_scope_collab_info(&cm, scope_id)
-                            .map_err(|e| format!("share scope collab info: {e}"))?
-                        {
-                            Some(info) => info,
-                            None => return Ok(None),
-                        };
-                        (
-                            scope_collab.notes_collection_uid.clone(),
-                            Some(scope_collab),
-                        )
-                    }
-                    None => {
-                        let Some(col_uid) = vault_col_uid else {
-                            return Ok(None);
-                        };
-                        (col_uid, None)
-                    }
+                // The collection the note is an item of: the vault, or for a
+                // note in a shared folder the folder's collection, whose uid
+                // is the scope.
+                let Some(col_uid) = share_scope_id.clone().or(vault_col_uid) else {
+                    return Ok(None);
                 };
                 let col = match cm.fetch(&col_uid, None) {
-                    Ok(c) => c,
+                    Ok(c) if !c.is_deleted() => c,
+                    Ok(_) => return Ok(None),
                     Err(e) => {
-                        log::warn!("[room_info] fetch notes collection failed: {e}");
+                        log::warn!("[room_info] fetch the note's collection failed: {e}");
                         return Ok(None);
                     }
+                };
+                // A shared folder's own content says what its live sessions
+                // mix into their keys. It came with the fetch above.
+                let scope_collab = match share_scope_id {
+                    Some(_) => Some(
+                        share_scope_collab_info(&col)
+                            .map_err(|e| format!("share scope collab info: {e}"))?,
+                    ),
+                    None => None,
                 };
                 let im = cm
                     .item_manager(&col)

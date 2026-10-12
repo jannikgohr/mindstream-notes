@@ -539,25 +539,18 @@ pub fn run() {
             sync::collab_room::note_room_ticket,
             sync::scheduler::set_sync_schedule,
             // Sharing
-            sharing::list_collection_invitations,
-            sharing::list_incoming_share_bundles,
-            sharing::accept_share_bundle,
-            sharing::decline_share_bundle,
+            sharing::list_incoming_shares,
+            sharing::accept_share,
+            sharing::decline_share,
             sharing::leave_shared_collection,
             sharing::stop_sharing_collection,
             sharing::list_collection_members,
             sharing::set_collection_member_access,
             sharing::remove_collection_member,
-            sharing::accept_collection_invitation,
-            sharing::reject_collection_invitation,
             sharing::get_collection_share_state,
             sharing::invite_collection,
             #[cfg(feature = "e2e-data-dir")]
             sharing::e2e_create_standalone_collection_invite,
-            #[cfg(feature = "e2e-data-dir")]
-            sharing::e2e_create_incomplete_share_bundle,
-            #[cfg(feature = "e2e-data-dir")]
-            sharing::e2e_accept_share_manifest_only,
             // One-shot recovery for items the pre-fix etebase encoder
             // bug left corrupt on the server. Invoke from dev tools.
             sync::repair::audit_corrupt_remote_items,

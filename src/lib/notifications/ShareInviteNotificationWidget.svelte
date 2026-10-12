@@ -2,18 +2,18 @@
   import { Share2, X } from '@lucide/svelte';
   import { tooltip } from '$lib/actions/tooltip';
   import { Button } from '$lib/components/ui/button';
-  import { acceptShareBundle, declineShareBundle } from '$lib/api/sharing';
-  import { loadTree } from '$lib/stores/tree.svelte';
+  import { acceptShare, declineShare } from '$lib/api/sharing';
+  import { runSync } from '$lib/sync/runner';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
     dismissNotification,
-    scanForCollectionInviteNotifications
+    scanForShareInviteNotifications
   } from './store.svelte';
-  import type { AppNotification, ShareBundleNotificationData } from './types';
+  import type { AppNotification, ShareInviteNotificationData } from './types';
   import { toErrorMessage } from '$lib/api/errors';
 
   interface Props {
-    notification: AppNotification<ShareBundleNotificationData>;
+    notification: AppNotification<ShareInviteNotificationData>;
     onClose?: () => void;
   }
 
@@ -26,9 +26,7 @@
       ? tUi('sharing.access.admin')
       : notification.data.accessLevel === 'read_write'
         ? tUi('sharing.access.readWrite')
-        : notification.data.accessLevel === 'read_only'
-          ? tUi('sharing.access.readOnly')
-          : null
+        : tUi('sharing.access.readOnly')
   );
 
   const senderLabel = $derived(
@@ -36,15 +34,15 @@
       tUi('notifications.invite.senderFallback')
   );
 
-  // A pending bundle hasn't been accepted, so its name is unknown — show the
-  // generic "wants to share" title until the user accepts and the name loads.
+  // The folder's name comes with the invitation. Only an older server
+  // leaves it out, and then the invitation is shown without one.
   const title = $derived(
-    notification.data.pending || notification.data.name === null
-      ? tUi('notifications.shareBundle.pendingTitle').replace(
+    notification.data.name === null
+      ? tUi('notifications.shareInvite.untitled').replace(
           '{sender}',
           senderLabel
         )
-      : tUi('notifications.shareBundle.title')
+      : tUi('notifications.shareInvite.title')
           .replace('{sender}', senderLabel)
           .replace('{name}', notification.data.name)
   );
@@ -54,10 +52,14 @@
     pending = true;
     error = null;
     try {
-      await acceptShareBundle(notification.data.manifestCollectionUid);
+      await acceptShare(notification.data.invitationId);
       dismissNotification(notification.id);
-      await loadTree();
-      void scanForCollectionInviteNotifications();
+      // Accepting creates nothing here. The folder arrives with a sync, so
+      // ask for one now and do not make the user wait for the next tick.
+      void runSync().catch((err) => {
+        console.debug('[notifications] sync after accepting a share', err);
+      });
+      void scanForShareInviteNotifications();
       onClose?.();
     } catch (err) {
       error = toErrorMessage(err);
@@ -71,9 +73,9 @@
     pending = true;
     error = null;
     try {
-      await declineShareBundle(notification.data.manifestCollectionUid);
+      await declineShare(notification.data.invitationId);
       dismissNotification(notification.id);
-      void scanForCollectionInviteNotifications();
+      void scanForShareInviteNotifications();
     } catch (err) {
       error = toErrorMessage(err);
     } finally {
@@ -92,19 +94,7 @@
     <Share2 class="mt-0.5 size-4 shrink-0 text-primary" />
     <div class="min-w-0 flex-1">
       <p class="text-sm font-medium">{title}</p>
-      {#if accessLabel}
-        <p class="mt-0.5 text-xs text-muted-foreground">{accessLabel}</p>
-      {/if}
-      {#if notification.data.pending}
-        <p class="mt-0.5 text-xs text-muted-foreground">
-          {tUi('notifications.shareBundle.pendingHint')}
-        </p>
-      {/if}
-      {#if !notification.data.complete}
-        <p class="mt-1 text-xs text-destructive">
-          {tUi('notifications.shareBundle.incomplete')}
-        </p>
-      {/if}
+      <p class="mt-0.5 text-xs text-muted-foreground">{accessLabel}</p>
       {#if error}
         <p class="mt-1 text-xs text-destructive">{error}</p>
       {/if}
@@ -112,7 +102,7 @@
         <Button
           class="h-7 px-2 text-xs"
           size="sm"
-          disabled={pending || !notification.data.complete}
+          disabled={pending}
           onclick={accept}
         >
           {tUi('notifications.invite.accept')}

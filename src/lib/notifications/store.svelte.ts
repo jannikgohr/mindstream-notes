@@ -78,64 +78,42 @@ export async function scanForUpdateNotifications(force = false): Promise<void> {
   }
 }
 
-export async function scanForCollectionInviteNotifications(): Promise<void> {
+/**
+ * Look for invitations to shared folders and show one notification for each.
+ * Runs when the app starts, and again whenever the server says an invitation
+ * arrived or went away.
+ */
+export async function scanForShareInviteNotifications(): Promise<void> {
   if (!isTauri()) return;
   try {
-    const { listIncomingShareBundles } = await import('$lib/api/sharing');
-    const { bundles, unbundled_invitations } = await listIncomingShareBundles();
+    const { listIncomingShares } = await import('$lib/api/sharing');
+    const shares = await listIncomingShares();
 
-    // Manifest-backed shares surface as a single bundle notification; any
-    // invitation that isn't part of a manifest scope still shows as a lone
-    // collaboration-invite. Reconcile both kinds against what's live so
-    // accepted/declined ones disappear.
-    const liveBundleIds = new Set(
-      bundles.map((bundle) => `share-bundle:${bundle.manifest_collection_uid}`)
+    // Keep only what still waits, so an invitation that was answered here or
+    // on another device, or withdrawn by its sender, disappears.
+    const waiting = new Set(
+      shares.map((share) => `share-invite:${share.invitation_id}`)
     );
-    const liveInviteIds = new Set(
-      unbundled_invitations.map(
-        (invitation) => `collaboration-invite:${invitation.id}`
-      )
+    notificationState.items = notificationState.items.filter(
+      (item) => item.kind !== 'share-invite' || waiting.has(item.id)
     );
-    notificationState.items = notificationState.items.filter((item) => {
-      if (item.kind === 'share-bundle') return liveBundleIds.has(item.id);
-      if (item.kind === 'collaboration-invite')
-        return liveInviteIds.has(item.id);
-      return true;
-    });
 
-    for (const bundle of bundles) {
+    for (const share of shares) {
       upsertNotification({
-        id: `share-bundle:${bundle.manifest_collection_uid}`,
-        kind: 'share-bundle',
-        widgetType: 'share-bundle',
+        id: `share-invite:${share.invitation_id}`,
+        kind: 'share-invite',
+        widgetType: 'share-invite',
         createdAt: Date.now(),
         data: {
-          manifestCollectionUid: bundle.manifest_collection_uid,
-          name: bundle.name,
-          pending: bundle.pending,
-          senderUsername: bundle.sender_username,
-          accessLevel: bundle.access_level,
-          complete: bundle.complete,
-          warnings: bundle.warnings
-        }
-      });
-    }
-
-    for (const invitation of unbundled_invitations) {
-      upsertNotification({
-        id: `collaboration-invite:${invitation.id}`,
-        kind: 'collaboration-invite',
-        widgetType: 'collaboration-invite',
-        createdAt: Date.now(),
-        data: {
-          invitationId: invitation.id,
-          senderUsername: invitation.sender_username,
-          collectionUid: invitation.collection_uid,
-          accessLevel: invitation.access_level
+          invitationId: share.invitation_id,
+          collectionUid: share.collection_uid,
+          name: share.name,
+          senderUsername: share.sender_username,
+          accessLevel: share.access_level
         }
       });
     }
   } catch (err) {
-    console.debug('[notifications] collection invite scan failed', err);
+    console.debug('[notifications] share invitation scan failed', err);
   }
 }

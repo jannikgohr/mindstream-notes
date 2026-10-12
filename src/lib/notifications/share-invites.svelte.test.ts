@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { isTauri, listIncomingShareBundles } = vi.hoisted(() => ({
+const { isTauri, listIncomingShares } = vi.hoisted(() => ({
   isTauri: vi.fn(),
-  listIncomingShareBundles: vi.fn()
+  listIncomingShares: vi.fn()
 }));
 
 vi.mock('$lib/api/core', () => ({ isTauri }));
@@ -10,39 +10,20 @@ vi.mock('$lib/platform', () => ({ isMobile: vi.fn().mockReturnValue(false) }));
 vi.mock('$lib/settings/store.svelte', () => ({
   getSettingValue: vi.fn().mockReturnValue(true)
 }));
-vi.mock('$lib/api/sharing', () => ({ listIncomingShareBundles }));
+vi.mock('$lib/api/sharing', () => ({ listIncomingShares }));
 
 import {
   notificationState,
-  scanForCollectionInviteNotifications
+  scanForShareInviteNotifications
 } from './store.svelte';
 
-function bundle(overrides: Record<string, unknown> = {}) {
+function share(overrides: Record<string, unknown> = {}) {
   return {
-    manifest_invitation_id: 'invite_manifest',
-    manifest_collection_uid: 'col_manifest',
-    pending: false,
-    share_scope_id: 'scope_1',
+    invitation_id: 'invite_1',
+    collection_uid: 'col_shared',
     name: 'Project X',
-    root_folder_id: 'folder_root',
-    owner_username: 'alice',
     sender_username: 'alice',
     access_level: 'read_write',
-    complete: true,
-    parts: [],
-    warnings: [],
-    ...overrides
-  };
-}
-
-function invitation(overrides: Record<string, unknown> = {}) {
-  return {
-    id: 'invite_other',
-    username: 'me',
-    sender_username: 'bob',
-    collection_uid: 'col_other',
-    access_level: 'read_only',
-    collection_type: 'custom.collection',
     ...overrides
   };
 }
@@ -50,78 +31,61 @@ function invitation(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   notificationState.items = [];
   isTauri.mockReset().mockReturnValue(true);
-  listIncomingShareBundles
-    .mockReset()
-    .mockResolvedValue({ bundles: [], unbundled_invitations: [] });
+  listIncomingShares.mockReset().mockResolvedValue([]);
 });
 
-describe('scanForCollectionInviteNotifications', () => {
-  it('posts one share-bundle notification per manifest bundle', async () => {
-    listIncomingShareBundles.mockResolvedValue({
-      bundles: [bundle()],
-      unbundled_invitations: []
-    });
+describe('scanForShareInviteNotifications', () => {
+  it('posts one notification per invitation, with the folder name', async () => {
+    listIncomingShares.mockResolvedValue([
+      share(),
+      share({ invitation_id: 'invite_2', name: 'Recipes' })
+    ]);
 
-    await scanForCollectionInviteNotifications();
+    await scanForShareInviteNotifications();
 
-    expect(notificationState.items).toHaveLength(1);
-    const item = notificationState.items[0];
-    expect(item.id).toBe('share-bundle:col_manifest');
-    expect(item.kind).toBe('share-bundle');
-    expect(item.data).toMatchObject({
-      manifestCollectionUid: 'col_manifest',
+    expect(notificationState.items).toHaveLength(2);
+    const first = notificationState.items.find(
+      (item) => item.id === 'share-invite:invite_1'
+    );
+    expect(first?.kind).toBe('share-invite');
+    expect(first?.widgetType).toBe('share-invite');
+    expect(first?.data).toEqual({
+      invitationId: 'invite_1',
+      collectionUid: 'col_shared',
       name: 'Project X',
       senderUsername: 'alice',
-      accessLevel: 'read_write',
-      complete: true
+      accessLevel: 'read_write'
     });
   });
 
-  it('surfaces an unaccepted (pending) share with no name yet', async () => {
-    listIncomingShareBundles.mockResolvedValue({
-      bundles: [bundle({ pending: true, name: null, share_scope_id: null })],
-      unbundled_invitations: []
-    });
+  it('shows an invitation whose name the server did not send', async () => {
+    listIncomingShares.mockResolvedValue([share({ name: null })]);
 
-    await scanForCollectionInviteNotifications();
+    await scanForShareInviteNotifications();
 
     expect(notificationState.items).toHaveLength(1);
     expect(notificationState.items[0].data).toMatchObject({
-      manifestCollectionUid: 'col_manifest',
-      pending: true,
+      invitationId: 'invite_1',
       name: null,
       senderUsername: 'alice'
     });
   });
 
-  it('keeps non-manifest invitations as lone collaboration-invites', async () => {
-    listIncomingShareBundles.mockResolvedValue({
-      bundles: [],
-      unbundled_invitations: [invitation()]
-    });
+  it('does not post the same invitation twice across scans', async () => {
+    listIncomingShares.mockResolvedValue([share()]);
 
-    await scanForCollectionInviteNotifications();
+    await scanForShareInviteNotifications();
+    await scanForShareInviteNotifications();
 
     expect(notificationState.items).toHaveLength(1);
-    expect(notificationState.items[0].id).toBe(
-      'collaboration-invite:invite_other'
-    );
-    expect(notificationState.items[0].kind).toBe('collaboration-invite');
   });
 
-  it('reconciles away accepted/declined shares but preserves other kinds', async () => {
+  it('drops invitations that no longer wait and keeps other kinds', async () => {
     notificationState.items = [
       {
-        id: 'share-bundle:col_gone',
-        kind: 'share-bundle',
-        widgetType: 'share-bundle',
-        createdAt: 0,
-        data: {}
-      },
-      {
-        id: 'collaboration-invite:invite_gone',
-        kind: 'collaboration-invite',
-        widgetType: 'collaboration-invite',
+        id: 'share-invite:invite_gone',
+        kind: 'share-invite',
+        widgetType: 'share-invite',
         createdAt: 0,
         data: {}
       },
@@ -133,20 +97,27 @@ describe('scanForCollectionInviteNotifications', () => {
         data: {}
       }
     ];
-    listIncomingShareBundles.mockResolvedValue({
-      bundles: [bundle()],
-      unbundled_invitations: []
-    });
+    listIncomingShares.mockResolvedValue([share()]);
 
-    await scanForCollectionInviteNotifications();
+    await scanForShareInviteNotifications();
 
     const ids = notificationState.items.map((item) => item.id).sort();
-    expect(ids).toEqual(['share-bundle:col_manifest', 'update:9.9.9']);
+    expect(ids).toEqual(['share-invite:invite_1', 'update:9.9.9']);
+  });
+
+  it('keeps what is shown when the list cannot be fetched', async () => {
+    listIncomingShares.mockResolvedValue([share()]);
+    await scanForShareInviteNotifications();
+    listIncomingShares.mockRejectedValue(new Error('offline'));
+
+    await scanForShareInviteNotifications();
+
+    expect(notificationState.items).toHaveLength(1);
   });
 
   it('does nothing outside Tauri', async () => {
     isTauri.mockReturnValue(false);
-    await scanForCollectionInviteNotifications();
-    expect(listIncomingShareBundles).not.toHaveBeenCalled();
+    await scanForShareInviteNotifications();
+    expect(listIncomingShares).not.toHaveBeenCalled();
   });
 });

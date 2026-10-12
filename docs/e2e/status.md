@@ -111,5 +111,3 @@ pending because their providers don't report presence (see
       — unblocks live markdown propagation and ink/freeform presence prompts.
 - [ ] **Render synced markdown assets in the editor UI** (4.7) — currently only
       the asset bytes are fetched through the app API.
-- [ ] **Incomplete-bundle guard (4.5)** — needs a share with a required part
-      invite revoked server-side.

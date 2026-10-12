@@ -2,18 +2,13 @@ import type { Component } from 'svelte';
 
 export type NotificationKind =
   | 'update'
-  | 'collaboration-invite'
-  | 'share-bundle'
+  | 'share-invite'
   | 'generic'
   | 'sync-offline'
   | 'session-ended'
   | 'plugin-gated'
   | 'plugin-new';
-export type NotificationWidgetType =
-  | 'update'
-  | 'collaboration-invite'
-  | 'share-bundle'
-  | 'generic';
+export type NotificationWidgetType = 'update' | 'share-invite' | 'generic';
 
 export interface AppNotification<TData = unknown> {
   id: string;
@@ -29,23 +24,15 @@ export interface UpdateNotificationData {
   currentVersion: string;
 }
 
-export interface CollaborationInviteNotificationData {
+/** An invitation to a shared folder that waits for an answer. */
+export interface ShareInviteNotificationData {
   invitationId: string;
-  senderUsername: string | null;
   collectionUid: string;
-  accessLevel: 'read_only' | 'read_write' | 'admin';
-}
-
-export interface ShareBundleNotificationData {
-  manifestCollectionUid: string;
-  // Null until the user accepts the manifest — its content (and thus the share
-  // name) is only readable once they're a member. `pending` marks that state.
+  // The folder's name, which comes with the invitation. Null only when the
+  // server did not send it along.
   name: string | null;
-  pending: boolean;
   senderUsername: string | null;
-  accessLevel: 'read_only' | 'read_write' | 'admin' | null;
-  complete: boolean;
-  warnings: string[];
+  accessLevel: 'read_only' | 'read_write' | 'admin';
 }
 
 export interface NotificationWidgetProps {

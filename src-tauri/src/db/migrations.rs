@@ -778,6 +778,44 @@ const MIGRATIONS: &[Migration] = &[
                SET etebase_uid = NULL, etebase_etag = NULL, dirty = 1;
         "#,
     },
+    Migration {
+        to: 28,
+        // A shared folder becomes one collection on the server.
+        //
+        // It used to be four, found through a manifest, and a row of a
+        // shared folder here is tagged with the id that manifest gave the
+        // share. Nothing reads those four any more, so no share made before
+        // this can sync. A folder this account shared goes back to being
+        // its own: its rows lose the tag and are marked for upload to the
+        // vault, as v27 did for the rest of the vault, and its owner can
+        // share it again. Every cursor and queued deletion of an old share
+        // goes, since the collections they belong to are no longer synced.
+        //
+        // A folder someone else shared is left for the first sync, which
+        // finds that the server lists no such share for this account and
+        // removes it, the same as when a share is withdrawn. That needs no
+        // SQL here, and it cannot run before the device has reached the
+        // server and heard that for itself.
+        sql: r#"
+            CREATE TEMP TABLE owned_shares AS
+                SELECT DISTINCT share_scope_id AS scope
+                  FROM collections
+                 WHERE share_scope_id IS NOT NULL AND COALESCE(shared_by_me, 0) = 1;
+            UPDATE notes
+               SET share_scope_id = NULL, etebase_uid = NULL, etebase_etag = NULL, dirty = 1
+             WHERE share_scope_id IN (SELECT scope FROM owned_shares);
+            UPDATE assets
+               SET share_scope_id = NULL, etebase_uid = NULL, etebase_etag = NULL, dirty = 1
+             WHERE share_scope_id IN (SELECT scope FROM owned_shares);
+            UPDATE collections
+               SET share_scope_id = NULL, etebase_uid = NULL, etebase_etag = NULL, dirty = 1,
+                   share_id = NULL, shared_role = NULL, shared_owner = NULL, shared_by_me = 0
+             WHERE share_scope_id IN (SELECT scope FROM owned_shares);
+            DROP TABLE owned_shares;
+            DELETE FROM tombstones WHERE share_scope_id IS NOT NULL;
+            DELETE FROM sync_state WHERE kind LIKE 'scope-%';
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {
@@ -1290,7 +1328,7 @@ mod asset_refcount_upgrade_tests {
     fn v27_detaches_the_vault_from_its_old_collections_and_queues_it_for_upload() {
         let mut conn = v26_synced_vault();
 
-        run(&mut conn).unwrap();
+        migrate_to(&mut conn, 27);
 
         let attached = |table: &str, id: &str| -> (Option<String>, Option<String>, i64) {
             conn.query_row(
@@ -1338,6 +1376,128 @@ mod asset_refcount_upgrade_tests {
             .map(|r| r.unwrap())
             .collect();
         assert_eq!(waiting, vec!["item_gone_shared".to_string()]);
+    }
+
+    /// A device with a folder it shared and a folder shared with it, both
+    /// from when a share was four collections.
+    fn v27_with_old_shares() -> Connection {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate_to(&mut conn, 27);
+        conn.execute_batch(
+            "INSERT INTO sync_state (kind, etebase_collection_uid, stoken, reconcile_passes_left)
+                 VALUES ('vault', 'col_vault', 'st_v', 0),
+                        ('scope-folders:scope_mine', NULL, 'st_1', 0),
+                        ('scope-notes:scope_mine', NULL, 'st_2', 0),
+                        ('scope-assets:scope_theirs', NULL, 'st_3', 0),
+                        ('scope-collab-epoch:scope_mine', NULL, '4', 0);
+             INSERT INTO collections (id, name, position, created, modified,
+                                      etebase_uid, etebase_etag, dirty)
+                 VALUES ('f_own', 'Private', 0, 't', 't', 'item_f_own', 'etag', 0);
+             INSERT INTO collections (id, name, position, created, modified,
+                                      etebase_uid, etebase_etag, dirty, share_scope_id,
+                                      share_id, shared_role, shared_owner, shared_by_me)
+                 VALUES ('f_mine', 'Shared by me', 1, 't', 't', 'item_f_mine', 'etag', 0,
+                         'scope_mine', 'col_folders_mine', 'admin', 'me', 1);
+             INSERT INTO collections (id, parent_collection_id, name, position, created,
+                                      modified, etebase_uid, etebase_etag, dirty, share_scope_id)
+                 VALUES ('f_mine_sub', 'f_mine', 'Inside', 0, 't', 't', 'item_f_sub', 'etag', 0,
+                         'scope_mine');
+             INSERT INTO collections (id, name, position, created, modified,
+                                      etebase_uid, etebase_etag, dirty, share_scope_id,
+                                      share_id, shared_role, shared_owner, shared_by_me)
+                 VALUES ('f_theirs', 'Shared with me', 2, 't', 't', 'item_f_theirs', 'etag', 0,
+                         'scope_theirs', 'col_folders_theirs', 'read_write', 'them', 0);
+             INSERT INTO notes (id, parent_collection_id, title, body, created, modified,
+                                etebase_uid, etebase_etag, dirty)
+                 VALUES ('n_own', 'f_own', 'Private', '', 't', 't', 'item_n_own', 'etag', 0);
+             INSERT INTO notes (id, parent_collection_id, title, body, created, modified,
+                                etebase_uid, etebase_etag, dirty, share_scope_id)
+                 VALUES ('n_mine', 'f_mine_sub', 'Mine', '', 't', 't', 'item_n_mine', 'etag', 0,
+                         'scope_mine'),
+                        ('n_theirs', 'f_theirs', 'Theirs', '', 't', 't', 'item_n_theirs', 'etag',
+                         0, 'scope_theirs');
+             INSERT INTO assets (id, owning_note_id, mime_type, bytes, size, created, modified,
+                                 etebase_uid, etebase_etag, dirty, share_scope_id)
+                 VALUES ('a_mine', 'n_mine', 'image/png', X'01', 1, 't', 't', 'item_a_mine',
+                         'etag', 0, 'scope_mine');
+             INSERT INTO tombstones (kind, etebase_uid, queued_at, share_scope_id)
+                 VALUES ('note', 'item_gone', 't', NULL),
+                        ('note', 'item_gone_mine', 't', 'scope_mine'),
+                        ('note', 'item_gone_theirs', 't', 'scope_theirs');",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn v28_takes_a_folder_the_account_shared_back_into_the_vault() {
+        let mut conn = v27_with_old_shares();
+
+        run(&mut conn).unwrap();
+
+        let row = |table: &str, id: &str| -> (Option<String>, Option<String>, i64) {
+            conn.query_row(
+                &format!("SELECT share_scope_id, etebase_uid, dirty FROM {table} WHERE id = ?1"),
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap()
+        };
+        // What this account shared is its own again and waits to be
+        // uploaded to the vault.
+        for (table, id) in [
+            ("collections", "f_mine"),
+            ("collections", "f_mine_sub"),
+            ("notes", "n_mine"),
+            ("assets", "a_mine"),
+        ] {
+            assert_eq!(row(table, id), (None, None, 1), "{table} {id}");
+        }
+        let (share_id, role, owner, by_me): (Option<String>, Option<String>, Option<String>, i64) =
+            conn.query_row(
+                "SELECT share_id, shared_role, shared_owner, shared_by_me
+                   FROM collections WHERE id = 'f_mine'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!((share_id, role, owner, by_me), (None, None, None, 0));
+
+        // The vault's own rows are not touched a second time.
+        assert_eq!(
+            row("collections", "f_own"),
+            (None, Some("item_f_own".into()), 0)
+        );
+        assert_eq!(row("notes", "n_own"), (None, Some("item_n_own".into()), 0));
+
+        // What someone else shared stays as it is until a sync has asked
+        // the server about it.
+        assert_eq!(
+            row("collections", "f_theirs"),
+            (Some("scope_theirs".into()), Some("item_f_theirs".into()), 0)
+        );
+        assert_eq!(
+            row("notes", "n_theirs"),
+            (Some("scope_theirs".into()), Some("item_n_theirs".into()), 0)
+        );
+
+        // No cursor and no queued deletion of an old share is left.
+        let kinds: Vec<String> = conn
+            .prepare("SELECT kind FROM sync_state ORDER BY kind")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(kinds, vec!["vault".to_string()]);
+        let waiting: Vec<String> = conn
+            .prepare("SELECT etebase_uid FROM tombstones")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(waiting, vec!["item_gone".to_string()]);
     }
 
     #[test]

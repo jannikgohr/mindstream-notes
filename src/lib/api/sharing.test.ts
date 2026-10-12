@@ -6,16 +6,13 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 
 import {
-  acceptCollectionInvitation,
-  acceptShareBundle,
-  declineShareBundle,
+  acceptShare,
+  declineShare,
   getCollectionShareState,
   inviteCollection,
   leaveSharedCollection,
-  listCollectionInvitations,
   listCollectionMembers,
-  listIncomingShareBundles,
-  rejectCollectionInvitation,
+  listIncomingShares,
   removeCollectionMember,
   setCollectionMemberAccess,
   stopSharingCollection
@@ -28,13 +25,18 @@ function setTauri(on: boolean): void {
     delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
 }
 
-const INVITATION = {
-  id: 'inv1',
-  username: 'alice',
-  sender_username: 'bob',
+const INCOMING_SHARE = {
+  invitation_id: 'inv1',
   collection_uid: 'col-uid',
-  access_level: 'read_write',
-  collection_type: 'notes'
+  name: 'Team folder',
+  sender_username: 'bob',
+  access_level: 'read_write'
+};
+
+const OUTGOING_INVITATION = {
+  id: 'inv2',
+  username: 'alice',
+  access_level: 'read_only'
 };
 
 const SHARE_STATE = {
@@ -44,27 +46,17 @@ const SHARE_STATE = {
   shared_owner: 'bob',
   shared_by_me: true,
   members: [{ username: 'alice', access_level: 'read_only' }],
-  outgoing_invitations: [INVITATION]
+  outgoing_invitations: [OUTGOING_INVITATION]
 };
 
 describe('sharing API fallback (non-Tauri)', () => {
-  it('returns empty incoming invitation views', async () => {
-    await expect(listCollectionInvitations()).resolves.toEqual([]);
-    await expect(listIncomingShareBundles()).resolves.toEqual({
-      bundles: [],
-      unbundled_invitations: []
-    });
+  it('has no invitations waiting', async () => {
+    await expect(listIncomingShares()).resolves.toEqual([]);
   });
 
   it('resolves accept and decline commands as no-ops', async () => {
-    await expect(acceptShareBundle('manifest_uid')).resolves.toBeUndefined();
-    await expect(declineShareBundle('manifest_uid')).resolves.toBeUndefined();
-    await expect(
-      acceptCollectionInvitation('invite_1')
-    ).resolves.toBeUndefined();
-    await expect(
-      rejectCollectionInvitation('invite_2')
-    ).resolves.toBeUndefined();
+    await expect(acceptShare('invite_1')).resolves.toBeUndefined();
+    await expect(declineShare('invite_2')).resolves.toBeUndefined();
   });
 
   it('reports collection sharing as unavailable outside Tauri', async () => {
@@ -118,15 +110,11 @@ describe('sharing API fallback (non-Tauri)', () => {
 
 describe('sharing API — input validation (synchronous)', () => {
   it('rejects empty required-string arguments', () => {
-    expect(() => acceptShareBundle('')).toThrow(/must be a non-empty string/);
-    expect(() => declineShareBundle('  ')).toThrow(
-      /must be a non-empty string/
-    );
+    expect(() => acceptShare('')).toThrow(/must be a non-empty string/);
+    expect(() => declineShare('  ')).toThrow(/must be a non-empty string/);
     expect(() => leaveSharedCollection('')).toThrow(/must be a non-empty/);
     expect(() => stopSharingCollection('')).toThrow(/must be a non-empty/);
     expect(() => listCollectionMembers('')).toThrow(/must be a non-empty/);
-    expect(() => acceptCollectionInvitation('')).toThrow(/must be a non-empty/);
-    expect(() => rejectCollectionInvitation('')).toThrow(/must be a non-empty/);
     expect(() => getCollectionShareState('')).toThrow(/must be a non-empty/);
   });
 
@@ -161,98 +149,37 @@ describe('sharing API — Tauri parse path', () => {
   });
   afterEach(() => setTauri(false));
 
-  it('parses collection invitations and rejects non-arrays', async () => {
-    invoke.mockResolvedValueOnce([INVITATION]);
-    const invitations = await listCollectionInvitations();
-    expect(invitations[0]).toEqual(INVITATION);
+  it('parses incoming shares and rejects non-arrays', async () => {
+    invoke.mockResolvedValueOnce([INCOMING_SHARE]);
+    await expect(listIncomingShares()).resolves.toEqual([INCOMING_SHARE]);
     invoke.mockResolvedValueOnce({});
-    await expect(listCollectionInvitations()).rejects.toThrow(
-      /must be an array/
-    );
+    await expect(listIncomingShares()).rejects.toThrow(/must be an array/);
   });
 
-  it('rejects an invitation with an unknown access level', async () => {
-    invoke.mockResolvedValue([{ ...INVITATION, access_level: 'super' }]);
-    await expect(listCollectionInvitations()).rejects.toThrow(
-      /unknown access level/
-    );
+  it('accepts an incoming share whose name the server did not send', async () => {
+    invoke.mockResolvedValue([
+      { ...INCOMING_SHARE, name: null, sender_username: null }
+    ]);
+    const [share] = await listIncomingShares();
+    expect(share.name).toBeNull();
+    expect(share.sender_username).toBeNull();
   });
 
-  it('parses an incoming share bundle with parts and a nested invitation', async () => {
-    invoke.mockResolvedValue({
-      bundles: [
-        {
-          manifest_invitation_id: 'm1',
-          manifest_collection_uid: 'muid',
-          pending: false,
-          share_scope_id: 'scope-1',
-          name: 'Team folder',
-          root_folder_id: 'root-1',
-          owner_username: 'bob',
-          sender_username: 'bob',
-          access_level: 'read_only',
-          complete: true,
-          parts: [
-            {
-              part: 'folders',
-              collection_uid: 'c1',
-              expected_collection_type: 'notes',
-              required: true,
-              invitation: INVITATION
-            },
-            {
-              part: 'assets',
-              collection_uid: null,
-              expected_collection_type: 'assets',
-              required: false,
-              invitation: null
-            }
-          ],
-          warnings: ['w1']
-        }
-      ],
-      unbundled_invitations: [INVITATION]
+  it('rejects an incoming share with an unknown access level', async () => {
+    invoke.mockResolvedValue([{ ...INCOMING_SHARE, access_level: 'super' }]);
+    await expect(listIncomingShares()).rejects.toThrow(/unknown access level/);
+  });
+
+  it('answers an invitation by its id', async () => {
+    invoke.mockResolvedValue(null);
+    await acceptShare('inv1');
+    expect(invoke).toHaveBeenLastCalledWith('accept_share', {
+      invitationId: 'inv1'
     });
-    const view = await listIncomingShareBundles();
-    expect(view.bundles).toHaveLength(1);
-    expect(view.bundles[0].parts[0].part).toBe('folders');
-    expect(view.bundles[0].parts[0].invitation?.id).toBe('inv1');
-    expect(view.bundles[0].parts[1].invitation).toBeNull();
-    expect(view.bundles[0].access_level).toBe('read_only');
-    expect(view.unbundled_invitations).toHaveLength(1);
-  });
-
-  it('rejects a bundle part with an unknown share part', async () => {
-    invoke.mockResolvedValue({
-      bundles: [
-        {
-          manifest_invitation_id: 'm1',
-          manifest_collection_uid: 'muid',
-          pending: true,
-          share_scope_id: null,
-          name: null,
-          root_folder_id: null,
-          owner_username: null,
-          sender_username: null,
-          access_level: null,
-          complete: false,
-          parts: [
-            {
-              part: 'nonsense',
-              collection_uid: null,
-              expected_collection_type: 'notes',
-              required: true,
-              invitation: null
-            }
-          ],
-          warnings: []
-        }
-      ],
-      unbundled_invitations: []
+    await declineShare('inv1');
+    expect(invoke).toHaveBeenLastCalledWith('decline_share', {
+      invitationId: 'inv1'
     });
-    await expect(listIncomingShareBundles()).rejects.toThrow(
-      /unknown share part/
-    );
   });
 
   it('parses full share state (members + invitations + nullable role)', async () => {
@@ -260,7 +187,7 @@ describe('sharing API — Tauri parse path', () => {
     const state = await getCollectionShareState('folder_1');
     expect(state.shared_role).toBe('admin');
     expect(state.members[0].username).toBe('alice');
-    expect(state.outgoing_invitations[0].id).toBe('inv1');
+    expect(state.outgoing_invitations[0]).toEqual(OUTGOING_INVITATION);
   });
 
   it('inviteCollection parses the returned share state', async () => {

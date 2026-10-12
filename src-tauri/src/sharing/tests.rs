@@ -1,93 +1,59 @@
 use super::*;
 
-fn invitation(id: &str, collection_uid: &str, collection_type: &str) -> CollectionInvitation {
-    CollectionInvitation {
-        id: id.to_string(),
+fn preview(collection_type: &str, name: Option<&str>) -> InvitationPreview {
+    InvitationPreview {
+        uid: "invite_1".into(),
         username: "recipient".into(),
         sender_username: Some("sender".into()),
-        collection_uid: collection_uid.to_string(),
-        access_level: ShareAccessLevel::ReadWrite,
-        collection_type: Some(collection_type.to_string()),
-    }
-}
-
-fn scope_manifest(scope: &str, salt: u8) -> ShareManifest {
-    ShareManifest {
-        schema: SHARE_MANIFEST_SCHEMA,
-        share_scope_id: scope.into(),
-        name: "Shared project".into(),
-        root_folder_id: "folder_root".into(),
-        owner_username: Some("sender".into()),
-        collab_epoch: 1,
-        collab_salt: vec![salt; SHARE_COLLAB_SALT_BYTES],
-        collections: vec![],
+        collection_uid: "col_shared".into(),
+        access_level: CollectionAccessLevel::ReadWrite,
+        collection_type: collection_type.into(),
+        collection_name: name.map(str::to_string),
     }
 }
 
 #[test]
-fn select_scope_manifest_returns_the_single_match() {
-    let picked = select_scope_manifest(
-        "scope_root",
-        vec![("col_a".into(), scope_manifest("scope_root", 7))],
-    )
-    .unwrap()
-    .expect("a manifest");
+fn invitation_to_a_shared_folder_is_shown_with_its_name() {
+    let share = incoming_share(&preview(COLLECTION_TYPE_SHARED, Some("Trip plans")))
+        .expect("an invitation to a shared folder");
 
-    assert_eq!(picked.collab_salt, vec![7; SHARE_COLLAB_SALT_BYTES]);
-}
-
-#[test]
-fn select_scope_manifest_returns_none_when_nothing_claims_the_scope() {
-    assert!(select_scope_manifest("scope_root", vec![])
-        .unwrap()
-        .is_none());
-}
-
-/// A scope id is unguessable to an outsider, but every member of a scope
-/// knows theirs — and anyone can create a collection and share it. A
-/// second manifest claiming the scope would otherwise let its author
-/// choose the collab salt, and so the live-collab room key, for everyone.
-#[test]
-fn select_scope_manifest_refuses_when_two_collections_claim_one_scope() {
-    let err = select_scope_manifest(
-        "scope_root",
-        vec![
-            ("col_real".into(), scope_manifest("scope_root", 7)),
-            ("col_impostor".into(), scope_manifest("scope_root", 9)),
-        ],
-    )
-    .unwrap_err();
-
-    // Must not silently resolve to either one.
-    assert!(
-        err.to_string().contains("more than one share manifest"),
-        "unexpected error: {err}"
+    assert_eq!(
+        share,
+        IncomingShare {
+            invitation_id: "invite_1".into(),
+            collection_uid: "col_shared".into(),
+            name: Some("Trip plans".into()),
+            sender_username: Some("sender".into()),
+            access_level: ShareAccessLevel::ReadWrite,
+        }
     );
 }
 
-fn manifest_preview(collections: Vec<ShareManifestCollectionRef>) -> ShareManifestPreview {
-    ShareManifestPreview {
-        invitation_id: "invite_manifest".into(),
-        manifest_collection_uid: "col_manifest".into(),
-        manifest: ShareManifest {
-            schema: SHARE_MANIFEST_SCHEMA,
-            share_scope_id: "scope_root".into(),
-            name: "Shared project".into(),
-            root_folder_id: "folder_root".into(),
-            owner_username: Some("sender".into()),
-            collab_epoch: 1,
-            collab_salt: vec![7; SHARE_COLLAB_SALT_BYTES],
-            collections,
-        },
+/// Only a shared folder is ever shared by this app. An invitation to any
+/// other kind of collection was made by something else, and showing it as a
+/// folder to accept would let that something put a collection of its own
+/// choosing among the user's.
+#[test]
+fn invitation_to_another_kind_of_collection_is_not_a_share() {
+    for other in [
+        "mindstream.vault",
+        "mindstream.share_manifest",
+        "mindstream.notes",
+        "etebase.vcard",
+        "",
+    ] {
+        assert_eq!(incoming_share(&preview(other, Some("Looks fine"))), None);
     }
 }
 
-fn collection_ref(part: ShareScopePart, collection_uid: &str) -> ShareManifestCollectionRef {
-    ShareManifestCollectionRef {
-        part,
-        collection_uid: collection_uid.to_string(),
-        required: true,
+#[test]
+fn invitation_without_a_usable_name_is_shown_without_one() {
+    for name in [None, Some(""), Some("   ")] {
+        let share = incoming_share(&preview(COLLECTION_TYPE_SHARED, name)).unwrap();
+        assert_eq!(share.name, None, "{name:?}");
     }
+    let padded = incoming_share(&preview(COLLECTION_TYPE_SHARED, Some("  Recipes ")));
+    assert_eq!(padded.unwrap().name.as_deref(), Some("Recipes"));
 }
 
 #[test]
@@ -131,94 +97,6 @@ fn read_only_access_changes_rotate_live_collab_credentials() {
     assert!(!access_change_requires_collab_rotation(
         ShareAccessLevel::Admin
     ));
-}
-
-#[test]
-fn scope_member_remove_errors_are_returned_to_callers() {
-    let err = scope_member_remove_error("bob", "col_notes", "remove member: denied".into());
-    let AppError::InvalidArg(message) = err else {
-        panic!("expected InvalidArg");
-    };
-
-    assert!(message.contains("bob"), "{message}");
-    assert!(message.contains("col_notes"), "{message}");
-    assert!(message.contains("remove member: denied"), "{message}");
-}
-
-#[test]
-fn manifest_bundle_hides_referenced_invites_and_requires_assets() {
-    let invitations = vec![
-        invitation(
-            "invite_manifest",
-            "col_manifest",
-            COLLECTION_TYPE_SHARE_MANIFEST,
-        ),
-        invitation(
-            "invite_folders",
-            "col_folders",
-            COLLECTION_TYPE_SHARE_FOLDERS,
-        ),
-        invitation("invite_notes", "col_notes", COLLECTION_TYPE_SHARE_NOTES),
-        invitation("invite_assets", "col_assets", COLLECTION_TYPE_SHARE_ASSETS),
-    ];
-    let manifests = vec![manifest_preview(vec![
-        collection_ref(ShareScopePart::Folders, "col_folders"),
-        collection_ref(ShareScopePart::Notes, "col_notes"),
-        collection_ref(ShareScopePart::Assets, "col_assets"),
-    ])];
-
-    let result = bundle_incoming_share_invitations(invitations, manifests);
-
-    assert!(result.unbundled_invitations.is_empty());
-    assert_eq!(result.bundles.len(), 1);
-    let bundle = &result.bundles[0];
-    assert!(bundle.complete, "{:?}", bundle.warnings);
-    assert!(!bundle.pending);
-    assert_eq!(bundle.share_scope_id.as_deref(), Some("scope_root"));
-    assert_eq!(bundle.name.as_deref(), Some("Shared project"));
-    assert_eq!(bundle.sender_username.as_deref(), Some("sender"));
-    assert_eq!(bundle.parts.len(), 3);
-    assert!(bundle.parts.iter().any(|part| {
-        part.part == ShareScopePart::Assets
-            && part.required
-            && part.invitation.as_ref().map(|invite| invite.id.as_str()) == Some("invite_assets")
-    }));
-}
-
-#[test]
-fn manifest_without_assets_scope_is_incomplete() {
-    let invitations = vec![
-        invitation(
-            "invite_manifest",
-            "col_manifest",
-            COLLECTION_TYPE_SHARE_MANIFEST,
-        ),
-        invitation(
-            "invite_folders",
-            "col_folders",
-            COLLECTION_TYPE_SHARE_FOLDERS,
-        ),
-        invitation("invite_notes", "col_notes", COLLECTION_TYPE_SHARE_NOTES),
-    ];
-    let manifests = vec![manifest_preview(vec![
-        collection_ref(ShareScopePart::Folders, "col_folders"),
-        collection_ref(ShareScopePart::Notes, "col_notes"),
-    ])];
-
-    let result = bundle_incoming_share_invitations(invitations, manifests);
-    let bundle = &result.bundles[0];
-
-    assert!(!bundle.complete);
-    assert!(bundle
-        .warnings
-        .iter()
-        .any(|warning| warning.contains("Assets")));
-    assert!(bundle.parts.iter().any(|part| {
-        part.part == ShareScopePart::Assets
-            && part.required
-            && part.collection_uid.is_none()
-            && part.invitation.is_none()
-    }));
 }
 
 #[test]
@@ -494,67 +372,79 @@ fn scope_split_preserves_history_and_normalizes_late_saves_after_creator_purge()
 
 #[test]
 fn profile_lookup_error_is_friendly_for_missing_user() {
-    let friendly = profile_lookup_error("bob", "UserInfo matching query does not exist.");
-    let AppError::InvalidArg(message) = friendly else {
+    let missing = etebase::error::Error::NotFound("User not found.".into());
+    let AppError::InvalidArg(message) = profile_lookup_error("bob", &missing) else {
         panic!("expected InvalidArg");
     };
     assert!(message.contains("bob"), "{message}");
-    assert!(message.contains("sign in once"), "{message}");
+    assert!(message.contains("Check the spelling"), "{message}");
     assert!(
-        !message.contains("matching query"),
-        "raw etebase text should not leak: {message}"
+        !message.contains("User not found"),
+        "the server's wording should not leak: {message}"
     );
 
-    // Unrelated errors keep their detail for debugging.
-    let other = profile_lookup_error("bob", "network unreachable");
-    let AppError::InvalidArg(message) = other else {
+    // Anything else keeps its detail, which is what there is to go on.
+    let unreachable = etebase::error::Error::Connection("network unreachable".into());
+    let AppError::InvalidArg(message) = profile_lookup_error("bob", &unreachable) else {
         panic!("expected InvalidArg");
     };
     assert!(message.contains("network unreachable"), "{message}");
 }
 
+/// Purging a folder is decided on "the server says it is not there". An
+/// outage or a session that ended must never read as that.
 #[test]
-fn build_share_manifest_lists_three_required_parts() {
-    let manifest = build_share_manifest(
-        "scope_1",
-        "Project X",
-        "coll_root",
-        Some("alice"),
-        "col_folders",
-        "col_notes",
-        "col_assets",
-    );
+fn only_a_definite_no_from_the_server_counts_as_gone() {
+    use etebase::error::Error;
+
+    assert!(fetch_says_gone(&Error::NotFound("gone".into())));
+    assert!(fetch_says_gone(&Error::PermissionDenied("removed".into())));
+    for outage in [
+        Error::Connection("timed out".into()),
+        Error::TemporaryServerError("503".into()),
+        Error::ServerError("500".into()),
+        Error::Unauthorized("session ended".into()),
+        Error::Http("418".into()),
+        Error::Generic("?".into()),
+    ] {
+        assert!(!fetch_says_gone(&outage), "{outage:?}");
+    }
+}
+
+#[test]
+fn share_manifest_names_the_root_and_carries_fresh_key_material() {
+    let manifest = build_share_manifest("coll_root", Some("alice"));
 
     assert_eq!(manifest.schema, SHARE_MANIFEST_SCHEMA);
-    assert_eq!(manifest.share_scope_id, "scope_1");
     assert_eq!(manifest.root_folder_id, "coll_root");
     assert_eq!(manifest.owner_username.as_deref(), Some("alice"));
     assert_eq!(manifest.collab_epoch, 1);
     assert_eq!(manifest.collab_salt.len(), SHARE_COLLAB_SALT_BYTES);
-    assert_eq!(manifest.collections.len(), 3);
-    for part in [
-        ShareScopePart::Folders,
-        ShareScopePart::Notes,
-        ShareScopePart::Assets,
-    ] {
-        let entry = manifest
-            .collections
-            .iter()
-            .find(|collection| collection.part == part)
-            .unwrap_or_else(|| panic!("missing {part:?} ref"));
-        assert!(entry.required, "{part:?} must be required");
-    }
+    // Two folders never share a salt.
+    assert_ne!(
+        manifest.collab_salt,
+        build_share_manifest("coll_root", Some("alice")).collab_salt
+    );
 
-    // Round-trips through the same JSON the receiver's decode_manifest reads.
+    // It goes through the same JSON every member's device reads.
     let json = serde_json::to_vec(&manifest).unwrap();
     let decoded: ShareManifest = serde_json::from_slice(&json).unwrap();
     assert_eq!(decoded, manifest);
 }
 
 #[test]
+fn share_manifest_reads_without_the_fields_that_have_defaults() {
+    let decoded: ShareManifest =
+        serde_json::from_str(r#"{"schema":3,"root_folder_id":"coll_root"}"#).unwrap();
+
+    assert_eq!(decoded.owner_username, None);
+    assert_eq!(decoded.collab_epoch, 1);
+    assert!(decoded.collab_salt.is_empty());
+}
+
+#[test]
 fn rotate_manifest_collab_secret_increments_epoch_and_replaces_salt() {
-    let mut manifest =
-        build_share_manifest("scope_1", "Docs", "root", Some("alice"), "f", "n", "a");
+    let mut manifest = build_share_manifest("root", Some("alice"));
     let previous_epoch = manifest.collab_epoch;
     let previous_salt = manifest.collab_salt.clone();
 
@@ -566,222 +456,76 @@ fn rotate_manifest_collab_secret_increments_epoch_and_replaces_salt() {
     assert_ne!(manifest.collab_salt, previous_salt);
 }
 
-#[test]
-fn accepted_manifest_falls_back_to_part_invitation_for_sender_and_access() {
-    // Mirrors a second scan: the manifest has been auto-accepted so its
-    // invitation is gone, but the part invitations are still pending. The
-    // bundle must still show sender/access, drawn from a part invitation.
-    let invitations = vec![
-        invitation(
-            "invite_folders",
-            "col_folders",
-            COLLECTION_TYPE_SHARE_FOLDERS,
-        ),
-        invitation("invite_notes", "col_notes", COLLECTION_TYPE_SHARE_NOTES),
-        invitation("invite_assets", "col_assets", COLLECTION_TYPE_SHARE_ASSETS),
-    ];
-    // Synthetic id == manifest collection uid (no pending manifest invite).
-    let mut preview = manifest_preview(vec![
-        collection_ref(ShareScopePart::Folders, "col_folders"),
-        collection_ref(ShareScopePart::Notes, "col_notes"),
-        collection_ref(ShareScopePart::Assets, "col_assets"),
-    ]);
-    preview.invitation_id = preview.manifest_collection_uid.clone();
+fn insert_folder(conn: &rusqlite::Connection, id: &str, parent: Option<&str>, scope: Option<&str>) {
+    conn.execute(
+        "INSERT INTO collections(id, parent_collection_id, name, position, created, modified, share_scope_id, dirty)
+         VALUES (?1, ?2, ?1, 0, 't', 't', ?3, 0)",
+        params![id, parent, scope],
+    )
+    .unwrap();
+}
 
-    let result = bundle_incoming_share_invitations(invitations, vec![preview]);
-
-    assert_eq!(result.bundles.len(), 1);
-    let bundle = &result.bundles[0];
-    assert!(bundle.complete, "{:?}", bundle.warnings);
-    assert_eq!(bundle.sender_username.as_deref(), Some("sender"));
-    assert_eq!(bundle.access_level, Some(ShareAccessLevel::ReadWrite));
-    assert!(
-        result.unbundled_invitations.is_empty(),
-        "part invites must stay bundled even without a manifest invitation"
-    );
+fn insert_note(conn: &rusqlite::Connection, id: &str, folder: &str, scope: Option<&str>) {
+    conn.execute(
+        "INSERT INTO notes(id, parent_collection_id, title, body, position, created, modified, share_scope_id, dirty)
+         VALUES (?1, ?2, ?1, '', 0, 't', 't', ?3, 0)",
+        params![id, folder, scope],
+    )
+    .unwrap();
 }
 
 #[test]
-fn unreferenced_collection_invites_stay_user_facing() {
-    let standalone = invitation("invite_other", "col_other", "custom.collection");
-    let invitations = vec![
-        invitation(
-            "invite_manifest",
-            "col_manifest",
-            COLLECTION_TYPE_SHARE_MANIFEST,
-        ),
-        invitation(
-            "invite_folders",
-            "col_folders",
-            COLLECTION_TYPE_SHARE_FOLDERS,
-        ),
-        invitation("invite_notes", "col_notes", COLLECTION_TYPE_SHARE_NOTES),
-        invitation("invite_assets", "col_assets", COLLECTION_TYPE_SHARE_ASSETS),
-        standalone.clone(),
-    ];
-    let manifests = vec![manifest_preview(vec![
-        collection_ref(ShareScopePart::Folders, "col_folders"),
-        collection_ref(ShareScopePart::Notes, "col_notes"),
-        collection_ref(ShareScopePart::Assets, "col_assets"),
-    ])];
+fn sharing_a_folder_marks_its_root_as_shared_by_its_admin() {
+    let db = crate::db::open_memory_for_tests();
+    db.with_conn(|conn| {
+        insert_folder(conn, "root", None, None);
+        record_outgoing_share(conn, "root", "col_shared", Some("alice"))?;
 
-    let result = bundle_incoming_share_invitations(invitations, manifests);
-
-    assert_eq!(result.unbundled_invitations, vec![standalone]);
+        let (scope, share_id, role, owner, by_me): (String, String, String, String, i64) = conn
+            .query_row(
+                "SELECT share_scope_id, share_id, shared_role, shared_owner, shared_by_me
+                   FROM collections WHERE id = 'root'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )?;
+        // The collection's uid is both the scope of the rows and the anchor.
+        assert_eq!(scope, "col_shared");
+        assert_eq!(share_id, "col_shared");
+        assert_eq!(role, "admin");
+        assert_eq!(owner, "alice");
+        assert_eq!(by_me, 1);
+        assert!(is_share_anchor(conn, "root")?);
+        Ok::<(), AppError>(())
+    })
+    .unwrap();
 }
 
+/// Inviting a second person to a folder must not move the folder again:
+/// moving deletes and recreates every item for everyone already in it.
 #[test]
-fn unopened_manifest_surfaces_as_pending_bundle_and_hides_its_parts() {
-    // The scan hasn't accepted the manifest (no opened manifests), so the
-    // manifest invite becomes a pending preview bundle and its part invites
-    // stay hidden rather than leaking as lone collaboration invites.
-    let invitations = vec![
-        invitation(
-            "invite_manifest",
-            "col_manifest",
-            COLLECTION_TYPE_SHARE_MANIFEST,
-        ),
-        invitation(
-            "invite_folders",
-            "col_folders",
-            COLLECTION_TYPE_SHARE_FOLDERS,
-        ),
-        invitation("invite_notes", "col_notes", COLLECTION_TYPE_SHARE_NOTES),
-        invitation("invite_assets", "col_assets", COLLECTION_TYPE_SHARE_ASSETS),
-    ];
+fn folder_that_is_wholly_in_its_scope_has_nothing_to_move() {
+    let db = crate::db::open_memory_for_tests();
+    db.with_conn(|conn| {
+        insert_folder(conn, "root", None, Some("col_shared"));
+        insert_folder(conn, "child", Some("root"), Some("col_shared"));
+        insert_note(conn, "n1", "child", Some("col_shared"));
+        // Something elsewhere in the tree does not count.
+        insert_folder(conn, "elsewhere", None, None);
+        insert_note(conn, "n_elsewhere", "elsewhere", None);
+        assert!(!subtree_outside_scope(conn, "root", "col_shared")?);
 
-    let result = assemble_incoming_share_bundles(invitations, Vec::new());
+        // A folder that has never been shared is outside any scope.
+        assert!(subtree_outside_scope(conn, "elsewhere", "col_shared")?);
 
-    assert!(result.unbundled_invitations.is_empty());
-    assert_eq!(result.bundles.len(), 1);
-    let bundle = &result.bundles[0];
-    assert!(bundle.pending);
-    assert_eq!(bundle.manifest_collection_uid, "col_manifest");
-    assert_eq!(bundle.sender_username.as_deref(), Some("sender"));
-    assert_eq!(bundle.access_level, Some(ShareAccessLevel::ReadWrite));
-    assert!(bundle.name.is_none());
-    assert!(bundle.parts.is_empty());
-    // Accept is still offered for a pending bundle.
-    assert!(bundle.complete);
-}
-
-#[test]
-fn opened_manifest_with_all_parts_accepted_stops_showing() {
-    // Manifest opened (member), and every part accepted (no pending part
-    // invites): the share is fully accepted, so it must not linger.
-    let opened = vec![manifest_preview(vec![
-        collection_ref(ShareScopePart::Folders, "col_folders"),
-        collection_ref(ShareScopePart::Notes, "col_notes"),
-        collection_ref(ShareScopePart::Assets, "col_assets"),
-    ])];
-
-    let result = assemble_incoming_share_bundles(Vec::new(), opened);
-
-    assert!(result.bundles.is_empty());
-    assert!(result.unbundled_invitations.is_empty());
-}
-
-#[test]
-fn opened_manifest_with_pending_parts_still_shows_to_finish_accept() {
-    // Manifest opened but the part invites are still pending (a resumed,
-    // partially-accepted share): keep showing so the user can finish.
-    let invitations = vec![
-        invitation(
-            "invite_folders",
-            "col_folders",
-            COLLECTION_TYPE_SHARE_FOLDERS,
-        ),
-        invitation("invite_notes", "col_notes", COLLECTION_TYPE_SHARE_NOTES),
-        invitation("invite_assets", "col_assets", COLLECTION_TYPE_SHARE_ASSETS),
-    ];
-    let opened = vec![manifest_preview(vec![
-        collection_ref(ShareScopePart::Folders, "col_folders"),
-        collection_ref(ShareScopePart::Notes, "col_notes"),
-        collection_ref(ShareScopePart::Assets, "col_assets"),
-    ])];
-
-    let result = assemble_incoming_share_bundles(invitations, opened);
-
-    assert_eq!(result.bundles.len(), 1);
-    let bundle = &result.bundles[0];
-    assert!(!bundle.pending);
-    assert_eq!(bundle.name.as_deref(), Some("Shared project"));
-    assert!(bundle.complete, "{:?}", bundle.warnings);
-}
-
-// ---- Incomplete-bundle guards ----
-
-#[test]
-fn manifest_missing_required_parts_flags_absent_parts() {
-    let full = manifest_preview(vec![
-        collection_ref(ShareScopePart::Folders, "f"),
-        collection_ref(ShareScopePart::Notes, "n"),
-        collection_ref(ShareScopePart::Assets, "a"),
-    ])
-    .manifest;
-    assert!(manifest_missing_required_parts(&full).is_empty());
-
-    let no_assets = manifest_preview(vec![
-        collection_ref(ShareScopePart::Folders, "f"),
-        collection_ref(ShareScopePart::Notes, "n"),
-    ])
-    .manifest;
-    assert_eq!(
-        manifest_missing_required_parts(&no_assets),
-        vec![ShareScopePart::Assets]
-    );
-
-    let empty = manifest_preview(vec![]).manifest;
-    assert_eq!(
-        manifest_missing_required_parts(&empty),
-        vec![
-            ShareScopePart::Folders,
-            ShareScopePart::Notes,
-            ShareScopePart::Assets
-        ]
-    );
-}
-
-#[test]
-fn build_share_manifest_is_structurally_complete() {
-    // The invite-time assertion (validate_scope_complete) relies on a fresh
-    // manifest never being missing a part.
-    let manifest = build_share_manifest("scope_1", "Docs", "root", Some("alice"), "f", "n", "a");
-    assert!(manifest_missing_required_parts(&manifest).is_empty());
-}
-
-#[test]
-fn unsatisfiable_required_parts_detects_missing_invite_and_missing_ref() {
-    let manifest = manifest_preview(vec![
-        collection_ref(ShareScopePart::Folders, "f"),
-        collection_ref(ShareScopePart::Notes, "n"),
-        collection_ref(ShareScopePart::Assets, "a"),
-    ])
-    .manifest;
-
-    // All three referenced parts satisfiable (invitation or member) → OK.
-    let all: HashSet<&str> = ["f", "n", "a"].into_iter().collect();
-    assert!(unsatisfiable_required_parts(&manifest, &all).is_empty());
-
-    // Assets referenced but not satisfiable (no invite, not a member).
-    let missing_assets: HashSet<&str> = ["f", "n"].into_iter().collect();
-    assert_eq!(
-        unsatisfiable_required_parts(&manifest, &missing_assets),
-        vec![ShareScopePart::Assets]
-    );
-
-    // A manifest that doesn't reference assets at all is unsatisfiable even
-    // if some stray uid happens to be "satisfiable".
-    let no_ref = manifest_preview(vec![
-        collection_ref(ShareScopePart::Folders, "f"),
-        collection_ref(ShareScopePart::Notes, "n"),
-    ])
-    .manifest;
-    let stray: HashSet<&str> = ["f", "n", "a"].into_iter().collect();
-    assert_eq!(
-        unsatisfiable_required_parts(&no_ref, &stray),
-        vec![ShareScopePart::Assets]
-    );
+        // One row under the root that missed the stamp is enough.
+        insert_note(conn, "n_stray", "child", None);
+        assert!(subtree_outside_scope(conn, "root", "col_shared")?);
+        conn.execute("DELETE FROM notes WHERE id = 'n_stray'", [])?;
+        insert_folder(conn, "stray", Some("child"), Some("another_share"));
+        assert!(subtree_outside_scope(conn, "root", "col_shared")?);
+        Ok::<(), AppError>(())
+    })
+    .unwrap();
 }
 
 #[test]
@@ -807,12 +551,17 @@ fn purge_local_scope_removes_scoped_rows_and_cursors() {
             "INSERT INTO tombstones(kind, etebase_uid, queued_at, share_scope_id) VALUES ('note', 'u', 't', 'scope_x')",
             [],
         )?;
-        for kind in ["scope-folders:scope_x", "scope-notes:scope_x", "scope-assets:scope_x"] {
+        for kind in [scope_stoken_key("scope_x"), scope_collab_epoch_key("scope_x")] {
             conn.execute(
                 "INSERT INTO sync_state(kind, stoken) VALUES (?1, 's')",
                 params![kind],
             )?;
         }
+        // Another folder's cursor stays.
+        conn.execute(
+            "INSERT INTO sync_state(kind, stoken) VALUES (?1, 's')",
+            params![scope_stoken_key("scope_y")],
+        )?;
         Ok::<(), AppError>(())
     })
     .unwrap();
@@ -826,11 +575,13 @@ fn purge_local_scope_removes_scoped_rows_and_cursors() {
                 (SELECT COUNT(*) FROM notes WHERE share_scope_id = 'scope_x') +
                 (SELECT COUNT(*) FROM assets WHERE share_scope_id = 'scope_x') +
                 (SELECT COUNT(*) FROM tombstones WHERE share_scope_id = 'scope_x') +
-                (SELECT COUNT(*) FROM sync_state WHERE kind LIKE 'scope-%:scope_x')",
+                (SELECT COUNT(*) FROM sync_state WHERE kind LIKE '%:scope_x')",
             [],
             |r| r.get(0),
         )?;
         assert_eq!(remaining, 0);
+        let others: i64 = conn.query_row("SELECT COUNT(*) FROM sync_state", [], |r| r.get(0))?;
+        assert_eq!(others, 1);
         Ok::<(), AppError>(())
     })
     .unwrap();
