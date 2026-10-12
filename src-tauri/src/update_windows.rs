@@ -139,6 +139,7 @@ pub(crate) fn begin(app: &AppHandle, id: Uuid, vault: Vault) -> AppResult<()> {
                 }
                 std::thread::sleep(Duration::from_millis(40));
             }
+            settle_visible_positions(&handle, &vault)?;
             Ok(())
         });
         if let Ok(mut book) = handle.state::<Restores>().0.lock() {
@@ -166,6 +167,31 @@ pub(crate) fn begin(app: &AppHandle, id: Uuid, vault: Vault) -> AppResult<()> {
             message: error.to_string(),
         };
         return Err(error.into());
+    }
+    Ok(())
+}
+
+fn settle_visible_positions(app: &AppHandle, vault: &Vault) -> AppResult<()> {
+    // GTK can clamp a hidden window's requested position using its old size.
+    // Wait for mapping/configuration, then place it using the allocated size.
+    // The window manager may still clamp bounds on a smaller monitor.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    for saved in vault
+        .windows
+        .iter()
+        .filter(|window| window.visible && !window.minimized && !window.maximized)
+    {
+        let window = app.get_webview_window(&saved.label).ok_or_else(invalid)?;
+        loop {
+            let size = window.inner_size()?;
+            if (window.is_visible()? && size.width == saved.width && size.height == saved.height)
+                || Instant::now() >= deadline
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        window.set_position(tauri::PhysicalPosition::new(saved.x, saved.y))?;
     }
     Ok(())
 }
@@ -208,7 +234,7 @@ fn restore(app: &AppHandle, vault: &Vault) -> AppResult<()> {
                         .visible(false)
                         .focused(false)
                         .min_inner_size(560.0, 420.0)
-                        .drag_and_drop(false)
+                        .disable_drag_drop_handler()
                         .decorations(
                             !crate::desktop_settings::should_use_custom_window_decorations(&handle),
                         )

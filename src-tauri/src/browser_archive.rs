@@ -78,13 +78,32 @@ fn invalid() -> AppError {
 }
 
 fn valid_origin(origin: &str) -> bool {
-    matches!(
+    if matches!(
         origin,
-        "http://localhost:1420"
-            | "http://tauri.localhost"
-            | "https://tauri.localhost"
-            | "tauri://localhost"
-    )
+        "http://tauri.localhost" | "https://tauri.localhost" | "tauri://localhost"
+    ) {
+        return true;
+    }
+    // The configured Vite port and loopback hostname can differ between dev
+    // sessions. The export caller is separately pinned to the configured origin.
+    let Ok(url) = tauri::Url::parse(origin) else {
+        return false;
+    };
+    url.scheme() == "http"
+        && url.port().is_some_and(|port| port != 0)
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.path() == "/"
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && url.origin().ascii_serialization() == origin
+        && url.host_str().is_some_and(|host| {
+            host == "localhost"
+                || host == "[::1]"
+                || host
+                    .parse::<std::net::Ipv4Addr>()
+                    .is_ok_and(|address| address.is_loopback())
+        })
 }
 
 fn checksum(origin: &str, vault_id: &str, values: &Values) -> AppResult<String> {

@@ -60,6 +60,8 @@ export enum TauriCommandName {
   GetWorkerBrowserOptions = 'get_worker_browser_options',
   GetVaultWindowState = 'get_vault_window_state',
   OpenProfileWindow = 'open_profile_window',
+  GetPickerVaults = 'get_picker_vaults',
+  OpenPickerVault = 'open_picker_vault',
   VaultWorkerReady = 'vault_worker_ready',
   VaultWindowCloseReady = 'vault_window_close_ready',
   VaultWindowCloseAck = 'vault_window_close_ack',

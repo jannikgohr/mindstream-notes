@@ -18,6 +18,7 @@ function participant(flush: () => Promise<void>) {
     acknowledge: vi.fn(async (_id: string, _saved: boolean) => {}),
     freeze: vi.fn(() => restore),
     failed: vi.fn(),
+    phase: vi.fn(),
     onError: vi.fn()
   };
   return { ...createCloseParticipant(options), ...options, restore };
@@ -36,6 +37,7 @@ describe('controlled worker close', () => {
     await window.receive({ id: 'first', phase: 'prepare' });
     expect(window.freeze).toHaveBeenCalledTimes(1);
     expect(window.flush).toHaveBeenCalledTimes(1);
+    expect(window.phase.mock.calls).toEqual([['waiting'], ['prepare']]);
     expect(window.acknowledge.mock.calls).toEqual([['first', true]]);
     expect(window.restore).not.toHaveBeenCalled();
   });
@@ -53,6 +55,15 @@ describe('controlled worker close', () => {
     await window.receive({ id: 'next', phase: 'waiting' });
     await window.receive({ id: 'next', phase: 'prepare' });
     expect(window.acknowledge.mock.calls).toEqual([['next', true]]);
+  });
+
+  it('distinguishes recovery cancellation from persistence failure and resumes editing', async () => {
+    const window = participant(vi.fn(async () => {}));
+    await window.receive({ id: 'first', phase: 'waiting' });
+    await window.receive({ id: 'first', phase: 'cancel', reason: 'recovery' });
+    expect(window.restore).toHaveBeenCalledTimes(1);
+    expect(window.failed).toHaveBeenCalledWith('recovery');
+    expect(window.flush).not.toHaveBeenCalled();
   });
 
   it('ignores a late waiting phase from a cancelled batch during a newer save', async () => {

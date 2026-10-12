@@ -7,7 +7,11 @@
     "boot.error.message": "Something went wrong while starting Mindstream Notes.",
     "boot.error.reload": "Reload",
     "vault.title": "Vaults",
-    "vault.closeFailed": "Could not finish saving. The vault remains open. Try closing it again after saving your changes.",
+    "vault.closeFailed": "Could not close the vault safely. It remains open. Check your changes and try again.",
+    "vault.waitingForTasks": "Preparing to close vault…",
+    "vault.savingChanges": "Saving changes…",
+    "vault.backgroundBusy": "Pending work did not finish in time. The vault remains open. Try closing it again when that work finishes.",
+    "vault.switchCancelled": "Vault switching was cancelled during recovery. Your vault remains open.",
     "vault.open.focus": "Focus existing window",
     "vault.open.newWindow": "Open in new window",
     "vault.open.failed.title": "Couldn't open vault",
@@ -1003,7 +1007,13 @@
     "account.managedHint": "Managed by Etebase. Switch to self-hosted in the radio above to use your own server.",
     "account.usernameOrEmail": "Username or email",
     "account.password": "Password",
-    "hotkeys.placeholder": "Cmd+K"
+    "hotkeys.placeholder": "Cmd+K",
+    "vault.open.thisWindow": "Open in this window",
+    "vault.open.choose": "How would you like to open this vault?",
+    "vault.open.remember": "Remember this decision",
+    "vault.open.cancel": "Cancel",
+    "vault.picker.title": "Choose a vault",
+    "vault.picker.message": "The last-used vault could not be opened. Choose another vault or create a new one."
   },
   "categories": {
     "account": {
@@ -1352,6 +1362,10 @@
     "language.spellcheck.customWords": {
       "label": "Personal dictionary",
       "description": "Words you have accepted. They apply in every language and are stored with this vault, not with the machine."
+    },
+    "general.vaultOpening": {
+      "label": "Vault opening",
+      "description": "Choose whether another vault replaces this window or opens a new window."
     }
   },
   "values": {
@@ -1415,6 +1429,9 @@
     "language.spellcheck.languages.pl_PL": "Polish",
     "language.spellcheck.languages.sv_SE": "Swedish",
     "language.spellcheck.languages.cs_CZ": "Czech",
-    "language.spellcheck.languages.ru_RU": "Russian"
+    "language.spellcheck.languages.ru_RU": "Russian",
+    "general.vaultOpening.ask": "Ask every time",
+    "general.vaultOpening.thisWindow": "This window",
+    "general.vaultOpening.newWindow": "New window"
   }
 }

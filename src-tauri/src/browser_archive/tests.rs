@@ -318,3 +318,27 @@ fn native_keystore_export_reopens_without_exposing_credentials() {
     let ciphertext = String::from_utf8(fs::read(fixture.root.join(FILE)).unwrap()).unwrap();
     assert!(!ciphertext.contains("synthetic-private-credential"));
 }
+
+#[test]
+fn development_origins_allow_configured_loopback_ports_without_remote_or_credential_origins() {
+    for origin in [
+        "http://localhost:1420",
+        "http://127.0.0.1:1421",
+        "http://[::1]:1430",
+    ] {
+        assert!(super::valid_origin(origin), "{origin}");
+    }
+    for origin in [
+        "http://localhost",
+        "http://localhost:0",
+        "https://localhost:1420",
+        "http://example.com:1420",
+        "http://localhost.example.com:1420",
+        "http://user@localhost:1420",
+        "http://localhost:1420/notes",
+        "http://localhost:1420?secret=1",
+        "http://localhost:1420#fragment",
+    ] {
+        assert!(!super::valid_origin(origin), "{origin}");
+    }
+}

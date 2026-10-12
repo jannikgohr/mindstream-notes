@@ -108,6 +108,12 @@ describe('profiles api (Tauri parse path)', () => {
     expect(invoke).toHaveBeenLastCalledWith('open_profile_window', {
       id: 'p1'
     });
+    invoke.mockResolvedValueOnce(undefined);
+    await expect(openProfileWindow('p1', true)).resolves.toBeUndefined();
+    expect(invoke).toHaveBeenLastCalledWith('open_profile_window', {
+      id: 'p1',
+      inThisWindow: true
+    });
     invoke.mockRejectedValueOnce(new Error('target still owns its lease'));
     await expect(openProfileWindow('p1')).rejects.toThrow(/owns its lease/);
     invoke.mockResolvedValueOnce({ accepted: true });

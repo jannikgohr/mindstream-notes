@@ -58,15 +58,15 @@ pub fn origin(app: &AppHandle) -> AppResult<String> {
     }
 }
 
-pub fn begin(app: &tauri::App, vault_id: String, complete: Completion) -> AppResult<()> {
-    let origin = origin(app.handle())?;
+pub fn begin(app: &AppHandle, vault_id: String, complete: Completion) -> AppResult<()> {
+    let origin = origin(app)?;
     let environment = app.state::<crate::environment::Environment>();
     if crate::browser_archive::resume_export(
         &environment.root,
         &environment.credential_service,
         &origin,
     )? {
-        complete(app.handle().clone());
+        complete(app.clone());
         return Ok(());
     }
     if crate::coordinator_revival::background_launch() {
@@ -100,7 +100,7 @@ pub fn begin(app: &tauri::App, vault_id: String, complete: Completion) -> AppRes
         builder = builder.additional_browser_args(args);
     }
     let window = builder.build()?;
-    let handle = app.handle().clone();
+    let handle = app.clone();
     window.on_window_event(move |event| {
         if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
             handle.exit(1);

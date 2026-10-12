@@ -1,0 +1,111 @@
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import {
+    getPickerVaults,
+    openPickerVault,
+    type PickerVault
+  } from '$lib/api/vault-picker';
+  import { createProfile } from '$lib/api/profiles';
+  import { tUi } from '$lib/settings/i18n.svelte';
+  import { toErrorMessage } from '$lib/api/errors';
+  let vaults = $state<PickerVault[]>([]);
+  let loading = $state(true);
+  let busy = $state(false);
+  let error = $state('');
+  let name = $state('');
+  async function refresh() {
+    loading = true;
+    error = '';
+    try {
+      vaults = await getPickerVaults();
+    } catch (cause) {
+      error = toErrorMessage(cause);
+    } finally {
+      loading = false;
+    }
+  }
+  async function open(id: string) {
+    if (busy) return;
+    busy = true;
+    error = '';
+    try {
+      await openPickerVault(id);
+    } catch (cause) {
+      error = toErrorMessage(cause);
+    } finally {
+      busy = false;
+    }
+  }
+  async function create() {
+    if (busy || !name.trim()) return;
+    busy = true;
+    error = '';
+    try {
+      const vault = await createProfile(name.trim());
+      name = '';
+      await refresh();
+      await openPickerVault(vault.id);
+    } catch (cause) {
+      error = toErrorMessage(cause);
+    } finally {
+      busy = false;
+    }
+  }
+  onMount(() => {
+    void refresh();
+  });
+</script>
+
+<div class="flex min-h-screen flex-col bg-background p-6 text-foreground">
+  <h1 class="text-xl font-semibold">{tUi('vault.picker.title')}</h1>
+  <p class="mt-2 text-sm text-muted-foreground">
+    {tUi('vault.picker.message')}
+  </p>
+  {#if error}
+    <p class="mt-3 text-sm text-destructive" role="alert">{error}</p>
+    <button
+      type="button"
+      class="mt-2 text-sm underline"
+      disabled={busy}
+      onclick={refresh}>{tUi('vault.windows.retry')}</button
+    >
+  {/if}
+  {#if loading}
+    <p class="mt-4 text-sm" role="status">{tUi('vault.windows.checking')}</p>
+  {:else}
+    <div class="my-4 flex flex-col gap-2">
+      {#each vaults as vault (vault.id)}
+        <button
+          type="button"
+          class="rounded-md border border-border p-3 text-left text-sm hover:bg-accent disabled:opacity-50"
+          disabled={busy || !vault.available}
+          onclick={() => open(vault.id)}
+          >{vault.name}{#if !vault.available}<span
+              class="ml-2 text-muted-foreground"
+              >{tUi('vault.windows.unavailable')}</span
+            >{/if}</button
+        >
+      {/each}
+    </div>
+    <form
+      class="mt-auto flex gap-2"
+      onsubmit={(event) => {
+        event.preventDefault();
+        void create();
+      }}
+    >
+      <input
+        class="min-w-0 flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm"
+        aria-label={tUi('vault.create.placeholder')}
+        placeholder={tUi('vault.create.placeholder')}
+        bind:value={name}
+        disabled={busy}
+      />
+      <button
+        type="submit"
+        class="rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50"
+        disabled={busy || !name.trim()}>{tUi('vault.create.button')}</button
+      >
+    </form>
+  {/if}
+</div>

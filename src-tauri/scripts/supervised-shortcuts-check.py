@@ -62,6 +62,22 @@ def wait(check, timeout=100):
 @contextmanager
 def lease(path):
     # Rust File::lock covers this byte as well. File presence is not ownership.
+    if os.name != "nt":
+        import fcntl
+        with path.open("r+b") as handle:
+            deadline = time.monotonic() + 10
+            while True:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    assert time.monotonic() < deadline, "fixture lease remained owned"
+                    time.sleep(0.04)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return
     import msvcrt
     with path.open("r+b") as handle:
         def acquire():
@@ -80,6 +96,15 @@ def lease(path):
 
 
 def owned(path):
+    if os.name != "nt":
+        import fcntl
+        with path.open("r+b") as handle:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            return False
     import msvcrt
     with path.open("r+b") as handle:
         try:
@@ -206,7 +231,7 @@ def main():
         try:
             peer = wait(endpoint)
             wait(lambda: status()["initialized"] and any(entry["id"] == "other" and entry["ready"] for entry in status()["workers"]))
-            assert status()["contract"]["protocol"] == 10
+            assert status()["contract"]["protocol"] == 11
             if args.wait_for_window_close:
                 if args.autostart_hidden:
                     assert status()["active"] is None, "hidden worker incorrectly took focus recency"

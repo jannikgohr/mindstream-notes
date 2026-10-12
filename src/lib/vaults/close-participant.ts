@@ -3,7 +3,8 @@ export function createCloseParticipant(options: {
   flush: () => Promise<void>;
   acknowledge: (id: string, saved: boolean) => Promise<void>;
   freeze: () => () => void;
-  failed: () => void;
+  phase?: (phase: 'waiting' | 'prepare') => void;
+  failed: (reason?: 'background' | 'recovery') => void;
   onError: (error: unknown) => void;
 }) {
   let active: string | null = null;
@@ -14,6 +15,7 @@ export function createCloseParticipant(options: {
   async function receive(notice: {
     id: string;
     phase: 'waiting' | 'prepare' | 'cancel';
+    reason?: 'background' | 'recovery';
   }) {
     if (disposed) return;
     if (notice.phase === 'cancel') {
@@ -21,13 +23,13 @@ export function createCloseParticipant(options: {
       if (cancelled.size > 64)
         cancelled.delete(cancelled.values().next().value!);
       if (notice.id === '00000000-0000-0000-0000-000000000000') {
-        options.failed();
+        options.failed(notice.reason);
       } else if (active === notice.id) {
         active = null;
         preparing = false;
         restore?.();
         restore = null;
-        options.failed();
+        options.failed(notice.reason);
       }
       return;
     }
@@ -43,6 +45,7 @@ export function createCloseParticipant(options: {
         preparing = false;
         restore = options.freeze();
       }
+      options.phase?.(notice.phase);
       // Freeze immediately, but take the final editor snapshot only after
       // services have completed and emitted their last content updates.
       if (notice.phase === 'waiting') return;

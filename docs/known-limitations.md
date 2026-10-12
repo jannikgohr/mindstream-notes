@@ -203,16 +203,17 @@ still overwrites collaborators silently. Closing it means plumbing presence from
 the _non-transactional restore_ limitation above is still user-visible for ink
 and freeform.
 
-### Concurrent vault opening — _partially implemented_
+### Concurrent vault platform checks
 
-Root/vault settings, physical ownership, isolated browser stores and the
-coordinator runtime are implemented. Opt-in `--supervised-vaults` runs concurrent
-workers and coordinates focus, shortcuts, tray, autostart, Quit, coordinator
-recovery and all-vault update recovery. Normal startup remains direct.
+Ordinary desktop launches use the coordinator and isolated vault workers.
+Root/vault settings, browser isolation, live ownership, remembered opening
+choices, handoff, shortcuts, tray, autostart, Quit and update recovery are
+implemented. Isolated test devices and mobile retain their single-vault flows.
+Handoff may replace the native window while preserving its content and geometry.
 
-The supervised desktop vault menu opens new windows, focuses existing windows
-and reports live owners. Remembered opening preferences and safe this-window
-worker handoff are still in progress. Packaged macOS/Linux, supervised
-development-host and reboot-durability checks remain release gates. Global plugin packages and
-theme presets are separate follow-ups. See the current delivery table in the
+Packaged macOS 14+ Dock/menu/Reopen testing remains deferred with the owner's
+approval. Linux compositor behavior and geometry constraints are recorded in
+[the harness guide](e2e/harness.md#concurrent-vault-checks). Reboot durability,
+monitor/DPI transitions and signed updater installation still need release QA.
+Global plugin packages and theme presets remain separate projects. See the
 [root/vault plan](root-vault-implementation-plan.md#current-delivery-status).

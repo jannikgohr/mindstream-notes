@@ -25,6 +25,19 @@ beforeEach(() => {
 });
 
 describe('vault menu ownership and opening', () => {
+  it('asks for closed vaults, respects remembered choices, and overrides them for Ctrl-click', async () => {
+    const menu = new VaultMenu();
+    await menu.refresh();
+    expect(menu.decision('closed', 'ask')).toBe('ask');
+    expect(menu.decision('closed', 'thisWindow')).toBe('thisWindow');
+    expect(menu.decision('closed', 'newWindow')).toBe('newWindow');
+    expect(menu.decision('closed', 'invalid')).toBe('ask');
+    expect(menu.decision('closed', 'thisWindow', true)).toBe('newWindow');
+    for (const id of ['source', 'loading', 'held'])
+      expect(menu.decision(id, 'thisWindow')).toBe('newWindow');
+    await menu.open('closed', 'thisWindow');
+    expect(openWindow).toHaveBeenCalledWith('closed', true);
+  });
   it('keeps every observed owner undeletable, including starting and unavailable workers', async () => {
     const menu = new VaultMenu();
     expect(menu.canDelete('closed')).toBe(false);

@@ -7,7 +7,11 @@
     "boot.error.message": "Beim Starten von Mindstream Notes ist ein Fehler aufgetreten.",
     "boot.error.reload": "Neu laden",
     "vault.title": "Tresore",
-    "vault.closeFailed": "Das Speichern konnte nicht abgeschlossen werden. Der Tresor bleibt geöffnet. Versuche ihn nach dem Speichern deiner Änderungen erneut zu schließen.",
+    "vault.closeFailed": "Der Tresor konnte nicht sicher geschlossen werden. Er bleibt geöffnet. Prüfe deine Änderungen und versuche es erneut.",
+    "vault.waitingForTasks": "Tresor wird zum Schließen vorbereitet…",
+    "vault.savingChanges": "Änderungen werden gespeichert…",
+    "vault.backgroundBusy": "Ausstehende Aufgaben wurden nicht rechtzeitig abgeschlossen. Der Tresor bleibt geöffnet. Versuche ihn erneut zu schließen, wenn diese Aufgaben fertig sind.",
+    "vault.switchCancelled": "Der Tresorwechsel wurde bei der Wiederherstellung abgebrochen. Dein Tresor bleibt geöffnet.",
     "vault.open.focus": "Vorhandenes Fenster anzeigen",
     "vault.open.newWindow": "In neuem Fenster öffnen",
     "vault.open.failed.title": "Tresor konnte nicht geöffnet werden",
@@ -1003,7 +1007,13 @@
     "account.managedHint": "Von Etebase verwaltet. Wähle oben „Selbst gehostet“, um einen eigenen Server zu nutzen.",
     "account.usernameOrEmail": "Benutzername oder E-Mail",
     "account.password": "Passwort",
-    "hotkeys.placeholder": "Strg+K"
+    "hotkeys.placeholder": "Strg+K",
+    "vault.open.thisWindow": "In diesem Fenster öffnen",
+    "vault.open.choose": "Wie möchtest du diesen Tresor öffnen?",
+    "vault.open.remember": "Diese Entscheidung merken",
+    "vault.open.cancel": "Abbrechen",
+    "vault.picker.title": "Tresor auswählen",
+    "vault.picker.message": "Der zuletzt verwendete Tresor konnte nicht geöffnet werden. Wähle einen anderen Tresor oder erstelle einen neuen."
   },
   "categories": {
     "account": {
@@ -1352,6 +1362,10 @@
     },
     "data.openFolder": {
       "label": "Datenordner öffnen"
+    },
+    "general.vaultOpening": {
+      "label": "Tresore öffnen",
+      "description": "Wähle, ob ein anderer Tresor dieses Fenster ersetzt oder in einem neuen Fenster geöffnet wird."
     }
   },
   "values": {
@@ -1415,6 +1429,9 @@
     "data.trashRetentionDays.7": "7 Tage",
     "data.trashRetentionDays.30": "30 Tage",
     "data.trashRetentionDays.90": "90 Tage",
-    "data.trashRetentionDays.forever": "Unbegrenzt"
+    "data.trashRetentionDays.forever": "Unbegrenzt",
+    "general.vaultOpening.ask": "Jedes Mal fragen",
+    "general.vaultOpening.thisWindow": "Dieses Fenster",
+    "general.vaultOpening.newWindow": "Neues Fenster"
   }
 }

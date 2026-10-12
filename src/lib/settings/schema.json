@@ -68,6 +68,14 @@
           "id": "general.behavior",
           "settings": [
             {
+              "id": "general.vaultOpening",
+              "scope": "D",
+              "type": "select",
+              "default": "ask",
+              "options": ["ask", "thisWindow", "newWindow"],
+              "platforms": ["desktop"]
+            },
+            {
               "id": "general.startOnLogin",
               "scope": "D",
               "type": "toggle",

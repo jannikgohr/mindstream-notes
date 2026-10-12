@@ -1,21 +1,12 @@
 # Root storage and concurrent vault implementation plan
 
-Status: restore safety, atomic document writes, environment identity, vault
-ownership, root desktop settings, dictionary publication, root recovery, and
-vault signing credentials are implemented and pass the Windows checks.
-Schema settings now use root/vault documents. Opt-in supervision exports legacy
-browser state before opening isolated vault workers and can adopt surviving
-workers after a coordinator restart. Coordinator shortcut registration and
-eligible-vault action dispatch, shared tray routing and last-window coordinator
-exit pass Windows checks. Coordinator autostart registration ownership is
-implemented. Packaged/embedded coordinator revival passes Windows checks.
-Coordinator update ownership and all-vault update recovery pass Windows checks.
-The supervised desktop menu now opens/focuses vault windows and reports live
-ownership. Opening preferences, prepared-worker handoff and platform checks
-remain pending; normal startup and isolated test devices still use direct mode.
-Supervised worker close waits for content-window persistence. Whole-app Quit
-orchestration passes the Windows app checks; source/target
-handoff remains pending.
+Status: the root settings and concurrent desktop vault implementation is complete.
+Ordinary desktop launches use the coordinator. Isolated test devices remain direct
+unless they request `--supervised-vaults`; mobile keeps its single-vault flow.
+The desktop switcher supports opening preferences, explicit alternatives,
+Ctrl/Command click, live ownership, and prepared-worker handoff. Durable recovery
+keeps an open source and finishes the target after a saved source has exited.
+Missing startup vaults open an isolated picker without recreating missing data.
 
 Global plugin packages and theme presets are separate follow-up projects:
 
@@ -28,25 +19,70 @@ Reviewed against the implementation on 2026-10-12. Dated slices below are a
 history of incremental delivery; their older pending lists do not describe the
 current release gates.
 
-| Area                  | Current state                                                                                                                                                                                                                     |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Phase 0 safety        | Implemented; Windows process-crash checks pass. Reboot durability remains unverified.                                                                                                                                             |
-| Phase 1 storage       | Root/vault schema documents, locked field edits, validated recovery, credential migration, browser export/classification and isolated worker stores are implemented.                                                              |
-| Phase 2 runtime       | Concurrent workers, duplicate/focus routing, cross-worker settings invalidation, service/save drains, whole-app Quit, shortcuts, tray, autostart, coordinator revival and update-session recovery pass documented Windows checks. |
-| Phase 3 menu/handoff  | Live-window observations and supervised menu open/focus actions are implemented. Opening preference, this-window choices and prepared-worker handoff remain unfinished.                                                           |
-| Phase 4 release gates | Packaged macOS/Linux lifecycle and activation, supervised `tauri dev`, busy/dirty handoff cases, reboot durability and signed updater installation remain required.                                                               |
+| Area                  | Current state                                                                                                                                                                                                                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Phase 0 safety        | Implemented; Windows process-crash checks pass. Reboot durability remains unverified.                                                                                                                                                                                                            |
+| Phase 1 storage       | Root/vault schema documents, locked field edits, validated recovery, credential migration, browser export/classification and isolated worker stores are implemented.                                                                                                                             |
+| Phase 2 runtime       | Concurrent workers, duplicate/focus routing, cross-worker settings invalidation, service/save drains, whole-app Quit, shortcuts, tray, autostart, coordinator revival and update-session recovery pass documented Windows checks.                                                                |
+| Phase 3 menu/handoff  | Implemented: remembered opening preference, accessible choices, modifier override, prepared hidden target, all-window saves, geometry transfer and durable handoff recovery.                                                                                                                     |
+| Phase 4 release gates | Windows native checks and the real development launcher pass. Linux X11 and nested Wayland lifecycle/recovery checks pass; platform evidence is recorded below. Packaged macOS checks retain the owner's accepted deferral; reboot durability and signed updater installation remain release QA. |
 
-Normal startup and existing isolated-device harnesses still use direct mode.
-`--supervised-vaults` enables the concurrent runtime explicitly. The supervised desktop
-switcher opens/focuses vault windows without changing its source worker. Direct
-desktop devices and mobile retain their existing restart flow.
+Normal desktop startup uses the supervised runtime. Direct isolated-device tests,
+browser fallback and mobile retain their existing single-vault behavior. Global
+plugin packages, theme presets and device appearance migration are independent
+follow-ups; accent and UI font size remain vault-scoped.
 
-Latest validation is 875 Rust unit tests plus one integration test passing,
-with five ignored overall, 33 focused frontend tests, frontend checks/builds
-and fresh-root embedded Windows regression checks. Native cross-worker visual settings refresh
-still needs a dedicated interaction check. Global plugin packages and theme
-presets are independent follow-ups; accent and UI font size remain vault-scoped
-until the appearance migration.
+### Completed handoff and startup slice on 2026-10-12
+
+`general.vaultOpening` is a device preference with Ask, This window and New
+window choices. The switcher offers the two opening actions and a remember
+checkbox. Ctrl or Command click requests a new window. An existing target
+always receives focus while its source remains open.
+
+Handoff writes `vault-handoff.json` before preparing a target. The record pins
+canonical root/vault paths, exact launch identities, source and target close
+requests, hidden and visible restore requests, and source main-window geometry.
+Preparing, Closing and Closed phases precede terminal Completed or Cancelled.
+Terminal records remain as evidence and cannot replay a close. Corrupt records
+and changed physical ownership fail safely without inventing replacement data.
+No root lock crosses worker IPC or a service/save drain.
+
+A hidden target must finish startup and register every content window before
+source closure. The source freezes editing, drains services, saves main/popout
+editors and settings, drains final writes and exits. Physical OS lease release
+proves closure. The target then becomes visible at the saved geometry and gets
+focus. Visible placement follows native mapping so GTK uses the resized window
+rather than its previous hidden size. A failed source close cancels the prepared
+target and keeps the source usable. If the prepared target cannot close safely,
+its active intent and ownership evidence remain available for retry.
+
+After coordinator loss, recovery cancels an exact source close if that source
+is still open. If its close committed and its OS lease has released, recovery
+finishes opening the target. A changed source identity never inherits the old
+close request. A released target can restart under a freshly journaled launch
+identity. Cancellation tombstones reject delayed close requests for the existing
+bounded replay interval.
+
+Startup with an unavailable last-used directory opens `vault-picker/` in its
+own browser store. The picker can select an available vault or create a new one;
+it imports no editor/database services. The selected vault supplies the initial
+legacy migration source. Ordinary development keeps the coordinator alive after
+its last worker closes, so `tauri dev` retains the frontend server until Quit.
+Configured loopback Vite origins support alternate hostnames/ports; export calls
+must still match the exact configured origin and dedicated export window.
+
+Close progress uses the ordinary bottom-right toast stack. Its spinner toast
+has no close button, stays until completion/cancellation, and updates between
+preparing to close and saving. Short operations avoid a flash. Recovery cancellation
+is informational; service timeouts and unsafe closes retain actionable errors.
+The save-failure and busy-job fixtures deliberately exercise those errors in
+disposable roots.
+
+Validation includes the complete Rust suite, Svelte/ESLint/localization checks,
+175 relevant frontend tests and a separate 20-test close/toast run, production builds,
+Windows native handoff/recovery checks, unsaved main/popout edits with automatic
+saving disabled, and real `tauri dev` handoff/last-worker closure. Commands and
+Linux platform evidence are in [the harness guide](e2e/harness.md#concurrent-vault-checks).
 
 ## Required behavior
 

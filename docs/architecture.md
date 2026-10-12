@@ -53,6 +53,32 @@ flowchart TB
     CP -->|"live updates (E2EE)"| NGINX
 ```
 
+## Desktop vault runtime
+
+An ordinary desktop launch elects one coordinator for its environment root.
+The coordinator owns the vault index, desktop integrations and root recovery.
+Each vault has one worker with a physical lifetime OS lease, its own SQLite
+connection, settings/account state and isolated browser store. Main and note
+popout windows share that worker. Authenticated private IPC pins launch identity
+and protocol compatibility; failed IPC never proves a released vault lease.
+Isolated e2e devices remain direct unless explicitly supervised, and mobile
+retains its existing single-vault runtime.
+
+Device settings live in locked root documents; content settings live in the
+vault. Revision notifications carry invalidations, and each worker reloads its
+own values. Before concurrency, a dedicated legacy-origin page exports browser
+storage into an encrypted archive with preserved original values. A missing
+startup directory opens an isolated picker before editor services initialize.
+
+Opening in this window prepares a hidden target, then saves and closes the
+source worker before showing the target. The durable `vault-handoff.json` record
+binds exact vault paths, launch/operation IDs, geometry and phase. Recovery keeps
+a still-open source; after source closure it finishes the target. Whole-app Quit
+and updates save every participating window before releasing worker ownership.
+Progress shares the bottom-right toast component and cannot be dismissed while
+native closure is deciding. The development coordinator survives worker closure
+so its `tauri dev` session remains alive until explicit Quit.
+
 ## Frontend (`src/`)
 
 Svelte 5 + SvelteKit render the UI. Editors are surface-specific: markdown uses
@@ -84,8 +110,8 @@ Pointer Events; freeform embeds an Excalidraw island; PDFs render through pdf.js
 The frontend never imports Rust directly — it `invoke()`s `#[tauri::command]`
 functions. Errors flow back through `AppError`
 ([`src-tauri/src/error.rs`](../src-tauri/src/error.rs)), which maps Rust errors
-to IPC error strings. All non-window state lives in SQLite; the frontend holds
-only view state.
+to IPC error strings. Note data lives in SQLite. Root/vault configuration and recovery records use
+locked filesystem documents; the frontend holds view state and pending edits.
 
 ## Rust backend (`src-tauri/src/`)
 

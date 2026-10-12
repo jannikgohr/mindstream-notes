@@ -142,3 +142,81 @@ rediscovered:
   helpers act on every browser at once; per-client work goes through
   `clientHelpers(client)`. `loginClient` runs under `Promise.all`, so an error
   in either client surfaces as `Promise.all (index N)`.
+
+## Concurrent vault checks
+
+Shared-root vault fixtures complement the existing isolated-device multiremote
+suites. They use disposable roots and real OS leases. Cleanup uses authenticated
+Quit and waits for released coordinator/vault leases; it retains uncertain
+owners for inspection rather than killing a PID discovered on disk.
+
+Build an embedded debug binary as described in [BUILDING.md](../BUILDING.md).
+Wait for the build to finish before launching it on Windows, where live app
+processes prevent executable replacement.
+
+```powershell
+python src-tauri/scripts/supervised-handoff-check.py --output .output/handoff-check
+python src-tauri/scripts/supervised-handoff-ui-check.py --exe src-tauri/target/debug/mindstream-notes.exe --output .output/handoff-editor-check --check-progress
+python src-tauri/scripts/supervised-shortcuts-check.py --output .output/shortcut-check --check-update-recovery
+```
+
+The handoff fixture covers ordinary transfer, existing targets, missing targets,
+save failure, busy-job timeout, source retained after coordinator crash, source
+already closed, changed source identity, target replacement and missing startup.
+The WebView2 UI fixture needs `msedgedriver` on PATH and verifies main/popout
+persistence with automatic saving disabled. `--check-progress` also exercises the
+source window API and checks the persistent toast wording, placement and absent
+close button. It attaches only to its own isolated
+browser. This follows [Microsoft's WebView2 attachment workflow](https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/webdriver).
+Failure fixtures intentionally display close errors while preserving the source;
+those toasts are expected evidence of safe cancellation.
+
+For development lifetime, start a Vite server and run:
+
+```powershell
+python src-tauri/scripts/supervised-dev-check.py --dev-url http://127.0.0.1:1421 --output .output/dev-vault-check
+```
+
+This starts the real project Tauri CLI against a disposable root, checks handoff
+and last-worker closure, opens another worker, then Quits its own CLI session.
+It leaves the existing Vite server running.
+
+Linux uses `linux-vault-check.Dockerfile` and `linux-vault-check.sh` with source
+mounted read-only at `/source` and an empty writable results directory at
+`/results`. The script copies source to `/work`, runs Rust quality gates, builds
+with `tauri/custom-protocol`, then runs native checks under D-Bus/Xvfb/Openbox.
+`linux-wayland-check.sh` runs the checked binary under nested Weston, with GTK
+forced to its Wayland backend. Xvfb provides the compositor an input seat; an
+initial headless-backend run had no usable keyboard focus. Source shell scripts
+keep LF line endings through `.gitattributes`.
+The container disables WebKit's nested sandbox only for this disposable root-run
+fixture; this setting is not an application launch policy.
+
+Local evidence from 2026-10-12:
+
+| Check                                  | Result and retained evidence                                                                                                                    |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Windows native handoff/recovery        | All ten cases pass; `.output/handoff-release-lifecycle-check`.                                                                                  |
+| Native progress toast                  | Pass through the source window API; correct wording, bottom/right placement, no dialog or close button; `.output/handoff-progress-toast-check`. |
+| Unsaved main and popout editors        | Pass with automatic saving disabled; `.output/handoff-release-editor-check`.                                                                    |
+| Development launcher lifetime          | Pass across handoff, last-worker closure and reopening; `.output/handoff-release-dev-check`.                                                    |
+| Shortcut/autostart/update regression   | Pass, including all-vault/popout/hidden-state restart and normal cold startup; `.output/handoff-verified-shortcuts-check`.                      |
+| Linux X11 lifecycle/recovery           | All ten cases pass; `.output/linux-vault-check/native-20261012-174653`.                                                                         |
+| Linux Wayland lifecycle/recovery/focus | All ten cases pass with an isolated input seat; `.output/linux-wayland-check/native-20261012-175438`.                                           |
+
+Windows checks ran on Windows 11 Pro build 26300. The Linux build uses Rust 1.97.1, Tauri 2.11.1, GTK 3.24.38, WebKitGTK 2.50.6,
+Openbox and Weston 10 in Debian Bookworm containers. Rust fmt/clippy/full serial tests pass on both platforms. Windows passes 881
+unit tests and one integration test, with five ignored overall. Linux passes 883
+unit tests and one integration test, with two ignored overall. Svelte checks, affected ESLint,
+localization and production frontend/native builds pass. All fixture vaults
+closed gracefully and released their OS leases.
+
+Native foreground focus is recorded in `focus-observed.json`. On an ordinary
+Windows desktop the OS may refuse focus or another app may take it; lifecycle
+checks therefore record focus rather than requiring it. `--check-focus` makes
+focus mandatory for an isolated desktop. The Linux runners use it. These
+container checks verify the recorded X11/Wayland sessions, not every compositor.
+Wayland controls global window position; the fixture checks saved size and
+compositor-provided coordinates. Packaged macOS retains its accepted unverified
+release check. Reboot durability, real desktop keyboard/tray interactions,
+monitor/DPI transitions and signed updater installation remain release QA.

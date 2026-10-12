@@ -39,6 +39,14 @@ enum HostCommand {
         launch_id: Uuid,
         vault_id: String,
     },
+    HandoffFromWindow {
+        source_vault_id: String,
+        launch_id: Uuid,
+        vault_id: String,
+    },
+    PickerOpen {
+        vault_id: String,
+    },
     OpenStatus {
         operation_id: Uuid,
     },
@@ -104,6 +112,19 @@ enum HostCommand {
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "command", rename_all = "camelCase", deny_unknown_fields)]
 enum WorkerCommand {
+    #[cfg(any(debug_assertions, feature = "e2e-data-dir"))]
+    TestWindowFocus {
+        launch_id: Uuid,
+    },
+    #[cfg(any(debug_assertions, feature = "e2e-data-dir"))]
+    TestCloseFailure {
+        launch_id: Uuid,
+    },
+    #[cfg(any(debug_assertions, feature = "e2e-data-dir"))]
+    TestHoldJob {
+        launch_id: Uuid,
+        seconds: u64,
+    },
     Activate {
         #[serde(default)]
         window: Option<String>,
@@ -132,6 +153,10 @@ enum WorkerCommand {
         message: String,
     },
     CloseStatus {
+        launch_id: Uuid,
+        operation_id: Uuid,
+    },
+    CancelClose {
         launch_id: Uuid,
         operation_id: Uuid,
     },
@@ -197,6 +222,9 @@ struct Book {
     had_ready_worker: bool,
     recovering: bool,
     quitting: Option<Uuid>,
+    handoff: Option<Uuid>,
+    bootstrap_started: bool,
+    picker_open: bool,
     last: Option<String>,
     workers: BTreeMap<String, Launch>,
     operations: BTreeMap<Uuid, Operation>,
@@ -208,8 +236,20 @@ struct Book {
 enum Action {
     Quit,
     Open(String),
+    Initialize {
+        vault_id: String,
+    },
+    ShowPicker,
+    Handoff {
+        source: String,
+        launch_id: Uuid,
+        target: String,
+    },
     ActivateLast,
-    Remember { vault_id: String, revision: u64 },
+    Remember {
+        vault_id: String,
+        revision: u64,
+    },
     RefreshDeviceSettings,
     Shortcut(crate::hotkeys::GlobalShortcutCommandId, Option<String>),
     Tray(crate::shortcut_actions::TrayCommand),
@@ -281,6 +321,8 @@ impl Book {
             && !self.recovering
             && self.workers.is_empty()
             && self.quitting.is_none()
+            && self.handoff.is_none()
+            && !self.picker_open
             && jobs.is_idle()
     }
 
@@ -288,7 +330,16 @@ impl Book {
         let operation = self.operations.get(&operation_id).ok_or_else(invalid)?;
         if !matches!(
             operation.input["command"].as_str(),
-            Some("open" | "openFromWindow" | "shortcut" | "tray" | "quit" | "updateInstall")
+            Some(
+                "open"
+                    | "openFromWindow"
+                    | "handoffFromWindow"
+                    | "pickerOpen"
+                    | "shortcut"
+                    | "tray"
+                    | "quit"
+                    | "updateInstall"
+            )
         ) {
             return Err(invalid());
         }
@@ -311,7 +362,14 @@ impl Book {
                 && matches!(
                     operation.input["command"].as_str(),
                     Some(
-                        "open" | "openFromWindow" | "shortcut" | "tray" | "quit" | "updateInstall"
+                        "open"
+                            | "openFromWindow"
+                            | "handoffFromWindow"
+                            | "pickerOpen"
+                            | "shortcut"
+                            | "tray"
+                            | "quit"
+                            | "updateInstall"
                     )
                 )
                 && operation.open_result.is_none()
@@ -378,7 +436,9 @@ impl Book {
         let command: HostCommand =
             serde_json::from_value(request.payload.clone()).map_err(|_| invalid())?;
         self.operations.retain(|id, operation| {
-            self.quitting == Some(*id) || operation.at.elapsed() < Duration::from_secs(600)
+            self.quitting == Some(*id)
+                || self.handoff == Some(*id)
+                || operation.at.elapsed() < Duration::from_secs(600)
         });
         if let Some(operation) = self.operations.get(&request.id) {
             if operation.input != request.payload {
@@ -456,6 +516,8 @@ impl Book {
                 command,
                 HostCommand::Open { .. }
                     | HostCommand::OpenFromWindow { .. }
+                    | HostCommand::HandoffFromWindow { .. }
+                    | HostCommand::PickerOpen { .. }
                     | HostCommand::Activate
                     | HostCommand::Shortcut { .. }
                     | HostCommand::Tray { .. }
@@ -467,6 +529,25 @@ impl Book {
                     "the app is quitting; no new vault action was started".into(),
                 ));
             }
+        }
+        if self.handoff.is_some()
+            && matches!(
+                command,
+                HostCommand::Open { .. }
+                    | HostCommand::OpenFromWindow { .. }
+                    | HostCommand::HandoffFromWindow { .. }
+                    | HostCommand::PickerOpen { .. }
+                    | HostCommand::Activate
+                    | HostCommand::Shortcut { .. }
+                    | HostCommand::Tray { .. }
+                    | HostCommand::Quit
+                    | HostCommand::UpdateCheck { .. }
+                    | HostCommand::UpdateInstall { .. }
+            )
+        {
+            return Err(AppError::InvalidArg(
+                "a vault handoff is in progress; no other window action was started".into(),
+            ));
         }
         if let HostCommand::DeviceSettingsChanged { vault_id, .. } = &command {
             // Slider/toolbar edits must not consume the mutation replay budget.
@@ -482,6 +563,19 @@ impl Book {
         }
         let mut action = None;
         match command {
+            HostCommand::PickerOpen { vault_id } => {
+                if !crate::profiles::valid_id(&vault_id) {
+                    return Err(invalid());
+                }
+                if self.exported {
+                    action = Some(Action::Open(vault_id));
+                } else if !self.bootstrap_started {
+                    self.bootstrap_started = true;
+                    action = Some(Action::Initialize { vault_id });
+                } else {
+                    return Err(invalid());
+                }
+            }
             HostCommand::Quit => {
                 if !self.exported {
                     return Err(invalid());
@@ -568,7 +662,7 @@ impl Book {
             }
             HostCommand::Status => {
                 return Ok((
-                    json!({"contract":RuntimeContract::current(),"initialized":self.exported,"active":self.last,"quitting":self.quitting,"workers":self.workers.iter().map(|(id, launch)| json!({
+                    json!({"contract":RuntimeContract::current(),"initialized":self.exported,"active":self.last,"quitting":self.quitting,"handoff":self.handoff,"workers":self.workers.iter().map(|(id, launch)| json!({
                     "id":id,"ready":launch.ready,"window":launch.focused_window,"error":launch.error,
                 })).collect::<Vec<_>>()}),
                     None,
@@ -611,6 +705,8 @@ impl Book {
                             .map(Action::Open)
                             .unwrap_or(Action::ActivateLast),
                     );
+                } else if !self.bootstrap_started {
+                    action = Some(Action::ShowPicker);
                 }
             }
             HostCommand::Open { vault_id } => {
@@ -631,6 +727,22 @@ impl Book {
                     return Err(invalid());
                 }
                 action = Some(Action::Open(vault_id));
+            }
+            HostCommand::HandoffFromWindow {
+                source_vault_id,
+                launch_id,
+                vault_id,
+            } => {
+                self.window_state(&source_vault_id, launch_id)?;
+                if self.recovering || !crate::profiles::valid_id(&vault_id) {
+                    return Err(invalid());
+                }
+                self.handoff = Some(request.id);
+                action = Some(Action::Handoff {
+                    source: source_vault_id,
+                    launch_id,
+                    target: vault_id,
+                });
             }
             HostCommand::DeviceSettingsChanged {
                 vault_id,
@@ -712,9 +824,14 @@ impl Book {
                     // before publishing success. Startup still activates here.
                     if launch.activate_on_ready
                         && self.quitting.is_none()
+                        && self.handoff.is_none()
                         && !self.operations.values().any(|operation| {
-                            operation.input["command"].as_str() == Some("open")
-                                && operation.input["vault_id"].as_str() == Some(vault_id.as_str())
+                            matches!(
+                                operation.input["command"].as_str(),
+                                Some(
+                                    "open" | "openFromWindow" | "handoffFromWindow" | "pickerOpen"
+                                )
+                            ) && operation.input["vault_id"].as_str() == Some(vault_id.as_str())
                                 && operation.open_result.is_none()
                         })
                     {
@@ -900,19 +1017,11 @@ fn adopt_host(
     Ok(())
 }
 
-/// Preserve existing direct e2e devices and normal startup until the full
-/// supervised path passes its release gates. Explicit workers cannot fall back.
+/// Ordinary desktop launches use the coordinator; isolated e2e devices retain
+/// direct mode unless they explicitly request a shared-root supervisor.
 pub fn startup_role(kind: crate::environment::Kind) -> AppResult<Role> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    if args.iter().any(|a| {
-        a == "--supervised-vaults"
-            || a == "--vault-worker"
-            || a == crate::coordinator_revival::BACKGROUND_ARG
-    }) {
-        Role::parse(kind, &args)
-    } else {
-        Ok(Role::Direct)
-    }
+    Role::parse(kind, &args)
 }
 
 pub fn start_host(app: &tauri::App) -> AppResult<()> {
@@ -949,14 +1058,6 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
         // corrupt evidence stays intact and shortcut selection fails closed.
         log::warn!("[vaults] shortcut history unavailable: {error}");
     }
-    // Seed/recover device settings before a second worker can win the first
-    // migration race. The startup-selected vault is the sole legacy source.
-    app.manage(
-        crate::desktop_settings::DesktopSettings::load_for_coordinator(&root, &index.active)
-            .map_err(|error| AppError::InvalidArg(error.to_string()))?,
-    );
-    let vault = crate::profiles::profile_dir(&root, &index.active);
-    crate::legacy_content::initialize_owner(&root, &index.active, &vault)?;
     let instance = coordinator.endpoint().instance();
     let endpoint = coordinator.endpoint().clone();
     let handle = app.handle().clone();
@@ -983,11 +1084,36 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
     // may have their own icon, while system shortcuts/updaters remain gated.
     crate::tray::init(app)?;
     start_lifetime_monitor(app.handle())?;
-    let initial = index.active;
+    if !crate::profiles::profile_dir(&root, &index.active).is_dir() {
+        return show_picker(app.handle());
+    }
+    app.state::<Host>()
+        .book
+        .lock()
+        .map_err(|_| invalid())?
+        .bootstrap_started = true;
+    begin_host_startup(app.handle(), index.active, None)
+}
+
+fn begin_host_startup(
+    app: &AppHandle,
+    initial: String,
+    operation_id: Option<Uuid>,
+) -> AppResult<()> {
+    let root = crate::paths::app_data_root(app)?;
+    // Seed/recover device settings before a second worker can win the first
+    // migration race. The startup-selected vault is the sole legacy source.
+    app.manage(
+        crate::desktop_settings::DesktopSettings::load_for_coordinator(&root, &initial)
+            .map_err(|error| AppError::InvalidArg(error.to_string()))?,
+    );
+    let vault = crate::profiles::profile_dir(&root, &initial);
+    crate::legacy_content::initialize_owner(&root, &initial, &vault)?;
+
     let background_recovery = crate::coordinator_revival::background_launch();
     let activate_initial = !background_recovery
         && (!crate::was_started_by_autostart()
-            || !crate::desktop_settings::should_start_in_tray(app.handle()));
+            || !crate::desktop_settings::should_start_in_tray(app));
     crate::legacy_export::begin(
         app,
         initial.clone(),
@@ -1034,22 +1160,30 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
                             }
                         }
                     }
-                    let resumed = resume_update(&task_app);
+                    let resumed = resume_handoff(&task_app).and_then(|resumed| if resumed { Ok(true) } else { resume_update(&task_app) });
                     let recovery_finished = resumed.is_ok();
+                    let mut startup_result = Ok(());
                     match resumed {
                         Ok(true) => {}
                         Ok(false) if !background_recovery => {
-                            if let Err(error) = open(&task_app, &target, activate_initial) {
+                            if let Err(error) = open_and_wait_with_activation(&task_app, &target, activate_initial) {
                                 log::error!("[vaults] initial launch failed: {error}");
+                                startup_result = Err(error);
+                                let picker = task_app.clone();
+                                let _ = task_app.run_on_main_thread(move || { let _ = show_picker(&picker); });
                             }
                         }
                         Ok(false) => {}
                         Err(error) => {
                             log::error!("[updater] restart recovery failed: {error}");
                             use tauri_plugin_dialog::DialogExt;
-                            task_app.dialog().message(format!("Update restart recovery could not finish. The saved session has been retained.\n\n{error}"))
-                                .title("Update recovery").show(|_| {});
+                            task_app.dialog().message(format!("Startup recovery could not finish. The saved operation has been retained.\n\n{error}"))
+                                .title("Startup recovery").show(|_| {});
+                            startup_result = Err(error);
                         }
+                    }
+                    if let Some(id) = operation_id {
+                        if let Ok(mut book) = task_app.state::<Host>().book.lock() { book.complete_open(id, startup_result); }
                     }
                     if recovery_finished {
                         if let Ok(mut book) = task_app.state::<Host>().book.lock() { book.recovering = false; }
@@ -1065,10 +1199,150 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
     Ok(())
 }
 
+#[derive(Serialize)]
+pub struct PickerVault {
+    id: String,
+    name: String,
+    available: bool,
+}
+
+fn picker_caller(app: &AppHandle, window: &WebviewWindow) -> AppResult<()> {
+    if app.try_state::<Host>().is_none()
+        || window.label() != "vault-picker"
+        || !matches!(window.url()?.path(), "/vault-picker" | "/vault-picker/")
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_picker_vaults(app: AppHandle, window: WebviewWindow) -> CommandResult<Vec<PickerVault>> {
+    picker_caller(&app, &window)?;
+    let root = crate::paths::app_data_root(&app)?;
+    Ok(crate::profiles::load_or_init(&root)?
+        .profiles
+        .into_iter()
+        .map(|vault| PickerVault {
+            available: crate::profiles::profile_dir(&root, &vault.id).is_dir(),
+            id: vault.id,
+            name: vault.name,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn open_picker_vault(
+    app: AppHandle,
+    window: WebviewWindow,
+    id: String,
+) -> CommandResult<()> {
+    picker_caller(&app, &window)?;
+    let root = crate::paths::app_data_root(&app)?;
+    let index = crate::profiles::prepare_coordinator_index(&root)?;
+    if !index.profiles.iter().any(|vault| vault.id == id)
+        || !crate::profiles::profile_dir(&root, &id).is_dir()
+    {
+        return Err(invalid().into());
+    }
+    let request = request(&HostCommand::PickerOpen { vault_id: id })?;
+    let endpoint = app.state::<Host>().endpoint.clone();
+    let handle = app.clone();
+    Ok(tauri::async_runtime::spawn_blocking(move || {
+        crate::foreground::transfer(&endpoint);
+        endpoint
+            .retry_call(&request)?
+            .map_err(AppError::InvalidArg)?;
+        await_open_result(
+            &endpoint,
+            request.id,
+            Instant::now() + OPEN_TIMEOUT + Duration::from_secs(60),
+        )?;
+        handle.run_on_main_thread(move || {
+            let _ = window.destroy();
+        })?;
+        Ok::<_, AppError>(())
+    })
+    .await
+    .map_err(|_| invalid())??)
+}
+
+fn show_picker(app: &AppHandle) -> AppResult<()> {
+    if let Some(window) = app.get_webview_window("vault-picker") {
+        app.state::<Host>()
+            .book
+            .lock()
+            .map_err(|_| invalid())?
+            .picker_open = true;
+        window.show()?;
+        window.set_focus()?;
+        return Ok(());
+    }
+    let root = crate::paths::app_data_root(app)?;
+    let identity =
+        crate::browser_identity::Identity::for_vault(&root, "coordinator-picker", &root)?;
+    let mut builder = tauri::WebviewWindowBuilder::new(
+        app,
+        "vault-picker",
+        tauri::WebviewUrl::App("vault-picker/".into()),
+    )
+    .title(
+        if app.state::<crate::environment::Environment>().kind == crate::environment::Kind::Dev {
+            "Mindstream Notes Dev: choose a vault"
+        } else {
+            "Mindstream Notes: choose a vault"
+        },
+    )
+    .inner_size(560.0, 540.0)
+    .min_inner_size(420.0, 360.0)
+    .visible(true)
+    .focused(true);
+    if let Some(args) = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == "main")
+        .and_then(|window| window.additional_browser_args.as_ref())
+    {
+        builder = builder.additional_browser_args(args);
+    }
+    let window = identity.apply(builder).build()?;
+    app.state::<Host>()
+        .book
+        .lock()
+        .map_err(|_| invalid())?
+        .picker_open = true;
+    let handle = app.clone();
+    window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::CloseRequested { .. })
+            && handle
+                .state::<Host>()
+                .book
+                .lock()
+                .is_ok_and(|book| !book.exported && book.workers.is_empty())
+        {
+            handle.exit(0);
+        }
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            if let Ok(mut book) = handle.state::<Host>().book.lock() {
+                book.picker_open = false;
+            }
+        }
+    });
+    Ok(())
+}
+
 fn recover_workers(app: &AppHandle) -> AppResult<()> {
     let root = crate::paths::app_data_root(app)?;
     let index = crate::profiles::prepare_coordinator_index(&root)?;
     for vault in index.profiles {
+        if !crate::profiles::profile_dir(&root, &vault.id).is_dir() {
+            // A missing path cannot be launched or recreated by supervision.
+            // Retain its index/discovery evidence, but do not invent a live
+            // nil-UUID worker that would make every later Quit fail.
+            continue;
+        }
         if let Err(error) = recover_worker(app, &root, &vault.id) {
             let host = app.state::<Host>();
             host.book.lock().map_err(|_| invalid())?.workers.insert(
@@ -1183,6 +1457,18 @@ fn reconcile_lifetime(app: &AppHandle) -> AppResult<()> {
     let host = app.state::<Host>();
     let root = crate::paths::app_data_root(app)?;
     reconcile_adopted(&host.book, &root)?;
+    if host.book.lock().map_err(|_| invalid())?.handoff.is_some() && host.jobs.is_idle() {
+        let _job = host.jobs.enter()?;
+        resume_handoff(app)?;
+        host.book.lock().map_err(|_| invalid())?.recovering = false;
+    }
+    // This process owns the tauri dev session. Keep its frontend server alive
+    // when the last worker closes; explicit Quit still shuts down the session.
+    if tauri::is_dev()
+        || app.state::<crate::environment::Environment>().kind == crate::environment::Kind::Dev
+    {
+        return Ok(());
+    }
     if !host
         .book
         .lock()
@@ -1239,10 +1525,13 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
         return serde_json::to_value(host_shortcut_status(app)?).map_err(|_| invalid());
     }
     let settings_notice = matches!(command, HostCommand::Ready { .. });
+    let window_observation = matches!(command, HostCommand::WindowState { .. });
     let tracked_open = matches!(
         command,
         HostCommand::Open { .. }
             | HostCommand::OpenFromWindow { .. }
+            | HostCommand::HandoffFromWindow { .. }
+            | HostCommand::PickerOpen { .. }
             | HostCommand::Shortcut { .. }
             | HostCommand::Tray { .. }
     );
@@ -1254,6 +1543,8 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
             | HostCommand::Activate
             | HostCommand::Open { .. }
             | HostCommand::OpenFromWindow { .. }
+            | HostCommand::HandoffFromWindow { .. }
+            | HostCommand::PickerOpen { .. }
             | HostCommand::Shortcut { .. }
             | HostCommand::Tray { .. }
     ) {
@@ -1282,6 +1573,22 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
         };
         (reply, action, job, refresh_job)
     };
+    if window_observation {
+        let root = crate::paths::app_data_root(app)?;
+        let mut view: crate::vault_window_state::View =
+            serde_json::from_value(reply).map_err(|_| invalid())?;
+        for vault in crate::profiles::load_or_init(&root)?.profiles {
+            if !crate::profiles::profile_dir(&root, &vault.id).is_dir()
+                && !view.vaults.iter().any(|entry| entry.vault_id == vault.id)
+            {
+                view.vaults.push(crate::vault_window_state::Entry {
+                    vault_id: vault.id,
+                    status: crate::vault_window_state::Status::Unavailable,
+                });
+            }
+        }
+        reply = serde_json::to_value(view).map_err(|_| invalid())?;
+    }
     if status_request {
         // Disk reads happen after releasing Book. No general root lock crosses
         // worker IPC, and a bad settings file never hides ownership status.
@@ -1339,6 +1646,47 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
                         return;
                     }
                     Action::Open(id) => Ok(id),
+                    Action::ShowPicker => {
+                        let picker = task_app.clone();
+                        let _ = task_app.run_on_main_thread(move || {
+                            let _ = show_picker(&picker);
+                        });
+                        return;
+                    }
+                    Action::Initialize { vault_id } => {
+                        let runtime = task_app.clone();
+                        let scheduled = task_app.run_on_main_thread(move || {
+                            if let Err(error) =
+                                begin_host_startup(&runtime, vault_id, Some(request_id))
+                            {
+                                if let Ok(mut book) = runtime.state::<Host>().book.lock() {
+                                    book.bootstrap_started = false;
+                                    book.complete_open(request_id, Err(error));
+                                }
+                            }
+                        });
+                        if let Err(error) = scheduled {
+                            if let Ok(mut book) = task_app.state::<Host>().book.lock() {
+                                book.bootstrap_started = false;
+                                book.complete_open(request_id, Err(error.into()));
+                            }
+                        }
+                        return;
+                    }
+                    Action::Handoff {
+                        source,
+                        launch_id,
+                        target,
+                    } => {
+                        let result = handoff(&task_app, request_id, &source, launch_id, &target);
+                        if let Err(error) = &result {
+                            log::error!("[vaults] handoff failed: {error}");
+                        }
+                        if let Ok(mut book) = task_app.state::<Host>().book.lock() {
+                            book.complete_open(request_id, result);
+                        }
+                        return;
+                    }
                     Action::ActivateLast => crate::paths::app_data_root(&task_app)
                         .and_then(|root| crate::profiles::prepare_coordinator_index(&root))
                         .map(|index| index.active),
@@ -1406,6 +1754,12 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
                 });
                 if let Err(error) = &result {
                     log::error!("[vaults] open request failed: {error}");
+                    if !tracked_open {
+                        let picker = task_app.clone();
+                        let _ = task_app.run_on_main_thread(move || {
+                            let _ = show_picker(&picker);
+                        });
+                    }
                 }
                 if tracked_open {
                     if let Ok(mut book) = task_app.state::<Host>().book.lock() {
@@ -1844,6 +2198,375 @@ pub(crate) fn update_failed(app: &AppHandle, operation_id: Uuid, error: AppError
     }
 }
 
+fn clear_handoff(app: &AppHandle, id: Uuid) {
+    if let Ok(mut book) = app.state::<Host>().book.lock() {
+        if book.handoff == Some(id) {
+            book.handoff = None;
+        }
+    }
+    crate::coordinator_shortcuts::suspend(app, false);
+}
+
+fn cancel_handoff_source(
+    app: &AppHandle,
+    root: &std::path::Path,
+    record: &crate::vault_handoff::Record,
+) -> AppResult<bool> {
+    use crate::coordinator_shutdown::Owner;
+    let host = app.state::<Host>();
+    match close_owner(&host.book, root, &record.source.id, record.source.launch_id)? {
+        Owner::Released => return Ok(false),
+        Owner::Changed => {
+            return Err(AppError::InvalidArg(
+                "the source owner changed; no replacement source was closed".into(),
+            ))
+        }
+        Owner::Present => {}
+    }
+    let (endpoint, _) = host
+        .book
+        .lock()
+        .map_err(|_| invalid())?
+        .ready_endpoint(&record.source.id, record.source.launch_id)?
+        .ok_or_else(invalid)?;
+    verified_worker(root, &record.source.id, record.source.launch_id, &endpoint)?;
+    endpoint
+        .retry_call(&request(&WorkerCommand::CancelClose {
+            launch_id: record.source.launch_id,
+            operation_id: record.source_close,
+        })?)?
+        .map_err(AppError::InvalidArg)?;
+    Ok(true)
+}
+
+fn cancel_handoff_target(
+    app: &AppHandle,
+    root: &std::path::Path,
+    record: &crate::vault_handoff::Record,
+) -> AppResult<()> {
+    // This never closes a target process that appeared under a different UUID.
+    close_for_quit(
+        app,
+        root,
+        &record.target.id,
+        record.target.launch_id,
+        record.target_close,
+        Instant::now() + OPEN_TIMEOUT,
+    )
+}
+
+fn abort_handoff(
+    app: &AppHandle,
+    root: &std::path::Path,
+    record: &crate::vault_handoff::Record,
+) -> AppResult<()> {
+    if close_owner(
+        &app.state::<Host>().book,
+        root,
+        &record.target.id,
+        record.target.launch_id,
+    )? != crate::coordinator_shutdown::Owner::Changed
+    {
+        // Keep the intent active until this prepared worker has actually exited.
+        // A later recovery pass can retry without losing its identity evidence.
+        cancel_handoff_target(app, root, record)?;
+    }
+    crate::vault_handoff::advance(
+        root,
+        record.operation_id,
+        crate::vault_handoff::Phase::Cancelled,
+    )?;
+    clear_handoff(app, record.operation_id);
+    Ok(())
+}
+
+fn prepare_handoff_target(
+    app: &AppHandle,
+    root: &std::path::Path,
+    mut record: crate::vault_handoff::Record,
+) -> AppResult<crate::vault_handoff::Record> {
+    record.verify_paths(root)?;
+    let host = app.state::<Host>();
+    let present = host
+        .book
+        .lock()
+        .map_err(|_| invalid())?
+        .workers
+        .get(&record.target.id)
+        .map(|worker| worker.id);
+    if let Some(id) = present {
+        if id != record.target.launch_id {
+            return Err(invalid());
+        }
+    } else {
+        // Drop the physical probe before any publication/IPC. A racing foreign
+        // owner is still rejected by the worker's own lifetime OS lease.
+        let free =
+            crate::storage_locks::VaultLock::try_acquire(&record.target.directory)?.is_some();
+        if !free {
+            return Err(invalid());
+        }
+        record = crate::vault_handoff::replace_target(root, record.operation_id)?;
+    }
+    let launch_id = open_with_launch(app, &record.target.id, false, Some(record.target.launch_id))?;
+    let (endpoint, _) = wait_for_ready(
+        &host.book,
+        &record.target.id,
+        launch_id,
+        Instant::now() + OPEN_TIMEOUT,
+    )?;
+    verified_worker(root, &record.target.id, launch_id, &endpoint)?;
+    restore_handoff_window(&endpoint, launch_id, &record, false)?;
+    Ok(record)
+}
+
+fn restore_handoff_window(
+    endpoint: &Endpoint,
+    launch_id: Uuid,
+    record: &crate::vault_handoff::Record,
+    visible: bool,
+) -> AppResult<()> {
+    let mut geometry = record.geometry.clone();
+    geometry.visible = visible;
+    geometry.minimized = false;
+    let restore = Request {
+        id: if visible {
+            record.activation_restore
+        } else {
+            record.restore
+        },
+        payload: serde_json::to_value(WorkerCommand::RestoreWindows {
+            launch_id,
+            vault: crate::update_recovery::Vault {
+                id: record.target.id.clone(),
+                directory: record.target.directory.clone(),
+                windows: vec![geometry],
+            },
+        })
+        .map_err(|_| invalid())?,
+    };
+    endpoint
+        .retry_call(&restore)?
+        .map_err(AppError::InvalidArg)?;
+    let poll = request(&WorkerCommand::RestoreStatus {
+        launch_id,
+        operation_id: if visible {
+            record.activation_restore
+        } else {
+            record.restore
+        },
+    })?;
+    let deadline = Instant::now() + OPEN_TIMEOUT;
+    loop {
+        let value = endpoint.retry_call(&poll)?.map_err(AppError::InvalidArg)?;
+        match serde_json::from_value::<crate::update_windows::Progress>(value)
+            .map_err(|_| invalid())?
+        {
+            crate::update_windows::Progress::Ready => break,
+            crate::update_windows::Progress::Failed { message } => {
+                return Err(AppError::InvalidArg(message))
+            }
+            crate::update_windows::Progress::Pending => {}
+        }
+        if Instant::now() >= deadline {
+            return Err(invalid());
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    Ok(())
+}
+
+fn commit_handoff(
+    app: &AppHandle,
+    root: &std::path::Path,
+    record: crate::vault_handoff::Record,
+) -> AppResult<()> {
+    let record = prepare_handoff_target(app, root, record)?;
+    let (endpoint, _) = app
+        .state::<Host>()
+        .book
+        .lock()
+        .map_err(|_| invalid())?
+        .ready_endpoint(&record.target.id, record.target.launch_id)?
+        .ok_or_else(invalid)?;
+    restore_handoff_window(&endpoint, record.target.launch_id, &record, true)?;
+    activate_worker(
+        root,
+        &record.target.directory,
+        &record.target.id,
+        record.target.launch_id,
+        &endpoint,
+        Some("main".into()),
+    )?;
+    crate::profiles::set_active(root, &record.target.id)?;
+    crate::vault_handoff::advance(
+        root,
+        record.operation_id,
+        crate::vault_handoff::Phase::Completed,
+    )?;
+    clear_handoff(app, record.operation_id);
+    Ok(())
+}
+
+fn handoff(
+    app: &AppHandle,
+    id: Uuid,
+    source: &str,
+    source_launch: Uuid,
+    target: &str,
+) -> AppResult<()> {
+    use crate::vault_handoff::{Phase, Worker};
+    let root = crate::paths::app_data_root(app)?;
+    crate::coordinator_shortcuts::suspend(app, true);
+    let result = (|| -> AppResult<()> {
+        let host = app.state::<Host>();
+        reconcile_adopted(&host.book, &root)?;
+        let existing = host
+            .book
+            .lock()
+            .map_err(|_| invalid())?
+            .workers
+            .contains_key(target);
+        if source == target || existing {
+            // An already-open target always focuses without closing its source,
+            // including a target that became open after the menu observation.
+            open_and_wait(app, target)?;
+            clear_handoff(app, id);
+            return Ok(());
+        }
+        let (endpoint, _) = host
+            .book
+            .lock()
+            .map_err(|_| invalid())?
+            .ready_endpoint(source, source_launch)?
+            .ok_or_else(invalid)?;
+        let source_identity = verified_worker(&root, source, source_launch, &endpoint)?;
+        let index = crate::profiles::prepare_coordinator_index(&root)?;
+        if !index.profiles.iter().any(|vault| vault.id == target) {
+            return Err(invalid());
+        }
+        let snapshot = endpoint
+            .retry_call(&request(&WorkerCommand::SnapshotWindows {
+                launch_id: source_launch,
+            })?)?
+            .map_err(AppError::InvalidArg)?;
+        let windows: Vec<crate::update_recovery::Window> =
+            serde_json::from_value(snapshot).map_err(|_| invalid())?;
+        let geometry = windows
+            .into_iter()
+            .find(|window| window.label == "main")
+            .ok_or_else(invalid)?;
+        let record = crate::vault_handoff::prepare(
+            &root,
+            id,
+            Worker {
+                id: source.into(),
+                launch_id: source_launch,
+                directory: source_identity.directory,
+            },
+            Worker {
+                id: target.into(),
+                launch_id: Uuid::new_v4(),
+                directory: std::fs::canonicalize(crate::profiles::profile_dir(&root, target))?,
+            },
+            geometry,
+        )?;
+        prepare_handoff_target(app, &root, record)?;
+        let record = crate::vault_handoff::advance(&root, id, Phase::Closing)?;
+        // The intent is durable before the close can be queued. Every source
+        // main/popout save and both service drains finish before lease release.
+        close_for_quit(
+            app,
+            &root,
+            source,
+            source_launch,
+            record.source_close,
+            Instant::now() + Duration::from_secs(120),
+        )?;
+        let record = crate::vault_handoff::advance(&root, id, Phase::Closed)?;
+        commit_handoff(app, &root, record)
+    })();
+    if result.is_err() {
+        match crate::vault_handoff::load(&root)? {
+            Some(record) if record.operation_id == id && record.active() => {
+                if matches!(record.phase, Phase::Preparing | Phase::Closing) {
+                    match cancel_handoff_source(app, &root, &record) {
+                        Ok(true) => abort_handoff(app, &root, &record)?,
+                        Ok(false) if record.phase == Phase::Closing => {
+                            let record = crate::vault_handoff::advance(&root, id, Phase::Closed)?;
+                            // Source exit may have raced a lost acknowledgement.
+                            // Finishing the target is now the confirmed policy.
+                            return commit_handoff(app, &root, record);
+                        }
+                        Ok(false) => {
+                            abort_handoff(app, &root, &record)?;
+                            open_and_wait(app, &record.source.id)?;
+                        }
+                        Err(error) => log::warn!("[vaults] close outcome uncertain; handoff intent retained for recovery: {error}"),
+                    }
+                }
+            }
+            _ => clear_handoff(app, id),
+        }
+    }
+    result
+}
+
+fn resume_handoff(app: &AppHandle) -> AppResult<bool> {
+    use crate::coordinator_shutdown::Owner;
+    use crate::vault_handoff::Phase;
+    let root = crate::paths::app_data_root(app)?;
+    let Some(record) = crate::vault_handoff::load(&root)?.filter(|record| record.active()) else {
+        return Ok(false);
+    };
+    record.verify_paths(&root)?;
+    let host = app.state::<Host>();
+    host.book.lock().map_err(|_| invalid())?.handoff = Some(record.operation_id);
+    crate::coordinator_shortcuts::suspend(app, true);
+    if record.phase == Phase::Closed {
+        commit_handoff(app, &root, record)?;
+        return Ok(true);
+    }
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        match close_owner(
+            &host.book,
+            &root,
+            &record.source.id,
+            record.source.launch_id,
+        )? {
+            Owner::Released if record.phase == Phase::Closing => {
+                let record =
+                    crate::vault_handoff::advance(&root, record.operation_id, Phase::Closed)?;
+                commit_handoff(app, &root, record)?;
+                return Ok(true);
+            }
+            Owner::Released => {
+                abort_handoff(app, &root, &record)?;
+                open_and_wait(app, &record.source.id)?;
+                return Ok(true);
+            }
+            Owner::Changed => {
+                // A different source is preserved. It does not inherit the old
+                // worker's close request or grant permission to force a close.
+                abort_handoff(app, &root, &record)?;
+                return Ok(true);
+            }
+            Owner::Present => {
+                if cancel_handoff_source(app, &root, &record).is_ok_and(|kept| kept) {
+                    abort_handoff(app, &root, &record)?;
+                    open_and_wait(app, &record.source.id)?;
+                    return Ok(true);
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(invalid());
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
+}
+
 fn close_targets(
     app: &AppHandle,
     root: &std::path::Path,
@@ -2212,6 +2935,15 @@ fn reconcile_adopted(book: &Mutex<Book>, root: &std::path::Path) -> AppResult<()
 }
 
 fn open(app: &AppHandle, vault_id: &str, activate: bool) -> AppResult<Uuid> {
+    open_with_launch(app, vault_id, activate, None)
+}
+
+fn open_with_launch(
+    app: &AppHandle,
+    vault_id: &str,
+    activate: bool,
+    expected: Option<Uuid>,
+) -> AppResult<Uuid> {
     let root = crate::paths::app_data_root(app)?;
     let index = crate::profiles::prepare_coordinator_index(&root)?;
     if !index.profiles.iter().any(|vault| vault.id == vault_id) {
@@ -2232,6 +2964,9 @@ fn open(app: &AppHandle, vault_id: &str, activate: bool) -> AppResult<Uuid> {
         return Err(invalid());
     }
     if let Some(launch) = book.workers.get_mut(vault_id) {
+        if expected.is_some_and(|id| id != launch.id) {
+            return Err(invalid());
+        }
         if activate && !launch.ready {
             launch.activate_on_ready = true;
         }
@@ -2280,7 +3015,7 @@ fn open(app: &AppHandle, vault_id: &str, activate: bool) -> AppResult<Uuid> {
         }
         return Ok(launch_id);
     }
-    let launch_id = Uuid::new_v4();
+    let launch_id = expected.unwrap_or_else(Uuid::new_v4);
     book.workers.insert(
         vault_id.into(),
         Launch {
@@ -2383,10 +3118,17 @@ fn wait_for_ready(
 }
 
 fn open_and_wait(app: &AppHandle, vault_id: &str) -> AppResult<()> {
+    open_and_wait_with_activation(app, vault_id, true)
+}
+
+fn open_and_wait_with_activation(app: &AppHandle, vault_id: &str, activate: bool) -> AppResult<()> {
     let deadline = Instant::now() + OPEN_TIMEOUT;
     let launch_id = open(app, vault_id, false)?;
     let host = app.state::<Host>();
     let (endpoint, window) = wait_for_ready(&host.book, vault_id, launch_id, deadline)?;
+    if !activate {
+        return Ok(());
+    }
     let root = crate::paths::app_data_root(app)?;
     activate_worker(
         &root,
@@ -2532,6 +3274,22 @@ pub fn register_worker(
         let command: WorkerCommand = serde_json::from_value(request.payload)
             .map_err(|_| "invalid worker request".to_string())?;
         match command {
+            #[cfg(any(debug_assertions, feature = "e2e-data-dir"))]
+            WorkerCommand::TestWindowFocus { launch_id } => {
+                if launch_id != registration.launch_id
+                    || handle.state::<crate::environment::Environment>().kind
+                        != crate::environment::Kind::Test
+                {
+                    return Err("test focus observation unavailable".into());
+                }
+                let windows: BTreeMap<_, _> = handle
+                    .webview_windows()
+                    .into_iter()
+                    .map(|(label, window)| window.is_focused().map(|focused| (label, focused)))
+                    .collect::<Result<_, _>>()
+                    .map_err(|error| error.to_string())?;
+                Ok(json!(windows))
+            }
             WorkerCommand::SnapshotWindows { launch_id } => {
                 if launch_id != registration.launch_id || !worker_ready.load(Ordering::Acquire) {
                     return Err("worker identity mismatch".into());
@@ -2648,6 +3406,37 @@ pub fn register_worker(
                 })();
                 adopted.map_err(|_| "worker adoption unavailable; ownership retained".into())
             }
+            #[cfg(any(debug_assertions, feature = "e2e-data-dir"))]
+            WorkerCommand::TestCloseFailure { launch_id } => {
+                if launch_id != registration.launch_id {
+                    return Err("worker identity mismatch".into());
+                }
+                crate::worker_shutdown::test_close_failure(&handle)
+                    .map_err(|error| error.to_string())?;
+                Ok(json!({"accepted":true}))
+            }
+            #[cfg(any(debug_assertions, feature = "e2e-data-dir"))]
+            WorkerCommand::TestHoldJob { launch_id, seconds } => {
+                if launch_id != registration.launch_id
+                    || seconds > 60
+                    || handle.state::<crate::environment::Environment>().kind
+                        != crate::environment::Kind::Test
+                {
+                    return Err("test service job unavailable".into());
+                }
+                let job = handle
+                    .state::<crate::vault_jobs::Jobs>()
+                    .enter()
+                    .map_err(|error| error.to_string())?;
+                std::thread::Builder::new()
+                    .name("test-vault-job".into())
+                    .spawn(move || {
+                        let _job = job;
+                        std::thread::sleep(Duration::from_secs(seconds));
+                    })
+                    .map_err(|error| error.to_string())?;
+                Ok(json!({"accepted":true}))
+            }
             WorkerCommand::Close { launch_id } => {
                 if launch_id != registration.launch_id {
                     return Err("worker identity mismatch".into());
@@ -2678,6 +3467,17 @@ pub fn register_worker(
                 let progress = crate::worker_shutdown::close_progress(&handle, operation_id)
                     .map_err(|error| error.to_string())?;
                 serde_json::to_value(progress).map_err(|_| "worker close status unavailable".into())
+            }
+            WorkerCommand::CancelClose {
+                launch_id,
+                operation_id,
+            } => {
+                if launch_id != registration.launch_id {
+                    return Err("worker identity mismatch".into());
+                }
+                crate::worker_shutdown::cancel_close(&handle, operation_id)
+                    .map_err(|error| error.to_string())?;
+                Ok(json!({"cancelled":true}))
             }
             WorkerCommand::RefreshDeviceSettings { launch_id } => {
                 if launch_id != registration.launch_id || !worker_ready.load(Ordering::Acquire) {
@@ -2760,14 +3560,37 @@ pub async fn vault_worker_ready(app: AppHandle, window: WebviewWindow) -> Comman
 }
 
 #[tauri::command]
-pub async fn open_profile_window(app: AppHandle, id: String) -> CommandResult<()> {
+pub async fn open_profile_window(
+    app: AppHandle,
+    id: String,
+    in_this_window: Option<bool>,
+) -> CommandResult<()> {
     let worker = app.try_state::<Worker>().ok_or_else(invalid)?;
-    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
-    let request = request(&HostCommand::OpenFromWindow {
-        source_vault_id: worker.vault_id.clone(),
-        launch_id: worker.launch_id,
-        vault_id: id,
-    })?;
+    let replace = in_this_window.unwrap_or(false);
+    if replace && !crate::worker_shutdown::coordinator_revival_allowed(&app) {
+        return Err(invalid().into());
+    }
+    // A handoff must be able to close its requesting worker. Admission is
+    // checked above, but its IPC waiter cannot hold a job through that close.
+    let job = if replace {
+        None
+    } else {
+        Some(app.state::<crate::vault_jobs::Jobs>().enter()?)
+    };
+    let command = if replace {
+        HostCommand::HandoffFromWindow {
+            source_vault_id: worker.vault_id.clone(),
+            launch_id: worker.launch_id,
+            vault_id: id,
+        }
+    } else {
+        HostCommand::OpenFromWindow {
+            source_vault_id: worker.vault_id.clone(),
+            launch_id: worker.launch_id,
+            vault_id: id,
+        }
+    };
+    let request = request(&command)?;
     let host = worker.host.lock().map_err(|_| invalid())?.clone();
     let probe = self::request(&HostCommand::Status)?;
     Ok(tauri::async_runtime::spawn_blocking(move || {
@@ -2779,7 +3602,7 @@ pub async fn open_profile_window(app: AppHandle, id: String) -> CommandResult<()
         await_open_result(
             &host,
             request.id,
-            Instant::now() + OPEN_TIMEOUT + Duration::from_secs(10),
+            Instant::now() + OPEN_TIMEOUT + Duration::from_secs(if replace { 180 } else { 10 }),
         )
     })
     .await
@@ -3761,6 +4584,88 @@ mod tests {
             adopted: false,
             focused_window: None,
         }
+    }
+
+    #[test]
+    fn handoff_pins_source_identity_replays_and_fences_other_window_actions() {
+        let root = std::env::temp_dir().join(format!("ms-handoff-book-{}", Uuid::new_v4()));
+        let owner = crate::storage_locks::VaultLock::acquire(&root).unwrap();
+        let listener = ipc::Coordinator::for_worker(&owner).unwrap();
+        let instance = Uuid::new_v4();
+        let launch_id = Uuid::new_v4();
+        let mut book = Book {
+            exported: true,
+            ..Book::default()
+        };
+        let mut source = pending(launch_id);
+        source.endpoint = Some(listener.endpoint().clone());
+        source.ready = true;
+        book.workers.insert("source".into(), source);
+        let handoff = request(&HostCommand::HandoffFromWindow {
+            source_vault_id: "source".into(),
+            launch_id,
+            vault_id: "target".into(),
+        })
+        .unwrap();
+        book.recovering = true;
+        assert!(book.accept(instance, handoff.clone()).is_err());
+        book.recovering = false;
+        let mut foreign = handoff.clone();
+        foreign.payload["launch_id"] = json!(Uuid::new_v4());
+        assert!(book.accept(instance, foreign).is_err());
+        assert!(matches!(
+            book.accept(instance, handoff.clone()).unwrap().1,
+            Some(Action::Handoff { .. })
+        ));
+        assert_eq!(book.handoff, Some(handoff.id));
+        assert!(book.accept(instance, handoff.clone()).unwrap().1.is_none());
+        for command in [
+            HostCommand::Quit,
+            HostCommand::Activate,
+            HostCommand::Open {
+                vault_id: "other".into(),
+            },
+            HostCommand::PickerOpen {
+                vault_id: "other".into(),
+            },
+        ] {
+            assert!(book.accept(instance, request(&command).unwrap()).is_err());
+        }
+        assert!(book.window_state("source", launch_id).is_ok());
+        book.complete_open(handoff.id, Ok(()));
+        assert_eq!(book.open_status(handoff.id).unwrap(), OpenProgress::Ready);
+        drop(listener);
+        drop(owner);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn startup_picker_initializes_once_and_stays_alive_without_workers() {
+        let mut book = Book {
+            picker_open: true,
+            ..Book::default()
+        };
+        let instance = Uuid::new_v4();
+        let jobs = crate::vault_jobs::Jobs::default();
+        assert!(!book.idle_exit_candidate(&jobs));
+        let select = request(&HostCommand::PickerOpen {
+            vault_id: "chosen".into(),
+        })
+        .unwrap();
+        assert!(matches!(
+            book.accept(instance, select.clone()).unwrap().1,
+            Some(Action::Initialize { .. })
+        ));
+        assert!(book.accept(instance, select).unwrap().1.is_none());
+        assert!(book
+            .accept(
+                instance,
+                request(&HostCommand::PickerOpen {
+                    vault_id: "other".into(),
+                })
+                .unwrap()
+            )
+            .is_err());
     }
 
     #[test]

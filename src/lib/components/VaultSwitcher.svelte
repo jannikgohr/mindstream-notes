@@ -15,7 +15,14 @@
    */
   import { onMount } from 'svelte';
   import { Vault } from '@jis3r/icons';
-  import { Check, ExternalLink, Pencil, Plus, Trash2 } from '@lucide/svelte';
+  import {
+    ArrowLeftRight,
+    Check,
+    ExternalLink,
+    Pencil,
+    Plus,
+    Trash2
+  } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { confirm, alert } from '$lib/components/confirm-dialog.svelte';
@@ -35,7 +42,8 @@
   import { tUi } from '$lib/settings/i18n.svelte';
   import { toErrorMessage } from '$lib/api/errors';
   import { VaultWindowStatus } from '$lib/api/vault-window-state';
-  import { VaultMenu } from '$lib/vaults/menu.svelte';
+  import { VaultMenu, type VaultOpenMode } from '$lib/vaults/menu.svelte';
+  import { getSettingValue, setSettingValue } from '$lib/settings/store.svelte';
 
   let open = $state(false);
   let creating = $state(false);
@@ -47,6 +55,8 @@
   let createInput: HTMLInputElement | null = $state(null);
   let renameInput: HTMLInputElement | null = $state(null);
   const windows = new VaultMenu();
+  let choice = $state<{ id: string; name: string } | null>(null);
+  let rememberChoice = $state(false);
 
   const current = $derived(currentProfile());
   const currentName = $derived(current?.name ?? tUi('vault.unknown'));
@@ -76,15 +86,34 @@
     );
   }
 
-  async function selectProfile(id: string, name: string) {
+  async function selectProfile(
+    id: string,
+    name: string,
+    explicit?: VaultOpenMode,
+    event?: MouseEvent
+  ) {
     if (busy || windows.checking || !windows.view) return;
     if (!windows.view.supervised) {
       await confirmAndSwitch(id, name);
       return;
     }
+    const mode =
+      explicit ??
+      windows.decision(
+        id,
+        getSettingValue('general.vaultOpening'),
+        event?.ctrlKey || event?.metaKey
+      );
+    if (mode === 'ask') {
+      choice = { id, name };
+      rememberChoice = false;
+      return;
+    }
     busy = true;
     try {
-      await windows.open(id);
+      if (choice?.id === id && rememberChoice)
+        await setSettingValue('general.vaultOpening', mode);
+      await windows.open(id, mode);
       close();
     } catch (err) {
       await alert({
@@ -107,6 +136,8 @@
     newName = '';
     renamingId = null;
     renameValue = '';
+    choice = null;
+    rememberChoice = false;
   }
 
   /**
@@ -359,6 +390,49 @@
       </div>
 
       <div class="max-h-80 overflow-y-auto p-1">
+        {#if choice}
+          <div
+            class="space-y-2 border-b border-border p-2"
+            role="group"
+            aria-label={tUi('vault.open.choose')}
+          >
+            <p class="text-sm font-medium">{choice.name}</p>
+            <div class="flex flex-col gap-1">
+              <Button
+                size="sm"
+                disabled={busy || windows.checking}
+                onclick={() =>
+                  choice && selectProfile(choice.id, choice.name, 'thisWindow')}
+                >{tUi('vault.open.thisWindow')}</Button
+              >
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy || windows.checking}
+                onclick={() =>
+                  choice && selectProfile(choice.id, choice.name, 'newWindow')}
+                >{tUi('vault.open.newWindow')}</Button
+              >
+            </div>
+            <label class="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                bind:checked={rememberChoice}
+                disabled={busy}
+              />
+              {tUi('vault.open.remember')}
+            </label>
+            <button
+              type="button"
+              class="text-xs underline"
+              disabled={busy}
+              onclick={() => {
+                choice = null;
+                rememberChoice = false;
+              }}>{tUi('vault.open.cancel')}</button
+            >
+          </div>
+        {/if}
         {#if windows.failed}
           <div class="space-y-1 px-2 py-1.5 text-sm" role="alert">
             <p>{tUi('vault.windows.failed')}</p>
@@ -406,7 +480,8 @@
                 title={windows.view?.supervised
                   ? openingLabel(profile.id)
                   : undefined}
-                onclick={() => selectProfile(profile.id, profile.name)}
+                onclick={(event) =>
+                  selectProfile(profile.id, profile.name, undefined, event)}
               >
                 <span class="flex size-4 shrink-0 items-center justify-center">
                   {#if profile.id === profilesState.active}
@@ -428,10 +503,23 @@
                     title={openingLabel(profile.id)}
                     aria-label={`${openingLabel(profile.id)}: ${profile.name}`}
                     disabled={busy || windows.checking}
-                    onclick={() => selectProfile(profile.id, profile.name)}
+                    onclick={() =>
+                      selectProfile(profile.id, profile.name, 'newWindow')}
                   >
                     <ExternalLink class="size-3.5" />
                   </button>
+                  {#if !windowStatus(profile.id)}
+                    <button
+                      type="button"
+                      class="rounded-sm p-1 text-muted-foreground hover:text-foreground"
+                      title={tUi('vault.open.thisWindow')}
+                      aria-label={`${tUi('vault.open.thisWindow')}: ${profile.name}`}
+                      disabled={busy || windows.checking}
+                      onclick={() =>
+                        selectProfile(profile.id, profile.name, 'thisWindow')}
+                      ><ArrowLeftRight class="size-3.5" /></button
+                    >
+                  {/if}
                 {/if}
                 <button
                   type="button"

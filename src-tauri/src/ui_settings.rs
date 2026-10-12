@@ -538,6 +538,9 @@ fn initialize_classified(
 
 fn validate_preference(id: &str, value: &Value) -> AppResult<()> {
     let valid = match id {
+        "general.vaultOpening" => {
+            matches!(value.as_str(), Some("ask" | "thisWindow" | "newWindow"))
+        }
         "ui.mobileDisplayMode" => matches!(value.as_str(), Some("list" | "grid")),
         "ui.fileTreeToolbar" => {
             value.is_object()

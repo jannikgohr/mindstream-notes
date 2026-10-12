@@ -20,6 +20,8 @@ struct Book {
     pending: Option<Batch>,
     committed: bool,
     requests: BTreeMap<Uuid, CloseRequest>,
+    #[cfg(any(debug_assertions, feature = "e2e-data-dir"))]
+    fail_next_close: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -35,6 +37,7 @@ struct CloseRequest {
     batch: Option<Uuid>,
     progress: CloseProgress,
     at: Instant,
+    cancelled: bool,
 }
 
 struct Batch {
@@ -56,8 +59,12 @@ impl Book {
 
     fn enqueue(&mut self, request_id: Uuid) -> AppResult<bool> {
         self.requests.retain(|_, request| {
-            !matches!(request.progress, CloseProgress::Failed { .. })
-                || request.at.elapsed() < Duration::from_secs(600)
+            if request.cancelled {
+                request.at.elapsed() < Duration::from_secs(600)
+            } else {
+                !matches!(request.progress, CloseProgress::Failed { .. })
+                    || request.at.elapsed() < Duration::from_secs(600)
+            }
         });
         if self.requests.contains_key(&request_id) {
             return Ok(false);
@@ -71,6 +78,7 @@ impl Book {
                 batch: None,
                 progress: CloseProgress::Queued,
                 at: Instant::now(),
+                cancelled: false,
             },
         );
         if self.pending.is_some() {
@@ -133,11 +141,15 @@ impl Book {
             return Err(unavailable());
         }
         let id = Uuid::new_v4();
+        #[cfg(any(debug_assertions, feature = "e2e-data-dir"))]
+        let failed = std::mem::take(&mut self.fail_next_close);
+        #[cfg(not(any(debug_assertions, feature = "e2e-data-dir")))]
+        let failed = false;
         self.pending = Some(Batch {
             id,
             waiting: windows.clone(),
             windows,
-            failed: false,
+            failed,
         });
         // Requests can arrive before their native callbacks execute. Attach
         // all queued aliases now, so a cancellation cannot turn a delayed
@@ -204,8 +216,37 @@ impl Book {
             request.progress = CloseProgress::Failed {
                 message: unavailable().to_string(),
             };
+            request.cancelled = true;
         }
         true
+    }
+
+    fn cancel_request(&mut self, id: Uuid) -> AppResult<Option<Uuid>> {
+        if self.committed {
+            return Err(unavailable());
+        }
+        if !self.requests.contains_key(&id) && self.requests.len() >= 1024 {
+            return Err(unavailable());
+        }
+        let batch = self.requests.get(&id).and_then(|request| request.batch);
+        if let Some(batch) = batch {
+            self.cancel(batch);
+        }
+        // A tombstone also covers a close request that was never received.
+        // Delayed callbacks and bounded IPC retries cannot allocate a new
+        // close during the shared ten-minute replay window.
+        self.requests.insert(
+            id,
+            CloseRequest {
+                batch,
+                at: Instant::now(),
+                cancelled: true,
+                progress: CloseProgress::Failed {
+                    message: unavailable().to_string(),
+                },
+            },
+        );
+        Ok(batch)
     }
 }
 
@@ -219,6 +260,8 @@ pub struct Shutdown {
 struct Notice {
     id: Uuid,
     phase: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'static str>,
 }
 
 fn unavailable() -> AppError {
@@ -314,6 +357,10 @@ pub fn window_destroyed(app: &AppHandle, label: &str) {
 }
 
 fn cancel(app: &AppHandle, id: Uuid) {
+    cancel_with_reason(app, id, None);
+}
+
+fn cancel_with_reason(app: &AppHandle, id: Uuid, reason: Option<&'static str>) {
     let Some(state) = app.try_state::<Shutdown>() else {
         return;
     };
@@ -324,6 +371,7 @@ fn cancel(app: &AppHandle, id: Uuid) {
             Notice {
                 id,
                 phase: "cancel",
+                reason,
             },
         );
     }
@@ -332,8 +380,16 @@ fn cancel(app: &AppHandle, id: Uuid) {
 fn notify(app: &AppHandle, participants: &BTreeSet<String>, id: Uuid, phase: &'static str) -> bool {
     participants.iter().all(|label| {
         app.get_webview_window(label).is_some_and(|_| {
-            app.emit_to(label.clone(), CLOSE_EVENT, Notice { id, phase })
-                .is_ok()
+            app.emit_to(
+                label.clone(),
+                CLOSE_EVENT,
+                Notice {
+                    id,
+                    phase,
+                    reason: None,
+                },
+            )
+            .is_ok()
         })
     })
 }
@@ -372,6 +428,41 @@ pub(crate) fn close_progress(app: &AppHandle, request_id: Uuid) -> AppResult<Clo
         .lock()
         .map_err(|_| unavailable())?
         .progress(request_id)
+}
+
+pub(crate) fn cancel_close(app: &AppHandle, request_id: Uuid) -> AppResult<()> {
+    let state = app.try_state::<Shutdown>().ok_or_else(unavailable)?;
+    let batch = state
+        .book
+        .lock()
+        .map_err(|_| unavailable())?
+        .cancel_request(request_id)?;
+    state.changed.notify_all();
+    if let Some(id) = batch {
+        app.emit(
+            CLOSE_EVENT,
+            Notice {
+                id,
+                phase: "cancel",
+                reason: Some("recovery"),
+            },
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(any(debug_assertions, feature = "e2e-data-dir"))]
+pub(crate) fn test_close_failure(app: &AppHandle) -> AppResult<()> {
+    if app.state::<crate::environment::Environment>().kind != crate::environment::Kind::Test {
+        return Err(unavailable());
+    }
+    let state = app.state::<Shutdown>();
+    let mut book = state.book.lock().map_err(|_| unavailable())?;
+    if !book.permits_coordinator_revival() {
+        return Err(unavailable());
+    }
+    book.fail_next_close = true;
+    Ok(())
 }
 
 fn request_close_inner(app: &AppHandle, request_id: Option<Uuid>) {
@@ -418,6 +509,7 @@ fn request_close_inner(app: &AppHandle, request_id: Option<Uuid>) {
                 Notice {
                     id: Uuid::nil(),
                     phase: "cancel",
+                    reason: None,
                 },
             );
             return;
@@ -445,7 +537,7 @@ fn request_close_inner(app: &AppHandle, request_id: Option<Uuid>) {
             }
             if let Err(error) = paused.wait(DRAIN_TIMEOUT) {
                 log::warn!("[vaults] service drain failed: {error}");
-                cancel(&handle, id);
+                cancel_with_reason(&handle, id, Some("background"));
                 return;
             }
             log::debug!("[vaults] services drained; preparing content saves");
@@ -521,6 +613,35 @@ fn request_close_inner(app: &AppHandle, request_id: Option<Uuid>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_cancellation_tombstones_unreceived_close_and_cannot_cancel_commit() {
+        let mut book = Book::default();
+        let unknown = Uuid::new_v4();
+        assert!(book.cancel_request(unknown).unwrap().is_none());
+        assert!(!book.enqueue(unknown).unwrap());
+        assert!(matches!(
+            book.progress(unknown).unwrap(),
+            CloseProgress::Failed { .. }
+        ));
+        let (mut book, windows) = ready();
+        let request = Uuid::new_v4();
+        book.enqueue(request).unwrap();
+        let batch = book.begin(windows.clone()).unwrap().unwrap();
+        assert_eq!(book.cancel_request(request).unwrap(), Some(batch));
+        assert!(!book.enqueue(request).unwrap());
+        assert!(book.pending.is_none());
+        assert!(book.permits_coordinator_revival());
+        let next = Uuid::new_v4();
+        book.enqueue(next).unwrap();
+        let batch = book.begin(windows.clone()).unwrap().unwrap();
+        for window in &windows {
+            book.ack(batch, window, true).unwrap();
+        }
+        assert!(book.commit(batch, &windows));
+        assert!(book.cancel_request(next).is_err());
+        assert_eq!(book.progress(next).unwrap(), CloseProgress::Committing);
+    }
 
     #[test]
     fn recovery_stops_before_close_callback_and_resumes_only_after_cancellation() {

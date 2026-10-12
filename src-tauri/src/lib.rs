@@ -87,6 +87,8 @@ pub mod ui_settings;
 mod update_recovery;
 #[cfg(desktop)]
 mod update_windows;
+#[cfg(desktop)]
+mod vault_handoff;
 pub mod vault_jobs;
 #[cfg(desktop)]
 pub mod vault_runtime;
@@ -716,6 +718,8 @@ pub fn run() {
                 vault_supervisor::vault_worker_ready,
                 #[cfg(desktop)]
                 vault_supervisor::open_profile_window,
+                vault_supervisor::get_picker_vaults,
+                vault_supervisor::open_picker_vault,
                 #[cfg(desktop)]
                 coordinator_updater::check_coordinated_update,
                 #[cfg(desktop)]
