@@ -191,6 +191,9 @@ collab), and **excalidraw-room** (freeform live collab). The client is
 configured with just that URL and derives the collaboration WebSocket paths
 itself. Operational details are in [backend/docs/advanced.md](../backend/docs/advanced.md).
 
+A single server that replaces this stack is designed in
+[server-design.md](server-design.md). It is not built yet.
+
 ## How this shapes testing
 
 The layering maps directly onto the [test tiers](e2e/strategy.md): pure logic is
