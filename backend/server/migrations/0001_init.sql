@@ -116,12 +116,15 @@ CREATE TABLE chunks (
     collection_id BIGINT NOT NULL REFERENCES collections (id) ON DELETE CASCADE,
     uid           TEXT NOT NULL,
     size          INTEGER NOT NULL,
-    -- Exactly one of these is set: small chunks live here, large ones in the
-    -- blob store under blob_key.
+    -- A small chunk lives here.
     data          BYTEA,
+    -- A large one lives in the blob store. One upload writes its large chunks
+    -- into a single blob, so a chunk is `size` bytes of it from blob_offset.
     blob_key      TEXT,
+    blob_offset   BIGINT,
     UNIQUE (collection_id, uid),
-    CHECK ((data IS NULL) <> (blob_key IS NULL))
+    CHECK ((data IS NULL) <> (blob_key IS NULL)),
+    CHECK ((blob_key IS NULL) = (blob_offset IS NULL))
 );
 
 CREATE TABLE members (

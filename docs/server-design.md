@@ -1,6 +1,7 @@
 # Sync server design
 
-Status: agreed design. No server code exists yet. Written 2026-10-12.
+Status: agreed design, written 2026-10-12. Build step 1, the server core, is
+in [backend/server](../backend/server/README.md). The later steps are not built.
 
 This replaces the backend stack described in
 [architecture.md](architecture.md#the-backend-stack): nginx, Etebase on
@@ -147,7 +148,9 @@ blob store                filesystem when self-hosted, S3-compatible when manage
 - **A connection pool.** The per-request session is what makes Etebase slow,
   not Postgres.
 - **Small chunks in the database, large ones in the blob store.** A note is
-  usually one small chunk.
+  usually one small chunk. The large chunks of one upload are written as a
+  single blob, so an attachment costs one write and one flush to disk, and one
+  object once blobs live in a bucket.
 - **Ready for a second node without running one.** Tickets are signed and
   short-lived, not held in memory. The change feed can ride on Postgres
   notifications. Rooms run on one node at first, and routing by room is the
@@ -197,7 +200,12 @@ in its encrypted metadata. Two consequences follow.
   each changed note one at a time. One batched fetch replaces that.
 - **Stoken order must match commit order.** If two transactions commit out of
   order, a device whose cursor has already passed the slower one never sees it.
-  The server takes a lock on the collection row while it assigns a stoken.
+  One counter orders every change on the server, and a writer takes its lock
+  as the last step before committing. A lock per collection would not be
+  enough, because a single cursor covers every collection a client has. The
+  price is that commits happen one at a time across the server. If that ever
+  limits throughput, cursors can be handed out from a watermark of finished
+  transactions instead.
 - **An acknowledged push must survive a power cut.** The client clears a note's
   dirty flag when the server acknowledges it, so a lost commit would never be
   sent again. Commits are flushed to disk before they are acknowledged.
@@ -422,7 +430,8 @@ Accepted:
   and paging. The Python server is a black box here and its source is not
   consulted.
 - **In process.** The server starts inside `cargo test` on a free port, so sync
-  and permission tests no longer need Docker. That covers the two tests
+  and permission tests need a Postgres and nothing else. That covers the two
+  tests
   [security-review.md](security-review.md) lists as missing: a read-only
   member cannot write, and a removed member loses access.
 - **Benchmark.** `pnpm bench:backend`, in
@@ -442,6 +451,23 @@ Targets, none of them measured yet:
 | Open a note in a shared folder   | 7 requests      | 1 ticket request, no blobs |
 | Push 1000 new notes, server time | 5.4 ms per note | Under 1 ms per note        |
 | Relay frame                      | 0.7 ms          | No worse                   |
+
+### Measured after step 1
+
+Both stacks in Docker on the same machine, the same client, the same request
+counts. Fewer requests come with step 2, when the app changes how it lays out
+its data.
+
+| Scenario                    | Etebase stack | New server |
+| --------------------------- | ------------- | ---------- |
+| Idle sync tick, 11 requests | 273 ms        | 15 ms      |
+| Tick with one edited note   | 365 ms        | 22 ms      |
+| Push 1000 new notes         | 5.9 s         | 0.63 s     |
+| New device pulls 1250 notes | 3.2 s         | 0.27 s     |
+| Push an 8 MiB attachment    | 1.18 s        | 0.38 s     |
+| Pull an 8 MiB attachment    | 448 ms        | 197 ms     |
+| Memory after startup        | 215 MiB       | 38 MiB     |
+| Memory after the benchmark  | 443 MiB       | 194 MiB    |
 
 ## Build order
 

@@ -15,6 +15,31 @@ struct Cli {
 enum Command {
     /// Run the server. This is the default.
     Serve,
+    /// Ask the server on this machine whether it is up. Exits non-zero when
+    /// it is not, for a container health check that has no curl to call.
+    Healthcheck,
+}
+
+/// One plain HTTP request to the health route of the server on this machine.
+async fn healthcheck(listen: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let port = listen.rsplit(':').next().unwrap_or("3735");
+    let mut stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await?;
+    stream
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .await?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response).await?;
+    if response.starts_with("HTTP/1.1 200") {
+        Ok(())
+    } else {
+        Err(format!(
+            "unexpected answer: {}",
+            response.lines().next().unwrap_or("")
+        )
+        .into())
+    }
 }
 
 async fn shutdown_signal() {
@@ -32,6 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cli = Cli::parse();
     match cli.command.unwrap_or(Command::Serve) {
+        Command::Healthcheck => healthcheck(&cli.config.listen).await?,
         Command::Serve => {
             let listen = cli.config.listen.clone();
             if cli.config.test_reset {

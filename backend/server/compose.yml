@@ -1,0 +1,60 @@
+# Mindstream server with its database.
+#
+#   cd backend/server
+#   POSTGRES_PASSWORD=<strong-random> docker compose up -d --build
+#
+# Plain HTTP on port 3735 of the `server` service. Put a TLS-terminating
+# reverse proxy in front for anything but local use.
+#
+# This stack does not yet replace the one in ../docker-compose.yml: live
+# collaboration still runs on the relays there.
+
+services:
+  server:
+    build: .
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MINDSTREAM_DATABASE_URL: postgres://mindstream:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres/mindstream
+      # closed: nobody can sign up. open: anyone who can reach the server can.
+      MINDSTREAM_SIGNUP: ${MINDSTREAM_SIGNUP:-closed}
+      # Hostnames clients use, comma separated. Needed when the reverse proxy
+      # does not pass the original Host header through.
+      MINDSTREAM_PUBLIC_HOSTS: ${MINDSTREAM_PUBLIC_HOSTS:-}
+      MINDSTREAM_TEST_RESET: ${MINDSTREAM_TEST_RESET:-false}
+    volumes:
+      # Attachment chunks. Losing this volume loses every attachment.
+      - blobs:/data
+    ports:
+      - '${MINDSTREAM_PORT:-3735}:3735'
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: mindstream
+      POSTGRES_USER: mindstream
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U mindstream -d mindstream']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    logging: *logging
+
+volumes:
+  blobs:
+  postgres:

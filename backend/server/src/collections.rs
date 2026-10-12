@@ -10,15 +10,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
-use axum::http::{header, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::http::StatusCode;
 use serde_bytes::ByteBuf;
 use sqlx::PgConnection;
 
 use crate::auth::AuthUser;
-use crate::blob::BlobStore;
+use crate::chunks;
 use crate::error::{ApiError, ApiResult, FieldError};
 use crate::wire::{
     self, check_uid, valid_uid, CollectionCreate, CollectionList, FetchQuery, ItemBatch, ItemList,
@@ -26,9 +24,6 @@ use crate::wire::{
 };
 use crate::AppState;
 
-/// The client's chunker never produces more than about 64 KiB, padded. This
-/// leaves room and still bounds what one row can hold.
-const MAX_CHUNK_BYTES: usize = 1024 * 1024;
 const MAX_META_BYTES: usize = 64 * 1024;
 const MAX_ITEMS_PER_REQUEST: usize = 10_000;
 
@@ -144,90 +139,30 @@ struct CollectionRow {
     item: ItemRow,
 }
 
-#[derive(sqlx::FromRow)]
-struct ChunkRow {
-    id: i64,
-    uid: String,
-    data: Option<Vec<u8>>,
-    blob_key: Option<String>,
-}
-
-/// A chunk's uid and, when it was asked for, its content.
-type LoadedChunks = HashMap<i64, (String, Option<Vec<u8>>)>;
-
-/// Fetch the chunks a set of revisions refers to. Without content, only
-/// their uids come back and the client downloads what it wants later.
-async fn load_chunks(
-    conn: &mut PgConnection,
-    blobs: &BlobStore,
-    ids: impl Iterator<Item = i64>,
-    with_content: bool,
-) -> ApiResult<LoadedChunks> {
-    let ids: Vec<i64> = ids.collect::<HashSet<_>>().into_iter().collect();
-    if ids.is_empty() {
-        return Ok(HashMap::new());
-    }
-    if !with_content {
-        let rows: Vec<(i64, String)> =
-            sqlx::query_as("SELECT id, uid FROM chunks WHERE id = ANY($1)")
-                .bind(&ids)
-                .fetch_all(conn)
-                .await?;
-        return Ok(rows
-            .into_iter()
-            .map(|(id, uid)| (id, (uid, None)))
-            .collect());
-    }
-    let rows: Vec<ChunkRow> =
-        sqlx::query_as("SELECT id, uid, data, blob_key FROM chunks WHERE id = ANY($1)")
-            .bind(&ids)
-            .fetch_all(conn)
-            .await?;
-    let mut chunks = HashMap::with_capacity(rows.len());
-    for row in rows {
-        let content = match (row.data, row.blob_key) {
-            (Some(data), _) => data,
-            (None, Some(key)) => blobs.get(&key).await?,
-            (None, None) => return Err(ApiError::internal("chunk row holds no content")),
-        };
-        chunks.insert(row.id, (row.uid, Some(content)));
-    }
-    Ok(chunks)
-}
-
 fn to_wire_revision(
     uid: String,
     meta: Vec<u8>,
     deleted: bool,
     chunk_ids: &[i64],
-    chunks: &LoadedChunks,
+    loaded: &mut chunks::Loaded,
 ) -> ApiResult<wire::Revision> {
-    let chunks = chunk_ids
-        .iter()
-        .map(|id| {
-            let (uid, content) = chunks
-                .get(id)
-                .ok_or_else(|| ApiError::internal("revision refers to a missing chunk"))?;
-            Ok(wire::Chunk(
-                uid.clone(),
-                content.as_ref().map(|bytes| ByteBuf::from(bytes.clone())),
-            ))
-        })
-        .collect::<ApiResult<Vec<_>>>()?;
     Ok(wire::Revision {
         uid,
         meta: ByteBuf::from(meta),
         deleted,
-        chunks,
+        chunks: chunk_ids
+            .iter()
+            .map(|id| loaded.take(*id))
+            .collect::<ApiResult<Vec<_>>>()?,
     })
 }
 
-fn to_wire_item(row: ItemRow, chunks: &LoadedChunks) -> ApiResult<wire::Item> {
+fn to_wire_item(row: ItemRow, loaded: &mut chunks::Loaded) -> ApiResult<wire::Item> {
     Ok(wire::Item {
         uid: row.uid,
         version: row.version as u8,
         encryption_key: row.encryption_key.map(ByteBuf::from),
-        content: to_wire_revision(row.rev_uid, row.meta, row.deleted, &row.chunk_ids, chunks)?,
+        content: to_wire_revision(row.rev_uid, row.meta, row.deleted, &row.chunk_ids, loaded)?,
         etag: None,
     })
 }
@@ -238,7 +173,7 @@ async fn to_wire_items(
     rows: Vec<ItemRow>,
     with_content: bool,
 ) -> ApiResult<Vec<wire::Item>> {
-    let chunks = load_chunks(
+    let mut loaded = chunks::load(
         conn,
         &state.blobs,
         rows.iter().flat_map(|row| row.chunk_ids.iter().copied()),
@@ -246,7 +181,7 @@ async fn to_wire_items(
     )
     .await?;
     rows.into_iter()
-        .map(|row| to_wire_item(row, &chunks))
+        .map(|row| to_wire_item(row, &mut loaded))
         .collect()
 }
 
@@ -267,7 +202,7 @@ async fn to_wire_collections(
     rows: Vec<CollectionRow>,
     with_content: bool,
 ) -> ApiResult<Vec<wire::Collection>> {
-    let chunks = load_chunks(
+    let mut loaded = chunks::load(
         conn,
         &state.blobs,
         rows.iter()
@@ -282,7 +217,7 @@ async fn to_wire_collections(
                 collection_key: ByteBuf::from(row.member_key),
                 collection_type: ByteBuf::from(row.collection_type),
                 stoken: state.keys.stoken(row.col_stoken),
-                item: to_wire_item(row.item, &chunks)?,
+                item: to_wire_item(row.item, &mut loaded)?,
             })
         })
         .collect()
@@ -602,7 +537,7 @@ pub async fn list_revisions(
     let done = rows.len() as i64 <= limit;
     rows.truncate(limit as usize);
 
-    let chunks = load_chunks(
+    let mut loaded = chunks::load(
         &mut conn,
         &state.blobs,
         rows.iter().flat_map(|row| row.3.iter().copied()),
@@ -613,7 +548,7 @@ pub async fn list_revisions(
     let data = rows
         .into_iter()
         .map(|(uid, meta, deleted, chunk_ids)| {
-            to_wire_revision(uid, meta, deleted, &chunk_ids, &chunks)
+            to_wire_revision(uid, meta, deleted, &chunk_ids, &mut loaded)
         })
         .collect::<ApiResult<Vec<_>>>()?;
     Ok(Msgpack(IteratorList {
@@ -646,122 +581,16 @@ fn validate_items(items: &[wire::Item]) -> ApiResult<()> {
             if !valid_uid(&chunk.0) {
                 return Err(ApiError::bad_request("Malformed uid"));
             }
-            if chunk.1.as_ref().is_some_and(|c| c.len() > MAX_CHUNK_BYTES) {
+            if chunk
+                .1
+                .as_ref()
+                .is_some_and(|c| c.len() > chunks::MAX_CHUNK_BYTES)
+            {
                 return Err(ApiError::bad_request("Chunk is too large."));
             }
         }
     }
     Ok(())
-}
-
-/// Where a chunk's bytes go: the database row when small, the blob store
-/// otherwise. Returns the two column values, of which exactly one is set.
-async fn place_chunk(
-    state: &AppState,
-    collection_uid: &str,
-    chunk_uid: &str,
-    content: Vec<u8>,
-) -> ApiResult<(Option<Vec<u8>>, Option<String>)> {
-    if content.len() <= state.config.inline_chunk_bytes {
-        return Ok((Some(content), None));
-    }
-    let key = BlobStore::chunk_key(collection_uid, chunk_uid);
-    state.blobs.put(&key, &content).await?;
-    Ok((None, Some(key)))
-}
-
-/// Make sure every chunk the revisions refer to is stored, and return their
-/// row ids and how many new bytes that took.
-async fn store_chunks(
-    state: &AppState,
-    conn: &mut PgConnection,
-    collection: &Membership,
-    items: &mut [wire::Item],
-) -> ApiResult<(HashMap<String, i64>, i64)> {
-    // A chunk can appear in several revisions; keep the first copy of its
-    // content and drop the rest.
-    let mut uploaded: HashMap<String, Vec<u8>> = HashMap::new();
-    let mut referenced: HashSet<String> = HashSet::new();
-    for item in items.iter_mut() {
-        for chunk in item.content.chunks.iter_mut() {
-            referenced.insert(chunk.0.clone());
-            if let Some(content) = chunk.1.take() {
-                uploaded
-                    .entry(chunk.0.clone())
-                    .or_insert_with(|| content.into_vec());
-            }
-        }
-    }
-    if referenced.is_empty() {
-        return Ok((HashMap::new(), 0));
-    }
-
-    let referenced: Vec<String> = referenced.into_iter().collect();
-    let find = "SELECT uid, id FROM chunks WHERE collection_id = $1 AND uid = ANY($2)";
-    let mut ids: HashMap<String, i64> = sqlx::query_as::<_, (String, i64)>(find)
-        .bind(collection.id)
-        .bind(&referenced)
-        .fetch_all(&mut *conn)
-        .await?
-        .into_iter()
-        .collect();
-
-    let mut uids = Vec::new();
-    let mut sizes: Vec<i32> = Vec::new();
-    let mut inline: Vec<Option<Vec<u8>>> = Vec::new();
-    let mut blob_keys: Vec<Option<String>> = Vec::new();
-    for uid in &referenced {
-        if ids.contains_key(uid) {
-            continue;
-        }
-        let Some(content) = uploaded.remove(uid) else {
-            return Err(ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "chunk_no_content",
-                "Tried to create a new chunk without content",
-            ));
-        };
-        sizes.push(content.len() as i32);
-        let (data, key) = place_chunk(state, &collection.uid, uid, content).await?;
-        inline.push(data);
-        blob_keys.push(key);
-        uids.push(uid.clone());
-    }
-    if uids.is_empty() {
-        return Ok((ids, 0));
-    }
-
-    let inserted: Vec<(String, i64, i32)> = sqlx::query_as(
-        "INSERT INTO chunks (collection_id, uid, size, data, blob_key)
-         SELECT $1, u.uid, u.size, u.data, u.blob_key
-         FROM UNNEST($2::text[], $3::int4[], $4::bytea[], $5::text[])
-              AS u(uid, size, data, blob_key)
-         ON CONFLICT (collection_id, uid) DO NOTHING
-         RETURNING uid, id, size",
-    )
-    .bind(collection.id)
-    .bind(&uids)
-    .bind(&sizes)
-    .bind(&inline)
-    .bind(&blob_keys)
-    .fetch_all(&mut *conn)
-    .await?;
-    let mut bytes_added = 0i64;
-    for (uid, id, size) in inserted {
-        bytes_added += i64::from(size);
-        ids.insert(uid, id);
-    }
-    // A chunk uploaded on its own at the same moment wins the insert above
-    // and is not returned by it. Pick those up.
-    if uids.iter().any(|uid| !ids.contains_key(uid)) {
-        let raced: Vec<(String, i64)> = sqlx::query_as(find)
-            .bind(collection.id)
-            .bind(&uids)
-            .fetch_all(&mut *conn)
-            .await?;
-        ids.extend(raced);
-    }
-    Ok((ids, bytes_added))
 }
 
 pub(crate) struct ExistingItem {
@@ -812,7 +641,7 @@ async fn store_revisions(
         return Ok(None);
     }
 
-    let (chunk_ids, chunk_bytes) = store_chunks(state, conn, collection, &mut items).await?;
+    let (chunk_ids, chunk_bytes) = chunks::store(state, conn, collection, &mut items).await?;
     let count = items.len() as i64;
     let first = next_changes(conn, count).await?;
 
@@ -1073,85 +902,40 @@ pub async fn transaction(
     .await
 }
 
-// ---------- chunks on their own ----------
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
 
-/// Upload one chunk ahead of the revision that will refer to it. The item in
-/// the path need not exist yet.
-pub async fn upload_chunk(
-    State(state): State<AppState>,
-    user: AuthUser,
-    Path((collection_uid, item_uid, chunk_uid)): Path<(String, String, String)>,
-    body: Bytes,
-) -> ApiResult<StatusCode> {
-    check_uid(&item_uid)?;
-    check_uid(&chunk_uid)?;
-    if body.len() > MAX_CHUNK_BYTES {
-        return Err(ApiError::bad_request("Chunk is too large."));
+    use super::*;
+
+    /// The property every cursor depends on. If a second writer could take a
+    /// number before the first committed, the second could commit first, a
+    /// reader could move its cursor past both numbers, and the first
+    /// writer's change would then land behind the cursor for good.
+    #[tokio::test]
+    async fn a_writer_waits_for_the_previous_one_to_commit() {
+        let pool = crate::testing::pool().await;
+
+        let mut first = pool.begin().await.unwrap();
+        let first_number = next_changes(&mut first, 3).await.unwrap();
+
+        let second = tokio::spawn({
+            let pool = pool.clone();
+            async move {
+                let mut tx = pool.begin().await.unwrap();
+                let number = next_changes(&mut tx, 1).await.unwrap();
+                tx.commit().await.unwrap();
+                number
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            !second.is_finished(),
+            "a second writer took a change number while the first had not committed"
+        );
+
+        first.commit().await.unwrap();
+        let second_number = second.await.unwrap();
+        assert!(second_number >= first_number + 3);
     }
-    let mut tx = state.pool.begin().await?;
-    let collection = membership(&mut tx, user.account_id, &collection_uid, false).await?;
-    collection.require_write()?;
-
-    let exists: Option<i64> =
-        sqlx::query_scalar("SELECT id FROM chunks WHERE collection_id = $1 AND uid = $2")
-            .bind(collection.id)
-            .bind(&chunk_uid)
-            .fetch_optional(&mut *tx)
-            .await?;
-    let chunk_exists = || ApiError::conflict("chunk_exists", "Chunk already exists.");
-    if exists.is_some() {
-        return Err(chunk_exists());
-    }
-
-    let size = body.len() as i32;
-    let (data, blob_key) = place_chunk(&state, &collection.uid, &chunk_uid, body.to_vec()).await?;
-    let inserted = sqlx::query(
-        "INSERT INTO chunks (collection_id, uid, size, data, blob_key)
-         VALUES ($1, $2, $3, $4, $5) ON CONFLICT (collection_id, uid) DO NOTHING",
-    )
-    .bind(collection.id)
-    .bind(&chunk_uid)
-    .bind(size)
-    .bind(&data)
-    .bind(&blob_key)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
-    if inserted == 0 {
-        return Err(chunk_exists());
-    }
-    sqlx::query("UPDATE collections SET bytes_used = bytes_used + $2 WHERE id = $1")
-        .bind(collection.id)
-        .bind(i64::from(size))
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
-    Ok(StatusCode::CREATED)
-}
-
-pub async fn download_chunk(
-    State(state): State<AppState>,
-    user: AuthUser,
-    Path((collection_uid, item_uid, chunk_uid)): Path<(String, String, String)>,
-) -> ApiResult<Response> {
-    check_uid(&item_uid)?;
-    check_uid(&chunk_uid)?;
-    let mut conn = state.pool.acquire().await?;
-    let collection = membership(&mut conn, user.account_id, &collection_uid, false).await?;
-    let row: Option<(Option<Vec<u8>>, Option<String>)> =
-        sqlx::query_as("SELECT data, blob_key FROM chunks WHERE collection_id = $1 AND uid = $2")
-            .bind(collection.id)
-            .bind(&chunk_uid)
-            .fetch_optional(&mut *conn)
-            .await?;
-    let content = match row.ok_or_else(|| ApiError::not_found("Chunk"))? {
-        (Some(data), _) => data,
-        (None, Some(key)) => state.blobs.get(&key).await?,
-        (None, None) => return Err(ApiError::internal("chunk row holds no content")),
-    };
-    Ok((
-        [(header::CONTENT_TYPE, "application/octet-stream")],
-        content,
-    )
-        .into_response())
 }

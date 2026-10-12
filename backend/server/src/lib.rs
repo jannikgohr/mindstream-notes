@@ -8,12 +8,15 @@
 
 mod auth;
 mod blob;
+mod chunks;
 mod collections;
 pub mod config;
 mod error;
 mod keys;
 mod sharing;
 mod test_reset;
+#[cfg(test)]
+mod testing;
 mod wire;
 
 use std::ops::Deref;
@@ -150,11 +153,11 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/collection/{collection}/item/{item}/chunk/{chunk}/",
-            put(collections::upload_chunk),
+            put(chunks::upload_chunk),
         )
         .route(
             "/collection/{collection}/item/{item}/chunk/{chunk}/download/",
-            get(collections::download_chunk),
+            get(chunks::download_chunk),
         )
         .route(
             "/collection/{collection}/member/",

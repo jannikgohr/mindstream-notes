@@ -258,19 +258,28 @@ fn strip_port(host: &str) -> &str {
 /// A login names the host it was made for. Refusing one made for another
 /// host stops a server that a user was tricked into logging in to from
 /// replaying that login here.
-fn host_matches(state: &AppState, headers: &HeaderMap, claimed: &str) -> bool {
+///
+/// With `public_hosts` configured, the claim must be one of them. Otherwise
+/// it must match the request's own Host header; a request without one is let
+/// through, since there is nothing to compare against.
+fn host_allowed(public_hosts: &[String], request_host: Option<&str>, claimed: &str) -> bool {
     let claimed = strip_port(claimed);
-    if !state.config.public_hosts.is_empty() {
-        return state
-            .config
-            .public_hosts
-            .iter()
-            .any(|host| strip_port(host).eq_ignore_ascii_case(claimed));
+    // An unset variable arrives as one empty name, which configures nothing.
+    let mut configured = public_hosts
+        .iter()
+        .filter(|host| !host.is_empty())
+        .peekable();
+    if configured.peek().is_some() {
+        return configured.any(|host| strip_port(host).eq_ignore_ascii_case(claimed));
     }
-    headers
+    request_host.is_none_or(|host| strip_port(host).eq_ignore_ascii_case(claimed))
+}
+
+fn host_matches(state: &AppState, headers: &HeaderMap, claimed: &str) -> bool {
+    let request_host = headers
         .get(header::HOST)
-        .and_then(|value| value.to_str().ok())
-        .is_none_or(|host| strip_port(host).eq_ignore_ascii_case(claimed))
+        .and_then(|value| value.to_str().ok());
+    host_allowed(&state.config.public_hosts, request_host, claimed)
 }
 
 /// Check everything a signed request claims, and return the account it is
@@ -414,6 +423,50 @@ mod tests {
         assert!(!valid_username("a b"));
         assert!(!valid_username("a%2Fb"));
         assert!(!valid_username(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn login_is_refused_for_another_host() {
+        // The Rust client names the host without a port, the JavaScript one
+        // with it.
+        assert!(host_allowed(
+            &[],
+            Some("notes.example.com:443"),
+            "notes.example.com"
+        ));
+        assert!(host_allowed(
+            &[],
+            Some("localhost:18080"),
+            "localhost:18080"
+        ));
+        assert!(host_allowed(
+            &[],
+            Some("Notes.Example.com"),
+            "notes.example.com"
+        ));
+        assert!(!host_allowed(
+            &[],
+            Some("notes.example.com"),
+            "evil.example.com"
+        ));
+
+        // Behind a proxy that rewrites Host, the configured names decide.
+        let public = vec!["notes.example.com".to_string()];
+        assert!(host_allowed(
+            &public,
+            Some("server:3735"),
+            "notes.example.com"
+        ));
+        assert!(!host_allowed(&public, Some("server:3735"), "server"));
+
+        // An empty setting is the same as none.
+        let unset = vec![String::new()];
+        assert!(host_allowed(
+            &unset,
+            Some("localhost:18090"),
+            "localhost:18090"
+        ));
+        assert!(!host_allowed(&unset, Some("localhost:18090"), "elsewhere"));
     }
 
     #[test]
