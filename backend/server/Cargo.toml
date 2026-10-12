@@ -55,3 +55,9 @@ reqwest = { version = "0.12", default-features = false }
 [profile.release]
 codegen-units = 1
 lto = "thin"
+
+# The client library stretches a password with Argon2, which takes seconds
+# per call when built without optimisation. The tests that sign in with a
+# password would spend minutes on it.
+[profile.dev.package.dryoc]
+opt-level = 3

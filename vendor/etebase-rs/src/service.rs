@@ -73,7 +73,7 @@ impl InvitationPreview {
     }
 }
 
-struct MainCryptoManager(CryptoManager);
+pub(crate) struct MainCryptoManager(pub(crate) CryptoManager);
 
 impl MainCryptoManager {
     pub fn new(key: &[u8; 32], version: u8) -> Result<MainCryptoManager> {
@@ -129,11 +129,11 @@ struct AccountDataStored<'a> {
 /// The main object for all user interactions and data manipulation, representing an authenticated
 /// user account.
 pub struct Account {
-    main_key: [u8; SYMMETRIC_KEY_SIZE],
-    version: u8,
-    user: LoginResponseUser,
-    client: Arc<Client>,
-    account_crypto_manager: Arc<AccountCryptoManager>,
+    pub(crate) main_key: [u8; SYMMETRIC_KEY_SIZE],
+    pub(crate) version: u8,
+    pub(crate) user: LoginResponseUser,
+    pub(crate) client: Arc<Client>,
+    pub(crate) account_crypto_manager: Arc<AccountCryptoManager>,
 }
 
 impl Account {

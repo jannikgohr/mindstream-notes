@@ -43,6 +43,17 @@ pub enum Error {
     ServerError(String),
     /// A generic error with the server request
     Http(String),
+    /// A Mindstream server refused, and gave its reason as a code a program
+    /// can act on. Only the Mindstream calls return this. The Etebase ones
+    /// keep the variants above.
+    Refused {
+        /// The HTTP status of the answer
+        status: u16,
+        /// The reason, one of the server's fixed set
+        code: String,
+        /// The same in words, for a person
+        detail: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -65,6 +76,7 @@ impl fmt::Display for Error {
             Error::TemporaryServerError(s) => s.fmt(f),
             Error::ServerError(s) => s.fmt(f),
             Error::Http(s) => s.fmt(f),
+            Error::Refused { detail, .. } => detail.fmt(f),
         }
     }
 }

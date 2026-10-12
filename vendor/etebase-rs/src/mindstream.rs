@@ -12,6 +12,13 @@ use super::encrypted_models::CollectionAccessLevel;
 use super::error::{Error, Result};
 use super::http_client::Client;
 
+mod account;
+
+pub use account::{
+    refusal, AccountSecurity, AuthenticatorSetup, DeviceSession, Recovery, RecoveryKey,
+    SecurityStatus, SignupWith,
+};
+
 /// A short-lived pass into the live room of one item.
 ///
 /// The server hands one out to a member of the item's collection. Whoever
