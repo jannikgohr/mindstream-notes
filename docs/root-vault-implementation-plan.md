@@ -1073,7 +1073,14 @@ and repeated crash/adoption/capture/Quit check passed with the shutdown guard.
 Its queued, pending, cancelled and committed states are covered by a lifecycle
 unit test. Artifacts remain under `.output/coordinator-revival-final-app-check`
 and `.output/coordinator-revival-regression-check`. No fixture app processes
-remained after cleanup. Real packaged macOS/Linux lifecycle and focus checks
+remained after cleanup. An empty update session also counts as a completed
+startup, allowing normal idle exit when no vault enables shortcuts and
+close-to-tray is off. It must not be retained as a failed first startup. Rust
+fmt/clippy and all 874 enabled tests passed for this follow-up. The native fixture
+in `.output/coordinator-updater-empty-session-app-check` repeated the two-vault,
+popout, hidden-state and ordinary-cold-start checks, then consumed an empty update
+session and exited with no eligible shortcuts and close-to-tray off. Every lease
+was free after exit. Real packaged macOS/Linux lifecycle and focus checks
 remain outstanding.
 
 Coordinator updater slice on 2026-10-12: supervised workers use a typed native

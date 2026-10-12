@@ -1712,6 +1712,9 @@ fn resume_update(app: &AppHandle) -> AppResult<bool> {
         )?;
     }
     crate::update_recovery::consume(&root, record.operation_id)?;
+    // An empty saved session is still a completed startup. Arm normal idle
+    // exit instead of retaining a headless coordinator as a failed first boot.
+    host.book.lock().map_err(|_| invalid())?.had_ready_worker = true;
     Ok(true)
 }
 

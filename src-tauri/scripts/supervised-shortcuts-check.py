@@ -364,6 +364,24 @@ def main():
                         with lease(root / "profiles" / vault_id / ".vault.lock"):
                             pass
                 print("Normal cold start opened only the last vault; final Quit released all leases")
+                for vault_id in vaults:
+                    enabled(vault_id, False)
+                empty_journal = {**journal, "operation_id": str(uuid.uuid4()), "vaults": [], "focus": None, "restored": [], "phase": "installing"}
+                with lease(root / ".coordinator.lock"), lease(root / ".root.lock"):
+                    path = root / "desktop-settings.json"
+                    document = json.loads(path.read_text())
+                    document["close_to_tray"] = False
+                    document["revision"] = document.get("revision", 0) + 1
+                    path.write_text(json.dumps(document), encoding="utf-8")
+                    (root / "update-restart.json").write_text(json.dumps(empty_journal), encoding="utf-8")
+                host = subprocess.Popen([str(args.exe.resolve()), "--supervised-vaults"], env=env,
+                    stdout=log, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW)
+                assert host.wait(timeout=100) == 0
+                assert json.loads((root / "update-restart.json").read_text())["phase"] == "consumed"
+                assert not owned(root / ".coordinator.lock")
+                for vault_id in vaults:
+                    assert not owned(root / "profiles" / vault_id / ".vault.lock")
+                print("Empty update session consumed its intent and exited with no shortcuts or close-to-tray")
                 clean = True
                 return
             if args.check_revival:
