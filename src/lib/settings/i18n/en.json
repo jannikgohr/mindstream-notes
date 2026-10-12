@@ -371,6 +371,8 @@
     "notifications.dismiss": "Dismiss notification",
     "notifications.sync.offline.title": "Can't reach your sync server",
     "notifications.sync.offline.message": "Sync is paused — {server} isn't responding. Check your connection or VPN, then tap to retry.",
+    "notifications.sync.signedOut.title": "Signed out on this device",
+    "notifications.sync.signedOut.message": "{server} ended this device's session. Your notes are still here. Sign in again to keep syncing.",
     "notifications.update.title": "Update available",
     "notifications.update.message": "Mindstream Notes {to} is available. You're on {from}.",
     "notifications.invite.title": "{sender} invited you",

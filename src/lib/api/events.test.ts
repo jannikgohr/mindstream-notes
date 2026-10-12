@@ -20,6 +20,7 @@ describe('TauriEventName', () => {
       'custom-window-decorations-changed'
     );
     expect(TauriEventName.NativeMenuCommand).toBe('native-menu-command');
+    expect(TauriEventName.SessionEnded).toBe('session-ended');
     expect(TauriEventName.ShowApp).toBe('show-app');
     expect(TauriEventName.SignaturesChanged).toBe('signatures-changed');
     expect(TauriEventName.SyncCompleted).toBe('sync-completed');

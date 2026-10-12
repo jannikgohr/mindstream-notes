@@ -3,21 +3,24 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // The bridge pulls tUi (i18n), syncNow (Tauri invoke), isTauri and the
 // event listener. Mock all four so the wiring is exercised in isolation;
 // the notification store itself is used for real (it's dependency-light).
-const { listen, handlers, syncNow, isTauri } = vi.hoisted(() => ({
-  handlers: {} as Record<string, (p: unknown) => void>,
-  listen: vi.fn(
-    (event: string, handler: (p: unknown) => void) =>
-      new Promise<() => void>((resolve) => {
-        (handlers as Record<string, (p: unknown) => void>)[event] = handler;
-        resolve(() => delete handlers[event]);
-      })
-  ),
-  syncNow: vi.fn().mockResolvedValue(undefined),
-  // Default false so the settings store's import-time hydration takes the
-  // non-Tauri fallback path instead of attempting real invokes. Tests
-  // that exercise the bridge flip it true explicitly.
-  isTauri: vi.fn(() => false)
-}));
+const { listen, handlers, syncNow, isTauri, refreshAuthSession } = vi.hoisted(
+  () => ({
+    refreshAuthSession: vi.fn().mockResolvedValue(undefined),
+    handlers: {} as Record<string, (p: unknown) => void>,
+    listen: vi.fn(
+      (event: string, handler: (p: unknown) => void) =>
+        new Promise<() => void>((resolve) => {
+          (handlers as Record<string, (p: unknown) => void>)[event] = handler;
+          resolve(() => delete handlers[event]);
+        })
+    ),
+    syncNow: vi.fn().mockResolvedValue(undefined),
+    // Default false so the settings store's import-time hydration takes the
+    // non-Tauri fallback path instead of attempting real invokes. Tests
+    // that exercise the bridge flip it true explicitly.
+    isTauri: vi.fn(() => false)
+  })
+);
 
 // Preserve the rest of api/core (invokeOrFallback et al.) — the store's
 // import-time settings hydration reaches for it — and only stub isTauri.
@@ -28,11 +31,13 @@ vi.mock('$lib/api/core', async (importOriginal) => {
 vi.mock('$lib/api/events', () => ({
   listen,
   TauriEventName: {
+    SessionEnded: 'session-ended',
     SyncCompleted: 'sync-completed',
     SyncUnreachable: 'sync-unreachable'
   }
 }));
 vi.mock('$lib/api/sync', () => ({ syncNow }));
+vi.mock('$lib/api/auth.svelte', () => ({ refreshAuthSession }));
 // tUi is left real: it resolves synchronously from the bundled en.json,
 // so the offline message keeps its `{server}` placeholder for us to assert
 // on — and the real module still provides `setLanguage`, which the
@@ -41,8 +46,10 @@ vi.mock('$lib/api/sync', () => ({ syncNow }));
 import { notificationState } from './store.svelte';
 import {
   clearServerUnreachable,
+  clearSessionEnded,
   installSyncStatusBridge,
-  reportServerUnreachable
+  reportServerUnreachable,
+  reportSessionEnded
 } from './sync-status';
 
 beforeEach(() => {
@@ -50,6 +57,7 @@ beforeEach(() => {
   for (const key of Object.keys(handlers)) delete handlers[key];
   listen.mockClear();
   syncNow.mockClear();
+  refreshAuthSession.mockClear();
   isTauri.mockReturnValue(false);
 });
 
@@ -104,11 +112,40 @@ describe('clearServerUnreachable', () => {
   });
 });
 
+describe('reportSessionEnded', () => {
+  it('names the server and says the notes are still there', () => {
+    reportSessionEnded('https://notes.example.com/');
+    expect(notificationState.items).toHaveLength(1);
+    const n = notificationState.items[0];
+    expect(n.kind).toBe('session-ended');
+    expect(n.widgetType).toBe('generic');
+    const { title, message } = n.data as { title: string; message: string };
+    expect(title).toBe('Signed out on this device');
+    expect(message).toContain('https://notes.example.com/');
+    expect(message).toContain('Your notes are still here');
+  });
+
+  it('is told once however often the server refuses', () => {
+    reportSessionEnded('https://a/');
+    reportSessionEnded('https://a/');
+    expect(notificationState.items).toHaveLength(1);
+  });
+
+  it('leaves other notifications alone when cleared', () => {
+    reportSessionEnded('https://a/');
+    reportServerUnreachable('https://a/');
+    clearSessionEnded();
+    expect(notificationState.items.map((n) => n.kind)).toEqual([
+      'sync-offline'
+    ]);
+  });
+});
+
 describe('installSyncStatusBridge', () => {
   it('wires unreachable→report and completed→clear, and tears down', async () => {
     isTauri.mockReturnValue(true);
     const teardown = installSyncStatusBridge();
-    expect(listen).toHaveBeenCalledTimes(2);
+    expect(listen).toHaveBeenCalledTimes(3);
     // Let the listen promises resolve so the handlers register.
     await Promise.resolve();
 
@@ -116,6 +153,26 @@ describe('installSyncStatusBridge', () => {
     expect(notificationState.items).toHaveLength(1);
     expect(notificationState.items[0].kind).toBe('sync-offline');
 
+    handlers['sync-completed']?.({});
+    expect(notificationState.items).toHaveLength(0);
+
+    teardown();
+  });
+
+  it('reports a session the server ended, and has the UI sign out', async () => {
+    isTauri.mockReturnValue(true);
+    const teardown = installSyncStatusBridge();
+    await Promise.resolve();
+
+    handlers['session-ended']?.({
+      username: 'ann',
+      server_url: 'https://notes.example.com/'
+    });
+    expect(notificationState.items).toHaveLength(1);
+    expect(notificationState.items[0].kind).toBe('session-ended');
+    expect(refreshAuthSession).toHaveBeenCalledOnce();
+
+    // Signing in again and syncing is what clears it.
     handlers['sync-completed']?.({});
     expect(notificationState.items).toHaveLength(0);
 

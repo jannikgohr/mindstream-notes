@@ -166,7 +166,7 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
     let app_for_blocking = app.clone();
     let delta = tauri::async_runtime::spawn_blocking(move || {
         catch_blocking_panic("sync-scheduler", || {
-            let mut account = auth::try_restore(&app_for_blocking)
+            let account = auth::try_restore(&app_for_blocking)
                 .map_err(|e| format!("restore session: {e}"))?
                 .ok_or_else(|| "not signed in".to_string())?;
             let self_username = auth::read_session_info(&app_for_blocking)
@@ -174,12 +174,7 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
                 .flatten()
                 .map(|info| info.username);
             let db = app_for_blocking.state::<Db>();
-            super::run_with_reauth(
-                &app_for_blocking,
-                &db,
-                &mut account,
-                self_username.as_deref(),
-            )
+            super::run_session(&app_for_blocking, &db, &account, self_username.as_deref())
         })
     })
     .await

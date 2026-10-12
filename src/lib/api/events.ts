@@ -11,6 +11,7 @@ export enum TauriEventName {
   FullscreenNote = 'fullscreen-note',
   ImportProgress = 'import-progress',
   NativeMenuCommand = 'native-menu-command',
+  SessionEnded = 'session-ended',
   ShowApp = 'show-app',
   SignaturesChanged = 'signatures-changed',
   SyncCompleted = 'sync-completed',
@@ -68,6 +69,13 @@ export type TauriEvents = {
    * can't flood this channel. Mirrors `app_events::AppEvent::ImportProgress`.
    */
   'import-progress': { phase: string; done: number; total: number };
+  /**
+   * Fired from Rust when the server has ended this device's session and
+   * the device has signed itself out: it was signed out from another
+   * device, the password changed, or the account was closed. The notes
+   * stay. Mirrors `app_events::AppEvent::SessionEnded`.
+   */
+  'session-ended': { username: string; server_url: string };
   'tray-note-created': { note_id: string };
   'show-app': null;
   /**

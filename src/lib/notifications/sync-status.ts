@@ -13,6 +13,7 @@
  * re-emits `sync-unreachable`, which just refreshes it in place.
  */
 
+import { refreshAuthSession } from '$lib/api/auth.svelte';
 import { isTauri } from '$lib/api/core';
 import { listen, TauriEventName } from '$lib/api/events';
 import { syncNow } from '$lib/api/sync';
@@ -59,6 +60,36 @@ export function clearServerUnreachable(): void {
   clearNotificationsByKind(SYNC_OFFLINE_KIND);
 }
 
+const SESSION_ENDED_KIND = 'session-ended' as const;
+/** Stable id: a device is signed out once, however often it is told. */
+const SESSION_ENDED_ID = 'sync:session-ended';
+
+/**
+ * Tell the user the server ended this device's session and the device has
+ * signed itself out. It happens without them doing anything here, so
+ * without a word the app would only look as if sync had stopped working.
+ */
+export function reportSessionEnded(serverUrl: string): void {
+  upsertNotification({
+    id: SESSION_ENDED_ID,
+    kind: SESSION_ENDED_KIND,
+    widgetType: 'generic',
+    createdAt: Date.now(),
+    data: {
+      title: tUi('notifications.sync.signedOut.title'),
+      message: tUi('notifications.sync.signedOut.message').replace(
+        '{server}',
+        serverUrl
+      )
+    }
+  });
+}
+
+/** Drop the signed-out notification (the device is syncing again). */
+export function clearSessionEnded(): void {
+  clearNotificationsByKind(SESSION_ENDED_KIND);
+}
+
 /**
  * Wire the Rust sync reachability signals to the notification centre.
  * Installed once from the root layout. No-op (returns a noop teardown)
@@ -72,11 +103,20 @@ export function installSyncStatusBridge(): () => void {
       reportServerUnreachable(payload.server_url);
     }
   );
+  const unlistenEnded = listen(TauriEventName.SessionEnded, (payload) => {
+    reportSessionEnded(payload.server_url);
+    // The session is gone on the Rust side already. Have the UI catch up,
+    // so the sign-in form shows and the sync schedule stops.
+    void refreshAuthSession();
+  });
   const unlistenCompleted = listen(TauriEventName.SyncCompleted, () => {
     clearServerUnreachable();
+    // A sync that completed means someone signed in again.
+    clearSessionEnded();
   });
   return () => {
     void unlistenUnreachable.then((unlisten) => unlisten());
+    void unlistenEnded.then((unlisten) => unlisten());
     void unlistenCompleted.then((unlisten) => unlisten());
   };
 }

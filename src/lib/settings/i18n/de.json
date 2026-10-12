@@ -216,6 +216,8 @@
     "notifications.dismiss": "Benachrichtigung ausblenden",
     "notifications.sync.offline.title": "Sync-Server nicht erreichbar",
     "notifications.sync.offline.message": "Die Synchronisierung pausiert — {server} antwortet nicht. Prüfe deine Verbindung oder dein VPN und tippe zum erneuten Versuch.",
+    "notifications.sync.signedOut.title": "Auf diesem Gerät abgemeldet",
+    "notifications.sync.signedOut.message": "{server} hat die Sitzung dieses Geräts beendet. Deine Notizen sind noch da. Melde dich erneut an, um weiter zu synchronisieren.",
     "notifications.update.title": "Update verfügbar",
     "notifications.update.message": "Mindstream Notes {to} ist verfügbar. Du nutzt {from}.",
     "notifications.invite.title": "{sender} hat dich eingeladen",

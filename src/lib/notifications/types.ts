@@ -6,6 +6,7 @@ export type NotificationKind =
   | 'share-bundle'
   | 'generic'
   | 'sync-offline'
+  | 'session-ended'
   | 'plugin-gated'
   | 'plugin-new';
 export type NotificationWidgetType =

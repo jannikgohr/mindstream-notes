@@ -23,7 +23,7 @@ use etebase::{Account, Client};
 use keyring_core::Entry;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult, CommandResult};
@@ -260,62 +260,42 @@ pub fn read_session_info(app: &AppHandle) -> AppResult<Option<SessionInfo>> {
     }))
 }
 
-/// Mint a fresh auth token for an already-restored account, without the
-/// user's password.
+/// Do locally what a sign-out does, because the server has ended this
+/// device's session: it was signed out from another device, the password
+/// was changed, or the account was closed.
 ///
-/// Etebase tokens are bearer tokens with no clock expiry and no refresh
-/// endpoint, so a server that has forgotten one (logged out elsewhere,
-/// password changed, server DB rebuilt) 401s every request until the
-/// account re-authenticates. `Account::fetch_token` re-runs only the
-/// *signature* half of the login handshake: it asks for a new login
-/// challenge and signs it with the login key derived from `main_key`.
-/// That key is part of the saved session blob and is already in memory
-/// after [`try_restore`], so no password and no user interaction is
-/// needed — unlike [`Account::login`], this skips Argon2id entirely.
+/// There is no request to make, the server has forgotten us already. The
+/// session file and its key go, the sync cursors are reset as on any
+/// sign-out, and the UI is told so it can show the device as signed out.
+/// The notes stay.
 ///
-/// The refreshed token is written back to the session file so the next
-/// restore starts authenticated instead of paying another round trip —
-/// and so the other restore sites (live collab, repair) pick it up too.
-/// Failing to persist is logged, not fatal: the in-memory account is
-/// already usable for the caller's current operation.
+/// The app used to answer a rejected token by signing in again with the
+/// key it keeps, with nobody asked. That would undo each of the three
+/// things above, and it would step around a second factor. Signing in is
+/// now always something a person does.
 ///
-/// Blocking HTTP — call from inside `spawn_blocking`, like the other
-/// etebase entry points here.
-pub fn refresh_token(app: &AppHandle, account: &mut Account) -> AppResult<()> {
-    account
-        .fetch_token()
-        .map_err(|e| AppError::InvalidArg(format!("refresh token: {e}")))?;
-    if let Err(e) = persist_session_blob(app, account) {
-        log::warn!("[auth] token refreshed but could not be persisted: {e}");
+/// Does nothing when the device is already signed out.
+pub fn end_session_locally(app: &AppHandle) {
+    let Ok(path) = session_path(app) else {
+        return;
+    };
+    let Ok(Some(info)) = read_session_info(app) else {
+        return;
+    };
+    clear_local_state(&path, &active_keyring_account(app));
+    if let Some(db) = app.try_state::<Db>() {
+        if let Err(err) = reset_sync_cursors(db.inner()) {
+            log::warn!("[auth] reset_sync_cursors after the session ended: {err}");
+        }
     }
-    Ok(())
-}
-
-/// Re-encrypt and write the account's current state (including its new
-/// token) over the existing session file, reusing the keyring-held
-/// wrapper key so the on-disk format is unchanged.
-fn persist_session_blob(app: &AppHandle, account: &Account) -> AppResult<()> {
-    let path = session_path(app)?;
-    // Signed out while the refresh was in flight — nothing to update.
-    let Some(stored) = read_stored(&path)? else {
-        return Ok(());
-    };
-    let key_b64 = keyring_entry(&active_keyring_account(app))?
-        .get_password()
-        .map_err(|e| AppError::InvalidArg(format!("keyring read: {e}")))?;
-    let key =
-        from_base64(&key_b64).map_err(|e| AppError::InvalidArg(format!("keyring decode: {e}")))?;
-    let blob = account
-        .save(Some(&key))
-        .map_err(|e| AppError::InvalidArg(format!("save session: {e}")))?;
-    let updated = StoredSession {
-        username: stored.username,
-        server_url: stored.server_url,
-        blob,
-    };
-    let bytes = serde_json::to_vec(&updated).map_err(|e| AppError::InvalidArg(e.to_string()))?;
-    fs::write(&path, bytes)?;
-    Ok(())
+    log::warn!(
+        "[auth] {} ended this device's session; signed out locally",
+        info.server_url
+    );
+    let event_name = crate::app_events::AppEvent::SessionEnded.as_str();
+    if let Err(err) = app.emit(event_name, &info) {
+        log::warn!("[auth] failed to emit {event_name}: {err}");
+    }
 }
 
 pub fn try_restore(app: &AppHandle) -> AppResult<Option<Account>> {

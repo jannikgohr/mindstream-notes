@@ -17,7 +17,8 @@ use serde::Deserialize;
 use tauri::{AppHandle, Manager};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::http::StatusCode;
+use tokio_tungstenite::tungstenite::{Error as SocketError, Message};
 
 use crate::auth;
 
@@ -36,6 +37,8 @@ const RETRY_MAX: Duration = Duration::from_secs(300);
 const SILENCE_LIMIT: Duration = Duration::from_secs(90);
 /// The newest feed protocol this client understands.
 const FEED_PROTOCOL: u32 = 1;
+/// The code the server closes a socket with when its session has ended.
+const CLOSE_SESSION_ENDED: u16 = 4401;
 
 /// What the server says on the feed. Its first message carries only the
 /// protocol level, every later one only the two flags.
@@ -136,12 +139,20 @@ async fn listen(app: &AppHandle) -> Result<(), String> {
             .parse()
             .map_err(|_| "session token is not a valid header".to_string())?,
     );
-    let (mut socket, _) = tokio_tungstenite::connect_async(request)
-        .await
-        .map_err(|e| format!("connect: {e}"))?;
+    let scheduler = app.state::<SyncScheduler>();
+    let mut socket = match tokio_tungstenite::connect_async(request).await {
+        Ok((socket, _)) => socket,
+        Err(SocketError::Http(response)) if response.status() == StatusCode::UNAUTHORIZED => {
+            // The server no longer knows this session. A sync finds out
+            // the same and signs the device out, which is not this
+            // module's call to make.
+            scheduler.request_sync();
+            return Err("the server refused the session".to_string());
+        }
+        Err(e) => return Err(format!("connect: {e}")),
+    };
     log::info!("[feed] listening");
 
-    let scheduler = app.state::<SyncScheduler>();
     // Whatever changed while nobody was listening.
     scheduler.request_sync();
 
@@ -173,7 +184,14 @@ async fn listen(app: &AppHandle) -> Result<(), String> {
                     scheduler.request_sync();
                 }
             }
-            Message::Close(_) => return Ok(()),
+            Message::Close(frame) => {
+                if frame.is_some_and(|frame| u16::from(frame.code) == CLOSE_SESSION_ENDED) {
+                    // Signed out from another device, most likely. Let a
+                    // sync confirm it and sign this device out.
+                    scheduler.request_sync();
+                }
+                return Ok(());
+            }
             // Pings are answered by the library. They are also what brings
             // the loop round to the check below at least every half minute.
             _ => {}
