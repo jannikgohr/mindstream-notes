@@ -88,6 +88,8 @@ pub fn client(url: &str) -> Client {
 pub struct TestAccount {
     account: Account,
     pub name: String,
+    /// The account main key, which stands in for the password.
+    pub key: Vec<u8>,
 }
 
 impl std::ops::Deref for TestAccount {
@@ -104,9 +106,9 @@ pub fn signup_at(url: &str, role: &str) -> TestAccount {
     etebase::init().expect("init etebase");
     let name = username(role);
     let user = User::new(&name, &format!("{name}@test.local"));
-    let account =
-        Account::signup_key(client(url), &user, &etebase::utils::randombytes(32)).expect("signup");
-    TestAccount { account, name }
+    let key = etebase::utils::randombytes(32);
+    let account = Account::signup_key(client(url), &user, &key).expect("signup");
+    TestAccount { account, name, key }
 }
 
 pub fn signup(role: &str) -> TestAccount {

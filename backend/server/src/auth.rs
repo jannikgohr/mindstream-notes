@@ -13,6 +13,7 @@ use serde_bytes::ByteBuf;
 use sqlx::PgConnection;
 
 use crate::config::SignupPolicy;
+use crate::edge::AuthAttempt;
 use crate::error::{ApiError, ApiResult};
 use crate::keys::{hash_session_token, new_session_token, ChallengeCheck};
 use crate::wire::{
@@ -97,7 +98,7 @@ pub fn valid_username(username: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
 }
 
-pub fn username_key(username: &str) -> String {
+pub(crate) fn username_key(username: &str) -> String {
     username.to_ascii_lowercase()
 }
 
@@ -211,6 +212,7 @@ pub(crate) async fn insert_account(conn: &mut PgConnection, body: &Signup) -> Ap
 
 pub async fn signup(
     State(state): State<AppState>,
+    _attempt: AuthAttempt,
     headers: HeaderMap,
     Msgpack(body): Msgpack<Signup>,
 ) -> ApiResult<Msgpack<LoginResponse>> {
@@ -234,6 +236,7 @@ pub async fn signup(
 
 pub async fn login_challenge(
     State(state): State<AppState>,
+    _attempt: AuthAttempt,
     Msgpack(body): Msgpack<LoginChallengeRequest>,
 ) -> ApiResult<Msgpack<LoginChallenge>> {
     let mut conn = state.pool.acquire().await?;
@@ -348,6 +351,7 @@ async fn verify_signed(
 
 pub async fn login(
     State(state): State<AppState>,
+    _attempt: AuthAttempt,
     headers: HeaderMap,
     Msgpack(request): Msgpack<SignedRequest>,
 ) -> ApiResult<Msgpack<LoginResponse>> {
@@ -368,6 +372,7 @@ pub async fn logout(State(state): State<AppState>, user: AuthUser) -> ApiResult<
 /// login key, so a session token alone cannot change the password.
 pub async fn change_password(
     State(state): State<AppState>,
+    _attempt: AuthAttempt,
     user: AuthUser,
     headers: HeaderMap,
     Msgpack(request): Msgpack<SignedRequest>,

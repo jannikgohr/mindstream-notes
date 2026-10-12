@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, ValueEnum};
+use ipnet::IpNet;
 
 /// Who may create an account.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -38,6 +39,27 @@ pub struct Config {
     #[arg(long, env = "MINDSTREAM_PUBLIC_HOSTS", value_delimiter = ',')]
     pub public_hosts: Vec<String>,
 
+    /// Networks whose `X-Forwarded-For` is believed. The default is loopback
+    /// and the private ranges a reverse proxy on the same host or container
+    /// network connects from. If the server is reachable directly from
+    /// addresses in these ranges that you do not control, narrow it.
+    #[arg(
+        long,
+        env = "MINDSTREAM_TRUSTED_PROXIES",
+        value_delimiter = ',',
+        default_value = "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1/128,fc00::/7"
+    )]
+    pub trusted_proxies: Vec<IpNet>,
+
+    /// Sign-in attempts one address may make per minute, across signup, login
+    /// and password change. Zero turns the limit off.
+    #[arg(long, env = "MINDSTREAM_AUTH_RATE_PER_MINUTE", default_value_t = 10)]
+    pub auth_rate_per_minute: u32,
+
+    /// How many attempts an address may make at once before the rate applies.
+    #[arg(long, env = "MINDSTREAM_AUTH_RATE_BURST", default_value_t = 20)]
+    pub auth_rate_burst: u32,
+
     /// Largest request body accepted, in bytes.
     #[arg(long, env = "MINDSTREAM_MAX_BODY_BYTES", default_value_t = 75 * 1024 * 1024)]
     pub max_body_bytes: usize,
@@ -67,6 +89,9 @@ impl Config {
             blob_dir,
             signup: SignupPolicy::Open,
             public_hosts: Vec::new(),
+            trusted_proxies: vec!["127.0.0.0/8".parse().expect("a valid network")],
+            auth_rate_per_minute: 0,
+            auth_rate_burst: 1,
             max_body_bytes: 75 * 1024 * 1024,
             inline_chunk_bytes: 20 * 1024,
             database_connections: 4,

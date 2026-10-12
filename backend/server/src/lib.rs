@@ -6,11 +6,13 @@
 //! the server adds is order and access control: which change came first, and
 //! who may see or make it.
 
+pub mod admin;
 mod auth;
 mod blob;
 mod chunks;
 mod collections;
 pub mod config;
+mod edge;
 mod error;
 mod keys;
 mod sharing;
@@ -19,12 +21,14 @@ mod test_reset;
 mod testing;
 mod wire;
 
+use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::Arc;
 
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, post, put};
-use axum::Router;
+use axum::{Json, Router};
+use serde::Serialize;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tower_http::trace::TraceLayer;
@@ -37,6 +41,7 @@ pub struct Inner {
     pub(crate) pool: PgPool,
     pub(crate) blobs: BlobStore,
     pub(crate) keys: Keys,
+    pub(crate) auth_limiter: edge::RateLimiter,
     pub(crate) config: Config,
 }
 
@@ -87,10 +92,13 @@ impl AppState {
         let blobs = BlobStore::open(&config.blob_dir)
             .await
             .map_err(StartError::Blobs)?;
+        let auth_limiter =
+            edge::RateLimiter::new(config.auth_rate_per_minute, config.auth_rate_burst);
         Ok(Self(Arc::new(Inner {
             pool,
             blobs,
             keys,
+            auth_limiter,
             config,
         })))
     }
@@ -100,11 +108,39 @@ async fn healthz() -> &'static str {
     "ok\n"
 }
 
+/// Bumped when the server stops understanding older clients or starts
+/// requiring something of them. A client compares it with the levels it
+/// knows and tells the user which side needs updating.
+pub const PROTOCOL_LEVEL: u32 = 1;
+
+#[derive(Serialize)]
+struct ServerInfo {
+    server: &'static str,
+    version: &'static str,
+    protocol: u32,
+    signup: &'static str,
+}
+
+/// What this server is, for a client deciding whether it can talk to it.
+/// JSON, unlike the rest of the API, so it can be read with nothing but curl.
+async fn info(axum::extract::State(state): axum::extract::State<AppState>) -> Json<ServerInfo> {
+    Json(ServerInfo {
+        server: "mindstream-server",
+        version: env!("CARGO_PKG_VERSION"),
+        protocol: PROTOCOL_LEVEL,
+        signup: match state.config.signup {
+            config::SignupPolicy::Open => "open",
+            config::SignupPolicy::Closed => "closed",
+        },
+    })
+}
+
 pub fn router(state: AppState) -> Router {
     // Paths are written out in full. Nesting a router would make its root
     // answer at `/collection` but not at `/collection/`, and the client
     // always sends the trailing slash.
     let mut api = Router::new()
+        .route("/mindstream/info/", get(info))
         .route("/authentication/is_etebase/", get(auth::is_etebase))
         .route("/authentication/signup/", post(auth::signup))
         .route(
@@ -204,7 +240,9 @@ pub async fn serve(
     state: AppState,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
-    axum::serve(listener, router(state))
+    // Handlers need the peer address to work out who is calling.
+    let service = router(state).into_make_service_with_connect_info::<SocketAddr>();
+    axum::serve(listener, service)
         .with_graceful_shutdown(shutdown)
         .await
 }

@@ -66,6 +66,8 @@ jobs:
       code: ${{ steps.decide.outputs.code }}
       e2e: ${{ steps.decide.outputs.e2e }}
       suites: ${{ steps.decide.outputs.list }}
+      # The filter step is skipped on a manual run, which runs everything.
+      server: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.server == 'true' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -82,9 +84,15 @@ jobs:
           # `README.md`, because `**/` does not match an empty path segment;
           # both spellings are needed. Verified against picomatch, which is
           # what paths-filter matches with.
+          # The sync server is a separate crate with its own job below, so
+          # a change confined to it leaves the app matrix alone. That
+          # exclusion has to live inside the same negated group.
           filters: |
             code:
-              - '!(**/*.md|*.md)'
+              - '!(**/*.md|*.md|backend/server/**)'
+            server:
+              - 'backend/server/**'
+              - '.github/workflows/test.yml'
             # The surfaces the two-client suites actually exercise. This is a
             # heuristic, not a proof: the Yjs/editor code they also depend on
             # is spread across src/lib/editor and friends, and listing that
@@ -222,6 +230,54 @@ jobs:
 
       - name: cargo test
         working-directory: src-tauri
+        run: cargo test --locked
+
+  # The sync server: its own crate, lockfile and tests. The tests start the
+  # server in-process and drive it with the client library the app ships, so
+  # all they need from outside is a Postgres.
+  server:
+    name: Server test
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.server == 'true'
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mindstream
+          POSTGRES_PASSWORD: mindstream
+          POSTGRES_DB: mindstream
+        # The port and credentials the tests default to; see
+        # backend/server/compose.dev.yml.
+        ports:
+          - 15432:5432
+        options: >-
+          --health-cmd "pg_isready -U mindstream -d mindstream"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend/server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend/server
+
+      - name: cargo fmt
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: cargo test
         run: cargo test --locked
 
   # Coverage thresholds fail CI; reports upload even when tests fail.
@@ -556,7 +612,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always() && (github.event.action != 'labeled' || github.event.label.name == 'ci:app-e2e')
-    needs: [changes, js, rust, coverage, e2e, format, app-e2e-build, app-e2e]
+    needs:
+      [changes, js, rust, server, coverage, e2e, format, app-e2e-build, app-e2e]
     steps:
       # Plain expressions, no jq or node: this job is the one that must never
       # be the thing that broke. `needs.*.result` is an array of every needed
