@@ -222,7 +222,9 @@ def check(case, fixture):
         assert fixture.status()["handoff"] is None
         return
     if case in ["save-failure", "busy-timeout"]:
-        command, fields = ("testCloseFailure", {}) if case == "save-failure" else ("testHoldJob", {"seconds": 35})
+        # Leave ample time for target preparation before the 30-second source
+        # drain timeout, including under a busy native/container test runner.
+        command, fields = ("testCloseFailure", {}) if case == "save-failure" else ("testHoldJob", {"seconds": 60})
         assert "Ok" in fixture.private("source", command, **fields)
         fixture.handoff(expected="failed")
         assert fixture.journal()["phase"] == "cancelled"

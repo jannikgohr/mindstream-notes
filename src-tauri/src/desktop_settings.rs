@@ -89,6 +89,31 @@ pub struct DesktopSettings {
 }
 
 impl DesktopSettings {
+    /// Read/recover an existing root without choosing a vault as a migration
+    /// source. A picker for a missing vault must not publish default settings.
+    pub(crate) fn load_existing_root(root: &std::path::Path) -> CommandResult<Option<Self>> {
+        let _lock = RootLock::acquire(root)?;
+        let path = root.join(SETTINGS_FILE);
+        let marker = root.join(".desktop-settings-migrated");
+        if marker.try_exists()? && fs::read(&marker)? != b"1" {
+            return Err(CommandError::new(
+                CommandErrorCode::InvalidArgument,
+                "desktop settings migration marker is corrupt; recovery required",
+            ));
+        }
+        crate::root_documents::recover(&path, validate_settings_bytes, validate_settings_bytes)?;
+        if path.try_exists()? {
+            return Self::load_from_path(path).map(Some);
+        }
+        if marker.try_exists()? {
+            return Err(CommandError::new(
+                CommandErrorCode::Io,
+                "root desktop settings are missing after migration; recovery required",
+            ));
+        }
+        Ok(None)
+    }
+
     fn refresh(&self) -> CommandResult<DesktopSettingsFile> {
         let parent = self.path.parent().ok_or_else(|| {
             CommandError::new(CommandErrorCode::Io, "settings path has no parent")
@@ -359,6 +384,10 @@ pub fn should_use_custom_window_decorations(app: &AppHandle) -> bool {
 pub fn apply_window_decorations(app: &AppHandle, custom_decorations: bool) -> CommandResult<()> {
     let native_decorations = !custom_decorations;
     for (label, window) in app.webview_windows() {
+        // Picker/export windows have native controls and no app title bar.
+        if label != "main" && !label.starts_with("note_") {
+            continue;
+        }
         if window.is_decorated().ok() == Some(native_decorations) {
             continue;
         }
@@ -518,6 +547,47 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ms-desktop-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn picker_reads_only_existing_root_settings_without_seeding_or_marking_migration() {
+        let root = root();
+        let other = crate::profiles::profile_dir(&root, "other");
+        fs::create_dir_all(&other).unwrap();
+        fs::write(
+            other.join(SETTINGS_FILE),
+            br#"{"language_code":"de","theme_mode":"dark"}"#,
+        )
+        .unwrap();
+        assert!(DesktopSettings::load_existing_root(&root)
+            .unwrap()
+            .is_none());
+        assert!(!root.join(SETTINGS_FILE).exists());
+        assert!(!root.join(".desktop-settings-migrated").exists());
+        let raw = br#"{"language_code":"de","theme_mode":"light","future":{"keep":1}}"#;
+        fs::write(root.join(SETTINGS_FILE), raw).unwrap();
+        let settings = DesktopSettings::load_existing_root(&root).unwrap().unwrap();
+        assert_eq!(settings.language_code(), "de");
+        assert_eq!(settings.theme_mode(), DesktopThemeMode::Light);
+        assert_eq!(fs::read(root.join(SETTINGS_FILE)).unwrap(), raw);
+        assert!(!root.join(".desktop-settings-migrated").exists());
+        assert!(!crate::profiles::profile_dir(&root, "missing").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn picker_refuses_missing_migrated_or_corrupt_root_instead_of_publishing_defaults() {
+        let root = root();
+        fs::write(root.join(".desktop-settings-migrated"), b"1").unwrap();
+        assert!(DesktopSettings::load_existing_root(&root).is_err());
+        assert!(!root.join(SETTINGS_FILE).exists());
+        fs::write(root.join(SETTINGS_FILE), b"corrupt original settings").unwrap();
+        assert!(DesktopSettings::load_existing_root(&root).is_err());
+        assert_eq!(
+            fs::read(root.join(SETTINGS_FILE)).unwrap(),
+            b"corrupt original settings"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

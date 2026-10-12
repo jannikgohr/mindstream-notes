@@ -84,6 +84,30 @@ Windows native handoff/recovery checks, unsaved main/popout edits with automatic
 saving disabled, and real `tauri dev` handoff/last-worker closure. Commands and
 Linux platform evidence are in [the harness guide](e2e/harness.md#concurrent-vault-checks).
 
+### Startup hardening on 2026-10-12
+
+The picker now reads existing root language/theme preferences before choosing a
+vault. It preserves unknown settings and does not seed defaults, choose a legacy
+migration source or recreate an unavailable vault. Its native title bar stays
+available when settings refresh. The coordinator permits listing, opening and
+creating vaults from the picker window while keeping content commands blocked.
+
+Discovery failures publish a terminal opening failure and release the initial
+startup reservation. Retrying can initialize the selected vault. A repeated
+request retains its original result. Once initialization has completed, retries
+use ordinary opening instead of repeating migration.
+
+When the last-used directory is missing, startup first looks for an indexed,
+compatible, ready worker with authenticated registration and a held OS lease.
+It prefers saved recency tied to the same physical directory. Stale registrations
+cannot authorize adoption. Launch activation waits until recovery completes.
+Other opening requests during recovery receive retry feedback.
+
+The disposable startup fixture covers discovery failure/retry and adoption of
+a surviving worker after coordinator loss. Its optional WebView2 checks exercise
+picker selection and creation with German/light root preferences. Validation
+commands and results are recorded in [the harness guide](e2e/harness.md#concurrent-vault-checks).
+
 ## Required behavior
 
 Update restart policy confirmed by the owner on 2026-10-12: reopen every vault

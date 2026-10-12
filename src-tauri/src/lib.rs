@@ -603,7 +603,10 @@ pub fn run() {
                 .app_handle()
                 .try_state::<vault_runtime::Role>()
                 .is_some_and(|role| *role == vault_runtime::Role::Host)
-                && invoke.message.command() != "finish_legacy_browser_export"
+                && !vault_supervisor::allows_host_invoke(
+                    invoke.message.webview_ref().label(),
+                    invoke.message.command(),
+                )
             {
                 invoke
                     .resolver

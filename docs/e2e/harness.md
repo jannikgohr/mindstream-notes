@@ -158,6 +158,7 @@ processes prevent executable replacement.
 python src-tauri/scripts/supervised-handoff-check.py --output .output/handoff-check
 python src-tauri/scripts/supervised-handoff-ui-check.py --exe src-tauri/target/debug/mindstream-notes.exe --output .output/handoff-editor-check --check-progress
 python src-tauri/scripts/supervised-shortcuts-check.py --output .output/shortcut-check --check-update-recovery
+python src-tauri/scripts/supervised-startup-check.py --output .output/startup-check --check-ui
 ```
 
 The handoff fixture covers ordinary transfer, existing targets, missing targets,
@@ -170,6 +171,15 @@ close button. It attaches only to its own isolated
 browser. This follows [Microsoft's WebView2 attachment workflow](https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/webdriver).
 Failure fixtures intentionally display close errors while preserving the source;
 those toasts are expected evidence of safe cancellation.
+
+The startup fixture makes the vault index temporarily unreadable in its own
+root, verifies a terminal failure and retries initialization. It also crashes
+its own coordinator, sets the last-used entry to a missing directory and checks
+that the exact surviving worker is adopted. `--check-ui` requires Windows and
+`msedgedriver`. It verifies German/light root preferences, native picker controls,
+disabled missing-vault selection, and real select/create actions. No vault is
+chosen as a migration source until the user selects or creates one. Original index bytes and
+failure artifacts remain in the fixture directory.
 
 For development lifetime, start a Vite server and run:
 
@@ -185,6 +195,7 @@ Linux uses `linux-vault-check.Dockerfile` and `linux-vault-check.sh` with source
 mounted read-only at `/source` and an empty writable results directory at
 `/results`. The script copies source to `/work`, runs Rust quality gates, builds
 with `tauri/custom-protocol`, then runs native checks under D-Bus/Xvfb/Openbox.
+Both Linux runners include the startup discovery/retry and surviving-worker checks.
 `linux-wayland-check.sh` runs the checked binary under nested Weston, with GTK
 forced to its Wayland backend. Xvfb provides the compositor an input seat; an
 initial headless-backend run had no usable keyboard focus. Source shell scripts
@@ -205,11 +216,29 @@ Local evidence from 2026-10-12:
 | Linux Wayland lifecycle/recovery/focus | All ten cases pass with an isolated input seat; `.output/linux-wayland-check/native-20261012-175438`.                                           |
 
 Windows checks ran on Windows 11 Pro build 26300. The Linux build uses Rust 1.97.1, Tauri 2.11.1, GTK 3.24.38, WebKitGTK 2.50.6,
-Openbox and Weston 10 in Debian Bookworm containers. Rust fmt/clippy/full serial tests pass on both platforms. Windows passes 881
-unit tests and one integration test, with five ignored overall. Linux passes 883
+Openbox and Weston 10 in Debian Bookworm containers. Rust fmt/clippy/full serial tests pass on both platforms. Windows passes 887
+unit tests and one integration test, with five ignored overall. Linux passes 889
 unit tests and one integration test, with two ignored overall. Svelte checks, affected ESLint,
 localization and production frontend/native builds pass. All fixture vaults
 closed gracefully and released their OS leases.
+
+The startup hardening run on the same date passed all four Windows startup cases
+in `.output/startup-hardening-final-check`, including actual picker selection and
+creation. It retains the German/light picker screenshot and state. The repeated
+Windows handoff and unsaved-editor checks use `.output/startup-hardening-handoff-check`
+and `.output/startup-hardening-editor-check`.
+The repeated Linux X11 run passed all ten handoff cases and both startup cases in
+`.output/linux-vault-check/native-20261012-191456` and
+`.output/linux-vault-check/startup-20261012-191736`.
+The final Wayland run passed all ten handoff cases and both startup cases in
+`.output/linux-wayland-check/native-20261012-191207` and
+`.output/linux-wayland-check/startup-20261012-191435`.
+All 61 affected vault/settings/API frontend tests pass, along with Svelte, affected
+ESLint, production frontend/native builds and formatting checks.
+
+The busy-job fixture holds its job for 60 seconds, leaving time for target
+preparation before the source's 30-second drain timeout. A prior 35-second hold
+could expire within that timeout on a busy runner and correctly allow closure.
 
 Native foreground focus is recorded in `focus-observed.json`. On an ordinary
 Windows desktop the OS may refuse focus or another app may take it; lifecycle

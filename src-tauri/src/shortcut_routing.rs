@@ -11,6 +11,24 @@ use crate::storage_locks::RootLock;
 
 const FILE: &str = "shortcut-recency.json";
 
+/// Startup recency stays bound to the recorded physical directory, including
+/// when the last-used vault is missing but another worker remains alive.
+pub(crate) fn startup_order(root: &Path) -> AppResult<Vec<String>> {
+    let _lock = RootLock::acquire(root)?;
+    Ok(read(root)?
+        .entries
+        .into_iter()
+        .rev()
+        .filter_map(|entry| {
+            let directory = crate::profiles::profile_dir(root, &entry.vault_id);
+            std::fs::canonicalize(directory)
+                .ok()
+                .filter(|current| current == &entry.directory)
+                .map(|_| entry.vault_id)
+        })
+        .collect())
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Entry {

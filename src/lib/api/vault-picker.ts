@@ -6,6 +6,7 @@ import {
   invokeOrFallback,
   TauriCommandName
 } from './core';
+import { DesktopThemeMode, isDesktopThemeMode } from './desktop-settings';
 
 export interface PickerVault {
   id: string;
@@ -13,15 +14,28 @@ export interface PickerVault {
   available: boolean;
 }
 
-export function getPickerVaults(): Promise<PickerVault[]> {
+export interface VaultPickerState {
+  vaults: PickerVault[];
+  languageCode: string;
+  themeMode: DesktopThemeMode;
+}
+
+export function getVaultPickerState(): Promise<VaultPickerState> {
   return invokeOrFallback(
     TauriCommandName.GetPickerVaults,
     undefined,
-    () => [],
+    () => ({
+      vaults: [],
+      languageCode: 'en',
+      themeMode: DesktopThemeMode.System
+    }),
     (value) => {
-      if (!Array.isArray(value))
+      const state = assertRecord(value, 'vault picker state');
+      if (!Array.isArray(state.vaults))
         throw new Error('Picker vaults must be an array');
-      return value.map((entry) => {
+      if (!isDesktopThemeMode(state.themeMode))
+        throw new Error('Picker theme mode must be light, dark, or system');
+      const vaults = state.vaults.map((entry) => {
         const raw = assertRecord(entry, 'picker vault');
         return {
           id: assertString(raw.id, 'vault id'),
@@ -29,6 +43,11 @@ export function getPickerVaults(): Promise<PickerVault[]> {
           available: assertBoolean(raw.available, 'vault availability')
         };
       });
+      return {
+        vaults,
+        languageCode: assertString(state.languageCode, 'picker language'),
+        themeMode: state.themeMode
+      };
     }
   );
 }

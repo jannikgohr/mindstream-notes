@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { ModeWatcher, setMode } from 'mode-watcher';
   import {
-    getPickerVaults,
+    getVaultPickerState,
     openPickerVault,
     type PickerVault
   } from '$lib/api/vault-picker';
   import { createProfile } from '$lib/api/profiles';
-  import { tUi } from '$lib/settings/i18n.svelte';
+  import { setLanguage, tUi } from '$lib/settings/i18n.svelte';
   import { toErrorMessage } from '$lib/api/errors';
   let vaults = $state<PickerVault[]>([]);
   let loading = $state(true);
@@ -17,7 +18,12 @@
     loading = true;
     error = '';
     try {
-      vaults = await getPickerVaults();
+      const state = await getVaultPickerState();
+      setLanguage(state.languageCode);
+      document.documentElement.lang = state.languageCode;
+      localStorage.setItem('mode-watcher-mode', state.themeMode);
+      setMode(state.themeMode);
+      vaults = state.vaults;
     } catch (cause) {
       error = toErrorMessage(cause);
     } finally {
@@ -56,6 +62,7 @@
   });
 </script>
 
+<ModeWatcher defaultMode="system" />
 <div class="flex min-h-screen flex-col bg-background p-6 text-foreground">
   <h1 class="text-xl font-semibold">{tUi('vault.picker.title')}</h1>
   <p class="mt-2 text-sm text-muted-foreground">

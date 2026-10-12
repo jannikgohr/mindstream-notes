@@ -224,6 +224,7 @@ struct Book {
     quitting: Option<Uuid>,
     handoff: Option<Uuid>,
     bootstrap_started: bool,
+    activate_after_startup: bool,
     picker_open: bool,
     last: Option<String>,
     workers: BTreeMap<String, Launch>,
@@ -259,6 +260,14 @@ enum Action {
 }
 
 impl Book {
+    fn startup_failed(&mut self, operation_id: Option<Uuid>, error: AppError) {
+        // Once export/discovery completed, retry through normal opening. Before
+        // that point release the initialization reservation for the picker.
+        self.bootstrap_started = self.exported;
+        if let Some(id) = operation_id {
+            self.complete_open(id, Err(error));
+        }
+    }
     fn window_state(
         &self,
         vault_id: &str,
@@ -549,6 +558,22 @@ impl Book {
                 "a vault handoff is in progress; no other window action was started".into(),
             ));
         }
+        if self.exported
+            && self.recovering
+            && matches!(
+                command,
+                HostCommand::Open { .. }
+                    | HostCommand::OpenFromWindow { .. }
+                    | HostCommand::HandoffFromWindow { .. }
+                    | HostCommand::PickerOpen { .. }
+                    | HostCommand::Shortcut { .. }
+                    | HostCommand::Tray { .. }
+            )
+        {
+            return Err(AppError::InvalidArg(
+                "startup recovery is still running; try opening the vault again shortly".into(),
+            ));
+        }
         if let HostCommand::DeviceSettingsChanged { vault_id, .. } = &command {
             // Slider/toolbar edits must not consume the mutation replay budget.
             // Retain the latest notice per source; older repeats are harmless
@@ -698,15 +723,18 @@ impl Book {
                 action = Some(Action::Remember { vault_id, revision });
             }
             HostCommand::Activate => {
-                if self.exported {
+                if self.recovering || !self.exported {
+                    self.activate_after_startup = true;
+                    if !self.bootstrap_started && !self.exported {
+                        action = Some(Action::ShowPicker);
+                    }
+                } else if self.exported {
                     action = Some(
                         self.last
                             .clone()
                             .map(Action::Open)
                             .unwrap_or(Action::ActivateLast),
                     );
-                } else if !self.bootstrap_started {
-                    action = Some(Action::ShowPicker);
                 }
             }
             HostCommand::Open { vault_id } => {
@@ -1078,21 +1106,61 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
         device_notifications: crate::device_notifications::Notifications::default(),
         _server: server,
     });
+    if let Some(settings) = crate::desktop_settings::DesktopSettings::load_existing_root(&root)
+        .map_err(|error| AppError::InvalidArg(error.to_string()))?
+    {
+        app.manage(settings);
+    }
     #[cfg(target_os = "macos")]
     crate::native_menu::init(app)?;
     // Workers never create a tray. As with direct test devices, isolated roots
     // may have their own icon, while system shortcuts/updaters remain gated.
     crate::tray::init(app)?;
     start_lifetime_monitor(app.handle())?;
-    if !crate::profiles::profile_dir(&root, &index.active).is_dir() {
+    let initial = if crate::profiles::profile_dir(&root, &index.active).is_dir() {
+        index.active.clone()
+    } else if let Some(id) = surviving_startup_vault(&root, &index)? {
+        id
+    } else {
         return show_picker(app.handle());
-    }
+    };
     app.state::<Host>()
         .book
         .lock()
         .map_err(|_| invalid())?
         .bootstrap_started = true;
-    begin_host_startup(app.handle(), index.active, None)
+    begin_host_startup(app.handle(), initial, None)
+}
+
+fn surviving_startup_vault(
+    root: &std::path::Path,
+    index: &crate::profiles::Index,
+) -> AppResult<Option<String>> {
+    let mut candidates = crate::shortcut_routing::startup_order(root).unwrap_or_default();
+    for profile in &index.profiles {
+        if !candidates.contains(&profile.id) {
+            candidates.push(profile.id.clone());
+        }
+    }
+    for id in candidates {
+        if !index.profiles.iter().any(|profile| profile.id == id) {
+            continue;
+        }
+        let directory = crate::profiles::profile_dir(root, &id);
+        if !directory.is_dir() || !crate::storage_locks::VaultLock::is_owned(&directory)? {
+            continue;
+        }
+        if let crate::worker_registration::Recovery::Held(record) =
+            crate::worker_registration::reconcile(root, &id, &directory)?
+        {
+            let identity = record.identify()?;
+            identity.require_compatible()?;
+            if identity.ready {
+                return Ok(Some(id));
+            }
+        }
+    }
+    Ok(None)
 }
 
 fn begin_host_startup(
@@ -1107,6 +1175,8 @@ fn begin_host_startup(
         crate::desktop_settings::DesktopSettings::load_for_coordinator(&root, &initial)
             .map_err(|error| AppError::InvalidArg(error.to_string()))?,
     );
+    crate::desktop_settings::refresh_runtime(app)
+        .map_err(|error| AppError::InvalidArg(error.to_string()))?;
     let vault = crate::profiles::profile_dir(&root, &initial);
     crate::legacy_content::initialize_owner(&root, &initial, &vault)?;
 
@@ -1119,8 +1189,12 @@ fn begin_host_startup(
         initial.clone(),
         Box::new(move |app| {
             let task_app = app.clone();
-            let Ok(job) = app.state::<Host>().jobs.enter() else {
-                return;
+            let job = match app.state::<Host>().jobs.enter() {
+                Ok(job) => job,
+                Err(error) => {
+                    startup_failed(&app, operation_id, error);
+                    return;
+                }
             };
             if let Err(error) = std::thread::Builder::new()
                 .name("vault-recovery".into())
@@ -1128,6 +1202,7 @@ fn begin_host_startup(
                     let _job = job;
                     if let Err(error) = recover_workers(&task_app) {
                         log::error!("[vaults] worker discovery failed: {error}");
+                        startup_failed(&task_app, operation_id, error);
                         return;
                     }
                     let mut target = initial;
@@ -1186,17 +1261,47 @@ fn begin_host_startup(
                         if let Ok(mut book) = task_app.state::<Host>().book.lock() { book.complete_open(id, startup_result); }
                     }
                     if recovery_finished {
-                        if let Ok(mut book) = task_app.state::<Host>().book.lock() { book.recovering = false; }
+                        let activate = task_app.state::<Host>().book.lock().ok().and_then(|mut book| {
+                            book.recovering = false;
+                            if book.quitting.is_none() && std::mem::take(&mut book.activate_after_startup) {
+                                book.last.clone()
+                            } else { None }
+                        });
+                        if let Some(id) = activate {
+                            if let Err(error) = open_and_wait(&task_app, &id) {
+                                log::warn!("[vaults] deferred launch activation failed: {error}");
+                            }
+                        }
                     }
                     broadcast_device_settings(&task_app);
                     crate::coordinator_shortcuts::refresh(&task_app);
                 })
             {
                 log::error!("[vaults] recovery thread unavailable: {error}");
+                startup_failed(&app, operation_id, AppError::InvalidArg(error.to_string()));
             }
         }),
     )?;
     Ok(())
+}
+
+fn startup_failed(app: &AppHandle, operation_id: Option<Uuid>, error: AppError) {
+    log::error!("[vaults] startup failed; picker retry available: {error}");
+    let show = app
+        .state::<Host>()
+        .book
+        .lock()
+        .map(|mut book| {
+            book.startup_failed(operation_id, error);
+            book.quitting.is_none()
+        })
+        .unwrap_or(false);
+    if show {
+        let picker = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let _ = show_picker(&picker);
+        });
+    }
 }
 
 #[derive(Serialize)]
@@ -1204,6 +1309,39 @@ pub struct PickerVault {
     id: String,
     name: String,
     available: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickerView {
+    vaults: Vec<PickerVault>,
+    language_code: String,
+    theme_mode: crate::desktop_settings::DesktopThemeMode,
+}
+
+fn picker_preferences(
+    root: &std::path::Path,
+) -> AppResult<(String, crate::desktop_settings::DesktopThemeMode)> {
+    Ok(
+        crate::desktop_settings::DesktopSettings::load_existing_root(root)
+            .map_err(|error| AppError::InvalidArg(error.to_string()))?
+            .map(|settings| (settings.language_code(), settings.theme_mode()))
+            .unwrap_or_else(|| {
+                (
+                    "en".into(),
+                    crate::desktop_settings::DesktopThemeMode::System,
+                )
+            }),
+    )
+}
+
+pub(crate) fn allows_host_invoke(label: &str, command: &str) -> bool {
+    command == "finish_legacy_browser_export"
+        || (label == "vault-picker"
+            && matches!(
+                command,
+                "get_picker_vaults" | "open_picker_vault" | "create_profile"
+            ))
 }
 
 fn picker_caller(app: &AppHandle, window: &WebviewWindow) -> AppResult<()> {
@@ -1217,10 +1355,11 @@ fn picker_caller(app: &AppHandle, window: &WebviewWindow) -> AppResult<()> {
 }
 
 #[tauri::command]
-pub fn get_picker_vaults(app: AppHandle, window: WebviewWindow) -> CommandResult<Vec<PickerVault>> {
+pub fn get_picker_vaults(app: AppHandle, window: WebviewWindow) -> CommandResult<PickerView> {
     picker_caller(&app, &window)?;
     let root = crate::paths::app_data_root(&app)?;
-    Ok(crate::profiles::load_or_init(&root)?
+    let (language_code, theme_mode) = picker_preferences(&root)?;
+    let vaults = crate::profiles::load_or_init(&root)?
         .profiles
         .into_iter()
         .map(|vault| PickerVault {
@@ -1228,7 +1367,12 @@ pub fn get_picker_vaults(app: AppHandle, window: WebviewWindow) -> CommandResult
             id: vault.id,
             name: vault.name,
         })
-        .collect())
+        .collect();
+    Ok(PickerView {
+        vaults,
+        language_code,
+        theme_mode,
+    })
 }
 
 #[tauri::command]
@@ -1279,6 +1423,7 @@ fn show_picker(app: &AppHandle) -> AppResult<()> {
         return Ok(());
     }
     let root = crate::paths::app_data_root(app)?;
+    let (language_code, theme_mode) = picker_preferences(&root)?;
     let identity =
         crate::browser_identity::Identity::for_vault(&root, "coordinator-picker", &root)?;
     let mut builder = tauri::WebviewWindowBuilder::new(
@@ -1288,15 +1433,25 @@ fn show_picker(app: &AppHandle) -> AppResult<()> {
     )
     .title(
         if app.state::<crate::environment::Environment>().kind == crate::environment::Kind::Dev {
-            "Mindstream Notes Dev: choose a vault"
+            format!(
+                "Mindstream Notes Dev: {}",
+                crate::i18n::t_ui(&language_code, "vault.picker.title")
+            )
         } else {
-            "Mindstream Notes: choose a vault"
+            format!(
+                "Mindstream Notes: {}",
+                crate::i18n::t_ui(&language_code, "vault.picker.title")
+            )
         },
     )
     .inner_size(560.0, 540.0)
     .min_inner_size(420.0, 360.0)
     .visible(true)
-    .focused(true);
+    .focused(true)
+    .initialization_script(format!(
+        "try {{ localStorage.setItem('mode-watcher-mode', {}); }} catch (_) {{}}",
+        serde_json::to_string(&theme_mode).map_err(|_| invalid())?
+    ));
     if let Some(args) = app
         .config()
         .app
@@ -1660,8 +1815,7 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
                                 begin_host_startup(&runtime, vault_id, Some(request_id))
                             {
                                 if let Ok(mut book) = runtime.state::<Host>().book.lock() {
-                                    book.bootstrap_started = false;
-                                    book.complete_open(request_id, Err(error));
+                                    book.startup_failed(Some(request_id), error);
                                 }
                             }
                         });
@@ -4637,6 +4791,177 @@ mod tests {
         drop(listener);
         drop(owner);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missing_startup_selects_an_authenticated_surviving_worker_and_ignores_stale_registration() {
+        let root = std::env::temp_dir().join(format!("ms-startup-survivor-{}", Uuid::new_v4()));
+        let directory = crate::profiles::profile_dir(&root, "target");
+        let owner = crate::storage_locks::VaultLock::acquire(&directory).unwrap();
+        let listener = ipc::Coordinator::for_worker(&owner).unwrap();
+        let record = crate::worker_registration::Registration::new(
+            &root,
+            "target",
+            &owner,
+            Uuid::new_v4(),
+            listener.endpoint().clone(),
+        )
+        .unwrap();
+        record.publish(&owner).unwrap();
+        let identity = Arc::new(Mutex::new(record.identity(false)));
+        let response = identity.clone();
+        let server = listener
+            .serve(move |_| Ok(serde_json::to_value(&*response.lock().unwrap()).unwrap()))
+            .unwrap();
+        let index = crate::profiles::Index {
+            active: "missing".into(),
+            profiles: vec![
+                crate::profiles::Profile {
+                    id: "missing".into(),
+                    name: "Missing".into(),
+                    created_at: String::new(),
+                },
+                crate::profiles::Profile {
+                    id: "target".into(),
+                    name: "Target".into(),
+                    created_at: String::new(),
+                },
+            ],
+        };
+        assert_eq!(surviving_startup_vault(&root, &index).unwrap(), None);
+        identity.lock().unwrap().ready = true;
+        assert_eq!(
+            surviving_startup_vault(&root, &index).unwrap(),
+            Some("target".into())
+        );
+        drop(server);
+        drop(owner);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while crate::storage_locks::VaultLock::is_owned(&directory).unwrap() {
+            assert!(
+                Instant::now() < deadline,
+                "IPC ownership must release before a stale-file check"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            surviving_startup_vault(&root, &index).unwrap(),
+            None,
+            "a stale discovery file does not own a vault"
+        );
+        assert!(!crate::profiles::profile_dir(&root, "missing").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn normal_launch_activation_waits_for_startup_recovery_instead_of_being_lost() {
+        let mut book = Book {
+            bootstrap_started: true,
+            recovering: true,
+            ..Book::default()
+        };
+        let instance = Uuid::new_v4();
+        let activate = request(&HostCommand::Activate).unwrap();
+        assert!(book.accept(instance, activate.clone()).unwrap().1.is_none());
+        assert!(book.activate_after_startup);
+        book.exported = true;
+        assert!(book
+            .accept(
+                instance,
+                request(&HostCommand::Open {
+                    vault_id: "target".into()
+                })
+                .unwrap()
+            )
+            .is_err());
+        assert!(book
+            .accept(instance, request(&HostCommand::Activate).unwrap())
+            .unwrap()
+            .1
+            .is_none());
+        assert!(book.accept(instance, activate).unwrap().1.is_none());
+        book.recovering = false;
+        assert!(matches!(
+            book.accept(instance, request(&HostCommand::Activate).unwrap())
+                .unwrap()
+                .1,
+            Some(Action::ActivateLast)
+        ));
+    }
+
+    #[test]
+    fn coordinator_invokes_allow_only_picker_operations_in_the_picker_window() {
+        for command in ["get_picker_vaults", "open_picker_vault", "create_profile"] {
+            assert!(allows_host_invoke("vault-picker", command));
+            assert!(!allows_host_invoke("main", command));
+            assert!(!allows_host_invoke("legacy-browser-export", command));
+        }
+        for command in [
+            "list_notes",
+            "switch_profile",
+            "delete_profile",
+            "get_settings",
+        ] {
+            assert!(!allows_host_invoke("vault-picker", command));
+        }
+        assert!(allows_host_invoke(
+            "legacy-browser-export",
+            "finish_legacy_browser_export"
+        ));
+    }
+
+    #[test]
+    fn failed_picker_initialization_publishes_failure_and_releases_retry_reservation() {
+        let instance = Uuid::new_v4();
+        let mut book = Book::default();
+        let first = request(&HostCommand::PickerOpen {
+            vault_id: "target".into(),
+        })
+        .unwrap();
+        book.accept(instance, first.clone()).unwrap();
+        assert!(book.bootstrap_started);
+        book.startup_failed(
+            Some(first.id),
+            AppError::InvalidArg("discovery failed".into()),
+        );
+        assert!(!book.bootstrap_started);
+        assert!(matches!(
+            book.open_status(first.id).unwrap(),
+            OpenProgress::Failed { .. }
+        ));
+        assert!(
+            book.accept(instance, first).unwrap().1.is_none(),
+            "replay cannot restart a failed operation"
+        );
+        let retry = request(&HostCommand::PickerOpen {
+            vault_id: "target".into(),
+        })
+        .unwrap();
+        assert!(matches!(
+            book.accept(instance, retry.clone()).unwrap().1,
+            Some(Action::Initialize { .. })
+        ));
+        book.exported = true;
+        book.startup_failed(
+            Some(retry.id),
+            AppError::InvalidArg("opening failed".into()),
+        );
+        assert!(book.bootstrap_started);
+        assert!(
+            matches!(
+                book.accept(
+                    instance,
+                    request(&HostCommand::PickerOpen {
+                        vault_id: "other".into()
+                    })
+                    .unwrap()
+                )
+                .unwrap()
+                .1,
+                Some(Action::Open(_))
+            ),
+            "exported roots retry opening without repeating initialization"
+        );
     }
 
     #[test]

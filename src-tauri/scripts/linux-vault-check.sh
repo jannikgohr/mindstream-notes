@@ -23,4 +23,6 @@ dbus-run-session -- xvfb-run -a bash -c '
   eval "$(printf "fixture-keyring\n" | gnome-keyring-daemon --unlock --components=secrets)"
   python3 src-tauri/scripts/supervised-handoff-check.py \
     --check-focus --exe /work/src-tauri/target/debug/mindstream-notes --output "/results/native-$(date +%Y%m%d-%H%M%S)"
+  python3 src-tauri/scripts/supervised-startup-check.py \
+    --exe /work/src-tauri/target/debug/mindstream-notes --output "/results/startup-$(date +%Y%m%d-%H%M%S)"
 '
