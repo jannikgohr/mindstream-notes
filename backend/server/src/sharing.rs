@@ -19,6 +19,7 @@ use crate::auth::{username_key, AuthUser};
 use crate::collections::{membership, next_changes, Membership};
 use crate::error::{ApiError, ApiResult};
 use crate::events::{self, Event};
+use crate::limits;
 use crate::wire::{
     check_uid, valid_access_level, FetchQuery, Invitation, InvitationAccept, InvitationCreate,
     IteratorList, Member, MemberPatch, Msgpack, UserProfile,
@@ -294,6 +295,9 @@ pub async fn invite(
     if already_member.is_some() {
         return Err(exists());
     }
+    // An invitation that could never be accepted is refused now, while the
+    // person sending it can still do something about it.
+    limits::check_new_member(&mut tx, collection.id, collection.owner_id, true).await?;
     let inserted = sqlx::query(
         "INSERT INTO invitations
              (uid, version, collection_id, from_account_id, to_account_id, access_level,
@@ -501,8 +505,8 @@ pub async fn accept(
     }
     let mut tx = state.pool.begin().await?;
     // Lock the collection before anything else, like every other writer.
-    let invitation: Option<(i64, i64, i16, i64)> = sqlx::query_as(
-        "SELECT i.id, i.collection_id, i.access_level, i.from_account_id
+    let invitation: Option<(i64, i64, i16, i64, i64)> = sqlx::query_as(
+        "SELECT i.id, i.collection_id, i.access_level, i.from_account_id, c.owner_id
          FROM invitations i JOIN collections c ON c.id = i.collection_id
          WHERE i.uid = $1 AND i.to_account_id = $2
          FOR UPDATE OF c",
@@ -511,8 +515,9 @@ pub async fn accept(
     .bind(user.account_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (invitation_id, collection_id, access_level, sender) =
+    let (invitation_id, collection_id, access_level, sender, owner) =
         invitation.ok_or_else(|| ApiError::not_found("Invitation"))?;
+    limits::check_new_member(&mut tx, collection_id, owner, false).await?;
 
     let stoken = touch_collection(&mut tx, collection_id).await?;
     sqlx::query(

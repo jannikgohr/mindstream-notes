@@ -31,6 +31,7 @@ proxy in front for anything but local use.
 | `MINDSTREAM_TRUSTED_PROXIES`      | see below    | Networks whose `X-Forwarded-For` is believed                    |
 | `MINDSTREAM_AUTH_RATE_PER_MINUTE` | 10           | Sign-in attempts per address per minute. 0 turns the limit off  |
 | `MINDSTREAM_AUTH_RATE_BURST`      | 20           | Attempts an address may make at once before the rate applies    |
+| `MINDSTREAM_ADMIN_TOKEN`          | unset        | Turns on the interface for setting account limits               |
 | `MINDSTREAM_MAX_BODY_BYTES`       | 78643200     | Largest request body accepted                                   |
 | `MINDSTREAM_INLINE_CHUNK_BYTES`   | 20480        | Chunks up to this size stay in the database                     |
 | `MINDSTREAM_TEST_RESET`           | false        | Serves a route that wipes accounts. For the client's tests only |
@@ -64,6 +65,50 @@ docker compose exec server mindstream-server user delete <username>
 Disabling an account ends its sessions and keeps its data. Deleting one
 removes every collection it owns, for the other members too. The server never
 holds a password or a key, so there is nothing to reset.
+
+## Limits
+
+An account has no limits until it is given some:
+
+```sh
+docker compose exec server mindstream-server user limit <username> \
+  --plan basic --storage-mib 1024 --max-spaces 10 --max-members 5 --max-item-mib 50
+docker compose exec server mindstream-server user usage <username>
+docker compose exec server mindstream-server user unlimit <username>
+```
+
+A collection counts against its owner, whoever writes into it. Once a limit is
+reached the server refuses what would add to it with status 402 and a code
+that says which limit: `storage_full`, `item_too_large`, `space_limit`,
+`member_limit`, or `plan_lapsed` for an account set to `--read-only`.
+Deletions are always accepted, and nothing is ever removed to bring an account
+back under a limit.
+
+The server can only limit what it can count. It cannot tell a note from an
+attachment, so there is no limit on the number of notes.
+
+### From another program
+
+A billing system sets the same limits over HTTP. Set `MINDSTREAM_ADMIN_TOKEN`
+and send it as a bearer token; without the variable the routes do not exist.
+
+```sh
+curl -X PUT http://localhost:3735/admin/v1/account/<username>/entitlements/ \
+  -H "Authorization: Bearer $MINDSTREAM_ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"plan":"basic","storageLimitBytes":1073741824,"maxSpaces":10,
+       "maxMembersPerSpace":5,"maxItemBytes":52428800,"readOnly":false}'
+curl http://localhost:3735/admin/v1/account/<username>/ \
+  -H "Authorization: Bearer $MINDSTREAM_ADMIN_TOKEN"
+curl -X DELETE http://localhost:3735/admin/v1/account/<username>/entitlements/ \
+  -H "Authorization: Bearer $MINDSTREAM_ADMIN_TOKEN"
+```
+
+A field left out of the body is a limit not applied. This interface can set
+limits and read usage, and nothing else: it cannot reach anything an account
+stores. Keep it off the public internet all the same, by not routing
+`/admin/` through the reverse proxy.
+
+A signed-in client reads its own usage from `GET /api/v1/mindstream/usage/`.
 
 ## Develop
 

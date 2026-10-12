@@ -19,6 +19,7 @@ use crate::auth::AuthUser;
 use crate::chunks;
 use crate::error::{ApiError, ApiResult, FieldError};
 use crate::events::{self, Event};
+use crate::limits;
 use crate::wire::{
     self, check_uid, valid_uid, CollectionCreate, CollectionList, FetchQuery, ItemBatch, ItemList,
     ItemRef, IteratorList, ListMulti, Msgpack, RemovedCollection, ACCESS_ADMIN, ACCESS_READ_ONLY,
@@ -341,6 +342,7 @@ pub async fn create_collection(
     let collection_uid = body.item.uid.clone();
 
     let mut tx = state.pool.begin().await?;
+    limits::check_new_space(&mut tx, user.account_id).await?;
     let id: Option<i64> = sqlx::query_scalar(
         "INSERT INTO collections (uid, owner_id, stoken) VALUES ($1, $2, 0)
          ON CONFLICT (uid) DO NOTHING RETURNING id",
@@ -646,6 +648,18 @@ async fn store_revisions(
     });
     if items.is_empty() {
         return Ok(None);
+    }
+
+    // Only an owner with a plan has limits to look up, so a server without
+    // any pays nothing here.
+    if let Some(limits) = limits::for_writes(conn, collection.owner_id).await? {
+        let (new_chunk_bytes, largest_item) = chunks::measure(conn, collection.id, &items).await?;
+        let meta_bytes: i64 = items
+            .iter()
+            .map(|item| item.content.meta.len() as i64)
+            .sum();
+        let deletions_only = items.iter().all(|item| item.content.deleted);
+        limits.check(new_chunk_bytes + meta_bytes, largest_item, deletions_only)?;
     }
 
     let (chunk_ids, chunk_bytes) = chunks::store(state, conn, collection, &mut items).await?;

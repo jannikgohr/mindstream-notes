@@ -24,6 +24,8 @@ services:
       # does not pass the original Host header through.
       MINDSTREAM_PUBLIC_HOSTS: ${MINDSTREAM_PUBLIC_HOSTS:-}
       MINDSTREAM_TEST_RESET: ${MINDSTREAM_TEST_RESET:-false}
+      # Lets another program set account limits. Empty leaves that interface off.
+      MINDSTREAM_ADMIN_TOKEN: ${MINDSTREAM_ADMIN_TOKEN:-}
     volumes:
       # Attachment chunks. Losing this volume loses every attachment.
       - blobs:/data

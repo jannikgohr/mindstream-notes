@@ -7,6 +7,7 @@
 //! who may see or make it.
 
 pub mod admin;
+mod admin_api;
 mod auth;
 mod blob;
 mod chunks;
@@ -18,6 +19,7 @@ mod events;
 mod feed;
 mod hub;
 mod keys;
+pub mod limits;
 mod rooms;
 mod sharing;
 mod test_reset;
@@ -149,6 +151,7 @@ pub fn router(state: AppState) -> Router {
     // always sends the trailing slash.
     let mut api = Router::new()
         .route("/mindstream/info/", get(info))
+        .route("/mindstream/usage/", get(limits::usage))
         .route("/mindstream/feed/", get(feed::feed_socket))
         .route("/room/", get(rooms::room_socket))
         .route(
@@ -240,9 +243,20 @@ pub fn router(state: AppState) -> Router {
         api = api.route("/test/authentication/reset/", post(test_reset::reset));
     }
 
+    let mut admin = Router::new();
+    if state.config.admin_token().is_some() {
+        admin = admin
+            .route("/account/{username}/", get(admin_api::account))
+            .route(
+                "/account/{username}/entitlements/",
+                put(admin_api::set_entitlements).delete(admin_api::clear_entitlements),
+            );
+    }
+
     Router::new()
         .route("/healthz", get(healthz))
         .nest("/api/v1", api)
+        .nest("/admin/v1", admin)
         .layer(DefaultBodyLimit::max(state.config.max_body_bytes))
         .layer(TraceLayer::new_for_http())
         .with_state(state)

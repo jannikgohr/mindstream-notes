@@ -60,6 +60,11 @@ pub struct Config {
     #[arg(long, env = "MINDSTREAM_AUTH_RATE_BURST", default_value_t = 20)]
     pub auth_rate_burst: u32,
 
+    /// Token for the admin interface another program uses to set account
+    /// limits. The interface does not exist unless this is set.
+    #[arg(long, env = "MINDSTREAM_ADMIN_TOKEN", hide_env_values = true)]
+    pub admin_token: Option<String>,
+
     /// Largest request body accepted, in bytes.
     #[arg(long, env = "MINDSTREAM_MAX_BODY_BYTES", default_value_t = 75 * 1024 * 1024)]
     pub max_body_bytes: usize,
@@ -81,6 +86,14 @@ pub struct Config {
 }
 
 impl Config {
+    /// The admin token, when one is configured. An empty value, which is
+    /// what an unset variable in a compose file turns into, counts as none.
+    pub fn admin_token(&self) -> Option<&str> {
+        self.admin_token
+            .as_deref()
+            .filter(|token| !token.is_empty())
+    }
+
     /// Settings for a server started inside a test.
     pub fn for_tests(database_url: String, blob_dir: PathBuf) -> Self {
         Self {
@@ -92,6 +105,7 @@ impl Config {
             trusted_proxies: vec!["127.0.0.0/8".parse().expect("a valid network")],
             auth_rate_per_minute: 0,
             auth_rate_burst: 1,
+            admin_token: None,
             max_body_bytes: 75 * 1024 * 1024,
             inline_chunk_bytes: 20 * 1024,
             database_connections: 4,

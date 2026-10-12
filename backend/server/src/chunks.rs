@@ -18,6 +18,7 @@ use crate::auth::AuthUser;
 use crate::blob::{BlobStore, Range};
 use crate::collections::{membership, Membership};
 use crate::error::{ApiError, ApiResult};
+use crate::limits;
 use crate::wire::{self, check_uid};
 use crate::AppState;
 
@@ -129,6 +130,57 @@ pub(crate) async fn load(
         }
     }
     Ok(Loaded { chunks, uses_left })
+}
+
+/// What storing these revisions' content would come to, without storing
+/// anything: the bytes of the chunks the collection does not have yet, and
+/// the content size of the largest item. For checking limits first.
+pub(crate) async fn measure(
+    conn: &mut PgConnection,
+    collection_id: i64,
+    items: &[wire::Item],
+) -> ApiResult<(i64, i64)> {
+    let referenced: Vec<&str> = items
+        .iter()
+        .flat_map(|item| item.content.chunks.iter().map(|chunk| chunk.0.as_str()))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let stored: HashMap<String, i32> = if referenced.is_empty() {
+        HashMap::new()
+    } else {
+        sqlx::query_as::<_, (String, i32)>(
+            "SELECT uid, size FROM chunks WHERE collection_id = $1 AND uid = ANY($2)",
+        )
+        .bind(collection_id)
+        .bind(&referenced)
+        .fetch_all(conn)
+        .await?
+        .into_iter()
+        .collect()
+    };
+
+    let mut counted = HashSet::new();
+    let mut new_bytes = 0i64;
+    let mut largest = 0i64;
+    for item in items {
+        let mut size = 0i64;
+        for chunk in &item.content.chunks {
+            let uploaded = chunk.1.as_ref().map_or(0, |content| content.len() as i64);
+            match stored.get(&chunk.0) {
+                Some(existing) => size += i64::from(*existing),
+                None => {
+                    size += uploaded;
+                    // A chunk shared by several items is stored once.
+                    if counted.insert(chunk.0.as_str()) {
+                        new_bytes += uploaded;
+                    }
+                }
+            }
+        }
+        largest = largest.max(size);
+    }
+    Ok((new_bytes, largest))
 }
 
 /// Make sure every chunk the revisions refer to is stored, and return their
@@ -262,6 +314,9 @@ pub async fn upload_chunk(
     let mut tx = state.pool.begin().await?;
     let collection = membership(&mut tx, user.account_id, &collection_uid, false).await?;
     collection.require_write()?;
+    if let Some(limits) = limits::for_writes(&mut tx, collection.owner_id).await? {
+        limits.check(body.len() as i64, body.len() as i64, false)?;
+    }
 
     let exists: Option<i64> =
         sqlx::query_scalar("SELECT id FROM chunks WHERE collection_id = $1 AND uid = $2")

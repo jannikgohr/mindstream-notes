@@ -6,6 +6,7 @@
 
 use crate::auth::username_key;
 use crate::events::{self, Event};
+use crate::limits::{self, Entitlements, Usage};
 use crate::AppState;
 
 #[derive(Debug, sqlx::FromRow)]
@@ -78,5 +79,70 @@ pub async fn delete_account(state: &AppState, username: &str) -> Result<bool, sq
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
+    Ok(true)
+}
+
+async fn account_id(state: &AppState, username: &str) -> Result<Option<i64>, sqlx::Error> {
+    sqlx::query_scalar("SELECT id FROM accounts WHERE username_key = $1")
+        .bind(username_key(username))
+        .fetch_optional(&state.pool)
+        .await
+}
+
+/// What an account uses and may use, or `None` when there is no such account.
+pub async fn usage(state: &AppState, username: &str) -> Result<Option<Usage>, sqlx::Error> {
+    let Some(id) = account_id(state, username).await? else {
+        return Ok(None);
+    };
+    let mut conn = state.pool.acquire().await?;
+    Ok(Some(limits::usage_of(&mut conn, id).await?))
+}
+
+/// Set what an account is entitled to, or lift every limit with `None`.
+/// Returns whether the account exists.
+///
+/// Lowering a limit below what the account already uses removes nothing. It
+/// stops the account from adding more until it is back under.
+pub async fn set_entitlements(
+    state: &AppState,
+    username: &str,
+    entitlements: Option<&Entitlements>,
+) -> Result<bool, sqlx::Error> {
+    let Some(id) = account_id(state, username).await? else {
+        return Ok(false);
+    };
+    match entitlements {
+        None => {
+            sqlx::query("DELETE FROM entitlements WHERE account_id = $1")
+                .bind(id)
+                .execute(&state.pool)
+                .await?;
+        }
+        Some(plan) => {
+            sqlx::query(
+                "INSERT INTO entitlements
+                     (account_id, plan, storage_limit_bytes, max_spaces, max_members_per_space,
+                      max_item_bytes, read_only, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+                 ON CONFLICT (account_id) DO UPDATE SET
+                     plan = EXCLUDED.plan,
+                     storage_limit_bytes = EXCLUDED.storage_limit_bytes,
+                     max_spaces = EXCLUDED.max_spaces,
+                     max_members_per_space = EXCLUDED.max_members_per_space,
+                     max_item_bytes = EXCLUDED.max_item_bytes,
+                     read_only = EXCLUDED.read_only,
+                     updated_at = now()",
+            )
+            .bind(id)
+            .bind(&plan.plan)
+            .bind(plan.storage_limit_bytes)
+            .bind(plan.max_spaces)
+            .bind(plan.max_members_per_space)
+            .bind(plan.max_item_bytes)
+            .bind(plan.read_only)
+            .execute(&state.pool)
+            .await?;
+        }
+    }
     Ok(true)
 }

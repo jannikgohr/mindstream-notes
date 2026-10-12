@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use mindstream_server::limits::Entitlements;
 use mindstream_server::{admin, serve, AppState, Config};
 
 #[derive(Parser)]
@@ -35,7 +36,37 @@ enum UserCommand {
     Enable { username: String },
     /// Delete an account and every collection it owns. Cannot be undone.
     Delete { username: String },
+    /// Show what an account uses and what its plan allows.
+    Usage { username: String },
+    /// Set what an account's plan allows. A limit left out is not applied.
+    /// Lowering a limit below current use removes nothing; it stops the
+    /// account from adding more.
+    Limit {
+        username: String,
+        /// A name for the plan, shown to the user.
+        #[arg(long, default_value = "custom")]
+        plan: String,
+        /// Storage across everything the account owns, in MiB.
+        #[arg(long)]
+        storage_mib: Option<i64>,
+        /// Collections the account may own.
+        #[arg(long)]
+        max_spaces: Option<i32>,
+        /// Members one of its collections may have, the owner included.
+        #[arg(long)]
+        max_members: Option<i32>,
+        /// Content of a single item, in MiB.
+        #[arg(long)]
+        max_item_mib: Option<i64>,
+        /// Accept nothing new. Reading and deleting keep working.
+        #[arg(long)]
+        read_only: bool,
+    },
+    /// Lift every limit from an account.
+    Unlimit { username: String },
 }
+
+const MIB: i64 = 1024 * 1024;
 
 /// One plain HTTP request to the health route of the server on this machine.
 async fn healthcheck(listen: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -57,6 +88,10 @@ async fn healthcheck(listen: &str) -> Result<(), Box<dyn std::error::Error>> {
         )
         .into())
     }
+}
+
+fn limit<T: std::fmt::Display>(value: Option<T>) -> String {
+    value.map_or_else(|| "no limit".to_owned(), |value| value.to_string())
 }
 
 async fn manage_users(
@@ -87,6 +122,34 @@ async fn manage_users(
             println!("{} account(s)", accounts.len());
             return Ok(());
         }
+        UserCommand::Usage { username } => {
+            let Some(usage) = admin::usage(state, &username).await? else {
+                return Err(format!("no account named {username}").into());
+            };
+            let plan = &usage.entitlements;
+            if !usage.limited {
+                println!("{username} has no limits");
+            } else {
+                println!(
+                    "plan            {}{}",
+                    plan.plan,
+                    if plan.read_only { " (read-only)" } else { "" }
+                );
+            }
+            println!(
+                "storage         {} of {} bytes",
+                usage.storage_used_bytes,
+                limit(plan.storage_limit_bytes)
+            );
+            println!(
+                "collections     {} of {}",
+                usage.spaces,
+                limit(plan.max_spaces)
+            );
+            println!("members each    {}", limit(plan.max_members_per_space));
+            println!("largest item    {} bytes", limit(plan.max_item_bytes));
+            return Ok(());
+        }
         UserCommand::Disable { username } => {
             let found = admin::set_disabled(state, &username, true).await?;
             (username, found, "disabled")
@@ -98,6 +161,30 @@ async fn manage_users(
         UserCommand::Delete { username } => {
             let found = admin::delete_account(state, &username).await?;
             (username, found, "deleted")
+        }
+        UserCommand::Limit {
+            username,
+            plan,
+            storage_mib,
+            max_spaces,
+            max_members,
+            max_item_mib,
+            read_only,
+        } => {
+            let entitlements = Entitlements {
+                plan,
+                storage_limit_bytes: storage_mib.map(|mib| mib * MIB),
+                max_spaces,
+                max_members_per_space: max_members,
+                max_item_bytes: max_item_mib.map(|mib| mib * MIB),
+                read_only,
+            };
+            let found = admin::set_entitlements(state, &username, Some(&entitlements)).await?;
+            (username, found, "limited")
+        }
+        UserCommand::Unlimit { username } => {
+            let found = admin::set_entitlements(state, &username, None).await?;
+            (username, found, "freed of limits")
         }
     };
     if !found {
