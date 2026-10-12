@@ -10,6 +10,7 @@ mod encrypted_models;
 pub mod error;
 pub mod fs_cache;
 mod http_client;
+mod mindstream;
 mod online_managers;
 mod service;
 pub mod utils;
@@ -30,6 +31,8 @@ pub use online_managers::{
 pub use encrypted_models::{CollectionAccessLevel, ItemMetadata, SignedInvitation};
 
 pub use service::{Account, Collection, InvitationPreview, Item};
+
+pub use mindstream::{Mindstream, RoomTicket};
 
 pub mod managers {
     pub use super::service::{

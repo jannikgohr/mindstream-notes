@@ -416,7 +416,7 @@ impl Socket {
             Some(Message::Binary(frame)) => {
                 let kind = frame[0];
                 if kind < 0x10 {
-                    Frame::Control(kind, rmp_serde::from_slice(&frame[1..]).unwrap())
+                    Frame::Control(kind, serde_json::from_slice(&frame[1..]).unwrap())
                 } else {
                     Frame::Relayed {
                         class: kind,

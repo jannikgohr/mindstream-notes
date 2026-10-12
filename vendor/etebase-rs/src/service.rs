@@ -555,6 +555,11 @@ impl Account {
         })
     }
 
+    /// The routes a Mindstream server has beyond the Etebase protocol
+    pub fn mindstream(&self) -> crate::mindstream::Mindstream {
+        crate::mindstream::Mindstream::new(Arc::clone(&self.client))
+    }
+
     /// Return a [`CollectionManager`] for creating, fetching and uploading collections
     pub fn collection_manager(&self) -> Result<CollectionManager> {
         CollectionManager::new(

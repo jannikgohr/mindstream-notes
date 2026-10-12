@@ -155,9 +155,12 @@ struct AccessChanged {
     access_level: i16,
 }
 
+/// A frame from the server itself. Its body is JSON, unlike the rest of the
+/// API: room sockets are opened by a web view, which reads JSON without
+/// carrying a msgpack decoder for four small messages.
 fn control<T: Serialize>(kind: u8, body: &T) -> Bytes {
     let mut frame = vec![kind];
-    frame.extend(rmp_serde::to_vec_named(body).expect("control frames serialise"));
+    frame.extend(serde_json::to_vec(body).expect("control frames serialise"));
     Bytes::from(frame)
 }
 

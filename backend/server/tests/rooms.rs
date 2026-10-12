@@ -244,3 +244,66 @@ async fn disabling_an_account_from_the_command_line_closes_its_sockets() {
     assert_eq!(socket.next().await, Frame::Closed(4403));
     assert_eq!(owner.ticket(&collection, &item).await, Err(401));
 }
+
+/// The ticket as the app gets it: from the client library it ships, with
+/// the account's real session.
+#[test]
+fn ticket_from_the_client_the_app_ships_opens_the_room() {
+    use etebase::error::Error;
+    use etebase::CollectionAccessLevel;
+
+    let owner = common::signup("owner");
+    let reader = common::signup("reader");
+    let outsider = common::signup("outsider");
+    let collection = common::new_collection(&owner, "space");
+    let items = owner
+        .collection_manager()
+        .unwrap()
+        .item_manager(&collection)
+        .unwrap();
+    let note = items.create(&common::named("note"), b"body").unwrap();
+    items.batch(std::iter::once(&note), None).unwrap();
+    common::share(
+        &owner,
+        &collection,
+        &reader,
+        CollectionAccessLevel::ReadOnly,
+    );
+
+    let rooms = owner.mindstream();
+    let ticket = rooms.room_ticket(collection.uid(), note.uid()).unwrap();
+    assert_eq!(ticket.access_level(), CollectionAccessLevel::Admin);
+    assert!((1..=60).contains(&ticket.expires_in()));
+    let address = rooms.room_url().unwrap();
+    assert!(address.starts_with("ws://127.0.0.1:"), "{address}");
+    assert!(address.ends_with("/api/v1/room/"), "{address}");
+
+    // A member who may only read is told so with the ticket, and still
+    // gets one: reading along is allowed.
+    let reading = reader
+        .mindstream()
+        .room_ticket(collection.uid(), note.uid())
+        .unwrap();
+    assert_eq!(reading.access_level(), CollectionAccessLevel::ReadOnly);
+    assert!(matches!(
+        outsider
+            .mindstream()
+            .room_ticket(collection.uid(), note.uid()),
+        Err(Error::NotFound(_))
+    ));
+
+    let welcome = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let mut socket = Socket::open(&address, "", None).await;
+            socket.hello(ticket.ticket()).await;
+            match socket.next().await {
+                Frame::Control(common::raw::WELCOME, welcome) => welcome,
+                other => panic!("expected a welcome, got {other:?}"),
+            }
+        });
+    assert_eq!(welcome["accessLevel"], ADMIN);
+    assert!(welcome["you"].as_u64().is_some());
+}
