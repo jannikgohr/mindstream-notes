@@ -1,5 +1,4 @@
-//! Finding — and converging on — the Etebase Collection behind each
-//! singleton kind.
+//! Finding — and converging on — the Etebase Collection that is the vault.
 //!
 //! Two fresh devices can each create their own collection in the
 //! first-sync race. The reconcile window makes every device deterministically
@@ -36,7 +35,6 @@ pub(super) fn ensure_collection(
     cm: &CollectionManager,
     kind: &str,
     collection_type: &str,
-    share_scope_part_uids: &HashSet<String>,
 ) -> AppResult<Collection> {
     let (cached_uid, passes_left) = load_collection_state(db, kind)?;
 
@@ -48,7 +46,7 @@ pub(super) fn ensure_collection(
             match cm.fetch(uid, None) {
                 Ok(col) => {
                     let candidate = VaultCollectionCandidate::from(&col);
-                    if usable_vault_collection(&candidate, share_scope_part_uids) {
+                    if usable_vault_collection(&candidate) {
                         return Ok(col);
                     }
                     log::warn!(
@@ -68,7 +66,7 @@ pub(super) fn ensure_collection(
         .data()
         .iter()
         .map(VaultCollectionCandidate::from)
-        .filter(|candidate| usable_vault_collection(candidate, share_scope_part_uids))
+        .filter(usable_vault_collection)
         .map(|candidate| candidate.uid.to_string())
         .min();
 
@@ -90,14 +88,8 @@ pub(super) fn ensure_collection(
 
     // None exist yet — create, upload, arm the window.
     let mut meta = ItemMetadata::new();
-    meta.set_name(Some(match kind {
-        KIND_NOTES => "Mindstream Notes",
-        KIND_FOLDERS => "Mindstream Folders",
-        KIND_ASSETS => "Mindstream Assets",
-        KIND_SIGNATURES => "Mindstream Signatures",
-        _ => "Mindstream",
-    }))
-    .set_mtime(Some(now_unix_ms()));
+    meta.set_name(Some("Mindstream Notes"))
+        .set_mtime(Some(now_unix_ms()));
     let col = cm
         .create(collection_type, &meta, &[])
         .map_err(|e| AppError::InvalidArg(format!("create {collection_type}: {e}")))?;
@@ -153,10 +145,10 @@ pub(super) fn save_collection_uid(db: &Db, kind: &str, uid: &str) -> AppResult<(
 
 /// Migrate this device onto the reconcile winner for `kind`. Points the cache
 /// at `winner_uid`, clears the stale pull cursor, re-arms the window, and
-/// routes every vault row of this kind back through push's create path against
-/// the winner by clearing its old collection-scoped item uid/etag and marking
-/// it dirty. The winner already holds the surviving copies; rows converge by
-/// their stable app id on the next pull, and rows only this device had are
+/// routes every vault row back through push's create path against the winner
+/// by clearing its old collection-scoped item uid/etag and marking it dirty.
+/// The winner already holds the surviving copies; rows converge by their
+/// stable app id on the next pull, and rows only this device had are
 /// re-created in the winner. Scoped (shared) rows keep their own routing and
 /// the local-only 'trash' folder is never pushed.
 pub(super) fn switch_to_collection(db: &Db, kind: &str, winner_uid: &str) -> AppResult<()> {
@@ -170,25 +162,21 @@ pub(super) fn switch_to_collection(db: &Db, kind: &str, winner_uid: &str) -> App
                 reconcile_passes_left = excluded.reconcile_passes_left",
             params![kind, winner_uid, RECONCILE_PASSES],
         )?;
-        let sql = match kind {
-            KIND_NOTES => {
-                "UPDATE notes SET dirty = 1, etebase_uid = NULL, etebase_etag = NULL
-                 WHERE share_scope_id IS NULL"
-            }
-            KIND_FOLDERS => {
-                "UPDATE collections SET dirty = 1, etebase_uid = NULL, etebase_etag = NULL
-                 WHERE share_scope_id IS NULL AND id != 'trash'"
-            }
-            KIND_ASSETS => {
-                "UPDATE assets SET dirty = 1, etebase_uid = NULL, etebase_etag = NULL
-                 WHERE share_scope_id IS NULL"
-            }
-            KIND_SIGNATURES => {
-                "UPDATE signatures SET dirty = 1, etebase_uid = NULL, etebase_etag = NULL"
-            }
-            _ => return Ok(()),
-        };
-        c.execute(sql, [])?;
+        if kind != KIND_VAULT {
+            return Ok(());
+        }
+        c.execute_batch(
+            "UPDATE notes SET dirty = 1, etebase_uid = NULL, etebase_etag = NULL
+              WHERE share_scope_id IS NULL;
+             UPDATE collections SET dirty = 1, etebase_uid = NULL, etebase_etag = NULL
+              WHERE share_scope_id IS NULL AND id != 'trash';
+             UPDATE assets SET dirty = 1, etebase_uid = NULL, etebase_etag = NULL
+              WHERE share_scope_id IS NULL;
+             UPDATE signatures SET dirty = 1, etebase_uid = NULL, etebase_etag = NULL;
+             -- Deletions queued against the collection this device is leaving
+             -- name items the winner never had.
+             DELETE FROM tombstones WHERE share_scope_id IS NULL;",
+        )?;
         Ok(())
     })?;
     log::info!("[sync] {kind} reconciled onto collection {winner_uid}");

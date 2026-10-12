@@ -746,6 +746,38 @@ const MIGRATIONS: &[Migration] = &[
             CREATE INDEX idx_asset_id_remaps_target ON asset_id_remaps(new_asset_id);
         "#,
     },
+    Migration {
+        to: 27,
+        // The vault becomes one collection on the server.
+        //
+        // It used to be four, one per kind of item, and every synced row
+        // here carries the uid of an item in one of them. Those uids mean
+        // nothing in the new collection, so they go, and so do the cursors
+        // and the queued deletions that went with the old four. Every vault
+        // row is marked for upload instead. The next sync pulls first, which
+        // re-attaches a row to its item where another device has already
+        // moved it over, and pushes what is left. It is what signing out
+        // and in again does, without the signing out.
+        //
+        // Rows of a shared folder are left alone. They sync with the
+        // collections of their share, which this does not change.
+        sql: r#"
+            DELETE FROM sync_state
+             WHERE kind IN ('notes', 'folders', 'assets', 'signatures');
+            DELETE FROM tombstones WHERE share_scope_id IS NULL;
+            UPDATE notes
+               SET etebase_uid = NULL, etebase_etag = NULL, dirty = 1
+             WHERE share_scope_id IS NULL;
+            UPDATE collections
+               SET etebase_uid = NULL, etebase_etag = NULL, dirty = 1
+             WHERE share_scope_id IS NULL AND id != 'trash';
+            UPDATE assets
+               SET etebase_uid = NULL, etebase_etag = NULL, dirty = 1
+             WHERE share_scope_id IS NULL;
+            UPDATE signatures
+               SET etebase_uid = NULL, etebase_etag = NULL, dirty = 1;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {
@@ -1215,6 +1247,97 @@ mod asset_refcount_upgrade_tests {
             .map(|r| r.unwrap())
             .collect();
         assert_eq!(refs, vec!["n1".to_string()]);
+    }
+
+    /// A vault as a device has it after syncing with the four collections of
+    /// old: everything clean and attached, a deletion waiting, and a folder
+    /// shared with it besides.
+    fn v26_synced_vault() -> Connection {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate_to(&mut conn, 26);
+        conn.execute_batch(
+            "INSERT INTO sync_state (kind, etebase_collection_uid, stoken, reconcile_passes_left)
+                 VALUES ('notes', 'col_notes', 'st_n', 0), ('folders', 'col_folders', 'st_f', 0),
+                        ('assets', 'col_assets', 'st_a', 0), ('signatures', 'col_sigs', 'st_s', 0),
+                        ('scope-notes:scope_x', NULL, 'st_scope', 0);
+             INSERT INTO collections (id, name, position, created, modified,
+                                      etebase_uid, etebase_etag, dirty)
+                 VALUES ('f1', 'Mine', 0, 't', 't', 'item_f1', 'etag_f1', 0);
+             INSERT INTO collections (id, name, position, created, modified,
+                                      etebase_uid, etebase_etag, dirty, share_scope_id)
+                 VALUES ('f2', 'Theirs', 1, 't', 't', 'item_f2', 'etag_f2', 0, 'scope_x');
+             INSERT INTO notes (id, title, body, created, modified,
+                                etebase_uid, etebase_etag, dirty)
+                 VALUES ('n1', 'Mine', '', 't', 't', 'item_n1', 'etag_n1', 0);
+             INSERT INTO notes (id, title, body, created, modified,
+                                etebase_uid, etebase_etag, dirty, share_scope_id)
+                 VALUES ('n2', 'Theirs', '', 't', 't', 'item_n2', 'etag_n2', 0, 'scope_x');
+             INSERT INTO assets (id, owning_note_id, mime_type, bytes, size, created, modified,
+                                 etebase_uid, etebase_etag, dirty)
+                 VALUES ('a1', 'n1', 'image/png', X'01', 1, 't', 't', 'item_a1', 'etag_a1', 0);
+             INSERT INTO signatures (id, data, created, modified, etebase_uid, etebase_etag, dirty)
+                 VALUES ('s1', 'x', 't', 't', 'item_s1', 'etag_s1', 0);
+             INSERT INTO tombstones (kind, etebase_uid, queued_at)
+                 VALUES ('note', 'item_gone', 't');
+             INSERT INTO tombstones (kind, etebase_uid, queued_at, share_scope_id)
+                 VALUES ('note', 'item_gone_shared', 't', 'scope_x');",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn v27_detaches_the_vault_from_its_old_collections_and_queues_it_for_upload() {
+        let mut conn = v26_synced_vault();
+
+        run(&mut conn).unwrap();
+
+        let attached = |table: &str, id: &str| -> (Option<String>, Option<String>, i64) {
+            conn.query_row(
+                &format!("SELECT etebase_uid, etebase_etag, dirty FROM {table} WHERE id = ?1"),
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap()
+        };
+        for (table, id) in [
+            ("collections", "f1"),
+            ("notes", "n1"),
+            ("assets", "a1"),
+            ("signatures", "s1"),
+        ] {
+            assert_eq!(attached(table, id), (None, None, 1), "{table} {id}");
+        }
+        // The built-in trash folder is local and never uploaded.
+        assert_eq!(attached("collections", "trash").2, 0);
+
+        // A shared folder's rows keep the items of their share.
+        assert_eq!(
+            attached("collections", "f2"),
+            (Some("item_f2".into()), Some("etag_f2".into()), 0)
+        );
+        assert_eq!(
+            attached("notes", "n2"),
+            (Some("item_n2".into()), Some("etag_n2".into()), 0)
+        );
+
+        let kinds: Vec<String> = conn
+            .prepare("SELECT kind FROM sync_state ORDER BY kind")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(kinds, vec!["scope-notes:scope_x".to_string()]);
+
+        let waiting: Vec<String> = conn
+            .prepare("SELECT etebase_uid FROM tombstones")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(waiting, vec!["item_gone_shared".to_string()]);
     }
 
     #[test]

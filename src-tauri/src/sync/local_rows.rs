@@ -36,13 +36,11 @@ impl<'a> From<&'a Collection> for VaultCollectionCandidate<'a> {
     }
 }
 
-pub(super) fn usable_vault_collection(
-    candidate: &VaultCollectionCandidate<'_>,
-    share_scope_part_uids: &HashSet<String>,
-) -> bool {
-    !candidate.is_deleted
-        && !share_scope_part_uids.contains(candidate.uid)
-        && !matches!(candidate.access_level, CollectionAccessLevel::ReadOnly)
+/// Whether a collection of the vault's type can be this account's vault.
+/// One the account can only read is somebody else's, shared by a client that
+/// is not this app.
+pub(super) fn usable_vault_collection(candidate: &VaultCollectionCandidate<'_>) -> bool {
+    !candidate.is_deleted && !matches!(candidate.access_level, CollectionAccessLevel::ReadOnly)
 }
 
 pub(super) struct DirtyNote {

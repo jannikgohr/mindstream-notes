@@ -97,29 +97,84 @@ fn describe_run_error_replaces_the_opaque_401_detail() {
 }
 
 #[test]
-fn usable_vault_collection_rejects_read_only_and_scope_parts() {
-    let mut scope_parts = HashSet::new();
-    scope_parts.insert("scope_folders".to_string());
-
-    let read_only = VaultCollectionCandidate {
-        uid: "external_read_only",
-        is_deleted: false,
-        access_level: CollectionAccessLevel::ReadOnly,
-    };
-    let scope_part = VaultCollectionCandidate {
-        uid: "scope_folders",
-        is_deleted: false,
-        access_level: CollectionAccessLevel::ReadWrite,
-    };
-    let vault = VaultCollectionCandidate {
-        uid: "vault_folders",
-        is_deleted: false,
-        access_level: CollectionAccessLevel::Admin,
+fn usable_vault_collection_rejects_read_only_and_deleted_ones() {
+    let candidate = |is_deleted, access_level| VaultCollectionCandidate {
+        uid: "a_collection",
+        is_deleted,
+        access_level,
     };
 
-    assert!(!usable_vault_collection(&read_only, &scope_parts));
-    assert!(!usable_vault_collection(&scope_part, &scope_parts));
-    assert!(usable_vault_collection(&vault, &scope_parts));
+    assert!(usable_vault_collection(&candidate(
+        false,
+        CollectionAccessLevel::Admin
+    )));
+    // Somebody else's, shared read-only by a client that is not this app.
+    assert!(!usable_vault_collection(&candidate(
+        false,
+        CollectionAccessLevel::ReadOnly
+    )));
+    assert!(!usable_vault_collection(&candidate(
+        true,
+        CollectionAccessLevel::Admin
+    )));
+}
+
+#[test]
+fn item_kind_is_read_from_the_type_in_the_metadata() {
+    assert_eq!(
+        ItemKind::from_item_type(Some(ITEM_TYPE_FOLDER)),
+        Some(ItemKind::Folder)
+    );
+    assert_eq!(
+        ItemKind::from_item_type(Some(ITEM_TYPE_NOTE)),
+        Some(ItemKind::Note)
+    );
+    assert_eq!(
+        ItemKind::from_item_type(Some(ITEM_TYPE_ASSET)),
+        Some(ItemKind::Asset)
+    );
+    assert_eq!(
+        ItemKind::from_item_type(Some(ITEM_TYPE_SIGNATURE)),
+        Some(ItemKind::Signature)
+    );
+    // Another app's item, or one without a type at all.
+    assert_eq!(ItemKind::from_item_type(Some("etebase.vcard")), None);
+    assert_eq!(ItemKind::from_item_type(None), None);
+}
+
+#[test]
+fn pulled_items_are_sorted_so_each_comes_after_what_it_needs() {
+    // The order the server sends: by when each item last changed. The
+    // asset is the oldest, its note was edited later, and the folder they
+    // are in was renamed last of all.
+    let arrived = [
+        (Some(ItemKind::Asset), "asset"),
+        (Some(ItemKind::Signature), "signature"),
+        (None, "another app's"),
+        (Some(ItemKind::Note), "note 1"),
+        (Some(ItemKind::Folder), "folder"),
+        (Some(ItemKind::Note), "note 2"),
+    ];
+
+    let sorted = by_kind(arrived);
+
+    let in_order: Vec<&str> = ItemKind::IN_ORDER
+        .into_iter()
+        .flat_map(|kind| sorted[kind as usize].clone())
+        .collect();
+    assert_eq!(
+        in_order,
+        vec!["folder", "note 1", "note 2", "asset", "signature"]
+    );
+}
+
+#[test]
+fn large_kinds_are_fetched_fewer_at_a_time() {
+    assert!(ItemKind::Asset.batch() < ItemKind::Note.batch());
+    assert!(ItemKind::Note.batch() < ItemKind::Folder.batch());
+    for kind in ItemKind::IN_ORDER {
+        assert!(kind.batch() > 0);
+    }
 }
 
 #[test]
@@ -219,7 +274,13 @@ fn switch_to_collection_rehomes_vault_rows_only() {
         // Pre-existing cache pointing at the loser collection with a stoken.
         c.execute(
             "INSERT INTO sync_state (kind, etebase_collection_uid, stoken, reconcile_passes_left)
-             VALUES ('notes', 'loser_uid', 'stok_old', 1)",
+             VALUES ('vault', 'loser_uid', 'stok_old', 1)",
+            [],
+        )?;
+        // A deletion queued against the loser, and one against a share.
+        c.execute(
+            "INSERT INTO tombstones (kind, etebase_uid, queued_at, share_scope_id)
+             VALUES ('note', 'gone_v', 't', NULL), ('note', 'gone_s', 't', 'scope_1')",
             [],
         )?;
         // Vault note synced to the loser collection.
@@ -240,13 +301,26 @@ fn switch_to_collection_rehomes_vault_rows_only() {
     })
     .unwrap();
 
-    switch_to_collection(&db, KIND_NOTES, "winner_uid").unwrap();
+    switch_to_collection(&db, KIND_VAULT, "winner_uid").unwrap();
+
+    let waiting: Vec<String> = db
+        .with_conn(|c| {
+            let mut stmt = c.prepare("SELECT etebase_uid FROM tombstones")?;
+            let rows = stmt.query_map([], |r| r.get(0))?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .unwrap();
+    assert_eq!(
+        waiting,
+        vec!["gone_s".to_string()],
+        "a deletion queued against the loser names an item the winner never had"
+    );
 
     let (uid, stoken, passes): (Option<String>, Option<String>, i64) = db
         .with_conn(|c| {
             Ok(c.query_row(
                 "SELECT etebase_collection_uid, stoken, reconcile_passes_left
-                 FROM sync_state WHERE kind = 'notes'",
+                 FROM sync_state WHERE kind = 'vault'",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )?)
@@ -301,7 +375,7 @@ fn switch_to_collection_leaves_trash_folder_local() {
     db.with_conn(|c| {
         c.execute(
             "INSERT INTO sync_state (kind, etebase_collection_uid, stoken, reconcile_passes_left)
-             VALUES ('folders', 'loser_uid', NULL, 1)",
+             VALUES ('vault', 'loser_uid', NULL, 1)",
             [],
         )?;
         c.execute(
@@ -314,7 +388,7 @@ fn switch_to_collection_leaves_trash_folder_local() {
     })
     .unwrap();
 
-    switch_to_collection(&db, KIND_FOLDERS, "winner_uid").unwrap();
+    switch_to_collection(&db, KIND_VAULT, "winner_uid").unwrap();
 
     let trash_dirty: i64 = db
         .with_conn(|c| {

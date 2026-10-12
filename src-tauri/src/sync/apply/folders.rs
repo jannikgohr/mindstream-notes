@@ -9,7 +9,7 @@ use super::*;
 
 /// Apply one pulled folder item to the local DB.
 ///
-/// Returns `Some(payload)` if we wrote a row (so `pull_folders` can
+/// Returns `Some(payload)` if we wrote a row (so the pull can
 /// queue it for the repair pass), `None` for deletes and missing-
 /// content items where there's nothing to re-link.
 pub(in crate::sync) fn apply_folder(
@@ -180,7 +180,7 @@ pub(in crate::sync) fn apply_folder_payload(
 /// locally, or `None` if it's missing — used by `apply_folder`/`apply_note`
 /// during pull so a dangling `parent_folder_id` on the server doesn't
 /// abort the sync with `FOREIGN KEY constraint failed`. The original
-/// payload value is preserved by `pull_folders` so the repair pass can
+/// payload value is preserved by the pull so the repair pass can
 /// reattach folders once the parent arrives.
 pub(in crate::sync) fn resolve_parent_id(
     conn: &Connection,

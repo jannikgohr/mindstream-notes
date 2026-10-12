@@ -155,7 +155,7 @@ pub async fn note_room_info(
             let col_uid: Option<String> = c
                 .query_row(
                     "SELECT etebase_collection_uid FROM sync_state WHERE kind = ?1",
-                    params![KIND_NOTES],
+                    params![KIND_VAULT],
                     |r| r.get::<_, Option<String>>(0),
                 )
                 .optional()?

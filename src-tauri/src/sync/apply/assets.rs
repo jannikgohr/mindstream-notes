@@ -74,8 +74,9 @@ pub(in crate::sync) fn apply_asset_payload(
         let tx = c.transaction()?;
 
         // FK gate: skip orphan assets rather than aborting the whole
-        // pull. The orphan flag in pull_assets keeps the stoken pinned
-        // so we retry on the next sync after the missing note arrives.
+        // pull. A pull applies every note it brings before any asset,
+        // so an asset that gets here without its note belongs to a note
+        // this device is not getting.
         let note_exists: bool = tx
             .query_row(
                 "SELECT 1 FROM notes WHERE id = ?1",

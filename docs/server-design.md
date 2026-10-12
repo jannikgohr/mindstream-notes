@@ -9,8 +9,9 @@ the app listens on the change feed and syncs when the server says something
 changed, and the old stack is gone from the repository. Step 5 is done in the
 app too: it signs up with a recovery key, signs in with a code, recovers an
 account, and has a panel for two-factor sign-in, the recovery key, the
-password and the devices signed in. Still to do in the app: one collection
-per space, and the screens for invitations and invite links.
+password and the devices signed in. Step 2 is half done: the vault is one
+collection. Still to do in the app: one collection per shared folder, and the
+screens for invitations and invite links.
 
 This replaces the backend stack described in
 [architecture.md](architecture.md#the-backend-stack): nginx, Etebase on
@@ -187,12 +188,32 @@ the other, as today.
 The server cannot tell a note from an attachment, because an item's type sits
 in its encrypted metadata. Two consequences follow.
 
-- Leaving attachment content out of a pull has to go by size. Chunks under a
-  threshold come inline and larger ones as references, which the client
-  downloads when the attachment is opened. A new device no longer downloads
-  every attachment up front.
+- The server cannot leave attachments out of a pull, and it does not try.
+  A new device downloads them in the background along with the notes, as it
+  always has. That was decided over the earlier idea of fetching an
+  attachment when it is first opened.
 - Account limits can only use what the server can count: bytes, spaces, members
   per space, blob size and sessions. It cannot count notes.
+
+As built so far, the vault is one collection of type `mindstream.vault`. A
+shared folder is still a manifest and three part collections, until the rest
+of this step lands. An app that synced with the four vault collections of
+before starts over against the new one on its first sync: its rows are
+detached from their old items and uploaded again, and a row another device
+has already moved over is matched by its own id, not uploaded twice.
+
+One stream of mixed items cannot be applied in the order it arrives. The
+server sends items in the order they last changed, so a folder renamed last
+week comes after the notes it has held for a year, and an attachment comes
+before the note it belongs to if the note was edited since. The pull handles
+this in one of two ways:
+
+- A change that fits one page is applied from that page, folders first, then
+  notes, attachments and signatures. Nearly every sync is this.
+- Anything larger, a first sync above all, is listed without content first.
+  The content is then fetched kind by kind in batches. Each item is
+  downloaded once, memory stays at one batch, and every folder is in place
+  before the first note is applied.
 
 ## Sync
 

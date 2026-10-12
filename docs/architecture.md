@@ -152,12 +152,15 @@ merge. This encoded CRDT state is the source of truth that travels in sync.
 
 ## Sync
 
-- **Vault sync — [`sync/mod.rs`](../src-tauri/src/sync/mod.rs).** Two Etebase
-  collections back the local store: `mindstream.folders` (placement metadata) and
-  `mindstream.notes` (a msgpack `NotePayload` carrying the yrs CRDT state plus
-  parent/position/tags/trash). Each sync bootstraps the collections, then per
-  kind pulls by `stoken` and pushes dirty rows via `ItemManager::transaction`
-  (folders first, so notes can resolve their parent). On a `Conflict` it refetches
+- **Vault sync — [`sync/mod.rs`](../src-tauri/src/sync/mod.rs).** One Etebase
+  collection, `mindstream.vault`, backs the local store. What an item is sits in
+  its metadata: a folder (placement metadata), a note (a msgpack `NotePayload`
+  carrying the yrs CRDT state plus parent/position/tags/trash), an attachment or
+  a signature. Each sync finds or creates the collection, pulls by its one
+  `stoken` and applies what came kind by kind
+  ([`sync/pull.rs`](../src-tauri/src/sync/pull.rs)), so a note's folder is in
+  place before the note. It then pushes dirty rows via
+  `ItemManager::transaction`, folders first. On a `Conflict` it refetches
   the item, merges the remote CRDT state into the local one (or takes remote
   non-CRDT fields for metadata-only rows), and retries — optimistic concurrency
   with the CRDT doing the actual conflict-free merge.

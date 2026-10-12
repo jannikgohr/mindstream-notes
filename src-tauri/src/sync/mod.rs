@@ -1,18 +1,20 @@
-//! Etebase sync — pull/push loop for notes and folders.
+//! Etebase sync — pull/push loop for everything the local store holds.
 //!
-//! Two parallel Etebase Collections back the local SQLite store:
+//! The vault is one Etebase Collection, `mindstream.vault`. What kind of
+//! thing an item is sits in its metadata:
 //!
-//!   * `mindstream.folders` — items typed `ms-md-folder`. Content is a
-//!     msgpack-encoded `FolderPayload`. No body, just placement metadata.
-//!   * `mindstream.notes`   — items typed `ms-md-note`. Content is a
-//!     msgpack-encoded `NotePayload`, which carries the yrs-encoded Doc
-//!     state (the CRDT source of truth) plus parent/position/tags/trash.
+//!   * `ms-md-folder` — content is a msgpack-encoded `FolderPayload`. No
+//!     body, just placement metadata.
+//!   * `ms-md-note` — content is a msgpack-encoded `NotePayload`, which
+//!     carries the yrs-encoded Doc state (the CRDT source of truth) plus
+//!     parent/position/tags/trash.
+//!   * `ms-md-asset` — an attachment, as an `AssetPayload`.
+//!   * `ms-md-signature` — a saved signature.
 //!
-//! On every sync we (1) bootstrap the two collections if they don't exist
-//! yet, then for each kind (2) pull by stoken — apply remote items to
-//! SQLite, (3) push dirty rows via `ItemManager::transaction` — and for
-//! folders we always go first so notes can resolve `parent_folder_id` on
-//! the way in.
+//! On every sync we (1) find or create the collection, (2) pull by its one
+//! stoken and apply remote items to SQLite in an order they can be applied
+//! in, see [`pull`], then (3) push dirty rows via
+//! `ItemManager::transaction`, folders first.
 //!
 //! Conflict handling: if `transaction` returns `Error::Conflict`, we
 //! refetch the colliding item, merge its yrs state into ours (or take
@@ -35,7 +37,7 @@ pub mod tags_crdt;
 pub mod yrs_doc;
 
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use chrono::Utc;
@@ -60,19 +62,19 @@ use crate::app_events::AppEvent;
 use crate::auth;
 use crate::db::Db;
 use crate::error::{AppError, AppResult, CommandResult};
-use crate::sharing::{
-    share_scope_collab_info, ShareManifest, ShareScopeCollabInfo, COLLECTION_TYPE_SHARE_MANIFEST,
-};
+use crate::sharing::{share_scope_collab_info, ShareScopeCollabInfo};
 
-const COLLECTION_TYPE_NOTES: &str = "mindstream.notes";
-const COLLECTION_TYPE_FOLDERS: &str = "mindstream.folders";
-const COLLECTION_TYPE_ASSETS: &str = "mindstream.assets";
-const COLLECTION_TYPE_SIGNATURES: &str = "mindstream.signatures";
+/// The one collection that holds an account's own folders, notes, assets
+/// and signatures.
+const COLLECTION_TYPE_VAULT: &str = "mindstream.vault";
 const ITEM_TYPE_NOTE: &str = "ms-md-note";
 const ITEM_TYPE_FOLDER: &str = "ms-md-folder";
 const ITEM_TYPE_ASSET: &str = "ms-md-asset";
 const ITEM_TYPE_SIGNATURE: &str = "ms-md-signature";
 
+/// The `sync_state` row of the vault collection: its uid and its cursor.
+const KIND_VAULT: &str = "vault";
+// What kind of row a tombstone or a remote uid belongs to.
 const KIND_NOTES: &str = "notes";
 const KIND_FOLDERS: &str = "folders";
 const KIND_ASSETS: &str = "assets";
@@ -206,44 +208,6 @@ pub(crate) fn run_session(
         }
         describe_run_error(err)
     })
-}
-
-fn load_share_scope_part_uids(cm: &CollectionManager) -> HashSet<String> {
-    let list = match cm.list(COLLECTION_TYPE_SHARE_MANIFEST, None) {
-        Ok(list) => list,
-        Err(e) => {
-            log::warn!("[sync] could not list share manifests before vault reconcile: {e}");
-            return HashSet::new();
-        }
-    };
-
-    let mut uids = HashSet::new();
-    for col in list.data() {
-        if col.is_deleted() {
-            continue;
-        }
-        let raw = match col.content() {
-            Ok(raw) => raw,
-            Err(e) => {
-                log::warn!("[sync] share manifest {} content failed: {e}", col.uid());
-                continue;
-            }
-        };
-        let manifest = match serde_json::from_slice::<ShareManifest>(&raw) {
-            Ok(manifest) => manifest,
-            Err(e) => {
-                log::warn!("[sync] share manifest {} decode failed: {e}", col.uid());
-                continue;
-            }
-        };
-        uids.extend(
-            manifest
-                .collections
-                .into_iter()
-                .map(|part| part.collection_uid),
-        );
-    }
-    uids
 }
 
 fn mark_local_by_remote_uid_dirty(db: &Db, kind: &str, etebase_uid: &str) -> AppResult<bool> {
@@ -462,76 +426,20 @@ fn run(db: &Db, account: &Account, self_username: Option<&str>) -> AppResult<Syn
     let cm = account
         .collection_manager()
         .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
-    let share_scope_part_uids = load_share_scope_part_uids(&cm);
-
-    // Item managers for the four vault collections. Set up all of them up
-    // front so the sync runs in three ordered phases: pull everything, sync
-    // scopes, then push everything.
-    let folders_col = ensure_collection(
-        db,
-        &cm,
-        KIND_FOLDERS,
-        COLLECTION_TYPE_FOLDERS,
-        &share_scope_part_uids,
-    )?;
-    let folders_im = cm
-        .item_manager(&folders_col)
-        .map_err(|e| AppError::InvalidArg(format!("item_manager(folders): {e}")))?;
-    let notes_col = ensure_collection(
-        db,
-        &cm,
-        KIND_NOTES,
-        COLLECTION_TYPE_NOTES,
-        &share_scope_part_uids,
-    )?;
-    let notes_im = cm
-        .item_manager(&notes_col)
-        .map_err(|e| AppError::InvalidArg(format!("item_manager(notes): {e}")))?;
-    let assets_col = ensure_collection(
-        db,
-        &cm,
-        KIND_ASSETS,
-        COLLECTION_TYPE_ASSETS,
-        &share_scope_part_uids,
-    )?;
-    let assets_im = cm
-        .item_manager(&assets_col)
-        .map_err(|e| AppError::InvalidArg(format!("item_manager(assets): {e}")))?;
-    let signatures_col = ensure_collection(
-        db,
-        &cm,
-        KIND_SIGNATURES,
-        COLLECTION_TYPE_SIGNATURES,
-        &share_scope_part_uids,
-    )?;
-    let signatures_im = cm
-        .item_manager(&signatures_col)
-        .map_err(|e| AppError::InvalidArg(format!("item_manager(signatures): {e}")))?;
+    let vault_col = ensure_collection(db, &cm, KIND_VAULT, COLLECTION_TYPE_VAULT)?;
+    let vault_im = cm
+        .item_manager(&vault_col)
+        .map_err(|e| AppError::InvalidArg(format!("item_manager(vault): {e}")))?;
 
     // --- Pull phase ---
-    // Folders first so notes' parent_folder_id can resolve; assets last so
-    // notes — and the FK target rows they need — are already in place when
-    // apply_asset tries to upsert. If a brand-new remote note + its asset land
-    // in the same sync, the note pull populates it, then the asset pull
-    // resolves the FK cleanly. The narrow race where a remote creates a note
-    // *between* our notes pull and our assets pull is handled inside
-    // apply_asset (it skips orphan assets and leaves the stoken unadvanced so
-    // the next sync retries). Signatures are user-global (no FK back to
-    // notes), so their order doesn't matter.
-    pull_folders(db, &folders_im, &mut delta.report)?;
-    pull_notes(
-        db,
-        &notes_im,
-        &mut delta.report,
-        &mut delta.notes_pulled_ids,
-    )?;
-    pull_assets(
-        db,
-        &assets_im,
-        &mut delta.report,
-        &mut delta.assets_pulled_ids,
-    )?;
-    pull_signatures(db, &signatures_im, &mut delta.report)?;
+    // One stream for every kind. `pull_space` sees to it that a folder is
+    // applied before the notes in it and a note before its assets.
+    let vault = SpacePull {
+        scope: None,
+        stoken_key: KIND_VAULT,
+        preserve_dirty_local_edits: true,
+    };
+    pull_space(db, &vault_im, &vault, &mut delta)?;
 
     // --- Scope sync ---
     // Runs between the vault pull and the vault push on purpose. A shared
@@ -548,10 +456,12 @@ fn run(db: &Db, account: &Account, self_username: Option<&str>) -> AppResult<Syn
     }
 
     // --- Push phase ---
-    push_folders(db, &folders_im, &mut delta.report, None)?;
-    push_notes(db, &notes_im, &mut delta.report, None)?;
-    push_assets(db, &assets_im, &mut delta.report, None)?;
-    push_signatures(db, &signatures_im, &mut delta.report)?;
+    // Folders first, so that no device ever pulls a note whose folder the
+    // server has not been told about.
+    push_folders(db, &vault_im, &mut delta.report, None)?;
+    push_notes(db, &vault_im, &mut delta.report, None)?;
+    push_assets(db, &vault_im, &mut delta.report, None)?;
+    push_signatures(db, &vault_im, &mut delta.report)?;
 
     Ok(delta)
 }
