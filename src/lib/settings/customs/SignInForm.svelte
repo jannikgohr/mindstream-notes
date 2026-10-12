@@ -702,7 +702,7 @@
           {#if mode === 'signin'}
             <button
               type="button"
-              class="text-primary underline-offset-2 hover:underline"
+              class="text-muted-foreground underline underline-offset-2 hover:text-foreground"
               onclick={() => switchMode('signup')}
               disabled={busy}
             >
@@ -710,7 +710,7 @@
             </button>
             <button
               type="button"
-              class="text-primary underline-offset-2 hover:underline"
+              class="text-muted-foreground underline underline-offset-2 hover:text-foreground"
               onclick={() => switchMode('recover')}
               disabled={busy}
             >
@@ -719,7 +719,7 @@
           {:else}
             <button
               type="button"
-              class="text-primary underline-offset-2 hover:underline"
+              class="text-muted-foreground underline underline-offset-2 hover:text-foreground"
               onclick={() => switchMode('signin')}
               disabled={busy}
             >

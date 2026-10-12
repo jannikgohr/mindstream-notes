@@ -994,6 +994,7 @@
     "account.serverUrl": "Server URL",
     "account.managedHint": "Hosted for you. Switch to self-hosted in the radio above to use your own server.",
     "account.password": "Password",
+    "account.serverType.locked": "Sign out to change server type.",
     "account.username": "Username",
     "account.email": "Email",
     "account.passwordAgain": "Repeat password",

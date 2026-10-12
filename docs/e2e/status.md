@@ -21,6 +21,7 @@ Tests we know we want but haven't written — the account/token-lifecycle flows
 | `settings-persist.e2e.ts`     | T3   | flows 3.1 / 3.2                                                                               |
 | `spellcheck.e2e.ts`           | T3   | flows 5.1 / 5.2 / 5.3 / 5.5 / 5.6 against a seeded dictionary                                 |
 | `text-checker.e2e.ts`         | T3   | flow 5.4 against a LanguageTool-shaped stub server                                            |
+| `account-security.e2e.ts`     | T4   | signup with a recovery key, a code asked of a new device, remote sign-out, password change    |
 | `sync-history.e2e.ts`         | T4   | per-device-history negative assertion; 4.10 edit-wins-over-delete                             |
 | `sharing.e2e.ts`              | T4   | sharing flows 4.1–4.4 + core 4.7 subtree/asset convergence + 4.7b                             |
 | `sharing-multi-device.e2e.ts` | T4   | owner-second-device 4.8–4.9 re-home cases                                                     |

@@ -6,9 +6,11 @@ server halves of steps 3, 4 and 5: rooms and the change feed, invite links,
 then device sessions, two-factor sign-in and the recovery key. On the app's
 side, live collaboration for every kind of note runs on the server's rooms,
 the app listens on the change feed and syncs when the server says something
-changed, and the old stack is gone from the repository. Still to do in the
-app: one collection per space, and the screens for invitations, links,
-two-factor sign-in, recovery and sessions.
+changed, and the old stack is gone from the repository. Step 5 is done in the
+app too: it signs up with a recovery key, signs in with a code, recovers an
+account, and has a panel for two-factor sign-in, the recovery key, the
+password and the devices signed in. Still to do in the app: one collection
+per space, and the screens for invitations and invite links.
 
 This replaces the backend stack described in
 [architecture.md](architecture.md#the-backend-stack): nginx, Etebase on
@@ -341,11 +343,19 @@ Signing in creates a session for that device. The server keeps a hash of its
 token, a name and when it was last used, and the user can list and revoke
 sessions.
 
-This replaces the silent refresh. Today, when a token is rejected the app logs
-in again with the stored main key and no user involved. That is
-`run_with_reauth` in [sync/mod.rs](../src-tauri/src/sync/mod.rs). The key is
-equivalent to the password, so the path would bypass a second factor. With
-device sessions a rejected token means signing in again.
+This replaces the silent refresh. The app used to answer a rejected token by
+logging in again with the stored main key, with no user involved. The key is
+equivalent to the password, so that path would have bypassed a second factor
+and undone every row of the table below. It is gone. A sync that meets a
+rejected token signs the device out, keeps its notes, and says so in a
+notification. That is `run_session` in
+[sync/mod.rs](../src-tauri/src/sync/mod.rs) and `end_session_locally` in
+[auth/mod.rs](../src-tauri/src/auth/mod.rs). The change feed asks for that
+sync the moment the server closes its socket, so the device notices within a
+second.
+
+A device names itself when it signs in: the app, the machine's name where the
+system gives one, and the system. The list of devices shows that name.
 
 Ending a session closes its rooms and its change feed at once. Some changes
 end sessions other than the caller's:
@@ -404,6 +414,23 @@ key and the second factor and returns the copy with a grant good for ten
 minutes. The second carries the grant, the new keys and the new recovery key.
 The grant exists because a code works once, so the second request could not
 show it again. The server refuses to keep a recovery key that has been used.
+
+As built in the client library and the app:
+
+- The recovery key is 32 random bytes. The client derives two keys from it
+  the way it does from the password's key: one wraps the copy of the account
+  keys, the other signs a recovery request. The server stores the copy and
+  the public half of the signing key.
+- It is shown as 56 letters and digits in fourteen groups of four. The last
+  characters are a checksum, so a typing mistake is caught on the device and
+  costs no attempt at the server. Case, spaces and dashes do not matter when
+  it is typed back.
+- The app shows it once, with a button to copy it, and does not go on until
+  the user says it is stored. The window is not reloaded before that, and the
+  key survives closing the settings dialog by accident.
+- A signed-in account can replace its key with the password, and a code if it
+  has a second factor. That is also the answer to a key that was never
+  written down.
 
 ### Routes
 
@@ -620,8 +647,9 @@ The frame figures are within the run-to-run noise of each other.
    server leaves it to the operator. Under `invite` any admin of a space may.
    Under `closed`, the default, nobody may and the administrator hands out
    signup codes. Confirm the default.
-7. **The recovery key's format**, and whether the app offers something to print
-   or save.
+7. **Printing or saving the recovery key.** The format is settled, see
+   [recovery key](#recovery-key). The app offers a copy button and nothing
+   else. A file to save or a page to print is still open.
 8. **How long a device session lasts** when it is not used.
 9. **The size under which content comes inline.**
 10. **Email verification on managed**, and whether it gates the first sync.

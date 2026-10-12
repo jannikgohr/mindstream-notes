@@ -17,8 +17,8 @@ function device(over: Partial<DeviceSession>): DeviceSession {
 describe('deviceLabel', () => {
   it('drops the tag of the client library from the name', () => {
     expect(
-      deviceLabel('Mindstream Notes on LAPTOP-7 (Windows) etebase/0.6.1')
-    ).toBe('Mindstream Notes on LAPTOP-7 (Windows)');
+      deviceLabel('Mindstream Notes (LAPTOP-7, Windows) etebase/0.6.1')
+    ).toBe('Mindstream Notes (LAPTOP-7, Windows)');
   });
 
   it('leaves the name of any other client as it is', () => {

@@ -136,7 +136,8 @@ fn resolve_server_url(server_type: &str, server_url: Option<&str>) -> AppResult<
 /// What this device calls itself to the server. It is the name the device
 /// goes by in the account's list of signed-in devices, so it should let the
 /// user tell their devices apart: the app, the machine's name where the
-/// system gives one, and the system.
+/// system gives one, and the system. No word of any language, because the
+/// list shows it as it is to a user of any.
 fn device_name() -> String {
     let machine = ["COMPUTERNAME", "HOSTNAME"]
         .iter()
@@ -164,7 +165,7 @@ fn describe_device(machine: &str, os: &str) -> String {
     if machine.is_empty() {
         format!("{APP_NAME} ({system})")
     } else {
-        format!("{APP_NAME} on {machine} ({system})")
+        format!("{APP_NAME} ({machine}, {system})")
     }
 }
 
@@ -634,11 +635,11 @@ mod tests {
     fn device_is_named_by_app_machine_and_system() {
         assert_eq!(
             describe_device("DESKTOP-7QK2", "windows"),
-            "Mindstream Notes on DESKTOP-7QK2 (Windows)"
+            "Mindstream Notes (DESKTOP-7QK2, Windows)"
         );
         assert_eq!(
             describe_device("anns-macbook.local", "macos"),
-            "Mindstream Notes on anns-macbook.local (macOS)"
+            "Mindstream Notes (anns-macbook.local, macOS)"
         );
         // No machine name to be had, on a phone for one.
         assert_eq!(describe_device("", "android"), "Mindstream Notes (Android)");
@@ -652,12 +653,12 @@ mod tests {
     fn device_name_keeps_only_what_a_header_can_carry() {
         assert_eq!(
             describe_device("Büro\r\nX-Evil: 1", "linux"),
-            "Mindstream Notes on BroX-Evil 1 (Linux)"
+            "Mindstream Notes (BroX-Evil 1, Linux)"
         );
         let long = "a".repeat(500);
         assert_eq!(
             describe_device(&long, "linux"),
-            format!("Mindstream Notes on {} (Linux)", "a".repeat(60))
+            format!("Mindstream Notes ({}, Linux)", "a".repeat(60))
         );
     }
 

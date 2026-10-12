@@ -277,7 +277,7 @@ describe('devices', () => {
     invoke.mockResolvedValueOnce([
       {
         id: 7,
-        device_name: 'Mindstream Notes on LAPTOP (Windows) etebase/0.6.1',
+        device_name: 'Mindstream Notes (LAPTOP, Windows) etebase/0.6.1',
         created_at: 1_790_000_000,
         last_used_at: 1_790_000_600,
         second_factor: true,
@@ -287,7 +287,7 @@ describe('devices', () => {
     await expect(accountSessions()).resolves.toEqual([
       {
         id: 7,
-        deviceName: 'Mindstream Notes on LAPTOP (Windows) etebase/0.6.1',
+        deviceName: 'Mindstream Notes (LAPTOP, Windows) etebase/0.6.1',
         createdAt: 1_790_000_000,
         lastUsedAt: 1_790_000_600,
         secondFactor: true,

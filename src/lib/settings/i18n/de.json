@@ -994,6 +994,7 @@
     "account.serverUrl": "Server-URL",
     "account.managedHint": "Für dich betrieben. Wähle oben „Selbst gehostet“, um einen eigenen Server zu nutzen.",
     "account.password": "Passwort",
+    "account.serverType.locked": "Melde dich ab, um den Servertyp zu ändern.",
     "account.username": "Benutzername",
     "account.email": "E-Mail",
     "account.passwordAgain": "Passwort wiederholen",

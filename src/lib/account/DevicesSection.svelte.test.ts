@@ -23,7 +23,7 @@ import DevicesSection from './DevicesSection.svelte';
 function device(over: Partial<DeviceSession>): DeviceSession {
   return {
     id: 1,
-    deviceName: 'Mindstream Notes on LAPTOP (Windows) etebase/0.6.1',
+    deviceName: 'Mindstream Notes (LAPTOP, Windows) etebase/0.6.1',
     createdAt: 1_790_000_000,
     lastUsedAt: 1_790_000_000,
     secondFactor: false,
@@ -58,7 +58,7 @@ describe('DevicesSection', () => {
 
     await waitFor(() => expect(rows()).toHaveLength(3));
     const [first, second, third] = rows();
-    expect(first.textContent).toMatch(/Mindstream Notes on LAPTOP \(Windows\)/);
+    expect(first.textContent).toMatch(/Mindstream Notes \(LAPTOP, Windows\)/);
     expect(first.textContent).toMatch(/This device/);
     expect(first.textContent).not.toMatch(/etebase/);
     expect(second.textContent).toMatch(/Android/);
