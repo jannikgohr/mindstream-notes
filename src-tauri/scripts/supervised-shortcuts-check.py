@@ -100,11 +100,17 @@ def main():
     parser.add_argument("--wait-for-window-close", action="store_true", help="start two vaults without background capture and wait for native window closure")
     parser.add_argument("--autostart-hidden", action="store_true", help="check hidden autostart before the window-close UI fixture; create activate-now to continue")
     parser.add_argument("--check-revival", action="store_true", help="crash the owned coordinator and check automatic worker adoption without a manual launch")
+    parser.add_argument("--check-update-recovery", action="store_true", help="simulate a completed update and verify all-vault/popout/hidden-state recovery without installing software")
+    parser.add_argument("--wait-for-update-inspection", action="store_true", help="pause recovered-update fixture for computer-use inspection until inspect-done exists")
     args = parser.parse_args()
+    if args.wait_for_update_inspection:
+        args.check_update_recovery = True
     if args.autostart_hidden:
         args.wait_for_window_close = True
     if args.check_revival and (args.wait_for_window_close or args.wait_for_external_quit):
         parser.error("revival check cannot be combined with interactive close/quit modes")
+    if args.check_update_recovery and (args.check_revival or args.wait_for_window_close or args.wait_for_external_quit):
+        parser.error("update recovery cannot be combined with another lifecycle fixture")
     assert os.name == "nt", "this fixture checks Windows native workers"
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -198,7 +204,7 @@ def main():
         try:
             peer = wait(endpoint)
             wait(lambda: status()["initialized"] and any(entry["id"] == "other" and entry["ready"] for entry in status()["workers"]))
-            assert status()["contract"]["protocol"] == 7
+            assert status()["contract"]["protocol"] == 8
             if args.wait_for_window_close:
                 if args.autostart_hidden:
                     assert status()["active"] is None, "hidden worker incorrectly took focus recency"
@@ -245,6 +251,121 @@ def main():
                 assert "Err" in call(peer, {"command": "open", "vault_id": "capture"}, request_id)
             assert "Err" in call(peer, {"command": "autostart", "vault_id": "other", "launch_id": str(uuid.uuid4()), "enabled": None})
             print("Coordinator autostart read/retry/identity and disabled test-root writes passed")
+            check_id = str(uuid.uuid4())
+            check_payload = {"command": "updateCheck", "vault_id": "other", "launch_id": owner["launch_id"], "force": False}
+            assert call(peer, check_payload, check_id)["Ok"] == {"accepted": True}
+            def update_checked():
+                progress = call(peer, {"command": "updateCheckStatus", "operation_id": check_id})["Ok"]
+                return progress if progress["state"] != "pending" else None
+            assert wait(update_checked) == {"state": "ready", "available": None}
+            assert call(peer, check_payload, check_id)["Ok"] == {"accepted": True}
+            assert "Err" in call(peer, {**check_payload, "force": True}, check_id)
+            assert "Err" in call(peer, {**check_payload, "launch_id": str(uuid.uuid4())})
+            install_id = str(uuid.uuid4())
+            install_payload = {"command": "updateInstall", "vault_id": "other", "launch_id": owner["launch_id"], "update_id": str(uuid.uuid4())}
+            assert call(peer, install_payload, install_id)["Ok"]["operation_id"] == install_id
+            def update_failed():
+                progress = call(peer, {"command": "openStatus", "operation_id": install_id})["Ok"]
+                return progress if progress["state"] != "pending" else None
+            assert wait(update_failed)["state"] == "failed"
+            wait(lambda: status()["quitting"] is None)
+            assert call(peer, install_payload, install_id)["Ok"]["operation_id"] == install_id
+            assert not (root / "update-restart.json").exists(), "unverified update saved restart state"
+            assert worker("other")["launch_id"] == owner["launch_id"], "disabled update closed a worker"
+            print("Coordinator update check/retry/identity and disabled installation passed")
+            if args.check_update_recovery:
+                completed("open", vault_id="capture")
+                wait(lambda: status()["active"] == "capture")
+                completed("tray", action="markdownNote")
+                captures = {}
+                def snapshot(vault_id):
+                    registered = worker(vault_id)
+                    return call(registered["endpoint"], {"command": "snapshotWindows", "launch_id": registered["launch_id"]})["Ok"]
+                def restore(vault_id, windows):
+                    registered = worker(vault_id)
+                    identity = call(registered["endpoint"], {"command": "identify", "launch_id": registered["launch_id"]})["Ok"]
+                    operation_id = str(uuid.uuid4())
+                    payload = {"command": "restoreWindows", "launch_id": registered["launch_id"], "vault": {
+                        "id": vault_id, "directory": identity["directory"], "windows": windows}}
+                    assert call(registered["endpoint"], payload, operation_id)["Ok"]["accepted"]
+                    def terminal():
+                        progress = call(registered["endpoint"], {"command": "restoreStatus", "launch_id": registered["launch_id"], "operation_id": operation_id})["Ok"]
+                        return progress if progress["state"] != "pending" else None
+                    assert wait(terminal)["state"] == "ready"
+                    assert call(registered["endpoint"], payload, operation_id)["Ok"]["accepted"]
+                    changed = json.loads(json.dumps(payload))
+                    changed["vault"]["windows"][0]["width"] += 1
+                    assert "Err" in call(registered["endpoint"], changed, operation_id)
+                    return identity
+                with sqlite3.connect(root / "profiles/capture/mindstream.db") as db:
+                    note_id = db.execute("SELECT id FROM notes WHERE title='Untitled' ORDER BY created DESC LIMIT 1").fetchone()
+                    if note_id is None:
+                        note_id = db.execute("SELECT id FROM notes ORDER BY created DESC LIMIT 1").fetchone()
+                    assert note_id
+                    note_id = note_id[0]
+                popout_label = note_id if note_id.startswith("note_") else "note_" + note_id
+                windows = snapshot("capture")
+                windows.append({"label": popout_label, "note_id": note_id, "x": 160, "y": 120, "width": 900, "height": 700,
+                    "visible": True, "minimized": False, "maximized": False})
+                captures["capture"] = restore("capture", windows)
+                hidden = snapshot("other")
+                for window in hidden:
+                    window["visible"] = False
+                captures["other"] = restore("other", hidden)
+                saved = [{"id": vault_id, "directory": captures[vault_id]["directory"], "windows": snapshot(vault_id)} for vault_id in vaults]
+                call(worker("capture")["endpoint"], {"command": "activate", "window": popout_label})
+                wait(lambda: status()["active"] == "capture")
+                print("Update fixture ready with visible capture/popout and hidden other vault", flush=True)
+                assert call(peer, {"command": "quit"})["Ok"]["accepted"]
+                assert host.wait(timeout=190) == 0
+                for vault_id in vaults:
+                    assert not owned(root / "profiles" / vault_id / ".vault.lock")
+                target_version = json.loads((Path(__file__).resolve().parents[2] / "package.json").read_text())["version"]
+                journal = {"version": 1, "operation_id": str(uuid.uuid4()), "root": captures["capture"]["root"],
+                    "source_version": "fixture-previous-version", "target_version": target_version, "phase": "installing",
+                    "vaults": saved, "focus": {"vault_id": "capture", "window": popout_label}, "restored": []}
+                with lease(root / ".coordinator.lock"), lease(root / ".root.lock"):
+                    (root / "update-restart.json").write_text(json.dumps(journal), encoding="utf-8")
+                # Installer auto-launch can inherit the recovery flag from a
+                # revived host. Valid update intent must override background mode.
+                host = subprocess.Popen([str(args.exe.resolve()), "--supervised-vaults", "--coordinator-recovery"], env=env,
+                    stdout=log, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW)
+                peer = wait(endpoint)
+                wait(lambda: len(status()["workers"]) == 2 and all(entry["ready"] for entry in status()["workers"]))
+                wait(lambda: json.loads((root / "update-restart.json").read_text())["phase"] == "consumed")
+                for vault in saved:
+                    actual = {window["label"]: window for window in snapshot(vault["id"])}
+                    assert set(actual) == {window["label"] for window in vault["windows"]}
+                    for expected in vault["windows"]:
+                        current = actual[expected["label"]]
+                        assert current["visible"] == expected["visible"], current
+                        assert current["minimized"] == expected["minimized"], current
+                        assert current["maximized"] == expected["maximized"], current
+                        assert abs(current["width"] - expected["width"]) <= 2, (current, expected)
+                        assert abs(current["height"] - expected["height"]) <= 2, (current, expected)
+                wait(lambda: any(entry["id"] == "capture" and entry["window"] == popout_label for entry in status()["workers"]))
+                (output / "update-recovered.json").write_text(json.dumps({"vaults": saved, "focus": journal["focus"]}), encoding="utf-8")
+                print("Completed update reopened both vaults, restored the popout/hidden state and consumed intent", flush=True)
+                if args.wait_for_update_inspection:
+                    wait(lambda: (output / "inspect-done").exists(), 190)
+                assert call(peer, {"command": "quit"})["Ok"]["accepted"]
+                assert host.wait(timeout=190) == 0
+                host = subprocess.Popen([str(args.exe.resolve()), "--supervised-vaults"], env=env,
+                    stdout=log, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW)
+                peer = wait(endpoint)
+                wait(lambda: status()["initialized"] and any(entry["ready"] for entry in status()["workers"]))
+                assert len(status()["workers"]) == 1, "consumed update reopened old session again"
+                assert status()["workers"][0]["id"] == "capture"
+                assert [window["label"] for window in snapshot("capture")] == ["main"]
+                assert call(peer, {"command": "quit"})["Ok"]["accepted"]
+                assert host.wait(timeout=190) == 0
+                with lease(root / ".coordinator.lock"):
+                    for vault_id in vaults:
+                        with lease(root / "profiles" / vault_id / ".vault.lock"):
+                            pass
+                print("Normal cold start opened only the last vault; final Quit released all leases")
+                clean = True
+                return
             if args.check_revival:
                 completed("open", vault_id="capture")
                 wait(lambda: len(status()["workers"]) == 2 and all(entry["ready"] for entry in status()["workers"]))

@@ -35,6 +35,8 @@ pub mod coordinator_revival;
 mod coordinator_shortcuts;
 #[cfg(desktop)]
 mod coordinator_shutdown;
+#[cfg(desktop)]
+mod coordinator_updater;
 pub mod data;
 pub mod db;
 #[cfg(desktop)]
@@ -81,6 +83,10 @@ pub mod tray;
 pub mod tree;
 pub mod tree_batch;
 pub mod ui_settings;
+#[cfg(desktop)]
+mod update_recovery;
+#[cfg(desktop)]
+mod update_windows;
 pub mod vault_jobs;
 #[cfg(desktop)]
 pub mod vault_runtime;
@@ -286,7 +292,11 @@ pub fn run() {
             }
             app_handle.plugin(autostart.build())
         };
-        app_handle.plugin(tauri_plugin_updater::Builder::new().build())
+        if std::env::args().any(|arg| arg == "--vault-worker") {
+            app_handle
+        } else {
+            app_handle.plugin(tauri_plugin_updater::Builder::new().build())
+        }
     } else {
         app_handle
     };
@@ -704,6 +714,10 @@ pub fn run() {
                 vault_supervisor::vault_worker_ready,
                 #[cfg(desktop)]
                 vault_supervisor::open_profile_window,
+                #[cfg(desktop)]
+                coordinator_updater::check_coordinated_update,
+                #[cfg(desktop)]
+                coordinator_updater::install_coordinated_update,
                 #[cfg(desktop)]
                 coordinator_autostart::get_start_on_login,
                 #[cfg(desktop)]

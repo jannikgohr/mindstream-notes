@@ -322,10 +322,13 @@ pub(crate) fn focus_vault_window(app: &AppHandle, window: &tauri::WebviewWindow)
         focus_main_window(app);
         return;
     }
+    let webview: &tauri::Webview = window.as_ref();
     if let Err(error) = window
         .unminimize()
         .and_then(|_| window.show())
+        .and_then(|_| webview.show())
         .and_then(|_| window.set_focus())
+        .and_then(|_| webview.set_focus())
     {
         log::warn!("[vaults] note window activation failed: {error}");
     }

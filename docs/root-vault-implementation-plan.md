@@ -9,8 +9,7 @@ workers after a coordinator restart. Coordinator shortcut registration and
 eligible-vault action dispatch, shared tray routing and last-window coordinator
 exit pass Windows checks. Coordinator autostart registration ownership is
 implemented. Packaged/embedded coordinator revival passes Windows checks.
-Platform checks, updater
-integration and the vault-opening UI remain pending;
+Coordinator update ownership and all-vault update recovery pass Windows checks. Platform checks and the vault-opening UI remain pending;
 normal startup and existing isolated test devices still use direct mode.
 Supervised worker close waits for content-window persistence. Whole-app Quit
 orchestration passes the Windows app checks; source/target
@@ -22,6 +21,14 @@ Global plugin packages and theme presets are separate follow-up projects:
 - [Theme presets plan](theme-presets-implementation-plan.md)
 
 ## Required behavior
+
+Update restart policy confirmed by the owner on 2026-10-12: reopen every vault
+that was open before the update. Preserve hidden/visible state and restore focus
+to the previously focused window. Save the restart record before closing workers;
+consume it after every saved vault is ready in the updated version, or after
+a failed install has restored the session in the original version. Retain the
+consumed record as evidence without replaying it on later normal starts. Normal
+cold startup without an update record still opens only the last-used vault.
 
 | Action                                              | Result                                                                               |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------ |
@@ -1069,6 +1076,68 @@ and `.output/coordinator-revival-regression-check`. No fixture app processes
 remained after cleanup. Real packaged macOS/Linux lifecycle and focus checks
 remain outstanding.
 
+Coordinator updater slice on 2026-10-12: supervised workers use a typed native
+bridge and never load the updater plugin. The root coalesces automatic checks,
+retains an identified offer and fences new launches/captures while installing.
+Checking holds a tracked job; installation holds no worker job, since its own
+worker must be able to close. Downloads/signatures complete before any worker
+closes. Progress reaches the requesting UI through private worker IPC.
+
+Before closing workers, the coordinator drains earlier root work, snapshots
+all ready vaults and their main/note windows, then atomically saves an update
+restart record under RootLock. Close uses the existing all-window save/service
+drain protocol and requires child-exit/physical-lease release. No root document
+lock crosses network work, worker IPC or waiting. Windows installation runs
+only in the root because the SDK starts an installer and exits its caller.
+Other desktop platforms restart from the coordinator after native installation.
+
+Startup validates the record's root, source/target version and physical indexed
+vault paths. Valid update recovery takes precedence over background/autostart
+launch flags inherited by an installer. It prepares workers without automatic
+activation, recreates note windows with vault-isolated browser options/account
+policy, and restores saved bounds, visibility and minimization/maximization.
+Every restored window must register persistence readiness before its vault is
+acknowledged. Final activation targets only the saved focus window. Note windows
+store their explicit note IDs, since IDs may already contain the window-label
+prefix. They use the app's root editor URL. Hidden-created popouts synchronize
+the WebView's visibility as well as their native window; activation shows and
+focuses their WebView explicitly.
+
+Per-vault acknowledgements survive interrupted startup. Surviving acknowledged
+workers retain their current windows; missing workers reopen even when an older
+acknowledgement exists. Completion writes an atomic consumed tombstone, so a
+normal cold start opens only the last-used vault. There is no previous-copy
+fallback for this journal: replaying an older update intent could revive windows
+the user has since closed. Invalid/foreign records remain intact and cannot be
+overwritten by a new update. Failed close/install drops the reversible drain,
+resumes root admission/shortcuts and restores closed vaults in the old version;
+an incomplete recovery retains its evidence.
+
+Validation: Rust fmt/clippy and 874 enabled tests passed, five ignored. Frontend
+check and affected ESLint passed, along with 28 updater/close-participant tests,
+the production frontend build and embedded Windows build. The fresh-root native
+fixture checked ready-owner authentication, operation replay and disabled test
+installation. Simulated installer completion reopened both vaults despite an
+inherited background-recovery flag, restored main/popout bounds and hidden state,
+and automatically focused the saved note window. Persistence readiness completed
+before the record was consumed. A subsequent normal cold start opened only the
+last-used vault and no old popout. Final Quit released every physical vault and
+coordinator lease.
+
+Computer use verified the actual editor URL/note identity and entered text in
+the restored popout. SQLite retained the text in that exact note after coordinated
+Quit. This caught and fixed an editor-route 404 and a hidden WebView2 controller
+that prevented restored popouts from receiving focus/input. Artifacts remain in
+`.output/coordinator-updater-visible-webview-ui-check`. Earlier failed fixtures
+were closed gracefully and left their evidence for inspection. The full native
+tray/shortcut/autostart/Quit/last-window regression also passed in
+`.output/coordinator-updater-full-regression-check`. No fixture app processes
+remained after cleanup.
+
+Actual signed updater installation, packaged macOS/Linux restart, and monitor/DPI
+changes remain release QA requirements. The native fixture simulates installer
+completion and never changes the installed application.
+
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.
 
@@ -1174,6 +1243,6 @@ and recovery tests in the same reviewable change. Commit automatically after
 required checks using scoped Conventional Commit messages.
 
 Out of scope: exact native-window preservation through backend session swapping,
-multiple local writers, full previous-session reopening, network-filesystem
+multiple local writers, ordinary cold-start previous-session reopening, network-filesystem
 vaults, full settings/plugin-data backup portability, and the separate plugins
 and themes projects.

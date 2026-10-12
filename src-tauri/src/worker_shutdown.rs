@@ -236,6 +236,18 @@ fn windows(app: &AppHandle) -> BTreeSet<String> {
         .collect()
 }
 
+#[cfg(desktop)]
+pub(crate) fn all_windows_ready(app: &AppHandle) -> bool {
+    let actual = windows(app);
+    !actual.is_empty()
+        && app.try_state::<Shutdown>().is_some_and(|state| {
+            state
+                .book
+                .lock()
+                .is_ok_and(|book| actual.is_subset(&book.ready))
+        })
+}
+
 #[tauri::command]
 pub fn vault_window_close_ready(
     app: AppHandle,

@@ -47,6 +47,19 @@ enum HostCommand {
         launch_id: Uuid,
         enabled: Option<bool>,
     },
+    UpdateCheck {
+        vault_id: String,
+        launch_id: Uuid,
+        force: bool,
+    },
+    UpdateCheckStatus {
+        operation_id: Uuid,
+    },
+    UpdateInstall {
+        vault_id: String,
+        launch_id: Uuid,
+        update_id: Uuid,
+    },
     AutostartStatus {
         operation_id: Uuid,
     },
@@ -113,6 +126,21 @@ enum WorkerCommand {
         launch_id: Uuid,
         operation_id: Uuid,
     },
+    SnapshotWindows {
+        launch_id: Uuid,
+    },
+    RestoreWindows {
+        launch_id: Uuid,
+        vault: crate::update_recovery::Vault,
+    },
+    RestoreStatus {
+        launch_id: Uuid,
+        operation_id: Uuid,
+    },
+    UpdateProgress {
+        launch_id: Uuid,
+        progress: crate::coordinator_updater::DownloadProgress,
+    },
     RefreshDeviceSettings {
         launch_id: Uuid,
     },
@@ -138,6 +166,7 @@ struct Operation {
     at: Instant,
     open_result: Option<Result<(), String>>,
     autostart_result: Option<Result<bool, String>>,
+    update_result: Option<crate::coordinator_updater::CheckProgress>,
 }
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "state", rename_all = "camelCase", deny_unknown_fields)]
@@ -157,6 +186,7 @@ enum OpenProgress {
 struct Book {
     exported: bool,
     had_ready_worker: bool,
+    recovering: bool,
     quitting: Option<Uuid>,
     last: Option<String>,
     workers: BTreeMap<String, Launch>,
@@ -175,6 +205,8 @@ enum Action {
     Shortcut(crate::hotkeys::GlobalShortcutCommandId, Option<String>),
     Tray(crate::shortcut_actions::TrayCommand),
     Autostart(Option<bool>),
+    UpdateCheck(bool),
+    UpdateInstall(Uuid),
 }
 
 impl Book {
@@ -205,6 +237,7 @@ impl Book {
     fn idle_exit_candidate(&self, jobs: &crate::vault_jobs::Jobs) -> bool {
         self.exported
             && self.had_ready_worker
+            && !self.recovering
             && self.workers.is_empty()
             && self.quitting.is_none()
             && jobs.is_idle()
@@ -214,7 +247,7 @@ impl Book {
         let operation = self.operations.get(&operation_id).ok_or_else(invalid)?;
         if !matches!(
             operation.input["command"].as_str(),
-            Some("open" | "shortcut" | "tray" | "quit")
+            Some("open" | "shortcut" | "tray" | "quit" | "updateInstall")
         ) {
             return Err(invalid());
         }
@@ -236,7 +269,7 @@ impl Book {
             if (*request_id == operation_id || quit_alias)
                 && matches!(
                     operation.input["command"].as_str(),
-                    Some("open" | "shortcut" | "tray" | "quit")
+                    Some("open" | "shortcut" | "tray" | "quit" | "updateInstall")
                 )
                 && operation.open_result.is_none()
             {
@@ -301,8 +334,9 @@ impl Book {
     fn accept(&mut self, instance: Uuid, request: Request) -> AppResult<(Value, Option<Action>)> {
         let command: HostCommand =
             serde_json::from_value(request.payload.clone()).map_err(|_| invalid())?;
-        self.operations
-            .retain(|_, operation| operation.at.elapsed() < Duration::from_secs(600));
+        self.operations.retain(|id, operation| {
+            self.quitting == Some(*id) || operation.at.elapsed() < Duration::from_secs(600)
+        });
         if let Some(operation) = self.operations.get(&request.id) {
             if operation.input != request.payload {
                 return Err(invalid());
@@ -315,6 +349,22 @@ impl Book {
                 None,
             ));
         }
+        if let HostCommand::UpdateCheckStatus { operation_id } = command {
+            let operation = self.operations.get(&operation_id).ok_or_else(invalid)?;
+            if operation.input["command"].as_str() != Some("updateCheck") {
+                return Err(invalid());
+            }
+            return Ok((
+                serde_json::to_value(
+                    operation
+                        .update_result
+                        .as_ref()
+                        .unwrap_or(&crate::coordinator_updater::CheckProgress::Pending),
+                )
+                .map_err(|_| invalid())?,
+                None,
+            ));
+        }
         if let HostCommand::AutostartStatus { operation_id } = command {
             return Ok((
                 serde_json::to_value(self.autostart_status(operation_id)?)
@@ -324,6 +374,13 @@ impl Book {
         }
         if let Some(operation_id) = self.quitting {
             if matches!(command, HostCommand::Quit) {
+                if self.operations.get(&operation_id).is_some_and(|operation| {
+                    operation.input["command"].as_str() == Some("updateInstall")
+                }) {
+                    return Err(AppError::InvalidArg(
+                        "the app is installing an update".into(),
+                    ));
+                }
                 if self.operations.len() >= 1024 {
                     return Err(invalid());
                 }
@@ -336,6 +393,7 @@ impl Book {
                         at: Instant::now(),
                         open_result: None,
                         autostart_result: None,
+                        update_result: None,
                     },
                 );
                 return Ok((reply, None));
@@ -347,6 +405,8 @@ impl Book {
                     | HostCommand::Shortcut { .. }
                     | HostCommand::Tray { .. }
                     | HostCommand::Autostart { .. }
+                    | HostCommand::UpdateCheck { .. }
+                    | HostCommand::UpdateInstall { .. }
             ) {
                 return Err(AppError::InvalidArg(
                     "the app is quitting; no new vault action was started".into(),
@@ -376,8 +436,48 @@ impl Book {
             }
             HostCommand::OpenStatus { .. }
             | HostCommand::ShortcutRegistrationStatus
-            | HostCommand::AutostartStatus { .. } => {
+            | HostCommand::AutostartStatus { .. }
+            | HostCommand::UpdateCheckStatus { .. } => {
                 unreachable!()
+            }
+            HostCommand::UpdateCheck {
+                vault_id,
+                launch_id,
+                force,
+            } => {
+                let launch = self.workers.get(&vault_id).ok_or_else(invalid)?;
+                if !self.exported
+                    || launch.id != launch_id
+                    || !launch.ready
+                    || launch.endpoint.is_none()
+                    || launch.error.is_some()
+                {
+                    return Err(invalid());
+                }
+                action = Some(Action::UpdateCheck(force));
+            }
+            HostCommand::UpdateInstall {
+                vault_id,
+                launch_id,
+                update_id,
+            } => {
+                let launch = self.workers.get(&vault_id).ok_or_else(invalid)?;
+                if !self.exported
+                    || launch.id != launch_id
+                    || !launch.ready
+                    || launch.endpoint.is_none()
+                    || launch.error.is_some()
+                {
+                    return Err(invalid());
+                }
+                if self.recovering {
+                    return Err(AppError::InvalidArg(
+                        "update restart recovery must finish before installing another update"
+                            .into(),
+                    ));
+                }
+                self.quitting = Some(request.id);
+                action = Some(Action::UpdateInstall(update_id));
             }
             HostCommand::Autostart {
                 vault_id,
@@ -567,6 +667,7 @@ impl Book {
                 at: Instant::now(),
                 open_result: None,
                 autostart_result: None,
+                update_result: None,
             },
         );
         Ok((reply, action))
@@ -795,10 +896,14 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
             .map_err(|_| "vault request unavailable; ownership retained".into())
     })?;
     app.manage(crate::coordinator_shortcuts::Shortcuts::default());
+    app.manage(crate::coordinator_updater::Updates::default());
     app.manage(Host {
         instance,
         endpoint,
-        book: Mutex::new(Book::default()),
+        book: Mutex::new(Book {
+            recovering: true,
+            ..Book::default()
+        }),
         jobs: crate::vault_jobs::Jobs::default(),
         device_notifications: crate::device_notifications::Notifications::default(),
         _server: server,
@@ -860,10 +965,25 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
                             }
                         }
                     }
-                    if !background_recovery {
-                        if let Err(error) = open(&task_app, &target, activate_initial) {
-                            log::error!("[vaults] initial launch failed: {error}");
+                    let resumed = resume_update(&task_app);
+                    let recovery_finished = resumed.is_ok();
+                    match resumed {
+                        Ok(true) => {}
+                        Ok(false) if !background_recovery => {
+                            if let Err(error) = open(&task_app, &target, activate_initial) {
+                                log::error!("[vaults] initial launch failed: {error}");
+                            }
                         }
+                        Ok(false) => {}
+                        Err(error) => {
+                            log::error!("[updater] restart recovery failed: {error}");
+                            use tauri_plugin_dialog::DialogExt;
+                            task_app.dialog().message(format!("Update restart recovery could not finish. The saved session has been retained.\n\n{error}"))
+                                .title("Update recovery").show(|_| {});
+                        }
+                    }
+                    if recovery_finished {
+                        if let Ok(mut book) = task_app.state::<Host>().book.lock() { book.recovering = false; }
                     }
                     broadcast_device_settings(&task_app);
                     crate::coordinator_shortcuts::refresh(&task_app);
@@ -1073,7 +1193,10 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
         let (reply, action) = book.accept(host.instance, request)?;
         // Register work while acceptance still holds Book. Quit cannot finish
         // draining before a previously accepted filesystem task starts.
-        let job = if action.as_ref().is_some_and(|a| !matches!(a, Action::Quit)) {
+        let job = if action
+            .as_ref()
+            .is_some_and(|a| !matches!(a, Action::Quit | Action::UpdateInstall(_)))
+        {
             Some(host.jobs.enter()?)
         } else {
             None
@@ -1108,6 +1231,28 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
             .spawn(move || {
                 let _job = job;
                 let target = match action {
+                    Action::UpdateCheck(force) => {
+                        let result = crate::coordinator_updater::check(&task_app, force);
+                        let progress = match result {
+                            Ok(available) => {
+                                crate::coordinator_updater::CheckProgress::Ready { available }
+                            }
+                            Err(error) => crate::coordinator_updater::CheckProgress::Failed {
+                                message: error.to_string(),
+                            },
+                        };
+                        if let Ok(mut book) = task_app.state::<Host>().book.lock() {
+                            if let Some(operation) = book.operations.get_mut(&request_id) {
+                                operation.update_result = Some(progress);
+                            }
+                        }
+                        return;
+                    }
+                    Action::UpdateInstall(id) => {
+                        crate::coordinator_shortcuts::suspend(&task_app, true);
+                        crate::coordinator_updater::install(&task_app, request_id, id);
+                        return;
+                    }
                     Action::Autostart(enabled) => {
                         let result = crate::coordinator_autostart::read_or_set(&task_app, enabled);
                         if let Ok(mut book) = task_app.state::<Host>().book.lock() {
@@ -1363,6 +1508,300 @@ fn close_for_quit(
     crate::coordinator_shutdown::close(&endpoint, launch_id, operation_id, deadline, ownership)
 }
 
+fn verified_worker(
+    root: &std::path::Path,
+    id: &str,
+    launch_id: Uuid,
+    endpoint: &Endpoint,
+) -> AppResult<crate::worker_registration::Identity> {
+    let reply = endpoint
+        .retry_call(&request(&WorkerCommand::Identify { launch_id })?)?
+        .map_err(AppError::InvalidArg)?;
+    let identity: crate::worker_registration::Identity =
+        serde_json::from_value(reply).map_err(|_| invalid())?;
+    identity.require_compatible()?;
+    if identity.launch_id != launch_id
+        || identity.vault_id != id
+        || !identity.ready
+        || identity.root != std::fs::canonicalize(root)?
+        || identity.directory != std::fs::canonicalize(crate::profiles::profile_dir(root, id))?
+    {
+        return Err(invalid());
+    }
+    Ok(identity)
+}
+
+pub(crate) fn update_progress(
+    app: &AppHandle,
+    progress: crate::coordinator_updater::DownloadProgress,
+) {
+    let targets = app
+        .state::<Host>()
+        .book
+        .lock()
+        .map(|book| book.device_targets())
+        .unwrap_or_default();
+    for (launch_id, endpoint) in targets {
+        if let Ok(request) = request(&WorkerCommand::UpdateProgress {
+            launch_id,
+            progress: progress.clone(),
+        }) {
+            let _ = endpoint.retry_call(&request);
+        }
+    }
+}
+
+/// The installer caller holds no tracked job of its own. Its Book fence keeps
+/// the coordinator alive, and this reversible pause drains earlier root work.
+pub(crate) fn drain_for_update(
+    app: &AppHandle,
+    operation_id: Uuid,
+    target_version: &str,
+) -> AppResult<crate::vault_jobs::Pause> {
+    let host = app.state::<Host>();
+    let root = crate::paths::app_data_root(app)?;
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let targets: Vec<_> = host
+        .book
+        .lock()
+        .map_err(|_| invalid())?
+        .workers
+        .iter()
+        .map(|(id, launch)| (id.clone(), launch.id))
+        .collect();
+    // Readiness itself can enqueue root work. Wait before pausing root jobs.
+    for (id, launch_id) in &targets {
+        wait_for_ready(&host.book, id, *launch_id, deadline)?;
+    }
+    let pause = host.jobs.pause()?;
+    pause.wait(deadline.saturating_duration_since(Instant::now()))?;
+    let mut vaults = Vec::new();
+    for (id, launch_id) in &targets {
+        let (endpoint, _) = host
+            .book
+            .lock()
+            .map_err(|_| invalid())?
+            .ready_endpoint(id, *launch_id)?
+            .ok_or_else(invalid)?;
+        let identity = verified_worker(&root, id, *launch_id, &endpoint)?;
+        let reply = endpoint
+            .retry_call(&request(&WorkerCommand::SnapshotWindows {
+                launch_id: *launch_id,
+            })?)?
+            .map_err(AppError::InvalidArg)?;
+        vaults.push(crate::update_recovery::Vault {
+            id: id.clone(),
+            directory: identity.directory,
+            windows: serde_json::from_value(reply).map_err(|_| invalid())?,
+        });
+    }
+    let focus = {
+        let book = host.book.lock().map_err(|_| invalid())?;
+        if book.quitting != Some(operation_id) {
+            return Err(invalid());
+        }
+        book.last.as_ref().and_then(|id| {
+            let label = book
+                .workers
+                .get(id)?
+                .focused_window
+                .as_deref()
+                .unwrap_or("main");
+            vaults
+                .iter()
+                .find(|vault| &vault.id == id)?
+                .windows
+                .iter()
+                .find(|window| window.label == label && window.visible && !window.minimized)
+                .map(|window| crate::update_recovery::Focus {
+                    vault_id: id.clone(),
+                    window: window.label.clone(),
+                })
+        })
+    };
+    crate::update_recovery::prepare(
+        &root,
+        operation_id,
+        &app.package_info().version.to_string(),
+        target_version,
+        vaults,
+        focus,
+    )?;
+    close_targets(app, &root, &targets, operation_id, deadline)?;
+    let book = host.book.lock().map_err(|_| invalid())?;
+    if book.quitting != Some(operation_id) || !book.workers.is_empty() {
+        return Err(invalid());
+    }
+    Ok(pause)
+}
+
+fn resume_update(app: &AppHandle) -> AppResult<bool> {
+    let root = crate::paths::app_data_root(app)?;
+    let Some(record) =
+        crate::update_recovery::resume(&root, &app.package_info().version.to_string())?
+    else {
+        return Ok(false);
+    };
+    let host = app.state::<Host>();
+    for vault in &record.vaults {
+        // The index/deletion checks in open remain authoritative. The record
+        // grants neither ownership nor permission to recreate a missing vault.
+        if vault.directory != std::fs::canonicalize(crate::profiles::profile_dir(&root, &vault.id))?
+        {
+            return Err(invalid());
+        }
+        let existing = host
+            .book
+            .lock()
+            .map_err(|_| invalid())?
+            .workers
+            .contains_key(&vault.id);
+        let launch_id = open(app, &vault.id, false)?;
+        let (endpoint, _) = wait_for_ready(
+            &host.book,
+            &vault.id,
+            launch_id,
+            Instant::now() + OPEN_TIMEOUT,
+        )?;
+        verified_worker(&root, &vault.id, launch_id, &endpoint)?;
+        if !existing || !record.was_restored(&vault.id) {
+            let restore = request(&WorkerCommand::RestoreWindows {
+                launch_id,
+                vault: vault.clone(),
+            })?;
+            endpoint
+                .retry_call(&restore)?
+                .map_err(AppError::InvalidArg)?;
+            let poll = request(&WorkerCommand::RestoreStatus {
+                launch_id,
+                operation_id: restore.id,
+            })?;
+            let deadline = Instant::now() + OPEN_TIMEOUT;
+            loop {
+                let reply = endpoint.retry_call(&poll)?.map_err(AppError::InvalidArg)?;
+                match serde_json::from_value::<crate::update_windows::Progress>(reply)
+                    .map_err(|_| invalid())?
+                {
+                    crate::update_windows::Progress::Ready => break,
+                    crate::update_windows::Progress::Failed { message } => {
+                        return Err(AppError::InvalidArg(message))
+                    }
+                    crate::update_windows::Progress::Pending => {}
+                }
+                if Instant::now() >= deadline {
+                    return Err(invalid());
+                }
+                std::thread::sleep(Duration::from_millis(40));
+            }
+        }
+        crate::update_recovery::restored(&root, record.operation_id, &vault.id)?;
+    }
+    if let Some(focus) = &record.focus {
+        let (launch_id, endpoint) = {
+            let book = host.book.lock().map_err(|_| invalid())?;
+            let launch = book.workers.get(&focus.vault_id).ok_or_else(invalid)?;
+            (launch.id, launch.endpoint.clone().ok_or_else(invalid)?)
+        };
+        activate_worker(
+            &root,
+            &crate::profiles::profile_dir(&root, &focus.vault_id),
+            &focus.vault_id,
+            launch_id,
+            &endpoint,
+            Some(focus.window.clone()),
+        )?;
+    }
+    crate::update_recovery::consume(&root, record.operation_id)?;
+    Ok(true)
+}
+
+pub(crate) fn update_failed(app: &AppHandle, operation_id: Uuid, error: AppError) {
+    let host = app.state::<Host>();
+    // Keep idle shutdown from winning between releasing the install fence and
+    // reserving recovery workers. The reversible drain has already dropped.
+    let _recovery_job = host.jobs.enter();
+    if let Ok(mut book) = host.book.lock() {
+        book.complete_open(operation_id, Err(AppError::InvalidArg(error.to_string())));
+        if book.quitting == Some(operation_id) {
+            book.quitting = None;
+        }
+    }
+    if let Ok(root) = crate::paths::app_data_root(app) {
+        // A download failure has no journal. A failed close/install retains
+        // the record and restores already-closed vaults in the old binary.
+        if crate::update_recovery::failed(&root, operation_id).is_ok() {
+            if let Ok(mut book) = host.book.lock() {
+                book.recovering = true;
+            }
+            match resume_update(app) {
+                Ok(_) => {
+                    if let Ok(mut book) = host.book.lock() {
+                        book.recovering = false;
+                    }
+                }
+                Err(recovery) => {
+                    log::error!("[updater] failed-install recovery incomplete: {recovery}")
+                }
+            }
+        }
+    }
+    crate::coordinator_shortcuts::suspend(app, false);
+    notify_quit_failure(app, &format!("Update failed: {error}"));
+    let targets = host
+        .book
+        .lock()
+        .map(|book| book.device_targets())
+        .unwrap_or_default();
+    for (launch_id, endpoint) in &targets {
+        if let Ok(request) = request(&WorkerCommand::QuitFailed {
+            launch_id: *launch_id,
+            message: format!("Update failed: {error}"),
+        }) {
+            let _ = endpoint.retry_call(&request);
+        }
+    }
+    if targets.is_empty() {
+        use tauri_plugin_dialog::DialogExt;
+        app.dialog().message(format!("The update could not finish. Your recovery information has been retained.\n\n{error}"))
+            .title("Update failed").show(|_| {});
+    }
+}
+
+fn close_targets(
+    app: &AppHandle,
+    root: &std::path::Path,
+    targets: &[(String, Uuid)],
+    operation_id: Uuid,
+    deadline: Instant,
+) -> AppResult<()> {
+    let mut errors = Vec::new();
+    for chunk in targets.chunks(8) {
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = chunk
+                .iter()
+                .map(|(id, launch)| {
+                    scope.spawn(move || {
+                        close_for_quit(app, root, id, *launch, operation_id, deadline)
+                            .map_err(|error| format!("{id}: {error}"))
+                    })
+                })
+                .collect();
+            for handle in handles {
+                match handle.join() {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => errors.push(error),
+                    Err(_) => errors.push("worker close task failed; ownership retained".into()),
+                }
+            }
+        });
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(AppError::InvalidArg(errors.join("; ")))
+    }
+}
+
 fn finish_quit(app: &AppHandle, operation_id: Uuid) {
     let host = app.state::<Host>();
     crate::coordinator_shortcuts::suspend(app, true);
@@ -1377,35 +1816,7 @@ fn finish_quit(app: &AppHandle, operation_id: Uuid) {
             .iter()
             .map(|(id, launch)| (id.clone(), launch.id))
             .collect();
-        let mut errors = Vec::new();
-        // Start independent close/save requests together, with bounded threads.
-        // No Book/root-document lock crosses a worker IPC call or wait.
-        for chunk in targets.chunks(8) {
-            std::thread::scope(|scope| {
-                let handles: Vec<_> = chunk
-                    .iter()
-                    .map(|(id, launch)| {
-                        let root = &root;
-                        scope.spawn(move || {
-                            close_for_quit(app, root, id, *launch, operation_id, deadline)
-                                .map_err(|error| format!("{id}: {error}"))
-                        })
-                    })
-                    .collect();
-                for handle in handles {
-                    match handle.join() {
-                        Ok(Ok(())) => {}
-                        Ok(Err(error)) => errors.push(error),
-                        Err(_) => {
-                            errors.push("worker close task failed; ownership retained".into())
-                        }
-                    }
-                }
-            });
-        }
-        if !errors.is_empty() {
-            return Err(AppError::InvalidArg(errors.join("; ")));
-        }
+        close_targets(app, &root, &targets, operation_id, deadline)?;
         let pause = host.jobs.pause()?;
         pause.wait(deadline.saturating_duration_since(Instant::now()))?;
         let mut book = host.book.lock().map_err(|_| invalid())?;
@@ -2038,11 +2449,55 @@ pub fn register_worker(
     let worker_window = last_window.clone();
     let worker_host = host.clone();
     let handle = app.clone();
+    app.manage(crate::update_windows::Restores::default());
     let server = listener.serve(move |request| {
         let request_id = request.id;
         let command: WorkerCommand = serde_json::from_value(request.payload)
             .map_err(|_| "invalid worker request".to_string())?;
         match command {
+            WorkerCommand::SnapshotWindows { launch_id } => {
+                if launch_id != registration.launch_id || !worker_ready.load(Ordering::Acquire) {
+                    return Err("worker identity mismatch".into());
+                }
+                crate::update_windows::snapshot(&handle)
+                    .and_then(|windows| serde_json::to_value(windows).map_err(|_| invalid()))
+                    .map_err(|error| error.to_string())
+            }
+            WorkerCommand::RestoreWindows { launch_id, vault } => {
+                if launch_id != registration.launch_id
+                    || !worker_ready.load(Ordering::Acquire)
+                    || vault.id != registration.vault_id
+                    || vault.directory != registration.directory
+                {
+                    return Err("worker identity mismatch".into());
+                }
+                crate::update_windows::begin(&handle, request_id, vault)
+                    .map_err(|error| error.to_string())?;
+                Ok(json!({"accepted":true}))
+            }
+            WorkerCommand::RestoreStatus {
+                launch_id,
+                operation_id,
+            } => {
+                if launch_id != registration.launch_id {
+                    return Err("worker identity mismatch".into());
+                }
+                crate::update_windows::progress(&handle, operation_id)
+                    .and_then(|progress| serde_json::to_value(progress).map_err(|_| invalid()))
+                    .map_err(|error| error.to_string())
+            }
+            WorkerCommand::UpdateProgress {
+                launch_id,
+                progress,
+            } => {
+                if launch_id != registration.launch_id {
+                    return Err("worker identity mismatch".into());
+                }
+                handle
+                    .emit("coordinator-update-progress", progress)
+                    .map_err(|error| error.to_string())?;
+                Ok(json!({"accepted":true}))
+            }
             WorkerCommand::Tray { launch_id, action } => {
                 if launch_id != registration.launch_id || !worker_ready.load(Ordering::Acquire) {
                     return Err("tray destination identity or readiness changed".into());
@@ -2277,6 +2732,52 @@ pub(crate) fn autostart_setting(app: &AppHandle, enabled: Option<bool>) -> AppRe
     }
 }
 
+pub(crate) fn check_update(
+    app: &AppHandle,
+    force: bool,
+) -> AppResult<Option<crate::coordinator_updater::Available>> {
+    let worker = app.state::<Worker>();
+    let host = worker.host.lock().map_err(|_| invalid())?.clone();
+    let check = request(&HostCommand::UpdateCheck {
+        vault_id: worker.vault_id.clone(),
+        launch_id: worker.launch_id,
+        force,
+    })?;
+    host.retry_call(&check)?.map_err(AppError::InvalidArg)?;
+    let poll = request(&HostCommand::UpdateCheckStatus {
+        operation_id: check.id,
+    })?;
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        let reply = host.retry_call(&poll)?.map_err(AppError::InvalidArg)?;
+        match serde_json::from_value::<crate::coordinator_updater::CheckProgress>(reply)
+            .map_err(|_| invalid())?
+        {
+            crate::coordinator_updater::CheckProgress::Ready { available } => return Ok(available),
+            crate::coordinator_updater::CheckProgress::Failed { message } => {
+                return Err(AppError::InvalidArg(message))
+            }
+            crate::coordinator_updater::CheckProgress::Pending => {}
+        }
+        if Instant::now() >= deadline {
+            return Err(invalid());
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
+}
+
+pub(crate) fn install_update(app: &AppHandle, update_id: Uuid) -> AppResult<()> {
+    let worker = app.state::<Worker>();
+    let host = worker.host.lock().map_err(|_| invalid())?.clone();
+    let install = request(&HostCommand::UpdateInstall {
+        vault_id: worker.vault_id.clone(),
+        launch_id: worker.launch_id,
+        update_id,
+    })?;
+    host.retry_call(&install)?.map_err(AppError::InvalidArg)?;
+    await_open_result(&host, install.id, Instant::now() + Duration::from_secs(600))
+}
+
 fn await_open_result(host: &Endpoint, operation_id: Uuid, deadline: Instant) -> AppResult<()> {
     let poll = request(&HostCommand::OpenStatus { operation_id })?;
     loop {
@@ -2298,6 +2799,105 @@ fn await_open_result(host: &Endpoint, operation_id: Uuid, deadline: Instant) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn updater_requires_ready_owner_deduplicates_and_fences_quit_and_new_actions() {
+        let root = std::env::temp_dir().join(format!("ms-update-book-{}", Uuid::new_v4()));
+        let owner = crate::storage_locks::VaultLock::acquire(&root).unwrap();
+        let listener = ipc::Coordinator::for_worker(&owner).unwrap();
+        let instance = Uuid::new_v4();
+        let launch_id = Uuid::new_v4();
+        let mut book = Book {
+            exported: true,
+            ..Book::default()
+        };
+        let mut launch = pending(launch_id);
+        launch.endpoint = Some(listener.endpoint().clone());
+        book.workers.insert("a".into(), launch);
+        let check = request(&HostCommand::UpdateCheck {
+            vault_id: "a".into(),
+            launch_id,
+            force: false,
+        })
+        .unwrap();
+        assert!(book.accept(instance, check.clone()).is_err());
+        book.workers.get_mut("a").unwrap().ready = true;
+        assert!(matches!(
+            book.accept(instance, check.clone()).unwrap().1,
+            Some(Action::UpdateCheck(false))
+        ));
+        assert!(book.accept(instance, check.clone()).unwrap().1.is_none());
+        let status = request(&HostCommand::UpdateCheckStatus {
+            operation_id: check.id,
+        })
+        .unwrap();
+        assert_eq!(
+            book.accept(instance, status.clone()).unwrap().0,
+            json!({"state":"pending"})
+        );
+        book.operations.get_mut(&check.id).unwrap().update_result =
+            Some(crate::coordinator_updater::CheckProgress::Ready { available: None });
+        assert_eq!(
+            book.accept(instance, status.clone()).unwrap().0,
+            json!({"state":"ready", "available":null})
+        );
+        assert!(book.open_status(check.id).is_err());
+        let update_id = Uuid::new_v4();
+        let install = request(&HostCommand::UpdateInstall {
+            vault_id: "a".into(),
+            launch_id,
+            update_id,
+        })
+        .unwrap();
+        book.recovering = true;
+        assert!(book.accept(instance, install.clone()).is_err());
+        book.recovering = false;
+        assert!(
+            matches!(book.accept(instance, install.clone()).unwrap().1, Some(Action::UpdateInstall(id)) if id == update_id)
+        );
+        assert!(book.accept(instance, install.clone()).unwrap().1.is_none());
+        assert!(book
+            .accept(instance, request(&HostCommand::Quit).unwrap())
+            .is_err());
+        assert!(book
+            .accept(instance, request(&HostCommand::Activate).unwrap())
+            .is_err());
+        assert!(book
+            .accept(
+                instance,
+                request(&HostCommand::UpdateCheck {
+                    vault_id: "a".into(),
+                    launch_id,
+                    force: true
+                })
+                .unwrap()
+            )
+            .is_err());
+        assert!(
+            book.accept(instance, status).is_ok(),
+            "previous check remains readable during installation"
+        );
+        assert_eq!(book.open_status(install.id).unwrap(), OpenProgress::Pending);
+        book.complete_open(
+            install.id,
+            Err(AppError::InvalidArg("signature mismatch".into())),
+        );
+        assert!(matches!(
+            book.open_status(install.id).unwrap(),
+            OpenProgress::Failed { .. }
+        ));
+        book.quitting = None;
+        assert!(
+            book.accept(instance, install).unwrap().1.is_none(),
+            "failed installation is never rerun on a retry"
+        );
+        assert!(book
+            .accept(instance, request(&HostCommand::Activate).unwrap())
+            .is_ok());
+        drop(listener);
+        drop(owner);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn autostart_requires_ready_owner_and_replays_terminal_result_without_mutation() {

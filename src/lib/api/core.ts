@@ -23,6 +23,8 @@ export enum TauriCommandName {
   CaptureCurrentNoteVersion = 'capture_current_note_version',
   CaptureNoteVersion = 'capture_note_version',
   CheckEtebaseServerUrl = 'check_etebase_server_url',
+  CheckCoordinatedUpdate = 'check_coordinated_update',
+  InstallCoordinatedUpdate = 'install_coordinated_update',
   CreateCollection = 'create_collection',
   ConvertLegacyWikilinks = 'convert_legacy_wikilinks_command',
   CreateNote = 'create_note',
