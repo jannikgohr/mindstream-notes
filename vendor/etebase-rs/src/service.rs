@@ -567,6 +567,58 @@ impl Account {
         crate::mindstream::Mindstream::new(Arc::clone(&self.client))
     }
 
+    /// Make an invite link into a collection this account administers.
+    ///
+    /// The link's text is the only place its secret exists. Give it to
+    /// whoever should join. Nothing but its uid is needed to remove it.
+    ///
+    /// # Arguments:
+    /// * `collection` - the collection to let people into
+    /// * `access_level` - what they may do there: read, or read and write
+    /// * `options` - how many people, for how long, and whether the link may
+    ///   create an account
+    pub fn create_invite_link(
+        &self,
+        collection: &Collection,
+        access_level: CollectionAccessLevel,
+        options: &crate::mindstream::LinkOptions,
+    ) -> Result<crate::mindstream::InviteLink> {
+        // An invitation like any other, sealed to a key that comes out of
+        // the link's secret where a user's key would be.
+        let (secret, pubkey) = crate::mindstream::links::new_secret()?;
+        let sealed = collection.col.create_invitation(
+            &self.account_crypto_manager,
+            &self.identity_crypto_manager()?,
+            "",
+            &pubkey,
+            access_level,
+        )?;
+        crate::mindstream::links::create(&self.client, secret, &sealed, options)
+    }
+
+    /// The invite links into a collection that can still let someone in
+    pub fn invite_links(&self, collection: &Collection) -> Result<Vec<crate::mindstream::LinkInfo>> {
+        crate::mindstream::links::list(&self.client, collection.uid())
+    }
+
+    /// Remove an invite link, so that it lets nobody else in
+    ///
+    /// # Arguments:
+    /// * `uid` - the link's uid, from [`InviteLink::uid`](crate::InviteLink::uid)
+    ///   or [`LinkInfo::uid`](crate::LinkInfo::uid)
+    pub fn revoke_invite_link(&self, uid: &str) -> Result<()> {
+        crate::mindstream::links::revoke(&self.client, uid)
+    }
+
+    /// Join the collection an invite link leads to
+    pub fn claim_invite_link(&self, link: &crate::mindstream::InviteLink) -> Result<()> {
+        link.claim(
+            &self.client,
+            &self.account_crypto_manager,
+            &self.user.username,
+        )
+    }
+
     /// Return a [`CollectionManager`] for creating, fetching and uploading collections
     pub fn collection_manager(&self) -> Result<CollectionManager> {
         CollectionManager::new(

@@ -33,8 +33,9 @@ pub use encrypted_models::{CollectionAccessLevel, ItemMetadata, SignedInvitation
 pub use service::{Account, Collection, InvitationPreview, Item};
 
 pub use mindstream::{
-    refusal, AccountSecurity, AuthenticatorSetup, DeviceSession, FeedEndpoint, Mindstream,
-    Recovery, RecoveryKey, RoomTicket, SecurityStatus, SignupWith,
+    refusal, AccountSecurity, AuthenticatorSetup, DeviceSession, FeedEndpoint, InviteLink,
+    LinkInfo, LinkOptions, LinkPreview, Mindstream, Recovery, RecoveryKey, RoomTicket,
+    SecurityStatus, SignupWith,
 };
 
 pub mod managers {

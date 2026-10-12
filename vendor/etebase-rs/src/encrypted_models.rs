@@ -196,6 +196,21 @@ pub(crate) struct SignedInvitationContent {
     pub collection_type: String,
 }
 
+/// The name in a collection's own item, opened with the collection's key.
+/// An invitation and an invite link both carry that key for whoever they
+/// are for, and the server sends the item along with them.
+pub(crate) fn collection_item_name(
+    item: &EncryptedItem,
+    collection_key: &[u8],
+) -> Result<Option<String>> {
+    let key: &[u8; 32] = collection_key
+        .try_into()
+        .map_err(|_| Error::Encryption("Invitation collection key has wrong length"))?;
+    let collection = CollectionCryptoManager::new(key, item.version)?;
+    let meta = item.meta(&item.crypto_manager(&collection)?)?;
+    Ok(ItemMetadata::from_msgpack(&meta)?.name().map(str::to_owned))
+}
+
 /// A signed invitation to join a collection
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -229,16 +244,15 @@ impl SignedInvitation {
     /// server cannot make one up. The sender can call the collection what
     /// they like.
     pub(crate) fn collection_name(&self, collection_key: &[u8]) -> Result<Option<String>> {
-        let item = match &self.collection_item {
-            Some(item) => item,
-            None => return Ok(None),
-        };
-        let key: &[u8; 32] = collection_key
-            .try_into()
-            .map_err(|_| Error::Encryption("Invitation collection key has wrong length"))?;
-        let collection = CollectionCryptoManager::new(key, item.version)?;
-        let meta = item.meta(&item.crypto_manager(&collection)?)?;
-        Ok(ItemMetadata::from_msgpack(&meta)?.name().map(str::to_owned))
+        match &self.collection_item {
+            Some(item) => collection_item_name(item, collection_key),
+            None => Ok(None),
+        }
+    }
+
+    /// The collection key and type, sealed to whoever the invitation is for
+    pub(crate) fn signed_encryption_key(&self) -> &[u8] {
+        &self.signed_encryption_key
     }
 
     /// The uid of the invitation

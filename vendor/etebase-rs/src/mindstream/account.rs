@@ -22,6 +22,8 @@ use crate::online_managers::{LoginChallange, LoginResponse, User};
 use crate::service::{Account, MainCryptoManager};
 use crate::utils::{randombytes_array, SALT_SIZE, SYMMETRIC_KEY_SIZE};
 
+use super::links::InviteLink;
+
 /// The reasons a Mindstream server gives in [`Error::Refused`] that a client
 /// is likely to treat differently from one another.
 pub mod refusal {
@@ -50,6 +52,12 @@ pub mod refusal {
     pub const SIGNUP_CLOSED: &str = "signup_closed";
     /// The signup code or the invite link is used up, expired or made up.
     pub const SIGNUP_INVITATION_INVALID: &str = "signup_invitation_invalid";
+    /// An invite link has run out of time.
+    pub const LINK_EXPIRED: &str = "link_expired";
+    /// An invite link has let in as many people as it was made for.
+    pub const LINK_USED: &str = "link_used";
+    /// The account is in the collection the invite link leads to already.
+    pub const ALREADY_MEMBER: &str = "already_member";
     /// The second half of a recovery came too late.
     pub const RECOVERY_EXPIRED: &str = "recovery_expired";
     pub const RECOVERY_USED: &str = "recovery_used";
@@ -58,7 +66,7 @@ pub mod refusal {
 }
 
 /// Like [`Response::error_for_status`], keeping the server's reason.
-fn checked(res: &Response) -> Result<()> {
+pub(super) fn checked(res: &Response) -> Result<()> {
     if (200..300).contains(&res.status()) {
         return Ok(());
     }
@@ -353,6 +361,7 @@ impl fmt::Debug for RecoveryKey {
 #[derive(Default, Clone, Debug)]
 pub struct SignupWith {
     signup_code: Option<String>,
+    link: Option<InviteLink>,
 }
 
 impl SignupWith {
@@ -364,6 +373,13 @@ impl SignupWith {
     /// A code from the server's administrator, good for one account
     pub fn signup_code(mut self, code: &str) -> Self {
         self.signup_code = Some(code.to_string());
+        self
+    }
+
+    /// An invite link whose maker let it create an account. Signing up does
+    /// not join what the link leads to: claim the link afterwards.
+    pub fn invite_link(mut self, link: &InviteLink) -> Self {
+        self.link = Some(link.clone());
         self
     }
 }
@@ -597,6 +613,14 @@ impl Account {
             recovery_encrypted_content: &'a Bytes,
             #[serde(skip_serializing_if = "Option::is_none")]
             signup_code: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            link: Option<LinkProof<'a>>,
+        }
+
+        #[derive(Serialize)]
+        struct LinkProof<'a> {
+            uid: &'a str,
+            signature: ByteBuf,
         }
 
         crate::init()?;
@@ -617,6 +641,16 @@ impl Account {
         let recovery_key = RecoveryKey::generate();
         let (recovery_pubkey, recovery_copy) = recovery_key.sealed(version, &account_keys)?;
 
+        // A link vouches for one account by name, so that a signature made
+        // for one signup cannot serve another.
+        let link = match &with.link {
+            Some(link) => Some(LinkProof {
+                uid: link.uid(),
+                signature: ByteBuf::from(link.proof("signup", user.username())?),
+            }),
+            None => None,
+        };
+
         let body = rmp_serde::to_vec_named(&Body {
             user,
             salt: Bytes::new(&salt),
@@ -626,6 +660,7 @@ impl Account {
             recovery_pubkey: Bytes::new(&recovery_pubkey),
             recovery_encrypted_content: Bytes::new(&recovery_copy),
             signup_code: with.signup_code.as_deref(),
+            link,
         })?;
         let url = api_url(&client, "authentication/signup/")?;
         let res = client.post(&url, body)?;

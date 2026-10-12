@@ -13,11 +13,13 @@ use super::error::{Error, Result};
 use super::http_client::Client;
 
 mod account;
+pub(crate) mod links;
 
 pub use account::{
     refusal, AccountSecurity, AuthenticatorSetup, DeviceSession, Recovery, RecoveryKey,
     SecurityStatus, SignupWith,
 };
+pub use links::{InviteLink, LinkInfo, LinkOptions, LinkPreview};
 
 /// A short-lived pass into the live room of one item.
 ///
