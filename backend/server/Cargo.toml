@@ -1,0 +1,46 @@
+[package]
+name = "mindstream-server"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "Sync, account and live-collaboration server for Mindstream Notes"
+repository = "https://github.com/jannikgohr/mindstream-notes"
+publish = false
+
+[lib]
+name = "mindstream_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mindstream-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "fs", "io-util", "time", "sync"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+rmp-serde = "1"
+# Login is a signature over a msgpack body, made with a key the client derives
+# from the password. Verifying it is the only cryptography the server performs
+# on client material; everything it stores is opaque.
+ed25519-dalek = "2"
+hmac = "0.12"
+sha2 = "0.10"
+subtle = "2"
+rand = "0.8"
+base64 = "0.22"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive", "env"] }
+tower-http = { version = "0.6", features = ["trace"] }
+
+[dev-dependencies]
+# The client the app ships. Driving the server with it in tests is what keeps
+# the two honest about the wire format.
+etebase = { git = "https://github.com/jannikgohr/etebase-rs", features = ["networking"] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

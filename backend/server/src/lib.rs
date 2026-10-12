@@ -1,0 +1,207 @@
+//! Mindstream's sync server.
+//!
+//! One process serves account, storage and sharing routes over HTTP. It
+//! speaks the protocol of the Etebase client library the app ships, so
+//! everything a client stores here is ciphertext the server cannot read. What
+//! the server adds is order and access control: which change came first, and
+//! who may see or make it.
+
+mod auth;
+mod blob;
+mod collections;
+pub mod config;
+mod error;
+mod keys;
+mod sharing;
+mod test_reset;
+mod wire;
+
+use std::ops::Deref;
+use std::sync::Arc;
+
+use axum::extract::DefaultBodyLimit;
+use axum::routing::{delete, get, post, put};
+use axum::Router;
+use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
+use tower_http::trace::TraceLayer;
+
+use blob::BlobStore;
+pub use config::Config;
+use keys::Keys;
+
+pub struct Inner {
+    pub(crate) pool: PgPool,
+    pub(crate) blobs: BlobStore,
+    pub(crate) keys: Keys,
+    pub(crate) config: Config,
+}
+
+#[derive(Clone)]
+pub struct AppState(Arc<Inner>);
+
+impl Deref for AppState {
+    type Target = Inner;
+
+    fn deref(&self) -> &Inner {
+        &self.0
+    }
+}
+
+#[derive(Debug)]
+pub enum StartError {
+    Database(sqlx::Error),
+    Migration(sqlx::migrate::MigrateError),
+    Blobs(std::io::Error),
+}
+
+impl std::fmt::Display for StartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StartError::Database(err) => write!(f, "database: {err}"),
+            StartError::Migration(err) => write!(f, "migration: {err}"),
+            StartError::Blobs(err) => write!(f, "blob directory: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for StartError {}
+
+impl AppState {
+    /// Connect to the database, bring its schema up to date and load the
+    /// server's secret.
+    pub async fn connect(config: Config) -> Result<Self, StartError> {
+        let pool = PgPoolOptions::new()
+            .max_connections(config.database_connections)
+            .connect(&config.database_url)
+            .await
+            .map_err(StartError::Database)?;
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .map_err(StartError::Migration)?;
+        let keys = Keys::load(&pool).await.map_err(StartError::Database)?;
+        let blobs = BlobStore::open(&config.blob_dir)
+            .await
+            .map_err(StartError::Blobs)?;
+        Ok(Self(Arc::new(Inner {
+            pool,
+            blobs,
+            keys,
+            config,
+        })))
+    }
+}
+
+async fn healthz() -> &'static str {
+    "ok\n"
+}
+
+pub fn router(state: AppState) -> Router {
+    // Paths are written out in full. Nesting a router would make its root
+    // answer at `/collection` but not at `/collection/`, and the client
+    // always sends the trailing slash.
+    let mut api = Router::new()
+        .route("/authentication/is_etebase/", get(auth::is_etebase))
+        .route("/authentication/signup/", post(auth::signup))
+        .route(
+            "/authentication/login_challenge/",
+            post(auth::login_challenge),
+        )
+        .route("/authentication/login/", post(auth::login))
+        .route("/authentication/logout/", post(auth::logout))
+        .route(
+            "/authentication/change_password/",
+            post(auth::change_password),
+        )
+        .route("/authentication/dashboard_url/", post(auth::dashboard_url))
+        .route(
+            "/collection/",
+            get(collections::list_all).post(collections::create_collection),
+        )
+        .route("/collection/list_multi/", post(collections::list_multi))
+        .route(
+            "/collection/{collection}/",
+            get(collections::fetch_collection),
+        )
+        .route(
+            "/collection/{collection}/item/",
+            get(collections::list_items),
+        )
+        .route(
+            "/collection/{collection}/item/fetch_updates/",
+            post(collections::fetch_updates),
+        )
+        .route(
+            "/collection/{collection}/item/batch/",
+            post(collections::batch),
+        )
+        .route(
+            "/collection/{collection}/item/transaction/",
+            post(collections::transaction),
+        )
+        .route(
+            "/collection/{collection}/item/{item}/",
+            get(collections::fetch_item),
+        )
+        .route(
+            "/collection/{collection}/item/{item}/revision/",
+            get(collections::list_revisions),
+        )
+        .route(
+            "/collection/{collection}/item/{item}/chunk/{chunk}/",
+            put(collections::upload_chunk),
+        )
+        .route(
+            "/collection/{collection}/item/{item}/chunk/{chunk}/download/",
+            get(collections::download_chunk),
+        )
+        .route(
+            "/collection/{collection}/member/",
+            get(sharing::list_members),
+        )
+        .route(
+            "/collection/{collection}/member/leave/",
+            post(sharing::leave),
+        )
+        .route(
+            "/collection/{collection}/member/{username}/",
+            delete(sharing::remove_member).patch(sharing::modify_member),
+        )
+        .route("/invitation/incoming/", get(sharing::list_incoming))
+        .route(
+            "/invitation/incoming/{uid}/",
+            get(sharing::fetch_incoming).delete(sharing::reject),
+        )
+        .route("/invitation/incoming/{uid}/accept/", post(sharing::accept))
+        .route(
+            "/invitation/outgoing/",
+            get(sharing::list_outgoing).post(sharing::invite),
+        )
+        .route(
+            "/invitation/outgoing/fetch_user_profile/",
+            get(sharing::fetch_user_profile),
+        )
+        .route("/invitation/outgoing/{uid}/", delete(sharing::disinvite));
+    if state.config.test_reset {
+        api = api.route("/test/authentication/reset/", post(test_reset::reset));
+    }
+
+    Router::new()
+        .route("/healthz", get(healthz))
+        .nest("/api/v1", api)
+        .layer(DefaultBodyLimit::max(state.config.max_body_bytes))
+        .layer(TraceLayer::new_for_http())
+        .with_state(state)
+}
+
+/// Serve until the listener fails or `shutdown` resolves.
+pub async fn serve(
+    listener: tokio::net::TcpListener,
+    state: AppState,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()> {
+    axum::serve(listener, router(state))
+        .with_graceful_shutdown(shutdown)
+        .await
+}
