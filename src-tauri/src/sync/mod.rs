@@ -23,6 +23,7 @@
 mod apply;
 pub mod collab_room;
 mod collections;
+pub mod feed;
 mod local_rows;
 mod payloads;
 mod pull;

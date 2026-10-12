@@ -32,7 +32,7 @@ pub use encrypted_models::{CollectionAccessLevel, ItemMetadata, SignedInvitation
 
 pub use service::{Account, Collection, InvitationPreview, Item};
 
-pub use mindstream::{Mindstream, RoomTicket};
+pub use mindstream::{FeedEndpoint, Mindstream, RoomTicket};
 
 pub mod managers {
     pub use super::service::{

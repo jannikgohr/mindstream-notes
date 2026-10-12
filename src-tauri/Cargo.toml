@@ -59,7 +59,11 @@ similar = "3"
 rmp-serde = "1"
 serde_bytes = "0.11"
 sha2 = "0.10"
-tokio = { version = "1.52.3", features = ["time", "sync"] }
+tokio = { version = "1.52.3", features = ["time", "sync", "macros"] }
+# The change feed: one socket to the sync server, opened by the Rust side
+# because it carries the session token.
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false }
 
 # Backup format: backups are zip files containing manifest.json + the
 # SQLite snapshot (see src/backup.rs). default-features keeps DEFLATE
@@ -108,6 +112,10 @@ md-5 = "0.11.0"
 # plugin instead of taking down the process. `panic = "abort"` would make those
 # guards no-ops and turn any panic into a hard crash. The size cost of unwinding
 # tables is accepted for that safety.
+[dev-dependencies]
+# Paused time, for testing what the sync scheduler waits for.
+tokio = { version = "1.52.3", features = ["rt", "macros", "test-util"] }
+
 [profile.release]
 codegen-units = 1
 lto = true

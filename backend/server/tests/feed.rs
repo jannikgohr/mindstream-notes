@@ -79,3 +79,43 @@ async fn feed_needs_a_session() {
     .await;
     assert!(refused.is_err(), "a bad token opened a feed socket");
 }
+
+/// The feed as the app opens it: at the address, and with the header, that
+/// the client library it ships hands out for a signed-in account.
+#[test]
+fn feed_opens_with_what_the_client_the_app_ships_hands_out() {
+    let laptop = common::signup("owner");
+    let endpoint = laptop.mindstream().feed_endpoint().unwrap();
+    assert!(endpoint.url().starts_with("ws://127.0.0.1:"));
+    assert!(endpoint.url().ends_with("/api/v1/mindstream/feed/"));
+    let token = endpoint
+        .authorization()
+        .strip_prefix("Token ")
+        .expect("a token header");
+    // The session token must not end up in a log by way of a debug print.
+    assert!(!format!("{endpoint:?}").contains(token));
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let mut feed = runtime.block_on(async {
+        let mut socket = Socket::open(endpoint.url(), "", Some(token)).await;
+        match socket.next_message().await {
+            Some(tokio_tungstenite::tungstenite::Message::Binary(hello)) => {
+                let hello: serde_json::Value = rmp_serde::from_slice(&hello).unwrap();
+                assert_eq!(hello["protocol"], 1);
+            }
+            other => panic!("expected the feed's greeting, got {other:?}"),
+        }
+        socket
+    });
+
+    // The same account on a second device makes a change. The first hears
+    // of it without asking.
+    let phone =
+        etebase::Account::login_key(common::client(common::server()), &laptop.name, &laptop.key)
+            .unwrap();
+    common::new_collection(&phone, "made on the phone");
+    assert_eq!(runtime.block_on(feed.news()), Some((true, false)));
+}

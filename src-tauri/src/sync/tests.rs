@@ -9,4 +9,5 @@ mod apply_folders;
 mod apply_notes;
 mod collab_room;
 mod collections;
+mod feed;
 mod fixtures;

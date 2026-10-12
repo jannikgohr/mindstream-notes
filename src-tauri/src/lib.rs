@@ -148,6 +148,14 @@ pub fn run() {
         android_logger::init_once(
             android_logger::Config::default()
                 .with_max_level(level)
+                // The socket library traces its handshake, and the change
+                // feed's handshake carries the session token. See the same
+                // rule for the desktop logger below.
+                .with_filter(
+                    android_logger::FilterBuilder::new()
+                        .parse("trace,tungstenite=warn,tokio_tungstenite=warn")
+                        .build(),
+                )
                 .with_tag("Mindstream"),
         );
     }
@@ -171,6 +179,11 @@ pub fn run() {
                 .level_for("hyper_util", log::LevelFilter::Warn)
                 .level_for("reqwest", log::LevelFilter::Warn)
                 .level_for("rustls", log::LevelFilter::Warn)
+                // Not only noise: the socket library traces its handshake
+                // request, headers and all, and the change feed's carries
+                // the session token. That must never reach a log.
+                .level_for("tungstenite", log::LevelFilter::Warn)
+                .level_for("tokio_tungstenite", log::LevelFilter::Warn)
                 .level_for("keyring_core", log::LevelFilter::Info)
                 .targets([
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
@@ -389,6 +402,9 @@ pub fn run() {
             // restored preference, which is what actually flips it on.
             app.manage(sync::scheduler::SyncScheduler::new());
             sync::scheduler::spawn(app.handle().clone());
+            // The server says when something changed elsewhere, so that
+            // sync does not have to wait for the next tick.
+            sync::feed::spawn(app.handle().clone());
 
             // Trash retention sweep — same setup pattern. Starts
             // disabled until the JS settings effect hands over the

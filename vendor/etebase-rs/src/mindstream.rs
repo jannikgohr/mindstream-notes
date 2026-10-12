@@ -46,6 +46,40 @@ impl RoomTicket {
     }
 }
 
+/// Where the change feed is, and what to present when connecting to it.
+///
+/// The feed is a socket on which the server says that something changed and
+/// a sync is worth running. It carries no data. Unlike a room it is opened
+/// with the session token itself, so it is for the part of an application
+/// that already holds the session. Do not hand one of these to a web view.
+#[derive(Clone)]
+pub struct FeedEndpoint {
+    url: String,
+    authorization: String,
+}
+
+impl FeedEndpoint {
+    /// The feed's address, a `ws` or `wss` URL
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// The value of the `Authorization` header to send with the request that
+    /// opens the socket
+    pub fn authorization(&self) -> &str {
+        &self.authorization
+    }
+}
+
+impl std::fmt::Debug for FeedEndpoint {
+    // The header holds the session token, which has no business in a log.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FeedEndpoint")
+            .field("url", &self.url)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The Mindstream routes, for a signed-in account.
 ///
 /// Get one from [`Account::mindstream`](crate::Account::mindstream).
@@ -76,6 +110,17 @@ impl Mindstream {
     /// The address room sockets connect to
     pub fn room_url(&self) -> Result<String> {
         socket_url(&self.client.api_base, "api/v1/room/")
+    }
+
+    /// Where to listen for the server saying that a sync is worth running
+    pub fn feed_endpoint(&self) -> Result<FeedEndpoint> {
+        let token = self.client.token().ok_or(Error::ProgrammingError(
+            "the change feed needs a signed-in account",
+        ))?;
+        Ok(FeedEndpoint {
+            url: socket_url(&self.client.api_base, "api/v1/mindstream/feed/")?,
+            authorization: format!("Token {}", token),
+        })
     }
 }
 

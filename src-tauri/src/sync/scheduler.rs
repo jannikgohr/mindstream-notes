@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::sync::{Mutex, MutexGuard};
+use tokio::sync::{Mutex, MutexGuard, Notify};
 
 use crate::app_events::AppEvent;
 use crate::auth;
@@ -52,6 +52,11 @@ pub struct SyncScheduler {
     /// double-push the same dirty rows or compete for the etebase
     /// stoken.
     in_flight: Mutex<()>,
+    /// Wakes the loop for a sync ahead of schedule. A request that arrives
+    /// while a sync is running is kept, so what changed mid-sync is fetched
+    /// by the one that follows. Any number of requests in that time make
+    /// one sync, not one each.
+    wake: Notify,
 }
 
 impl SyncScheduler {
@@ -64,6 +69,26 @@ impl SyncScheduler {
             enabled: AtomicBool::new(false),
             interval_secs: AtomicU64::new(DEFAULT_INTERVAL_SECS),
             in_flight: Mutex::new(()),
+            wake: Notify::new(),
+        }
+    }
+
+    /// Whether the user has scheduled sync on.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    /// Ask for a sync now instead of at the next tick. Does nothing while
+    /// scheduled sync is off: the user turned it off.
+    pub fn request_sync(&self) {
+        self.wake.notify_one();
+    }
+
+    /// Resolves at the next tick, or sooner when a sync was asked for.
+    async fn next_tick(&self, interval: Duration) {
+        tokio::select! {
+            _ = tokio::time::sleep(interval) => {}
+            _ = self.wake.notified() => {}
         }
     }
 
@@ -106,7 +131,7 @@ pub fn spawn(app: AppHandle) {
                 }
             }
 
-            tokio::time::sleep(Duration::from_secs(interval)).await;
+            scheduler.next_tick(Duration::from_secs(interval)).await;
         }
     });
 }
@@ -235,6 +260,28 @@ mod tests {
 
         assert!(!scheduler.enabled.load(Ordering::Relaxed));
         assert_eq!(scheduler.interval_secs.load(Ordering::Relaxed), 300);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sync_asked_for_does_not_wait_for_the_tick() {
+        let scheduler = SyncScheduler::new();
+        let hour = Duration::from_secs(3600);
+
+        // Nothing asked: the tick takes its full time.
+        let started = tokio::time::Instant::now();
+        scheduler.next_tick(hour).await;
+        assert_eq!(started.elapsed(), hour);
+
+        // Asked while nothing was waiting, as when a sync is running: kept
+        // for the next wait, however many times it was asked.
+        scheduler.request_sync();
+        scheduler.request_sync();
+        let started = tokio::time::Instant::now();
+        scheduler.next_tick(hour).await;
+        assert_eq!(started.elapsed(), Duration::ZERO);
+        // And spent by it.
+        scheduler.next_tick(hour).await;
+        assert_eq!(started.elapsed(), hour);
     }
 
     #[test]
