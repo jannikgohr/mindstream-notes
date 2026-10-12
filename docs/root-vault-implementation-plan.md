@@ -1145,6 +1145,29 @@ Actual signed updater installation, packaged macOS/Linux restart, and monitor/DP
 changes remain release QA requirements. The native fixture simulates installer
 completion and never changes the installed application.
 
+Vault menu observation slice on 2026-10-12: a typed native query identifies the
+supervised runtime and lists its ready, starting and unavailable vault workers.
+The coordinator requires the exact ready caller identity. It reconciles adopted
+workers using physical OS leases, preserves unavailable owners and does not infer
+closure from socket failure or PID state. Observations cannot authorize a launch
+or source close; the eventual opening action must recheck ownership. The bridge
+holds a tracked read job off the event loop and never waits on IPC under RootLock.
+Direct, browser and mobile devices explicitly report their existing single-vault
+mode; coordinator errors cannot become an empty closed-vault list. Frontend
+validation rejects unknown states, duplicate/empty IDs and contradictory direct
+mode data. Runtime protocol 9 adds the authenticated read request.
+
+Rust fmt/clippy and 875 enabled tests passed, five ignored. Frontend check,
+affected ESLint, 15 bridge/profile-store tests and the production build passed.
+The embedded Windows build and fresh-root native check passed authentication,
+live-window state, tray/shortcut routing, autostart, whole-app Quit and last-window
+exit. Artifacts are in `.output/vault-window-state-retry-app-check`. A transient
+Windows endpoint read failure during atomic publication is now retried within
+the harness's bounded startup wait. It never authorizes takeover; the failed
+fixture was closed through authenticated coordinated Quit. No fixture processes
+remained after cleanup. Menu choices/preferences and handoff remain pending;
+normal startup remains direct during the rollout.
+
 Keep one vault per worker for its lifetime. Use the validated long-lived
 host/coordinator arrangement. Do not add in-process session swapping.
 

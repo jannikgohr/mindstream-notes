@@ -22,6 +22,10 @@ use crate::worker_registration::RuntimeContract;
 enum HostCommand {
     Activate,
     Status,
+    WindowState {
+        vault_id: String,
+        launch_id: Uuid,
+    },
     Focused {
         vault_id: String,
         launch_id: Uuid,
@@ -210,6 +214,38 @@ enum Action {
 }
 
 impl Book {
+    fn window_state(
+        &self,
+        vault_id: &str,
+        launch_id: Uuid,
+    ) -> AppResult<crate::vault_window_state::View> {
+        let source = self.workers.get(vault_id).ok_or_else(invalid)?;
+        if !self.exported
+            || source.id != launch_id
+            || !source.ready
+            || source.endpoint.is_none()
+            || source.error.is_some()
+        {
+            return Err(invalid());
+        }
+        Ok(crate::vault_window_state::View {
+            supervised: true,
+            vaults: self
+                .workers
+                .iter()
+                .map(|(id, launch)| crate::vault_window_state::Entry {
+                    vault_id: id.clone(),
+                    status: if launch.error.is_some() {
+                        crate::vault_window_state::Status::Unavailable
+                    } else if launch.ready && launch.endpoint.is_some() {
+                        crate::vault_window_state::Status::Ready
+                    } else {
+                        crate::vault_window_state::Status::Starting
+                    },
+                })
+                .collect(),
+        })
+    }
     fn autostart_status(&self, id: Uuid) -> AppResult<AutostartProgress> {
         let operation = self.operations.get(&id).ok_or_else(invalid)?;
         if operation.input["command"].as_str() != Some("autostart") {
@@ -343,6 +379,17 @@ impl Book {
             }
             return Ok((operation.reply.clone(), None));
         }
+        if let HostCommand::WindowState {
+            vault_id,
+            launch_id,
+        } = &command
+        {
+            return Ok((
+                serde_json::to_value(self.window_state(vault_id, *launch_id)?)
+                    .map_err(|_| invalid())?,
+                None,
+            ));
+        }
         if let HostCommand::OpenStatus { operation_id } = command {
             return Ok((
                 serde_json::to_value(self.open_status(operation_id)?).map_err(|_| invalid())?,
@@ -435,6 +482,7 @@ impl Book {
                 action = Some(Action::Quit);
             }
             HostCommand::OpenStatus { .. }
+            | HostCommand::WindowState { .. }
             | HostCommand::ShortcutRegistrationStatus
             | HostCommand::AutostartStatus { .. }
             | HostCommand::UpdateCheckStatus { .. } => {
@@ -1178,6 +1226,7 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
     if matches!(
         command,
         HostCommand::Status
+            | HostCommand::WindowState { .. }
             | HostCommand::Activate
             | HostCommand::Open { .. }
             | HostCommand::Shortcut { .. }
@@ -2735,6 +2784,18 @@ pub(crate) fn autostart_setting(app: &AppHandle, enabled: Option<bool>) -> AppRe
     }
 }
 
+pub(crate) fn window_state(app: &AppHandle) -> AppResult<crate::vault_window_state::View> {
+    let worker = app.state::<Worker>();
+    let host = worker.host.lock().map_err(|_| invalid())?.clone();
+    let reply = host
+        .retry_call(&request(&HostCommand::WindowState {
+            vault_id: worker.vault_id.clone(),
+            launch_id: worker.launch_id,
+        })?)?
+        .map_err(AppError::InvalidArg)?;
+    serde_json::from_value(reply).map_err(|_| invalid())
+}
+
 pub(crate) fn check_update(
     app: &AppHandle,
     force: bool,
@@ -2802,6 +2863,53 @@ fn await_open_result(host: &Endpoint, operation_id: Uuid, deadline: Instant) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_state_requires_ready_caller_and_retains_starting_and_unavailable_owners() {
+        use crate::vault_window_state::Status;
+        let root = std::env::temp_dir().join(format!("ms-window-state-{}", Uuid::new_v4()));
+        let owner = crate::storage_locks::VaultLock::acquire(&root).unwrap();
+        let listener = ipc::Coordinator::for_worker(&owner).unwrap();
+        let id = Uuid::new_v4();
+        let mut book = Book {
+            exported: true,
+            ..Book::default()
+        };
+        let mut source = pending(id);
+        source.endpoint = Some(listener.endpoint().clone());
+        book.workers.insert("source".into(), source);
+        assert!(book.window_state("source", id).is_err());
+        book.workers.get_mut("source").unwrap().ready = true;
+        book.workers
+            .insert("starting".into(), pending(Uuid::new_v4()));
+        let mut unknown = pending(Uuid::new_v4());
+        unknown.error = Some("owner is unresponsive; ownership retained".into());
+        book.workers.insert("unknown".into(), unknown);
+        let view = book.window_state("source", id).unwrap();
+        assert!(view.supervised);
+        assert_eq!(
+            view.vaults
+                .iter()
+                .map(|entry| (&*entry.vault_id, entry.status.clone()))
+                .collect::<Vec<_>>(),
+            [
+                ("source", Status::Ready),
+                ("starting", Status::Starting),
+                ("unknown", Status::Unavailable)
+            ]
+        );
+        assert!(book.window_state("source", Uuid::new_v4()).is_err());
+        assert!(book.window_state("closed", id).is_err());
+        assert!(!view.vaults.iter().any(|entry| entry.vault_id == "closed"));
+        book.quitting = Some(Uuid::new_v4());
+        assert!(
+            book.window_state("source", id).is_ok(),
+            "read-only observation stays available during quit"
+        );
+        drop(listener);
+        drop(owner);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn updater_requires_ready_owner_deduplicates_and_fences_quit_and_new_actions() {

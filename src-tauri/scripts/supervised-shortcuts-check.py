@@ -146,7 +146,9 @@ def main():
                 record = json.loads((root / "coordinator-endpoint.json").read_text())
                 # Process ID correlates this fixture, never determines ownership.
                 return record if record.get("process_id") == host.pid else None
-            except (FileNotFoundError, json.JSONDecodeError):
+            except (FileNotFoundError, PermissionError, json.JSONDecodeError):
+                # Windows may temporarily deny a read during atomic publication.
+                # Bounded startup retries do not authorize ownership or takeover.
                 return None
 
         def status():
@@ -204,7 +206,7 @@ def main():
         try:
             peer = wait(endpoint)
             wait(lambda: status()["initialized"] and any(entry["id"] == "other" and entry["ready"] for entry in status()["workers"]))
-            assert status()["contract"]["protocol"] == 8
+            assert status()["contract"]["protocol"] == 9
             if args.wait_for_window_close:
                 if args.autostart_hidden:
                     assert status()["active"] is None, "hidden worker incorrectly took focus recency"
@@ -234,6 +236,11 @@ def main():
             assert status()["shortcuts"]["vault_id"] == "capture"
             assert not status()["shortcutRegistration"]["registered"], "test root registered OS shortcuts"
             owner = worker("other")
+            view_payload = {"command": "windowState", "vault_id": "other", "launch_id": owner["launch_id"]}
+            assert call(peer, view_payload)["Ok"] == {"supervised": True, "vaults": [{"vaultId": "other", "status": "ready"}]}
+            assert "Err" in call(peer, {**view_payload, "launch_id": str(uuid.uuid4())})
+            print("Authenticated live vault-window state passed")
+
             for enabled_value in [None, True]:
                 request_id = str(uuid.uuid4())
                 payload = {"command": "autostart", "vault_id": "other", "launch_id": owner["launch_id"], "enabled": enabled_value}

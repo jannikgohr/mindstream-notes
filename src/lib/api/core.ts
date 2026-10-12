@@ -58,6 +58,7 @@ export enum TauriCommandName {
   GetCollectionShareState = 'get_collection_share_state',
   GetCustomWindowDecorations = 'get_custom_window_decorations',
   GetWorkerBrowserOptions = 'get_worker_browser_options',
+  GetVaultWindowState = 'get_vault_window_state',
   VaultWorkerReady = 'vault_worker_ready',
   VaultWindowCloseReady = 'vault_window_close_ready',
   VaultWindowCloseAck = 'vault_window_close_ack',

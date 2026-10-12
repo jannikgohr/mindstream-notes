@@ -92,6 +92,7 @@ pub mod vault_jobs;
 pub mod vault_runtime;
 #[cfg(desktop)]
 pub mod vault_supervisor;
+pub mod vault_window_state;
 #[cfg(desktop)]
 pub mod webview_memory;
 pub mod webview_security;
@@ -689,6 +690,7 @@ pub fn run() {
                 plugins::preview_service::plugins_preview_stop,
                 // Profiles (vaults)
                 profiles::list_profiles,
+                vault_window_state::get_vault_window_state,
                 profiles::create_profile,
                 profiles::switch_profile,
                 profiles::rename_profile,
