@@ -37,6 +37,21 @@
           ]
         },
         {
+          "id": "account.security",
+          "settings": [
+            {
+              "id": "account.securityPanel",
+              "scope": "V",
+              "type": "custom",
+              "customId": "account-security",
+              "showIf": {
+                "id": "account.serverType",
+                "notEquals": "local-only"
+              }
+            }
+          ]
+        },
+        {
           "id": "account.sync",
           "settings": [
             {

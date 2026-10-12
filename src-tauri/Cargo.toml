@@ -41,6 +41,9 @@ thiserror = "2.0.18"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 etebase = { path = "../vendor/etebase-rs", features = ["networking"] }
+# The link an authenticator app scans when two-factor sign-in is set up.
+# Drawn here so the secret in it never passes through a web library.
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
 # Keyring — v4 architecture: the API lives in keyring-core, and each
 # OS backend is its own crate. Pulling them in via target.cfg blocks

@@ -880,7 +880,7 @@ async function selectSelfHosted(client: WebdriverIO.Browser): Promise<void> {
  * Accessible names are taken verbatim from src/lib/settings (the label-wrapped
  * inputs in SignInForm.svelte and the section labels in i18n/en.json):
  *   "Open settings" → "Account & Sync" → "Self-hosted" →
- *   "Server URL" / "Username or email" / "Password" → "Sign in".
+ *   "Server URL" / "Username" / "Password" → "Sign in".
  *
  * NOTE: written to the confirmed labels but not yet validated against a live
  * app session — see e2e-tests/app/README.md ("Not yet validated end-to-end").
@@ -957,7 +957,7 @@ export async function loginClient(
     };
 
     setInput('Server URL', formInput.serverUrl);
-    setInput('Username or email', formInput.username);
+    setInput('Username', formInput.username);
     setInput('Password', formInput.password);
   }, input);
 
@@ -1008,7 +1008,7 @@ export async function loginClient(
       const text = document.body.innerText;
       return {
         serverUrl: value('Server URL'),
-        username: value('Username or email'),
+        username: value('Username'),
         hasPassword: (value('Password') ?? '').length > 0,
         visibleText: text.slice(0, 2_000)
       };

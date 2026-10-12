@@ -33,6 +33,8 @@ pub enum CommandErrorCode {
     InvalidArgument,
     Tauri,
     Task,
+    /// The sync server said no, or could not be asked. `reason` says which.
+    Refused,
     Unknown,
 }
 
@@ -41,6 +43,11 @@ pub enum CommandErrorCode {
 pub struct CommandError {
     pub code: CommandErrorCode,
     pub message: String,
+    /// One of a fixed set of words the UI can act on and translate, where
+    /// `message` is English prose for the log. Only [`Self::refused`] sets
+    /// it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 impl CommandError {
@@ -48,6 +55,15 @@ impl CommandError {
         Self {
             code,
             message: message.into(),
+            reason: None,
+        }
+    }
+
+    pub fn refused(reason: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: CommandErrorCode::Refused,
+            message: message.into(),
+            reason: Some(reason.into()),
         }
     }
 

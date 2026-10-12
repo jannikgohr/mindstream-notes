@@ -7,17 +7,35 @@ export enum CommandErrorCode {
   InvalidArgument = 'invalidArgument',
   Tauri = 'tauri',
   Task = 'task',
+  /** The sync server said no, or could not be asked. See `reason`. */
+  Refused = 'refused',
   Unknown = 'unknown'
 }
 
 export interface CommandError {
   code: CommandErrorCode;
   message: string;
+  /** Only with `Refused`: a fixed word for why, which
+   *  `$lib/account/refusal` turns into a sentence. */
+  reason?: string;
 }
 
 export enum TauriCommandName {
   AcceptCollectionInvitation = 'accept_collection_invitation',
   AcceptShareBundle = 'accept_share_bundle',
+  AccountBeginAuthenticator = 'account_begin_authenticator',
+  AccountChangePassword = 'account_change_password',
+  AccountConfirmAuthenticator = 'account_confirm_authenticator',
+  AccountEndOtherSessions = 'account_end_other_sessions',
+  AccountEndSession = 'account_end_session',
+  AccountNewBackupCodes = 'account_new_backup_codes',
+  AccountNewRecoveryKey = 'account_new_recovery_key',
+  AccountRecover = 'account_recover',
+  AccountRemoveAuthenticator = 'account_remove_authenticator',
+  AccountSecurityStatus = 'account_security_status',
+  AccountServerInfo = 'account_server_info',
+  AccountSessions = 'account_sessions',
+  AccountSignup = 'account_signup',
   AuditCorruptRemoteItems = 'audit_corrupt_remote_items',
   BackupNow = 'backup_now',
   CaptureCurrentNoteVersion = 'capture_current_note_version',
