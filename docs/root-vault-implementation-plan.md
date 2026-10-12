@@ -1221,6 +1221,12 @@ editor persistence, and secondary-window lifecycle.
 - Add opening actions, remember checkbox, three-choice device preference,
   Ctrl + left click override, and accessible alternatives. Apply the same rules
   to newly created vaults; consider Command + click on macOS.
+  Handoff recovery decision pending owner input: if the coordinator crashes after
+  the source has saved and closed, finish opening the target, or reopen the source.
+  The recommendation is to finish the target after source closure and retain the
+  source if it is still open. Ownership changes, unknown close receipts and failed
+  saves must never authorize closing a different source process.
+
 - Reserve/start the target as a prepared worker at source geometry. Ready means
   locks, recovery, settings, and account policy succeeded. Then flush main and
   popout editors and stop source services. Activation is a separate commit step.
