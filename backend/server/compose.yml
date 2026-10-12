@@ -7,8 +7,7 @@
 # Plain HTTP on port 3735 of the `server` service. Put a TLS-terminating
 # reverse proxy in front for anything but local use.
 #
-# This stack does not yet replace the one in ../docker-compose.yml: live
-# collaboration still runs on the relays there.
+# This is the whole backend: accounts, storage, sharing and live rooms.
 
 services:
   server:
@@ -28,6 +27,8 @@ services:
       # does not pass the original Host header through.
       MINDSTREAM_PUBLIC_HOSTS: ${MINDSTREAM_PUBLIC_HOSTS:-}
       MINDSTREAM_TEST_RESET: ${MINDSTREAM_TEST_RESET:-false}
+      # Sign-in attempts one address may make per minute. 0 turns the limit off.
+      MINDSTREAM_AUTH_RATE_PER_MINUTE: ${MINDSTREAM_AUTH_RATE_PER_MINUTE:-10}
       # Lets another program set account limits. Empty leaves that interface off.
       MINDSTREAM_ADMIN_TOKEN: ${MINDSTREAM_ADMIN_TOKEN:-}
       # Seals authenticator secrets. Empty makes the server create a key in

@@ -38,11 +38,11 @@ flowchart TB
     DB[("mindstream.db (per profile)")]
 
     subgraph SRV["mindstream-server (self-hosted, one URL)"]
-        NGINX["nginx front door"]
-        Etebase["Etebase (+Postgres)"]
-        Relays["yjs-relay · excalidraw-room"]
-        NGINX --> Etebase
-        NGINX --> Relays
+        API["Accounts · encrypted storage · sharing"]
+        Rooms["Live rooms · change feed"]
+        PG[("Postgres")]
+        API --> PG
+        Rooms --> PG
     end
 
     UI --> Bridge
@@ -184,15 +184,21 @@ user's own vault sync.
 
 ## The backend stack
 
-The optional server ([`backend/`](../backend/README.md)) is a Docker Compose
-stack behind **one URL**: an `nginx` front door path-routes to **Etebase**
-(encrypted storage + auth, on Postgres), **yjs-relay** (markdown/PDF live
-collab), and **excalidraw-room** (freeform live collab). The client is
-configured with just that URL and derives the collaboration WebSocket paths
-itself. Operational details are in [backend/docs/advanced.md](../backend/docs/advanced.md).
+The optional server ([`backend/`](../backend/README.md)) is one program on
+Postgres behind **one URL**. It keeps accounts and encrypted storage, speaking
+the protocol of the Etebase client library the app ships, and it hosts the
+live rooms that notes of every kind are co-edited in. The client is configured
+with just that URL.
 
-A single server that replaces this stack is designed in
-[server-design.md](server-design.md). It is not built yet.
+A room is a note's item on the server. The Rust side asks for a ticket with
+the session it holds and hands it to the editor, which opens the room socket
+with it, so the session token never reaches the WebView. The server knows who
+is in a room and drops document changes from members who may only read. Frames
+stay encrypted under a key derived from the note's own, which the server never
+has.
+
+The design and the reasons for it are in [server-design.md](server-design.md).
+Running one is covered in [backend/server/README.md](../backend/server/README.md).
 
 ## How this shapes testing
 

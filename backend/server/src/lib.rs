@@ -37,11 +37,13 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use axum::extract::DefaultBodyLimit;
+use axum::http::{header, HeaderValue};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde::Serialize;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
 use blob::BlobStore;
@@ -295,12 +297,19 @@ pub fn router(state: AppState) -> Router {
             );
     }
 
+    // On every answer, whatever produced it. Nothing here is meant to be
+    // framed by another site, guessed at by a browser, or named in a referrer.
+    let fixed =
+        |name, value| SetResponseHeaderLayer::if_not_present(name, HeaderValue::from_static(value));
     Router::new()
         .route("/healthz", get(healthz))
         .route("/join/{uid}", get(join::page))
         .nest("/api/v1", api)
         .nest("/admin/v1", admin)
         .layer(DefaultBodyLimit::max(state.config.max_body_bytes))
+        .layer(fixed(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
+        .layer(fixed(header::X_FRAME_OPTIONS, "DENY"))
+        .layer(fixed(header::REFERRER_POLICY, "no-referrer"))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

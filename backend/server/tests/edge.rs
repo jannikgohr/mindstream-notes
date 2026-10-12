@@ -76,3 +76,41 @@ fn info_route_says_what_the_server_is() {
     let missing = http_get(common::server(), "/api/v1/nothing/here/");
     assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
 }
+
+/// A reverse proxy used to add these. The server answers browsers directly
+/// now, on the invite page at least, so it sends them itself, on every
+/// answer including refusals.
+#[tokio::test]
+async fn every_answer_carries_the_security_headers() {
+    let http = reqwest::Client::new();
+    for path in [
+        "/healthz",
+        "/api/v1/mindstream/info/",
+        "/api/v1/collection/",
+        "/api/v1/no-such-route/",
+        "/join/some-link",
+    ] {
+        let response = http
+            .get(format!("{}{path}", common::server()))
+            .send()
+            .await
+            .unwrap();
+        let header = |name: &str| {
+            response
+                .headers()
+                .get(name)
+                .map(|value| value.to_str().unwrap().to_owned())
+        };
+        assert_eq!(
+            header("x-content-type-options").as_deref(),
+            Some("nosniff"),
+            "{path}"
+        );
+        assert_eq!(header("x-frame-options").as_deref(), Some("DENY"), "{path}");
+        assert_eq!(
+            header("referrer-policy").as_deref(),
+            Some("no-referrer"),
+            "{path}"
+        );
+    }
+}

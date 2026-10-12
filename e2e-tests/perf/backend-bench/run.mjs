@@ -40,7 +40,6 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
-  joinExcalidrawRoom,
   relayTransport,
   roomsTransport,
   roundTrips,
@@ -596,31 +595,12 @@ async function benchmark(url, scale) {
   }
 
   // --- freeform ---
-  if (builtIn) {
-    run.skipped.push({
-      name: 'freeform.frame',
-      reason:
-        'freeform notes use the same rooms on this server; see relay.frame'
-    });
-  }
-  try {
-    if (builtIn) throw null;
-    const roomId = randomBytes(10).toString('hex');
-    const first = await joinExcalidrawRoom(url, roomId);
-    const second = await joinExcalidrawRoom(url, roomId);
-    closers.push(
-      () => first.close(),
-      () => second.close()
-    );
-    await settle([first, second]);
-    record(
-      'freeform.frame[1 KiB]',
-      summariseLatencies(await roundTrips([first, second], KIB, scale.frames)),
-      'excalidraw-room, one sender, one receiver'
-    );
-  } catch (err) {
-    if (err) run.skipped.push({ name: 'freeform.frame', reason: err.message });
-  }
+  // Freeform notes use the same rooms as every other kind, so relay.frame
+  // covers them. The socket.io relay they once had is gone.
+  run.skipped.push({
+    name: 'freeform.frame',
+    reason: 'freeform notes use the same rooms; see relay.frame'
+  });
 
   for (const close of closers) {
     try {

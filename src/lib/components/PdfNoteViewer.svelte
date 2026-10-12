@@ -37,7 +37,7 @@
   import {
     etebaseSession,
     fetchDrawingAsset,
-    getYjsRelayUrl,
+    getRoomSocketUrl,
     isTauri,
     loadNote,
     onSessionChange,
@@ -1481,7 +1481,7 @@
    */
   const collabSession = createCollabSession({
     getContext: () => {
-      const url = getYjsRelayUrl(
+      const url = getRoomSocketUrl(
         (getSettingValue('account.serverUrl') as string | undefined) ?? ''
       );
       if (!url || !(yDoc && awareness)) return null;

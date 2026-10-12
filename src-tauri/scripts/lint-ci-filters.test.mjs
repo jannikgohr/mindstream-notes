@@ -62,10 +62,10 @@ test('a server-only change runs the server job and not the app jobs', () => {
       `${file} would run the whole app matrix`
     );
   }
-  // The rest of backend/ is the stack the app's collaboration suites run
-  // against, so it still counts as app code.
-  assert.equal(selectsCodeJobs('backend/docker-compose.yml'), true);
-  assert.equal(selectsServerJob('backend/docker-compose.yml'), false);
+  // The rest of backend/ drives the stack the app's collaboration suites
+  // run against, so it still counts as app code.
+  assert.equal(selectsCodeJobs('backend/scripts/test-stack.mjs'), true);
+  assert.equal(selectsServerJob('backend/scripts/test-stack.mjs'), false);
   // A workflow change can break either side, and so can a change to the
   // client library: the app ships it and the server's tests are written
   // with it.

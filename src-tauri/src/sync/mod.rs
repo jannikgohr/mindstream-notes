@@ -37,14 +37,12 @@ use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::Utc;
 use etebase::error::Error as EtebaseError;
 use etebase::managers::{CollectionManager, ItemManager};
 use etebase::utils::randombytes;
 use etebase::{Account, Collection, CollectionAccessLevel, FetchOptions, Item, ItemMetadata};
 use hkdf::Hkdf;
-use p256::pkcs8::{EncodePrivateKey, EncodePublicKey};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -72,7 +70,6 @@ const COLLECTION_TYPE_SIGNATURES: &str = "mindstream.signatures";
 const ITEM_TYPE_NOTE: &str = "ms-md-note";
 const ITEM_TYPE_FOLDER: &str = "ms-md-folder";
 const ITEM_TYPE_ASSET: &str = "ms-md-asset";
-const ITEM_TYPE_COLLAB_WRITER_KEY: &str = "ms-collab-writer-key";
 const ITEM_TYPE_SIGNATURE: &str = "ms-md-signature";
 
 const KIND_NOTES: &str = "notes";
@@ -82,12 +79,6 @@ const KIND_SIGNATURES: &str = "signatures";
 
 const PAYLOAD_SCHEMA: u32 = 2;
 const LIVE_COLLAB_KEY_INFO: &[u8] = b"mindstream-live-collab-key/v1";
-const LIVE_COLLAB_JOIN_INFO: &[u8] = b"mindstream-live-collab-join/v1";
-const P256_SPKI_DER_LEN: usize = 91;
-const P256_SPKI_DER_PREFIX: &[u8] = &[
-    0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a,
-    0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04,
-];
 
 pub(super) fn catch_blocking_panic<T>(
     label: &str,

@@ -1,153 +1,115 @@
 /**
- * E2EE collab provider for live yjs co-editing.
+ * Live Yjs co-editing over a note's room on the sync server.
  *
- * Why custom (vs y-websocket directly): vanilla y-websocket carries
- * y.js update bytes in plaintext, so a self-hosted relay would see
- * everything users type. We want the relay to be a dumb broadcast hub
- * that only sees ciphertext — so this provider AES-GCM-encrypts every
- * outgoing payload with a per-note 32-byte key and decrypts incoming
- * frames before applying. The room key is distributed via etebase
- * (already E2EE), see src-tauri/src/sync/mod.rs::NotePayload.
+ * The room, who may be in it and who may write are the server's business;
+ * see `room-socket.ts`. This module is the Yjs side: what to say when
+ * joining, and what to do with what arrives.
  *
- * Wire frame layout (all binary, no JSON):
- *   [1 byte type][12 bytes IV][N bytes ciphertext+gcm-tag]
+ * Joining is a two-way catch-up that costs each side only what the other is
+ * missing:
  *
- * Type byte:
- *   0x00 sync_step_1  — sender's encoded state vector. Peer responds
- *                       with sync_step_2 carrying the missing updates.
- *   0x01 sync_step_2  — encoded yjs update bytes. Apply to local doc.
- *   0x02 awareness    — encoded awareness update (cursors/presence).
+ *   joiner  → everyone   sync    our state vector
+ *   writer  → joiner     reply   what the joiner lacks, plus the writer's
+ *                                own state vector
+ *   joiner  → writer     reply   what that writer lacks, if anything
  *
- * Server contract: receive a frame from client X in room R, broadcast
- * to every other client in R. No state, no peeking. See
- * backend/collab-server.mjs for a 50-line reference impl.
+ * A member who may only read cannot reply, so a writer who joins would never
+ * learn what that member is missing. Such a member asks instead: on hearing a
+ * writer's request it sends one of its own.
+ *
+ * After that, each local edit goes out as an update. Presence travels in its
+ * own class, which members who may only read can send too.
+ *
+ * Only updates and replies ever touch the document. The server relays those
+ * classes from writers alone, so a member who may only read cannot change
+ * what the others see, whatever they put in a presence frame.
  */
 
 import * as Y from 'yjs';
 import {
   applyAwarenessUpdate,
   encodeAwarenessUpdate,
+  removeAwarenessStates,
   type Awareness
 } from 'y-protocols/awareness';
 import {
-  canSignCollabFrame,
-  CollabReplayGuard,
-  decodeCollabFrame,
-  encodeCollabFrame,
-  signedCollabFrameNeedsAuthRefresh,
-  type CollabFrameAuth
-} from './signed-collab-frame';
-import { isJoinChallenge, signJoinChallenge } from './collab-join-challenge';
+  ROOM_CLASS_PRESENCE,
+  ROOM_CLASS_REPLY,
+  ROOM_CLASS_SYNC,
+  ROOM_CLASS_UPDATE,
+  RoomSocket,
+  type RoomConnection,
+  type RoomFrame,
+  type RoomPeer
+} from './room-socket';
 
-const FRAME_SYNC_STEP_1 = 0x00;
-const FRAME_SYNC_STEP_2 = 0x01;
-const FRAME_AWARENESS = 0x02;
-/**
- * Every frame type a shared-scope room refuses unsigned.
- *
- * Not just document updates: awareness carries the identity peers render, so
- * leaving it unsigned let anyone holding the room key impersonate a
- * collaborator's cursor — and an unsigned sync_step_1 with an empty state
- * vector made every writer in the room encode and broadcast the whole
- * document, which is a cheap amplification primitive.
- *
- * Safe to require across the board because a scoped room is withheld from
- * read-only members entirely (`can_receive_live_collab_room` in
- * src-tauri/src/sync/mod.rs), so everyone who can join can also sign.
- */
-const SIGNED_REQUIRED_TYPES = new Set([
-  FRAME_SYNC_STEP_1,
-  FRAME_SYNC_STEP_2,
-  FRAME_AWARENESS
-]);
-/** Unshared rooms require no signatures — only this device holds the key. */
-const NO_SIGNED_REQUIRED_TYPES: ReadonlySet<number> = new Set();
-
-const RECONNECT_INITIAL_MS = 1_000;
-const RECONNECT_MAX_MS = 30_000;
-/** Floor between auth refreshes. Doubles after each one (up to
- *  AUTH_REFRESH_MAX_THROTTLE_MS) because a refresh can be *provoked*: any
- *  holder of the room key can self-sign a frame with a fresh keypair and make
- *  us re-fetch scope state from Etebase. A legitimate key rotation needs one
- *  or two refreshes, so backing off costs nothing real while turning an
- *  unbounded drip into a handful of requests. */
-const AUTH_REFRESH_THROTTLE_MS = 5_000;
-const AUTH_REFRESH_MAX_THROTTLE_MS = 5 * 60_000;
-/** How long to wait for the relay's join challenge before giving up on the
- *  socket. Well under the relay's own 10s auth deadline so a slow challenge
- *  can still land in time. */
-const JOIN_CHALLENGE_TIMEOUT_MS = 4_000;
-
-/** First/last few base64 chars of the key — enough to confirm two
- *  devices imported the same secret without leaking the secret. */
-function keyFingerprint(bytes: Uint8Array): string {
-  let bin = '';
-  for (let i = 0; i < bytes.byteLength; i++) {
-    bin += String.fromCharCode(bytes[i]);
-  }
-  const b64 = btoa(bin);
-  return `${b64.slice(0, 3)}…${b64.slice(-3)}`;
-}
-
-function frameName(type: number): string {
-  switch (type) {
-    case FRAME_SYNC_STEP_1:
-      return 'sync_step_1';
-    case FRAME_SYNC_STEP_2:
-      return 'sync_step_2';
-    case FRAME_AWARENESS:
-      return 'awareness';
-    default:
-      return `unknown(0x${type.toString(16)})`;
-  }
-}
-
-export interface CollabProviderOptions {
-  /** wss:// URL of the relay. */
-  url: string;
-  /** Room ID — base64 of the room's derived P-256 public key. */
-  roomId: string;
-  /** Private half of the room's join keypair (PKCS#8 DER, base64). Used to
-   *  answer the relay's challenge nonce. Rust always supplies it for a real
-   *  room; absent only in tests and the browser-fallback mock, where there is
-   *  no relay to answer to. */
-  joinPrivateKeyPkcs8B64?: string;
-  /** 32 raw bytes of AES-GCM key material. */
-  keyBytes: Uint8Array;
+export interface CollabProviderOptions extends RoomConnection {
   /** Live yjs document the editor is bound to. */
   doc: Y.Doc;
   /** Awareness instance for cursor + presence. */
   awareness: Awareness;
   /** Optional callback fired on connect / disconnect (for UI badges). */
   onStatusChange?: (online: boolean) => void;
-  /** Optional writer-key signature context. When present, document updates
-   *  from peers must be signed by an authorized writer key. */
-  auth?: CollabFrameAuth;
-  /** True for a shared-scope room, where document updates must carry a writer
-   *  signature. Derived from the room's collab epoch rather than from `auth`
-   *  being present, so a failed authorisation lookup fails closed. */
-  requireSignedWrites?: boolean;
-  /** Called when a signed frame for this room/epoch uses a key we don't know
-   *  yet. The editor should re-fetch room info and recreate the provider. */
-  onAuthStale?: () => void;
+  /** Who else is in the room, by the account the server authenticated. */
+  onPeersChange?: (peers: RoomPeer[]) => void;
+}
+
+/** A Yjs update that changes nothing still encodes to two bytes. */
+const EMPTY_UPDATE_BYTES = 2;
+
+/**
+ * A reply: the update, and optionally the sender's state vector so the
+ * receiver can answer with what the sender is missing in turn.
+ *
+ *   [update length, u32 BE][update][state vector, possibly empty]
+ */
+export function encodeSyncReply(
+  update: Uint8Array,
+  stateVector?: Uint8Array
+): Uint8Array {
+  const out = new Uint8Array(
+    4 + update.byteLength + (stateVector?.byteLength ?? 0)
+  );
+  new DataView(out.buffer).setUint32(0, update.byteLength);
+  out.set(update, 4);
+  if (stateVector) out.set(stateVector, 4 + update.byteLength);
+  return out;
+}
+
+export function decodeSyncReply(
+  payload: Uint8Array
+): { update: Uint8Array; stateVector: Uint8Array | null } | null {
+  if (payload.byteLength < 4) return null;
+  const length = new DataView(
+    payload.buffer,
+    payload.byteOffset,
+    payload.byteLength
+  ).getUint32(0);
+  if (4 + length > payload.byteLength) return null;
+  const rest = payload.subarray(4 + length);
+  return {
+    update: payload.subarray(4, 4 + length),
+    stateVector: rest.byteLength > 0 ? rest : null
+  };
+}
+
+/** Marks awareness changes that came from one peer, so they can be taken
+ *  back when that peer leaves. */
+class FromPeer {
+  constructor(
+    readonly provider: CollabProvider,
+    readonly peer: number
+  ) {}
 }
 
 export class CollabProvider {
-  private ws: WebSocket | null = null;
-  private cryptoKey: CryptoKey | null = null;
+  private readonly socket: RoomSocket;
   private destroyed = false;
-  private reconnectAttempt = 0;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private lastAuthRefreshRequest = 0;
-  private authRefreshThrottleMs = AUTH_REFRESH_THROTTLE_MS;
-  /** Drops frames we've already applied, and frames too old to be live. */
-  private readonly replayGuard = new CollabReplayGuard();
-  /** False while we're waiting for (or answering) the relay's join
-   *  challenge. Nothing is sent until it flips. */
-  private joined = false;
   private awarenessFrame: number | null = null;
   private readonly pendingAwarenessClients = new Set<number>();
-  private joinDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Which awareness clients each peer has spoken for. A peer that drops
+   *  off without saying goodbye still has its cursor removed. */
+  private readonly awarenessOf = new Map<number, Set<number>>();
 
   private readonly docUpdateHandler: (
     update: Uint8Array,
@@ -159,19 +121,26 @@ export class CollabProvider {
   ) => void;
 
   constructor(private readonly opts: CollabProviderOptions) {
-    // Local doc edits → encrypt + send. `origin === this` filters out
-    // the updates we just *received* (we re-applied them with origin=this
-    // in handleMessage), preventing an echo loop.
+    // Local doc edits → send. `origin === this` filters out the updates we
+    // just *received* (applied with origin=this below), preventing an echo
+    // loop.
     this.docUpdateHandler = (update, origin) => {
       if (origin === this) return;
-      if (this.opts.auth && !canSignCollabFrame(this.opts.auth)) return;
-      void this.send(FRAME_SYNC_STEP_2, update);
+      // The server would drop it. Not sending saves the bytes.
+      if (!this.socket.canWrite) return;
+      void this.socket.send(ROOM_CLASS_UPDATE, update);
     };
     this.awarenessUpdateHandler = ({ added, updated, removed }, origin) => {
+      if (origin instanceof FromPeer) {
+        if (origin.provider === this) {
+          const clients = this.awarenessOf.get(origin.peer) ?? new Set();
+          for (const client of [...added, ...updated]) clients.add(client);
+          for (const client of removed) clients.delete(client);
+          this.awarenessOf.set(origin.peer, clients);
+        }
+        return;
+      }
       if (origin === this) return;
-      // Same guard as document updates: in a scoped room peers now reject
-      // unsigned awareness, so sending it unsigned is pure noise.
-      if (this.opts.auth && !canSignCollabFrame(this.opts.auth)) return;
       const changedClients = [...added, ...updated, ...removed];
       if (changedClients.length === 0) return;
       for (const client of changedClients)
@@ -183,20 +152,24 @@ export class CollabProvider {
         this.pendingAwarenessClients.clear();
         if (this.destroyed) return;
         const update = encodeAwarenessUpdate(this.opts.awareness, clients);
-        void this.send(FRAME_AWARENESS, update);
+        void this.socket.send(ROOM_CLASS_PRESENCE, update);
       });
     };
 
     this.opts.doc.on('update', this.docUpdateHandler);
     this.opts.awareness.on('update', this.awarenessUpdateHandler);
 
-    console.info(
-      '[collab] init room=%s key=%s url=%s',
-      this.opts.roomId,
-      keyFingerprint(this.opts.keyBytes),
-      this.opts.url
-    );
-    void this.connect();
+    this.socket = new RoomSocket({
+      url: this.opts.url,
+      keyBytes: this.opts.keyBytes,
+      getTicket: this.opts.getTicket,
+      label: 'yjs',
+      onOpen: () => this.startSync(),
+      onFrame: (frame) => this.handleFrame(frame),
+      onPeerLeft: (peer) => this.forgetPeer(peer),
+      onPeersChange: (peers) => this.opts.onPeersChange?.(peers),
+      onStatusChange: (online) => this.opts.onStatusChange?.(online)
+    });
   }
 
   destroy(): void {
@@ -204,307 +177,90 @@ export class CollabProvider {
     if (this.awarenessFrame !== null) cancelAnimationFrame(this.awarenessFrame);
     this.awarenessFrame = null;
     this.pendingAwarenessClients.clear();
-    if (this.reconnectTimer !== null) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    this.clearJoinDeadline();
     this.opts.doc.off('update', this.docUpdateHandler);
     this.opts.awareness.off('update', this.awarenessUpdateHandler);
-    // Drop our own awareness state so peers' cursor list immediately
-    // reflects the disconnect — the relay's broadcast of a final null
-    // state happens before we close the socket below.
+    // Drop our own awareness state so this editor stops showing itself. The
+    // peers hear from the server that we left and remove our cursor.
     try {
       this.opts.awareness.setLocalState(null);
     } catch {
       /* ignore */
     }
-    if (this.ws) {
-      try {
-        this.ws.close();
-      } catch {
-        /* ignore */
-      }
-      this.ws = null;
-    }
+    this.socket.destroy();
     this.opts.onStatusChange?.(false);
   }
 
-  private async connect(): Promise<void> {
-    if (this.destroyed) return;
-    if (!this.cryptoKey) {
-      this.cryptoKey = await crypto.subtle.importKey(
-        'raw',
-        this.opts.keyBytes.slice().buffer,
-        { name: 'AES-GCM' },
-        false,
-        ['encrypt', 'decrypt']
-      );
-    }
-    if (this.destroyed) return;
-    const url = `${this.opts.url}?room=${encodeURIComponent(this.opts.roomId)}`;
-    let ws: WebSocket;
-    try {
-      ws = new WebSocket(url);
-    } catch (err) {
-      console.warn('[collab] WebSocket constructor threw:', err);
-      this.scheduleReconnect();
-      return;
-    }
-    ws.binaryType = 'arraybuffer';
-    this.ws = ws;
-    ws.onopen = () => {
-      this.reconnectAttempt = 0;
-      this.opts.onStatusChange?.(true);
-      console.info('[collab] open room=%s', this.opts.roomId);
-      if (!this.opts.joinPrivateKeyPkcs8B64) {
-        // No join key to prove anything with — start straight away and let
-        // the relay reject us if it requires the challenge.
-        this.startSync();
-        return;
-      }
-      // Say nothing until the relay has challenged us. If none arrives the
-      // peer isn't a relay that authenticates joins, so drop the socket
-      // rather than downgrade to an unauthenticated session — reconnect
-      // backoff will keep retrying in case the relay is mid-upgrade.
-      this.joinDeadlineTimer = setTimeout(() => {
-        this.joinDeadlineTimer = null;
-        if (this.joined || this.destroyed) return;
-        console.warn(
-          '[collab] no join challenge from relay room=%s — closing (relay too old?)',
-          this.opts.roomId
-        );
-        this.ws?.close();
-      }, JOIN_CHALLENGE_TIMEOUT_MS);
-    };
-    ws.onmessage = (e) => {
-      void this.handleMessage(e.data);
-    };
-    ws.onclose = (e) => {
-      this.ws = null;
-      // The next socket has to re-answer a fresh challenge.
-      this.joined = false;
-      this.clearJoinDeadline();
-      this.opts.onStatusChange?.(false);
-      console.info(
-        '[collab] close room=%s code=%d reason=%s',
-        this.opts.roomId,
-        e.code,
-        e.reason || '(none)'
-      );
-      this.scheduleReconnect();
-    };
-    ws.onerror = (e) => {
-      console.warn('[collab] error room=%s', this.opts.roomId, e);
-      // onclose will fire next; reconnect logic lives there.
-    };
-  }
-
-  private scheduleReconnect(): void {
-    if (this.destroyed) return;
-    if (this.reconnectTimer !== null) return;
-    const delay = Math.min(
-      RECONNECT_MAX_MS,
-      RECONNECT_INITIAL_MS * 2 ** this.reconnectAttempt
-    );
-    this.reconnectAttempt += 1;
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
-      void this.connect();
-    }, delay);
-  }
-
-  private async send(type: number, payload: Uint8Array): Promise<void> {
-    const ws = this.ws;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      console.debug(
-        '[collab] send dropped (ws not open) %s payload=%dB',
-        frameName(type),
-        payload.byteLength
-      );
-      return;
-    }
-    if (!this.cryptoKey) return;
-    const frame = await encodeCollabFrame(
-      type,
-      payload,
-      this.cryptoKey,
-      this.opts.auth
-    );
-    // Re-check the socket state: encrypt() awaited a microtask, during
-    // which the user may have closed the note (provider.destroy() →
-    // ws.close()). Without this guard, the post-await ws.send throws
-    // "WebSocket is already in CLOSING or CLOSED state" — harmless but
-    // noisy in the console. Both the cached `ws` reference and
-    // `this.ws` matter: destroy() nulls the latter, but the cached one
-    // is the same WebSocket instance, just with readyState now > OPEN.
-    if (this.destroyed || ws.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    try {
-      ws.send(frame);
-      console.debug(
-        '[collab] send %s payload=%dB frame=%dB',
-        frameName(type),
-        payload.byteLength,
-        frame.byteLength
-      );
-    } catch (err) {
-      console.warn('[collab] send failed:', err);
-    }
-  }
-
-  /** Opening exchange once we're allowed to talk: state vector, our current
-   *  state, then presence. */
-  /** Which frame types this room refuses to accept unsigned. */
-  private signedRequiredTypes(): ReadonlySet<number> {
-    return this.opts.requireSignedWrites
-      ? SIGNED_REQUIRED_TYPES
-      : NO_SIGNED_REQUIRED_TYPES;
-  }
-
+  /** Opening exchange once the server has let us in. */
   private startSync(): void {
-    if (this.joined || this.destroyed) return;
-    this.joined = true;
-    // Initial sync handshake: send our state vector so peers already in
-    // the room can compute a diff and ship us their newer ops.
-    const sv = Y.encodeStateVector(this.opts.doc);
-    void this.send(FRAME_SYNC_STEP_1, sv);
-    // Also publish our current state. If this client edited while
-    // disconnected, peers already in the room won't have sent us a fresh
-    // sync_step_1, so the normal request/reply half would only pull their
-    // edits into us. Yjs updates are idempotent, making this safe on ordinary
-    // reconnects and necessary for offline edits to converge both ways.
-    const update = Y.encodeStateAsUpdate(this.opts.doc);
-    void this.send(FRAME_SYNC_STEP_2, update);
-    // Announce our awareness so peers' cursor list shows us joining.
-    const local = encodeAwarenessUpdate(this.opts.awareness, [
-      this.opts.awareness.clientID
-    ]);
-    void this.send(FRAME_AWARENESS, local);
-  }
-
-  private clearJoinDeadline(): void {
-    if (this.joinDeadlineTimer !== null) {
-      clearTimeout(this.joinDeadlineTimer);
-      this.joinDeadlineTimer = null;
-    }
-  }
-
-  /** Answer the relay's challenge. Returns true if the frame was a challenge
-   *  and we've dealt with it — the caller should not process it further. */
-  private async handleJoinChallenge(frame: Uint8Array): Promise<boolean> {
-    if (this.joined || !isJoinChallenge(frame)) return false;
-    this.clearJoinDeadline();
-    const key = this.opts.joinPrivateKeyPkcs8B64;
-    if (!key) return true;
-    const response = await signJoinChallenge(frame, this.opts.roomId, key);
-    if (this.destroyed) return true;
-    if (!response) {
-      // Can't answer, so we'll never be let in. Reconnecting would just
-      // fail the same way — close and leave the badge offline.
-      console.warn(
-        '[collab] could not answer join challenge room=%s',
-        this.opts.roomId
-      );
-      this.destroy();
-      return true;
-    }
-    const ws = this.ws;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return true;
-    try {
-      ws.send(response);
-    } catch (err) {
-      console.warn('[collab] join response send failed:', err);
-      return true;
-    }
-    console.debug('[collab] joined room=%s', this.opts.roomId);
-    this.startSync();
-    return true;
-  }
-
-  private async handleMessage(data: unknown): Promise<void> {
-    if (!(data instanceof ArrayBuffer)) return;
-    if (!this.cryptoKey) return;
-    const frame = new Uint8Array(data);
-    if (await this.handleJoinChallenge(frame)) return;
-    let decoded;
-    try {
-      decoded = await decodeCollabFrame(
-        frame,
-        this.cryptoKey,
-        this.opts.auth,
-        this.signedRequiredTypes(),
-        this.replayGuard
-      );
-    } catch (err) {
-      // Wrong key, malformed ciphertext, or replay from a different
-      // room — drop loudly so the user can spot key mismatches when
-      // diagnosing "live editing not working." A genuinely broken peer
-      // will keep failing and the badge will stay offline.
-      console.warn(
-        '[collab] decrypt failed type=%s frame=%dB room=%s — likely a key mismatch between devices',
-        frameName(frame[0]),
-        frame.byteLength,
-        this.opts.roomId,
-        err
-      );
-      return;
-    }
-    if (!decoded) {
-      void this.maybeRequestAuthRefresh(frame);
-      return;
-    }
-    const { type, payload: pt } = decoded;
-    // Mirror image of the post-await guard in send(): if the user closed
-    // the note during the decrypt microtask, the doc/awareness may be
-    // destroyed by now and applying updates would crash.
     if (this.destroyed) return;
-    console.debug(
-      '[collab] recv %s payload=%dB frame=%dB',
-      frameName(type),
-      pt.byteLength,
-      frame.byteLength
+    // Ask for what we are missing. Every writer in the room answers us
+    // alone, and tells us its own state so we can answer in kind.
+    void this.socket.send(ROOM_CLASS_SYNC, Y.encodeStateVector(this.opts.doc));
+    // Announce our presence so the peers' cursor list shows us joining.
+    void this.socket.send(
+      ROOM_CLASS_PRESENCE,
+      encodeAwarenessUpdate(this.opts.awareness, [this.opts.awareness.clientID])
     );
-    switch (type) {
-      case FRAME_SYNC_STEP_1: {
-        // Peer sent their state vector. Reply with the diff they're missing.
-        const diff = Y.encodeStateAsUpdate(this.opts.doc, pt);
-        void this.send(FRAME_SYNC_STEP_2, diff);
+  }
+
+  private forgetPeer(peer: number): void {
+    const clients = this.awarenessOf.get(peer);
+    this.awarenessOf.delete(peer);
+    if (!clients || clients.size === 0 || this.destroyed) return;
+    removeAwarenessStates(this.opts.awareness, [...clients], this);
+  }
+
+  private handleFrame({ cls, sender, payload }: RoomFrame): void {
+    if (this.destroyed) return;
+    switch (cls) {
+      case ROOM_CLASS_SYNC: {
+        // A peer sent its state vector. Only a writer may answer; the
+        // server would drop a reply from anyone else.
+        if (!this.socket.canWrite) {
+          // So the peer never hears what we lack. If it is a writer, it
+          // may have brought something new: ask it.
+          if (this.socket.peerCanWrite(sender)) {
+            void this.socket.send(
+              ROOM_CLASS_SYNC,
+              Y.encodeStateVector(this.opts.doc)
+            );
+          }
+          break;
+        }
+        const diff = Y.encodeStateAsUpdate(this.opts.doc, payload);
+        void this.socket.reply(
+          sender,
+          encodeSyncReply(diff, Y.encodeStateVector(this.opts.doc))
+        );
         break;
       }
-      case FRAME_SYNC_STEP_2:
-        // origin=this so the docUpdateHandler doesn't echo this update
-        // back out as if it were a local edit.
-        Y.applyUpdate(this.opts.doc, pt, this);
+      case ROOM_CLASS_REPLY: {
+        const reply = decodeSyncReply(payload);
+        if (!reply) break;
+        // origin=this so the docUpdateHandler doesn't echo this back out
+        // as if it were a local edit.
+        Y.applyUpdate(this.opts.doc, reply.update, this);
+        if (!reply.stateVector || !this.socket.canWrite) break;
+        // The other half: what we have that the peer does not, such as
+        // edits made while this device was offline.
+        const missing = Y.encodeStateAsUpdate(this.opts.doc, reply.stateVector);
+        if (missing.byteLength > EMPTY_UPDATE_BYTES) {
+          void this.socket.reply(sender, encodeSyncReply(missing));
+        }
         break;
-      case FRAME_AWARENESS:
-        applyAwarenessUpdate(this.opts.awareness, pt, this);
+      }
+      case ROOM_CLASS_UPDATE:
+        Y.applyUpdate(this.opts.doc, payload, this);
+        break;
+      case ROOM_CLASS_PRESENCE:
+        applyAwarenessUpdate(
+          this.opts.awareness,
+          payload,
+          new FromPeer(this, sender)
+        );
         break;
       default:
-        console.warn('[collab] unknown frame type', type);
+        console.warn('[collab] unknown frame class', cls);
     }
-  }
-
-  private async maybeRequestAuthRefresh(frame: Uint8Array): Promise<void> {
-    if (!this.cryptoKey) return;
-    if (
-      !(await signedCollabFrameNeedsAuthRefresh(
-        frame,
-        this.cryptoKey,
-        this.opts.auth
-      ))
-    ) {
-      return;
-    }
-    const now = Date.now();
-    if (now - this.lastAuthRefreshRequest < this.authRefreshThrottleMs) return;
-    this.lastAuthRefreshRequest = now;
-    this.authRefreshThrottleMs = Math.min(
-      AUTH_REFRESH_MAX_THROTTLE_MS,
-      this.authRefreshThrottleMs * 2
-    );
-    console.info('[collab] refreshing writer auth room=%s', this.opts.roomId);
-    this.opts.onAuthStale?.();
   }
 }

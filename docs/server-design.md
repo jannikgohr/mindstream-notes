@@ -3,8 +3,11 @@
 Status: agreed design, written 2026-10-12. The server in
 [backend/server](../backend/server/README.md) has the core of step 1 and the
 server halves of steps 3, 4 and 5: rooms and the change feed, invite links,
-then device sessions, two-factor sign-in and the recovery key. The app still
-runs on the old stack: nothing on the client side is built yet.
+then device sessions, two-factor sign-in and the recovery key. On the app's
+side, live collaboration for every kind of note runs on the server's rooms,
+and the old stack is gone from the repository. Still to do in the app: the
+change feed, one collection per space, and the screens for invitations,
+links, two-factor sign-in, recovery and sessions.
 
 This replaces the backend stack described in
 [architecture.md](architecture.md#the-backend-stack): nginx, Etebase on

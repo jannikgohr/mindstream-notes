@@ -83,6 +83,7 @@ export enum TauriCommandName {
   LoadNoteVersion = 'load_note_version',
   MoveMany = 'move_many',
   NoteRoomInfo = 'note_room_info',
+  NoteRoomTicket = 'note_room_ticket',
   NoteWordCount = 'note_word_count',
   NotesExportPickDir = 'notes_export_pick_dir',
   NotesExportWriteFile = 'notes_export_write_file',

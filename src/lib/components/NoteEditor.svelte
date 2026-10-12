@@ -20,7 +20,7 @@
     TRASH_ID,
     etebaseSession,
     authSession,
-    getYjsRelayUrl,
+    getRoomSocketUrl,
     onSessionChange,
     captureNoteVersion,
     type VersionAction,
@@ -849,7 +849,7 @@
    */
   const collabSession = createCollabSession({
     getContext: () => {
-      const url = getYjsRelayUrl(
+      const url = getRoomSocketUrl(
         (getSettingValue('account.serverUrl') as string | undefined) ?? ''
       );
       if (!url || !(yDoc && awareness) || e2eCollabPaused) return null;

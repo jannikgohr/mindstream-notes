@@ -591,7 +591,7 @@ jobs:
         if: ${{ !cancelled() && matrix.suite != 'single' }}
         run: |
           mkdir -p .output/wdio
-          docker compose -f backend/docker-compose.yml -f backend/docker-compose.test.yml --env-file backend/.env.test -p mindstream-test logs --no-color > .output/wdio/backend.log
+          node backend/scripts/test-stack.mjs logs --no-color > .output/wdio/backend.log
       - name: Stop disposable backend
         if: ${{ always() && matrix.suite != 'single' }}
         run: pnpm backend:test:down

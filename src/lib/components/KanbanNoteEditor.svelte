@@ -12,7 +12,7 @@
    * the shell. It owns the note's `Y.Doc`, hydrates it from `yrs_state`,
    * debounce-saves, and attaches the generic {@link CollabProvider} for live
    * co-editing once the note has been pushed — a Kanban board is just a plain
-   * `Y.Doc`, so it rides the same yjs-relay path as markdown notes.
+   * `Y.Doc`, so it rides the same room protocol as markdown notes.
    *
    * The SVAR `<Kanban>` widget is a controlled component: it renders from the
    * `board` props and re-inits when they change (see its internal `$effect`).
@@ -65,7 +65,7 @@
     loadNote,
     saveNote as apiSaveNote,
     TRASH_ID,
-    getYjsRelayUrl,
+    getRoomSocketUrl,
     onSessionChange,
     authSession
   } from '$lib/api';
@@ -1194,10 +1194,10 @@
     return origin === KANBAN_LOCAL_ORIGIN || origin === undoManager;
   }
 
-  // ---- Collab provider (yjs-relay, same as markdown notes) ----
+  // ---- Collab provider (same as markdown notes) ----
   const collabSession = createCollabSession({
     getContext: () => {
-      const url = getYjsRelayUrl(
+      const url = getRoomSocketUrl(
         (getSettingValue('account.serverUrl') as string | undefined) ?? ''
       );
       if (!url || !(yDoc && awareness)) return null;

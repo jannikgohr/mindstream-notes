@@ -20,7 +20,6 @@ import {
   randomBytes,
   sign
 } from 'node:crypto';
-import { io } from 'socket.io-client';
 import WebSocket from 'ws';
 
 // Mirrors of src-tauri/src/sync/mod.rs and backend/yjs-relay/collab-server.mjs.
@@ -260,38 +259,6 @@ export function roomsTransport(device, newItem) {
         await device.roomTicket(room.collectionUid, room.itemUid)
       )
   };
-}
-
-/** Join an excalidraw-room room over socket.io, as `ExcalidrawRoomClient` does. */
-export function joinExcalidrawRoom(serverUrl, roomId) {
-  return new Promise((resolve, reject) => {
-    const socket = io(serverUrl, {
-      transports: ['websocket'],
-      forceNew: true,
-      reconnection: false
-    });
-    const peer = new Peer(
-      (frame) =>
-        socket.emit('server-broadcast', roomId, frame, randomBytes(12)),
-      () => socket.disconnect()
-    );
-    const timer = setTimeout(() => {
-      socket.disconnect();
-      reject(new Error('excalidraw-room did not admit the client'));
-    }, FRAME_TIMEOUT_MS);
-
-    socket.on('init-room', () => socket.emit('join-room', roomId));
-    // Sent to the whole room once the server has added this socket to it.
-    socket.once('room-user-change', () => {
-      clearTimeout(timer);
-      resolve(peer);
-    });
-    socket.on('client-broadcast', (frame) => peer.deliver(frame));
-    socket.on('connect_error', (err) => {
-      clearTimeout(timer);
-      reject(new Error(`excalidraw-room connect failed: ${err.message}`));
-    });
-  });
 }
 
 /**

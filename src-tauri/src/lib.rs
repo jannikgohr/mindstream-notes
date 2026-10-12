@@ -507,6 +507,7 @@ pub fn run() {
             // Sync
             sync::sync_now,
             sync::collab_room::note_room_info,
+            sync::collab_room::note_room_ticket,
             sync::scheduler::set_sync_schedule,
             // Sharing
             sharing::list_collection_invitations,

@@ -70,7 +70,7 @@
     drawingSetLiveInkFingerDrawing,
     drawingSetLiveInkStyle,
     drawingShowLiveInkOverlay,
-    getYjsRelayUrl,
+    getRoomSocketUrl,
     loadNote,
     onSessionChange,
     isTauri,
@@ -633,7 +633,7 @@
 
   const collabSession = createCollabSession({
     getContext: () => {
-      const url = getYjsRelayUrl(
+      const url = getRoomSocketUrl(
         (getSettingValue('account.serverUrl') as string | undefined) ?? ''
       );
       if (!url || !handle) return null;

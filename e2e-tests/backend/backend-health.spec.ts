@@ -2,32 +2,32 @@ import { randomBytes } from 'node:crypto';
 import http from 'node:http';
 import { URL } from 'node:url';
 import { expect, test } from '@playwright/test';
+import WebSocket from 'ws';
 import { backendUrl } from '../shared/backend-target.js';
-import { makeRoom } from './collab-room';
 
 /**
- * Local-only health gating for the mindstream-server stack (docs/e2e/backend-stack.md
- * §2.2). These are the probes that must pass before the (not-yet-built) T4
- * collaboration specs can run against a real backend, so they double as a quick
- * "is my stack actually up and routed correctly?" smoke test.
+ * Health gating for the sync server (docs/e2e/backend-stack.md). These are
+ * the probes that must pass before the collaboration specs can run against a
+ * real backend, so they double as a quick "is my stack up and is it the
+ * right server?" smoke test.
  *
- * Everything goes through the single nginx edge — the same one URL the client
- * connects to — exercising the path routing in backend/nginx/nginx.conf:
- *   /healthz     → nginx itself
- *   /socket.io/  → excalidraw-room   (freeform live sync)
- *   /yjs         → yjs-relay         (markdown + PDF Yjs collab)
- *   /            → etebase           (encrypted storage + auth)
+ * One server answers everything, on the one URL the app is given:
+ *   /healthz                    liveness
+ *   /api/v1/...                 accounts, storage and sharing
+ *   /api/v1/room/               live rooms, over WebSocket
+ *   /api/v1/mindstream/feed/    "sync now" notices, over WebSocket
+ *   /join/<id>                  the page an invite link shows in a browser
  *
  * The stack itself is a precondition, checked once in global-setup.ts — see
  * e2e-tests/backend/playwright.config.ts to run this suite.
  */
 
 const BASE = backendUrl();
+const SOCKET_BASE = BASE.replace(/^http/, 'ws');
 
 /**
  * Attempt a WebSocket upgrade and resolve with the HTTP status the server
- * answered the handshake with (101 on success). yjs-relay speaks WS, not plain
- * HTTP, so a 101 is the only way to prove the route reaches a live relay.
+ * answered the handshake with (101 on success).
  */
 function wsHandshakeStatus(url: string, timeoutMs = 8000): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -69,41 +69,89 @@ function wsHandshakeStatus(url: string, timeoutMs = 8000): Promise<number> {
   });
 }
 
+/** Open a room socket, send one frame, and resolve with the close code. */
+function roomCloseCode(firstFrame: Uint8Array, timeoutMs = 8000) {
+  return new Promise<number>((resolve, reject) => {
+    const socket = new WebSocket(`${SOCKET_BASE}/api/v1/room/`);
+    const timer = setTimeout(() => {
+      socket.terminate();
+      reject(new Error('the room socket was not closed'));
+    }, timeoutMs);
+    socket.on('open', () => socket.send(firstFrame));
+    socket.on('close', (code) => {
+      clearTimeout(timer);
+      resolve(code);
+    });
+    socket.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
+}
+
 test.describe('local backend health (mindstream-server)', () => {
-  test('nginx edge is live (/healthz)', async ({ request }) => {
+  test('the server is live (/healthz)', async ({ request }) => {
     const res = await request.get(`${BASE}/healthz`);
     expect(res.status()).toBe(200);
     expect((await res.text()).trim()).toBe('ok');
   });
 
-  test('excalidraw-room answers the socket.io handshake', async ({
+  test('it is a Mindstream server at a protocol level the app knows', async ({
     request
   }) => {
-    const res = await request.get(`${BASE}/socket.io/?EIO=4&transport=polling`);
+    const res = await request.get(`${BASE}/api/v1/mindstream/info/`);
     expect(res.status()).toBe(200);
-    // Engine.IO opens every session with a packet whose type prefix is "0".
-    expect((await res.text()).startsWith('0')).toBe(true);
+    const info = await res.json();
+    expect(info.server).toBe('mindstream-server');
+    expect(info.protocol).toBe(1);
+    // The suites sign up their own accounts, which a real server's default
+    // would refuse.
+    expect(info.signup).toBe('open');
   });
 
-  test('yjs-relay accepts a WebSocket upgrade on /yjs', async () => {
-    // The room id has to be a real P-256 public key: the relay rejects
-    // anything else at upgrade, because the id is what it verifies the join
-    // signature against. Auth itself is covered in collab-relay-auth.spec.ts.
-    const { room } = await makeRoom();
-    const status = await wsHandshakeStatus(
-      `${BASE}/yjs?room=${encodeURIComponent(room)}`
-    );
-    expect(status).toBe(101);
+  test('it answers the client library as an Etebase server', async ({
+    request
+  }) => {
+    const res = await request.get(`${BASE}/api/v1/authentication/is_etebase/`);
+    expect(res.status()).toBe(200);
   });
 
-  test('etebase is reachable behind the edge', async ({ request }) => {
-    // The canonical "is this an Etebase server?" endpoint. We assert it
-    // *responded* (any non-gateway status) rather than a specific body, so the
-    // probe survives Etebase version bumps — a 502/504 is the real failure,
-    // meaning nginx could not reach the upstream.
-    const res = await request.get(`${BASE}/api/v1/authentication/is_etebase/`, {
+  test('storage is closed to a request without a session', async ({
+    request
+  }) => {
+    const res = await request.get(`${BASE}/api/v1/collection/`, {
       failOnStatusCode: false
     });
-    expect([502, 503, 504]).not.toContain(res.status());
+    expect(res.status()).toBe(401);
+  });
+
+  test('a room socket opens, and closes on anything but a valid ticket', async () => {
+    // The ticket travels in the first frame, so the upgrade itself is open.
+    expect(await wsHandshakeStatus(`${BASE}/api/v1/room/`)).toBe(101);
+    const hello = (ticket: string) =>
+      Buffer.concat([Buffer.from([0x01]), Buffer.from(ticket)]);
+    // 4401: no valid ticket.
+    expect(await roomCloseCode(hello('bm90IGEgdGlja2V0'))).toBe(4401);
+    // A document frame before any ticket gets the same answer.
+    expect(await roomCloseCode(Buffer.from([0x10, 1, 2, 3]))).toBe(4401);
+  });
+
+  test('the change feed refuses a socket without a session', async () => {
+    expect(await wsHandshakeStatus(`${BASE}/api/v1/mindstream/feed/`)).toBe(
+      401
+    );
+  });
+
+  test('an invite link opened in a browser shows a page', async ({
+    request
+  }) => {
+    const res = await request.get(`${BASE}/join/some-link-id`);
+    expect(res.status()).toBe(200);
+    expect(res.headers()['content-type']).toContain('text/html');
+    expect(res.headers()['content-security-policy']).toContain(
+      "default-src 'none'"
+    );
+    // The page is the same for every link and never echoes the one asked for.
+    expect(await res.text()).not.toContain('some-link-id');
   });
 });

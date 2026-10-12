@@ -6,9 +6,6 @@ library the app ships, so everything stored here is ciphertext. The design and
 the reasons behind it are in
 [docs/server-design.md](../../docs/server-design.md).
 
-It does not yet replace the stack in [../docker-compose.yml](../docker-compose.yml).
-Live collaboration still runs on the relays there.
-
 Licensed AGPL-3.0, unlike the app. See [LICENSE](LICENSE).
 
 ## Run it

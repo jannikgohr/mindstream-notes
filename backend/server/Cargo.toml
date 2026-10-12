@@ -41,7 +41,7 @@ ipnet = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive", "env"] }
-tower-http = { version = "0.6", features = ["trace"] }
+tower-http = { version = "0.6", features = ["trace", "set-header"] }
 
 [dev-dependencies]
 # The client the app ships. Driving the server with it in tests is what keeps

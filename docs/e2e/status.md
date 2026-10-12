@@ -72,11 +72,12 @@ Two things worth carrying forward:
 - **A cascading first failure hides its own cause.** Both T4 specs reported
   timeouts several assertions downstream of the real break. Running a single
   test in isolation (`--mochaOpts.grep`) surfaced it immediately.
-- **The relay container must match the client.** A stack rebuilt from a
-  different commit leaves the relay without the join challenge, and the client
-  then hangs waiting for one. Symptoms look like app bugs. `docker exec
-mindstream-test-yjs-relay grep -c mindstream-collab-join /app/collab-server.mjs`
-  tells you which you have.
+- **The server container must match the client.** The test stack builds the
+  server from the working tree, and `pnpm backend:test:up` rebuilds it when
+  the source changed. A stack left running from a different commit can
+  disagree with the app about the room protocol, and the symptoms look like
+  app bugs. `curl http://localhost:18080/api/v1/mindstream/info/` shows the
+  protocol level the running server speaks.
 
 ## What's pending
 
