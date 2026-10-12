@@ -1,5 +1,5 @@
 //! Supervised runtime integration. Startup remains opt-in while platform
-//! activation, coordinator recovery and OS integrations are being completed.
+//! menu/handoff and platform release checks are being completed.
 use std::collections::BTreeMap;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,6 +32,11 @@ enum HostCommand {
         window: String,
     },
     Open {
+        vault_id: String,
+    },
+    OpenFromWindow {
+        source_vault_id: String,
+        launch_id: Uuid,
         vault_id: String,
     },
     OpenStatus {
@@ -283,7 +288,7 @@ impl Book {
         let operation = self.operations.get(&operation_id).ok_or_else(invalid)?;
         if !matches!(
             operation.input["command"].as_str(),
-            Some("open" | "shortcut" | "tray" | "quit" | "updateInstall")
+            Some("open" | "openFromWindow" | "shortcut" | "tray" | "quit" | "updateInstall")
         ) {
             return Err(invalid());
         }
@@ -305,7 +310,9 @@ impl Book {
             if (*request_id == operation_id || quit_alias)
                 && matches!(
                     operation.input["command"].as_str(),
-                    Some("open" | "shortcut" | "tray" | "quit" | "updateInstall")
+                    Some(
+                        "open" | "openFromWindow" | "shortcut" | "tray" | "quit" | "updateInstall"
+                    )
                 )
                 && operation.open_result.is_none()
             {
@@ -448,6 +455,7 @@ impl Book {
             if matches!(
                 command,
                 HostCommand::Open { .. }
+                    | HostCommand::OpenFromWindow { .. }
                     | HostCommand::Activate
                     | HostCommand::Shortcut { .. }
                     | HostCommand::Tray { .. }
@@ -607,6 +615,19 @@ impl Book {
             }
             HostCommand::Open { vault_id } => {
                 if !self.exported || !crate::profiles::valid_id(&vault_id) {
+                    return Err(invalid());
+                }
+                action = Some(Action::Open(vault_id));
+            }
+            HostCommand::OpenFromWindow {
+                source_vault_id,
+                launch_id,
+                vault_id,
+            } => {
+                // Observations are only menu hints. Revalidate the source and
+                // let open() recheck the indexed target and its physical lease.
+                self.window_state(&source_vault_id, launch_id)?;
+                if !crate::profiles::valid_id(&vault_id) {
                     return Err(invalid());
                 }
                 action = Some(Action::Open(vault_id));
@@ -1220,7 +1241,10 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
     let settings_notice = matches!(command, HostCommand::Ready { .. });
     let tracked_open = matches!(
         command,
-        HostCommand::Open { .. } | HostCommand::Shortcut { .. } | HostCommand::Tray { .. }
+        HostCommand::Open { .. }
+            | HostCommand::OpenFromWindow { .. }
+            | HostCommand::Shortcut { .. }
+            | HostCommand::Tray { .. }
     );
     let status_request = matches!(command, HostCommand::Status);
     if matches!(
@@ -1229,6 +1253,7 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
             | HostCommand::WindowState { .. }
             | HostCommand::Activate
             | HostCommand::Open { .. }
+            | HostCommand::OpenFromWindow { .. }
             | HostCommand::Shortcut { .. }
             | HostCommand::Tray { .. }
     ) {
@@ -2737,10 +2762,16 @@ pub async fn vault_worker_ready(app: AppHandle, window: WebviewWindow) -> Comman
 #[tauri::command]
 pub async fn open_profile_window(app: AppHandle, id: String) -> CommandResult<()> {
     let worker = app.try_state::<Worker>().ok_or_else(invalid)?;
-    let request = request(&HostCommand::Open { vault_id: id })?;
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let request = request(&HostCommand::OpenFromWindow {
+        source_vault_id: worker.vault_id.clone(),
+        launch_id: worker.launch_id,
+        vault_id: id,
+    })?;
     let host = worker.host.lock().map_err(|_| invalid())?.clone();
     let probe = self::request(&HostCommand::Status)?;
     Ok(tauri::async_runtime::spawn_blocking(move || {
+        let _job = job;
         crate::foreground::after_probe(&host, &probe)?;
         host.retry_call(&request)?
             .map(|_| ())
@@ -2863,6 +2894,76 @@ fn await_open_result(host: &Endpoint, operation_id: Uuid, deadline: Instant) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn menu_open_authenticates_source_replays_result_and_never_closes_it() {
+        let root = std::env::temp_dir().join(format!("ms-menu-open-{}", Uuid::new_v4()));
+        let owner = crate::storage_locks::VaultLock::acquire(&root).unwrap();
+        let listener = ipc::Coordinator::for_worker(&owner).unwrap();
+        let instance = Uuid::new_v4();
+        let launch_id = Uuid::new_v4();
+        let mut book = Book {
+            exported: true,
+            ..Book::default()
+        };
+        let mut source = pending(launch_id);
+        source.endpoint = Some(listener.endpoint().clone());
+        book.workers.insert("source".into(), source);
+        let menu_request = |source: &str, launch_id, target: &str| {
+            request(&HostCommand::OpenFromWindow {
+                source_vault_id: source.into(),
+                launch_id,
+                vault_id: target.into(),
+            })
+            .unwrap()
+        };
+        assert!(book
+            .accept(instance, menu_request("source", launch_id, "target"))
+            .is_err());
+        book.workers.get_mut("source").unwrap().ready = true;
+        assert!(book
+            .accept(instance, menu_request("missing", launch_id, "target"))
+            .is_err());
+        assert!(book
+            .accept(instance, menu_request("source", Uuid::new_v4(), "target"))
+            .is_err());
+        assert!(book
+            .accept(instance, menu_request("source", launch_id, "../target"))
+            .is_err());
+        book.workers.get_mut("source").unwrap().error = Some("unavailable".into());
+        assert!(book
+            .accept(instance, menu_request("source", launch_id, "target"))
+            .is_err());
+        book.workers.get_mut("source").unwrap().error = None;
+
+        let opening = menu_request("source", launch_id, "target");
+        assert!(matches!(book.accept(instance, opening.clone()).unwrap().1,
+            Some(Action::Open(id)) if id == "target"));
+        assert!(book.accept(instance, opening.clone()).unwrap().1.is_none());
+        assert!(matches!(
+            book.open_status(opening.id).unwrap(),
+            OpenProgress::Pending
+        ));
+        book.complete_open(
+            opening.id,
+            Err(AppError::InvalidArg("target missing".into())),
+        );
+        book.complete_open(opening.id, Ok(()));
+        assert!(
+            matches!(book.open_status(opening.id).unwrap(), OpenProgress::Failed { message } if message.contains("target missing"))
+        );
+        assert!(book.accept(instance, opening).unwrap().1.is_none());
+        assert_eq!(book.workers["source"].id, launch_id);
+        assert!(book.workers["source"].ready);
+        assert!(book.quitting.is_none());
+        book.quitting = Some(Uuid::new_v4());
+        assert!(book
+            .accept(instance, menu_request("source", launch_id, "target"))
+            .is_err());
+        drop(listener);
+        drop(owner);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn window_state_requires_ready_caller_and_retains_starting_and_unavailable_owners() {

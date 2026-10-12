@@ -206,7 +206,7 @@ def main():
         try:
             peer = wait(endpoint)
             wait(lambda: status()["initialized"] and any(entry["id"] == "other" and entry["ready"] for entry in status()["workers"]))
-            assert status()["contract"]["protocol"] == 9
+            assert status()["contract"]["protocol"] == 10
             if args.wait_for_window_close:
                 if args.autostart_hidden:
                     assert status()["active"] is None, "hidden worker incorrectly took focus recency"
@@ -240,6 +240,22 @@ def main():
             assert call(peer, view_payload)["Ok"] == {"supervised": True, "vaults": [{"vaultId": "other", "status": "ready"}]}
             assert "Err" in call(peer, {**view_payload, "launch_id": str(uuid.uuid4())})
             print("Authenticated live vault-window state passed")
+
+            menu_payload = {"command": "openFromWindow", "source_vault_id": "other",
+                "launch_id": owner["launch_id"], "vault_id": "other"}
+            assert "Err" in call(peer, {**menu_payload, "launch_id": str(uuid.uuid4())})
+            completed("openFromWindow", source_vault_id="other", launch_id=owner["launch_id"], vault_id="other")
+            assert worker("other")["launch_id"] == owner["launch_id"], "menu focus replaced source"
+            menu_id = str(uuid.uuid4())
+            missing = {**menu_payload, "vault_id": "missing"}
+            assert call(peer, missing, menu_id)["Ok"] == {"accepted": True}
+            def menu_failed():
+                progress = call(peer, {"command": "openStatus", "operation_id": menu_id})["Ok"]
+                return progress if progress["state"] != "pending" else None
+            assert wait(menu_failed)["state"] == "failed"
+            assert call(peer, missing, menu_id)["Ok"] == {"accepted": True}
+            assert worker("other")["launch_id"] == owner["launch_id"]
+            print("Authenticated menu focus/retry and missing-target source retention passed")
 
             for enabled_value in [None, True]:
                 request_id = str(uuid.uuid4())
@@ -504,7 +520,9 @@ def main():
             completed("shortcut", command_id="newInkNote")
             assert counts("other")["ink"] == before.get("ink", 0) + 1
             print("Zero eligibility fails visibly; closed eligible MRU routing passed")
-            completed("open", vault_id="capture")
+            source = worker("other")
+            completed("openFromWindow", source_vault_id="other", launch_id=source["launch_id"], vault_id="capture")
+            assert worker("other")["launch_id"] == source["launch_id"], "menu opening closed source"
             wait(lambda: len(status()["workers"]) == 2 and all(entry["ready"] for entry in status()["workers"]))
             if args.wait_for_external_quit:
                 (output / "quit-ready.json").write_text(json.dumps({"host_pid": host.pid, "vaults": vaults}), encoding="utf-8")

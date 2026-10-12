@@ -3,9 +3,9 @@
  *
  * The list of vaults and which one is active is global to the window, so
  * this module holds a single canonical reactive copy. The switcher reads
- * from it and refreshes through `loadProfiles`. Mutations (create/switch)
- * relaunch the app, so there's no optimistic in-place update to keep in
- * sync — a fresh launch re-reads the index.
+ * from it and refreshes through `loadProfiles`. A supervised opening action
+ * keeps the running vault unchanged; only the coordinator's last-used startup
+ * preference may change. Direct devices retain their restart switch flow.
  */
 
 import { listProfiles, type Profile } from '$lib/api/profiles';

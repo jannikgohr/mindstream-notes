@@ -1,0 +1,54 @@
+import { openProfileWindow } from '$lib/api/profiles';
+import {
+  getVaultWindowState,
+  type VaultWindowState
+} from '$lib/api/vault-window-state';
+
+/** Menu observations never authorize ownership or a fallback to direct mode. */
+export class VaultMenu {
+  view = $state<VaultWindowState | null>(null);
+  checking = $state(false);
+  failed = $state(false);
+  #observationId = 0;
+
+  invalidate() {
+    ++this.#observationId;
+    this.checking = false;
+  }
+
+  async refresh() {
+    const id = ++this.#observationId;
+    this.checking = true;
+    this.failed = false;
+    try {
+      const view = await getVaultWindowState();
+      if (id !== this.#observationId) return false;
+      this.view = view;
+      return true;
+    } catch {
+      if (id !== this.#observationId) return false;
+      this.view = null;
+      this.failed = true;
+      return false;
+    } finally {
+      if (id === this.#observationId) this.checking = false;
+    }
+  }
+
+  status(id: string) {
+    return this.view?.vaults.find((entry) => entry.vaultId === id)?.status;
+  }
+
+  canDelete(id: string) {
+    return this.view !== null && !this.checking && !this.status(id);
+  }
+
+  /** False means explicit direct mode; errors never select the restart flow. */
+  async open(id: string) {
+    if (this.checking || !this.view)
+      throw new Error('Vault window state is unavailable');
+    if (!this.view.supervised) return false;
+    await openProfileWindow(id);
+    return true;
+  }
+}

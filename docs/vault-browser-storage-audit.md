@@ -44,7 +44,8 @@ copies. Dynamic `hotkey.*` bindings use the root; unknown/plugin entries remain
 with the vault until their persistence owner migrates them. Raw browser buckets
 remain intact. Account preferences require the matching vault bucket, except
 the default vault's historical unscoped fallback. Focus and same-worker events
-reload canonical settings; cross-worker broadcast remains pending. This covers
+reload canonical settings; authenticated cross-worker invalidation now reloads
+each worker's own root/vault documents. This covers
 the schema store only, not the other browser consumers listed above.
 
 The mixed `notes-app:preferences:v1` bucket is also migrated in native builds.
@@ -92,8 +93,9 @@ matching legacy browser key and retain its source. Corrupt legacy/native keys
 and unavailable keystore keys stop migration rather than regenerate identities.
 Native writes no longer put new private keys in localStorage. Browser-only mode
 keeps its existing localStorage fallback. Export of legacy keys for accounts in
-unopened vaults remains required before WebView store isolation; this lazy import
-does not complete that export. Generic root snapshots must exclude private keys.
+unopened vaults is now covered by the encrypted archive and supervised export
+below. Lazy import alone does not complete that export. Generic root settings
+snapshots must exclude private keys.
 
 Encrypted export storage is implemented in `browser_archive.rs`. It preserves
 raw values from known app origins in one versioned ciphertext archive, including

@@ -9,8 +9,10 @@ workers after a coordinator restart. Coordinator shortcut registration and
 eligible-vault action dispatch, shared tray routing and last-window coordinator
 exit pass Windows checks. Coordinator autostart registration ownership is
 implemented. Packaged/embedded coordinator revival passes Windows checks.
-Coordinator update ownership and all-vault update recovery pass Windows checks. Platform checks and the vault-opening UI remain pending;
-normal startup and existing isolated test devices still use direct mode.
+Coordinator update ownership and all-vault update recovery pass Windows checks.
+The supervised desktop menu now opens/focuses vault windows and reports live
+ownership. Opening preferences, prepared-worker handoff and platform checks
+remain pending; normal startup and isolated test devices still use direct mode.
 Supervised worker close waits for content-window persistence. Whole-app Quit
 orchestration passes the Windows app checks; source/target
 handoff remains pending.
@@ -19,6 +21,32 @@ Global plugin packages and theme presets are separate follow-up projects:
 
 - [Global plugins plan](global-plugins-implementation-plan.md)
 - [Theme presets plan](theme-presets-implementation-plan.md)
+
+## Current delivery status
+
+Reviewed against the implementation on 2026-10-12. Dated slices below are a
+history of incremental delivery; their older pending lists do not describe the
+current release gates.
+
+| Area                  | Current state                                                                                                                                                                                                                     |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phase 0 safety        | Implemented; Windows process-crash checks pass. Reboot durability remains unverified.                                                                                                                                             |
+| Phase 1 storage       | Root/vault schema documents, locked field edits, validated recovery, credential migration, browser export/classification and isolated worker stores are implemented.                                                              |
+| Phase 2 runtime       | Concurrent workers, duplicate/focus routing, cross-worker settings invalidation, service/save drains, whole-app Quit, shortcuts, tray, autostart, coordinator revival and update-session recovery pass documented Windows checks. |
+| Phase 3 menu/handoff  | Live-window observations and supervised menu open/focus actions are implemented. Opening preference, this-window choices and prepared-worker handoff remain unfinished.                                                           |
+| Phase 4 release gates | Packaged macOS/Linux lifecycle and activation, supervised `tauri dev`, busy/dirty handoff cases, reboot durability and signed updater installation remain required.                                                               |
+
+Normal startup and existing isolated-device harnesses still use direct mode.
+`--supervised-vaults` enables the concurrent runtime explicitly. The supervised desktop
+switcher opens/focuses vault windows without changing its source worker. Direct
+desktop devices and mobile retain their existing restart flow.
+
+Latest validation is 875 Rust unit tests plus one integration test passing,
+with five ignored overall, 33 focused frontend tests, frontend checks/builds
+and fresh-root embedded Windows regression checks. Native cross-worker visual settings refresh
+still needs a dedicated interaction check. Global plugin packages and theme
+presets are independent follow-ups; accent and UI font size remain vault-scoped
+until the appearance migration.
 
 ## Required behavior
 
@@ -1213,6 +1241,46 @@ changes, and recoverable deletion/shutdown.
 
 ## Phase 3: menu UI and worker handoff
 
+Supervised menu opening slice on 2026-10-12: the desktop switcher reads live
+window observations on opening and while visible. It shows open, starting and
+unavailable owners and hides deletion for all of them. Failed observations show
+localized retry feedback and block opening/deletion; they never select the
+legacy restart flow. Generation checks discard responses from an older menu
+session. Direct desktop/browser and mobile behavior remain compatible.
+
+Primary selection and the accessible new-window button route to the coordinator.
+Ready targets focus their existing window; closed targets open a worker while
+the source remains running. Newly created vaults use this same supervised path,
+including development builds. This slice intentionally exposes only the
+new-window/focus action while safe this-window handoff is unfinished. Remembered
+preferences and the two-choice prompt follow with handoff.
+
+The native action holds a source service job, supplies the exact source launch
+identity and waits for the terminal opening result. The coordinator rechecks
+source readiness, target index membership and physical ownership. Quit/update
+fences reject new requests. Identical request IDs replay without redispatch, and
+failed opening cannot trigger a legacy switch or close the source. Runtime
+protocol 10 adds the source-authenticated opening request.
+
+Validation: Rust fmt/clippy and the full serial suite pass, with 875 unit tests
+and one integration test passing, five ignored overall. All 33 focused menu,
+profile, live-state bridge and profile-readiness frontend tests pass. Svelte,
+affected ESLint, localization and production frontend/embedded Windows builds
+pass. The fresh-root native fixture checks authenticated focus/replay, a missing
+target with a retained source, opening another vault without replacing the source,
+tray/shortcut/autostart/update routing, whole-app Quit and last-window exit.
+Final build artifacts and the repeated native regression remain in
+`.output/vault-menu-final-build.log` and `.output/vault-menu-final-app-check`.
+The first successful regression remains in `.output/vault-menu-opening-retry-app-check`. The earlier
+fixture attempted to open from an already closed source and correctly failed;
+its graceful cleanup and evidence remain in `.output/vault-menu-opening-app-check`.
+The collaborative browser checked direct-mode rendering and a disposable
+supervised-state fixture: status labels, deletion visibility and accessible
+focus/new-window buttons rendered correctly, both actions kept the source label
+unchanged and no browser error was recorded. Its opening API was simulated;
+the native fixture separately verified real coordinator requests. Native visual
+interaction with the new menu remains a release QA check.
+
 Estimate: 4 to 6 working days including persistence/shutdown verification.
 
 Primary areas: `VaultSwitcher.svelte`, profile APIs/stores, coordinator launch,
@@ -1221,11 +1289,10 @@ editor persistence, and secondary-window lifecycle.
 - Add opening actions, remember checkbox, three-choice device preference,
   Ctrl + left click override, and accessible alternatives. Apply the same rules
   to newly created vaults; consider Command + click on macOS.
-  Handoff recovery decision pending owner input: if the coordinator crashes after
-  the source has saved and closed, finish opening the target, or reopen the source.
-  The recommendation is to finish the target after source closure and retain the
-  source if it is still open. Ownership changes, unknown close receipts and failed
-  saves must never authorize closing a different source process.
+  Handoff recovery policy confirmed by the owner on 2026-10-12: if the coordinator
+  crashes after the source has saved and closed, finish opening the target.
+  Retain the source if it is still open. Ownership changes, unknown close receipts
+  and failed saves must never authorize closing a different source process.
 
 - Reserve/start the target as a prepared worker at source geometry. Ready means
   locks, recovery, settings, and account policy succeeded. Then flush main and

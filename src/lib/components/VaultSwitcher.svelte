@@ -9,14 +9,13 @@
    *
    * Click: opens a dropdown (same outside-pointerdown + Escape pattern as
    * NotificationCenter) listing every vault with the active one checked.
-   * Picking another vault confirms, then switches and relaunches into it
-   * — switching only takes effect on a fresh launch (the boot code reads
-   * the index and opens that vault's DB). "Create vault" reveals an
-   * inline name field that creates then switches into the new vault.
+   * Supervised workers open/focus vault windows through the coordinator.
+   * Direct devices retain their restart flow. Menu observations never grant
+   * ownership; the native action rechecks the target.
    */
   import { onMount } from 'svelte';
   import { Vault } from '@jis3r/icons';
-  import { Check, Pencil, Plus, Trash2 } from '@lucide/svelte';
+  import { Check, ExternalLink, Pencil, Plus, Trash2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { confirm, alert } from '$lib/components/confirm-dialog.svelte';
@@ -35,6 +34,8 @@
   } from '$lib/stores/profiles.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { toErrorMessage } from '$lib/api/errors';
+  import { VaultWindowStatus } from '$lib/api/vault-window-state';
+  import { VaultMenu } from '$lib/vaults/menu.svelte';
 
   let open = $state(false);
   let creating = $state(false);
@@ -45,16 +46,62 @@
   let root: HTMLDivElement | null = $state(null);
   let createInput: HTMLInputElement | null = $state(null);
   let renameInput: HTMLInputElement | null = $state(null);
+  const windows = new VaultMenu();
 
   const current = $derived(currentProfile());
   const currentName = $derived(current?.name ?? tUi('vault.unknown'));
 
   function toggle() {
-    open = !open;
-    if (!open) creating = false;
+    if (busy) return;
+    if (open) close();
+    else {
+      open = true;
+      void refreshWindows();
+    }
+  }
+
+  async function refreshWindows() {
+    if (await windows.refresh()) await loadProfiles();
+  }
+
+  function windowStatus(id: string) {
+    return windows.status(id);
+  }
+
+  function openingLabel(id: string) {
+    return tUi(
+      windowStatus(id) === VaultWindowStatus.Ready
+        ? 'vault.open.focus'
+        : 'vault.open.newWindow'
+    );
+  }
+
+  async function selectProfile(id: string, name: string) {
+    if (busy || windows.checking || !windows.view) return;
+    if (!windows.view.supervised) {
+      await confirmAndSwitch(id, name);
+      return;
+    }
+    busy = true;
+    try {
+      await windows.open(id);
+      close();
+    } catch (err) {
+      await alert({
+        title: tUi('vault.open.failed.title'),
+        message: tUi('vault.open.failed.message').replace(
+          '{error}',
+          toErrorMessage(err)
+        )
+      });
+      if (open) await refreshWindows();
+    } finally {
+      busy = false;
+    }
   }
 
   function close() {
+    windows.invalidate();
     open = false;
     creating = false;
     newName = '';
@@ -114,6 +161,7 @@
   }
 
   function startCreate() {
+    if (busy || windows.checking || !windows.view) return;
     creating = true;
     renamingId = null;
     newName = '';
@@ -131,7 +179,8 @@
   function canDeleteProfile(profile: Profile) {
     return (
       profile.id !== profilesState.active &&
-      profile.id !== profilesState.indexActive
+      profile.id !== profilesState.indexActive &&
+      windows.canDelete(profile.id)
     );
   }
 
@@ -201,12 +250,17 @@
 
   async function submitCreate() {
     const name = newName.trim();
-    if (!name || busy) return;
+    if (!name || busy || windows.checking || !windows.view) return;
     busy = true;
     try {
       const profile = await createProfile(name);
-      busy = false;
-      if (import.meta.env.DEV) {
+      if (windows.view.supervised) {
+        creating = false;
+        newName = '';
+        await loadProfiles();
+        busy = false;
+        await selectProfile(profile.id, profile.name);
+      } else if (import.meta.env.DEV) {
         // Dev can't relaunch into the new vault (see finishSwitch), so
         // instead of a dead-end switch prompt we just refresh the list
         // and keep the menu open — the new vault appears immediately and
@@ -214,9 +268,11 @@
         creating = false;
         newName = '';
         await loadProfiles();
+        busy = false;
       } else {
         // Packaged: switch into the new vault, which re-confirms and
         // relaunches.
+        busy = false;
         await confirmAndSwitch(profile.id, profile.name);
       }
     } catch (err) {
@@ -267,6 +323,14 @@
       document.removeEventListener('keydown', handleKeydown);
     };
   });
+
+  $effect(() => {
+    if (!open) return;
+    const timer = setInterval(() => {
+      if (!busy && !windows.checking) void refreshWindows();
+    }, 3000);
+    return () => clearInterval(timer);
+  });
 </script>
 
 <div bind:this={root} class="relative">
@@ -278,9 +342,10 @@
     title={currentName}
     aria-label={tUi('vault.switch')}
     aria-expanded={open}
+    disabled={busy}
   >
     <Vault size={16} animate={open} />
-    <span class="vault-name">{currentName}</span>
+    <span class="inline-block max-w-48 truncate">{currentName}</span>
   </Button>
 
   {#if open}
@@ -294,6 +359,22 @@
       </div>
 
       <div class="max-h-80 overflow-y-auto p-1">
+        {#if windows.failed}
+          <div class="space-y-1 px-2 py-1.5 text-sm" role="alert">
+            <p>{tUi('vault.windows.failed')}</p>
+            <button
+              type="button"
+              class="underline"
+              disabled={windows.checking}
+              onclick={() => refreshWindows()}
+              >{tUi('vault.windows.retry')}</button
+            >
+          </div>
+        {:else if windows.checking && !windows.view}
+          <p class="px-2 py-1.5 text-sm text-muted-foreground" role="status">
+            {tUi('vault.windows.checking')}
+          </p>
+        {/if}
         {#each profilesState.profiles as profile (profile.id)}
           {#if renamingId === profile.id}
             <div class="flex items-center gap-1 p-1">
@@ -321,8 +402,11 @@
               <button
                 type="button"
                 class="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-sm"
-                disabled={busy}
-                onclick={() => confirmAndSwitch(profile.id, profile.name)}
+                disabled={busy || windows.checking || !windows.view}
+                title={windows.view?.supervised
+                  ? openingLabel(profile.id)
+                  : undefined}
+                onclick={() => selectProfile(profile.id, profile.name)}
               >
                 <span class="flex size-4 shrink-0 items-center justify-center">
                   {#if profile.id === profilesState.active}
@@ -330,8 +414,25 @@
                   {/if}
                 </span>
                 <span class="truncate">{profile.name}</span>
+                {#if windows.view?.supervised && windowStatus(profile.id)}
+                  <span class="ml-auto text-xs text-muted-foreground">
+                    {tUi(`vault.windows.${windowStatus(profile.id)}`)}
+                  </span>
+                {/if}
               </button>
               <div class="flex shrink-0 items-center gap-0.5 pr-1">
+                {#if windows.view?.supervised}
+                  <button
+                    type="button"
+                    class="rounded-sm p-1 text-muted-foreground hover:text-foreground"
+                    title={openingLabel(profile.id)}
+                    aria-label={`${openingLabel(profile.id)}: ${profile.name}`}
+                    disabled={busy || windows.checking}
+                    onclick={() => selectProfile(profile.id, profile.name)}
+                  >
+                    <ExternalLink class="size-3.5" />
+                  </button>
+                {/if}
                 <button
                   type="button"
                   class="rounded-sm p-1 text-muted-foreground hover:text-foreground"
@@ -375,7 +476,10 @@
               variant="default"
               size="sm"
               class="h-7"
-              disabled={busy || newName.trim() === ''}
+              disabled={busy ||
+                windows.checking ||
+                !windows.view ||
+                newName.trim() === ''}
               onclick={submitCreate}
             >
               {tUi('vault.create.button')}
@@ -385,7 +489,7 @@
           <button
             type="button"
             class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
-            disabled={busy}
+            disabled={busy || windows.checking || !windows.view}
             onclick={startCreate}
           >
             <Plus class="size-4 shrink-0" />
@@ -396,15 +500,3 @@
     </div>
   {/if}
 </div>
-
-<style>
-  /* Current-vault name is always shown. Capped with an ellipsis so a very
-   * long name can't push the rest of the top bar out of the window. */
-  .vault-name {
-    display: inline-block;
-    max-width: 12rem;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-</style>

@@ -110,11 +110,17 @@ thread pool, holding the lock only for a single query.
 - **Profiles / vaults — [`profiles.rs`](../src-tauri/src/profiles.rs).** Each
   profile is a self-contained directory `…/profiles/<id>/` with its own
   `mindstream.db`, Etebase session, settings, and backups. A `profiles.json`
-  index at the fixed OS app-data root records which profile is active; boot
-  reads it _before_ opening any database. A legacy single-vault layout is
+  index at the environment's app-data root records the last-used startup vault;
+  live ownership comes from physical OS vault locks, not this index. Boot
+  reads it before opening any database. A legacy single-vault layout is
   migrated into a `"default"` profile. The `MINDSTREAM_PROFILE_DIR` override
-  (dev/e2e only) points the whole app at a throwaway dir — the isolation/restart
-  seam the real-app tests use.
+  (dev/e2e only) selects a vault directory; `MINDSTREAM_ROOT_DIR` separately
+  isolates root documents and credentials for real-app test devices. Native
+  desktop/device preferences live at the root; content/account preferences,
+  layouts and signing identities belong to the vault. Opt-in supervision uses a
+  long-lived coordinator with one process and isolated WebView store per vault.
+  Normal startup remains direct while menu/handoff and platform release gates
+  are completed. See the [implementation plan](root-vault-implementation-plan.md).
 - **Auth — [`auth/mod.rs`](../src-tauri/src/auth/mod.rs).** Etebase login. The
   password is never stored: a random 32-byte key encrypts the saved account
   state; the **key** goes in the OS keystore (Credential Manager / Keychain /

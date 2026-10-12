@@ -54,9 +54,11 @@ are rejected. DB success remains cached even when focus/notification delivery
 fails, so a lost response cannot create a second note. Frontend key dispatch
 queries current coordinator ownership before invoking the same local command;
 unknown or settling ownership suppresses local execution. Dev/test registration
-remains disabled. The worker protocol is 4, with the shared shortcut manifest
-included in the runtime compatibility hash. Whole-app shutdown and real OS
-keyboard checks remain required before enabling supervision by default.
+remains disabled. The runtime contract in `worker_registration.rs` is
+authoritative for protocol/storage versions; the shared shortcut manifest is
+included in its compatibility hash. Coordinator shortcut routing and whole-app
+shutdown pass Windows fixture checks. Packaged platform checks and menu/handoff
+release gates remain required before enabling supervision by default.
 
 All document operations hold the root OS lock. Set/reset operations patch one
 field after rereading the document; they never save a whole frontend cache.
@@ -126,7 +128,9 @@ deletions. Resume a legacy profile migration only when its files are unambiguous
 Select the vault and acquire its lifetime lock before restore or SQLite opens.
 Desktop settings then validate/recover and migrate before database mutation.
 Restore recovery runs next; only successful reconciliation permits SQLite and
-normal services to start. Worker readiness registration will follow in Phase 2.
+normal services to start. Supervised workers register their exact launch identity
+and report readiness only after native settings initialization. Legacy browser
+export/classification finishes before isolated worker stores open.
 
 Index and desktop-settings writes validate the current file, publish its
 `.previous` copy, then atomically publish the new file. An ordinary save never
@@ -191,7 +195,27 @@ ten minutes; unknown status reads do not allocate requests. An existing close
 can be observed through a new alias. Committing proves the save/drain decision,
 not process exit or ownership release. Coordinators must still observe actual
 child exit or acquire the physical vault's OS lease before considering it closed.
-Whole-app Quit and handoff orchestration are still pending.
+Whole-app Quit uses this protocol and observes physical ownership release before
+exiting the coordinator. Cancellation, save failure, unknown owners or timeout
+leave the remaining workers usable. Worker handoff is still pending.
+
+Desktop menu observations distinguish ready, starting and unavailable owners.
+Failed reads cannot imply closure or authorize deletion/restart switching. The
+supervised opening command binds to the exact ready source launch and rechecks
+the target's index/physical ownership. Source admission tracks the opening job;
+the coordinator rejects new opening requests during Quit/update drain. Opening
+another vault leaves the source running; requesting an existing target focuses
+its window. This-window handoff and opening preferences remain unfinished.
+The owner confirmed that interrupted handoff should finish opening the target
+once the source has saved and closed, and retain the source while it is open.
+
+The coordinator also owns tray, shortcut and autostart registration and update
+installation. Update recovery records every open vault and main/popout window
+before close, restores visibility/geometry/focus, and consumes the record only
+after persistence readiness. A consumed record is retained without replay on a
+normal cold launch. Coordinator revival adopts surviving physical owners without
+opening another vault or activating a window. These paths pass embedded Windows
+checks; actual signed installation and packaged macOS/Linux checks remain open.
 
 ## Verification limits
 

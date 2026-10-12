@@ -203,9 +203,16 @@ still overwrites collaborators silently. Closing it means plumbing presence from
 the _non-transactional restore_ limitation above is still user-visible for ink
 and freeform.
 
-### User profiles / multi-vault — _planned_
+### Concurrent vault opening — _partially implemented_
 
-Multi-vault profiles (`feat/user-profiles`, `src-tauri/src/profiles.rs`). The
-active-profile seam (`MINDSTREAM_PROFILE_DIR` / `dir_override`, gated to dev
-builds and the `e2e-data-dir` feature) already exists and is what e2e isolation
-relies on; the lifecycle + UI are still in progress.
+Root/vault settings, physical ownership, isolated browser stores and the
+coordinator runtime are implemented. Opt-in `--supervised-vaults` runs concurrent
+workers and coordinates focus, shortcuts, tray, autostart, Quit, coordinator
+recovery and all-vault update recovery. Normal startup remains direct.
+
+The supervised desktop vault menu opens new windows, focuses existing windows
+and reports live owners. Remembered opening preferences and safe this-window
+worker handoff are still in progress. Packaged macOS/Linux, supervised
+development-host and reboot-durability checks remain release gates. Global plugin packages and
+theme presets are separate follow-ups. See the current delivery table in the
+[root/vault plan](root-vault-implementation-plan.md#current-delivery-status).
