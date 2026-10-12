@@ -551,7 +551,11 @@ fn purge_local_scope_removes_scoped_rows_and_cursors() {
             "INSERT INTO tombstones(kind, etebase_uid, queued_at, share_scope_id) VALUES ('note', 'u', 't', 'scope_x')",
             [],
         )?;
-        for kind in [scope_stoken_key("scope_x"), scope_collab_epoch_key("scope_x")] {
+        for kind in [
+            scope_stoken_key("scope_x"),
+            scope_collab_epoch_key("scope_x"),
+            crate::sync::held_key(&scope_stoken_key("scope_x")),
+        ] {
             conn.execute(
                 "INSERT INTO sync_state(kind, stoken) VALUES (?1, 's')",
                 params![kind],

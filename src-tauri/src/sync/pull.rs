@@ -20,7 +20,9 @@
 //! too large for any answer is fetched chunk by chunk.
 //!
 //! Deciding what a pulled item means for the local row is [`super::apply`]'s
-//! job.
+//! job. Deciding whether it may touch that row at all is [`super::claim`]'s.
+//! An item that may not is kept until every space has been pulled and tried
+//! once more, see [`settle_held`].
 
 use super::*;
 
@@ -110,13 +112,115 @@ pub(super) fn by_kind<T>(items: impl IntoIterator<Item = (Option<ItemKind>, T)>)
     sorted
 }
 
-/// Pull everything that changed in a space since the last pull.
+/// A space whose pull brought items it could not apply yet, because the
+/// rows they name were at home in another space. Its cursor is not saved
+/// until [`settle_held`] has dealt with them.
+pub(super) struct Held {
+    scope: Option<String>,
+    stoken_key: String,
+    preserve_dirty_local_edits: bool,
+    /// The cursor the pull reached.
+    stoken: Option<String>,
+    items: Vec<(ItemKind, Item)>,
+}
+
+/// How many syncs in a row a space's cursor may wait for an item that
+/// cannot be applied. A row that is moving between spaces is settled by the
+/// next sync at the latest. An item that is still refused after this many
+/// is not one of those: somebody put it there to take over a row that is
+/// not theirs, and it is dropped.
+pub(super) const MAX_HOLDS: u32 = 3;
+
+/// Whether a space that still holds refused items waits another sync, given
+/// how many it has waited already. `Some(n)` is the count to remember.
+pub(super) fn hold_again(held_before: u32) -> Option<u32> {
+    (held_before + 1 < MAX_HOLDS).then_some(held_before + 1)
+}
+
+/// Where the number of syncs a space's cursor has waited is kept.
+pub(crate) fn held_key(stoken_key: &str) -> String {
+    format!("held:{stoken_key}")
+}
+
+fn load_holds(db: &Db, stoken_key: &str) -> AppResult<u32> {
+    Ok(load_stoken(db, &held_key(stoken_key))?
+        .and_then(|count| count.parse().ok())
+        .unwrap_or(0))
+}
+
+fn clear_holds(db: &Db, stoken_key: &str) -> AppResult<()> {
+    let key = held_key(stoken_key);
+    db.with_conn(|c| {
+        c.execute("DELETE FROM sync_state WHERE kind = ?1", params![key])?;
+        Ok(())
+    })
+}
+
+/// Try the items that were refused once more, now that every space has been
+/// pulled, and move each space's cursor on when nothing of it is left over.
+///
+/// What is still refused holds the cursor where it was, so the next sync
+/// pulls the same items again and tries again. That covers a second device
+/// that pulled the space a row moved into before the space it moved out of
+/// had deleted it. It is bounded by [`MAX_HOLDS`].
+pub(super) fn settle_held(db: &Db, held: Vec<Held>, delta: &mut SyncDelta) -> AppResult<()> {
+    for space in held {
+        let pull = SpacePull {
+            scope: space.scope.as_deref(),
+            stoken_key: &space.stoken_key,
+            preserve_dirty_local_edits: space.preserve_dirty_local_edits,
+        };
+        let mut applier = Applier {
+            db,
+            space: &pull,
+            delta: &mut *delta,
+            folders: Vec::new(),
+            refused: Vec::new(),
+        };
+        for kind in ItemKind::IN_ORDER {
+            for (_, item) in space.items.iter().filter(|(of, _)| *of == kind) {
+                applier.apply(kind, item)?;
+            }
+            applier.after(kind)?;
+        }
+        let refused = std::mem::take(&mut applier.refused);
+
+        if !refused.is_empty() {
+            let uids: Vec<&str> = refused.iter().map(|(_, item)| item.uid()).collect();
+            match hold_again(load_holds(db, &space.stoken_key)?) {
+                Some(count) => {
+                    log::warn!(
+                        "[sync] {}: {} item(s) name rows that live in another space ({}); trying again next sync",
+                        space.stoken_key,
+                        uids.len(),
+                        uids.join(", ")
+                    );
+                    save_stoken(db, &held_key(&space.stoken_key), Some(&count.to_string()))?;
+                    continue;
+                }
+                None => log::error!(
+                    "[sync] {}: dropping {} item(s) that name rows of another space ({})",
+                    space.stoken_key,
+                    uids.len(),
+                    uids.join(", ")
+                ),
+            }
+        }
+        save_stoken(db, &space.stoken_key, space.stoken.as_deref())?;
+        clear_holds(db, &space.stoken_key)?;
+    }
+    Ok(())
+}
+
+/// Pull everything that changed in a space since the last pull. Returns the
+/// space when some of what came could not be applied yet, for
+/// [`settle_held`]. Its cursor is not saved in that case.
 pub(super) fn pull_space(
     db: &Db,
     im: &ItemManager,
     space: &SpacePull<'_>,
     delta: &mut SyncDelta,
-) -> AppResult<()> {
+) -> AppResult<Option<Held>> {
     // Outer retry handles `bad_stoken`: if the server rejects our cached
     // cursor (because the user logged into a different account, or the
     // collection was rebuilt server-side), clear it and replay the whole
@@ -126,7 +230,7 @@ pub(super) fn pull_space(
     let mut already_retried = false;
     loop {
         match pull_space_once(db, im, space, delta) {
-            Ok(()) => return Ok(()),
+            Ok(held) => return Ok(held),
             Err(err) if !already_retried && is_bad_stoken_error(&err) => {
                 log::warn!(
                     "[sync] bad_stoken on {} pull, resetting the cursor and retrying ({err})",
@@ -145,13 +249,14 @@ fn pull_space_once(
     im: &ItemManager,
     space: &SpacePull<'_>,
     delta: &mut SyncDelta,
-) -> AppResult<()> {
+) -> AppResult<Option<Held>> {
     let stoken = load_stoken(db, space.stoken_key)?;
     let mut applier = Applier {
         db,
         space,
         delta,
         folders: Vec::new(),
+        refused: Vec::new(),
     };
 
     let new_stoken = match stoken.as_deref() {
@@ -176,10 +281,20 @@ fn pull_space_once(
         }
     };
 
+    let refused = std::mem::take(&mut applier.refused);
+    if !refused.is_empty() {
+        return Ok(Some(Held {
+            scope: space.scope.map(str::to_string),
+            stoken_key: space.stoken_key.to_string(),
+            preserve_dirty_local_edits: space.preserve_dirty_local_edits,
+            stoken: new_stoken,
+            items: refused,
+        }));
+    }
     if new_stoken != stoken {
         save_stoken(db, space.stoken_key, new_stoken.as_deref())?;
     }
-    Ok(())
+    Ok(None)
 }
 
 /// How an item came back in an answer that was asked for content.
@@ -230,6 +345,8 @@ struct Applier<'a> {
     /// Folders applied so far, for re-linking the ones whose parent had not
     /// arrived when they did.
     folders: Vec<FolderPayload>,
+    /// Items that name a row whose home is another space.
+    refused: Vec<(ItemKind, Item)>,
 }
 
 impl Applier<'_> {
@@ -346,28 +463,41 @@ impl Applier<'_> {
         let scope = self.space.scope;
         let preserve = self.space.preserve_dirty_local_edits;
         let report = &mut self.delta.report;
+        let refused = &mut self.refused;
+        let mut refuse = || refused.push((kind, item.clone()));
         let applied = match kind {
-            ItemKind::Folder => apply_folder(self.db, item, scope, preserve).map(|payload| {
-                self.folders.extend(payload);
-                report.folders_pulled += 1;
-            }),
-            ItemKind::Note => apply_note(self.db, item, scope, preserve).map(|id| {
-                self.delta.notes_pulled_ids.extend(id);
-                report.notes_pulled += 1;
-            }),
-            ItemKind::Asset => apply_asset(self.db, item, scope).map(|outcome| match outcome {
-                ApplyAssetOutcome::Applied(id) => {
+            ItemKind::Folder => {
+                apply_folder(self.db, item, scope, preserve).map(|pulled| match pulled {
+                    Pulled::Done(payload) => {
+                        self.folders.extend(payload);
+                        report.folders_pulled += 1;
+                    }
+                    Pulled::Refused => refuse(),
+                })
+            }
+            ItemKind::Note => {
+                apply_note(self.db, item, scope, preserve).map(|pulled| match pulled {
+                    Pulled::Done(id) => {
+                        self.delta.notes_pulled_ids.extend(id);
+                        report.notes_pulled += 1;
+                    }
+                    Pulled::Refused => refuse(),
+                })
+            }
+            ItemKind::Asset => apply_asset(self.db, item, scope).map(|pulled| match pulled {
+                Pulled::Done(ApplyAssetOutcome::Applied(id)) => {
                     report.assets_pulled += 1;
                     self.delta.assets_pulled_ids.push(id);
                 }
                 // Its note is not in this space, or could not be read. The
                 // note was applied before it if it was coming at all, so
                 // waiting would not help.
-                ApplyAssetOutcome::Orphaned => log::warn!(
+                Pulled::Done(ApplyAssetOutcome::Orphaned) => log::warn!(
                     "[sync] asset item {} belongs to a note this device does not have; skipped",
                     item.uid()
                 ),
-                ApplyAssetOutcome::Skipped => {}
+                Pulled::Done(ApplyAssetOutcome::Skipped) => {}
+                Pulled::Refused => refuse(),
             }),
             // Signatures are the account's own. A shared folder has none.
             ItemKind::Signature if scope.is_some() => Ok(()),

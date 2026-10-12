@@ -17,21 +17,24 @@ pub(in crate::sync) fn apply_folder(
     item: &Item,
     scope: Option<&str>,
     preserve_dirty_local_edits: bool,
-) -> AppResult<Option<FolderPayload>> {
+) -> AppResult<Pulled<Option<FolderPayload>>> {
     if item.is_deleted() {
         // Server-side delete: drop our row if we have one matched by uid,
         // unless it has unpushed edits — see `apply_remote_delete`.
-        db.with_conn(|c| apply_remote_delete(c, "collections", item.uid()))?;
-        return Ok(None);
+        db.with_conn(|c| apply_remote_delete(c, "collections", item.uid(), scope))?;
+        return Ok(Pulled::Done(None));
     }
     if item.is_missing_content() {
-        return Ok(None);
+        return Ok(Pulled::Done(None));
     }
     let raw = item
         .content()
         .map_err(|e| AppError::InvalidArg(format!("folder content: {e}")))?;
     let payload: FolderPayload = rmp_serde::from_slice(&raw)
         .map_err(|e| AppError::InvalidArg(format!("folder msgpack: {e}")))?;
+    if !db.with_conn(|c| may_claim(c, "collections", &payload.id, scope))? {
+        return Ok(Pulled::Refused);
+    }
     let etag = item.etag().to_string();
     apply_folder_payload(
         db,
@@ -41,6 +44,7 @@ pub(in crate::sync) fn apply_folder(
         scope,
         preserve_dirty_local_edits,
     )
+    .map(Pulled::Done)
 }
 
 /// Apply a decoded folder payload to local SQLite. Split out from
@@ -118,7 +122,8 @@ pub(in crate::sync) fn apply_folder_payload(
                 // reclaimed into its scope without losing the local name.
                 c.execute(
                     "UPDATE collections
-                     SET etebase_uid = ?1, etebase_etag = ?2, dirty = 1, share_scope_id = ?3
+                     SET etebase_uid = ?1, etebase_etag = ?2, dirty = 1, share_scope_id = ?3,
+                         released = 0
                      WHERE id = ?4",
                     params![uid, etag, scope, payload.id],
                 )?;
@@ -128,7 +133,8 @@ pub(in crate::sync) fn apply_folder_payload(
                     "UPDATE collections
                      SET parent_collection_id = ?1, name = ?2, position = ?3,
                          created = ?4, modified = ?5, etebase_uid = ?6,
-                         etebase_etag = ?7, dirty = 0, share_scope_id = ?8
+                         etebase_etag = ?7, dirty = 0, share_scope_id = ?8,
+                         released = 0
                      WHERE id = ?9",
                     params![
                         resolved_parent,

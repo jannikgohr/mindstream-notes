@@ -156,11 +156,11 @@ pub(crate) fn rehome_folder_subtree(
 
     // 2. Stamp the target scope, detach from the source, and mark dirty.
     conn.execute(
-        &format!("{SUBTREE_CTE} UPDATE collections SET share_scope_id = ?2, etebase_uid = NULL, dirty = 1 WHERE id IN (SELECT id FROM subtree)"),
+        &format!("{SUBTREE_CTE} UPDATE collections SET share_scope_id = ?2, etebase_uid = NULL, dirty = 1, released = 0 WHERE id IN (SELECT id FROM subtree)"),
         params![root_folder_id, target_scope],
     )?;
     conn.execute(
-        &format!("{SUBTREE_CTE} UPDATE notes SET share_scope_id = ?2, etebase_uid = NULL, dirty = 1 WHERE parent_collection_id IN (SELECT id FROM subtree)"),
+        &format!("{SUBTREE_CTE} UPDATE notes SET share_scope_id = ?2, etebase_uid = NULL, dirty = 1, released = 0 WHERE parent_collection_id IN (SELECT id FROM subtree)"),
         params![root_folder_id, target_scope],
     )?;
     rehome_assets_for_notes(conn, &moving_notes, target_scope)?;
@@ -189,7 +189,7 @@ pub(crate) fn rehome_note_subtree(
         crate::sync::queue_tombstone(conn, "note", &uid)?;
     }
     conn.execute(
-        "UPDATE notes SET share_scope_id = ?2, etebase_uid = NULL, dirty = 1 WHERE id = ?1",
+        "UPDATE notes SET share_scope_id = ?2, etebase_uid = NULL, dirty = 1, released = 0 WHERE id = ?1",
         params![note_id, target_scope],
     )?;
     rehome_assets_for_notes(conn, &[note_id.to_string()], target_scope)?;
@@ -295,7 +295,7 @@ fn rehome_assets_for_notes(
             }
             conn.execute(
                 "UPDATE assets SET owning_note_id = ?1, share_scope_id = ?2,
-                        etebase_uid = NULL, modified = ?3, dirty = 1 WHERE id = ?4",
+                        etebase_uid = NULL, modified = ?3, dirty = 1, released = 0 WHERE id = ?4",
                 params![moving_refs[0], target_scope, now, asset.id],
             )?;
             continue;

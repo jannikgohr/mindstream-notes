@@ -135,8 +135,12 @@ pub(crate) fn purge_local_scope(db: &Db, scope: &str) -> AppResult<()> {
             params![scope],
         )?;
         tx.execute(
-            "DELETE FROM sync_state WHERE kind IN (?1, ?2)",
-            params![scope_stoken_key(scope), scope_collab_epoch_key(scope)],
+            "DELETE FROM sync_state WHERE kind IN (?1, ?2, ?3)",
+            params![
+                scope_stoken_key(scope),
+                scope_collab_epoch_key(scope),
+                crate::sync::held_key(&scope_stoken_key(scope)),
+            ],
         )?;
         tx.commit()?;
         Ok(())

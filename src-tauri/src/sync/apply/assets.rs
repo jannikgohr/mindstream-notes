@@ -33,29 +33,32 @@ pub(in crate::sync) fn apply_asset(
     db: &Db,
     item: &Item,
     scope: Option<&str>,
-) -> AppResult<ApplyAssetOutcome> {
+) -> AppResult<Pulled<ApplyAssetOutcome>> {
     if item_type(item)
         .as_deref()
         .is_some_and(|kind| kind != ITEM_TYPE_ASSET)
     {
-        return Ok(ApplyAssetOutcome::Skipped);
+        return Ok(Pulled::Done(ApplyAssetOutcome::Skipped));
     }
     if item.is_deleted() {
-        db.with_conn(|c| apply_remote_delete(c, "assets", item.uid()))?;
-        return Ok(ApplyAssetOutcome::Skipped);
+        db.with_conn(|c| apply_remote_delete(c, "assets", item.uid(), scope))?;
+        return Ok(Pulled::Done(ApplyAssetOutcome::Skipped));
     }
     if item.is_missing_content() {
-        return Ok(ApplyAssetOutcome::Skipped);
+        return Ok(Pulled::Done(ApplyAssetOutcome::Skipped));
     }
     let raw = item
         .content()
         .map_err(|e| AppError::InvalidArg(format!("asset content: {e}")))?;
     let payload: AssetPayload = rmp_serde::from_slice(&raw)
         .map_err(|e| AppError::InvalidArg(format!("asset msgpack: {e}")))?;
+    if !db.with_conn(|c| may_claim(c, "assets", &payload.id, scope))? {
+        return Ok(Pulled::Refused);
+    }
     let etag = item.etag().to_string();
     let uid = item.uid().to_string();
 
-    apply_asset_payload(db, &payload, &uid, &etag, scope)
+    apply_asset_payload(db, &payload, &uid, &etag, scope).map(Pulled::Done)
 }
 
 /// Apply a decoded asset payload to local SQLite. Split out from `apply_asset`
@@ -77,10 +80,14 @@ pub(in crate::sync) fn apply_asset_payload(
         // pull. A pull applies every note it brings before any asset,
         // so an asset that gets here without its note belongs to a note
         // this device is not getting.
+        //
+        // The note has to be in the asset's own space. An attachment lives
+        // where its note does, and an asset that names a note elsewhere is
+        // somebody attaching things to a note that is not theirs.
         let note_exists: bool = tx
             .query_row(
-                "SELECT 1 FROM notes WHERE id = ?1",
-                params![payload.owning_note_id],
+                "SELECT 1 FROM notes WHERE id = ?1 AND share_scope_id IS ?2",
+                params![payload.owning_note_id, scope],
                 |_| Ok(true),
             )
             .optional()?
@@ -113,7 +120,7 @@ pub(in crate::sync) fn apply_asset_payload(
                  SET owning_note_id = ?1, mime_type = ?2, bytes = ?3,
                      size = ?4, modified = ?5, etebase_uid = ?6,
                      etebase_etag = ?7, dirty = 0, share_scope_id = ?8,
-                     content_hash = ?9
+                     content_hash = ?9, released = 0
                  WHERE id = ?10",
                 params![
                     payload.owning_note_id,

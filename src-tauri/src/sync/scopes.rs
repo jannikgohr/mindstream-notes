@@ -11,13 +11,17 @@
 //! The vault's pull and push leave those rows alone and the ones here take
 //! only them, so a row lives in one collection.
 //!
-//! All of this is best effort. `sync_scopes` runs inside the vault's sync
-//! and what it returns is logged, never passed on, so a broken share cannot
-//! stop the user's own notes from syncing.
+//! The work is done in the same phases as the vault's, and `sync::run`
+//! runs each phase for the vault and for every shared folder before it
+//! starts the next: pull, then deletions, then what is new.
+//!
+//! All of this is best effort. What goes wrong with a shared folder is
+//! logged, never passed on, so a broken share cannot stop the user's own
+//! notes from syncing.
 
 use std::collections::HashSet;
 
-use etebase::managers::CollectionManager;
+use etebase::managers::{CollectionManager, ItemManager};
 use etebase::{Collection, CollectionAccessLevel, FetchOptions};
 use rusqlite::{params, OptionalExtension};
 
@@ -29,32 +33,62 @@ use crate::sharing::{
     COLLECTION_TYPE_SHARED,
 };
 
-use super::{pull_space, push_assets, push_folders, push_notes, save_stoken, SpacePull, SyncDelta};
+use super::{
+    drain_tombstones, pull_space, push_assets, push_folders, push_notes, save_stoken, Held,
+    SpacePull, SyncDelta,
+};
 
-/// Sync every shared folder the account is a member of, then drop the ones
-/// it has stopped being a member of.
-pub fn sync_scopes(
+/// A shared folder this sync has pulled, and may have to push to.
+pub(super) struct OpenScope {
+    collection: Collection,
+    im: ItemManager,
+    access: CollectionAccessLevel,
+    root_folder_id: String,
+}
+
+impl OpenScope {
+    fn scope(&self) -> &str {
+        self.collection.uid()
+    }
+
+    /// Someone who may only read cannot upload. Pushing anyway fails on the
+    /// server and leaves the edited row dirty, so every later sync would
+    /// retry the same doomed push. Such a member pulls and never pushes.
+    fn writable(&self) -> bool {
+        !matches!(self.access, CollectionAccessLevel::ReadOnly)
+    }
+}
+
+/// Pull every shared folder the account is a member of, and drop the ones
+/// it has stopped being a member of. Returns the folders that were pulled,
+/// for the push phase. Items a pull could not apply yet go into `held`.
+pub(super) fn pull_scopes(
     db: &Db,
     cm: &CollectionManager,
     delta: &mut SyncDelta,
     self_username: Option<&str>,
-) -> AppResult<()> {
+    held: &mut Vec<Held>,
+) -> AppResult<Vec<OpenScope>> {
     // The whole list or nothing. What is missing from it is removed from
     // this device below, so a list that stopped early must not be used.
     let collections = list_shared_collections(cm)?;
 
     let mut live: HashSet<String> = HashSet::new();
-    for collection in &collections {
+    let mut opened = Vec::new();
+    for collection in collections {
         if collection.is_deleted() {
             continue;
         }
         live.insert(collection.uid().to_string());
-        if let Err(e) = sync_one_scope(db, cm, collection, delta, self_username) {
-            log::warn!("[sync] shared folder {} sync failed: {e}", collection.uid());
+        let uid = collection.uid().to_string();
+        match pull_one_scope(db, cm, collection, delta, self_username, held) {
+            Ok(scope) => opened.push(scope),
+            Err(e) => log::warn!("[sync] shared folder {uid} pull failed: {e}"),
         }
     }
 
-    reconcile_revoked_shares(db, &live)
+    reconcile_revoked_shares(db, &live)?;
+    Ok(opened)
 }
 
 /// Every shared collection the account belongs to.
@@ -82,27 +116,31 @@ fn list_shared_collections(cm: &CollectionManager) -> AppResult<Vec<Collection>>
     }
 }
 
-fn sync_one_scope(
+fn pull_one_scope(
     db: &Db,
     cm: &CollectionManager,
-    collection: &Collection,
+    collection: Collection,
     delta: &mut SyncDelta,
     self_username: Option<&str>,
-) -> AppResult<()> {
-    let scope = collection.uid();
-    let manifest = decode_manifest(collection)?;
+    held: &mut Vec<Held>,
+) -> AppResult<OpenScope> {
+    let manifest = decode_manifest(&collection)?;
+    let im = cm
+        .item_manager(&collection)
+        .map_err(|e| AppError::InvalidArg(format!("item_manager(shared folder): {e}")))?;
+    let open = OpenScope {
+        access: collection.access_level(),
+        root_folder_id: manifest.root_folder_id.clone(),
+        collection,
+        im,
+    };
+    let scope = open.scope();
     record_scope_collab_epoch(db, scope, &manifest, delta)?;
-
-    // Someone who may only read cannot upload. Pushing anyway fails on the
-    // server and leaves the edited row dirty, so every later sync would
-    // retry the same doomed push. Such a member pulls and never pushes.
-    let access = collection.access_level();
-    let writable = !matches!(access, CollectionAccessLevel::ReadOnly);
 
     // In a folder that is read-only here, a dirty row is a bug or what is
     // left of one. Drop those edits, rewind the cursor, and let the pull
     // below put the server's content back.
-    if !writable {
+    if !open.writable() {
         let repair = discard_read_only_scope_edits(db, scope)?;
         if repair.total() > 0 {
             save_stoken(db, &scope_stoken_key(scope), None)?;
@@ -113,41 +151,75 @@ fn sync_one_scope(
         }
     }
 
-    let im = cm
-        .item_manager(collection)
-        .map_err(|e| AppError::InvalidArg(format!("item_manager(shared folder): {e}")))?;
     let stoken_key = scope_stoken_key(scope);
     let space = SpacePull {
         scope: Some(scope),
         stoken_key: &stoken_key,
-        preserve_dirty_local_edits: writable,
+        preserve_dirty_local_edits: open.writable(),
     };
-    pull_space(db, &im, &space, delta)?;
+    held.extend(pull_space(db, &open.im, &space, delta)?);
 
     // The pull brings the root folder like any other, with a name and a
     // place and nothing that says it is shared. That it is, by whom and
     // with what rights is the collection's to say, so it is written onto
     // the row here.
-    project_shared_root(db, scope, &manifest, access, self_username)?;
+    project_shared_root(db, scope, &manifest, open.access, self_username)?;
+    Ok(open)
+}
 
-    if writable {
+/// Push the deletions queued for each shared folder this device may write
+/// to. Runs for every folder before anything new is pushed to any, see
+/// `sync::run`. A folder that fails is logged and the others go on.
+pub(super) fn drain_scope_tombstones(db: &Db, scopes: &[OpenScope]) {
+    for open in scopes.iter().filter(|open| open.writable()) {
+        for kind in ["folder", "note", "asset"] {
+            if let Err(e) = drain_tombstones(db, &open.im, kind, Some(open.scope())) {
+                log::warn!(
+                    "[sync] shared folder {}: deleting {kind}s failed: {e}",
+                    open.scope()
+                );
+            }
+        }
+    }
+}
+
+/// Push what changed locally in each shared folder this device may write
+/// to. A folder that fails is logged and the others go on.
+pub(super) fn push_scopes(
+    db: &Db,
+    cm: &CollectionManager,
+    scopes: &[OpenScope],
+    delta: &mut SyncDelta,
+) {
+    for open in scopes {
+        if let Err(e) = push_one_scope(db, cm, open, delta) {
+            log::warn!("[sync] shared folder {} push failed: {e}", open.scope());
+        }
+    }
+}
+
+fn push_one_scope(
+    db: &Db,
+    cm: &CollectionManager,
+    open: &OpenScope,
+    delta: &mut SyncDelta,
+) -> AppResult<()> {
+    let scope = open.scope();
+    if open.writable() {
         // Folders first, so nobody pulls a note whose folder the server has
         // not been told about.
-        push_folders(db, &im, &mut delta.report, Some(scope))?;
-        push_notes(db, &im, &mut delta.report, Some(scope))?;
-        push_assets(db, &im, &mut delta.report, Some(scope))?;
+        push_folders(db, &open.im, &mut delta.report, Some(scope))?;
+        push_notes(db, &open.im, &mut delta.report, Some(scope))?;
+        push_assets(db, &open.im, &mut delta.report, Some(scope))?;
     }
 
     // An invitation shows the collection's name, so it follows the root
     // folder's. Only an admin may change it.
-    if matches!(access, CollectionAccessLevel::Admin) {
-        if let Some(name) = local_root_name(db, &manifest.root_folder_id)? {
-            if let Err(e) = rename_space(cm, collection, &name) {
-                log::warn!("[sync] could not rename shared folder {scope}: {e}");
-            }
+    if matches!(open.access, CollectionAccessLevel::Admin) {
+        if let Some(name) = local_root_name(db, &open.root_folder_id)? {
+            rename_space(cm, &open.collection, &name)?;
         }
     }
-
     Ok(())
 }
 

@@ -39,19 +39,22 @@ pub(in crate::sync) fn apply_note(
     item: &Item,
     scope: Option<&str>,
     preserve_dirty_local_edits: bool,
-) -> AppResult<Option<String>> {
+) -> AppResult<Pulled<Option<String>>> {
     if item.is_deleted() {
-        db.with_conn(|c| apply_remote_delete(c, "notes", item.uid()))?;
-        return Ok(None);
+        db.with_conn(|c| apply_remote_delete(c, "notes", item.uid(), scope))?;
+        return Ok(Pulled::Done(None));
     }
     if item.is_missing_content() {
-        return Ok(None);
+        return Ok(Pulled::Done(None));
     }
     let raw = item
         .content()
         .map_err(|e| AppError::InvalidArg(format!("note content: {e}")))?;
     let payload: NotePayload = rmp_serde::from_slice(&raw)
         .map_err(|e| AppError::InvalidArg(format!("note msgpack: {e}")))?;
+    if !db.with_conn(|c| may_claim(c, "notes", &payload.id, scope))? {
+        return Ok(Pulled::Refused);
+    }
     let etag = item.etag().to_string();
     apply_note_payload(
         db,
@@ -61,6 +64,7 @@ pub(in crate::sync) fn apply_note(
         scope,
         preserve_dirty_local_edits,
     )
+    .map(Pulled::Done)
 }
 
 /// Apply a decoded note payload to local SQLite. Split out from `apply_note`
@@ -285,7 +289,7 @@ pub(in crate::sync) fn apply_note_payload(
                      created = ?5, modified = ?6, trashed_at = ?7, yrs_state = ?8,
                      etebase_uid = ?9, etebase_etag = ?10, dirty = ?11,
                      payload_schema = ?12, favourite = ?13, note_kind = ?14,
-                     tags_state = ?15, share_scope_id = ?16
+                     tags_state = ?15, share_scope_id = ?16, released = 0
                  WHERE id = ?17",
                 params![
                     final_parent,

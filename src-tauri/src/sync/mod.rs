@@ -23,6 +23,7 @@
 //! Etebase exposes; the CRDT does the actual conflict-free merging.
 
 mod apply;
+mod claim;
 pub mod collab_room;
 mod collections;
 pub mod feed;
@@ -52,9 +53,11 @@ use sha2::Sha256;
 use tauri::{AppHandle, Emitter, Manager};
 
 use apply::*;
+use claim::*;
 use collections::*;
 use local_rows::*;
 use payloads::*;
+pub(crate) use pull::held_key;
 use pull::*;
 use push::*;
 
@@ -225,38 +228,6 @@ fn mark_local_by_remote_uid_dirty(db: &Db, kind: &str, etebase_uid: &str) -> App
         )?;
         Ok(changed > 0)
     })
-}
-
-/// Apply a server-side deletion of `etebase_uid` in `table`.
-///
-/// Edit-wins-over-delete: a row with unpushed local edits (`dirty = 1`) is
-/// never destroyed by a remote tombstone. Instead we *detach* it — drop the
-/// server identity (`etebase_uid`/`etebase_etag`) but keep the row and its
-/// dirty flag — so the next push re-homes it. This makes re-home
-/// non-destructive: when a shared folder's items are tombstoned out of the
-/// vault and recreated in a scope, a device holding offline edits detaches its
-/// vault copy here, then the scope pull reclaims that same row by stable `id`
-/// and CRDT-merges the edits in (see `apply_note_payload`). It also turns a
-/// genuine delete-vs-offline-edit conflict into a resurrection of the edited
-/// copy rather than a silent loss. A clean row is a real delete and is removed.
-///
-/// `table` is always a crate-internal literal ("notes"/"collections"/
-/// "assets"), never user input, so the format! is injection-safe.
-fn apply_remote_delete(conn: &Connection, table: &str, etebase_uid: &str) -> AppResult<()> {
-    let detached = conn.execute(
-        &format!(
-            "UPDATE {table} SET etebase_uid = NULL, etebase_etag = NULL
-             WHERE etebase_uid = ?1 AND dirty = 1"
-        ),
-        params![etebase_uid],
-    )?;
-    if detached == 0 {
-        conn.execute(
-            &format!("DELETE FROM {table} WHERE etebase_uid = ?1"),
-            params![etebase_uid],
-        )?;
-    }
-    Ok(())
 }
 
 /// Result reported back to the UI after a sync attempt.
@@ -432,6 +403,14 @@ fn run(db: &Db, account: &Account, self_username: Option<&str>) -> AppResult<Syn
         .map_err(|e| AppError::InvalidArg(format!("item_manager(vault): {e}")))?;
 
     // --- Pull phase ---
+    // Every space is pulled before anything is pushed. A shared subtree's
+    // items are tombstoned out of the vault and recreated in a scope; a
+    // device holding offline edits *detaches* its vault copy during the
+    // vault pull (see `apply_remote_delete`) rather than deleting it. The
+    // scope's pull then reclaims that row by stable `id` and stamps its
+    // scope, so the vault push below skips it. Pushed any earlier, the
+    // detached row would go back up as an orphan vault copy.
+    //
     // One stream for every kind. `pull_space` sees to it that a folder is
     // applied before the notes in it and a note before its assets.
     let vault = SpacePull {
@@ -439,23 +418,37 @@ fn run(db: &Db, account: &Account, self_username: Option<&str>) -> AppResult<Syn
         stoken_key: KIND_VAULT,
         preserve_dirty_local_edits: true,
     };
-    pull_space(db, &vault_im, &vault, &mut delta)?;
+    let mut held: Vec<Held> = Vec::new();
+    held.extend(pull_space(db, &vault_im, &vault, &mut delta)?);
 
-    // --- Scope sync ---
-    // Runs between the vault pull and the vault push on purpose. A shared
-    // subtree's items are tombstoned out of the vault and recreated in a
-    // scope; a device holding offline edits *detaches* its vault copy during
-    // the pull above (see `apply_remote_delete`) rather than deleting it. This
-    // scope sync then reclaims that row by stable `id` and stamps its scope,
-    // so the vault push below skips it — without this ordering the push would
-    // resurrect the detached row as an orphan vault copy. Isolated from the
-    // vault sync: a failure here (malformed manifest, unreachable scope) is
-    // logged and must never break the user's own vault sync.
-    if let Err(e) = scopes::sync_scopes(db, &cm, &mut delta, self_username) {
-        log::error!("[sync] scoped sync failed (vault sync unaffected): {e}");
-    }
+    // The shared folders are kept apart from the vault's sync: a failure
+    // there (a manifest that does not decode, a list that does not come) is
+    // logged and must never stop the user's own notes from syncing.
+    let shared = match scopes::pull_scopes(db, &cm, &mut delta, self_username, &mut held) {
+        Ok(shared) => shared,
+        Err(e) => {
+            log::error!("[sync] shared folders not synced (vault sync unaffected): {e}");
+            Vec::new()
+        }
+    };
+
+    // Items whose row was still at home in another space when they came.
+    // Every space has been pulled now, so a row that was moving has been
+    // let go by the space it left.
+    settle_held(db, held, &mut delta)?;
 
     // --- Push phase ---
+    // Deletions first, in every space, and only then what is new. A row
+    // that moves from one space to another is a deletion in the first and a
+    // creation in the second. In this order no device ever finds it in
+    // both, which is what lets a pull refuse an item whose row is at home
+    // somewhere else (see `claim`).
+    for kind in ["folder", "note", "asset"] {
+        drain_tombstones(db, &vault_im, kind, None)?;
+    }
+    scopes::drain_scope_tombstones(db, &shared);
+    scopes::push_scopes(db, &cm, &shared, &mut delta);
+
     // Folders first, so that no device ever pulls a note whose folder the
     // server has not been told about.
     push_folders(db, &vault_im, &mut delta.report, None)?;

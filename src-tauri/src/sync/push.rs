@@ -540,10 +540,17 @@ fn acknowledge_push(conn: &Connection, receipt: PushReceipt<'_>) -> AppResult<()
     } else {
         "share_scope_id IS ?6"
     };
+    // A row that has an item again is nobody's to claim. Signatures never
+    // leave the vault and have no such mark.
+    let released = if matches!(receipt.kind, PushedKind::Signature) {
+        ""
+    } else {
+        "released = 0,"
+    };
     // Always retain a newly assigned identity, even if a concurrent edit must
     // remain dirty. Rehomed/deleted rows must not regain their old identity.
     let sql = format!(
-        "UPDATE {table} SET etebase_uid = ?1, etebase_etag = ?2,
+        "UPDATE {table} SET etebase_uid = ?1, etebase_etag = ?2, {released}
         dirty = CASE WHEN modified = ?4 THEN 0 ELSE dirty END
         WHERE id = ?3 AND etebase_uid IS ?5 AND {scope_guard}"
     );

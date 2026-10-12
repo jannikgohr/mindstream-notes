@@ -251,7 +251,7 @@ fn rehome_detaches_then_scope_pull_reclaims_with_local_edits() {
     .unwrap();
 
     // 1. Vault tombstone from B's re-home: detach, don't delete.
-    db.with_conn(|c| apply_remote_delete(c, "notes", "uid_vault"))
+    db.with_conn(|c| apply_remote_delete(c, "notes", "uid_vault", None))
         .unwrap();
     let survived: i64 = db
         .with_conn(|c| {

@@ -395,17 +395,38 @@ uses.
   its own key when a folder is shared. This weakness exists today. Not built
   yet.
 
-One thing the move to one collection did not fix, and that still needs
-fixing. A pulled item says which local row it is by the id in its payload,
-and a row is looked up by that id alone. Someone who can write to a folder
-shared with a user, and who knows the id of one of that user's own notes,
-can put an item with that id into the shared folder and have it take the
-note over. Ids are random, so they have to be learned, for instance from a
-note that was once in a folder shared between the two. The rule that closes
-it: an item may claim a row that is already in its own space or in none,
-never one that is attached to another. That needs deletions to reach the
-server before the creations that replace them, across every space in one
-sync, so that a row moving between spaces is never in two at once.
+**Who may write a row.** A pulled item says which local row it is by the id
+in its payload, and ids travel with rows from space to space. That is what
+lets a note keep its history when its folder is shared. It also means that
+someone who can write to a folder shared with a user, and who knows the id of
+one of that user's own notes, could put an item with that id into the shared
+folder and have it overwrite the note and pull it into their folder. Ids are
+random, so they have to be learned, for instance from a note that was once in
+a folder the two shared.
+
+The rule, in `sync::claim`: an item may write a row that is in its own space,
+or one that its last home has let go of. A row is let go when the server
+deletes its item while this device still holds edits to it. That is what a
+note moving into a shared folder looks like from the owner's second device,
+and it is the only case in which a row changes space through a pull. Any
+other row of another space is out of reach, including one that is new on this
+device and has not been uploaded yet. The same holds one level down: an
+attachment is only attached to a note of its own space, and a deletion only
+reaches rows of the space it came from.
+
+Two things make the rule safe to enforce:
+
+- **Deletions go up before creations, across every space.** A row that moves
+  is a deletion in one space and a creation in another. A sync now pulls
+  every space, then pushes every space's deletions, then everything new. So
+  no device ever finds a row in two spaces, and refusing an item whose row is
+  at home elsewhere never refuses a row that is legitimately on its way.
+- **A refused item is tried again.** Spaces are pulled one after another, so
+  a device can meet the creation before the deletion. Refused items are kept
+  until every space has been pulled and then applied. If one is still
+  refused, the space's cursor stays where it was and the next sync pulls the
+  item again, three syncs at most. After that it is dropped and logged: it
+  was not a row on its way anywhere.
 
 ### Invite links
 

@@ -816,6 +816,24 @@ const MIGRATIONS: &[Migration] = &[
             DELETE FROM sync_state WHERE kind LIKE 'scope-%';
         "#,
     },
+    Migration {
+        to: 29,
+        // A row a space has let go of.
+        //
+        // When the server deletes a row's item and this device still holds
+        // edits to the row, the row is kept without an item. That is the
+        // one state in which another space may take the row over: it is
+        // what a note moving into a shared folder looks like from a second
+        // device. `released` marks it, so that a row which merely has no
+        // item yet, because it is new or waits to be uploaded, cannot be
+        // taken over by an item in somebody's shared folder that happens to
+        // carry its id. See `sync::claim`.
+        sql: r#"
+            ALTER TABLE collections ADD COLUMN released INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE notes ADD COLUMN released INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE assets ADD COLUMN released INTEGER NOT NULL DEFAULT 0;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {
@@ -1498,6 +1516,24 @@ mod asset_refcount_upgrade_tests {
             .map(|r| r.unwrap())
             .collect();
         assert_eq!(waiting, vec!["item_gone".to_string()]);
+    }
+
+    #[test]
+    fn v29_marks_no_existing_row_as_let_go() {
+        let mut conn = v27_with_old_shares();
+
+        run(&mut conn).unwrap();
+
+        for table in ["collections", "notes", "assets"] {
+            let released: i64 = conn
+                .query_row(
+                    &format!("SELECT COALESCE(SUM(released), 0) FROM {table}"),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(released, 0, "{table}");
+        }
     }
 
     #[test]
