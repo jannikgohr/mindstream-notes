@@ -18,6 +18,7 @@ use sqlx::PgConnection;
 use crate::auth::AuthUser;
 use crate::chunks;
 use crate::error::{ApiError, ApiResult, FieldError};
+use crate::events::{self, Event};
 use crate::wire::{
     self, check_uid, valid_uid, CollectionCreate, CollectionList, FetchQuery, ItemBatch, ItemList,
     ItemRef, IteratorList, ListMulti, Msgpack, RemovedCollection, ACCESS_ADMIN, ACCESS_READ_ONLY,
@@ -382,6 +383,12 @@ pub async fn create_collection(
     .bind(stoken)
     .execute(&mut *tx)
     .await?;
+    // The account's other devices pick the new collection up at once.
+    let event = Event::Changed {
+        collection: collection.id,
+        session: Some(user.session_id),
+    };
+    events::publish(&mut tx, &event).await?;
     tx.commit().await?;
     Ok(StatusCode::CREATED)
 }
@@ -861,7 +868,7 @@ async fn write_items(
         return Err(error);
     }
 
-    store_revisions(
+    let changed = store_revisions(
         &state,
         &mut tx,
         &collection,
@@ -870,6 +877,13 @@ async fn write_items(
         &existing,
     )
     .await?;
+    if changed.is_some() {
+        let event = Event::Changed {
+            collection: collection.id,
+            session: Some(user.session_id),
+        };
+        events::publish(&mut tx, &event).await?;
+    }
     tx.commit().await?;
     Ok(StatusCode::OK)
 }

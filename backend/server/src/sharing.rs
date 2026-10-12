@@ -18,6 +18,7 @@ use sqlx::PgConnection;
 use crate::auth::{username_key, AuthUser};
 use crate::collections::{membership, next_changes, Membership};
 use crate::error::{ApiError, ApiResult};
+use crate::events::{self, Event};
 use crate::wire::{
     check_uid, valid_access_level, FetchQuery, Invitation, InvitationAccept, InvitationCreate,
     IteratorList, Member, MemberPatch, Msgpack, UserProfile,
@@ -116,8 +117,21 @@ async fn remove_membership(
     .bind(collection.id)
     .bind(account_id)
     .bind(stoken)
-    .execute(conn)
+    .execute(&mut *conn)
     .await?;
+    // Their open sockets close, and the remaining members see the roster
+    // change.
+    let lost = Event::Membership {
+        collection: collection.id,
+        account: account_id,
+        access: None,
+    };
+    events::publish(conn, &lost).await?;
+    let changed = Event::Changed {
+        collection: collection.id,
+        session: None,
+    };
+    events::publish(conn, &changed).await?;
     Ok(true)
 }
 
@@ -199,6 +213,17 @@ pub async fn modify_member(
     .bind(stoken)
     .execute(&mut *tx)
     .await?;
+    let access = Event::Membership {
+        collection: collection.id,
+        account: target,
+        access: Some(body.access_level),
+    };
+    events::publish(&mut tx, &access).await?;
+    let changed = Event::Changed {
+        collection: collection.id,
+        session: Some(user.session_id),
+    };
+    events::publish(&mut tx, &changed).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -289,6 +314,7 @@ pub async fn invite(
     if inserted == 0 {
         return Err(exists());
     }
+    events::publish(&mut tx, &Event::Invitation { account: recipient }).await?;
     tx.commit().await?;
     Ok(StatusCode::CREATED)
 }
@@ -427,18 +453,21 @@ async fn delete_invitation(
     uid: &str,
     direction: Direction,
 ) -> ApiResult<StatusCode> {
-    let deleted = sqlx::query(&format!(
-        "DELETE FROM invitations i WHERE i.uid = $1 AND {} = $2",
+    let mut tx = state.pool.begin().await?;
+    let deleted: Option<(i64, i64)> = sqlx::query_as(&format!(
+        "DELETE FROM invitations i WHERE i.uid = $1 AND {} = $2
+         RETURNING i.from_account_id, i.to_account_id",
         direction.column()
     ))
     .bind(uid)
     .bind(user.account_id)
-    .execute(&state.pool)
-    .await?
-    .rows_affected();
-    if deleted == 0 {
-        return Err(ApiError::not_found("Invitation"));
-    }
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (sender, recipient) = deleted.ok_or_else(|| ApiError::not_found("Invitation"))?;
+    // Both ends have a list this invitation just left.
+    events::publish(&mut tx, &Event::Invitation { account: sender }).await?;
+    events::publish(&mut tx, &Event::Invitation { account: recipient }).await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -472,8 +501,8 @@ pub async fn accept(
     }
     let mut tx = state.pool.begin().await?;
     // Lock the collection before anything else, like every other writer.
-    let invitation: Option<(i64, i64, i16)> = sqlx::query_as(
-        "SELECT i.id, i.collection_id, i.access_level
+    let invitation: Option<(i64, i64, i16, i64)> = sqlx::query_as(
+        "SELECT i.id, i.collection_id, i.access_level, i.from_account_id
          FROM invitations i JOIN collections c ON c.id = i.collection_id
          WHERE i.uid = $1 AND i.to_account_id = $2
          FOR UPDATE OF c",
@@ -482,7 +511,7 @@ pub async fn accept(
     .bind(user.account_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (invitation_id, collection_id, access_level) =
+    let (invitation_id, collection_id, access_level, sender) =
         invitation.ok_or_else(|| ApiError::not_found("Invitation"))?;
 
     let stoken = touch_collection(&mut tx, collection_id).await?;
@@ -514,6 +543,18 @@ pub async fn accept(
         .bind(user.account_id)
         .execute(&mut *tx)
         .await?;
+    let joined = Event::Membership {
+        collection: collection_id,
+        account: user.account_id,
+        access: Some(access_level),
+    };
+    events::publish(&mut tx, &joined).await?;
+    let changed = Event::Changed {
+        collection: collection_id,
+        session: Some(user.session_id),
+    };
+    events::publish(&mut tx, &changed).await?;
+    events::publish(&mut tx, &Event::Invitation { account: sender }).await?;
     tx.commit().await?;
     Ok(StatusCode::CREATED)
 }

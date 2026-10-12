@@ -14,7 +14,11 @@ mod collections;
 pub mod config;
 mod edge;
 mod error;
+mod events;
+mod feed;
+mod hub;
 mod keys;
+mod rooms;
 mod sharing;
 mod test_reset;
 #[cfg(test)]
@@ -42,6 +46,7 @@ pub struct Inner {
     pub(crate) blobs: BlobStore,
     pub(crate) keys: Keys,
     pub(crate) auth_limiter: edge::RateLimiter,
+    pub(crate) hub: hub::Hub,
     pub(crate) config: Config,
 }
 
@@ -94,13 +99,16 @@ impl AppState {
             .map_err(StartError::Blobs)?;
         let auth_limiter =
             edge::RateLimiter::new(config.auth_rate_per_minute, config.auth_rate_burst);
-        Ok(Self(Arc::new(Inner {
+        let state = Self(Arc::new(Inner {
             pool,
             blobs,
             keys,
             auth_limiter,
+            hub: hub::Hub::default(),
             config,
-        })))
+        }));
+        events::listen(state.clone());
+        Ok(state)
     }
 }
 
@@ -141,6 +149,12 @@ pub fn router(state: AppState) -> Router {
     // always sends the trailing slash.
     let mut api = Router::new()
         .route("/mindstream/info/", get(info))
+        .route("/mindstream/feed/", get(feed::feed_socket))
+        .route("/room/", get(rooms::room_socket))
+        .route(
+            "/collection/{collection}/item/{item}/room-ticket/",
+            post(rooms::room_ticket),
+        )
         .route("/authentication/is_etebase/", get(auth::is_etebase))
         .route("/authentication/signup/", post(auth::signup))
         .route(

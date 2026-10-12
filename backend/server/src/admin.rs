@@ -5,6 +5,7 @@
 //! it stores, and switching it off.
 
 use crate::auth::username_key;
+use crate::events::{self, Event};
 use crate::AppState;
 
 #[derive(Debug, sqlx::FromRow)]
@@ -51,6 +52,8 @@ pub async fn set_disabled(
             .bind(id)
             .execute(&mut *tx)
             .await?;
+        // The server process hears this and closes the account's sockets.
+        events::publish(&mut tx, &Event::AccountClosed { account: id }).await?;
     }
     tx.commit().await?;
     Ok(id.is_some())
@@ -61,10 +64,19 @@ pub async fn set_disabled(
 ///
 /// The blobs of the deleted collections stay on disk until they are swept.
 pub async fn delete_account(state: &AppState, username: &str) -> Result<bool, sqlx::Error> {
-    let deleted = sqlx::query("DELETE FROM accounts WHERE username_key = $1")
+    let mut tx = state.pool.begin().await?;
+    let id: Option<i64> = sqlx::query_scalar("SELECT id FROM accounts WHERE username_key = $1")
         .bind(username_key(username))
-        .execute(&state.pool)
-        .await?
-        .rows_affected();
-    Ok(deleted > 0)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let Some(id) = id else {
+        return Ok(false);
+    };
+    events::publish_account_closing(&mut tx, id).await?;
+    sqlx::query("DELETE FROM accounts WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(true)
 }

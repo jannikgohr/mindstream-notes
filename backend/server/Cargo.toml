@@ -16,11 +16,12 @@ name = "mindstream-server"
 path = "src/main.rs"
 
 [dependencies]
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "fs", "io-util", "time", "sync"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
+serde_json = "1"
 rmp-serde = "1"
 # Login is a signature over a msgpack body, made with a key the client derives
 # from the password. Verifying it is the only cryptography the server performs
@@ -41,6 +42,10 @@ tower-http = { version = "0.6", features = ["trace"] }
 # The client the app ships. Driving the server with it in tests is what keeps
 # the two honest about the wire format.
 etebase = { git = "https://github.com/jannikgohr/etebase-rs", features = ["networking"] }
+# A WebSocket client, for the room and feed tests.
+tokio-tungstenite = "0.29"
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false }
 
 [profile.release]
 codegen-units = 1

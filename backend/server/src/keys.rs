@@ -21,6 +21,11 @@ const CHALLENGE_NONCE_LEN: usize = 16;
 const CHALLENGE_TAG_LEN: usize = 32;
 /// How long a client has to answer a login challenge.
 const CHALLENGE_TTL_SECS: u64 = 300;
+const ROOM_TICKET_BODY_LEN: usize = 32;
+const ROOM_TICKET_TAG_LEN: usize = 32;
+/// A room ticket only has to survive the trip from the app's backend to its
+/// WebView and on to the server.
+const ROOM_TICKET_TTL_SECS: u64 = 30;
 
 pub fn random_bytes<const N: usize>() -> [u8; N] {
     let mut bytes = [0u8; N];
@@ -43,6 +48,16 @@ fn now_secs() -> u64 {
 pub struct Keys {
     stoken: [u8; 32],
     challenge: [u8; 32],
+    room_ticket: [u8; 32],
+}
+
+/// Who may enter which room. Carried in a ticket, so the socket that
+/// presents it needs no session token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RoomTicket {
+    pub account_id: i64,
+    pub collection_id: i64,
+    pub item_id: i64,
 }
 
 impl Keys {
@@ -71,6 +86,7 @@ impl Keys {
         Self {
             stoken: derive(b"mindstream-server/stoken/v1"),
             challenge: derive(b"mindstream-server/login-challenge/v1"),
+            room_ticket: derive(b"mindstream-server/room-ticket/v1"),
         }
     }
 
@@ -133,6 +149,54 @@ impl Keys {
     }
 }
 
+impl Keys {
+    pub fn room_ticket(&self, ticket: RoomTicket) -> String {
+        self.room_ticket_expiring(ticket, now_secs() + ROOM_TICKET_TTL_SECS)
+    }
+
+    /// The ticket's lifetime in seconds, for telling the client.
+    pub const ROOM_TICKET_TTL_SECS: u64 = ROOM_TICKET_TTL_SECS;
+
+    fn room_ticket_expiring(&self, ticket: RoomTicket, expires: u64) -> String {
+        let mut out = Vec::with_capacity(ROOM_TICKET_BODY_LEN + ROOM_TICKET_TAG_LEN);
+        out.extend_from_slice(&expires.to_be_bytes());
+        out.extend_from_slice(&ticket.account_id.to_be_bytes());
+        out.extend_from_slice(&ticket.collection_id.to_be_bytes());
+        out.extend_from_slice(&ticket.item_id.to_be_bytes());
+        let mut mac = HmacSha256::new_from_slice(&self.room_ticket).expect("any key length works");
+        mac.update(&out);
+        out.extend_from_slice(&mac.finalize().into_bytes());
+        to_base64(&out)
+    }
+
+    /// The ticket's contents, if this server issued it and it has not
+    /// expired. Whether the account is still a member is for the caller to
+    /// check: a ticket says what was true when it was issued.
+    pub fn verify_room_ticket(&self, token: &str) -> Option<RoomTicket> {
+        let bytes = URL_SAFE_NO_PAD.decode(token).ok()?;
+        if bytes.len() != ROOM_TICKET_BODY_LEN + ROOM_TICKET_TAG_LEN {
+            return None;
+        }
+        let (body, tag) = bytes.split_at(ROOM_TICKET_BODY_LEN);
+        let mut mac = HmacSha256::new_from_slice(&self.room_ticket).expect("any key length works");
+        mac.update(body);
+        mac.verify_slice(tag).ok()?;
+        let field = |index: usize| -> [u8; 8] {
+            body[index * 8..(index + 1) * 8]
+                .try_into()
+                .expect("8 bytes")
+        };
+        if u64::from_be_bytes(field(0)) < now_secs() {
+            return None;
+        }
+        Some(RoomTicket {
+            account_id: i64::from_be_bytes(field(1)),
+            collection_id: i64::from_be_bytes(field(2)),
+            item_id: i64::from_be_bytes(field(3)),
+        })
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum ChallengeCheck {
     Valid,
@@ -186,6 +250,28 @@ mod tests {
             Keys::from_secret(b"two").verify_challenge(&challenge, 7),
             ChallengeCheck::Invalid
         );
+    }
+
+    #[test]
+    fn room_ticket_is_only_good_here_and_for_a_while() {
+        let keys = Keys::from_secret(b"one");
+        let ticket = RoomTicket {
+            account_id: 3,
+            collection_id: 5,
+            item_id: 8,
+        };
+        let token = keys.room_ticket(ticket);
+        assert_eq!(keys.verify_room_ticket(&token), Some(ticket));
+        assert_eq!(Keys::from_secret(b"two").verify_room_ticket(&token), None);
+        assert_eq!(keys.verify_room_ticket("garbage"), None);
+
+        // Swapping the collection for another invalidates it.
+        let mut bytes = URL_SAFE_NO_PAD.decode(&token).unwrap();
+        bytes[23] ^= 1;
+        assert_eq!(keys.verify_room_ticket(&to_base64(&bytes)), None);
+
+        let expired = keys.room_ticket_expiring(ticket, now_secs() - 1);
+        assert_eq!(keys.verify_room_ticket(&expired), None);
     }
 
     #[test]
