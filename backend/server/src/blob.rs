@@ -49,13 +49,32 @@ impl BlobStore {
     /// A fresh key under the collection. The uid was checked to be URL-safe
     /// base64, so the key cannot climb out of the root.
     pub fn new_key(collection_uid: &str) -> String {
+        format!(
+            "{}/{}",
+            Self::collection_dir(collection_uid),
+            to_base64(&random_bytes::<16>())
+        )
+    }
+
+    /// Where a collection's blobs are kept, relative to the root.
+    fn collection_dir(collection_uid: &str) -> String {
         // Fan out by a prefix so no single directory collects every
         // collection on the server.
         let prefix = &collection_uid[..collection_uid.len().min(2)];
-        format!(
-            "{prefix}/{collection_uid}/{}",
-            to_base64(&random_bytes::<16>())
-        )
+        format!("{prefix}/{collection_uid}")
+    }
+
+    /// Remove every blob of a collection. Call it once the rows that
+    /// pointed into them are gone for good: a blob that outlives its rows
+    /// wastes space, and rows that outlive their blob lose data.
+    pub async fn remove_collection(&self, collection_uid: &str) -> io::Result<()> {
+        let dir = self.path(&Self::collection_dir(collection_uid));
+        tokio::task::spawn_blocking(move || match fs::remove_dir_all(&dir) {
+            Err(err) if err.kind() != io::ErrorKind::NotFound => Err(err),
+            _ => Ok(()),
+        })
+        .await
+        .map_err(join_error)?
     }
 
     fn path(&self, key: &str) -> PathBuf {
@@ -163,6 +182,36 @@ mod tests {
             .unwrap();
         assert_eq!(many[0], vec![b"1".to_vec()]);
         assert_eq!(many[1], vec![b"9".to_vec(), b"0".to_vec()]);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn removing_a_collection_takes_its_blobs_and_no_others() {
+        let dir = std::env::temp_dir().join(format!(
+            "mindstream-blob-test-{}",
+            to_base64(&random_bytes::<8>())
+        ));
+        let store = BlobStore::open(&dir).await.unwrap();
+        // The two share a prefix directory.
+        let gone = [BlobStore::new_key("AbCdEf"), BlobStore::new_key("AbCdEf")];
+        let kept = BlobStore::new_key("AbXyZw");
+        for key in gone.iter().chain([&kept]) {
+            store.put(key, b"data".to_vec()).await.unwrap();
+        }
+        let whole = || vec![Range { offset: 0, len: 4 }];
+
+        store.remove_collection("AbCdEf").await.unwrap();
+        for key in &gone {
+            assert!(store.get_ranges(key, whole()).await.is_err());
+        }
+        assert_eq!(
+            store.get_ranges(&kept, whole()).await.unwrap(),
+            vec![b"data".to_vec()]
+        );
+        // A collection that never had a blob, or has none left, is fine.
+        store.remove_collection("AbCdEf").await.unwrap();
+        store.remove_collection("never-stored").await.unwrap();
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

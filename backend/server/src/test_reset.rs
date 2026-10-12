@@ -6,9 +6,9 @@
 use axum::extract::State;
 use axum::http::StatusCode;
 
+use crate::admin;
 use crate::auth::{insert_account, username_key, validate_signup};
 use crate::error::ApiResult;
-use crate::events;
 use crate::wire::{Msgpack, Signup};
 use crate::AppState;
 
@@ -25,14 +25,14 @@ pub async fn reset(
             .bind(username_key(&body.user.username))
             .fetch_optional(&mut *tx)
             .await?;
-    if let Some(id) = existing {
-        events::publish_account_closing(&mut tx, id).await?;
-        sqlx::query("DELETE FROM accounts WHERE id = $1")
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
+    let orphaned = match existing {
+        Some(id) => Some(admin::remove_account(&state, &mut tx, id).await?),
+        None => None,
+    };
     insert_account(&mut tx, &body).await?;
-    tx.commit().await?;
+    match orphaned {
+        Some(orphaned) => orphaned.commit(tx).await?,
+        None => tx.commit().await?,
+    }
     Ok(StatusCode::NO_CONTENT)
 }

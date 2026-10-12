@@ -230,6 +230,19 @@ pub struct Signup {
     pub recovery_pubkey: Option<ByteBuf>,
     #[serde(default)]
     pub recovery_encrypted_content: Option<ByteBuf>,
+    /// A code from an administrator, where signup is not open.
+    #[serde(default)]
+    pub signup_code: Option<String>,
+    /// Or an invite link that lets its holder create an account.
+    #[serde(default)]
+    pub link: Option<LinkProof>,
+}
+
+/// Shows that the caller holds an invite link's secret.
+#[derive(Deserialize, Debug)]
+pub struct LinkProof {
+    pub uid: String,
+    pub signature: ByteBuf,
 }
 
 #[derive(Deserialize, Debug)]
@@ -320,6 +333,11 @@ pub struct Invitation {
     pub signed_encryption_key: ByteBuf,
     pub from_username: String,
     pub from_pubkey: ByteBuf,
+    /// The collection's own item, on an invitation someone received. Its
+    /// metadata holds the collection's name, which the key in the invitation
+    /// opens, so the name can be shown before the invitation is answered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collection_item: Option<Item>,
 }
 
 #[derive(Deserialize, Debug)]

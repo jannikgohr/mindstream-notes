@@ -2,9 +2,9 @@
 
 Status: agreed design, written 2026-10-12. The server in
 [backend/server](../backend/server/README.md) has the core of step 1 and the
-server halves of steps 3 and 5: rooms and the change feed, then device
-sessions, two-factor sign-in and the recovery key. The app still runs on the
-old stack: nothing on the client side is built yet.
+server halves of steps 3, 4 and 5: rooms and the change feed, invite links,
+then device sessions, two-factor sign-in and the recovery key. The app still
+runs on the old stack: nothing on the client side is built yet.
 
 This replaces the backend stack described in
 [architecture.md](architecture.md#the-backend-stack): nginx, Etebase on
@@ -296,6 +296,39 @@ single-use by default.
 It needs two new pieces: handling for links opened at the operating-system
 level, and a landing page on the server for devices without the app.
 
+As built on the server:
+
+- The client derives a second key from the secret, one that signs, and gives
+  the server its public half. Every request about a link carries a signature
+  made with it over the action, the link id and the caller's username. A link
+  id alone therefore gets nothing, which matters because ids pass through
+  address bars, logs and chat previews. The fork already derives the login key
+  from a seed this way.
+- A link gives read or write access and never admin. It lasts a week unless
+  told otherwise and 90 days at most. It lets in one person unless told
+  otherwise and 100 at most.
+- Looking at a link needs the secret and no account. The server returns the
+  sender's name and key, the sealed collection key and the collection's own
+  item, so the app can show who invites the person to what before they sign in
+  or sign up.
+- A link stops working when its maker stops being an admin of the space.
+- The landing page is the same for every link and never looks one up.
+
+| Route                              | Takes                            | Does                         |
+| ---------------------------------- | -------------------------------- | ---------------------------- |
+| `POST mindstream/link/`            | Session of an admin of the space | Makes a link                 |
+| `GET mindstream/link/?collection=` | The same                         | Lists the links into a space |
+| `DELETE mindstream/link/{id}/`     | The same                         | Removes one                  |
+| `POST mindstream/link/{id}/open/`  | Proof of the secret              | Shows what the link leads to |
+| `POST mindstream/link/{id}/claim/` | Session, proof of the secret     | Joins the space              |
+| `GET /join/{id}`                   | Nothing                          | The page a browser shows     |
+
+Signing up where signup is not open takes one of two things in the signup
+request. One is a code an administrator made on the command line, good for one
+account. The other is proof of a link that was made to allow it. The server's
+signup setting has three values to match: `closed` takes codes only, `invite`
+takes such links too, and `open` takes anyone.
+
 ## Accounts
 
 ### Device sessions
@@ -577,8 +610,10 @@ The frame figures are within the run-to-run noise of each other.
 5. **The link's shape.** The `mindstream:` scheme is already taken inside the
    WebView for attachments, and nothing handles links at the operating-system
    level yet.
-6. **Who may create links that permit signup** on a self-hosted server: only
-   administrators, or any member when the policy allows it.
+6. **Who may create links that permit signup** on a self-hosted server. The
+   server leaves it to the operator. Under `invite` any admin of a space may.
+   Under `closed`, the default, nobody may and the administrator hands out
+   signup codes. Confirm the default.
 7. **The recovery key's format**, and whether the app offers something to print
    or save.
 8. **How long a device session lasts** when it is not used.

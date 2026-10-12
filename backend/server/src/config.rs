@@ -8,11 +8,16 @@ use ipnet::IpNet;
 /// Who may create an account.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum SignupPolicy {
-    /// Nobody. Accounts come from an administrator.
+    /// Only someone holding a signup code from an administrator.
     Closed,
+    /// Also someone holding an invite link whose maker let it create an
+    /// account.
+    Invite,
     /// Anyone who can reach the server.
     Open,
 }
+
+const DEFAULT_APP_URL: &str = "https://github.com/jannikgohr/mindstream-notes/releases";
 
 #[derive(Args, Clone, Debug)]
 pub struct Config {
@@ -85,6 +90,11 @@ pub struct Config {
     )]
     pub totp_issuer: String,
 
+    /// Where the page an invite link shows in a browser sends people who do
+    /// not have the app yet.
+    #[arg(long, env = "MINDSTREAM_APP_URL", default_value = DEFAULT_APP_URL)]
+    pub app_url: String,
+
     /// Largest request body accepted, in bytes.
     #[arg(long, env = "MINDSTREAM_MAX_BODY_BYTES", default_value_t = 75 * 1024 * 1024)]
     pub max_body_bytes: usize,
@@ -114,6 +124,17 @@ impl Config {
             .filter(|token| !token.is_empty())
     }
 
+    /// Where to send people who do not have the app. An empty value, which
+    /// is what an unset variable in a compose file turns into, means the
+    /// default.
+    pub fn app_url(&self) -> &str {
+        if self.app_url.trim().is_empty() {
+            DEFAULT_APP_URL
+        } else {
+            &self.app_url
+        }
+    }
+
     pub fn secret_key_file(&self) -> PathBuf {
         self.secret_key_file
             .clone()
@@ -135,10 +156,30 @@ impl Config {
             secret_key: None,
             secret_key_file: None,
             totp_issuer: "Mindstream Tests".into(),
+            app_url: "https://example.com/app".into(),
             max_body_bytes: 75 * 1024 * 1024,
             inline_chunk_bytes: 20 * 1024,
             database_connections: 4,
             test_reset: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_settings_fall_back_to_their_defaults() {
+        let mut config = Config::for_tests(String::new(), PathBuf::from("blobs"));
+        assert_eq!(config.app_url(), "https://example.com/app");
+        config.app_url = String::new();
+        assert_eq!(config.app_url(), DEFAULT_APP_URL);
+        config.admin_token = Some(String::new());
+        assert_eq!(config.admin_token(), None);
+        assert_eq!(
+            config.secret_key_file(),
+            PathBuf::from("blobs").join("secret.key")
+        );
     }
 }

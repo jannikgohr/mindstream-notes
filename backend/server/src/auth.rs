@@ -12,11 +12,11 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use serde_bytes::ByteBuf;
 use sqlx::PgConnection;
 
-use crate::config::SignupPolicy;
 use crate::edge::AuthAttempt;
 use crate::error::{ApiError, ApiResult};
 use crate::events::{self, Event};
 use crate::keys::{hash_session_token, new_session_token, ChallengeCheck};
+use crate::links;
 use crate::security;
 use crate::wire::{
     LoginChallenge, LoginChallengeRequest, LoginResponse, LoginUser, Msgpack, SignedBody,
@@ -258,16 +258,12 @@ pub async fn signup(
     headers: HeaderMap,
     Msgpack(body): Msgpack<Signup>,
 ) -> ApiResult<Msgpack<LoginResponse>> {
-    if state.config.signup != SignupPolicy::Open {
-        return Err(ApiError::forbidden(
-            "signup_closed",
-            "This server does not accept signups.",
-        ));
-    }
     validate_signup(&body)?;
 
     let mut tx = state.pool.begin().await?;
-    insert_account(&mut tx, &body).await?;
+    let grant = links::signup_grant(&state, &mut tx, &body).await?;
+    let account_id = insert_account(&mut tx, &body).await?;
+    links::redeem(&mut tx, grant, account_id).await?;
     let account = find_account(&mut tx, &body.user.username)
         .await?
         .ok_or_else(|| ApiError::internal("account vanished during signup"))?;

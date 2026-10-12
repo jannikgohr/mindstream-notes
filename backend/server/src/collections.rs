@@ -187,6 +187,39 @@ async fn to_wire_items(
         .collect()
 }
 
+/// The main item of each of these collections, without its content. It is
+/// what someone invited needs to read a collection's name before joining.
+pub(crate) async fn main_items(
+    state: &AppState,
+    conn: &mut PgConnection,
+    collection_ids: &[i64],
+) -> ApiResult<HashMap<i64, wire::Item>> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        collection_id: i64,
+        #[sqlx(flatten)]
+        item: ItemRow,
+    }
+    let rows: Vec<Row> = sqlx::query_as(&format!(
+        "SELECT i.collection_id, {ITEM_COLUMNS} FROM {ITEM_TABLES}
+         WHERE i.collection_id = ANY($1) AND i.is_main"
+    ))
+    .bind(collection_ids)
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut loaded = chunks::load(
+        conn,
+        &state.blobs,
+        rows.iter()
+            .flat_map(|row| row.item.chunk_ids.iter().copied()),
+        false,
+    )
+    .await?;
+    rows.into_iter()
+        .map(|row| Ok((row.collection_id, to_wire_item(row.item, &mut loaded)?)))
+        .collect()
+}
+
 // ---------- collections ----------
 
 const COLLECTION_QUERY: &str = "SELECT c.stoken AS col_stoken, m.access_level, \

@@ -18,7 +18,8 @@ services:
         condition: service_healthy
     environment:
       MINDSTREAM_DATABASE_URL: postgres://mindstream:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres/mindstream
-      # closed: nobody can sign up. open: anyone who can reach the server can.
+      # closed: only with a signup code you made. invite: also by an invite
+      # link made to allow it. open: anyone who can reach the server.
       MINDSTREAM_SIGNUP: ${MINDSTREAM_SIGNUP:-closed}
       # Hostnames clients use, comma separated. Needed when the reverse proxy
       # does not pass the original Host header through.
@@ -29,6 +30,9 @@ services:
       # Seals authenticator secrets. Empty makes the server create a key in
       # the volume below on first start.
       MINDSTREAM_SECRET_KEY: ${MINDSTREAM_SECRET_KEY:-}
+      # Where the page behind an invite link sends people without the app.
+      # Empty keeps the default, the project's releases page.
+      MINDSTREAM_APP_URL: ${MINDSTREAM_APP_URL:-}
     volumes:
       # Attachment chunks, and the secret key unless one is given above.
       # Losing this volume loses every attachment and every authenticator.

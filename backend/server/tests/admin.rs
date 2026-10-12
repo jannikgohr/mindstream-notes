@@ -3,9 +3,9 @@
 mod common;
 
 use common::keyed::{enrol, refused, Extra, Person};
-use common::{new_collection, signup, COLLECTION_TYPE};
+use common::{admin_state, new_collection, signup, COLLECTION_TYPE};
 use etebase::error::Error;
-use mindstream_server::{admin, AppState, Config};
+use mindstream_server::{admin, AppState};
 
 /// Run an admin operation the way the command line does: on its own
 /// connection to the same database the server uses.
@@ -15,12 +15,6 @@ fn admin_do<T>(operation: impl AsyncFnOnce(&AppState) -> T) -> T {
         .build()
         .unwrap()
         .block_on(async { operation(&admin_state().await).await })
-}
-
-async fn admin_state() -> AppState {
-    let blob_dir = std::env::temp_dir().join("mindstream-server-test-admin");
-    let config = Config::for_tests(common::database_url(), blob_dir);
-    AppState::connect(config).await.unwrap()
 }
 
 #[test]

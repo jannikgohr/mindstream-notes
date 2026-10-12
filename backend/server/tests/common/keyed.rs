@@ -28,6 +28,13 @@ pub fn public(key: &SigningKey) -> Vec<u8> {
     key.verifying_key().to_bytes().to_vec()
 }
 
+/// A uid of the kind the client makes up for collections, items and links.
+pub fn new_uid() -> String {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    URL_SAFE_NO_PAD.encode(rand::random::<[u8; 18]>())
+}
+
 fn bytes(value: &[u8]) -> ByteBuf {
     ByteBuf::from(value.to_vec())
 }
@@ -198,6 +205,12 @@ async fn sign(url: &str, name: &str, key: &SigningKey, action: &str, extra: &Ext
     .unwrap()
 }
 
+/// A request from nobody at all.
+pub async fn post<B: Serialize>(url: &str, path: &str, body: &B) -> Reply {
+    let body = Some(rmp_serde::to_vec_named(body).unwrap());
+    request(url, Method::POST, path, None, "test", body).await
+}
+
 /// A signed request from nobody in particular: signing in, or recovering.
 pub async fn signed(
     url: &str,
@@ -224,6 +237,25 @@ pub struct Session {
     pub user: SessionUser,
 }
 
+/// What a signup brings along beyond the account itself.
+#[derive(Default)]
+pub struct SignupWith<'a> {
+    pub recovery: bool,
+    /// A signup code from an administrator.
+    pub code: Option<&'a str>,
+    /// An invite link's uid and the key derived from its secret.
+    pub link: Option<(&'a str, &'a SigningKey)>,
+}
+
+/// The signature that shows a caller holds an invite link's secret.
+pub fn link_proof(key: &SigningKey, action: &str, link: &str, username: &str) -> Vec<u8> {
+    let message = format!(
+        "mindstream-link:{action}:{link}:{}",
+        username.to_lowercase()
+    );
+    key.sign(message.as_bytes()).to_bytes().to_vec()
+}
+
 /// One device of one account.
 pub struct Person {
     pub url: String,
@@ -237,16 +269,28 @@ pub struct Person {
 
 impl Person {
     pub async fn signup(url: &str, role: &str, with_recovery: bool) -> Self {
-        Self::try_signup(url, role, with_recovery)
-            .await
-            .expect("signup")
+        let with = SignupWith {
+            recovery: with_recovery,
+            ..SignupWith::default()
+        };
+        Self::signup_with(url, role, with).await.expect("signup")
     }
 
-    pub async fn try_signup(url: &str, role: &str, with_recovery: bool) -> Result<Self, u16> {
+    /// Sign up, or report how the server refused.
+    pub async fn signup_with(
+        url: &str,
+        role: &str,
+        with: SignupWith<'_>,
+    ) -> Result<Self, (u16, String)> {
         #[derive(Serialize)]
         struct User<'a> {
             username: &'a str,
             email: String,
+        }
+        #[derive(Serialize)]
+        struct Link<'a> {
+            uid: &'a str,
+            signature: ByteBuf,
         }
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -260,10 +304,14 @@ impl Person {
             recovery_pubkey: Option<ByteBuf>,
             #[serde(skip_serializing_if = "Option::is_none")]
             recovery_encrypted_content: Option<ByteBuf>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            signup_code: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            link: Option<Link<'a>>,
         }
         let name = super::username(role);
         let login = new_key();
-        let recovery = with_recovery.then(new_key);
+        let recovery = with.recovery.then(new_key);
         let body = Signup {
             user: User {
                 username: &name,
@@ -275,6 +323,11 @@ impl Person {
             encrypted_content: bytes(ACCOUNT_KEYS),
             recovery_pubkey: recovery.as_ref().map(|key| bytes(&public(key))),
             recovery_encrypted_content: recovery.as_ref().map(|_| bytes(RECOVERY_COPY)),
+            signup_code: with.code,
+            link: with.link.map(|(uid, key)| Link {
+                uid,
+                signature: bytes(&link_proof(key, "signup", uid, &name)),
+            }),
         };
         let reply = request(
             url,
@@ -286,7 +339,7 @@ impl Person {
         )
         .await;
         if reply.status != 200 {
-            return Err(reply.status);
+            return Err(reply.outcome());
         }
         Ok(Self {
             url: url.to_owned(),

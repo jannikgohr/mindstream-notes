@@ -7,6 +7,7 @@
 use crate::auth::username_key;
 use crate::events::{self, Event};
 use crate::limits::{self, Entitlements, Usage};
+use crate::links;
 use crate::security;
 use crate::AppState;
 
@@ -66,9 +67,7 @@ pub async fn set_disabled(
 }
 
 /// Delete an account, its sessions and memberships, and every collection it
-/// owns. Returns whether it existed.
-///
-/// The blobs of the deleted collections stay on disk until they are swept.
+/// owns, blobs included. Returns whether it existed.
 pub async fn delete_account(state: &AppState, username: &str) -> Result<bool, sqlx::Error> {
     let mut tx = state.pool.begin().await?;
     let id: Option<i64> = sqlx::query_scalar("SELECT id FROM accounts WHERE username_key = $1")
@@ -78,13 +77,51 @@ pub async fn delete_account(state: &AppState, username: &str) -> Result<bool, sq
     let Some(id) = id else {
         return Ok(false);
     };
-    events::publish_account_closing(&mut tx, id).await?;
-    sqlx::query("DELETE FROM accounts WHERE id = $1")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
+    remove_account(state, &mut tx, id).await?.commit(tx).await?;
     Ok(true)
+}
+
+/// The blobs an account's deletion leaves without rows. Their removal waits
+/// for the commit, so a deletion that fails takes no attachment with it.
+pub(crate) struct OrphanedBlobs<'a> {
+    state: &'a AppState,
+    collections: Vec<String>,
+}
+
+impl OrphanedBlobs<'_> {
+    pub(crate) async fn commit(
+        self,
+        tx: sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), sqlx::Error> {
+        tx.commit().await?;
+        for uid in &self.collections {
+            // Left behind, a blob costs disk space and nothing else.
+            if let Err(err) = self.state.blobs.remove_collection(uid).await {
+                tracing::warn!("could not remove the blobs of collection {uid}: {err}");
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Delete an account's rows inside the caller's transaction, telling the
+/// open sockets first. Commit through what this returns.
+pub(crate) async fn remove_account<'a>(
+    state: &'a AppState,
+    conn: &mut sqlx::PgConnection,
+    account_id: i64,
+) -> Result<OrphanedBlobs<'a>, sqlx::Error> {
+    let collections: Vec<String> =
+        sqlx::query_scalar("SELECT uid FROM collections WHERE owner_id = $1")
+            .bind(account_id)
+            .fetch_all(&mut *conn)
+            .await?;
+    events::publish_account_closing(conn, account_id).await?;
+    sqlx::query("DELETE FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .execute(conn)
+        .await?;
+    Ok(OrphanedBlobs { state, collections })
 }
 
 /// Take the second factor off an account whose owner has lost the
@@ -165,4 +202,51 @@ pub async fn set_entitlements(
         }
     }
     Ok(true)
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct SignupCodeSummary {
+    pub id: i64,
+    pub note: String,
+    /// The day it stops working, as YYYY-MM-DD.
+    pub expires: String,
+    pub expired: bool,
+    pub used: bool,
+    /// Who signed up with it, if that account still exists.
+    pub used_by: Option<String>,
+}
+
+/// Make a code that lets one person sign up where signup is not open. The
+/// code is returned this once; the server keeps only a hash of it.
+pub async fn create_signup_code(
+    state: &AppState,
+    note: &str,
+    days: i32,
+) -> Result<String, sqlx::Error> {
+    let code = links::new_signup_code();
+    let mut conn = state.pool.acquire().await?;
+    links::store_signup_code(&mut conn, &code, note, days).await?;
+    Ok(code)
+}
+
+pub async fn list_signup_codes(state: &AppState) -> Result<Vec<SignupCodeSummary>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT s.id, s.note, to_char(s.expires_at, 'YYYY-MM-DD') AS expires,
+                s.expires_at <= now() AS expired, s.used_at IS NOT NULL AS used,
+                a.username AS used_by
+         FROM signup_codes s LEFT JOIN accounts a ON a.id = s.used_by
+         ORDER BY s.id",
+    )
+    .fetch_all(&state.pool)
+    .await
+}
+
+/// Withdraw a code nobody has used. Returns whether there was one.
+pub async fn revoke_signup_code(state: &AppState, id: i64) -> Result<bool, sqlx::Error> {
+    let removed = sqlx::query("DELETE FROM signup_codes WHERE id = $1 AND used_at IS NULL")
+        .bind(id)
+        .execute(&state.pool)
+        .await?
+        .rows_affected();
+    Ok(removed == 1)
 }

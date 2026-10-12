@@ -18,8 +18,10 @@ mod error;
 mod events;
 mod feed;
 mod hub;
+mod join;
 mod keys;
 pub mod limits;
+mod links;
 mod rooms;
 mod security;
 mod sharing;
@@ -152,6 +154,7 @@ async fn info(axum::extract::State(state): axum::extract::State<AppState>) -> Js
         protocol: PROTOCOL_LEVEL,
         signup: match state.config.signup {
             config::SignupPolicy::Open => "open",
+            config::SignupPolicy::Invite => "invite",
             config::SignupPolicy::Closed => "closed",
         },
     })
@@ -273,7 +276,11 @@ pub fn router(state: AppState) -> Router {
             "/invitation/outgoing/fetch_user_profile/",
             get(sharing::fetch_user_profile),
         )
-        .route("/invitation/outgoing/{uid}/", delete(sharing::disinvite));
+        .route("/invitation/outgoing/{uid}/", delete(sharing::disinvite))
+        .route("/mindstream/link/", get(links::list).post(links::create))
+        .route("/mindstream/link/{uid}/", delete(links::revoke))
+        .route("/mindstream/link/{uid}/open/", post(links::open))
+        .route("/mindstream/link/{uid}/claim/", post(links::claim));
     if state.config.test_reset {
         api = api.route("/test/authentication/reset/", post(test_reset::reset));
     }
@@ -290,6 +297,7 @@ pub fn router(state: AppState) -> Router {
 
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/join/{uid}", get(join::page))
         .nest("/api/v1", api)
         .nest("/admin/v1", admin)
         .layer(DefaultBodyLimit::max(state.config.max_body_bytes))

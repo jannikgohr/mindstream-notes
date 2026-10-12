@@ -24,6 +24,30 @@ enum Command {
         #[command(subcommand)]
         command: UserCommand,
     },
+    /// Manage the codes that let someone sign up where signup is not open.
+    SignupCode {
+        #[command(subcommand)]
+        command: SignupCodeCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum SignupCodeCommand {
+    /// Make a code for one signup. It is printed once and cannot be shown
+    /// again.
+    Create {
+        /// Days until the code stops working.
+        #[arg(long, default_value_t = 7)]
+        days: i32,
+        /// Who it is for. Shown in the list, never to the person signing up.
+        #[arg(long, default_value = "")]
+        note: String,
+    },
+    /// List the codes made so far and what became of them.
+    List,
+    /// Withdraw a code that has not been used. Takes the number from the
+    /// list.
+    Revoke { id: i64 },
 }
 
 #[derive(Subcommand)]
@@ -203,6 +227,46 @@ async fn manage_users(
     Ok(())
 }
 
+async fn manage_signup_codes(
+    state: &AppState,
+    command: SignupCodeCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
+        SignupCodeCommand::Create { days, note } => {
+            if !(1..=365).contains(&days) {
+                return Err("a code lasts between 1 and 365 days".into());
+            }
+            let code = admin::create_signup_code(state, &note, days).await?;
+            println!("{code}");
+            println!("Good for one signup in the next {days} day(s). It is not shown again.");
+        }
+        SignupCodeCommand::List => {
+            let codes = admin::list_signup_codes(state).await?;
+            println!("{:>5}  {:<10}  {:<24} note", "id", "expires", "state");
+            for code in &codes {
+                let state = match (&code.used_by, code.used, code.expired) {
+                    (Some(username), _, _) => format!("used by {username}"),
+                    (None, true, _) => "used".to_owned(),
+                    (None, false, true) => "expired".to_owned(),
+                    (None, false, false) => "open".to_owned(),
+                };
+                println!(
+                    "{:>5}  {:<10}  {:<24} {}",
+                    code.id, code.expires, state, code.note
+                );
+            }
+            println!("{} code(s)", codes.len());
+        }
+        SignupCodeCommand::Revoke { id } => {
+            if !admin::revoke_signup_code(state, id).await? {
+                return Err(format!("no unused code with id {id}").into());
+            }
+            println!("code {id} withdrawn");
+        }
+    }
+    Ok(())
+}
+
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }
@@ -222,6 +286,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::User { command } => {
             let state = AppState::connect(cli.config).await?;
             manage_users(&state, command).await?;
+        }
+        Command::SignupCode { command } => {
+            let state = AppState::connect(cli.config).await?;
+            manage_signup_codes(&state, command).await?;
         }
         Command::Serve => {
             let listen = cli.config.listen.clone();

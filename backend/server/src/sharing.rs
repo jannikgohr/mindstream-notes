@@ -16,7 +16,7 @@ use serde_bytes::ByteBuf;
 use sqlx::PgConnection;
 
 use crate::auth::{username_key, AuthUser};
-use crate::collections::{membership, next_changes, Membership};
+use crate::collections::{self, membership, next_changes, Membership};
 use crate::error::{ApiError, ApiResult};
 use crate::events::{self, Event};
 use crate::limits;
@@ -323,7 +323,7 @@ pub async fn invite(
     Ok(StatusCode::CREATED)
 }
 
-const INVITATION_QUERY: &str = "SELECT i.uid, i.version, i.access_level, \
+const INVITATION_QUERY: &str = "SELECT i.uid, i.version, i.access_level, i.collection_id, \
             recipient.username AS username, c.uid AS collection, i.signed_encryption_key, \
             sender.username AS from_username, sender.pubkey AS from_pubkey \
      FROM invitations i \
@@ -336,6 +336,7 @@ struct InvitationRow {
     uid: String,
     version: i16,
     access_level: i16,
+    collection_id: i64,
     username: String,
     collection: String,
     signed_encryption_key: Vec<u8>,
@@ -354,8 +355,29 @@ impl From<InvitationRow> for Invitation {
             signed_encryption_key: ByteBuf::from(row.signed_encryption_key),
             from_username: row.from_username,
             from_pubkey: ByteBuf::from(row.from_pubkey),
+            collection_item: None,
         }
     }
+}
+
+/// Turn received invitations into what goes on the wire, each with its
+/// collection's own item so the invited can see what they are invited to.
+async fn with_previews(
+    state: &AppState,
+    conn: &mut PgConnection,
+    rows: Vec<InvitationRow>,
+) -> ApiResult<Vec<Invitation>> {
+    let ids: Vec<i64> = rows.iter().map(|row| row.collection_id).collect();
+    // One account holds at most one invitation to a collection, so each
+    // item is wanted once.
+    let mut items = collections::main_items(state, conn, &ids).await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| Invitation {
+            collection_item: items.remove(&row.collection_id),
+            ..row.into()
+        })
+        .collect())
 }
 
 #[derive(Clone, Copy)]
@@ -409,7 +431,11 @@ async fn list_invitations(
     rows.truncate(limit as usize);
     Ok(IteratorList {
         iterator: rows.last().map(|row| row.uid.clone()),
-        data: rows.into_iter().map(Invitation::from).collect(),
+        data: match direction {
+            Direction::Incoming => with_previews(state, &mut conn, rows).await?,
+            // The sender is a member and has the collection already.
+            Direction::Outgoing => rows.into_iter().map(Invitation::from).collect(),
+        },
         done,
     })
 }
@@ -439,16 +465,17 @@ pub async fn fetch_incoming(
     user: AuthUser,
     Path(uid): Path<String>,
 ) -> ApiResult<Msgpack<Invitation>> {
+    let mut conn = state.pool.acquire().await?;
     let row: Option<InvitationRow> = sqlx::query_as(&format!(
         "{INVITATION_QUERY} WHERE i.to_account_id = $1 AND i.uid = $2"
     ))
     .bind(user.account_id)
     .bind(&uid)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *conn)
     .await?;
-    Ok(Msgpack(
-        row.ok_or_else(|| ApiError::not_found("Invitation"))?.into(),
-    ))
+    let row = row.ok_or_else(|| ApiError::not_found("Invitation"))?;
+    let mut invitations = with_previews(&state, &mut conn, vec![row]).await?;
+    Ok(Msgpack(invitations.remove(0)))
 }
 
 async fn delete_invitation(
@@ -491,18 +518,76 @@ pub async fn disinvite(
     delete_invitation(&state, &user, &uid, Direction::Outgoing).await
 }
 
+pub(crate) fn validate_membership_keys(
+    encryption_key: &[u8],
+    collection_type: &[u8],
+) -> ApiResult<()> {
+    if encryption_key.is_empty()
+        || encryption_key.len() > MAX_KEY_BYTES
+        || collection_type.len() > MAX_KEY_BYTES
+    {
+        return Err(ApiError::bad_request("Malformed membership key."));
+    }
+    Ok(())
+}
+
+/// Make an account a member of a collection: store its copy of the
+/// collection key, move the collection's cursor and tell the open sockets.
+/// The caller holds the lock on the collection.
+pub(crate) async fn add_member(
+    conn: &mut PgConnection,
+    collection_id: i64,
+    user: &AuthUser,
+    access_level: i16,
+    encryption_key: &[u8],
+    collection_type: &[u8],
+) -> ApiResult<()> {
+    let stoken = touch_collection(conn, collection_id).await?;
+    sqlx::query(
+        "INSERT INTO members
+             (collection_id, account_id, access_level, encryption_key, collection_type, stoken)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (collection_id, account_id) DO UPDATE
+             SET access_level = EXCLUDED.access_level,
+                 encryption_key = EXCLUDED.encryption_key,
+                 collection_type = EXCLUDED.collection_type,
+                 stoken = EXCLUDED.stoken",
+    )
+    .bind(collection_id)
+    .bind(user.account_id)
+    .bind(access_level)
+    .bind(encryption_key)
+    .bind(collection_type)
+    .bind(stoken)
+    .execute(&mut *conn)
+    .await?;
+    // Back in, so there is no lost membership left to report.
+    sqlx::query("DELETE FROM removed_members WHERE collection_id = $1 AND account_id = $2")
+        .bind(collection_id)
+        .bind(user.account_id)
+        .execute(&mut *conn)
+        .await?;
+    let joined = Event::Membership {
+        collection: collection_id,
+        account: user.account_id,
+        access: Some(access_level),
+    };
+    events::publish(conn, &joined).await?;
+    let changed = Event::Changed {
+        collection: collection_id,
+        session: Some(user.session_id),
+    };
+    events::publish(conn, &changed).await?;
+    Ok(())
+}
+
 pub async fn accept(
     State(state): State<AppState>,
     user: AuthUser,
     Path(uid): Path<String>,
     Msgpack(body): Msgpack<InvitationAccept>,
 ) -> ApiResult<StatusCode> {
-    if body.encryption_key.is_empty()
-        || body.encryption_key.len() > MAX_KEY_BYTES
-        || body.collection_type.len() > MAX_KEY_BYTES
-    {
-        return Err(ApiError::bad_request("Malformed membership key."));
-    }
+    validate_membership_keys(&body.encryption_key, &body.collection_type)?;
     let mut tx = state.pool.begin().await?;
     // Lock the collection before anything else, like every other writer.
     let invitation: Option<(i64, i64, i16, i64, i64)> = sqlx::query_as(
@@ -519,46 +604,19 @@ pub async fn accept(
         invitation.ok_or_else(|| ApiError::not_found("Invitation"))?;
     limits::check_new_member(&mut tx, collection_id, owner, false).await?;
 
-    let stoken = touch_collection(&mut tx, collection_id).await?;
-    sqlx::query(
-        "INSERT INTO members
-             (collection_id, account_id, access_level, encryption_key, collection_type, stoken)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (collection_id, account_id) DO UPDATE
-             SET access_level = EXCLUDED.access_level,
-                 encryption_key = EXCLUDED.encryption_key,
-                 collection_type = EXCLUDED.collection_type,
-                 stoken = EXCLUDED.stoken",
+    add_member(
+        &mut tx,
+        collection_id,
+        &user,
+        access_level,
+        &body.encryption_key,
+        &body.collection_type,
     )
-    .bind(collection_id)
-    .bind(user.account_id)
-    .bind(access_level)
-    .bind(&body.encryption_key[..])
-    .bind(&body.collection_type[..])
-    .bind(stoken)
-    .execute(&mut *tx)
     .await?;
     sqlx::query("DELETE FROM invitations WHERE id = $1")
         .bind(invitation_id)
         .execute(&mut *tx)
         .await?;
-    // Back in, so there is no lost membership left to report.
-    sqlx::query("DELETE FROM removed_members WHERE collection_id = $1 AND account_id = $2")
-        .bind(collection_id)
-        .bind(user.account_id)
-        .execute(&mut *tx)
-        .await?;
-    let joined = Event::Membership {
-        collection: collection_id,
-        account: user.account_id,
-        access: Some(access_level),
-    };
-    events::publish(&mut tx, &joined).await?;
-    let changed = Event::Changed {
-        collection: collection_id,
-        session: Some(user.session_id),
-    };
-    events::publish(&mut tx, &changed).await?;
     events::publish(&mut tx, &Event::Invitation { account: sender }).await?;
     tx.commit().await?;
     Ok(StatusCode::CREATED)

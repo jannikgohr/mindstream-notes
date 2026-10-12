@@ -21,23 +21,24 @@ POSTGRES_PASSWORD=<strong-random> docker compose up -d --build
 The server listens on port 3735 over plain HTTP. Put a TLS-terminating reverse
 proxy in front for anything but local use.
 
-| Variable                          | Default          | Meaning                                                         |
-| --------------------------------- | ---------------- | --------------------------------------------------------------- |
-| `MINDSTREAM_DATABASE_URL`         | required         | Postgres connection string                                      |
-| `MINDSTREAM_LISTEN`               | 0.0.0.0:3735     | Address to listen on                                            |
-| `MINDSTREAM_BLOB_DIR`             | data/blobs       | Where large chunks are stored                                   |
-| `MINDSTREAM_SIGNUP`               | closed           | `open` lets anyone who can reach the server sign up             |
-| `MINDSTREAM_PUBLIC_HOSTS`         | empty            | Hostnames clients use, when the proxy rewrites the Host header  |
-| `MINDSTREAM_TRUSTED_PROXIES`      | see below        | Networks whose `X-Forwarded-For` is believed                    |
-| `MINDSTREAM_AUTH_RATE_PER_MINUTE` | 10               | Sign-in attempts per address per minute. 0 turns the limit off  |
-| `MINDSTREAM_AUTH_RATE_BURST`      | 20               | Attempts an address may make at once before the rate applies    |
-| `MINDSTREAM_ADMIN_TOKEN`          | unset            | Turns on the interface for setting account limits               |
-| `MINDSTREAM_SECRET_KEY`           | unset            | Key that seals authenticator secrets. See below                 |
-| `MINDSTREAM_SECRET_KEY_FILE`      | see below        | Where that key is created when none is given                    |
-| `MINDSTREAM_TOTP_ISSUER`          | Mindstream Notes | Name an authenticator app shows for accounts here               |
-| `MINDSTREAM_MAX_BODY_BYTES`       | 78643200         | Largest request body accepted                                   |
-| `MINDSTREAM_INLINE_CHUNK_BYTES`   | 20480            | Chunks up to this size stay in the database                     |
-| `MINDSTREAM_TEST_RESET`           | false            | Serves a route that wipes accounts. For the client's tests only |
+| Variable                          | Default           | Meaning                                                         |
+| --------------------------------- | ----------------- | --------------------------------------------------------------- |
+| `MINDSTREAM_DATABASE_URL`         | required          | Postgres connection string                                      |
+| `MINDSTREAM_LISTEN`               | 0.0.0.0:3735      | Address to listen on                                            |
+| `MINDSTREAM_BLOB_DIR`             | data/blobs        | Where large chunks are stored                                   |
+| `MINDSTREAM_SIGNUP`               | closed            | Who may sign up: `closed`, `invite` or `open`. See below        |
+| `MINDSTREAM_PUBLIC_HOSTS`         | empty             | Hostnames clients use, when the proxy rewrites the Host header  |
+| `MINDSTREAM_TRUSTED_PROXIES`      | see below         | Networks whose `X-Forwarded-For` is believed                    |
+| `MINDSTREAM_AUTH_RATE_PER_MINUTE` | 10                | Sign-in attempts per address per minute. 0 turns the limit off  |
+| `MINDSTREAM_AUTH_RATE_BURST`      | 20                | Attempts an address may make at once before the rate applies    |
+| `MINDSTREAM_ADMIN_TOKEN`          | unset             | Turns on the interface for setting account limits               |
+| `MINDSTREAM_SECRET_KEY`           | unset             | Key that seals authenticator secrets. See below                 |
+| `MINDSTREAM_SECRET_KEY_FILE`      | see below         | Where that key is created when none is given                    |
+| `MINDSTREAM_TOTP_ISSUER`          | Mindstream Notes  | Name an authenticator app shows for accounts here               |
+| `MINDSTREAM_APP_URL`              | the releases page | Where the invite page sends people without the app              |
+| `MINDSTREAM_MAX_BODY_BYTES`       | 78643200          | Largest request body accepted                                   |
+| `MINDSTREAM_INLINE_CHUNK_BYTES`   | 20480             | Chunks up to this size stay in the database                     |
+| `MINDSTREAM_TEST_RESET`           | false             | Serves a route that wipes accounts. For the client's tests only |
 
 A login names the host it was made for, and the server refuses one made for
 another host. If logins fail with `wrong_host` behind a proxy, set
@@ -68,6 +69,43 @@ docker compose exec server mindstream-server user delete <username>
 Disabling an account ends its sessions and keeps its data. Deleting one
 removes every collection it owns, for the other members too. The server never
 holds a password or a key, so it cannot reset a password.
+
+## Signing up
+
+`MINDSTREAM_SIGNUP` says who may create an account.
+
+| Value    | Who can sign up                                                         |
+| -------- | ----------------------------------------------------------------------- |
+| `closed` | Someone you gave a signup code                                          |
+| `invite` | That, and someone holding an invite link that was made to allow signups |
+| `open`   | Anyone who can reach the server                                         |
+
+You cannot create an account for someone, because an account's keys are made
+on that person's own device. A signup code is how you let one person in:
+
+```sh
+docker compose exec server mindstream-server signup-code create --note "for Ann"
+docker compose exec server mindstream-server signup-code list
+docker compose exec server mindstream-server signup-code revoke <id>
+```
+
+The code is printed once. It is good for one signup within a week, or within
+`--days` of your choosing.
+
+With `invite`, any admin of a shared space can make a link that also lets its
+holder sign up. Choose it when the people on your server should be able to
+bring in others without asking you.
+
+## Invite links
+
+A member shares a space by link as well as by username. A link is an address
+on this server, `/join/<id>#<secret>`. Browsers keep the part after the `#` to
+themselves, so the server never sees the secret and cannot open what the link
+carries.
+
+Opened in a browser, a link shows a page that tells the person to paste it
+into the app. Route `/join/` through your reverse proxy along with `/api/`, or
+that page will be missing.
 
 ## Account security
 

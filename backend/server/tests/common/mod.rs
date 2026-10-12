@@ -169,3 +169,11 @@ pub fn share(
 pub fn closed_signup(config: &mut Config) {
     config.signup = SignupPolicy::Closed;
 }
+
+/// The server's state the way the command line gets it: its own connection
+/// to the database the test servers use.
+pub async fn admin_state() -> AppState {
+    let blob_dir = std::env::temp_dir().join("mindstream-server-test-admin");
+    let config = Config::for_tests(database_url(), blob_dir);
+    AppState::connect(config).await.expect("connect as admin")
+}
