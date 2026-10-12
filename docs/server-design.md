@@ -1,7 +1,9 @@
 # Sync server design
 
-Status: agreed design, written 2026-10-12. Build step 1, the server core, is
-in [backend/server](../backend/server/README.md). The later steps are not built.
+Status: agreed design, written 2026-10-12. The server in
+[backend/server](../backend/server/README.md) has the core of step 1 and the
+server half of step 3, rooms and the change feed. The app still runs on the
+old stack: nothing on the client side is built yet.
 
 This replaces the backend stack described in
 [architecture.md](architecture.md#the-backend-stack): nginx, Etebase on
@@ -468,6 +470,19 @@ its data.
 | Pull an 8 MiB attachment    | 448 ms        | 197 ms     |
 | Memory after startup        | 215 MiB       | 38 MiB     |
 | Memory after the benchmark  | 443 MiB       | 194 MiB    |
+
+Rooms, measured the same way against the two relays:
+
+| Scenario                            | Old relays | New server |
+| ----------------------------------- | ---------- | ---------- |
+| Enter a room, first frame delivered | 50 ms      | 6 ms       |
+| Frame, one sender to one receiver   | 0.68 ms    | 0.56 ms    |
+| Frame to all of 32 peers            | 1.34 ms    | 1.12 ms    |
+| Frames per second, one pair         | 65,000     | 70,000     |
+
+About 45 ms of the old figure for entering a room is Docker Desktop delaying
+a second write on a new connection, which the new handshake does not trigger.
+The frame figures are within the run-to-run noise of each other.
 
 ## Build order
 

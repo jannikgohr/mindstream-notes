@@ -10,10 +10,11 @@
  *   pnpm bench:backend --label new --compare .output/bench/backend/etebase.json
  *   pnpm bench:backend diff a.json b.json       # compare two saved runs
  *
- * It speaks the Etebase protocol and the two live-collab protocols, so it runs
- * unchanged against anything that serves them: point `--url` (or
- * MINDSTREAM_E2E_BACKEND_URL) at another server, give the run a `--label`, and
- * compare the result files.
+ * It speaks the Etebase protocol, and for live collaboration either the two
+ * relays of the old stack or the rooms built into the new server, whichever
+ * the server at `--url` has. So the same run works against both: point
+ * `--url` (or MINDSTREAM_E2E_BACKEND_URL) at a server, give the run a
+ * `--label`, and compare the result files.
  *
  * Every row reports wall time next to the number of HTTP requests and the time
  * and bytes those took. On localhost a request costs a millisecond or two; on
@@ -39,11 +40,9 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
-  deriveRoom,
   joinExcalidrawRoom,
-  joinRoom,
-  randomRoom,
-  relayUrl,
+  relayTransport,
+  roomsTransport,
   roundTrips,
   settle,
   throughput
@@ -286,6 +285,21 @@ function dockerFootprint(project) {
     .sort((a, b) => b.memMiB - a.memMiB);
 }
 
+/**
+ * Whether the server has rooms of its own, as opposed to the separate
+ * relays of the old stack. It says so on a route only it serves.
+ */
+async function hasBuiltInRooms(url) {
+  try {
+    const response = await fetch(`${url}/api/v1/mindstream/info/`);
+    return (
+      response.ok && (await response.json()).server === 'mindstream-server'
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function assertReachable(url) {
   try {
     // Any answer will do: the build-free stack has no nginx to serve /healthz.
@@ -461,7 +475,15 @@ async function benchmark(url, scale) {
   });
 
   // --- live rooms ---
-  const relay = relayUrl(url);
+  const builtIn = await hasBuiltInRooms(url);
+  const transport = builtIn
+    ? roomsTransport(deviceA, async () => {
+        const note = newNote();
+        const collection = await deviceA.vaultCollection('notes');
+        await deviceA.pushNotes(collection, { newNotes: [note] });
+        return { collectionUid: collection.uid, itemUid: note.uid };
+      })
+    : relayTransport(url);
   const liveScenarios = [
     'live.join',
     'live.open_note',
@@ -472,7 +494,7 @@ async function benchmark(url, scale) {
   ];
   let relayUp = true;
   try {
-    (await joinRoom(relay, randomRoom())).close();
+    (await transport.join(await transport.newRoom())).close();
   } catch (err) {
     relayUp = false;
     for (const name of liveScenarios) {
@@ -482,24 +504,24 @@ async function benchmark(url, scale) {
 
   if (relayUp) {
     const frame = randomBytes(128);
-    /** Time from dialling the relay to a peer already in the room hearing us. */
+    /** Time from dialling the server to a peer already in the room hearing us. */
     const openRoom = async (room, listener) => {
-      const peer = await joinRoom(relay, room);
+      const peer = await transport.join(room);
       peer.send(frame);
       await listener.nextFrame();
       return peer;
     };
     /** A peer that is already in `room`, as the other editor would be. */
     const listenIn = async (room) => {
-      const listener = await joinRoom(relay, room);
-      const probe = await joinRoom(relay, room);
+      const listener = await transport.join(room);
+      const probe = await transport.join(room);
       await settle([probe, listener]);
       probe.close();
       closers.push(() => listener.close());
       return listener;
     };
 
-    const joinRoomOnly = randomRoom();
+    const joinRoomOnly = await transport.newRoom();
     const joinListener = await listenIn(joinRoomOnly);
     let joined = null;
     await time('live.join', reps, {
@@ -507,15 +529,15 @@ async function benchmark(url, scale) {
         joined = await openRoom(joinRoomOnly, joinListener);
       },
       after: () => joined.close(),
-      detail: 'relay: connect, join challenge, first frame delivered'
+      detail: transport.joinDetail
     });
 
     const personalListener = await listenIn(
-      deriveRoom(await deviceA.roomInfo(liveNote.uid))
+      transport.noteRoom(await deviceA.roomInfo(liveNote.uid))
     );
     await time('live.open_note', reps, {
       run: async () => {
-        const room = deriveRoom(await deviceA.roomInfo(liveNote.uid));
+        const room = transport.noteRoom(await deviceA.roomInfo(liveNote.uid));
         joined = await openRoom(room, personalListener);
       },
       after: () => joined.close(),
@@ -523,13 +545,13 @@ async function benchmark(url, scale) {
     });
 
     const sharedListener = await listenIn(
-      deriveRoom(
+      transport.noteRoom(
         await deviceA.sharedRoomInfo(scopeId, sharedNote.uid, writerKey)
       )
     );
     await time('live.open_note+share', heavyReps, {
       run: async () => {
-        const room = deriveRoom(
+        const room = transport.noteRoom(
           await deviceA.sharedRoomInfo(scopeId, sharedNote.uid, writerKey)
         );
         joined = await openRoom(room, sharedListener);
@@ -539,8 +561,8 @@ async function benchmark(url, scale) {
     });
 
     const pair = [];
-    const pairRoom = randomRoom();
-    for (let i = 0; i < 2; i++) pair.push(await joinRoom(relay, pairRoom));
+    const pairRoom = await transport.newRoom();
+    for (let i = 0; i < 2; i++) pair.push(await transport.join(pairRoom));
     closers.push(...pair.map((peer) => () => peer.close()));
     await settle(pair);
     for (const bytes of [128, 16 * KIB]) {
@@ -560,9 +582,9 @@ async function benchmark(url, scale) {
     );
 
     const crowd = [];
-    const crowdRoom = randomRoom();
+    const crowdRoom = await transport.newRoom();
     for (let i = 0; i < scale.fanoutPeers; i++) {
-      crowd.push(await joinRoom(relay, crowdRoom));
+      crowd.push(await transport.join(crowdRoom));
     }
     closers.push(...crowd.map((peer) => () => peer.close()));
     await settle(crowd);
@@ -574,7 +596,15 @@ async function benchmark(url, scale) {
   }
 
   // --- freeform ---
+  if (builtIn) {
+    run.skipped.push({
+      name: 'freeform.frame',
+      reason:
+        'freeform notes use the same rooms on this server; see relay.frame'
+    });
+  }
   try {
+    if (builtIn) throw null;
     const roomId = randomBytes(10).toString('hex');
     const first = await joinExcalidrawRoom(url, roomId);
     const second = await joinExcalidrawRoom(url, roomId);
@@ -589,7 +619,7 @@ async function benchmark(url, scale) {
       'excalidraw-room, one sender, one receiver'
     );
   } catch (err) {
-    run.skipped.push({ name: 'freeform.frame', reason: err.message });
+    if (err) run.skipped.push({ name: 'freeform.frame', reason: err.message });
   }
 
   for (const close of closers) {

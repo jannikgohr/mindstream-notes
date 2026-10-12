@@ -16,7 +16,7 @@
 
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { meteredGet } from './meter.mjs';
+import { meteredGet, meteredRequest } from './meter.mjs';
 import {
   decodePayload,
   ITEM_TYPE_COLLAB_WRITER_KEY,
@@ -255,7 +255,29 @@ export class Device {
     const collection = await this.cm.fetch(this.vault.notes.uid);
     const item = await this.cm.getItemManager(collection).fetch(noteUid);
     const payload = decodePayload(await item.getContent());
-    return { noteUid, noteKey: payload.crypto_key, salt: null, epoch: 0 };
+    return {
+      collectionUid: collection.uid,
+      noteUid,
+      noteKey: payload.crypto_key,
+      salt: null,
+      epoch: 0
+    };
+  }
+
+  /**
+   * Ask a server with built-in rooms for a ticket to the room of one item.
+   * This is the whole of what entering a room needs from HTTP there.
+   */
+  async roomTicket(collectionUid, itemUid) {
+    const { status, body } = await meteredRequest(
+      `${this.serverUrl}/api/v1/collection/${collectionUid}/item/${itemUid}/room-ticket/`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Token ${this.account.authToken}` }
+      }
+    );
+    if (status !== 200) throw new Error(`room ticket refused with ${status}`);
+    return decodePayload(body).ticket;
   }
 
   /**
@@ -316,6 +338,7 @@ export class Device {
 
     await this.listWriterKeys(assetsIm, scopeId); // list_collab_writer_keys
     return {
+      collectionUid: notesCollection.uid,
       noteUid,
       noteKey: payload.crypto_key,
       salt: Buffer.from(manifest.collab_salt),

@@ -2,11 +2,12 @@
  * Live-collaboration transports: the yjs-relay (markdown, PDF, kanban, ink)
  * and excalidraw-room (freeform).
  *
- * `joinRoom` is the one place that knows how a client proves it may enter a
- * room. Today that is the relay's join challenge: the room id is the public
- * half of a keypair derived from the note key, and the client signs a nonce
- * with the private half. A server that authorises joins some other way needs
- * a different `joinRoom` and nothing else in this file.
+ * How a client proves it may enter a room differs by server, so the
+ * scenarios work through a transport: `relayTransport` for the yjs-relay,
+ * where the room id is the public half of a keypair derived from the note
+ * key and the client signs a nonce with the private half, and
+ * `roomsTransport` for a server with built-in rooms, where the client
+ * presents a ticket the server issued to its session.
  *
  * Frames are opaque to both servers, so the latency scenarios send random
  * bytes of a realistic size and skip the AES-GCM a real client would apply.
@@ -40,7 +41,7 @@ const FRAME_TIMEOUT_MS = 10_000;
  * `derive_live_collab_room`: the AES-GCM wire key and the join keypair, both
  * HKDF'd from the per-note key. Local work, no requests.
  */
-export function deriveRoom({ noteUid, noteKey, salt, epoch }) {
+function deriveRoom({ noteUid, noteKey, salt, epoch }) {
   const epochBytes = Buffer.alloc(8);
   epochBytes.writeBigUInt64BE(BigInt(epoch));
   const uid = Buffer.from(noteUid, 'utf8');
@@ -79,7 +80,7 @@ export function deriveRoom({ noteUid, noteKey, salt, epoch }) {
 }
 
 /** A room nobody else knows, for scenarios that only exercise the relay. */
-export function randomRoom() {
+function randomRoom() {
   return deriveRoom({
     noteUid: randomBytes(16).toString('hex'),
     noteKey: randomBytes(32),
@@ -89,7 +90,7 @@ export function randomRoom() {
 }
 
 /** `getYjsRelayUrl` in src/lib/api/server-urls.ts. */
-export function relayUrl(serverUrl) {
+function relayUrl(serverUrl) {
   const url = new URL(serverUrl);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   url.pathname = `${url.pathname.replace(/\/+$/, '')}/yjs`;
@@ -130,7 +131,7 @@ class Peer {
 }
 
 /** Connect to a yjs-relay room and answer its join challenge. */
-export function joinRoom(url, room) {
+function joinRoom(url, room) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`${url}?room=${encodeURIComponent(room.roomId)}`);
     const peer = new Peer(
@@ -175,6 +176,90 @@ export function joinRoom(url, room) {
       if (!joined) fail(`closed with ${code}`);
     });
   });
+}
+
+// Frame kinds of the built-in rooms (backend/server/src/hub.rs).
+const FRAME_HELLO = 0x01;
+const FRAME_WELCOME = 0x02;
+const CLASS_UPDATE = 0x10;
+/** A relayed frame is its class, the sender's 4-byte id, then the payload. */
+const RELAYED_HEADER = 5;
+
+/** Enter a room on a server with built-in rooms, using a ticket. */
+function enterRoom(serverUrl, ticket) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(serverUrl);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    url.pathname = `${url.pathname.replace(/\/+$/, '')}/api/v1/room/`;
+    const ws = new WebSocket(url.toString());
+    const peer = new Peer(
+      (frame) => ws.send(Buffer.concat([Buffer.from([CLASS_UPDATE]), frame])),
+      () => ws.terminate()
+    );
+    let welcomed = false;
+    const fail = (reason) => {
+      clearTimeout(timer);
+      ws.terminate();
+      reject(new Error(`room join failed: ${reason}`));
+    };
+    const timer = setTimeout(() => fail('no welcome'), FRAME_TIMEOUT_MS);
+
+    ws.on('open', () =>
+      ws.send(Buffer.concat([Buffer.from([FRAME_HELLO]), Buffer.from(ticket)]))
+    );
+    ws.on('message', (frame) => {
+      if (frame[0] === FRAME_WELCOME) {
+        welcomed = true;
+        clearTimeout(timer);
+        resolve(peer);
+      } else if (frame[0] >= CLASS_UPDATE) {
+        peer.deliver(frame.subarray(RELAYED_HEADER));
+      }
+      // Other control frames are roster news, which no scenario reads.
+    });
+    ws.on('error', (err) => fail(err.message));
+    ws.on('close', (code) => {
+      if (!welcomed) fail(`closed with ${code}`);
+    });
+  });
+}
+
+/**
+ * The yjs-relay. A room is derived from a note key and needs nothing from
+ * the server to exist.
+ */
+export function relayTransport(serverUrl) {
+  const url = relayUrl(serverUrl);
+  return {
+    joinDetail: 'relay: connect, join challenge, first frame delivered',
+    newRoom: async () => randomRoom(),
+    noteRoom: (info) => deriveRoom(info),
+    join: (room) => joinRoom(url, room)
+  };
+}
+
+/**
+ * Rooms built into the server. A room is an item in a collection, and
+ * entering takes a ticket requested over the device's session.
+ *
+ * @param device The device whose session asks for tickets.
+ * @param newItem Creates and pushes an item, returning its collection and
+ *   item uids, for scenarios that need a room nobody else is in.
+ */
+export function roomsTransport(device, newItem) {
+  return {
+    joinDetail: 'rooms: ticket, connect, first frame delivered',
+    newRoom: newItem,
+    noteRoom: (info) => ({
+      collectionUid: info.collectionUid,
+      itemUid: info.noteUid
+    }),
+    join: async (room) =>
+      enterRoom(
+        device.serverUrl,
+        await device.roomTicket(room.collectionUid, room.itemUid)
+      )
+  };
 }
 
 /** Join an excalidraw-room room over socket.io, as `ExcalidrawRoomClient` does. */

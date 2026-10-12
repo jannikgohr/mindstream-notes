@@ -70,6 +70,18 @@ export async function meteredGet(url) {
   return response.status;
 }
 
+/**
+ * A metered request for what the app does outside the SDK. Returns the
+ * status and the raw body.
+ */
+export async function meteredRequest(url, options) {
+  const response = await meteredFetch(url, options);
+  return {
+    status: response.status,
+    body: new Uint8Array(await response.arrayBuffer())
+  };
+}
+
 export function httpSnapshot() {
   return { ...totals };
 }
