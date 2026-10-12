@@ -15,6 +15,10 @@
 //!   batch, each item is downloaded once, and by the time a note is applied
 //!   every folder of the space already has been.
 //!
+//! The server holds what one answer carries to a size. Past it, items come
+//! back as the uids of their chunks. Those are asked for again, and an item
+//! too large for any answer is fetched chunk by chunk.
+//!
 //! Deciding what a pulled item means for the local row is [`super::apply`]'s
 //! job.
 
@@ -160,7 +164,7 @@ fn pull_space_once(
                 .list(Some(&opts))
                 .map_err(|e| AppError::InvalidArg(format!("list {}: {e}", space.stoken_key)))?;
             if page.done() {
-                applier.apply_page(page.data())?;
+                applier.apply_page(im, page.data())?;
                 page.stoken().map(str::to_string).or_else(|| stoken.clone())
             } else {
                 // More changed than one page holds, after a long time
@@ -178,6 +182,46 @@ fn pull_space_once(
     Ok(())
 }
 
+/// How an item came back in an answer that was asked for content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Arrived {
+    /// With its content.
+    Whole,
+    /// First in the answer and still without content, so no answer has room
+    /// for it. Its chunks are fetched one at a time.
+    TooLarge,
+    /// Without content, behind others that used the room up. Asked for
+    /// again it is nearer the front.
+    Later,
+}
+
+impl Arrived {
+    /// `place` counts from the front of the answer. The server gives content
+    /// to as many items as fit, from the first, so every round of asking
+    /// settles the first item at least and the asking ends.
+    pub(super) fn at(place: usize, held_back: bool) -> Self {
+        match (held_back, place) {
+            (false, _) => Arrived::Whole,
+            (true, 0) => Arrived::TooLarge,
+            (true, _) => Arrived::Later,
+        }
+    }
+}
+
+/// Whether the server sent an item as the uids of its chunks, having no
+/// room for the content. A deleted item has none to send.
+fn held_back(item: &Item) -> bool {
+    !item.is_deleted() && item.is_missing_content()
+}
+
+/// The item with its content, fetched chunk by chunk.
+fn whole(im: &ItemManager, item: &Item) -> AppResult<Item> {
+    let mut whole = item.clone();
+    im.download_content(&mut whole)
+        .map_err(|e| AppError::InvalidArg(format!("download item {}: {e}", item.uid())))?;
+    Ok(whole)
+}
+
 /// Applies pulled items to the local store and keeps count.
 struct Applier<'a> {
     db: &'a Db,
@@ -190,13 +234,55 @@ struct Applier<'a> {
 
 impl Applier<'_> {
     /// Apply one page that holds a whole change, kind by kind.
-    fn apply_page(&mut self, items: &[Item]) -> AppResult<()> {
+    fn apply_page(&mut self, im: &ItemManager, items: &[Item]) -> AppResult<()> {
         let sorted = by_kind(items.iter().map(|item| (ItemKind::of(item), item)));
         for kind in ItemKind::IN_ORDER {
             for item in &sorted[kind as usize] {
-                self.apply(kind, item)?;
+                if held_back(item) {
+                    // The one item of a page that no page has room for.
+                    self.apply(kind, &whole(im, item)?)?;
+                } else {
+                    self.apply(kind, item)?;
+                }
             }
             self.after(kind)?;
+        }
+        Ok(())
+    }
+
+    /// Fetch these items of one kind with their content and apply them.
+    ///
+    /// The server answers with content for as many as fit its size limit,
+    /// from the first, and the rest as the uids of their chunks. Those are
+    /// asked for again, which puts one of them first. An item that comes
+    /// back first and still without content is too large for any answer.
+    fn apply_fetched(
+        &mut self,
+        im: &ItemManager,
+        kind: ItemKind,
+        uids: &[String],
+    ) -> AppResult<()> {
+        let mut wanted: Vec<String> = uids.to_vec();
+        while !wanted.is_empty() {
+            let fetched = im
+                .fetch_multi(wanted.iter().map(String::as_str), None)
+                .map_err(|e| {
+                    AppError::InvalidArg(format!("fetch {} items: {e}", self.space.stoken_key))
+                })?;
+            let mut again = Vec::new();
+            for (place, item) in fetched.data().iter().enumerate() {
+                // Changed again since the listing, into something else or
+                // into nothing: the next pull brings it.
+                if ItemKind::of(item) != Some(kind) {
+                    continue;
+                }
+                match Arrived::at(place, held_back(item)) {
+                    Arrived::Whole => self.apply(kind, item)?,
+                    Arrived::TooLarge => self.apply(kind, &whole(im, item)?)?,
+                    Arrived::Later => again.push(item.uid().to_string()),
+                }
+            }
+            wanted = again;
         }
         Ok(())
     }
@@ -238,16 +324,7 @@ impl Applier<'_> {
 
         for kind in ItemKind::IN_ORDER {
             for batch in wanted[kind as usize].chunks(kind.batch()) {
-                let fetched = im
-                    .fetch_multi(batch.iter().map(String::as_str), None)
-                    .map_err(|e| AppError::InvalidArg(format!("fetch {what} items: {e}")))?;
-                for item in fetched.data() {
-                    // Changed again since the listing, into something else
-                    // or into nothing: the next pull brings it.
-                    if ItemKind::of(item) == Some(kind) {
-                        self.apply(kind, item)?;
-                    }
-                }
+                self.apply_fetched(im, kind, batch)?;
             }
             self.after(kind)?;
         }

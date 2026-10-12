@@ -178,6 +178,50 @@ fn large_kinds_are_fetched_fewer_at_a_time() {
 }
 
 #[test]
+fn asking_again_for_what_the_server_held_back_reaches_every_item() {
+    // The server's rule, played back: an answer gives content to as many
+    // items as fit its limit together, from the first, and holds the rest
+    // back.
+    const LIMIT: u32 = 300;
+    let answer = |wanted: &[(&'static str, u32)]| -> Vec<(&'static str, bool)> {
+        let mut total = 0;
+        wanted
+            .iter()
+            .map(|(name, size)| {
+                total += size;
+                (*name, total > LIMIT)
+            })
+            .collect()
+    };
+
+    let sizes = [("a", 200), ("b", 200), ("huge", 700), ("c", 50), ("d", 250)];
+    let mut wanted: Vec<(&str, u32)> = sizes.to_vec();
+    let (mut whole, mut by_chunk, mut rounds) = (Vec::new(), Vec::new(), 0);
+    while !wanted.is_empty() {
+        rounds += 1;
+        assert!(
+            rounds <= sizes.len(),
+            "asking again stopped making progress"
+        );
+        let mut again = Vec::new();
+        for (place, (name, held_back)) in answer(&wanted).into_iter().enumerate() {
+            match Arrived::at(place, held_back) {
+                Arrived::Whole => whole.push(name),
+                Arrived::TooLarge => by_chunk.push(name),
+                Arrived::Later => again.push(name),
+            }
+        }
+        wanted.retain(|(name, _)| again.contains(name));
+    }
+
+    // Every item was applied once, and only the one no answer has room for
+    // was fetched chunk by chunk.
+    assert_eq!(whole, vec!["a", "b", "c", "d"]);
+    assert_eq!(by_chunk, vec!["huge"]);
+    assert_eq!(rounds, 4);
+}
+
+#[test]
 fn rehome_detaches_then_scope_pull_reclaims_with_local_edits() {
     // The A/B offline-merge scenario: device A has an unpushed edit to a
     // note in a folder that device B just shared. B's re-home tombstones
