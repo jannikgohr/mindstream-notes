@@ -8,6 +8,7 @@
  *   pnpm bench:backend --scale full             # 1000-note pushes, 8 MiB assets
  *   pnpm bench:backend --rtt 40                 # add a column projected to a 40 ms link
  *   pnpm bench:backend --label new --compare .output/bench/backend/etebase.json
+ *   pnpm bench:backend --layout legacy          # the old call sequence, any server
  *   pnpm bench:backend diff a.json b.json       # compare two saved runs
  *
  * It speaks the Etebase protocol, and for live collaboration either the two
@@ -15,6 +16,15 @@
  * the server at `--url` has. So the same run works against both: point
  * `--url` (or MINDSTREAM_E2E_BACKEND_URL) at a server, give the run a
  * `--label`, and compare the result files.
+ *
+ * The app lays its data out differently on the two. Against the old stack it
+ * kept four vault collections and built a shared folder out of a manifest
+ * and three more ([vault.mjs](vault.mjs)). Against the new server the vault
+ * is one collection and so is each shared folder ([spaces.mjs](spaces.mjs)).
+ * A run replays the layout that goes with the server it finds, so comparing
+ * an old-stack run with a new-server run compares what a user of each
+ * actually gets. `--layout legacy` forces the old call sequence onto any
+ * server, which isolates what the server alone changed.
  *
  * Every row reports wall time next to the number of HTTP requests and the time
  * and bytes those took. On localhost a request costs a millisecond or two; on
@@ -54,6 +64,7 @@ import {
   summarise,
   summariseLatencies
 } from './meter.mjs';
+import { SpaceDevice } from './spaces.mjs';
 import { Device, freshCredentials, login, signup } from './vault.mjs';
 import { BenchNote, makeAsset } from './workload.mjs';
 
@@ -95,6 +106,7 @@ const { values: args, positionals } = parseArgs({
     label: { type: 'string', default: 'etebase' },
     out: { type: 'string' },
     compare: { type: 'string' },
+    layout: { type: 'string', default: 'auto' },
     rtt: { type: 'string' },
     'docker-project': { type: 'string', default: 'mindstream-test' }
   }
@@ -180,6 +192,14 @@ function printResults(run, rttMs) {
 }
 
 function printComparison(base, current) {
+  const layoutOf = (run) => run.meta.layout ?? 'legacy';
+  if (layoutOf(base) !== layoutOf(current)) {
+    console.log(
+      `\nnote: "${base.meta.label}" replays the ${layoutOf(base)} layout and ` +
+        `"${current.meta.label}" the ${layoutOf(current)} one. The request ` +
+        'counts differ because the app asks for different things.'
+    );
+  }
   if (base.meta.scale !== current.meta.scale) {
     console.log(
       `\nwarning: comparing a "${base.meta.scale}" run with a "${current.meta.scale}" run; ` +
@@ -314,7 +334,7 @@ async function assertReachable(url) {
 
 // ---------- scenarios ----------
 
-async function benchmark(url, scale) {
+async function benchmark(url, scale, DeviceClass) {
   const { reps } = scale;
   // Scenarios that download a shared folder's attachments on every repetition.
   const heavyReps = Math.min(reps, 10);
@@ -343,11 +363,11 @@ async function benchmark(url, scale) {
   await time('sync.first', accounts.length, {
     before: () => accounts[devices.length].account,
     run: async (account) => {
-      const device = new Device(url, account);
+      const device = new DeviceClass(url, account);
       await device.sync();
       devices.push(device);
     },
-    detail: 'new account: create the vault collections'
+    detail: 'new account: create the vault'
   });
   const deviceA = devices.at(-1);
   closers.push(...devices.map((device) => () => device.logout()));
@@ -632,21 +652,35 @@ async function main() {
   const rttMs = args.rtt ? Number(args.rtt) : 0;
 
   await assertReachable(url);
+  if (!['auto', 'legacy', 'spaces'].includes(args.layout)) {
+    throw new Error('--layout must be one of: auto, legacy, spaces');
+  }
+  // The layout the app uses goes with the server: one collection per space
+  // needs the new one, which is also the only server the app now targets.
+  const layout =
+    args.layout === 'auto'
+      ? (await hasBuiltInRooms(url))
+        ? 'spaces'
+        : 'legacy'
+      : args.layout;
   installHttpMeter();
   run.meta = {
     label: args.label,
     url,
     scale: args.scale,
+    layout,
     startedAt: new Date().toISOString(),
     node: process.version,
     host: `${os.cpus()[0].model.trim()} x${os.cpus().length}, ${os.platform()}`
   };
-  console.log(`benchmarking ${url} (${args.scale}) as "${args.label}"`);
+  console.log(
+    `benchmarking ${url} (${args.scale}, ${layout} layout) as "${args.label}"`
+  );
 
   const idle = dockerFootprint(args['docker-project']);
   if (idle) run.footprint['before the run'] = idle;
   try {
-    await benchmark(url, scale);
+    await benchmark(url, scale, layout === 'spaces' ? SpaceDevice : Device);
   } finally {
     closeHttpMeter();
   }
