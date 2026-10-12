@@ -39,9 +39,16 @@ pub struct InvitationPreview {
     pub collection_uid: String,
     pub access_level: CollectionAccessLevel,
     pub collection_type: String,
+    pub collection_name: Option<String>,
 }
 
 impl InvitationPreview {
+    /// The name of the collection, when the server sent the collection's
+    /// item with the invitation and it opens with the invitation's key.
+    pub fn collection_name(&self) -> Option<&str> {
+        self.collection_name.as_deref()
+    }
+
     /// The uid of the invitation.
     pub fn uid(&self) -> &str {
         &self.uid
@@ -1216,6 +1223,11 @@ impl CollectionInvitationManager {
     /// * `invitation` - the invitation to preview
     pub fn preview(&self, invitation: &SignedInvitation) -> Result<InvitationPreview> {
         let content = self.decrypt_invitation_content(invitation)?;
+        // The name is a courtesy. An invitation whose collection item is
+        // missing, or does not open, is an invitation all the same.
+        let collection_name = invitation
+            .collection_name(&content.encryption_key)
+            .unwrap_or(None);
         Ok(InvitationPreview {
             uid: invitation.uid().to_owned(),
             username: invitation.username().to_owned(),
@@ -1223,6 +1235,7 @@ impl CollectionInvitationManager {
             collection_uid: invitation.collection().to_owned(),
             access_level: invitation.access_level(),
             collection_type: content.collection_type,
+            collection_name,
         })
     }
 

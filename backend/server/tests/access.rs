@@ -293,6 +293,49 @@ fn invitation_belongs_to_its_recipient() {
         .is_empty());
 }
 
+/// Someone invited can read what they are invited to before answering:
+/// the server sends the collection's own item with the invitation, and the
+/// key inside the invitation opens its name.
+#[test]
+fn invitation_names_the_collection_before_it_is_answered() {
+    let owner = signup("owner");
+    let invited = signup("invited");
+    let collection = new_collection(&owner, "Trip plans");
+    let owner_invites = owner.invitation_manager().unwrap();
+    let profile = owner_invites.fetch_user_profile(&invited.name).unwrap();
+    owner_invites
+        .invite(
+            &collection,
+            &invited.name,
+            profile.pubkey(),
+            CollectionAccessLevel::ReadOnly,
+        )
+        .unwrap();
+
+    let invited_invites = invited.invitation_manager().unwrap();
+    let incoming = invited_invites.list_incoming(None).unwrap();
+    assert_eq!(incoming.data().len(), 1);
+    let preview = invited_invites.preview(&incoming.data()[0]).unwrap();
+    assert_eq!(preview.collection_name(), Some("Trip plans"));
+    assert_eq!(preview.collection_type(), COLLECTION_TYPE);
+
+    // Reading the name took nothing: the invitation is still there, and the
+    // collection is still out of reach.
+    assert_eq!(invited_invites.list_incoming(None).unwrap().data().len(), 1);
+    assert_refused!(
+        invited
+            .collection_manager()
+            .unwrap()
+            .fetch(collection.uid(), None),
+        Error::NotFound(_) | Error::PermissionDenied(_)
+    );
+
+    // What the sender lists as sent carries no item, and its preview has no
+    // name to show. Nothing breaks for it.
+    let outgoing = owner_invites.list_outgoing(None).unwrap();
+    assert_eq!(outgoing.data().len(), 1);
+}
+
 #[test]
 fn logout_ends_the_session() {
     let account = signup("solo");

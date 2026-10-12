@@ -214,9 +214,33 @@ pub struct SignedInvitation {
 
     #[serde(with = "serde_bytes", skip_serializing)]
     from_pubkey: Option<Vec<u8>>,
+
+    /// The collection's own item. A Mindstream server sends it along with an
+    /// invitation someone received, so that what the invitation is to can be
+    /// named before it is answered.
+    #[serde(default, skip_serializing)]
+    collection_item: Option<EncryptedItem>,
 }
 
 impl SignedInvitation {
+    /// The name of the collection this invitation is to, when the server
+    /// sent the collection's item along. `collection_key` is the key the
+    /// invitation carries. The name is authenticated by that key, so a
+    /// server cannot make one up. The sender can call the collection what
+    /// they like.
+    pub(crate) fn collection_name(&self, collection_key: &[u8]) -> Result<Option<String>> {
+        let item = match &self.collection_item {
+            Some(item) => item,
+            None => return Ok(None),
+        };
+        let key: &[u8; 32] = collection_key
+            .try_into()
+            .map_err(|_| Error::Encryption("Invitation collection key has wrong length"))?;
+        let collection = CollectionCryptoManager::new(key, item.version)?;
+        let meta = item.meta(&item.crypto_manager(&collection)?)?;
+        Ok(ItemMetadata::from_msgpack(&meta)?.name().map(str::to_owned))
+    }
+
     /// The uid of the invitation
     pub fn uid(&self) -> &str {
         &self.uid
@@ -499,6 +523,7 @@ impl EncryptedCollection {
             signed_encryption_key,
             from_username: None,
             from_pubkey: Some(identity_crypto_manager.pubkey().to_owned()),
+            collection_item: None,
         })
     }
 
