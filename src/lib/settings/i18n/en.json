@@ -1013,7 +1013,17 @@
     "vault.open.remember": "Remember this decision",
     "vault.open.cancel": "Cancel",
     "vault.picker.title": "Choose a vault",
-    "vault.picker.message": "The last-used vault could not be opened. Choose another vault or create a new one."
+    "vault.picker.message": "The last-used vault could not be opened. Choose another vault or create a new one.",
+    "theme.select": "Theme preset",
+    "theme.missingOption": "Missing preset: {id}",
+    "theme.missing": "This preset is unavailable. Mindstream is displayed while your selection is retained.",
+    "theme.useAccent": "Use preset accent",
+    "theme.editJson": "Show preset JSON",
+    "theme.remove": "Remove preset",
+    "theme.import": "Import or edit a preset",
+    "theme.importHelp": "Paste preset JSON here. Give a built-in preset a new ID to save your own copy. Saving an existing custom ID replaces that preset on this device.",
+    "theme.json": "Preset JSON",
+    "theme.save": "Save preset"
   },
   "categories": {
     "account": {
@@ -1366,6 +1376,10 @@
     "general.vaultOpening": {
       "label": "Vault opening",
       "description": "Choose whether another vault replaces this window or opens a new window."
+    },
+    "appearance.preset": {
+      "label": "Theme preset",
+      "description": "Applies to every vault on this device. Light/dark mode and your accent override are independent."
     }
   },
   "values": {

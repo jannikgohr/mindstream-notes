@@ -1011,6 +1011,7 @@ fn broadcast_device_settings(app: &AppHandle) {
     let Some(host) = app.try_state::<Host>() else {
         return;
     };
+    let _ = app.emit(crate::app_events::AppEvent::UiSettingsChanged.as_str(), ());
     // Targets are copied under the short book mutex. Delivery never holds it
     // or a root document lock while contacting another worker.
     host.device_notifications.changed(|| {
@@ -1178,6 +1179,7 @@ fn begin_host_startup(
     crate::desktop_settings::refresh_runtime(app)
         .map_err(|error| AppError::InvalidArg(error.to_string()))?;
     let vault = crate::profiles::profile_dir(&root, &initial);
+    crate::ui_settings::prepare_device_appearance(&root, &vault, &initial)?;
     crate::legacy_content::initialize_owner(&root, &initial, &vault)?;
 
     let background_recovery = crate::coordinator_revival::background_launch();
@@ -1340,7 +1342,10 @@ pub(crate) fn allows_host_invoke(label: &str, command: &str) -> bool {
         || (label == "vault-picker"
             && matches!(
                 command,
-                "get_picker_vaults" | "open_picker_vault" | "create_profile"
+                "get_picker_vaults"
+                    | "open_picker_vault"
+                    | "create_profile"
+                    | "get_theme_appearance"
             ))
 }
 
@@ -1431,6 +1436,7 @@ fn show_picker(app: &AppHandle) -> AppResult<()> {
         "vault-picker",
         tauri::WebviewUrl::App("vault-picker/".into()),
     )
+    .initialization_script(crate::theme_presets::initialization_script(app)?)
     .title(
         if app.state::<crate::environment::Environment>().kind == crate::environment::Kind::Dev {
             format!(

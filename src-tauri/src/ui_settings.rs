@@ -16,6 +16,9 @@ type Values = BTreeMap<String, Value>;
 const MAX_BYTES: usize = 1024 * 1024;
 const GLOBAL_SHORTCUTS: &str = "hotkeys.globalShortcuts";
 const SHORTCUT_RECEIPT: &str = ".global-shortcuts-migrated";
+const DEVICE_APPEARANCE: [&str; 2] = ["appearance.accent", "appearance.uiFontSize"];
+const APPEARANCE_OWNER: &str = "appearance-migration-owner.json";
+const APPEARANCE_RECEIPT: &str = ".device-appearance-migrated";
 static SCOPES: LazyLock<BTreeMap<String, bool>> = LazyLock::new(|| {
     let schema: Value = serde_json::from_str(include_str!("../../src/lib/settings/schema.json"))
         .expect("bundled settings schema");
@@ -91,6 +94,7 @@ fn decode(raw: &[u8], device: bool) -> AppResult<Document> {
         || document.values.keys().any(|id| {
             device_scope(id) != device
                 && !(device && (id == "appearance.sortStrategy" || id == GLOBAL_SHORTCUTS))
+                && !(!device && DEVICE_APPEARANCE.contains(&id.as_str()))
         })
     {
         return Err(invalid());
@@ -161,11 +165,83 @@ fn snapshot(device: Document, vault: Document) -> Snapshot {
     // An old root recovery copy may still carry this former device flag. Its
     // pinned migration owner must import it; it never affects another vault.
     values.remove(GLOBAL_SHORTCUTS);
-    values.extend(vault.values);
+    values.extend(
+        vault
+            .values
+            .into_iter()
+            .filter(|(id, _)| !DEVICE_APPEARANCE.contains(&id.as_str())),
+    );
     Snapshot {
         device_revision: device.revision,
         vault_revision: vault.revision,
         values,
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AppearanceOwner {
+    version: u32,
+    vault_id: String,
+    directory: std::path::PathBuf,
+}
+
+fn appearance_owner_bytes(raw: &[u8]) -> AppResult<AppearanceOwner> {
+    if raw.len() > 16384 {
+        return Err(invalid());
+    }
+    let owner: AppearanceOwner = serde_json::from_slice(raw).map_err(|_| invalid())?;
+    if owner.version != 1
+        || !crate::profiles::valid_id(&owner.vault_id)
+        || !owner.directory.is_absolute()
+    {
+        return Err(invalid());
+    }
+    Ok(owner)
+}
+
+fn appearance_owner(root: &Path, vault: &Path, vault_id: &str) -> AppResult<AppearanceOwner> {
+    let path = root.join(APPEARANCE_OWNER);
+    crate::root_documents::recover(
+        &path,
+        |raw| appearance_owner_bytes(raw).map(|_| ()),
+        |raw| appearance_owner_bytes(raw).map(|_| ()),
+    )?;
+    if path.try_exists()? {
+        return appearance_owner_bytes(&fs::read(path)?);
+    }
+    if !crate::profiles::valid_id(vault_id) {
+        return Err(invalid());
+    }
+    let owner = AppearanceOwner {
+        version: 1,
+        vault_id: vault_id.into(),
+        directory: fs::canonicalize(vault)?,
+    };
+    let raw = serde_json::to_vec(&owner).map_err(|_| invalid())?;
+    crate::root_documents::write(&path, &raw, |raw| appearance_owner_bytes(raw).map(|_| ()))?;
+    Ok(owner)
+}
+
+/// Pin the startup-selected migration source before concurrent workers start.
+pub(crate) fn prepare_device_appearance(
+    root: &Path,
+    vault: &Path,
+    vault_id: &str,
+) -> AppResult<()> {
+    let _lock = RootLock::acquire(root)?;
+    appearance_owner(root, vault, vault_id)?;
+    Ok(())
+}
+
+/// Caller holds RootLock. This read never seeds a vault or migration marker.
+pub(crate) fn appearance_values(root: &Path) -> AppResult<Values> {
+    let path = root.join("ui-settings.json");
+    recover(&path, true)?;
+    match fs::read(path) {
+        Ok(raw) => Ok(decode(&raw, true)?.values),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Values::new()),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -375,7 +451,10 @@ fn initialize_classified(
                 .iter()
                 // Retain the former device toggle until the pinned owner has
                 // imported it, even if another vault initializes first.
-                .filter(|(id, _)| device_scope(id) || id.as_str() == GLOBAL_SHORTCUTS)
+                .filter(|(id, _)| {
+                    (device_scope(id) && !DEVICE_APPEARANCE.contains(&id.as_str()))
+                        || id.as_str() == GLOBAL_SHORTCUTS
+                })
                 .map(|(id, v)| (id.clone(), v.clone()))
                 .collect(),
         }
@@ -386,7 +465,7 @@ fn initialize_classified(
         let values = if vault_raw.is_some() {
             legacy(vault_raw)?
         } else if vault_id == "default" {
-            legacy_device
+            legacy_device.clone()
         } else {
             Values::new()
         };
@@ -396,7 +475,8 @@ fn initialize_classified(
             values: values
                 .into_iter()
                 .filter(|(id, _)| {
-                    !device_scope(id) && (id != GLOBAL_SHORTCUTS || vault_raw.is_some())
+                    (!device_scope(id) || DEVICE_APPEARANCE.contains(&id.as_str()))
+                        && (id != GLOBAL_SHORTCUTS || vault_raw.is_some())
                 })
                 .collect(),
         }
@@ -430,6 +510,31 @@ fn initialize_classified(
     };
     let mut device_changed = false;
     let mut vault_changed = false;
+    let appearance_receipt = root.join(APPEARANCE_RECEIPT);
+    let appearance_complete = match fs::read(&appearance_receipt) {
+        Ok(raw) if raw == b"1" => true,
+        Ok(_) => return Err(invalid()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.into()),
+    };
+    let owner = appearance_owner(root, vault, vault_id)?;
+    let finish_appearance = !appearance_complete
+        && owner.vault_id == vault_id
+        && owner.directory == fs::canonicalize(vault)?;
+    if finish_appearance {
+        // Retain all vault source fields. Completed migration prevents a later
+        // reset from importing an old value again, including after recovery.
+        for id in DEVICE_APPEARANCE {
+            if !device.values.contains_key(id) {
+                let value = vault_doc.values.get(id).or_else(|| legacy_device.get(id));
+                if let Some(value) = value {
+                    validate_preference(id, value)?;
+                    device.values.insert(id.into(), value.clone());
+                    device_changed = true;
+                }
+            }
+        }
+    }
     let layout_marker = vault.join(".dock-layout-migrated");
     let need_layout = match fs::read(&layout_marker) {
         Ok(raw) if raw == b"1" => false,
@@ -516,6 +621,9 @@ fn initialize_classified(
     if need_device || device_changed {
         save(&device_path, &device, true)?;
     }
+    if finish_appearance {
+        crate::atomic_file::write(&appearance_receipt, b"1")?;
+    }
     for path in [&device_path, &vault_path] {
         if !marker(path).try_exists()? {
             crate::atomic_file::write(&marker(path), b"1")?;
@@ -538,6 +646,15 @@ fn initialize_classified(
 
 fn validate_preference(id: &str, value: &Value) -> AppResult<()> {
     let valid = match id {
+        "appearance.preset" => value.as_str().is_some_and(crate::theme_presets::valid_id),
+        "appearance.accent" => value.as_str().is_some_and(|color| {
+            color.starts_with('#')
+                && [4, 5, 7, 9].contains(&color.len())
+                && color[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
+        }),
+        "appearance.uiFontSize" => value
+            .as_f64()
+            .is_some_and(|size| size.is_finite() && (12.0..=18.0).contains(&size)),
         "general.vaultOpening" => {
             matches!(value.as_str(), Some("ask" | "thisWindow" | "newWindow"))
         }
@@ -711,7 +828,8 @@ pub async fn initialize_ui_settings(
 ) -> CommandResult<Snapshot> {
     let (root, vault) = context(&app, &expected_vault_id)?;
     let job = app.state::<crate::vault_jobs::Saves>().enter()?;
-    Ok(tauri::async_runtime::spawn_blocking(move || {
+    let notify = app.clone();
+    let snapshot = tauri::async_runtime::spawn_blocking(move || {
         let _job = job;
         if let Some(source) = app.try_state::<crate::browser_migration::Source>() {
             let owner = crate::legacy_content::is_owner(&root, &expected_vault_id, &vault)?;
@@ -758,7 +876,11 @@ pub async fn initialize_ui_settings(
         }
     })
     .await
-    .map_err(|_| invalid())??)
+    .map_err(|_| invalid())??;
+    let _ = notify.emit(crate::app_events::AppEvent::UiSettingsChanged.as_str(), ());
+    #[cfg(desktop)]
+    crate::vault_supervisor::device_settings_changed(&notify);
+    Ok(snapshot)
 }
 
 #[tauri::command]
@@ -810,6 +932,74 @@ pub async fn patch_ui_setting(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_vault_migrates_appearance_once_and_retains_every_vault_source() {
+        let dirs = TestDirs::new();
+        prepare_device_appearance(&dirs.root, &dirs.a, "default").unwrap();
+        let other = initialize(&dirs.root, &dirs.b, "other", None, Some(r##"{"appearance.accent":"#abcdef","appearance.uiFontSize":18,"appearance.editorFontSize":22}"##)).unwrap();
+        assert!(!other.values.contains_key("appearance.accent"));
+        assert_eq!(other.values["appearance.editorFontSize"], 22);
+        assert!(!dirs.root.join(APPEARANCE_RECEIPT).exists());
+        let selected = initialize(&dirs.root, &dirs.a, "default", None, Some(r##"{"appearance.accent":"#123456","appearance.uiFontSize":14,"appearance.editorFontSize":20}"##)).unwrap();
+        assert_eq!(selected.values["appearance.accent"], "#123456");
+        assert_eq!(selected.values["appearance.uiFontSize"], 14);
+        assert_eq!(
+            access(&dirs.root, &dirs.b, None).unwrap().values["appearance.accent"],
+            "#123456"
+        );
+        assert_eq!(
+            read(&dirs.b.join("content-settings.json"), false)
+                .unwrap()
+                .values["appearance.accent"],
+            "#abcdef"
+        );
+        assert_eq!(
+            read(&dirs.a.join("content-settings.json"), false)
+                .unwrap()
+                .values["appearance.uiFontSize"],
+            14
+        );
+        access(
+            &dirs.root,
+            &dirs.a,
+            Some(("appearance.accent".into(), None)),
+        )
+        .unwrap();
+        let reopened = initialize(&dirs.root, &dirs.a, "default", None, None).unwrap();
+        assert!(
+            !reopened.values.contains_key("appearance.accent"),
+            "reset cannot resurrect a retained vault value"
+        );
+        assert_eq!(reopened.values["appearance.editorFontSize"], 20);
+    }
+
+    #[test]
+    fn root_appearance_wins_and_partial_completion_retries_without_reseeding() {
+        let dirs = TestDirs::new();
+        fs::write(dirs.root.join("ui-settings.json"),r##"{"version":1,"revision":2,"values":{"appearance.accent":"#aabbcc","appearance.uiFontSize":17}}"##).unwrap();
+        let migrated = initialize(
+            &dirs.root,
+            &dirs.a,
+            "default",
+            None,
+            Some(r##"{"appearance.accent":"#112233","appearance.uiFontSize":13}"##),
+        )
+        .unwrap();
+        assert_eq!(migrated.values["appearance.accent"], "#aabbcc");
+        assert_eq!(migrated.values["appearance.uiFontSize"], 17);
+        // Simulate a crash after root publication and before the completion receipt.
+        fs::remove_file(dirs.root.join(APPEARANCE_RECEIPT)).unwrap();
+        let retry = initialize(&dirs.root, &dirs.a, "default", None, None).unwrap();
+        assert_eq!(retry.values["appearance.uiFontSize"], 17);
+        fs::write(dirs.root.join(APPEARANCE_RECEIPT), b"corrupt receipt").unwrap();
+        let before = fs::read(dirs.root.join("ui-settings.json")).unwrap();
+        assert!(initialize(&dirs.root, &dirs.a, "default", None, None).is_err());
+        assert_eq!(
+            fs::read(dirs.root.join("ui-settings.json")).unwrap(),
+            before
+        );
+    }
 
     fn old_shortcut_root(dirs: &TestDirs) {
         fs::write(

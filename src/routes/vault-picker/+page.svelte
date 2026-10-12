@@ -1,6 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { ModeWatcher, setMode } from 'mode-watcher';
+  import { ModeWatcher, setMode, mode } from 'mode-watcher';
+  import {
+    getThemeAppearance,
+    type ThemeAppearance
+  } from '$lib/api/theme-presets';
+  import { applyThemeAppearance } from '$lib/settings/theme-presets';
+  import { listen, TauriEventName } from '$lib/api/events';
   import {
     getVaultPickerState,
     openPickerVault,
@@ -14,6 +20,25 @@
   let busy = $state(false);
   let error = $state('');
   let name = $state('');
+  let appearance = $state<ThemeAppearance | null>(null);
+  async function refreshAppearance() {
+    try {
+      appearance = await getThemeAppearance();
+      localStorage.setItem('mode-watcher-mode', appearance.mode);
+      setMode(appearance.mode);
+    } catch (cause) {
+      error = toErrorMessage(cause);
+    }
+  }
+  $effect(() => {
+    if (appearance)
+      applyThemeAppearance(
+        appearance.preset,
+        $mode === 'dark',
+        appearance.accent,
+        appearance.uiFontSize
+      );
+  });
   async function refresh() {
     loading = true;
     error = '';
@@ -59,6 +84,13 @@
   }
   onMount(() => {
     void refresh();
+    void refreshAppearance();
+    const unlisten = listen(TauriEventName.UiSettingsChanged, () => {
+      void refreshAppearance();
+    });
+    return () => {
+      void unlisten.then((dispose) => dispose());
+    };
   });
 </script>
 

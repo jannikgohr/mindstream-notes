@@ -16,6 +16,10 @@ export interface CommandError {
 }
 
 export enum TauriCommandName {
+  ListThemePresets = 'list_theme_presets',
+  GetThemeAppearance = 'get_theme_appearance',
+  SaveThemePreset = 'save_theme_preset',
+  DeleteThemePreset = 'delete_theme_preset',
   AcceptCollectionInvitation = 'accept_collection_invitation',
   AcceptShareBundle = 'accept_share_bundle',
   AuditCorruptRemoteItems = 'audit_corrupt_remote_items',

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
-  import { ModeWatcher } from 'mode-watcher';
+  import { ModeWatcher, mode } from 'mode-watcher';
+  import { isTauri } from '$lib/api/core';
   import {
     getSettingValue,
     isModified,
@@ -10,11 +11,16 @@
   import { authSession, serverTypeForSession } from '$lib/api/auth.svelte';
   import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
   import { isMobile } from '$lib/platform';
-  import { applyAccentColor, clearAccentColor } from '$lib/settings/accent';
   import {
-    applyEditorTypography,
-    applyUiFontSize
-  } from '$lib/settings/appearance';
+    applyThemeAppearance,
+    resolvedPreset
+  } from '$lib/settings/theme-presets';
+  import {
+    themeCatalog,
+    refreshThemePresets
+  } from '$lib/settings/theme.svelte';
+  import { listen, TauriEventName } from '$lib/api/events';
+  import { applyEditorTypography } from '$lib/settings/appearance';
   import { setNativeHotkeyDisplays } from '$lib/api/hotkeys';
   import { setTrashRetention, sweepTrashRetention } from '$lib/api/data';
   import { setSyncSchedule } from '$lib/api/sync';
@@ -177,28 +183,38 @@
     void setSettingValue('account.serverType', serverTypeForSession(session));
   });
 
-  // Re-apply the accent colour whenever the user changes it (or on
-  // first mount, since $effect runs once for the initial values). Only
-  // applied when the setting differs from its schema default: a single
-  // user hex can't carry separate light/dark values, so an untouched
-  // install is better served by the theme's own --accent-brand.
-  // The helper overrides the brand tokens (--accent-brand /
-  // --accent-brand-foreground / --ring) and leaves --primary — the
-  // neutral button surface — alone. See docs/theming.md.
+  // Native startup injects the root appearance before paint. Keep it until
+  // settings are ready, then apply preset tokens before an explicit accent.
   $effect(() => {
-    const value = getSettingValue('appearance.accent') as string | undefined;
-    if (isModified('appearance.accent') && value) {
-      applyAccentColor(value);
-    } else {
-      clearAccentColor();
-    }
+    if (isTauri() && !profilesState.loaded) return;
+    const preset = resolvedPreset(
+      themeCatalog.presets,
+      getSettingValue('appearance.preset')
+    );
+    applyThemeAppearance(
+      preset,
+      $mode === 'dark' ||
+        (!$mode && document.documentElement.classList.contains('dark')),
+      settings.values['appearance.accent'],
+      getSettingValue('appearance.uiFontSize')
+    );
   });
 
-  // Appearance → UI font size. Writes --ui-font-size (the rem base for the
-  // whole chrome). Unlike accent, applying at the default is safe, so this
-  // runs unconditionally and stays the single source of truth for the slider.
-  $effect(() => {
-    applyUiFontSize(getSettingValue('appearance.uiFontSize'));
+  // Catalog changes invalidate every worker and popout without changing the
+  // selected ID when a user preset has been removed or cannot be loaded.
+  onMount(() => {
+    const refresh = () => {
+      void refreshThemePresets();
+    };
+    refresh();
+    window.addEventListener('focus', refresh);
+    window.addEventListener('theme-presets-changed', refresh);
+    const unlisten = listen(TauriEventName.UiSettingsChanged, refresh);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('theme-presets-changed', refresh);
+      void unlisten.then((dispose) => dispose());
+    };
   });
 
   // Appearance → editor body text size + line height. Written to CSS vars

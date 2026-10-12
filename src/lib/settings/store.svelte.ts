@@ -203,6 +203,11 @@ function loadRaw(vaultId = activeSettingsVaultId): Record<string, unknown> {
   // exists; new/non-default vaults start from schema defaults.
   const legacyVaultRaw =
     vaultRaw === null && vaultId === DEFAULT_VAULT_ID ? deviceRaw : null;
+  const content = { ...(vaultRaw ?? legacyVaultRaw ?? {}) };
+  if (localStorage.getItem('mindstream:appearance-migration:v1')) {
+    delete content['appearance.accent'];
+    delete content['appearance.uiFontSize'];
+  }
   return {
     // Device bucket: only its device-scoped ids. This key historically also
     // held vault-scoped values (pre-scoping), so it stays filtered or those
@@ -215,8 +220,50 @@ function loadRaw(vaultId = activeSettingsVaultId): Record<string, unknown> {
     // Templates folder/tag) is loaded at startup *before* its plugin registers,
     // so `scopeForId` would misclassify it as device-scoped and drop it —
     // silently losing the value on every restart.
-    ...(vaultRaw ?? legacyVaultRaw ?? {})
+    ...content
   };
+}
+
+function migrateBrowserAppearance(vaultId: string): boolean {
+  if (localStorage.getItem('mindstream:appearance-migration:v1')) return false;
+  const read = (key: string) => {
+    const raw = localStorage.getItem(key);
+    const value = raw === null ? {} : parseStoredSettings(raw);
+    if (value === null)
+      throw new Error(
+        'Appearance migration refused malformed browser settings; original data retained'
+      );
+    return value;
+  };
+  const device = read(DEVICE_STORAGE_KEY);
+  const source =
+    localStorage.getItem(vaultStorageKey(vaultId)) === null &&
+    vaultId === DEFAULT_VAULT_ID
+      ? device
+      : read(vaultStorageKey(vaultId));
+  for (const id of ['appearance.accent', 'appearance.uiFontSize']) {
+    if (!Object.hasOwn(device, id) && Object.hasOwn(source, id))
+      device[id] = source[id];
+  }
+  archiveBrowserAppearance(vaultId);
+  localStorage.setItem(DEVICE_STORAGE_KEY, JSON.stringify(device));
+  localStorage.setItem('mindstream:appearance-migration:v1', vaultId);
+  return true;
+}
+
+function archiveBrowserAppearance(vaultId: string): void {
+  const raw = localStorage.getItem(vaultStorageKey(vaultId));
+  const key = `mindstream:appearance-source:v1:${vaultId}`;
+  if (raw !== null && !localStorage.getItem(key)) {
+    const values = parseStoredSettings(raw);
+    if (
+      values &&
+      ['appearance.accent', 'appearance.uiFontSize'].some((id) =>
+        Object.hasOwn(values, id)
+      )
+    )
+      localStorage.setItem(key, raw);
+  }
 }
 
 interface SettingsState {
@@ -349,8 +396,12 @@ export async function setSettingsVaultId(id: string): Promise<void> {
     }
     return;
   }
-  if (next === activeSettingsVaultId) return;
-  persistNow();
+  const migratedAppearance = migrateBrowserAppearance(next);
+  if (next === activeSettingsVaultId) {
+    if (migratedAppearance) settings.values = loadRaw(next);
+    return;
+  }
+  if (!migratedAppearance) persistNow();
   activeSettingsVaultId = next;
   settings.values = loadRaw(activeSettingsVaultId);
   void hydrateSettings('startup');
@@ -642,6 +693,7 @@ function persistNow() {
       if (scopeForId(id) === 'V') vault[id] = value;
       else device[id] = value;
     }
+    archiveBrowserAppearance(activeSettingsVaultId);
     localStorage.setItem(DEVICE_STORAGE_KEY, JSON.stringify(device));
     localStorage.setItem(
       vaultStorageKey(activeSettingsVaultId),

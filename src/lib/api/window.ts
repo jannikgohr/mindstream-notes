@@ -9,6 +9,7 @@ import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { isTauri } from './core';
 import { getCustomWindowDecorations } from './desktop-settings';
 import { getWorkerBrowserOptions } from './browser-identity';
+import { currentThemeWindowBackground } from '$lib/settings/theme-presets';
 import {
   type DockviewApi,
   type IDockviewGroupPanel,
@@ -26,20 +27,7 @@ function themedWindowBackground(): {
   blue: number;
   alpha: number;
 } {
-  let useDark = false;
-  try {
-    const stored = localStorage.getItem('mode-watcher-mode');
-    const prefersDark =
-      typeof window !== 'undefined' &&
-      window.matchMedia &&
-      window.matchMedia('(prefers-color-scheme: dark)').matches;
-    useDark = stored === 'dark' || (stored !== 'light' && prefersDark);
-  } catch {
-    /* localStorage may be unavailable in some contexts; fall back to light. */
-  }
-  return useDark
-    ? { red: 10, green: 10, blue: 10, alpha: 255 }
-    : { red: 255, green: 255, blue: 255, alpha: 255 };
+  return currentThemeWindowBackground();
 }
 
 /**

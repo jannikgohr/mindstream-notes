@@ -9,6 +9,24 @@ inherit content from the old unscoped bucket. Unknown/plugin entries stay in
 the vault, while dynamic `hotkey.*` bindings stay at the root. Plugin settings
 with an external store continue to use the vault database.
 
+Appearance presets, accent and UI font size are device preferences in root
+`ui-settings.json`. Editor font size and line height remain vault preferences.
+`appearance-migration-owner.json` pins the startup-selected vault's canonical
+directory before concurrent startup. Root values win; that vault seeds absent
+accent/font values once. Root `.device-appearance-migrated` publishes after the
+device document. Retries preserve an existing root value, and completion prevents
+a reset from resurrecting retained vault fields. Those former vault fields stay
+in `content-settings.json` as migration evidence and never override root values.
+Browser fallback retains original bucket bytes under
+`mindstream:appearance-source:v1:<vault>`.
+
+Root `theme-presets.json` stores a versioned map of user presets. Built-in IDs
+are immutable. Numeric, bounded OKLCH tokens cannot load CSS, scripts or URLs.
+RootLock serializes catalog edits across workers. A missing preset displays the
+built-in default without changing `appearance.preset`; restoring it restores the
+appearance. Catalog recovery retains corrupt bytes and promotes only a validated
+previous copy. Mode, accent and preset selection have independent precedence.
+
 `hotkeys.globalShortcuts` is a vault boolean, defaulting to false. It determines
 eligibility for system-wide actions; it does not move the shared key bindings
 into the vault. A root `global-shortcuts-migration.json` intent pins the former

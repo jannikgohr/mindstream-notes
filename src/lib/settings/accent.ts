@@ -4,7 +4,7 @@
  *
  *   --accent-brand             the colour itself (links, mentions, selection,
  *                              active-state emphasis)
- *   --accent-brand-foreground  white, so dark accents stay legible
+ *   --accent-brand-foreground  black or white, chosen for fill contrast
  *   --ring                     same colour, so focus rings match the accent
  *
  * Deliberately NOT --primary. --primary is the neutral high-contrast button
@@ -13,19 +13,31 @@
  * lives in its own token (see docs/theming.md), the accent tints identity
  * surfaces only and leaves neutral chrome alone.
  *
- * +layout.svelte only calls this when the setting is *modified*, so an
- * untouched install keeps the theme's own --accent-brand — which, unlike a
- * single user-supplied hex, carries separate light and dark values.
- *
- * White is chosen as foreground unconditionally — works for any vibrant accent
- * (blue, violet, teal, red, …); for very light accents (yellow) the user can
- * pick a different colour or we'll add a luminance check if it becomes a
- * problem.
+ * Theme application calls this after preset tokens only when an explicit
+ * accent value exists. Clearing that value restores the preset's separate
+ * light and dark accents. The foreground uses the RGB channels' luminance.
  */
 
 const HEX_PATTERN = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 
 const VARS = ['--accent-brand', '--accent-brand-foreground', '--ring'] as const;
+
+export function accentForeground(color: string): string {
+  let hex = color.slice(1);
+  if (hex.length === 3 || hex.length === 4)
+    hex = hex
+      .slice(0, 3)
+      .split('')
+      .map((char) => char + char)
+      .join('');
+  const [r, g, b] = [0, 2, 4].map((index) => {
+    const channel = parseInt(hex.slice(index, index + 2), 16) / 255;
+    return channel <= 0.04045
+      ? channel / 12.92
+      : ((channel + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.179 ? '#000000' : '#ffffff';
+}
 
 export function applyAccentColor(color: string): void {
   if (typeof document === 'undefined') return;
@@ -35,7 +47,7 @@ export function applyAccentColor(color: string): void {
     return;
   }
   root.style.setProperty('--accent-brand', color);
-  root.style.setProperty('--accent-brand-foreground', '#ffffff');
+  root.style.setProperty('--accent-brand-foreground', accentForeground(color));
   root.style.setProperty('--ring', color);
 }
 

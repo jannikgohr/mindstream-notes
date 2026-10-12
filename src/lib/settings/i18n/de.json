@@ -1013,7 +1013,17 @@
     "vault.open.remember": "Diese Entscheidung merken",
     "vault.open.cancel": "Abbrechen",
     "vault.picker.title": "Tresor auswählen",
-    "vault.picker.message": "Der zuletzt verwendete Tresor konnte nicht geöffnet werden. Wähle einen anderen Tresor oder erstelle einen neuen."
+    "vault.picker.message": "Der zuletzt verwendete Tresor konnte nicht geöffnet werden. Wähle einen anderen Tresor oder erstelle einen neuen.",
+    "theme.select": "Designvorlage",
+    "theme.missingOption": "Fehlende Vorlage: {id}",
+    "theme.missing": "Diese Vorlage ist nicht verfügbar. Mindstream wird angezeigt, deine Auswahl bleibt erhalten.",
+    "theme.useAccent": "Akzent der Vorlage verwenden",
+    "theme.editJson": "Vorlagen-JSON anzeigen",
+    "theme.remove": "Vorlage entfernen",
+    "theme.import": "Vorlage importieren oder bearbeiten",
+    "theme.importHelp": "Füge hier Vorlagen-JSON ein. Gib einer integrierten Vorlage eine neue ID, um eine eigene Kopie zu speichern. Eine vorhandene eigene ID wird auf diesem Gerät ersetzt.",
+    "theme.json": "Vorlagen-JSON",
+    "theme.save": "Vorlage speichern"
   },
   "categories": {
     "account": {
@@ -1366,6 +1376,10 @@
     "general.vaultOpening": {
       "label": "Tresore öffnen",
       "description": "Wähle, ob ein anderer Tresor dieses Fenster ersetzt oder in einem neuen Fenster geöffnet wird."
+    },
+    "appearance.preset": {
+      "label": "Designvorlage",
+      "description": "Gilt für alle Tresore auf diesem Gerät. Hell-/Dunkelmodus und dein eigener Akzent sind unabhängig."
     }
   },
   "values": {

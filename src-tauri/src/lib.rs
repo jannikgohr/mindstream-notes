@@ -78,6 +78,7 @@ pub mod spellcheck;
 pub mod storage_locks;
 pub mod sync;
 pub mod system;
+pub mod theme_presets;
 #[cfg(desktop)]
 pub mod tray;
 pub mod tree;
@@ -404,6 +405,7 @@ pub fn run() {
             };
             log::info!("[boot] active profile = {active_id}");
             let app_data = ownership.directory.clone();
+            ui_settings::prepare_device_appearance(&app_data_root, &app_data, &active_id)?;
             legacy_content::initialize_owner(&app_data_root, &active_id, &app_data)?;
             app.manage(paths::ActiveProfile {
                 id: active_id.clone(),
@@ -504,6 +506,7 @@ pub fn run() {
                 title
             };
             let builder = tauri::WebviewWindowBuilder::from_config(app, config)?
+                .initialization_script(theme_presets::initialization_script(app.handle())?)
                 .title(title)
                 .on_web_resource_request(move |_request, response| {
                     if !response
@@ -739,6 +742,10 @@ pub fn run() {
                 vault_worker_ready,
                 legacy_content::migrate_legacy_content,
                 ui_settings::load_ui_settings,
+                theme_presets::list_theme_presets,
+                theme_presets::get_theme_appearance,
+                theme_presets::save_theme_preset,
+                theme_presets::delete_theme_preset,
                 ui_settings::patch_ui_setting,
                 auth::check_etebase_server_url,
                 // Sync

@@ -159,6 +159,7 @@ python src-tauri/scripts/supervised-handoff-check.py --output .output/handoff-ch
 python src-tauri/scripts/supervised-handoff-ui-check.py --exe src-tauri/target/debug/mindstream-notes.exe --output .output/handoff-editor-check --check-progress
 python src-tauri/scripts/supervised-shortcuts-check.py --output .output/shortcut-check --check-update-recovery
 python src-tauri/scripts/supervised-startup-check.py --output .output/startup-check --check-ui
+python src-tauri/scripts/supervised-theme-check.py --output .output/theme-check
 ```
 
 The handoff fixture covers ordinary transfer, existing targets, missing targets,
@@ -180,6 +181,32 @@ that the exact surviving worker is adopted. `--check-ui` requires Windows and
 disabled missing-vault selection, and real select/create actions. No vault is
 chosen as a migration source until the user selects or creates one. Original index bytes and
 failure artifacts remain in the fixture directory.
+
+The Windows theme fixture seeds different legacy appearance/editor settings in
+two vaults. It checks root migration, live accent/font/mode changes across both
+vaults and a source popout, real preset selection/import, missing-preset fallback
+with retained selection, and cold restart. It verifies the original vault fields
+remain intact. Each vault gets its own automatic WebView2 debugging port; the
+fixture attaches separate WebDriver sessions to their `DevToolsActivePort` files.
+Those paths derive from the fixture's authenticated registrations and browser
+identity hash. One fixed debugging port cannot inspect separate vault browsers.
+Only the owned driver process stops directly; app cleanup uses authenticated Quit.
+
+Theme evidence from 2026-10-13 is retained in `.output/themes-final-native-check`.
+It includes the custom-preset settings screenshot and restarted computed styles.
+The final theme run passes all 145 affected frontend tests and Rust fmt/clippy/full
+tests. Windows passes 893 unit tests and one integration test, five ignored overall;
+Linux passes 895 unit tests and one integration test, two ignored overall.
+Windows repeats all ten handoff cases and all four startup cases in
+`.output/themes-handoff-regression` and `.output/themes-startup-regression`.
+Linux X11 repeats all ten handoff and both startup cases in
+`.output/linux-vault-check/native-20261012-230544` and
+`.output/linux-vault-check/startup-20261012-230824`.
+Nested Wayland repeats those cases, including focus, in
+`.output/linux-wayland-check/native-20261012-230623` and
+`.output/linux-wayland-check/startup-20261012-230908`.
+Native theme UI validation covers Windows; packaged macOS and the existing
+reboot/monitor/DPI/signed-updater release checks retain their prior status.
 
 For development lifetime, start a Vite server and run:
 

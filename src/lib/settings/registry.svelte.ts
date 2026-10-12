@@ -175,6 +175,10 @@ export type CustomComponentLoader = () => Promise<AnyComponent>;
 
 /** Components rendered in place of a generic control. */
 export const CUSTOM_COMPONENT_LOADERS: Record<string, CustomComponentLoader> = {
+  'theme-presets': () =>
+    import('./customs/ThemePresets.svelte').then(
+      (mod) => mod.default as unknown as AnyComponent
+    ),
   'sign-in-form': () =>
     import('./customs/SignInForm.svelte').then(
       (mod) => mod.default as unknown as AnyComponent

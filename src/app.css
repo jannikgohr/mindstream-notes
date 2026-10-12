@@ -151,9 +151,9 @@
   --primary: oklch(0.205 0 0);
   --primary-foreground: oklch(0.985 0 0);
   --secondary: var(--surface-2);
-  --secondary-foreground: oklch(0.205 0 0);
+  --secondary-foreground: var(--foreground);
   --muted: var(--surface-2);
-  --muted-foreground: oklch(0.556 0 0);
+  --muted-foreground: oklch(0.53 0 0);
   /* Hover wash. Translucent rather than opaque so one token reads
    * correctly on every elevation step — the old opaque value was equal to
    * --muted, which made hover invisible on any surface that happened to
@@ -242,7 +242,7 @@ html {
   --foreground: oklch(0.985 0 0);
   --primary: oklch(0.985 0 0);
   --primary-foreground: oklch(0.205 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
+  --secondary-foreground: var(--foreground);
   --muted-foreground: oklch(0.708 0 0);
   /* Slightly stronger than light mode: a white wash at 6% disappears on a
    * dark ground. */

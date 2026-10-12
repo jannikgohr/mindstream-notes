@@ -8,7 +8,8 @@ Ctrl/Command click, live ownership, and prepared-worker handoff. Durable recover
 keeps an open source and finishes the target after a saved source has exited.
 Missing startup vaults open an isolated picker without recreating missing data.
 
-Global plugin packages and theme presets are separate follow-up projects:
+Theme presets and device appearance shipped on 2026-10-13. Global plugin
+packages remain a separate follow-up project:
 
 - [Global plugins plan](global-plugins-implementation-plan.md)
 - [Theme presets plan](theme-presets-implementation-plan.md)
@@ -29,8 +30,8 @@ current release gates.
 
 Normal desktop startup uses the supervised runtime. Direct isolated-device tests,
 browser fallback and mobile retain their existing single-vault behavior. Global
-plugin packages, theme presets and device appearance migration are independent
-follow-ups; accent and UI font size remain vault-scoped.
+plugin packages remain an independent follow-up. Accent, UI font size and
+preset selection are device preferences; editor typography remains vault-scoped.
 
 ### Completed handoff and startup slice on 2026-10-12
 
