@@ -15,7 +15,9 @@ use sqlx::PgConnection;
 use crate::config::SignupPolicy;
 use crate::edge::AuthAttempt;
 use crate::error::{ApiError, ApiResult};
+use crate::events::{self, Event};
 use crate::keys::{hash_session_token, new_session_token, ChallengeCheck};
+use crate::security;
 use crate::wire::{
     LoginChallenge, LoginChallengeRequest, LoginResponse, LoginUser, Msgpack, SignedBody,
     SignedRequest, Signup,
@@ -103,21 +105,24 @@ pub(crate) fn username_key(username: &str) -> String {
 }
 
 #[derive(sqlx::FromRow)]
-struct Account {
-    id: i64,
-    username: String,
-    email: String,
-    version: i16,
-    salt: Vec<u8>,
-    login_pubkey: Vec<u8>,
-    pubkey: Vec<u8>,
-    encrypted_content: Vec<u8>,
-    disabled: bool,
+pub(crate) struct Account {
+    pub id: i64,
+    pub username: String,
+    pub email: String,
+    pub version: i16,
+    pub salt: Vec<u8>,
+    pub login_pubkey: Vec<u8>,
+    pub pubkey: Vec<u8>,
+    pub encrypted_content: Vec<u8>,
+    pub disabled: bool,
+    pub recovery_pubkey: Option<Vec<u8>>,
+    pub recovery_encrypted_content: Option<Vec<u8>>,
 }
 
 async fn find_account(conn: &mut PgConnection, username: &str) -> ApiResult<Option<Account>> {
     Ok(sqlx::query_as(
-        "SELECT id, username, email, version, salt, login_pubkey, pubkey, encrypted_content, disabled
+        "SELECT id, username, email, version, salt, login_pubkey, pubkey, encrypted_content,
+                disabled, recovery_pubkey, recovery_encrypted_content
          FROM accounts WHERE username_key = $1",
     )
     .bind(username_key(username))
@@ -139,18 +144,25 @@ fn device_name(headers: &HeaderMap) -> String {
         .collect()
 }
 
-async fn open_session(
+/// Start a session for a device. `second_factor` records that it got here
+/// by proving one.
+pub(crate) async fn open_session(
     conn: &mut PgConnection,
     account: Account,
     headers: &HeaderMap,
+    second_factor: bool,
 ) -> ApiResult<LoginResponse> {
     let (token, hash) = new_session_token();
-    sqlx::query("INSERT INTO sessions (account_id, token_hash, device_name) VALUES ($1, $2, $3)")
-        .bind(account.id)
-        .bind(&hash[..])
-        .bind(device_name(headers))
-        .execute(conn)
-        .await?;
+    sqlx::query(
+        "INSERT INTO sessions (account_id, token_hash, device_name, second_factor_at)
+         VALUES ($1, $2, $3, CASE WHEN $4 THEN now() END)",
+    )
+    .bind(account.id)
+    .bind(&hash[..])
+    .bind(device_name(headers))
+    .bind(second_factor)
+    .execute(conn)
+    .await?;
     Ok(LoginResponse {
         token,
         user: LoginUser {
@@ -178,12 +190,39 @@ pub(crate) fn validate_signup(body: &Signup) -> ApiResult<()> {
     if body.login_pubkey.len() != 32 || body.pubkey.len() != 32 {
         return Err(ApiError::bad_request("Malformed public key."));
     }
-    if body.salt.is_empty()
-        || body.salt.len() > 64
-        || body.encrypted_content.is_empty()
-        || body.encrypted_content.len() > MAX_KEY_BLOB_LEN
+    if body.salt.is_empty() || body.salt.len() > 64 {
+        return Err(ApiError::bad_request("Malformed account keys."));
+    }
+    validate_account_keys(&body.login_pubkey, &body.encrypted_content)?;
+    match (&body.recovery_pubkey, &body.recovery_encrypted_content) {
+        (None, None) => Ok(()),
+        (Some(pubkey), Some(content)) => validate_recovery_key(pubkey, content),
+        _ => Err(ApiError::bad_request(
+            "A recovery key comes with its copy of the account keys.",
+        )),
+    }
+}
+
+/// The key a password proves and the account keys wrapped under it.
+pub(crate) fn validate_account_keys(
+    login_pubkey: &[u8],
+    encrypted_content: &[u8],
+) -> ApiResult<()> {
+    if login_pubkey.len() != 32
+        || encrypted_content.is_empty()
+        || encrypted_content.len() > MAX_KEY_BLOB_LEN
     {
         return Err(ApiError::bad_request("Malformed account keys."));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_recovery_key(pubkey: &[u8], encrypted_content: &[u8]) -> ApiResult<()> {
+    if pubkey.len() != 32
+        || encrypted_content.is_empty()
+        || encrypted_content.len() > MAX_KEY_BLOB_LEN
+    {
+        return Err(ApiError::bad_request("Malformed recovery key."));
     }
     Ok(())
 }
@@ -191,8 +230,9 @@ pub(crate) fn validate_signup(body: &Signup) -> ApiResult<()> {
 pub(crate) async fn insert_account(conn: &mut PgConnection, body: &Signup) -> ApiResult<i64> {
     let inserted: Option<i64> = sqlx::query_scalar(
         "INSERT INTO accounts
-             (username, username_key, email, version, salt, login_pubkey, pubkey, encrypted_content)
-         VALUES ($1, $2, $3, 1, $4, $5, $6, $7)
+             (username, username_key, email, version, salt, login_pubkey, pubkey, encrypted_content,
+              recovery_pubkey, recovery_encrypted_content)
+         VALUES ($1, $2, $3, 1, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (username_key) DO NOTHING
          RETURNING id",
     )
@@ -203,6 +243,8 @@ pub(crate) async fn insert_account(conn: &mut PgConnection, body: &Signup) -> Ap
     .bind(&body.login_pubkey[..])
     .bind(&body.pubkey[..])
     .bind(&body.encrypted_content[..])
+    .bind(body.recovery_pubkey.as_ref().map(|key| &key[..]))
+    .bind(body.recovery_encrypted_content.as_ref().map(|c| &c[..]))
     .fetch_optional(conn)
     .await?;
     inserted.ok_or_else(|| {
@@ -229,7 +271,7 @@ pub async fn signup(
     let account = find_account(&mut tx, &body.user.username)
         .await?
         .ok_or_else(|| ApiError::internal("account vanished during signup"))?;
-    let response = open_session(&mut tx, account, &headers).await?;
+    let response = open_session(&mut tx, account, &headers, false).await?;
     tx.commit().await?;
     Ok(Msgpack(response))
 }
@@ -285,14 +327,24 @@ fn host_matches(state: &AppState, headers: &HeaderMap, claimed: &str) -> bool {
     host_allowed(&state.config.public_hosts, request_host, claimed)
 }
 
+/// Which of an account's keys a request has to be signed with.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SignedBy {
+    /// The key derived from the password.
+    Password,
+    /// The key derived from the recovery secret.
+    RecoveryKey,
+}
+
 /// Check everything a signed request claims, and return the account it is
 /// for along with the decoded body.
-async fn verify_signed(
+pub(crate) async fn verify_signed(
     state: &AppState,
     conn: &mut PgConnection,
     headers: &HeaderMap,
     request: &SignedRequest,
     action: &str,
+    signed_by: SignedBy,
 ) -> ApiResult<(Account, SignedBody)> {
     let body: SignedBody = rmp_serde::from_slice(&request.response)
         .map_err(|err| ApiError::bad_request(format!("Malformed login response: {err}")))?;
@@ -330,11 +382,25 @@ async fn verify_signed(
         }
     }
 
-    let bad_signature =
-        || ApiError::unauthorized("login_bad_signature", "Wrong password for user.");
-    let key_bytes: [u8; 32] = account.login_pubkey[..]
+    let bad_signature = || match signed_by {
+        SignedBy::Password => {
+            ApiError::unauthorized("login_bad_signature", "Wrong password for user.")
+        }
+        SignedBy::RecoveryKey => {
+            ApiError::unauthorized("recovery_bad_signature", "Wrong recovery key for user.")
+        }
+    };
+    let stored = match signed_by {
+        SignedBy::Password => Some(&account.login_pubkey),
+        // An account without a recovery key answers like one given the
+        // wrong key, so asking does not reveal which accounts have one.
+        SignedBy::RecoveryKey => account.recovery_pubkey.as_ref(),
+    };
+    let key_bytes: [u8; 32] = stored
+        .ok_or_else(bad_signature)?
+        .as_slice()
         .try_into()
-        .map_err(|_| ApiError::internal("stored login key has the wrong length"))?;
+        .map_err(|_| ApiError::internal("a stored public key has the wrong length"))?;
     let key = VerifyingKey::from_bytes(&key_bytes).map_err(|_| bad_signature())?;
     let signature = Signature::from_slice(&request.signature).map_err(|_| bad_signature())?;
     key.verify_strict(&request.response, &signature)
@@ -349,6 +415,27 @@ async fn verify_signed(
     Ok((account, body))
 }
 
+/// A signed request from a device that is signed in: the password proven
+/// again, for the account the session belongs to.
+pub(crate) async fn verify_own(
+    state: &AppState,
+    conn: &mut PgConnection,
+    headers: &HeaderMap,
+    user: &AuthUser,
+    request: &SignedRequest,
+    action: &str,
+) -> ApiResult<(Account, SignedBody)> {
+    let (account, body) =
+        verify_signed(state, conn, headers, request, action, SignedBy::Password).await?;
+    if account.id != user.account_id {
+        return Err(ApiError::forbidden(
+            "wrong_user",
+            "This request was signed for another account.",
+        ));
+    }
+    Ok((account, body))
+}
+
 pub async fn login(
     State(state): State<AppState>,
     _attempt: AuthAttempt,
@@ -356,20 +443,43 @@ pub async fn login(
     Msgpack(request): Msgpack<SignedRequest>,
 ) -> ApiResult<Msgpack<LoginResponse>> {
     let mut conn = state.pool.acquire().await?;
-    let (account, _) = verify_signed(&state, &mut conn, &headers, &request, "login").await?;
-    Ok(Msgpack(open_session(&mut conn, account, &headers).await?))
+    let (account, body) = verify_signed(
+        &state,
+        &mut conn,
+        &headers,
+        &request,
+        "login",
+        SignedBy::Password,
+    )
+    .await?;
+    // Asked for only once the password has been proven, so the answer does
+    // not tell a stranger which accounts have a second factor.
+    let second_factor =
+        security::check_second_factor(&state, &mut conn, account.id, body.totp.as_deref()).await?;
+    Ok(Msgpack(
+        open_session(&mut conn, account, &headers, second_factor).await?,
+    ))
 }
 
 pub async fn logout(State(state): State<AppState>, user: AuthUser) -> ApiResult<StatusCode> {
+    let mut tx = state.pool.begin().await?;
     sqlx::query("DELETE FROM sessions WHERE id = $1")
         .bind(user.session_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    let closed = Event::SessionClosed {
+        session: user.session_id,
+    };
+    events::publish(&mut tx, &closed).await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// Replace the login key and the wrapped account keys. Signed with the old
 /// login key, so a session token alone cannot change the password.
+///
+/// Every other device is signed out. A password is often changed because
+/// someone else may know it, and whoever that is may be signed in.
 pub async fn change_password(
     State(state): State<AppState>,
     _attempt: AuthAttempt,
@@ -379,29 +489,20 @@ pub async fn change_password(
 ) -> ApiResult<StatusCode> {
     let mut tx = state.pool.begin().await?;
     let (account, body) =
-        verify_signed(&state, &mut tx, &headers, &request, "changePassword").await?;
-    if account.id != user.account_id {
-        return Err(ApiError::forbidden(
-            "wrong_user",
-            "This request was signed for another account.",
-        ));
-    }
+        verify_own(&state, &mut tx, &headers, &user, &request, "changePassword").await?;
     let (Some(login_pubkey), Some(encrypted_content)) = (body.login_pubkey, body.encrypted_content)
     else {
         return Err(ApiError::bad_request("Missing the new account keys."));
     };
-    if login_pubkey.len() != 32
-        || encrypted_content.is_empty()
-        || encrypted_content.len() > MAX_KEY_BLOB_LEN
-    {
-        return Err(ApiError::bad_request("Malformed account keys."));
-    }
+    validate_account_keys(&login_pubkey, &encrypted_content)?;
+    security::check_second_factor(&state, &mut tx, account.id, body.totp.as_deref()).await?;
     sqlx::query("UPDATE accounts SET login_pubkey = $2, encrypted_content = $3 WHERE id = $1")
         .bind(account.id)
         .bind(&login_pubkey[..])
         .bind(&encrypted_content[..])
         .execute(&mut *tx)
         .await?;
+    security::close_sessions(&mut tx, account.id, Some(user.session_id)).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }

@@ -7,6 +7,7 @@
 use crate::auth::username_key;
 use crate::events::{self, Event};
 use crate::limits::{self, Entitlements, Usage};
+use crate::security;
 use crate::AppState;
 
 #[derive(Debug, sqlx::FromRow)]
@@ -14,6 +15,8 @@ pub struct AccountSummary {
     pub username: String,
     pub email: String,
     pub disabled: bool,
+    /// Whether signing in takes a code from an authenticator.
+    pub second_factor: bool,
     pub sessions: i64,
     /// Ciphertext bytes in the collections this account owns.
     pub bytes_used: i64,
@@ -22,6 +25,8 @@ pub struct AccountSummary {
 pub async fn list_accounts(state: &AppState) -> Result<Vec<AccountSummary>, sqlx::Error> {
     sqlx::query_as(
         "SELECT a.username, a.email, a.disabled,
+                EXISTS (SELECT 1 FROM second_factors f
+                        WHERE f.account_id = a.id AND f.confirmed_at IS NOT NULL) AS second_factor,
                 (SELECT count(*) FROM sessions s WHERE s.account_id = a.id) AS sessions,
                 COALESCE((SELECT sum(c.bytes_used) FROM collections c WHERE c.owner_id = a.id), 0)::bigint
                     AS bytes_used
@@ -78,6 +83,21 @@ pub async fn delete_account(state: &AppState, username: &str) -> Result<bool, sq
         .bind(id)
         .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// Take the second factor off an account whose owner has lost the
+/// authenticator and the backup codes. Returns whether the account exists.
+///
+/// The password still stands between anyone and the account. Whoever asks
+/// for this should be shown to be the owner by some other means first.
+pub async fn reset_second_factor(state: &AppState, username: &str) -> Result<bool, sqlx::Error> {
+    let Some(id) = account_id(state, username).await? else {
+        return Ok(false);
+    };
+    let mut tx = state.pool.begin().await?;
+    security::remove_second_factor(&mut tx, id).await?;
     tx.commit().await?;
     Ok(true)
 }

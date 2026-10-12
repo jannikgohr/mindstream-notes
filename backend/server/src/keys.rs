@@ -21,7 +21,12 @@ const CHALLENGE_NONCE_LEN: usize = 16;
 const CHALLENGE_TAG_LEN: usize = 32;
 /// How long a client has to answer a login challenge.
 const CHALLENGE_TTL_SECS: u64 = 300;
-const ROOM_TICKET_BODY_LEN: usize = 32;
+const ROOM_TICKET_BODY_LEN: usize = 40;
+const GRANT_BODY_LEN: usize = 16;
+const GRANT_TAG_LEN: usize = 32;
+/// How long a user has to choose a new password once the recovery key has
+/// been accepted.
+const RECOVERY_GRANT_TTL_SECS: u64 = 600;
 const ROOM_TICKET_TAG_LEN: usize = 32;
 /// A room ticket only has to survive the trip from the app's backend to its
 /// WebView and on to the server.
@@ -37,7 +42,7 @@ pub fn to_base64(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
-fn now_secs() -> u64 {
+pub(crate) fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -49,6 +54,7 @@ pub struct Keys {
     stoken: [u8; 32],
     challenge: [u8; 32],
     room_ticket: [u8; 32],
+    recovery_grant: [u8; 32],
 }
 
 /// Who may enter which room. Carried in a ticket, so the socket that
@@ -56,6 +62,9 @@ pub struct Keys {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RoomTicket {
     pub account_id: i64,
+    /// The session that asked for the ticket. The room socket closes when
+    /// that session ends.
+    pub session_id: i64,
     pub collection_id: i64,
     pub item_id: i64,
 }
@@ -87,6 +96,7 @@ impl Keys {
             stoken: derive(b"mindstream-server/stoken/v1"),
             challenge: derive(b"mindstream-server/login-challenge/v1"),
             room_ticket: derive(b"mindstream-server/room-ticket/v1"),
+            recovery_grant: derive(b"mindstream-server/recovery-grant/v1"),
         }
     }
 
@@ -161,6 +171,7 @@ impl Keys {
         let mut out = Vec::with_capacity(ROOM_TICKET_BODY_LEN + ROOM_TICKET_TAG_LEN);
         out.extend_from_slice(&expires.to_be_bytes());
         out.extend_from_slice(&ticket.account_id.to_be_bytes());
+        out.extend_from_slice(&ticket.session_id.to_be_bytes());
         out.extend_from_slice(&ticket.collection_id.to_be_bytes());
         out.extend_from_slice(&ticket.item_id.to_be_bytes());
         let mut mac = HmacSha256::new_from_slice(&self.room_ticket).expect("any key length works");
@@ -191,9 +202,44 @@ impl Keys {
         }
         Some(RoomTicket {
             account_id: i64::from_be_bytes(field(1)),
-            collection_id: i64::from_be_bytes(field(2)),
-            item_id: i64::from_be_bytes(field(3)),
+            session_id: i64::from_be_bytes(field(2)),
+            collection_id: i64::from_be_bytes(field(3)),
+            item_id: i64::from_be_bytes(field(4)),
         })
+    }
+
+    /// Proof that an account's recovery key and second factor were just
+    /// accepted, good for long enough to choose a new password.
+    pub fn recovery_grant(&self, account_id: i64) -> String {
+        self.recovery_grant_expiring(account_id, now_secs() + RECOVERY_GRANT_TTL_SECS)
+    }
+
+    fn recovery_grant_expiring(&self, account_id: i64, expires: u64) -> String {
+        let mut out = Vec::with_capacity(GRANT_BODY_LEN + GRANT_TAG_LEN);
+        out.extend_from_slice(&expires.to_be_bytes());
+        out.extend_from_slice(&account_id.to_be_bytes());
+        let mut mac =
+            HmacSha256::new_from_slice(&self.recovery_grant).expect("any key length works");
+        mac.update(&out);
+        out.extend_from_slice(&mac.finalize().into_bytes());
+        to_base64(&out)
+    }
+
+    /// The account a recovery grant is for, if it is ours and still valid.
+    pub fn verify_recovery_grant(&self, token: &str) -> Option<i64> {
+        let bytes = URL_SAFE_NO_PAD.decode(token).ok()?;
+        if bytes.len() != GRANT_BODY_LEN + GRANT_TAG_LEN {
+            return None;
+        }
+        let (body, tag) = bytes.split_at(GRANT_BODY_LEN);
+        let mut mac =
+            HmacSha256::new_from_slice(&self.recovery_grant).expect("any key length works");
+        mac.update(body);
+        mac.verify_slice(tag).ok()?;
+        if u64::from_be_bytes(body[..8].try_into().expect("8 bytes")) < now_secs() {
+            return None;
+        }
+        Some(i64::from_be_bytes(body[8..].try_into().expect("8 bytes")))
     }
 }
 
@@ -257,6 +303,7 @@ mod tests {
         let keys = Keys::from_secret(b"one");
         let ticket = RoomTicket {
             account_id: 3,
+            session_id: 4,
             collection_id: 5,
             item_id: 8,
         };
@@ -267,11 +314,32 @@ mod tests {
 
         // Swapping the collection for another invalidates it.
         let mut bytes = URL_SAFE_NO_PAD.decode(&token).unwrap();
-        bytes[23] ^= 1;
+        bytes[31] ^= 1;
         assert_eq!(keys.verify_room_ticket(&to_base64(&bytes)), None);
 
         let expired = keys.room_ticket_expiring(ticket, now_secs() - 1);
         assert_eq!(keys.verify_room_ticket(&expired), None);
+    }
+
+    #[test]
+    fn recovery_grant_names_its_account_and_expires() {
+        let keys = Keys::from_secret(b"one");
+        let grant = keys.recovery_grant(12);
+        assert_eq!(keys.verify_recovery_grant(&grant), Some(12));
+        assert_eq!(
+            Keys::from_secret(b"two").verify_recovery_grant(&grant),
+            None
+        );
+        let expired = keys.recovery_grant_expiring(12, now_secs() - 1);
+        assert_eq!(keys.verify_recovery_grant(&expired), None);
+        // A room ticket is not a grant, though the same server made both.
+        let ticket = keys.room_ticket(RoomTicket {
+            account_id: 12,
+            session_id: 1,
+            collection_id: 1,
+            item_id: 1,
+        });
+        assert_eq!(keys.verify_recovery_grant(&ticket), None);
     }
 
     #[test]

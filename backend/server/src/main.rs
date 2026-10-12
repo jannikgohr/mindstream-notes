@@ -64,6 +64,10 @@ enum UserCommand {
     },
     /// Lift every limit from an account.
     Unlimit { username: String },
+    /// Remove an account's authenticator and backup codes, for an owner who
+    /// has lost both. Signing in then takes the password alone.
+    #[command(name = "reset-2fa")]
+    ResetSecondFactor { username: String },
 }
 
 const MIB: i64 = 1024 * 1024;
@@ -102,16 +106,17 @@ async fn manage_users(
         UserCommand::List => {
             let accounts = admin::list_accounts(state).await?;
             println!(
-                "{:<32} {:<36} {:>8} {:>14}  state",
-                "username", "email", "sessions", "bytes"
+                "{:<32} {:<36} {:>8} {:>14}  {:<4} state",
+                "username", "email", "sessions", "bytes", "2fa"
             );
             for account in &accounts {
                 println!(
-                    "{:<32} {:<36} {:>8} {:>14}  {}",
+                    "{:<32} {:<36} {:>8} {:>14}  {:<4} {}",
                     account.username,
                     account.email,
                     account.sessions,
                     account.bytes_used,
+                    if account.second_factor { "on" } else { "off" },
                     if account.disabled {
                         "disabled"
                     } else {
@@ -185,6 +190,10 @@ async fn manage_users(
         UserCommand::Unlimit { username } => {
             let found = admin::set_entitlements(state, &username, None).await?;
             (username, found, "freed of limits")
+        }
+        UserCommand::ResetSecondFactor { username } => {
+            let found = admin::reset_second_factor(state, &username).await?;
+            (username, found, "no longer needs a code to sign in")
         }
     };
     if !found {

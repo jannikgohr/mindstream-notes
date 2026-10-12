@@ -77,6 +77,7 @@ impl Kick {
 
 struct Peer {
     account_id: i64,
+    session_id: i64,
     username: String,
     access: i16,
     frames: UnboundedSender<Bytes>,
@@ -194,6 +195,7 @@ impl Hub {
         &self,
         key: RoomKey,
         account_id: i64,
+        session_id: i64,
         username: String,
         access: i16,
     ) -> Result<Joined, u16> {
@@ -212,6 +214,7 @@ impl Hub {
         let (frames, receiver) = unbounded_channel();
         let peer = Peer {
             account_id,
+            session_id,
             username,
             access,
             frames,
@@ -375,15 +378,40 @@ impl Hub {
 
     /// The account was disabled or deleted: close every socket it holds.
     pub fn account_closed(&self, account_id: i64) {
+        self.close_sockets(CLOSE_REMOVED, |account, _| account == account_id);
+    }
+
+    /// One session ended: close the sockets it opened and leave the
+    /// account's other devices alone.
+    pub fn session_closed(&self, session_id: i64) {
+        self.close_sockets(CLOSE_UNAUTHORIZED, |_, session| session == session_id);
+    }
+
+    /// Every session of an account ended, apart from `keep`.
+    pub fn sessions_closed(&self, account_id: i64, keep: Option<i64>) {
+        self.close_sockets(CLOSE_UNAUTHORIZED, |account, session| {
+            account == account_id && Some(session) != keep
+        });
+    }
+
+    /// Close the room and feed sockets whose account and session match.
+    fn close_sockets(&self, code: u16, matches: impl Fn(i64, i64) -> bool) {
         let mut inner = self.lock();
         for room in inner.rooms.values_mut() {
-            Self::evict(room, CLOSE_REMOVED, |peer| peer.account_id == account_id);
+            Self::evict(room, code, |peer| matches(peer.account_id, peer.session_id));
         }
         inner.rooms.retain(|_, room| !room.is_empty());
-        for feed in inner.feeds.remove(&account_id).unwrap_or_default() {
-            feed.signal.closed.store(true, Ordering::SeqCst);
-            feed.signal.notify.notify_one();
+        for (account, feeds) in inner.feeds.iter_mut() {
+            feeds.retain(|feed| {
+                if !matches(*account, feed.session_id) {
+                    return true;
+                }
+                feed.signal.closed.store(true, Ordering::SeqCst);
+                feed.signal.notify.notify_one();
+                false
+            });
         }
+        inner.feeds.retain(|_, feeds| !feeds.is_empty());
     }
 
     /// The collection is gone: close its rooms.
@@ -469,8 +497,14 @@ mod tests {
     };
 
     fn join(hub: &Hub, account: i64, access: i16) -> Joined {
-        hub.join(ROOM, account, format!("user{account}"), access)
-            .unwrap()
+        hub.join(
+            ROOM,
+            account,
+            account * 10,
+            format!("user{account}"),
+            access,
+        )
+        .unwrap()
     }
 
     /// Everything queued for a member so far, as (kind, rest of frame).
@@ -625,11 +659,59 @@ mod tests {
             held.push(join(&hub, 1, ACCESS_ADMIN));
         }
         assert_eq!(
-            hub.join(ROOM, 1, "user1".into(), ACCESS_ADMIN).err(),
+            hub.join(ROOM, 1, 10, "user1".into(), ACCESS_ADMIN).err(),
             Some(CLOSE_TOO_MANY)
         );
         // Someone else is not affected.
         join(&hub, 2, ACCESS_ADMIN);
+    }
+
+    #[tokio::test]
+    async fn ending_a_session_closes_only_what_it_opened() {
+        let hub = Hub::default();
+        let laptop = hub.join(ROOM, 1, 100, "ann".into(), ACCESS_ADMIN).unwrap();
+        let mut phone = hub.join(ROOM, 1, 101, "ann".into(), ACCESS_ADMIN).unwrap();
+        let (_, laptop_feed) = hub.subscribe_feed(1, 100);
+        let (_, phone_feed) = hub.subscribe_feed(1, 101);
+        drain(&mut phone);
+
+        hub.session_closed(100);
+        assert_eq!(laptop.kick.fired().await, CLOSE_UNAUTHORIZED);
+        assert!(laptop_feed.closed.load(Ordering::SeqCst));
+        assert!(!phone_feed.closed.load(Ordering::SeqCst));
+        assert_eq!(kinds(&mut phone), vec![FRAME_LEFT]);
+        assert_eq!(
+            hub.relay(ROOM, phone.id, CLASS_UPDATE, b"x", None),
+            Relay::Sent
+        );
+    }
+
+    #[tokio::test]
+    async fn ending_the_other_sessions_spares_the_one_that_asked() {
+        let hub = Hub::default();
+        let kept = hub.join(ROOM, 1, 100, "ann".into(), ACCESS_ADMIN).unwrap();
+        let ended = hub.join(ROOM, 1, 101, "ann".into(), ACCESS_ADMIN).unwrap();
+        let mut stranger = hub
+            .join(ROOM, 2, 200, "bob".into(), ACCESS_READ_WRITE)
+            .unwrap();
+        let (_, kept_feed) = hub.subscribe_feed(1, 100);
+        let (_, ended_feed) = hub.subscribe_feed(1, 101);
+        let (_, stranger_feed) = hub.subscribe_feed(2, 200);
+        drain(&mut stranger);
+
+        hub.sessions_closed(1, Some(100));
+        assert_eq!(ended.kick.fired().await, CLOSE_UNAUTHORIZED);
+        assert!(ended_feed.closed.load(Ordering::SeqCst));
+        assert!(!kept_feed.closed.load(Ordering::SeqCst));
+        assert!(!stranger_feed.closed.load(Ordering::SeqCst));
+        assert_eq!(kinds(&mut stranger), vec![FRAME_LEFT]);
+        assert_eq!(hub.room_memberships(), vec![(1, 1), (1, 2)]);
+
+        // With nothing to keep, the account's last socket goes too.
+        hub.sessions_closed(1, None);
+        assert_eq!(kept.kick.fired().await, CLOSE_UNAUTHORIZED);
+        assert!(kept_feed.closed.load(Ordering::SeqCst));
+        assert_eq!(hub.room_memberships(), vec![(1, 2)]);
     }
 
     #[test]

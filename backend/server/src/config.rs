@@ -65,6 +65,26 @@ pub struct Config {
     #[arg(long, env = "MINDSTREAM_ADMIN_TOKEN", hide_env_values = true)]
     pub admin_token: Option<String>,
 
+    /// Key for the few secrets the server has to read back, which today are
+    /// the authenticator secrets: 32 bytes as URL-safe base64. Without it a
+    /// key is created in the key file on first start.
+    #[arg(long, env = "MINDSTREAM_SECRET_KEY", hide_env_values = true)]
+    pub secret_key: Option<String>,
+
+    /// Where that key is kept when it is not given directly. The default is
+    /// `secret.key` in the blob directory.
+    #[arg(long, env = "MINDSTREAM_SECRET_KEY_FILE")]
+    pub secret_key_file: Option<PathBuf>,
+
+    /// The name an authenticator app shows next to an account of this
+    /// server.
+    #[arg(
+        long,
+        env = "MINDSTREAM_TOTP_ISSUER",
+        default_value = "Mindstream Notes"
+    )]
+    pub totp_issuer: String,
+
     /// Largest request body accepted, in bytes.
     #[arg(long, env = "MINDSTREAM_MAX_BODY_BYTES", default_value_t = 75 * 1024 * 1024)]
     pub max_body_bytes: usize,
@@ -94,6 +114,12 @@ impl Config {
             .filter(|token| !token.is_empty())
     }
 
+    pub fn secret_key_file(&self) -> PathBuf {
+        self.secret_key_file
+            .clone()
+            .unwrap_or_else(|| self.blob_dir.join("secret.key"))
+    }
+
     /// Settings for a server started inside a test.
     pub fn for_tests(database_url: String, blob_dir: PathBuf) -> Self {
         Self {
@@ -106,6 +132,9 @@ impl Config {
             auth_rate_per_minute: 0,
             auth_rate_burst: 1,
             admin_token: None,
+            secret_key: None,
+            secret_key_file: None,
+            totp_issuer: "Mindstream Tests".into(),
             max_body_bytes: 75 * 1024 * 1024,
             inline_chunk_bytes: 20 * 1024,
             database_connections: 4,

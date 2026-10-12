@@ -8,6 +8,7 @@
 
 #![allow(dead_code)] // each test file uses its own subset
 
+pub mod keyed;
 pub mod raw;
 
 use std::sync::atomic::{AtomicU64, Ordering};

@@ -21,10 +21,13 @@ mod hub;
 mod keys;
 pub mod limits;
 mod rooms;
+mod security;
 mod sharing;
 mod test_reset;
 #[cfg(test)]
 mod testing;
+pub mod totp;
+mod vault;
 mod wire;
 
 use std::net::SocketAddr;
@@ -47,7 +50,9 @@ pub struct Inner {
     pub(crate) pool: PgPool,
     pub(crate) blobs: BlobStore,
     pub(crate) keys: Keys,
+    pub(crate) vault: vault::Vault,
     pub(crate) auth_limiter: edge::RateLimiter,
+    pub(crate) code_limiter: security::CodeLimiter,
     pub(crate) hub: hub::Hub,
     pub(crate) config: Config,
 }
@@ -68,6 +73,7 @@ pub enum StartError {
     Database(sqlx::Error),
     Migration(sqlx::migrate::MigrateError),
     Blobs(std::io::Error),
+    SecretKey(std::io::Error),
 }
 
 impl std::fmt::Display for StartError {
@@ -76,6 +82,7 @@ impl std::fmt::Display for StartError {
             StartError::Database(err) => write!(f, "database: {err}"),
             StartError::Migration(err) => write!(f, "migration: {err}"),
             StartError::Blobs(err) => write!(f, "blob directory: {err}"),
+            StartError::SecretKey(err) => write!(f, "secret key: {err}"),
         }
     }
 }
@@ -99,13 +106,18 @@ impl AppState {
         let blobs = BlobStore::open(&config.blob_dir)
             .await
             .map_err(StartError::Blobs)?;
+        let vault = vault::Vault::load(config.secret_key.as_deref(), &config.secret_key_file())
+            .await
+            .map_err(StartError::SecretKey)?;
         let auth_limiter =
             edge::RateLimiter::new(config.auth_rate_per_minute, config.auth_rate_burst);
         let state = Self(Arc::new(Inner {
             pool,
             blobs,
             keys,
+            vault,
             auth_limiter,
+            code_limiter: security::CodeLimiter::default(),
             hub: hub::Hub::default(),
             config,
         }));
@@ -153,6 +165,24 @@ pub fn router(state: AppState) -> Router {
         .route("/mindstream/info/", get(info))
         .route("/mindstream/usage/", get(limits::usage))
         .route("/mindstream/feed/", get(feed::feed_socket))
+        .route("/mindstream/security/", get(security::status))
+        .route("/mindstream/totp/enroll/", post(security::enroll_totp))
+        .route("/mindstream/totp/confirm/", post(security::confirm_totp))
+        .route("/mindstream/totp/disable/", post(security::disable_totp))
+        .route(
+            "/mindstream/backup-codes/",
+            post(security::new_backup_codes),
+        )
+        .route("/mindstream/recovery/", put(security::set_recovery))
+        .route("/mindstream/sessions/", get(security::list_sessions))
+        .route(
+            "/mindstream/sessions/revoke-others/",
+            post(security::revoke_other_sessions),
+        )
+        .route(
+            "/mindstream/sessions/{session}/",
+            delete(security::revoke_session),
+        )
         .route("/room/", get(rooms::room_socket))
         .route(
             "/collection/{collection}/item/{item}/room-ticket/",
@@ -171,6 +201,11 @@ pub fn router(state: AppState) -> Router {
             post(auth::change_password),
         )
         .route("/authentication/dashboard_url/", post(auth::dashboard_url))
+        .route("/authentication/recover/", post(security::recover))
+        .route(
+            "/authentication/recover/complete/",
+            post(security::complete_recovery),
+        )
         .route(
             "/collection/",
             get(collections::list_all).post(collections::create_collection),

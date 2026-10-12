@@ -26,8 +26,12 @@ services:
       MINDSTREAM_TEST_RESET: ${MINDSTREAM_TEST_RESET:-false}
       # Lets another program set account limits. Empty leaves that interface off.
       MINDSTREAM_ADMIN_TOKEN: ${MINDSTREAM_ADMIN_TOKEN:-}
+      # Seals authenticator secrets. Empty makes the server create a key in
+      # the volume below on first start.
+      MINDSTREAM_SECRET_KEY: ${MINDSTREAM_SECRET_KEY:-}
     volumes:
-      # Attachment chunks. Losing this volume loses every attachment.
+      # Attachment chunks, and the secret key unless one is given above.
+      # Losing this volume loses every attachment and every authenticator.
       - blobs:/data
     ports:
       - '${MINDSTREAM_PORT:-3735}:3735'

@@ -7,7 +7,8 @@
  * The server must have been started with the reset route on
  * (MINDSTREAM_TEST_RESET=true) and signup open, because every test begins by
  * wiping and recreating its two accounts. The suite therefore runs one test
- * at a time.
+ * at a time. It also signs in more often than the sign-in limit allows, so
+ * start the server with MINDSTREAM_AUTH_RATE_PER_MINUTE=0.
  *
  * The client is checked out at the revision the app pins in
  * src-tauri/Cargo.lock, so the server is held to what the app actually ships.

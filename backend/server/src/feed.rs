@@ -15,7 +15,7 @@ use axum::response::Response;
 use serde::Serialize;
 
 use crate::auth::AuthUser;
-use crate::hub::CLOSE_REMOVED;
+use crate::hub::CLOSE_UNAUTHORIZED;
 use crate::{AppState, PROTOCOL_LEVEL};
 
 const PING_INTERVAL: Duration = Duration::from_secs(30);
@@ -61,7 +61,7 @@ async fn serve(state: AppState, user: AuthUser, mut socket: WebSocket) {
     ping.tick().await;
     let mut last_heard = Instant::now();
 
-    let removed = 'serving: {
+    let signed_out = 'serving: {
         let hello = Hello {
             protocol: PROTOCOL_LEVEL,
         };
@@ -101,10 +101,10 @@ async fn serve(state: AppState, user: AuthUser, mut socket: WebSocket) {
     };
 
     state.hub.unsubscribe_feed(user.account_id, id);
-    if removed {
+    if signed_out {
         let frame = CloseFrame {
-            code: CLOSE_REMOVED,
-            reason: "account closed".into(),
+            code: CLOSE_UNAUTHORIZED,
+            reason: "not signed in".into(),
         };
         let _ = socket.send(Message::Close(Some(frame))).await;
     }

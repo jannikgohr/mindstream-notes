@@ -68,6 +68,7 @@ pub async fn room_ticket(
     Ok(Msgpack(TicketResponse {
         ticket: state.keys.room_ticket(RoomTicket {
             account_id: user.account_id,
+            session_id: user.session_id,
             collection_id: collection.id,
             item_id,
         }),
@@ -86,7 +87,7 @@ pub async fn room_socket(State(state): State<AppState>, upgrade: WebSocketUpgrad
 fn close_reason(code: u16) -> &'static str {
     match code {
         crate::hub::CLOSE_BAD_FRAME => "malformed frame",
-        crate::hub::CLOSE_UNAUTHORIZED => "no valid ticket",
+        crate::hub::CLOSE_UNAUTHORIZED => "not signed in",
         crate::hub::CLOSE_REMOVED => "no longer a member",
         crate::hub::CLOSE_SLOW => "not keeping up",
         crate::hub::CLOSE_TOO_MANY => "too many sockets",
@@ -104,10 +105,7 @@ async fn close(socket: &mut WebSocket, code: u16) {
 
 /// Wait for the ticket and decide, from the database as it is now, whether
 /// its holder may enter and with what access.
-async fn admit(
-    state: &AppState,
-    socket: &mut WebSocket,
-) -> Result<(RoomKey, i64, String, i16), u16> {
+async fn admit(state: &AppState, socket: &mut WebSocket) -> Result<(RoomTicket, String, i16), u16> {
     let hello = match tokio::time::timeout(HELLO_TIMEOUT, socket.recv()).await {
         Ok(Some(Ok(Message::Binary(frame)))) if frame.first() == Some(&FRAME_HELLO) => frame,
         _ => return Err(CLOSE_UNAUTHORIZED),
@@ -118,17 +116,20 @@ async fn admit(
         .ok_or(CLOSE_UNAUTHORIZED)?;
 
     // The ticket says what was true when it was issued. The member may have
-    // been removed, downgraded or disabled since, or the item deleted.
+    // been removed, downgraded or disabled since, or signed out, or the item
+    // deleted.
     let row: Option<(i16, String)> = sqlx::query_as(
         "SELECT m.access_level, a.username
          FROM members m
          JOIN accounts a ON a.id = m.account_id AND NOT a.disabled
+         JOIN sessions s ON s.account_id = a.id AND s.id = $4
          JOIN items i ON i.collection_id = m.collection_id AND i.id = $3
          WHERE m.collection_id = $1 AND m.account_id = $2",
     )
     .bind(ticket.collection_id)
     .bind(ticket.account_id)
     .bind(ticket.item_id)
+    .bind(ticket.session_id)
     .fetch_optional(&state.pool)
     .await
     .map_err(|err| {
@@ -136,24 +137,27 @@ async fn admit(
         CLOSE_UNAUTHORIZED
     })?;
     let (access, username) = row.ok_or(CLOSE_REMOVED)?;
-    let key = RoomKey {
-        collection_id: ticket.collection_id,
-        item_id: ticket.item_id,
-    };
-    Ok((key, ticket.account_id, username, access))
+    Ok((ticket, username, access))
 }
 
 async fn serve(state: AppState, mut socket: WebSocket) {
-    let (key, account_id, username, access) = match admit(&state, &mut socket).await {
+    let (ticket, username, access) = match admit(&state, &mut socket).await {
         Ok(admitted) => admitted,
         Err(code) => return close(&mut socket, code).await,
+    };
+    let key = RoomKey {
+        collection_id: ticket.collection_id,
+        item_id: ticket.item_id,
     };
     let Joined {
         id,
         mut frames,
         queued,
         kick,
-    } = match state.hub.join(key, account_id, username, access) {
+    } = match state
+        .hub
+        .join(key, ticket.account_id, ticket.session_id, username, access)
+    {
         Ok(joined) => joined,
         Err(code) => return close(&mut socket, code).await,
     };

@@ -225,6 +225,11 @@ pub struct Signup {
     pub login_pubkey: ByteBuf,
     pub pubkey: ByteBuf,
     pub encrypted_content: ByteBuf,
+    /// A recovery key set up along with the account.
+    #[serde(default)]
+    pub recovery_pubkey: Option<ByteBuf>,
+    #[serde(default)]
+    pub recovery_encrypted_content: Option<ByteBuf>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -254,11 +259,23 @@ pub struct SignedBody {
     pub challenge: ByteBuf,
     pub host: String,
     pub action: String,
-    /// Only on a password change.
+    /// Only when the password changes.
     #[serde(default)]
     pub login_pubkey: Option<ByteBuf>,
     #[serde(default)]
     pub encrypted_content: Option<ByteBuf>,
+    /// A code from the authenticator, or a backup code, when the account has
+    /// a second factor.
+    #[serde(default)]
+    pub totp: Option<String>,
+    /// Only when the recovery key is set or replaced.
+    #[serde(default)]
+    pub recovery_pubkey: Option<ByteBuf>,
+    #[serde(default)]
+    pub recovery_encrypted_content: Option<ByteBuf>,
+    /// Only on the second half of a recovery.
+    #[serde(default)]
+    pub grant: Option<String>,
 }
 
 #[derive(Serialize, Debug)]

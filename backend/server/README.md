@@ -21,20 +21,23 @@ POSTGRES_PASSWORD=<strong-random> docker compose up -d --build
 The server listens on port 3735 over plain HTTP. Put a TLS-terminating reverse
 proxy in front for anything but local use.
 
-| Variable                          | Default      | Meaning                                                         |
-| --------------------------------- | ------------ | --------------------------------------------------------------- |
-| `MINDSTREAM_DATABASE_URL`         | required     | Postgres connection string                                      |
-| `MINDSTREAM_LISTEN`               | 0.0.0.0:3735 | Address to listen on                                            |
-| `MINDSTREAM_BLOB_DIR`             | data/blobs   | Where large chunks are stored                                   |
-| `MINDSTREAM_SIGNUP`               | closed       | `open` lets anyone who can reach the server sign up             |
-| `MINDSTREAM_PUBLIC_HOSTS`         | empty        | Hostnames clients use, when the proxy rewrites the Host header  |
-| `MINDSTREAM_TRUSTED_PROXIES`      | see below    | Networks whose `X-Forwarded-For` is believed                    |
-| `MINDSTREAM_AUTH_RATE_PER_MINUTE` | 10           | Sign-in attempts per address per minute. 0 turns the limit off  |
-| `MINDSTREAM_AUTH_RATE_BURST`      | 20           | Attempts an address may make at once before the rate applies    |
-| `MINDSTREAM_ADMIN_TOKEN`          | unset        | Turns on the interface for setting account limits               |
-| `MINDSTREAM_MAX_BODY_BYTES`       | 78643200     | Largest request body accepted                                   |
-| `MINDSTREAM_INLINE_CHUNK_BYTES`   | 20480        | Chunks up to this size stay in the database                     |
-| `MINDSTREAM_TEST_RESET`           | false        | Serves a route that wipes accounts. For the client's tests only |
+| Variable                          | Default          | Meaning                                                         |
+| --------------------------------- | ---------------- | --------------------------------------------------------------- |
+| `MINDSTREAM_DATABASE_URL`         | required         | Postgres connection string                                      |
+| `MINDSTREAM_LISTEN`               | 0.0.0.0:3735     | Address to listen on                                            |
+| `MINDSTREAM_BLOB_DIR`             | data/blobs       | Where large chunks are stored                                   |
+| `MINDSTREAM_SIGNUP`               | closed           | `open` lets anyone who can reach the server sign up             |
+| `MINDSTREAM_PUBLIC_HOSTS`         | empty            | Hostnames clients use, when the proxy rewrites the Host header  |
+| `MINDSTREAM_TRUSTED_PROXIES`      | see below        | Networks whose `X-Forwarded-For` is believed                    |
+| `MINDSTREAM_AUTH_RATE_PER_MINUTE` | 10               | Sign-in attempts per address per minute. 0 turns the limit off  |
+| `MINDSTREAM_AUTH_RATE_BURST`      | 20               | Attempts an address may make at once before the rate applies    |
+| `MINDSTREAM_ADMIN_TOKEN`          | unset            | Turns on the interface for setting account limits               |
+| `MINDSTREAM_SECRET_KEY`           | unset            | Key that seals authenticator secrets. See below                 |
+| `MINDSTREAM_SECRET_KEY_FILE`      | see below        | Where that key is created when none is given                    |
+| `MINDSTREAM_TOTP_ISSUER`          | Mindstream Notes | Name an authenticator app shows for accounts here               |
+| `MINDSTREAM_MAX_BODY_BYTES`       | 78643200         | Largest request body accepted                                   |
+| `MINDSTREAM_INLINE_CHUNK_BYTES`   | 20480            | Chunks up to this size stay in the database                     |
+| `MINDSTREAM_TEST_RESET`           | false            | Serves a route that wipes accounts. For the client's tests only |
 
 A login names the host it was made for, and the server refuses one made for
 another host. If logins fail with `wrong_host` behind a proxy, set
@@ -64,7 +67,45 @@ docker compose exec server mindstream-server user delete <username>
 
 Disabling an account ends its sessions and keeps its data. Deleting one
 removes every collection it owns, for the other members too. The server never
-holds a password or a key, so there is nothing to reset.
+holds a password or a key, so it cannot reset a password.
+
+## Account security
+
+An account can require a code from an authenticator app when signing in. The
+codes are standard TOTP, so Google Authenticator, Bitwarden, Aegis and the
+rest all work. Setting it up returns ten single-use backup codes.
+
+The authenticator secrets are the one thing the server stores that it can
+read back, because checking a code takes the secret itself. They are sealed
+under a key that is kept outside the database. Give it as
+`MINDSTREAM_SECRET_KEY`, 32 bytes as URL-safe base64, or let the server create
+one on first start in `MINDSTREAM_SECRET_KEY_FILE`, which defaults to
+`secret.key` in the blob directory.
+
+Back that key up. Without it every authenticator set up so far stops working
+and each of those accounts needs the reset below. Keep its backup apart from
+the database's if you can. Someone holding both can make valid codes, though
+they still need a password to use one.
+
+Someone who has lost the authenticator and the backup codes, and has no device
+still signed in, needs you:
+
+```sh
+docker compose exec server mindstream-server user reset-2fa <username>
+```
+
+Signing in then takes the password alone. Be sure the person asking owns the
+account before you run it.
+
+An account can also have a recovery key, which sets a new password when the
+old one is forgotten. The server never sees it. It stores a public key and a
+second copy of the account's keys that only the recovery key opens, and a
+reset with it still asks for the code when the account has an authenticator.
+Without a recovery key or a signed-in device, a forgotten password means the
+data on the server cannot be read by anyone.
+
+Each device that signs in gets its own session, which the user can list and
+end. A new password or a new authenticator signs every other device out.
 
 ## Limits
 
@@ -131,6 +172,13 @@ The tests drive the server with the same client library the app uses:
 - `tests/sync.rs` covers what a syncing client relies on beyond the wire
   format, such as cursors and storage accounting.
 
+The client library knows nothing of rooms, the change feed, second factors or
+recovery, so those tests speak the wire format by hand:
+
+- `tests/rooms.rs` and `tests/feed.rs` open real sockets.
+- `tests/security.rs` signs its own requests with keys it makes up, and plays
+  the authenticator app.
+
 ## Conformance
 
 The client library has its own integration suite. It runs against a server
@@ -139,12 +187,14 @@ started with the reset route on:
 ```sh
 MINDSTREAM_DATABASE_URL=postgres://mindstream:mindstream@127.0.0.1:15432/mindstream \
 MINDSTREAM_LISTEN=127.0.0.1:13735 MINDSTREAM_SIGNUP=open MINDSTREAM_TEST_RESET=true \
+MINDSTREAM_AUTH_RATE_PER_MINUTE=0 \
   cargo run &
 node scripts/conformance.mjs 127.0.0.1:13735
 ```
 
-The script checks out the client at the revision the app pins and runs its
-`service` tests. One of them, `signup_with_key`, is marked ignored upstream
+The suite signs in far more often than the sign-in limit allows, which is why
+the limit is off above. The script checks out the client at the revision the
+app pins and runs its `service` tests. One of them, `signup_with_key`, is marked ignored upstream
 because it cannot pass against any server.
 
 ## Benchmark

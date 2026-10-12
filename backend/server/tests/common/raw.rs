@@ -120,6 +120,16 @@ impl Device {
         }
     }
 
+    /// A session that already exists, signed in some other way.
+    pub fn with_token(url: &str, name: &str, token: &str) -> Self {
+        Self {
+            url: url.to_owned(),
+            name: name.to_owned(),
+            token: token.to_owned(),
+            http: reqwest::Client::new(),
+        }
+    }
+
     /// Send a request and return its status and decoded body.
     pub async fn call<B: Serialize>(
         &self,
@@ -416,6 +426,17 @@ impl Socket {
                 }
             }
             Some(other) => panic!("unexpected message {other:?}"),
+        }
+    }
+
+    /// The code the server closes the socket with, skipping whatever it
+    /// sends first.
+    pub async fn close_code(&mut self) -> Option<u16> {
+        loop {
+            match self.next_message().await? {
+                Message::Close(frame) => return Some(frame.map_or(0, |f| u16::from(f.code))),
+                _ => continue,
+            }
         }
     }
 

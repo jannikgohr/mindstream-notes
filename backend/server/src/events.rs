@@ -37,6 +37,10 @@ pub enum Event {
     Invitation { account: i64 },
     /// The account was disabled or deleted.
     AccountClosed { account: i64 },
+    /// One session ended: a logout, or a device signed out from another.
+    SessionClosed { session: i64 },
+    /// Every session of the account ended, apart from `keep`.
+    SessionsClosed { account: i64, keep: Option<i64> },
     /// The collection was deleted.
     CollectionClosed { collection: i64 },
 }
@@ -120,6 +124,8 @@ async fn apply(state: &AppState, event: Event) -> Result<(), sqlx::Error> {
                 .signal_feeds(&[account], None, FeedNews::Invitations);
         }
         Event::AccountClosed { account } => state.hub.account_closed(account),
+        Event::SessionClosed { session } => state.hub.session_closed(session),
+        Event::SessionsClosed { account, keep } => state.hub.sessions_closed(account, keep),
         Event::CollectionClosed { collection } => state.hub.collection_closed(collection),
     }
     Ok(())
@@ -222,6 +228,15 @@ mod tests {
             },
             Event::Invitation { account: 2 },
             Event::AccountClosed { account: 2 },
+            Event::SessionClosed { session: 7 },
+            Event::SessionsClosed {
+                account: 2,
+                keep: Some(7),
+            },
+            Event::SessionsClosed {
+                account: 2,
+                keep: None,
+            },
             Event::CollectionClosed { collection: 4 },
         ];
         for event in events {

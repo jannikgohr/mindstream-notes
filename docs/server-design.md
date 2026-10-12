@@ -2,7 +2,8 @@
 
 Status: agreed design, written 2026-10-12. The server in
 [backend/server](../backend/server/README.md) has the core of step 1 and the
-server half of step 3, rooms and the change feed. The app still runs on the
+server halves of steps 3 and 5: rooms and the change feed, then device
+sessions, two-factor sign-in and the recovery key. The app still runs on the
 old stack: nothing on the client side is built yet.
 
 This replaces the backend stack described in
@@ -220,8 +221,9 @@ A room is a collection plus an item. The server knows both, and it knows who is
 a member at which access level.
 
 1. The Rust side, which holds the session, asks the server for a ticket for one
-   note. The ticket is signed, lasts about 30 seconds, and names the user, the
-   room and the access level.
+   note. The ticket is signed, lasts about 30 seconds, and names the session
+   and the room. Access is read from the database when the socket opens, so a
+   ticket cannot carry access that has since changed.
 2. The WebView opens the room socket with the ticket. The session token never
    reaches the WebView or a URL.
 3. The server admits members and sends each socket a roster with usernames
@@ -231,7 +233,8 @@ a member at which access level.
    members. Receivers act on the class the server saw, so a read-only member
    cannot hide an update inside a presence frame.
 5. When a member is removed or downgraded, the server closes or downgrades
-   their sockets immediately.
+   their sockets immediately. When a session ends, the sockets it opened close
+   with it.
 
 Frames stay encrypted under the per-note key. The server relays ciphertext and
 never reads it.
@@ -307,6 +310,20 @@ in again with the stored main key and no user involved. That is
 equivalent to the password, so the path would bypass a second factor. With
 device sessions a rejected token means signing in again.
 
+Ending a session closes its rooms and its change feed at once. Some changes
+end sessions other than the caller's:
+
+| Change                             | Sessions ended     |
+| ---------------------------------- | ------------------ |
+| Signing out, or being signed out   | That device's      |
+| A new password                     | Every other device |
+| An authenticator set up or changed | Every other device |
+| A reset with the recovery key      | All of them        |
+| The account disabled or deleted    | All of them        |
+
+A new password ends the other sessions because a password is often changed on
+the suspicion that someone else knows it.
+
 ### Two-factor sign-in
 
 TOTP with the parameters every authenticator app honours: SHA-1, six digits, a
@@ -315,10 +332,15 @@ TOTP with the parameters every authenticator app honours: SHA-1, six digits, a
 - The server asks for a code only after the password signature checks out, so
   it never reveals which accounts have a second factor. The code travels inside
   the signed login body.
-- The server rejects a time step it has already accepted, limits attempts per
-  account, and stores the secret encrypted, since a secret it has to verify
-  cannot be hashed.
-- Enrolment issues single-use backup codes.
+- The server rejects a time step it has already accepted, and stores the
+  secret encrypted, since a secret it has to verify cannot be hashed. The key
+  for that lives outside the database, so a copy of the database alone does
+  not yield anyone's codes.
+- Five wrong codes lock an account's second factor for ten minutes. The
+  devices already signed in keep working.
+- Enrolment takes the password again and is in two steps: the server hands out
+  a secret, and nothing changes until a code from it comes back. It then
+  issues ten single-use backup codes.
 - Changing the password, turning the second factor off, and regenerating the
   recovery key or the backup codes all ask for a code again.
 - Second factors are stored in a generic table so passkeys can be added later.
@@ -338,6 +360,40 @@ A reset is the update a password change already sends, signed by the recovery
 key instead of the old login key. The server then revokes every session, and
 the client issues a new recovery key. A password change leaves the recovery
 copy valid, because the blob itself does not change.
+
+It takes two requests, because the client needs the recovery copy before it
+can wrap the account keys under a new password. The first proves the recovery
+key and the second factor and returns the copy with a grant good for ten
+minutes. The second carries the grant, the new keys and the new recovery key.
+The grant exists because a code works once, so the second request could not
+show it again. The server refuses to keep a recovery key that has been used.
+
+### Routes
+
+"Password" below means a request signed with the key derived from it, the way
+a login is. A code travels inside the signed body.
+
+| Route                                     | Takes                                   | Does                                         |
+| ----------------------------------------- | --------------------------------------- | -------------------------------------------- |
+| `POST authentication/login/`              | Password, code if enrolled              | Opens a session                              |
+| `POST authentication/change_password/`    | Session, password, code if enrolled     | Sets the new login key                       |
+| `POST authentication/recover/`            | Recovery key, code if enrolled          | Returns the recovery copy and a grant        |
+| `POST authentication/recover/complete/`   | Recovery key, the grant                 | Sets the new keys and opens a session        |
+| `GET mindstream/security/`                | Session                                 | Says what the account has set up             |
+| `POST mindstream/totp/enroll/`            | Session, password                       | Returns a secret to put in the authenticator |
+| `POST mindstream/totp/confirm/`           | Session, a code from that authenticator | Turns it on and returns backup codes         |
+| `POST mindstream/totp/disable/`           | Session, password, code                 | Turns it off                                 |
+| `POST mindstream/backup-codes/`           | Session, password, code                 | Replaces the backup codes                    |
+| `PUT mindstream/recovery/`                | Session, password, code if enrolled     | Sets or replaces the recovery key            |
+| `GET mindstream/sessions/`                | Session                                 | Lists the devices signed in                  |
+| `DELETE mindstream/sessions/{id}/`        | Session                                 | Signs one device out                         |
+| `POST mindstream/sessions/revoke-others/` | Session                                 | Signs every other device out                 |
+
+Replacing an authenticator also asks for a code, unless the session asking
+signed in with one. That exception is the way back for someone who has lost
+the authenticator and the backup codes and still has a signed-in device.
+Signup accepts a recovery key in the same request, so an account never exists
+without the one it was shown.
 
 ### Losing a factor
 

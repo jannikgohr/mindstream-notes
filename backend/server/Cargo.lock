@@ -1220,6 +1220,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "chacha20poly1305",
  "clap",
  "ed25519-dalek",
  "etebase",
@@ -1232,6 +1233,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
+ "sha1",
  "sha2",
  "sqlx",
  "subtle",
