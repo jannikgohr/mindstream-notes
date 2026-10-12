@@ -875,15 +875,26 @@ impl ItemManager {
     ///
     /// See [`fetch_multi`](Self::fetch_multi) for fetching multiple items
     ///
+    /// The item comes back with its content unless the options ask for
+    /// [`PrefetchOption::Medium`](crate::PrefetchOption::Medium). A server
+    /// holds what one answer carries to a size, and sends an item past it
+    /// as the uids of its chunks. Those are then downloaded one at a time,
+    /// so the caller never has to tell the two apart.
+    ///
     /// # Arguments:
     /// * `item_uid` - the UID of the collection to be fetched
     /// * `options` - parameters to tune or optimize the fetch
     pub fn fetch(&self, item_uid: &StrBase64, options: Option<&FetchOptions>) -> Result<Item> {
         let encrypted_item = self.item_manager_online.fetch(item_uid, options)?;
-        Item::new(
+        let mut item = Item::new(
             encrypted_item.crypto_manager(&self.collection_crypto_manager)?,
             encrypted_item,
-        )
+        )?;
+        let wants_content = options.map_or(true, FetchOptions::wants_content);
+        if wants_content && !item.is_deleted() && item.is_missing_content() {
+            self.download_content(&mut item)?;
+        }
+        Ok(item)
     }
 
     /// Fetch all [`Item`]s of a collection and return an [`ItemListResponse`]

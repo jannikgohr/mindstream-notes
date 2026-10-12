@@ -157,7 +157,9 @@ fn simple_collection_handling() -> Result<()> {
     assert!(!col.is_deleted());
     col.delete()?;
     assert!(col.is_deleted());
-    verify_collection(&col, &meta2, content)?;
+    // Upstream keeps the content on a deleted item. This fork lets it go,
+    // so that a server can give the storage back.
+    verify_collection(&col, &meta2, b"")?;
 
     etebase.logout()
 }
@@ -185,7 +187,7 @@ fn simple_item_handling() -> Result<()> {
     assert!(!item.is_deleted());
     item.delete()?;
     assert!(item.is_deleted());
-    verify_item(&item, &meta2, content)?;
+    verify_item(&item, &meta2, b"")?;
 
     etebase.logout()
 }
@@ -489,7 +491,7 @@ fn collection_and_item_deletion() -> Result<()> {
         let items = it_mgr.list(Some(&fetch_options))?;
         assert_eq!(items.data().len(), 1);
         let first_item = items.data().first().unwrap();
-        verify_item(first_item, &meta, content)?;
+        verify_item(first_item, &meta, b"")?;
         assert!(first_item.is_deleted());
     }
 
@@ -502,7 +504,7 @@ fn collection_and_item_deletion() -> Result<()> {
         assert_eq!(collections.data().len(), 1);
 
         let first_col = collections.data().first().unwrap();
-        verify_collection(first_col, &col_meta, col_content)?;
+        verify_collection(first_col, &col_meta, b"")?;
         assert!(first_col.is_deleted());
     }
 

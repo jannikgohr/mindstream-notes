@@ -445,6 +445,12 @@ impl<'a> FetchOptions<'a> {
         self.stoken = stoken;
         self
     }
+
+    /// Whether these options ask for content, which is everything short of
+    /// [`PrefetchOption::Medium`].
+    pub(crate) fn wants_content(&self) -> bool {
+        !matches!(self.prefetch, Some(PrefetchOption::Medium))
+    }
 }
 
 pub fn apply_fetch_options(url: Url, options: Option<&FetchOptions>) -> Url {

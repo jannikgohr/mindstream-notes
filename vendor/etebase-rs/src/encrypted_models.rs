@@ -820,6 +820,11 @@ impl EncryptedRevision {
         let meta = self.meta(crypto_manager, additional_data)?;
 
         self.deleted = true;
+        // A deleted item has no content to speak of. Upstream keeps the
+        // chunks on the tombstone, which makes a server hold on to them for
+        // as long as the tombstone lives. Letting them go is what lets a
+        // Mindstream server give the storage back.
+        self.chunks = Vec::new();
 
         self.set_meta(crypto_manager, additional_data, &meta)?;
         Ok(())
