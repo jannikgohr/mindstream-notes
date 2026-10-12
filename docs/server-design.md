@@ -456,7 +456,9 @@ not offered in the app. It will point at a deployment of this server.
 - **Member limits follow the owner's tier.** An invite link is checked against
   the limit when it is claimed.
 - **Billing is a separate program.** It receives payment webhooks and writes
-  entitlements. The server never sees payment data.
+  entitlements. The server never sees payment data. It is not built. What it
+  has to do, and a stand-in that sets plans by hand, are in
+  [backend/billing](../backend/billing/README.md).
 - **Both sides of a share must be on the same server.** A managed account
   cannot share with a self-hosted one.
 
@@ -619,3 +621,14 @@ The frame figures are within the run-to-run noise of each other.
 8. **How long a device session lasts** when it is not used.
 9. **The size under which content comes inline.**
 10. **Email verification on managed**, and whether it gates the first sync.
+11. **Whether the public repository carries a working billing program.** The
+    proposal is that it does not. Enforcing limits and the interface that sets
+    them stay in the public server, because the managed service runs that same
+    server and self-hosters can use limits too. The program that talks to a
+    payment provider would live in a private repository. It is of no use to
+    someone hosting for themselves, it changes with prices and tiers that are
+    nobody else's business, and how it catches abuse is better not published.
+    It reaches the server only over HTTP, as any other program could, which is
+    why this design treats it as outside the AGPL work. That last point is a
+    reading of the licence and worth checking with someone qualified before
+    the service takes money.
