@@ -376,6 +376,9 @@ pub async fn confirm_totp(
     Msgpack(body): Msgpack<Code>,
 ) -> ApiResult<Msgpack<BackupCodes>> {
     let mut tx = state.pool.begin().await?;
+    // Turning a second factor on ends the other sessions. A sign-in on the
+    // password alone must not slip in behind that.
+    auth::lock_account(&mut tx, user.account_id).await?;
     let pending: Option<(i64, Vec<u8>)> = sqlx::query_as(
         "SELECT id, secret FROM second_factors
          WHERE account_id = $1 AND kind = 'totp' AND confirmed_at IS NULL
@@ -604,20 +607,22 @@ pub async fn recover(
     headers: HeaderMap,
     Msgpack(request): Msgpack<SignedRequest>,
 ) -> ApiResult<Msgpack<RecoveryOpened>> {
-    let mut conn = state.pool.acquire().await?;
+    let mut tx = state.pool.begin().await?;
     let (account, body) = auth::verify_signed(
         &state,
-        &mut conn,
+        &mut tx,
         &headers,
         &request,
         "recover",
         SignedBy::RecoveryKey,
     )
     .await?;
-    check_second_factor(&state, &mut conn, account.id, body.totp.as_deref()).await?;
+    check_second_factor(&state, &mut tx, account.id, body.totp.as_deref()).await?;
     let content = account
         .recovery_encrypted_content
         .ok_or_else(|| ApiError::internal("an account has a recovery key and no recovery copy"))?;
+    // The code is spent with the grant in hand, not before.
+    tx.commit().await?;
     Ok(Msgpack(RecoveryOpened {
         recovery_encrypted_content: ByteBuf::from(content),
         grant: state.keys.recovery_grant(account.id),

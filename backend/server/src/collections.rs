@@ -258,6 +258,24 @@ async fn to_wire_collections(
         .collect()
 }
 
+/// A read-only transaction whose statements all see the database as it was
+/// when the first of them ran.
+///
+/// A cursor is only safe to hand out if every change up to it is in the
+/// answer it comes with. Two statements on a plain connection each see what
+/// had committed by the time they ran, so the second can see a change, and
+/// move the cursor past it, that the first ran too early to include. The
+/// client would then never be told of what committed in between.
+pub(crate) async fn snapshot(
+    pool: &sqlx::PgPool,
+) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    Ok(tx)
+}
+
 /// The collections the account belongs to that changed after the cursor,
 /// optionally only those of the given types, plus the ones it lost access to.
 async fn list_collections(
@@ -268,7 +286,9 @@ async fn list_collections(
 ) -> ApiResult<CollectionList> {
     let since = list_cursor(state, query.stoken.as_deref())?;
     let limit = query.limit();
-    let mut conn = state.pool.acquire().await?;
+    // The changed collections and the lost memberships are two statements
+    // that feed one cursor, so they read from one snapshot.
+    let mut conn = snapshot(&state.pool).await?;
 
     let mut rows: Vec<CollectionRow> = sqlx::query_as(&format!(
         "{COLLECTION_QUERY}

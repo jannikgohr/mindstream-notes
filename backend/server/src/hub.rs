@@ -42,6 +42,9 @@ pub const CLOSE_UNAUTHORIZED: u16 = 4401;
 pub const CLOSE_REMOVED: u16 = 4403;
 pub const CLOSE_SLOW: u16 = 4408;
 pub const CLOSE_TOO_MANY: u16 = 4429;
+/// The server can no longer check that the socket may stay open. The
+/// standard code for "try again later".
+pub const CLOSE_UNAVAILABLE: u16 = 1013;
 
 /// A member whose socket has this much waiting to be written is not keeping
 /// up. Frames are ciphertext, so nothing can be merged or dropped for them;
@@ -100,8 +103,20 @@ impl Peer {
 pub struct FeedSignal {
     pub changed: AtomicBool,
     pub invitations: AtomicBool,
-    pub closed: AtomicBool,
+    /// The code to close the socket with, once there is one. Zero until
+    /// then.
+    pub closed: AtomicU16,
     pub notify: Notify,
+}
+
+impl FeedSignal {
+    /// The code the feed was told to close with, if it was.
+    pub fn close_code(&self) -> Option<u16> {
+        match self.closed.load(Ordering::SeqCst) {
+            0 => None,
+            code => Some(code),
+        }
+    }
 }
 
 struct Feed {
@@ -409,12 +424,33 @@ impl Hub {
                 if !matches(*account, feed.session_id) {
                     return true;
                 }
-                feed.signal.closed.store(true, Ordering::SeqCst);
+                feed.signal.closed.store(code, Ordering::SeqCst);
                 feed.signal.notify.notify_one();
                 false
             });
         }
         inner.feeds.retain(|_, feeds| !feeds.is_empty());
+    }
+
+    /// Close every socket, in every room and on every feed. For when the
+    /// server has lost the means to tell which of them may stay.
+    pub fn close_all(&self, code: u16) {
+        self.close_sockets(code, |_, _| true);
+    }
+
+    /// Every session with a socket open, in a room or on the feed, for
+    /// checking them against the database after events may have been missed.
+    pub fn open_sessions(&self) -> Vec<i64> {
+        let inner = self.lock();
+        let in_rooms = inner
+            .rooms
+            .values()
+            .flat_map(|room| room.values().map(|peer| peer.session_id));
+        let on_feeds = inner.feeds.values().flatten().map(|feed| feed.session_id);
+        let mut sessions: Vec<i64> = in_rooms.chain(on_feeds).collect();
+        sessions.sort_unstable();
+        sessions.dedup();
+        sessions
     }
 
     /// The collection is gone: close its rooms.
@@ -680,8 +716,8 @@ mod tests {
 
         hub.session_closed(100);
         assert_eq!(laptop.kick.fired().await, CLOSE_UNAUTHORIZED);
-        assert!(laptop_feed.closed.load(Ordering::SeqCst));
-        assert!(!phone_feed.closed.load(Ordering::SeqCst));
+        assert_eq!(laptop_feed.close_code(), Some(CLOSE_UNAUTHORIZED));
+        assert_eq!(phone_feed.close_code(), None);
         assert_eq!(kinds(&mut phone), vec![FRAME_LEFT]);
         assert_eq!(
             hub.relay(ROOM, phone.id, CLASS_UPDATE, b"x", None),
@@ -704,16 +740,16 @@ mod tests {
 
         hub.sessions_closed(1, Some(100));
         assert_eq!(ended.kick.fired().await, CLOSE_UNAUTHORIZED);
-        assert!(ended_feed.closed.load(Ordering::SeqCst));
-        assert!(!kept_feed.closed.load(Ordering::SeqCst));
-        assert!(!stranger_feed.closed.load(Ordering::SeqCst));
+        assert_eq!(ended_feed.close_code(), Some(CLOSE_UNAUTHORIZED));
+        assert_eq!(kept_feed.close_code(), None);
+        assert_eq!(stranger_feed.close_code(), None);
         assert_eq!(kinds(&mut stranger), vec![FRAME_LEFT]);
         assert_eq!(hub.room_memberships(), vec![(1, 1), (1, 2)]);
 
         // With nothing to keep, the account's last socket goes too.
         hub.sessions_closed(1, None);
         assert_eq!(kept.kick.fired().await, CLOSE_UNAUTHORIZED);
-        assert!(kept_feed.closed.load(Ordering::SeqCst));
+        assert_eq!(kept_feed.close_code(), Some(CLOSE_UNAUTHORIZED));
         assert_eq!(hub.room_memberships(), vec![(1, 2)]);
     }
 

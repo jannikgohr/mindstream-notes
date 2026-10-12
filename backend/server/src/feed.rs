@@ -14,8 +14,8 @@ use axum::extract::State;
 use axum::response::Response;
 use serde::Serialize;
 
-use crate::auth::AuthUser;
-use crate::hub::CLOSE_UNAUTHORIZED;
+use crate::auth::{self, AuthUser};
+use crate::hub::{CLOSE_UNAUTHORIZED, CLOSE_UNAVAILABLE};
 use crate::{AppState, PROTOCOL_LEVEL};
 
 const PING_INTERVAL: Duration = Duration::from_secs(30);
@@ -61,18 +61,29 @@ async fn serve(state: AppState, user: AuthUser, mut socket: WebSocket) {
     ping.tick().await;
     let mut last_heard = Instant::now();
 
-    let signed_out = 'serving: {
+    let close_with = 'serving: {
+        // The session was good when the request came in. If it ended before
+        // the line above put this socket where events can find it, nothing
+        // would ever close it. Ask again now that they can.
+        match auth::standing_sessions(&state.pool, &[user.session_id]).await {
+            Ok(standing) if standing.contains(&user.session_id) => {}
+            Ok(_) => break 'serving Some(CLOSE_UNAUTHORIZED),
+            Err(err) => {
+                tracing::error!("could not check a feed's session: {err}");
+                break 'serving Some(CLOSE_UNAVAILABLE);
+            }
+        }
         let hello = Hello {
             protocol: PROTOCOL_LEVEL,
         };
         if socket.send(binary(&hello)).await.is_err() {
-            break 'serving false;
+            break 'serving None;
         }
         loop {
             tokio::select! {
                 _ = signal.notify.notified() => {
-                    if signal.closed.load(Ordering::SeqCst) {
-                        break 'serving true;
+                    if let Some(code) = signal.close_code() {
+                        break 'serving Some(code);
                     }
                     tokio::time::sleep(SETTLE).await;
                     let news = News {
@@ -82,18 +93,18 @@ async fn serve(state: AppState, user: AuthUser, mut socket: WebSocket) {
                     if (news.changed || news.invitations)
                         && socket.send(binary(&news)).await.is_err()
                     {
-                        break 'serving false;
+                        break 'serving None;
                     }
                 }
                 incoming = socket.recv() => match incoming {
-                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break 'serving false,
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break 'serving None,
                     Some(Ok(_)) => last_heard = Instant::now(),
                 },
                 _ = ping.tick() => {
                     if last_heard.elapsed() > IDLE_TIMEOUT
                         || socket.send(Message::Ping(Default::default())).await.is_err()
                     {
-                        break 'serving false;
+                        break 'serving None;
                     }
                 }
             }
@@ -101,10 +112,15 @@ async fn serve(state: AppState, user: AuthUser, mut socket: WebSocket) {
     };
 
     state.hub.unsubscribe_feed(user.account_id, id);
-    if signed_out {
+    if let Some(code) = close_with {
+        let reason = if code == CLOSE_UNAUTHORIZED {
+            "not signed in"
+        } else {
+            "try again later"
+        };
         let frame = CloseFrame {
-            code: CLOSE_UNAUTHORIZED,
-            reason: "not signed in".into(),
+            code,
+            reason: reason.into(),
         };
         let _ = socket.send(Message::Close(Some(frame))).await;
     }

@@ -134,6 +134,11 @@ pub async fn reset_second_factor(state: &AppState, username: &str) -> Result<boo
         return Ok(false);
     };
     let mut tx = state.pool.begin().await?;
+    // In turn with a sign-in that is checking a code right now.
+    sqlx::query("SELECT 1 FROM accounts WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     security::remove_second_factor(&mut tx, id).await?;
     tx.commit().await?;
     Ok(true)

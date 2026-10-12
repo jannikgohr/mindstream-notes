@@ -22,7 +22,7 @@ use crate::collections::membership;
 use crate::error::{ApiError, ApiResult};
 use crate::hub::{
     Joined, RoomKey, CLASS_PRESENCE, CLASS_REPLY, CLASS_SYNC, CLASS_UPDATE, CLOSE_BAD_FRAME,
-    CLOSE_REMOVED, CLOSE_UNAUTHORIZED, FRAME_HELLO,
+    CLOSE_REMOVED, CLOSE_UNAUTHORIZED, CLOSE_UNAVAILABLE, FRAME_HELLO,
 };
 use crate::keys::{Keys, RoomTicket};
 use crate::wire::{check_uid, Msgpack};
@@ -91,6 +91,7 @@ fn close_reason(code: u16) -> &'static str {
         crate::hub::CLOSE_REMOVED => "no longer a member",
         crate::hub::CLOSE_SLOW => "not keeping up",
         crate::hub::CLOSE_TOO_MANY => "too many sockets",
+        CLOSE_UNAVAILABLE => "try again later",
         _ => "",
     }
 }
@@ -103,21 +104,13 @@ async fn close(socket: &mut WebSocket, code: u16) {
     let _ = socket.send(Message::Close(Some(frame))).await;
 }
 
-/// Wait for the ticket and decide, from the database as it is now, whether
-/// its holder may enter and with what access.
-async fn admit(state: &AppState, socket: &mut WebSocket) -> Result<(RoomTicket, String, i16), u16> {
-    let hello = match tokio::time::timeout(HELLO_TIMEOUT, socket.recv()).await {
-        Ok(Some(Ok(Message::Binary(frame)))) if frame.first() == Some(&FRAME_HELLO) => frame,
-        _ => return Err(CLOSE_UNAUTHORIZED),
-    };
-    let ticket = std::str::from_utf8(&hello[1..])
-        .ok()
-        .and_then(|token| state.keys.verify_room_ticket(token))
-        .ok_or(CLOSE_UNAUTHORIZED)?;
-
-    // The ticket says what was true when it was issued. The member may have
-    // been removed, downgraded or disabled since, or signed out, or the item
-    // deleted.
+/// Whether a ticket's holder may be in its room, from the database as it is
+/// now, and with what access and under what name.
+///
+/// A ticket says what was true when it was issued. The member may have been
+/// removed, downgraded or disabled since, or signed out, or the item
+/// deleted.
+async fn standing(state: &AppState, ticket: &RoomTicket) -> Result<(i16, String), u16> {
     let row: Option<(i16, String)> = sqlx::query_as(
         "SELECT m.access_level, a.username
          FROM members m
@@ -134,9 +127,23 @@ async fn admit(state: &AppState, socket: &mut WebSocket) -> Result<(RoomTicket, 
     .await
     .map_err(|err| {
         tracing::error!("could not check a room ticket: {err}");
-        CLOSE_UNAUTHORIZED
+        CLOSE_UNAVAILABLE
     })?;
-    let (access, username) = row.ok_or(CLOSE_REMOVED)?;
+    row.ok_or(CLOSE_REMOVED)
+}
+
+/// Wait for the ticket and decide whether its holder may enter and with
+/// what access.
+async fn admit(state: &AppState, socket: &mut WebSocket) -> Result<(RoomTicket, String, i16), u16> {
+    let hello = match tokio::time::timeout(HELLO_TIMEOUT, socket.recv()).await {
+        Ok(Some(Ok(Message::Binary(frame)))) if frame.first() == Some(&FRAME_HELLO) => frame,
+        _ => return Err(CLOSE_UNAUTHORIZED),
+    };
+    let ticket = std::str::from_utf8(&hello[1..])
+        .ok()
+        .and_then(|token| state.keys.verify_room_ticket(token))
+        .ok_or(CLOSE_UNAUTHORIZED)?;
+    let (access, username) = standing(state, &ticket).await?;
     Ok((ticket, username, access))
 }
 
@@ -161,6 +168,24 @@ async fn serve(state: AppState, mut socket: WebSocket) {
         Ok(joined) => joined,
         Err(code) => return close(&mut socket, code).await,
     };
+
+    // Being let in and being in the room are two moments. A member removed,
+    // or a session ended, between them is announced by an event that finds
+    // no socket to close, and the socket would then stay for good. So the
+    // question is asked again now that the socket can be found: whatever
+    // changes from here on reaches it as an event.
+    match standing(&state, &ticket).await {
+        Ok((now, _)) if now == access => {}
+        Ok((now, _)) => {
+            state
+                .hub
+                .membership_changed(key.collection_id, ticket.account_id, Some(now))
+        }
+        Err(code) => {
+            state.hub.leave(key, id);
+            return close(&mut socket, code).await;
+        }
+    }
 
     let mut ping = tokio::time::interval(PING_INTERVAL);
     ping.tick().await;

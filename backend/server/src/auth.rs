@@ -130,6 +130,64 @@ async fn find_account(conn: &mut PgConnection, username: &str) -> ApiResult<Opti
     .await?)
 }
 
+/// Which of these sessions still stand: the session exists and its account
+/// is not disabled. A socket is open on the strength of the session that
+/// opened it, and this is how the sockets are held to that.
+pub(crate) async fn standing_sessions(
+    pool: &sqlx::PgPool,
+    sessions: &[i64],
+) -> Result<Vec<i64>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT s.id FROM sessions s
+         JOIN accounts a ON a.id = s.account_id AND NOT a.disabled
+         WHERE s.id = ANY($1)",
+    )
+    .bind(sessions)
+    .fetch_all(pool)
+    .await
+}
+
+/// Take the account's turn at changing how it is secured, until the
+/// transaction ends.
+///
+/// Signing in, a new password, a recovery, and setting up or removing a
+/// second factor each read the account's credentials and then act on what
+/// they read. Unless they take turns, a sign-in that has checked the old
+/// password can open its session after a password change has ended every
+/// other one, and the change would have achieved nothing against whoever
+/// knew the old password.
+///
+/// Every such path takes this lock first, in a transaction, before it reads
+/// anything it will act on. `FOR NO KEY UPDATE` is the lock an ordinary
+/// update of the row takes, so it also takes turns with an administrator
+/// disabling the account, and it does not hold up the rows that merely
+/// refer to the account.
+pub(crate) async fn lock_account(conn: &mut PgConnection, account_id: i64) -> ApiResult<()> {
+    sqlx::query("SELECT 1 FROM accounts WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(account_id)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// Find an account and take its turn, see [`lock_account`]. The row comes
+/// back as it is once the turn is ours, so a password changed while we
+/// waited is the one we get.
+async fn find_account_for_change(
+    conn: &mut PgConnection,
+    username: &str,
+) -> ApiResult<Option<Account>> {
+    Ok(sqlx::query_as(
+        "SELECT id, username, email, version, salt, login_pubkey, pubkey, encrypted_content,
+                disabled, recovery_pubkey, recovery_encrypted_content
+         FROM accounts WHERE username_key = $1
+         FOR NO KEY UPDATE",
+    )
+    .bind(username_key(username))
+    .fetch_optional(conn)
+    .await?)
+}
+
 fn user_not_found() -> ApiError {
     ApiError::unauthorized("user_not_found", "User not found")
 }
@@ -334,6 +392,11 @@ pub(crate) enum SignedBy {
 
 /// Check everything a signed request claims, and return the account it is
 /// for along with the decoded body.
+///
+/// `conn` has to be a transaction: this takes the account's turn at changing
+/// how it is secured, see [`lock_account`], and the turn lasts as long as
+/// the transaction does. What the caller goes on to do with the account
+/// belongs in the same one.
 pub(crate) async fn verify_signed(
     state: &AppState,
     conn: &mut PgConnection,
@@ -345,7 +408,7 @@ pub(crate) async fn verify_signed(
     let body: SignedBody = rmp_serde::from_slice(&request.response)
         .map_err(|err| ApiError::bad_request(format!("Malformed login response: {err}")))?;
 
-    let account = find_account(conn, &body.username)
+    let account = find_account_for_change(conn, &body.username)
         .await?
         .ok_or_else(user_not_found)?;
     if body.action != action {
@@ -438,10 +501,13 @@ pub async fn login(
     headers: HeaderMap,
     Msgpack(request): Msgpack<SignedRequest>,
 ) -> ApiResult<Msgpack<LoginResponse>> {
-    let mut conn = state.pool.acquire().await?;
+    // Checking the password, spending the code and opening the session are
+    // one step. A password change waits for it or goes first, and in neither
+    // case does a session open on a password that no longer stands.
+    let mut tx = state.pool.begin().await?;
     let (account, body) = verify_signed(
         &state,
-        &mut conn,
+        &mut tx,
         &headers,
         &request,
         "login",
@@ -451,10 +517,10 @@ pub async fn login(
     // Asked for only once the password has been proven, so the answer does
     // not tell a stranger which accounts have a second factor.
     let second_factor =
-        security::check_second_factor(&state, &mut conn, account.id, body.totp.as_deref()).await?;
-    Ok(Msgpack(
-        open_session(&mut conn, account, &headers, second_factor).await?,
-    ))
+        security::check_second_factor(&state, &mut tx, account.id, body.totp.as_deref()).await?;
+    let session = open_session(&mut tx, account, &headers, second_factor).await?;
+    tx.commit().await?;
+    Ok(Msgpack(session))
 }
 
 pub async fn logout(State(state): State<AppState>, user: AuthUser) -> ApiResult<StatusCode> {

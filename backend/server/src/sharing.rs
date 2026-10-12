@@ -22,7 +22,7 @@ use crate::events::{self, Event};
 use crate::limits;
 use crate::wire::{
     check_uid, valid_access_level, FetchQuery, Invitation, InvitationAccept, InvitationCreate,
-    IteratorList, Member, MemberPatch, Msgpack, UserProfile,
+    IteratorList, Member, MemberPatch, Msgpack, UserProfile, ACCESS_ADMIN,
 };
 use crate::AppState;
 
@@ -120,6 +120,7 @@ async fn remove_membership(
     .bind(stoken)
     .execute(&mut *conn)
     .await?;
+    withdraw_invitations(conn, collection.id, account_id).await?;
     // Their open sockets close, and the remaining members see the roster
     // change.
     let lost = Event::Membership {
@@ -214,6 +215,9 @@ pub async fn modify_member(
     .bind(stoken)
     .execute(&mut *tx)
     .await?;
+    if body.access_level != ACCESS_ADMIN {
+        withdraw_invitations(&mut tx, collection.id, target).await?;
+    }
     let access = Event::Membership {
         collection: collection.id,
         account: target,
@@ -230,6 +234,47 @@ pub async fn modify_member(
 }
 
 // ---------- invitations ----------
+
+/// The rule every invitation is read by: it stands only while whoever sent
+/// it is an admin of the collection, on an account that is not disabled. It
+/// was their authority the invitation carried. Invite links go by the same
+/// rule, see `links::find`.
+///
+/// Reading by the rule is what keeps an invitation from outliving its
+/// sender's authority. [`withdraw_invitations`] tidies up after it. The
+/// result is a pair of joins on the invitation `i`.
+fn sender_still_admin() -> String {
+    format!(
+        "JOIN accounts sender
+             ON sender.id = i.from_account_id AND NOT sender.disabled
+         JOIN members sender_member
+             ON sender_member.collection_id = i.collection_id
+            AND sender_member.account_id = sender.id
+            AND sender_member.access_level = {ACCESS_ADMIN}"
+    )
+}
+
+/// Delete the invitations an account sent into a collection it is no longer
+/// an admin of, and tell the invited, whose lists just got shorter. The
+/// caller holds the lock on the collection.
+async fn withdraw_invitations(
+    conn: &mut PgConnection,
+    collection_id: i64,
+    sender: i64,
+) -> ApiResult<()> {
+    let invited: Vec<i64> = sqlx::query_scalar(
+        "DELETE FROM invitations WHERE collection_id = $1 AND from_account_id = $2
+         RETURNING to_account_id",
+    )
+    .bind(collection_id)
+    .bind(sender)
+    .fetch_all(&mut *conn)
+    .await?;
+    for account in invited {
+        events::publish(conn, &Event::Invitation { account }).await?;
+    }
+    Ok(())
+}
 
 #[derive(Deserialize)]
 pub struct ProfileQuery {
@@ -323,13 +368,20 @@ pub async fn invite(
     Ok(StatusCode::CREATED)
 }
 
-const INVITATION_QUERY: &str = "SELECT i.uid, i.version, i.access_level, i.collection_id, \
-            recipient.username AS username, c.uid AS collection, i.signed_encryption_key, \
-            sender.username AS from_username, sender.pubkey AS from_pubkey \
-     FROM invitations i \
-     JOIN collections c ON c.id = i.collection_id \
-     JOIN accounts sender ON sender.id = i.from_account_id \
-     JOIN accounts recipient ON recipient.id = i.to_account_id";
+/// Invitations that stand, see [`sender_still_admin`]. Ends in a join, so a
+/// `WHERE` follows it.
+fn invitation_query() -> String {
+    let sender_still_admin = sender_still_admin();
+    format!(
+        "SELECT i.uid, i.version, i.access_level, i.collection_id,
+                recipient.username AS username, c.uid AS collection, i.signed_encryption_key,
+                sender.username AS from_username, sender.pubkey AS from_pubkey
+         FROM invitations i
+         JOIN collections c ON c.id = i.collection_id
+         {sender_still_admin}
+         JOIN accounts recipient ON recipient.id = i.to_account_id"
+    )
+}
 
 #[derive(sqlx::FromRow)]
 struct InvitationRow {
@@ -420,7 +472,8 @@ async fn list_invitations(
         })?,
     };
     let mut rows: Vec<InvitationRow> = sqlx::query_as(&format!(
-        "{INVITATION_QUERY} WHERE {column} = $1 AND i.id > $2 ORDER BY i.id LIMIT $3"
+        "{} WHERE {column} = $1 AND i.id > $2 ORDER BY i.id LIMIT $3",
+        invitation_query()
     ))
     .bind(user.account_id)
     .bind(after)
@@ -467,7 +520,8 @@ pub async fn fetch_incoming(
 ) -> ApiResult<Msgpack<Invitation>> {
     let mut conn = state.pool.acquire().await?;
     let row: Option<InvitationRow> = sqlx::query_as(&format!(
-        "{INVITATION_QUERY} WHERE i.to_account_id = $1 AND i.uid = $2"
+        "{} WHERE i.to_account_id = $1 AND i.uid = $2",
+        invitation_query()
     ))
     .bind(user.account_id)
     .bind(&uid)
@@ -590,12 +644,16 @@ pub async fn accept(
     validate_membership_keys(&body.encryption_key, &body.collection_type)?;
     let mut tx = state.pool.begin().await?;
     // Lock the collection before anything else, like every other writer.
-    let invitation: Option<(i64, i64, i16, i64, i64)> = sqlx::query_as(
+    // Removing or downgrading the sender takes the same lock, so whether the
+    // invitation still stands is settled before it is acted on.
+    let sender_still_admin = sender_still_admin();
+    let invitation: Option<(i64, i64, i16, i64, i64)> = sqlx::query_as(&format!(
         "SELECT i.id, i.collection_id, i.access_level, i.from_account_id, c.owner_id
          FROM invitations i JOIN collections c ON c.id = i.collection_id
+         {sender_still_admin}
          WHERE i.uid = $1 AND i.to_account_id = $2
-         FOR UPDATE OF c",
-    )
+         FOR UPDATE OF c"
+    ))
     .bind(&uid)
     .bind(user.account_id)
     .fetch_optional(&mut *tx)

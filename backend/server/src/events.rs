@@ -6,16 +6,28 @@
 //! back, a second server process hears what the first one did, and so does
 //! the server when the change came from the admin command line.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgListener;
 use sqlx::PgConnection;
 
-use crate::hub::FeedNews;
+use crate::auth;
+use crate::hub::{FeedNews, CLOSE_UNAVAILABLE};
 use crate::AppState;
 
 const CHANNEL: &str = "mindstream_events";
+/// How long sockets may stay open while nothing can check that they still
+/// should be. An event that ends a session or a membership is what closes a
+/// socket, and for as long as events cannot be heard or the database cannot
+/// be asked, a socket's right to be open is only as good as it was when
+/// last checked.
+const UNCHECKED_GRACE: Duration = Duration::from_secs(60);
+/// How often every socket is checked against the database whether or not an
+/// event said to. Nothing is known to need it. It bounds what a lost event
+/// can cost to minutes.
+const RECHECK_EVERY: Duration = Duration::from_secs(300);
+const RETRY: Duration = Duration::from_secs(2);
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -131,10 +143,20 @@ async fn apply(state: &AppState, event: Event) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-/// Events may have been missed while the connection was down. A missed
-/// removal is the one that matters: check every socket in a room against the
-/// database and close the ones that no longer belong.
-async fn revalidate(state: &AppState) -> Result<(), sqlx::Error> {
+/// Events may have been missed while the connection was down. The ones
+/// that matter are the ones that take something away: check every socket
+/// against the database, and close those whose session has ended, whose
+/// account is disabled, or whose member no longer belongs in the room.
+pub(crate) async fn revalidate(state: &AppState) -> Result<(), sqlx::Error> {
+    let open = state.hub.open_sessions();
+    if !open.is_empty() {
+        let standing = auth::standing_sessions(&state.pool, &open).await?;
+        for session in open {
+            if !standing.contains(&session) {
+                state.hub.session_closed(session);
+            }
+        }
+    }
     for (collection, account) in state.hub.room_memberships() {
         let access: Option<i16> = sqlx::query_scalar(
             "SELECT m.access_level FROM members m
@@ -150,27 +172,81 @@ async fn revalidate(state: &AppState) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
+/// Keeps track of whether the open sockets can still be vouched for.
+#[derive(Default)]
+struct Watch {
+    /// Since when the sockets have gone unchecked with events possibly lost.
+    unchecked_since: Option<Instant>,
+}
+
+impl Watch {
+    /// Whether sockets have gone unchecked for longer than they may.
+    fn overdue(&self, now: Instant) -> bool {
+        self.unchecked_since
+            .is_some_and(|since| now.duration_since(since) >= UNCHECKED_GRACE)
+    }
+
+    /// Events may have been lost and the sockets could not be checked. Past
+    /// the grace period every socket is closed: a client reconnects and is
+    /// let in again on what the database says by then, while a socket left
+    /// open would keep an authority nobody can confirm.
+    fn failed(&mut self, state: &AppState) {
+        let now = Instant::now();
+        self.unchecked_since.get_or_insert(now);
+        if self.overdue(now) {
+            tracing::warn!("sockets have gone unchecked for too long; closing them all");
+            state.hub.close_all(CLOSE_UNAVAILABLE);
+        }
+    }
+
+    /// Check every socket against the database after events may have been
+    /// lost.
+    async fn recheck(&mut self, state: &AppState) {
+        match revalidate(state).await {
+            Ok(()) => self.unchecked_since = None,
+            Err(err) => {
+                tracing::warn!("could not recheck the open sockets: {err}");
+                self.failed(state);
+            }
+        }
+    }
+}
+
 /// Listen for events for as long as the process runs.
 pub fn listen(state: AppState) {
+    let periodic = state.clone();
     tokio::spawn(async move {
+        let mut tick = tokio::time::interval(RECHECK_EVERY);
+        tick.tick().await;
+        loop {
+            tick.tick().await;
+            if let Err(err) = revalidate(&periodic).await {
+                tracing::warn!("could not recheck the open sockets: {err}");
+            }
+        }
+    });
+
+    tokio::spawn(async move {
+        let mut watch = Watch::default();
         loop {
             let mut listener = match PgListener::connect_with(&state.pool).await {
                 Ok(listener) => listener,
                 Err(err) => {
                     tracing::warn!("cannot listen for events yet: {err}");
-                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    // No events until this works, so ask the database instead.
+                    watch.recheck(&state).await;
+                    tokio::time::sleep(RETRY).await;
                     continue;
                 }
             };
             if let Err(err) = listener.listen(CHANNEL).await {
                 tracing::warn!("cannot subscribe to events: {err}");
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                watch.recheck(&state).await;
+                tokio::time::sleep(RETRY).await;
                 continue;
             }
             // Anything published before this point was not heard.
-            if let Err(err) = revalidate(&state).await {
-                tracing::warn!("could not recheck room memberships: {err}");
-            }
+            watch.recheck(&state).await;
             loop {
                 match listener.try_recv().await {
                     Ok(Some(notification)) => {
@@ -185,14 +261,11 @@ pub fn listen(state: AppState) {
                     }
                     // The connection dropped and is re-established on the
                     // next call. Whatever was published in between is gone.
-                    Ok(None) => {
-                        if let Err(err) = revalidate(&state).await {
-                            tracing::warn!("could not recheck room memberships: {err}");
-                        }
-                    }
+                    Ok(None) => watch.recheck(&state).await,
                     Err(err) => {
                         tracing::warn!("event listener failed: {err}");
-                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        watch.recheck(&state).await;
+                        tokio::time::sleep(RETRY).await;
                         break;
                     }
                 }
@@ -204,6 +277,19 @@ pub fn listen(state: AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sockets_are_only_given_up_on_after_the_grace_period() {
+        let start = Instant::now();
+        let mut watch = Watch::default();
+        // Checked a moment ago: nothing to act on, however late it is.
+        assert!(!watch.overdue(start + UNCHECKED_GRACE * 10));
+
+        watch.unchecked_since = Some(start);
+        assert!(!watch.overdue(start));
+        assert!(!watch.overdue(start + UNCHECKED_GRACE - Duration::from_secs(1)));
+        assert!(watch.overdue(start + UNCHECKED_GRACE));
+    }
 
     #[test]
     fn events_survive_the_trip_through_a_notification() {
