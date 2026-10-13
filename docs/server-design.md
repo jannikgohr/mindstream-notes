@@ -821,16 +821,21 @@ Accepted:
   client as the data layout changes. Two runs against the same server differ by
   10 to 40%.
 
-Targets, none of them measured yet:
+Targets, set before anything was built, and where each stands. "Before" is the
+Etebase stack with the app as it was.
 
-| Scenario                         | Today           | Target                     |
-| -------------------------------- | --------------- | -------------------------- |
-| Idle sync                        | 11 requests     | 1 request, 0 with the feed |
-| Authenticated read               | 27 ms           | 2 ms or less               |
-| Remote edit reaches other device | Up to one tick  | Under a second             |
-| Open a note in a shared folder   | 7 requests      | 1 ticket request, no blobs |
-| Push 1000 new notes, server time | 5.4 ms per note | Under 1 ms per note        |
-| Relay frame                      | 0.7 ms          | No worse                   |
+| Scenario                         | Before          | Target                     | Measured                              |
+| -------------------------------- | --------------- | -------------------------- | ------------------------------------- |
+| Idle sync                        | 11 requests     | 1 request, 0 with the feed | 1 request, 2 ms                       |
+| Authenticated read               | 27 ms           | 2 ms or less               | About 2 ms                            |
+| Remote edit reaches other device | Up to one tick  | Under a second             | Not timed. The e2e suite waits for it |
+| Open a note in a shared folder   | 7 requests      | 1 ticket request, no blobs | 3 requests, no blobs                  |
+| Push 1000 new notes, server time | 5.4 ms per note | Under 1 ms per note        | 0.63 ms per note                      |
+| Relay frame                      | 0.7 ms          | No worse                   | 0.57 ms                               |
+
+Opening a note in a shared folder is still three requests and not one: the
+note's own key lives in its item, so the item and its collection are fetched
+before the ticket is asked for. See open point 2.
 
 ### Measured after step 1
 
@@ -848,6 +853,41 @@ its data.
 | Pull an 8 MiB attachment    | 448 ms        | 197 ms     |
 | Memory after startup        | 215 MiB       | 38 MiB     |
 | Memory after the benchmark  | 443 MiB       | 194 MiB    |
+
+### Measured after step 2
+
+The same server twice, on the same machine on the same day. The first column
+replays what the app asked for before: four collections for the vault, four
+more for each shared folder, every one of them visited on every sync. The
+second is the app as built: one collection per space, one request to ask what
+changed, and the items a push changes fetched by the batch. The request counts
+are exact. Times are the median of 20, and differ by 10 to 40% between runs.
+
+| Scenario                                 | Old layout         | As built          |
+| ---------------------------------------- | ------------------ | ----------------- |
+| Idle sync tick                           | 11 requests, 17 ms | 1 request, 2 ms   |
+| Idle tick with one shared folder         | 18 requests, 27 ms | 1 request, 2 ms   |
+| Tick with one new note                   | 12 requests, 24 ms | 3 requests, 12 ms |
+| Tick with one edited note                | 13 requests, 25 ms | 4 requests, 14 ms |
+| Tick that receives another device's edit | 11 requests, 16 ms | 2 requests, 4 ms  |
+| First sync of a new account              | 15 requests, 44 ms | 5 requests, 20 ms |
+| Push 25 edited notes                     | 26 requests, 80 ms | 2 requests, 30 ms |
+| Open a note in a shared folder           | 8 requests, 31 ms  | 3 requests, 10 ms |
+
+Against the Etebase stack an idle tick took 273 ms, so the two steps together
+bring it to under a hundredth of that. Most of it came with the server in
+step 1. What step 2 adds is that the cost stops growing with the number of
+shared folders, and that a device with a slow link makes one round trip
+where it made eleven.
+
+Not everything got better:
+
+- Pushing 100 new notes is one request either way.
+- A new device's first pull of 220 notes is six requests where it was five,
+  because a first pull now lists without content and then fetches by kind.
+  That keeps memory at one batch and applies folders before the notes in them.
+- A sync that sends something is one request more than it needs: the next
+  sync is told that space changed and pulls the device's own change back.
 
 Rooms, measured the same way against the two relays:
 
