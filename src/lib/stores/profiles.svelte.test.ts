@@ -12,7 +12,12 @@ vi.mock('$lib/api/core', async (original) => ({
   invokeOrFallback: workerReady
 }));
 
-import { currentProfile, loadProfiles, profilesState } from './profiles.svelte';
+import {
+  currentProfile,
+  loadProfiles,
+  loadProfilesAtStartup,
+  profilesState
+} from './profiles.svelte';
 
 const VIEW = {
   active: 'work',
@@ -61,6 +66,33 @@ describe('loadProfiles', () => {
     );
     await loadProfiles();
     expect(workerReady).not.toHaveBeenCalled();
+    expect(profilesState.loaded).toBe(false);
+  });
+
+  it('retries a failed startup load before reporting readiness', async () => {
+    listProfiles.mockResolvedValue(VIEW);
+    setSettingsVaultId
+      .mockRejectedValueOnce(new Error('app root is busy'))
+      .mockResolvedValue(undefined);
+    await loadProfilesAtStartup([0, 0]);
+    expect(setSettingsVaultId).toHaveBeenCalledTimes(2);
+    expect(workerReady).toHaveBeenCalledOnce();
+    expect(workerReady.mock.calls[0][0]).toBe('vault_worker_ready');
+    expect(profilesState.loaded).toBe(true);
+  });
+
+  it('reports a startup load that keeps failing so the worker can exit', async () => {
+    listProfiles.mockResolvedValue(VIEW);
+    setSettingsVaultId.mockRejectedValue(
+      new Error('invalid retained settings')
+    );
+    await loadProfilesAtStartup([0, 0]);
+    expect(setSettingsVaultId).toHaveBeenCalledTimes(3);
+    expect(workerReady).toHaveBeenCalledOnce();
+    expect(workerReady.mock.calls[0][0]).toBe('vault_worker_failed');
+    expect(workerReady.mock.calls[0][1]).toEqual({
+      message: 'invalid retained settings'
+    });
     expect(profilesState.loaded).toBe(false);
   });
 

@@ -79,6 +79,16 @@ Progress shares the bottom-right toast component and cannot be dismissed while
 native closure is deciding. The development coordinator survives worker closure
 so its `tauri dev` session remains alive until explicit Quit.
 
+Startup recovery never blocks opening vaults indefinitely. A handoff or update
+record that is corrupt or names another root, vault path or build is renamed to
+`<name>.unresumable-<uuid>` and startup continues. A resumable update session
+that fails to reopen is kept for one retry on the next launch, then set aside;
+a failing handoff gets three backed-off retries, then is set aside and its
+vault opened normally. Recovery as a whole is limited to five minutes. A worker
+whose window never becomes ready reports the failure and exits, releasing its
+vault, and a launch that finds an unresponsive coordinator tells the user
+instead of exiting silently.
+
 ## Frontend (`src/`)
 
 Svelte 5 + SvelteKit render the UI. Editors are surface-specific: markdown uses

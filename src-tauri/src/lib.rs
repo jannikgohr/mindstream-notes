@@ -190,6 +190,12 @@ fn vault_worker_ready() -> crate::error::CommandResult<()> {
     Ok(())
 }
 
+#[cfg(not(desktop))]
+#[tauri::command]
+fn vault_worker_failed() -> crate::error::CommandResult<()> {
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Route the `log` facade into logcat on Android. Without this
@@ -726,8 +732,12 @@ pub fn run() {
                 #[cfg(desktop)]
                 vault_supervisor::vault_worker_ready,
                 #[cfg(desktop)]
+                vault_supervisor::vault_worker_failed,
+                #[cfg(desktop)]
                 vault_supervisor::open_profile_window,
+                #[cfg(desktop)]
                 vault_supervisor::get_picker_vaults,
+                #[cfg(desktop)]
                 vault_supervisor::open_picker_vault,
                 #[cfg(desktop)]
                 coordinator_updater::check_coordinated_update,
@@ -743,6 +753,8 @@ pub fn run() {
                 worker_shutdown::vault_window_close_ack,
                 #[cfg(not(desktop))]
                 vault_worker_ready,
+                #[cfg(not(desktop))]
+                vault_worker_failed,
                 legacy_content::migrate_legacy_content,
                 ui_settings::load_ui_settings,
                 theme_presets::list_theme_presets,

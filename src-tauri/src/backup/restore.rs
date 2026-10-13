@@ -171,11 +171,39 @@ pub(super) fn imports_staging_root(app: &AppHandle) -> AppResult<PathBuf> {
     Ok(root)
 }
 
+/// Staging entries never outlive the process that created them: a committed
+/// restore has already moved its inputs out. The caller holds the vault lease,
+/// so nothing else can be staging here.
+pub(super) fn sweep_abandoned_staging(vault: &Path) {
+    for staging in [
+        vault.join("imports").join(".staging"),
+        vault.join("backups").join(".staging"),
+    ] {
+        if !fs::symlink_metadata(&staging).is_ok_and(|meta| meta.is_dir()) {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&staging) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let removed = match entry.file_type() {
+                Ok(kind) if kind.is_dir() => fs::remove_dir_all(entry.path()),
+                Ok(_) => fs::remove_file(entry.path()),
+                Err(err) => Err(err),
+            };
+            if let Err(err) = removed {
+                log::warn!("[restore] abandoned staging entry retained: {err}");
+            }
+        }
+    }
+}
+
 /// Run at startup *before* `Db::open`. If a previous session staged a
 /// restore, preserve the old DB and install the replacement. An unresolved
 /// restore stops boot so Db::open cannot create or migrate an ambiguous DB.
 pub fn apply_pending_restore_if_any(app: &AppHandle) -> AppResult<()> {
     let vault = crate::paths::app_data_dir(app)?;
+    sweep_abandoned_staging(&vault);
     let sentinel = vault.join(SENTINEL_FILE);
     if sentinel.try_exists()? {
         apply_pending_restore_with_root(

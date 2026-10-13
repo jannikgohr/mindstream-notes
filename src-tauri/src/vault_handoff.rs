@@ -110,10 +110,28 @@ fn read_locked(root: &Path) -> AppResult<Option<Record>> {
     }
     let record: Record = serde_json::from_slice(&raw).map_err(|_| invalid())?;
     record.validate()?;
-    if record.root != fs::canonicalize(root)? {
+    // A terminal record is only a tombstone. It stays readable after the root
+    // moves; an active intent must still describe this physical root.
+    if record.active() && record.root != fs::canonicalize(root)? {
         return Err(invalid());
     }
     Ok(Some(record))
+}
+
+/// An intent that is unreadable or names other physical vaults can never be
+/// resumed here. Set it aside so it cannot fail every later startup.
+pub(crate) fn quarantine_unresumable(root: &Path) -> AppResult<Option<PathBuf>> {
+    let _lock = RootLock::acquire(root)?;
+    let resumable = match read_locked(root) {
+        Ok(None) => return Ok(None),
+        Ok(Some(record)) => !record.active() || record.verify_paths(root).is_ok(),
+        Err(AppError::InvalidArg(_)) => false,
+        Err(error) => return Err(error),
+    };
+    if resumable {
+        return Ok(None);
+    }
+    crate::root_documents::set_aside(&root.join(FILE)).map(Some)
 }
 
 fn write_locked(root: &Path, record: &Record) -> AppResult<()> {
@@ -186,6 +204,16 @@ pub(crate) fn advance(root: &Path, id: Uuid, phase: Phase) -> AppResult<Record> 
     record.phase = phase;
     write_locked(root, &record)?;
     Ok(record)
+}
+
+/// Give up on an intent that keeps failing. Its evidence is retained under
+/// another name; nothing replays its close or pins its target any longer.
+pub(crate) fn abandon(root: &Path) -> AppResult<Option<PathBuf>> {
+    let _lock = RootLock::acquire(root)?;
+    if !root.join(FILE).try_exists()? {
+        return Ok(None);
+    }
+    crate::root_documents::set_aside(&root.join(FILE)).map(Some)
 }
 
 /// Caller has proved the old target's physical lease is released. Journal the
@@ -287,5 +315,34 @@ mod tests {
         assert!(record.verify_paths(&root).is_err());
         assert!(load(&root).unwrap().unwrap().active());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unresumable_intents_are_set_aside_and_moved_tombstones_stay_readable() {
+        let (root, source, target, geometry) = fixture();
+        let record = prepare(&root, Uuid::new_v4(), source, target, geometry).unwrap();
+        assert!(quarantine_unresumable(&root).unwrap().is_none());
+        let moved = root.with_file_name(format!("ms-handoff-moved-{}", Uuid::new_v4()));
+        fs::rename(&root, &moved).unwrap();
+        assert!(load(&moved).is_err());
+        let evidence = quarantine_unresumable(&moved).unwrap().unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Record>(&fs::read(evidence).unwrap()).unwrap(),
+            record
+        );
+        assert!(load(&moved).unwrap().is_none());
+        assert!(quarantine_unresumable(&moved).unwrap().is_none());
+
+        let mut terminal = record;
+        terminal.phase = Phase::Completed;
+        fs::write(moved.join(FILE), serde_json::to_vec(&terminal).unwrap()).unwrap();
+        assert!(!load(&moved).unwrap().unwrap().active());
+        assert!(quarantine_unresumable(&moved).unwrap().is_none());
+        assert!(abandon(&moved).unwrap().is_some());
+        assert!(abandon(&moved).unwrap().is_none());
+        fs::write(moved.join(FILE), b"corrupt").unwrap();
+        assert!(quarantine_unresumable(&moved).unwrap().is_some());
+        assert!(!moved.join(FILE).exists());
+        fs::remove_dir_all(moved).unwrap();
     }
 }

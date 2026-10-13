@@ -171,7 +171,13 @@ fn read_payload(directory: &Path) -> AppResult<Payload> {
     }
     crate::ui_settings::validate_backup_values(&payload.vault_settings, false)?;
     crate::ui_settings::validate_backup_values(&payload.device_settings, true)?;
+    #[cfg(desktop)]
     crate::desktop_settings::validate_backup_values(&payload.desktop_settings)?;
+    // Mobile has no desktop settings document. Carry the values unread.
+    #[cfg(not(desktop))]
+    if !payload.desktop_settings.is_object() {
+        return Err(invalid("invalid desktop backup settings"));
+    }
     crate::theme_presets::validate_backup_presets(&payload.presets)?;
     let mut ids = BTreeSet::new();
     for id in &payload.packages {
@@ -299,7 +305,10 @@ pub(super) fn capture(
             version: 1,
             vault_settings: crate::ui_settings::backup_values(vault, false)?,
             device_settings: crate::ui_settings::backup_values(root, true)?,
+            #[cfg(desktop)]
             desktop_settings: crate::desktop_settings::backup_values(root)?,
+            #[cfg(not(desktop))]
+            desktop_settings: serde_json::json!({}),
             device_plugin_settings,
             device_plugin_keys,
             presets: crate::theme_presets::backup_presets(root)?,
@@ -643,6 +652,7 @@ pub(super) fn apply(root: &Path, vault: &Path, hash: &str, include_device: bool)
         if include_device {
             crate::theme_presets::restore_backup_presets(root, &payload.presets)?;
             crate::ui_settings::restore_backup_values(root, &payload.device_settings, true)?;
+            #[cfg(desktop)]
             crate::desktop_settings::restore_backup_values(root, &payload.desktop_settings)?;
             crate::plugins::settings::restore_backup_values(root, &payload.device_plugin_settings)?;
         }
