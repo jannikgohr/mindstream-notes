@@ -834,6 +834,25 @@ const MIGRATIONS: &[Migration] = &[
             ALTER TABLE assets ADD COLUMN released INTEGER NOT NULL DEFAULT 0;
         "#,
     },
+    Migration {
+        to: 30,
+        // The public keys of the people this account shares with.
+        //
+        // The server hands out every key. The first one seen for a name is
+        // kept here, so that a different one later is noticed and held back
+        // until the user has looked at it. A name is one person on one
+        // server only, so the server is part of what a key is kept for.
+        // See `sharing::pins`.
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS known_keys (
+                server     TEXT NOT NULL,
+                username   TEXT NOT NULL,
+                pubkey     BLOB NOT NULL,
+                first_seen TEXT NOT NULL,
+                PRIMARY KEY (server, username)
+            ) WITHOUT ROWID;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

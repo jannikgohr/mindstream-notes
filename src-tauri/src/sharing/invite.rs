@@ -2,17 +2,19 @@
 //! inviting someone to it.
 
 use super::*;
+use crate::error::CommandError;
 
 #[tauri::command]
 pub async fn invite_collection(
     app: AppHandle,
     input: InviteCollectionInput,
 ) -> CommandResult<CollectionShareState> {
-    tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || -> CommandResult<CollectionShareState> {
         let InviteCollectionInput {
             collection_id,
             username,
             access_level,
+            trust_changed_key,
         } = input;
 
         // Look at the folder first. It costs nothing, and a bogus id must
@@ -20,27 +22,26 @@ pub async fn invite_collection(
         let db = app.state::<Db>();
         let folder = db.with_conn(|conn| crate::collections::get(conn, &collection_id))?;
         if collection_id == crate::collections::TRASH_ID {
-            return Err(AppError::InvalidArg(
-                "the trash collection cannot be shared".into(),
-            ));
+            return Err(
+                AppError::InvalidArg("the trash collection cannot be shared".into()).into(),
+            );
         }
 
         let account = restore_required(&app)?;
+        let server = session_server(&app)?;
         let owner_username = crate::auth::read_session_info(&app)?.map(|info| info.username);
 
         let recipient = username.trim();
         if recipient.is_empty() {
-            return Err(AppError::InvalidArg(
-                "a recipient username is required".into(),
-            ));
+            return Err(AppError::InvalidArg("a recipient username is required".into()).into());
         }
         if owner_username
             .as_deref()
             .is_some_and(|me| me.eq_ignore_ascii_case(recipient))
         {
-            return Err(AppError::InvalidArg(
-                "you can't share a folder with yourself".into(),
-            ));
+            return Err(
+                AppError::InvalidArg("you can't share a folder with yourself".into()).into(),
+            );
         }
 
         let existing_scope = db.with_conn(|conn| collection_scope(conn, &collection_id))?;
@@ -57,6 +58,11 @@ pub async fn invite_collection(
         let profile = invitations
             .fetch_user_profile(recipient)
             .map_err(|e| profile_lookup_error(recipient, &e))?;
+
+        // The folder's key is about to be sealed to this key. If it is not
+        // the one remembered for the recipient, nothing is made or sent
+        // until the user has looked at it.
+        check_key(&db, &server, recipient, profile.pubkey(), trust_changed_key)?;
 
         // A folder that is shared already gets one more member. Only a
         // folder that is not gets a collection.
@@ -84,7 +90,8 @@ pub async fn invite_collection(
         if recipient_already_on_space(&invitations, &cm, &collection, recipient)? {
             return Err(AppError::InvalidArg(format!(
                 "{recipient} has already been invited to this folder"
-            )));
+            ))
+            .into());
         }
 
         invitations
@@ -96,11 +103,14 @@ pub async fn invite_collection(
             )
             .map_err(|e| AppError::InvalidArg(format!("invite {recipient}: {e}")))?;
 
-        db.with_conn(|conn| local_share_state(conn, &collection_id))
+        // The folder's key now depends on this key, so this is when it is
+        // kept.
+        db.with_conn(|conn| remember_key(conn, &server, recipient, profile.pubkey()))?;
+
+        Ok(db.with_conn(|conn| local_share_state(conn, &collection_id))?)
     })
     .await
-    .map_err(|e| format!("invite collection task: {e}"))?
-    .map_err(Into::into)
+    .map_err(|e| CommandError::task(format!("invite collection task: {e}")))?
 }
 
 /// Test-only: invite someone to a collection that is not a shared folder,

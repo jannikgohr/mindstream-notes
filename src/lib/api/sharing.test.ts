@@ -17,10 +17,12 @@ import {
   listIncomingShares,
   listShareLinks,
   openShareLink,
+  ownKeyFingerprint,
   removeCollectionMember,
   revokeShareLink,
   setCollectionMemberAccess,
-  stopSharingCollection
+  stopSharingCollection,
+  userKeyInfo
 } from './sharing';
 
 function setTauri(on: boolean): void {
@@ -35,7 +37,15 @@ const INCOMING_SHARE = {
   collection_uid: 'col-uid',
   name: 'Team folder',
   sender_username: 'bob',
-  access_level: 'read_write'
+  access_level: 'read_write',
+  sender_key: null
+};
+
+const SENDER_KEY = {
+  username: 'bob',
+  standing: 'changed',
+  fingerprint: '11111   22222',
+  known_fingerprint: '33333   44444'
 };
 
 const OUTGOING_INVITATION = {
@@ -175,11 +185,42 @@ describe('sharing API — Tauri parse path', () => {
     await expect(listIncomingShares()).rejects.toThrow(/unknown access level/);
   });
 
+  it('reads the sender key that comes with an invitation', async () => {
+    invoke.mockResolvedValueOnce([
+      { ...INCOMING_SHARE, sender_key: SENDER_KEY }
+    ]);
+    const [share] = await listIncomingShares();
+    expect(share.sender_key).toEqual(SENDER_KEY);
+
+    // A key that was not seen before has no other one to show.
+    invoke.mockResolvedValueOnce([
+      {
+        ...INCOMING_SHARE,
+        sender_key: { ...SENDER_KEY, standing: 'new', known_fingerprint: null }
+      }
+    ]);
+    const [fresh] = await listIncomingShares();
+    expect(fresh.sender_key?.standing).toBe('new');
+    expect(fresh.sender_key?.known_fingerprint).toBeNull();
+  });
+
+  it('rejects a sender key it cannot place', async () => {
+    invoke.mockResolvedValueOnce([
+      { ...INCOMING_SHARE, sender_key: { ...SENDER_KEY, standing: 'fine' } }
+    ]);
+    await expect(listIncomingShares()).rejects.toThrow(/standing/);
+    invoke.mockResolvedValueOnce([
+      { ...INCOMING_SHARE, sender_key: { ...SENDER_KEY, fingerprint: 7 } }
+    ]);
+    await expect(listIncomingShares()).rejects.toThrow(/fingerprint/);
+  });
+
   it('answers an invitation by its id', async () => {
     invoke.mockResolvedValue(null);
     await acceptShare('inv1');
     expect(invoke).toHaveBeenLastCalledWith('accept_share', {
-      invitationId: 'inv1'
+      invitationId: 'inv1',
+      trustChangedKey: false
     });
     await declineShare('inv1');
     expect(invoke).toHaveBeenLastCalledWith('decline_share', {
@@ -362,6 +403,86 @@ describe('invite links', () => {
 
       await expect(claimShareLink(LINK)).resolves.toBeUndefined();
       expect(invoke).toHaveBeenCalledWith('claim_share_link', { link: LINK });
+    });
+  });
+});
+
+describe('the keys of the people shared with', () => {
+  const KEY = {
+    username: 'bob',
+    standing: 'changed',
+    fingerprint: '11111   22222',
+    known_fingerprint: '33333   44444'
+  };
+
+  it('cannot be asked about outside Tauri', async () => {
+    await expect(userKeyInfo('bob')).rejects.toThrow(/Tauri desktop app/);
+    await expect(ownKeyFingerprint()).rejects.toThrow(/Tauri desktop app/);
+  });
+
+  it('needs a name to ask about', () => {
+    expect(() => userKeyInfo(' ')).toThrow(/must be a non-empty/);
+  });
+
+  describe('in Tauri', () => {
+    beforeEach(() => {
+      setTauri(true);
+      invoke.mockReset();
+    });
+    afterEach(() => setTauri(false));
+
+    it('reads how a user key stands', async () => {
+      invoke.mockResolvedValue(KEY);
+
+      await expect(userKeyInfo('bob')).resolves.toEqual(KEY);
+      expect(invoke).toHaveBeenCalledWith('user_key_info', { username: 'bob' });
+    });
+
+    it('rejects a key it cannot read', async () => {
+      invoke.mockResolvedValueOnce({ ...KEY, standing: 'maybe' });
+      await expect(userKeyInfo('bob')).rejects.toThrow(/standing/);
+      invoke.mockResolvedValueOnce({ ...KEY, username: null });
+      await expect(userKeyInfo('bob')).rejects.toThrow(/username/);
+    });
+
+    it('reads the account key as digits', async () => {
+      invoke.mockResolvedValue('45680   71497');
+
+      await expect(ownKeyFingerprint()).resolves.toBe('45680   71497');
+      expect(invoke).toHaveBeenCalledWith('own_key_fingerprint', undefined);
+      invoke.mockResolvedValue({ digits: 1 });
+      await expect(ownKeyFingerprint()).rejects.toThrow(/must be a string/);
+    });
+
+    it('says when the user chose to trust a changed key', async () => {
+      invoke.mockResolvedValue(null);
+
+      await acceptShare('inv1', { trustChangedKey: true });
+      expect(invoke).toHaveBeenLastCalledWith('accept_share', {
+        invitationId: 'inv1',
+        trustChangedKey: true
+      });
+    });
+
+    it('passes the choice along with an invitation that is sent', async () => {
+      invoke.mockResolvedValue({
+        collection_id: 'folder_1',
+        share_id: 'share-1',
+        shared_role: null,
+        shared_owner: 'ann',
+        shared_by_me: true,
+        members: [],
+        outgoing_invitations: []
+      });
+      const input = {
+        collection_id: 'folder_1',
+        username: 'bob',
+        access_level: 'read_write' as const,
+        trust_changed_key: true
+      };
+
+      await inviteCollection(input);
+      expect(invoke).toHaveBeenCalledWith('invite_collection', { input });
     });
   });
 });

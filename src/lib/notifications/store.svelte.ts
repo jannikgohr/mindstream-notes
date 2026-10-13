@@ -109,7 +109,8 @@ export async function scanForShareInviteNotifications(): Promise<void> {
           collectionUid: share.collection_uid,
           name: share.name,
           senderUsername: share.sender_username,
-          accessLevel: share.access_level
+          accessLevel: share.access_level,
+          senderKey: share.sender_key
         }
       });
     }

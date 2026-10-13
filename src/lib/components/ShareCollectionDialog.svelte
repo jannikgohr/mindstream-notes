@@ -17,10 +17,23 @@
   import { parseRecipients } from './share-recipients';
   import { pushToast } from './toast.svelte';
   import { toErrorMessage } from '$lib/api/errors';
+  import { refusalReason } from '$lib/account/refusal';
+  import KeyChangedNotice from './KeyChangedNotice.svelte';
 
   interface InviteFailure {
     username: string;
     reason: string;
+    /** Held back because the recipient's key is not the one this device
+     *  remembers. The user can look at the new key and send it anyway. */
+    keyChanged: boolean;
+  }
+
+  function failureOf(recipient: string, err: unknown): InviteFailure {
+    return {
+      username: recipient,
+      reason: toErrorMessage(err),
+      keyChanged: refusalReason(err) === 'key_changed'
+    };
   }
 
   let username = $state('');
@@ -75,10 +88,7 @@
         });
         invited.push(recipient);
       } catch (err) {
-        failed.push({
-          username: recipient,
-          reason: toErrorMessage(err)
-        });
+        failed.push(failureOf(recipient, err));
       }
     }
 
@@ -96,6 +106,33 @@
     // Keep the failed names for a quick retry; clear the field on a clean run.
     username = failed.map((f) => f.username).join(', ');
     pending = false;
+  }
+
+  /** Send the invitation that was held back for a changed key, now that the
+   *  user has been shown the new key and said to go on. */
+  async function inviteWithNewKey(recipient: string) {
+    if (!collectionId || pending) return;
+    pending = true;
+    try {
+      await inviteCollection({
+        collection_id: collectionId,
+        username: recipient,
+        access_level: accessLevel,
+        trust_changed_key: true
+      });
+      failures = failures.filter((f) => f.username !== recipient);
+      username = failures.map((f) => f.username).join(', ');
+      await loadTree();
+      pushToast(tUi('sharing.toast.invited').replace('{names}', recipient), {
+        variant: 'success'
+      });
+    } catch (err) {
+      failures = failures.map((f) =>
+        f.username === recipient ? failureOf(recipient, err) : f
+      );
+    } finally {
+      pending = false;
+    }
   }
 </script>
 
@@ -187,7 +224,15 @@
             <ul class="space-y-0.5">
               {#each failures as failure (failure.username)}
                 <li>
-                  <span class="font-medium">{failure.username}</span> — {failure.reason}
+                  {#if failure.keyChanged}
+                    <KeyChangedNotice
+                      username={failure.username}
+                      disabled={pending}
+                      onTrust={() => void inviteWithNewKey(failure.username)}
+                    />
+                  {:else}
+                    <span class="font-medium">{failure.username}</span> — {failure.reason}
+                  {/if}
                 </li>
               {/each}
             </ul>

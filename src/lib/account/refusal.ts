@@ -40,7 +40,8 @@ const SENTENCES: Record<string, string> = {
   link_expired: 'account.refusal.linkExpired',
   link_other_server: 'account.refusal.linkOtherServer',
   already_member: 'account.refusal.alreadyMember',
-  too_many_links: 'account.refusal.tooManyLinks'
+  too_many_links: 'account.refusal.tooManyLinks',
+  key_changed: 'account.refusal.keyChanged'
 };
 
 /** The server wants a code from the authenticator before it goes on. */

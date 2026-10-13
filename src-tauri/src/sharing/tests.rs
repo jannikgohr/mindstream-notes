@@ -25,6 +25,7 @@ fn invitation_to_a_shared_folder_is_shown_with_its_name() {
             name: Some("Trip plans".into()),
             sender_username: Some("sender".into()),
             access_level: ShareAccessLevel::ReadWrite,
+            sender_key: None,
         }
     );
 }

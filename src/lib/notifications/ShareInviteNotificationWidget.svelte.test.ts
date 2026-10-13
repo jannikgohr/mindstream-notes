@@ -15,7 +15,7 @@ const dismissNotification = vi.fn();
 const scanForShareInviteNotifications = vi.fn();
 
 vi.mock('$lib/api/sharing', () => ({
-  acceptShare: (id: string) => acceptShare(id),
+  acceptShare: (id: string, options: unknown) => acceptShare(id, options),
   declineShare: (id: string) => declineShare(id)
 }));
 vi.mock('$lib/sync/runner', () => ({ runSync: () => runSync() }));
@@ -40,6 +40,12 @@ function invitation(
       name: 'Trip plans',
       senderUsername: 'alice',
       accessLevel: 'read_write',
+      senderKey: {
+        username: 'alice',
+        standing: 'known',
+        fingerprint: '11111   22222',
+        known_fingerprint: null
+      },
       ...over
     }
   };
@@ -90,7 +96,9 @@ describe('ShareInviteNotificationWidget', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
 
     await waitFor(() => expect(onClose).toHaveBeenCalled());
-    expect(acceptShare).toHaveBeenCalledWith('invite_1');
+    expect(acceptShare).toHaveBeenCalledWith('invite_1', {
+      trustChangedKey: false
+    });
     expect(dismissNotification).toHaveBeenCalledWith('share-invite:invite_1');
     expect(runSync).toHaveBeenCalledTimes(1);
     expect(scanForShareInviteNotifications).toHaveBeenCalled();
@@ -112,6 +120,92 @@ describe('ShareInviteNotificationWidget', () => {
       (screen.getByRole('button', { name: 'Accept' }) as HTMLButtonElement)
         .disabled
     ).toBe(false);
+  });
+
+  describe('from a key that is not the one remembered', () => {
+    const changed = () =>
+      invitation({
+        senderKey: {
+          username: 'alice',
+          standing: 'changed',
+          fingerprint: '11111   22222',
+          known_fingerprint: '33333   44444'
+        }
+      });
+
+    it('says so and shows both keys', () => {
+      render(ShareInviteNotificationWidget, { notification: changed() });
+
+      const warning = screen.getByTestId('share-invite-key-changed');
+      expect(warning.textContent).toContain(
+        'not the one you accepted from alice before'
+      );
+      const [now, before] = screen.getAllByTestId('key-fingerprint');
+      expect(now.textContent).toBe('11111   22222');
+      expect(before.textContent).toBe('33333   44444');
+      // Nothing is plainly accepted.
+      expect(screen.queryByRole('button', { name: 'Accept' })).toBeNull();
+    });
+
+    it('accepts only as a choice to trust the new key', async () => {
+      render(ShareInviteNotificationWidget, { notification: changed() });
+
+      await fireEvent.click(
+        screen.getByRole('button', { name: 'Accept anyway' })
+      );
+
+      await waitFor(() =>
+        expect(acceptShare).toHaveBeenCalledWith('invite_1', {
+          trustChangedKey: true
+        })
+      );
+    });
+
+    it('can still be declined', async () => {
+      render(ShareInviteNotificationWidget, { notification: changed() });
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Decline' }));
+
+      await waitFor(() =>
+        expect(declineShare).toHaveBeenCalledWith('invite_1')
+      );
+      expect(acceptShare).not.toHaveBeenCalled();
+    });
+  });
+
+  it('shows no warning for a key seen for the first time', () => {
+    render(ShareInviteNotificationWidget, {
+      notification: invitation({
+        senderKey: {
+          username: 'alice',
+          standing: 'new',
+          fingerprint: '11111   22222',
+          known_fingerprint: null
+        }
+      })
+    });
+
+    expect(screen.queryByTestId('share-invite-key-changed')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Accept' })).toBeTruthy();
+  });
+
+  it('lists the invitations again when the server refuses for a changed key', async () => {
+    acceptShare.mockRejectedValue({
+      code: 'refused',
+      message: 'server words',
+      reason: 'key_changed'
+    });
+    render(ShareInviteNotificationWidget, { notification: invitation() });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Their key is not the one this device remembers.')
+      ).toBeTruthy()
+    );
+    expect(scanForShareInviteNotifications).toHaveBeenCalled();
+    expect(dismissNotification).not.toHaveBeenCalled();
   });
 
   it('declines by invitation id and syncs nothing', async () => {

@@ -6,6 +6,7 @@
 //! along, so the folder's name can be shown without accepting anything.
 
 use super::*;
+use crate::error::CommandError;
 
 pub(super) fn restore_required(app: &AppHandle) -> AppResult<Account> {
     crate::auth::try_restore(app)
@@ -28,7 +29,29 @@ pub(super) fn incoming_share(preview: &InvitationPreview) -> Option<IncomingShar
             .map(str::to_string),
         sender_username: preview.sender_username().map(str::to_string),
         access_level: preview.access_level().into(),
+        sender_key: None,
     })
+}
+
+/// The server this device is signed in to. Keys are remembered per server.
+pub(super) fn session_server(app: &AppHandle) -> AppResult<String> {
+    crate::auth::read_session_info(app)?
+        .map(|info| info.server_url)
+        .ok_or_else(|| AppError::InvalidArg("not signed in".into()))
+}
+
+/// The key an invitation came from, held against the one remembered for its
+/// sender. `None` for an invitation that names no sender: there is nobody
+/// to remember a key for.
+fn sender_key(
+    conn: &Connection,
+    server_url: &str,
+    invitation: &SignedInvitation,
+) -> AppResult<Option<UserKey>> {
+    invitation
+        .sender_username()
+        .map(|sender| user_key(conn, server_url, sender, invitation.sender_pubkey()))
+        .transpose()
 }
 
 /// Every invitation waiting for this account, with what could be read of it.
@@ -72,15 +95,20 @@ fn find_incoming_share(
 pub async fn list_incoming_shares(app: AppHandle) -> CommandResult<Vec<IncomingShare>> {
     tauri::async_runtime::spawn_blocking(move || {
         let account = restore_required(&app)?;
+        let server = session_server(&app)?;
         let manager = account
             .invitation_manager()
             .map_err(|e| AppError::InvalidArg(format!("invitation_manager: {e}")))?;
-        Ok::<_, AppError>(
-            incoming_previews(&manager)?
-                .iter()
-                .filter_map(|(_, preview)| incoming_share(preview))
-                .collect(),
-        )
+        let db = app.state::<Db>();
+        let mut shares = Vec::new();
+        for (invitation, preview) in incoming_previews(&manager)? {
+            let Some(mut share) = incoming_share(&preview) else {
+                continue;
+            };
+            share.sender_key = db.with_conn(|conn| sender_key(conn, &server, &invitation))?;
+            shares.push(share);
+        }
+        Ok::<_, AppError>(shares)
     })
     .await
     .map_err(|e| format!("list incoming shares task: {e}"))?
@@ -90,23 +118,49 @@ pub async fn list_incoming_shares(app: AppHandle) -> CommandResult<Vec<IncomingS
 /// Accept an invitation to a shared folder. That is the whole of joining:
 /// the next sync finds the collection among this account's and pulls the
 /// folder in, with the sender's own ids for its folders and notes.
+///
+/// An invitation is as good as the key it came from. One from a key that is
+/// not the one remembered for its sender is refused unless
+/// `trust_changed_key` says the user has seen that and wants to go on.
 #[tauri::command]
-pub async fn accept_share(app: AppHandle, invitation_id: String) -> CommandResult<()> {
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn accept_share(
+    app: AppHandle,
+    invitation_id: String,
+    trust_changed_key: Option<bool>,
+) -> CommandResult<()> {
+    tauri::async_runtime::spawn_blocking(move || -> CommandResult<()> {
         let account = restore_required(&app)?;
+        let server = session_server(&app)?;
         let manager = account
             .invitation_manager()
             .map_err(|e| AppError::InvalidArg(format!("invitation_manager: {e}")))?;
         let invitation = find_incoming_share(&manager, &invitation_id)?
             .ok_or_else(|| AppError::NotFound(format!("invitation {invitation_id}")))?;
+
+        let db = app.state::<Db>();
+        let sender = invitation.sender_username().map(str::to_string);
+        if let Some(sender) = sender.as_deref() {
+            check_key(
+                &db,
+                &server,
+                sender,
+                invitation.sender_pubkey(),
+                trust_changed_key.unwrap_or(false),
+            )?;
+        }
+
         manager
             .accept(&invitation)
             .map_err(|e| AppError::InvalidArg(format!("accept invitation: {e}")))?;
-        Ok::<(), AppError>(())
+
+        // Accepting is relying on the key, so this is when it is kept.
+        if let Some(sender) = sender.as_deref() {
+            db.with_conn(|conn| remember_key(conn, &server, sender, invitation.sender_pubkey()))?;
+        }
+        Ok(())
     })
     .await
-    .map_err(|e| format!("accept share task: {e}"))?
-    .map_err(Into::into)
+    .map_err(|e| CommandError::task(format!("accept share task: {e}")))?
 }
 
 /// Turn an invitation to a shared folder down. One that is already gone,

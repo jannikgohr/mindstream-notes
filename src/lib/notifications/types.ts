@@ -1,4 +1,5 @@
 import type { Component } from 'svelte';
+import type { UserKey } from '$lib/api/sharing';
 
 export type NotificationKind =
   | 'update'
@@ -33,6 +34,9 @@ export interface ShareInviteNotificationData {
   name: string | null;
   senderUsername: string | null;
   accessLevel: 'read_only' | 'read_write' | 'admin';
+  // The sender's key, held against the one this device remembers for them.
+  // Null when the invitation names no sender.
+  senderKey: UserKey | null;
 }
 
 export interface NotificationWidgetProps {

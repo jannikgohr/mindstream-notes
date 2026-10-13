@@ -11,8 +11,9 @@
  * why the old flow 4.5 (a share that arrived in part) has no successor here.
  *
  * Status: flows 4.1–4.4, 4.6, the core 4.7 subtree convergence path,
- * 4.7b move-out re-home and 4.11 joining by an invite link are IMPLEMENTED
- * and validated against the live two-app + backend session. The
+ * 4.7b move-out re-home, 4.11 joining by an invite link and 4.12 keys that
+ * changed are IMPLEMENTED and validated against the live two-app + backend
+ * session. The
  * owner-second-device 4.8–4.9 re-home cases live in
  * sharing-multi-device.e2e.ts because they require A1 + A2 + recipient B.
  * Plain-vault 4.10 lives in sync-history.e2e.ts.
@@ -35,6 +36,10 @@
  *   - tree background menu:     "Join shared folder…" (ui.sharing.menu.joinByLink)
  *   - join dialog:              "Invite link" / "Continue" / "Join"
  *                               (ui.sharing.join.*)
+ *   - changed key, sending:     "Share with the new key"
+ *                               (ui.sharing.key.trustAndInvite)
+ *   - changed key, receiving:   "Accept anyway"
+ *                               (ui.notifications.invite.acceptAnyway)
  *   - view-only editor banner:  ui.editor.viewonly.banner
  */
 
@@ -246,6 +251,13 @@ interface ShareLinkRow {
 interface MemberRow {
   username: string;
   access_level: string;
+}
+
+interface UserKeyRow {
+  username: string;
+  standing: 'new' | 'known' | 'changed';
+  fingerprint: string;
+  known_fingerprint: string | null;
 }
 
 /** Call a command that is expected to be refused, and say with which
@@ -502,6 +514,12 @@ describe('T4 sharing a folder', function () {
     await A.clickMenuItem('Sharing');
     await A.clickMenuItem('Share folder…');
 
+    // A has shared nothing with B yet, so B's key is new to this device.
+    const unseen = await invokeTauri<UserKeyRow>(browserA, 'user_key_info', {
+      username: accounts.recipient.username
+    });
+    expect(unseen.standing).toBe('new');
+
     // Fill "Users" with B's real username, pick "Can edit", then "Invite".
     await A.setValue('Users', accounts.recipient.username);
     await setSharePermission(browserA, 'Can edit');
@@ -511,6 +529,16 @@ describe('T4 sharing a folder', function () {
     // badge — a Share2 icon whose accessible name is "Shared" (nav.shared),
     // rendered inside the folder's tree row (FileExplorer.svelte).
     await expectSharedByMeBadge(browserA, SHARED_FOLDER);
+
+    // Sharing relied on B's key, so A remembers it now. And it is B's key:
+    // the digits A is shown for B are the ones B's own app shows.
+    const seen = await invokeTauri<UserKeyRow>(browserA, 'user_key_info', {
+      username: accounts.recipient.username
+    });
+    expect(seen.standing).toBe('known');
+    expect(seen.fingerprint).toBe(
+      await invokeTauri<string>(browserB, 'own_key_fingerprint')
+    );
 
     await A.click('Cancel');
   });
@@ -919,6 +947,131 @@ describe('T4 sharing a folder', function () {
     // It is a shared folder like any other: not in Home.
     await selectTreeSource(browserB, 'Home');
     await expect(B.treeItem(LINK_FOLDER)).not.toBeDisplayed();
+  });
+
+  const KEY_FOLDER = `Key Folder ${RUN_ID}`;
+
+  // --- 4.12 A key that is not the one remembered (P1) ---
+  it('a changed key holds an invitation back, both ways, until it was seen', async () => {
+    // B accepted A's first invitation, so B remembers A's key, and it is the
+    // key A's own app shows.
+    const senderKey = await invokeTauri<UserKeyRow>(browserB, 'user_key_info', {
+      username: accounts.sender.username
+    });
+    expect(senderKey.standing).toBe('known');
+    expect(senderKey.fingerprint).toBe(
+      await invokeTauri<string>(browserA, 'own_key_fingerprint')
+    );
+
+    // Sending. A's device is made to remember another key for B, as it would
+    // if the server had given A a different key before.
+    await invokeTauri(browserA, 'e2e_remember_other_key', {
+      username: accounts.recipient.username
+    });
+    await closeSharingDialogs(browserA);
+    await selectTreeSource(browserA, 'Home');
+    await A.newRootFolder(KEY_FOLDER);
+    const folderId = await findCollectionId(browserA, KEY_FOLDER);
+    await A.clickElement(A.treeItem(KEY_FOLDER), { button: 'right' });
+    await A.clickMenuItem('Sharing');
+    await A.clickMenuItem('Share folder…');
+    await A.setValue('Users', accounts.recipient.username);
+    await setSharePermission(browserA, 'Can view');
+    await submitShareInvite(browserA);
+
+    // The dialog shows what changed, with both keys, and nothing was made
+    // or sent.
+    const notice = browserA.$('[data-testid="key-changed-notice"]');
+    await notice.waitForDisplayed({ timeout: 60_000 });
+    await browserA.waitUntil(
+      async () =>
+        (await notice.$$('[data-testid="key-fingerprint"]').length) === 2,
+      { timeout: 60_000, timeoutMsg: 'the two keys were not shown' }
+    );
+    const state = await invokeTauri<{ share_id: string | null }>(
+      browserA,
+      'get_collection_share_state',
+      { collectionId: folderId }
+    );
+    expect(state.share_id).toBeNull();
+    const none = await invokeTauri<IncomingShareFixture[]>(
+      browserB,
+      'list_incoming_shares'
+    );
+    expect(none.some((share) => share.name === KEY_FOLDER)).toBe(false);
+
+    // Saying to share with the new key sends it, and A remembers that key.
+    await clickDialogButton(
+      browserA,
+      'share-collection-title',
+      'Share with the new key'
+    );
+    await expectSharedByMeBadge(browserA, KEY_FOLDER);
+    const trusted = await invokeTauri<UserKeyRow>(browserA, 'user_key_info', {
+      username: accounts.recipient.username
+    });
+    expect(trusted.standing).toBe('known');
+    await closeSharingDialogs(browserA);
+    await syncClient(browserA);
+
+    // Receiving. B's device is made to remember another key for A.
+    await invokeTauri(browserB, 'e2e_remember_other_key', {
+      username: accounts.sender.username
+    });
+    await browserB.reloadSession();
+    await browserB.$('aria/Welcome').waitForDisplayed({ timeout: 30_000 });
+    B = clientHelpers(browserB);
+
+    // The invitation is listed with the change, and the backend will not
+    // accept it as if nothing had happened.
+    let waiting: (IncomingShareFixture & { sender_key: UserKeyRow | null })[] =
+      [];
+    await browserB.waitUntil(
+      async () => {
+        waiting = await invokeTauri(browserB, 'list_incoming_shares');
+        return waiting.some((share) => share.name === KEY_FOLDER);
+      },
+      { timeout: 60_000, timeoutMsg: 'the invitation did not reach B' }
+    );
+    const invitation = waiting.find((share) => share.name === KEY_FOLDER);
+    expect(invitation?.sender_key?.standing).toBe('changed');
+    expect(invitation?.sender_key?.fingerprint).toBe(senderKey.fingerprint);
+    expect(
+      await refusalOf(browserB, 'accept_share', {
+        invitationId: invitation?.invitation_id
+      })
+    ).toBe('key_changed');
+
+    // The notification says so, and offers only "Accept anyway".
+    await browserB.waitUntil(
+      async () => {
+        await B.openNotifications();
+        return browserB
+          .$('[data-testid="share-invite-key-changed"]')
+          .isDisplayed();
+      },
+      { timeout: 60_000, timeoutMsg: 'the changed key was not shown to B' }
+    );
+    await expect(B.byName('Accept')).not.toBeDisplayed();
+    await B.click('Accept anyway');
+
+    // Accepted by choice: the folder arrives, and B remembers A's key again.
+    await selectTreeSource(browserB, 'Shared');
+    await browserB.waitUntil(
+      async () => {
+        await syncClient(browserA);
+        await syncClient(browserB);
+        return B.isDisplayed(KEY_FOLDER, 1_000);
+      },
+      {
+        timeout: 180_000,
+        timeoutMsg: 'the folder did not arrive after accepting anyway'
+      }
+    );
+    const again = await invokeTauri<UserKeyRow>(browserB, 'user_key_info', {
+      username: accounts.sender.username
+    });
+    expect(again.standing).toBe('known');
   });
 
   // 4.8–4.9 require an owner second device (A2) and are covered by

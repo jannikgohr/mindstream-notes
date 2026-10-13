@@ -23,13 +23,14 @@ Tests we know we want but haven't written — the account/token-lifecycle flows
 | `text-checker.e2e.ts`         | T3   | flow 5.4 against a LanguageTool-shaped stub server                                            |
 | `account-security.e2e.ts`     | T4   | signup with a recovery key, a code asked of a new device, remote sign-out, password change    |
 | `sync-history.e2e.ts`         | T4   | per-device-history negative assertion; 4.10 edit-wins-over-delete                             |
-| `sharing.e2e.ts`              | T4   | sharing flows 4.1–4.4 + core 4.7 subtree/asset convergence + 4.7b + 4.11 invite links         |
+| `sharing.e2e.ts`              | T4   | sharing flows 4.1–4.4 + core 4.7 subtree/asset convergence + 4.7b + 4.11 + 4.12 keys          |
 | `sharing-multi-device.e2e.ts` | T4   | owner-second-device 4.8–4.9 re-home cases                                                     |
 | `collab.e2e.ts`               | T4   | live markdown propagation, restore convergence, restore-vs-paused-peer, reconnect convergence |
 
 Validated app assertions cover live collab propagation, restore convergence,
 reconnect convergence, seeded-note convergence, sharing 4.1–4.7b, joining
-by an invite link, and edit-wins-over-delete for plain vault notes.
+by an invite link, held-back invitations when a key changed, and
+edit-wins-over-delete for plain vault notes.
 
 ## Previously red, now fixed — 2026-07-20
 

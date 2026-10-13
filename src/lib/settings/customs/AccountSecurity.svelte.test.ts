@@ -36,6 +36,10 @@ vi.mock('$lib/api/account', () => ({
   accountRemoveAuthenticator: vi.fn()
 }));
 
+vi.mock('$lib/api/sharing', () => ({
+  ownKeyFingerprint: async () => '45680   71497'
+}));
+
 vi.mock('../store.svelte', () => ({ settingsDialog: { open: true } }));
 
 import AccountSecurity from './AccountSecurity.svelte';

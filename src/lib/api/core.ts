@@ -135,6 +135,7 @@ export enum TauriCommandName {
   PluginsSettingsAll = 'plugins_settings_all',
   PluginsSettingsRemove = 'plugins_settings_remove',
   OpenShareLink = 'open_share_link',
+  OwnKeyFingerprint = 'own_key_fingerprint',
   PluginsSettingsSet = 'plugins_settings_set',
   PruneNoteVersions = 'prune_note_versions',
   PurgeCorruptRemoteNote = 'purge_corrupt_remote_note',
@@ -178,7 +179,8 @@ export enum TauriCommandName {
   TrashMany = 'trash_many',
   TrashNote = 'trash_note',
   UpdateCollection = 'update_collection',
-  UploadDrawingAsset = 'upload_drawing_asset'
+  UploadDrawingAsset = 'upload_drawing_asset',
+  UserKeyInfo = 'user_key_info'
 }
 
 export type IpcValidator<T> = (value: unknown) => T;

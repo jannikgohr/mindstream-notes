@@ -14,6 +14,7 @@
   } from '$lib/api/account';
   import { authSession } from '$lib/api/auth.svelte';
   import DevicesSection from '$lib/account/DevicesSection.svelte';
+  import KeySection from '$lib/account/KeySection.svelte';
   import PasswordSection from '$lib/account/PasswordSection.svelte';
   import RecoveryKeySection from '$lib/account/RecoveryKeySection.svelte';
   import TwoFactorSection from '$lib/account/TwoFactorSection.svelte';
@@ -62,6 +63,7 @@
       <TwoFactorSection {overview} onChanged={changed} />
       <RecoveryKeySection {overview} onChanged={changed} />
       <PasswordSection {overview} onChanged={changed} />
+      <KeySection />
       <DevicesSection {revision} />
     </div>
   {:else if error}

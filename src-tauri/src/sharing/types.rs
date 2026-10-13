@@ -43,6 +43,9 @@ pub struct IncomingShare {
     pub name: Option<String>,
     pub sender_username: Option<String>,
     pub access_level: ShareAccessLevel,
+    /// The sender's key, held against the one this device remembers for
+    /// them. Missing when the invitation names no sender.
+    pub sender_key: Option<UserKey>,
 }
 
 /// An invitation this account sent that has not been answered.
@@ -58,6 +61,10 @@ pub struct InviteCollectionInput {
     pub collection_id: String,
     pub username: String,
     pub access_level: ShareAccessLevel,
+    /// The user has seen that the recipient's key is not the one this
+    /// device remembers, and said to share with the new one.
+    #[serde(default)]
+    pub trust_changed_key: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

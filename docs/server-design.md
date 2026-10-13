@@ -390,10 +390,27 @@ uses.
   same lock that removing a member takes. An admin who is removed or
   downgraded has their pending invitations withdrawn. A claim on an invite
   link follows the same rule.
-- **Recipient keys are pinned.** The client remembers the public key first seen
-  for a username and warns when it changes. Without this a server could swap in
-  its own key when a folder is shared. This weakness exists today. Not built
-  yet.
+- **Keys are remembered.** The server hands out every public key: a
+  recipient's when a folder is shared with them, a sender's with their
+  invitation. A server that handed out a key of its own could read what is
+  shared, or stand in for a sender. Nothing proves a key on first sight, so
+  the app keeps the first key it relied on for a name on a server, in the
+  local database, and holds back anything that comes with another one.
+  - Inviting someone whose key changed creates and sends nothing. The dialog
+    shows the key the server gives now and the key remembered, as digits,
+    and the invitation goes out only when the user says to share with the
+    new key.
+  - An invitation from a changed key is shown with the same warning and both
+    keys, and "Accept" becomes "Accept anyway". The backend refuses to accept
+    it without that choice, so the rule does not rest on the UI.
+  - A key is kept at the moment it is relied on: when an invitation to it is
+    sent, or one from it is accepted. Looking at a key keeps nothing.
+  - Account settings show the account's own key as the same digits. That is
+    what two people compare, over another channel, to know the server gave
+    each of them the other's real key. A key only changes when an account is
+    made again, so a warning is rare and worth reading.
+  - An invite link needs none of this. Its content is sealed to a key that
+    only the link's holders can derive, so the server could not have made it.
 
 **Who may write a row.** A pulled item says which local row it is by the id
 in its payload, and ids travel with rows from space to space. That is what

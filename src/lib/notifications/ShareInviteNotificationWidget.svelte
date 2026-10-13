@@ -1,16 +1,17 @@
 <script lang="ts">
-  import { Share2, X } from '@lucide/svelte';
+  import { Share2, TriangleAlert, X } from '@lucide/svelte';
   import { tooltip } from '$lib/actions/tooltip';
   import { Button } from '$lib/components/ui/button';
   import { acceptShare, declineShare } from '$lib/api/sharing';
   import { runSync } from '$lib/sync/runner';
-  import { tUi } from '$lib/settings/i18n.svelte';
+  import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
+  import { describeRefusal } from '$lib/account/refusal';
+  import KeyFingerprint from '$lib/sharing/KeyFingerprint.svelte';
   import {
     dismissNotification,
     scanForShareInviteNotifications
   } from './store.svelte';
   import type { AppNotification, ShareInviteNotificationData } from './types';
-  import { toErrorMessage } from '$lib/api/errors';
 
   interface Props {
     notification: AppNotification<ShareInviteNotificationData>;
@@ -47,12 +48,23 @@
           .replace('{name}', notification.data.name)
   );
 
+  // The invitation comes from a key that is not the one this device
+  // remembers for its sender. It can still be accepted, by someone who has
+  // been shown that.
+  const changedKey = $derived(
+    notification.data.senderKey?.standing === 'changed'
+      ? notification.data.senderKey
+      : null
+  );
+
   async function accept(event: MouseEvent) {
     event.stopPropagation();
     pending = true;
     error = null;
     try {
-      await acceptShare(notification.data.invitationId);
+      await acceptShare(notification.data.invitationId, {
+        trustChangedKey: changedKey !== null
+      });
       dismissNotification(notification.id);
       // Accepting creates nothing here. The folder arrives with a sync, so
       // ask for one now and do not make the user wait for the next tick.
@@ -62,7 +74,10 @@
       void scanForShareInviteNotifications();
       onClose?.();
     } catch (err) {
-      error = toErrorMessage(err);
+      error = describeRefusal(err);
+      // The key may have changed since this was listed. Listing again shows
+      // it, with what to compare.
+      void scanForShareInviteNotifications();
     } finally {
       pending = false;
     }
@@ -77,7 +92,7 @@
       dismissNotification(notification.id);
       void scanForShareInviteNotifications();
     } catch (err) {
-      error = toErrorMessage(err);
+      error = describeRefusal(err);
     } finally {
       pending = false;
     }
@@ -95,6 +110,30 @@
     <div class="min-w-0 flex-1">
       <p class="text-sm font-medium">{title}</p>
       <p class="mt-0.5 text-xs text-muted-foreground">{accessLabel}</p>
+      {#if changedKey}
+        <div
+          class="mt-2 space-y-1.5 rounded-md border border-destructive/30 bg-destructive/10 p-2 text-xs"
+          data-testid="share-invite-key-changed"
+        >
+          <p class="flex items-start gap-1.5 font-medium text-destructive">
+            <TriangleAlert class="mt-0.5 size-3.5 shrink-0" />
+            <span>
+              {tUiFormat('sharing.key.changed.sender', { name: senderLabel })}
+            </span>
+          </p>
+          <p>{tUiFormat('sharing.key.compare', { name: senderLabel })}</p>
+          <KeyFingerprint
+            label={tUi('sharing.key.now')}
+            value={changedKey.fingerprint}
+          />
+          {#if changedKey.known_fingerprint}
+            <KeyFingerprint
+              label={tUi('sharing.key.before')}
+              value={changedKey.known_fingerprint}
+            />
+          {/if}
+        </div>
+      {/if}
       {#if error}
         <p class="mt-1 text-xs text-destructive">{error}</p>
       {/if}
@@ -105,7 +144,11 @@
           disabled={pending}
           onclick={accept}
         >
-          {tUi('notifications.invite.accept')}
+          {tUi(
+            changedKey
+              ? 'notifications.invite.acceptAnyway'
+              : 'notifications.invite.accept'
+          )}
         </Button>
         <Button
           class="h-7 px-2 text-xs"

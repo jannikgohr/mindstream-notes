@@ -11,6 +11,22 @@ import {
 
 export type CollectionShareAccessLevel = 'read_only' | 'read_write' | 'admin';
 
+/**
+ * How a key stands against the one this device remembers for its owner:
+ * none remembered yet, the same one, or another one.
+ */
+export type KeyStanding = 'new' | 'known' | 'changed';
+
+/** A user's key, with what someone needs to check it. */
+export interface UserKey {
+  username: string;
+  standing: KeyStanding;
+  /** The key the server gives now, as digits two people can compare. */
+  fingerprint: string;
+  /** The key remembered, when it is another one. */
+  known_fingerprint: string | null;
+}
+
 /** An invitation to a shared folder that has not been answered. */
 export interface IncomingShare {
   invitation_id: string;
@@ -20,6 +36,8 @@ export interface IncomingShare {
   name: string | null;
   sender_username: string | null;
   access_level: CollectionShareAccessLevel;
+  /** The sender's key. Null when the invitation names no sender. */
+  sender_key: UserKey | null;
 }
 
 /** An invitation this account sent that has not been answered. */
@@ -81,6 +99,11 @@ export interface InviteCollectionInput {
   collection_id: string;
   username: string;
   access_level: CollectionShareAccessLevel;
+  /**
+   * The user has seen that the recipient's key is not the one this device
+   * remembers, and said to share with the new one.
+   */
+  trust_changed_key?: boolean;
 }
 
 export interface CollectionMember {
@@ -111,14 +134,56 @@ export function listIncomingShares(): Promise<IncomingShare[]> {
 /**
  * Accept an invitation to a shared folder. Nothing appears at once: the next
  * sync pulls the folder in.
+ *
+ * An invitation from a key that is not the one remembered for its sender is
+ * refused with the reason `key_changed`, unless `trustChangedKey` says the
+ * user has seen that and wants to go on.
  */
-export function acceptShare(invitationId: string): Promise<void> {
+export function acceptShare(
+  invitationId: string,
+  options: { trustChangedKey?: boolean } = {}
+): Promise<void> {
   assertRequiredString(invitationId, 'invitationId');
   return invokeOrFallback<void>(
     TauriCommandName.AcceptShare,
-    { invitationId },
+    { invitationId, trustChangedKey: options.trustChangedKey === true },
     async () => undefined,
     (value) => assertVoid(value, 'accept_share response')
+  );
+}
+
+/**
+ * The key the server gives for a user now, held against the one this device
+ * remembers. For showing what changed before someone decides.
+ */
+export function userKeyInfo(username: string): Promise<UserKey> {
+  assertRequiredString(username, 'username');
+  return invokeOrFallback<UserKey>(
+    TauriCommandName.UserKeyInfo,
+    { username },
+    async () => {
+      throw new Error(
+        'Collection sharing is only available in the Tauri desktop app.'
+      );
+    },
+    (value) => parseUserKey(value, 'user key')
+  );
+}
+
+/**
+ * This account's own key as digits, for someone else to compare with what
+ * their app shows for this account.
+ */
+export function ownKeyFingerprint(): Promise<string> {
+  return invokeOrFallback<string>(
+    TauriCommandName.OwnKeyFingerprint,
+    undefined,
+    async () => {
+      throw new Error(
+        'Collection sharing is only available in the Tauri desktop app.'
+      );
+    },
+    (value) => assertString(value, 'own key fingerprint')
   );
 }
 
@@ -372,6 +437,27 @@ function parseIncomingShare(value: unknown): IncomingShare {
     access_level: parseAccessLevel(
       raw.access_level,
       'incoming share.access_level'
+    ),
+    sender_key:
+      raw.sender_key === null || raw.sender_key === undefined
+        ? null
+        : parseUserKey(raw.sender_key, 'incoming share.sender_key')
+  };
+}
+
+function parseUserKey(value: unknown, context: string): UserKey {
+  const raw = assertRecord(value, context);
+  const standing = raw.standing;
+  if (standing !== 'new' && standing !== 'known' && standing !== 'changed') {
+    throw new Error(`${context}.standing is not one this app knows`);
+  }
+  return {
+    username: assertString(raw.username, `${context}.username`),
+    standing,
+    fingerprint: assertString(raw.fingerprint, `${context}.fingerprint`),
+    known_fingerprint: optionalString(
+      raw.known_fingerprint,
+      `${context}.known_fingerprint`
     )
   };
 }

@@ -24,6 +24,12 @@ function share(overrides: Record<string, unknown> = {}) {
     name: 'Project X',
     sender_username: 'alice',
     access_level: 'read_write',
+    sender_key: {
+      username: 'alice',
+      standing: 'known',
+      fingerprint: '11111   22222',
+      known_fingerprint: null
+    },
     ...overrides
   };
 }
@@ -54,7 +60,13 @@ describe('scanForShareInviteNotifications', () => {
       collectionUid: 'col_shared',
       name: 'Project X',
       senderUsername: 'alice',
-      accessLevel: 'read_write'
+      accessLevel: 'read_write',
+      senderKey: {
+        username: 'alice',
+        standing: 'known',
+        fingerprint: '11111   22222',
+        known_fingerprint: null
+      }
     });
   });
 

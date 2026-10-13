@@ -491,6 +491,26 @@ one invitation now, so the state this flow guarded cannot be reached.
 - **Watch for:** the folder landing in B's Home; B joining with a link whose
   preview could not be read; a used-up link that still lets someone in.
 
+### 4.12 A key that is not the one remembered (P1)
+
+- **Why e2e:** the check is a refusal in the backend, a notice in two
+  different places in the UI, and a second request that carries the user's
+  choice. Each part has unit tests. Only the app shows that a held-back
+  invitation creates nothing, and that the digits one person is shown for
+  another are the digits that other person's app shows for itself.
+- **Steps:** A's device is made to remember another key for B (a test-only
+  command). A shares a new folder with B. Then B's device is made to
+  remember another key for A, and B opens the invitation.
+- **Proves:** after the first share A knows B's key and it matches B's own;
+  with another key remembered, **Invite** shares nothing and shows both
+  keys; **Share with the new key** sends it and A remembers the new key; B
+  sees the invitation with the warning and only **Accept anyway**, the
+  backend refuses a plain accept with `key_changed`, and accepting anyway
+  brings the folder in.
+- **Watch for:** a collection left on the server by the held-back
+  invitation; the notice offering to go on before a key is on screen; a
+  plain **Accept** next to the warning.
+
 ## 5. Spellchecking and text diagnostics
 
 The app checks spelling itself rather than leaving it to the webview, so the

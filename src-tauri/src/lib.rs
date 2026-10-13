@@ -554,8 +554,12 @@ pub fn run() {
             sharing::revoke_share_link,
             sharing::open_share_link,
             sharing::claim_share_link,
+            sharing::user_key_info,
+            sharing::own_key_fingerprint,
             #[cfg(feature = "e2e-data-dir")]
             sharing::e2e_create_standalone_collection_invite,
+            #[cfg(feature = "e2e-data-dir")]
+            sharing::e2e_remember_other_key,
             // One-shot recovery for items the pre-fix etebase encoder
             // bug left corrupt on the server. Invoke from dev tools.
             sync::repair::audit_corrupt_remote_items,
