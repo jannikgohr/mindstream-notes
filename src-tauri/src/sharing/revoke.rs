@@ -106,11 +106,6 @@ pub(crate) fn scope_stoken_key(scope: &str) -> String {
     format!("scope:{scope}")
 }
 
-/// The key the last seen collab epoch of a scope is kept under.
-pub(crate) fn scope_collab_epoch_key(scope: &str) -> String {
-    format!("scope-collab-epoch:{scope}")
-}
-
 /// Delete every row this device holds of a scope: its folders, notes and
 /// attachments, the deletions queued for it, and its cursors. Used when the
 /// folder is left or taken away, so it stops showing and nothing of it is
@@ -135,10 +130,9 @@ pub(crate) fn purge_local_scope(db: &Db, scope: &str) -> AppResult<()> {
             params![scope],
         )?;
         tx.execute(
-            "DELETE FROM sync_state WHERE kind IN (?1, ?2, ?3)",
+            "DELETE FROM sync_state WHERE kind IN (?1, ?2)",
             params![
                 scope_stoken_key(scope),
-                scope_collab_epoch_key(scope),
                 crate::sync::held_key(&scope_stoken_key(scope)),
             ],
         )?;

@@ -88,19 +88,6 @@ fn share_access_level_collection_access_round_trips() {
 }
 
 #[test]
-fn read_only_access_changes_rotate_live_collab_credentials() {
-    assert!(access_change_requires_collab_rotation(
-        ShareAccessLevel::ReadOnly
-    ));
-    assert!(!access_change_requires_collab_rotation(
-        ShareAccessLevel::ReadWrite
-    ));
-    assert!(!access_change_requires_collab_rotation(
-        ShareAccessLevel::Admin
-    ));
-}
-
-#[test]
 fn rehome_folder_subtree_stamps_detaches_and_tombstones() {
     let db = crate::db::open_memory_for_tests();
     db.with_conn(|conn| {
@@ -413,23 +400,25 @@ fn only_a_definite_no_from_the_server_counts_as_gone() {
 }
 
 #[test]
-fn share_manifest_names_the_root_and_carries_fresh_key_material() {
+fn share_manifest_names_the_root_and_who_shared_it() {
     let manifest = build_share_manifest("coll_root", Some("alice"));
 
     assert_eq!(manifest.schema, SHARE_MANIFEST_SCHEMA);
     assert_eq!(manifest.root_folder_id, "coll_root");
     assert_eq!(manifest.owner_username.as_deref(), Some("alice"));
-    assert_eq!(manifest.collab_epoch, 1);
-    assert_eq!(manifest.collab_salt.len(), SHARE_COLLAB_SALT_BYTES);
-    // Two folders never share a salt.
-    assert_ne!(
-        manifest.collab_salt,
-        build_share_manifest("coll_root", Some("alice")).collab_salt
-    );
 
-    // It goes through the same JSON every member's device reads.
-    let json = serde_json::to_vec(&manifest).unwrap();
-    let decoded: ShareManifest = serde_json::from_slice(&json).unwrap();
+    // It goes through the same JSON every member's device reads, and holds
+    // no key material: a room's key comes from the note alone.
+    let json = serde_json::to_value(&manifest).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "schema": SHARE_MANIFEST_SCHEMA,
+            "root_folder_id": "coll_root",
+            "owner_username": "alice",
+        })
+    );
+    let decoded: ShareManifest = serde_json::from_value(json).unwrap();
     assert_eq!(decoded, manifest);
 }
 
@@ -439,22 +428,19 @@ fn share_manifest_reads_without_the_fields_that_have_defaults() {
         serde_json::from_str(r#"{"schema":3,"root_folder_id":"coll_root"}"#).unwrap();
 
     assert_eq!(decoded.owner_username, None);
-    assert_eq!(decoded.collab_epoch, 1);
-    assert!(decoded.collab_salt.is_empty());
 }
 
+/// A folder shared by an earlier build has a salt and an epoch in its
+/// manifest. They are read past, not tripped over.
 #[test]
-fn rotate_manifest_collab_secret_increments_epoch_and_replaces_salt() {
-    let mut manifest = build_share_manifest("root", Some("alice"));
-    let previous_epoch = manifest.collab_epoch;
-    let previous_salt = manifest.collab_salt.clone();
+fn share_manifest_reads_one_that_still_carries_the_old_key_material() {
+    let decoded: ShareManifest = serde_json::from_str(
+        r#"{"schema":3,"root_folder_id":"coll_root","owner_username":"alice",
+            "collab_epoch":4,"collab_salt":[1,2,3]}"#,
+    )
+    .unwrap();
 
-    rotate_manifest_collab_secret(&mut manifest);
-
-    assert_eq!(manifest.schema, SHARE_MANIFEST_SCHEMA);
-    assert_eq!(manifest.collab_epoch, previous_epoch + 1);
-    assert_eq!(manifest.collab_salt.len(), SHARE_COLLAB_SALT_BYTES);
-    assert_ne!(manifest.collab_salt, previous_salt);
+    assert_eq!(decoded, build_share_manifest("coll_root", Some("alice")));
 }
 
 fn insert_folder(conn: &rusqlite::Connection, id: &str, parent: Option<&str>, scope: Option<&str>) {
@@ -554,7 +540,6 @@ fn purge_local_scope_removes_scoped_rows_and_cursors() {
         )?;
         for kind in [
             scope_stoken_key("scope_x"),
-            scope_collab_epoch_key("scope_x"),
             crate::sync::held_key(&scope_stoken_key("scope_x")),
         ] {
             conn.execute(

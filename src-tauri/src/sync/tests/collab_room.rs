@@ -1,60 +1,35 @@
 //! Room key derivation and what the room commands make of the server's
 //! answers.
 
-use super::fixtures::*;
 use super::*;
 
-/// The wire key must not be the Etebase item key. One key for storage at
-/// rest and for frames on the wire would mean a compromise of either context
-/// compromises both.
+/// The wire key must not be the key the note carries. One key for storage
+/// at rest and for frames on the wire would mean a compromise of either
+/// context compromises both.
 #[test]
 fn room_key_is_separated_from_the_note_key_and_bound_to_the_note() {
     let note_key = [3_u8; 32];
 
-    let key = room_key("note_uid", &note_key, None).unwrap();
+    let key = room_key("note_uid", &note_key).unwrap();
     assert_ne!(key, note_key);
     // Deterministic: every member has to arrive at the same key.
-    assert_eq!(key, room_key("note_uid", &note_key, None).unwrap());
+    assert_eq!(key, room_key("note_uid", &note_key).unwrap());
     // Two notes that somehow share a key still get different rooms.
-    assert_ne!(key, room_key("other_uid", &note_key, None).unwrap());
-    assert_ne!(key, room_key("note_uid", &[4_u8; 32], None).unwrap());
+    assert_ne!(key, room_key("other_uid", &note_key).unwrap());
+    assert_ne!(key, room_key("note_uid", &[4_u8; 32]).unwrap());
 }
 
+/// Every device has to derive the same key from the same note, on every
+/// build that speaks this version of the protocol. A change to the
+/// derivation changes this value, and then two builds cannot share a room.
 #[test]
-fn room_key_of_a_shared_note_uses_the_scope_salt_and_epoch() {
+fn room_key_is_hkdf_sha256_of_the_note_key_over_the_label_and_uid() {
     let note_key = [3_u8; 32];
-    let epoch_one = collab_info(1, &[9_u8; 32]);
-    let epoch_two = collab_info(2, &[9_u8; 32]);
-    let different_salt = collab_info(1, &[8_u8; 32]);
-
-    let personal = room_key("note_uid", &note_key, None).unwrap();
-    let scoped = room_key("note_uid", &note_key, Some(&epoch_one)).unwrap();
-    assert_ne!(scoped, note_key);
-    assert_ne!(scoped, personal);
-    assert_ne!(
-        scoped,
-        room_key("note_uid", &note_key, Some(&epoch_two)).unwrap()
-    );
-    assert_ne!(
-        scoped,
-        room_key("note_uid", &note_key, Some(&different_salt)).unwrap()
-    );
-    assert_eq!(
-        scoped,
-        derive_live_collab_key("note_uid", &note_key, Some(&[9_u8; 32]), 1).unwrap()
-    );
-}
-
-/// A manifest without a salt gives a shared note the key a personal note
-/// would have, as it always has.
-#[test]
-fn scope_without_a_salt_derives_like_a_personal_note() {
-    let note_key = [3_u8; 32];
-    let unsalted = collab_info(7, &[]);
-    assert_eq!(
-        room_key("note_uid", &note_key, Some(&unsalted)).unwrap(),
-        room_key("note_uid", &note_key, None).unwrap()
-    );
+    let hkdf = Hkdf::<Sha256>::new(None, &note_key);
+    let mut expected = [0_u8; 32];
+    hkdf.expand(b"mindstream-live-collab-key/v2note_uid", &mut expected)
+        .unwrap();
+    assert_eq!(room_key("note_uid", &note_key).unwrap(), expected);
 }
 
 /// "You may not enter" stops the editor asking. Anything else is worth

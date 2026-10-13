@@ -5,8 +5,7 @@
 //! collection, told apart by the type in their metadata exactly as they are
 //! in the vault. The collection's own metadata carries the folder's name,
 //! which is what someone invited is shown before they answer. Its own
-//! content is a small manifest: which folder is the root, who shared it,
-//! and the material live sessions mix into their keys.
+//! content is a small manifest: which folder is the root and who shared it.
 //!
 //! So sharing is one invitation and one membership, and there is no state
 //! in which someone holds part of a shared folder. An invite link is the
@@ -25,7 +24,6 @@ use std::collections::HashSet;
 
 use chrono::Utc;
 use etebase::managers::{CollectionInvitationManager, CollectionManager};
-use etebase::utils::randombytes;
 use etebase::{
     Account, Collection, CollectionAccessLevel, FetchOptions, InvitationPreview, ItemMetadata,
     SignedInvitation,
@@ -40,7 +38,6 @@ use crate::error::{AppError, AppResult, CommandResult};
 /// The type of the one collection a shared folder is.
 pub const COLLECTION_TYPE_SHARED: &str = "mindstream.shared";
 pub const SHARE_MANIFEST_SCHEMA: u32 = 3;
-pub const SHARE_COLLAB_SALT_BYTES: usize = 32;
 
 mod incoming;
 mod invite;

@@ -22,13 +22,6 @@ pub(super) fn remote_note(id: &str, parent: Option<&str>, trashed_at: Option<&st
     }
 }
 
-pub(super) fn collab_info(epoch: u64, salt: &[u8]) -> ShareScopeCollabInfo {
-    ShareScopeCollabInfo {
-        collab_epoch: epoch,
-        collab_salt: salt.to_vec(),
-    }
-}
-
 pub(super) fn remote_folder(id: &str, parent: Option<&str>, name: &str) -> FolderPayload {
     FolderPayload {
         schema: 1,

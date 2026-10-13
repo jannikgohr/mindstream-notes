@@ -63,9 +63,10 @@ pub async fn list_collection_members(
 }
 
 /// Change what a member may do in a folder the current user shares. The
-/// member's next sync reads the new level off the collection. Someone made
-/// read-only has their unsent edits to the folder discarded there, and the
-/// folder's live sessions get new key material here.
+/// member's next sync reads the new level off the collection, and someone
+/// made read-only has their unsent edits to the folder discarded there. In a
+/// live session the server applies the new level at once: it goes on showing
+/// them the note and drops what they send.
 #[tauri::command]
 pub async fn set_collection_member_access(
     app: AppHandle,
@@ -82,16 +83,11 @@ pub async fn set_collection_member_access(
         let cm = account
             .collection_manager()
             .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
-        let (scope, collection) = space_to_manage(&db, &cm, &collection_id)?;
+        let (_, collection) = space_to_manage(&db, &cm, &collection_id)?;
         cm.member_manager(&collection)
             .map_err(|e| AppError::InvalidArg(format!("member_manager: {e}")))?
             .modify_access_level(&username, access_level.into())
             .map_err(|e| AppError::InvalidArg(format!("change access for {username}: {e}")))?;
-        if access_change_requires_collab_rotation(access_level) {
-            let affected = crate::collab_events::note_ids_for_share_scope(&db, &scope)?;
-            rotate_collab_secret(&cm, &collection)?;
-            crate::collab_events::emit_collab_credentials_changed(&app, affected);
-        }
         Ok::<(), AppError>(())
     })
     .await
@@ -99,14 +95,14 @@ pub async fn set_collection_member_access(
     .map_err(Into::into)
 }
 
-pub(super) fn access_change_requires_collab_rotation(access_level: ShareAccessLevel) -> bool {
-    matches!(access_level, ShareAccessLevel::ReadOnly)
-}
-
 /// Remove one member from a folder the current user shares. The server
 /// closes their live sessions and stops answering them at once, and their
 /// device drops its copy on its next sync (see `reconcile_revoked_shares`).
 /// Everyone else keeps their access.
+///
+/// No key is changed. What keeps a removed member out is the server
+/// refusing them, the room and the collection alike. They keep what they
+/// had already synced, and the keys to it, as with any shared document.
 #[tauri::command]
 pub async fn remove_collection_member(
     app: AppHandle,
@@ -122,14 +118,11 @@ pub async fn remove_collection_member(
         let cm = account
             .collection_manager()
             .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
-        let (scope, collection) = space_to_manage(&db, &cm, &collection_id)?;
+        let (_, collection) = space_to_manage(&db, &cm, &collection_id)?;
         cm.member_manager(&collection)
             .map_err(|e| AppError::InvalidArg(format!("member_manager: {e}")))?
             .remove(&username)
             .map_err(|e| AppError::InvalidArg(format!("remove {username}: {e}")))?;
-        let affected = crate::collab_events::note_ids_for_share_scope(&db, &scope)?;
-        rotate_collab_secret(&cm, &collection)?;
-        crate::collab_events::emit_collab_credentials_changed(&app, affected);
         Ok::<(), AppError>(())
     })
     .await

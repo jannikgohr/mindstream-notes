@@ -13,9 +13,6 @@ vi.mock('@tauri-apps/api/event', () => ({
 
 describe('TauriEventName', () => {
   it('matches Rust AppEvent wire names', () => {
-    expect(TauriEventName.CollabCredentialsChanged).toBe(
-      'collab-credentials-changed'
-    );
     expect(TauriEventName.CustomWindowDecorationsChanged).toBe(
       'custom-window-decorations-changed'
     );

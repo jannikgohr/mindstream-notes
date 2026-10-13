@@ -30,8 +30,7 @@ use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::sharing::{
     decode_manifest, open_space, purge_lost_shares, reconcile_revoked_shares, rename_space,
-    scope_collab_epoch_key, scope_stoken_key, share_access_level_to_db, ShareAccessLevel,
-    ShareManifest,
+    scope_stoken_key, share_access_level_to_db, ShareAccessLevel, ShareManifest,
 };
 
 use super::{
@@ -185,7 +184,6 @@ fn pull_one_scope(
         im,
     };
     let scope = open.scope();
-    record_scope_collab_epoch(db, scope, &manifest, delta)?;
 
     // In a folder that is read-only here, a dirty row is a bug or what is
     // left of one. Drop those edits, rewind the cursor, and let the pull
@@ -369,57 +367,6 @@ fn discard_read_only_scope_edits(db: &Db, scope: &str) -> AppResult<ReadOnlyScop
             tombstones_discarded,
         })
     })
-}
-
-fn load_scope_collab_epoch(db: &Db, scope: &str) -> AppResult<Option<u64>> {
-    let key = scope_collab_epoch_key(scope);
-    db.with_conn(|conn| {
-        let raw: Option<String> = conn
-            .query_row(
-                "SELECT stoken FROM sync_state WHERE kind = ?1",
-                params![key],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten();
-        Ok(raw.and_then(|value| value.parse::<u64>().ok()))
-    })
-}
-
-fn save_scope_collab_epoch(db: &Db, scope: &str, epoch: u64) -> AppResult<()> {
-    let key = scope_collab_epoch_key(scope);
-    let value = epoch.to_string();
-    db.with_conn(|conn| {
-        conn.execute(
-            "INSERT INTO sync_state(kind, stoken)
-             VALUES (?1, ?2)
-             ON CONFLICT(kind) DO UPDATE SET stoken = excluded.stoken",
-            params![key, value],
-        )?;
-        Ok(())
-    })
-}
-
-/// Remember the folder's collab epoch, and when it is not the one seen
-/// last, name the folder's notes so their live sessions reconnect with the
-/// new key material.
-fn record_scope_collab_epoch(
-    db: &Db,
-    scope: &str,
-    manifest: &ShareManifest,
-    delta: &mut SyncDelta,
-) -> AppResult<()> {
-    if manifest.collab_salt.is_empty() {
-        return Ok(());
-    }
-    if load_scope_collab_epoch(db, scope)? == Some(manifest.collab_epoch) {
-        return Ok(());
-    }
-    save_scope_collab_epoch(db, scope, manifest.collab_epoch)?;
-    delta
-        .collab_credentials_changed_note_ids
-        .extend(crate::collab_events::note_ids_for_share_scope(db, scope)?);
-    Ok(())
 }
 
 /// Write what the collection says about the share onto the local root

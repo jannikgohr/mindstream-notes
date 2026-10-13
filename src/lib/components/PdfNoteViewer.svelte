@@ -93,7 +93,6 @@
     type PdfSignatureSnapshot
   } from '$lib/pdf/types';
   import { CollabProvider } from '$lib/sync/collab-provider';
-  import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
   import { tree } from '$lib/stores/tree.svelte';
   import { registerNoteHistory } from '$lib/stores/note-history-bridge.svelte';
   import {
@@ -262,7 +261,6 @@
   let restoringHistorySnapshot = false;
   let unregisterHistory: (() => void) | null = null;
   let unsubSync: (() => void) | null = null;
-  let unsubCollabCredentials: (() => void) | null = null;
   let unsubSession: (() => void) | null = null;
   let editorListener: EditorListener | null = null;
   let resizeObserver: ResizeObserver | null = null;
@@ -1661,13 +1659,6 @@
       }).then((unlisten) => {
         unsubSync = unlisten;
       });
-      void listen(TauriEventName.CollabCredentialsChanged, (payload) => {
-        if (collabCredentialsChangedForNote(payload, noteId)) {
-          void setupCollabProvider();
-        }
-      }).then((unlisten) => {
-        unsubCollabCredentials = unlisten;
-      });
 
       // Capture the initial pushed state, set up the provider once, then
       // let the $effect react only to subsequent transitions.
@@ -1746,8 +1737,6 @@
     }
     unsubSync?.();
     unsubSync = null;
-    unsubCollabCredentials?.();
-    unsubCollabCredentials = null;
     unsubSession?.();
     unsubSession = null;
     viewerZoom.cancelPendingCentring();

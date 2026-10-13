@@ -87,6 +87,10 @@ pub struct CollectionShareState {
 /// What a shared collection says about itself, kept as the collection's own
 /// content. The folder's name is not here: it is the collection's name, in
 /// its metadata, where someone invited can read it.
+///
+/// A folder shared by a build from before 2026-10-13 also carries
+/// `collab_epoch` and `collab_salt` here, which live sessions once mixed
+/// into their keys. Nothing reads them now.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ShareManifest {
     pub schema: u32,
@@ -95,25 +99,4 @@ pub struct ShareManifest {
     pub root_folder_id: String,
     #[serde(default)]
     pub owner_username: Option<String>,
-    /// Raised when a member is removed or loses the right to write. Live
-    /// sessions mix it and the salt into their keys.
-    #[serde(default = "default_collab_epoch")]
-    pub collab_epoch: u64,
-    #[serde(default, with = "serde_bytes")]
-    pub collab_salt: Vec<u8>,
-}
-
-/// What a live session in a shared folder needs from the folder.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ShareScopeCollabInfo {
-    pub collab_epoch: u64,
-    pub collab_salt: Vec<u8>,
-}
-
-pub(super) fn default_collab_epoch() -> u64 {
-    1
-}
-
-pub(super) fn fresh_collab_salt() -> Vec<u8> {
-    randombytes(SHARE_COLLAB_SALT_BYTES)
 }

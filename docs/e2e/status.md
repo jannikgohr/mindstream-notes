@@ -11,22 +11,22 @@ Tests we know we want but haven't written — the account/token-lifecycle flows
 
 ## What's landed
 
-| Spec                          | Tier | Covers                                                                                             |
-| ----------------------------- | ---- | -------------------------------------------------------------------------------------------------- |
-| `editor-roundtrip.e2e.ts`     | T3   | flow 1.1 through real `save_note` + SQLite + restart                                               |
-| `history.e2e.ts`              | T3   | capture / restore / Undo / editor-undo isolation / restart persistence                             |
-| `import-notes.e2e.ts`         | T3   | real vault import, hierarchy, note bodies, links/assets, counts, and restart persistence           |
-| `plugins.e2e.ts`              | T3   | `plugins_discover` off disk + toolbar contribution; disable persists across restart                |
-| `trash-retention.e2e.ts`      | T3   | flows 1.5 + 3.3 (retention sweep on boot)                                                          |
-| `settings-persist.e2e.ts`     | T3   | flows 3.1 / 3.2                                                                                    |
-| `spellcheck.e2e.ts`           | T3   | flows 5.1 / 5.2 / 5.3 / 5.5 / 5.6 against a seeded dictionary                                      |
-| `text-checker.e2e.ts`         | T3   | flow 5.4 against a LanguageTool-shaped stub server                                                 |
-| `invite-link-open.e2e.ts`     | T3   | flow 4.13: a link handed over by the operating system opens the join dialog, and nothing else does |
-| `account-security.e2e.ts`     | T4   | signup with a recovery key, a code asked of a new device, remote sign-out, password change         |
-| `sync-history.e2e.ts`         | T4   | per-device-history negative assertion; 4.10 edit-wins-over-delete                                  |
-| `sharing.e2e.ts`              | T4   | sharing flows 4.1–4.4 + core 4.7 subtree/asset convergence + 4.7b + 4.11 + 4.12 keys + 4.14 limits |
-| `sharing-multi-device.e2e.ts` | T4   | owner-second-device 4.8–4.9 re-home cases                                                          |
-| `collab.e2e.ts`               | T4   | live markdown propagation, restore convergence, restore-vs-paused-peer, reconnect convergence      |
+| Spec                          | Tier | Covers                                                                                                                                 |
+| ----------------------------- | ---- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `editor-roundtrip.e2e.ts`     | T3   | flow 1.1 through real `save_note` + SQLite + restart                                                                                   |
+| `history.e2e.ts`              | T3   | capture / restore / Undo / editor-undo isolation / restart persistence                                                                 |
+| `import-notes.e2e.ts`         | T3   | real vault import, hierarchy, note bodies, links/assets, counts, and restart persistence                                               |
+| `plugins.e2e.ts`              | T3   | `plugins_discover` off disk + toolbar contribution; disable persists across restart                                                    |
+| `trash-retention.e2e.ts`      | T3   | flows 1.5 + 3.3 (retention sweep on boot)                                                                                              |
+| `settings-persist.e2e.ts`     | T3   | flows 3.1 / 3.2                                                                                                                        |
+| `spellcheck.e2e.ts`           | T3   | flows 5.1 / 5.2 / 5.3 / 5.5 / 5.6 against a seeded dictionary                                                                          |
+| `text-checker.e2e.ts`         | T3   | flow 5.4 against a LanguageTool-shaped stub server                                                                                     |
+| `invite-link-open.e2e.ts`     | T3   | flow 4.13: a link handed over by the operating system opens the join dialog, and nothing else does                                     |
+| `account-security.e2e.ts`     | T4   | signup with a recovery key, a code asked of a new device, remote sign-out, password change                                             |
+| `sync-history.e2e.ts`         | T4   | per-device-history negative assertion; 4.10 edit-wins-over-delete                                                                      |
+| `sharing.e2e.ts`              | T4   | sharing flows 4.1–4.4 + core 4.7 subtree/asset convergence + 4.7b + 4.11 + 4.12 keys + 4.14 limits + 4.15 access changed, then removed |
+| `sharing-multi-device.e2e.ts` | T4   | owner-second-device 4.8–4.9 re-home cases                                                                                              |
+| `collab.e2e.ts`               | T4   | live markdown propagation, restore convergence, restore-vs-paused-peer, reconnect convergence                                          |
 
 Validated app assertions cover live collab propagation, restore convergence,
 reconnect convergence, seeded-note convergence, sharing 4.1–4.7b, joining

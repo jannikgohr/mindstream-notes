@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum AppEvent {
-    CollabCredentialsChanged,
     CustomWindowDecorationsChanged,
     ImportProgress,
     InvitationsChanged,
@@ -20,7 +19,6 @@ pub enum AppEvent {
 impl AppEvent {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::CollabCredentialsChanged => "collab-credentials-changed",
             Self::CustomWindowDecorationsChanged => "custom-window-decorations-changed",
             Self::ImportProgress => "import-progress",
             Self::InvitationsChanged => "invitations-changed",
@@ -43,10 +41,6 @@ mod tests {
     #[test]
     fn event_names_match_tauri_wire_names() {
         let cases = [
-            (
-                AppEvent::CollabCredentialsChanged,
-                "collab-credentials-changed",
-            ),
             (
                 AppEvent::CustomWindowDecorationsChanged,
                 "custom-window-decorations-changed",

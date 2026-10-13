@@ -82,7 +82,6 @@
   import type { MenuItem } from '$lib/components/context-menu-types';
   import { Toolbar, ToolbarButton } from '$lib/components/ui/toolbar';
   import { CollabProvider } from '$lib/sync/collab-provider';
-  import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
   import { pickCursorColor } from '$lib/editor/cursor-color';
   import { folderPathLabel } from '$lib/notes/folder-path';
   import { resolveShareScopeUsers } from '$lib/notes/share-users';
@@ -220,7 +219,6 @@
   let stopObserve: (() => void) | null = null;
   let unsubSession: (() => void) | null = null;
   let unsubSync: (() => void) | null = null;
-  let unsubCollabCredentials: (() => void) | null = null;
   let unregisterHistory: (() => void) | null = null;
   let editorListener: EditorListener | null = $state(null);
 
@@ -1290,13 +1288,6 @@
       }).then((unlisten) => {
         unsubSync = unlisten;
       });
-      void listen(TauriEventName.CollabCredentialsChanged, (payload) => {
-        if (collabCredentialsChangedForNote(payload, noteId)) {
-          void setupCollabProvider();
-        }
-      }).then((unlisten) => {
-        unsubCollabCredentials = unlisten;
-      });
 
       // Command-bus listener: handle app-level active-note search and displace
       // any hidden editor listener so markdown/pdf commands don't leak across
@@ -1388,8 +1379,6 @@
     stopObserve?.();
     unsubSession?.();
     unsubSync?.();
-    unsubCollabCredentials?.();
-    unsubCollabCredentials = null;
     unregisterHistory?.();
     if (editorListener) unregisterEditor(editorListener);
     collabSession.destroy();

@@ -117,6 +117,7 @@ removing them loops over the collections one request at a time.
 | Data     | One collection per space: one for the vault and one for each shared folder.                             |
 | Rooms    | The server enforces write permission. Per-frame signatures, writer keys and the join challenge go.      |
 | Rooms    | Freeform notes use the same room protocol as every other kind. socket.io goes.                          |
+| Rooms    | No key changes when a member is removed. The server keeps them out of the folder and its rooms.         |
 | Sharing  | Invite links, including signup on self-hosted servers.                                                  |
 | Accounts | Sessions are per device and replace the silent token refresh.                                           |
 | Accounts | Two-factor sign-in with TOTP, compatible with the common authenticator apps.                            |
@@ -223,9 +224,8 @@ of the folder's collection. The collection is found by that uid, in one
 fetch, so there is no list of manifests to search and nothing a second
 collection could claim. That is what closes M5.
 
-The collection's own content is a small manifest: which folder is the root,
-who shared it, and the epoch and salt that live sessions mix into their
-keys. The folder's name is the collection's name.
+The collection's own content is a small manifest: which folder is the root
+and who shared it. The folder's name is the collection's name.
 
 One stream of mixed items cannot be applied in the order it arrives. The
 server sends items in the order they last changed, so a folder renamed last
@@ -398,6 +398,8 @@ What this removes:
 - the writer-key registry, its scan of the assets collection, and the backoff
   around refreshing it
 - per-frame signatures and the replay guard
+- the salt and epoch a shared folder gave its rooms, and changing them when a
+  member was removed. A room's key comes from the note alone
 - the yjs-relay, excalidraw-room and nginx containers, and `socket.io-client`
 
 What it adds for users: read-only members can watch live, and every note kind
@@ -848,8 +850,12 @@ Accepted:
 
 - The server enforces write permission in rooms, as it already does at rest.
 - The server sees who is in which room.
-- A removed member keeps the keys they already had. The server stops serving
-  them. This is how Etebase behaves at rest today.
+- A removed member keeps the keys they already had, the key of each note's
+  room among them. The server stops serving them, the folder and its rooms
+  alike. This is how Etebase behaves at rest today. A server working with a
+  removed member could let them go on reading. Ruling that out means a new
+  key for the folder, everything in it encrypted again and every remaining
+  member invited again, which Etebase has no way to do.
 - A link grants access to whoever holds it, until it is used or expires.
 - With the authenticator and the backup codes lost and no signed-in device, a
   managed account cannot add a device again.
@@ -979,18 +985,14 @@ The frame figures are within the run-to-run noise of each other.
 
 ## Open points
 
-1. **Key rotation on removal.** The collab epoch and salt exist to lock removed
-   members out of rooms. With the server refusing them, this design proposed
-   to drop both. The app still has them: it gives a folder a new salt when a
-   member is removed or made read-only, and the others reconnect their rooms
-   once they have synced it. Whether to keep that is not decided.
-
-   What the salt adds is small. It is stored in the collection, under the
-   collection key, and that key is never changed. A removed member keeps
-   the key, so the new salt is out of their reach only for as long as the
-   server refuses to hand them the collection. That is the same server that
-   refuses them the room. And what is typed in a room is synced to the
-   collection moments later, under keys the removed member also kept.
+1. **Key rotation on removal.** Decided on 2026-10-13: there is none. A
+   shared folder used to give its rooms a salt and write a new one when a
+   member was removed or made read-only. The salt was stored in the
+   collection, under the collection key, and that key never changes. A
+   removed member keeps it, so the new salt was out of their reach only for
+   as long as the server refused to hand them the collection, the same
+   server that refuses them the room. It is gone, with the event that made
+   editors reconnect after a change. See what is [accepted](#security).
 
 2. **Where the room key comes from when a note opens.** Today the per-note key
    is fetched from the server on every open. It could be cached locally, or

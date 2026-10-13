@@ -212,10 +212,6 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
     if let Err(err) = app.emit(event_name, &event) {
         log::warn!("[sync-scheduler] failed to emit {event_name}: {err}");
     }
-    crate::collab_events::emit_collab_credentials_changed(
-        app,
-        delta.collab_credentials_changed_note_ids,
-    );
     Ok(())
 }
 

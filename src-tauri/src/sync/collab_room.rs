@@ -28,46 +28,27 @@ pub struct RoomInfo {
     pub key_b64: String,
 }
 
-/// HKDF the per-room AES-GCM wire key. `salt` is the shared folder's collab
-/// salt for a room in one, `None` for a personal one. Either way the key that
-/// goes on the wire is domain-separated from the Etebase item key it derives
-/// from.
-pub(super) fn derive_live_collab_key(
-    note_uid: &str,
-    note_key: &[u8],
-    salt: Option<&[u8]>,
-    collab_epoch: u64,
-) -> Result<[u8; 32], String> {
-    let hkdf = Hkdf::<Sha256>::new(salt, note_key);
+/// The AES-GCM key a note's room encrypts its frames under, derived with
+/// HKDF from the key the note carries. It is not that key itself: one key
+/// for what is stored and for what goes over the wire would let a break of
+/// either take both.
+///
+/// The same for a note in the vault and for one in a shared folder. Whoever
+/// holds the note holds its room's key, and nothing changes it when a member
+/// of the folder is removed. Keeping them out of the room is the server's
+/// job, which it does by refusing them the ticket and closing their sockets.
+/// A folder once gave its rooms a salt that was changed on removal. It was
+/// stored under the folder's own key, which a removed member keeps, so it
+/// hid nothing from them that the server did not already withhold.
+pub(super) fn room_key(note_uid: &str, note_key: &[u8]) -> Result<[u8; 32], String> {
+    let hkdf = Hkdf::<Sha256>::new(None, note_key);
     let mut derived_key = [0_u8; 32];
-    let mut info = Vec::with_capacity(
-        LIVE_COLLAB_KEY_INFO.len() + std::mem::size_of::<u64>() + note_uid.len(),
-    );
+    let mut info = Vec::with_capacity(LIVE_COLLAB_KEY_INFO.len() + note_uid.len());
     info.extend_from_slice(LIVE_COLLAB_KEY_INFO);
-    info.extend_from_slice(&collab_epoch.to_be_bytes());
     info.extend_from_slice(note_uid.as_bytes());
     hkdf.expand(&info, &mut derived_key)
         .map_err(|e| format!("derive live-collab key: {e}"))?;
     Ok(derived_key)
-}
-
-/// The wire key for a note's room. A note in a shared folder mixes in the
-/// folder's collab salt and epoch; a personal one has only its own key to
-/// derive from.
-pub(super) fn room_key(
-    note_uid: &str,
-    note_key: &[u8],
-    scope: Option<&ShareScopeCollabInfo>,
-) -> Result<[u8; 32], String> {
-    match scope.filter(|scope| !scope.collab_salt.is_empty()) {
-        Some(scope) => derive_live_collab_key(
-            note_uid,
-            note_key,
-            Some(&scope.collab_salt),
-            scope.collab_epoch,
-        ),
-        None => derive_live_collab_key(note_uid, note_key, None, 0),
-    }
 }
 
 /// Whether the server's answer means "you may not enter this room", as
@@ -202,15 +183,6 @@ pub async fn note_room_info(
                         return Ok(None);
                     }
                 };
-                // A shared folder's own content says what its live sessions
-                // mix into their keys. It came with the fetch above.
-                let scope_collab = match share_scope_id {
-                    Some(_) => Some(
-                        share_scope_collab_info(&col)
-                            .map_err(|e| format!("share scope collab info: {e}"))?,
-                    ),
-                    None => None,
-                };
                 let im = cm
                     .item_manager(&col)
                     .map_err(|e| format!("item_manager: {e}"))?;
@@ -238,7 +210,7 @@ pub async fn note_room_info(
                     // encoding zero bytes.
                     return Ok(None);
                 }
-                let key = room_key(&note_uid, &payload.crypto_key, scope_collab.as_ref())?;
+                let key = room_key(&note_uid, &payload.crypto_key)?;
 
                 // A member who may only read gets a ticket like anyone else.
                 // The server lets them watch and drops what they send.

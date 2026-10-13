@@ -113,8 +113,6 @@ pub(super) fn build_share_manifest(
         schema: SHARE_MANIFEST_SCHEMA,
         root_folder_id: root_folder_id.to_string(),
         owner_username: owner_username.map(str::to_string),
-        collab_epoch: default_collab_epoch(),
-        collab_salt: fresh_collab_salt(),
     }
 }
 
@@ -129,43 +127,6 @@ pub(crate) fn decode_manifest(collection: &Collection) -> AppResult<ShareManifes
         .map_err(|e| AppError::InvalidArg(format!("manifest content: {e}")))?;
     serde_json::from_slice(&raw)
         .map_err(|e| AppError::InvalidArg(format!("decode manifest json: {e}")))
-}
-
-/// What a live session in a shared folder mixes into its key, read off the
-/// folder's collection.
-pub(crate) fn share_scope_collab_info(collection: &Collection) -> AppResult<ShareScopeCollabInfo> {
-    let manifest = decode_manifest(collection)?;
-    Ok(ShareScopeCollabInfo {
-        collab_epoch: manifest.collab_epoch,
-        collab_salt: manifest.collab_salt,
-    })
-}
-
-/// Give the folder new key material for live sessions and upload it. Called
-/// when someone stops being a writer, so that what they could derive stops
-/// matching what the others use.
-pub(super) fn rotate_collab_secret(
-    cm: &CollectionManager,
-    collection: &Collection,
-) -> AppResult<ShareManifest> {
-    let mut manifest = decode_manifest(collection)?;
-    rotate_manifest_collab_secret(&mut manifest);
-    let mut updated = collection.clone();
-    updated
-        .set_content(&encode_manifest(&manifest)?)
-        .map_err(|e| AppError::InvalidArg(format!("update manifest content: {e}")))?;
-    cm.upload(&updated, None)
-        .map_err(|e| AppError::InvalidArg(format!("upload rotated manifest: {e}")))?;
-    Ok(manifest)
-}
-
-pub(super) fn rotate_manifest_collab_secret(manifest: &mut ShareManifest) {
-    manifest.schema = SHARE_MANIFEST_SCHEMA;
-    manifest.collab_epoch = manifest
-        .collab_epoch
-        .saturating_add(1)
-        .max(default_collab_epoch());
-    manifest.collab_salt = fresh_collab_salt();
 }
 
 /// Every page of a list that is walked with an iterator.

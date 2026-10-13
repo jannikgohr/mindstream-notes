@@ -70,7 +70,6 @@ use crate::app_events::AppEvent;
 use crate::auth;
 use crate::db::Db;
 use crate::error::{AppError, AppResult, CommandResult};
-use crate::sharing::{share_scope_collab_info, ShareScopeCollabInfo};
 
 /// The one collection that holds an account's own folders, notes, assets
 /// and signatures.
@@ -89,7 +88,9 @@ const KIND_ASSETS: &str = "assets";
 const KIND_SIGNATURES: &str = "signatures";
 
 const PAYLOAD_SCHEMA: u32 = 2;
-const LIVE_COLLAB_KEY_INFO: &[u8] = b"mindstream-live-collab-key/v1";
+// v2: a room's key comes from the note's key and uid alone. v1 also took
+// eight bytes of an epoch, and a salt for a note in a shared folder.
+const LIVE_COLLAB_KEY_INFO: &[u8] = b"mindstream-live-collab-key/v2";
 
 pub(super) fn catch_blocking_panic<T>(
     label: &str,
@@ -416,10 +417,6 @@ pub async fn sync_now(app: AppHandle) -> CommandResult<SyncReport> {
     if let Err(err) = app.emit(event_name, &event) {
         log::warn!("[sync] failed to emit {event_name}: {err}");
     }
-    crate::collab_events::emit_collab_credentials_changed(
-        &app,
-        delta.collab_credentials_changed_note_ids,
-    );
 
     Ok(delta.report)
 }
@@ -442,10 +439,6 @@ pub struct SyncDelta {
     /// editors evict matching blob URLs from their AssetBridge cache
     /// and kick the corresponding image NodeView so it re-resolves.
     pub assets_pulled_ids: Vec<String>,
-    /// Note ids whose live-collab room credentials changed because a
-    /// share-scope manifest rotated its collab epoch/salt. Open editors
-    /// reconnect their active relay clients for these notes.
-    pub collab_credentials_changed_note_ids: Vec<String>,
     /// The spaces whose push the server refused for a limit. Their rows
     /// stay dirty and go up with the first sync that has room.
     pub limits: Vec<LimitReached>,

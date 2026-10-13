@@ -106,7 +106,6 @@ jobs:
               - 'src/lib/sync/**'
               - 'src-tauri/src/sync/**'
               - 'src-tauri/src/sharing/**'
-              - 'src-tauri/src/collab_events.rs'
               - 'backend/**'
               - 'e2e-tests/app/specs/multi/**'
               - 'e2e-tests/app/specs/multi-a2/**'

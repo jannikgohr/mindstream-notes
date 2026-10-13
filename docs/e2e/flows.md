@@ -548,6 +548,19 @@ one invitation now, so the state this flow guarded cannot be reached.
   `pnpm backend:test:up` starts. Against a server elsewhere the flow skips
   itself.
 
+### 4.15 More access for a member, then less, then none (P1)
+
+- **Why e2e:** changing a member's access and removing a member are requests
+  to the server whose effect shows on another account's device, one sync
+  later. No unit test has a server and a second account.
+- **Steps:** in a folder B may only look at, A lets B edit, takes that back,
+  then removes B. B syncs after each. A adds a note to the folder and syncs.
+- **Proves:** each is one step that does not fail. B's device reads the new
+  level off the folder, then drops its copy. A still has the folder as its
+  own share, and what A writes into it still reaches the server.
+- **Not covered here:** that the server closes B's live sessions at once.
+  The server's own tests cover that.
+
 ## 5. Spellchecking and text diagnostics
 
 The app checks spelling itself rather than leaving it to the webview, so the

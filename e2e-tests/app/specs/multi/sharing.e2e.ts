@@ -12,8 +12,9 @@
  *
  * Status: flows 4.1–4.4, 4.6, the core 4.7 subtree convergence path,
  * 4.7b move-out re-home, 4.11 joining by an invite link and 4.12 keys that
- * changed and 4.14 a plan's limit in a shared folder are IMPLEMENTED and
- * validated against the live two-app + backend session. The
+ * changed, 4.14 a plan's limit in a shared folder and 4.15 more access for a
+ * member, then less, then none, are IMPLEMENTED and validated against the
+ * live two-app + backend session. The
  * owner-second-device 4.8–4.9 re-home cases live in
  * sharing-multi-device.e2e.ts because they require A1 + A2 + recipient B.
  * Plain-vault 4.10 lives in sync-history.e2e.ts.
@@ -306,6 +307,8 @@ interface NoteRow {
   title: string;
   body?: string;
   parent_collection_id: string | null;
+  /** True once the note has reached the server. */
+  pushed?: boolean;
 }
 
 interface AssetRow {
@@ -1193,6 +1196,77 @@ describe('T4 sharing a folder', function () {
       username: accounts.sender.username
     });
     expect(again.standing).toBe('known');
+  });
+
+  // --- 4.15 More access for a member, then less, then none (P1) ---
+  it('A changes what B may do and then removes B, each in one step', async () => {
+    const folderOnA = await findCollectionId(browserA, KEY_FOLDER);
+    const member = accounts.recipient.username;
+    const accessOfB = async () =>
+      (
+        await invokeTauri<MemberRow[]>(browserA, 'list_collection_members', {
+          collectionId: folderOnA
+        })
+      ).find(
+        (candidate) => candidate.username.toLowerCase() === member.toLowerCase()
+      )?.access_level;
+    const folderOnB = async () =>
+      (await listCollections(browserB)).find(
+        (candidate) => candidate.name === KEY_FOLDER
+      );
+    // One request to the server and nothing after it. No key changes: the
+    // server is what holds B to the new level, in the folder and its rooms.
+    const setAccess = async (level: 'read_only' | 'read_write') => {
+      await invokeTauri(browserA, 'set_collection_member_access', {
+        input: {
+          collection_id: folderOnA,
+          username: member,
+          access_level: level
+        }
+      });
+      expect(await accessOfB()).toBe(level);
+      // B's device reads the new level off the folder with its next sync.
+      await browserB.waitUntil(
+        async () => {
+          await syncClient(browserB);
+          return (await folderOnB())?.shared_role === level;
+        },
+        { timeout: 120_000, timeoutMsg: `B was not told: ${level}` }
+      );
+    };
+
+    // 4.12 shared this folder with B to look at only.
+    expect(await accessOfB()).toBe('read_only');
+    expect((await folderOnB())?.shared_role).toBe('read_only');
+
+    await setAccess('read_write');
+    await setAccess('read_only');
+
+    await invokeTauri(browserA, 'remove_collection_member', {
+      input: { collection_id: folderOnA, username: member }
+    });
+    expect(await accessOfB()).toBeUndefined();
+
+    // B's device drops its copy of the folder with its next sync.
+    await browserB.waitUntil(
+      async () => {
+        await syncClient(browserB);
+        return (await folderOnB()) === undefined;
+      },
+      { timeout: 120_000, timeoutMsg: 'B kept a folder it was removed from' }
+    );
+
+    // A is where it was: the folder is still shared by A, and what A writes
+    // into it still goes up.
+    await expectSharedByMeBadge(browserA, KEY_FOLDER);
+    const after = await createNoteFixture(
+      browserA,
+      `After the removal ${RUN_ID}`,
+      'still syncs',
+      folderOnA
+    );
+    await syncClient(browserA);
+    expect((await loadNoteFixture(browserA, after.id)).pushed).toBe(true);
   });
 
   // 4.8–4.9 require an owner second device (A2) and are covered by

@@ -7,65 +7,7 @@ fn manifest(root_folder_id: &str, owner: Option<&str>) -> ShareManifest {
         schema: crate::sharing::SHARE_MANIFEST_SCHEMA,
         root_folder_id: root_folder_id.into(),
         owner_username: owner.map(str::to_string),
-        collab_epoch: 1,
-        collab_salt: vec![7; crate::sharing::SHARE_COLLAB_SALT_BYTES],
     }
-}
-
-#[test]
-fn record_scope_collab_epoch_marks_scope_notes_when_epoch_first_seen_or_changed() {
-    let db = open_memory_for_tests();
-    db.with_conn(|conn| {
-        conn.execute(
-            "INSERT INTO notes(id, title, body, position, created, modified, share_scope_id)
-             VALUES ('note_b', 'B', '', 0, 't', 't', 'scope_1')",
-            [],
-        )?;
-        conn.execute(
-            "INSERT INTO notes(id, title, body, position, created, modified, share_scope_id)
-             VALUES ('note_a', 'A', '', 0, 't', 't', 'scope_1')",
-            [],
-        )?;
-        conn.execute(
-            "INSERT INTO notes(id, title, body, position, created, modified, share_scope_id)
-             VALUES ('other', 'Other', '', 0, 't', 't', 'scope_2')",
-            [],
-        )?;
-        Ok(())
-    })
-    .unwrap();
-
-    let mut m = manifest("folder_root", Some("alice"));
-    let mut delta = SyncDelta::default();
-    record_scope_collab_epoch(&db, "scope_1", &m, &mut delta).unwrap();
-    assert_eq!(
-        delta.collab_credentials_changed_note_ids,
-        vec!["note_a", "note_b"]
-    );
-
-    delta.collab_credentials_changed_note_ids.clear();
-    record_scope_collab_epoch(&db, "scope_1", &m, &mut delta).unwrap();
-    assert!(delta.collab_credentials_changed_note_ids.is_empty());
-
-    m.collab_epoch += 1;
-    record_scope_collab_epoch(&db, "scope_1", &m, &mut delta).unwrap();
-    assert_eq!(
-        delta.collab_credentials_changed_note_ids,
-        vec!["note_a", "note_b"]
-    );
-}
-
-#[test]
-fn record_scope_collab_epoch_ignores_legacy_manifest_without_salt() {
-    let db = open_memory_for_tests();
-    let mut m = manifest("folder_root", Some("alice"));
-    m.collab_salt.clear();
-    let mut delta = SyncDelta::default();
-
-    record_scope_collab_epoch(&db, "scope_1", &m, &mut delta).unwrap();
-
-    assert!(delta.collab_credentials_changed_note_ids.is_empty());
-    assert_eq!(load_scope_collab_epoch(&db, "scope_1").unwrap(), None);
 }
 
 #[test]

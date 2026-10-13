@@ -6,7 +6,6 @@ import {
 import type { SyncReport } from './sync';
 
 export enum TauriEventName {
-  CollabCredentialsChanged = 'collab-credentials-changed',
   CustomWindowDecorationsChanged = 'custom-window-decorations-changed',
   FullscreenNote = 'fullscreen-note',
   ImportProgress = 'import-progress',
@@ -62,22 +61,11 @@ export interface SyncLimitReached {
   owner: string | null;
 }
 
-export interface CollabCredentialsChangedPayload {
-  note_ids: string[];
-}
-
 export type TauriEvents = {
   'fullscreen-note': { noteId: string; title: string };
   'custom-window-decorations-changed': boolean;
   'native-menu-command': unknown;
   'sync-completed': SyncCompletedPayload;
-  /**
-   * Fired when a shared collection's live-collab epoch/salt changes.
-   * Open note editors whose note id appears here must recreate their
-   * active relay client so removed members stay stranded in the old room.
-   * Mirrors `app_events::AppEvent::CollabCredentialsChanged`.
-   */
-  'collab-credentials-changed': CollabCredentialsChangedPayload;
   /**
    * Fired from Rust when the pre-sync reachability probe fails — the
    * active vault's server didn't answer. The notification bridge turns

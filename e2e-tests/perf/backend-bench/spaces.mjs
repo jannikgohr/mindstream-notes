@@ -350,24 +350,25 @@ export class SpaceDevice {
 
   /**
    * The same for a note in a shared folder. The folder's collection is the
-   * scope, so there is nothing to look up first, and what the folder's live
-   * sessions mix into their keys comes with the collection.
+   * scope, so there is nothing to look up first, and the room's key comes
+   * from the note alone, as it does in the vault.
    */
   async sharedRoomInfo(scope, noteUid) {
-    return this.roomInfoIn(scope, noteUid, true);
+    return this.roomInfoIn(scope, noteUid);
   }
 
-  async roomInfoIn(collectionUid, noteUid, shared = false) {
+  async roomInfoIn(collectionUid, noteUid) {
     const collection = await this.cm.fetch(collectionUid);
-    const manifest = shared ? await manifestOf(collection) : null;
     const item = await this.cm.getItemManager(collection).fetch(noteUid);
     const payload = decodePayload(await item.getContent());
     return {
       collectionUid: collection.uid,
       noteUid,
       noteKey: payload.crypto_key,
-      salt: manifest ? Buffer.from(manifest.collab_salt) : null,
-      epoch: manifest ? manifest.collab_epoch : 0
+      // The fields the key derivation shared with the old layout still
+      // takes. The app as built has neither a salt nor an epoch.
+      salt: null,
+      epoch: 0
     };
   }
 
@@ -396,9 +397,7 @@ export class SpaceDevice {
     const manifest = {
       schema: 3,
       root_folder_id: randomUUID(),
-      owner_username: this.account.user.username,
-      collab_epoch: 1,
-      collab_salt: [...randomBytes(32)]
+      owner_username: this.account.user.username
     };
     const collection = await this.cm.create(
       COLLECTION_TYPE_SHARED,
