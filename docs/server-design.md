@@ -31,8 +31,9 @@ in one step, and account security.
 
 Every row in the [decisions](#decisions) table was decided by the project
 owner. The mechanisms under the later headings are proposals for carrying those
-decisions out, and may change during implementation. Points that still need an
-answer are collected under [open points](#open-points).
+decisions out, and may change during implementation. The points that were open
+when it was written, and what was decided for each, are at the end under
+[open points](#open-points).
 
 ## Why
 
@@ -620,7 +621,8 @@ domain at a time, which a self-hosted server does not have.
 
 Signing in creates a session for that device. The server keeps a hash of its
 token, a name and when it was last used, and the user can list and revoke
-sessions.
+sessions. A session that no device has used for a number of days ends by
+itself, 90 unless the server's operator sets another number or turns it off.
 
 This replaces the silent refresh. The app used to answer a rejected token by
 logging in again with the stored main key, with no user involved. The key is
@@ -890,13 +892,15 @@ Etebase stack with the app as it was.
 | Idle sync                        | 11 requests     | 1 request, 0 with the feed | 1 request, 2 ms                       |
 | Authenticated read               | 27 ms           | 2 ms or less               | About 2 ms                            |
 | Remote edit reaches other device | Up to one tick  | Under a second             | Not timed. The e2e suite waits for it |
-| Open a note in a shared folder   | 7 requests      | 1 ticket request, no blobs | 3 requests, no blobs                  |
+| Open a note in a shared folder   | 7 requests      | 1 ticket request, no blobs | 1 request, the ticket                 |
 | Push 1000 new notes, server time | 5.4 ms per note | Under 1 ms per note        | 0.63 ms per note                      |
 | Relay frame                      | 0.7 ms          | No worse                   | 0.57 ms                               |
 
-Opening a note in a shared folder is still three requests and not one: the
-note's own key lives in its item, so the item and its collection are fetched
-before the ticket is asked for. See open point 2.
+Opening a note was three requests until the device kept the note's key. The
+key lives in the note's item, so the item and its collection were fetched
+before the ticket was asked for. A sync brings the same key with every note,
+and the device now keeps it, sealed, see [open point 2](#open-points). A note
+whose key is not kept, or cannot be opened, is fetched as before.
 
 ### Measured after step 1
 
@@ -933,7 +937,7 @@ are exact. Times are the median of 20, and differ by 10 to 40% between runs.
 | Tick that receives another device's edit | 11 requests, 16 ms | 2 requests, 4 ms  |
 | First sync of a new account              | 15 requests, 44 ms | 5 requests, 20 ms |
 | Push 25 edited notes                     | 26 requests, 80 ms | 2 requests, 30 ms |
-| Open a note in a shared folder           | 8 requests, 31 ms  | 3 requests, 10 ms |
+| Open a note in a shared folder           | 8 requests, 31 ms  | 1 request, 7 ms   |
 
 Against the Etebase stack an idle tick took 273 ms, so the two steps together
 bring it to under a hundredth of that. Most of it came with the server in
@@ -994,28 +998,45 @@ The frame figures are within the run-to-run noise of each other.
    server that refuses them the room. It is gone, with the event that made
    editors reconnect after a change. See what is [accepted](#security).
 
-2. **Where the room key comes from when a note opens.** Today the per-note key
-   is fetched from the server on every open. It could be cached locally, or
-   derived from the collection key so no fetch is needed.
+2. **Where the room key comes from when a note opens.** Decided on
+   2026-10-13: the device keeps it. A sync brings every note's key with the
+   note, and it now goes into a table of its own, sealed under a key derived
+   from the secret the operating system's keystore holds for the signed-in
+   session. Opening a note reads it there and asks the server for the ticket
+   alone. Signing out deletes the secret and the rows, so a signed-out
+   device has nothing it could enter a room with, which is why an earlier
+   version of the app did not store these keys at all. A backup leaves the
+   table out. The alternative, deriving the key from the collection's key,
+   was not taken: it changes what a key is derived from for a saving the
+   kept key already makes.
 3. **Whether read-only members send presence**, so writers can see who is
-   watching.
-4. **Requests for state.** A joining client asks the room for the document, and
-   today every writer answers to everyone. Addressing the reply to the
-   requester and limiting how often a socket may ask would stop a join from
-   fanning a whole document out to the room.
+   watching. They do. The app sends it whatever the member's access, and the
+   server passes it on. Decided to stay that way.
+4. **Requests for state.** A joining client asks the room for the document.
+   Each writer answers the one who asked and nobody else, and the server
+   passes on ten requests per socket in ten seconds and drops the rest. Both
+   were built with the rooms. A test now holds the limit.
 5. **The link's shape.** Settled. A link is a web address on its server, and
    the app answers to `mindstream-notes://join?link=…`. See
    [invite links](#invite-links).
 6. **Who may create links that permit signup** on a self-hosted server. The
    server leaves it to the operator. Under `invite` any admin of a space may.
    Under `closed`, the default, nobody may and the administrator hands out
-   signup codes. Confirm the default.
+   signup codes. Decided: `closed` stays the default.
 7. **Printing or saving the recovery key.** The format is settled, see
-   [recovery key](#recovery-key). The app offers a copy button and nothing
-   else. A file to save or a page to print is still open.
-8. **How long a device session lasts** when it is not used.
-9. **The size under which content comes inline.**
+   [recovery key](#recovery-key). Decided: beside the copy button the app
+   saves the key to a file the user chooses, on desktop. The file says what
+   it is and which account it is for, and is written so that only its owner
+   can read it where the system can say so. No page to print.
+8. **How long a device session lasts** when it is not used. Decided: the
+   server's operator sets it, `MINDSTREAM_SESSION_IDLE_DAYS`, 90 days unless
+   they say otherwise, and 0 for never. A session past its time ends the way
+   a signed-out one does. A device that is running syncs, which counts as
+   use.
+9. **The size under which content comes inline.** Decided: it stays at 20
+   KiB, which the operator can change with `MINDSTREAM_INLINE_CHUNK_BYTES`.
 10. **Email verification on managed**, and whether it gates the first sync.
+    Put off until there is a managed deployment to verify addresses for.
 11. **Whether the public repository carries a working billing program.**
     Decided for now, on 2026-10-13, that it does not. Enforcing limits and the
     interface that sets them stay in the public server, because the managed
