@@ -24,7 +24,7 @@ Tests we know we want but haven't written — the account/token-lifecycle flows
 | `invite-link-open.e2e.ts`     | T3   | flow 4.13: a link handed over by the operating system opens the join dialog, and nothing else does |
 | `account-security.e2e.ts`     | T4   | signup with a recovery key, a code asked of a new device, remote sign-out, password change         |
 | `sync-history.e2e.ts`         | T4   | per-device-history negative assertion; 4.10 edit-wins-over-delete                                  |
-| `sharing.e2e.ts`              | T4   | sharing flows 4.1–4.4 + core 4.7 subtree/asset convergence + 4.7b + 4.11 + 4.12 keys               |
+| `sharing.e2e.ts`              | T4   | sharing flows 4.1–4.4 + core 4.7 subtree/asset convergence + 4.7b + 4.11 + 4.12 keys + 4.14 limits |
 | `sharing-multi-device.e2e.ts` | T4   | owner-second-device 4.8–4.9 re-home cases                                                          |
 | `collab.e2e.ts`               | T4   | live markdown propagation, restore convergence, restore-vs-paused-peer, reconnect convergence      |
 

@@ -21,8 +21,9 @@ use crate::auth::AuthUser;
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
-/// Refusals for being over a limit share a status the client library does
-/// not treat specially, so the code reaches the app intact.
+/// Refusals for being over a limit share one status, which no other refusal
+/// has. The client library keeps the code of an answer with that status,
+/// on its Etebase calls too, and the app has a sentence for each.
 fn refuse(code: &'static str, detail: String) -> ApiError {
     ApiError::new(StatusCode::PAYMENT_REQUIRED, code, detail)
 }

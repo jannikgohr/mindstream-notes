@@ -41,7 +41,15 @@ const SENTENCES: Record<string, string> = {
   link_other_server: 'account.refusal.linkOtherServer',
   already_member: 'account.refusal.alreadyMember',
   too_many_links: 'account.refusal.tooManyLinks',
-  key_changed: 'account.refusal.keyChanged'
+  key_changed: 'account.refusal.keyChanged',
+  // Limits of the plan that pays for a space. A sync that runs into one
+  // has its own notice, see notifications/sync-status.ts. These are for
+  // the dialogs: sharing a folder, inviting someone, accepting, joining.
+  space_limit: 'account.refusal.spaceLimit',
+  member_limit: 'account.refusal.memberLimit',
+  storage_full: 'account.refusal.storageFull',
+  item_too_large: 'account.refusal.itemTooLarge',
+  plan_lapsed: 'account.refusal.planLapsed'
 };
 
 /** The server wants a code from the authenticator before it goes on. */

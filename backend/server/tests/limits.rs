@@ -51,13 +51,11 @@ fn set_plan(account: &TestAccount, plan: &str) {
 }
 
 /// Assert a refusal for breaking a limit, with the code that says which.
+/// The client library hands the code over as it came, on the Etebase calls
+/// too, because the app says something different for each limit.
 fn assert_over<T>(result: Result<T, Error>, code: &str) {
     match result {
-        Err(Error::Http(message)) => {
-            assert!(message.contains("402"), "{message}");
-            assert!(message.contains(code), "expected {code} in: {message}");
-        }
-        Err(other) => panic!("refused, but with {other:?}"),
+        Err(err) => assert_eq!(etebase::refusal::limit(&err), Some(code), "{err:?}"),
         Ok(_) => panic!("was allowed"),
     }
 }
@@ -127,10 +125,15 @@ fn collaborators_spend_the_owners_storage() {
         .unwrap();
     let file = guest_items.create(&named("file"), &megabyte(3)).unwrap();
     match guest_items.batch(iter::once(&file), None) {
-        Err(Error::Http(message)) => {
-            assert!(message.contains("storage_full"), "{message}");
-            // The app has to be able to say whose storage is full.
-            assert!(message.contains(&owner.name), "{message}");
+        Err(Error::Refused {
+            status,
+            code,
+            detail,
+        }) => {
+            assert_eq!((status, code.as_str()), (402, "storage_full"));
+            // The server says whose storage is full. The app does not read
+            // it out of this sentence, it knows the folder's owner itself.
+            assert!(detail.contains(&owner.name), "{detail}");
         }
         other => panic!("expected the owner's storage to be full, got {other:?}"),
     }

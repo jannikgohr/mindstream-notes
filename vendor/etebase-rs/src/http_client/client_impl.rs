@@ -114,6 +114,18 @@ impl Response {
             500..=501 | 505..=599 => {
                 Error::ServerError(content.detail.unwrap_or("Server error").to_string())
             }
+            // A Mindstream server answers 402 when a write would go over a
+            // limit of the plan that pays for the collection. The code says
+            // which limit, and a client tells its user, so it is kept as it
+            // came. An Etebase server never answers 402.
+            402 if content.code.is_some() => {
+                let code = content.code.unwrap_or_default();
+                Error::Refused {
+                    status: self.status,
+                    code: code.to_string(),
+                    detail: content.detail.unwrap_or(code).to_string(),
+                }
+            }
             status => Error::Http(format!(
                 "HTTP error {}! Code: '{}'. Detail: '{}'",
                 status,

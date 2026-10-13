@@ -7,6 +7,7 @@ export type NotificationKind =
   | 'generic'
   | 'sync-offline'
   | 'session-ended'
+  | 'sync-limit'
   | 'plugin-gated'
   | 'plugin-new';
 export type NotificationWidgetType = 'update' | 'share-invite' | 'generic';

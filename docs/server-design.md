@@ -16,11 +16,11 @@ stack is gone from the repository.
   account, and has a panel for two-factor sign-in, the recovery key, the
   password and the devices signed in.
 
-Of step 6 the server's half is built: it counts what an account stores,
-refuses what goes over a limit, and has the interface that sets limits. The
-app does not yet tell such a refusal from any other sync that failed, so it
-cannot say whose storage is full. The billing program is not built and will
-not be part of this repository, see [decisions](#decisions).
+Of step 6 everything but billing is built. The server counts what an account
+stores, refuses what goes over a limit, and has the interface that sets
+limits. The app says which limit a sync ran into and whose plan it is. The
+billing program is not built and will not be part of this repository, see
+[decisions](#decisions).
 
 This replaces the backend stack described in
 [architecture.md](architecture.md#the-backend-stack): nginx, Etebase on
@@ -768,6 +768,20 @@ not offered in the app. It will point at a deployment of this server.
   whose storage is full.
 - **A lapsed subscription means read-only.** Pulls and deletes keep working.
   Nothing is removed.
+- **A limit is not a failed sync.** The server answers a write that goes over
+  a limit with status 402 and a word for the limit. The app pulls as usual,
+  pushes the spaces that have room, and leaves what was refused where it is,
+  to go up with the first sync that can take it. It shows one notice for as
+  long as the limit holds. For the account's own plan the notice says so.
+  In a folder someone else shared it names the folder and its owner, because
+  the person typing can only ask them. The dialogs for sharing, inviting,
+  accepting and joining have a sentence for each limit too.
+
+  Two things about this are rough. A device that is over a limit asks again
+  with every sync, which costs two requests each time. And a push is one
+  transaction for each kind of thing, so one attachment that is too large
+  holds back the other attachments in the same space until it is removed.
+
 - **Member limits follow the owner's tier.** An invite link is checked against
   the limit when it is claimed.
 - **Billing is a separate program.** It receives payment webhooks and writes

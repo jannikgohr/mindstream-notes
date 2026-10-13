@@ -36,7 +36,7 @@ use crate::sharing::{
 
 use super::{
     drain_tombstones, pull_space, push_assets, push_folders, push_notes, save_stoken,
-    scopes_to_fetch, scopes_with_local_work, Changes, Held, SpacePull, SyncDelta,
+    scopes_to_fetch, scopes_with_local_work, Changes, Held, LimitReached, SpacePull, SyncDelta,
 };
 
 /// A shared folder this sync has pulled, and may have to push to.
@@ -244,6 +244,13 @@ pub(super) fn push_scopes(
     for open in scopes {
         if let Err(e) = push_one_scope(db, cm, open, delta) {
             log::warn!("[sync] shared folder {} push failed: {e}", open.scope());
+            // The one failure the user can do something about, or ask the
+            // folder's owner to.
+            if let Some(reason) = e.limit() {
+                delta
+                    .limits
+                    .push(LimitReached::in_folder(db, &open.root_folder_id, reason));
+            }
         }
     }
 }

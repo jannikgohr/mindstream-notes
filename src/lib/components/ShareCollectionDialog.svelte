@@ -16,8 +16,7 @@
   } from './share-dialog.svelte';
   import { parseRecipients } from './share-recipients';
   import { pushToast } from './toast.svelte';
-  import { toErrorMessage } from '$lib/api/errors';
-  import { refusalReason } from '$lib/account/refusal';
+  import { describeRefusal, refusalReason } from '$lib/account/refusal';
   import KeyChangedNotice from './KeyChangedNotice.svelte';
 
   interface InviteFailure {
@@ -31,7 +30,7 @@
   function failureOf(recipient: string, err: unknown): InviteFailure {
     return {
       username: recipient,
-      reason: toErrorMessage(err),
+      reason: describeRefusal(err),
       keyChanged: refusalReason(err) === 'key_changed'
     };
   }

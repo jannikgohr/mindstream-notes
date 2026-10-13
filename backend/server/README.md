@@ -197,6 +197,10 @@ back under a limit.
 The server can only limit what it can count. It cannot tell a note from an
 attachment, so there is no limit on the number of notes.
 
+The app keeps what was refused on the device and sends it once there is room.
+Until then it shows a notice that names the limit, and in a shared folder the
+owner whose plan it is.
+
 Storage that is no longer needed is given back. An item keeps its current
 revision and the `MINDSTREAM_KEEP_REVISIONS` before it. Older revisions go
 when a new one arrives, and a deleted item keeps only the record that it was

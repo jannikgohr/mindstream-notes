@@ -206,6 +206,7 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
         report: delta.report,
         notes_pulled_ids: delta.notes_pulled_ids,
         assets_pulled_ids: delta.assets_pulled_ids,
+        limits: delta.limits,
     };
     let event_name = AppEvent::SyncCompleted.as_str();
     if let Err(err) = app.emit(event_name, &event) {

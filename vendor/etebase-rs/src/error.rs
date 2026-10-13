@@ -44,8 +44,9 @@ pub enum Error {
     /// A generic error with the server request
     Http(String),
     /// A Mindstream server refused, and gave its reason as a code a program
-    /// can act on. Only the Mindstream calls return this. The Etebase ones
-    /// keep the variants above.
+    /// can act on. The Mindstream calls return this for every refusal. The
+    /// Etebase ones keep the variants above, except for a write that would
+    /// go over a limit, see `mindstream::refusal::limit`.
     Refused {
         /// The HTTP status of the answer
         status: u16,

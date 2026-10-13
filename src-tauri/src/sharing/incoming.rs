@@ -151,7 +151,7 @@ pub async fn accept_share(
 
         manager
             .accept(&invitation)
-            .map_err(|e| AppError::InvalidArg(format!("accept invitation: {e}")))?;
+            .map_err(|e| AppError::from_server("accept invitation", e))?;
 
         // Accepting is relying on the key, so this is when it is kept.
         if let Some(sender) = sender.as_deref() {

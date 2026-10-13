@@ -68,7 +68,7 @@ pub(super) fn create_space(
         )
         .map_err(|e| AppError::InvalidArg(format!("create shared folder: {e}")))?;
     cm.upload(&collection, None)
-        .map_err(|e| AppError::InvalidArg(format!("upload shared folder: {e}")))?;
+        .map_err(|e| AppError::from_server("upload shared folder", e))?;
     Ok(collection)
 }
 

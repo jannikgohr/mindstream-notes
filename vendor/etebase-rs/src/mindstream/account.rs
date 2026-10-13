@@ -63,6 +63,32 @@ pub mod refusal {
     pub const RECOVERY_USED: &str = "recovery_used";
     /// The session token is not one the server knows.
     pub const SESSION_ENDED: &str = "authentication_failed";
+
+    /// The status of every refusal for a limit.
+    pub const OVER_LIMIT_STATUS: u16 = 402;
+    /// The collection's owner has no room left for what the write adds.
+    pub const STORAGE_FULL: &str = "storage_full";
+    /// One item is larger than the owner's plan allows.
+    pub const ITEM_TOO_LARGE: &str = "item_too_large";
+    /// The owner's plan has lapsed. Reading and deleting still work.
+    pub const PLAN_LAPSED: &str = "plan_lapsed";
+    /// The account owns as many collections as its plan allows.
+    pub const SPACE_LIMIT: &str = "space_limit";
+    /// The collection has as many members as its owner's plan allows.
+    pub const MEMBER_LIMIT: &str = "member_limit";
+
+    /// The limit a write went over, when that is why `err` is an error.
+    ///
+    /// These come from any call that writes, the Etebase ones included: a
+    /// push of items, a new collection, an invitation.
+    pub fn limit(err: &crate::error::Error) -> Option<&str> {
+        match err {
+            crate::error::Error::Refused { status, code, .. } if *status == OVER_LIMIT_STATUS => {
+                Some(code)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Like [`Response::error_for_status`], keeping the server's reason.
@@ -1016,5 +1042,46 @@ mod tests {
             checked(&Response::new(b"<html>".to_vec(), 404)),
             Err(Error::NotFound("NotFound".to_string()))
         );
+    }
+
+    #[test]
+    fn a_write_over_a_limit_keeps_its_code_on_the_etebase_calls_too() {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            code: &'a str,
+            detail: &'a str,
+        }
+        let body = rmp_serde::to_vec_named(&Body {
+            code: refusal::STORAGE_FULL,
+            detail: "The storage of ada is full.",
+        })
+        .unwrap();
+        // `error_for_status` is what a push of items goes through.
+        let err = Response::new(body, 402).error_for_status().unwrap_err();
+        assert_eq!(
+            err,
+            Error::Refused {
+                status: 402,
+                code: refusal::STORAGE_FULL.to_string(),
+                detail: "The storage of ada is full.".to_string(),
+            }
+        );
+        assert_eq!(refusal::limit(&err), Some(refusal::STORAGE_FULL));
+
+        // A 402 that names no limit is not this server's, and stays what it
+        // was before.
+        let bare = Response::new(b"<html>".to_vec(), 402)
+            .error_for_status()
+            .unwrap_err();
+        assert!(matches!(bare, Error::Http(_)), "{bare:?}");
+        assert_eq!(refusal::limit(&bare), None);
+
+        // Other refusals are not limits, whatever their code says.
+        let other = Error::Refused {
+            status: 403,
+            code: refusal::STORAGE_FULL.to_string(),
+            detail: String::new(),
+        };
+        assert_eq!(refusal::limit(&other), None);
     }
 }

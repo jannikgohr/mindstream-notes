@@ -528,6 +528,26 @@ one invitation now, so the state this flow guarded cannot be reached.
   address as its argument, and starting it a second time while it runs, were
   tried by hand on a debug build.
 
+### 4.14 A plan's limit in a shared folder (P1)
+
+- **Why e2e:** a limit is set on the server and felt on a device. The refusal
+  crosses the client library, the sync run and an event before the window
+  turns it into a notice, and whose plan it is comes from the folder's local
+  root. No unit test joins those.
+- **Steps:** the server's admin command ends the plan of A, who shares a
+  folder with B. B adds a note to the folder and syncs. A adds a note to the
+  vault and syncs. The command lifts the limit and both sync again.
+- **Proves:** B is told that A's plan has ended, with the folder's name, and
+  B's note stays on B's device. A is told it is their own plan. Nothing B
+  typed reached A. A second sync under the limit shows the same notice, not
+  two. With the limit lifted the notices go and B's note reaches A.
+- **Not covered here:** a full storage and an item that is too large, which
+  take megabytes to set up. The server's tests cover what it answers for
+  each, and the window's tests the sentence for each.
+- **Needs:** the server in a container on the same machine, which is what
+  `pnpm backend:test:up` starts. Against a server elsewhere the flow skips
+  itself.
+
 ## 5. Spellchecking and text diagnostics
 
 The app checks spelling itself rather than leaving it to the webview, so the

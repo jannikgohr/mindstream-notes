@@ -34,12 +34,32 @@ export type TauriEventKey = `${TauriEventName}`;
  *                       evict matching blob URLs from AssetBridge and
  *                       kick matching image views so they re-resolve
  *
+ *   limits            — the spaces the server took nothing new for,
+ *                       because a limit of the plan that pays for them
+ *                       was reached. Empty when everything went up.
+ *
  * Keep this enum in sync with Rust's `app_events::AppEvent`.
  */
 export interface SyncCompletedPayload {
   report: SyncReport;
   notes_pulled_ids: string[];
   assets_pulled_ids: string[];
+  limits?: SyncLimitReached[];
+}
+
+/**
+ * A space the server took nothing new for, and the limit that stopped it.
+ * Mirrors `sync::limits::LimitReached`.
+ */
+export interface SyncLimitReached {
+  /** The server's word for the limit: `storage_full`, `item_too_large` or
+   *  `plan_lapsed`. */
+  reason: string;
+  /** The shared folder's root. Null for the vault. */
+  folder_id: string | null;
+  folder_name: string | null;
+  /** Whose plan the limit belongs to, when it is someone else's. */
+  owner: string | null;
 }
 
 export interface CollabCredentialsChangedPayload {

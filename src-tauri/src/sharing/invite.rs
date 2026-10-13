@@ -101,7 +101,7 @@ pub async fn invite_collection(
                 profile.pubkey(),
                 access_level.into(),
             )
-            .map_err(|e| AppError::InvalidArg(format!("invite {recipient}: {e}")))?;
+            .map_err(|e| AppError::from_server(format_args!("invite {recipient}"), e))?;
 
         // The folder's key now depends on this key, so this is when it is
         // kept.

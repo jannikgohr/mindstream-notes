@@ -28,6 +28,7 @@ mod claim;
 pub mod collab_room;
 mod collections;
 pub mod feed;
+pub mod limits;
 mod local_rows;
 mod payloads;
 mod pull;
@@ -58,6 +59,7 @@ pub(crate) use changes::forget_account_cursor;
 use changes::*;
 use claim::*;
 use collections::*;
+use limits::LimitReached;
 use local_rows::*;
 use payloads::*;
 pub(crate) use pull::held_key;
@@ -292,6 +294,10 @@ pub struct SyncCompletedEvent {
     pub report: SyncReport,
     pub notes_pulled_ids: Vec<String>,
     pub assets_pulled_ids: Vec<String>,
+    /// The spaces the server took nothing new for, see [`LimitReached`].
+    /// Empty when everything went up, which is also what takes an earlier
+    /// notice away.
+    pub limits: Vec<LimitReached>,
 }
 
 /// Emitted when the pre-sync reachability probe fails — the active
@@ -399,6 +405,7 @@ pub async fn sync_now(app: AppHandle) -> CommandResult<SyncReport> {
         report: delta.report.clone(),
         notes_pulled_ids: delta.notes_pulled_ids,
         assets_pulled_ids: delta.assets_pulled_ids,
+        limits: delta.limits,
     };
     let event_name = AppEvent::SyncCompleted.as_str();
     if let Err(err) = app.emit(event_name, &event) {
@@ -434,6 +441,9 @@ pub struct SyncDelta {
     /// share-scope manifest rotated its collab epoch/salt. Open editors
     /// reconnect their active relay clients for these notes.
     pub collab_credentials_changed_note_ids: Vec<String>,
+    /// The spaces whose push the server refused for a limit. Their rows
+    /// stay dirty and go up with the first sync that has room.
+    pub limits: Vec<LimitReached>,
 }
 
 /// The vault's collection, when this sync visits the vault: the server
@@ -528,12 +538,16 @@ fn run(db: &Db, account: &Account, self_username: Option<&str>) -> Result<SyncDe
     scopes::push_scopes(db, &cm, &shared.open, &mut delta);
 
     if let Some(vault_im) = &vault_im {
-        // Folders first, so that no device ever pulls a note whose folder
-        // the server has not been told about.
-        push_folders(db, vault_im, &mut delta.report, None)?;
-        push_notes(db, vault_im, &mut delta.report, None)?;
-        push_assets(db, vault_im, &mut delta.report, None)?;
-        push_signatures(db, vault_im, &mut delta.report)?;
+        if let Err(err) = push_vault(db, vault_im, &mut delta.report) {
+            // A full vault is not a sync that failed. Everything was
+            // pulled, the shared folders were pushed, and what could not go
+            // up waits where it is. The user is told which limit it was.
+            let Some(reason) = err.limit() else {
+                return Err(err.into());
+            };
+            log::warn!("[sync] the server took nothing new for the vault: {err}");
+            delta.limits.push(LimitReached::in_vault(reason));
+        }
     }
 
     // The account's cursor moves last, and only when everything the list
@@ -548,6 +562,16 @@ fn run(db: &Db, account: &Account, self_username: Option<&str>) -> Result<SyncDe
     }
 
     Ok(delta)
+}
+
+/// Push what changed locally in the vault.
+fn push_vault(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<()> {
+    // Folders first, so that no device ever pulls a note whose folder the
+    // server has not been told about.
+    push_folders(db, im, report, None)?;
+    push_notes(db, im, report, None)?;
+    push_assets(db, im, report, None)?;
+    push_signatures(db, im, report)
 }
 
 fn now_unix_ms() -> i64 {

@@ -22,6 +22,7 @@ const notif = (
   widgetType:
     kind === 'sync-offline' ||
     kind === 'session-ended' ||
+    kind === 'sync-limit' ||
     kind === 'plugin-gated' ||
     kind === 'plugin-new'
       ? 'generic'

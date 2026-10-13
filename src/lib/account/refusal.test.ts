@@ -63,6 +63,20 @@ describe('describeRefusal', () => {
     }
   });
 
+  it('has a sentence for each limit a dialog can run into', () => {
+    expect(describeRefusal(refused('member_limit'))).toBe(
+      "This folder has as many members as its owner's plan allows."
+    );
+    expect(describeRefusal(refused('space_limit'))).toMatch(
+      /no more shared folders/
+    );
+    for (const reason of ['storage_full', 'item_too_large', 'plan_lapsed']) {
+      expect(describeRefusal(refused(reason)), reason).not.toBe(
+        'in the words of the server'
+      );
+    }
+  });
+
   it('passes on the message for a reason it has no sentence for', () => {
     expect(
       describeRefusal(refused('bad_request', 'sign up: Malformed email.'))

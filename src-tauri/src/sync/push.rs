@@ -143,7 +143,7 @@ pub(super) fn push_folders(
 
     let mut items: Vec<Item> = prepared.into_iter().map(|(i, _)| i).collect();
     transact_or_resolve(im, &mut items, &mut report.conflicts_resolved)
-        .map_err(|e| AppError::InvalidArg(format!("transaction folders: {e}")))?;
+        .map_err(|e| AppError::from_server("transaction folders", e))?;
 
     let pushed = items.len();
     // Persist new uids/etags + clear dirty flag.
@@ -254,7 +254,7 @@ pub(super) fn push_notes(
 
     let mut items: Vec<Item> = prepared.into_iter().map(|(i, _)| i).collect();
     transact_or_resolve(im, &mut items, &mut report.conflicts_resolved)
-        .map_err(|e| AppError::InvalidArg(format!("transaction notes: {e}")))?;
+        .map_err(|e| AppError::from_server("transaction notes", e))?;
 
     let pushed = items.len();
     db.with_conn_mut(|c| {
@@ -350,7 +350,7 @@ pub(super) fn push_assets(
 
     let mut items: Vec<Item> = prepared.into_iter().map(|(i, _)| i).collect();
     transact_or_resolve(im, &mut items, &mut report.conflicts_resolved)
-        .map_err(|e| AppError::InvalidArg(format!("transaction assets: {e}")))?;
+        .map_err(|e| AppError::from_server("transaction assets", e))?;
 
     let pushed = items.len();
     db.with_conn_mut(|c| {
@@ -427,7 +427,7 @@ pub(super) fn push_signatures(db: &Db, im: &ItemManager, report: &mut SyncReport
 
     let mut items: Vec<Item> = prepared.into_iter().map(|(i, _)| i).collect();
     transact_or_resolve(im, &mut items, &mut report.conflicts_resolved)
-        .map_err(|e| AppError::InvalidArg(format!("transaction signatures: {e}")))?;
+        .map_err(|e| AppError::from_server("transaction signatures", e))?;
 
     let pushed = items.len();
     db.with_conn_mut(|c| {

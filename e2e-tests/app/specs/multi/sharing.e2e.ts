@@ -12,8 +12,8 @@
  *
  * Status: flows 4.1–4.4, 4.6, the core 4.7 subtree convergence path,
  * 4.7b move-out re-home, 4.11 joining by an invite link and 4.12 keys that
- * changed are IMPLEMENTED and validated against the live two-app + backend
- * session. The
+ * changed and 4.14 a plan's limit in a shared folder are IMPLEMENTED and
+ * validated against the live two-app + backend session. The
  * owner-second-device 4.8–4.9 re-home cases live in
  * sharing-multi-device.e2e.ts because they require A1 + A2 + recipient B.
  * Plain-vault 4.10 lives in sync-history.e2e.ts.
@@ -41,6 +41,10 @@
  *   - changed key, receiving:   "Accept anyway"
  *                               (ui.notifications.invite.acceptAnyway)
  *   - view-only editor banner:  ui.editor.viewonly.banner
+ *   - a limit, the owner's own: "Your plan has ended"
+ *                               (ui.notifications.sync.limit.planLapsed.title)
+ *   - a limit, someone else's:  "{owner}'s plan has ended"
+ *                               (ui.notifications.sync.limit.planLapsed.theirTitle)
  */
 
 import { expect } from '@wdio/globals';
@@ -50,6 +54,11 @@ import {
   type TwoAccounts
 } from '../../helpers/accounts.js';
 import { backendUrl } from '../../helpers/backend.js';
+import {
+  lapsePlan,
+  liftLimits,
+  serverAdminAvailable
+} from '../../helpers/server-admin.js';
 import {
   clientHelpers,
   loginClient,
@@ -334,6 +343,52 @@ async function invokeTauri<T>(
     command,
     args
   ) as Promise<T>;
+}
+
+/**
+ * What the notification panel says, opened first if it is closed.
+ *
+ * Read off the page as text. A title can hold an apostrophe or the folder's
+ * name in quotes, and neither is safe inside an `aria/` selector.
+ */
+async function notificationsText(client: WebdriverIO.Browser): Promise<string> {
+  return client.execute(async () => {
+    const toggle = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open notifications"]'
+    );
+    if (!toggle) throw new Error('the notifications button was not found');
+    if (toggle.getAttribute('aria-expanded') !== 'true') {
+      toggle.click();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return (toggle.parentElement?.textContent ?? '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  });
+}
+
+async function waitForNotification(
+  client: WebdriverIO.Browser,
+  text: string
+): Promise<void> {
+  await client.waitUntil(
+    async () => (await notificationsText(client)).includes(text),
+    { timeout: 30_000, timeoutMsg: `no notification said: ${text}` }
+  );
+}
+
+async function waitForNoNotification(
+  client: WebdriverIO.Browser,
+  text: string
+): Promise<void> {
+  await client.waitUntil(
+    async () => {
+      const shown = await notificationsText(client);
+      // The panel's heading is there, so it is open and was read.
+      return shown.includes('Notifications') && !shown.includes(text);
+    },
+    { timeout: 30_000, timeoutMsg: `a notification still said: ${text}` }
+  );
 }
 
 async function listCollections(
@@ -805,6 +860,72 @@ describe('T4 sharing a folder', function () {
     await B.click(SHARED_FOLDER);
 
     await expect(B.treeItem(noteToMoveOut.title)).not.toBeDisplayed();
+  });
+
+  // --- 4.14 A plan's limit in a shared folder is the owner's (P1) ---
+  it('a lapsed plan is named as the plan of the owner, to the owner and to a guest', async function () {
+    if (!serverAdminAvailable()) {
+      // Limits are set with the server's own command, in its container.
+      this.skip();
+    }
+    const owner = accounts.sender.username;
+    const sharedOnB = await findCollectionId(browserB, SHARED_FOLDER);
+    const guestTitle = `Held back ${RUN_ID}`;
+    const guestBody = `typed while the plan had ended ${RUN_ID}`;
+    const ownerTitle = `Owner held back ${RUN_ID}`;
+    const theirs = `${owner}'s plan has ended`;
+    const own = 'Your plan has ended';
+
+    // B writes into A's folder after A's plan has ended. The folder counts
+    // against A, so it is A's plan that stops the push, and B is told so by
+    // name.
+    lapsePlan(owner);
+    const guestNote = await createNoteFixture(
+      browserB,
+      guestTitle,
+      guestBody,
+      sharedOnB
+    ).catch((err: unknown) => {
+      liftLimits(owner);
+      throw err;
+    });
+    try {
+      await syncClient(browserB);
+      await waitForNotification(browserB, theirs);
+      const told = await notificationsText(browserB);
+      expect(told).toContain(`“${SHARED_FOLDER}”`);
+      expect(told).toContain('stay on this device');
+
+      // The sync itself did not fail, and the note is where B left it.
+      const kept = await loadNoteFixture(browserB, guestNote.id);
+      expect(kept.body).toContain(guestBody);
+
+      // A's own vault runs on the same plan. A is told it is theirs.
+      await createNoteFixture(browserA, ownerTitle, 'x', null);
+      await syncClient(browserA);
+      await waitForNotification(browserA, own);
+      expect(await notificationsText(browserA)).not.toContain(theirs);
+
+      // Nothing B typed reached the server, so A does not have it.
+      await expect(loadNoteFixture(browserA, guestNote.id)).rejects.toThrow();
+
+      // The limit still holds on the next sync, and the notice is the same
+      // one, not a second.
+      await syncClient(browserB);
+      const again = await notificationsText(browserB);
+      expect(again.split(theirs)).toHaveLength(2);
+    } finally {
+      // Later flows share and sync with this account.
+      liftLimits(owner);
+    }
+
+    // With the plan back, the next sync sends what waited and takes the
+    // notice away, on both devices.
+    await syncClient(browserB);
+    await waitForNoNotification(browserB, theirs);
+    await syncClient(browserA);
+    await waitForNoNotification(browserA, own);
+    await expectNoteBodyContains(browserA, guestNote.id, guestBody);
   });
 
   const LINK_FOLDER = `Link Folder ${RUN_ID}`;
