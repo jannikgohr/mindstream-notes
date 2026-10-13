@@ -10,27 +10,34 @@ export type VaultOpeningPreference = 'ask' | VaultOpenMode;
 /** Menu observations never authorize ownership or a fallback to direct mode. */
 export class VaultMenu {
   view = $state<VaultWindowState | null>(null);
+  /** A check is in flight and nothing current has been observed yet. */
   checking = $state(false);
   failed = $state(false);
   #observationId = 0;
+  #current = false;
 
   invalidate() {
     ++this.#observationId;
+    this.#current = false;
     this.checking = false;
   }
 
   async refresh() {
     const id = ++this.#observationId;
-    this.checking = true;
+    // Re-observing a current view is a background poll. It must not block the
+    // menu: toggling `checking` every few seconds made its controls flicker.
+    this.checking = !this.#current;
     this.failed = false;
     try {
       const view = await getVaultWindowState();
       if (id !== this.#observationId) return false;
       this.view = view;
+      this.#current = true;
       return true;
     } catch {
       if (id !== this.#observationId) return false;
       this.view = null;
+      this.#current = false;
       this.failed = true;
       return false;
     } finally {

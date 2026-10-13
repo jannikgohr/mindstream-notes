@@ -109,6 +109,45 @@ describe('vault menu ownership and opening', () => {
     expect(menu.checking).toBe(false);
   });
 
+  it('polls a current view without blocking the menu, and blocks again once closed', async () => {
+    let finish: (view: unknown) => void = () => {};
+    const menu = new VaultMenu();
+    await menu.refresh();
+    observe.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    const poll = menu.refresh();
+    expect(menu.checking).toBe(false);
+    expect(menu.canDelete('closed')).toBe(true);
+    expect(await menu.open('closed')).toBe(true);
+    finish({
+      supervised: true,
+      vaults: [{ vaultId: 'closed', status: 'ready' }]
+    });
+    expect(await poll).toBe(true);
+    expect(menu.canDelete('closed')).toBe(false);
+
+    menu.invalidate();
+    observe.mockReturnValueOnce(new Promise(() => {}));
+    void menu.refresh();
+    expect(menu.checking).toBe(true);
+    expect(menu.canDelete('source')).toBe(false);
+    await expect(menu.open('source')).rejects.toThrow(/unavailable/);
+  });
+
+  it('blocks the menu again for the check that follows a failed poll', async () => {
+    const menu = new VaultMenu();
+    await menu.refresh();
+    observe.mockRejectedValueOnce(new Error('coordinator unavailable'));
+    expect(await menu.refresh()).toBe(false);
+    observe.mockReturnValueOnce(new Promise(() => {}));
+    void menu.refresh();
+    expect(menu.checking).toBe(true);
+    expect(menu.failed).toBe(false);
+  });
+
   it('cannot replace a newer supervised observation with an older direct response', async () => {
     let finish: (view: unknown) => void = () => {};
     observe.mockReturnValueOnce(

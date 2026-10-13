@@ -61,6 +61,14 @@
   const current = $derived(currentProfile());
   const currentName = $derived(current?.name ?? tUi('vault.unknown'));
 
+  // Tinted like the app's other status chips. Plain muted text next to the
+  // row's icon buttons read as one more action ("Open") rather than a state.
+  const STATUS_BADGE: Record<VaultWindowStatus, string> = {
+    [VaultWindowStatus.Ready]: 'bg-success-subtle text-success',
+    [VaultWindowStatus.Starting]: 'bg-info-subtle text-info',
+    [VaultWindowStatus.Unavailable]: 'bg-warning-subtle text-warning'
+  };
+
   function toggle() {
     if (busy) return;
     if (open) close();
@@ -215,6 +223,20 @@
     );
   }
 
+  /**
+   * Whether the row offers deletion at all. Unlike `canDeleteProfile` this
+   * ignores an in-flight check, so the button is disabled rather than removed
+   * and the row's other buttons keep their place.
+   */
+  function showsDelete(profile: Profile) {
+    return (
+      profile.id !== profilesState.active &&
+      profile.id !== profilesState.indexActive &&
+      windows.view !== null &&
+      !windowStatus(profile.id)
+    );
+  }
+
   async function submitRename() {
     const id = renamingId;
     const name = renameValue.trim();
@@ -357,8 +379,15 @@
 
   $effect(() => {
     if (!open) return;
+    // A poll no longer raises `windows.checking`, so overlap is tracked here:
+    // a slow coordinator must not have each poll superseded by the next.
+    let polling = false;
     const timer = setInterval(() => {
-      if (!busy && !windows.checking) void refreshWindows();
+      if (busy || polling || windows.checking) return;
+      polling = true;
+      void refreshWindows().finally(() => {
+        polling = false;
+      });
     }, 3000);
     return () => clearInterval(timer);
   });
@@ -383,10 +412,19 @@
     <div
       class="absolute left-0 top-[calc(100%+0.375rem)] z-300 w-64 overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-lg"
     >
-      <div class="border-b border-border px-3 py-2">
+      <div
+        class="flex items-center justify-between gap-2 border-b border-border px-3 py-2"
+      >
         <p class="text-xs font-medium text-muted-foreground">
           {tUi('vault.title')}
         </p>
+        <!-- In the header so the brief first check cannot push the rows down
+             and back up again. -->
+        {#if windows.checking && !windows.view}
+          <p class="truncate text-xs text-muted-foreground" role="status">
+            {tUi('vault.windows.checking')}
+          </p>
+        {/if}
       </div>
 
       <div class="max-h-80 overflow-y-auto p-1">
@@ -444,10 +482,6 @@
               >{tUi('vault.windows.retry')}</button
             >
           </div>
-        {:else if windows.checking && !windows.view}
-          <p class="px-2 py-1.5 text-sm text-muted-foreground" role="status">
-            {tUi('vault.windows.checking')}
-          </p>
         {/if}
         {#each profilesState.profiles as profile (profile.id)}
           {#if renamingId === profile.id}
@@ -470,6 +504,9 @@
               </Button>
             </div>
           {:else}
+            {@const status = windows.view?.supervised
+              ? windowStatus(profile.id)
+              : undefined}
             <div
               class="flex items-center rounded-sm hover:bg-accent hover:text-accent-foreground"
             >
@@ -489,9 +526,13 @@
                   {/if}
                 </span>
                 <span class="truncate">{profile.name}</span>
-                {#if windows.view?.supervised && windowStatus(profile.id)}
-                  <span class="ml-auto text-xs text-muted-foreground">
-                    {tUi(`vault.windows.${windowStatus(profile.id)}`)}
+                {#if status}
+                  <span
+                    class="ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-medium leading-none {STATUS_BADGE[
+                      status
+                    ]}"
+                  >
+                    {tUi(`vault.windows.${status}`)}
                   </span>
                 {/if}
               </button>
@@ -508,7 +549,7 @@
                   >
                     <ExternalLink class="size-3.5" />
                   </button>
-                  {#if !windowStatus(profile.id)}
+                  {#if !status}
                     <button
                       type="button"
                       class="rounded-sm p-1 text-muted-foreground hover:text-foreground"
@@ -531,13 +572,13 @@
                 >
                   <Pencil class="size-3.5" />
                 </button>
-                {#if canDeleteProfile(profile)}
+                {#if showsDelete(profile)}
                   <button
                     type="button"
                     class="rounded-sm p-1 text-muted-foreground hover:text-destructive"
                     title={tUi('vault.delete')}
                     aria-label={tUi('vault.delete')}
-                    disabled={busy}
+                    disabled={busy || windows.checking}
                     onclick={() => confirmAndDelete(profile)}
                   >
                     <Trash2 class="size-3.5" />
