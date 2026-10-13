@@ -1,8 +1,9 @@
 # Vault browser storage audit
 
-Audit date: 2026-10-10. This inventories persistence outside the vault database
-before WebView store isolation. It records migration work; no production storage
-or credential migration is implemented by this audit.
+Initial inventory: 2026-10-10; delivery reviewed on 2026-10-13. The inventory
+records legacy persistence outside the vault database. Native browser export,
+classification, credential migration and worker store isolation are implemented.
+Current delivery and remaining release QA are in the [root/vault status](root-vault-implementation-plan.md).
 
 The settings schema is only part of the problem. Searching `src` for
 `localStorage`, `sessionStorage`, and `indexedDB` finds 26 source files including
@@ -31,8 +32,8 @@ application sources. Browser libraries/caches still need a runtime inventory.
 | Hotkey settings, including dynamic command bindings                       | `hotkeys/store.svelte.ts`, `hotkeys/migrations.ts`, settings store                                  | Device settings. Migrate legacy command IDs, publish one root revision, and give the coordinator authoritative bindings. No per-window global registration.                                                                                                                   |
 | Plugin settings                                                           | `plugins/settings-store.svelte.ts`, `plugins/settings-bridge.ts`, `api/plugins.ts`                  | Vault values remain in the vault DB; device values use root plugin-settings.json. Enabled/approved state remains per vault.                                                                                                                                                   |
 
-The pinned schema currently declares 28 device-scoped settings and 42
-vault-scoped settings, with additional action/custom entries. Dynamic account
+The settings schema declares device and vault scopes, with additional
+action/custom entries. Dynamic account
 and hotkey/plugin IDs require their existing resolver rules. Counting schema
 entries is not proof that browser state is isolated.
 
@@ -108,7 +109,7 @@ binds each sealed origin to its capture checksum. Recovery refuses an older
 archive that lacks a completed capture. A missing keystore key cannot be replaced
 when ciphertext or completion receipts exist. Opt-in supervised startup now
 exports from the legacy origin before opening isolated workers. Normal startup
-continues to use its existing browser store while coordination is completed.
+uses isolated worker stores through the coordinator.
 
 Per-vault classification is now implemented in `browser_migration.rs` and wired
 into the native settings, content and signing consumers when a worker has a
@@ -118,7 +119,8 @@ match the exact legacy encoded server/username key and stay outside settings
 snapshots. Existing vault credentials win over stale retained bytes. The archive
 preference path has separate device and owner-content receipts, including when a
 different vault opens first. Supervised workers now load a verified `Source`
-before database/frontend initialization. Normal startup still uses direct mode.
+before database/frontend initialization. Ordinary desktop startup is supervised;
+isolated direct fixtures, mobile and browser fallback keep their existing flows.
 
 `legacy_export.rs`, `legacy-export.js` and the standalone export page perform
 the host-side capture without loading app code, plugins or account sessions.

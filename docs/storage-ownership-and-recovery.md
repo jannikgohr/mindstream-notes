@@ -36,7 +36,7 @@ receipt is published after its settings and before removing the root source.
 Retries and recovered old root copies cannot re-enable a cleared owner or seed
 another vault. Unscoped browser values follow that same owner; explicit vault
 buckets preserve their own choice. Invalid booleans or migration records stop
-initialization with evidence intact. The worker storage contract is version 3;
+initialization with evidence intact. The worker storage contract is version 4;
 incompatible live workers block adoption and shared-document migration.
 
 The coordinator records vault focus in root `shortcut-recency.json`, separately
@@ -84,8 +84,8 @@ The caller's expected vault ID must match the running worker. Frontend profile
 readiness waits for migration, and failed writes surface to callers. Focus and
 same-worker popout notifications refresh caches from disk. A recovery can reduce
 the revision, so caches accept that refreshed snapshot. Cross-worker invalidations reload each worker's own canonical documents.
-Remaining browser-persistence audit and platform checks are tracked in the
-implementation plan before supervision becomes the default.
+Supervised desktop startup and browser migration are implemented. Remaining
+release QA is tracked in the [current implementation status](root-vault-implementation-plan.md).
 
 Native sidebar widths use root fields `appearance.leftSidebarWidth` and
 `appearance.rightSidebarWidth`. Sorting, direction, and sidebar open/closed
@@ -202,8 +202,9 @@ Existing browser keys import unchanged only for a matching account. Their source
 remains until browser migration is verified. A missing keystore key with an
 existing encrypted file, corrupt file, or malformed legacy key is a recovery
 error. These conditions must never create a replacement signing identity. Vault
-deletion attempts removal of both session and signing master keys. Full portable
-credential/settings backup remains outside the current concurrency plan.
+deletion attempts removal of both session and signing master keys. Vault settings
+and plugin data have a [portable backup contract](backup-restore-portability.md).
+Credentials and signing private keys remain bound to the destination device/vault.
 
 Private worker close commands retain request IDs and expose queued, pending,
 committing or failed status. Repeated IDs never start another save attempt.
@@ -215,7 +216,8 @@ not process exit or ownership release. Coordinators must still observe actual
 child exit or acquire the physical vault's OS lease before considering it closed.
 Whole-app Quit uses this protocol and observes physical ownership release before
 exiting the coordinator. Cancellation, save failure, unknown owners or timeout
-leave the remaining workers usable. Worker handoff is still pending.
+leave the remaining workers usable. Durable handoff uses the same close receipts
+and physical ownership checks.
 
 Desktop menu observations distinguish ready, starting and unavailable owners.
 Failed reads cannot imply closure or authorize deletion/restart switching. The
@@ -242,7 +244,8 @@ delete boundaries, concurrent root field/index edits, validated previous-copy
 recovery, and concurrent dictionary readers/publishers. Native app tests confirmed
 duplicate rejection and reopening after forced termination. File contents and
 Unix directory entries are flushed before publication. Windows directory-entry
-reboot durability and macOS/Linux runtime behavior still need platform tests.
+reboot durability and packaged platform behavior remain release QA. Linux X11
+and nested Wayland handoff/recovery/startup checks pass; see the harness guide.
 Never delete SQLite WAL files as a startup cleanup operation.
 
 Global plugin packages use root `plugins/catalog.json`, immutable
@@ -258,3 +261,11 @@ Root `plugin-settings.json` records the startup-selected canonical vault directo
 and one-time `D` key receipts. Existing root values win. Retained vault rows cannot
 resurrect a reset value. RootLock guards field edits and catalog publication;
 notifications are sent after its release. See the [global plugin plan](global-plugins-implementation-plan.md).
+
+Portable backup format 2 carries vault settings and writable plugin data along
+with immutable package files and portable device values. Restore replaces the
+selected vault; shared settings/themes/packages import only when selected, and
+existing device entries win. Imported third-party execution approval is cleared.
+Version 2 restore journals validate database/resource hashes, preserve old vault
+files and resume before opening the database. The worker storage contract is 4.
+See [backup recovery and retained evidence](backup-restore-portability.md#validation-and-recovery).

@@ -70,7 +70,8 @@ Receipts prevent reset from importing retained database rows again. Runtime
 contexts include stored values and manifest defaults. Preview services build the
 same backend context instead of accepting frontend settings as authority.
 
-Worker storage contract 3 refuses adoption of older workers before migration.
+Global packages introduced storage contract 3. Portable restore now requires
+contract 4; the runtime refuses incompatible worker adoption before migration.
 
 ## Validation
 

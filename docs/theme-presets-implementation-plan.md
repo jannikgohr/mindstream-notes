@@ -65,7 +65,6 @@ regressions and retained evidence.
 Primary areas: `app.css`, `app.html`, settings schema/registry, appearance/accent
 helpers, preview styling, lint tooling, and theming documentation.
 
-The original estimate was 3 to 5 working days after shared persistence and
-notifications. Theme marketplaces and unrestricted stylesheets remain separate
+Theme marketplaces and unrestricted stylesheets remain separate
 features. Packaged macOS and real desktop monitor/DPI/reboot/updater checks retain
 the existing release QA status; native theme UI evidence currently covers Windows.

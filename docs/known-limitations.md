@@ -215,5 +215,6 @@ Packaged macOS 14+ Dock/menu/Reopen testing remains deferred with the owner's
 approval. Linux compositor behavior and geometry constraints are recorded in
 [the harness guide](e2e/harness.md#concurrent-vault-checks). Reboot durability,
 monitor/DPI transitions and signed updater installation still need release QA.
-Global plugin packages and theme presets remain separate projects. See the
+Global plugin packages, theme presets and settings/plugin-data backup portability
+are implemented. Credentials and downloaded caches stay device-local. See the
 [root/vault plan](root-vault-implementation-plan.md#current-delivery-status).
