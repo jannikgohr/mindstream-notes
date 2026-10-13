@@ -742,7 +742,8 @@ async fn landing_page_tells_a_browser_what_to_do_with_a_link() {
     assert_eq!(header("referrer-policy"), "no-referrer");
     assert_eq!(header("cache-control"), "no-store");
     let page = response.text().await.unwrap();
-    assert!(page.contains("Join with a link"));
+    assert!(page.contains("Join shared folder…"));
+    assert!(page.contains("data-scheme=\"mindstream-notes\""));
     assert!(page.contains("https://example.com/app"));
     // The page is the same for every link and says nothing about this one.
     assert!(!page.contains("some-link-uid"));
@@ -756,5 +757,5 @@ async fn landing_page_tells_a_browser_what_to_do_with_a_link() {
         .text()
         .await
         .unwrap();
-    assert!(german.contains("Mit Link beitreten"));
+    assert!(german.contains("Geteiltem Ordner beitreten…"));
 }

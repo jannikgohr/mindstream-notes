@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import written from '../../../protocol/links/invite-links.json';
 import { parseInviteLink, sameServer, serverName } from './invite-link';
 
 const SECRET = 'A'.repeat(43);
@@ -82,6 +83,30 @@ describe('sameServer', () => {
       ['', '']
     ]) {
       expect(sameServer(one, other), `${one} / ${other}`).toBe(false);
+    }
+  });
+});
+
+/**
+ * The client library reads a link in Rust and this module reads it again in
+ * the window, to react while someone types. protocol/links holds what both
+ * have to make of the same text. The library's half is in `deep_links.rs`.
+ */
+describe('the links written down for every side', () => {
+  it.each(written.links.valid)('reads $link', ({ link, server, uid }) => {
+    expect(parseInviteLink(link)).toEqual({ serverUrl: server, uid });
+  });
+
+  it.each(written.links.invalid)('takes %j for no link', (text) => {
+    expect(parseInviteLink(text)).toBeNull();
+  });
+
+  it('takes no address under the app scheme for a link either', () => {
+    // Those are opened by the operating system and unwrapped in Rust. What
+    // reaches the window is the link inside.
+    for (const { address, link } of written.appAddresses.valid) {
+      expect(parseInviteLink(address), address).toBeNull();
+      expect(parseInviteLink(link), link).not.toBeNull();
     }
   });
 });

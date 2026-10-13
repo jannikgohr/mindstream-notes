@@ -511,6 +511,23 @@ one invitation now, so the state this flow guarded cannot be reached.
   invitation; the notice offering to go on before a key is on screen; a
   plain **Accept** next to the warning.
 
+### 4.13 An invite link opened outside the app (P2)
+
+- **Why e2e:** the link crosses three layers that are only joined in the real
+  app. The Rust side unwraps the address and keeps the link, an event tells
+  the window, and the window fetches the link and opens the dialog.
+- **Steps:** hand the app `mindstream-notes://join?link=…` through the
+  test-only command that stands in for the operating system. Then a second
+  one. Then addresses that carry no invite link.
+- **Proves:** the join dialog opens with the link filled in and nothing
+  looked up; a second link replaces the first in the open dialog; an address
+  with another action, another scheme, or a link that is not an invite link
+  opens nothing.
+- **Not covered here:** the operating system's part. The suite must not
+  register the scheme on the machine it runs on. Starting the app with the
+  address as its argument, and starting it a second time while it runs, were
+  tried by hand on a debug build.
+
 ## 5. Spellchecking and text diagnostics
 
 The app checks spelling itself rather than leaving it to the webview, so the

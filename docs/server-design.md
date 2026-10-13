@@ -512,7 +512,8 @@ Whoever holds the link can claim it until it is used up or expires. Links are
 single-use by default.
 
 It needs two new pieces: handling for links opened at the operating-system
-level, and a landing page on the server for devices without the app.
+level, and a landing page on the server for devices without the app. Both are
+built, see below.
 
 As built on the server:
 
@@ -569,8 +570,37 @@ As built in the app:
   never shown. A link for a server the device is not signed in to is looked
   at and not joined.
 
-Not built: opening a link from the operating system. A link has to be pasted
-into the app.
+- **Opening one from outside the app.** A link is a web address on whatever
+  server made it, so a browser opens it and shows the server's page for
+  links. That page offers the same link under the app's own scheme,
+  `mindstream-notes://join?link=…`, built in the browser and sent nowhere.
+  The operating system hands such an address to the app: as its argument
+  when that starts the app, and through the instance already running when
+  there is one. The app then comes to the front with the join dialog open and
+  the link filled in.
+
+  It does no more than that. Any program on the device can open an address
+  under the scheme, with any link inside, so nothing is asked of a server
+  until the user presses "Continue". An address that carries no invite link
+  opens nothing.
+
+  The desktop app is a single instance now, which this needs: a second
+  launch hands its arguments to the first and ends. Builds that run on a
+  data directory of their own, as the test suite's devices and a
+  developer's second vault do, are left out.
+
+  The installer registers the scheme. The app never registers it at run
+  time, so a build run from a checkout cannot take the scheme away from the
+  installed app. What an invite link and the app's address look like is
+  written down in [protocol/links](../protocol/links), with examples that
+  the client library, the app's window, the app's start-up code and the
+  server's page are each tested against.
+
+Tried on a real build: starting the app with a link as its argument, and
+starting it a second time with one while it runs. Not tried: the installer's
+registration and a click in a browser, which need the app installed. Mobile
+is not covered. A phone opens links through verified web addresses, one
+domain at a time, which a self-hosted server does not have.
 
 ## Accounts
 

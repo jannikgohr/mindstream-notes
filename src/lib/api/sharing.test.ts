@@ -22,6 +22,7 @@ import {
   revokeShareLink,
   setCollectionMemberAccess,
   stopSharingCollection,
+  takePendingInviteLink,
   userKeyInfo
 } from './sharing';
 
@@ -483,6 +484,40 @@ describe('the keys of the people shared with', () => {
 
       await inviteCollection(input);
       expect(invoke).toHaveBeenCalledWith('invite_collection', { input });
+    });
+  });
+});
+
+describe('a link opened outside the app', () => {
+  it('is never waiting outside Tauri', async () => {
+    await expect(takePendingInviteLink()).resolves.toBeNull();
+  });
+
+  describe('in Tauri', () => {
+    beforeEach(() => {
+      setTauri(true);
+      invoke.mockReset();
+    });
+    afterEach(() => setTauri(false));
+
+    it('is handed over as text, or as nothing', async () => {
+      const link = `https://notes.example.test/join/link_1#${'A'.repeat(43)}`;
+      invoke.mockResolvedValueOnce(link);
+      await expect(takePendingInviteLink()).resolves.toBe(link);
+      expect(invoke).toHaveBeenCalledWith(
+        'take_pending_invite_link',
+        undefined
+      );
+
+      invoke.mockResolvedValueOnce(null);
+      await expect(takePendingInviteLink()).resolves.toBeNull();
+    });
+
+    it('is refused when it is not text', async () => {
+      invoke.mockResolvedValueOnce({ link: 'x' });
+      await expect(takePendingInviteLink()).rejects.toThrow(
+        /pending invite link/
+      );
     });
   });
 });

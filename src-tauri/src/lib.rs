@@ -22,6 +22,7 @@ pub mod collections;
 pub mod content_stats;
 pub mod data;
 pub mod db;
+pub mod deep_links;
 #[cfg(desktop)]
 pub mod desktop_settings;
 pub mod drawing;
@@ -161,7 +162,7 @@ pub fn run() {
     }
 
     #[cfg(desktop)]
-    let app_handle = tauri::Builder::default()
+    let app_handle = deep_links::builder()
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(if cfg!(debug_assertions) {
@@ -402,6 +403,10 @@ pub fn run() {
             // restored preference, which is what actually flips it on.
             app.manage(sync::scheduler::SyncScheduler::new());
             sync::scheduler::spawn(app.handle().clone());
+            // An invite link opened outside the app, now or when it started.
+            app.manage(deep_links::PendingInviteLink::default());
+            #[cfg(desktop)]
+            deep_links::listen(app.handle());
             // The server says when something changed elsewhere, so that
             // sync does not have to wait for the next tick.
             sync::feed::spawn(app.handle().clone());
@@ -556,6 +561,9 @@ pub fn run() {
             sharing::claim_share_link,
             sharing::user_key_info,
             sharing::own_key_fingerprint,
+            deep_links::take_pending_invite_link,
+            #[cfg(feature = "e2e-data-dir")]
+            deep_links::e2e_open_address,
             #[cfg(feature = "e2e-data-dir")]
             sharing::e2e_create_standalone_collection_invite,
             #[cfg(feature = "e2e-data-dir")]

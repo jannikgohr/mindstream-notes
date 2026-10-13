@@ -1,9 +1,11 @@
 //! The page an invite link shows in a browser.
 //!
 //! A link is an ordinary web address so that it survives being pasted into a
-//! chat or an email. Someone who opens it without the app, or on a device
-//! where the app does not take the link over, lands here and is told what to
-//! do with it.
+//! chat or an email. A browser is what opens it, on any server's address, so
+//! it lands here. From here the app is one click away: the page offers the
+//! same link under the app's own scheme, which the operating system hands to
+//! the app where it is installed. Where it is not, or the click does
+//! nothing, the page says how to paste the link in by hand.
 //!
 //! The page is the same for every link and never looks one up. The secret
 //! sits after the `#`, which the browser keeps to itself, so there is
@@ -21,10 +23,17 @@ use sha2::{Digest, Sha256};
 
 use crate::AppState;
 
+/// The scheme the app is registered for with the operating system. An
+/// address under it never leaves the device: no server is asked anything.
+/// Written down for every side in `protocol/links`.
+const APP_SCHEME: &str = "mindstream-notes";
+
 struct Text {
     lang: &'static str,
     title: &'static str,
     heading: &'static str,
+    open: &'static str,
+    by_hand: &'static str,
     steps: [&'static str; 3],
     link_label: &'static str,
     copy: &'static str,
@@ -35,11 +44,13 @@ struct Text {
 
 const ENGLISH: Text = Text {
     lang: "en",
-    title: "Join a shared space",
-    heading: "You have been invited to a shared space",
+    title: "Join a shared folder",
+    heading: "You have been invited to a shared folder",
+    open: "Open in Mindstream Notes",
+    by_hand: "If nothing opens, do it by hand:",
     steps: [
         "Open Mindstream Notes.",
-        "Choose \"Join with a link\".",
+        "Right-click an empty spot in the list of notes and choose \"Join shared folder…\".",
         "Paste the link below.",
     ],
     link_label: "Your link",
@@ -51,11 +62,13 @@ const ENGLISH: Text = Text {
 
 const GERMAN: Text = Text {
     lang: "de",
-    title: "Einem geteilten Bereich beitreten",
-    heading: "Du wurdest in einen geteilten Bereich eingeladen",
+    title: "Einem geteilten Ordner beitreten",
+    heading: "Du wurdest in einen geteilten Ordner eingeladen",
+    open: "In Mindstream Notes öffnen",
+    by_hand: "Falls sich nichts öffnet, geht es auch von Hand:",
     steps: [
         "Öffne Mindstream Notes.",
-        "Wähle \"Mit Link beitreten\".",
+        "Klicke in der Notizliste mit der rechten Maustaste auf eine freie Stelle und wähle \"Geteiltem Ordner beitreten…\".",
         "Füge den Link unten ein.",
     ],
     link_label: "Dein Link",
@@ -90,16 +103,23 @@ ol{padding-left:1.2rem}\
 label{display:block;margin-top:1.5rem;font-weight:600}\
 input{width:100%;box-sizing:border-box;margin:.4rem 0;padding:.6rem;font:inherit;\
 border:1px solid #c8c8cc;border-radius:8px}\
-button{font:inherit;padding:.5rem 1rem;border:0;border-radius:8px;background:#2f6feb;\
+button,a.open{font:inherit;padding:.5rem 1rem;border:0;border-radius:8px;background:#2f6feb;\
 color:#fff;cursor:pointer}\
+a.open{display:inline-block;text-decoration:none;margin-bottom:1rem}\
+a.open[hidden]{display:none}\
 p.note{color:#5c5c63;font-size:.9rem}a{color:#1f5fd0}\
 @media(prefers-color-scheme:dark){body{background:#17171a;color:#eee}\
 main{background:#232327;box-shadow:none}input{background:#17171a;color:#eee;border-color:#44444b}\
 p.note{color:#a0a0a8}a{color:#8ab4ff}}";
 
-/// Shows the whole address, secret included, for copying into the app.
-/// Without scripts the page still says what to do; the address bar has the
-/// same link.
+/// Shows the whole address, secret included, for copying into the app, and
+/// points the button that opens the app at the same address under the app's
+/// scheme. Without scripts the page still says what to do; the address bar
+/// has the same link.
+///
+/// The address under the app's scheme carries the link, secret and all, as
+/// one percent-encoded parameter. The browser hands it to the operating
+/// system and to nobody else.
 ///
 /// The clipboard interface is missing on a page served without TLS and may
 /// refuse where it exists. The older command is tried then. If that fails
@@ -107,6 +127,8 @@ p.note{color:#a0a0a8}a{color:#8ab4ff}}";
 /// not claim otherwise.
 const SCRIPT: &str = "\
 var field=document.getElementById('link');field.value=location.href;\
+var open=document.getElementById('open');\
+open.href=open.dataset.scheme+'://join?link='+encodeURIComponent(location.href);open.hidden=false;\
 var button=document.getElementById('copy');button.hidden=false;\
 function done(){button.textContent=button.dataset.copied;}\
 function older(){field.select();if(document.execCommand('copy'))done();}\
@@ -149,7 +171,9 @@ fn render(text: &Text, app_url: &str) -> String {
         "<!doctype html><html lang=\"{lang}\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
          <meta name=\"robots\" content=\"noindex\"><title>{title}</title>\
-         <style>{STYLE}</style></head><body><main><h1>{heading}</h1><ol>{steps}</ol>\
+         <style>{STYLE}</style></head><body><main><h1>{heading}</h1>\
+         <a id=\"open\" class=\"open\" data-scheme=\"{APP_SCHEME}\" hidden>{open}</a>\
+         <p>{by_hand}</p><ol>{steps}</ol>\
          <label for=\"link\">{link_label}</label><input id=\"link\" readonly>\
          <button id=\"copy\" type=\"button\" data-copied=\"{copied}\" hidden>{copy}</button>\
          <p class=\"note\">{warning}</p>\
@@ -158,6 +182,8 @@ fn render(text: &Text, app_url: &str) -> String {
         lang = text.lang,
         title = escape(text.title),
         heading = escape(text.heading),
+        open = escape(text.open),
+        by_hand = escape(text.by_hand),
         link_label = escape(text.link_label),
         copied = escape(text.copied),
         copy = escape(text.copy),
@@ -207,6 +233,40 @@ mod tests {
         let page = render(&ENGLISH, "https://example.com/\"><script>alert(1)</script>");
         assert!(!page.contains("<script>alert"));
         assert!(page.contains("&quot;&gt;&lt;script&gt;"));
+    }
+
+    /// The app's own menu entry is what the page tells people to look for,
+    /// in both languages. These are the words in the app's two bundles.
+    #[test]
+    fn page_names_the_apps_menu_entry_as_the_app_does() {
+        assert!(render(&ENGLISH, "https://example.com").contains("Join shared folder…"));
+        assert!(render(&GERMAN, "https://example.com").contains("Geteiltem Ordner beitreten…"));
+    }
+
+    /// The button that opens the app is there, hidden until the script has
+    /// given it an address, and the script builds that address the way the
+    /// app reads it: the link as one encoded parameter under the app's
+    /// scheme.
+    #[test]
+    fn page_offers_the_link_under_the_apps_scheme() {
+        let page = render(&ENGLISH, "https://example.com");
+        assert!(page.contains(
+            "<a id=\"open\" class=\"open\" data-scheme=\"mindstream-notes\" hidden>Open in Mindstream Notes</a>"
+        ));
+        assert!(SCRIPT
+            .contains("open.dataset.scheme+'://join?link='+encodeURIComponent(location.href)"));
+        // Without scripts nothing claims to open anything.
+        assert!(!page.contains("href=\"mindstream-notes:"));
+    }
+
+    /// The app registers a scheme with the operating system and this page
+    /// builds addresses under it. Both take the name from one file.
+    #[test]
+    fn scheme_is_the_one_written_down_for_the_app() {
+        let written: serde_json::Value =
+            serde_json::from_str(include_str!("../../../protocol/links/invite-links.json"))
+                .expect("the invite link file is JSON");
+        assert_eq!(written["appScheme"], APP_SCHEME);
     }
 
     #[test]

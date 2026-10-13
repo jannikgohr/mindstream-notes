@@ -131,6 +131,11 @@ tauri-plugin-process = "2"
 tauri-plugin-global-shortcut = "2.3.2"
 tauri-plugin-window-state = "2.4.1"
 tauri-plugin-updater = "2.10.1"
+# An invite link opened outside the app. The operating system hands the
+# app an address under its own scheme, and a second launch passes that
+# address to the instance already running and ends. See `deep_links`.
+tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 # `log` facade backend for desktop. Routes log::info!/warn!/error! to
 # stdout (visible under `cargo tauri dev`) and to a rotating file in
 # the OS-specific app log dir, so sync warnings like the corrupt-

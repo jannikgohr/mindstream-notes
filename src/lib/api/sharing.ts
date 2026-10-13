@@ -488,6 +488,19 @@ function parseOutgoingInvitations(value: unknown): OutgoingInvitation[] {
   return value.map((item) => parseOutgoingInvitation(item));
 }
 
+/**
+ * The invite link that was opened from outside the app, once. Null when
+ * none waits. See `$lib/sharing/opened-links`.
+ */
+export function takePendingInviteLink(): Promise<string | null> {
+  return invokeOrFallback<string | null>(
+    TauriCommandName.TakePendingInviteLink,
+    undefined,
+    async () => null,
+    (value) => optionalString(value, 'pending invite link')
+  );
+}
+
 function parseCreatedShareLink(value: unknown): CreatedShareLink {
   const raw = assertRecord(value, 'created share link');
   return {

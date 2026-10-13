@@ -175,6 +175,7 @@ export enum TauriCommandName {
   SwitchProfile = 'switch_profile',
   SyncGlobalShortcuts = 'sync_global_shortcuts',
   SyncNow = 'sync_now',
+  TakePendingInviteLink = 'take_pending_invite_link',
   TrashCounts = 'trash_counts',
   TrashMany = 'trash_many',
   TrashNote = 'trash_note',

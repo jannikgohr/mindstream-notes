@@ -11,6 +11,7 @@ export enum TauriEventName {
   FullscreenNote = 'fullscreen-note',
   ImportProgress = 'import-progress',
   InvitationsChanged = 'invitations-changed',
+  InviteLinkOpened = 'invite-link-opened',
   NativeMenuCommand = 'native-menu-command',
   SessionEnded = 'session-ended',
   ShowApp = 'show-app',
@@ -77,6 +78,13 @@ export type TauriEvents = {
    * without a restart. Mirrors `app_events::AppEvent::InvitationsChanged`.
    */
   'invitations-changed': null;
+  /**
+   * Fired from Rust when the operating system handed the app an invite
+   * link: someone clicked one outside the app. It carries nothing. The
+   * window fetches the link with `takePendingInviteLink`, which hands it
+   * out once. Mirrors `app_events::AppEvent::InviteLinkOpened`.
+   */
+  'invite-link-opened': null;
   /**
    * Fired from Rust when the server has ended this device's session and
    * the device has signed itself out: it was signed out from another

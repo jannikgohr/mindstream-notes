@@ -250,7 +250,9 @@
   <ManageAccessDialog />
 {/if}
 {#if JoinSharedFolderDialog}
-  <JoinSharedFolderDialog />
+  {#key joinLinkDialog.opened}
+    <JoinSharedFolderDialog />
+  {/key}
 {/if}
 {#if ToastHost}
   <ToastHost />
