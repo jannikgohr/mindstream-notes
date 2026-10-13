@@ -6,7 +6,89 @@
 
 use super::*;
 
+use etebase::PrefetchOption;
+
 // ---------- Push ----------
+
+/// How many items one request names when their content is not asked for.
+/// Each comes back as its revision alone, a few hundred bytes.
+const EXISTING_BATCH: usize = 500;
+
+/// What a push needs of the items it is about to change.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Existing {
+    /// The revision alone. Enough to put new content on an item or to
+    /// delete it, and nothing of the old content is downloaded.
+    Revision,
+    /// The content too. A note's holds the key of its live sessions, which
+    /// the next revision has to carry over.
+    Content,
+}
+
+/// The items the server has under these uids, keyed by uid.
+///
+/// A push that changes an item builds on the item as the server has it.
+/// Getting that used to be a request per item, each one downloading the
+/// content the push was about to replace. This names a batch at a time.
+///
+/// An item the server does not have is left out. The caller decides what
+/// that means.
+fn fetch_existing(
+    im: &ItemManager,
+    uids: &[&str],
+    need: Existing,
+) -> AppResult<HashMap<String, Item>> {
+    let mut found = HashMap::with_capacity(uids.len());
+    let without_content = PrefetchOption::Medium;
+    let batch = match need {
+        Existing::Revision => EXISTING_BATCH,
+        Existing::Content => ItemKind::Note.batch(),
+    };
+    for named in uids.chunks(batch) {
+        let mut wanted: Vec<String> = named.iter().map(|uid| uid.to_string()).collect();
+        // With content, the server gives it to as many items as fit one
+        // answer, from the first. The rest are asked for again, as a pull
+        // does it, see `Arrived`.
+        while !wanted.is_empty() {
+            let options = match need {
+                Existing::Revision => Some(FetchOptions::new().prefetch(&without_content)),
+                Existing::Content => None,
+            };
+            let fetched = im
+                .fetch_multi(wanted.iter().map(String::as_str), options.as_ref())
+                .map_err(|e| AppError::InvalidArg(format!("fetch items to push: {e}")))?;
+            let mut again = Vec::new();
+            for (place, item) in fetched.data().iter().enumerate() {
+                let item = match need {
+                    Existing::Revision => item.clone(),
+                    Existing::Content => match Arrived::at(place, held_back(item)) {
+                        Arrived::Whole => item.clone(),
+                        Arrived::TooLarge => whole(im, item)?,
+                        Arrived::Later => {
+                            again.push(item.uid().to_string());
+                            continue;
+                        }
+                    },
+                };
+                found.insert(item.uid().to_string(), item);
+            }
+            wanted = again;
+        }
+    }
+    Ok(found)
+}
+
+/// The uids of the rows that are on the server already.
+fn uids_on_server<'a>(uids: impl Iterator<Item = &'a Option<String>>) -> Vec<&'a str> {
+    uids.filter_map(|uid| uid.as_deref()).collect()
+}
+
+/// Take the item a row is on the server as out of what was fetched.
+fn take_existing(existing: &mut HashMap<String, Item>, what: &str, uid: &str) -> AppResult<Item> {
+    existing.remove(uid).ok_or_else(|| {
+        AppError::InvalidArg(format!("fetch {what} {uid}: the server does not have it"))
+    })
+}
 
 pub(super) fn push_folders(
     db: &Db,
@@ -18,6 +100,12 @@ pub(super) fn push_folders(
     if dirty.is_empty() {
         return drain_tombstones(db, im, "folder", scope);
     }
+
+    let mut existing = fetch_existing(
+        im,
+        &uids_on_server(dirty.iter().map(|row| &row.etebase_uid)),
+        Existing::Revision,
+    )?;
 
     // Build (Item, payload, local_id) tuples for each dirty row.
     let mut prepared: Vec<(Item, String)> = Vec::with_capacity(dirty.len());
@@ -38,9 +126,7 @@ pub(super) fn push_folders(
             .set_name(Some(row.name.clone()))
             .set_mtime(Some(now_unix_ms()));
         let item = if let Some(uid) = &row.etebase_uid {
-            let mut existing = im
-                .fetch(uid, None)
-                .map_err(|e| AppError::InvalidArg(format!("fetch folder {uid}: {e}")))?;
+            let mut existing = take_existing(&mut existing, "folder", uid)?;
             existing
                 .set_meta(&meta)
                 .map_err(|e| AppError::InvalidArg(format!("set_meta folder: {e}")))?;
@@ -97,19 +183,22 @@ pub(super) fn push_notes(
         return drain_tombstones(db, im, "note", scope);
     }
 
+    // For existing items we fetch first so we can extract the live
+    // crypto_key off the server-side payload and re-use it in the new one.
+    // Rotating the key on every push would break peers' in-progress live
+    // sessions. So these come with their content, a batch per request.
+    // For first-time pushes we mint a fresh key.
+    let mut existing = fetch_existing(
+        im,
+        &uids_on_server(dirty.iter().map(|row| &row.etebase_uid)),
+        Existing::Content,
+    )?;
+
     let mut prepared: Vec<(Item, String)> = Vec::with_capacity(dirty.len());
     for row in &dirty {
-        // For existing items we fetch first so we can extract the live
-        // crypto_key off the server-side payload and re-use it in the
-        // new one. Rotating the key on every push would break peers'
-        // in-progress live sessions. We'd need the fetch anyway to
-        // call set_meta/set_content, so there's no extra round-trip.
-        // For first-time pushes we mint a fresh key.
         let (existing_item, key_for_payload): (Option<Item>, Vec<u8>) = match &row.etebase_uid {
             Some(uid) => {
-                let existing = im
-                    .fetch(uid, None)
-                    .map_err(|e| AppError::InvalidArg(format!("fetch note {uid}: {e}")))?;
+                let existing = take_existing(&mut existing, "note", uid)?;
                 let extracted = if !existing.is_deleted() && !existing.is_missing_content() {
                     existing
                         .content()
@@ -214,6 +303,14 @@ pub(super) fn push_assets(
         return drain_tombstones(db, im, "asset", scope);
     }
 
+    // The revision alone: an attachment's old bytes are of no use to the
+    // push that replaces them.
+    let mut existing = fetch_existing(
+        im,
+        &uids_on_server(dirty.iter().map(|row| &row.etebase_uid)),
+        Existing::Revision,
+    )?;
+
     let mut prepared: Vec<(Item, String)> = Vec::with_capacity(dirty.len());
     for row in &dirty {
         let payload = AssetPayload {
@@ -236,9 +333,7 @@ pub(super) fn push_assets(
             .set_name(Some(row.id.clone()))
             .set_mtime(Some(now_unix_ms()));
         let item = if let Some(uid) = &row.etebase_uid {
-            let mut existing = im
-                .fetch(uid, None)
-                .map_err(|e| AppError::InvalidArg(format!("fetch asset {uid}: {e}")))?;
+            let mut existing = take_existing(&mut existing, "asset", uid)?;
             existing
                 .set_meta(&meta)
                 .map_err(|e| AppError::InvalidArg(format!("set_meta asset: {e}")))?;
@@ -293,6 +388,12 @@ pub(super) fn push_signatures(db: &Db, im: &ItemManager, report: &mut SyncReport
         return drain_tombstones(db, im, "signature", None);
     }
 
+    let mut existing = fetch_existing(
+        im,
+        &uids_on_server(dirty.iter().map(|row| &row.etebase_uid)),
+        Existing::Revision,
+    )?;
+
     let mut prepared: Vec<(Item, String)> = Vec::with_capacity(dirty.len());
     for row in &dirty {
         let payload = SignaturePayload {
@@ -309,9 +410,7 @@ pub(super) fn push_signatures(db: &Db, im: &ItemManager, report: &mut SyncReport
             .set_name(Some(row.id.clone()))
             .set_mtime(Some(now_unix_ms()));
         let item = if let Some(uid) = &row.etebase_uid {
-            let mut existing = im
-                .fetch(uid, None)
-                .map_err(|e| AppError::InvalidArg(format!("fetch signature {uid}: {e}")))?;
+            let mut existing = take_existing(&mut existing, "signature", uid)?;
             existing
                 .set_meta(&meta)
                 .map_err(|e| AppError::InvalidArg(format!("set_meta signature: {e}")))?;
@@ -480,17 +579,21 @@ pub(super) fn drain_tombstones(
         return Ok(());
     }
 
+    // Deleting an item takes its revision and none of its content.
+    let named: Vec<&str> = uids.iter().map(String::as_str).collect();
+    let mut existing = fetch_existing(im, &named, Existing::Revision)?;
     let mut items: Vec<Item> = Vec::with_capacity(uids.len());
     for uid in &uids {
-        match im.fetch(uid, None) {
-            Ok(mut item) => {
+        match existing.remove(uid) {
+            Some(mut item) => {
                 if !item.is_deleted() {
                     item.delete()
                         .map_err(|e| AppError::InvalidArg(format!("mark deleted {uid}: {e}")))?;
                 }
                 items.push(item);
             }
-            Err(e) => log::warn!("[sync] tombstone fetch {uid} failed: {e}"),
+            // Nothing there to delete. The queue entry goes all the same.
+            None => log::warn!("[sync] tombstone {uid}: the server does not have the item"),
         }
     }
 

@@ -325,12 +325,12 @@ impl Arrived {
 
 /// Whether the server sent an item as the uids of its chunks, having no
 /// room for the content. A deleted item has none to send.
-fn held_back(item: &Item) -> bool {
+pub(super) fn held_back(item: &Item) -> bool {
     !item.is_deleted() && item.is_missing_content()
 }
 
 /// The item with its content, fetched chunk by chunk.
-fn whole(im: &ItemManager, item: &Item) -> AppResult<Item> {
+pub(super) fn whole(im: &ItemManager, item: &Item) -> AppResult<Item> {
     let mut whole = item.clone();
     im.download_content(&mut whole)
         .map_err(|e| AppError::InvalidArg(format!("download item {}: {e}", item.uid())))?;

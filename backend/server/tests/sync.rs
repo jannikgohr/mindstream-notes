@@ -4,13 +4,13 @@
 
 mod common;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::iter;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use common::{named, new_collection, share, signup, COLLECTION_TYPE};
-use etebase::{CollectionAccessLevel, FetchOptions, PrefetchOption};
+use etebase::{CollectionAccessLevel, FetchOptions, Item, PrefetchOption};
 
 /// Run one query against the test database and return its single value.
 fn query_i64(sql: &'static str, collection_uid: &str) -> i64 {
@@ -197,6 +197,97 @@ fn idle_check_names_every_collection_a_device_has_to_visit() {
     };
     assert!(uids.contains(plain.uid()));
     assert!(!uids.contains(other.uid()));
+}
+
+/// A push asks for the items it is about to change by name, many at a time
+/// and without their content, and builds the next revision on what comes
+/// back. So an item that came without content has to take new content, and
+/// a deletion, like one that came whole.
+#[test]
+fn item_fetched_without_content_takes_new_content_and_a_deletion() {
+    let account = signup("solo");
+    let collection = new_collection(&account, "space");
+    let items = account
+        .collection_manager()
+        .unwrap()
+        .item_manager(&collection)
+        .unwrap();
+    let kept = items.create(&named("kept"), b"old content").unwrap();
+    let doomed = items.create(&named("doomed"), b"more old content").unwrap();
+    let untouched = items.create(&named("untouched"), b"left alone").unwrap();
+    items
+        .batch([&kept, &doomed, &untouched].into_iter(), None)
+        .unwrap();
+
+    // Two of the three by name, and one name the server has nothing under.
+    let unknown = etebase::utils::to_base64(&etebase::utils::randombytes(32)).unwrap();
+    let without_content = PrefetchOption::Medium;
+    let options = FetchOptions::new().prefetch(&without_content);
+    let fetched = items
+        .fetch_multi(
+            [kept.uid(), doomed.uid(), unknown.as_str()].into_iter(),
+            Some(&options),
+        )
+        .unwrap();
+    // The unknown one is left out. It is not an error.
+    let mut by_uid: HashMap<String, Item> = fetched
+        .data()
+        .iter()
+        .map(|item| (item.uid().to_owned(), item.clone()))
+        .collect();
+    assert_eq!(by_uid.len(), 2);
+    for item in by_uid.values() {
+        assert!(
+            item.is_missing_content(),
+            "{} came with content",
+            item.uid()
+        );
+        // What it is called is in the revision, so it is there all the same.
+        assert!(item.meta().unwrap().name().is_some());
+    }
+
+    let mut edited = by_uid.remove(kept.uid()).unwrap();
+    edited.set_meta(&named("kept, renamed")).unwrap();
+    edited.set_content(b"new content").unwrap();
+    let mut deleted = by_uid.remove(doomed.uid()).unwrap();
+    deleted.delete().unwrap();
+    items
+        .transaction([&edited, &deleted].into_iter(), None)
+        .unwrap();
+
+    let now = items.fetch(kept.uid(), None).unwrap();
+    assert_eq!(now.content().unwrap(), b"new content");
+    assert_eq!(now.meta().unwrap().name(), Some("kept, renamed"));
+    assert!(items.fetch(doomed.uid(), None).unwrap().is_deleted());
+    assert_eq!(
+        items
+            .fetch(untouched.uid(), None)
+            .unwrap()
+            .content()
+            .unwrap(),
+        b"left alone"
+    );
+
+    // Built on a revision that is no longer the latest, a change is still
+    // refused, content or no content: that is what keeps two devices from
+    // overwriting each other.
+    let mut stale = fetched
+        .data()
+        .iter()
+        .find(|item| item.uid() == kept.uid())
+        .unwrap()
+        .clone();
+    stale
+        .set_content(b"from the device that fell behind")
+        .unwrap();
+    assert!(matches!(
+        items.transaction(std::iter::once(&stale), None),
+        Err(etebase::error::Error::Conflict(_))
+    ));
+    assert_eq!(
+        items.fetch(kept.uid(), None).unwrap().content().unwrap(),
+        b"new content"
+    );
 }
 
 /// Writers in several collections push while a reader follows with a cursor,

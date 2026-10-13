@@ -274,21 +274,43 @@ export class SpaceDevice {
   }
 
   /**
-   * `push_notes`: every dirty row goes into one transaction, and each row
-   * that already exists on the server is fetched first, one request per
-   * row, to carry its per-note key over.
+   * `push_notes`: every dirty row goes into one transaction. The rows that
+   * already exist on the server are fetched first, a batch per request and
+   * with their content, to carry each note's key over. `fetch_existing`
+   * asks again for what one answer had no room for.
    */
   async pushNotes(collection, { newNotes = [], editedNotes = [] }) {
     const im = this.cm.getItemManager(collection);
     const items = [];
-    for (const note of editedNotes) {
-      const existing = await im.fetch(note.uid);
-      const { crypto_key: cryptoKey } = decodePayload(
-        await existing.getContent()
-      );
-      existing.setMeta(note.meta());
-      await existing.setContent(note.payload(cryptoKey));
-      items.push(existing);
+    const noteBatch = KINDS.find((kind) => kind.type === ITEM_TYPE_NOTE).batch;
+    for (let at = 0; at < editedNotes.length; at += noteBatch) {
+      const batch = editedNotes.slice(at, at + noteBatch);
+      const existing = new Map();
+      let asking = batch.map((note) => note.uid);
+      while (asking.length > 0) {
+        const fetched = await im.fetchMulti(asking);
+        const again = [];
+        for (const [place, item] of fetched.data.entries()) {
+          if (item.isMissingContent && !item.isDeleted) {
+            if (place > 0) {
+              again.push(item.uid);
+              continue;
+            }
+            await im.downloadContent(item);
+          }
+          existing.set(item.uid, item);
+        }
+        asking = again;
+      }
+      for (const note of batch) {
+        const item = existing.get(note.uid);
+        const { crypto_key: cryptoKey } = decodePayload(
+          await item.getContent()
+        );
+        item.setMeta(note.meta());
+        await item.setContent(note.payload(cryptoKey));
+        items.push(item);
+      }
     }
     for (const note of newNotes) {
       items.push(await im.create(note.meta(), note.payload(randomBytes(32))));
