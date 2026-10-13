@@ -74,10 +74,28 @@ describe('signing up and recovering', () => {
         username: 'ann',
         email: 'ann@example.test',
         password: 'correct horse',
-        signup_code: 'ABCDE-FGHIJ'
+        signup_code: 'ABCDE-FGHIJ',
+        invite_link: null
       }
     });
     expect(created).toEqual({ session: SESSION, recoveryKey: 'ABCD-EFGH' });
+  });
+
+  it('sends an invite link in place of a code', async () => {
+    invoke.mockResolvedValueOnce({ session: SESSION, recovery_key: 'K' });
+    const link = `https://notes.example.test/join/link_1#${'A'.repeat(43)}`;
+
+    await accountSignup({
+      ...SELF_HOSTED,
+      username: 'ann',
+      email: 'ann@example.test',
+      password: 'correct horse',
+      inviteLink: ` ${link} `
+    });
+
+    expect(invoke.mock.calls[0][1]).toMatchObject({
+      args: { signup_code: null, invite_link: link }
+    });
   });
 
   it('sends no signup code when the field was left empty', async () => {

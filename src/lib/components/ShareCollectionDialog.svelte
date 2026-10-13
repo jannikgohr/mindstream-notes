@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Settings2, Share2, X } from '@lucide/svelte';
+  import { Link, Settings2, Share2, X } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import {
@@ -213,20 +213,23 @@
         </div>
       </form>
 
-      {#if canManageSharing}
-        <div class="border-t border-border px-4 py-3">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            class="gap-1.5"
-            onclick={() => setShareDialogView('access')}
-          >
+      <div class="border-t border-border px-4 py-3">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          class="gap-1.5"
+          onclick={() => setShareDialogView('access')}
+        >
+          {#if canManageSharing}
             <Settings2 class="size-3.5" />
             {tUi('sharing.dialog.toManage')}
-          </Button>
-        </div>
-      {/if}
+          {:else}
+            <Link class="size-3.5" />
+            {tUi('sharing.dialog.toLinks')}
+          {/if}
+        </Button>
+      </div>
     </div>
   </div>
 {/if}

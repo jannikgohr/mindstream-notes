@@ -239,6 +239,82 @@ describe('creating an account', () => {
     expect(button('Create account').disabled).toBe(false);
   });
 
+  describe('with an invite link', () => {
+    const SECRET = 'A'.repeat(43);
+    const HERE = `https://notes.example.test/join/link_1#${SECRET}`;
+    const ELSEWHERE = `https://other.example.test/join/link_1#${SECRET}`;
+
+    async function fillIn(link: string) {
+      accountServerInfo.mockResolvedValue({
+        signup: 'invite',
+        protocol: 1,
+        version: '0.1.0'
+      });
+      await openSignup();
+      await type('Username', 'ann');
+      await type('Email', 'ann@example.test');
+      await type('Password', 'correct horse');
+      await type('Repeat password', 'correct horse');
+      await screen.findByLabelText('Signup code');
+      await type('Signup code', link);
+    }
+
+    it('signs up with the link and sends no code', async () => {
+      accountSignup.mockResolvedValueOnce({
+        session: SESSION,
+        recoveryKey: 'ABCD-EFGH-IJKL'
+      });
+      await fillIn(` ${HERE} `);
+      expect(
+        screen.getByText(/Your account will join the folder/)
+      ).toBeTruthy();
+      await fireEvent.click(button('Create account'));
+
+      await waitFor(() => expect(accountSignup).toHaveBeenCalledOnce());
+      const sent = accountSignup.mock.calls[0][0];
+      expect(sent.inviteLink).toBe(HERE);
+      expect(sent.signupCode).toBeUndefined();
+    });
+
+    it('holds back a link that is for another server', async () => {
+      await fillIn(ELSEWHERE);
+
+      expect(
+        screen.getByText(
+          'This link is for other.example.test, not for the server set above.'
+        )
+      ).toBeTruthy();
+      expect(button('Create account').disabled).toBe(true);
+      expect(accountSignup).not.toHaveBeenCalled();
+    });
+
+    it("can switch to the link's server", async () => {
+      await fillIn(ELSEWHERE);
+      await fireEvent.click(button('Use other.example.test'));
+
+      await waitFor(() =>
+        expect(settings['account.serverUrl']).toBe(
+          'https://other.example.test/'
+        )
+      );
+      expect(settings['account.serverType']).toBe('self-hosted');
+    });
+
+    it('takes anything else in the field for a code', async () => {
+      accountSignup.mockResolvedValueOnce({
+        session: SESSION,
+        recoveryKey: 'ABCD-EFGH-IJKL'
+      });
+      await fillIn('ABCDE-FGHIJ');
+      await fireEvent.click(button('Create account'));
+
+      await waitFor(() => expect(accountSignup).toHaveBeenCalledOnce());
+      const sent = accountSignup.mock.calls[0][0];
+      expect(sent.signupCode).toBe('ABCDE-FGHIJ');
+      expect(sent.inviteLink).toBeUndefined();
+    });
+  });
+
   it('holds back a short or mismatched password', async () => {
     await openSignup();
     await type('Username', 'ann');

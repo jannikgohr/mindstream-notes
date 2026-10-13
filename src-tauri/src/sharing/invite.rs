@@ -67,6 +67,20 @@ pub async fn invite_collection(
             owner_username.as_deref(),
         )?;
 
+        // Recorded before the invitation is sent. If sending fails, the
+        // folder is shared with nobody yet and the next try finds its
+        // collection. Recording afterwards would leave a collection nothing
+        // points to, and make another on every try.
+        db.with_conn(|conn| {
+            move_into_space(
+                conn,
+                &collection_id,
+                collection.uid(),
+                created,
+                owner_username.as_deref(),
+            )
+        })?;
+
         if recipient_already_on_space(&invitations, &cm, &collection, recipient)? {
             return Err(AppError::InvalidArg(format!(
                 "{recipient} has already been invited to this folder"
@@ -81,24 +95,6 @@ pub async fn invite_collection(
                 access_level.into(),
             )
             .map_err(|e| AppError::InvalidArg(format!("invite {recipient}: {e}")))?;
-
-        // Move the folder into its collection: stamp every folder, note and
-        // attachment under it with the scope and detach it from where it
-        // was, so the next sync creates it there. A folder that was shared
-        // already is in its collection, and what was added to it since
-        // inherited the scope as it was added, so there is nothing to move
-        // and moving it anyway would delete and recreate every item for
-        // every member.
-        let scope = collection.uid().to_string();
-        db.with_conn(|conn| {
-            if created || subtree_outside_scope(conn, &collection_id, &scope)? {
-                rehome_folder_subtree(conn, &collection_id, Some(&scope))?;
-            }
-            if created {
-                record_outgoing_share(conn, &collection_id, &scope, owner_username.as_deref())?;
-            }
-            Ok::<(), AppError>(())
-        })?;
 
         db.with_conn(|conn| local_share_state(conn, &collection_id))
     })

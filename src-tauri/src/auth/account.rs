@@ -10,7 +10,7 @@
 use std::time::Duration;
 
 use etebase::error::Error as ServerError;
-use etebase::{refusal as server, Account, RecoveryKey, SignupWith, User};
+use etebase::{refusal as server, Account, InviteLink, RecoveryKey, SignupWith, User};
 use qrcode::render::svg;
 use qrcode::QrCode;
 use reqwest::Url;
@@ -38,7 +38,7 @@ const QR_SIZE: u32 = 220;
 
 /// Turn the client library's error into what the UI gets. `doing` names the
 /// attempt for the log and for a message nobody translated.
-pub(super) fn refusal(doing: &str, err: ServerError) -> CommandError {
+pub(crate) fn refusal(doing: &str, err: ServerError) -> CommandError {
     match err {
         ServerError::Refused { code, detail, .. } => {
             CommandError::refused(code, format!("{doing}: {detail}"))
@@ -102,12 +102,35 @@ pub struct SignupArgs {
     /// A code from the server's administrator, where signup is not open.
     #[serde(default)]
     pub signup_code: Option<String>,
+    /// Or an invite link whose maker let it create an account. The account
+    /// is made on the link's server, whatever server was named besides, and
+    /// then joins what the link leads to.
+    #[serde(default)]
+    pub invite_link: Option<String>,
+}
+
+/// The text is not an invite link.
+const REASON_NOT_A_LINK: &str = "link_invalid";
+
+/// The invite link a signup came with, if it came with one.
+fn signup_link(text: Option<&str>) -> CommandResult<Option<InviteLink>> {
+    typed(text)
+        .map(|text| {
+            InviteLink::parse(text)
+                .map_err(|_| CommandError::refused(REASON_NOT_A_LINK, "that is not an invite link"))
+        })
+        .transpose()
 }
 
 /// Create an account and sign this device in to it.
 #[tauri::command]
 pub async fn account_signup(args: SignupArgs, app: AppHandle) -> CommandResult<NewAccount> {
-    let server_url = resolve_server_url(&args.server_type, args.server_url.as_deref())?;
+    let link = signup_link(args.invite_link.as_deref())?;
+    // A link is good on one server, the one in its address.
+    let server_url = match &link {
+        Some(link) => link.server_url().to_string(),
+        None => resolve_server_url(&args.server_type, args.server_url.as_deref())?,
+    };
     let path = session_path(&app)?;
     let keyring_account = active_keyring_account(&app);
 
@@ -118,8 +141,19 @@ pub async fn account_signup(args: SignupArgs, app: AppHandle) -> CommandResult<N
         if let Some(code) = typed(args.signup_code.as_deref()) {
             with = with.signup_code(code);
         }
+        if let Some(link) = &link {
+            with = with.invite_link(link);
+        }
         let (account, recovery_key) = Account::signup_with(client, &user, &args.password, &with)
             .map_err(|e| refusal("sign up", e))?;
+        // Having an account is not yet being in the folder the link leads
+        // to. Joining is its own step, and a failure there must not undo a
+        // signup that worked: the link can be pasted again.
+        if let Some(link) = &link {
+            if let Err(e) = account.claim_invite_link(link) {
+                log::warn!("[account] signed up by an invite link but could not join by it: {e}");
+            }
+        }
         let session = store_session(
             &path,
             &keyring_account,

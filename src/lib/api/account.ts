@@ -44,6 +44,11 @@ export interface SignupInput extends ServerTarget {
   password: string;
   /** From the server's administrator, where signup is not open. */
   signupCode?: string;
+  /**
+   * Or an invite link whose maker let it create an account. The account is
+   * made on the link's server and then joins what the link leads to.
+   */
+  inviteLink?: string;
 }
 
 export interface RecoverInput extends ServerTarget {
@@ -139,7 +144,8 @@ export async function accountSignup(input: SignupInput): Promise<NewAccount> {
         username: input.username,
         email: input.email,
         password: input.password,
-        signup_code: orNull(input.signupCode)
+        signup_code: orNull(input.signupCode),
+        invite_link: orNull(input.inviteLink)
       }
     })
   );

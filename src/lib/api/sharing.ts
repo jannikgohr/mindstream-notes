@@ -29,6 +29,54 @@ export interface OutgoingInvitation {
   access_level: CollectionShareAccessLevel;
 }
 
+/** What an invite link may give: a link never makes someone an admin. */
+export type ShareLinkAccessLevel = 'read_only' | 'read_write';
+
+export interface CreateShareLinkInput {
+  collection_id: string;
+  access_level: ShareLinkAccessLevel;
+  /** How many people the link lets in. The server's default is one. */
+  max_uses?: number;
+  /** How long it lasts. The server's default is a week. */
+  expires_in_days?: number;
+  /** Whether it may create an account for someone who has none. */
+  allow_signup?: boolean;
+}
+
+/** A link that was just made. `link` is the only copy of its secret. */
+export interface CreatedShareLink {
+  link: string;
+  uid: string;
+}
+
+/** A link as the people who manage a folder see it. */
+export interface ShareLink {
+  uid: string;
+  access_level: CollectionShareAccessLevel;
+  max_uses: number;
+  uses: number;
+  allows_signup: boolean;
+  /** Seconds since 1970. */
+  expires_at: number;
+  created_at: number;
+  sender_username: string;
+}
+
+/** What a link leads to, for someone deciding whether to join. */
+export interface ShareLinkPreview {
+  server_url: string;
+  collection_uid: string;
+  name: string | null;
+  sender_username: string;
+  access_level: CollectionShareAccessLevel;
+  /** The link can still create an account on its server. */
+  can_signup: boolean;
+  /** This device is signed in to the link's server, so it can join. */
+  signed_in: boolean;
+  /** The folder is on this device already. */
+  already_member: boolean;
+}
+
 export interface InviteCollectionInput {
   collection_id: string;
   username: string;
@@ -162,6 +210,86 @@ export function removeCollectionMember(input: {
   );
 }
 
+/**
+ * Make an invite link to a folder, sharing the folder first if it is not
+ * shared yet. The link comes back once and cannot be shown again.
+ */
+export function createShareLink(
+  input: CreateShareLinkInput
+): Promise<CreatedShareLink> {
+  assertRequiredString(input.collection_id, 'input.collection_id');
+  if (input.access_level !== 'read_only' && input.access_level !== 'read_write')
+    throw new Error('an invite link can let people view or edit');
+  return invokeOrFallback<CreatedShareLink>(
+    TauriCommandName.CreateShareLink,
+    { input },
+    async () => {
+      throw new Error(
+        'Collection sharing is only available in the Tauri desktop app.'
+      );
+    },
+    parseCreatedShareLink
+  );
+}
+
+/**
+ * The links into a folder that have not run out of time. One that is used
+ * up stays listed until then, so that its maker sees it was used.
+ */
+export function listShareLinks(collectionId: string): Promise<ShareLink[]> {
+  assertRequiredString(collectionId, 'collectionId');
+  return invokeOrFallback<ShareLink[]>(
+    TauriCommandName.ListShareLinks,
+    { collectionId },
+    async () => [],
+    parseShareLinks
+  );
+}
+
+/** Remove a link, so that it lets nobody else in. */
+export function revokeShareLink(uid: string): Promise<void> {
+  assertRequiredString(uid, 'uid');
+  return invokeOrFallback<void>(
+    TauriCommandName.RevokeShareLink,
+    { uid },
+    async () => undefined,
+    (value) => assertVoid(value, 'revoke_share_link response')
+  );
+}
+
+/** Look at what a pasted link leads to. Joins nothing. */
+export function openShareLink(link: string): Promise<ShareLinkPreview> {
+  assertRequiredString(link, 'link');
+  return invokeOrFallback<ShareLinkPreview>(
+    TauriCommandName.OpenShareLink,
+    { link },
+    async () => {
+      throw new Error(
+        'Collection sharing is only available in the Tauri desktop app.'
+      );
+    },
+    parseShareLinkPreview
+  );
+}
+
+/**
+ * Join the shared folder a link leads to. Nothing appears at once: the next
+ * sync pulls the folder in.
+ */
+export function claimShareLink(link: string): Promise<void> {
+  assertRequiredString(link, 'link');
+  return invokeOrFallback<void>(
+    TauriCommandName.ClaimShareLink,
+    { link },
+    async () => {
+      throw new Error(
+        'Collection sharing is only available in the Tauri desktop app.'
+      );
+    },
+    (value) => assertVoid(value, 'claim_share_link response')
+  );
+}
+
 export function inviteCollection(
   input: InviteCollectionInput
 ): Promise<CollectionShareState> {
@@ -272,6 +400,71 @@ function parseOutgoingInvitations(value: unknown): OutgoingInvitation[] {
     throw new Error('outgoing invitations must be an array');
   }
   return value.map((item) => parseOutgoingInvitation(item));
+}
+
+function parseCreatedShareLink(value: unknown): CreatedShareLink {
+  const raw = assertRecord(value, 'created share link');
+  return {
+    link: assertString(raw.link, 'created share link.link'),
+    uid: assertString(raw.uid, 'created share link.uid')
+  };
+}
+
+function assertCount(value: unknown, context: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`${context} must be a number`);
+  }
+  return value;
+}
+
+function parseShareLink(value: unknown): ShareLink {
+  const raw = assertRecord(value, 'share link');
+  return {
+    uid: assertString(raw.uid, 'share link.uid'),
+    access_level: parseAccessLevel(raw.access_level, 'share link.access_level'),
+    max_uses: assertCount(raw.max_uses, 'share link.max_uses'),
+    uses: assertCount(raw.uses, 'share link.uses'),
+    allows_signup: assertBoolean(raw.allows_signup, 'share link.allows_signup'),
+    expires_at: assertCount(raw.expires_at, 'share link.expires_at'),
+    created_at: assertCount(raw.created_at, 'share link.created_at'),
+    sender_username: assertString(
+      raw.sender_username,
+      'share link.sender_username'
+    )
+  };
+}
+
+function parseShareLinks(value: unknown): ShareLink[] {
+  if (!Array.isArray(value)) {
+    throw new Error('share links must be an array');
+  }
+  return value.map((item) => parseShareLink(item));
+}
+
+function parseShareLinkPreview(value: unknown): ShareLinkPreview {
+  const raw = assertRecord(value, 'share link preview');
+  return {
+    server_url: assertString(raw.server_url, 'share link preview.server_url'),
+    collection_uid: assertString(
+      raw.collection_uid,
+      'share link preview.collection_uid'
+    ),
+    name: optionalString(raw.name, 'share link preview.name'),
+    sender_username: assertString(
+      raw.sender_username,
+      'share link preview.sender_username'
+    ),
+    access_level: parseAccessLevel(
+      raw.access_level,
+      'share link preview.access_level'
+    ),
+    can_signup: assertBoolean(raw.can_signup, 'share link preview.can_signup'),
+    signed_in: assertBoolean(raw.signed_in, 'share link preview.signed_in'),
+    already_member: assertBoolean(
+      raw.already_member,
+      'share link preview.already_member'
+    )
+  };
 }
 
 function parseCollectionMember(value: unknown): CollectionMember {

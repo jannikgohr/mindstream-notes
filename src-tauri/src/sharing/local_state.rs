@@ -29,6 +29,32 @@ pub(super) fn record_outgoing_share(
     Ok(())
 }
 
+/// Move a folder into its shared collection on this device: stamp every
+/// folder, note and attachment under it with the scope and detach it from
+/// where it was, so the next sync creates it there. `created` says the
+/// collection was made just now, which is when the folder's root is marked
+/// as shared by this account.
+///
+/// A folder that was shared already is in its collection, and what was
+/// added to it since inherited the scope as it was added. There is nothing
+/// to move then, and moving it anyway would delete and recreate every item
+/// for every member.
+pub(super) fn move_into_space(
+    conn: &Connection,
+    collection_id: &str,
+    scope: &str,
+    created: bool,
+    owner: Option<&str>,
+) -> AppResult<()> {
+    if created || subtree_outside_scope(conn, collection_id, scope)? {
+        rehome_folder_subtree(conn, collection_id, Some(scope))?;
+    }
+    if created {
+        record_outgoing_share(conn, collection_id, scope, owner)?;
+    }
+    Ok(())
+}
+
 /// Whether anything under a folder, the folder included, is tagged with
 /// something other than `scope`. Rows added to a shared folder inherit its
 /// scope as they are added, so this is false for a folder that has been

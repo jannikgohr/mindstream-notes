@@ -44,6 +44,25 @@ describe('describeRefusal', () => {
     expect(describeRefusal(refused('unreachable'))).toMatch(/reach the server/);
   });
 
+  it('has a sentence for each way an invite link can fail', () => {
+    expect(describeRefusal(refused('link_used'))).toBe(
+      'This link has been used up.'
+    );
+    expect(describeRefusal(refused('link_expired'))).toBe(
+      'This link has expired.'
+    );
+    for (const reason of [
+      'link_invalid',
+      'link_other_server',
+      'already_member',
+      'too_many_links'
+    ]) {
+      expect(describeRefusal(refused(reason)), reason).not.toBe(
+        'in the words of the server'
+      );
+    }
+  });
+
   it('passes on the message for a reason it has no sentence for', () => {
     expect(
       describeRefusal(refused('bad_request', 'sign up: Malformed email.'))

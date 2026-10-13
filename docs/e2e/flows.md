@@ -473,6 +473,24 @@ one invitation now, so the state this flow guarded cannot be reached.
 
 ---
 
+### 4.11 Joining by an invite link (P1)
+
+- **Why e2e:** a link is made, opened and claimed in three requests against
+  the server by two accounts, and the folder then has to arrive by an
+  ordinary sync. The client library's tests cover the wire. Only two apps
+  show that a folder shared by nothing but a link ends up on the other side.
+- **Steps:** A creates a folder with a note, opens **Sharing ▸ Share folder…
+  ▸ Invite with a link**, picks "Can edit" and **Create link**, and syncs. B
+  opens **Join shared folder…** from the background menu of the Shared view,
+  pastes the link, **Continue**, then **Join**.
+- **Proves:** making a link shares a folder that was not shared; the link is
+  shown once, with its secret after the `#`; looking at it names the sender
+  and the folder and joins nothing; joining brings the folder and its note
+  to B under "Shared" with the link's rights; A sees B as a member and the
+  one-person link listed as used, and that link opens for nobody any more.
+- **Watch for:** the folder landing in B's Home; B joining with a link whose
+  preview could not be read; a used-up link that still lets someone in.
+
 ## 5. Spellchecking and text diagnostics
 
 The app checks spelling itself rather than leaving it to the webview, so the

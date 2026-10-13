@@ -774,3 +774,94 @@ fn scopes_to_purge_flags_scopes_absent_from_live_set() {
         vec!["a", "b", "c"]
     );
 }
+
+fn link_input(access_level: ShareAccessLevel) -> CreateShareLinkInput {
+    CreateShareLinkInput {
+        collection_id: "folder".into(),
+        access_level,
+        max_uses: None,
+        expires_in_days: None,
+        allow_signup: false,
+    }
+}
+
+/// Whoever holds a link is a stranger until they use it. A stranger is not
+/// handed the power to remove everyone else.
+#[test]
+fn invite_link_lets_people_view_or_edit_and_never_manage() {
+    assert!(link_options(&link_input(ShareAccessLevel::ReadOnly)).is_ok());
+    assert!(link_options(&link_input(ShareAccessLevel::ReadWrite)).is_ok());
+    let AppError::InvalidArg(message) =
+        link_options(&link_input(ShareAccessLevel::Admin)).unwrap_err()
+    else {
+        panic!("expected InvalidArg");
+    };
+    assert!(message.contains("not manage"), "{message}");
+}
+
+#[test]
+fn link_is_only_good_on_the_server_that_made_it() {
+    for (signed_in_to, link_server) in [
+        ("https://notes.example.com", "https://notes.example.com/"),
+        ("https://Notes.Example.com/", "https://notes.example.com"),
+        (
+            "https://notes.example.com:443/",
+            "https://notes.example.com/",
+        ),
+        ("http://localhost:3735", "http://localhost:3735/"),
+        ("https://example.com/notes", "https://example.com/notes/"),
+    ] {
+        assert!(
+            same_server(signed_in_to, link_server),
+            "{signed_in_to} / {link_server}"
+        );
+    }
+    for (signed_in_to, link_server) in [
+        ("https://notes.example.com/", "https://other.example.com/"),
+        ("https://notes.example.com/", "http://notes.example.com/"),
+        ("http://localhost:3735/", "http://localhost:3736/"),
+        ("https://example.com/notes/", "https://example.com/other/"),
+        ("https://example.com/", "https://example.com.evil.test/"),
+        ("not a url", "https://example.com/"),
+        ("", ""),
+    ] {
+        assert!(
+            !same_server(signed_in_to, link_server),
+            "{signed_in_to} / {link_server}"
+        );
+    }
+}
+
+#[test]
+fn moving_a_folder_into_its_collection_marks_the_root_once() {
+    let db = crate::db::open_memory_for_tests();
+    db.with_conn(|conn| {
+        insert_folder(conn, "root", None, None);
+        insert_note(conn, "n1", "root", None);
+
+        move_into_space(conn, "root", "col_shared", true, Some("alice"))?;
+        assert!(is_share_anchor(conn, "root")?);
+        assert_eq!(note_scope(conn, "n1")?.as_deref(), Some("col_shared"));
+
+        // Once the folder has synced, making a link or inviting someone
+        // else must leave its rows attached where they are.
+        conn.execute(
+            "UPDATE notes SET etebase_uid = 'uid_n1', dirty = 0 WHERE id = 'n1'",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE collections SET etebase_uid = 'uid_root', dirty = 0 WHERE id = 'root'",
+            [],
+        )?;
+        move_into_space(conn, "root", "col_shared", false, Some("alice"))?;
+        let uid: Option<String> =
+            conn.query_row("SELECT etebase_uid FROM notes WHERE id = 'n1'", [], |r| {
+                r.get(0)
+            })?;
+        assert_eq!(uid.as_deref(), Some("uid_n1"));
+        let queued: i64 = conn.query_row("SELECT COUNT(*) FROM tombstones", [], |r| r.get(0))?;
+        assert_eq!(queued, 0);
+        Ok::<(), AppError>(())
+    })
+    .unwrap();
+}

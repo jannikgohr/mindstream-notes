@@ -23,6 +23,11 @@
    * out is a signature made with a key derived from it. And we never
    * persist it.
    */
+  import {
+    parseInviteLink,
+    sameServer,
+    serverName
+  } from '$lib/sharing/invite-link';
   import { Button } from '$lib/components/ui/button';
   import { CheckCircle2, LogOut, Loader2, RefreshCw } from '@lucide/svelte';
   import {
@@ -142,9 +147,23 @@
 
   /** A server that takes anyone needs no code. One this app could not ask
    *  gets the field anyway, left optional. */
-  const signupCodeShown = $derived(serverInfo?.signup !== 'open');
+  const signupCodeShown = $derived(
+    serverInfo?.signup !== 'open' || signupCode.trim().length > 0
+  );
   const signupCodeRequired = $derived(
     serverInfo !== null && serverInfo.signup !== 'open'
+  );
+  /** What is in the code field, if it is an invite link and not a code. A
+   *  link is good on one server, so it only counts for the one above. */
+  const signupLink = $derived(
+    mode === 'signup' ? parseInviteLink(signupCode) : null
+  );
+  const signupLinkElsewhere = $derived(
+    signupLink !== null &&
+      !sameServer(
+        signupLink.serverUrl,
+        serverType === 'managed' ? MANAGED_SERVER_URL : serverUrlValidation.url
+      )
   );
 
   const canSubmit = $derived.by(() => {
@@ -156,6 +175,7 @@
         return (
           newPasswordReady &&
           email.trim().length > 0 &&
+          !signupLinkElsewhere &&
           (!signupCodeRequired || signupCode.trim().length > 0)
         );
       case 'recover':
@@ -232,6 +252,21 @@
     }
   }
 
+  /** Point the form at the server an invite link belongs to. */
+  async function useLinkServer() {
+    if (!signupLink) return;
+    try {
+      if (sameServer(signupLink.serverUrl, MANAGED_SERVER_URL)) {
+        await setSettingValue('account.serverType', 'managed');
+      } else {
+        await setSettingValue('account.serverType', 'self-hosted');
+        await setSettingValue('account.serverUrl', signupLink.serverUrl);
+      }
+    } catch (err) {
+      console.warn('[auth] use the server of an invite link', err);
+    }
+  }
+
   /** The server asked for a code: show the field and say so, as a prompt
    *  and not as a failure. */
   function askForCode(err: unknown): boolean {
@@ -270,7 +305,9 @@
       username: username.trim(),
       email: email.trim(),
       password,
-      signupCode
+      // The field takes either. A link also joins what it leads to.
+      signupCode: signupLink === null ? signupCode : undefined,
+      inviteLink: signupLink === null ? undefined : signupCode.trim()
     });
     await keepNormalizedUrl();
     pendingReveal.current = created;
@@ -637,10 +674,37 @@
               disabled={busy}
               class="{FIELD_CLASS} font-mono"
             />
-            <span class="text-xs text-muted-foreground">
-              {tUi('account.signupCode.hint')}
-            </span>
+            {#if !signupLinkElsewhere}
+              <span class="text-xs text-muted-foreground">
+                {tUi(
+                  signupLink
+                    ? 'account.signupLink.hint'
+                    : 'account.signupCode.hint'
+                )}
+              </span>
+            {/if}
           </label>
+          <!-- Outside the label, so the button is not part of the field's
+               name and a click on it does not land in the field. -->
+          {#if signupLinkElsewhere && signupLink}
+            <div class="grid gap-1" data-testid="signup-link-elsewhere">
+              <p class="text-xs text-destructive">
+                {tUiFormat('account.signupLink.elsewhere', {
+                  server: serverName(signupLink.serverUrl)
+                })}
+              </p>
+              <button
+                type="button"
+                class="justify-self-start text-xs text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                disabled={busy}
+                onclick={() => void useLinkServer()}
+              >
+                {tUiFormat('account.signupLink.useServer', {
+                  server: serverName(signupLink.serverUrl)
+                })}
+              </button>
+            </div>
+          {/if}
         {/if}
 
         {#if codeNeeded && mode !== 'signup'}

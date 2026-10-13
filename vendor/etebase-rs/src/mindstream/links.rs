@@ -474,7 +474,8 @@ pub(crate) fn new_secret() -> Result<(LinkSecret, [u8; PUBLIC_KEY_SIZE])> {
     Ok((secret, pubkey))
 }
 
-/// The links into a collection that can still let someone in.
+/// The links into a collection that have not expired. One that is used up
+/// stays listed until it expires, so that its maker can see it was used.
 pub(crate) fn list(client: &Client, collection_uid: &str) -> Result<Vec<LinkInfo>> {
     #[derive(Deserialize)]
     struct Links {

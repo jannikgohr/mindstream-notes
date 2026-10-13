@@ -549,6 +549,11 @@ pub fn run() {
             sharing::remove_collection_member,
             sharing::get_collection_share_state,
             sharing::invite_collection,
+            sharing::create_share_link,
+            sharing::list_share_links,
+            sharing::revoke_share_link,
+            sharing::open_share_link,
+            sharing::claim_share_link,
             #[cfg(feature = "e2e-data-dir")]
             sharing::e2e_create_standalone_collection_invite,
             // One-shot recovery for items the pre-fix etebase encoder

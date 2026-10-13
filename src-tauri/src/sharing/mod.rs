@@ -9,7 +9,8 @@
 //! and the material live sessions mix into their keys.
 //!
 //! So sharing is one invitation and one membership, and there is no state
-//! in which someone holds part of a shared folder.
+//! in which someone holds part of a shared folder. An invite link is the
+//! same invitation, addressed to whoever holds the link (see `links`).
 //!
 //! Locally a row belongs to a shared folder when its `share_scope_id` is
 //! that collection's uid. Sharing a folder re-homes its subtree: every
@@ -43,6 +44,7 @@ pub const SHARE_COLLAB_SALT_BYTES: usize = 32;
 
 mod incoming;
 mod invite;
+mod links;
 mod local_state;
 mod members;
 mod permissions;
@@ -52,6 +54,7 @@ mod types;
 
 pub use incoming::*;
 pub use invite::*;
+pub use links::*;
 pub(crate) use local_state::*;
 pub use members::*;
 pub(crate) use permissions::*;

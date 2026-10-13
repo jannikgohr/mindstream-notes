@@ -596,7 +596,8 @@ impl Account {
         crate::mindstream::links::create(&self.client, secret, &sealed, options)
     }
 
-    /// The invite links into a collection that can still let someone in
+    /// The invite links into a collection that have not expired, the ones that
+    /// are used up among them
     pub fn invite_links(&self, collection: &Collection) -> Result<Vec<crate::mindstream::LinkInfo>> {
         crate::mindstream::links::list(&self.client, collection.uid())
     }

@@ -10,11 +10,12 @@
  * invitation. There is no state in which B holds part of a share, which is
  * why the old flow 4.5 (a share that arrived in part) has no successor here.
  *
- * Status: flows 4.1–4.4, 4.6, the core 4.7 subtree convergence path, and
- * 4.7b move-out re-home are IMPLEMENTED and validated against the live
- * two-app + backend session. The owner-second-device 4.8–4.9 re-home cases
- * live in sharing-multi-device.e2e.ts because they require A1 + A2 +
- * recipient B. Plain-vault 4.10 lives in sync-history.e2e.ts.
+ * Status: flows 4.1–4.4, 4.6, the core 4.7 subtree convergence path,
+ * 4.7b move-out re-home and 4.11 joining by an invite link are IMPLEMENTED
+ * and validated against the live two-app + backend session. The
+ * owner-second-device 4.8–4.9 re-home cases live in
+ * sharing-multi-device.e2e.ts because they require A1 + A2 + recipient B.
+ * Plain-vault 4.10 lives in sync-history.e2e.ts.
  *
  * Accessible names referenced below (from src/lib/settings/i18n/en.json, the
  * same names the SvelteKit UI renders inside the WebView):
@@ -29,6 +30,11 @@
  *                               (ui.notifications.shareInvite.title)
  *   - share actions:            "Accept" / "Decline"
  *   - shared tree section:      "Shared"            (ui.nav.shared)
+ *   - share dialog, to links:   "Invite with a link" (ui.sharing.dialog.toLinks)
+ *   - links section:            "Create link"       (ui.sharing.links.create)
+ *   - tree background menu:     "Join shared folder…" (ui.sharing.menu.joinByLink)
+ *   - join dialog:              "Invite link" / "Continue" / "Join"
+ *                               (ui.sharing.join.*)
  *   - view-only editor banner:  ui.editor.viewonly.banner
  */
 
@@ -138,10 +144,140 @@ async function selectTreeSource(
   }, label);
 }
 
+/** Click a button by its text inside one dialog, once it can be clicked. */
+async function clickDialogButton(
+  client: WebdriverIO.Browser,
+  labelledBy: string,
+  text: string
+): Promise<void> {
+  await client.waitUntil(
+    () =>
+      client.execute(
+        (dialogId: string, label: string) => {
+          const dialog = document.querySelector<HTMLElement>(
+            `[role="dialog"][aria-labelledby="${dialogId}"]`
+          );
+          const button = Array.from(
+            dialog?.querySelectorAll<HTMLButtonElement>('button') ?? []
+          ).find((candidate) => candidate.textContent?.trim() === label);
+          return button !== undefined && !button.disabled;
+        },
+        labelledBy,
+        text
+      ),
+    {
+      timeout: 30_000,
+      timeoutMsg: `"${text}" did not become clickable in ${labelledBy}`
+    }
+  );
+  await client.execute(
+    (dialogId: string, label: string) => {
+      const dialog = document.querySelector<HTMLElement>(
+        `[role="dialog"][aria-labelledby="${dialogId}"]`
+      );
+      const button = Array.from(
+        dialog?.querySelectorAll<HTMLButtonElement>('button') ?? []
+      ).find((candidate) => candidate.textContent?.trim() === label);
+      if (!button) throw new Error(`button not found: ${label}`);
+      button.click();
+    },
+    labelledBy,
+    text
+  );
+}
+
+/** Close whichever sharing dialog is open, if one is. */
+async function closeSharingDialogs(client: WebdriverIO.Browser): Promise<void> {
+  await client.execute(() => {
+    for (const id of [
+      'share-collection-title',
+      'manage-access-title',
+      'join-link-title'
+    ]) {
+      document
+        .querySelector<HTMLButtonElement>(
+          `[role="dialog"][aria-labelledby="${id}"] button[aria-label="Close"]`
+        )
+        ?.click();
+    }
+  });
+}
+
+/** Open the menu of the file tree's background, as a right-click on the
+ *  empty part of the tree does. */
+async function openTreeBackgroundMenu(
+  client: WebdriverIO.Browser
+): Promise<void> {
+  await client.execute(() => {
+    const tree = document.querySelector<HTMLElement>(
+      '[role="group"][aria-label="File tree"]'
+    );
+    if (!tree) throw new Error('file tree not found');
+    const rect = tree.getBoundingClientRect();
+    tree.dispatchEvent(
+      new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: rect.left + rect.width / 2,
+        clientY: rect.bottom - 8,
+        button: 2,
+        buttons: 2
+      })
+    );
+  });
+}
+
 interface CollectionRow {
   id: string;
   name: string;
   parent_collection_id: string | null;
+  share_id?: string | null;
+  shared_role?: string | null;
+}
+
+interface ShareLinkRow {
+  uid: string;
+  access_level: string;
+  max_uses: number;
+  uses: number;
+}
+
+interface MemberRow {
+  username: string;
+  access_level: string;
+}
+
+/** Call a command that is expected to be refused, and say with which
+ *  reason. `null` when it went through. */
+async function refusalOf(
+  client: WebdriverIO.Browser,
+  command: string,
+  args?: Record<string, unknown>
+): Promise<string | null> {
+  return client.execute(
+    async (cmd: string, invokeArgs: Record<string, unknown> | undefined) => {
+      const tauri = window as unknown as {
+        __TAURI_INTERNALS__?: {
+          invoke?: (
+            command: string,
+            args?: Record<string, unknown>
+          ) => Promise<unknown>;
+        };
+      };
+      const invoke = tauri.__TAURI_INTERNALS__?.invoke;
+      if (!invoke) throw new Error('Tauri invoke is not exposed in WebView');
+      try {
+        await invoke(cmd, invokeArgs);
+        return null;
+      } catch (err) {
+        const reason = (err as { reason?: unknown } | null)?.reason;
+        return typeof reason === 'string' ? reason : `not a refusal: ${err}`;
+      }
+    },
+    command,
+    args
+  );
 }
 
 interface NoteRow {
@@ -641,6 +777,148 @@ describe('T4 sharing a folder', function () {
     await B.click(SHARED_FOLDER);
 
     await expect(B.treeItem(noteToMoveOut.title)).not.toBeDisplayed();
+  });
+
+  const LINK_FOLDER = `Link Folder ${RUN_ID}`;
+
+  // --- 4.11 Joining by an invite link (P1) ---
+  it('A makes an invite link → B looks at it, joins and gets the folder', async () => {
+    // A folder of A's own with a note in it, shared with nobody.
+    await closeSharingDialogs(browserA);
+    await selectTreeSource(browserA, 'Home');
+    await A.newRootFolder(LINK_FOLDER);
+    const folderId = await findCollectionId(browserA, LINK_FOLDER);
+    const noteTitle = `Linked note ${RUN_ID}`;
+    const noteBody = `linked body ${RUN_ID}`;
+    const note = await createNoteFixture(
+      browserA,
+      noteTitle,
+      noteBody,
+      folderId
+    );
+
+    // "Sharing" ▸ "Share folder…" ▸ "Invite with a link" leads to the links
+    // of a folder that is not shared yet. Making one shares it.
+    await A.clickElement(A.treeItem(LINK_FOLDER), { button: 'right' });
+    await A.clickMenuItem('Sharing');
+    await A.clickMenuItem('Share folder…');
+    await clickDialogButton(
+      browserA,
+      'share-collection-title',
+      'Invite with a link'
+    );
+    await browserA
+      .$('[data-testid="share-links"]')
+      .waitForDisplayed({ timeout: 30_000 });
+    await browserA.execute(() => {
+      const select = document.querySelector<HTMLSelectElement>(
+        '[data-testid="share-links"] select[aria-label="Permission"]'
+      );
+      if (!select) throw new Error('link permission select not found');
+      select.value = 'read_write';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await clickDialogButton(browserA, 'manage-access-title', 'Create link');
+
+    // The link is shown once, with its secret after the `#`.
+    const linkText = browserA.$('[data-testid="share-link-text"]');
+    await linkText.waitForDisplayed({ timeout: 60_000 });
+    const link = (await linkText.getText()).trim();
+    expect(link).toMatch(/\/join\/[A-Za-z0-9_-]+#[A-Za-z0-9_-]{43}$/);
+    expect(link.startsWith(backendUrl().replace(/\/+$/, ''))).toBe(true);
+
+    await expectSharedByMeBadge(browserA, LINK_FOLDER);
+    const made = await invokeTauri<ShareLinkRow[]>(
+      browserA,
+      'list_share_links',
+      { collectionId: folderId }
+    );
+    expect(made).toHaveLength(1);
+    expect(made[0].uses).toBe(0);
+    expect(made[0].max_uses).toBe(1);
+    expect(made[0].access_level).toBe('read_write');
+    await closeSharingDialogs(browserA);
+
+    // The folder moves into its own collection with A's next sync.
+    await syncClient(browserA);
+
+    // B pastes the link where the shared folders are listed.
+    await closeSharingDialogs(browserB);
+    await selectTreeSource(browserB, 'Shared');
+    await openTreeBackgroundMenu(browserB);
+    await B.clickMenuItem('Join shared folder…');
+    await B.setValue('Invite link', link);
+    await clickDialogButton(browserB, 'join-link-title', 'Continue');
+
+    // Looking shows who invites to what, and takes nothing.
+    const preview = browserB.$('[data-testid="join-link-preview"]');
+    await preview.waitForDisplayed({ timeout: 60_000 });
+    const shown = await preview.getText();
+    expect(shown).toContain(
+      `${accounts.sender.username} invites you to “${LINK_FOLDER}”`
+    );
+    expect(shown).toContain('Can edit');
+    const before = await listCollections(browserB);
+    expect(before.some((folder) => folder.name === LINK_FOLDER)).toBe(false);
+    const unused = await invokeTauri<ShareLinkRow[]>(
+      browserA,
+      'list_share_links',
+      { collectionId: folderId }
+    );
+    expect(unused.map((row) => row.uses)).toEqual([0]);
+
+    // Joining closes the dialog and asks for a sync that pulls the folder in.
+    await clickDialogButton(browserB, 'join-link-title', 'Join');
+    await preview.waitForExist({ reverse: true, timeout: 60_000 });
+    await browserB.waitUntil(
+      async () => {
+        await syncClient(browserA);
+        await syncClient(browserB);
+        return B.isDisplayed(LINK_FOLDER, 1_000);
+      },
+      {
+        timeout: 180_000,
+        timeoutMsg: 'the folder did not arrive after joining by a link'
+      }
+    );
+    await expect(B.treeItem(LINK_FOLDER)).toBeDisplayed();
+    await expectNoteBodyContains(browserB, note.id, noteBody);
+
+    // B holds the folder as a shared one, with the rights the link gave.
+    const joined = (await listCollections(browserB)).find(
+      (folder) => folder.name === LINK_FOLDER
+    );
+    expect(joined?.shared_role).toBe('read_write');
+    expect(joined?.share_id).toBeTruthy();
+
+    // A sees B among the members, and the link for one person is used up.
+    // It stays listed until it expires, so that A sees it was used.
+    const members = await invokeTauri<MemberRow[]>(
+      browserA,
+      'list_collection_members',
+      { collectionId: folderId }
+    );
+    expect(
+      members.find(
+        (member) =>
+          member.username.toLowerCase() ===
+          accounts.recipient.username.toLowerCase()
+      )?.access_level
+    ).toBe('read_write');
+    const left = await invokeTauri<ShareLinkRow[]>(
+      browserA,
+      'list_share_links',
+      { collectionId: folderId }
+    );
+    expect(left.map((row) => [row.uses, row.max_uses])).toEqual([[1, 1]]);
+    // Used up means it lets nobody else in, not even to look.
+    expect(await refusalOf(browserB, 'open_share_link', { link })).toBe(
+      'link_used'
+    );
+
+    // It is a shared folder like any other: not in Home.
+    await selectTreeSource(browserB, 'Home');
+    await expect(B.treeItem(LINK_FOLDER)).not.toBeDisplayed();
   });
 
   // 4.8–4.9 require an owner second device (A2) and are covered by

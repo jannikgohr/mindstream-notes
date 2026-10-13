@@ -34,7 +34,13 @@ const SENTENCES: Record<string, string> = {
   authentication_failed: 'account.refusal.sessionEnded',
   not_signed_in: 'account.refusal.sessionEnded',
   unreachable: 'account.refusal.unreachable',
-  not_a_mindstream_server: 'account.refusal.notAServer'
+  not_a_mindstream_server: 'account.refusal.notAServer',
+  link_invalid: 'account.refusal.linkInvalid',
+  link_used: 'account.refusal.linkUsed',
+  link_expired: 'account.refusal.linkExpired',
+  link_other_server: 'account.refusal.linkOtherServer',
+  already_member: 'account.refusal.alreadyMember',
+  too_many_links: 'account.refusal.tooManyLinks'
 };
 
 /** The server wants a code from the authenticator before it goes on. */

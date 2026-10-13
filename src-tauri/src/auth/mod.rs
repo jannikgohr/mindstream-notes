@@ -169,7 +169,7 @@ fn describe_device(machine: &str, os: &str) -> String {
     }
 }
 
-fn client_for(server_url: &str) -> AppResult<Client> {
+pub(crate) fn client_for(server_url: &str) -> AppResult<Client> {
     Client::new(&device_name(), server_url)
         .map_err(|e| AppError::InvalidArg(format!("etebase client: {e}")))
 }

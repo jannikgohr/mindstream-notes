@@ -483,6 +483,31 @@ account. The other is proof of a link that was made to allow it. The server's
 signup setting has three values to match: `closed` takes codes only, `invite`
 takes such links too, and `open` takes anyone.
 
+As built in the app:
+
+- **Making one.** The links of a folder are in its access dialog, below the
+  members. The owner of a folder and its admins see them. A link is shown
+  once, when it is made, because its secret is in its text and nowhere else.
+  The list afterwards shows each link's rights, how often it was used and
+  when it ends, and removes one. Making a link to a folder that is not shared
+  yet shares it, the same way the first invitation does.
+- **Joining by one.** "Join shared folder…" is in the file tree's background
+  menu, in the shared view too. The dialog takes two steps so that nobody
+  joins something unseen. It first shows who invites to which folder with
+  which rights, then joins. Joining creates nothing on the device. The sync
+  it starts pulls the folder in like any other shared folder.
+- **Signing up by one.** The signup code field also takes a link. The form
+  then sends the link in place of a code, and the new account joins the
+  folder. A link is only good on the server that made it, so the form holds
+  back a link for another server and offers to switch to that server.
+- **What the app refuses.** A link to a collection that is not a shared
+  folder is never opened or joined, for the reason such an invitation is
+  never shown. A link for a server the device is not signed in to is looked
+  at and not joined.
+
+Not built: opening a link from the operating system. A link has to be pasted
+into the app.
+
 ## Accounts
 
 ### Device sessions

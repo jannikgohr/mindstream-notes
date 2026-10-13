@@ -7,13 +7,18 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 import {
   acceptShare,
+  claimShareLink,
+  createShareLink,
   declineShare,
   getCollectionShareState,
   inviteCollection,
   leaveSharedCollection,
   listCollectionMembers,
   listIncomingShares,
+  listShareLinks,
+  openShareLink,
   removeCollectionMember,
+  revokeShareLink,
   setCollectionMemberAccess,
   stopSharingCollection
 } from './sharing';
@@ -209,5 +214,154 @@ describe('sharing API — Tauri parse path', () => {
     await expect(listCollectionMembers('folder_1')).rejects.toThrow(
       /unknown access level/
     );
+  });
+});
+
+describe('invite links', () => {
+  const LINK = `https://notes.example.test/join/link_1#${'A'.repeat(43)}`;
+  const SHARE_LINK = {
+    uid: 'link_1',
+    access_level: 'read_only',
+    max_uses: 5,
+    uses: 2,
+    allows_signup: true,
+    expires_at: 1_900_000_000,
+    created_at: 1_899_000_000,
+    sender_username: 'ann'
+  };
+  const PREVIEW = {
+    server_url: 'https://notes.example.test/',
+    collection_uid: 'col_1',
+    name: null,
+    sender_username: 'ann',
+    access_level: 'read_write',
+    can_signup: true,
+    signed_in: false,
+    already_member: false
+  };
+
+  describe('outside Tauri', () => {
+    it('has no links and removes none', async () => {
+      await expect(listShareLinks('folder_1')).resolves.toEqual([]);
+      await expect(revokeShareLink('link_1')).resolves.toBeUndefined();
+    });
+
+    it('cannot make, open or claim one', async () => {
+      const unavailable =
+        'Collection sharing is only available in the Tauri desktop app.';
+      await expect(
+        createShareLink({
+          collection_id: 'folder_1',
+          access_level: 'read_only'
+        })
+      ).rejects.toThrow(unavailable);
+      await expect(openShareLink(LINK)).rejects.toThrow(unavailable);
+      await expect(claimShareLink(LINK)).rejects.toThrow(unavailable);
+    });
+  });
+
+  it('refuses bad input before asking anything', () => {
+    expect(() => listShareLinks('')).toThrow(/must be a non-empty/);
+    expect(() => revokeShareLink(' ')).toThrow(/must be a non-empty/);
+    expect(() => openShareLink('')).toThrow(/must be a non-empty/);
+    expect(() => claimShareLink('')).toThrow(/must be a non-empty/);
+    expect(() =>
+      createShareLink({ collection_id: '', access_level: 'read_only' })
+    ).toThrow(/must be a non-empty/);
+    // A link never makes someone an admin.
+    expect(() =>
+      createShareLink({
+        collection_id: 'folder_1',
+        access_level: 'admin' as never
+      })
+    ).toThrow(/view or edit/);
+  });
+
+  describe('in Tauri', () => {
+    beforeEach(() => {
+      setTauri(true);
+      invoke.mockReset();
+    });
+    afterEach(() => setTauri(false));
+
+    it('makes a link with what was chosen', async () => {
+      invoke.mockResolvedValue({ link: LINK, uid: 'link_1' });
+      const input = {
+        collection_id: 'folder_1',
+        access_level: 'read_write' as const,
+        max_uses: 5,
+        expires_in_days: 30,
+        allow_signup: true
+      };
+
+      await expect(createShareLink(input)).resolves.toEqual({
+        link: LINK,
+        uid: 'link_1'
+      });
+      expect(invoke).toHaveBeenCalledWith('create_share_link', { input });
+    });
+
+    it('rejects a made link that has no text', async () => {
+      invoke.mockResolvedValue({ uid: 'link_1' });
+      await expect(
+        createShareLink({
+          collection_id: 'folder_1',
+          access_level: 'read_only'
+        })
+      ).rejects.toThrow(/created share link\.link/);
+    });
+
+    it('lists the links of a folder', async () => {
+      invoke.mockResolvedValue([SHARE_LINK]);
+
+      await expect(listShareLinks('folder_1')).resolves.toEqual([SHARE_LINK]);
+      expect(invoke).toHaveBeenCalledWith('list_share_links', {
+        collectionId: 'folder_1'
+      });
+    });
+
+    it('rejects a list it cannot read', async () => {
+      invoke.mockResolvedValueOnce({ links: [] });
+      await expect(listShareLinks('folder_1')).rejects.toThrow(/an array/);
+      invoke.mockResolvedValueOnce([{ ...SHARE_LINK, uses: '2' }]);
+      await expect(listShareLinks('folder_1')).rejects.toThrow(
+        /share link\.uses must be a number/
+      );
+      invoke.mockResolvedValueOnce([{ ...SHARE_LINK, access_level: 'root' }]);
+      await expect(listShareLinks('folder_1')).rejects.toThrow(
+        /unknown access level/
+      );
+    });
+
+    it('removes a link by its uid', async () => {
+      invoke.mockResolvedValue(null);
+
+      await expect(revokeShareLink('link_1')).resolves.toBeUndefined();
+      expect(invoke).toHaveBeenCalledWith('revoke_share_link', {
+        uid: 'link_1'
+      });
+    });
+
+    it('reads what a link leads to, a folder without a name included', async () => {
+      invoke.mockResolvedValue(PREVIEW);
+
+      await expect(openShareLink(LINK)).resolves.toEqual(PREVIEW);
+      expect(invoke).toHaveBeenCalledWith('open_share_link', { link: LINK });
+    });
+
+    it('rejects a preview that leaves out whether one can join', async () => {
+      const { signed_in: _signedIn, ...rest } = PREVIEW;
+      invoke.mockResolvedValue(rest);
+      await expect(openShareLink(LINK)).rejects.toThrow(
+        /share link preview\.signed_in/
+      );
+    });
+
+    it('claims a link', async () => {
+      invoke.mockResolvedValue(null);
+
+      await expect(claimShareLink(LINK)).resolves.toBeUndefined();
+      expect(invoke).toHaveBeenCalledWith('claim_share_link', { link: LINK });
+    });
   });
 });
