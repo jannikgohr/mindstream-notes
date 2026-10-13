@@ -169,12 +169,14 @@ fn write_zip_round_trips_manifest_and_db_bytes() {
     fs::write(&db_path, b"SQLite fake content for zip roundtrip").unwrap();
 
     let manifest = Manifest {
-        format_version: MANIFEST_FORMAT_VERSION,
+        format_version: 1,
         app_version: "0.0.0-test".into(),
         schema_version: 11,
         created_at: "2026-06-10T00:00:00+00:00".into(),
         account_present_at_export: false,
         account: None,
+        portable: None,
+        data_db_sha256: None,
         contents: Contents {
             db_filename: DB_ENTRY_NAME.into(),
             counts: Counts {
@@ -197,7 +199,7 @@ fn write_zip_round_trips_manifest_and_db_bytes() {
     manifest_entry.read_to_end(&mut manifest_bytes).unwrap();
     drop(manifest_entry);
     let parsed: Manifest = serde_json::from_slice(&manifest_bytes).unwrap();
-    assert_eq!(parsed.format_version, MANIFEST_FORMAT_VERSION);
+    assert_eq!(parsed.format_version, 1);
     assert_eq!(parsed.contents.counts.notes, 3);
     assert!(parsed.account.is_none());
 
@@ -211,12 +213,14 @@ fn write_zip_round_trips_manifest_and_db_bytes() {
 
 fn sample_manifest() -> Manifest {
     Manifest {
-        format_version: MANIFEST_FORMAT_VERSION,
+        format_version: 1,
         app_version: "0.0.0-test".into(),
         schema_version: 11,
         created_at: "2026-06-10T00:00:00+00:00".into(),
         account_present_at_export: false,
         account: None,
+        portable: None,
+        data_db_sha256: None,
         contents: Contents {
             db_filename: DB_ENTRY_NAME.into(),
             counts: Counts {
@@ -275,16 +279,20 @@ fn with_extra_extension_appends_a_suffix() {
 }
 
 #[test]
-fn sweep_staging_root_removes_every_child() {
+fn import_tokens_cannot_escape_or_remove_another_staged_import() {
     let root = std::env::temp_dir().join(format!("ms-sweep-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(root.join("a")).unwrap();
     fs::create_dir_all(root.join("b")).unwrap();
     fs::write(root.join("a/file.txt"), b"x").unwrap();
 
-    sweep_staging_root(&root);
-
-    let remaining = fs::read_dir(&root).unwrap().count();
-    assert_eq!(remaining, 0);
+    assert!(portable::token_directory(&root, "../a").is_err());
+    assert!(portable::token_directory(&root, "b").is_err());
+    let token = uuid::Uuid::new_v4().to_string();
+    assert_eq!(
+        portable::token_directory(&root, &token).unwrap(),
+        root.join(token)
+    );
+    assert_eq!(fs::read(root.join("a/file.txt")).unwrap(), b"x");
     fs::remove_dir_all(&root).ok();
 }
 
@@ -471,6 +479,8 @@ fn restore_resumes_after_each_database_move_and_phase_write() {
             phase,
             safety_filename: Some(safety_filename.into()),
             pending_sha256: hash,
+            portable_sha256: None,
+            include_device: false,
         }
         .save(&root.join(SENTINEL_FILE))
         .unwrap();
@@ -498,6 +508,8 @@ fn restore_rejects_mismatched_installed_database_without_clearing_recovery_state
         phase: RestorePhase::OldPreserved,
         safety_filename: None,
         pending_sha256: restore_file_hash(&root.join("expected.db")).unwrap(),
+        portable_sha256: None,
+        include_device: false,
     }
     .save(&root.join(SENTINEL_FILE))
     .unwrap();
@@ -522,6 +534,8 @@ fn restore_retains_unexpected_wal_even_when_main_file_hash_matches() {
         phase: RestorePhase::Installed,
         safety_filename: None,
         pending_sha256: hash.clone(),
+        portable_sha256: None,
+        include_device: false,
     }
     .save(&root.join(SENTINEL_FILE))
     .unwrap();

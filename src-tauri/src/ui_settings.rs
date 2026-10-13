@@ -160,6 +160,80 @@ fn save(path: &Path, document: &Document, device: bool) -> AppResult<()> {
     crate::root_documents::write(path, &raw, |raw| decode(raw, device).map(|_| ()))
 }
 
+/// Backup callers hold RootLock. Export values, never migration identities.
+pub(crate) fn backup_values(directory: &Path, device: bool) -> AppResult<Values> {
+    let path = directory.join(if device {
+        "ui-settings.json"
+    } else {
+        "content-settings.json"
+    });
+    recover(&path, device)?;
+    if !path.try_exists()? {
+        return Ok(Values::new());
+    }
+    Ok(read(&path, device)?
+        .values
+        .into_iter()
+        .filter(|(id, _)| device_scope(id) == device)
+        .collect())
+}
+
+pub(crate) fn validate_backup_values(values: &Values, device: bool) -> AppResult<()> {
+    let raw = serde_json::to_vec(&Document {
+        version: 1,
+        revision: 0,
+        values: values.clone(),
+    })
+    .map_err(|_| invalid())?;
+    decode(&raw, device)?;
+    if values.keys().any(|id| device_scope(id) != device) {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+/// Replace vault values or fill absent device fields. Caller holds RootLock.
+pub(crate) fn restore_backup_values(
+    directory: &Path,
+    values: &Values,
+    device: bool,
+) -> AppResult<()> {
+    validate_backup_values(values, device)?;
+    let path = directory.join(if device {
+        "ui-settings.json"
+    } else {
+        "content-settings.json"
+    });
+    recover(&path, device)?;
+    let mut document = if path.try_exists()? {
+        read(&path, device)?
+    } else {
+        Document {
+            version: 1,
+            revision: 0,
+            values: Values::new(),
+        }
+    };
+    if device {
+        for (key, value) in values {
+            document
+                .values
+                .entry(key.clone())
+                .or_insert_with(|| value.clone());
+        }
+    } else {
+        document.values = values.clone();
+    }
+    document.revision = document.revision.checked_add(1).ok_or_else(invalid)?;
+    save(&path, &document, device)?;
+    crate::atomic_file::write(&marker(&path), b"1")?;
+    if !device {
+        crate::atomic_file::write(&directory.join(".dock-layout-migrated"), b"1")?;
+        crate::atomic_file::write(&directory.join(".ui-content-preferences-migrated"), b"1")?;
+    }
+    Ok(())
+}
+
 fn snapshot(device: Document, vault: Document) -> Snapshot {
     let mut values = device.values;
     // An old root recovery copy may still carry this former device flag. Its

@@ -178,6 +178,43 @@ fn edit(root: &Path, preset: Option<Preset>, id: &str) -> AppResult<()> {
     crate::root_documents::write(&root.join(FILE), &raw, |raw| decode(raw).map(|_| ()))
 }
 
+/// Caller holds RootLock; builtins travel in the application, not the backup.
+pub(crate) fn backup_presets(root: &Path) -> AppResult<Vec<Preset>> {
+    Ok(load(root)?.presets.into_values().collect())
+}
+
+pub(crate) fn validate_backup_presets(presets: &[Preset]) -> AppResult<()> {
+    let mut document = Document {
+        version: 1,
+        ..Document::default()
+    };
+    for preset in presets {
+        if document
+            .presets
+            .insert(preset.id.clone(), preset.clone())
+            .is_some()
+        {
+            return Err(invalid());
+        }
+    }
+    decode(&serde_json::to_vec(&document).map_err(|_| invalid())?)?;
+    Ok(())
+}
+
+/// Caller holds RootLock. Existing IDs, including builtins, always win.
+pub(crate) fn restore_backup_presets(root: &Path, presets: &[Preset]) -> AppResult<()> {
+    validate_backup_presets(presets)?;
+    let mut document = load(root)?;
+    for preset in presets {
+        document
+            .presets
+            .entry(preset.id.clone())
+            .or_insert_with(|| preset.clone());
+    }
+    let raw = serde_json::to_vec(&document).map_err(|_| invalid())?;
+    crate::root_documents::write(&root.join(FILE), &raw, |raw| decode(raw).map(|_| ()))
+}
+
 fn notify(app: &AppHandle) {
     let _ = app.emit(crate::app_events::AppEvent::UiSettingsChanged.as_str(), ());
     #[cfg(desktop)]

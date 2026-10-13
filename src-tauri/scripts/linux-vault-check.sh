@@ -25,4 +25,13 @@ dbus-run-session -- xvfb-run -a bash -c '
     --check-focus --exe /work/src-tauri/target/debug/mindstream-notes --output "/results/native-$(date +%Y%m%d-%H%M%S)"
   python3 src-tauri/scripts/supervised-startup-check.py \
     --exe /work/src-tauri/target/debug/mindstream-notes --output "/results/startup-$(date +%Y%m%d-%H%M%S)"
+  portable_tests_exe=""
+  for candidate in /work/src-tauri/target/debug/deps/mindstream_notes_lib-*; do
+    if [[ -f "$candidate" && -x "$candidate" ]] && [[ -z "$portable_tests_exe" || "$candidate" -nt "$portable_tests_exe" ]]; then
+      portable_tests_exe="$candidate"
+    fi
+  done
+  test -n "$portable_tests_exe"
+  python3 src-tauri/scripts/supervised-backup-check.py \
+    --test-exe "$portable_tests_exe" --exe /work/src-tauri/target/debug/mindstream-notes --output "/results/backup-$(date +%Y%m%d-%H%M%S)"
 '

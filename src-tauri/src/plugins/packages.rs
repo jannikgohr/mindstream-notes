@@ -308,6 +308,15 @@ fn migrate_artifacts(root: &Path, catalog: &Catalog, sources: &[PathBuf]) -> App
 /// Explicit installation can republish identical bytes after removal. Updates
 /// retain their generation; reinstallations always receive a fresh one.
 pub fn install(root: &Path, source: &Path) -> AppResult<String> {
+    install_with_policy(root, source, false)
+}
+
+/// Restore never replaces an existing catalog entry, including removal receipts.
+pub(crate) fn restore_missing(root: &Path, source: &Path) -> AppResult<String> {
+    install_with_policy(root, source, true)
+}
+
+fn install_with_policy(root: &Path, source: &Path, missing_only: bool) -> AppResult<String> {
     if fs::symlink_metadata(source)?.file_type().is_symlink() {
         return Err(AppError::InvalidArg(
             "plugin directory cannot be a symlink".into(),
@@ -333,6 +342,9 @@ pub fn install(root: &Path, source: &Path) -> AppResult<String> {
     }
     let _lock = RootLock::acquire(root)?;
     let mut catalog = load(root)?;
+    if missing_only && catalog.entries.contains_key(&plugin.id) {
+        return Ok(plugin.id);
+    }
     let digest = publish(root, &plugin)?;
     let previous = catalog.entries.get(&plugin.id);
     let generation = previous

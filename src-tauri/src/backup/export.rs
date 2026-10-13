@@ -77,13 +77,28 @@ pub(super) fn run_backup(
     destination: &Path,
     session: Option<&auth::SessionInfo>,
 ) -> AppResult<BackupReport> {
+    run_backup_at(
+        &crate::paths::app_data_root(app)?,
+        &crate::paths::app_data_dir(app)?,
+        conn,
+        destination,
+        session,
+    )
+}
+
+pub(super) fn run_backup_at(
+    root: &Path,
+    vault: &Path,
+    conn: &mut Connection,
+    destination: &Path,
+    session: Option<&auth::SessionInfo>,
+) -> AppResult<BackupReport> {
+    validate_destination(root, vault, destination)?;
     // Snapshot lives under `<app_data>/backups/.staging/<uuid>.db` —
     // same drive as the live DB so VACUUM INTO is fast, separated from
     // the user's chosen output dir so it stays clean. We delete the
     // staging file at the end regardless of outcome.
-    let staging_dir = crate::paths::app_data_dir(app)?
-        .join("backups")
-        .join(".staging");
+    let staging_dir = vault.join("backups").join(".staging");
     fs::create_dir_all(&staging_dir)?;
     let staging_db = staging_dir.join(format!("snapshot-{}.db", uuid::Uuid::new_v4()));
 
@@ -98,6 +113,8 @@ pub(super) fn run_backup(
     // staging file. The `?` propagation below would otherwise leave it
     // behind.
     let _cleanup = StagingCleanup(staging_db.clone());
+    let resources_dir = staging_dir.join(format!("resources-{}", uuid::Uuid::new_v4()));
+    let _resources_cleanup = DirectoryCleanup(resources_dir.clone());
 
     let staging_db_str = staging_db
         .to_str()
@@ -118,6 +135,9 @@ pub(super) fn run_backup(
     let schema_version: u32 = snapshot.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     drop(snapshot);
 
+    let resources = portable::capture(root, vault, conn, &resources_dir)?;
+    portable::sanitize_database(&staging_db, Some(&resources_dir))?;
+
     let manifest = Manifest {
         format_version: MANIFEST_FORMAT_VERSION,
         app_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -129,6 +149,8 @@ pub(super) fn run_backup(
             db_filename: DB_ENTRY_NAME.to_string(),
             counts: counts.clone(),
         },
+        data_db_sha256: Some(super::restore::restore_file_hash(&staging_db)?),
+        portable: Some(resources),
     };
 
     // Atomic write: zip into `<destination>.tmp`, fsync the parent
@@ -137,13 +159,13 @@ pub(super) fn run_backup(
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;
     }
-    let tmp_path = with_extra_extension(destination, "tmp");
-    write_zip(&tmp_path, &manifest, &staging_db)?;
-    if destination.exists() {
-        // Replace works on Windows where rename-over-existing doesn't.
-        fs::remove_file(destination)?;
-    }
+    let tmp_path = with_extra_extension(destination, &format!("{}.tmp", uuid::Uuid::new_v4()));
+    let _zip_cleanup = StagingCleanup(tmp_path.clone());
+    write_zip_with_resources(&tmp_path, &manifest, &staging_db, Some(&resources_dir))?;
     fs::rename(&tmp_path, destination)?;
+    if let Some(parent) = destination.parent() {
+        crate::atomic_file::sync_directory(parent)?;
+    }
 
     Ok(BackupReport {
         destination: destination
@@ -153,6 +175,71 @@ pub(super) fn run_backup(
         counts,
         account_present: manifest.account_present_at_export,
     })
+}
+
+fn validate_destination(root: &Path, vault: &Path, destination: &Path) -> AppResult<()> {
+    let name = destination
+        .file_name()
+        .ok_or_else(|| AppError::InvalidArg("backup filename missing".into()))?;
+    let parent = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    let resolved = if destination.try_exists()? {
+        destination.canonicalize()?
+    } else {
+        parent.canonicalize()?.join(name)
+    };
+    let root = root.canonicalize()?;
+    let vault = vault.canonicalize()?;
+    if (resolved.starts_with(&root) || resolved.starts_with(&vault))
+        && (!resolved
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+            || !(resolved.parent() == Some(root.as_path())
+                || resolved.parent() == Some(vault.as_path())
+                || resolved.starts_with(root.join("backups"))
+                || resolved.starts_with(vault.join("backups"))))
+    {
+        return Err(AppError::InvalidArg("inside app storage, save the backup ZIP in the backups folder or outside the app's managed folders".into()));
+    }
+    for directory in [root, vault] {
+        for name in [
+            "mindstream.db",
+            "mindstream.db-wal",
+            "mindstream.db-shm",
+            "content-settings.json",
+            "content-settings.migrated",
+            "ui-settings.json",
+            "desktop-settings.json",
+            "plugin-settings.json",
+            "theme-presets.json",
+            "profiles.json",
+            PENDING_DB_FILE,
+            SENTINEL_FILE,
+        ] {
+            if resolved == directory.join(name) {
+                return Err(AppError::InvalidArg(
+                    "backup destination is an application storage file".into(),
+                ));
+            }
+        }
+        for name in [
+            "plugins",
+            "plugin-packages",
+            "plugin-data",
+            "plugin-artifacts",
+            portable::PENDING,
+        ] {
+            if resolved.starts_with(directory.join(name)) {
+                return Err(AppError::InvalidArg(
+                    "backup destination is inside managed plugin storage".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn read_counts(conn: &Connection) -> AppResult<Counts> {
@@ -211,7 +298,17 @@ pub(super) fn read_account_identity(
     }
 }
 
+#[cfg(test)]
 pub(super) fn write_zip(zip_path: &Path, manifest: &Manifest, db_path: &Path) -> AppResult<()> {
+    write_zip_with_resources(zip_path, manifest, db_path, None)
+}
+
+fn write_zip_with_resources(
+    zip_path: &Path,
+    manifest: &Manifest,
+    db_path: &Path,
+    resources: Option<&Path>,
+) -> AppResult<()> {
     let file = fs::File::create(zip_path)?;
     let mut zip = zip::ZipWriter::new(file);
     let opts: FileOptions<()> = FileOptions::default()
@@ -227,10 +324,19 @@ pub(super) fn write_zip(zip_path: &Path, manifest: &Manifest, db_path: &Path) ->
     zip.write_all(&manifest_bytes)?;
 
     zip.start_file(DB_ENTRY_NAME, opts).map_err(zip_to_app)?;
-    let db_bytes = fs::read(db_path)?;
-    zip.write_all(&db_bytes)?;
+    std::io::copy(&mut fs::File::open(db_path)?, &mut zip)?;
+    if let Some(index) = &manifest.portable {
+        let directory = resources
+            .ok_or_else(|| AppError::InvalidArg("backup resource directory missing".into()))?;
+        portable::validate_bundle(directory, index)?;
+        for entry in &index.files {
+            zip.start_file(&entry.path, opts.unix_permissions(entry.mode))
+                .map_err(zip_to_app)?;
+            std::io::copy(&mut fs::File::open(directory.join(&entry.path))?, &mut zip)?;
+        }
+    }
 
-    zip.finish().map_err(zip_to_app)?;
+    zip.finish().map_err(zip_to_app)?.sync_all()?;
     Ok(())
 }
 
@@ -256,5 +362,17 @@ pub(super) struct StagingCleanup(PathBuf);
 impl Drop for StagingCleanup {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.0);
+    }
+}
+
+pub(super) struct DirectoryCleanup(pub PathBuf);
+impl Drop for DirectoryCleanup {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+impl DirectoryCleanup {
+    pub(super) fn keep(mut self) {
+        self.0 = PathBuf::new();
     }
 }

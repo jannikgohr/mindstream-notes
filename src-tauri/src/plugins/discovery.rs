@@ -273,7 +273,7 @@ fn collect_files_embedded(dir: &Dir<'static>) -> Vec<(String, Vec<u8>)> {
 /// Read one plugin directory into a [`DiscoveredPlugin`]. The integrity checksum
 /// and signature both cover the whole package (manifest + code + assets) via the
 /// [`signing::package_digest`] document, not just `manifest.json`.
-pub(super) fn read_plugin(files: PluginFiles, source: &str) -> AppResult<DiscoveredPlugin> {
+pub(crate) fn read_plugin(files: PluginFiles, source: &str) -> AppResult<DiscoveredPlugin> {
     let all = files.collect()?;
     let digest = signing::package_digest(&all);
     let checksum = sha256_hex(&digest);

@@ -71,7 +71,14 @@ The remaining variables are behaviour switches, not gates:
   directory never appear.
 - **Native dialogs.** WebDriver can't click native pickers. Notes import has
   feature-gated folder/file path overrides; backup, export and PDF flows still
-  need equivalent seams.
+  need equivalent seams for picker interaction. Portable backup export/preview/
+  staging is exercised through the real Rust helpers; the
+  `supervised-backup-check.py` fixture then verifies desktop restore startup,
+  approval gates, a separate vault, cold restart and lease release. See the
+  [backup contract](../backup-restore-portability.md#verification).
+  On Windows, `--check-ui` renders the real restore-choice dialog using a
+  fixture preview through the bundled dialog helper, so its unchecked default
+  and returned selection are checked without a second replacement or a picker.
 - **Session injection (not yet built).** T4 specs log each client in through the
   app's own `etebase_login` (drives the Account UI / IPC). Seeding a
   pre-authenticated session blob into each profile dir would skip that per run,

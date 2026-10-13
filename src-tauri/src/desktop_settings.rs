@@ -70,6 +70,92 @@ fn validate_settings_bytes(raw: &[u8]) -> crate::error::AppResult<()> {
         })
 }
 
+/// Caller holds RootLock. Do not export revisions, extension fields or paths.
+pub(crate) fn backup_values(root: &std::path::Path) -> crate::error::AppResult<serde_json::Value> {
+    let path = root.join(SETTINGS_FILE);
+    crate::root_documents::recover(&path, validate_settings_bytes, validate_settings_bytes)?;
+    let mut value = match fs::read(path) {
+        Ok(raw) => {
+            validate_settings_bytes(&raw)?;
+            serde_json::from_slice::<serde_json::Value>(&raw)
+                .map_err(|e| crate::error::AppError::InvalidArg(e.to_string()))?
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+        Err(e) => return Err(e.into()),
+    };
+    value
+        .as_object_mut()
+        .ok_or_else(|| crate::error::AppError::InvalidArg("invalid desktop settings".into()))?
+        .retain(|key, _| {
+            matches!(
+                key.as_str(),
+                "close_to_tray"
+                    | "start_in_tray"
+                    | "custom_window_decorations"
+                    | "language_code"
+                    | "theme_mode"
+            )
+        });
+    Ok(value)
+}
+
+pub(crate) fn validate_backup_values(value: &serde_json::Value) -> crate::error::AppResult<()> {
+    if !value.as_object().is_some_and(|fields| {
+        fields.keys().all(|key| {
+            matches!(
+                key.as_str(),
+                "close_to_tray"
+                    | "start_in_tray"
+                    | "custom_window_decorations"
+                    | "language_code"
+                    | "theme_mode"
+            )
+        })
+    }) {
+        return Err(crate::error::AppError::InvalidArg(
+            "invalid desktop backup settings".into(),
+        ));
+    }
+    validate_settings_bytes(
+        &serde_json::to_vec(value)
+            .map_err(|e| crate::error::AppError::InvalidArg(e.to_string()))?,
+    )
+}
+
+pub(crate) fn restore_backup_values(
+    root: &std::path::Path,
+    input: &serde_json::Value,
+) -> crate::error::AppResult<()> {
+    validate_backup_values(input)?;
+    let path = root.join(SETTINGS_FILE);
+    crate::root_documents::recover(&path, validate_settings_bytes, validate_settings_bytes)?;
+    let mut values = match fs::read(&path) {
+        Ok(raw) => {
+            validate_settings_bytes(&raw)?;
+            serde_json::from_slice::<serde_json::Value>(&raw)
+                .map_err(|e| crate::error::AppError::InvalidArg(e.to_string()))?
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+        Err(e) => return Err(e.into()),
+    };
+    let target = values
+        .as_object_mut()
+        .ok_or_else(|| crate::error::AppError::InvalidArg("invalid desktop settings".into()))?;
+    for (key, value) in input.as_object().expect("validated object") {
+        target.entry(key.clone()).or_insert_with(|| value.clone());
+    }
+    let revision = target
+        .get("revision")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| crate::error::AppError::InvalidArg("desktop revision exhausted".into()))?;
+    target.insert("revision".into(), revision.into());
+    let raw = serde_json::to_vec(&values)
+        .map_err(|e| crate::error::AppError::InvalidArg(e.to_string()))?;
+    crate::root_documents::write(&path, &raw, validate_settings_bytes)
+}
+
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum DesktopThemeMode {

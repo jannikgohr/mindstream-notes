@@ -254,7 +254,8 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
       // User cancelled the file picker — stay quiet.
       return;
     }
-    const choice = await pickImportChoice(preview);
+    const options = { includeDevice: false };
+    const choice = await pickImportChoice(preview, options);
     if (choice === 'cancel') {
       await importCleanup(preview.token).catch((err) =>
         console.warn('[settings] import_cleanup failed', err)
@@ -294,7 +295,11 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
       return;
     }
     try {
-      const staged = await importRestore(preview.token, preview.same_account);
+      const staged = await importRestore(
+        preview.token,
+        preview.same_account,
+        options.includeDevice
+      );
       if (staged.restart_required) {
         const action = await showRestoreReadyResult(preview, staged);
         if (action === 'restart') {

@@ -17,43 +17,108 @@ pub fn import_restore(
     app: AppHandle,
     token: String,
     same_account: bool,
+    include_device: Option<bool>,
 ) -> CommandResult<RestoreStaged> {
+    let _job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let app_data = crate::paths::app_data_dir(&app)?;
-    let staged = imports_staging_root(&app)?.join(&token).join("data.db");
+    let dir = portable::token_directory(&imports_staging_root(&app)?, &token)?;
+    Ok(app.state::<Db>().with_conn(|live| {
+        stage_restore_at(
+            &app_data,
+            &dir,
+            live,
+            same_account,
+            include_device.unwrap_or(false),
+        )
+    })?)
+}
+
+pub(super) fn stage_restore_at(
+    app_data: &Path,
+    dir: &Path,
+    live: &Connection,
+    same_account: bool,
+    include_device: bool,
+) -> AppResult<RestoreStaged> {
+    let staged = dir.join("data.db");
     if !staged.exists() {
-        return Err(format!("staged backup '{token}' not found").into());
+        return Err(AppError::InvalidArg("staged backup not found".into()));
     }
     let pending_db = app_data.join(PENDING_DB_FILE);
     let sentinel = app_data.join(SENTINEL_FILE);
 
     if sentinel.exists() {
         return Err(
-            "a restore is already pending — restart Mindstream Notes to finish that one before starting another"
-                .into(),
+            AppError::InvalidArg("a restore is already pending; restart Mindstream Notes to finish it before starting another".into()),
         );
     }
+
+    let manifest: Manifest = serde_json::from_slice(&fs::read(dir.join(MANIFEST_ENTRY_NAME))?)
+        .map_err(|e| AppError::InvalidArg(e.to_string()))?;
+    if let Some(index) = &manifest.portable {
+        portable::validate_bundle(dir, index)?;
+    }
+    let identity = read_account_identity(&Connection::open(&staged)?, None)?;
+    let matches = {
+        let current = read_account_identity(live, None)?;
+        match (&identity, current) {
+            (Some(backup), Some(current)) => {
+                backup.etebase_collection_uid_notes == current.etebase_collection_uid_notes
+                    && backup.etebase_collection_uid_folders
+                        == current.etebase_collection_uid_folders
+            }
+            _ => false,
+        }
+    };
+    let same_account = same_account && matches;
 
     // Sanitize on the staged file, not on the pending file, so a
     // failure here leaves no half-prepared pending in place.
     if !same_account {
         sanitize_for_foreign_account(&staged)?;
     }
+    portable::sanitize_database(&staged, manifest.portable.as_ref().map(|_| dir))?;
+    checkpoint_for_move(&staged)?;
 
     // Move-then-mark: the sentinel must not exist until the staged DB
     // is fully in place. Otherwise a crash between the two leaves the
     // app thinking a restore is ready when the file isn't there.
-    if pending_db.exists() {
-        fs::remove_file(&pending_db)?;
+    // Preserve preparations that never committed a sentinel. They cannot be
+    // replayed automatically and must not be silently overwritten by a retry.
+    for old in [&pending_db, &app_data.join(portable::PENDING)] {
+        if old.try_exists()? {
+            let safety = app_data
+                .join("backups")
+                .join(format!("uncommitted-restore-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(
+                safety
+                    .parent()
+                    .ok_or_else(|| AppError::InvalidArg("restore parent missing".into()))?,
+            )?;
+            fs::rename(old, safety)?;
+        }
     }
     fs::rename(&staged, &pending_db)?;
     crate::atomic_file::sync_file(&pending_db)?;
-    crate::atomic_file::sync_directory(&app_data)?;
-    crate::atomic_file::write(&sentinel, b"pending")?;
+    crate::atomic_file::sync_directory(app_data)?;
+    let portable_sha256 = manifest
+        .portable
+        .as_ref()
+        .map(|index| portable::stage(dir, app_data, index))
+        .transpose()?;
+    let operation = RestoreOperation {
+        format_version: 2,
+        phase: RestorePhase::Prepared,
+        safety_filename: safety_filename(app_data.join("mindstream.db").exists()),
+        pending_sha256: restore_file_hash(&pending_db)?,
+        portable_sha256,
+        include_device,
+    };
+    operation.save(&sentinel)?;
 
     // The staging dir's now empty of its data.db; drop the dir
     // entirely so a future import_begin doesn't sweep it later.
-    let dir = imports_staging_root(&app)?.join(&token);
-    let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(dir);
 
     Ok(RestoreStaged {
         restart_required: true,
@@ -106,22 +171,25 @@ pub(super) fn imports_staging_root(app: &AppHandle) -> AppResult<PathBuf> {
     Ok(root)
 }
 
-pub(super) fn sweep_staging_root(root: &Path) {
-    let Ok(entries) = fs::read_dir(root) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let _ = fs::remove_dir_all(entry.path());
-    }
-}
-
 /// Run at startup *before* `Db::open`. If a previous session staged a
 /// restore, preserve the old DB and install the replacement. An unresolved
 /// restore stops boot so Db::open cannot create or migrate an ambiguous DB.
 pub fn apply_pending_restore_if_any(app: &AppHandle) -> AppResult<()> {
-    reconcile_pending_restore(&crate::paths::app_data_dir(app)?)
+    let vault = crate::paths::app_data_dir(app)?;
+    let sentinel = vault.join(SENTINEL_FILE);
+    if sentinel.try_exists()? {
+        apply_pending_restore_with_root(
+            &crate::paths::app_data_root(app)?,
+            &vault,
+            &vault.join(PENDING_DB_FILE),
+            &sentinel,
+        )?;
+        crate::plugins::settings::notify(app);
+    }
+    Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn reconcile_pending_restore(app_data: &Path) -> AppResult<()> {
     let sentinel = app_data.join(SENTINEL_FILE);
     let pending = app_data.join(PENDING_DB_FILE);
@@ -146,6 +214,10 @@ pub(super) struct RestoreOperation {
     pub phase: RestorePhase,
     pub safety_filename: Option<String>,
     pub pending_sha256: String,
+    #[serde(default)]
+    pub portable_sha256: Option<String>,
+    #[serde(default)]
+    pub include_device: bool,
 }
 
 impl RestoreOperation {
@@ -157,12 +229,16 @@ impl RestoreOperation {
     }
 
     fn validate(&self) -> AppResult<()> {
-        if self.format_version != 1
+        if !matches!(self.format_version, 1 | 2)
+            || (self.portable_sha256.is_some() && self.format_version != 2)
             || self.pending_sha256.len() != 64
             || !self
                 .pending_sha256
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit())
+            || self.portable_sha256.as_ref().is_some_and(|hash| {
+                hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit())
+            })
         {
             return Err(AppError::InvalidArg(
                 "unsupported or invalid restore operation".into(),
@@ -284,7 +360,27 @@ fn require_restore_input(path: &Path, expected_hash: &str) -> AppResult<()> {
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn apply_pending_restore(
+    app_data: &Path,
+    pending: &Path,
+    sentinel: &Path,
+) -> AppResult<()> {
+    apply_pending_restore_with_root(app_data, app_data, pending, sentinel)
+}
+
+fn safety_filename(exists: bool) -> Option<String> {
+    exists.then(|| {
+        format!(
+            "mindstream-pre-restore-{}-{}.db",
+            chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S"),
+            uuid::Uuid::new_v4()
+        )
+    })
+}
+
+pub(super) fn apply_pending_restore_with_root(
+    root: &Path,
     app_data: &Path,
     pending: &Path,
     sentinel: &Path,
@@ -299,14 +395,10 @@ pub(super) fn apply_pending_restore(
         let operation = RestoreOperation {
             format_version: 1,
             phase: RestorePhase::Prepared,
-            safety_filename: live.exists().then(|| {
-                format!(
-                    "mindstream-pre-restore-{}-{}.db",
-                    chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S"),
-                    uuid::Uuid::new_v4()
-                )
-            }),
+            safety_filename: safety_filename(live.exists()),
             pending_sha256: restore_file_hash(pending)?,
+            portable_sha256: None,
+            include_device: false,
         };
         operation.save(sentinel)?;
         operation
@@ -315,6 +407,9 @@ pub(super) fn apply_pending_restore(
             .map_err(|err| AppError::InvalidArg(format!("restore operation corrupt: {err}")))?
     };
     operation.validate()?;
+    if let Some(hash) = &operation.portable_sha256 {
+        portable::pending_index(app_data, hash)?;
+    }
     let safety = operation
         .safety_filename
         .as_ref()
@@ -370,8 +465,37 @@ pub(super) fn apply_pending_restore(
     }
 
     require_restore_input(&live, &operation.pending_sha256)?;
+    if let Some(hash) = &operation.portable_sha256 {
+        portable::apply(root, app_data, hash, operation.include_device)?;
+    }
+    {
+        let conn = Connection::open_with_flags(&live, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'plugin_settings')", [], |row| row.get(0))?;
+        if exists {
+            let rows = conn
+                .prepare("SELECT plugin_id, key FROM plugin_settings")?
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            crate::plugins::settings::seal_restored_rows(root, &rows)?;
+        }
+    }
     fs::remove_file(sentinel)?;
     crate::atomic_file::sync_directory(app_data)?;
+    if let Some(hash) = &operation.portable_sha256 {
+        let safety = app_data
+            .join("backups")
+            .join(format!("pre-restore-files-{hash}"));
+        // The committed restore no longer depends on these bytes. Keep them
+        // as evidence; an archival failure must not undo the installed vault.
+        if let Err(error) = fs::rename(
+            app_data.join(portable::PENDING),
+            safety.join("restored-resources"),
+        ) {
+            log::warn!("[restore] resource evidence retained in place: {error}");
+        }
+    }
     log::info!("[restore] pending restore applied");
     Ok(())
 }

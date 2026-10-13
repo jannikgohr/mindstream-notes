@@ -44,6 +44,62 @@ fn save_device(root: &std::path::Path, document: &DeviceSettings) -> AppResult<(
     })
 }
 
+/// Backup callers hold RootLock. Physical migration owners stay on this device.
+pub(crate) fn backup_values(root: &std::path::Path) -> AppResult<BTreeMap<String, PluginSettings>> {
+    Ok(read_device(root)?.values)
+}
+
+pub(crate) fn restore_backup_values(
+    root: &std::path::Path,
+    values: &BTreeMap<String, PluginSettings>,
+) -> AppResult<()> {
+    let mut document = read_device(root)?;
+    for (id, settings) in values {
+        for (key, value) in settings {
+            if document.migrated.contains(&format!("{id}:{key}"))
+                && !document
+                    .values
+                    .get(id)
+                    .is_some_and(|settings| settings.contains_key(key))
+            {
+                continue;
+            }
+            document.migrated.insert(format!("{id}:{key}"));
+            document
+                .values
+                .entry(id.clone())
+                .or_default()
+                .entry(key.clone())
+                .or_insert_with(|| value.clone());
+        }
+    }
+    save_device(root, &document)
+}
+
+pub(crate) fn scoped_device_keys(
+    plugin: &super::discovery::DiscoveredPlugin,
+) -> std::collections::BTreeSet<String> {
+    device_keys(plugin)
+}
+
+/// Imported database rows are vault configuration, never legacy D migration
+/// input. Even an unavailable plugin must not seed shared values when installed
+/// later. Existing root values and reset receipts remain authoritative.
+pub(crate) fn seal_restored_rows(
+    root: &std::path::Path,
+    rows: &[(String, String)],
+) -> AppResult<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let _lock = crate::storage_locks::RootLock::acquire(root)?;
+    let mut document = read_device(root)?;
+    for (id, key) in rows {
+        document.migrated.insert(format!("{id}:{key}"));
+    }
+    save_device(root, &document)
+}
+
 /// Pin the selected migration source before workers can race to seed D values.
 pub fn prepare(root: &std::path::Path, selected: &std::path::Path) -> AppResult<()> {
     let _lock = crate::storage_locks::RootLock::acquire(root)?;

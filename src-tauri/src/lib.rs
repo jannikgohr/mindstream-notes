@@ -442,14 +442,14 @@ pub fn run() {
                     .build(),
             )?;
 
-            #[cfg(desktop)]
-            app.manage(desktop_settings::DesktopSettings::load(app)?);
-
             // Apply any pending restore the user staged in a previous
             // session BEFORE opening the live DB. If the sentinel
             // file is present, we move the live DB aside and swap the
             // staged copy into place. No-op when nothing's pending.
             backup::apply_pending_restore_if_any(app.handle())?;
+
+            #[cfg(desktop)]
+            app.manage(desktop_settings::DesktopSettings::load(app)?);
 
             let db_path = app_data.join("mindstream.db");
             log::info!("[boot] db path = {}", db_path.display());
