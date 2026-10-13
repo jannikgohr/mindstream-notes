@@ -232,6 +232,14 @@ stores. Keep it off the public internet all the same, by not routing
 
 A signed-in client reads its own usage from `GET /api/v1/mindstream/usage/`.
 
+## Releases
+
+The server has no releases of its own yet. When it gets them, they go out as
+tags of its container image, and not as a release of this repository marked
+latest. The app's updater reads `releases/latest/download/latest.json` from
+this repository, and a server release in that place has no such file, so
+every installed app would fail its update check.
+
 ## Develop
 
 Tests need a Postgres. This starts one on a loopback port that the tests

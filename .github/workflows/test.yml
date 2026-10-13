@@ -452,6 +452,12 @@ jobs:
       # lives in the one job no gate can skip.
       - run: pnpm lint:ci
 
+      # Every file has to say whose it is and under which licence. This
+      # repository holds parts under four licences side by side, and
+      # REUSE.toml is where each path gets its answer. A folder added under
+      # another licence, or a licence text that is missing, fails here.
+      - uses: fsfe/reuse-action@v6
+
   # One build for all three suites.
   #
   # Each suite job used to compile the same crate itself: the rust-cache

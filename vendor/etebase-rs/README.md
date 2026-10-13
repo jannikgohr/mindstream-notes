@@ -3,7 +3,16 @@
 > `6c8293f104a6b3beae1d8b009e854c51c459804d`, itself a fork of
 > [etesync/etebase-rs](https://github.com/etesync/etebase-rs), and is changed
 > here from now on. It keeps its own licence, BSD-3-Clause; see
-> [LICENSE](LICENSE). What follows is the upstream README.
+> [LICENSE](LICENSE).
+>
+> Twelve of its files still open with a header that names the LGPL 2.1.
+> Upstream moved from the LGPL to BSD-3-Clause on 2020-11-11, in commit
+> [`f288e6fc`](https://github.com/etesync/etebase-rs/commit/f288e6fc), which
+> changed `LICENSE` and `Cargo.toml` and left those headers as they were.
+> They are left alone here as well. What was added here, `src/mindstream.rs`
+> and `src/mindstream/`, is under the same BSD-3-Clause.
+>
+> What follows is the upstream README.
 
 <p align="center">
   <img width="120" src="https://github.com/etesync/etesync-web/blob/master/src/images/logo.svg" />
@@ -33,6 +42,7 @@ until it may become required.
 # Build
 
 To build:
+
 ```
 $ cargo build
 ```
@@ -44,6 +54,7 @@ docker run -p 3735:3735 -d etesync/test-server:latest
 ```
 
 and then set `ETEBASE_TEST_HOST` to the host:port on which that is running; for the docker invocation above, that's
+
 ```
 export ETEBASE_TEST_HOST=localhost:3735
 ```
