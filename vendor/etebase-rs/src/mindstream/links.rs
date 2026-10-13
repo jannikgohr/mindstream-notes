@@ -206,7 +206,8 @@ impl InviteLink {
         // again under the account's own, exactly as accepting an invitation
         // does.
         let content = self.fetch(client)?.content(&self.secret)?;
-        let collection_type = account_crypto_manager.collection_type_to_uid(&content.collection_type)?;
+        let collection_type =
+            account_crypto_manager.collection_type_to_uid(&content.collection_type)?;
         let encryption_key = account_crypto_manager
             .0
             .encrypt(&content.encryption_key, Some(&collection_type))?;
@@ -483,7 +484,8 @@ pub(crate) fn list(client: &Client, collection_uid: &str) -> Result<Vec<LinkInfo
     }
 
     let mut url = Url::parse(&link_url(client, "")?)?;
-    url.query_pairs_mut().append_pair("collection", collection_uid);
+    url.query_pairs_mut()
+        .append_pair("collection", collection_uid);
     let res = client.get(url.as_str())?;
     checked(&res)?;
     Ok(rmp_serde::from_slice::<Links>(res.bytes())?.links)

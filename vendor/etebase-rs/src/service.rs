@@ -598,7 +598,10 @@ impl Account {
 
     /// The invite links into a collection that have not expired, the ones that
     /// are used up among them
-    pub fn invite_links(&self, collection: &Collection) -> Result<Vec<crate::mindstream::LinkInfo>> {
+    pub fn invite_links(
+        &self,
+        collection: &Collection,
+    ) -> Result<Vec<crate::mindstream::LinkInfo>> {
         crate::mindstream::links::list(&self.client, collection.uid())
     }
 
