@@ -80,6 +80,59 @@ async fn members_of_a_room_see_each_other_and_exchange_frames() {
     assert!(matches!(owner_socket.next().await, Frame::Control(LEFT, _)));
 }
 
+/// A request for the document's state makes every writer in the room send
+/// what the asker lacks, which for an asker that claims to have nothing is
+/// all of it. So a socket gets ten of them in ten seconds, and what it asks
+/// beyond that is not passed on.
+#[tokio::test]
+async fn member_that_keeps_asking_for_the_state_is_heard_only_so_often() {
+    let (owner, collection, item) = space().await;
+    let asker = Device::signup(common::server(), "asker").await;
+    owner.share(&collection, &asker, READ_ONLY).await;
+
+    let (mut owner_socket, _) = owner.enter(&collection, &item).await;
+    let (mut asker_socket, welcome) = asker.enter(&collection, &item).await;
+    let asker_id = welcome["you"].as_u64().unwrap();
+    assert!(matches!(
+        owner_socket.next().await,
+        Frame::Control(JOINED, _)
+    ));
+
+    for request in 0..15u8 {
+        asker_socket.send(SYNC, &[request]).await;
+    }
+    for request in 0..10u8 {
+        assert_eq!(
+            owner_socket.next().await,
+            Frame::Relayed {
+                class: SYNC,
+                sender: asker_id,
+                payload: vec![request]
+            },
+            "request {request}"
+        );
+    }
+    // The other five went nowhere, and the asker was not put out for them.
+    owner_socket.expect_quiet().await;
+
+    // Only asking is counted. Anything else the member may send still
+    // arrives, and the room still reaches the member.
+    asker_socket.send(PRESENCE, b"cursor").await;
+    assert_eq!(
+        owner_socket.next().await,
+        Frame::Relayed {
+            class: PRESENCE,
+            sender: asker_id,
+            payload: b"cursor".to_vec()
+        }
+    );
+    owner_socket.send(UPDATE, b"edit").await;
+    assert!(matches!(
+        asker_socket.next().await,
+        Frame::Relayed { class: UPDATE, .. }
+    ));
+}
+
 #[tokio::test]
 async fn nobody_enters_without_a_ticket_they_are_entitled_to() {
     let (owner, collection, item) = space().await;
