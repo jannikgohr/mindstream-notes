@@ -88,7 +88,8 @@ import staging and retained safety evidence are not automatically deleted.
 
 Worker storage contract 4 prevents incompatible old workers from participating
 in the new restore flow. The current runtime versions are authoritative in
-`worker_registration.rs`. Reboot/power-loss and signed packaged updater checks
+`worker_registration.rs`. Hard-reset verification is pending. Linux packaged
+updates pass with a disposable QA signing key; production-key platform checks
 remain release QA, separately from tested process-crash recovery.
 
 ## Verification
@@ -102,7 +103,9 @@ Frontend tests cover preview parsing, the unchecked option and its IPC argument.
 functions to prepare a disposable root, then launches real desktop workers,
 checks restored values/data and approval gates, opens a separate unchanged vault
 and verifies cold restart. It closes through authenticated Quit and verifies
-every coordinator/vault lease. Native file-picker interaction remains manual QA.
+every coordinator/vault lease. The Ubuntu VM run also exercised real Save As
+and Open pickers, replacement confirmation and Restart now. See
+[the VM report](e2e/ubuntu-vm-qa.md) for current results and remaining checks.
 The optional Windows `--check-ui` case renders the actual choice dialog with a
 fixture preview and verifies its unchecked default and returned selection. Backend replacement is tested
 separately through the real export/staging/startup path.

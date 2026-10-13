@@ -1437,6 +1437,55 @@ mod tests {
         a: std::path::PathBuf,
         b: std::path::PathBuf,
     }
+
+    /// Stream durable receipts to a separate host before it resets the QA VM.
+    /// The caller must create the disposable directory and its ownership marker.
+    #[test]
+    #[ignore = "manual VM reset fixture; requires MINDSTREAM_RESET_FIXTURE_ROOT"]
+    fn stream_vm_reset_receipts() {
+        use std::io::Write;
+
+        let root = std::path::PathBuf::from(
+            std::env::var("MINDSTREAM_RESET_FIXTURE_ROOT").expect("fixture root required"),
+        )
+        .canonicalize()
+        .unwrap();
+        assert_eq!(
+            fs::read(root.join("reset-fixture.owner")).unwrap(),
+            b"mindstream-qa-v1"
+        );
+        assert!(!root.join("ui-settings.json").exists());
+        let vault = root.join("profiles/default");
+        fs::create_dir_all(&vault).unwrap();
+        initialize(&root, &vault, "default", None, None).unwrap();
+        access(
+            &root,
+            &vault,
+            Some((
+                "appearance.accent".into(),
+                Some(serde_json::json!("#abcdef")),
+            )),
+        )
+        .unwrap();
+        for sequence in 1..=36_000u64 {
+            let font = 12 + sequence % 7;
+            let snapshot = access(
+                &root,
+                &vault,
+                Some(("appearance.uiFontSize".into(), Some(Value::from(font)))),
+            )
+            .unwrap();
+            println!(
+                "QA_RECEIPT {}",
+                serde_json::json!({
+                    "sequence": sequence, "revision": snapshot.device_revision, "font": font
+                })
+            );
+            std::io::stdout().flush().unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        panic!("fixture expired without a VM reset");
+    }
     impl TestDirs {
         fn new() -> Self {
             let root =

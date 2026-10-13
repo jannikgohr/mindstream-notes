@@ -124,7 +124,11 @@ class Fixture:
         source, target = self.identity("source"), self.identity("target")
         geometry = next(window for window in self.windows("source") if window["label"] == "main")
         source_position = {key: geometry[key] for key in ["x", "y"]}
-        geometry.update({"x": 135, "y": 95, "width": 1020, "height": 740, "maximized": False})
+        # Snapshots use physical pixels. Keep fixture requests above GTK's
+        # scaled minimum size and on whole logical pixels at integer scaling.
+        scale = int(os.environ.get("GDK_SCALE", "1")) if os.name != "nt" else 1
+        geometry.update({"x": 135 * scale, "y": 95 * scale, "width": 1020 * scale,
+            "height": 740 * scale, "maximized": False})
         if os.environ.get("GDK_BACKEND") == "wayland":
             # Global placement belongs to the compositor; validate saved size.
             geometry.update(source_position)

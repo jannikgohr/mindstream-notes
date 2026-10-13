@@ -537,4 +537,42 @@ fn produce_native_restore_fixture() {
     fs::write(vault.join("plugin-data/before"), b"old native data").unwrap();
     fixture.stage(&vault, &conn, true);
     fs::copy(&fixture.zip, root.parent().unwrap().join("portable.zip")).unwrap();
+    drop(conn);
+    // Persist selected interrupted states for an external, whole-VM reset.
+    // No production fault hooks are enabled by these test-only preparations.
+    if let Ok(boundary) = std::env::var("MINDSTREAM_BACKUP_FIXTURE_BOUNDARY") {
+        let operation: RestoreOperation =
+            serde_json::from_slice(&fs::read(vault.join(SENTINEL_FILE)).unwrap()).unwrap();
+        let hash = operation.portable_sha256.as_ref().unwrap();
+        match boundary.as_str() {
+            "files-preserved" => {
+                let safety = vault
+                    .join("backups")
+                    .join(format!("pre-restore-files-{hash}"));
+                fs::create_dir_all(&safety).unwrap();
+                fs::rename(vault.join("plugin-data"), safety.join("plugin-data")).unwrap();
+                crate::atomic_file::sync_directory(&safety).unwrap();
+                crate::atomic_file::sync_directory(&vault).unwrap();
+                crate::atomic_file::sync_directory(&vault.join("backups")).unwrap();
+            }
+            "resources-published" => portable::apply(&root, &vault, hash, true).unwrap(),
+            "database-installed" => {
+                portable::apply(&root, &vault, hash, true).unwrap();
+                fs::rename(
+                    vault.join("mindstream.db"),
+                    vault.join(operation.safety_filename.as_ref().unwrap()),
+                )
+                .unwrap();
+                fs::rename(vault.join(PENDING_DB_FILE), vault.join("mindstream.db")).unwrap();
+                crate::atomic_file::sync_directory(&vault).unwrap();
+                RestoreOperation {
+                    phase: RestorePhase::Installed,
+                    ..operation
+                }
+                .save(&vault.join(SENTINEL_FILE))
+                .unwrap();
+            }
+            _ => panic!("unknown VM restore checkpoint"),
+        }
+    }
 }

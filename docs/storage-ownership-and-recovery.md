@@ -225,9 +225,9 @@ supervised opening command binds to the exact ready source launch and rechecks
 the target's index/physical ownership. Source admission tracks the opening job;
 the coordinator rejects new opening requests during Quit/update drain. Opening
 another vault leaves the source running; requesting an existing target focuses
-its window. This-window handoff and opening preferences remain unfinished.
-The owner confirmed that interrupted handoff should finish opening the target
-once the source has saved and closed, and retain the source while it is open.
+its window. This-window handoff and remembered opening preferences are implemented.
+Interrupted handoff finishes opening the target once the source has saved and
+closed, and retains the source while it is open.
 
 The coordinator also owns tray, shortcut and autostart registration and update
 installation. Update recovery records every open vault and main/popout window
@@ -235,7 +235,10 @@ before close, restores visibility/geometry/focus, and consumes the record only
 after persistence readiness. A consumed record is retained without replay on a
 normal cold launch. Coordinator revival adopts surviving physical owners without
 opening another vault or activating a window. These paths pass embedded Windows
-checks; actual signed installation and packaged macOS/Linux checks remain open.
+checks. Optimized Linux Debian installation and a locally signed AppImage update
+also pass, including rejected signatures, both vaults, popouts, hidden state and
+consumed restart behavior. Packaged macOS and production-key platform checks
+remain open. See [the VM report](e2e/ubuntu-vm-qa.md).
 
 ## Verification limits
 

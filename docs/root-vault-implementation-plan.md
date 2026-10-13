@@ -20,7 +20,7 @@ lists are historical.
 | Appearance              | Root presets, accent and UI font size implemented. Editor typography remains vault-specific.                                                                                              |
 | Global plugins          | Shared immutable packages/artifacts and device settings implemented. Approval, enablement and writable data remain per vault.                                                             |
 | Backup portability      | Version 2 archives include vault settings/data and portable device configuration/packages. Shared-device restore is opt-in and preserves conflicts. Version 1 archives remain readable.   |
-| Release QA              | Windows native checks and Linux X11/nested Wayland checks pass. Packaged macOS, signed updater installation, monitor/DPI and reboot checks remain open.                                   |
+| Release QA              | Windows/Linux native checks, Linux QA packages/updater, real pickers and integer scaling pass. Hard reset, production-key platform and real display/macOS checks remain open.             |
 
 Detailed contracts and evidence:
 
@@ -30,6 +30,7 @@ Detailed contracts and evidence:
 - [Theme presets and device appearance](theme-presets-implementation-plan.md)
 - [Browser storage migration inventory](vault-browser-storage-audit.md)
 - [Native validation commands](e2e/harness.md#concurrent-vault-checks)
+- [Ubuntu VM QA and reset/updater procedures](e2e/ubuntu-vm-qa.md)
 
 ## Required behavior
 
@@ -103,13 +104,17 @@ Windows checks cover simultaneous workers, duplicate/focus routing, unsaved
 main/popout edits, close failures, handoff recovery, startup retry/adoption,
 shortcuts/tray and the development launcher. Linux X11 and nested Weston/Wayland
 checks cover handoff, recovery, startup and observed window focus. These are
-native development-build checks, not proof of signed packaged installation or
-power-loss durability.
+native development-build checks. The Ubuntu VM also passes optimized Debian
+installation and a locally signed AppImage update, including tampered-signature
+rejection and all-vault/popout/hidden-state restoration. It passes the real Linux
+backup pickers and integer 200% scaling. See the linked VM report for evidence
+and limits; the external hard-reset verification is pending.
 
 Remaining release QA:
 
 - VM/reboot interruptions for filesystem publication and restore durability.
-- Actual signed updater installation and packaged restart on supported platforms.
+- Production-key updater installation and packaged restart on Windows/macOS.
+  Linux installation/restart passes with a disposable QA signing key.
 - Real monitor, DPI and display-change behavior.
 - Packaged macOS 14+ Dock/menu/Reopen, focus, hide/show and Cmd+Q behavior. The
   owner accepted deferral until a Mac is available for release testing.

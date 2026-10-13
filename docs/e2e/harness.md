@@ -1,5 +1,8 @@
 # The real-app harness (T3/T4)
 
+Current Linux VM, real-picker, signed-package and hard-reset procedures are in
+[Ubuntu VM QA](ubuntu-vm-qa.md). Dated evidence below describes earlier runs.
+
 How the `e2e-tests/app/` suite drives the **packaged Tauri binary** with
 `tauri-driver` (WebDriver) under a headless display (`xvfb` on Linux CI). The
 binary is built with `--features e2e-data-dir` so the test seams below work in a
