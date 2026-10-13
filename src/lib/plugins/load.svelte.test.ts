@@ -153,6 +153,16 @@ describe('loadPlugins — Tauri (backend discovery)', () => {
     expect(allPlugins()).toHaveLength(0);
   });
 
+  it('removes contributions when a shared package disappears', async () => {
+    isTauri.mockReturnValue(true);
+    pluginsDiscover.mockResolvedValue([view({ enabled: true })]);
+    await loadPlugins();
+    expect(enabledPlugins()).toHaveLength(1);
+    pluginsDiscover.mockResolvedValue([]);
+    await loadPlugins();
+    expect(allPlugins()).toHaveLength(0);
+  });
+
   it('falls back to the record id for a gated plugin whose manifest has no name', async () => {
     isTauri.mockReturnValue(true);
     // Manifest omits `name`, so the gate notification uses the record id.

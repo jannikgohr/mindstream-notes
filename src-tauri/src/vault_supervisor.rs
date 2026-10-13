@@ -1179,6 +1179,8 @@ fn begin_host_startup(
     crate::desktop_settings::refresh_runtime(app)
         .map_err(|error| AppError::InvalidArg(error.to_string()))?;
     let vault = crate::profiles::profile_dir(&root, &initial);
+    crate::plugins::packages::prepare(&root, &vault)?;
+    crate::plugins::settings::prepare(&root, &vault)?;
     crate::ui_settings::prepare_device_appearance(&root, &vault, &initial)?;
     crate::legacy_content::initialize_owner(&root, &initial, &vault)?;
 
@@ -3646,6 +3648,7 @@ pub fn register_worker(
                 handle
                     .emit(crate::app_events::AppEvent::UiSettingsChanged.as_str(), ())
                     .map_err(|_| "worker settings notification unavailable".to_string())?;
+                let _ = handle.emit(crate::app_events::AppEvent::PluginsChanged.as_str(), ());
                 let app = handle.clone();
                 handle
                     .run_on_main_thread(move || {

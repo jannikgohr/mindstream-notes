@@ -129,6 +129,7 @@ export enum TauriCommandName {
   PluginsPreviewStop = 'plugins_preview_stop',
   PluginsPreviewUpdate = 'plugins_preview_update',
   PluginsRemove = 'plugins_remove',
+  PluginsInstall = 'plugins_install',
   PluginsReadArtifact = 'plugins_read_artifact',
   PluginsReadFile = 'plugins_read_file',
   PluginsRunNativeTool = 'plugins_run_native_tool',

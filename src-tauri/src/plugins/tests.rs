@@ -441,6 +441,9 @@ fn reconcile_registers_discovered_plugins_and_returns_manifests() {
     let db = open_memory_for_tests();
     db.with_conn(|c| {
         let discovered = vec![super::discovery::DiscoveredPlugin {
+            generation: None,
+            legacy_generation: None,
+            lease: None,
             id: "com.a.plugin".into(),
             version: "1.0.0".into(),
             permissions: vec!["notes.create".into()],
@@ -1135,8 +1138,12 @@ mod artifacts {
 
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
         assert!(
-            path.ends_with("typst-compiler/0.13.1/typst.wasm"),
-            "laid out by id and version: {path:?}"
+            path.ends_with(
+                Path::new("typst-compiler/0.13.1")
+                    .join(&declared.sha256)
+                    .join("typst.wasm")
+            ),
+            "laid out by id, version and content digest: {path:?}"
         );
         // The staging copy is gone: it was renamed, not left behind.
         assert_eq!(files(&root), ["typst.wasm"]);
@@ -1183,18 +1190,17 @@ mod artifacts {
     }
 
     #[test]
-    fn replaces_a_previously_installed_file() {
-        // Re-downloading the same artifact must end with exactly one file, not
-        // fail on the existing one.
+    fn keeps_different_bytes_with_the_same_declared_version() {
         let root = artifact_dir("replace");
         let first = b"first build";
-        install_artifact_bytes(&root, &artifact(first), first).unwrap();
+        let first_path = install_artifact_bytes(&root, &artifact(first), first).unwrap();
 
         let second = b"second build";
         let path = install_artifact_bytes(&root, &artifact(second), second).unwrap();
 
         assert_eq!(std::fs::read(&path).unwrap(), second);
-        assert_eq!(files(&root), ["typst.wasm"]);
+        assert_eq!(std::fs::read(first_path).unwrap(), first);
+        assert_eq!(files(&root), ["typst.wasm", "typst.wasm"]);
     }
 
     #[test]
@@ -1227,6 +1233,9 @@ mod artifacts {
 /// `source` and `checksum` matter to the integrity gate; the rest is filler.
 fn on_disk(id: &str, checksum: &str, source: &str) -> discovery::DiscoveredPlugin {
     discovery::DiscoveredPlugin {
+        generation: None,
+        legacy_generation: None,
+        lease: None,
         id: id.to_string(),
         version: "1.0.0".to_string(),
         permissions: Vec::new(),
@@ -1405,6 +1414,37 @@ fn signed_same_signer_update_cannot_widen_its_permissions() {
         let reason = rec.last_load_error.unwrap();
         assert!(reason.contains("new permissions"), "{reason}");
         assert!(reason.contains("nativeTools.runDeclared"), "{reason}");
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn resigning_identical_code_cannot_replace_the_pinned_signer() {
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        upsert(
+            c,
+            signed_input("com.a.p", "h1", SOURCE_INSTALLED, Some("keyA"), "valid"),
+        )?;
+        approve(
+            c,
+            "com.a.p",
+            "h1",
+            &["notes.create".into()],
+            Some("keyA"),
+            "valid",
+        )?;
+        for hash in ["h1", "h1", "h2"] {
+            let record = upsert(
+                c,
+                signed_input("com.a.p", hash, SOURCE_INSTALLED, Some("keyB"), "valid"),
+            )?;
+            assert!(!record.enabled);
+            assert_eq!(record.signer.as_deref(), Some("keyA"));
+            assert_eq!(record.accepted_hash, "h1");
+            assert!(record.last_load_error.unwrap().contains("different key"));
+        }
         Ok(())
     })
     .unwrap();

@@ -62,6 +62,7 @@ fn require_service<'a>(
 
 /// One running preview server.
 struct Session {
+    _package_lease: Option<std::sync::Arc<super::packages::PackageLease>>,
     child: Option<Child>,
     input_path: PathBuf,
     /// The server's data-plane HTTP port — where the reverse-proxy fetches the
@@ -689,15 +690,29 @@ pub async fn plugins_preview_start(
     }
     // Snapshot of the plugin's own settings (id → value) fed into `{setting:<id>}`
     // arg placeholders, each restricted to a safe CLI charset.
-    let settings: HashMap<String, String> = settings
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(k, v)| (k, sanitize_setting_value(&v)))
-        .collect();
+    let _ = settings;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
     let (_, plugin) = db.with_conn(|c| {
         super::load_runnable(c, &third_party_dir, &id, Some(PERM_NATIVE_SERVICES_RUN))
     })?;
+    let effective = db.with_conn(|c| {
+        super::settings::effective(
+            &crate::paths::app_data_root(&app)?,
+            &crate::paths::app_data_dir(&app)?,
+            c,
+            &plugin,
+        )
+    })?;
+    let settings: HashMap<String, String> = super::settings::with_defaults(&plugin, effective)
+        .into_iter()
+        .map(|(key, value)| {
+            let text = value
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| value.to_string());
+            (key, sanitize_setting_value(&text))
+        })
+        .collect();
     let service = require_service(&plugin.manifest, &service_id)?.clone();
     // Absent  means direct, so resolve it once and read from that.
     let iframe = service.iframe();
@@ -742,6 +757,7 @@ pub async fn plugins_preview_start(
     let handle = tauri::async_runtime::spawn_blocking(move || -> AppResult<_> {
         let startup_job = blocking_job;
         let mut session = Session {
+            _package_lease: plugin.lease,
             child: None,
             input_path,
             data_port: free_port()?,
@@ -1057,6 +1073,7 @@ mod tests {
             .args(["--exact", "storage_locks::tests::lock_child"])
             .env("MINDSTREAM_TEST_LOCK_ROOT", &root);
         let mut session = Session {
+            _package_lease: None,
             child: Some(
                 super::super::hide_console_window(&mut command)
                     .spawn()
@@ -1110,6 +1127,7 @@ mod tests {
             registry.sessions.lock().unwrap().insert(
                 "same-session".into(),
                 Session {
+                    _package_lease: None,
                     child: None,
                     input_path: path.clone(),
                     data_port: 1,

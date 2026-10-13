@@ -6,8 +6,8 @@ document has a revision, a validated `.previous` copy and a `.migrated` record.
 Initial migration retains raw browser buckets. Valid documents win over those
 inputs; malformed required inputs refuse migration. Only the default vault can
 inherit content from the old unscoped bucket. Unknown/plugin entries stay in
-the vault, while dynamic `hotkey.*` bindings stay at the root. Plugin settings
-with an external store continue to use the vault database.
+the vault, while dynamic `hotkey.*` bindings stay at the root. Plugin settings with `scope: "V"` use the vault database; `D` values use root
+`plugin-settings.json`. Scripts and preview services read the merged backend values.
 
 Appearance presets, accent and UI font size are device preferences in root
 `ui-settings.json`. Editor font size and line height remain vault preferences.
@@ -36,7 +36,7 @@ receipt is published after its settings and before removing the root source.
 Retries and recovered old root copies cannot re-enable a cleared owner or seed
 another vault. Unscoped browser values follow that same owner; explicit vault
 buckets preserve their own choice. Invalid booleans or migration records stop
-initialization with evidence intact. The worker storage contract is version 2;
+initialization with evidence intact. The worker storage contract is version 3;
 incompatible live workers block adoption and shared-document migration.
 
 The coordinator records vault focus in root `shortcut-recency.json`, separately
@@ -244,3 +244,17 @@ duplicate rejection and reopening after forced termination. File contents and
 Unix directory entries are flushed before publication. Windows directory-entry
 reboot durability and macOS/Linux runtime behavior still need platform tests.
 Never delete SQLite WAL files as a startup cleanup operation.
+
+Global plugin packages use root `plugins/catalog.json`, immutable
+`plugin-packages/<digest>` directories and OS leases in `plugin-leases`.
+Installation generations bind approvals to a particular installation. Removal
+publishes a revocation before a catalog tombstone, so recovery cannot restore its
+authority. Reinstall needs fresh approval even in unopened vaults. Existing scripts
+and preview services retain their old package lease; final release collects retired
+files and unreferenced digest-addressed artifacts. Writable `plugin-data` stays in
+the vault. Settings and migration sources survive removal.
+
+Root `plugin-settings.json` records the startup-selected canonical vault directory
+and one-time `D` key receipts. Existing root values win. Retained vault rows cannot
+resurrect a reset value. RootLock guards field edits and catalog publication;
+notifications are sent after its release. See the [global plugin plan](global-plugins-implementation-plan.md).

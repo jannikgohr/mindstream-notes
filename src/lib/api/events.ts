@@ -14,6 +14,7 @@ export enum TauriEventName {
   FullscreenNote = 'fullscreen-note',
   ImportProgress = 'import-progress',
   NativeMenuCommand = 'native-menu-command',
+  PluginsChanged = 'plugins-changed',
   ShowApp = 'show-app',
   SignaturesChanged = 'signatures-changed',
   SyncCompleted = 'sync-completed',
@@ -84,6 +85,7 @@ export type TauriEvents = {
    * (already-persisted) library when this fires. See stores/signatures.svelte.
    */
   'signatures-changed': null;
+  'plugins-changed': null;
   'ui-settings-changed': null;
   'desktop-settings-changed': null;
   'vault-worker-close': {

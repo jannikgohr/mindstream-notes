@@ -758,6 +758,15 @@ const MIGRATIONS: &[Migration] = &[
             );
         "#,
     },
+    Migration {
+        to: 28,
+        sql: r#"
+            CREATE TABLE plugin_installations (
+                plugin_id TEXT PRIMARY KEY,
+                generation TEXT NOT NULL
+            );
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

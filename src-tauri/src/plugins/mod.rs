@@ -37,6 +37,7 @@ use crate::error::{AppError, AppResult, CommandResult};
 pub mod discovery;
 pub mod luau;
 pub mod manifest;
+pub mod packages;
 pub mod preview_service;
 pub mod settings;
 pub mod signing;
@@ -224,7 +225,12 @@ pub fn upsert(conn: &Connection, input: UpsertPlugin) -> AppResult<PluginRecord>
             // Same author only when both are present and the fingerprints match.
             let same_signer =
                 input.signer.is_some() && input.signer.as_deref() == existing.signer.as_deref();
-            let accept = trusted || hash_matches || (signed_valid && same_signer);
+            // Signature metadata is excluded from the signed content digest.
+            // Re-signing identical bytes must not replace the accepted key:
+            // that key could otherwise auto-approve its next changed package.
+            let unchanged_signer = input.signer == existing.signer;
+            let accept =
+                trusted || (hash_matches && unchanged_signer) || (signed_valid && same_signer);
 
             // An accepted update may narrow its permissions freely, but it may
             // not widen them. Auto-approving a same-signer update is a
@@ -358,8 +364,16 @@ pub fn reconcile(
     conn: &Connection,
     discovered: Vec<discovery::DiscoveredPlugin>,
 ) -> AppResult<Vec<DiscoveredPluginView>> {
+    let present: std::collections::HashSet<_> =
+        discovered.iter().map(|plugin| plugin.id.as_str()).collect();
+    for record in list(conn)? {
+        if record.source == SOURCE_INSTALLED && !present.contains(record.id.as_str()) {
+            disable_crashed(conn, &record.id, "package is not installed on this device")?;
+        }
+    }
     let mut views = Vec::with_capacity(discovered.len());
     for plugin in discovered {
+        packages::reconcile_generation(conn, &plugin)?;
         let record = upsert(
             conn,
             UpsertPlugin {
@@ -463,6 +477,7 @@ pub fn remove(conn: &Connection, id: &str) -> AppResult<()> {
 /// `..` segment or symlink can't escape the plugins folder — defense in depth so
 /// this can never remove a builtin or unrelated directory even if handed a bad
 /// path.
+#[cfg(test)]
 fn remove_plugin_dir(third_party_dir: &Path, dir: &Path) -> AppResult<()> {
     let base = third_party_dir
         .canonicalize()
@@ -583,6 +598,7 @@ fn load_runnable(
     }
     let plugin = discovery::find(third_party_dir, id)
         .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
+    packages::require_generation(conn, &plugin)?;
     require_approved(&record, &plugin)?;
     Ok((record, plugin))
 }
@@ -898,7 +914,7 @@ fn require_artifact<'a>(
 
 fn plugin_artifact_root(app: &AppHandle, plugin_id: &str) -> AppResult<PathBuf> {
     safe_segment(plugin_id, "plugin id")?;
-    Ok(crate::paths::app_data_dir(app)?
+    Ok(crate::paths::app_data_root(app)?
         .join("plugin-artifacts")
         .join(plugin_id))
 }
@@ -914,6 +930,7 @@ fn artifact_path_in(root: &Path, artifact: &manifest::ArtifactDecl) -> AppResult
     Ok(root
         .join(&artifact.id)
         .join(&artifact.version)
+        .join(&artifact.sha256)
         .join(&artifact.file_name))
 }
 
@@ -975,6 +992,7 @@ async fn download_artifact(
         .await
         .map_err(|e| AppError::InvalidArg(format!("artifact download body: {e}")))?;
 
+    let _lock = crate::storage_locks::RootLock::acquire(&crate::paths::app_data_root(&app)?)?;
     install_artifact_bytes(&plugin_artifact_root(&app, &plugin_id)?, &artifact, &bytes)?;
     artifact_status(&app, &plugin_id, &artifact)
 }
@@ -1021,20 +1039,22 @@ fn install_artifact_bytes(
     let version_dir = final_path
         .parent()
         .ok_or_else(|| AppError::InvalidArg("artifact path has no parent".into()))?;
-    let staging_dir = root.join(".staging");
-    fs::create_dir_all(&staging_dir)?;
-    fs::create_dir_all(version_dir)?;
-    let staging_path = staging_dir.join(format!(
-        "{}-{}-{}",
-        artifact.id,
-        artifact.version,
-        uuid::Uuid::new_v4()
-    ));
-    fs::write(&staging_path, bytes)?;
-    if final_path.exists() {
-        fs::remove_file(&final_path)?;
+    fs::create_dir_all(root)?;
+    let mut ancestor = version_dir;
+    while !ancestor.exists() {
+        ancestor = ancestor
+            .parent()
+            .ok_or_else(|| AppError::InvalidArg("artifact parent missing".into()))?;
     }
-    fs::rename(&staging_path, &final_path)?;
+    ensure_inside_data_root(root, ancestor)?;
+    fs::create_dir_all(version_dir)?;
+    ensure_write_target_safe(root, &final_path)?;
+    // A digest-addressed artifact is immutable. Atomic publication uses a
+    // unique synced temporary file; concurrent downloads publish equal bytes.
+    if fs::read(&final_path).is_ok_and(|existing| sha256_hex(&existing) == actual_hash) {
+        return Ok(final_path);
+    }
+    crate::atomic_file::write(&final_path, bytes)?;
     Ok(final_path)
 }
 
@@ -1315,23 +1335,65 @@ pub fn plugins_discover(
     app: AppHandle,
     db: State<'_, Db>,
 ) -> CommandResult<Vec<DiscoveredPluginView>> {
+    let _save = app.state::<crate::vault_jobs::Saves>().enter()?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
     discovery::ensure_third_party_dir(&third_party_dir);
-    let discovered = discovery::discover(&third_party_dir);
+    if packages::prepare(&crate::paths::app_data_root(&app)?, &crate::paths::app_data_dir(&app)?)? { settings::notify(&app); }
+    let discovered = discovery::try_discover(&third_party_dir)?;
     db.with_conn(|c| reconcile(c, discovered))
         .map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn plugins_enable(db: tauri::State<'_, Db>, id: String) -> CommandResult<PluginRecord> {
-    db.with_conn(|c| set_enabled(c, &id, true))
-        .map_err(Into::into)
+pub async fn plugins_install(app: AppHandle, source_path: Option<String>) -> CommandResult<Option<String>> {
+    let source_path = match source_path {
+        Some(path) => path,
+        None => {
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_dialog::DialogExt;
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                app.dialog().file().set_title("Install plugin from folder").pick_folder(move |path| { let _ = tx.send(path); });
+                let Some(path) = rx.await.map_err(|_| AppError::InvalidArg("plugin picker unavailable".into()))? else { return Ok(None); };
+                path.into_path().map_err(|e| AppError::InvalidArg(e.to_string()))?.to_string_lossy().into_owned()
+            }
+            #[cfg(mobile)]
+            { return Err(AppError::InvalidArg("folder installation requires desktop".into()).into()); }
+        }
+    };
+    let save = app.state::<crate::vault_jobs::Saves>().enter()?;
+    let root = crate::paths::app_data_root(&app)?;
+    let id = tauri::async_runtime::spawn_blocking(move || {
+        let _save = save;
+        packages::install(&root, Path::new(&source_path))
+    }).await.map_err(|e| AppError::InvalidArg(e.to_string()))??;
+    settings::notify(&app);
+    Ok(Some(id))
 }
 
 #[tauri::command]
-pub fn plugins_disable(db: tauri::State<'_, Db>, id: String) -> CommandResult<PluginRecord> {
-    db.with_conn(|c| set_enabled(c, &id, false))
-        .map_err(Into::into)
+pub fn plugins_enable(app: AppHandle, db: tauri::State<'_, Db>, id: String) -> CommandResult<PluginRecord> {
+    let _save = app.state::<crate::vault_jobs::Saves>().enter()?;
+    let dir = discovery::third_party_plugins_dir(&app)?;
+    let plugin = discovery::find(&dir, &id).ok_or_else(|| AppError::NotFound(format!("plugin {id}")))?;
+    let record = db.with_conn(|c| {
+        packages::require_generation(c, &plugin)?;
+        let record = require(c, &id)?;
+        require_approved(&record, &plugin)?;
+        set_enabled(c, &id, true)
+    })?;
+    use tauri::Emitter;
+    let _ = app.emit(crate::app_events::AppEvent::PluginsChanged.as_str(), ());
+    Ok(record)
+}
+
+#[tauri::command]
+pub fn plugins_disable(app: AppHandle, db: tauri::State<'_, Db>, id: String) -> CommandResult<PluginRecord> {
+    let _save = app.state::<crate::vault_jobs::Saves>().enter()?;
+    let record = db.with_conn(|c| set_enabled(c, &id, false))?;
+    use tauri::Emitter;
+    let _ = app.emit(crate::app_events::AppEvent::PluginsChanged.as_str(), ());
+    Ok(record)
 }
 
 /// Re-approve a gated plugin by accepting whatever is currently on disk. Trust
@@ -1343,10 +1405,12 @@ pub fn plugins_approve(
     db: State<'_, Db>,
     id: String,
 ) -> CommandResult<PluginRecord> {
+    let _save = app.state::<crate::vault_jobs::Saves>().enter()?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
     let plugin = discovery::find(&third_party_dir, &id)
         .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
-    db.with_conn(|c| {
+    let record = db.with_conn(|c| {
+        packages::reconcile_generation(c, &plugin)?;
         approve(
             c,
             &plugin.id,
@@ -1355,8 +1419,10 @@ pub fn plugins_approve(
             plugin.signer.as_deref(),
             &plugin.signature_status,
         )
-    })
-    .map_err(Into::into)
+    })?;
+    use tauri::Emitter;
+    let _ = app.emit(crate::app_events::AppEvent::PluginsChanged.as_str(), ());
+    Ok(record)
 }
 
 #[tauri::command]
@@ -1376,6 +1442,7 @@ pub fn plugins_set_load_error(
 /// hides the trash affordance for builtins; this is the backend enforcement.
 #[tauri::command]
 pub fn plugins_remove(app: AppHandle, db: State<'_, Db>, id: String) -> CommandResult<()> {
+    let _save = app.state::<crate::vault_jobs::Saves>().enter()?;
     if let Some(record) = db.with_conn(|c| get(c, &id))? {
         if record.source == SOURCE_BUILTIN {
             return Err(
@@ -1384,24 +1451,12 @@ pub fn plugins_remove(app: AppHandle, db: State<'_, Db>, id: String) -> CommandR
         }
     }
 
-    // Re-locate the plugin on disk (trust stays location-derived) and delete its
-    // directory when it's a third-party install. Already gone from disk is fine —
-    // we still clear the DB record below so a stale row can't linger.
-    let third_party_dir = discovery::third_party_plugins_dir(&app)?;
-    if let Some(plugin) = discovery::find(&third_party_dir, &id) {
-        if let Some(dir) = plugin.files.fs_path() {
-            remove_plugin_dir(&third_party_dir, dir)?;
-        }
-    }
-
-    // Drop the plugin's stored settings with it: leaving them behind would
-    // silently reapply to a later reinstall the user may have meant as a fresh
-    // start.
-    db.with_conn(|c| {
-        settings::clear(c, &id)?;
-        remove(c, &id)
-    })
-    .map_err(Into::into)
+    packages::uninstall(&crate::paths::app_data_root(&app)?, &id)?;
+    // Configuration and approvals remain in their vault. A future install has
+    // a new generation and cannot inherit these approvals.
+    db.with_conn(|c| disable_crashed(c, &id, "package removed from this device"))?;
+    settings::notify(&app);
+    Ok(())
 }
 
 /// Read one of a plugin's bundled text files (docs `.md`, icon `.svg`, …).
@@ -1489,6 +1544,8 @@ pub fn plugins_read_artifact(
     })?;
     let artifact = require_artifact(&plugin.manifest, &artifact_id)?;
     let path = artifact_file_path(&app, &id, artifact)?;
+    let _lock = crate::storage_locks::RootLock::acquire(&crate::paths::app_data_root(&app)?)?;
+    ensure_write_target_safe(&plugin_artifact_root(&app, &id)?, &path)?;
     let bytes = fs::read(&path).map_err(|_| {
         AppError::NotFound(format!("installed artifact {artifact_id} for plugin {id}"))
     })?;
@@ -1566,8 +1623,10 @@ pub async fn plugins_run_native_tool(
     })?;
     let cwd = plugin_data_root(&app, &id)?;
     let blocking_job = _job.clone();
+    let lease = plugin.lease;
     let raw = tauri::async_runtime::spawn_blocking(move || {
         let _job = blocking_job;
+        let _lease = lease;
         run_native_tool_process(binary, cwd, args, stdin, timeout_ms)
     })
     .await
@@ -1584,33 +1643,45 @@ pub async fn plugins_run_native_tool(
 /// values the backend will actually pass to its scripts.
 #[tauri::command]
 pub fn plugins_settings_all(
+    app: AppHandle,
     db: State<'_, Db>,
     id: String,
 ) -> CommandResult<settings::PluginSettings> {
-    db.with_conn(|c| settings::all(c, &id)).map_err(Into::into)
+    let plugin = discovery::find(&discovery::third_party_plugins_dir(&app)?, &id)
+        .ok_or_else(|| AppError::NotFound(format!("plugin {id}")))?;
+    db.with_conn(|c| settings::effective(&crate::paths::app_data_root(&app)?, &crate::paths::app_data_dir(&app)?, c, &plugin)).map_err(Into::into)
 }
 
 /// Store one plugin setting. Requires the plugin to exist, so a typo'd id
 /// cannot quietly accumulate orphan rows.
 #[tauri::command]
 pub fn plugins_settings_set(
+    app: AppHandle,
     db: State<'_, Db>,
     id: String,
     key: String,
     value: serde_json::Value,
 ) -> CommandResult<()> {
+    let _save = app.state::<crate::vault_jobs::Saves>().enter()?;
     db.with_conn(|c| {
         require(c, &id)?;
-        settings::set(c, &id, &key, &value)
-    })
-    .map_err(Into::into)
+        let plugin = discovery::find(&discovery::third_party_plugins_dir(&app)?, &id)
+            .ok_or_else(|| AppError::NotFound(format!("plugin {id}")))?;
+        settings::set_scoped(&crate::paths::app_data_root(&app)?, c, &plugin, &key, Some(&value))
+    })?;
+    settings::notify(&app);
+    Ok(())
 }
 
 /// Remove one plugin setting, so it falls back to the manifest's default.
 #[tauri::command]
-pub fn plugins_settings_remove(db: State<'_, Db>, id: String, key: String) -> CommandResult<()> {
-    db.with_conn(|c| settings::remove(c, &id, &key))
-        .map_err(Into::into)
+pub fn plugins_settings_remove(app: AppHandle, db: State<'_, Db>, id: String, key: String) -> CommandResult<()> {
+    let _save = app.state::<crate::vault_jobs::Saves>().enter()?;
+    let plugin = discovery::find(&discovery::third_party_plugins_dir(&app)?, &id)
+        .ok_or_else(|| AppError::NotFound(format!("plugin {id}")))?;
+    db.with_conn(|c| settings::set_scoped(&crate::paths::app_data_root(&app)?, c, &plugin, &key, None))?;
+    settings::notify(&app);
+    Ok(())
 }
 
 /// Run a scripted plugin's entry function. The plugin is re-located on disk
@@ -1634,8 +1705,6 @@ pub async fn plugins_run_script(
     // DB pinned — not the ones the manifest currently on disk asks for.
     let (record, plugin) = db.with_conn(|c| load_runnable(c, &third_party_dir, &id, None))?;
 
-    let files = plugin.files;
-    let manifest = plugin.manifest;
     let granted = record.granted_permissions;
     // Capture everything the script needs from the DB up front, so the blocking
     // worker needs no DB access. The note snapshot is empty unless the plugin
@@ -1648,8 +1717,14 @@ pub async fn plugins_run_script(
     // Settings, folders and the clock are the backend's to supply — see
     // `backend_script_context`. The caller's `input` carries only what is
     // genuinely call-specific (which note, which format, which locale).
-    let backend_ctx = db.with_conn(|c| backend_script_context(c, &id, &granted))?;
+    let mut backend_ctx = db.with_conn(|c| backend_script_context(c, &id, &granted))?;
+    backend_ctx["settings"] = serde_json::to_value(settings::with_defaults(&plugin, db.with_conn(|c|
+        settings::effective(&crate::paths::app_data_root(&app)?, &crate::paths::app_data_dir(&app)?, c, &plugin)
+    )?)).map_err(|e| AppError::InvalidArg(e.to_string()))?;
     let input = merge_script_input(input, backend_ctx);
+    let lease = plugin.lease;
+    let files = plugin.files;
+    let manifest = plugin.manifest;
     // The plugin's isolated data directory: the cwd for any native tool the
     // script runs via `ms.nativeTools`, and the root `ms.storage` reads and
     // writes under. Resolved here (it needs the AppHandle) so the blocking
@@ -1663,6 +1738,7 @@ pub async fn plugins_run_script(
     let blocking_job = job.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         let _job = blocking_job;
+        let _lease = lease;
         run_plugin_script(&files, &manifest, granted, &export, input, notes, data_root)
     })
     .await;
@@ -1702,6 +1778,7 @@ coverage_command_stubs!(
     plugins_approve,
     plugins_set_load_error,
     plugins_remove,
+    plugins_install,
     plugins_read_file,
     plugins_artifacts_status,
     plugins_download_artifact,
@@ -1716,3 +1793,6 @@ coverage_command_stubs!(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod package_tests;

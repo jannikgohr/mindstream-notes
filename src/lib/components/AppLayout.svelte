@@ -50,7 +50,7 @@
   import { installWorkerCloseBridge } from '$lib/vaults/close-bridge';
   import { installSyncStatusBridge } from '$lib/notifications/sync-status';
   import { installSyncTreeRefreshBridge } from '$lib/sync/tree-refresh-bridge';
-  import { loadPlugins } from '$lib/plugins/load';
+  import { loadPlugins, watchPluginChanges } from '$lib/plugins/load';
   import { installPluginSettingsBridge } from '$lib/plugins/settings-bridge';
   import { startPickerSettingPruning } from '$lib/settings/pickers.svelte';
   import { startSpellcheckSettingsWatcher } from '$lib/diagnostics/editor-diagnostics.svelte';
@@ -118,6 +118,7 @@
     // manifest is a recorded load error, not a startup crash. Fire-and-forget —
     // the registry is reactive.
     installPluginSettingsBridge();
+    const stopPluginChanges = watchPluginChanges();
     void loadPlugins();
     // Clear any folder/tag picker setting whose target gets deleted.
     const stopPickerPruning = startPickerSettingPruning();
@@ -143,6 +144,7 @@
       teardownSyncStatus();
       teardownTreeRefresh();
       void teardownGlobalShortcuts();
+      stopPluginChanges();
       stopPickerPruning();
       stopSpellcheckWatch();
     };

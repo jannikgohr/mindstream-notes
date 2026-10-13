@@ -405,6 +405,8 @@ pub fn run() {
             };
             log::info!("[boot] active profile = {active_id}");
             let app_data = ownership.directory.clone();
+            plugins::packages::prepare(&app_data_root, &app_data)?;
+            plugins::settings::prepare(&app_data_root, &app_data)?;
             ui_settings::prepare_device_appearance(&app_data_root, &app_data, &active_id)?;
             legacy_content::initialize_owner(&app_data_root, &active_id, &app_data)?;
             app.manage(paths::ActiveProfile {
@@ -682,6 +684,7 @@ pub fn run() {
                 plugins::plugins_approve,
                 plugins::plugins_set_load_error,
                 plugins::plugins_remove,
+                plugins::plugins_install,
                 plugins::plugins_read_file,
                 plugins::plugins_artifacts_status,
                 plugins::plugins_download_artifact,

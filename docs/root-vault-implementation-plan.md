@@ -8,15 +8,15 @@ Ctrl/Command click, live ownership, and prepared-worker handoff. Durable recover
 keeps an open source and finishes the target after a saved source has exited.
 Missing startup vaults open an isolated picker without recreating missing data.
 
-Theme presets and device appearance shipped on 2026-10-13. Global plugin
-packages remain a separate follow-up project:
+Theme presets, device appearance and global plugin packages shipped on
+2026-10-13. Their implementation and validation records are documented separately:
 
 - [Global plugins plan](global-plugins-implementation-plan.md)
 - [Theme presets plan](theme-presets-implementation-plan.md)
 
 ## Current delivery status
 
-Reviewed against the implementation on 2026-10-12. Dated slices below are a
+Reviewed against the implementation on 2026-10-13. Dated slices below are a
 history of incremental delivery; their older pending lists do not describe the
 current release gates.
 
@@ -27,6 +27,8 @@ current release gates.
 | Phase 2 runtime       | Concurrent workers, duplicate/focus routing, cross-worker settings invalidation, service/save drains, whole-app Quit, shortcuts, tray, autostart, coordinator revival and update-session recovery pass documented Windows checks.                                                                |
 | Phase 3 menu/handoff  | Implemented: remembered opening preference, accessible choices, modifier override, prepared hidden target, all-window saves, geometry transfer and durable handoff recovery.                                                                                                                     |
 | Phase 4 release gates | Windows native checks and the real development launcher pass. Linux X11 and nested Wayland lifecycle/recovery checks pass; platform evidence is recorded below. Packaged macOS checks retain the owner's accepted deferral; reboot durability and signed updater installation remain release QA. |
+| Theme presets         | Root presets and device appearance implemented. See the [theme plan](theme-presets-implementation-plan.md).                                                                                                                                                                                      |
+| Global plugins        | Shared immutable packages/artifacts, per-vault approvals, installation generations, leases, migration and device plugin settings implemented. See the [global plugin plan](global-plugins-implementation-plan.md).                                                                               |
 
 Normal desktop startup uses the supervised runtime. Direct isolated-device tests,
 browser fallback and mobile retain their existing single-vault behavior. Global
@@ -151,7 +153,7 @@ flow and adopts compatible storage and recovery fixes.
 | Downloaded dictionaries                                                       | Database, notes, assets, backups, imports, restore records                                |
 | Vault index and last-used startup preference                                  | Account session, sync state, credential identity                                          |
 | Root transaction and coordinator records                                      | Lifetime ownership and vault recovery records                                             |
-| Eventually global plugin packages, artifacts, presets, device plugin settings | Plugin enablement, accepted hashes/signers/grants, vault settings, writable `plugin-data` |
+| Global plugin packages, artifacts, presets, device plugin settings            | Plugin enablement, accepted hashes/signers/grants, vault settings, writable `plugin-data` |
 
 Account remains vault-specific. Mode and preset selection are independent. The
 appearance follow-up moves accent and UI font size to device scope; editor font
@@ -1408,5 +1410,5 @@ required checks using scoped Conventional Commit messages.
 
 Out of scope: exact native-window preservation through backend session swapping,
 multiple local writers, ordinary cold-start previous-session reopening, network-filesystem
-vaults, full settings/plugin-data backup portability, and the separate plugins
-and themes projects.
+vaults and full settings/plugin-data backup portability. Plugins and themes
+are implemented in their linked follow-up plans.

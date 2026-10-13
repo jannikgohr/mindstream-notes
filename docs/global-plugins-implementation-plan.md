@@ -1,8 +1,9 @@
 # Global plugin packages implementation plan
 
-Status: follow-up feature. Complete environment isolation, vault ownership,
-WebView migration, and root transactions in the [concurrency plan](root-vault-implementation-plan.md)
-before enabling global package mutation. Concurrent vaults do not depend on it.
+Status: implemented on 2026-10-13. Packages, artifacts and `D` plugin values
+belong to the app root. Approvals, enablement, `V` values and writable data
+remain in each vault. See [plugin usage](plugins.md) and
+[storage recovery](storage-ownership-and-recovery.md).
 
 ## Ownership and behavior
 
@@ -35,16 +36,76 @@ before enabling global package mutation. Concurrent vaults do not depend on it.
 6. Update management UI/docs for global removal, vault approval/disable, missing
    packages, reapproval, and deferred deletion.
 
-## Validation and estimate
+## Publication and recovery
 
-Test separate vault approvals, same-account vault independence, simultaneous
-downloads/update/removal, changed permissions/signers, unopened-vault reinstall,
-conflicting migration inputs, and interruption at each publication step. Keep
-path/symlink protections and builtin trust checks.
+`plugins/catalog.json` maps IDs to an installation generation and an immutable
+package digest. `plugin-packages/<digest>/` contains complete packages. This
+storage digest includes signature bytes; approval still uses the verified signed
+package digest. Different bytes with the same declared version remain distinct.
+RootLock serializes publication and removal. Files are synced in a unique staging
+directory, validated again, then renamed before the catalog commits. Interrupted
+staging and unreferenced published copies are collected during the next operation.
+Source folders remain intact, including migration conflicts. The catalog uses the
+verified staged digest; changing source bytes during publication rejects the
+operation before committing metadata.
 
-Primary areas: Rust discovery/settings/plugin commands, frontend plugin stores
-and management UI, manifests, coordinator package operations, and plugin tests.
-Dictionary concurrency belongs to the core plan because it is already shared.
+Updates retain the installation generation. Removal records an append-only
+revocation before committing a tombstone. Reinstall assigns a new generation.
+Recovery of an older catalog cannot undo revocation. Vault database migration 28
+records the generation observed by each vault. Even a vault unopened throughout
+remove/reinstall must approve again, including legacy approvals not yet migrated.
 
-Budget 4 to 7 working days after core platform checks. Reassess native-tool
-version pinning before committing to the estimate.
+OS shared leases pin package versions while scripts, native calls, downloads and
+preview services use them. Removal immediately removes discovery/authority for
+new work. Existing admitted work finishes with its pinned files. Exclusive lease
+acquisition gates deletion, and the final release schedules collection. A worker
+crash releases its OS leases; the next startup/operation collects retired files.
+Versions referenced by the previous catalog remain available for recovery;
+revocation overrides both catalog snapshots. Artifact paths include their declared SHA-256. Concurrent publication uses unique,
+synced atomic files. Artifacts stay while an active or pinned package declares them.
+
+Root `plugin-settings.json` pins the startup-selected migration vault before
+workers start. Root values win; only this vault seeds missing `D` keys once.
+Receipts prevent reset from importing retained database rows again. Runtime
+contexts include stored values and manifest defaults. Preview services build the
+same backend context instead of accepting frontend settings as authority.
+
+Worker storage contract 3 refuses adoption of older workers before migration.
+
+## Validation
+
+Rust regression tests cover independent approvals and enablement, identical
+reinstall in unopened/unmigrated vaults, same-version updates, leases and deferred
+collection, concurrent publication/removal and downloads, retained migration
+conflicts, interrupted publication, catalog recovery after removal, and one-time
+`D` migration/reset. Existing signer/permission and traversal tests remain in use. Re-signing
+identical content with another key must preserve the old pinned signer and gate
+both that package and its later updates.
+Frontend tests cover removal invalidation, reset propagation and operation failures.
+
+`src-tauri/scripts/supervised-plugins-check.py` exercises two real Windows vault
+workers, shared discovery, separate script contexts/approval, same-version updates,
+remove/reinstall while one vault is closed, retained configuration and cold restart.
+
+Validation completed on 2026-10-13:
+
+- Windows: Rust formatting and Clippy passed; 905 unit tests and the plugin
+  contract integration test passed. The production frontend and desktop builds
+  passed. The final two-worker plugin fixture passed and released its leases.
+- Frontend: 469 tests passed; Svelte reported no errors or warnings. Affected
+  ESLint, theme and localization checks passed. The management screen was also
+  inspected in the running desktop app.
+- Linux X11: Rust formatting and Clippy passed; 907 unit tests and the plugin
+  contract integration test passed. All ten handoff cases, focus checks and both
+  startup cases passed, with coordinator and vault leases released.
+- Linux Wayland: the same checked desktop binary passed all ten handoff cases,
+  focus checks and both startup cases, with all leases released.
+
+Windows plugin fixture evidence is retained under
+`.output/global-plugins-final-native-check/`; Linux X11 evidence is under
+`.output/linux-vault-check/native-20261013-011115/` and
+`.output/linux-vault-check/startup-20261013-011403/`. Wayland evidence is under
+`.output/linux-wayland-check/native-20261013-084106/` and its adjacent startup
+fixture directory.
+
+Packaged macOS validation remains part of the previously deferred platform QA.

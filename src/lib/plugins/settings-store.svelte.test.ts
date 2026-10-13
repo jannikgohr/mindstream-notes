@@ -89,6 +89,15 @@ describe('hydratePluginSettings', () => {
 });
 
 describe('setPluginSettingValue', () => {
+  it('refresh removes reset values without clearing a plugin with a dotted prefix', async () => {
+    h.all.mockResolvedValue({ k: 'stored' });
+    await hydratePluginSettings('com.a.plugin');
+    await hydratePluginSettings('com.a.plugin.child');
+    h.all.mockResolvedValue({});
+    await hydratePluginSettings('com.a.plugin');
+    expect(hasPluginSettingValue('plugins.com.a.plugin.k')).toBe(false);
+    expect(pluginSettingValue('plugins.com.a.plugin.child.k')).toBe('stored');
+  });
   it('persists through the backend with the id split apart', async () => {
     await setPluginSettingValue('plugins.com.a.plugin.source-folder', 'f2');
     expect(h.set).toHaveBeenCalledWith('com.a.plugin', 'source-folder', 'f2');

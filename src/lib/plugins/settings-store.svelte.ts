@@ -1,20 +1,6 @@
-/**
- * Plugin settings, backed by the vault database rather than `localStorage`.
- *
- * Every other app setting lives in the WebView's `localStorage`, which is right
- * for settings the WebView is the only consumer of. Plugin settings are not
- * one of those: a scripted plugin receives them as `ctx.settings`, and the
- * backend is what decides what a plugin sees. While they sat in `localStorage`
- * the backend could not read them, so the frontend had to assemble the script
- * context and pass it down — which quietly made a UI action the only thing that
- * could ever invoke a plugin, since nothing else could build the argument.
- *
- * So the backend owns them (`src-tauri/src/plugins/settings.rs`) and this
- * module is the cache in front of it: reads stay synchronous, because the
- * settings dialog and every `$derived` chain expect that, and writes go through
- * Tauri. Outside Tauri (`vite preview`, the web build) there is no backend and
- * no persistence — the cache is all there is, which matches how plugins behave
- * there anyway.
+/** Synchronous cache of backend plugin settings. Device values live at the root;
+ * vault values live in the vault database. Windows refresh on plugin invalidation.
+ * Browser fallback is in memory. Runtime contexts are assembled by the backend.
  */
 
 import { isTauri } from '$lib/api/core';
@@ -70,6 +56,10 @@ export async function hydratePluginSettings(pluginId: string): Promise<void> {
   if (!isTauri()) return;
   try {
     const stored = await pluginsSettingsAll(pluginId);
+    for (const id of Object.keys(cache.values)) {
+      if (parsePluginSettingId(id)?.pluginId === pluginId)
+        delete cache.values[id];
+    }
     for (const [settingId, value] of Object.entries(stored)) {
       cache.values[pluginSettingId(pluginId, settingId)] = value;
     }
