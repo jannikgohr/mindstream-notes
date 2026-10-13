@@ -26,7 +26,9 @@ import { collab } from '@milkdown/plugin-collab';
 // directly — keeps us from declaring a transitive dep that's already
 // bundled through @milkdown/kit.
 import { listener } from '@milkdown/kit/plugin/listener';
+import { uploadConfig } from '@milkdown/kit/plugin/upload';
 import type { AssetBridge } from '$lib/assets/bridge';
+import { isImageFile, normalizeImageFile } from '$lib/file-drop';
 import { tUi } from '$lib/settings/i18n.svelte';
 import { $prose } from '@milkdown/kit/utils';
 import { Plugin } from '@milkdown/kit/prose/state';
@@ -240,6 +242,27 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
   // `ctx.update` spreads the previous value so Milkdown's internal `handlers` /
   // `encode` entries are preserved.
   crepe.editor.config((ctx) => {
+    // Crepe only checks `file.type`, but native desktop drags can leave it
+    // blank. Use the same extension fallback as the window drop router and
+    // normalise the file before storing it so the asset keeps its MIME type.
+    ctx.update(uploadConfig.key, (prev) => ({
+      ...prev,
+      uploader: async (files, schema) => {
+        const nodeType = schema.nodes['image-block'] ?? schema.nodes.image;
+        if (!nodeType) return [];
+
+        const images = Array.from(files).filter(isImageFile);
+        return Promise.all(
+          images.map(async (file) => {
+            const src = await opts.assetBridge.uploadFile(
+              normalizeImageFile(file)
+            );
+            return nodeType.createAndFill({ src })!;
+          })
+        );
+      }
+    }));
+
     ctx.update(remarkStringifyOptionsCtx, (prev) => ({
       ...prev,
       bullet: '-' as const,

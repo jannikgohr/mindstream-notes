@@ -126,8 +126,6 @@ legacy harness compatibility. Test builds without any override refuse startup.
 Desktop macOS builds now require macOS 14. The owner accepted deferring packaged
 Dock/menu/Reopen testing until a release can be tested on a Mac.
 
-The Tauri config runs `pnpm setup-android-cargo` before dev and build commands so Android cargo configuration stays in sync.
-
 ## Desktop Builds
 
 Build a production frontend bundle:
@@ -154,12 +152,6 @@ Use Java 21, then run:
 
 ```shell
 pnpm tauri android build
-```
-
-If Android cargo setup needs to be refreshed manually:
-
-```shell
-pnpm setup-android-cargo
 ```
 
 ## Verification
