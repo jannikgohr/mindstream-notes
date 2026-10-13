@@ -88,8 +88,9 @@ import staging and retained safety evidence are not automatically deleted.
 
 Worker storage contract 4 prevents incompatible old workers from participating
 in the new restore flow. The current runtime versions are authoritative in
-`worker_registration.rs`. Hard-reset verification is pending. Linux packaged
-updates pass with a disposable QA signing key; production-key platform checks
+`worker_registration.rs`. Linux guest hard-reset recovery passes at three restore
+checkpoints, including safety copies, peer isolation and plugin approval.
+Linux packaged updates pass with a disposable QA signing key; production-key platform checks
 remain release QA, separately from tested process-crash recovery.
 
 ## Verification

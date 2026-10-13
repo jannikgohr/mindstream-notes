@@ -49,9 +49,12 @@ class Reopened(h.Fixture):
                         XDG_DATA_HOME=str(self.output / "xdg-data"),
                         XDG_CACHE_HOME=str(self.output / "xdg-cache"))
         self.children = []
-        self.log = (self.output / "after-reset.log").open("w")
+        self.log = (self.output / "after-reset.log").open("a")
         self.launch()
-        h.wait(lambda: self.status()["initialized"])
+        # Coordinator initialization starts worker launch; it does not prove
+        # the worker has finished applying its pending restore or opened SQLite.
+        h.wait(lambda: self.status()["initialized"] and
+               any(worker["ready"] for worker in self.status()["workers"]))
 
 
 def prepare(args):
@@ -101,7 +104,8 @@ def titles(vault):
         return [row[0] for row in conn.execute("SELECT title FROM notes ORDER BY title")]
 
 
-def verify_restore(fixture):
+def verify_restore(fixture, boundary):
+    h.wait(lambda: fixture.ready("source"))
     vault = fixture.root / "profiles/source"
     assert titles(vault) == ["Portable note"]
     assert not (vault / "pending-restore.flag").exists()
@@ -112,7 +116,11 @@ def verify_restore(fixture):
     assert settings["appearance.accent"] == "#abcdef"
     assert settings["appearance.preset"] == "portable-theme"
     desktop = json.loads((fixture.root / "desktop-settings.json").read_text())
-    assert desktop["language_code"] == "de" and desktop["theme_mode"] == "dark"
+    # This preparation has no desktop document until resource publication.
+    # At files-preserved, coordinator startup publishes English/system defaults
+    # before vault recovery; those existing device fields win import conflicts.
+    expected = ("en", "system") if boundary == "files-preserved" else ("de", "dark")
+    assert (desktop["language_code"], desktop["theme_mode"]) == expected
     assert any(p.joinpath("plugin-data/before").read_bytes() == b"old native data"
                for p in (vault / "backups").glob("pre-restore-files-*"))
     with sqlite3.connect(vault / "mindstream.db") as conn:
@@ -148,7 +156,7 @@ def verify(args):
                 assert not h.owned(fixture.root / "profiles" / other / ".vault.lock")
                 titles(fixture.root / "profiles" / selected)
             else:
-                verify_restore(fixture)
+                verify_restore(fixture, name)
             print("Reset recovery passed: " + name, flush=True)
         finally:
             fixture.cleanup()

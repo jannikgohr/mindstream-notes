@@ -34,7 +34,7 @@ Fresh desktop onboarding completed and recognized both agents as ready.
 | Installed Debian package                     | Two vaults, duplicate focus, Quit and single-vault cold startup passed                                                            |
 | Signed AppImage update                       | Tampered signature rejected before closure; valid installation restored both vaults, source popout, hidden target and saved focus |
 | Update consumption                           | Following cold startup opened one vault and retained the consumed restart record                                                  |
-| Hard VM reset                                | Prepared; awaiting external reset and recovery verification                                                                       |
+| Hard VM reset                                | All 23,328 acknowledged settings writes survived; all five native recovery checkpoints and repeated cold starts passed            |
 
 The picker run checked the restored SQLite database, vault settings, plugin data
 including an empty directory, imported theme/package, retained device conflicts
@@ -53,6 +53,27 @@ coordinates between logical pixels. The handoff fixture now scales its
 synthetic geometry requests. Production geometry remains a physical-pixel
 snapshot. Integer scaling in an isolated compositor does not cover moving a
 window between physical monitors or changing fractional scale.
+
+The owner reset the VM through Proxmox without a guest shutdown. Linux's boot ID
+changed from `331bd5a3-d15e-4f27-bf68-d1fafc467db0` to
+`845efbe1-fc90-45a5-81be-83cf1807e505`. The separate Windows host retained the last
+complete receipt, sequence 23,328 at revision 23,329 with font size 16. The
+recovered document matched that revision and value and retained its accent.
+The tested root filesystem is ext4 on `/dev/sda1`, mounted with `commit=30`.
+
+Native recovery cancelled the pre-closure handoff and reopened the source; it
+finished opening the target after acknowledged source closure. All three restore
+checkpoints completed, retained safety copies, preserved the peer vault and
+required fresh plugin approval. SQLite integrity, settings and plugin data,
+repeat cold startup and release of every coordinator/vault lease passed.
+T3 and the private desktop/VNC services restarted automatically after boot.
+
+The reset verifier now waits for worker readiness before inspecting SQLite.
+Coordinator initialization alone starts worker launch and does not prove restore
+completion. At the files-preserved checkpoint, first coordinator startup creates
+English/system desktop defaults before resource import; those existing device
+values win conflicts. The two checkpoints that had already published resources
+retain imported German/dark values. The assertions check that distinction.
 
 An Ubuntu WebKit renderer crash report occurred during the concurrent fault
 runs; the native workflows subsequently completed and released their leases.

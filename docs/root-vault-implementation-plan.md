@@ -10,17 +10,17 @@ lists are historical.
 
 ## Current delivery status
 
-| Area                    | Current state                                                                                                                                                                             |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Storage safety          | Locked ownership, restore/deletion journals, validated document recovery and retained migration inputs implemented. Process-crash checks pass; reboot durability remains release QA.      |
-| Root and vault settings | Device and vault documents, field transactions, browser export/classification, credential migration and isolated worker stores implemented.                                               |
-| Concurrent runtime      | One coordinator and one process per open vault. Duplicate/focus routing, settings invalidation, save/service drains, tray, shortcuts, autostart and updater-session recovery implemented. |
-| Menu and handoff        | Remembered opening choices, modifier override, prepared targets, all-window saves, geometry transfer and durable recovery implemented.                                                    |
-| Startup                 | Missing last-used vault opens a picker without recreating data. Compatible surviving workers can be adopted after authenticated ownership checks.                                         |
-| Appearance              | Root presets, accent and UI font size implemented. Editor typography remains vault-specific.                                                                                              |
-| Global plugins          | Shared immutable packages/artifacts and device settings implemented. Approval, enablement and writable data remain per vault.                                                             |
-| Backup portability      | Version 2 archives include vault settings/data and portable device configuration/packages. Shared-device restore is opt-in and preserves conflicts. Version 1 archives remain readable.   |
-| Release QA              | Windows/Linux native checks, Linux QA packages/updater, real pickers and integer scaling pass. Hard reset, production-key platform and real display/macOS checks remain open.             |
+| Area                    | Current state                                                                                                                                                                                                                    |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Storage safety          | Locked ownership, restore/deletion journals, validated document recovery and retained migration inputs implemented. Process-crash and Linux guest hard-reset checks pass; Windows/host power-loss durability remains release QA. |
+| Root and vault settings | Device and vault documents, field transactions, browser export/classification, credential migration and isolated worker stores implemented.                                                                                      |
+| Concurrent runtime      | One coordinator and one process per open vault. Duplicate/focus routing, settings invalidation, save/service drains, tray, shortcuts, autostart and updater-session recovery implemented.                                        |
+| Menu and handoff        | Remembered opening choices, modifier override, prepared targets, all-window saves, geometry transfer and durable recovery implemented.                                                                                           |
+| Startup                 | Missing last-used vault opens a picker without recreating data. Compatible surviving workers can be adopted after authenticated ownership checks.                                                                                |
+| Appearance              | Root presets, accent and UI font size implemented. Editor typography remains vault-specific.                                                                                                                                     |
+| Global plugins          | Shared immutable packages/artifacts and device settings implemented. Approval, enablement and writable data remain per vault.                                                                                                    |
+| Backup portability      | Version 2 archives include vault settings/data and portable device configuration/packages. Shared-device restore is opt-in and preserves conflicts. Version 1 archives remain readable.                                          |
+| Release QA              | Windows/Linux native checks, Linux QA packages/updater, real pickers and integer scaling pass. Linux guest hard reset passes; host power loss, production-key platform and real display/macOS checks remain open.                |
 
 Detailed contracts and evidence:
 
@@ -108,11 +108,13 @@ native development-build checks. The Ubuntu VM also passes optimized Debian
 installation and a locally signed AppImage update, including tampered-signature
 rejection and all-vault/popout/hidden-state restoration. It passes the real Linux
 backup pickers and integer 200% scaling. See the linked VM report for evidence
-and limits; the external hard-reset verification is pending.
+and limits. An externally triggered Proxmox hard reset retained all acknowledged
+settings writes and passed five recovery checkpoints plus repeat cold starts.
 
 Remaining release QA:
 
-- VM/reboot interruptions for filesystem publication and restore durability.
+- Windows directory-entry and physical host power-loss durability. Linux guest
+  hard-reset publication/restore checks pass on the tested ext4 virtual disk.
 - Production-key updater installation and packaged restart on Windows/macOS.
   Linux installation/restart passes with a disposable QA signing key.
 - Real monitor, DPI and display-change behavior.

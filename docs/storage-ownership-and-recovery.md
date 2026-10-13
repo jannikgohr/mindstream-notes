@@ -249,6 +249,10 @@ duplicate rejection and reopening after forced termination. File contents and
 Unix directory entries are flushed before publication. Windows directory-entry
 reboot durability and packaged platform behavior remain release QA. Linux X11
 and nested Wayland handoff/recovery/startup checks pass; see the harness guide.
+The Ubuntu Proxmox guest hard-reset run retained the last externally acknowledged
+settings revision and recovered both handoff and three restore checkpoints.
+Repeated cold starts released all leases. Physical host power loss and Windows
+directory-entry durability remain outside that result; see the VM report.
 Never delete SQLite WAL files as a startup cleanup operation.
 
 Global plugin packages use root `plugins/catalog.json`, immutable
