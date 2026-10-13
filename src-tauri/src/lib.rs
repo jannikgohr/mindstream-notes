@@ -533,6 +533,7 @@ pub fn run() {
             auth::account::account_remove_authenticator,
             auth::account::account_new_backup_codes,
             auth::account::account_new_recovery_key,
+            auth::secret_file::account_save_secret_file,
             auth::account::account_change_password,
             auth::account::account_sessions,
             auth::account::account_end_session,

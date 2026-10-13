@@ -268,6 +268,38 @@ export async function accountChangePassword(
   );
 }
 
+/** A secret to keep in a file, and what the save dialog says about it. */
+export interface SecretFile {
+  /** The save dialog's title. */
+  title: string;
+  /** What the dialog calls the kind of file. */
+  kind: string;
+  suggestedName: string;
+  contents: string;
+}
+
+/**
+ * Ask the user where to keep a secret they were just shown, and write it
+ * there. Resolves to false when they close the dialog without choosing.
+ */
+export async function accountSaveSecretFile(
+  file: SecretFile
+): Promise<boolean> {
+  requireApp();
+  assertRequiredString(file.contents, 'file.contents');
+  return assertBoolean(
+    await tauriInvoke<unknown>(TauriCommandName.AccountSaveSecretFile, {
+      input: {
+        title: file.title,
+        kind: file.kind,
+        suggested_name: file.suggestedName,
+        contents: file.contents
+      }
+    }),
+    'account_save_secret_file response'
+  );
+}
+
 export async function accountSessions(): Promise<DeviceSession[]> {
   requireApp();
   const value = await tauriInvoke<unknown>(TauriCommandName.AccountSessions);

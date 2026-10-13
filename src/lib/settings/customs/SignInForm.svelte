@@ -51,6 +51,7 @@
   import { normalizeServerUrl } from '$lib/api/server-urls';
   import SecretReveal from '$lib/account/SecretReveal.svelte';
   import { pendingReveal } from '$lib/account/pending-reveal.svelte';
+  import { recoveryKeyFile } from '$lib/account/recovery-key-file';
   import {
     describeRefusal,
     refusalReason,
@@ -430,6 +431,10 @@
       title={tUi('account.reveal.recoveryKey.title')}
       explanation={tUi('account.reveal.recoveryKey.explanation')}
       lines={[pendingReveal.current.recoveryKey]}
+      file={recoveryKeyFile(
+        pendingReveal.current.recoveryKey,
+        pendingReveal.current.session
+      )}
       onDone={finishReveal}
     />
   {:else if !authSession.initialised}

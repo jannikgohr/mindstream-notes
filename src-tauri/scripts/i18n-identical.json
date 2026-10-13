@@ -39,6 +39,7 @@
     "values.account.syncInterval.live": "Live",
     "values.editor.defaultMode.wysiwyg": "WYSIWYG",
     "values.language.code.en": "English",
-    "values.language.code.de": "Deutsch"
+    "values.language.code.de": "Deutsch",
+    "ui.account.reveal.file.server": "Server: {server}"
   }
 }

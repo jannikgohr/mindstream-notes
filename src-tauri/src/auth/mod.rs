@@ -29,6 +29,7 @@ use crate::db::Db;
 use crate::error::{AppError, AppResult, CommandError, CommandResult};
 
 pub mod account;
+pub mod secret_file;
 
 const KEYRING_SERVICE: &str = "mindstream-notes";
 const KEYRING_ACCOUNT: &str = "etebase-session-key";

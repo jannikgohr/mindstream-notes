@@ -3,19 +3,51 @@
  * have said the key is stored, because nothing can show it a second time.
  */
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SecretFile } from '$lib/api/account';
+
+const { accountSaveSecretFile, isTauri, isMobile } = vi.hoisted(() => ({
+  accountSaveSecretFile: vi.fn(),
+  isTauri: vi.fn(() => true),
+  isMobile: vi.fn(() => false)
+}));
+
+vi.mock('$lib/api/account', () => ({ accountSaveSecretFile }));
+vi.mock('$lib/api/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/api/core')>()),
+  isTauri
+}));
+vi.mock('$lib/platform', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/platform')>()),
+  isMobile
+}));
+
 import SecretReveal from './SecretReveal.svelte';
+
+const FILE: SecretFile = {
+  title: 'Save your recovery key',
+  kind: 'Text file',
+  suggestedName: 'mindstream-recovery-key-ann.txt',
+  contents: ['Mindstream Notes recovery key', '', 'AAAA-BBBB', ''].join('\n')
+};
+
+beforeEach(() => {
+  accountSaveSecretFile.mockReset();
+  isTauri.mockReturnValue(true);
+  isMobile.mockReturnValue(false);
+});
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
 
-function show(lines: string[], onDone = vi.fn()) {
+function show(lines: string[], onDone = vi.fn(), file?: SecretFile) {
   render(SecretReveal, {
     title: 'Your recovery key',
     explanation: 'Keep it.',
     lines,
+    file,
     onDone
   });
   return onDone;
@@ -63,5 +95,57 @@ describe('SecretReveal', () => {
     // Still there to be copied by hand.
     expect(screen.getByText('AAAA-BBBB')).toBeTruthy();
     expect(screen.queryByText('Copied')).toBeNull();
+  });
+
+  describe('keeping it in a file', () => {
+    it('offers no file where none was prepared', () => {
+      show(['AAAA-BBBB']);
+      expect(screen.queryByTestId('secret-reveal-save')).toBeNull();
+    });
+
+    it('offers none on a phone or outside the app', () => {
+      isMobile.mockReturnValue(true);
+      show(['AAAA-BBBB'], vi.fn(), FILE);
+      expect(screen.queryByTestId('secret-reveal-save')).toBeNull();
+      cleanup();
+
+      isMobile.mockReturnValue(false);
+      isTauri.mockReturnValue(false);
+      show(['AAAA-BBBB'], vi.fn(), FILE);
+      expect(screen.queryByTestId('secret-reveal-save')).toBeNull();
+    });
+
+    it('hands the prepared file over and says when it is saved', async () => {
+      accountSaveSecretFile.mockResolvedValueOnce(true);
+      show(['AAAA-BBBB'], vi.fn(), FILE);
+
+      await fireEvent.click(screen.getByText('Save as a file'));
+      expect(accountSaveSecretFile).toHaveBeenCalledWith(FILE);
+      expect(await screen.findByText('Saved')).toBeTruthy();
+    });
+
+    it('says nothing when the user closes the dialog without choosing', async () => {
+      accountSaveSecretFile.mockResolvedValueOnce(false);
+      show(['AAAA-BBBB'], vi.fn(), FILE);
+
+      await fireEvent.click(screen.getByText('Save as a file'));
+      await Promise.resolve();
+      expect(screen.queryByText('Saved')).toBeNull();
+      expect(screen.queryByTestId('secret-reveal-save-failed')).toBeNull();
+    });
+
+    it('says so when the file could not be written, and leaves the way on closed', async () => {
+      accountSaveSecretFile.mockRejectedValueOnce(new Error('disk full'));
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      show(['AAAA-BBBB'], vi.fn(), FILE);
+
+      await fireEvent.click(screen.getByText('Save as a file'));
+      expect(await screen.findByText("Couldn't save the file.")).toBeTruthy();
+      // Saving is not the same as saying it is stored. That stays a choice.
+      const done = screen.getByTestId(
+        'secret-reveal-done'
+      ) as HTMLButtonElement;
+      expect(done.disabled).toBe(true);
+    });
   });
 });

@@ -7,8 +7,12 @@
    * whole point of the component: the server cannot show either a second
    * time, so a click-through here would lose it for good.
    */
-  import { Check, Copy } from '@lucide/svelte';
+  import { Check, Copy, Download } from '@lucide/svelte';
+  import { accountSaveSecretFile } from '$lib/api/account';
+  import type { SecretFile } from '$lib/api/account';
+  import { isTauri } from '$lib/api/core';
   import { Button } from '$lib/components/ui/button';
+  import { isMobile } from '$lib/platform';
   import { tUi } from '$lib/settings/i18n.svelte';
 
   interface Props {
@@ -16,13 +20,35 @@
     explanation: string;
     /** One line for a recovery key, one per code for backup codes. */
     lines: string[];
+    /** What to write when the user asks for a file. Without it there is no
+     *  such button. */
+    file?: SecretFile;
     onDone: () => void;
   }
 
-  let { title, explanation, lines, onDone }: Props = $props();
+  let { title, explanation, lines, file, onDone }: Props = $props();
 
   let stored = $state(false);
   let copied = $state(false);
+  let saved = $state(false);
+  let saveFailed = $state(false);
+
+  // The file is written by the desktop app, through a save dialog. A phone
+  // hands back a place the app cannot write a path to, and a browser has no
+  // app at all.
+  const canSave = $derived(file !== undefined && isTauri() && !isMobile());
+
+  async function save() {
+    if (!file) return;
+    saveFailed = false;
+    try {
+      // False is the user closing the dialog, which is not worth a word.
+      if (await accountSaveSecretFile(file)) saved = true;
+    } catch (err) {
+      console.warn('[account] saving the file failed', err);
+      saveFailed = true;
+    }
+  }
 
   async function copy() {
     try {
@@ -60,6 +86,24 @@
         {tUi(copied ? 'account.reveal.copied' : 'account.reveal.copy')}
       </span>
     </Button>
+    {#if canSave}
+      <Button
+        type="button"
+        size="sm"
+        variant="secondary"
+        onclick={save}
+        data-testid="secret-reveal-save"
+      >
+        <span class="inline-flex items-center">
+          {#if saved}
+            <Check class="mr-1.5 size-3.5" />
+          {:else}
+            <Download class="mr-1.5 size-3.5" />
+          {/if}
+          {tUi(saved ? 'account.reveal.saved' : 'account.reveal.save')}
+        </span>
+      </Button>
+    {/if}
     <label class="flex items-center gap-2 text-xs">
       <input
         type="checkbox"
@@ -69,6 +113,11 @@
       {tUi('account.reveal.stored')}
     </label>
   </div>
+  {#if saveFailed}
+    <p class="text-xs text-destructive" data-testid="secret-reveal-save-failed">
+      {tUi('account.reveal.saveFailed')}
+    </p>
+  {/if}
   <div>
     <Button
       type="button"

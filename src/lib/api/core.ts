@@ -31,6 +31,7 @@ export enum TauriCommandName {
   AccountNewRecoveryKey = 'account_new_recovery_key',
   AccountRecover = 'account_recover',
   AccountRemoveAuthenticator = 'account_remove_authenticator',
+  AccountSaveSecretFile = 'account_save_secret_file',
   AccountSecurityStatus = 'account_security_status',
   AccountServerInfo = 'account_server_info',
   AccountSessions = 'account_sessions',

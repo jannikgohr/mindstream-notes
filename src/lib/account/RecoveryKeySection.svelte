@@ -10,9 +10,11 @@
     accountNewRecoveryKey,
     type SecurityOverview
   } from '$lib/api/account';
+  import { authSession } from '$lib/api/auth.svelte';
   import { Button } from '$lib/components/ui/button';
   import { tUi } from '$lib/settings/i18n.svelte';
   import ProofForm from './ProofForm.svelte';
+  import { recoveryKeyFile } from './recovery-key-file';
   import SecretReveal from './SecretReveal.svelte';
 
   interface Props {
@@ -74,6 +76,7 @@
       title={tUi('account.reveal.recoveryKey.title')}
       explanation={tUi('account.reveal.recoveryKey.explanation')}
       lines={[key]}
+      file={recoveryKeyFile(key, authSession.current)}
       onDone={stored}
     />
   {/if}
