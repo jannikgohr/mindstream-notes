@@ -853,6 +853,24 @@ const MIGRATIONS: &[Migration] = &[
             ) WITHOUT ROWID;
         "#,
     },
+    Migration {
+        to: 31,
+        // The key of each note's live room, sealed under a key that only
+        // the signed-in session can derive. See `sync::room_keys`.
+        //
+        // Migration 7 dropped a column that held these keys in the clear,
+        // so that a signed-out device could not enter a room. They are
+        // back for the requests they save on every note that is opened,
+        // and sealed so that the same holds: signing out deletes what
+        // opens them. A table of its own, so that a backup can leave it
+        // out and no query for notes carries it.
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS room_keys (
+                note_id TEXT PRIMARY KEY REFERENCES notes(id) ON DELETE CASCADE,
+                sealed  BLOB NOT NULL
+            ) WITHOUT ROWID;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

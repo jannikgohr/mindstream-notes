@@ -177,6 +177,7 @@ pub(super) fn push_notes(
     im: &ItemManager,
     report: &mut SyncReport,
     scope: Option<&str>,
+    room_keys: &mut room_keys::Learned,
 ) -> AppResult<()> {
     let dirty = load_dirty_notes(db, scope)?;
     if dirty.is_empty() {
@@ -195,6 +196,9 @@ pub(super) fn push_notes(
     )?;
 
     let mut prepared: Vec<(Item, String)> = Vec::with_capacity(dirty.len());
+    // The key each note goes up with: carried over, or made here for a note
+    // that is new to the server.
+    let mut keys: Vec<(&str, Vec<u8>)> = Vec::with_capacity(dirty.len());
     for row in &dirty {
         let (existing_item, key_for_payload): (Option<Item>, Vec<u8>) = match &row.etebase_uid {
             Some(uid) => {
@@ -227,7 +231,7 @@ pub(super) fn push_notes(
             trashed_at: row.trashed_at.clone(),
             yrs_state: row.yrs_state.clone(),
             body: row.body.clone(),
-            crypto_key: key_for_payload,
+            crypto_key: key_for_payload.clone(),
             favourite: row.favourite,
             note_kind: row.note_kind.clone(),
         };
@@ -250,11 +254,17 @@ pub(super) fn push_notes(
                 .map_err(|e| AppError::InvalidArg(format!("create note item: {e}")))?
         };
         prepared.push((item, row.id.clone()));
+        keys.push((&row.id, key_for_payload));
     }
 
     let mut items: Vec<Item> = prepared.into_iter().map(|(i, _)| i).collect();
     transact_or_resolve(im, &mut items, &mut report.conflicts_resolved)
         .map_err(|e| AppError::from_server("transaction notes", e))?;
+    // Only now are these the keys the server has. A push that was refused
+    // made keys nobody will ever see.
+    for (note_id, key) in &keys {
+        room_keys.note(note_id, key);
+    }
 
     let pushed = items.len();
     db.with_conn_mut(|c| {

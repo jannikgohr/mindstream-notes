@@ -3060,6 +3060,7 @@ dependencies = [
  "android_logger 0.14.1",
  "apple-native-keyring-store",
  "base64 0.22.1",
+ "chacha20poly1305",
  "chrono",
  "dbus-secret-service-keyring-store",
  "ed25519-dalek",

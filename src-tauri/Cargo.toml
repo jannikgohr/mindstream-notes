@@ -58,6 +58,9 @@ keyring-core = "1"
 # msgpack wire format inside Etebase item content.
 yrs = "0.26"
 hkdf = "0.12"
+# Seals the room keys kept on the device, see sync::room_keys. The client
+# library links the same crate, so this adds nothing to the build.
+chacha20poly1305 = "0.10"
 similar = "3"
 rmp-serde = "1"
 serde_bytes = "0.11"

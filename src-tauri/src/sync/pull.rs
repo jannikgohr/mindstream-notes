@@ -477,8 +477,11 @@ impl Applier<'_> {
             }
             ItemKind::Note => {
                 apply_note(self.db, item, scope, preserve).map(|pulled| match pulled {
-                    Pulled::Done(id) => {
-                        self.delta.notes_pulled_ids.extend(id);
+                    Pulled::Done(note) => {
+                        if let Some(note) = note {
+                            self.delta.room_keys.note(&note.id, &note.room_key);
+                            self.delta.notes_pulled_ids.push(note.id);
+                        }
                         report.notes_pulled += 1;
                     }
                     Pulled::Refused => refuse(),

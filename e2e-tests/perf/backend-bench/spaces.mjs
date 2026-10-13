@@ -74,6 +74,8 @@ export class SpaceDevice {
     this.accountStoken = null;
     /** Whether a sync has reached the server, see `preflight_reachable`. */
     this.reached = false;
+    /** Item uid → the note's key, as `sync::room_keys` keeps them. */
+    this.roomKeys = new Map();
   }
 
   get vault() {
@@ -282,6 +284,7 @@ export class SpaceDevice {
   async pushNotes(collection, { newNotes = [], editedNotes = [] }) {
     const im = this.cm.getItemManager(collection);
     const items = [];
+    const keys = [];
     const noteBatch = KINDS.find((kind) => kind.type === ITEM_TYPE_NOTE).batch;
     for (let at = 0; at < editedNotes.length; at += noteBatch) {
       const batch = editedNotes.slice(at, at + noteBatch);
@@ -310,16 +313,22 @@ export class SpaceDevice {
         item.setMeta(note.meta());
         await item.setContent(note.payload(cryptoKey));
         items.push(item);
+        keys.push(cryptoKey);
       }
     }
     for (const note of newNotes) {
-      items.push(await im.create(note.meta(), note.payload(randomBytes(32))));
+      const cryptoKey = randomBytes(32);
+      items.push(await im.create(note.meta(), note.payload(cryptoKey)));
+      keys.push(cryptoKey);
     }
     if (items.length === 0) return;
     await im.transaction(items);
     newNotes.forEach((note, i) => {
       note.uid = items[editedNotes.length + i].uid;
     });
+    // `room_keys`: the key each note went up with is kept on the device,
+    // so that opening the note later does not fetch it to read the key.
+    items.forEach((item, i) => this.roomKeys.set(item.uid, keys[i]));
   }
 
   /** `push_assets` for new assets: one transaction, blobs inline. */
@@ -358,13 +367,19 @@ export class SpaceDevice {
   }
 
   async roomInfoIn(collectionUid, noteUid) {
-    const collection = await this.cm.fetch(collectionUid);
-    const item = await this.cm.getItemManager(collection).fetch(noteUid);
-    const payload = decodePayload(await item.getContent());
+    // The key a sync kept, when there is one. Then nothing is asked of the
+    // server here, and the ticket is the only request of opening the note.
+    let noteKey = this.roomKeys.get(noteUid);
+    if (!noteKey) {
+      const collection = await this.cm.fetch(collectionUid);
+      const item = await this.cm.getItemManager(collection).fetch(noteUid);
+      noteKey = decodePayload(await item.getContent()).crypto_key;
+      this.roomKeys.set(noteUid, noteKey);
+    }
     return {
-      collectionUid: collection.uid,
+      collectionUid,
       noteUid,
-      noteKey: payload.crypto_key,
+      noteKey,
       // The fields the key derivation shared with the old layout still
       // takes. The app as built has neither a salt nor an epoch.
       salt: null,

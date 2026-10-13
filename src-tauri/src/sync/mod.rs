@@ -34,6 +34,7 @@ mod payloads;
 mod pull;
 mod push;
 pub mod repair;
+pub mod room_keys;
 pub mod scheduler;
 pub mod scopes;
 pub mod tags_crdt;
@@ -230,7 +231,17 @@ pub(crate) fn run_session(
     self_username: Option<&str>,
 ) -> Result<Option<SyncDelta>, String> {
     match run(db, account, self_username) {
-        Ok(delta) => Ok(Some(delta)),
+        Ok(mut delta) => {
+            // What the sync saw of the notes' keys is kept for the next
+            // time one of them is opened. Not keeping it costs requests
+            // then and nothing else, so a failure here is only logged.
+            let learned = std::mem::take(&mut delta.room_keys);
+            let seal = auth::room_key_seal(app);
+            if let Err(err) = room_keys::keep(db, seal.as_ref(), learned) {
+                log::warn!("[sync] could not keep the room keys of this sync: {err}");
+            }
+            Ok(Some(delta))
+        }
         Err(RunError::Unreachable(detail)) => {
             let server_url = auth::read_session_info(app)
                 .ok()
@@ -442,6 +453,9 @@ pub struct SyncDelta {
     /// The spaces whose push the server refused for a limit. Their rows
     /// stay dirty and go up with the first sync that has room.
     pub limits: Vec<LimitReached>,
+    /// The key of each note this sync pulled or pushed, to be sealed and
+    /// kept once it is over. See [`room_keys`].
+    pub room_keys: room_keys::Learned,
 }
 
 /// The vault's collection, when this sync visits the vault: the server
@@ -536,7 +550,7 @@ fn run(db: &Db, account: &Account, self_username: Option<&str>) -> Result<SyncDe
     scopes::push_scopes(db, &cm, &shared.open, &mut delta);
 
     if let Some(vault_im) = &vault_im {
-        if let Err(err) = push_vault(db, vault_im, &mut delta.report) {
+        if let Err(err) = push_vault(db, vault_im, &mut delta.report, &mut delta.room_keys) {
             // A full vault is not a sync that failed. Everything was
             // pulled, the shared folders were pushed, and what could not go
             // up waits where it is. The user is told which limit it was.
@@ -565,11 +579,16 @@ fn run(db: &Db, account: &Account, self_username: Option<&str>) -> Result<SyncDe
 }
 
 /// Push what changed locally in the vault.
-fn push_vault(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<()> {
+fn push_vault(
+    db: &Db,
+    im: &ItemManager,
+    report: &mut SyncReport,
+    room_keys: &mut room_keys::Learned,
+) -> AppResult<()> {
     // Folders first, so that no device ever pulls a note whose folder the
     // server has not been told about.
     push_folders(db, im, report, None)?;
-    push_notes(db, im, report, None)?;
+    push_notes(db, im, report, None, room_keys)?;
     push_assets(db, im, report, None)?;
     push_signatures(db, im, report)
 }

@@ -264,7 +264,13 @@ fn push_one_scope(
         // Folders first, so nobody pulls a note whose folder the server has
         // not been told about.
         push_folders(db, &open.im, &mut delta.report, Some(scope))?;
-        push_notes(db, &open.im, &mut delta.report, Some(scope))?;
+        push_notes(
+            db,
+            &open.im,
+            &mut delta.report,
+            Some(scope),
+            &mut delta.room_keys,
+        )?;
         push_assets(db, &open.im, &mut delta.report, Some(scope))?;
     }
 

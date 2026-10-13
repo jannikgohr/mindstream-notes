@@ -105,6 +105,52 @@ pub async fn note_room_ticket(
     )
 }
 
+/// The key a note carries, read off the note as the server has it. `None`
+/// where there is no room to be had: the collection or the note is gone or
+/// cannot be fetched, or the note is from before live sessions and has no
+/// key.
+fn fetch_note_key(
+    account: &Account,
+    col_uid: &str,
+    note_uid: &str,
+) -> Result<Option<Vec<u8>>, String> {
+    let cm = account
+        .collection_manager()
+        .map_err(|e| format!("collection_manager: {e}"))?;
+    let col = match cm.fetch(col_uid, None) {
+        Ok(c) if !c.is_deleted() => c,
+        Ok(_) => return Ok(None),
+        Err(e) => {
+            log::warn!("[room_info] fetch the note's collection failed: {e}");
+            return Ok(None);
+        }
+    };
+    let im = cm
+        .item_manager(&col)
+        .map_err(|e| format!("item_manager: {e}"))?;
+    let item = match im.fetch(note_uid, None) {
+        Ok(it) => it,
+        Err(e) => {
+            log::warn!("[room_info] fetch note item {note_uid} failed: {e}");
+            return Ok(None);
+        }
+    };
+    if item.is_deleted() || item.is_missing_content() {
+        return Ok(None);
+    }
+    let raw = item.content().map_err(|e| format!("item content: {e}"))?;
+    let payload: NotePayload = match rmp_serde::from_slice(&raw) {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("[room_info] payload decode failed: {e}");
+            return Ok(None);
+        }
+    };
+    // Empty for a note from before live sessions. No room, rather than a
+    // key made of nothing.
+    Ok(Some(payload.crypto_key).filter(|key| !key.is_empty()))
+}
+
 #[tauri::command]
 pub async fn note_room_info(
     app: AppHandle,
@@ -116,9 +162,9 @@ pub async fn note_room_info(
         return Ok(None);
     }
 
-    // Read just the local breadcrumbs we need: the note item UID, its optional
-    // share scope, and the cached vault notes-collection UID. The actual key
-    // lives only on the etebase server now; we resolve it on demand below.
+    // Read the local breadcrumbs: the note's item uid, its share scope if it
+    // has one, and the vault's collection uid. The note's key is read below,
+    // from what the last sync kept, or from the server when nothing is kept.
     let lookups = db
         .with_conn(|c| {
             let note_lookup: Option<(Option<String>, Option<String>)> = c
@@ -157,6 +203,7 @@ pub async fn note_room_info(
     // closure returns only plain strings so no etebase-owned value escapes
     // the blocking pool.
     let app_for_blocking = app.clone();
+    let note_id = id;
     Ok(
         tauri::async_runtime::spawn_blocking(move || -> Result<Option<RoomInfo>, String> {
             catch_blocking_panic("room_info", || {
@@ -166,51 +213,42 @@ pub async fn note_room_info(
                     Some(a) => a,
                     None => return Ok(None),
                 };
-                let cm = account
-                    .collection_manager()
-                    .map_err(|e| format!("collection_manager: {e}"))?;
                 // The collection the note is an item of: the vault, or for a
                 // note in a shared folder the folder's collection, whose uid
                 // is the scope.
                 let Some(col_uid) = share_scope_id.clone().or(vault_col_uid) else {
                     return Ok(None);
                 };
-                let col = match cm.fetch(&col_uid, None) {
-                    Ok(c) if !c.is_deleted() => c,
-                    Ok(_) => return Ok(None),
-                    Err(e) => {
-                        log::warn!("[room_info] fetch the note's collection failed: {e}");
-                        return Ok(None);
+
+                // The note's key, from what the last sync kept. Then the
+                // ticket below is the only request. A key that is not kept,
+                // or that this session cannot open, is fetched as it always
+                // was, and kept for next time.
+                let db = app_for_blocking.state::<Db>();
+                let seal = crate::auth::room_key_seal(&app_for_blocking);
+                let kept = match &seal {
+                    Some(seal) => db
+                        .with_conn(|conn| room_keys::load(conn, seal, &note_id))
+                        .map_err(|e| format!("read the kept room key: {e}"))?,
+                    None => None,
+                };
+                let note_key = match kept {
+                    Some(key) => key,
+                    None => {
+                        let Some(key) = fetch_note_key(&account, &col_uid, &note_uid)? else {
+                            return Ok(None);
+                        };
+                        if let Some(seal) = &seal {
+                            if let Err(err) =
+                                db.with_conn(|conn| room_keys::store(conn, seal, &note_id, &key))
+                            {
+                                log::warn!("[room_info] could not keep the room key: {err}");
+                            }
+                        }
+                        key
                     }
                 };
-                let im = cm
-                    .item_manager(&col)
-                    .map_err(|e| format!("item_manager: {e}"))?;
-                let item = match im.fetch(&note_uid, None) {
-                    Ok(it) => it,
-                    Err(e) => {
-                        log::warn!("[room_info] fetch note item {note_uid} failed: {e}");
-                        return Ok(None);
-                    }
-                };
-                if item.is_deleted() || item.is_missing_content() {
-                    return Ok(None);
-                }
-                let raw = item.content().map_err(|e| format!("item content: {e}"))?;
-                let payload: NotePayload = match rmp_serde::from_slice(&raw) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        log::warn!("[room_info] payload decode failed: {e}");
-                        return Ok(None);
-                    }
-                };
-                if payload.crypto_key.is_empty() {
-                    // Legacy v1 payload, or a peer pushed before live collab was
-                    // wired up. Surface as "no room available" rather than
-                    // encoding zero bytes.
-                    return Ok(None);
-                }
-                let key = room_key(&note_uid, &payload.crypto_key)?;
+                let key = room_key(&note_uid, &note_key)?;
 
                 // A member who may only read gets a ticket like anyone else.
                 // The server lets them watch and drops what they send.

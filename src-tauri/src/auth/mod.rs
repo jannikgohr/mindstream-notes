@@ -276,6 +276,18 @@ fn persist_account(app: &AppHandle, account: &Account) -> AppResult<()> {
     Ok(())
 }
 
+/// What seals the room keys this device keeps, for the session that is
+/// signed in. `None` when nobody is, or when the keystore will not say:
+/// then no key is kept or read, and the server is asked as before.
+pub(crate) fn room_key_seal(app: &AppHandle) -> Option<crate::sync::room_keys::Seal> {
+    let secret = keyring_entry(&active_keyring_account(app))
+        .ok()?
+        .get_password()
+        .ok()?;
+    let secret = from_base64(&secret).ok()?;
+    crate::sync::room_keys::Seal::from_session_secret(&secret).ok()
+}
+
 fn clear_local_state(path: &Path, keyring_account: &str) {
     let _ = fs::remove_file(path);
     if let Ok(entry) = keyring_entry(keyring_account) {
@@ -324,6 +336,10 @@ fn reset_sync_cursors(db: &Db) -> AppResult<()> {
         let tx = c.transaction()?;
         tx.execute("DELETE FROM sync_state", [])?;
         tx.execute("DELETE FROM tombstones", [])?;
+        // The room keys kept here were sealed for the session that is
+        // ending. Nothing can open them once its secret is gone, and the
+        // next sign-in brings them again.
+        crate::sync::room_keys::forget_all(&tx)?;
         // Strip server-side identifiers from every row so the next
         // sync treats them as freshly-created locally.
         tx.execute(
@@ -498,11 +514,10 @@ pub async fn etebase_logout(app: AppHandle) -> CommandResult<()> {
         }
     }
 
-    // Nothing key-shaped needs wiping locally: the crypto_key column
-    // was removed in migration v7. note_room_info now fetches the key
-    // directly from etebase each time a note is opened, so logging out
-    // (which deletes the keyring entry below) makes those fetches fail
-    // immediately and the editor falls back to single-device mode.
+    // The room keys this device keeps are sealed under a key derived from
+    // the secret that is deleted below, so they stop being readable here,
+    // and `reset_sync_cursors` deletes the rows. A room also takes a
+    // ticket, which only a signed-in device is given.
     clear_local_state(&path, &keyring_account);
 
     // Drop sync cursors after the session file is gone, so a crash here
@@ -682,10 +697,21 @@ mod tests {
     fn reset_sync_cursors_wipes_server_side_state_and_re_dirties_rows() {
         let db = open_memory_for_tests();
         seed_synced_state(&db);
+        // A room key this device kept for the session that is ending.
+        let seal = crate::sync::room_keys::Seal::from_session_secret(&[3; 32]).unwrap();
+        db.with_conn(|c| {
+            assert_eq!(crate::sync::room_keys::store(c, &seal, "n1", &[8; 32])?, 1);
+            Ok(())
+        })
+        .unwrap();
 
         reset_sync_cursors(&db).unwrap();
 
         db.with_conn(|c| {
+            let room_keys: i64 = c
+                .query_row("SELECT COUNT(*) FROM room_keys", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(room_keys, 0, "kept room keys go at sign-out");
             // Cursor tables emptied
             let sync_state_count: i64 = c
                 .query_row("SELECT COUNT(*) FROM sync_state", [], |r| r.get(0))
