@@ -158,6 +158,19 @@ mod tests {
     }
 
     #[test]
+    fn the_report_tells_the_window_how_many_spaces_were_held_back() {
+        // The window reads this field by name and refuses a report without
+        // it, see `parseSyncReport` in src/lib/api/sync.ts.
+        let report = crate::sync::SyncReport {
+            held_back: 2,
+            ..Default::default()
+        };
+        let json = serde_json::to_value(report).unwrap();
+        assert_eq!(json["held_back"], 2);
+        assert_eq!(json["notes_pushed"], 0);
+    }
+
+    #[test]
     fn the_window_gets_the_fields_under_these_names() {
         let json = serde_json::to_value(LimitReached::in_vault("storage_full")).unwrap();
         assert_eq!(

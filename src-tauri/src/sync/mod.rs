@@ -278,6 +278,11 @@ pub struct SyncReport {
     pub signatures_pulled: usize,
     pub signatures_pushed: usize,
     pub conflicts_resolved: usize,
+    /// Spaces the server took nothing new for because a limit was reached,
+    /// see [`LimitReached`]. Their changes are still on the device, so a
+    /// sync that reports any did not bring everything up to date, whatever
+    /// the counts above say.
+    pub held_back: usize,
 }
 
 /// Payload of the `sync-completed` Tauri event. JS listeners use this
@@ -560,6 +565,8 @@ fn run(db: &Db, account: &Account, self_username: Option<&str>) -> Result<SyncDe
     if shared.complete && !holds_remain(db)? {
         save_stoken(db, KIND_ACCOUNT, changes.stoken.as_deref())?;
     }
+
+    delta.report.held_back = delta.limits.len();
 
     Ok(delta)
 }

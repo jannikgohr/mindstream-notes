@@ -772,7 +772,8 @@ not offered in the app. It will point at a deployment of this server.
   a limit with status 402 and a word for the limit. The app pulls as usual,
   pushes the spaces that have room, and leaves what was refused where it is,
   to go up with the first sync that can take it. It shows one notice for as
-  long as the limit holds. For the account's own plan the notice says so.
+  long as the limit holds, and a sync started by hand says that some changes
+  were not sent. For the account's own plan the notice says so.
   In a folder someone else shared it names the folder and its owner, because
   the person typing can only ask them. The dialogs for sharing, inviting,
   accepting and joining have a sentence for each limit too.

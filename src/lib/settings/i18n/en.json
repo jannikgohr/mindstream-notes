@@ -1115,6 +1115,7 @@
     "account.sync.pushed": "Notes pushed: {notes}, folders: {folders}",
     "account.sync.conflicts": "Conflicts merged: {count}",
     "account.sync.upToDate": "Already up to date",
+    "account.sync.heldBack": "Some changes were not sent, see the notifications",
     "account.security.signedOut": "Sign in to manage two-factor sign-in, your recovery key and your devices.",
     "account.security.loading": "Loading…",
     "account.security.retry": "Try again",

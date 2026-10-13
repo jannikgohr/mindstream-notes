@@ -63,6 +63,7 @@
   } from '$lib/account/styles';
   import { upsertNotification } from '$lib/notifications/store.svelte';
   import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
+  import { summariseSyncReport } from '$lib/sync/report-summary';
   import { runSync } from '$lib/sync/runner';
   import {
     getSettingValue,
@@ -382,32 +383,6 @@
     }
   }
 
-  function summarise(r: SyncReport): string {
-    const parts: string[] = [];
-    if (r.notes_pulled || r.folders_pulled) {
-      parts.push(
-        tUiFormat('account.sync.pulled', {
-          notes: r.notes_pulled,
-          folders: r.folders_pulled
-        })
-      );
-    }
-    if (r.notes_pushed || r.folders_pushed) {
-      parts.push(
-        tUiFormat('account.sync.pushed', {
-          notes: r.notes_pushed,
-          folders: r.folders_pushed
-        })
-      );
-    }
-    if (r.conflicts_resolved) {
-      parts.push(
-        tUiFormat('account.sync.conflicts', { count: r.conflicts_resolved })
-      );
-    }
-    return parts.length > 0 ? parts.join(' · ') : tUi('account.sync.upToDate');
-  }
-
   /** Two-way binding for the URL input. We can't `bind:value` against a
    *  `$derived` (it's read-only by design), so the input drives
    *  setSettingValue and reads back through the same derived store. */
@@ -504,7 +479,9 @@
         </Button>
       </div>
       {#if lastReport && !error}
-        <p class="text-xs text-muted-foreground">{summarise(lastReport)}</p>
+        <p class="text-xs text-muted-foreground">
+          {summariseSyncReport(lastReport)}
+        </p>
       {/if}
       {#if error}
         <p class="text-xs text-destructive">{error}</p>

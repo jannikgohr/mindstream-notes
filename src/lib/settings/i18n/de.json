@@ -1115,6 +1115,7 @@
     "account.sync.pushed": "Notizen gesendet: {notes}, Ordner: {folders}",
     "account.sync.conflicts": "Zusammengeführte Konflikte: {count}",
     "account.sync.upToDate": "Bereits auf dem neuesten Stand",
+    "account.sync.heldBack": "Einige Änderungen wurden nicht gesendet, siehe Benachrichtigungen",
     "account.security.signedOut": "Melde dich an, um die Zwei-Faktor-Anmeldung, deinen Wiederherstellungsschlüssel und deine Geräte zu verwalten.",
     "account.security.loading": "Lade…",
     "account.security.retry": "Erneut versuchen",

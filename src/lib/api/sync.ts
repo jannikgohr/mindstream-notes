@@ -25,6 +25,9 @@ export interface SyncReport {
   assets_pulled: number;
   assets_pushed: number;
   conflicts_resolved: number;
+  /** Spaces the server took nothing new for because a limit was reached.
+   *  Their changes are still on the device. */
+  held_back: number;
 }
 
 export async function syncNow(): Promise<SyncReport> {
@@ -131,7 +134,8 @@ function parseSyncReport(value: unknown): SyncReport {
     conflicts_resolved: assertNumber(
       raw.conflicts_resolved,
       'sync report.conflicts_resolved'
-    )
+    ),
+    held_back: assertNumber(raw.held_back, 'sync report.held_back')
   };
 }
 
