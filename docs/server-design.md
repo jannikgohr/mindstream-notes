@@ -1,17 +1,26 @@
 # Sync server design
 
-Status: agreed design, written 2026-10-12. The server in
-[backend/server](../backend/server/README.md) has the core of step 1 and the
-server halves of steps 3, 4 and 5: rooms and the change feed, invite links,
-then device sessions, two-factor sign-in and the recovery key. On the app's
-side, live collaboration for every kind of note runs on the server's rooms,
-the app listens on the change feed and syncs when the server says something
-changed, and the old stack is gone from the repository. Step 5 is done in the
-app too: it signs up with a recovery key, signs in with a code, recovers an
-account, and has a panel for two-factor sign-in, the recovery key, the
-password and the devices signed in. Step 2 is half done: the vault is one
-collection. Still to do in the app: one collection per shared folder, and the
-screens for invitations and invite links.
+Status: agreed design, written 2026-10-12. Steps 1 to 5 of the
+[build order](#build-order) are built, on the server in
+[backend/server](../backend/server/README.md) and in the app, and the old
+stack is gone from the repository.
+
+- The vault is one collection and so is each shared folder. A sync opens
+  with one request that says which of them changed.
+- Live collaboration for every kind of note runs on the server's rooms. The
+  app listens on the change feed and syncs when the server says something
+  changed.
+- A folder is shared by invitation or by invite link. A link opens from a
+  browser into the app.
+- The app signs up with a recovery key, signs in with a code, recovers an
+  account, and has a panel for two-factor sign-in, the recovery key, the
+  password and the devices signed in.
+
+Of step 6 the server's half is built: it counts what an account stores,
+refuses what goes over a limit, and has the interface that sets limits. The
+app does not yet tell such a refusal from any other sync that failed, so it
+cannot say whose storage is full. The billing program is not built and will
+not be part of this repository, see [decisions](#decisions).
 
 This replaces the backend stack described in
 [architecture.md](architecture.md#the-backend-stack): nginx, Etebase on
@@ -117,6 +126,7 @@ removing them loops over the collections one request at a time.
 | Accounts | A signed-in device plus the re-entered password may enrol a new authenticator.                          |
 | Managed  | The `managed` server type runs on this server, later with account limits, paid subscriptions and tiers. |
 | Managed  | The owner of a space pays for its storage. Collaborators need no paid account.                          |
+| Managed  | Limits and the interface that sets them are public. The program that takes payment is private.          |
 
 ## What stays and what changes
 
@@ -955,8 +965,18 @@ The frame figures are within the run-to-run noise of each other.
 ## Open points
 
 1. **Key rotation on removal.** The collab epoch and salt exist to lock removed
-   members out of rooms. With the server refusing them, this design drops both
-   and does not rotate keys on removal. Confirm.
+   members out of rooms. With the server refusing them, this design proposed
+   to drop both. The app still has them: it gives a folder a new salt when a
+   member is removed or made read-only, and the others reconnect their rooms
+   once they have synced it. Whether to keep that is not decided.
+
+   What the salt adds is small. It is stored in the collection, under the
+   collection key, and that key is never changed. A removed member keeps
+   the key, so the new salt is out of their reach only for as long as the
+   server refuses to hand them the collection. That is the same server that
+   refuses them the room. And what is typed in a room is synced to the
+   collection moments later, under keys the removed member also kept.
+
 2. **Where the room key comes from when a note opens.** Today the per-note key
    is fetched from the server on every open. It could be cached locally, or
    derived from the collection key so no fetch is needed.
@@ -966,9 +986,9 @@ The frame figures are within the run-to-run noise of each other.
    today every writer answers to everyone. Addressing the reply to the
    requester and limiting how often a socket may ask would stop a join from
    fanning a whole document out to the room.
-5. **The link's shape.** The `mindstream:` scheme is already taken inside the
-   WebView for attachments, and nothing handles links at the operating-system
-   level yet.
+5. **The link's shape.** Settled. A link is a web address on its server, and
+   the app answers to `mindstream-notes://join?link=…`. See
+   [invite links](#invite-links).
 6. **Who may create links that permit signup** on a self-hosted server. The
    server leaves it to the operator. Under `invite` any admin of a space may.
    Under `closed`, the default, nobody may and the administrator hands out
@@ -979,11 +999,12 @@ The frame figures are within the run-to-run noise of each other.
 8. **How long a device session lasts** when it is not used.
 9. **The size under which content comes inline.**
 10. **Email verification on managed**, and whether it gates the first sync.
-11. **Whether the public repository carries a working billing program.** The
-    proposal is that it does not. Enforcing limits and the interface that sets
-    them stay in the public server, because the managed service runs that same
-    server and self-hosters can use limits too. The program that talks to a
-    payment provider would live in a private repository. It is of no use to
+11. **Whether the public repository carries a working billing program.**
+    Decided for now, on 2026-10-13, that it does not. Enforcing limits and the
+    interface that sets them stay in the public server, because the managed
+    service runs that same server and self-hosters can use limits too. The
+    program that talks to a payment provider lives in a private repository
+    once there is one. It is of no use to
     someone hosting for themselves, it changes with prices and tiers that are
     nobody else's business, and how it catches abuse is better not published.
     It reaches the server only over HTTP, as any other program could, which is
