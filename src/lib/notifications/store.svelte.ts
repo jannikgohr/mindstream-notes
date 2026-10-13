@@ -99,11 +99,15 @@ export async function scanForShareInviteNotifications(): Promise<void> {
     );
 
     for (const share of shares) {
+      const id = `share-invite:${share.invitation_id}`;
+      // An invitation that was listed before keeps the time it was first
+      // seen. Every rescan lists it again for as long as it waits.
+      const known = notificationState.items.find((item) => item.id === id);
       upsertNotification({
-        id: `share-invite:${share.invitation_id}`,
+        id,
         kind: 'share-invite',
         widgetType: 'share-invite',
-        createdAt: Date.now(),
+        createdAt: known?.createdAt ?? Date.now(),
         data: {
           invitationId: share.invitation_id,
           collectionUid: share.collection_uid,
