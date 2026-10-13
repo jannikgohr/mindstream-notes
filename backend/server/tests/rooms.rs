@@ -122,6 +122,51 @@ async fn ticket_issued_before_a_removal_no_longer_opens_the_room() {
     assert_eq!(socket.next().await, Frame::Closed(4403));
 }
 
+/// A ticket is asked for over HTTP and spent on a socket a moment later.
+/// A session that ends in between has nothing open for the server to
+/// close, so the news of its end passes the socket by. The socket is
+/// therefore asked about once more after it has taken its place in the
+/// room, and that is what turns it away here.
+#[tokio::test]
+async fn ticket_issued_before_a_sign_out_no_longer_opens_the_room() {
+    let (owner, collection, item) = space().await;
+    let guest = Device::signup(common::server(), "guest").await;
+    owner.share(&collection, &guest, READ_WRITE).await;
+    // Someone to notice whether the guest got in after all.
+    let (mut watcher, _) = owner.enter(&collection, &item).await;
+
+    let ticket = guest.ticket(&collection, &item).await.unwrap();
+    let (status, _) = guest
+        .call::<()>(reqwest::Method::POST, "/authentication/logout/", None)
+        .await;
+    assert!((200..300).contains(&status), "logout answered {status}");
+    // The session is gone, so the same device gets no second ticket.
+    assert_eq!(guest.ticket(&collection, &item).await, Err(401));
+
+    // Turned away the way any ticket is that no longer entitles its holder
+    // to the room. The server does not say which of the reasons it was. A
+    // client asks for a new ticket either way, and that request is refused
+    // as not signed in, as above.
+    let mut socket = Socket::open(common::server(), "/api/v1/room/", None).await;
+    socket.hello(&ticket).await;
+    assert_eq!(socket.next().await, Frame::Closed(4403));
+
+    // Whatever the room saw of the guest, the guest is not in it: a frame
+    // from the owner's second socket is the next thing of substance.
+    let (mut second, _) = owner.enter(&collection, &item).await;
+    second.send(UPDATE, b"only among the owner's devices").await;
+    loop {
+        match watcher.next().await {
+            Frame::Relayed { payload, .. } => {
+                assert_eq!(payload, b"only among the owner's devices");
+                break;
+            }
+            Frame::Control(JOINED | LEFT, _) => {}
+            other => panic!("unexpected frame in the room: {other:?}"),
+        }
+    }
+}
+
 #[tokio::test]
 async fn read_only_member_watches_live_but_cannot_edit() {
     let (owner, collection, item) = space().await;

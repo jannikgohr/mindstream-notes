@@ -13,7 +13,7 @@ use sqlx::postgres::PgListener;
 use sqlx::PgConnection;
 
 use crate::auth;
-use crate::hub::{FeedNews, CLOSE_UNAVAILABLE};
+use crate::hub::{FeedNews, Hub, CLOSE_UNAVAILABLE};
 use crate::AppState;
 
 const CHANNEL: &str = "mindstream_events";
@@ -190,23 +190,27 @@ impl Watch {
     /// the grace period every socket is closed: a client reconnects and is
     /// let in again on what the database says by then, while a socket left
     /// open would keep an authority nobody can confirm.
-    fn failed(&mut self, state: &AppState) {
-        let now = Instant::now();
+    fn failed(&mut self, hub: &Hub, now: Instant) {
         self.unchecked_since.get_or_insert(now);
         if self.overdue(now) {
             tracing::warn!("sockets have gone unchecked for too long; closing them all");
-            state.hub.close_all(CLOSE_UNAVAILABLE);
+            hub.close_all(CLOSE_UNAVAILABLE);
         }
+    }
+
+    /// Every socket was checked against the database just now.
+    fn checked(&mut self) {
+        self.unchecked_since = None;
     }
 
     /// Check every socket against the database after events may have been
     /// lost.
     async fn recheck(&mut self, state: &AppState) {
         match revalidate(state).await {
-            Ok(()) => self.unchecked_since = None,
+            Ok(()) => self.checked(),
             Err(err) => {
                 tracing::warn!("could not recheck the open sockets: {err}");
-                self.failed(state);
+                self.failed(&state.hub, Instant::now());
             }
         }
     }
@@ -277,6 +281,8 @@ pub fn listen(state: AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hub::{FeedSignal, Joined, RoomKey};
+    use crate::wire::{ACCESS_ADMIN, ACCESS_READ_WRITE};
 
     #[test]
     fn sockets_are_only_given_up_on_after_the_grace_period() {
@@ -289,6 +295,74 @@ mod tests {
         assert!(!watch.overdue(start));
         assert!(!watch.overdue(start + UNCHECKED_GRACE - Duration::from_secs(1)));
         assert!(watch.overdue(start + UNCHECKED_GRACE));
+    }
+
+    /// Two people in a room and one of them on the feed, on a hub of
+    /// their own.
+    fn open_sockets(hub: &Hub) -> (Joined, Joined, std::sync::Arc<FeedSignal>) {
+        let room = RoomKey {
+            collection_id: 1,
+            item_id: 1,
+        };
+        let ann = hub
+            .join(room, 1, 100, "ann".into(), ACCESS_ADMIN)
+            .expect("ann joins");
+        let bob = hub
+            .join(room, 2, 200, "bob".into(), ACCESS_READ_WRITE)
+            .expect("bob joins");
+        let (_, feed) = hub.subscribe_feed(1, 100).expect("ann listens");
+        (ann, bob, feed)
+    }
+
+    /// While the database cannot be asked, nothing can say which sockets
+    /// may stay open. They are left alone for the grace period, since most
+    /// outages are a restart, and then every one of them is closed: in the
+    /// rooms and on the feed, whoever they belong to.
+    #[tokio::test]
+    async fn outage_past_the_grace_period_closes_every_socket() {
+        let hub = Hub::default();
+        let (ann, bob, feed) = open_sockets(&hub);
+        let start = Instant::now();
+        let mut watch = Watch::default();
+
+        // The first check that fails starts the clock and closes nothing.
+        watch.failed(&hub, start);
+        watch.failed(&hub, start + UNCHECKED_GRACE - Duration::from_secs(1));
+        assert_eq!(feed.close_code(), None);
+        let mut open = hub.open_sessions();
+        open.sort_unstable();
+        assert_eq!(open, vec![100, 200]);
+
+        watch.failed(&hub, start + UNCHECKED_GRACE);
+        assert_eq!(ann.kick.fired().await, CLOSE_UNAVAILABLE);
+        assert_eq!(bob.kick.fired().await, CLOSE_UNAVAILABLE);
+        assert_eq!(feed.close_code(), Some(CLOSE_UNAVAILABLE));
+        assert!(hub.open_sessions().is_empty());
+        assert!(hub.room_memberships().is_empty());
+    }
+
+    /// A check that goes through in between means the sockets were vouched
+    /// for then. The next outage gets a grace period of its own, however
+    /// long ago the last one began.
+    #[tokio::test]
+    async fn outage_that_ends_in_time_closes_nothing_and_restarts_the_clock() {
+        let hub = Hub::default();
+        let (_ann, _bob, feed) = open_sockets(&hub);
+        let start = Instant::now();
+        let mut watch = Watch::default();
+
+        watch.failed(&hub, start);
+        watch.checked();
+        // Long after the first outage began, and one second into the next.
+        let later = start + UNCHECKED_GRACE * 5;
+        watch.failed(&hub, later);
+        watch.failed(&hub, later + Duration::from_secs(1));
+        assert_eq!(feed.close_code(), None);
+        assert_eq!(hub.open_sessions().len(), 2);
+
+        watch.failed(&hub, later + UNCHECKED_GRACE);
+        assert_eq!(feed.close_code(), Some(CLOSE_UNAVAILABLE));
+        assert!(hub.open_sessions().is_empty());
     }
 
     #[test]
