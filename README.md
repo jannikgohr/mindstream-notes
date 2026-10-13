@@ -113,6 +113,7 @@ this table, which have a licence of their own:
 | [`vendor/etebase-rs/`](vendor/etebase-rs)                         | The Etebase client library, changed here      | BSD-3-Clause ([text](vendor/etebase-rs/LICENSE)) |
 | [`packages/svelte-kanban/`](packages/svelte-kanban)               | A fork of `@svar-ui/svelte-kanban`, the board | MIT ([text](packages/svelte-kanban/LICENSE))     |
 | `src-tauri/gen/android/gradlew`, `gradlew.bat`, `gradle/wrapper/` | The Gradle wrapper                            | Apache-2.0                                       |
+| `plugins/*/icons/`                                                | Plugin icons from Lucide and Simple Icons     | ISC, CC0-1.0                                     |
 
 The server is a program of its own. The app does not contain it and talks to
 it over the network. The files in [`protocol/`](protocol), which both are

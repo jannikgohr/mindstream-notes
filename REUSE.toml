@@ -69,3 +69,19 @@ path = [
 ]
 SPDX-FileCopyrightText = "2015 the original author or authors of Gradle"
 SPDX-License-Identifier = "Apache-2.0"
+
+# Two plugin icons, taken from Lucide.
+[[annotations]]
+path = [
+  "plugins/languagetool/icons/spell-check.svg",
+  "plugins/templates/icons/templates.svg",
+]
+SPDX-FileCopyrightText = "2022 Lucide Contributors"
+SPDX-License-Identifier = "ISC"
+
+# The Typst plugin's icon, as Simple Icons draws it. The drawing is in the
+# public domain. The mark it shows is Typst's.
+[[annotations]]
+path = "plugins/typst/icons/typst.svg"
+SPDX-FileCopyrightText = "Simple Icons Collaborators"
+SPDX-License-Identifier = "CC0-1.0"
