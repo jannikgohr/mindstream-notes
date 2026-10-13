@@ -748,8 +748,15 @@ point in time, and limits against abuse of open signup.
   observable behaviour. The owner stays the sole copyright holder, which keeps
   dual licensing possible and does not force the managed service to publish
   every change. Porting the reference server's source would give up both.
-- A small crate holds the room protocol types. Both the app and the server link
-  it, so it is MIT OR Apache-2.0.
+- The room protocol is written down once, in [protocol/room](../protocol/room),
+  under MIT OR Apache-2.0. The plan was a small crate that the app and the
+  server both link. A crate would not have covered the side that matters:
+  frames are decoded in the web view, in TypeScript, and the fake server the
+  app's unit tests use is TypeScript too. So the shared thing is a file with
+  the numbers, example frames and one scripted conversation, and each side
+  has a test that reads it: the server's hub, the server over real sockets,
+  the app's room socket and the fake server. Changing the protocol means
+  changing the file first, and the tests say which side has not followed.
 - The app never depends on the server crate outside tests.
 - Billing stays a separate program, outside the AGPL work.
 - Outside contributions to the server need a decision before the first one

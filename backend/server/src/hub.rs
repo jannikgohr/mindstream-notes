@@ -554,7 +554,7 @@ impl Hub {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wire::{ACCESS_ADMIN, ACCESS_READ_WRITE};
+    use crate::wire::{ACCESS_ADMIN, ACCESS_READ_ONLY, ACCESS_READ_WRITE};
 
     const ROOM: RoomKey = RoomKey {
         collection_id: 1,
@@ -583,6 +583,133 @@ mod tests {
 
     fn kinds(joined: &mut Joined) -> Vec<u8> {
         drain(joined).into_iter().map(|(kind, _)| kind).collect()
+    }
+
+    /// The protocol as it is written down for every side that speaks it.
+    fn protocol() -> serde_json::Value {
+        serde_json::from_str(include_str!("../../../protocol/room/room-protocol.json"))
+            .expect("the room protocol file is JSON")
+    }
+
+    fn bytes_of(hex: &serde_json::Value) -> Vec<u8> {
+        let hex = hex.as_str().expect("hex as a string");
+        (0..hex.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).expect("hex digits"))
+            .collect()
+    }
+
+    /// The next frame queued for a member, as its first byte and the rest
+    /// read as JSON.
+    fn next_control(joined: &mut Joined) -> (u8, serde_json::Value) {
+        let frame = joined.frames.try_recv().expect("a frame is waiting");
+        let body = serde_json::from_slice(&frame[1..]).expect("a control frame carries JSON");
+        (frame[0], body)
+    }
+
+    /// The app's room socket and the fake server its tests use have their
+    /// own code for this protocol, in another language. What keeps the
+    /// three alike is the file they are each held to. This holds the hub
+    /// to it: the numbers, and the frames it builds.
+    #[test]
+    fn hub_speaks_the_room_protocol_as_written_down() {
+        let spec = protocol();
+        for (name, value) in [
+            ("hello", FRAME_HELLO),
+            ("welcome", FRAME_WELCOME),
+            ("joined", FRAME_JOINED),
+            ("left", FRAME_LEFT),
+            ("access", FRAME_ACCESS),
+        ] {
+            assert_eq!(spec["frames"][name], value, "frame {name}");
+        }
+        for (name, value) in [
+            ("update", CLASS_UPDATE),
+            ("sync", CLASS_SYNC),
+            ("reply", CLASS_REPLY),
+            ("presence", CLASS_PRESENCE),
+        ] {
+            assert_eq!(spec["classes"][name], value, "class {name}");
+        }
+        assert_eq!(spec["frames"].as_object().unwrap().len(), 5);
+        assert_eq!(spec["classes"].as_object().unwrap().len(), 4);
+        // A receiver tells a control frame from a relayed one by this.
+        let lowest_class = spec["classes"]
+            .as_object()
+            .unwrap()
+            .values()
+            .map(|class| class.as_u64().unwrap())
+            .min()
+            .unwrap();
+        for (name, frame) in spec["frames"].as_object().unwrap() {
+            assert!(frame.as_u64().unwrap() < lowest_class, "frame {name}");
+        }
+        for (name, value) in [
+            ("readOnly", ACCESS_READ_ONLY),
+            ("admin", ACCESS_ADMIN),
+            ("readWrite", ACCESS_READ_WRITE),
+        ] {
+            assert_eq!(spec["accessLevels"][name], value, "access {name}");
+        }
+        for (name, value) in [
+            ("badFrame", CLOSE_BAD_FRAME),
+            ("unauthorized", CLOSE_UNAUTHORIZED),
+            ("removed", CLOSE_REMOVED),
+            ("slow", CLOSE_SLOW),
+            ("tooMany", CLOSE_TOO_MANY),
+            ("unavailable", CLOSE_UNAVAILABLE),
+        ] {
+            assert_eq!(spec["closeCodes"][name], value, "close code {name}");
+        }
+        assert_eq!(spec["senderBytes"], std::mem::size_of::<u32>());
+
+        // The frames. A hub of its own hands out the ids 1 and 2, which is
+        // what the examples are written with.
+        let examples = &spec["examples"];
+        let hub = Hub::default();
+        let mut ann = hub
+            .join(ROOM, 1, 10, "ann".into(), ACCESS_ADMIN)
+            .expect("ann joins");
+        drain(&mut ann);
+        let mut bob = hub
+            .join(ROOM, 2, 20, "bob".into(), ACCESS_READ_ONLY)
+            .expect("bob joins");
+        assert_eq!(
+            next_control(&mut bob),
+            (FRAME_WELCOME, examples["welcome"]["body"].clone())
+        );
+        assert_eq!(
+            next_control(&mut ann),
+            (FRAME_JOINED, examples["joined"]["body"].clone())
+        );
+
+        let relayed = &examples["relayed"];
+        assert_eq!(
+            hub.relay(
+                ROOM,
+                ann.id,
+                CLASS_UPDATE,
+                &bytes_of(&relayed["payload"]),
+                None
+            ),
+            Relay::Sent
+        );
+        assert_eq!(
+            bob.frames.try_recv().expect("the update").to_vec(),
+            bytes_of(&relayed["hex"])
+        );
+
+        hub.membership_changed(ROOM.collection_id, 2, Some(ACCESS_READ_WRITE));
+        assert_eq!(
+            next_control(&mut bob),
+            (FRAME_ACCESS, examples["access"]["body"].clone())
+        );
+
+        hub.leave(ROOM, bob.id);
+        assert_eq!(
+            next_control(&mut ann),
+            (FRAME_LEFT, examples["left"]["body"].clone())
+        );
     }
 
     #[test]

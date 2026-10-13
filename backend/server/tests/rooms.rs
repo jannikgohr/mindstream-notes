@@ -376,3 +376,196 @@ async fn frame_larger_than_the_backlog_allowance_reaches_a_member_that_is_readin
     sender.send(UPDATE, b"after").await;
     assert!(matches!(receiver.next().await, Frame::Relayed { .. }));
 }
+
+// ---------- the protocol as written down ----------
+
+fn protocol() -> serde_json::Value {
+    serde_json::from_str(include_str!("../../../protocol/room/room-protocol.json"))
+        .expect("the room protocol file is JSON")
+}
+
+fn bytes_of(hex: &serde_json::Value) -> Vec<u8> {
+    let hex = hex.as_str().expect("hex as a string");
+    (0..hex.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).expect("hex digits"))
+        .collect()
+}
+
+/// Someone in the exchange: the name the protocol file gives them, the
+/// account that plays them, and what the server made of them.
+struct Player {
+    username: String,
+    id: Option<u64>,
+    socket: Option<Socket>,
+}
+
+/// A body from the protocol file with its names turned into what this
+/// server handed out: a member's name into their id or their username, an
+/// access level's name into its number.
+fn in_this_room(
+    body: &serde_json::Value,
+    key: Option<&str>,
+    players: &std::collections::HashMap<String, Player>,
+    spec: &serde_json::Value,
+) -> serde_json::Value {
+    use serde_json::Value;
+    match body {
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|(name, value)| (name.clone(), in_this_room(value, Some(name), players, spec)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| in_this_room(item, None, players, spec))
+                .collect(),
+        ),
+        Value::String(name) => match key {
+            Some("you" | "id") => players[name].id.expect("they have joined").into(),
+            Some("username") => players[name].username.clone().into(),
+            Some("accessLevel") => spec["accessLevels"][name].clone(),
+            _ => body.clone(),
+        },
+        other => other.clone(),
+    }
+}
+
+/// The conversation in the protocol file, held over real sockets. The
+/// hub's own test checks the frames it builds. This checks the whole way:
+/// what a member's bytes are taken to mean, who is sent what because of
+/// them, and what a member who may only read is not allowed to say.
+#[tokio::test]
+async fn room_exchange_goes_as_the_protocol_says() {
+    use std::collections::HashMap;
+
+    let spec = protocol();
+    // The numbers this file's helpers send and expect are the protocol's.
+    for (name, value) in [
+        ("hello", common::raw::HELLO),
+        ("welcome", common::raw::WELCOME),
+        ("joined", JOINED),
+        ("left", LEFT),
+        ("access", ACCESS),
+    ] {
+        assert_eq!(spec["frames"][name], value, "frame {name}");
+    }
+    for (name, value) in [
+        ("update", UPDATE),
+        ("sync", SYNC),
+        ("reply", common::raw::REPLY),
+        ("presence", PRESENCE),
+    ] {
+        assert_eq!(spec["classes"][name], value, "class {name}");
+    }
+    for (name, value) in [
+        ("readOnly", READ_ONLY),
+        ("admin", ADMIN),
+        ("readWrite", READ_WRITE),
+    ] {
+        assert_eq!(spec["accessLevels"][name], value, "access {name}");
+    }
+
+    // Ann owns the space, which makes her its admin. Bob is invited with
+    // whatever access the protocol file has him join with.
+    let (ann, collection, item) = space().await;
+    let bob = Device::signup(common::server(), "bob").await;
+    let mut players: HashMap<String, Player> = HashMap::new();
+    for (name, device) in [("ann", &ann), ("bob", &bob)] {
+        players.insert(
+            name.to_string(),
+            Player {
+                username: device.name.clone(),
+                id: None,
+                socket: None,
+            },
+        );
+    }
+    let level = |name: &serde_json::Value| -> i16 {
+        spec["accessLevels"][name.as_str().unwrap()]
+            .as_i64()
+            .expect("an access level") as i16
+    };
+    let class = |name: &serde_json::Value| -> u8 {
+        spec["classes"][name.as_str().unwrap()]
+            .as_u64()
+            .expect("a class") as u8
+    };
+
+    for (number, step) in spec["exchange"].as_array().unwrap().iter().enumerate() {
+        let what = format!("step {number}: {step}");
+        let mut welcome = None;
+        if let Some(who) = step["join"].as_str() {
+            let device = if who == "ann" {
+                assert_eq!(level(&step["access"]), ADMIN, "{what}");
+                &ann
+            } else {
+                ann.share(&collection, &bob, level(&step["access"])).await;
+                &bob
+            };
+            let (socket, body) = device.enter(&collection, &item).await;
+            let player = players.get_mut(who).unwrap();
+            player.id = body["you"].as_u64();
+            player.socket = Some(socket);
+            welcome = Some((who.to_string(), body));
+        } else if let Some(who) = step["send"].as_str() {
+            let payload = bytes_of(&step["payload"]);
+            let target = step["target"]
+                .as_str()
+                .map(|name| players[name].id.expect("the target has joined"));
+            let socket = players.get_mut(who).unwrap().socket.as_mut().unwrap();
+            match target {
+                Some(target) => {
+                    assert_eq!(class(&step["class"]), common::raw::REPLY, "{what}");
+                    socket.reply(target, &payload).await;
+                }
+                None => socket.send(class(&step["class"]), &payload).await,
+            }
+        } else if let Some(who) = step["setAccess"].as_str() {
+            assert_eq!(who, "bob", "{what}");
+            ann.set_access(&collection, &bob, level(&step["access"]))
+                .await;
+        } else if let Some(who) = step["leave"].as_str() {
+            // Dropping the socket closes it.
+            players.get_mut(who).unwrap().socket = None;
+        } else {
+            panic!("a step this test does not know how to take: {what}");
+        }
+
+        for expected in step["then"].as_array().unwrap() {
+            let to = expected["to"].as_str().unwrap();
+            let received = match &welcome {
+                // `enter` has read the welcome off the socket already.
+                Some((who, body)) if who == to && expected["frame"] == "welcome" => {
+                    Frame::Control(common::raw::WELCOME, body.clone())
+                }
+                _ => {
+                    players
+                        .get_mut(to)
+                        .unwrap()
+                        .socket
+                        .as_mut()
+                        .unwrap()
+                        .next()
+                        .await
+                }
+            };
+            let wanted = match expected["frame"].as_str() {
+                Some(frame) => Frame::Control(
+                    spec["frames"][frame].as_u64().expect("a frame") as u8,
+                    in_this_room(&expected["body"], None, &players, &spec),
+                ),
+                None => Frame::Relayed {
+                    class: class(&expected["class"]),
+                    sender: players[expected["sender"].as_str().unwrap()]
+                        .id
+                        .expect("the sender has joined"),
+                    payload: bytes_of(&expected["payload"]),
+                },
+            };
+            assert_eq!(received, wanted, "{what}, to {to}");
+        }
+    }
+}
