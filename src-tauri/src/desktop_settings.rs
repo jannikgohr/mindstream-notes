@@ -841,6 +841,21 @@ mod tests {
     }
 
     #[test]
+    fn coordinator_lifetime_follows_close_to_tray_and_never_guesses() {
+        let root = std::env::temp_dir().join(format!("ms-desktop-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(SETTINGS_FILE);
+        assert!(coordinator_keep_alive_locked(&root).is_err());
+        fs::write(&path, b"{broken").unwrap();
+        assert!(coordinator_keep_alive_locked(&root).is_err());
+        fs::write(&path, br#"{"close_to_tray":true}"#).unwrap();
+        assert!(coordinator_keep_alive_locked(&root).unwrap());
+        fs::write(&path, br#"{"close_to_tray":false}"#).unwrap();
+        assert!(!coordinator_keep_alive_locked(&root).unwrap());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn unreadable_settings_are_not_treated_as_missing() {
         let root = std::env::temp_dir().join(format!("ms-desktop-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();

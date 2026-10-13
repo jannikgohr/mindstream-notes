@@ -76,8 +76,10 @@ binds exact vault paths, launch/operation IDs, geometry and phase. Recovery keep
 a still-open source; after source closure it finishes the target. Whole-app Quit
 and updates save every participating window before releasing worker ownership.
 Progress shares the bottom-right toast component and cannot be dismissed while
-native closure is deciding. The development coordinator survives worker closure
-so its `tauri dev` session remains alive until explicit Quit.
+native closure is deciding. Once its last worker has exited, the coordinator
+exits too unless close-to-tray is on. That setting alone decides, in `tauri dev`
+as in a release: a vault that enables global shortcuts does not keep a closed
+app in the tray, so capturing into a closed vault needs close-to-tray.
 
 Startup recovery never blocks opening vaults indefinitely. A handoff or update
 record that is corrupt or names another root, vault path or build is renamed to

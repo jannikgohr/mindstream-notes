@@ -1795,13 +1795,6 @@ fn reconcile_lifetime(app: &AppHandle) -> AppResult<()> {
             }
         }
     }
-    // This process owns the tauri dev session. Keep its frontend server alive
-    // when the last worker closes; explicit Quit still shuts down the session.
-    if tauri::is_dev()
-        || app.state::<crate::environment::Environment>().kind == crate::environment::Kind::Dev
-    {
-        return Ok(());
-    }
     if !host
         .book
         .lock()
@@ -1814,12 +1807,9 @@ fn reconcile_lifetime(app: &AppHandle) -> AppResult<()> {
         // Root -> Book is the established lock order. No Book lock crosses a
         // filesystem read, and no root lock crosses shutdown IPC or draining.
         let _root_lock = crate::storage_locks::RootLock::acquire(&root)?;
-        if crate::desktop_settings::coordinator_keep_alive_locked(&root)?
-            || !matches!(
-                crate::shortcut_routing::select_locked(&root, &[])?.0,
-                crate::shortcut_routing::Selection::None
-            )
-        {
+        // Close-to-tray alone decides, in development as in a release. A vault
+        // that enables global shortcuts does not keep a closed app in the tray.
+        if crate::desktop_settings::coordinator_keep_alive_locked(&root)? {
             return Ok(());
         }
         let mut book = host.book.lock().map_err(|_| invalid())?;
@@ -1832,7 +1822,7 @@ fn reconcile_lifetime(app: &AppHandle) -> AppResult<()> {
         book.accept(host.instance, quit.clone())?;
         quit.id
     };
-    log::info!("[vaults] last vault closed without background capture; exiting");
+    log::info!("[vaults] last vault closed with close-to-tray off; exiting");
     finish_quit(app, quit);
     Ok(())
 }

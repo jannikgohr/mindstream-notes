@@ -224,8 +224,9 @@ For development lifetime, start a Vite server and run:
 python src-tauri/scripts/supervised-dev-check.py --dev-url http://127.0.0.1:1421 --output .output/dev-vault-check
 ```
 
-This starts the real project Tauri CLI against a disposable root, checks handoff
-and last-worker closure, opens another worker, then Quits its own CLI session.
+This starts the real project Tauri CLI against a disposable root and checks
+handoff. With close-to-tray on, the coordinator must outlive its last worker and
+open another; with it off, closing the last worker must end the CLI session.
 It leaves the existing Vite server running.
 
 Linux uses `linux-vault-check.Dockerfile` and `linux-vault-check.sh` with source

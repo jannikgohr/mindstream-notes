@@ -1,7 +1,9 @@
-"""Check that the real tauri dev launcher survives worker handoff and closure.
+"""Check the real tauri dev launcher across worker handoff and last-worker closure.
 
-Uses an existing Vite server and a disposable root. Explicit Quit cleans up the
-owned CLI session. This does not terminate or take ownership of the Vite server.
+Uses an existing Vite server and a disposable root. With close-to-tray on, the
+coordinator outlives its last worker; with it off, closing the last worker ends
+the owned CLI session as it would a release. This does not terminate or take
+ownership of the Vite server.
 """
 import argparse
 import importlib.util
@@ -46,7 +48,22 @@ def main():
             assert response.status == 200
         fixture.operation("open", vault_id="source")
         assert fixture.ready("source")
-        print("tauri dev retained its coordinator/server across handoff and last-worker closure", flush=True)
+        print("tauri dev retained its coordinator/server across handoff and, with close-to-tray, last-worker closure", flush=True)
+        with handoff.lease(fixture.root / ".root.lock"):
+            path = fixture.root / "desktop-settings.json"
+            document = json.loads(path.read_text())
+            document["close_to_tray"] = False
+            document["revision"] = document.get("revision", 0) + 1
+            temporary = path.with_suffix(".fixture-next")
+            temporary.write_text(json.dumps(document), encoding="utf-8")
+            temporary.replace(path)
+        # The coordinator is gone afterwards, so its status cannot be polled.
+        assert "Ok" in fixture.private("source", "close", handoff.uid())
+        assert fixture.process.wait(timeout=190) == 0, "tauri dev outlived its last worker without close-to-tray"
+        assert not handoff.owned(fixture.root / ".coordinator.lock")
+        with urllib.request.urlopen(args.dev_url) as response:
+            assert response.status == 200
+        print("tauri dev ended with its last worker once close-to-tray was off", flush=True)
     finally:
         fixture.cleanup()
 

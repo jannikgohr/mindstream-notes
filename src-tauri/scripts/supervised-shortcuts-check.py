@@ -564,8 +564,8 @@ def main():
                         pass
             print("Whole-app Quit closed both workers and released coordinator/vault leases")
             if not args.wait_for_external_quit:
-                for vault_id in vaults:
-                    enabled(vault_id, False)
+                # "capture" stays eligible: only close-to-tray keeps a coordinator.
+                enabled("other", False)
                 with lease(root / ".root.lock"):
                     path = root / "desktop-settings.json"
                     document = json.loads(path.read_text())
@@ -592,7 +592,7 @@ def main():
                     for vault_id in vaults:
                         with lease(root / "profiles" / vault_id / ".vault.lock"):
                             pass
-                print("Last vault close exits coordinator with no eligible shortcuts and close-to-tray off")
+                print("Last vault close exits coordinator with close-to-tray off despite an eligible capture vault")
             clean = True
         finally:
             # Graceful close retains every worker's real ownership until it exits.

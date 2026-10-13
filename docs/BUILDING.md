@@ -100,9 +100,10 @@ vault-specific within each environment. Never run an older binary that lacks
 vault locking against the same physical vault as a new binary.
 
 Normal desktop launches run a persistent coordinator and isolated vault workers.
-The coordinator survives vault handoffs and last-worker closure in `tauri dev`;
-explicit Quit ends the development session. Test devices remain direct by
-default. Use `--supervised-vaults` when testing several vaults in one root.
+The coordinator survives vault handoffs in `tauri dev`. As in a release, closing
+the last vault window ends it, and with it the development session, unless
+close-to-tray is on. Test devices remain direct by default. Use
+`--supervised-vaults` when testing several vaults in one root.
 
 For an embedded native debug fixture, build the production frontend first and
 use Tauri's production protocol feature. Clearing `devUrl` alone still leaves

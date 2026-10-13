@@ -49,6 +49,7 @@ There is no in-process database/session swap.
 | Close with unsaved work                 | Freeze editing, drain services and save every main/popout editor. Failed saves retain the vault.                       |
 | Coordinator crash during handoff        | Keep the source if it is still open. Finish opening the target after saved source closure and physical lease release.  |
 | Whole-app Quit                          | Save and close every worker before the coordinator exits.                                                              |
+| Close the last vault window             | The app quits unless close-to-tray is on. Global shortcuts and `tauri dev` do not keep it running.                     |
 | Update restart                          | Reopen all previously open vaults, restore hidden/visible windows and focus, then consume the restart record.          |
 | Normal cold startup                     | Open only the last-used vault; use the picker if it is unavailable.                                                    |
 | Restore backup                          | Replace only the selected vault. Import shared configuration/packages only when selected; existing device entries win. |
@@ -72,7 +73,8 @@ Only the coordinator owns global shortcut/tray/autostart registration. Shortcuts
 target the most recently focused eligible vault. A sole eligible closed vault can
 be opened for capture; multiple closed eligible vaults require a prior recency
 choice. Unknown ownership suppresses dispatch rather than falling back to a
-second local handler.
+second local handler. Shortcuts need a running coordinator: eligibility does not
+keep the app in the tray after its last vault window closes; close-to-tray does.
 
 ## Recovery and compatibility
 
