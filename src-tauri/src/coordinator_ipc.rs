@@ -24,6 +24,7 @@ const MAX_FRAME: usize = 64 * 1024;
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(2);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_CONNECTIONS: usize = 16;
+const PROBE_GRACE: Duration = Duration::from_millis(150);
 
 // Do not derive Debug: the endpoint/wire contain a credential, not diagnostics.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,10 +120,18 @@ pub fn elect(root: &Path) -> AppResult<Election> {
         .create(true)
         .truncate(false)
         .open(root.join(".coordinator.lock"))?;
-    match ownership.try_lock() {
-        Ok(()) => {}
-        Err(TryLockError::WouldBlock) => return Ok(Election::Existing),
-        Err(TryLockError::Error(err)) => return Err(err.into()),
+    // is_owned probes hold this lease for an instant. Only a lease that stays
+    // held is an existing coordinator.
+    let deadline = Instant::now() + PROBE_GRACE;
+    loop {
+        match ownership.try_lock() {
+            Ok(()) => break,
+            Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(TryLockError::WouldBlock) => return Ok(Election::Existing),
+            Err(TryLockError::Error(err)) => return Err(err.into()),
+        }
     }
     let mut coordinator = Coordinator::bind()?;
     coordinator._ownership = Some(Arc::new(ownership));
@@ -195,6 +204,9 @@ fn write_frame<T: Serialize>(
 }
 
 fn socket_options(stream: &TcpStream) -> AppResult<()> {
+    // Windows and macOS accept sockets inherit the listener's non-blocking
+    // mode, where the timeouts below would not apply.
+    stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(SOCKET_TIMEOUT))?;
     stream.set_write_timeout(Some(SOCKET_TIMEOUT))?;
     stream.set_nodelay(true)?;

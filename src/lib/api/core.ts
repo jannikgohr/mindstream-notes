@@ -67,6 +67,7 @@ export enum TauriCommandName {
   GetPickerVaults = 'get_picker_vaults',
   OpenPickerVault = 'open_picker_vault',
   VaultWorkerReady = 'vault_worker_ready',
+  VaultWorkerFailed = 'vault_worker_failed',
   VaultWindowCloseReady = 'vault_window_close_ready',
   VaultWindowCloseAck = 'vault_window_close_ack',
   GetDesktopLanguage = 'get_desktop_language',

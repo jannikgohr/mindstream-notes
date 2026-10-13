@@ -15,6 +15,10 @@
         .catch((error) => {
           console.error('[app] layout load failed', error);
           failed = true;
+          // A supervised worker is still hidden; let it release its vault.
+          void import('$lib/stores/profiles.svelte').then((module) =>
+            module.reportWorkerStartupFailure(error)
+          );
         });
   });
 </script>

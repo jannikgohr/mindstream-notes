@@ -46,7 +46,10 @@
     teardownGlobalShortcuts
   } from '$lib/hotkeys/global.svelte';
   import { initNativeMenuCommands } from '$lib/native-menu.svelte';
-  import { loadProfiles, profilesState } from '$lib/stores/profiles.svelte';
+  import {
+    loadProfilesAtStartup,
+    profilesState
+  } from '$lib/stores/profiles.svelte';
   import { installWorkerCloseBridge } from '$lib/vaults/close-bridge';
   import { installSyncStatusBridge } from '$lib/notifications/sync-status';
   import { installSyncTreeRefreshBridge } from '$lib/sync/tree-refresh-bridge';
@@ -108,7 +111,7 @@
   // root layout ever remounts (HMR, route swap). Returned teardown only
   // matters in tests; we drop it intentionally here.
   onMount(() => {
-    void loadProfiles();
+    void loadProfilesAtStartup();
     initHotkeys();
     const stopShortcutOwnership = watchGlobalShortcutOwnership();
     initNativeMenuCommands();

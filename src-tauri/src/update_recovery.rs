@@ -94,6 +94,17 @@ pub(crate) struct Record {
     pub vaults: Vec<Vault>,
     pub focus: Option<Focus>,
     restored: BTreeSet<String>,
+    /// Attempts that could not reopen this session. Omitted while zero so
+    /// records stay readable by builds that predate the counter.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    failed_attempts: u32,
+}
+
+/// One retry: the second failed attempt sets the session aside.
+const MAX_ATTEMPTS: u32 = 2;
+
+fn is_zero(count: &u32) -> bool {
+    *count == 0
 }
 
 fn invalid() -> AppError {
@@ -187,10 +198,39 @@ fn load_locked(root: &Path) -> AppResult<Option<Record>> {
     }
     let record: Record = serde_json::from_slice(&raw).map_err(|_| invalid())?;
     record.validate()?;
-    if record.root != fs::canonicalize(root)? {
+    // The consumed tombstone stays readable after the root moves. A pending
+    // session must still describe this physical root.
+    if record.phase != Phase::Consumed && record.root != fs::canonicalize(root)? {
         return Err(invalid());
     }
     Ok(Some(record))
+}
+
+/// A session that is unreadable, belongs to other builds or names other
+/// physical vaults can never be resumed here. Set it aside so it cannot fail
+/// every later startup; its windows are simply not reopened.
+pub(crate) fn quarantine_unresumable(
+    root: &Path,
+    running_version: &str,
+) -> AppResult<Option<PathBuf>> {
+    let _lock = RootLock::acquire(root)?;
+    let resumable = match load_locked(root) {
+        Ok(None) => return Ok(None),
+        Ok(Some(record)) => {
+            record.phase == Phase::Consumed
+                || (record.may_resume(running_version).is_ok()
+                    && record.vaults.iter().all(|vault| {
+                        fs::canonicalize(crate::profiles::profile_dir(root, &vault.id))
+                            .is_ok_and(|directory| directory == vault.directory)
+                    }))
+        }
+        Err(AppError::InvalidArg(_)) => false,
+        Err(error) => return Err(error),
+    };
+    if resumable {
+        return Ok(None);
+    }
+    crate::root_documents::set_aside(&root.join(FILE)).map(Some)
 }
 
 fn write_locked(root: &Path, record: &Record) -> AppResult<()> {
@@ -221,6 +261,7 @@ pub(crate) fn prepare(
         vaults,
         focus,
         restored: BTreeSet::new(),
+        failed_attempts: 0,
     };
     record.validate()?;
     // Canonical paths pin the same physical indexed vaults. Never grant a
@@ -293,6 +334,23 @@ pub(crate) fn restored(root: &Path, operation_id: Uuid, id: &str) -> AppResult<(
         record.restored.insert(id.into());
         Ok(())
     })
+}
+
+/// Count an attempt that could not reopen the saved session. The record stays
+/// for one retry; after that it is set aside and its evidence path returned,
+/// so a persistent failure cannot block every later startup.
+pub(crate) fn attempt_failed(root: &Path, operation_id: Uuid) -> AppResult<Option<PathBuf>> {
+    let _lock = RootLock::acquire(root)?;
+    let mut record = load_locked(root)?.ok_or_else(invalid)?;
+    if record.operation_id != operation_id || record.phase == Phase::Consumed {
+        return Err(invalid());
+    }
+    record.failed_attempts = record.failed_attempts.saturating_add(1);
+    write_locked(root, &record)?;
+    if record.failed_attempts < MAX_ATTEMPTS {
+        return Ok(None);
+    }
+    crate::root_documents::set_aside(&root.join(FILE)).map(Some)
 }
 
 /// Write the consumed state only after every saved vault and final activation
@@ -415,6 +473,57 @@ mod tests {
         fs::write(&path, b"corrupt evidence").unwrap();
         assert!(prepare(&root, id, "1", "2", vaults, None).is_err());
         assert_eq!(fs::read(path).unwrap(), b"corrupt evidence");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unresumable_sessions_are_set_aside_and_moved_tombstones_stay_readable() {
+        let (root, vaults) = fixture();
+        let id = Uuid::new_v4();
+        prepare(&root, id, "1", "2", vaults.clone(), None).unwrap();
+        assert!(quarantine_unresumable(&root, "1").unwrap().is_none());
+        // Neither the source nor the installing target build.
+        assert!(quarantine_unresumable(&root, "3").unwrap().is_some());
+        assert!(resume(&root, "3").unwrap().is_none());
+
+        prepare(&root, id, "1", "2", vaults.clone(), None).unwrap();
+        fs::remove_dir_all(crate::profiles::profile_dir(&root, "one")).unwrap();
+        assert!(quarantine_unresumable(&root, "1").unwrap().is_some());
+        fs::create_dir_all(crate::profiles::profile_dir(&root, "one")).unwrap();
+
+        prepare(&root, id, "1", "2", vaults, None).unwrap();
+        restored(&root, id, "one").unwrap();
+        restored(&root, id, "two").unwrap();
+        consume(&root, id).unwrap();
+        let moved = root.with_file_name(format!("ms-update-moved-{}", Uuid::new_v4()));
+        fs::rename(&root, &moved).unwrap();
+        assert!(resume(&moved, "9").unwrap().is_none());
+        assert!(quarantine_unresumable(&moved, "9").unwrap().is_none());
+        fs::write(moved.join(FILE), b"corrupt").unwrap();
+        assert!(quarantine_unresumable(&moved, "9").unwrap().is_some());
+        assert!(resume(&moved, "9").unwrap().is_none());
+        fs::remove_dir_all(moved).unwrap();
+    }
+
+    #[test]
+    fn a_failed_attempt_keeps_the_session_for_one_retry_then_sets_it_aside() {
+        let (root, vaults) = fixture();
+        let id = Uuid::new_v4();
+        prepare(&root, id, "1", "2", vaults.clone(), None).unwrap();
+        assert!(!String::from_utf8(fs::read(root.join(FILE)).unwrap())
+            .unwrap()
+            .contains("failed_attempts"));
+        assert!(attempt_failed(&root, Uuid::new_v4()).is_err());
+        assert!(attempt_failed(&root, id).unwrap().is_none());
+        restored(&root, id, "one").unwrap();
+        let retained = resume(&root, "1").unwrap().unwrap();
+        assert!(retained.was_restored("one"));
+        let evidence = attempt_failed(&root, id).unwrap().unwrap();
+        assert!(evidence.is_file());
+        assert!(resume(&root, "1").unwrap().is_none());
+        assert!(attempt_failed(&root, id).is_err());
+        // A later update is no longer refused by the abandoned session.
+        prepare(&root, Uuid::new_v4(), "1", "2", vaults, None).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 

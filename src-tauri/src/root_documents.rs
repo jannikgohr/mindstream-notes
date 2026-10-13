@@ -73,6 +73,21 @@ pub fn recover(
     Ok(())
 }
 
+/// Move a journal that can never be resumed out of its active name. Its bytes
+/// are retained as evidence; callers hold RootLock.
+pub fn set_aside(path: &Path) -> AppResult<PathBuf> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| AppError::InvalidArg("document filename missing".into()))?
+        .to_string_lossy();
+    let target = path.with_file_name(format!("{name}.unresumable-{}", uuid::Uuid::new_v4()));
+    fs::rename(path, &target)?;
+    if let Some(parent) = path.parent() {
+        crate::atomic_file::sync_directory(parent)?;
+    }
+    Ok(target)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

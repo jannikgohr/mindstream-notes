@@ -107,6 +107,11 @@ enum HostCommand {
         vault_id: String,
         launch_id: Uuid,
     },
+    StartupFailed {
+        vault_id: String,
+        launch_id: Uuid,
+        message: String,
+    },
 }
 
 #[derive(Deserialize, Serialize)]
@@ -232,6 +237,11 @@ struct Book {
     focus_order: Vec<String>,
     shortcut_order: Vec<String>,
     focus_revision: u64,
+    /// A failed update session was kept for one retry on the next launch.
+    update_retry: bool,
+    handoff_failures: u32,
+    handoff_failing_since: Option<Instant>,
+    handoff_retry_at: Option<Instant>,
 }
 
 enum Action {
@@ -247,6 +257,7 @@ enum Action {
         target: String,
     },
     ActivateLast,
+    RetryRecovery,
     Remember {
         vault_id: String,
         revision: u64,
@@ -260,6 +271,21 @@ enum Action {
 }
 
 impl Book {
+    fn handoff_settled(&mut self) {
+        self.handoff_failures = 0;
+        self.handoff_failing_since = None;
+        self.handoff_retry_at = None;
+    }
+
+    /// Record a failed automatic retry and schedule the next one. True once
+    /// the intent has used its retries or the overall recovery limit.
+    fn handoff_failed(&mut self, now: Instant) -> bool {
+        self.handoff_failures += 1;
+        let since = *self.handoff_failing_since.get_or_insert(now);
+        self.handoff_retry_at = Some(now + Duration::from_secs(5) * self.handoff_failures);
+        self.handoff_failures >= HANDOFF_RETRIES || now.duration_since(since) >= RECOVERY_LIMIT
+    }
+
     fn startup_failed(&mut self, operation_id: Option<Uuid>, error: AppError) {
         // Once export/discovery completed, retry through normal opening. Before
         // that point release the initialization reservation for the picker.
@@ -687,7 +713,7 @@ impl Book {
             }
             HostCommand::Status => {
                 return Ok((
-                    json!({"contract":RuntimeContract::current(),"initialized":self.exported,"active":self.last,"quitting":self.quitting,"handoff":self.handoff,"workers":self.workers.iter().map(|(id, launch)| json!({
+                    json!({"contract":RuntimeContract::current(),"initialized":self.exported,"recovering":self.recovering,"recoveryRetry":self.update_retry,"active":self.last,"quitting":self.quitting,"handoff":self.handoff,"workers":self.workers.iter().map(|(id, launch)| json!({
                     "id":id,"ready":launch.ready,"window":launch.focused_window,"error":launch.error,
                 })).collect::<Vec<_>>()}),
                     None,
@@ -728,6 +754,11 @@ impl Book {
                     if !self.bootstrap_started && !self.exported {
                         action = Some(Action::ShowPicker);
                     }
+                } else if std::mem::take(&mut self.update_retry) {
+                    // Launching the app again is the one retry of a session
+                    // that failed to reopen. Opens wait for its outcome.
+                    self.recovering = true;
+                    action = Some(Action::RetryRecovery);
                 } else if self.exported {
                     action = Some(
                         self.last
@@ -836,6 +867,23 @@ impl Book {
                 {
                     return Err(invalid());
                 }
+            }
+            HostCommand::StartupFailed {
+                vault_id,
+                launch_id,
+                message,
+            } => {
+                // Only a worker that never became ready may fail its launch.
+                // It exits next; its released lease then permits a retry.
+                let launch = self.workers.get_mut(&vault_id).ok_or_else(invalid)?;
+                if launch.id != launch_id
+                    || launch.ready
+                    || message.is_empty()
+                    || message.len() > STARTUP_FAILURE_MAX
+                {
+                    return Err(invalid());
+                }
+                launch.error.get_or_insert(message);
             }
             HostCommand::Ready {
                 vault_id,
@@ -1064,12 +1112,30 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
     let root = crate::paths::app_data_root(app)?;
     let coordinator = match ipc::elect(&root)? {
         ipc::Election::Existing => {
-            let (endpoint, reply) =
-                ipc::request_with_endpoint(&root, &request(&HostCommand::Status)?)?;
+            let quiet = crate::was_started_by_autostart()
+                || crate::coordinator_revival::background_launch();
+            let (endpoint, reply) = match ipc::request_with_endpoint(
+                &root,
+                &request(&HostCommand::Status)?,
+            ) {
+                Ok(reply) => reply,
+                // The lease is held but nothing answers. Ownership is never
+                // taken over; the user decides what happens to that process.
+                Err(error) if !quiet => {
+                    log::error!("[vaults] running coordinator is unresponsive: {error}");
+                    use tauri_plugin_dialog::DialogExt;
+                    let handle = app.handle().clone();
+                    app.dialog()
+                            .message("Mindstream Notes is already running but is not responding. End the running Mindstream Notes process, then start it again.")
+                            .title("Mindstream Notes")
+                            .kind(tauri_plugin_dialog::MessageDialogKind::Error)
+                            .show(move |_| handle.exit(1));
+                    return Ok(());
+                }
+                Err(error) => return Err(error),
+            };
             reply.map_err(AppError::InvalidArg)?;
-            if !crate::was_started_by_autostart()
-                && !crate::coordinator_revival::background_launch()
-            {
+            if !quiet {
                 crate::foreground::transfer(&endpoint);
                 endpoint
                     .retry_call(&request(&HostCommand::Activate)?)?
@@ -1239,38 +1305,72 @@ fn begin_host_startup(
                             }
                         }
                     }
-                    let resumed = resume_handoff(&task_app).and_then(|resumed| if resumed { Ok(true) } else { resume_update(&task_app) });
-                    let recovery_finished = resumed.is_ok();
+                    quarantine_unresumable_records(&task_app);
                     let mut startup_result = Ok(());
-                    match resumed {
-                        Ok(true) => {}
-                        Ok(false) if !background_recovery => {
-                            if let Err(error) = open_and_wait_with_activation(&task_app, &target, activate_initial) {
-                                log::error!("[vaults] initial launch failed: {error}");
-                                startup_result = Err(error);
-                                let picker = task_app.clone();
-                                let _ = task_app.run_on_main_thread(move || { let _ = show_picker(&picker); });
-                            }
+                    let mut open_initial = !background_recovery;
+                    let recovery_finished = match resume_handoff(&task_app) {
+                        Ok(true) => {
+                            open_initial = false;
+                            true
                         }
-                        Ok(false) => {}
+                        Ok(false) => {
+                            match resume_update(&task_app, Instant::now() + RECOVERY_LIMIT) {
+                                Ok(resumed) => open_initial &= !resumed,
+                                // Vaults stay reachable: startup continues normally.
+                                Err(error) => report_recovery_failure(&task_app, &error),
+                            }
+                            true
+                        }
                         Err(error) => {
-                            log::error!("[updater] restart recovery failed: {error}");
-                            use tauri_plugin_dialog::DialogExt;
-                            task_app.dialog().message(format!("Startup recovery could not finish. The saved operation has been retained.\n\n{error}"))
-                                .title("Startup recovery").show(|_| {});
+                            log::error!("[vaults] handoff recovery failed: {error}");
+                            // The lifetime monitor retries a pinned intent a bounded
+                            // number of times. Without one nothing would ever unblock.
+                            let pinned = task_app
+                                .state::<Host>()
+                                .book
+                                .lock()
+                                .is_ok_and(|book| book.handoff.is_some());
+                            if !pinned {
+                                report_recovery_failure(&task_app, &error);
+                            }
+                            startup_result = Err(AppError::InvalidArg(error.to_string()));
+                            !pinned
+                        }
+                    };
+                    if recovery_finished && open_initial {
+                        if let Err(error) =
+                            open_and_wait_with_activation(&task_app, &target, activate_initial)
+                        {
+                            log::error!("[vaults] initial launch failed: {error}");
                             startup_result = Err(error);
+                            let picker = task_app.clone();
+                            let _ = task_app.run_on_main_thread(move || {
+                                let _ = show_picker(&picker);
+                            });
                         }
                     }
                     if let Some(id) = operation_id {
-                        if let Ok(mut book) = task_app.state::<Host>().book.lock() { book.complete_open(id, startup_result); }
+                        if let Ok(mut book) = task_app.state::<Host>().book.lock() {
+                            book.complete_open(id, startup_result);
+                        }
                     }
                     if recovery_finished {
-                        let activate = task_app.state::<Host>().book.lock().ok().and_then(|mut book| {
-                            book.recovering = false;
-                            if book.quitting.is_none() && std::mem::take(&mut book.activate_after_startup) {
-                                book.last.clone()
-                            } else { None }
-                        });
+                        let activate =
+                            task_app
+                                .state::<Host>()
+                                .book
+                                .lock()
+                                .ok()
+                                .and_then(|mut book| {
+                                    book.recovering = false;
+                                    if book.quitting.is_none()
+                                        && std::mem::take(&mut book.activate_after_startup)
+                                    {
+                                        book.last.clone()
+                                    } else {
+                                        None
+                                    }
+                                });
                         if let Some(id) = activate {
                             if let Err(error) = open_and_wait(&task_app, &id) {
                                 log::warn!("[vaults] deferred launch activation failed: {error}");
@@ -1287,6 +1387,50 @@ fn begin_host_startup(
         }),
     )?;
     Ok(())
+}
+
+/// A journal that can never be resumed must not fail every startup. Its
+/// evidence is set aside and normal startup continues without that session.
+fn quarantine_unresumable_records(app: &AppHandle) {
+    let Ok(root) = crate::paths::app_data_root(app) else {
+        return;
+    };
+    let version = app.package_info().version.to_string();
+    for result in [
+        crate::vault_handoff::quarantine_unresumable(&root),
+        crate::update_recovery::quarantine_unresumable(&root, &version),
+    ] {
+        match result {
+            Ok(None) => {}
+            Ok(Some(evidence)) => {
+                log::error!(
+                    "[vaults] unresumable startup record set aside: {}",
+                    evidence.display()
+                );
+                use tauri_plugin_dialog::DialogExt;
+                app.dialog()
+                    .message(format!(
+                        "A saved window session could not be resumed and was set aside. Your vaults are unchanged.\n\n{}",
+                        evidence.display()
+                    ))
+                    .title("Startup recovery")
+                    .show(|_| {});
+            }
+            // Resumption reports the same failure and retains the record.
+            Err(error) => log::warn!("[vaults] startup record check unavailable: {error}"),
+        }
+    }
+}
+
+fn report_recovery_failure(app: &AppHandle, error: &AppError) {
+    log::error!("[vaults] startup recovery failed: {error}");
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog()
+        .message(format!(
+            "Startup recovery could not finish. Your vaults are unchanged and can be opened normally.\n\n{error}"
+        ))
+        .title("Startup recovery")
+        .show(|_| {});
 }
 
 fn startup_failed(app: &AppHandle, operation_id: Option<Uuid>, error: AppError) {
@@ -1620,10 +1764,36 @@ fn reconcile_lifetime(app: &AppHandle) -> AppResult<()> {
     let host = app.state::<Host>();
     let root = crate::paths::app_data_root(app)?;
     reconcile_adopted(&host.book, &root)?;
-    if host.book.lock().map_err(|_| invalid())?.handoff.is_some() && host.jobs.is_idle() {
+    let handoff_due = {
+        let book = host.book.lock().map_err(|_| invalid())?;
+        book.handoff.is_some() && book.handoff_retry_at.is_none_or(|at| Instant::now() >= at)
+    };
+    if handoff_due && host.jobs.is_idle() {
         let _job = host.jobs.enter()?;
-        resume_handoff(app)?;
-        host.book.lock().map_err(|_| invalid())?.recovering = false;
+        match resume_handoff(app) {
+            Ok(resumed) => {
+                let mut book = host.book.lock().map_err(|_| invalid())?;
+                book.recovering = false;
+                book.handoff_settled();
+                if !resumed {
+                    // No active intent remains to pin the fence.
+                    book.handoff = None;
+                    drop(book);
+                    crate::coordinator_shortcuts::suspend(app, false);
+                }
+            }
+            Err(error) => {
+                let give_up = host
+                    .book
+                    .lock()
+                    .map_err(|_| invalid())?
+                    .handoff_failed(Instant::now());
+                if !give_up {
+                    return Err(error);
+                }
+                abandon_handoff(app, &root, &error)?;
+            }
+        }
     }
     // This process owns the tauri dev session. Keep its frontend server alive
     // when the last worker closes; explicit Quit still shuts down the session.
@@ -1664,6 +1834,51 @@ fn reconcile_lifetime(app: &AppHandle) -> AppResult<()> {
     };
     log::info!("[vaults] last vault closed without background capture; exiting");
     finish_quit(app, quit);
+    Ok(())
+}
+
+/// A handoff that keeps failing must not fence opens and Quit forever. Its
+/// journal is set aside and the vault the user was heading for is opened.
+fn abandon_handoff(app: &AppHandle, root: &std::path::Path, error: &AppError) -> AppResult<()> {
+    let record = crate::vault_handoff::load(root)
+        .ok()
+        .flatten()
+        .filter(|record| record.active());
+    let evidence = crate::vault_handoff::abandon(root)?;
+    {
+        let host = app.state::<Host>();
+        let mut book = host.book.lock().map_err(|_| invalid())?;
+        book.handoff = None;
+        book.recovering = false;
+        book.handoff_settled();
+    }
+    crate::coordinator_shortcuts::suspend(app, false);
+    report_recovery_failure(
+        app,
+        &AppError::InvalidArg(match evidence {
+            Some(evidence) => format!(
+                "{error}; switching vaults was abandoned and its record set aside: {}",
+                evidence.display()
+            ),
+            None => format!("{error}; switching vaults was abandoned"),
+        }),
+    );
+    let Some(record) = record else {
+        return Ok(());
+    };
+    // After the source closed, the target is the only vault left to show.
+    let vault = if record.phase == crate::vault_handoff::Phase::Closed {
+        &record.target.id
+    } else {
+        &record.source.id
+    };
+    if let Err(error) = open_and_wait(app, vault) {
+        log::error!("[vaults] opening after an abandoned handoff failed: {error}");
+        let picker = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let _ = show_picker(&picker);
+        });
+    }
     Ok(())
 }
 
@@ -1848,6 +2063,29 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
                             book.complete_open(request_id, result);
                         }
                         return;
+                    }
+                    Action::RetryRecovery => {
+                        if let Err(error) =
+                            resume_update(&task_app, Instant::now() + RECOVERY_LIMIT)
+                        {
+                            report_recovery_failure(&task_app, &error);
+                        }
+                        let last =
+                            task_app
+                                .state::<Host>()
+                                .book
+                                .lock()
+                                .ok()
+                                .and_then(|mut book| {
+                                    book.recovering = false;
+                                    book.last.clone()
+                                });
+                        match last {
+                            Some(id) => Ok(id),
+                            None => crate::paths::app_data_root(&task_app)
+                                .and_then(|root| crate::profiles::prepare_coordinator_index(&root))
+                                .map(|index| index.active),
+                        }
                     }
                     Action::ActivateLast => crate::paths::app_data_root(&task_app)
                         .and_then(|root| crate::profiles::prepare_coordinator_index(&root))
@@ -2225,18 +2463,52 @@ pub(crate) fn drain_for_update(
     Ok(pause)
 }
 
-fn resume_update(app: &AppHandle) -> AppResult<bool> {
+/// A failed attempt keeps the saved session for exactly one retry, on the next
+/// launch. A second failure sets it aside, so recovery can never block opening
+/// vaults for more than the attempt itself.
+fn resume_update(app: &AppHandle, deadline: Instant) -> AppResult<bool> {
     let root = crate::paths::app_data_root(app)?;
     let Some(record) =
         crate::update_recovery::resume(&root, &app.package_info().version.to_string())?
     else {
         return Ok(false);
     };
+    let Err(error) = restore_update_session(app, &root, &record, deadline) else {
+        return Ok(true);
+    };
+    let outcome = match crate::update_recovery::attempt_failed(&root, record.operation_id) {
+        Ok(Some(evidence)) => format!(
+            "the saved windows were not reopened and the session was set aside: {}",
+            evidence.display()
+        ),
+        Ok(None) => {
+            if let Ok(mut book) = app.state::<Host>().book.lock() {
+                book.update_retry = true;
+            }
+            "reopening the saved windows will be tried once more the next time the app is started"
+                .into()
+        }
+        Err(count) => format!("the saved session was retained: {count}"),
+    };
+    Err(AppError::InvalidArg(format!("{error}; {outcome}")))
+}
+
+fn restore_update_session(
+    app: &AppHandle,
+    root: &std::path::Path,
+    record: &crate::update_recovery::Record,
+    deadline: Instant,
+) -> AppResult<()> {
     let host = app.state::<Host>();
     for vault in &record.vaults {
+        if Instant::now() >= deadline {
+            return Err(AppError::InvalidArg(
+                "reopening the saved windows took too long".into(),
+            ));
+        }
         // The index/deletion checks in open remain authoritative. The record
         // grants neither ownership nor permission to recreate a missing vault.
-        if vault.directory != std::fs::canonicalize(crate::profiles::profile_dir(&root, &vault.id))?
+        if vault.directory != std::fs::canonicalize(crate::profiles::profile_dir(root, &vault.id))?
         {
             return Err(invalid());
         }
@@ -2251,9 +2523,9 @@ fn resume_update(app: &AppHandle) -> AppResult<bool> {
             &host.book,
             &vault.id,
             launch_id,
-            Instant::now() + OPEN_TIMEOUT,
+            (Instant::now() + OPEN_TIMEOUT).min(deadline),
         )?;
-        verified_worker(&root, &vault.id, launch_id, &endpoint)?;
+        verified_worker(root, &vault.id, launch_id, &endpoint)?;
         if !existing || !record.was_restored(&vault.id) {
             let restore = request(&WorkerCommand::RestoreWindows {
                 launch_id,
@@ -2266,7 +2538,7 @@ fn resume_update(app: &AppHandle) -> AppResult<bool> {
                 launch_id,
                 operation_id: restore.id,
             })?;
-            let deadline = Instant::now() + OPEN_TIMEOUT;
+            let deadline = (Instant::now() + OPEN_TIMEOUT).min(deadline);
             loop {
                 let reply = endpoint.retry_call(&poll)?.map_err(AppError::InvalidArg)?;
                 match serde_json::from_value::<crate::update_windows::Progress>(reply)
@@ -2284,7 +2556,7 @@ fn resume_update(app: &AppHandle) -> AppResult<bool> {
                 std::thread::sleep(Duration::from_millis(40));
             }
         }
-        crate::update_recovery::restored(&root, record.operation_id, &vault.id)?;
+        crate::update_recovery::restored(root, record.operation_id, &vault.id)?;
     }
     if let Some(focus) = &record.focus {
         let (launch_id, endpoint) = {
@@ -2293,19 +2565,19 @@ fn resume_update(app: &AppHandle) -> AppResult<bool> {
             (launch.id, launch.endpoint.clone().ok_or_else(invalid)?)
         };
         activate_worker(
-            &root,
-            &crate::profiles::profile_dir(&root, &focus.vault_id),
+            root,
+            &crate::profiles::profile_dir(root, &focus.vault_id),
             &focus.vault_id,
             launch_id,
             &endpoint,
             Some(focus.window.clone()),
         )?;
     }
-    crate::update_recovery::consume(&root, record.operation_id)?;
+    crate::update_recovery::consume(root, record.operation_id)?;
     // An empty saved session is still a completed startup. Arm normal idle
     // exit instead of retaining a headless coordinator as a failed first boot.
     host.book.lock().map_err(|_| invalid())?.had_ready_worker = true;
-    Ok(true)
+    Ok(())
 }
 
 pub(crate) fn update_failed(app: &AppHandle, operation_id: Uuid, error: AppError) {
@@ -2326,15 +2598,12 @@ pub(crate) fn update_failed(app: &AppHandle, operation_id: Uuid, error: AppError
             if let Ok(mut book) = host.book.lock() {
                 book.recovering = true;
             }
-            match resume_update(app) {
-                Ok(_) => {
-                    if let Ok(mut book) = host.book.lock() {
-                        book.recovering = false;
-                    }
-                }
-                Err(recovery) => {
-                    log::error!("[updater] failed-install recovery incomplete: {recovery}")
-                }
+            if let Err(recovery) = resume_update(app, Instant::now() + RECOVERY_LIMIT) {
+                log::error!("[updater] failed-install recovery incomplete: {recovery}");
+            }
+            // Vaults that were not reopened stay reachable by hand.
+            if let Ok(mut book) = host.book.lock() {
+                book.recovering = false;
             }
         }
     }
@@ -3255,6 +3524,12 @@ fn open_with_launch(
 }
 
 const OPEN_TIMEOUT: Duration = Duration::from_secs(90);
+/// The host has stopped waiting by now. A worker still unready is abandoned.
+const STARTUP_LIMIT: Duration = Duration::from_secs(120);
+const STARTUP_FAILURE_MAX: usize = 512;
+/// Startup recovery as a whole. Past this it counts as failed, not as running.
+const RECOVERY_LIMIT: Duration = Duration::from_secs(300);
+const HANDOFF_RETRIES: u32 = 3;
 
 fn wait_for_ready(
     book: &Mutex<Book>,
@@ -3681,7 +3956,85 @@ pub fn register_worker(
         _server: server,
     });
     crate::coordinator_revival::start(app)?;
+    start_startup_watchdog(app)?;
     Ok(())
+}
+
+/// The main window stays hidden until readiness. A frontend that neither
+/// becomes ready nor reports failure must not keep the vault leased forever.
+fn start_startup_watchdog(app: &AppHandle) -> AppResult<()> {
+    let app = app.clone();
+    std::thread::Builder::new()
+        .name("vault-startup-watchdog".into())
+        .spawn(move || {
+            std::thread::sleep(STARTUP_LIMIT);
+            loop {
+                match fail_startup(&app, "the vault window did not finish starting") {
+                    Ok(()) => return,
+                    // Startup work is still writing. Never interrupt it.
+                    Err(error) => log::warn!("[vaults] unready worker retained: {error}"),
+                }
+                std::thread::sleep(Duration::from_secs(30));
+            }
+        })?;
+    Ok(())
+}
+
+/// Exit a worker whose frontend never became ready. No editor has loaded, so
+/// only startup services can hold unsaved work; both gates drain first.
+fn fail_startup(app: &AppHandle, message: &str) -> AppResult<()> {
+    let worker = app.state::<Worker>();
+    if worker.ready.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    let jobs = app.state::<crate::vault_jobs::Jobs>().pause()?;
+    let saves = app.state::<crate::vault_jobs::Saves>().pause()?;
+    let timeout = Duration::from_secs(30);
+    jobs.wait(timeout)?;
+    saves.wait(timeout)?;
+    // Readiness needs a save job, so it cannot begin after this check.
+    if worker.ready.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    crate::vault_jobs::Pause::commit_all(vec![jobs, saves])?;
+    let mut message: String = message.chars().filter(|c| !c.is_control()).collect();
+    if message.is_empty() {
+        message = "the vault window could not start".into();
+    }
+    while message.len() > STARTUP_FAILURE_MAX {
+        message.pop();
+    }
+    log::error!("[vaults] worker startup failed; releasing the vault: {message}");
+    let host = worker.host.lock().map_err(|_| invalid())?.clone();
+    let notice = request(&HostCommand::StartupFailed {
+        vault_id: worker.vault_id.clone(),
+        launch_id: worker.launch_id,
+        message,
+    })?;
+    // The released lease is the authority. A lost notice only costs the host
+    // its specific message.
+    if !matches!(host.retry_call(&notice), Ok(Ok(_))) {
+        log::warn!("[vaults] startup failure notification unavailable");
+    }
+    app.exit(1);
+    Ok(())
+}
+
+/// The frontend gave up initializing this vault after its own retries.
+#[tauri::command]
+pub async fn vault_worker_failed(
+    app: AppHandle,
+    window: WebviewWindow,
+    message: String,
+) -> CommandResult<()> {
+    if window.label() != "main" || app.try_state::<Worker>().is_none() {
+        return Ok(());
+    }
+    Ok(
+        tauri::async_runtime::spawn_blocking(move || fail_startup(&app, &message))
+            .await
+            .map_err(|_| invalid())??,
+    )
 }
 
 #[tauri::command]
@@ -3692,6 +4045,8 @@ pub async fn vault_worker_ready(app: AppHandle, window: WebviewWindow) -> Comman
     let Some(worker) = app.try_state::<Worker>() else {
         return Ok(());
     };
+    // An abandoned startup stops admission before it exits; see fail_startup.
+    let _startup = app.state::<crate::vault_jobs::Saves>().enter()?;
     worker.ready.store(true, Ordering::Release);
     let request = request(&HostCommand::Ready {
         vault_id: worker.vault_id.clone(),
@@ -5363,6 +5718,114 @@ mod tests {
             .is_err());
         assert!(!book.workers["default"].ready);
         assert!(book.last.is_none());
+    }
+
+    #[test]
+    fn relaunch_retries_a_kept_update_session_once_and_fences_opens_meanwhile() {
+        let instance = Uuid::new_v4();
+        let mut book = Book {
+            exported: true,
+            update_retry: true,
+            last: Some("default".into()),
+            ..Book::default()
+        };
+        let activate = || request(&HostCommand::Activate).unwrap();
+        let (_, action) = book.accept(instance, activate()).unwrap();
+        assert!(matches!(action, Some(Action::RetryRecovery)));
+        assert!(book.recovering && !book.update_retry);
+        assert!(book
+            .accept(
+                instance,
+                request(&HostCommand::Open {
+                    vault_id: "default".into()
+                })
+                .unwrap()
+            )
+            .is_err());
+        // A second launch during the retry only asks for later activation.
+        let (_, action) = book.accept(instance, activate()).unwrap();
+        assert!(action.is_none() && book.activate_after_startup);
+        book.recovering = false;
+        let (_, action) = book.accept(instance, activate()).unwrap();
+        assert!(matches!(action, Some(Action::Open(id)) if id == "default"));
+    }
+
+    #[test]
+    fn a_failing_handoff_backs_off_and_is_given_up_after_its_retries_or_the_overall_limit() {
+        let start = Instant::now();
+        let mut book = Book::default();
+        assert!(!book.handoff_failed(start));
+        assert_eq!(book.handoff_retry_at, Some(start + Duration::from_secs(5)));
+        assert!(!book.handoff_failed(start));
+        assert_eq!(book.handoff_retry_at, Some(start + Duration::from_secs(10)));
+        assert!(book.handoff_failed(start));
+        book.handoff_settled();
+        assert!(book.handoff_retry_at.is_none());
+        assert!(!book.handoff_failed(start));
+        assert!(book.handoff_failed(start + RECOVERY_LIMIT));
+    }
+
+    #[test]
+    fn only_the_unready_launch_can_fail_its_startup_and_it_cannot_become_ready_afterwards() {
+        let instance = Uuid::new_v4();
+        let launch = Uuid::new_v4();
+        let mut book = Book {
+            exported: true,
+            ..Book::default()
+        };
+        book.workers.insert("default".into(), pending(launch));
+        let failed = |launch_id, message: &str| {
+            request(&HostCommand::StartupFailed {
+                vault_id: "default".into(),
+                launch_id,
+                message: message.into(),
+            })
+            .unwrap()
+        };
+        for wrong in [
+            failed(Uuid::new_v4(), "settings unavailable"),
+            failed(launch, ""),
+            failed(launch, &"x".repeat(STARTUP_FAILURE_MAX + 1)),
+        ] {
+            assert!(book.accept(instance, wrong).is_err());
+        }
+        assert!(book.ready_endpoint("default", launch).unwrap().is_none());
+        book.accept(instance, failed(launch, "settings unavailable"))
+            .unwrap();
+        book.accept(instance, failed(launch, "later")).unwrap();
+        assert!(book
+            .ready_endpoint("default", launch)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("settings unavailable"));
+        assert!(book
+            .accept(
+                instance,
+                request(&HostCommand::Ready {
+                    vault_id: "default".into(),
+                    launch_id: launch,
+                })
+                .unwrap()
+            )
+            .is_err());
+
+        let ready = Uuid::new_v4();
+        let mut running = pending(ready);
+        running.ready = true;
+        book.workers.insert("other".into(), running);
+        assert!(book
+            .accept(
+                instance,
+                request(&HostCommand::StartupFailed {
+                    vault_id: "other".into(),
+                    launch_id: ready,
+                    message: "late".into(),
+                })
+                .unwrap()
+            )
+            .is_err());
+        assert!(book.workers["other"].error.is_none());
     }
 
     #[test]

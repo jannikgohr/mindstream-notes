@@ -117,9 +117,9 @@ pub(super) fn stage_import_at(
     live_conn: &Connection,
     session: Option<&auth::SessionInfo>,
 ) -> AppResult<ImportPreview> {
-    // One staging dir per import attempt. Sweep prior dirs first —
-    // they're either a crashed import (nothing to recover) or a
-    // user-cancelled choice that never reached `import_cleanup`.
+    // One staging dir per import attempt. Another window may still hold a
+    // choice dialog on an earlier token, so abandoned dirs are swept at the
+    // next startup instead (`sweep_abandoned_staging`).
     let staging_root = vault.join("imports").join(".staging");
     fs::create_dir_all(&staging_root)?;
 
