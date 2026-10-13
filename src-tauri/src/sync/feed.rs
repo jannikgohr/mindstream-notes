@@ -122,6 +122,15 @@ async fn endpoint(app: &AppHandle) -> Result<Option<FeedEndpoint>, String> {
     .map_err(|e| format!("feed task: {e}"))?
 }
 
+/// Tell the UI that the invitations waiting for this account may have
+/// changed, so it lists them again.
+fn announce_invitations(app: &AppHandle) {
+    let event = crate::app_events::AppEvent::InvitationsChanged.as_str();
+    if let Err(err) = app.emit(event, ()) {
+        log::warn!("[feed] failed to emit {event}: {err}");
+    }
+}
+
 /// Connect and pass on what the server says until the connection ends.
 /// `Err` means it never got as far as listening.
 async fn listen(app: &AppHandle) -> Result<(), String> {
@@ -153,8 +162,12 @@ async fn listen(app: &AppHandle) -> Result<(), String> {
     };
     log::info!("[feed] listening");
 
-    // Whatever changed while nobody was listening.
+    // Whatever changed while nobody was listening. A sync fetches what
+    // changed in the collections. An invitation that arrived in that time
+    // is in none of them, and no later message will mention it, so the
+    // notifications are told to list the invitations again as well.
     scheduler.request_sync();
+    announce_invitations(app);
 
     loop {
         let message = match tokio::time::timeout(SILENCE_LIMIT, socket.next()).await {
@@ -178,10 +191,7 @@ async fn listen(app: &AppHandle) -> Result<(), String> {
                 if news.invitations {
                     // Nothing to sync for an invitation that waits. The
                     // notifications list them again.
-                    let event = crate::app_events::AppEvent::InvitationsChanged.as_str();
-                    if let Err(err) = app.emit(event, ()) {
-                        log::warn!("[feed] failed to emit {event}: {err}");
-                    }
+                    announce_invitations(app);
                 }
                 if news.worth_a_sync() {
                     log::debug!(

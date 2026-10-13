@@ -413,7 +413,10 @@ uses.
   plans” with you". Reading it accepts nothing.
 - **Invitations are pushed** over the change feed. Accepting triggers the first
   pull at once. Built: the feed's invitation flag makes the app list its
-  invitations again, and accepting asks for a sync.
+  invitations again, and accepting asks for a sync. The app also lists them
+  again whenever the feed connects. An invitation that arrived while the
+  socket was down is in no collection, so no sync brings it and no later
+  message mentions it.
 - **Only a shared folder is offered.** An invitation to a collection of any
   other type was made by another program. The app neither shows nor accepts
   it, so nobody can put a collection of their choosing among a user's.
