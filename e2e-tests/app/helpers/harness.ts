@@ -1122,6 +1122,15 @@ export async function syncClient(client: WebdriverIO.Browser): Promise<void> {
   await closeSettingsDialog(client);
 }
 
+/** Whether a driver error says the element it was handed is no longer in
+ *  the page. WebView2 and WebKit word it differently. */
+export function isStaleElement(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /stale element reference|Node with identifier .* was not found/i.test(
+    message
+  );
+}
+
 /**
  * Per-instance versions of the global `aria/` helpers, bound to ONE wdio client.
  *
@@ -1271,7 +1280,19 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
       await clickElement(action, { visibility: 'page' });
       return;
     }
-    await clickElement(byName(name), opts);
+    // The page may draw the element again between finding it and clicking
+    // it, and the driver then holds a node that is gone. The name still
+    // finds its successor, so look it up again. WebKit reports this where
+    // WebView2 mostly gets away with it. Seen in CI on a notice that was
+    // redrawn when the list of invitations was read again.
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await clickElement(byName(name), opts);
+        return;
+      } catch (err) {
+        if (attempt >= 3 || !isStaleElement(err)) throw err;
+      }
+    }
   };
 
   const setValue = async (name: string, value: string): Promise<void> => {
