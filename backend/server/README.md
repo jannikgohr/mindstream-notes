@@ -43,6 +43,7 @@ list. Under compose a variable only reaches the server if
 | `MINDSTREAM_APP_URL`                     | the releases page | Where the invite page sends people without the app                                  |
 | `MINDSTREAM_MAX_PAGE_BYTES`              | 33554432          | Most content one response carries. See below                                        |
 | `MINDSTREAM_KEEP_REVISIONS`              | 10                | Earlier revisions kept per item besides the current one                             |
+| `MINDSTREAM_SESSION_IDLE_DAYS`           | 90                | Days a device's session may go unused before it ends. 0 never ends one for that     |
 | `MINDSTREAM_MAX_BODY_BYTES`              | 78643200          | Largest request body accepted                                                       |
 | `MINDSTREAM_INLINE_CHUNK_BYTES`          | 20480             | Chunks up to this size stay in the database                                         |
 | `MINDSTREAM_TEST_RESET`                  | false             | Serves a route that wipes accounts. For the client's tests only                     |
@@ -174,7 +175,10 @@ Without a recovery key or a signed-in device, a forgotten password means the
 data on the server cannot be read by anyone.
 
 Each device that signs in gets its own session, which the user can list and
-end. A new password or a new authenticator signs every other device out.
+end. A new password or a new authenticator signs every other device out. A
+session that no device has used for `MINDSTREAM_SESSION_IDLE_DAYS` ends by
+itself, so a device that was put away or lost does not stay signed in for
+ever. A device that is running syncs, and that counts as use.
 
 ## Limits
 

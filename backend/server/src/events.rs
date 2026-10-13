@@ -224,6 +224,17 @@ pub fn listen(state: AppState) {
         tick.tick().await;
         loop {
             tick.tick().await;
+            // Sessions nobody has used for too long end here. Their sockets,
+            // if any are somehow still open, go with the recheck below.
+            let idle_days = periodic.config.session_idle_days;
+            match crate::auth::end_idle_sessions(&periodic.pool, idle_days, None).await {
+                Ok(ended) if !ended.is_empty() => tracing::info!(
+                    "ended {} session(s) unused for {idle_days} days",
+                    ended.len()
+                ),
+                Ok(_) => {}
+                Err(err) => tracing::warn!("could not end idle sessions: {err}"),
+            }
             if let Err(err) = revalidate(&periodic).await {
                 tracing::warn!("could not recheck the open sockets: {err}");
             }

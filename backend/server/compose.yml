@@ -32,6 +32,7 @@ services:
       MINDSTREAM_MAX_CONNECTIONS_PER_ADDRESS: ${MINDSTREAM_MAX_CONNECTIONS_PER_ADDRESS:-128}
       MINDSTREAM_MAX_CONNECTIONS: ${MINDSTREAM_MAX_CONNECTIONS:-10000}
       MINDSTREAM_KEEP_REVISIONS: ${MINDSTREAM_KEEP_REVISIONS:-10}
+      MINDSTREAM_SESSION_IDLE_DAYS: ${MINDSTREAM_SESSION_IDLE_DAYS:-90}
       # Lets another program set account limits. Empty leaves that interface off.
       MINDSTREAM_ADMIN_TOKEN: ${MINDSTREAM_ADMIN_TOKEN:-}
       # Seals authenticator secrets. Empty makes the server create a key in

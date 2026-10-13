@@ -769,3 +769,108 @@ async fn recovery_key_can_be_set_up_with_the_account() {
         .await
         .expect("the password still works");
 }
+
+/// Set how long ago the device last used its session.
+async fn unused_for(pool: &sqlx::PgPool, person: &Person, device: &str, days: i32) {
+    let changed = sqlx::query(
+        "UPDATE sessions SET last_used_at = now() - make_interval(days => $3)
+         WHERE device_name = $2
+           AND account_id = (SELECT id FROM accounts WHERE username = $1)",
+    )
+    .bind(&person.name)
+    .bind(device)
+    .bind(days)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert_eq!(changed.rows_affected(), 1, "one session for {device}");
+}
+
+#[tokio::test]
+async fn session_nobody_used_for_too_long_ends_when_its_device_comes_back() {
+    let url = common::start_server(|config| config.session_idle_days = 30);
+    let pool = sqlx::PgPool::connect(&common::database_url())
+        .await
+        .unwrap();
+    let laptop = Person::signup(&url, "ann", false).await;
+    let phone = laptop
+        .login(&laptop.login, &Extra::none(), "Phone")
+        .await
+        .unwrap();
+    let mut phone_feed = phone.device().feed().await;
+
+    // Within the limit the device is let in, and that counts as use.
+    unused_for(&pool, &laptop, "Phone", 29).await;
+    assert!(phone.signed_in().await);
+
+    // Past it, the request that comes back is refused like any request with
+    // a token the server does not know, and what the session had open goes.
+    unused_for(&pool, &laptop, "Phone", 31).await;
+    assert!(!phone.signed_in().await);
+    assert_eq!(phone_feed.close_code().await, Some(4401));
+    // It is gone, not waiting to be used again.
+    assert!(!phone.signed_in().await);
+
+    // Nobody else's session went with it.
+    assert!(laptop.signed_in().await);
+    let listed = laptop.get("/mindstream/sessions/").await.value();
+    let devices: Vec<&str> = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|session| session["deviceName"].as_str().unwrap())
+        .collect();
+    assert_eq!(devices, vec!["Laptop"]);
+}
+
+#[tokio::test]
+async fn sweep_ends_idle_sessions_and_a_limit_of_zero_ends_none() {
+    let pool = sqlx::PgPool::connect(&common::database_url())
+        .await
+        .unwrap();
+    let laptop = Person::signup(url(), "ann", false).await;
+    let phone = laptop
+        .login(&laptop.login, &Extra::none(), "Phone")
+        .await
+        .unwrap();
+    let tablet = laptop
+        .login(&laptop.login, &Extra::none(), "Tablet")
+        .await
+        .unwrap();
+    let mut phone_feed = phone.device().feed().await;
+    let mut tablet_feed = tablet.device().feed().await;
+
+    // The server looks every few minutes. This is that look, asked for
+    // now, with the limit a server has when nothing sets one: 90 days.
+    unused_for(&pool, &laptop, "Phone", 91).await;
+    unused_for(&pool, &laptop, "Tablet", 89).await;
+    let state = common::admin_state().await;
+    let ended = mindstream_server::admin::end_idle_sessions(&state)
+        .await
+        .unwrap();
+    assert!(ended >= 1, "ended {ended}");
+
+    // The phone never came back, and its session is gone all the same.
+    let left: Vec<String> = sqlx::query_scalar(
+        "SELECT device_name FROM sessions
+         WHERE account_id = (SELECT id FROM accounts WHERE username = $1)
+         ORDER BY device_name",
+    )
+    .bind(&laptop.name)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(left, vec!["Laptop", "Tablet"]);
+    assert_eq!(phone_feed.close_code().await, Some(4401));
+    assert!(!phone.signed_in().await);
+    tablet_feed.expect_no_news().await;
+    assert!(tablet.signed_in().await);
+
+    // A server told never to end a session for being idle does not, however
+    // long ago that was.
+    let lenient = common::start_server(|config| config.session_idle_days = 0);
+    let bob = Person::signup(&lenient, "bob", false).await;
+    unused_for(&pool, &bob, "Laptop", 5000).await;
+    assert!(bob.signed_in().await);
+    assert!(bob.signed_in().await);
+}

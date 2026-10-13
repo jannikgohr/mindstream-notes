@@ -23,6 +23,15 @@ pub struct AccountSummary {
     pub bytes_used: i64,
 }
 
+/// End every session that has gone unused for longer than the server's
+/// `session_idle_days`. The server does this by itself every few minutes.
+/// Returns how many it ended.
+pub async fn end_idle_sessions(state: &AppState) -> Result<usize, sqlx::Error> {
+    let ended =
+        crate::auth::end_idle_sessions(&state.pool, state.config.session_idle_days, None).await?;
+    Ok(ended.len())
+}
+
 pub async fn list_accounts(state: &AppState) -> Result<Vec<AccountSummary>, sqlx::Error> {
     sqlx::query_as(
         "SELECT a.username, a.email, a.disabled,

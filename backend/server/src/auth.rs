@@ -58,22 +58,37 @@ impl FromRequestParts<AppState> for AuthUser {
                 )
             })?;
 
-        let row: Option<(i64, i64, bool, bool)> = sqlx::query_as(&format!(
+        let idle_days = idle_days(state.config.session_idle_days);
+        let row: Option<(i64, i64, bool, bool, bool)> = sqlx::query_as(&format!(
             "SELECT s.id, s.account_id, a.disabled,
-                    s.last_used_at < now() - interval '{LAST_USED_REFRESH}'
+                    s.last_used_at < now() - interval '{LAST_USED_REFRESH}',
+                    $2 > 0 AND s.last_used_at < now() - make_interval(days => $2)
              FROM sessions s JOIN accounts a ON a.id = s.account_id
              WHERE s.token_hash = $1"
         ))
         .bind(&hash_session_token(token)[..])
+        .bind(idle_days)
         .fetch_optional(&state.pool)
         .await?;
 
-        let (session_id, account_id, disabled, stale) = row.ok_or_else(invalid_token)?;
+        let (session_id, account_id, disabled, stale, idle) = row.ok_or_else(invalid_token)?;
         if disabled {
             return Err(ApiError::unauthorized(
                 "user_inactive",
                 "User inactive or deleted.",
             ));
+        }
+        if idle {
+            // Unused for too long. The sweep in `events` ends such a session
+            // within minutes of its time, but the server may have been down
+            // or just started, and this request must not be what revives it.
+            end_idle_sessions(
+                &state.pool,
+                state.config.session_idle_days,
+                Some(session_id),
+            )
+            .await?;
+            return Err(invalid_token());
         }
         if stale {
             let pool = state.pool.clone();
@@ -128,6 +143,47 @@ async fn find_account(conn: &mut PgConnection, username: &str) -> ApiResult<Opti
     .bind(username_key(username))
     .fetch_optional(conn)
     .await?)
+}
+
+/// The idle limit as the queries take it. A limit too large for a count of
+/// days is as good as none.
+fn idle_days(configured: u32) -> i32 {
+    i32::try_from(configured).unwrap_or(0)
+}
+
+/// End the sessions no device has used for longer than the server allows,
+/// or only `only` when it is one of them. Each goes the way a session goes
+/// that its device signed out of: the row is deleted and what it had open
+/// is closed. Returns the sessions ended.
+///
+/// A session is used by every request its device makes, and a device that
+/// is running syncs. So this reaches devices that were put away, sold or
+/// lost, whose sessions would otherwise stand for ever.
+pub(crate) async fn end_idle_sessions(
+    pool: &sqlx::PgPool,
+    configured_days: u32,
+    only: Option<i64>,
+) -> Result<Vec<i64>, sqlx::Error> {
+    let days = idle_days(configured_days);
+    if days == 0 {
+        return Ok(Vec::new());
+    }
+    let mut tx = pool.begin().await?;
+    let ended: Vec<i64> = sqlx::query_scalar(
+        "DELETE FROM sessions
+         WHERE last_used_at < now() - make_interval(days => $1)
+           AND ($2::bigint IS NULL OR id = $2)
+         RETURNING id",
+    )
+    .bind(days)
+    .bind(only)
+    .fetch_all(&mut *tx)
+    .await?;
+    for session in &ended {
+        events::publish(&mut tx, &Event::SessionClosed { session: *session }).await?;
+    }
+    tx.commit().await?;
+    Ok(ended)
 }
 
 /// Which of these sessions still stand: the session exists and its account

@@ -131,6 +131,14 @@ pub struct Config {
     #[arg(long, env = "MINDSTREAM_KEEP_REVISIONS", default_value_t = 10)]
     pub keep_revisions: u32,
 
+    /// Days a device's session may go unused before the server ends it.
+    /// The device then has to sign in again, with the second factor where
+    /// the account has one. A session is in use whenever its device syncs,
+    /// so only a device that was put away, or lost, runs into this. 0
+    /// never ends a session for being idle.
+    #[arg(long, env = "MINDSTREAM_SESSION_IDLE_DAYS", default_value_t = 90)]
+    pub session_idle_days: u32,
+
     /// Chunks up to this size are stored in the database; larger ones go to
     /// the blob directory. A note is nearly always a single chunk under the
     /// default.
@@ -203,6 +211,7 @@ impl Config {
             max_page_bytes: 32 * 1024 * 1024,
             max_body_bytes: 75 * 1024 * 1024,
             keep_revisions: 10,
+            session_idle_days: 90,
             inline_chunk_bytes: 20 * 1024,
             database_connections: 4,
             test_reset: true,
