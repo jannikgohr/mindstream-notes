@@ -257,6 +257,40 @@ is a write.
   returns only the collections that changed. Checked against the reference
   server: it returns nothing when nothing changed, and returns the collection
   after an item is added to it.
+
+  Built. A sync opens by asking that list, for the vault and the shared
+  folders at once, what changed since the account's cursor. It then visits
+  the spaces the answer names and the ones this device has something to
+  send to, and no others. A visit is what a sync always was: pull, then
+  push. A sync that visits nothing is the one request.
+
+  A collection counts as changed when an item in it did, when its own
+  record did (a folder's name, or the key material of its live sessions),
+  when a member's rights did, and for an account that has just joined it.
+  A deleted collection is named as deleted, and one the account was taken
+  out of is reported as lost. `idle_check_names_every_collection_a_device_has_to_visit`
+  holds the server to each of these, since a case it missed would be a
+  change no device goes to look for.
+
+  Three rules keep the shortcut safe:
+  - The account's cursor moves last, and only when everything the answer
+    named was applied. A shared folder that failed, or a space still
+    waiting for a row to be let go, keeps it where it was, so the next
+    sync hears of the same spaces again.
+  - The cursor is dropped whenever the app opens its database. The first
+    sync of every run asks about everything, visits every space, and
+    removes the shared folders the full list no longer has. A change that
+    was somehow missed costs one restart at most.
+  - What a sync pushed is past the cursor it saves. The next sync is told
+    those spaces changed and pulls its own changes back, once.
+
+  The reachability probe that used to go before every sync now goes only
+  while the device does not know the server is there: before the first
+  sync of a run, and after one that could not reach it. The probe gives up
+  after six seconds, where a sync's own requests wait far longer, so
+  being offline still costs one short question per tick. Once a sync has
+  gone through, the list it opens with is the probe.
+
 - **A change feed makes it zero.** Each device holds one socket on which the
   server names the collections that changed and announces new invitations. It
   carries no data. The client reacts by running a normal sync. The periodic

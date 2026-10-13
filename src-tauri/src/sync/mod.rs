@@ -23,6 +23,7 @@
 //! Etebase exposes; the CRDT does the actual conflict-free merging.
 
 mod apply;
+mod changes;
 mod claim;
 pub mod collab_room;
 mod collections;
@@ -53,6 +54,8 @@ use sha2::Sha256;
 use tauri::{AppHandle, Emitter, Manager};
 
 use apply::*;
+pub(crate) use changes::forget_account_cursor;
+use changes::*;
 use claim::*;
 use collections::*;
 use local_rows::*;
@@ -189,7 +192,26 @@ pub(crate) fn describe_run_error(err: AppError) -> String {
     }
 }
 
-/// [`run`], and what follows when the server no longer knows this device.
+/// Why [`run`] stopped.
+pub(crate) enum RunError {
+    /// The request a sync opens with did not reach the server. Nothing was
+    /// pulled or pushed. Carries the transport's words.
+    Unreachable(String),
+    Failed(AppError),
+}
+
+impl From<AppError> for RunError {
+    fn from(err: AppError) -> Self {
+        Self::Failed(err)
+    }
+}
+
+/// [`run`], and what follows when it could not finish for a reason that is
+/// not an error to report.
+///
+/// `Ok(None)` is a server that could not be reached. The UI has been told,
+/// see [`announce_unreachable`], and the caller remembers it so that the
+/// next attempt starts with the quick probe.
 ///
 /// A session the server has ended does not come back, and asking again on
 /// a timer only repeats the refusal. So the device signs itself out, see
@@ -203,14 +225,26 @@ pub(crate) fn run_session(
     db: &Db,
     account: &Account,
     self_username: Option<&str>,
-) -> Result<SyncDelta, String> {
-    run(db, account, self_username).map_err(|err| {
-        if is_auth_error(&err) {
-            log::warn!("[sync] the server rejected this device's session: {err}");
-            auth::end_session_locally(app);
+) -> Result<Option<SyncDelta>, String> {
+    match run(db, account, self_username) {
+        Ok(delta) => Ok(Some(delta)),
+        Err(RunError::Unreachable(detail)) => {
+            let server_url = auth::read_session_info(app)
+                .ok()
+                .flatten()
+                .map(|info| info.server_url)
+                .unwrap_or_default();
+            announce_unreachable(app, server_url, detail);
+            Ok(None)
         }
-        describe_run_error(err)
-    })
+        Err(RunError::Failed(err)) => {
+            if is_auth_error(&err) {
+                log::warn!("[sync] the server rejected this device's session: {err}");
+                auth::end_session_locally(app);
+            }
+            Err(describe_run_error(err))
+        }
+    }
 }
 
 fn mark_local_by_remote_uid_dirty(db: &Db, kind: &str, etebase_uid: &str) -> AppResult<bool> {
@@ -271,13 +305,28 @@ pub struct SyncUnreachableEvent {
     pub detail: String,
 }
 
-/// Pre-sync reachability guard shared by `sync_now` and the scheduler
-/// tick. Returns `true` to proceed with the sync; `false` to skip it
-/// because the active vault's server didn't answer — in which case a
-/// [`AppEvent::SyncUnreachable`] has already been emitted so the UI shows
-/// one clear offline notification instead of letting `run` fan out into
-/// a storm of failing requests (cached-collection fetch + list × 4
-/// kinds).
+/// Tell the UI the sync server did not answer. It shows one clear offline
+/// notification for it.
+fn announce_unreachable(app: &AppHandle, server_url: String, detail: String) {
+    log::warn!("[sync] server unreachable, skipping sync: {server_url} ({detail})");
+    let event = SyncUnreachableEvent { server_url, detail };
+    let event_name = AppEvent::SyncUnreachable.as_str();
+    if let Err(e) = app.emit(event_name, &event) {
+        log::warn!("[sync] failed to emit {event_name}: {e}");
+    }
+}
+
+/// Reachability guard for a sync that does not know whether the server is
+/// there: the first of a run, and any that follows one that could not
+/// reach it. Returns `true` to proceed with the sync; `false` to skip it
+/// because the active vault's server didn't answer, in which case
+/// [`announce_unreachable`] has told the UI.
+///
+/// The probe is small and gives up after a few seconds, where a sync's own
+/// requests wait much longer. So while the server is away, each tick costs
+/// one short question. Once a sync has gone through, the next ones skip
+/// the probe: the request a sync opens with finds out just as well, see
+/// [`RunError::Unreachable`], and an idle sync is then that one request.
 ///
 /// Signed-out installs return `true`; `run`'s `try_restore` then no-ops
 /// exactly as before. An error *reading* the session (not a transport
@@ -295,18 +344,7 @@ async fn preflight_reachable(app: &AppHandle) -> bool {
     match auth::probe_server_reachable(&info.server_url).await {
         Ok(()) => true,
         Err(detail) => {
-            log::warn!(
-                "[sync] server unreachable, skipping sync: {} ({detail})",
-                info.server_url
-            );
-            let event = SyncUnreachableEvent {
-                server_url: info.server_url,
-                detail,
-            };
-            let event_name = AppEvent::SyncUnreachable.as_str();
-            if let Err(e) = app.emit(event_name, &event) {
-                log::warn!("[sync] failed to emit {event_name}: {e}");
-            }
+            announce_unreachable(app, info.server_url, detail);
             false
         }
     }
@@ -323,29 +361,35 @@ pub async fn sync_now(app: AppHandle) -> CommandResult<SyncReport> {
     let scheduler_state = app.state::<scheduler::SyncScheduler>();
     let _guard = scheduler_state.acquire_in_flight().await;
 
-    // Check the server is reachable before doing anything. On failure the
-    // probe emits `sync-unreachable` (one clear offline notification);
-    // bail out rather than fanning out into a storm of failing requests.
-    if !preflight_reachable(&app).await {
+    // While it is not known that the server is there, ask with the quick
+    // probe first. On failure it emits `sync-unreachable` (one clear
+    // offline notification); bail out rather than wait on a sync's own
+    // slower requests.
+    if !scheduler_state.server_reached() && !preflight_reachable(&app).await {
         return Err("sync server unreachable".into());
     }
 
     let app_for_blocking = app.clone();
-    let delta = tauri::async_runtime::spawn_blocking(move || -> Result<SyncDelta, String> {
-        catch_blocking_panic("sync", || {
-            let account = auth::try_restore(&app_for_blocking)
-                .map_err(|e| format!("restore session: {e}"))?
-                .ok_or_else(|| "not signed in".to_string())?;
-            let self_username = auth::read_session_info(&app_for_blocking)
-                .ok()
-                .flatten()
-                .map(|info| info.username);
-            let db = app_for_blocking.state::<Db>();
-            run_session(&app_for_blocking, &db, &account, self_username.as_deref())
+    let delta =
+        tauri::async_runtime::spawn_blocking(move || -> Result<Option<SyncDelta>, String> {
+            catch_blocking_panic("sync", || {
+                let account = auth::try_restore(&app_for_blocking)
+                    .map_err(|e| format!("restore session: {e}"))?
+                    .ok_or_else(|| "not signed in".to_string())?;
+                let self_username = auth::read_session_info(&app_for_blocking)
+                    .ok()
+                    .flatten()
+                    .map(|info| info.username);
+                let db = app_for_blocking.state::<Db>();
+                run_session(&app_for_blocking, &db, &account, self_username.as_deref())
+            })
         })
-    })
-    .await
-    .map_err(|e| format!("sync task: {e}"))??;
+        .await
+        .map_err(|e| format!("sync task: {e}"))??;
+    scheduler_state.set_server_reached(delta.is_some());
+    let Some(delta) = delta else {
+        return Err("sync server unreachable".into());
+    };
 
     // Best-effort event emission — if no JS listeners are attached the
     // emit call is a no-op; if serialization fails (shouldn't, given
@@ -392,18 +436,43 @@ pub struct SyncDelta {
     pub collab_credentials_changed_note_ids: Vec<String>,
 }
 
-fn run(db: &Db, account: &Account, self_username: Option<&str>) -> AppResult<SyncDelta> {
+/// The vault's collection, when this sync visits the vault: the server
+/// changed it, this device has something to send to it, or the device has
+/// not settled on a vault collection yet. `None` when it is left alone.
+fn open_vault(db: &Db, cm: &CollectionManager, changes: &Changes) -> AppResult<Option<Collection>> {
+    let (cached_uid, passes_left) = load_collection_state(db, KIND_VAULT)?;
+    let settled = cached_uid.is_some() && passes_left == 0;
+    // Any vault collection in the answer counts, the one in use or another.
+    // A second one is what `ensure_collection` exists to sort out.
+    let changed = !changes.vault.is_empty();
+    if !visits_vault(changes.full, settled, changed, vault_has_local_work(db)?) {
+        return Ok(None);
+    }
+    ensure_collection(db, cm, KIND_VAULT, COLLECTION_TYPE_VAULT, &changes.vault).map(Some)
+}
+
+fn run(db: &Db, account: &Account, self_username: Option<&str>) -> Result<SyncDelta, RunError> {
     let mut delta = SyncDelta::default();
     let cm = account
         .collection_manager()
         .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
-    let vault_col = ensure_collection(db, &cm, KIND_VAULT, COLLECTION_TYPE_VAULT)?;
-    let vault_im = cm
-        .item_manager(&vault_col)
-        .map_err(|e| AppError::InvalidArg(format!("item_manager(vault): {e}")))?;
+
+    // One request says which spaces changed since the last sync. A space
+    // that did not, and that this device has nothing to send to, is not
+    // visited. When that is every space, the sync ends here.
+    let changes = account_changes(db, &cm)?;
+
+    let vault_im = match open_vault(db, &cm, &changes)? {
+        Some(vault_col) => Some(
+            cm.item_manager(&vault_col)
+                .map_err(|e| AppError::InvalidArg(format!("item_manager(vault): {e}")))?,
+        ),
+        None => None,
+    };
 
     // --- Pull phase ---
-    // Every space is pulled before anything is pushed. A shared subtree's
+    // Every space that is visited is pulled before anything is pushed, the
+    // ones with only something to send included. A shared subtree's
     // items are tombstoned out of the vault and recreated in a scope; a
     // device holding offline edits *detaches* its vault copy during the
     // vault pull (see `apply_remote_delete`) rather than deleting it. The
@@ -419,16 +488,23 @@ fn run(db: &Db, account: &Account, self_username: Option<&str>) -> AppResult<Syn
         preserve_dirty_local_edits: true,
     };
     let mut held: Vec<Held> = Vec::new();
-    held.extend(pull_space(db, &vault_im, &vault, &mut delta)?);
+    if let Some(vault_im) = &vault_im {
+        held.extend(pull_space(db, vault_im, &vault, &mut delta)?);
+    }
 
     // The shared folders are kept apart from the vault's sync: a failure
-    // there (a manifest that does not decode, a list that does not come) is
-    // logged and must never stop the user's own notes from syncing.
-    let shared = match scopes::pull_scopes(db, &cm, &mut delta, self_username, &mut held) {
+    // there (a manifest that does not decode, a folder that cannot be
+    // fetched) is logged and must never stop the user's own notes from
+    // syncing.
+    let shared = match scopes::pull_scopes(db, &cm, &changes, &mut delta, self_username, &mut held)
+    {
         Ok(shared) => shared,
         Err(e) => {
             log::error!("[sync] shared folders not synced (vault sync unaffected): {e}");
-            Vec::new()
+            scopes::PulledScopes {
+                open: Vec::new(),
+                complete: false,
+            }
         }
     };
 
@@ -443,18 +519,33 @@ fn run(db: &Db, account: &Account, self_username: Option<&str>) -> AppResult<Syn
     // creation in the second. In this order no device ever finds it in
     // both, which is what lets a pull refuse an item whose row is at home
     // somewhere else (see `claim`).
-    for kind in ["folder", "note", "asset"] {
-        drain_tombstones(db, &vault_im, kind, None)?;
+    if let Some(vault_im) = &vault_im {
+        for kind in ["folder", "note", "asset"] {
+            drain_tombstones(db, vault_im, kind, None)?;
+        }
     }
-    scopes::drain_scope_tombstones(db, &shared);
-    scopes::push_scopes(db, &cm, &shared, &mut delta);
+    scopes::drain_scope_tombstones(db, &shared.open);
+    scopes::push_scopes(db, &cm, &shared.open, &mut delta);
 
-    // Folders first, so that no device ever pulls a note whose folder the
-    // server has not been told about.
-    push_folders(db, &vault_im, &mut delta.report, None)?;
-    push_notes(db, &vault_im, &mut delta.report, None)?;
-    push_assets(db, &vault_im, &mut delta.report, None)?;
-    push_signatures(db, &vault_im, &mut delta.report)?;
+    if let Some(vault_im) = &vault_im {
+        // Folders first, so that no device ever pulls a note whose folder
+        // the server has not been told about.
+        push_folders(db, vault_im, &mut delta.report, None)?;
+        push_notes(db, vault_im, &mut delta.report, None)?;
+        push_assets(db, vault_im, &mut delta.report, None)?;
+        push_signatures(db, vault_im, &mut delta.report)?;
+    }
+
+    // The account's cursor moves last, and only when everything the list
+    // named was applied. A folder that failed, or a space still waiting for
+    // a row to be let go, has not moved its own cursor. Keeping this one
+    // back makes the next sync hear of the same spaces again.
+    //
+    // What this sync pushed is past the cursor, so the next sync is told
+    // those spaces changed and pulls its own changes back once.
+    if shared.complete && !holds_remain(db)? {
+        save_stoken(db, KIND_ACCOUNT, changes.stoken.as_deref())?;
+    }
 
     Ok(delta)
 }

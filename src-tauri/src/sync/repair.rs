@@ -90,7 +90,7 @@ fn audit_impl(db: &Db, account: &Account) -> AppResult<CorruptAudit> {
 
     let mut audit = CorruptAudit::default();
 
-    let vault_col = ensure_collection(db, &cm, KIND_VAULT, COLLECTION_TYPE_VAULT)?;
+    let vault_col = ensure_collection(db, &cm, KIND_VAULT, COLLECTION_TYPE_VAULT, &[])?;
     let vault_im = cm
         .item_manager(&vault_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(vault): {e}")))?;
@@ -253,7 +253,7 @@ fn purge_impl(
         .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
 
     // --- Note: verify corrupt, then tombstone. ---
-    let vault_col = ensure_collection(db, &cm, KIND_VAULT, COLLECTION_TYPE_VAULT)?;
+    let vault_col = ensure_collection(db, &cm, KIND_VAULT, COLLECTION_TYPE_VAULT, &[])?;
     let notes_im = cm
         .item_manager(&vault_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(vault): {e}")))?;

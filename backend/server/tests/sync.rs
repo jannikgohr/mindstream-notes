@@ -9,8 +9,8 @@ use std::iter;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use common::{named, new_collection, signup, COLLECTION_TYPE};
-use etebase::{FetchOptions, PrefetchOption};
+use common::{named, new_collection, share, signup, COLLECTION_TYPE};
+use etebase::{CollectionAccessLevel, FetchOptions, PrefetchOption};
 
 /// Run one query against the test database and return its single value.
 fn query_i64(sql: &'static str, collection_uid: &str) -> i64 {
@@ -66,6 +66,137 @@ fn one_cursor_covers_every_collection() {
         .unwrap()
         .data()
         .is_empty());
+}
+
+/// A device asks once what changed and visits only that. So the one answer
+/// has to name every collection the device must look at: one of either type
+/// it asked about, one whose rights changed, one it has just joined and one
+/// that was deleted. And nothing else.
+#[test]
+fn idle_check_names_every_collection_a_device_has_to_visit() {
+    const OTHER_TYPE: &str = "test.other-space";
+    let types = [COLLECTION_TYPE, OTHER_TYPE];
+    let owner = signup("owner");
+    let guest = signup("guest");
+    let owner_collections = owner.collection_manager().unwrap();
+    let guest_collections = guest.collection_manager().unwrap();
+
+    // The guest has a collection of each type, and is a reader of one of
+    // the owner's.
+    let plain = new_collection(&guest, "plain");
+    let other = guest_collections
+        .create(OTHER_TYPE, &named("other"), b"")
+        .unwrap();
+    guest_collections.upload(&other, None).unwrap();
+    let shared = new_collection(&owner, "shared");
+    share(&owner, &shared, &guest, CollectionAccessLevel::ReadOnly);
+
+    // Everything, once, and from then on nothing.
+    let everything = guest_collections.list_multi(types, None).unwrap();
+    assert!(everything.done());
+    let listed: HashSet<&str> = everything.data().iter().map(|c| c.uid()).collect();
+    assert_eq!(
+        listed,
+        HashSet::from([plain.uid(), other.uid(), shared.uid()])
+    );
+    let mut cursor = everything.stoken().map(str::to_owned);
+    let changed_since = |cursor: &Option<String>| {
+        let options = FetchOptions::new().stoken(cursor.as_deref());
+        let page = guest_collections.list_multi(types, Some(&options)).unwrap();
+        assert!(page.done());
+        let uids: HashSet<String> = page.data().iter().map(|c| c.uid().to_owned()).collect();
+        let removed: Vec<String> = page
+            .removed_memberships()
+            .map(|gone| gone.iter().map(|c| c.uid().to_string()).collect())
+            .unwrap_or_default();
+        (uids, removed, page.stoken().map(str::to_owned))
+    };
+    let (uids, removed, same) = changed_since(&cursor);
+    assert!(uids.is_empty() && removed.is_empty());
+    // Nothing changed, so there is nowhere new for the cursor to be.
+    assert_eq!(same, cursor);
+
+    // An item in the collection of the second type.
+    let items = guest_collections.item_manager(&other).unwrap();
+    let note = items.create(&named("note"), b"body").unwrap();
+    items.batch(iter::once(&note), None).unwrap();
+    let (uids, removed, next) = changed_since(&cursor);
+    assert_eq!(uids, HashSet::from([other.uid().to_owned()]));
+    assert!(removed.is_empty());
+    cursor = next;
+
+    // The owner lets the guest write. Nothing in the collection changed,
+    // and the guest's device still has to hear of it.
+    owner_collections
+        .member_manager(&shared)
+        .unwrap()
+        .modify_access_level(&guest.name, CollectionAccessLevel::ReadWrite)
+        .unwrap();
+    let options = FetchOptions::new().stoken(cursor.as_deref());
+    let page = guest_collections.list_multi(types, Some(&options)).unwrap();
+    assert_eq!(page.data().len(), 1);
+    assert_eq!(page.data()[0].uid(), shared.uid());
+    assert_eq!(
+        page.data()[0].access_level(),
+        CollectionAccessLevel::ReadWrite
+    );
+    cursor = page.stoken().map(str::to_owned);
+
+    // The owner changes what the collection says about itself: its name
+    // here, and in the app the key material of its live sessions too.
+    let mut renamed = owner_collections.fetch(shared.uid(), None).unwrap();
+    renamed.set_meta(&named("shared, renamed")).unwrap();
+    renamed.set_content(b"a new manifest").unwrap();
+    owner_collections.upload(&renamed, None).unwrap();
+    let options = FetchOptions::new().stoken(cursor.as_deref());
+    let page = guest_collections.list_multi(types, Some(&options)).unwrap();
+    assert_eq!(page.data().len(), 1);
+    assert_eq!(page.data()[0].uid(), shared.uid());
+    assert_eq!(page.data()[0].content().unwrap(), b"a new manifest");
+    cursor = page.stoken().map(str::to_owned);
+
+    // A collection the guest joins after the cursor.
+    let joined = new_collection(&owner, "joined");
+    share(&owner, &joined, &guest, CollectionAccessLevel::ReadWrite);
+    let (uids, removed, next) = changed_since(&cursor);
+    assert_eq!(uids, HashSet::from([joined.uid().to_owned()]));
+    assert!(removed.is_empty());
+    cursor = next;
+
+    // One that its owner deletes is named, as deleted.
+    let mut doomed = owner_collections.fetch(joined.uid(), None).unwrap();
+    doomed.delete().unwrap();
+    owner_collections.upload(&doomed, None).unwrap();
+    let options = FetchOptions::new().stoken(cursor.as_deref());
+    let page = guest_collections.list_multi(types, Some(&options)).unwrap();
+    assert_eq!(page.data().len(), 1);
+    assert_eq!(page.data()[0].uid(), joined.uid());
+    assert!(page.data()[0].is_deleted());
+    cursor = page.stoken().map(str::to_owned);
+
+    // One the guest is taken out of is reported as lost, and with that the
+    // device is level again.
+    owner_collections
+        .member_manager(&shared)
+        .unwrap()
+        .remove(&guest.name)
+        .unwrap();
+    let (uids, removed, next) = changed_since(&cursor);
+    assert!(uids.is_empty());
+    assert_eq!(removed, vec![shared.uid().to_owned()]);
+    let (uids, removed, _) = changed_since(&next);
+    assert!(uids.is_empty() && removed.is_empty());
+
+    // A type that was not asked about is left out, changed or not.
+    let (uids, _, _) = {
+        let page = guest_collections
+            .list_multi([COLLECTION_TYPE], None)
+            .unwrap();
+        let uids: HashSet<String> = page.data().iter().map(|c| c.uid().to_owned()).collect();
+        (uids, (), ())
+    };
+    assert!(uids.contains(plain.uid()));
+    assert!(!uids.contains(other.uid()));
 }
 
 /// Writers in several collections push while a reader follows with a cursor,

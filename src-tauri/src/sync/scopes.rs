@@ -3,9 +3,10 @@
 //! A shared folder (see `crate::sharing`) is one collection, and its
 //! folders, notes and attachments are items in it. Being a member of the
 //! collection is what having the folder means, for the owner and for
-//! everyone invited alike, so this lists the shared collections the account
-//! belongs to and pulls and pushes each one. The pull is the vault's own
-//! `pull_space`, told which scope the rows belong to.
+//! everyone invited alike. A sync visits the shared collections the server
+//! says changed and the ones this device has something to send to, and
+//! pulls and pushes each. The pull is the vault's own `pull_space`, told
+//! which scope the rows belong to.
 //!
 //! Rows of a shared folder carry its collection's uid as `share_scope_id`.
 //! The vault's pull and push leave those rows alone and the ones here take
@@ -22,20 +23,20 @@
 use std::collections::HashSet;
 
 use etebase::managers::{CollectionManager, ItemManager};
-use etebase::{Collection, CollectionAccessLevel, FetchOptions};
+use etebase::{Collection, CollectionAccessLevel};
 use rusqlite::{params, OptionalExtension};
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::sharing::{
-    decode_manifest, reconcile_revoked_shares, rename_space, scope_collab_epoch_key,
-    scope_stoken_key, share_access_level_to_db, ShareAccessLevel, ShareManifest,
-    COLLECTION_TYPE_SHARED,
+    decode_manifest, open_space, purge_lost_shares, reconcile_revoked_shares, rename_space,
+    scope_collab_epoch_key, scope_stoken_key, share_access_level_to_db, ShareAccessLevel,
+    ShareManifest,
 };
 
 use super::{
-    drain_tombstones, pull_space, push_assets, push_folders, push_notes, save_stoken, Held,
-    SpacePull, SyncDelta,
+    drain_tombstones, pull_space, push_assets, push_folders, push_notes, save_stoken,
+    scopes_to_fetch, scopes_with_local_work, Changes, Held, SpacePull, SyncDelta,
 };
 
 /// A shared folder this sync has pulled, and may have to push to.
@@ -59,59 +60,108 @@ impl OpenScope {
     }
 }
 
-/// Pull every shared folder the account is a member of, and drop the ones
-/// it has stopped being a member of. Returns the folders that were pulled,
-/// for the push phase. Items a pull could not apply yet go into `held`.
+/// The shared folders a sync pulled, for its push phase.
+pub(super) struct PulledScopes {
+    pub(super) open: Vec<OpenScope>,
+    /// Whether every folder that had to be visited was pulled. When one
+    /// failed, the account's cursor must stay where it is, so the next sync
+    /// is told about that folder again.
+    pub(super) complete: bool,
+}
+
+/// Pull the shared folders that need it, and drop the ones the account has
+/// stopped being a member of. Items a pull could not apply yet go into
+/// `held`.
+///
+/// Which folders need it depends on the list the sync opened with:
+///
+/// - A list of everything, the first of each run. Every folder is pulled,
+///   and a folder this device holds that the list does not have is one the
+///   account lost.
+/// - A list of what changed. The changed folders are pulled, and so are the
+///   ones this device has something to send to: a pull goes before every
+///   push. The server names the folders the account lost.
 pub(super) fn pull_scopes(
     db: &Db,
     cm: &CollectionManager,
+    changes: &Changes,
     delta: &mut SyncDelta,
     self_username: Option<&str>,
     held: &mut Vec<Held>,
-) -> AppResult<Vec<OpenScope>> {
-    // The whole list or nothing. What is missing from it is removed from
-    // this device below, so a list that stopped early must not be used.
-    let collections = list_shared_collections(cm)?;
-
+) -> AppResult<PulledScopes> {
+    let mut pulled = PulledScopes {
+        open: Vec::new(),
+        complete: true,
+    };
     let mut live: HashSet<String> = HashSet::new();
-    let mut opened = Vec::new();
-    for collection in collections {
+    let mut gone: Vec<String> = changes.removed.clone();
+
+    for collection in &changes.shared {
         if collection.is_deleted() {
+            gone.push(collection.uid().to_string());
             continue;
         }
         live.insert(collection.uid().to_string());
-        let uid = collection.uid().to_string();
-        match pull_one_scope(db, cm, collection, delta, self_username, held) {
-            Ok(scope) => opened.push(scope),
-            Err(e) => log::warn!("[sync] shared folder {uid} pull failed: {e}"),
+        visit_scope(
+            db,
+            cm,
+            collection.clone(),
+            delta,
+            self_username,
+            held,
+            &mut pulled,
+        );
+    }
+
+    if changes.full {
+        // The list ran to its end, or `account_changes` would have failed.
+        // That matters: a folder is removed here for being absent from it.
+        reconcile_revoked_shares(db, &live)?;
+        return Ok(pulled);
+    }
+
+    // Folders the server did not name, with something to send.
+    let changed: Vec<&str> = changes.shared.iter().map(Collection::uid).collect();
+    for scope in scopes_to_fetch(&changed, &scopes_with_local_work(db)?) {
+        if gone.contains(&scope) {
+            continue;
+        }
+        match open_space(cm, &scope) {
+            Ok(Some(collection)) => {
+                visit_scope(db, cm, collection, delta, self_username, held, &mut pulled)
+            }
+            // Gone without the list saying so. Left for the next full list
+            // to remove, which does not act on one answer alone.
+            Ok(None) => {
+                log::warn!("[sync] shared folder {scope} has work to send and is gone");
+                pulled.complete = false;
+            }
+            Err(e) => {
+                log::warn!("[sync] shared folder {scope} could not be fetched: {e}");
+                pulled.complete = false;
+            }
         }
     }
 
-    reconcile_revoked_shares(db, &live)?;
-    Ok(opened)
+    purge_lost_shares(db, &gone)?;
+    Ok(pulled)
 }
 
-/// Every shared collection the account belongs to.
-fn list_shared_collections(cm: &CollectionManager) -> AppResult<Vec<Collection>> {
-    let mut collections = Vec::new();
-    let mut stoken: Option<String> = None;
-    loop {
-        let options = FetchOptions::new().limit(100).stoken(stoken.as_deref());
-        let page = cm
-            .list(COLLECTION_TYPE_SHARED, Some(&options))
-            .map_err(|e| AppError::InvalidArg(format!("list shared folders: {e}")))?;
-        collections.extend(page.data().iter().cloned());
-        if page.done() {
-            return Ok(collections);
-        }
-        match page.stoken() {
-            Some(next) => stoken = Some(next.to_string()),
-            // Not done and nowhere to go on from: the list is not whole.
-            None => {
-                return Err(AppError::InvalidArg(
-                    "list shared folders: the server ended the list without finishing it".into(),
-                ))
-            }
+fn visit_scope(
+    db: &Db,
+    cm: &CollectionManager,
+    collection: Collection,
+    delta: &mut SyncDelta,
+    self_username: Option<&str>,
+    held: &mut Vec<Held>,
+    pulled: &mut PulledScopes,
+) {
+    let uid = collection.uid().to_string();
+    match pull_one_scope(db, cm, collection, delta, self_username, held) {
+        Ok(scope) => pulled.open.push(scope),
+        Err(e) => {
+            log::warn!("[sync] shared folder {uid} pull failed: {e}");
+            pulled.complete = false;
         }
     }
 }

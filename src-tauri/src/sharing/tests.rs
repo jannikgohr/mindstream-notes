@@ -866,3 +866,83 @@ fn moving_a_folder_into_its_collection_marks_the_root_once() {
     })
     .unwrap();
 }
+
+/// A shared root as a device holds it: received from someone, or shared by
+/// this account.
+fn insert_shared_root(conn: &rusqlite::Connection, id: &str, scope: &str, by_me: bool) {
+    conn.execute(
+        "INSERT INTO collections(id, parent_collection_id, name, position, created, modified,
+                                 share_scope_id, share_id, shared_role, shared_by_me, dirty)
+         VALUES (?1, NULL, ?1, 0, 't', 't', ?2, ?2, ?3, ?4, 0)",
+        params![id, scope, if by_me { "admin" } else { "read_write" }, by_me],
+    )
+    .unwrap();
+}
+
+fn folders_left(db: &Db) -> Vec<String> {
+    db.with_conn(|conn| {
+        let mut stmt =
+            conn.prepare("SELECT id FROM collections WHERE id <> 'trash' ORDER BY id")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    })
+    .unwrap()
+}
+
+#[test]
+fn folder_the_server_names_as_lost_is_removed_and_the_others_stay() {
+    let db = crate::db::open_memory_for_tests();
+    db.with_conn(|conn| {
+        insert_shared_root(conn, "lost", "scope_lost", false);
+        insert_note(conn, "n_lost", "lost", Some("scope_lost"));
+        insert_shared_root(conn, "kept", "scope_kept", false);
+        insert_note(conn, "n_kept", "kept", Some("scope_kept"));
+        insert_folder(conn, "own", None, None);
+        Ok(())
+    })
+    .unwrap();
+
+    purge_lost_shares(
+        &db,
+        &["scope_lost".to_string(), "scope_unknown".to_string()],
+    )
+    .unwrap();
+
+    assert_eq!(folders_left(&db), vec!["kept", "own"]);
+    let notes: i64 = db
+        .with_conn(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM notes", [], |row| row.get(0))?))
+        .unwrap();
+    assert_eq!(notes, 1);
+}
+
+/// When the collection of a folder this account shares is gone, the folder
+/// is still the owner's. Its rows come back through the vault, so nothing
+/// of it is removed here.
+#[test]
+fn folder_this_account_shares_is_never_removed_as_lost() {
+    let db = crate::db::open_memory_for_tests();
+    db.with_conn(|conn| {
+        insert_shared_root(conn, "mine", "scope_mine", true);
+        insert_note(conn, "n_mine", "mine", Some("scope_mine"));
+        Ok(())
+    })
+    .unwrap();
+
+    purge_lost_shares(&db, &["scope_mine".to_string()]).unwrap();
+
+    assert_eq!(folders_left(&db), vec!["mine"]);
+}
+
+#[test]
+fn nothing_lost_removes_nothing() {
+    let db = crate::db::open_memory_for_tests();
+    db.with_conn(|conn| {
+        insert_shared_root(conn, "kept", "scope_kept", false);
+        Ok(())
+    })
+    .unwrap();
+
+    purge_lost_shares(&db, &[]).unwrap();
+
+    assert_eq!(folders_left(&db), vec!["kept"]);
+}

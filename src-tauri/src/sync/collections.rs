@@ -30,11 +30,16 @@ pub(super) const RECONCILE_PASSES: i64 = 3;
 /// over (see `switch_to_collection`) and the abandoned collection is simply
 /// left orphaned server-side. A stable pass decrements the counter; reaching
 /// zero disarms.
+///
+/// `listed` is what the sync's opening list returned for this type, if the
+/// caller has one. When the cached collection is among it there is nothing
+/// to fetch.
 pub(super) fn ensure_collection(
     db: &Db,
     cm: &CollectionManager,
     kind: &str,
     collection_type: &str,
+    listed: &[Collection],
 ) -> AppResult<Collection> {
     let (cached_uid, passes_left) = load_collection_state(db, kind)?;
 
@@ -43,7 +48,13 @@ pub(super) fn ensure_collection(
     // fetched — a cache miss must not silently mint a duplicate.
     if passes_left == 0 {
         if let Some(uid) = &cached_uid {
-            match cm.fetch(uid, None) {
+            let known = listed
+                .iter()
+                .find(|col| col.uid() == uid.as_str())
+                .cloned()
+                .map(Ok)
+                .unwrap_or_else(|| cm.fetch(uid, None));
+            match known {
                 Ok(col) => {
                     let candidate = VaultCollectionCandidate::from(&col);
                     if usable_vault_collection(&candidate) {

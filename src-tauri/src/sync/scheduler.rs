@@ -57,6 +57,9 @@ pub struct SyncScheduler {
     /// by the one that follows. Any number of requests in that time make
     /// one sync, not one each.
     wake: Notify,
+    /// Whether the last sync reached the server. While it did not, or none
+    /// has run yet, a sync starts with the quick reachability probe.
+    server_reached: AtomicBool,
 }
 
 impl SyncScheduler {
@@ -70,7 +73,18 @@ impl SyncScheduler {
             interval_secs: AtomicU64::new(DEFAULT_INTERVAL_SECS),
             in_flight: Mutex::new(()),
             wake: Notify::new(),
+            server_reached: AtomicBool::new(false),
         }
+    }
+
+    /// Whether the last sync reached the server, see
+    /// [`super::preflight_reachable`].
+    pub(crate) fn server_reached(&self) -> bool {
+        self.server_reached.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn set_server_reached(&self, reached: bool) {
+        self.server_reached.store(reached, Ordering::Relaxed);
     }
 
     /// Whether the user has scheduled sync on.
@@ -155,11 +169,13 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    // Reachability preflight. When the server is unreachable the probe
-    // emits a one-shot `sync-unreachable` notification; skip the tick
-    // quietly rather than logging a hard failure (and firing doomed
-    // requests) every cycle while offline.
-    if !preflight_reachable(app).await {
+    // Reachability preflight, while it is not known that the server is
+    // there. When the server is unreachable the probe emits a one-shot
+    // `sync-unreachable` notification; skip the tick quietly rather than
+    // logging a hard failure (and firing doomed requests) every cycle
+    // while offline.
+    let scheduler = app.state::<SyncScheduler>();
+    if !scheduler.server_reached() && !preflight_reachable(app).await {
         return Ok(());
     }
 
@@ -179,6 +195,12 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
     })
     .await
     .map_err(|e| format!("sync task: {e}"))??;
+    scheduler.set_server_reached(delta.is_some());
+    // The server went away between two syncs. The UI has been told, and
+    // the next tick asks with the probe.
+    let Some(delta) = delta else {
+        return Ok(());
+    };
 
     let event = SyncCompletedEvent {
         report: delta.report,

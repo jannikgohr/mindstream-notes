@@ -240,3 +240,52 @@ pub(super) fn save_stoken(db: &Db, kind: &str, stoken: Option<&str>) -> AppResul
         Ok(())
     })
 }
+
+// ---------- what waits to be sent ----------
+//
+// A sync only visits a space the server changed or this device has work
+// for. These say whether it has. They must name every row the pushes above
+// would send: a row they miss is not sent until the next sync that visits
+// its space for another reason. Naming one row too many only costs a visit.
+
+/// Whether the vault has anything to send: a row to upload or a deletion to
+/// pass on.
+pub(super) fn vault_has_local_work(db: &Db) -> AppResult<bool> {
+    db.with_conn(|c| {
+        Ok(c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM collections
+                            WHERE dirty = 1 AND id <> 'trash' AND share_scope_id IS NULL)
+                 OR EXISTS(SELECT 1 FROM notes WHERE dirty = 1 AND share_scope_id IS NULL)
+                 OR EXISTS(SELECT 1 FROM assets
+                            WHERE dirty = 1 AND owning_note_id IS NOT NULL
+                              AND share_scope_id IS NULL)
+                 OR EXISTS(SELECT 1 FROM signatures WHERE dirty = 1)
+                 OR EXISTS(SELECT 1 FROM tombstones WHERE share_scope_id IS NULL)",
+            [],
+            |r| r.get(0),
+        )?)
+    })
+}
+
+/// The shared folders that have anything to send.
+pub(super) fn scopes_with_local_work(db: &Db) -> AppResult<Vec<String>> {
+    db.with_conn(|c| {
+        let mut stmt = c.prepare(
+            "SELECT share_scope_id FROM collections
+              WHERE dirty = 1 AND share_scope_id IS NOT NULL
+             UNION
+             SELECT share_scope_id FROM notes
+              WHERE dirty = 1 AND share_scope_id IS NOT NULL
+             UNION
+             SELECT share_scope_id FROM assets
+              WHERE dirty = 1 AND owning_note_id IS NOT NULL
+                AND share_scope_id IS NOT NULL
+             UNION
+             SELECT share_scope_id FROM tombstones
+              WHERE share_scope_id IS NOT NULL
+             ORDER BY 1",
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    })
+}

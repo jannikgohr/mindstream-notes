@@ -230,6 +230,25 @@ pub(crate) fn reconcile_revoked_shares(db: &Db, live_scopes: &HashSet<String>) -
     Ok(())
 }
 
+/// Remove the shared folders the server named as lost: ones the account was
+/// taken out of, or whose collection was deleted. Of those, only folders
+/// that were shared with this account are removed. A folder this account
+/// shares is the owner's own content, and when its collection goes the
+/// rows come back through the vault.
+pub(crate) fn purge_lost_shares(db: &Db, lost: &[String]) -> AppResult<()> {
+    if lost.is_empty() {
+        return Ok(());
+    }
+    for scope in local_received_scopes(db)?
+        .iter()
+        .filter(|scope| lost.contains(scope))
+    {
+        log::info!("[sharing] shared folder {scope} is no longer accessible; removing it locally");
+        purge_local_scope(db, scope)?;
+    }
+    Ok(())
+}
+
 /// Stop sharing a folder the current user owns. The owner keeps the folder:
 /// its subtree goes back into the vault as a personal folder. The shared
 /// collection is deleted, which is what tells every other member's device

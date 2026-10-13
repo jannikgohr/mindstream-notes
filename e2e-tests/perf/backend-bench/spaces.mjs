@@ -66,6 +66,14 @@ export class SpaceDevice {
     this.cursor = null;
     /** scope (the shared collection's uid) → `{ uid, stoken }`. */
     this.scopes = new Map();
+    /**
+     * The account's cursor: what the list a sync opens with is asked
+     * against. Null until a sync has applied everything, as in the app
+     * after it starts.
+     */
+    this.accountStoken = null;
+    /** Whether a sync has reached the server, see `preflight_reachable`. */
+    this.reached = false;
   }
 
   get vault() {
@@ -82,23 +90,80 @@ export class SpaceDevice {
   // ---------- sync::run ----------
 
   /**
-   * One full sync, as `sync::run` behind the scheduler tick or `sync_now`:
-   * reachability probe, vault pull, shared folders, then the push phase.
+   * One sync, as `sync::run` behind the scheduler tick or `sync_now`.
+   *
+   * The quick reachability probe goes first only while the device does not
+   * know that the server is there, which here is before its first sync.
+   * Then one list says which spaces changed. The vault is visited when it
+   * did or when there is something to send to it, a shared folder when it
+   * did. A visit is a pull, then the push. A sync that visits nothing is
+   * the list and no more.
    */
   async sync({ newNotes = [], editedNotes = [] } = {}) {
-    await meteredGet(`${this.serverUrl}/healthz`); // preflight_reachable
-    const collection = await this.ensureCollection();
-    await this.pull(this.cursor, collection);
-    await this.syncScopes();
-    await this.pushNotes(collection, { newNotes, editedNotes });
+    if (!this.reached) {
+      await meteredGet(`${this.serverUrl}/healthz`); // preflight_reachable
+      this.reached = true;
+    }
+    const changes = await this.accountChanges();
+
+    // `open_vault`
+    const localWork = newNotes.length + editedNotes.length > 0;
+    let collection = null;
+    if (changes.full || !this.cursor || changes.vault.length > 0 || localWork) {
+      collection = await this.ensureCollection(changes.vault);
+      await this.pull(this.cursor, collection);
+    }
+    await this.pullScopes(changes);
+    if (collection) {
+      await this.pushNotes(collection, { newNotes, editedNotes });
+    }
+    // The cursor moves once everything the list named has been applied.
+    // What this sync pushed is past it, so the next sync pulls that back.
+    this.accountStoken = changes.stoken;
   }
 
   /**
-   * `ensure_collection`: fetch the cached vault collection, or on a first
-   * sync list by type and adopt the smallest uid, or create one.
+   * `account_changes`: the collections of both types that changed since
+   * the account's cursor, in one list.
    */
-  async ensureCollection() {
-    if (this.cursor) return this.cm.fetch(this.cursor.uid);
+  async accountChanges() {
+    const changes = {
+      full: this.accountStoken === null,
+      vault: [],
+      shared: [],
+      stoken: this.accountStoken
+    };
+    let stoken = this.accountStoken;
+    for (;;) {
+      const page = await this.cm.list(
+        [COLLECTION_TYPE_VAULT, COLLECTION_TYPE_SHARED],
+        { limit: 100, stoken }
+      );
+      for (const collection of page.data) {
+        const type = collection.getCollectionType();
+        if (type === COLLECTION_TYPE_VAULT) changes.vault.push(collection);
+        else if (type === COLLECTION_TYPE_SHARED)
+          changes.shared.push(collection);
+      }
+      stoken = page.stoken ?? stoken;
+      if (page.done) break;
+    }
+    changes.stoken = stoken;
+    return changes;
+  }
+
+  /**
+   * `ensure_collection`: the cached vault collection, taken from the list
+   * the sync opened with when it is in it and fetched otherwise. On a first
+   * sync, list by type and adopt the smallest uid, or create one.
+   */
+  async ensureCollection(listed = []) {
+    if (this.cursor) {
+      return (
+        listed.find((collection) => collection.uid === this.cursor.uid) ??
+        this.cm.fetch(this.cursor.uid)
+      );
+    }
 
     const list = await this.cm.list(COLLECTION_TYPE_VAULT);
     const winner = list.data
@@ -188,30 +253,23 @@ export class SpaceDevice {
   }
 
   /**
-   * `sync_scopes` + `sync_one_scope`: list the shared collections, then pull
-   * each from its cursor. The list comes with each collection's manifest,
+   * `pull_scopes` + `pull_one_scope`: pull each shared folder the list
+   * named from its cursor. The list comes with each collection's manifest,
    * and it is also what tells the device which shares it has lost, so
-   * nothing more is asked for either.
+   * nothing more is asked for either. The scenarios never leave something
+   * to send in a shared folder the server did not also change, so the
+   * fetch of such a folder is not replayed here.
    */
-  async syncScopes() {
-    let stoken = null;
-    for (;;) {
-      const page = await this.cm.list(COLLECTION_TYPE_SHARED, {
-        limit: 100,
-        stoken
-      });
-      for (const collection of page.data) {
-        if (collection.isDeleted) continue;
-        await manifestOf(collection);
-        let cursor = this.scopes.get(collection.uid);
-        if (!cursor) {
-          cursor = { uid: collection.uid, stoken: null };
-          this.scopes.set(collection.uid, cursor);
-        }
-        await this.pull(cursor, collection);
+  async pullScopes(changes) {
+    for (const collection of changes.shared) {
+      if (collection.isDeleted) continue;
+      await manifestOf(collection);
+      let cursor = this.scopes.get(collection.uid);
+      if (!cursor) {
+        cursor = { uid: collection.uid, stoken: null };
+        this.scopes.set(collection.uid, cursor);
       }
-      if (page.done) break;
-      stoken = page.stoken ?? stoken;
+      await this.pull(cursor, collection);
     }
   }
 
