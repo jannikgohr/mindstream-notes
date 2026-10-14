@@ -21,6 +21,9 @@ const CHALLENGE_NONCE_LEN: usize = 16;
 const CHALLENGE_TAG_LEN: usize = 32;
 /// How long a client has to answer a login challenge.
 const CHALLENGE_TTL_SECS: u64 = 300;
+/// How far ahead of this server's clock a challenge may claim to be issued.
+/// Covers ordinary skew; anything more is a clock that jumped backwards.
+const CHALLENGE_SKEW_SECS: u64 = 60;
 const ROOM_TICKET_BODY_LEN: usize = 40;
 const GRANT_BODY_LEN: usize = 16;
 const GRANT_TAG_LEN: usize = 32;
@@ -152,7 +155,14 @@ impl Keys {
         if issued_for != account_id {
             return ChallengeCheck::Invalid;
         }
-        if now_secs().saturating_sub(issued) > CHALLENGE_TTL_SECS {
+        let now = now_secs();
+        // A challenge from the future stays valid past its forged timestamp,
+        // since the age below saturates. Only a clock jumping backwards
+        // mints one, but rejecting it is free.
+        if issued > now.saturating_add(CHALLENGE_SKEW_SECS) {
+            return ChallengeCheck::Expired;
+        }
+        if now.saturating_sub(issued) > CHALLENGE_TTL_SECS {
             return ChallengeCheck::Expired;
         }
         ChallengeCheck::Valid {

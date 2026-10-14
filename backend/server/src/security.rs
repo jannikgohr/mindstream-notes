@@ -29,54 +29,71 @@ use crate::AppState;
 /// Wrong codes an account may get through before it has to wait.
 const MAX_CODE_FAILURES: u32 = 5;
 const CODE_FAILURE_WINDOW: Duration = Duration::from_secs(10 * 60);
-const BACKUP_CODES: usize = 10;
-/// Characters in a backup code, five bits each.
-const BACKUP_CODE_LEN: usize = 10;
 
-/// Counts wrong codes per account. A six-digit code is only as strong as the
-/// number of guesses allowed at it.
+/// Counts wrong guesses per account: a password or a six-digit code is only
+/// as strong as the number of guesses allowed at it.
 ///
 /// Kept in memory. A restart forgets the counts and a second process keeps
 /// its own, which loosens the limit by a small constant and no more.
-#[derive(Default)]
 pub struct CodeLimiter {
+    max_failures: u32,
+    window: Duration,
     failures: Mutex<HashMap<i64, (u32, Instant)>>,
 }
 
+impl Default for CodeLimiter {
+    /// The second-factor throttle: five wrong codes in ten minutes.
+    fn default() -> Self {
+        Self::new(MAX_CODE_FAILURES, CODE_FAILURE_WINDOW)
+    }
+}
+
 impl CodeLimiter {
+    pub(crate) fn new(max_failures: u32, window: Duration) -> Self {
+        Self {
+            max_failures,
+            window,
+            failures: Mutex::new(HashMap::new()),
+        }
+    }
+
     fn blocked_at(&self, account_id: i64, now: Instant) -> bool {
         let mut failures = self.failures.lock().unwrap_or_else(|e| e.into_inner());
         match failures.get(&account_id) {
-            Some((_, since)) if now.duration_since(*since) > CODE_FAILURE_WINDOW => {
+            Some((_, since)) if now.duration_since(*since) > self.window => {
                 failures.remove(&account_id);
                 false
             }
-            Some((count, _)) => *count >= MAX_CODE_FAILURES,
+            Some((count, _)) => *count >= self.max_failures,
             None => false,
         }
     }
 
     fn failed_at(&self, account_id: i64, now: Instant) {
         let mut failures = self.failures.lock().unwrap_or_else(|e| e.into_inner());
-        failures.retain(|_, (_, since)| now.duration_since(*since) <= CODE_FAILURE_WINDOW);
+        failures.retain(|_, (_, since)| now.duration_since(*since) <= self.window);
         failures.entry(account_id).or_insert((0, now)).0 += 1;
     }
 
-    fn blocked(&self, account_id: i64) -> bool {
+    pub(crate) fn blocked(&self, account_id: i64) -> bool {
         self.blocked_at(account_id, Instant::now())
     }
 
-    fn failed(&self, account_id: i64) {
+    pub(crate) fn failed(&self, account_id: i64) {
         self.failed_at(account_id, Instant::now());
     }
 
-    fn clear(&self, account_id: i64) {
+    pub(crate) fn clear(&self, account_id: i64) {
         self.failures
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&account_id);
     }
 }
+
+const BACKUP_CODES: usize = 10;
+/// Characters in a backup code, five bits each.
+const BACKUP_CODE_LEN: usize = 10;
 
 fn code_required() -> ApiError {
     ApiError::unauthorized(

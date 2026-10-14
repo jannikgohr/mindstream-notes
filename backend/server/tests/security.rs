@@ -976,3 +976,32 @@ async fn sweep_ends_idle_sessions_and_a_limit_of_zero_ends_none() {
     assert!(bob.signed_in().await);
     assert!(bob.signed_in().await);
 }
+
+/// Wrong passwords are held back per account, no matter how many addresses
+/// they come from: ten in ten minutes, then even the right password waits.
+/// Another account is unaffected.
+#[tokio::test]
+async fn wrong_passwords_lock_the_account_for_a_while() {
+    let ann = Person::signup(url(), "ann", false).await;
+    let bob = Person::signup(url(), "bob", false).await;
+    let guess = new_key();
+    for _ in 0..10 {
+        assert_eq!(
+            ann.login(&guess, &Extra::none(), "Elsewhere").await.err(),
+            Some(refused(401, "login_bad_signature"))
+        );
+    }
+    assert_eq!(
+        ann.login(&guess, &Extra::none(), "Elsewhere").await.err(),
+        Some(refused(429, "password_throttled"))
+    );
+    assert_eq!(
+        ann.login(&ann.login, &Extra::none(), "Elsewhere")
+            .await
+            .err(),
+        Some(refused(429, "password_throttled"))
+    );
+    bob.login(&bob.login, &Extra::none(), "Elsewhere")
+        .await
+        .expect("another account still signs in");
+}

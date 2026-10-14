@@ -64,6 +64,9 @@ pub struct Inner {
     pub(crate) connections: Arc<edge::Gate>,
     pub(crate) sockets: Arc<edge::Gate>,
     pub(crate) code_limiter: security::CodeLimiter,
+    /// Wrong passwords per account, same throttle shape as the codes above
+    /// but looser: people mistype passwords more often than codes.
+    pub(crate) password_limiter: security::CodeLimiter,
     pub(crate) hub: hub::Hub,
     pub(crate) config: Config,
 }
@@ -143,6 +146,7 @@ impl AppState {
             connections: gate(),
             sockets: gate(),
             code_limiter: security::CodeLimiter::default(),
+            password_limiter: security::CodeLimiter::new(10, std::time::Duration::from_secs(600)),
             hub: hub::Hub::default(),
             config,
         }));

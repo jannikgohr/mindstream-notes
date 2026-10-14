@@ -15,6 +15,7 @@ use axum::Json;
 use subtle::ConstantTimeEq;
 
 use crate::admin;
+use crate::edge::AuthAttempt;
 use crate::error::{ApiError, ApiResult};
 use crate::limits::{Entitlements, Usage};
 use crate::AppState;
@@ -47,6 +48,7 @@ fn no_such_account() -> ApiError {
 
 pub async fn account(
     State(state): State<AppState>,
+    _attempt: AuthAttempt,
     _admin: AdminToken,
     Path(username): Path<String>,
 ) -> ApiResult<Json<Usage>> {
@@ -58,6 +60,7 @@ pub async fn account(
 
 pub async fn set_entitlements(
     State(state): State<AppState>,
+    _attempt: AuthAttempt,
     _admin: AdminToken,
     Path(username): Path<String>,
     Json(entitlements): Json<Entitlements>,
@@ -77,6 +80,7 @@ pub async fn set_entitlements(
 /// Lift every limit from the account.
 pub async fn clear_entitlements(
     State(state): State<AppState>,
+    _attempt: AuthAttempt,
     _admin: AdminToken,
     Path(username): Path<String>,
 ) -> ApiResult<StatusCode> {

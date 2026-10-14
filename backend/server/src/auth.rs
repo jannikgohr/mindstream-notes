@@ -420,8 +420,9 @@ fn strip_port(host: &str) -> &str {
 /// replaying that login here.
 ///
 /// With `public_hosts` configured, the claim must be one of them. Otherwise
-/// it must match the request's own Host header; a request without one is let
-/// through, since there is nothing to compare against.
+/// it must match the request's own Host header; a request without one is
+/// refused, since a missing Host says nothing about where the login was
+/// really made for.
 fn host_allowed(public_hosts: &[String], request_host: Option<&str>, claimed: &str) -> bool {
     let claimed = strip_port(claimed);
     // An unset variable arrives as one empty name, which configures nothing.
@@ -432,7 +433,7 @@ fn host_allowed(public_hosts: &[String], request_host: Option<&str>, claimed: &s
     if configured.peek().is_some() {
         return configured.any(|host| strip_port(host).eq_ignore_ascii_case(claimed));
     }
-    request_host.is_none_or(|host| strip_port(host).eq_ignore_ascii_case(claimed))
+    request_host.is_some_and(|host| strip_port(host).eq_ignore_ascii_case(claimed))
 }
 
 fn host_matches(state: &AppState, headers: &HeaderMap, claimed: &str) -> bool {
@@ -521,10 +522,28 @@ pub(crate) async fn verify_signed(
         .as_slice()
         .try_into()
         .map_err(|_| ApiError::internal("a stored public key has the wrong length"))?;
+    // A password proof is held to its account's throttle before it is
+    // checked, so the check itself cannot be used to guess without bound.
+    // In memory, like the second-factor throttle: no database round-trip,
+    // so concurrent logins cannot wedge the pool waiting on each other.
+    if signed_by == SignedBy::Password && state.password_limiter.blocked(account.id) {
+        return Err(ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "password_throttled",
+            "Too many wrong passwords. Wait ten minutes and try again.",
+        ));
+    }
     let key = VerifyingKey::from_bytes(&key_bytes).map_err(|_| bad_signature())?;
     let signature = Signature::from_slice(&request.signature).map_err(|_| bad_signature())?;
-    key.verify_strict(&request.response, &signature)
-        .map_err(|_| bad_signature())?;
+    if key.verify_strict(&request.response, &signature).is_err() {
+        if signed_by == SignedBy::Password {
+            state.password_limiter.failed(account.id);
+        }
+        return Err(bad_signature());
+    }
+    if signed_by == SignedBy::Password {
+        state.password_limiter.clear(account.id);
+    }
 
     if account.disabled {
         return Err(ApiError::unauthorized(
@@ -733,6 +752,13 @@ mod tests {
             "localhost:18090"
         ));
         assert!(!host_allowed(&unset, Some("localhost:18090"), "elsewhere"));
+        // Without a Host header there is nothing to compare against, so the
+        // login is refused rather than let through — unless the expected
+        // names are configured, in which case they decide on their own.
+        assert!(!host_allowed(&[], None, "localhost:18090"));
+        assert!(!host_allowed(&unset, None, "localhost:18090"));
+        assert!(host_allowed(&public, None, "notes.example.com"));
+        assert!(!host_allowed(&public, None, "evil.example.com"));
     }
 
     #[test]

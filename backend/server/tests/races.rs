@@ -382,10 +382,10 @@ async fn invitation_withdrawn_while_its_acceptance_waits_grants_nothing() {
     assert_eq!(guest.try_add_item(&collection).await.0, 404);
 }
 
-/// A chunk is uploaded without taking the collection's lock. One that
-/// arrives while the collection is being deleted would land after the
-/// deletion dropped everything in there, and stay charged for with nothing
-/// able to use it. It is refused once it has waited the deletion out.
+/// A chunk upload takes the collection's write lock like any other write.
+/// One that arrives while the collection is being deleted waits the deletion
+/// out then finds it gone, instead of landing after the deletion dropped
+/// everything in there. It is refused, and nothing is stored or charged for.
 #[tokio::test]
 async fn chunk_uploaded_during_a_deletion_is_refused() {
     let _turn = ONE_AT_A_TIME.lock().await;
@@ -425,7 +425,7 @@ async fn chunk_uploaded_during_a_deletion_is_refused() {
             .as_u16()
     };
     let delete = async {
-        wait_until_blocked(&pool, "INSERT INTO chunks").await;
+        wait_until_blocked(&pool, "FOR UPDATE").await;
         deletion.commit().await.unwrap();
     };
     let (status, ()) = tokio::join!(upload, delete);
