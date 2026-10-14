@@ -5,13 +5,30 @@ mod common;
 
 use common::raw::{Device, Socket, READ_WRITE};
 
+/// Share `collection` with `guest` and wait until the server has told
+/// everyone about it. Sharing is news too, and on a busy server it can
+/// still be on its way when the next feed opens, which then hears it in
+/// the middle of a test about something else. The server acts on events
+/// in the order they happened, and the last one sharing makes tells the
+/// owner that the invitation was answered.
+async fn share(owner: &Device, collection: &str, guest: &Device) {
+    let mut settling = owner.feed().await;
+    owner.share(collection, guest, READ_WRITE).await;
+    while let Some((_, invitations)) = settling.news().await {
+        if invitations {
+            return;
+        }
+    }
+    panic!("the owner never heard that the invitation was answered");
+}
+
 #[tokio::test]
 async fn members_hear_about_a_push_and_the_pusher_does_not() {
     let owner = Device::signup(common::server(), "owner").await;
     let guest = Device::signup(common::server(), "guest").await;
     let stranger = Device::signup(common::server(), "stranger").await;
     let collection = owner.create_collection().await;
-    owner.share(&collection, &guest, READ_WRITE).await;
+    share(&owner, &collection, &guest).await;
 
     let mut owner_feed = owner.feed().await;
     let mut guest_feed = guest.feed().await;
@@ -34,7 +51,7 @@ async fn burst_of_pushes_is_one_piece_of_news() {
     let owner = Device::signup(common::server(), "owner").await;
     let guest = Device::signup(common::server(), "guest").await;
     let collection = owner.create_collection().await;
-    owner.share(&collection, &guest, READ_WRITE).await;
+    share(&owner, &collection, &guest).await;
     let mut guest_feed = guest.feed().await;
 
     let pushes = (0..5).map(|_| owner.add_item(&collection));
