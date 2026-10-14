@@ -153,6 +153,8 @@ pub struct Config {
 
     /// Serve the route that wipes and recreates an account. For the client
     /// library's integration tests only; never enable it on a real server.
+    /// Release builds do not contain the route at all, and even a debug
+    /// build refuses to start with it on a non-loopback address.
     #[arg(long, env = "MINDSTREAM_TEST_RESET", default_value_t = false)]
     pub test_reset: bool,
 }

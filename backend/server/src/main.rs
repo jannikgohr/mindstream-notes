@@ -200,14 +200,24 @@ async fn manage_users(
             max_item_mib,
             read_only,
         } => {
+            let mib_to_bytes = |mib: Option<i64>| -> Result<Option<i64>, String> {
+                mib.map(|mib| {
+                    mib.checked_mul(MIB)
+                        .ok_or_else(|| format!("{mib} MiB does not fit"))
+                })
+                .transpose()
+            };
             let entitlements = Entitlements {
                 plan,
-                storage_limit_bytes: storage_mib.map(|mib| mib * MIB),
+                storage_limit_bytes: mib_to_bytes(storage_mib)?,
                 max_spaces,
                 max_members_per_space: max_members,
-                max_item_bytes: max_item_mib.map(|mib| mib * MIB),
+                max_item_bytes: mib_to_bytes(max_item_mib)?,
                 read_only,
             };
+            if let Err(field) = entitlements.validate() {
+                return Err(format!("a limit cannot be negative: {field}").into());
+            }
             let found = admin::set_entitlements(state, &username, Some(&entitlements)).await?;
             (username, found, "limited")
         }
@@ -271,6 +281,33 @@ async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
+/// Whether `MINDSTREAM_LISTEN` keeps the server on this machine. Anything
+/// else may be reachable by strangers, so dangerous settings refuse it.
+fn listen_is_loopback(listen: &str) -> bool {
+    use std::net::ToSocketAddrs;
+
+    if let Ok(addr) = listen.parse::<std::net::SocketAddr>() {
+        return addr.ip().is_loopback();
+    }
+    // A hostname: every address it resolves to must be loopback, and it must
+    // resolve to something. Unresolvable or unparsable means not provably
+    // loopback, which fails closed.
+    if let Some((host, _)) = listen.rsplit_once(':') {
+        let host = host.trim_matches(|c| c == '[' || c == ']');
+        if let Ok(addrs) = format!("{host}:0").to_socket_addrs() {
+            let mut any = false;
+            for addr in addrs {
+                any = true;
+                if !addr.ip().is_loopback() {
+                    return false;
+                }
+            }
+            return any;
+        }
+    }
+    false
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -293,6 +330,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::Serve => {
             let listen = cli.config.listen.clone();
+            if cli.config.test_reset && !listen_is_loopback(&listen) {
+                // The reset route wipes and recreates any account without
+                // authentication. Refuse to serve it anywhere but loopback,
+                // where only this machine can reach it.
+                return Err(format!(
+                    "refusing to start with MINDSTREAM_TEST_RESET=true on {listen}: \
+                     the account reset route must only ever listen on loopback"
+                )
+                .into());
+            }
             if cli.config.test_reset {
                 tracing::warn!("the account reset route is on; never run a real server this way");
             }
@@ -303,4 +350,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_listen_addresses_are_recognised() {
+        assert!(listen_is_loopback("127.0.0.1:3735"));
+        assert!(listen_is_loopback("[::1]:3735"));
+        assert!(listen_is_loopback("localhost:3735"));
+        assert!(!listen_is_loopback("0.0.0.0:3735"));
+        assert!(!listen_is_loopback("[::]:3735"));
+        assert!(!listen_is_loopback("192.168.1.10:3735"));
+        assert!(!listen_is_loopback("not an address"));
+        assert!(!listen_is_loopback(""));
+    }
 }

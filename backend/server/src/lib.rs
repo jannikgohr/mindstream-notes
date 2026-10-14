@@ -25,6 +25,11 @@ mod links;
 mod rooms;
 mod security;
 mod sharing;
+// The account reset route is compiled out of release builds entirely, so no
+// production artifact can serve it whatever its configuration says. Debug
+// builds (developer machines, the client library's conformance run) keep it
+// behind the TEST_RESET setting.
+#[cfg(debug_assertions)]
 mod test_reset;
 #[cfg(test)]
 mod testing;
@@ -301,6 +306,8 @@ pub fn router(state: AppState) -> Router {
         .route("/mindstream/link/{uid}/", delete(links::revoke))
         .route("/mindstream/link/{uid}/open/", post(links::open))
         .route("/mindstream/link/{uid}/claim/", post(links::claim));
+    // See the module gate above: release builds never serve this route.
+    #[cfg(debug_assertions)]
     if state.config.test_reset {
         api = api.route("/test/authentication/reset/", post(test_reset::reset));
     }
