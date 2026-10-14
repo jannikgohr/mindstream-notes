@@ -845,6 +845,31 @@ async fn recovery_key_can_be_set_up_with_the_account() {
 }
 
 /// Set how long ago the device last used its session.
+/// Wait until the server has noted that the device's session was used.
+async fn used_again(pool: &sqlx::PgPool, person: &Person, device: &str) {
+    let noted = async {
+        loop {
+            let recent: bool = sqlx::query_scalar(
+                "SELECT s.last_used_at > now() - interval '1 minute'
+                 FROM sessions s JOIN accounts a ON a.id = s.account_id
+                 WHERE a.username = $1 AND s.device_name = $2",
+            )
+            .bind(&person.name)
+            .bind(device)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            if recent {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(5), noted)
+        .await
+        .expect("the use was noted");
+}
+
 async fn unused_for(pool: &sqlx::PgPool, person: &Person, device: &str, days: i32) {
     let changed = sqlx::query(
         "UPDATE sessions SET last_used_at = now() - make_interval(days => $3)
@@ -876,6 +901,9 @@ async fn session_nobody_used_for_too_long_ends_when_its_device_comes_back() {
     // Within the limit the device is let in, and that counts as use.
     unused_for(&pool, &laptop, "Phone", 29).await;
     assert!(phone.signed_in().await);
+    // The use is written down after the answer. Until it is, it could land
+    // on top of the next step and give the session back its time.
+    used_again(&pool, &laptop, "Phone").await;
 
     // Past it, the request that comes back is refused like any request with
     // a token the server does not know, and what the session had open goes.
