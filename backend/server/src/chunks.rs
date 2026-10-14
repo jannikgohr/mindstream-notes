@@ -444,7 +444,9 @@ pub async fn upload_chunk(
         return Err(ApiError::bad_request("Chunk is too large."));
     }
     let mut tx = state.pool.begin().await?;
-    let collection = membership(&mut tx, user.account_id, &collection_uid, false).await?;
+    // The write lock, like every other write to the collection: uploads
+    // change its bytes and rows, so a deletion racing one must wait for it.
+    let collection = membership(&mut tx, user.account_id, &collection_uid, true).await?;
     collection.require_write()?;
     collection.require_live()?;
     if let Some(limits) = limits::for_writes(&mut tx, collection.owner_id).await? {
@@ -512,12 +514,21 @@ pub async fn download_chunk(
     check_uid(&chunk_uid)?;
     let mut conn = state.pool.acquire().await?;
     let collection = membership(&mut conn, user.account_id, &collection_uid, false).await?;
+    // The chunk must belong to the item named in the path, in some revision
+    // the server still keeps. Without this any member could fetch any chunk
+    // of the collection by guessing its uid, and probe which uids exist.
+    // (Uploads stay unbound on purpose: a chunk is uploaded before the
+    // revision that will refer to it.)
     let row: Option<ChunkRow> = sqlx::query_as(
-        "SELECT id, size, data, blob_key, blob_offset FROM chunks
-         WHERE collection_id = $1 AND uid = $2",
+        "SELECT c.id, c.size, c.data, c.blob_key, c.blob_offset FROM chunks c
+         WHERE c.collection_id = $1 AND c.uid = $2
+           AND EXISTS (SELECT 1 FROM items i JOIN revisions r ON r.item_id = i.id
+                       WHERE i.collection_id = $1 AND i.uid = $3
+                         AND r.chunk_ids @> ARRAY[c.id])",
     )
     .bind(collection.id)
     .bind(&chunk_uid)
+    .bind(&item_uid)
     .fetch_optional(&mut *conn)
     .await?;
     let row = row.ok_or_else(|| ApiError::not_found("Chunk"))?;
