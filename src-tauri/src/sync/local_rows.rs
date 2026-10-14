@@ -124,11 +124,22 @@ pub(super) fn load_dirty_notes(db: &Db, scope: Option<&str>) -> AppResult<Vec<Di
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     })?;
 
-    // Hydrate tags in a second pass to keep the row mapping simple.
+    if rows.is_empty() {
+        return Ok(rows);
+    }
+
+    // Only the notes being pushed need tags. Walking the entire tag table
+    // once per visited space makes a small edit cost the size of the vault.
     let mut by_id: HashMap<String, Vec<String>> = HashMap::new();
     db.with_conn(|c| {
-        let mut stmt = c.prepare("SELECT note_id, tag FROM note_tags ORDER BY tag")?;
-        let mut rs = stmt.query([])?;
+        let mut stmt = c.prepare(
+            "SELECT t.note_id, t.tag FROM notes n
+             JOIN note_tags t ON t.note_id = n.id
+             WHERE n.dirty = 1
+               AND ((?1 IS NULL AND n.share_scope_id IS NULL) OR n.share_scope_id = ?1)
+             ORDER BY t.tag",
+        )?;
+        let mut rs = stmt.query(params![scope])?;
         while let Some(r) = rs.next()? {
             let id: String = r.get(0)?;
             let tag: String = r.get(1)?;

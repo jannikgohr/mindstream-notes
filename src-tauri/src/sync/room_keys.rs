@@ -9,6 +9,9 @@
 //!
 //! Now a sync keeps it, in a table of its own, sealed. Opening a note reads
 //! it there and asks the server for the ticket alone.
+//! A push can reuse it too, when the sealed item uid and revision match
+//! the server's current revision. Older entries without that binding still
+//! open rooms, but a push fetches their content to learn the current key.
 //!
 //! **What seals it.** The system's keystore already holds one secret for
 //! the signed-in session, the one the saved session is encrypted under. The
@@ -31,6 +34,7 @@
 //! A key that cannot be opened is treated as one that is not there, and the
 //! caller goes back to asking the server.
 
+use std::collections::HashMap;
 use std::fmt;
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
@@ -38,6 +42,7 @@ use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use etebase::utils::randombytes;
 use hkdf::Hkdf;
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
 use crate::db::Db;
@@ -112,7 +117,23 @@ impl Seal {
 /// The keys a sync came across, by note id, until the sync is over and they
 /// are sealed. In memory only, and never printed.
 #[derive(Default)]
-pub struct Learned(Vec<(String, Vec<u8>)>);
+pub struct Learned(HashMap<String, RevisionKey>);
+
+/// The revision is sealed together with the key. A key learned for an
+/// older revision must not overwrite one another device has since changed.
+#[derive(Serialize, Deserialize)]
+struct RevisionKey {
+    uid: String,
+    etag: String,
+    key: Vec<u8>,
+}
+
+impl RevisionKey {
+    fn for_revision(&self, uid: &str, etag: &str) -> Option<&[u8]> {
+        (self.uid == uid && self.etag == etag && !self.key.is_empty())
+            .then_some(self.key.as_slice())
+    }
+}
 
 impl fmt::Debug for Learned {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -123,10 +144,21 @@ impl fmt::Debug for Learned {
 impl Learned {
     /// Remember the key a note was pulled or pushed with. A note from
     /// before live sessions has none, and that is not remembered.
-    pub(super) fn note(&mut self, note_id: &str, key: &[u8]) {
+    pub(super) fn note(&mut self, note_id: &str, key: &[u8], uid: &str, etag: &str) {
         if !key.is_empty() {
-            self.0.push((note_id.to_string(), key.to_vec()));
+            self.0.insert(
+                note_id.to_string(),
+                RevisionKey {
+                    uid: uid.to_string(),
+                    etag: etag.to_string(),
+                    key: key.to_vec(),
+                },
+            );
         }
+    }
+
+    pub(super) fn for_revision(&self, note_id: &str, uid: &str, etag: &str) -> Option<&[u8]> {
+        self.0.get(note_id)?.for_revision(uid, etag)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -150,7 +182,9 @@ pub fn keep(db: &Db, seal: Option<&Seal>, learned: Learned) -> AppResult<usize> 
         let tx = conn.transaction()?;
         let mut kept = 0;
         for (note_id, key) in &learned.0 {
-            kept += store(&tx, seal, note_id, key)?;
+            let bytes = rmp_serde::to_vec_named(key)
+                .map_err(|e| AppError::InvalidArg(format!("encode room key revision: {e}")))?;
+            kept += store(&tx, seal, note_id, &bytes)?;
         }
         tx.commit()?;
         Ok(kept)
@@ -174,6 +208,33 @@ pub fn store(conn: &Connection, seal: &Seal, note_id: &str, key: &[u8]) -> AppRe
 
 /// The key kept for a note, if there is one and this session can open it.
 pub fn load(conn: &Connection, seal: &Seal, note_id: &str) -> AppResult<Option<Vec<u8>>> {
+    Ok(load_sealed(conn, seal, note_id)?.and_then(|bytes| {
+        // Older caches and keys fetched just to open a room have no
+        // revision. They still open rooms, but cannot shortcut a push.
+        if bytes.len() == 32 {
+            Some(bytes)
+        } else {
+            rmp_serde::from_slice::<RevisionKey>(&bytes)
+                .ok()
+                .map(|entry| entry.key)
+        }
+    }))
+}
+
+pub(super) fn load_revision(
+    conn: &Connection,
+    seal: &Seal,
+    note_id: &str,
+    uid: &str,
+    etag: &str,
+) -> AppResult<Option<Vec<u8>>> {
+    Ok(load_sealed(conn, seal, note_id)?.and_then(|bytes| {
+        let entry: RevisionKey = rmp_serde::from_slice(&bytes).ok()?;
+        entry.for_revision(uid, etag).map(<[u8]>::to_vec)
+    }))
+}
+
+fn load_sealed(conn: &Connection, seal: &Seal, note_id: &str) -> AppResult<Option<Vec<u8>>> {
     let sealed: Option<Vec<u8>> = conn
         .query_row(
             "SELECT sealed FROM room_keys WHERE note_id = ?1",
@@ -329,15 +390,15 @@ mod tests {
         note(&db, "note_b");
 
         let mut learned = Learned::default();
-        learned.note("note_a", &[1; 32]);
-        learned.note("note_b", &[2; 32]);
-        learned.note("old_note", &[]);
-        learned.note("gone", &[3; 32]);
+        learned.note("note_a", &[1; 32], "uid", "etag");
+        learned.note("note_b", &[2; 32], "uid", "etag");
+        learned.note("old_note", &[], "uid", "etag");
+        learned.note("gone", &[3; 32], "uid", "etag");
         // Pushed after it was pulled, with the key the push carried.
-        learned.note("note_a", &[4; 32]);
-        assert_eq!(format!("{learned:?}"), "Learned(4 keys)");
+        learned.note("note_a", &[4; 32], "uid", "etag");
+        assert_eq!(format!("{learned:?}"), "Learned(3 keys)");
 
-        assert_eq!(keep(&db, Some(&seal), learned).unwrap(), 3);
+        assert_eq!(keep(&db, Some(&seal), learned).unwrap(), 2);
         db.with_conn(|conn| {
             assert_eq!(
                 load(conn, &seal, "note_a")?.as_deref(),
@@ -358,9 +419,67 @@ mod tests {
         let db = open_memory_for_tests();
         note(&db, "note_a");
         let mut learned = Learned::default();
-        learned.note("note_a", &KEY);
+        learned.note("note_a", &KEY, "uid", "etag");
         assert_eq!(keep(&db, None, learned).unwrap(), 0);
         assert_eq!(stored(&db, "note_a"), None);
+    }
+
+    #[test]
+    fn push_cache_requires_the_same_item_revision_and_session() {
+        let db = open_memory_for_tests();
+        let seal = seal_of(1);
+        note(&db, "note_a");
+        let mut learned = Learned::default();
+        learned.note("note_a", &KEY, "item", "revision");
+        assert_eq!(
+            learned.for_revision("note_a", "item", "revision"),
+            Some(&KEY[..])
+        );
+        assert_eq!(
+            learned.for_revision("note_a", "moved_item", "revision"),
+            None
+        );
+        assert_eq!(learned.for_revision("note_a", "item", "new_revision"), None);
+        keep(&db, Some(&seal), learned).unwrap();
+
+        db.with_conn(|conn| {
+            assert_eq!(
+                load_revision(conn, &seal, "note_a", "item", "revision")?,
+                Some(KEY.to_vec())
+            );
+            assert_eq!(
+                load_revision(conn, &seal, "note_a", "moved_item", "revision")?,
+                None
+            );
+            assert_eq!(
+                load_revision(conn, &seal, "note_a", "item", "new_revision")?,
+                None
+            );
+            assert_eq!(
+                load_revision(conn, &seal_of(2), "note_a", "item", "revision")?,
+                None
+            );
+            assert_eq!(load(conn, &seal, "note_a")?, Some(KEY.to_vec()));
+
+            // A legacy key still opens a room, but has no proof of which
+            // revision it came from and must not be used to replace content.
+            store(conn, &seal, "note_a", &KEY)?;
+            assert_eq!(load(conn, &seal, "note_a")?, Some(KEY.to_vec()));
+            assert_eq!(
+                load_revision(conn, &seal, "note_a", "item", "revision")?,
+                None
+            );
+            conn.execute(
+                "UPDATE room_keys SET sealed = X'010203' WHERE note_id = 'note_a'",
+                [],
+            )?;
+            assert_eq!(
+                load_revision(conn, &seal, "note_a", "item", "revision")?,
+                None
+            );
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]

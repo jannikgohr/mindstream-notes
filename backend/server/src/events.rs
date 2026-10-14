@@ -6,6 +6,7 @@
 //! back, a second server process hears what the first one did, and so does
 //! the server when the change came from the admin command line.
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -158,26 +159,46 @@ async fn apply(state: &AppState, event: Event) -> Result<(), sqlx::Error> {
 pub(crate) async fn revalidate(state: &AppState) -> Result<(), sqlx::Error> {
     let open = state.hub.open_sessions();
     if !open.is_empty() {
-        let standing = auth::standing_sessions(&state.pool, &open).await?;
+        let standing: HashSet<_> = auth::standing_sessions(&state.pool, &open)
+            .await?
+            .into_iter()
+            .collect();
         for session in open {
             if !standing.contains(&session) {
                 state.hub.session_closed(session);
             }
         }
     }
-    for (collection, account) in state.hub.room_memberships() {
-        let access: Option<i16> = sqlx::query_scalar(
-            "SELECT m.access_level FROM members m
-             JOIN accounts a ON a.id = m.account_id AND NOT a.disabled
-             WHERE m.collection_id = $1 AND m.account_id = $2",
-        )
-        .bind(collection)
-        .bind(account)
-        .fetch_optional(&state.pool)
-        .await?;
+    for (collection, account, access) in
+        standing_memberships(&state.pool, state.hub.room_memberships()).await?
+    {
         state.hub.membership_changed(collection, account, access);
     }
     rooms::close_deleted_rooms(state, None).await
+}
+
+/// Keep the requested pairs together: independent ANY filters would also
+/// match memberships of these accounts in other requested collections.
+async fn standing_memberships(
+    pool: &sqlx::PgPool,
+    pairs: Vec<(i64, i64)>,
+) -> Result<Vec<(i64, i64, Option<i16>)>, sqlx::Error> {
+    if pairs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (collections, accounts): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
+    sqlx::query_as(
+        "SELECT wanted.collection_id, wanted.account_id,
+                CASE WHEN NOT a.disabled THEN m.access_level END
+         FROM UNNEST($1::bigint[], $2::bigint[]) AS wanted(collection_id, account_id)
+         LEFT JOIN members m ON m.collection_id = wanted.collection_id
+                            AND m.account_id = wanted.account_id
+         LEFT JOIN accounts a ON a.id = m.account_id",
+    )
+    .bind(collections)
+    .bind(accounts)
+    .fetch_all(pool)
+    .await
 }
 
 /// Keeps track of whether the open sockets can still be vouched for.
@@ -305,6 +326,65 @@ mod tests {
     use super::*;
     use crate::hub::{FeedSignal, Joined, RoomKey};
     use crate::wire::{ACCESS_ADMIN, ACCESS_READ_WRITE};
+
+    #[tokio::test]
+    async fn membership_batch_preserves_pairs_and_reports_lost_access() {
+        let pool = crate::testing::pool().await;
+        let prefix = crate::keys::to_base64(&crate::keys::random_bytes::<16>());
+        let accounts: Vec<i64> = sqlx::query_scalar(
+            "INSERT INTO accounts (username, username_key, email, version, salt,
+                                   login_pubkey, pubkey, encrypted_content, disabled)
+             SELECT $1 || n, $1 || n, '', 1, ''::bytea, ''::bytea, ''::bytea, ''::bytea, n = 3
+             FROM generate_series(1, 3) n RETURNING id",
+        )
+        .bind(&prefix)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        let collections: Vec<i64> = sqlx::query_scalar(
+            "INSERT INTO collections (uid, owner_id, stoken)
+             SELECT $1 || n, $2, 0 FROM generate_series(1, 2) n RETURNING id",
+        )
+        .bind(&prefix)
+        .bind(accounts[0])
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO members (collection_id, account_id, access_level, encryption_key, collection_type, stoken)
+             SELECT c, a, 1, ''::bytea, ''::bytea, 0
+             FROM UNNEST($1::bigint[]) c CROSS JOIN UNNEST($2::bigint[]) a",
+        ).bind(&collections).bind(&accounts).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM members WHERE collection_id = $1 AND account_id = $2")
+            .bind(collections[1])
+            .bind(accounts[1])
+            .execute(&pool)
+            .await
+            .unwrap();
+        let pairs = vec![
+            (collections[0], accounts[0]),
+            (collections[1], accounts[1]),
+            (collections[0], accounts[2]),
+        ];
+        let mut actual = standing_memberships(&pool, pairs).await.unwrap();
+        actual.sort_unstable();
+        let mut expected = vec![
+            (collections[0], accounts[0], Some(1)),
+            (collections[1], accounts[1], None),
+            (collections[0], accounts[2], None),
+        ];
+        expected.sort_unstable();
+        assert_eq!(actual, expected);
+        assert!(standing_memberships(&pool, Vec::new())
+            .await
+            .unwrap()
+            .is_empty());
+        sqlx::query("DELETE FROM accounts WHERE id = ANY($1)")
+            .bind(accounts)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
 
     #[test]
     fn sockets_are_only_given_up_on_after_the_grace_period() {

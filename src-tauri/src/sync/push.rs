@@ -178,22 +178,53 @@ pub(super) fn push_notes(
     report: &mut SyncReport,
     scope: Option<&str>,
     room_keys: &mut room_keys::Learned,
+    seal: Option<&room_keys::Seal>,
 ) -> AppResult<()> {
     let dirty = load_dirty_notes(db, scope)?;
     if dirty.is_empty() {
         return drain_tombstones(db, im, "note", scope);
     }
 
-    // For existing items we fetch first so we can extract the live
-    // crypto_key off the server-side payload and re-use it in the new one.
-    // Rotating the key on every push would break peers' in-progress live
-    // sessions. So these come with their content, a batch per request.
-    // For first-time pushes we mint a fresh key.
+    // The revision is enough when the key learned from that exact revision
+    // is still here. Prefer this sync's pull, then the sealed cache. A miss
+    // fetches the content as before; a stale key must never be pushed over
+    // a newer one. The transaction's etag handles changes after this read.
     let mut existing = fetch_existing(
         im,
         &uids_on_server(dirty.iter().map(|row| &row.etebase_uid)),
-        Existing::Content,
+        Existing::Revision,
     )?;
+    let mut cached = db.with_conn(|conn| {
+        let mut cached = HashMap::new();
+        for row in &dirty {
+            let Some(item) = row.etebase_uid.as_ref().and_then(|uid| existing.get(uid)) else {
+                continue;
+            };
+            if item.is_deleted() {
+                continue;
+            }
+            let key = match room_keys.for_revision(&row.id, item.uid(), item.etag()) {
+                Some(key) => Some(key.to_vec()),
+                None => match seal {
+                    Some(seal) => {
+                        room_keys::load_revision(conn, seal, &row.id, item.uid(), item.etag())?
+                    }
+                    None => None,
+                },
+            };
+            if let Some(key) = key {
+                cached.insert(item.uid().to_string(), key);
+            }
+        }
+        Ok(cached)
+    })?;
+    let missing: Vec<&str> = existing
+        .values()
+        .filter(|item| !item.is_deleted() && !cached.contains_key(item.uid()))
+        .map(Item::uid)
+        .collect();
+    let fetched = fetch_existing(im, &missing, Existing::Content)?;
+    existing.extend(fetched);
 
     let mut prepared: Vec<(Item, String)> = Vec::with_capacity(dirty.len());
     // The key each note goes up with: carried over, or made here for a note
@@ -203,16 +234,18 @@ pub(super) fn push_notes(
         let (existing_item, key_for_payload): (Option<Item>, Vec<u8>) = match &row.etebase_uid {
             Some(uid) => {
                 let existing = take_existing(&mut existing, "note", uid)?;
-                let extracted = if !existing.is_deleted() && !existing.is_missing_content() {
-                    existing
-                        .content()
-                        .ok()
-                        .and_then(|raw| rmp_serde::from_slice::<NotePayload>(&raw).ok())
-                        .map(|p| p.crypto_key)
-                        .filter(|k| !k.is_empty())
-                } else {
-                    None
-                };
+                let extracted = cached.remove(uid).or_else(|| {
+                    if !existing.is_deleted() && !existing.is_missing_content() {
+                        existing
+                            .content()
+                            .ok()
+                            .and_then(|raw| rmp_serde::from_slice::<NotePayload>(&raw).ok())
+                            .map(|p| p.crypto_key)
+                            .filter(|k| !k.is_empty())
+                    } else {
+                        None
+                    }
+                });
                 (Some(existing), extracted.unwrap_or_else(|| randombytes(32)))
             }
             None => (None, randombytes(32)),
@@ -262,8 +295,8 @@ pub(super) fn push_notes(
         .map_err(|e| AppError::from_server("transaction notes", e))?;
     // Only now are these the keys the server has. A push that was refused
     // made keys nobody will ever see.
-    for (note_id, key) in &keys {
-        room_keys.note(note_id, key);
+    for ((note_id, key), item) in keys.iter().zip(&items) {
+        room_keys.note(note_id, key, item.uid(), item.etag());
     }
 
     let pushed = items.len();
@@ -509,7 +542,7 @@ pub(super) fn refetch_and_remerge(
             // etag was stale. Inherit the new etag and retry.
             let bytes = item.content()?;
             let meta = item.meta()?;
-            *item = im.fetch(server.uid(), None)?;
+            *item = server;
             item.set_meta(&meta)?;
             item.set_content(&bytes)?;
             continue;
@@ -536,7 +569,7 @@ pub(super) fn refetch_and_remerge(
                 local_payload.tags = tags_crdt::tags(&local_payload.tags_state);
                 let merged = rmp_serde::to_vec_named(&local_payload)
                     .map_err(|e| EtebaseError::Generic(format!("re-encode merged note: {e}")))?;
-                *item = im.fetch(server.uid(), None)?;
+                *item = server;
                 let local_meta = item.meta()?;
                 item.set_meta(&local_meta)?;
                 item.set_content(&merged)?;
@@ -546,7 +579,7 @@ pub(super) fn refetch_and_remerge(
         // Folder (or unknown): take the local payload, ride the server etag.
         let local_bytes = item.content()?;
         let local_meta = item.meta()?;
-        *item = im.fetch(server.uid(), None)?;
+        *item = server;
         item.set_meta(&local_meta)?;
         item.set_content(&local_bytes)?;
     }

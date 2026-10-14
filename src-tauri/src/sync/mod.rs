@@ -230,13 +230,13 @@ pub(crate) fn run_session(
     account: &Account,
     self_username: Option<&str>,
 ) -> Result<Option<SyncDelta>, String> {
-    match run(db, account, self_username) {
+    let seal = auth::room_key_seal(app);
+    match run(db, account, self_username, seal.as_ref()) {
         Ok(mut delta) => {
             // What the sync saw of the notes' keys is kept for the next
             // time one of them is opened. Not keeping it costs requests
             // then and nothing else, so a failure here is only logged.
             let learned = std::mem::take(&mut delta.room_keys);
-            let seal = auth::room_key_seal(app);
             if let Err(err) = room_keys::keep(db, seal.as_ref(), learned) {
                 log::warn!("[sync] could not keep the room keys of this sync: {err}");
             }
@@ -473,7 +473,12 @@ fn open_vault(db: &Db, cm: &CollectionManager, changes: &Changes) -> AppResult<O
     ensure_collection(db, cm, KIND_VAULT, COLLECTION_TYPE_VAULT, &changes.vault).map(Some)
 }
 
-fn run(db: &Db, account: &Account, self_username: Option<&str>) -> Result<SyncDelta, RunError> {
+fn run(
+    db: &Db,
+    account: &Account,
+    self_username: Option<&str>,
+    seal: Option<&room_keys::Seal>,
+) -> Result<SyncDelta, RunError> {
     let mut delta = SyncDelta::default();
     let cm = account
         .collection_manager()
@@ -547,10 +552,10 @@ fn run(db: &Db, account: &Account, self_username: Option<&str>) -> Result<SyncDe
         }
     }
     scopes::drain_scope_tombstones(db, &shared.open);
-    scopes::push_scopes(db, &cm, &shared.open, &mut delta);
+    scopes::push_scopes(db, &cm, &shared.open, &mut delta, seal);
 
     if let Some(vault_im) = &vault_im {
-        if let Err(err) = push_vault(db, vault_im, &mut delta.report, &mut delta.room_keys) {
+        if let Err(err) = push_vault(db, vault_im, &mut delta.report, &mut delta.room_keys, seal) {
             // A full vault is not a sync that failed. Everything was
             // pulled, the shared folders were pushed, and what could not go
             // up waits where it is. The user is told which limit it was.
@@ -584,11 +589,12 @@ fn push_vault(
     im: &ItemManager,
     report: &mut SyncReport,
     room_keys: &mut room_keys::Learned,
+    seal: Option<&room_keys::Seal>,
 ) -> AppResult<()> {
     // Folders first, so that no device ever pulls a note whose folder the
     // server has not been told about.
     push_folders(db, im, report, None)?;
-    push_notes(db, im, report, None, room_keys)?;
+    push_notes(db, im, report, None, room_keys, seal)?;
     push_assets(db, im, report, None)?;
     push_signatures(db, im, report)
 }

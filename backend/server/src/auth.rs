@@ -93,10 +93,15 @@ impl FromRequestParts<AppState> for AuthUser {
         if stale {
             let pool = state.pool.clone();
             tokio::spawn(async move {
-                let _ = sqlx::query("UPDATE sessions SET last_used_at = now() WHERE id = $1")
-                    .bind(session_id)
-                    .execute(&pool)
-                    .await;
+                // Several requests may have seen the same stale timestamp.
+                // Once one refreshes it, the others have nothing to write.
+                let _ = sqlx::query(&format!(
+                    "UPDATE sessions SET last_used_at = now() WHERE id = $1
+                     AND last_used_at < now() - interval '{LAST_USED_REFRESH}'"
+                ))
+                .bind(session_id)
+                .execute(&pool)
+                .await;
             });
         }
         Ok(Self {

@@ -34,7 +34,7 @@ use crate::sharing::{
 };
 
 use super::{
-    drain_tombstones, pull_space, push_assets, push_folders, push_notes, save_stoken,
+    drain_tombstones, pull_space, push_assets, push_folders, push_notes, room_keys, save_stoken,
     scopes_to_fetch, scopes_with_local_work, Changes, Held, LimitReached, SpacePull, SyncDelta,
 };
 
@@ -238,9 +238,10 @@ pub(super) fn push_scopes(
     cm: &CollectionManager,
     scopes: &[OpenScope],
     delta: &mut SyncDelta,
+    seal: Option<&room_keys::Seal>,
 ) {
     for open in scopes {
-        if let Err(e) = push_one_scope(db, cm, open, delta) {
+        if let Err(e) = push_one_scope(db, cm, open, delta, seal) {
             log::warn!("[sync] shared folder {} push failed: {e}", open.scope());
             // The one failure the user can do something about, or ask the
             // folder's owner to.
@@ -258,6 +259,7 @@ fn push_one_scope(
     cm: &CollectionManager,
     open: &OpenScope,
     delta: &mut SyncDelta,
+    seal: Option<&room_keys::Seal>,
 ) -> AppResult<()> {
     let scope = open.scope();
     if open.writable() {
@@ -270,6 +272,7 @@ fn push_one_scope(
             &mut delta.report,
             Some(scope),
             &mut delta.room_keys,
+            seal,
         )?;
         push_assets(db, &open.im, &mut delta.report, Some(scope))?;
     }

@@ -479,7 +479,12 @@ impl Applier<'_> {
                 apply_note(self.db, item, scope, preserve).map(|pulled| match pulled {
                     Pulled::Done(note) => {
                         if let Some(note) = note {
-                            self.delta.room_keys.note(&note.id, &note.room_key);
+                            self.delta.room_keys.note(
+                                &note.id,
+                                &note.room_key,
+                                item.uid(),
+                                item.etag(),
+                            );
                             self.delta.notes_pulled_ids.push(note.id);
                         }
                         report.notes_pulled += 1;

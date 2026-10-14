@@ -317,12 +317,15 @@ is a write.
 
   Built, for every kind of item and for deletions. A push builds the next
   revision of an item on the item as the server has it. It now asks for
-  those by name, a batch per request. Only a note is asked for with its
-  content, because the key of its live sessions is in there and has to be
-  carried over. Folders, attachments, signatures and anything about to be
-  deleted come as their revision alone, so replacing an 8 MiB attachment no
-  longer downloads the old 8 MiB first. A change built on a revision that
-  is no longer the latest is refused as before.
+  those by name, a batch per request. Notes come as their revision alone
+  when the key of their live sessions is already on the device, from this
+  sync's pull or the sealed cache. The cached key must name the same item
+  and revision; otherwise the content is fetched to read its current key.
+  Folders, attachments, signatures and anything about to be deleted come
+  as their revision alone too, so replacing an 8 MiB attachment no longer
+  downloads the old 8 MiB first. A change built on a revision that is no
+  longer the latest is refused as before. A conflict retry reuses the item
+  it fetched to merge, rather than downloading it again.
 
 - **Stoken order must match commit order.** If two transactions commit out of
   order, a device whose cursor has already passed the slower one never sees it.
