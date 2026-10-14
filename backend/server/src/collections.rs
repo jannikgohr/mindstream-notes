@@ -778,7 +778,10 @@ fn is_tombstone(item: &wire::Item, existing: &HashMap<String, ExistingItem>) -> 
     item.content.deleted
         && existing.contains_key(&item.uid)
         && item.content.meta.len() <= MAX_TOMBSTONE_META_BYTES
-        && item.content.chunks.iter().all(|chunk| chunk.1.is_none())
+        // A deletion brings nothing to store. Chunk references would keep
+        // existing chunks alive without counting against any limit, so a
+        // revision that names any is a write like any other.
+        && item.content.chunks.is_empty()
 }
 
 /// What a write left behind for its caller to see to.
@@ -1283,6 +1286,13 @@ async fn write_items(
     if deletes_collection {
         sharing::end_share(&mut tx, &collection).await?;
         freed_blobs.extend(drop_content(&mut tx, collection.id).await?);
+        // Close the rooms from the in-memory hub directly. ItemsDeleted
+        // above only closes them after a database round-trip, so a transient
+        // database failure would leave deleted rooms lingering.
+        let closed = Event::CollectionClosed {
+            collection: collection.id,
+        };
+        events::publish(&mut tx, &closed).await?;
     }
     stored.written.keep();
     tx.commit().await?;

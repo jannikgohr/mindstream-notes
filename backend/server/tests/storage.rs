@@ -146,6 +146,39 @@ async fn content_marked_deleted_is_held_to_the_plan_like_any_other() {
     assert_eq!(push(&device, &collection, vec![tombstone]).await.0, 200);
 }
 
+/// A deletion that names stored chunks is not a deletion: the references
+/// would keep those bytes alive without counting against any limit, past a
+/// plan that allows nothing.
+#[tokio::test]
+async fn tombstone_may_not_reference_chunks() {
+    let device = Device::signup(common::server(), "tombstone-refs").await;
+    let collection = device.create_collection().await;
+    let existing = new_uid();
+    let stored_uid = new_uid();
+    let stored = push(
+        &device,
+        &collection,
+        vec![revision(
+            &existing,
+            false,
+            vec![(stored_uid.clone(), Some(ByteBuf::from(vec![7u8; KIB])))],
+        )],
+    )
+    .await;
+    assert_eq!(stored.0, 200);
+    let pool = pool().await;
+    lapse(&pool, &device).await;
+    let before = bytes_used(&pool, &collection).await;
+
+    // Deleted, but naming the stored chunk: a write like any other.
+    let pinned = revision(&existing, true, vec![(stored_uid, None)]);
+    assert_eq!(
+        push(&device, &collection, vec![pinned]).await,
+        (402, "plan_lapsed".to_owned())
+    );
+    assert_eq!(bytes_used(&pool, &collection).await, before);
+}
+
 /// A new chunk is stored with the first content the request gives it,
 /// whichever item that comes with, and is charged for that content even
 /// when an item before it names the chunk without any.
