@@ -784,6 +784,81 @@ async fn link_can_bring_someone_without_an_account() {
     assert!(is_member(&guest, &collection).await);
 }
 
+/// Make a link into `collection` that also lets one new person sign up.
+async fn welcoming_link(owner: &Person, collection: &str) -> Link {
+    let link = new_link();
+    let body = Create {
+        allow_signup: true,
+        ..Create::new(&link, collection)
+    };
+    assert_eq!(owner.post("/mindstream/link/", &body).await.status, 201);
+    link
+}
+
+/// One use means one person in, however the signup and the claim interleave:
+/// a claim spends the link's place, and a signup on a spent link is refused.
+/// (A signup alone is not membership: the account it creates still joins
+/// with the same link, which is why the budgets are separate.)
+#[tokio::test]
+async fn one_use_signup_link_admits_one_person_either_way_round() {
+    let server = invite_server();
+    let state = common::admin_state().await;
+    let code = admin::create_signup_code(&state, "the owner", 1)
+        .await
+        .unwrap();
+    let owner = Person::signup_with(
+        server,
+        "owner",
+        SignupWith {
+            code: Some(&code),
+            ..SignupWith::default()
+        },
+    )
+    .await
+    .expect("the owner signs up with a code");
+    let collection = owner.device().create_collection().await;
+    let by = |link: &'static Link| SignupWith {
+        link: Some((&link.uid, &link.key)),
+        ..SignupWith::default()
+    };
+
+    // Claim first: the place is taken, so signing up on the link is refused.
+    // (Plain accounts come from the open server; every test server shares
+    // the database, so the link is the same one.)
+    let spent: &'static Link = Box::leak(Box::new(welcoming_link(&owner, &collection).await));
+    let first = Person::signup(url(), "first", false).await;
+    assert_eq!(claim(&first, spent).await.outcome(), refused(201, ""));
+    assert_eq!(
+        Person::signup_with(server, "late", by(spent)).await.err(),
+        Some(refused(403, "signup_invitation_invalid"))
+    );
+    assert_eq!(
+        open(server, spent).await.outcome(),
+        refused(410, "link_used")
+    );
+
+    // Signup first: the new account still joins on the same link, and then
+    // the link is spent for everyone else.
+    let welcoming: &'static Link =
+        Box::leak(Box::new(welcoming_link(&owner, &collection).await));
+    let guest = Person::signup_with(server, "guest", by(welcoming))
+        .await
+        .expect("signup by link");
+    assert_eq!(claim(&guest, welcoming).await.outcome(), refused(201, ""));
+    assert!(is_member(&guest, &collection).await);
+    assert_eq!(
+        Person::signup_with(server, "second", by(welcoming))
+            .await
+            .err(),
+        Some(refused(403, "signup_invitation_invalid"))
+    );
+    let late = Person::signup(url(), "late", false).await;
+    assert_eq!(
+        claim(&late, welcoming).await.outcome(),
+        refused(410, "link_used")
+    );
+}
+
 #[tokio::test]
 async fn landing_page_tells_a_browser_what_to_do_with_a_link() {
     let http = reqwest::Client::new();

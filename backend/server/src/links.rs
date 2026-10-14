@@ -102,9 +102,9 @@ struct Link {
 }
 
 impl Link {
-    /// Refuse a link that can let nobody else in. Only someone who has
-    /// shown the secret is told why.
-    fn usable(&self) -> ApiResult<()> {
+    /// Whether anyone else may still join on this link. Joining takes the
+    /// link's places, one per claim, so this is the membership budget.
+    fn claimable(&self) -> ApiResult<()> {
         if self.expired {
             Err(gone("link_expired", "This link has expired."))
         } else if self.uses >= self.max_uses {
@@ -112,6 +112,15 @@ impl Link {
         } else {
             Ok(())
         }
+    }
+
+    /// Whether the link may still bring someone without an account. A signup
+    /// is only useful if the account it creates can then join, and every
+    /// signup that never joins still costs the maker an account, so signups
+    /// have their own budget beside the claims: neither may reach the
+    /// maximum while the other has places left unused.
+    fn signup_available(&self) -> bool {
+        !self.expired && self.uses < self.max_uses && self.signups < self.max_uses
     }
 }
 
@@ -378,7 +387,7 @@ pub async fn open(
         .await?
         .filter(|link| proves(&link.claim_pubkey, &body.signature, &message))
         .ok_or_else(no_link)?;
-    link.usable()?;
+    link.claimable()?;
     let collection_item = collections::main_items(&state, &mut conn, &[link.collection_id])
         .await?
         .remove(&link.collection_id)
@@ -386,7 +395,7 @@ pub async fn open(
     Ok(Msgpack(OpenedLink {
         signup: state.config.signup == SignupPolicy::Invite
             && link.allows_signup
-            && link.signups < link.max_uses,
+            && link.signup_available(),
         uid: link.uid,
         version: link.version,
         collection: link.collection,
@@ -442,7 +451,7 @@ pub async fn claim(
             "You already belong to this space.",
         ));
     }
-    link.usable()?;
+    link.claimable()?;
     limits::check_new_member(&mut tx, link.collection_id, link.owner_id, false).await?;
 
     sharing::add_member(
@@ -558,8 +567,7 @@ pub(crate) async fn signup_grant(
             .await?
             .filter(|link| {
                 link.allows_signup
-                    && !link.expired
-                    && link.signups < link.max_uses
+                    && link.signup_available()
                     && proves(&link.claim_pubkey, &proof.signature, &message)
             })
             .map(|link| SignupGrant::Link(link.id))
