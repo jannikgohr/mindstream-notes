@@ -4,8 +4,9 @@
 #   cp .env.example .env    # then set POSTGRES_PASSWORD in it
 #   docker compose up -d --build
 #
-# Plain HTTP on port 3735 of the `server` service. Put a TLS-terminating
-# reverse proxy in front for anything but local use.
+# Plain HTTP on port 3735 of the `server` service, published on this
+# machine's loopback address only. A TLS-terminating reverse proxy on this
+# machine is the way in from elsewhere.
 #
 # This is the whole backend: accounts, storage, sharing and live rooms.
 
@@ -26,6 +27,11 @@ services:
       # Hostnames clients use, comma separated. Needed when the reverse proxy
       # does not pass the original Host header through.
       MINDSTREAM_PUBLIC_HOSTS: ${MINDSTREAM_PUBLIC_HOSTS:-}
+      # Networks whose X-Forwarded-For is believed, comma separated. The
+      # default is the server's own: loopback and the private ranges, which
+      # is where a reverse proxy on this machine or this Docker network
+      # connects from.
+      MINDSTREAM_TRUSTED_PROXIES: ${MINDSTREAM_TRUSTED_PROXIES:-127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1/128,fc00::/7}
       MINDSTREAM_TEST_RESET: ${MINDSTREAM_TEST_RESET:-false}
       # Sign-in attempts one address may make per minute. 0 turns the limit off.
       MINDSTREAM_AUTH_RATE_PER_MINUTE: ${MINDSTREAM_AUTH_RATE_PER_MINUTE:-10}
@@ -46,7 +52,12 @@ services:
       # Losing this volume loses every attachment and every authenticator.
       - blobs:/data
     ports:
-      - '${MINDSTREAM_PORT:-3735}:3735'
+      # Whatever Docker forwards to the server from this machine arrives
+      # from the Docker network, which the trusted networks above take in.
+      # Published on every address, so may a stranger's connection, and the
+      # stranger could then say who they are. Set MINDSTREAM_BIND only
+      # together with MINDSTREAM_TRUSTED_PROXIES.
+      - '${MINDSTREAM_BIND:-127.0.0.1}:${MINDSTREAM_PORT:-3735}:3735'
     security_opt:
       - no-new-privileges:true
     cap_drop:

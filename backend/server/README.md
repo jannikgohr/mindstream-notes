@@ -16,8 +16,10 @@ cp .env.example .env    # then set POSTGRES_PASSWORD in it
 docker compose up -d --build
 ```
 
-The server listens on port 3735 over plain HTTP. Put a TLS-terminating reverse
-proxy in front for anything but local use.
+The server listens on port 3735 over plain HTTP. Compose publishes it on this
+machine's loopback address only, so a TLS-terminating reverse proxy on the
+same machine is the way in from elsewhere. `MINDSTREAM_BIND` in `.env` changes
+the address it is published on; read the next paragraphs before you do.
 
 [.env.example](.env.example) holds the settings most servers want to look at,
 with the choice of who may sign up at the top. The table below is the full
@@ -57,7 +59,9 @@ comes from `X-Forwarded-For`, which the server believes only from trusted
 networks: by default loopback and the private ranges. If the server is
 reachable directly from private addresses you do not control, narrow
 `MINDSTREAM_TRUSTED_PROXIES`, or a caller there can pick the address it is
-counted under.
+counted under. Under Docker that includes the port published on any address
+but loopback: Docker hands some of the connections it forwards to the
+server from its own network's gateway, which is a private address.
 
 The connection caps count the same way. An address may hold
 `MINDSTREAM_MAX_CONNECTIONS_PER_ADDRESS` connections open and as many live
