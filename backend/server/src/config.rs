@@ -77,7 +77,9 @@ pub struct Config {
     )]
     pub max_connections_per_address: usize,
 
-    /// The same for the whole server. Zero turns the cap off.
+    /// The same for the whole server, a trusted proxy's connections
+    /// included. It is held under what the process may open files for,
+    /// whatever it says. Zero leaves only that.
     #[arg(long, env = "MINDSTREAM_MAX_CONNECTIONS", default_value_t = 10_000)]
     pub max_connections: usize,
 

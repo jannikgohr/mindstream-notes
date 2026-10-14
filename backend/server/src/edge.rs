@@ -2,6 +2,7 @@
 //! itself: work out who is really calling, and slow down password guessing.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::io;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::num::NonZeroU32;
@@ -22,6 +23,7 @@ use governor::Quota;
 use ipnet::IpNet;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::time::{Instant, Sleep};
 
 use crate::error::ApiError;
 use crate::AppState;
@@ -109,7 +111,8 @@ pub struct Gate {
 /// One place taken at a [`Gate`], given back when this is dropped.
 pub struct Permit {
     gate: Arc<Gate>,
-    caller: IpAddr,
+    /// Who the place is counted against, besides the total.
+    caller: Option<IpAddr>,
 }
 
 impl Gate {
@@ -141,7 +144,21 @@ impl Gate {
         open.total += 1;
         Some(Permit {
             gate: Arc::clone(self),
-            caller,
+            caller: Some(caller),
+        })
+    }
+
+    /// Take a place in the total only, for a connection that stands for
+    /// callers who are counted on their own: a trusted proxy's.
+    pub fn enter_shared(self: &Arc<Self>) -> Option<Permit> {
+        let mut open = self.open.lock().unwrap_or_else(|e| e.into_inner());
+        if self.total > 0 && open.total >= self.total {
+            return None;
+        }
+        open.total += 1;
+        Some(Permit {
+            gate: Arc::clone(self),
+            caller: None,
         })
     }
 }
@@ -150,10 +167,13 @@ impl Drop for Permit {
     fn drop(&mut self) {
         let mut open = self.gate.open.lock().unwrap_or_else(|e| e.into_inner());
         open.total = open.total.saturating_sub(1);
-        if let Some(held) = open.by_caller.get_mut(&self.caller) {
+        let Some(caller) = self.caller else {
+            return;
+        };
+        if let Some(held) = open.by_caller.get_mut(&caller) {
             *held = held.saturating_sub(1);
             if *held == 0 {
-                open.by_caller.remove(&self.caller);
+                open.by_caller.remove(&caller);
             }
         }
     }
@@ -170,11 +190,14 @@ impl Connected<IncomingStream<'_, CappedListener>> for Peer {
     }
 }
 
-/// A listener that holds each address to a number of connections.
+/// A listener that holds each address to a number of connections, and the
+/// server to a number in all.
 ///
-/// A connection past the cap is closed as soon as it is accepted, before
-/// anything is read from it. A trusted proxy is exempt: every client behind
-/// it shares its address, and the proxy is where those are to be capped.
+/// A connection past a cap is closed as soon as it is accepted, before
+/// anything is read from it. A trusted proxy is exempt from the cap per
+/// address: every client behind it shares its address, and the proxy is
+/// where those are to be capped. Its connections still count towards the
+/// total, which is what keeps the server within the files it may open.
 pub struct CappedListener {
     inner: TcpListener,
     gate: Arc<Gate>,
@@ -197,22 +220,23 @@ impl Listener for CappedListener {
 
     async fn accept(&mut self) -> (Self::Io, Self::Addr) {
         loop {
-            let (stream, address) = Listener::accept(&mut self.inner).await;
-            let ip = address.ip();
-            let permit = if self.trusted.iter().any(|net| net.contains(&ip)) {
-                None
-            } else {
-                match self.gate.enter(ip) {
-                    Some(permit) => Some(permit),
-                    // Dropping the stream closes it.
-                    None => continue,
+            let (stream, address) = match self.inner.accept().await {
+                Ok(accepted) => accepted,
+                Err(err) => {
+                    accept_failed(err).await;
+                    continue;
                 }
             };
-            let stream = CappedStream {
-                stream,
-                _permit: permit,
+            let ip = address.ip();
+            let permit = if self.trusted.iter().any(|net| net.contains(&ip)) {
+                self.gate.enter_shared()
+            } else {
+                self.gate.enter(ip)
             };
-            return (stream, address);
+            // Without a place, dropping the stream closes it.
+            if let Some(permit) = permit {
+                return (CappedStream::new(stream, permit), address);
+            }
         }
     }
 
@@ -221,49 +245,205 @@ impl Listener for CappedListener {
     }
 }
 
-/// A connection that keeps its place at the gate for as long as it is open.
+/// A connection that could not be taken. Most such failures are the
+/// caller's, and the caller is gone. Any other means the server is short
+/// of something, open files most likely, and trying again at once would
+/// fail the same way.
+async fn accept_failed(err: io::Error) {
+    use io::ErrorKind::{ConnectionAborted, ConnectionRefused, ConnectionReset};
+    if matches!(
+        err.kind(),
+        ConnectionAborted | ConnectionRefused | ConnectionReset
+    ) {
+        return;
+    }
+    tracing::error!("cannot accept connections: {err}");
+    tokio::time::sleep(Duration::from_secs(1)).await;
+}
+
+/// How long a connection may go without a byte moving either way. Rooms
+/// and the change feed ping well within it. Without it a caller could keep
+/// connections open for nothing, and every one of them holds a file.
+const IDLE_CONNECTION: Duration = Duration::from_secs(120);
+
+/// A connection that keeps its place at the gate for as long as it is open,
+/// and is closed when it goes quiet for too long.
 pub struct CappedStream {
     stream: TcpStream,
-    _permit: Option<Permit>,
+    _permit: Permit,
+    /// How long it may go quiet.
+    idle: Duration,
+    /// When bytes last moved, either way.
+    moved: Instant,
+    /// Wakes the connection to see whether it has been quiet for too long.
+    check: Pin<Box<Sleep>>,
+}
+
+impl CappedStream {
+    fn new(stream: TcpStream, permit: Permit) -> Self {
+        Self::quiet_for(stream, permit, IDLE_CONNECTION)
+    }
+
+    fn quiet_for(stream: TcpStream, permit: Permit, idle: Duration) -> Self {
+        let now = Instant::now();
+        Self {
+            stream,
+            _permit: permit,
+            idle,
+            moved: now,
+            check: Box::pin(tokio::time::sleep_until(now + idle)),
+        }
+    }
+
+    /// Called whenever the connection waits. Ready with an error once
+    /// nothing has moved for as long as it may be quiet; until then it
+    /// arranges to be woken when that would be.
+    fn poll_quiet(&mut self, cx: &mut Context<'_>) -> Poll<io::Error> {
+        while self.check.as_mut().poll(cx).is_ready() {
+            let due = self.moved + self.idle;
+            if Instant::now() >= due {
+                return Poll::Ready(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "nothing moved on the connection for too long",
+                ));
+            }
+            self.check.as_mut().reset(due);
+        }
+        Poll::Pending
+    }
+
+    fn written(
+        &mut self,
+        outcome: Poll<io::Result<usize>>,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<usize>> {
+        match outcome {
+            Poll::Ready(Ok(written)) => {
+                if written > 0 {
+                    self.moved = Instant::now();
+                }
+                Poll::Ready(Ok(written))
+            }
+            Poll::Pending => self.poll_quiet(cx).map(Err),
+            failed => failed,
+        }
+    }
 }
 
 impl AsyncRead for CappedStream {
     fn poll_read(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.stream).poll_read(cx, buf)
+        let this = self.get_mut();
+        let before = buf.filled().len();
+        match Pin::new(&mut this.stream).poll_read(cx, buf) {
+            Poll::Ready(Ok(())) => {
+                if buf.filled().len() > before {
+                    this.moved = Instant::now();
+                }
+                Poll::Ready(Ok(()))
+            }
+            Poll::Pending => this.poll_quiet(cx).map(Err),
+            failed => failed,
+        }
     }
 }
 
 impl AsyncWrite for CappedStream {
     fn poll_write(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.stream).poll_write(cx, buf)
+        let this = self.get_mut();
+        let outcome = Pin::new(&mut this.stream).poll_write(cx, buf);
+        this.written(outcome, cx)
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.stream).poll_flush(cx)
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        match Pin::new(&mut this.stream).poll_flush(cx) {
+            Poll::Pending => this.poll_quiet(cx).map(Err),
+            done => done,
+        }
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.stream).poll_shutdown(cx)
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().stream).poll_shutdown(cx)
     }
 
     fn poll_write_vectored(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         bufs: &[io::IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.stream).poll_write_vectored(cx, bufs)
+        let this = self.get_mut();
+        let outcome = Pin::new(&mut this.stream).poll_write_vectored(cx, bufs);
+        this.written(outcome, cx)
     }
 
     fn is_write_vectored(&self) -> bool {
         self.stream.is_write_vectored()
+    }
+}
+
+/// Raise the number of files the process may open as far as it is allowed
+/// to, and return what it may open now. Every connection is a file, and a
+/// process that runs out cannot take another: for anyone. Many systems
+/// start a process with a low soft limit and a much higher hard one.
+#[cfg(unix)]
+pub fn raise_open_file_limit() -> Option<u64> {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: getrlimit writes the limits into the struct it is given.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
+        return None;
+    }
+    if limit.rlim_cur < limit.rlim_max {
+        let raised = libc::rlimit {
+            rlim_cur: limit.rlim_max,
+            rlim_max: limit.rlim_max,
+        };
+        // SAFETY: setrlimit reads the struct it is given. Asking for no
+        // more than the hard limit is allowed to any process.
+        if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raised) } == 0 {
+            limit = raised;
+        }
+    }
+    // rlim_t is a u64 here and narrower on some systems.
+    #[allow(clippy::unnecessary_cast)]
+    let files = limit.rlim_cur as u64;
+    (limit.rlim_cur != libc::RLIM_INFINITY).then_some(files)
+}
+
+#[cfg(not(unix))]
+pub fn raise_open_file_limit() -> Option<u64> {
+    None
+}
+
+/// Files kept back from connections: the database pool, blobs being read
+/// and written, the listener itself.
+const FILES_KEPT_BACK: usize = 256;
+
+/// The cap on connections in all that the server can keep: what is
+/// configured, but never more than it can open files for. Past that it
+/// could take nothing at all, which is worse than refusing the newest.
+pub fn connection_room(configured: usize, file_limit: Option<u64>, database: u32) -> usize {
+    let Some(files) = file_limit else {
+        return configured;
+    };
+    let room = usize::try_from(files)
+        .unwrap_or(usize::MAX)
+        .saturating_sub(FILES_KEPT_BACK + database as usize)
+        .max(1);
+    if configured == 0 {
+        room
+    } else {
+        configured.min(room)
     }
 }
 
@@ -427,12 +607,126 @@ mod gate_tests {
     }
 
     #[test]
+    fn a_trusted_proxy_counts_towards_the_total_only() {
+        let gate = Gate::new(1, 3);
+        let proxied: Vec<Permit> = (0..2).map(|_| gate.enter_shared().unwrap()).collect();
+        // The proxy's places are nobody's, so a caller still gets its own.
+        let caller = gate.enter(ip("203.0.113.5")).unwrap();
+        // And then the server is full, for the proxy too.
+        assert!(gate.enter_shared().is_none());
+        assert!(gate.enter(ip("203.0.113.6")).is_none());
+        drop(proxied);
+        assert!(gate.enter_shared().is_some());
+        drop(caller);
+        assert!(gate.open.lock().unwrap().by_caller.is_empty());
+    }
+
+    #[test]
+    fn connections_fit_under_the_open_file_limit() {
+        // Kept back: 256 files and the database pool.
+        assert_eq!(connection_room(10_000, Some(1024), 10), 758);
+        assert_eq!(connection_room(10_000, Some(1_048_576), 10), 10_000);
+        assert_eq!(connection_room(500, Some(1024), 10), 500);
+        // No cap configured is still no more than the files allow.
+        assert_eq!(connection_room(0, Some(1024), 10), 758);
+        // An unknown limit leaves the setting as it is.
+        assert_eq!(connection_room(0, None, 10), 0);
+        assert_eq!(connection_room(10_000, Some(64), 10), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_open_file_limit_is_raised_as_far_as_allowed() {
+        let raised = raise_open_file_limit().unwrap_or(u64::MAX);
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: as in raise_open_file_limit.
+        assert_eq!(
+            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) },
+            0
+        );
+        assert_eq!(limit.rlim_cur, limit.rlim_max);
+        #[allow(clippy::unnecessary_cast)]
+        let files = limit.rlim_cur as u64;
+        assert!(raised == u64::MAX || raised == files);
+    }
+
+    #[test]
     fn no_cap_means_no_cap() {
         let gate = Gate::new(0, 0);
         let held: Vec<Permit> = (0..500)
             .map(|_| gate.enter(ip("203.0.113.5")).unwrap())
             .collect();
         assert_eq!(held.len(), 500);
+    }
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::*;
+
+    const QUIET: Duration = Duration::from_millis(300);
+
+    async fn connection() -> (CappedStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        let permit = Gate::new(0, 0).enter_shared().unwrap();
+        (CappedStream::quiet_for(server, permit, QUIET), client)
+    }
+
+    #[tokio::test]
+    async fn a_connection_that_sends_nothing_is_closed() {
+        let (mut server, _client) = connection().await;
+        let started = Instant::now();
+        let failed = server.read(&mut [0u8; 8]).await.unwrap_err();
+        assert_eq!(failed.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() >= QUIET);
+    }
+
+    #[tokio::test]
+    async fn a_connection_that_keeps_talking_stays_open() {
+        let (mut server, mut client) = connection().await;
+        let talker = tokio::spawn(async move {
+            for _ in 0..6 {
+                tokio::time::sleep(QUIET / 3).await;
+                client.write_all(b"x").await.unwrap();
+            }
+            client
+        });
+        let mut byte = [0u8; 1];
+        for _ in 0..6 {
+            server.read_exact(&mut byte).await.unwrap();
+        }
+        // Well past the quiet period in all, and still open.
+        let mut client = talker.await.unwrap();
+        server.write_all(b"y").await.unwrap();
+        client.read_exact(&mut byte).await.unwrap();
+        assert_eq!(&byte, b"y");
+    }
+
+    /// A caller that stops reading what it asked for holds the server's
+    /// writes up, and is closed for it just the same.
+    #[tokio::test]
+    async fn a_connection_that_stops_reading_is_closed() {
+        let (mut server, _client) = connection().await;
+        let chunk = vec![0u8; 1024 * 1024];
+        let failed = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Err(err) = server.write_all(&chunk).await {
+                    return err;
+                }
+            }
+        })
+        .await
+        .expect("the writes never stopped");
+        assert_eq!(failed.kind(), io::ErrorKind::TimedOut);
     }
 }
 

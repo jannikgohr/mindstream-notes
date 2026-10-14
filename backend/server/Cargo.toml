@@ -54,6 +54,10 @@ tower-http = { version = "0.6", features = ["trace", "set-header"] }
 object_store = { version = "0.14", default-features = false, features = ["fs"] }
 futures-util = "0.3"
 
+[target.'cfg(unix)'.dependencies]
+# Raising the limit on open files the process starts with.
+libc = "0.2"
+
 [dev-dependencies]
 # The client the app ships. Driving the server with it in tests is what keeps
 # the two honest about the wire format.

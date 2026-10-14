@@ -117,7 +117,18 @@ impl AppState {
             .map_err(StartError::SecretKey)?;
         let auth_limiter =
             edge::RateLimiter::new(config.auth_rate_per_minute, config.auth_rate_burst);
-        let gate = || edge::Gate::new(config.max_connections_per_address, config.max_connections);
+        let files = edge::raise_open_file_limit();
+        let total =
+            edge::connection_room(config.max_connections, files, config.database_connections);
+        if config.max_connections > 0 && total < config.max_connections {
+            tracing::warn!(
+                "the process may open {} files, which leaves room for {total} connections, \
+                 not the {} configured; raise its limit on open files to allow them",
+                files.unwrap_or_default(),
+                config.max_connections
+            );
+        }
+        let gate = || edge::Gate::new(config.max_connections_per_address, total);
         let state = Self(Arc::new(Inner {
             pool,
             blobs,

@@ -35,7 +35,7 @@ list. Under compose a variable only reaches the server if
 | `MINDSTREAM_AUTH_RATE_PER_MINUTE`        | 10                | Sign-in attempts per address per minute. 0 turns the limit off                      |
 | `MINDSTREAM_AUTH_RATE_BURST`             | 20                | Attempts an address may make at once before the rate applies                        |
 | `MINDSTREAM_MAX_CONNECTIONS_PER_ADDRESS` | 128               | Connections, and separately sockets, one address may hold open. 0 turns the cap off |
-| `MINDSTREAM_MAX_CONNECTIONS`             | 10000             | The same for the whole server. 0 turns the cap off                                  |
+| `MINDSTREAM_MAX_CONNECTIONS`             | 10000             | The same for the whole server. 0 leaves only the limit on open files                |
 | `MINDSTREAM_ADMIN_TOKEN`                 | unset             | Turns on the interface for setting account limits                                   |
 | `MINDSTREAM_SECRET_KEY`                  | unset             | Key that seals authenticator secrets. See below                                     |
 | `MINDSTREAM_SECRET_KEY_FILE`             | see below         | Where that key is created when none is given                                        |
@@ -68,6 +68,14 @@ but the sockets it forwards are counted per client. If clients reach the
 server through something that hides their addresses and sends no
 `X-Forwarded-For`, such as a NAT, they share one allowance: raise the cap or
 set it to 0.
+
+`MINDSTREAM_MAX_CONNECTIONS` counts every connection, a trusted proxy's
+included. Each one is an open file, and a server that may open no more
+cannot take a connection from anyone, so the server raises its limit on
+open files as far as the system allows and keeps the total under it. If it
+says at startup that the limit leaves too little room, raise the limit
+(`ulimit -n`, or `LimitNOFILE` under systemd). A connection on which nothing
+has moved either way for two minutes is closed.
 
 A response is built in memory, so the content one response carries is held
 to `MINDSTREAM_MAX_PAGE_BYTES`. A list ends its page early when the next item
