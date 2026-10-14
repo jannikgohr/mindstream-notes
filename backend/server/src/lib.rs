@@ -332,7 +332,7 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// Serve until the listener fails or `shutdown` resolves.
+/// Serve until `shutdown` resolves, then let the requests under way finish.
 pub async fn serve(
     listener: tokio::net::TcpListener,
     state: AppState,
@@ -343,9 +343,6 @@ pub async fn serve(
         Arc::clone(&state.connections),
         state.config.trusted_proxies.clone(),
     );
-    // Handlers need the peer address to work out who is calling.
-    let service = router(state).into_make_service_with_connect_info::<edge::Peer>();
-    axum::serve(listener, service)
-        .with_graceful_shutdown(shutdown)
-        .await
+    edge::serve(listener, router(state), shutdown).await;
+    Ok(())
 }

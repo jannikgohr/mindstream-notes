@@ -868,6 +868,12 @@ Newly owned:
   address and in all. An IPv6 caller is its /64. A trusted proxy is exempt
   from the connection count and the clients it forwards are not. An account
   may hold 32 change feeds and a session 4.
+- How long a connection may take. nginx used to time out slow clients too.
+  A connection where nothing moves for two minutes is closed. A request's
+  head has 30 seconds to arrive, and its body has to come at 1 KiB a second
+  on average after a grace of 30 seconds, so a caller cannot hold a
+  connection by sending a byte now and then. axum's `serve` sets neither,
+  so the server runs hyper itself, over HTTP/1.1 only.
 - TOTP secrets and session token hashes at rest.
 - The invite link claim path and the recovery path, the two places that grant
   access without the usual login.

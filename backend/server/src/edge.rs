@@ -1,29 +1,37 @@
 //! What a reverse proxy used to do for the old stack and this server now does
-//! itself: work out who is really calling, and slow down password guessing.
+//! itself: work out who is really calling, hold callers to their share of
+//! connections and to deadlines, and slow down password guessing.
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::io;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::num::NonZeroU32;
-use std::pin::Pin;
+use std::pin::{pin, Pin};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use axum::extract::connect_info::Connected;
-use axum::extract::{ConnectInfo, FromRequestParts};
+use axum::body::{Body, Bytes};
+use axum::extract::{ConnectInfo, FromRequestParts, Request};
 use axum::http::request::Parts;
 use axum::http::StatusCode;
-use axum::serve::{IncomingStream, Listener};
+use axum::{BoxError, Router};
 use governor::clock::{Clock, DefaultClock};
 use governor::middleware::NoOpMiddleware;
 use governor::state::keyed::DashMapStateStore;
 use governor::Quota;
+use http_body::{Frame, SizeHint};
+use hyper::body::Incoming;
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use ipnet::IpNet;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::watch;
 use tokio::time::{Instant, Sleep};
+use tower::ServiceExt;
 
 use crate::error::ApiError;
 use crate::AppState;
@@ -179,16 +187,10 @@ impl Drop for Permit {
     }
 }
 
-/// The address a connection came from. Its own type so the listener below
-/// can say how to find it.
+/// The address a connection came from, which [`serve`] hands every request
+/// on it.
 #[derive(Clone, Copy, Debug)]
 pub struct Peer(pub SocketAddr);
-
-impl Connected<IncomingStream<'_, CappedListener>> for Peer {
-    fn connect_info(stream: IncomingStream<'_, CappedListener>) -> Self {
-        Peer(*stream.remote_addr())
-    }
-}
 
 /// A listener that holds each address to a number of connections, and the
 /// server to a number in all.
@@ -214,11 +216,9 @@ impl CappedListener {
     }
 }
 
-impl Listener for CappedListener {
-    type Io = CappedStream;
-    type Addr = SocketAddr;
-
-    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+impl CappedListener {
+    /// The next connection that fits under the caps.
+    pub async fn accept(&mut self) -> (CappedStream, SocketAddr) {
         loop {
             let (stream, address) = match self.inner.accept().await {
                 Ok(accepted) => accepted,
@@ -238,10 +238,6 @@ impl Listener for CappedListener {
                 return (CappedStream::new(stream, permit), address);
             }
         }
-    }
-
-    fn local_addr(&self) -> io::Result<Self::Addr> {
-        self.inner.local_addr()
     }
 }
 
@@ -386,6 +382,168 @@ impl AsyncWrite for CappedStream {
 
     fn is_write_vectored(&self) -> bool {
         self.stream.is_write_vectored()
+    }
+}
+
+/// How long a caller may take to send a request.
+#[derive(Clone, Copy)]
+struct Deadlines {
+    /// For a request's head, from when the server starts waiting for it: as
+    /// soon as a connection is open, and again after each answer on it.
+    head: Duration,
+    /// For a body to get going, from when the server first asks for it.
+    body_grace: Duration,
+    /// Bytes a second a body has to have come at since, on average.
+    body_rate: u64,
+}
+
+/// Lenient to the slowest connection a phone still gets anywhere with. A
+/// caller who sends less than this is either not there or wasting a file.
+const DEADLINES: Deadlines = Deadlines {
+    head: Duration::from_secs(30),
+    body_grace: Duration::from_secs(30),
+    body_rate: 1024,
+};
+
+/// Serve `router` on `listener` until `shutdown` resolves, then let what is
+/// under way finish.
+///
+/// This is `axum::serve` with the deadlines it does not set. Going quiet
+/// for too long is caught by [`CappedStream`]. A caller that keeps sending
+/// a byte now and then is not quiet, and these catch it: a request has to
+/// arrive in good time, head and body. HTTP/2 is not offered, because hyper
+/// sets it no such deadline. A proxy in front speaks HTTP/1.1 to the server
+/// whatever it speaks to clients.
+pub async fn serve(listener: CappedListener, router: Router, shutdown: impl Future<Output = ()>) {
+    serve_with(listener, router, shutdown, DEADLINES).await;
+}
+
+async fn serve_with(
+    mut listener: CappedListener,
+    router: Router,
+    shutdown: impl Future<Output = ()>,
+    deadlines: Deadlines,
+) {
+    let mut http = http1::Builder::new();
+    http.timer(TokioTimer::new())
+        .header_read_timeout(deadlines.head);
+    // Every connection holds a receiver of `open`, so it is closed once the
+    // last of them is.
+    let (open, _) = watch::channel(());
+    let (stop, stopping) = watch::channel(false);
+    let mut shutdown = pin!(shutdown);
+    loop {
+        let (stream, address) = tokio::select! {
+            accepted = listener.accept() => accepted,
+            () = &mut shutdown => break,
+        };
+        let router = router.clone();
+        let requests = service_fn(move |request: hyper::Request<Incoming>| {
+            let mut request: Request = request.map(|body| Body::new(Paced::new(body, deadlines)));
+            request.extensions_mut().insert(ConnectInfo(Peer(address)));
+            router.clone().oneshot(request)
+        });
+        let connection = http
+            .serve_connection(TokioIo::new(stream), requests)
+            .with_upgrades();
+        let held = open.subscribe();
+        let mut stopping = stopping.clone();
+        tokio::spawn(async move {
+            let mut connection = pin!(connection);
+            let stopped = async {
+                let _ = stopping.wait_for(|stop| *stop).await;
+            };
+            tokio::select! {
+                _ = connection.as_mut() => {}
+                () = stopped => {
+                    connection.as_mut().graceful_shutdown();
+                    let _ = connection.await;
+                }
+            }
+            drop(held);
+        });
+    }
+    drop(listener);
+    stop.send_replace(true);
+    open.closed().await;
+}
+
+/// A request body that has to keep coming: after a grace period, at an
+/// average rate since the server first asked for it. Averaged, so a fast
+/// caller whose connection stalls has the time it saved to spare.
+struct Paced<B> {
+    body: B,
+    deadlines: Deadlines,
+    /// When the server first asked for the body.
+    started: Option<Instant>,
+    received: u64,
+    /// Made the first time the body is waited for. Most come in one piece.
+    check: Option<Pin<Box<Sleep>>>,
+}
+
+impl<B> Paced<B> {
+    fn new(body: B, deadlines: Deadlines) -> Self {
+        Self {
+            body,
+            deadlines,
+            started: None,
+            received: 0,
+            check: None,
+        }
+    }
+}
+
+impl<B> http_body::Body for Paced<B>
+where
+    B: http_body::Body<Data = Bytes> + Unpin,
+    B::Error: Into<BoxError>,
+{
+    type Data = Bytes;
+    type Error = BoxError;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, BoxError>>> {
+        let this = self.get_mut();
+        let started = *this.started.get_or_insert_with(Instant::now);
+        match Pin::new(&mut this.body).poll_frame(cx) {
+            Poll::Ready(Some(Ok(frame))) => {
+                if let Some(data) = frame.data_ref() {
+                    this.received += data.len() as u64;
+                }
+                Poll::Ready(Some(Ok(frame)))
+            }
+            Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(err.into()))),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => {
+                let Deadlines {
+                    body_grace,
+                    body_rate,
+                    ..
+                } = this.deadlines;
+                let earned = Duration::from_millis(this.received.saturating_mul(1000) / body_rate);
+                let due = started + body_grace + earned;
+                let check = this
+                    .check
+                    .get_or_insert_with(|| Box::pin(tokio::time::sleep_until(due)));
+                check.as_mut().reset(due);
+                if check.as_mut().poll(cx).is_ready() {
+                    let late =
+                        io::Error::new(io::ErrorKind::TimedOut, "the request body came too slowly");
+                    return Poll::Ready(Some(Err(late.into())));
+                }
+                Poll::Pending
+            }
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.body.is_end_stream()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        self.body.size_hint()
     }
 }
 
@@ -727,6 +885,142 @@ mod stream_tests {
         .await
         .expect("the writes never stopped");
         assert_eq!(failed.kind(), io::ErrorKind::TimedOut);
+    }
+}
+
+#[cfg(test)]
+mod serve_tests {
+    use axum::routing::{get, post};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::*;
+
+    const SOON: Deadlines = Deadlines {
+        head: Duration::from_millis(400),
+        body_grace: Duration::from_millis(400),
+        body_rate: 1000,
+    };
+
+    /// A server with `SOON` for deadlines, and what stops it.
+    async fn server() -> (
+        SocketAddr,
+        tokio::sync::oneshot::Sender<()>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let router = Router::new().route("/", get(|| async { "ok" })).route(
+            "/upload",
+            post(|body: Bytes| async move { body.len().to_string() }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let listener = CappedListener::new(listener, Gate::new(0, 0), Vec::new());
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let shutdown = async {
+            let _ = stopped.await;
+        };
+        let served = tokio::spawn(serve_with(listener, router, shutdown, SOON));
+        (address, stop, served)
+    }
+
+    /// Send `parts` a pause apart, and return everything that comes back
+    /// before the server closes the connection, and when it did.
+    async fn trickle(address: SocketAddr, parts: &[&[u8]], pause: Duration) -> (String, Duration) {
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        let started = Instant::now();
+        let (mut reader, mut writer) = stream.split();
+        let writes = async {
+            for part in parts {
+                if writer.write_all(part).await.is_err() {
+                    return;
+                }
+                tokio::time::sleep(pause).await;
+            }
+            // Then sit and wait to be thrown out.
+            std::future::pending::<()>().await;
+        };
+        let mut answer = Vec::new();
+        let reads = async {
+            let _ = reader.read_to_end(&mut answer).await;
+        };
+        let closed = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::select! {
+                () = writes => {}
+                () = reads => {}
+            }
+        });
+        closed.await.expect("the connection was never closed");
+        (
+            String::from_utf8_lossy(&answer).into_owned(),
+            started.elapsed(),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_head_sent_a_line_at_a_time_runs_out_of_time() {
+        let (address, _stop, _) = server().await;
+        let mut parts: Vec<&[u8]> = vec![b"GET / HTTP/1.1\r\nHost: x\r\n"];
+        parts.extend(std::iter::repeat_n(b"X-Slow: y\r\n".as_slice(), 50));
+        let (answer, took) = trickle(address, &parts, Duration::from_millis(100)).await;
+        assert!(!answer.contains("200 OK"), "{answer}");
+        assert!(took < Duration::from_secs(2), "open for {took:?}");
+    }
+
+    #[tokio::test]
+    async fn a_kept_connection_has_as_long_for_its_next_request() {
+        let (address, _stop, _) = server().await;
+        let request: &[u8] = b"GET / HTTP/1.1\r\nHost: x\r\n\r\n";
+        let (answer, took) = trickle(address, &[request], Duration::ZERO).await;
+        assert!(answer.starts_with("HTTP/1.1 200 OK"), "{answer}");
+        assert!(
+            took >= SOON.head && took < Duration::from_secs(2),
+            "open for {took:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_body_that_dawdles_is_refused() {
+        let (address, _stop, _) = server().await;
+        let mut parts: Vec<&[u8]> =
+            vec![b"POST /upload HTTP/1.1\r\nHost: x\r\nContent-Length: 10000\r\n\r\n"];
+        // A hundred bytes a second, against a thousand asked for.
+        parts.extend(std::iter::repeat_n([b'x'; 10].as_slice(), 100));
+        let (answer, took) = trickle(address, &parts, Duration::from_millis(100)).await;
+        assert!(!answer.contains("200 OK"), "{answer}");
+        assert!(took < Duration::from_secs(2), "open for {took:?}");
+    }
+
+    #[tokio::test]
+    async fn a_body_at_a_fair_pace_gets_through() {
+        let (address, _stop, _) = server().await;
+        let mut parts: Vec<&[u8]> =
+            vec![b"POST /upload HTTP/1.1\r\nHost: x\r\nContent-Length: 2000\r\n\r\n"];
+        // Two thousand bytes a second, over a second in all.
+        parts.extend(std::iter::repeat_n([b'x'; 100].as_slice(), 20));
+        let (answer, _) = trickle(address, &parts, Duration::from_millis(50)).await;
+        assert!(answer.starts_with("HTTP/1.1 200 OK"), "{answer}");
+        assert!(answer.ends_with("2000"), "{answer}");
+    }
+
+    #[tokio::test]
+    async fn stopping_lets_the_request_under_way_finish() {
+        let (address, stop, served) = server().await;
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        stream
+            .write_all(b"POST /upload HTTP/1.1\r\nHost: x\r\nContent-Length: 4\r\n\r\nab")
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        stop.send(()).unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!served.is_finished());
+        stream.write_all(b"cd").await.unwrap();
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).await.unwrap();
+        assert!(answer.starts_with("HTTP/1.1 200 OK"), "{answer}");
+        tokio::time::timeout(Duration::from_secs(2), served)
+            .await
+            .expect("still serving after the last request")
+            .unwrap();
     }
 }
 

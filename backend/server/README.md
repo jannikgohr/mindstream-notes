@@ -16,7 +16,7 @@ cp .env.example .env    # then set POSTGRES_PASSWORD in it
 docker compose up -d --build
 ```
 
-The server listens on port 3735 over plain HTTP. Compose publishes it on this
+The server listens on port 3735 over plain HTTP/1.1. Compose publishes it on this
 machine's loopback address only, so a TLS-terminating reverse proxy on the
 same machine is the way in from elsewhere. `MINDSTREAM_BIND` in `.env` changes
 the address it is published on; read the next paragraphs before you do.
@@ -80,6 +80,14 @@ open files as far as the system allows and keeps the total under it. If it
 says at startup that the limit leaves too little room, raise the limit
 (`ulimit -n`, or `LimitNOFILE` under systemd). A connection on which nothing
 has moved either way for two minutes is closed.
+
+A request has to arrive in good time, or its connection is closed. Its head
+gets 30 seconds, counted from when the connection opens or the previous
+answer on it went out, so a connection kept open between requests is
+closed after 30 quiet seconds too. Its body gets 30 seconds to get going
+and has to have come at 1 KiB a second on average since. HTTP/2 is not
+served: a proxy in front speaks HTTP/1.1 to the server, whatever it speaks
+to clients.
 
 A response is built in memory, so the content one response carries is held
 to `MINDSTREAM_MAX_PAGE_BYTES`. A list ends its page early when the next item
