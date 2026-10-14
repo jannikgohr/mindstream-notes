@@ -155,7 +155,10 @@ impl Keys {
         if now_secs().saturating_sub(issued) > CHALLENGE_TTL_SECS {
             return ChallengeCheck::Expired;
         }
-        ChallengeCheck::Valid
+        ChallengeCheck::Valid {
+            nonce: body[16..].try_into().expect("the nonce's length"),
+            expires: issued + CHALLENGE_TTL_SECS,
+        }
     }
 }
 
@@ -245,7 +248,12 @@ impl Keys {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ChallengeCheck {
-    Valid,
+    /// Ours, for this account and still in time. The nonce tells it apart
+    /// from every other, until it expires.
+    Valid {
+        nonce: [u8; CHALLENGE_NONCE_LEN],
+        expires: u64,
+    },
     Expired,
     Invalid,
 }
@@ -283,7 +291,16 @@ mod tests {
     fn challenge_is_bound_to_the_account() {
         let keys = Keys::from_secret(b"one");
         let challenge = keys.challenge(7);
-        assert_eq!(keys.verify_challenge(&challenge, 7), ChallengeCheck::Valid);
+        let ChallengeCheck::Valid { nonce, expires } = keys.verify_challenge(&challenge, 7) else {
+            panic!("a fresh challenge is not valid");
+        };
+        assert_eq!(nonce[..], challenge[16..32]);
+        assert!(expires >= now_secs() + CHALLENGE_TTL_SECS - 1);
+        assert_ne!(
+            keys.verify_challenge(&keys.challenge(7), 7),
+            ChallengeCheck::Valid { nonce, expires },
+            "two challenges looked the same"
+        );
         assert_eq!(
             keys.verify_challenge(&challenge, 8),
             ChallengeCheck::Invalid

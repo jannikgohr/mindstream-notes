@@ -479,8 +479,8 @@ pub(crate) async fn verify_signed(
             format!("This login was made for \"{}\".", body.host),
         ));
     }
-    match state.keys.verify_challenge(&body.challenge, account.id) {
-        ChallengeCheck::Valid => {}
+    let (nonce, expires) = match state.keys.verify_challenge(&body.challenge, account.id) {
+        ChallengeCheck::Valid { nonce, expires } => (nonce, expires),
         ChallengeCheck::Expired => {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
@@ -495,7 +495,7 @@ pub(crate) async fn verify_signed(
                 "Login challenge is not one this server issued",
             ))
         }
-    }
+    };
 
     let bad_signature = || match signed_by {
         SignedBy::Password => {
@@ -527,7 +527,44 @@ pub(crate) async fn verify_signed(
             "User inactive or deleted.",
         ));
     }
+    spend_challenge(conn, &nonce, expires).await?;
     Ok((account, body))
+}
+
+/// A challenge answers one request. It is spent in the caller's
+/// transaction, so a request that fails leaves it to be answered again,
+/// and of two copies of one request only the first goes through.
+async fn spend_challenge(conn: &mut PgConnection, nonce: &[u8], expires: u64) -> ApiResult<()> {
+    let fresh = sqlx::query(
+        "INSERT INTO spent_challenges (nonce, expires_at) VALUES ($1, to_timestamp($2))
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(nonce)
+    .bind(expires as f64)
+    .execute(conn)
+    .await?
+    .rows_affected()
+        == 1;
+    if fresh {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "challenge_used",
+            "This login challenge has been answered already. Ask for another.",
+        ))
+    }
+}
+
+/// Forget the spent challenges that have expired, which no request can
+/// answer any more.
+pub(crate) async fn forget_spent_challenges(pool: &sqlx::PgPool) -> Result<u64, sqlx::Error> {
+    Ok(
+        sqlx::query("DELETE FROM spent_challenges WHERE expires_at < now()")
+            .execute(pool)
+            .await?
+            .rows_affected(),
+    )
 }
 
 /// A signed request from a device that is signed in: the password proven

@@ -4,8 +4,8 @@
 mod common;
 
 use common::keyed::{
-    backup_codes, confirm, enrol, new_key, public, refused, signed, Authenticator, Extra, Person,
-    Session, ACCOUNT_KEYS, RECOVERY_COPY,
+    backup_codes, confirm, enrol, new_key, post, public, refused, signed, Authenticator, Extra,
+    Person, Session, ACCOUNT_KEYS, RECOVERY_COPY,
 };
 use common::raw::{Frame, Socket};
 use reqwest::Method;
@@ -69,6 +69,80 @@ async fn code_is_asked_for_only_once_the_password_is_right() {
         .expect("password and code");
     let status = phone.get("/mindstream/security/").await.value();
     assert_eq!(status["sessionVerified"], true);
+}
+
+/// A login built by hand from a challenge, so that it can be sent twice.
+fn login_answering(person: &Person, challenge: &[u8], code: Option<&str>) -> Vec<u8> {
+    use ed25519_dalek::Signer;
+    #[derive(serde::Serialize)]
+    struct Body<'a> {
+        username: &'a str,
+        challenge: ByteBuf,
+        host: &'a str,
+        action: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        totp: Option<&'a str>,
+    }
+    let body = rmp_serde::to_vec_named(&Body {
+        username: &person.name,
+        challenge: ByteBuf::from(challenge.to_vec()),
+        host: url().trim_start_matches("http://"),
+        action: "login",
+        totp: code,
+    })
+    .unwrap();
+    let signature = person.login.sign(&body).to_bytes().to_vec();
+    rmp_serde::to_vec_named(&json!({
+        "response": ByteBuf::from(body),
+        "signature": ByteBuf::from(signature),
+    }))
+    .unwrap()
+}
+
+async fn challenge_for(person: &Person) -> Vec<u8> {
+    #[derive(Deserialize)]
+    struct Challenge {
+        challenge: ByteBuf,
+    }
+    let reply = post(
+        url(),
+        "/authentication/login_challenge/",
+        &json!({ "username": person.name }),
+    )
+    .await;
+    reply.decode::<Challenge>().challenge.into_vec()
+}
+
+async fn send_login(body: Vec<u8>) -> (u16, String) {
+    let reply = reqwest::Client::new()
+        .post(format!("{}/api/v1/authentication/login/", url()))
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    let status = reply.status().as_u16();
+    let body: serde_json::Value =
+        rmp_serde::from_slice(&reply.bytes().await.unwrap()).unwrap_or_default();
+    (status, body["code"].as_str().unwrap_or("").to_owned())
+}
+
+/// A challenge is answered once. A login sent a second time, as whoever
+/// captured it on its way might, opens nothing. A request that failed
+/// spends nothing, so the same challenge can be answered again.
+#[tokio::test]
+async fn a_challenge_is_answered_once() {
+    let ann = Person::signup(url(), "once", false).await;
+    let challenge = challenge_for(&ann).await;
+    let login = login_answering(&ann, &challenge, None);
+    assert_eq!(send_login(login.clone()).await.0, 200);
+    assert_eq!(send_login(login).await, refused(400, "challenge_used"));
+
+    let (mut authenticator, _) = enrol(&ann).await;
+    let challenge = challenge_for(&ann).await;
+    let wrong = login_answering(&ann, &challenge, Some(&authenticator.wrong_code()));
+    assert_eq!(send_login(wrong).await, refused(401, "totp_invalid"));
+    let right = login_answering(&ann, &challenge, Some(&authenticator.code()));
+    assert_eq!(send_login(right).await.0, 200);
 }
 
 #[tokio::test]

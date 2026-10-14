@@ -243,6 +243,9 @@ pub fn listen(state: AppState) {
                 Ok(_) => {}
                 Err(err) => tracing::warn!("could not end idle sessions: {err}"),
             }
+            if let Err(err) = crate::auth::forget_spent_challenges(&periodic.pool).await {
+                tracing::warn!("could not forget expired login challenges: {err}");
+            }
             if let Err(err) = revalidate(&periodic).await {
                 tracing::warn!("could not recheck the open sockets: {err}");
             }

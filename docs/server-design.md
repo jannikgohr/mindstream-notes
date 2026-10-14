@@ -738,7 +738,9 @@ As built in the client library and the app:
 ### Routes
 
 "Password" below means a request signed with the key derived from it, the way
-a login is. A code travels inside the signed body.
+a login is. A code travels inside the signed body. Each signed request answers
+a challenge of its own, and the server takes an answer to a challenge once, so
+a request captured on its way cannot be sent again.
 
 | Route                                     | Takes                                   | Does                                         |
 | ----------------------------------------- | --------------------------------------- | -------------------------------------------- |
