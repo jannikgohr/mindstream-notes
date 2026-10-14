@@ -23,6 +23,7 @@
     Plus,
     Trash2
   } from '@lucide/svelte';
+  import { tooltip } from '$lib/actions/tooltip';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { confirm, alert } from '$lib/components/confirm-dialog.svelte';
@@ -514,7 +515,7 @@
                 type="button"
                 class="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-sm"
                 disabled={busy || windows.checking || !windows.view}
-                title={windows.view?.supervised
+                use:tooltip={windows.view?.supervised
                   ? openingLabel(profile.id)
                   : undefined}
                 onclick={(event) =>
@@ -541,7 +542,7 @@
                   <button
                     type="button"
                     class="rounded-sm p-1 text-muted-foreground hover:text-foreground"
-                    title={openingLabel(profile.id)}
+                    use:tooltip={openingLabel(profile.id)}
                     aria-label={`${openingLabel(profile.id)}: ${profile.name}`}
                     disabled={busy || windows.checking}
                     onclick={() =>
@@ -553,7 +554,7 @@
                     <button
                       type="button"
                       class="rounded-sm p-1 text-muted-foreground hover:text-foreground"
-                      title={tUi('vault.open.thisWindow')}
+                      use:tooltip={tUi('vault.open.thisWindow')}
                       aria-label={`${tUi('vault.open.thisWindow')}: ${profile.name}`}
                       disabled={busy || windows.checking}
                       onclick={() =>
@@ -565,7 +566,7 @@
                 <button
                   type="button"
                   class="rounded-sm p-1 text-muted-foreground hover:text-foreground"
-                  title={tUi('vault.rename')}
+                  use:tooltip={tUi('vault.rename')}
                   aria-label={tUi('vault.rename')}
                   disabled={busy}
                   onclick={() => startRename(profile)}
@@ -576,7 +577,7 @@
                   <button
                     type="button"
                     class="rounded-sm p-1 text-muted-foreground hover:text-destructive"
-                    title={tUi('vault.delete')}
+                    use:tooltip={tUi('vault.delete')}
                     aria-label={tUi('vault.delete')}
                     disabled={busy || windows.checking}
                     onclick={() => confirmAndDelete(profile)}
