@@ -643,23 +643,36 @@ pub async fn accept(
 ) -> ApiResult<StatusCode> {
     validate_membership_keys(&body.encryption_key, &body.collection_type)?;
     let mut tx = state.pool.begin().await?;
+    let no_invitation = || ApiError::not_found("Invitation");
     // Lock the collection before anything else, like every other writer.
     // Removing or downgrading the sender takes the same lock, so whether the
-    // invitation still stands is settled before it is acted on.
-    let sender_still_admin = sender_still_admin();
-    let invitation: Option<(i64, i64, i16, i64, i64)> = sqlx::query_as(&format!(
-        "SELECT i.id, i.collection_id, i.access_level, i.from_account_id, c.owner_id
-         FROM invitations i JOIN collections c ON c.id = i.collection_id
-         {sender_still_admin}
-         WHERE i.uid = $1 AND i.to_account_id = $2
-         FOR UPDATE OF c"
-    ))
+    // invitation still stands is settled before it is acted on. It is read
+    // again once the lock is held, in a statement of its own: one that waits
+    // for the lock goes on with the other rows as they were when it started.
+    let collection_id: i64 = sqlx::query_scalar(
+        "SELECT collection_id FROM invitations WHERE uid = $1 AND to_account_id = $2",
+    )
     .bind(&uid)
     .bind(user.account_id)
     .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(no_invitation)?;
+    collections::lock_collection(&mut tx, collection_id).await?;
+    // The invitation is locked too, so withdrawing it waits for this.
+    let sender_still_admin = sender_still_admin();
+    let invitation: Option<(i64, i16, i64, i64)> = sqlx::query_as(&format!(
+        "SELECT i.id, i.access_level, i.from_account_id, c.owner_id
+         FROM invitations i JOIN collections c ON c.id = i.collection_id
+         {sender_still_admin}
+         WHERE i.uid = $1 AND i.to_account_id = $2 AND i.collection_id = $3
+         FOR UPDATE OF i"
+    ))
+    .bind(&uid)
+    .bind(user.account_id)
+    .bind(collection_id)
+    .fetch_optional(&mut *tx)
     .await?;
-    let (invitation_id, collection_id, access_level, sender, owner) =
-        invitation.ok_or_else(|| ApiError::not_found("Invitation"))?;
+    let (invitation_id, access_level, sender, owner) = invitation.ok_or_else(no_invitation)?;
     limits::check_new_member(&mut tx, collection_id, owner, false).await?;
 
     add_member(

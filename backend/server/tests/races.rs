@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use common::keyed::{new_key, public, refused, Extra, Person};
 use common::raw::{Device, Frame, ADMIN, JOINED, READ_WRITE, UPDATE};
+use common::wait_until_blocked;
 use reqwest::Method;
 use serde::Deserialize;
 
@@ -24,31 +25,6 @@ async fn pool() -> sqlx::PgPool {
     sqlx::PgPool::connect(&common::database_url())
         .await
         .expect("connect to the test database")
-}
-
-/// Wait until some backend is stuck on a lock while running a query that
-/// contains `marker`.
-async fn wait_until_blocked(pool: &sqlx::PgPool, marker: &str) {
-    let blocked = async {
-        loop {
-            let waiting: bool = sqlx::query_scalar(
-                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity
-                 WHERE datname = current_database() AND wait_event_type = 'Lock'
-                   AND query LIKE '%' || $1 || '%')",
-            )
-            .bind(marker)
-            .fetch_one(pool)
-            .await
-            .unwrap();
-            if waiting {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    };
-    tokio::time::timeout(Duration::from_secs(10), blocked)
-        .await
-        .unwrap_or_else(|_| panic!("nothing got as far as waiting on: {marker}"));
 }
 
 #[derive(Deserialize)]
@@ -323,6 +299,87 @@ async fn invitation_from_a_downgraded_admin_grants_nothing_even_after_promotion(
     let again = admin.invite(&collection, &guest, READ_WRITE).await;
     assert_eq!(try_accept(&guest, &again).await, 201);
     assert_eq!(guest.try_add_item(&collection).await.0, 200);
+}
+
+/// Take `member` out of `collection` the way the server does, holding the
+/// collection's lock in `tx` until the caller commits.
+async fn remove_held(
+    tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
+    collection: &str,
+    member: &Device,
+) {
+    let (collection, account): (i64, i64) = sqlx::query_as(
+        "SELECT c.id, a.id FROM collections c, accounts a
+         WHERE c.uid = $1 AND a.username = $2
+         FOR UPDATE OF c",
+    )
+    .bind(collection)
+    .bind(&member.name)
+    .fetch_one(&mut **tx)
+    .await
+    .unwrap();
+    sqlx::query("DELETE FROM members WHERE collection_id = $1 AND account_id = $2")
+        .bind(collection)
+        .bind(account)
+        .execute(&mut **tx)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM invitations WHERE collection_id = $1 AND from_account_id = $2")
+        .bind(collection)
+        .bind(account)
+        .execute(&mut **tx)
+        .await
+        .unwrap();
+}
+
+/// A write that arrives while its writer is being removed waits for the
+/// collection, and when its turn comes the writer is no longer a member.
+/// What it would have found before the wait does not let it through.
+#[tokio::test]
+async fn write_that_waited_out_a_removal_is_refused() {
+    let _turn = ONE_AT_A_TIME.lock().await;
+    let url = common::server();
+    let owner = Device::signup(url, "owner").await;
+    let member = Device::signup(url, "member").await;
+    let collection = owner.create_collection().await;
+    owner.share(&collection, &member, READ_WRITE).await;
+
+    let pool = pool().await;
+    let mut removal = pool.begin().await.unwrap();
+    remove_held(&mut removal, &collection, &member).await;
+    let write = member.try_add_item(&collection);
+    let remove = async {
+        wait_until_blocked(&pool, "FOR UPDATE").await;
+        removal.commit().await.unwrap();
+    };
+    let ((status, _), ()) = tokio::join!(write, remove);
+    assert_eq!(status, 404);
+}
+
+/// The same for an invitation accepted while its sender is being removed:
+/// the removal withdraws it, and the acceptance that waited finds it gone.
+#[tokio::test]
+async fn invitation_withdrawn_while_its_acceptance_waits_grants_nothing() {
+    let _turn = ONE_AT_A_TIME.lock().await;
+    let url = common::server();
+    let owner = Device::signup(url, "owner").await;
+    let admin = Device::signup(url, "admin").await;
+    let guest = Device::signup(url, "guest").await;
+    let collection = owner.create_collection().await;
+    owner.share(&collection, &admin, ADMIN).await;
+    let invitation = admin.invite(&collection, &guest, READ_WRITE).await;
+
+    let pool = pool().await;
+    let mut removal = pool.begin().await.unwrap();
+    remove_held(&mut removal, &collection, &admin).await;
+    let accept = try_accept(&guest, &invitation);
+    let remove = async {
+        wait_until_blocked(&pool, "FOR UPDATE").await;
+        removal.commit().await.unwrap();
+    };
+    let (status, ()) = tokio::join!(accept, remove);
+    assert_eq!(status, 404);
+    assert_eq!(guest.try_add_item(&collection).await.0, 404);
 }
 
 /// The server learns that a session ended from a notification, and

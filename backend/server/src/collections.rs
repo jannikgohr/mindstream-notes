@@ -70,7 +70,8 @@ impl Membership {
 /// collection's rows: to them it does not exist.
 ///
 /// With `lock`, the collection row is locked until the transaction ends,
-/// which serialises writers to one collection.
+/// which serialises writers to one collection, and the membership is read
+/// once the lock is held.
 pub(crate) async fn membership(
     conn: &mut PgConnection,
     account_id: i64,
@@ -78,13 +79,25 @@ pub(crate) async fn membership(
     lock: bool,
 ) -> ApiResult<Membership> {
     check_uid(collection_uid)?;
-    let row: Option<(i64, i64, i64, i16)> = sqlx::query_as(&format!(
+    if lock {
+        let id: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM collections WHERE uid = $1 FOR UPDATE")
+                .bind(collection_uid)
+                .fetch_optional(&mut *conn)
+                .await?;
+        if id.is_none() {
+            return Err(ApiError::not_found("Collection"));
+        }
+    }
+    // Never in the statement that locks. One that waits for the lock goes on
+    // with the other rows as they were when it started, so a membership
+    // taken away by whoever held the lock would still let this through.
+    let row: Option<(i64, i64, i64, i16)> = sqlx::query_as(
         "SELECT c.id, c.owner_id, c.stoken, m.access_level
          FROM collections c
          JOIN members m ON m.collection_id = c.id AND m.account_id = $2
-         WHERE c.uid = $1 {}",
-        if lock { "FOR UPDATE OF c" } else { "" }
-    ))
+         WHERE c.uid = $1",
+    )
     .bind(collection_uid)
     .bind(account_id)
     .fetch_optional(conn)
@@ -98,6 +111,18 @@ pub(crate) async fn membership(
         stoken,
         access_level,
     })
+}
+
+/// Lock a collection's row until the transaction ends, the way every writer
+/// to it starts. For callers that reach the collection by something other
+/// than a membership; whatever decides that the write may go ahead must be
+/// read after this, in statements of its own.
+pub(crate) async fn lock_collection(conn: &mut PgConnection, collection_id: i64) -> ApiResult<()> {
+    sqlx::query("SELECT 1 FROM collections WHERE id = $1 FOR UPDATE")
+        .bind(collection_id)
+        .execute(conn)
+        .await?;
+    Ok(())
 }
 
 /// Take `count` consecutive numbers from the change counter and return the

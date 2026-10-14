@@ -406,6 +406,49 @@ async fn link_stands_only_while_its_maker_is_an_admin() {
     assert_eq!(open(url(), &link).await.status, 404);
 }
 
+/// A claim that arrives while the link's maker is being removed waits for
+/// the collection, and when its turn comes the link no longer stands.
+#[tokio::test]
+async fn claim_that_waited_out_its_makers_removal_grants_nothing() {
+    let owner = Person::signup(url(), "owner", false).await;
+    let helper = Person::signup(url(), "helper", false).await;
+    let collection = owner.device().create_collection().await;
+    owner
+        .device()
+        .share(&collection, &helper.device(), ADMIN)
+        .await;
+    let link = share_by_link(&helper, &collection).await;
+    let guest = Person::signup(url(), "guest", false).await;
+
+    // The helper's removal, held open while the guest claims.
+    let pool = sqlx::PgPool::connect(&common::database_url())
+        .await
+        .unwrap();
+    let mut removal = pool.begin().await.unwrap();
+    sqlx::query(
+        "DELETE FROM members m USING collections c, accounts a
+         WHERE c.uid = $1 AND a.username = $2
+           AND m.collection_id = c.id AND m.account_id = a.id",
+    )
+    .bind(&collection)
+    .bind(&helper.name)
+    .execute(&mut *removal)
+    .await
+    .unwrap();
+    sqlx::query("SELECT 1 FROM collections WHERE uid = $1 FOR UPDATE")
+        .bind(&collection)
+        .execute(&mut *removal)
+        .await
+        .unwrap();
+    let remove = async {
+        common::wait_until_blocked(&pool, "FOR UPDATE").await;
+        removal.commit().await.unwrap();
+    };
+    let (claimed, ()) = tokio::join!(claim(&guest, &link), remove);
+    assert_eq!(claimed.status, 404);
+    assert!(!is_member(&guest, &collection).await);
+}
+
 #[tokio::test]
 async fn expired_link_is_refused() {
     let owner = Person::signup(url(), "owner", false).await;

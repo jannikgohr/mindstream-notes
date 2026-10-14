@@ -24,6 +24,31 @@ pub fn database_url() -> String {
     std::env::var("MINDSTREAM_TEST_DATABASE_URL").unwrap_or_else(|_| DEFAULT_DATABASE_URL.into())
 }
 
+/// Wait until some backend is stuck on a lock while running a query that
+/// contains `marker`.
+pub async fn wait_until_blocked(pool: &sqlx::PgPool, marker: &str) {
+    let blocked = async {
+        loop {
+            let waiting: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+                 WHERE datname = current_database() AND wait_event_type = 'Lock'
+                   AND query LIKE '%' || $1 || '%')",
+            )
+            .bind(marker)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            if waiting {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(10), blocked)
+        .await
+        .unwrap_or_else(|_| panic!("nothing got as far as waiting on: {marker}"));
+}
+
 /// Start a server on a free port and return its URL. It lives until the test
 /// process exits.
 pub fn start_server(configure: impl FnOnce(&mut Config) + Send + 'static) -> String {

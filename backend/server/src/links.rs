@@ -119,8 +119,21 @@ impl Link {
 /// stops being an admin of the collection: it was their authority it carried.
 ///
 /// With `lock`, the collection and the link are locked until the transaction
-/// ends, the collection first like every other writer.
+/// ends, the collection first like every other writer. The link is read once
+/// the collection is locked, so that a maker removed by whoever held the
+/// lock is seen to be gone.
 async fn find(conn: &mut PgConnection, uid: &str, lock: bool) -> ApiResult<Option<Link>> {
+    if lock {
+        let collection: Option<i64> =
+            sqlx::query_scalar("SELECT collection_id FROM invite_links WHERE uid = $1")
+                .bind(uid)
+                .fetch_optional(&mut *conn)
+                .await?;
+        let Some(collection) = collection else {
+            return Ok(None);
+        };
+        collections::lock_collection(&mut *conn, collection).await?;
+    }
     Ok(sqlx::query_as(&format!(
         "SELECT l.id, l.uid, l.version, l.collection_id, c.uid AS collection, c.owner_id,
                 l.access_level, l.signed_encryption_key, l.claim_pubkey, l.max_uses, l.uses,
@@ -133,7 +146,7 @@ async fn find(conn: &mut PgConnection, uid: &str, lock: bool) -> ApiResult<Optio
          JOIN members m ON m.collection_id = c.id AND m.account_id = sender.id
                        AND m.access_level = {ACCESS_ADMIN}
          WHERE l.uid = $1 {}",
-        if lock { "FOR UPDATE OF c, l" } else { "" }
+        if lock { "FOR UPDATE OF l" } else { "" }
     ))
     .bind(uid)
     .fetch_optional(conn)
