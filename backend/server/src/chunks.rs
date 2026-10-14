@@ -3,7 +3,8 @@
 //! The client splits content into chunks and addresses each by a keyed hash
 //! of its bytes, so within a collection an identical chunk is stored once
 //! however many revisions refer to it. Small chunks sit in the database row;
-//! the large chunks of one upload go into a single blob.
+//! each large chunk goes into a blob of its own, so a chunk that loses its
+//! insert to a concurrent writer takes only its own bytes with it.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -28,6 +29,14 @@ use crate::AppState;
 /// The client's chunker never produces more than about 64 KiB, padded. This
 /// leaves room and still bounds what one row can hold.
 pub(crate) const MAX_CHUNK_BYTES: usize = 1024 * 1024;
+/// What one chunk upload may carry over the wire: the chunk itself with room
+/// for the framing around it. Anything larger is refused before it is
+/// buffered, instead of once the whole body is in memory.
+pub(crate) const MAX_CHUNK_UPLOAD_BYTES: usize = 2 * MAX_CHUNK_BYTES;
+/// Chunk ids read from the database in one round-trip. A page may name far
+/// more chunks than that; they are read in turns so no single query carries
+/// them all.
+const INDEX_WINDOW: usize = 1000;
 
 /// Of the blob keys in `$1`, those no chunk row points into.
 pub(crate) const UNUSED_BLOBS: &str = "SELECT key FROM UNNEST($1::text[]) AS key
@@ -51,6 +60,15 @@ struct ChunkRow {
 
 fn no_content() -> ApiError {
     ApiError::internal("chunk row holds no content")
+}
+
+/// Where a chunk row says its bytes are. Sizes and offsets come back from
+/// the database signed; a corrupt row must error, not wrap into a huge
+/// range that reads half the disk.
+fn chunk_range(offset: i64, size: i32) -> ApiResult<Range> {
+    let offset = u64::try_from(offset).map_err(|_| no_content())?;
+    let len = usize::try_from(size).map_err(|_| no_content())?;
+    Ok(Range { offset, len })
 }
 
 /// How many of these sizes, taken in order from the first, fit a budget
@@ -148,11 +166,22 @@ pub(crate) async fn load(
         return Ok(loaded);
     }
 
-    let index: Vec<(i64, String, i32)> =
-        sqlx::query_as("SELECT id, uid, size FROM chunks WHERE id = ANY($1)")
-            .bind(&referenced)
+    let index: Vec<(i64, String, i32)> = {
+        // A page may name far more chunks than one query should carry, so
+        // the index is read in turns. The turns add up to the same rows.
+        let mut index = Vec::with_capacity(referenced.len().min(INDEX_WINDOW));
+        for window in referenced.chunks(INDEX_WINDOW) {
+            sqlx::query_as::<_, (i64, String, i32)>(
+                "SELECT id, uid, size FROM chunks WHERE id = ANY($1)",
+            )
+            .bind(window)
             .fetch_all(&mut *conn)
-            .await?;
+            .await?
+            .into_iter()
+            .for_each(|row| index.push(row));
+        }
+        index
+    };
     let mut sizes: HashMap<i64, i64> = HashMap::with_capacity(index.len());
     for (id, uid, size) in index {
         sizes.insert(id, i64::from(size));
@@ -178,12 +207,17 @@ pub(crate) async fn load(
     }
     let wanted: Vec<i64> = loaded.uses_left.keys().copied().collect();
 
-    let rows: Vec<ChunkRow> = sqlx::query_as(
-        "SELECT id, size, data, blob_key, blob_offset FROM chunks WHERE id = ANY($1)",
-    )
-    .bind(&wanted)
-    .fetch_all(conn)
-    .await?;
+    let mut rows: Vec<ChunkRow> = Vec::new();
+    for window in wanted.chunks(INDEX_WINDOW) {
+        sqlx::query_as::<_, ChunkRow>(
+            "SELECT id, size, data, blob_key, blob_offset FROM chunks WHERE id = ANY($1)",
+        )
+        .bind(window)
+        .fetch_all(&mut *conn)
+        .await?
+        .into_iter()
+        .for_each(|row| rows.push(row));
+    }
     // Group what lives in the blob store by blob, so each is opened once.
     let mut by_blob: HashMap<String, Vec<(i64, Range)>> = HashMap::new();
     for row in rows {
@@ -192,10 +226,7 @@ pub(crate) async fn load(
                 loaded.content.insert(row.id, data);
             }
             (None, Some(key), Some(offset)) => {
-                let range = Range {
-                    offset: offset as u64,
-                    len: row.size as usize,
-                };
+                let range = chunk_range(offset, row.size)?;
                 by_blob.entry(key).or_default().push((row.id, range));
             }
             _ => return Err(no_content()),
@@ -315,7 +346,9 @@ pub(crate) async fn store(
     let mut sizes: Vec<i32> = Vec::new();
     let mut inline: Vec<Option<Vec<u8>>> = Vec::new();
     let mut offsets: Vec<Option<i64>> = Vec::new();
-    let mut blob = Vec::new();
+    // One blob per large chunk, so a chunk that loses the insert below
+    // takes only its own bytes with it instead of orphaning a shared blob.
+    let mut blob_keys: Vec<Option<String>> = Vec::new();
     for uid in &referenced {
         if ids.contains_key(uid) {
             continue;
@@ -327,33 +360,25 @@ pub(crate) async fn store(
                 "Tried to create a new chunk without content",
             ));
         };
-        sizes.push(content.len() as i32);
+        sizes.push(i32::try_from(content.len()).map_err(|_| {
+            ApiError::internal("a chunk is too large for its row")
+        })?);
         if content.len() <= state.config.inline_chunk_bytes {
             inline.push(Some(content));
             offsets.push(None);
+            blob_keys.push(None);
         } else {
-            offsets.push(Some(blob.len() as i64));
-            blob.extend_from_slice(&content);
+            let key = BlobStore::new_key(&collection.uid);
+            offsets.push(Some(0));
+            written.put(key.clone(), content).await?;
             inline.push(None);
+            blob_keys.push(Some(key));
         }
         uids.push(uid.clone());
     }
     if uids.is_empty() {
         return Ok((ids, 0));
     }
-
-    // The blob first: a row must never point at bytes that are not there
-    // yet. If the transaction then fails, `written` takes the blob away.
-    let mut blob_key = None;
-    if !blob.is_empty() {
-        let key = BlobStore::new_key(&collection.uid);
-        written.put(key.clone(), blob).await?;
-        blob_key = Some(key);
-    }
-    let blob_keys: Vec<Option<String>> = offsets
-        .iter()
-        .map(|offset| offset.and(blob_key.clone()))
-        .collect();
 
     let inserted: Vec<(String, i64, i32)> = sqlx::query_as(
         "INSERT INTO chunks (collection_id, uid, size, data, blob_key, blob_offset)
@@ -372,9 +397,21 @@ pub(crate) async fn store(
     .fetch_all(&mut *conn)
     .await?;
     let mut bytes_added = 0i64;
+    let mut inserted_uids = HashSet::new();
     for (uid, id, size) in inserted {
         bytes_added += i64::from(size);
-        ids.insert(uid, id);
+        ids.insert(uid.clone(), id);
+        inserted_uids.insert(uid);
+    }
+    // A chunk that lost the insert to a concurrent writer leaves its blob
+    // behind. Drop those blobs now, before the commit keeps what is left:
+    // only winners' bytes are charged, and only winners' blobs stay.
+    for (uid, key) in uids.iter().zip(blob_keys.iter()) {
+        if let Some(key) = key {
+            if !inserted_uids.contains(uid) {
+                written.abandon(key).await?;
+            }
+        }
     }
     // A chunk uploaded on its own at the same moment wins the insert above
     // and is not returned by it. Pick those up.
@@ -426,8 +463,43 @@ pub fn reclaim_blobs_periodically(state: AppState) {
                 Ok(count) => tracing::info!("removed {count} blob(s) that nothing used"),
                 Err(_) => tracing::warn!("could not look for blobs that nothing uses"),
             }
+            match audit_storage(&state.pool).await {
+                Ok(drifted) if drifted.is_empty() => {}
+                Ok(drifted) => {
+                    for (uid, used, counted) in drifted.iter().take(20) {
+                        tracing::warn!(
+                            "collection {uid} counts {used} stored bytes but holds {counted}"
+                        );
+                    }
+                }
+                Err(_) => tracing::warn!("could not audit stored bytes"),
+            }
         }
     });
+}
+
+/// Collections whose counted bytes drifted from what their rows hold.
+///
+/// The recount is the same one deleting a collection uses, in a single
+/// statement so concurrent writes cannot skew it: incremental accounting
+/// must always agree with it. A mismatch is drift — an undercount hides
+/// storage from the owner's plan — and is reported, not repaired.
+pub(crate) async fn audit_storage(pool: &PgPool) -> Result<Vec<(String, i64, i64)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT c.uid, c.bytes_used,
+                (SELECT COALESCE(sum(octet_length(r.meta)), 0)
+                 FROM revisions r JOIN items i ON i.id = r.item_id
+                 WHERE i.collection_id = c.id)
+                + (SELECT COALESCE(sum(size), 0) FROM chunks WHERE collection_id = c.id)
+         FROM collections c
+         WHERE c.bytes_used !=
+               (SELECT COALESCE(sum(octet_length(r.meta)), 0)
+                FROM revisions r JOIN items i ON i.id = r.item_id
+                WHERE i.collection_id = c.id)
+               + (SELECT COALESCE(sum(size), 0) FROM chunks WHERE collection_id = c.id)",
+    )
+    .fetch_all(pool)
+    .await
 }
 
 /// Upload one chunk ahead of the revision that will refer to it. The item in
@@ -464,7 +536,8 @@ pub async fn upload_chunk(
         return Err(chunk_exists());
     }
 
-    let size = body.len() as i32;
+    let size = i32::try_from(body.len())
+        .map_err(|_| ApiError::internal("a chunk is too large for its row"))?;
     let mut written = Uncommitted::new(&state.blobs);
     let (data, blob_key, blob_offset) = if body.len() <= state.config.inline_chunk_bytes {
         (Some(body.to_vec()), None, None)
@@ -535,10 +608,7 @@ pub async fn download_chunk(
     let content = match (row.data, row.blob_key, row.blob_offset) {
         (Some(data), _, _) => data,
         (None, Some(key), Some(offset)) => {
-            let range = Range {
-                offset: offset as u64,
-                len: row.size as usize,
-            };
+            let range = chunk_range(offset, row.size)?;
             state
                 .blobs
                 .get_ranges(&key, vec![range])

@@ -1,9 +1,9 @@
 //! Where chunks too large to keep in a database row are stored.
 //!
-//! A blob holds all the large chunks of one upload, back to back, and a chunk
-//! row records which blob and where in it. An attachment is hundreds of
-//! chunks, so one blob per upload means one write and one flush to disk for
-//! it, not hundreds, and one object in a bucket once this runs on S3.
+//! A blob holds one large chunk, and a chunk row records which blob and
+//! where in it. An attachment is hundreds of chunks, so one blob per chunk
+//! means one write and one flush to disk for each, and one object in a bucket
+//! once this runs on S3.
 //!
 //! The storage itself is the `object_store` crate. Only its local filesystem
 //! is switched on, with the option that makes a finished write survive a
@@ -30,6 +30,10 @@ use crate::wire::valid_uid;
 
 /// How many blobs one request reads at once.
 const CONCURRENCY: usize = 16;
+/// How many blob reads are started before the earlier ones are collected.
+/// The semaphore above caps how many run together; this caps how many wait
+/// for a turn, so one request cannot hold a task per blob of a whole page.
+const REQUEST_WINDOW: usize = 64;
 
 /// A chunk's place inside a blob.
 #[derive(Clone, Copy, Debug)]
@@ -197,10 +201,19 @@ impl BlobStore {
                 io::ErrorKind::InvalidInput,
                 "not a blob key",
             ));
-        }        let wanted: Vec<std::ops::Range<u64>> = ranges
-            .iter()
-            .map(|range| range.offset..range.offset + range.len as u64)
-            .collect();
+        }
+        let mut wanted = Vec::with_capacity(ranges.len());
+        for range in &ranges {
+            wanted.push(
+                range
+                    .offset
+                    .checked_add(range.len as u64)
+                    .map(|end| range.offset..end)
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "range runs past the end")
+                    })?,
+            );
+        }
         let parts = self
             .store
             .get_ranges(&Key::from(key), &wanted)
@@ -230,19 +243,26 @@ impl BlobStore {
         requests: Vec<(String, Vec<Range>)>,
     ) -> io::Result<Vec<Vec<Vec<u8>>>> {
         let limit = Arc::new(Semaphore::new(CONCURRENCY));
-        let mut tasks = JoinSet::new();
-        for (index, (key, ranges)) in requests.into_iter().enumerate() {
-            let store = self.clone();
-            let limit = Arc::clone(&limit);
-            tasks.spawn(async move {
-                let _permit = limit.acquire().await.map_err(io::Error::other)?;
-                Ok::<_, io::Error>((index, store.get_ranges(&key, ranges).await?))
-            });
-        }
-        let mut blobs = vec![Vec::new(); tasks.len()];
-        while let Some(done) = tasks.join_next().await {
-            let (index, data) = done.map_err(io::Error::other)??;
-            blobs[index] = data;
+        let mut blobs = vec![Vec::new(); requests.len()];
+        let mut taken = 0;
+        while taken < requests.len() {
+            let end = (taken + REQUEST_WINDOW).min(requests.len());
+            let mut tasks = JoinSet::new();
+            for (index, (key, ranges)) in requests[taken..end].iter().enumerate() {
+                let store = self.clone();
+                let limit = Arc::clone(&limit);
+                let key = key.clone();
+                let ranges = ranges.clone();
+                tasks.spawn(async move {
+                    let _permit = limit.acquire().await.map_err(io::Error::other)?;
+                    Ok::<_, io::Error>((taken + index, store.get_ranges(&key, ranges).await?))
+                });
+            }
+            taken = end;
+            while let Some(done) = tasks.join_next().await {
+                let (index, data) = done.map_err(io::Error::other)??;
+                blobs[index] = data;
+            }
         }
         Ok(blobs)
     }
@@ -281,6 +301,17 @@ impl Uncommitted {
     /// The transaction is about to commit, and the blobs are its to keep.
     pub fn keep(mut self) {
         self.keys.clear();
+    }
+
+    /// Drop one blob before the commit: its chunk lost the insert to a
+    /// concurrent writer, so no row will ever point at it. Removing it now,
+    /// instead of leaving it for the reaper, keeps lost races from filling
+    /// the disk with blobs nothing refers to.
+    pub async fn abandon(&mut self, key: &str) -> io::Result<()> {
+        if let Some(pos) = self.keys.iter().position(|kept| kept == key) {
+            self.keys.remove(pos);
+        }
+        self.store.remove(vec![key.to_owned()]).await
     }
 }
 
@@ -439,8 +470,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn removing_blobs_by_key_spares_the_rest_and_forgives_the_missing() {
-        let dir = scratch_dir();
+    async fn removing_blobs_by_key_spares_the_rest_and_forgives_the_missing() {        let dir = scratch_dir();
         let store = BlobStore::open(&dir).await.unwrap();
         let gone = BlobStore::new_key("AbCdEf");
         let kept = BlobStore::new_key("AbCdEf");
@@ -460,6 +490,29 @@ mod tests {
         );
         // Removing it again changes nothing and is no error.
         store.remove(vec![gone]).await.unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn abandoned_blobs_go_at_once_while_the_rest_wait_for_the_commit() {
+        let dir = scratch_dir();
+        let store = BlobStore::open(&dir).await.unwrap();
+        let whole = || vec![Range { offset: 0, len: 4 }];
+        let (loser, winner) = (BlobStore::new_key("AbCdEf"), BlobStore::new_key("AbCdEf"));
+
+        let mut written = Uncommitted::new(&store);
+        written.put(loser.clone(), b"data".to_vec()).await.unwrap();
+        written.put(winner.clone(), b"data".to_vec()).await.unwrap();
+        // The loser's chunk lost the insert: its blob goes now, while the
+        // winner's stays until the commit keeps it.
+        written.abandon(&loser).await.unwrap();
+        assert!(store.get_ranges(&loser, whole()).await.is_err());
+        assert!(store.get_ranges(&winner, whole()).await.is_ok());
+        // Abandoning what is already gone, or never was a blob, is no error.
+        written.abandon(&loser).await.unwrap();
+        written.keep();
+        assert!(store.get_ranges(&winner, whole()).await.is_ok());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

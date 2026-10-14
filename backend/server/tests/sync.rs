@@ -409,13 +409,24 @@ fn large_content_round_trips_through_the_blob_store() {
         in_blob_store >= 4,
         "only {in_blob_store} chunks left the database"
     );
-    // One upload, one blob, however many chunks it carried.
+    // One blob per chunk: a chunk that loses its insert to a concurrent
+    // writer takes only its own bytes with it instead of orphaning a blob
+    // shared with the winners.
     let blobs = query_i64(
         "SELECT count(DISTINCT k.blob_key) FROM chunks k
          JOIN collections c ON c.id = k.collection_id WHERE c.uid = $1",
         collection.uid(),
     );
-    assert_eq!(blobs, 1);
+    assert_eq!(blobs, in_blob_store);
+    let shared = query_i64(
+        "SELECT count(*) FROM
+          (SELECT k.blob_key FROM chunks k
+           JOIN collections c ON c.id = k.collection_id
+           WHERE c.uid = $1 AND k.blob_key IS NOT NULL
+           GROUP BY k.blob_key HAVING count(*) > 1) AS shared",
+        collection.uid(),
+    );
+    assert_eq!(shared, 0, "a blob holds chunks of two uploads");
 
     let fetched = items.fetch(file.uid(), None).unwrap();
     assert_eq!(fetched.content().unwrap(), content);
