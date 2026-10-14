@@ -1109,6 +1109,12 @@ async fn write_items(
     let mut tx = state.pool.begin().await?;
     let collection = membership(&mut tx, user.account_id, &collection_uid, true).await?;
     collection.require_write()?;
+    // The collection's own item holds its name, and for a shared folder who
+    // shared which folder. Marking it deleted ends the share for everyone in
+    // it. Like inviting and removing members, that is for an admin.
+    if body.items.iter().any(|item| item.uid == collection.uid) {
+        collection.require_admin()?;
+    }
 
     // The client may require that nothing at all changed in the collection
     // since it last looked. Anything that is not the current cursor fails,

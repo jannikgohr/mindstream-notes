@@ -73,6 +73,55 @@ fn read_only_member_can_read_but_not_write() {
     assert_eq!(unchanged.content().unwrap(), b"body");
 }
 
+/// The collection's own item names it and, for a shared folder, says who
+/// shared which folder; deleting it ends the share for every member. Write
+/// access to the collection's items is not enough for either.
+#[test]
+fn only_an_admin_renames_or_deletes_the_collection() {
+    let owner = signup("owner");
+    let writer = signup("writer");
+    let collection = new_collection(&owner, "shared");
+    let writer_view = share(
+        &owner,
+        &collection,
+        &writer,
+        CollectionAccessLevel::ReadWrite,
+    );
+    let writer_collections = writer.collection_manager().unwrap();
+
+    let mut renamed = writer_collections.fetch(collection.uid(), None).unwrap();
+    renamed.set_meta(&named("taken over")).unwrap();
+    assert_refused!(
+        writer_collections.upload(&renamed, None),
+        Error::PermissionDenied(_)
+    );
+    assert_refused!(
+        writer_collections.transaction(&renamed, None),
+        Error::PermissionDenied(_)
+    );
+    let mut deleted = writer_collections.fetch(collection.uid(), None).unwrap();
+    deleted.delete().unwrap();
+    assert_refused!(
+        writer_collections.upload(&deleted, None),
+        Error::PermissionDenied(_)
+    );
+    // The items are still theirs to write.
+    let items = writer_collections.item_manager(&writer_view).unwrap();
+    let note = items.create(&named("note"), b"body").unwrap();
+    items.batch(iter::once(&note), None).unwrap();
+
+    owner
+        .collection_manager()
+        .unwrap()
+        .member_manager(&collection)
+        .unwrap()
+        .modify_access_level(&writer.name, CollectionAccessLevel::Admin)
+        .unwrap();
+    let mut renamed = writer_collections.fetch(collection.uid(), None).unwrap();
+    renamed.set_meta(&named("renamed by an admin")).unwrap();
+    writer_collections.upload(&renamed, None).unwrap();
+}
+
 #[test]
 fn removed_member_loses_access_at_once() {
     let owner = signup("owner");

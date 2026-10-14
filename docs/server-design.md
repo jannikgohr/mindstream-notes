@@ -451,6 +451,10 @@ uses.
   delete and recreate every item for every member.
 - **Member changes are one request** and take effect in open rooms
   immediately.
+- **Only an admin changes the folder itself.** The collection's own item
+  holds the folder's name and the manifest, and marking it deleted ends the
+  share. Writing it takes admin access, as inviting and removing members do,
+  not just write access to the folder's notes.
 - **An invitation is only as good as its sender.** It is accepted on the
   authority of the admin who sent it. Accepting checks that the sender is
   still an admin of the space on an account that is still enabled, under the
