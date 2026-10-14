@@ -146,6 +146,38 @@ async fn content_marked_deleted_is_held_to_the_plan_like_any_other() {
     assert_eq!(push(&device, &collection, vec![tombstone]).await.0, 200);
 }
 
+/// A new chunk is stored with the first content the request gives it,
+/// whichever item that comes with, and is charged for that content even
+/// when an item before it names the chunk without any.
+#[tokio::test]
+async fn chunk_named_before_its_content_is_charged_for_that_content() {
+    let device = Device::signup(common::server(), "content-later").await;
+    let collection = device.create_collection().await;
+    let pool = pool().await;
+    sqlx::query(
+        "INSERT INTO entitlements (account_id, storage_limit_bytes)
+         SELECT id, $2 FROM accounts WHERE username = $1",
+    )
+    .bind(&device.name)
+    .bind(KIB as i64)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let before = bytes_used(&pool, &collection).await;
+
+    let (shared, content) = chunk(1, 4 * KIB);
+    let items = vec![
+        revision(&new_uid(), false, vec![(shared.clone(), None)]),
+        revision(&new_uid(), false, vec![(shared, content)]),
+    ];
+    assert_eq!(
+        push(&device, &collection, items).await,
+        (402, "storage_full".to_owned())
+    );
+    assert_eq!(bytes_used(&pool, &collection).await, before);
+    assert_eq!(count(&pool, "chunks", &collection).await, 0);
+}
+
 /// Deleting an item gives its storage back: the content goes, its earlier
 /// revisions go, and what is left is the tombstone.
 #[tokio::test]

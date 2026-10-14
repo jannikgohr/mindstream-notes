@@ -230,26 +230,32 @@ pub(crate) async fn measure(
         .collect()
     };
 
-    let mut counted = HashSet::new();
-    let mut new_bytes = 0i64;
-    let mut largest = 0i64;
-    for item in items {
-        let mut size = 0i64;
-        for chunk in &item.content.chunks {
-            let uploaded = chunk.1.as_ref().map_or(0, |content| content.len() as i64);
-            match stored.get(&chunk.0) {
-                Some(existing) => size += i64::from(*existing),
-                None => {
-                    size += uploaded;
-                    // A chunk shared by several items is stored once.
-                    if counted.insert(chunk.0.as_str()) {
-                        new_bytes += uploaded;
-                    }
-                }
-            }
+    // A new chunk is stored once, with the first content the request gives
+    // it, as `store` does. An item may name it without content and leave
+    // that to another, so its size is that content's wherever it appears.
+    let mut uploaded: HashMap<&str, i64> = HashMap::new();
+    for chunk in items.iter().flat_map(|item| &item.content.chunks) {
+        if let (Some(content), false) = (&chunk.1, stored.contains_key(&chunk.0)) {
+            uploaded
+                .entry(chunk.0.as_str())
+                .or_insert(content.len() as i64);
         }
-        largest = largest.max(size);
     }
+    let new_bytes = uploaded.values().sum();
+    let largest = items
+        .iter()
+        .map(|item| {
+            item.content
+                .chunks
+                .iter()
+                .map(|chunk| match stored.get(&chunk.0) {
+                    Some(existing) => i64::from(*existing),
+                    None => uploaded.get(chunk.0.as_str()).copied().unwrap_or(0),
+                })
+                .sum::<i64>()
+        })
+        .max()
+        .unwrap_or(0);
     Ok((new_bytes, largest))
 }
 
