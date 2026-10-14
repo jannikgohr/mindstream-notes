@@ -258,6 +258,11 @@ Chunks are shared between revisions, so a chunk is only removed once nothing
 refers to it. Files are removed after the transaction commits. A crash in
 between leaves a file nothing points to, never a row that points to nothing.
 
+A write stores its file before the rows that point into it, and removes the
+file again when it fails before committing. Whatever is left all the same, by
+a crash or by a commit whose answer was lost, is found by a sweep every six
+hours: a file older than a day that no row points into goes.
+
 The exception that lets deletions past a full or lapsed plan holds for
 deletions only. A revision that is marked deleted and still carries content
 is a write.

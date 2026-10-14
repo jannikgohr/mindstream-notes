@@ -6,16 +6,19 @@
 //! the large chunks of one upload go into a single blob.
 
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
+use futures_util::stream::TryChunksError;
+use futures_util::TryStreamExt;
 use serde_bytes::ByteBuf;
-use sqlx::PgConnection;
+use sqlx::{PgConnection, PgPool};
 
 use crate::auth::AuthUser;
-use crate::blob::{BlobStore, Range};
+use crate::blob::{BlobStore, Range, Uncommitted};
 use crate::collections::{membership, Membership};
 use crate::error::{ApiError, ApiResult};
 use crate::limits;
@@ -25,6 +28,17 @@ use crate::AppState;
 /// The client's chunker never produces more than about 64 KiB, padded. This
 /// leaves room and still bounds what one row can hold.
 pub(crate) const MAX_CHUNK_BYTES: usize = 1024 * 1024;
+
+/// Of the blob keys in `$1`, those no chunk row points into.
+pub(crate) const UNUSED_BLOBS: &str = "SELECT key FROM UNNEST($1::text[]) AS key
+     WHERE NOT EXISTS (SELECT 1 FROM chunks c WHERE c.blob_key = key)";
+/// How long a blob may have gone without rows before the sweep takes it. A
+/// write puts its blob before it inserts the rows and commits them moments
+/// later. This is far longer than any transaction stays open.
+const RECLAIM_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
+const RECLAIM_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+/// Blob keys asked about in one query.
+const RECLAIM_BATCH: usize = 1000;
 
 #[derive(sqlx::FromRow)]
 struct ChunkRow {
@@ -260,12 +274,14 @@ pub(crate) async fn measure(
 }
 
 /// Make sure every chunk the revisions refer to is stored, and return their
-/// row ids and how many new bytes that took.
+/// row ids and how many new bytes that took. A blob it writes is noted in
+/// `written`, which removes it unless the transaction goes on to commit.
 pub(crate) async fn store(
     state: &AppState,
     conn: &mut PgConnection,
     collection: &Membership,
     items: &mut [wire::Item],
+    written: &mut Uncommitted,
 ) -> ApiResult<(HashMap<String, i64>, i64)> {
     // A chunk can appear in several revisions; keep the first copy of its
     // content and drop the rest.
@@ -327,12 +343,11 @@ pub(crate) async fn store(
     }
 
     // The blob first: a row must never point at bytes that are not there
-    // yet. If the transaction then fails, the blob is left behind unused,
-    // which costs space and nothing else.
+    // yet. If the transaction then fails, `written` takes the blob away.
     let mut blob_key = None;
     if !blob.is_empty() {
         let key = BlobStore::new_key(&collection.uid);
-        state.blobs.put(&key, blob).await?;
+        written.put(key.clone(), blob).await?;
         blob_key = Some(key);
     }
     let blob_keys: Vec<Option<String>> = offsets
@@ -374,6 +389,47 @@ pub(crate) async fn store(
     Ok((ids, bytes_added))
 }
 
+/// Remove the blobs written more than `grace` ago that no chunk row points
+/// into, and return how many there were. A write cleans up after itself when
+/// it fails, but not after a crash, nor when it cannot tell whether its
+/// commit went through; nothing else would ever take those blobs away.
+pub(crate) async fn reclaim_blobs(
+    pool: &PgPool,
+    blobs: &BlobStore,
+    grace: Duration,
+) -> ApiResult<usize> {
+    let mut written = blobs
+        .written_before(grace)
+        .try_chunks(RECLAIM_BATCH)
+        .map_err(|TryChunksError(_, err)| err);
+    let mut reclaimed = 0;
+    while let Some(keys) = written.try_next().await? {
+        let unused: Vec<String> = sqlx::query_scalar(UNUSED_BLOBS)
+            .bind(&keys)
+            .fetch_all(pool)
+            .await?;
+        reclaimed += unused.len();
+        blobs.remove(unused).await?;
+    }
+    Ok(reclaimed)
+}
+
+/// Sweep for blobs nothing uses, now and then for as long as the process
+/// runs, see [`reclaim_blobs`].
+pub fn reclaim_blobs_periodically(state: AppState) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(RECLAIM_EVERY);
+        loop {
+            tick.tick().await;
+            match reclaim_blobs(&state.pool, &state.blobs, RECLAIM_GRACE).await {
+                Ok(0) => {}
+                Ok(count) => tracing::info!("removed {count} blob(s) that nothing used"),
+                Err(_) => tracing::warn!("could not look for blobs that nothing uses"),
+            }
+        }
+    });
+}
+
 /// Upload one chunk ahead of the revision that will refer to it. The item in
 /// the path need not exist yet.
 pub async fn upload_chunk(
@@ -406,11 +462,12 @@ pub async fn upload_chunk(
     }
 
     let size = body.len() as i32;
+    let mut written = Uncommitted::new(&state.blobs);
     let (data, blob_key, blob_offset) = if body.len() <= state.config.inline_chunk_bytes {
         (Some(body.to_vec()), None, None)
     } else {
         let key = BlobStore::new_key(&collection.uid);
-        state.blobs.put(&key, body.to_vec()).await?;
+        written.put(key.clone(), body.to_vec()).await?;
         (None, Some(key), Some(0i64))
     };
     let inserted = sqlx::query(
@@ -434,6 +491,7 @@ pub async fn upload_chunk(
         .bind(i64::from(size))
         .execute(&mut *tx)
         .await?;
+    written.keep();
     tx.commit().await?;
     Ok(StatusCode::CREATED)
 }
@@ -482,6 +540,7 @@ pub async fn download_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keys::{random_bytes, to_base64};
 
     #[test]
     fn content_goes_out_for_the_revisions_that_fit_together_from_the_first() {
@@ -497,5 +556,63 @@ mod tests {
         assert_eq!(fit(&[0, 0, 0, 0], 0), 4);
         // Sizes that would overflow when added up do not wrap round to fit.
         assert_eq!(fit(&[i64::MAX - 5, 10, 1], i64::MAX - 1), 1);
+    }
+
+    /// The sweep takes an old blob that no row points into, and leaves the
+    /// blobs rows point into, the young ones, and files that are not blobs.
+    #[tokio::test]
+    async fn sweep_takes_only_old_blobs_that_nothing_uses() {
+        let pool = crate::testing::pool().await;
+        let dir = std::env::temp_dir().join(format!(
+            "mindstream-reclaim-test-{}",
+            to_base64(&random_bytes::<8>())
+        ));
+        let blobs = BlobStore::open(&dir).await.unwrap();
+        let collection = to_base64(&random_bytes::<16>());
+        let (used, unused) = (
+            BlobStore::new_key(&collection),
+            BlobStore::new_key(&collection),
+        );
+        for key in [&used, &unused] {
+            blobs.put(key, b"data".to_vec()).await.unwrap();
+        }
+        std::fs::write(dir.join("secret.key"), b"not a blob").unwrap();
+        let owner: i64 = sqlx::query_scalar(
+            "WITH owner AS (
+                 INSERT INTO accounts (username, username_key, email, version, salt,
+                                       login_pubkey, pubkey, encrypted_content)
+                 VALUES ($1, $1, '', 1, '', '', '', '') RETURNING id
+             ), collection AS (
+                 INSERT INTO collections (uid, owner_id, stoken)
+                 SELECT $1, id, 0 FROM owner RETURNING id
+             ), chunk AS (
+                 INSERT INTO chunks (collection_id, uid, size, blob_key, blob_offset)
+                 SELECT id, 'chunk', 4, $2, 0 FROM collection
+             )
+             SELECT id FROM owner",
+        )
+        .bind(&collection)
+        .bind(&used)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let hour = Duration::from_secs(3600);
+        assert_eq!(reclaim_blobs(&pool, &blobs, hour).await.unwrap(), 0);
+        assert_eq!(
+            reclaim_blobs(&pool, &blobs, Duration::ZERO).await.unwrap(),
+            1
+        );
+        let whole = || vec![Range { offset: 0, len: 4 }];
+        assert!(blobs.get_ranges(&unused, whole()).await.is_err());
+        assert!(blobs.get_ranges(&used, whole()).await.is_ok());
+        assert!(dir.join("secret.key").exists());
+
+        sqlx::query("DELETE FROM accounts WHERE id = $1")
+            .bind(owner)
+            .execute(&pool)
+            .await
+            .unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

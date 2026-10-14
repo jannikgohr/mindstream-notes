@@ -132,6 +132,7 @@ impl AppState {
         }));
         events::listen(state.clone());
         edge::forget_idle_callers(state.clone());
+        chunks::reclaim_blobs_periodically(state.clone());
         Ok(state)
     }
 }

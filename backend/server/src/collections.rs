@@ -16,6 +16,7 @@ use serde_bytes::ByteBuf;
 use sqlx::PgConnection;
 
 use crate::auth::AuthUser;
+use crate::blob::Uncommitted;
 use crate::chunks;
 use crate::error::{ApiError, ApiResult, FieldError};
 use crate::events::{self, Event};
@@ -457,7 +458,7 @@ pub async fn create_collection(
         access_level: ACCESS_ADMIN,
     };
 
-    let stoken = store_revisions(
+    let stored = store_revisions(
         &state,
         &mut tx,
         &collection,
@@ -465,9 +466,10 @@ pub async fn create_collection(
         vec![body.item],
         &HashMap::new(),
     )
-    .await?
-    .stoken
-    .ok_or_else(|| ApiError::internal("a new collection stored no revision"))?;
+    .await?;
+    let stoken = stored
+        .stoken
+        .ok_or_else(|| ApiError::internal("a new collection stored no revision"))?;
     sqlx::query(
         "INSERT INTO members
              (collection_id, account_id, access_level, encryption_key, collection_type, stoken)
@@ -487,6 +489,7 @@ pub async fn create_collection(
         session: Some(user.session_id),
     };
     events::publish(&mut tx, &event).await?;
+    stored.written.keep();
     tx.commit().await?;
     Ok(StatusCode::CREATED)
 }
@@ -753,6 +756,9 @@ pub(crate) struct Stored {
     /// Blobs no row points into any more. They can go once the transaction
     /// has committed, and not before: until then the rows may come back.
     pub freed_blobs: Vec<String>,
+    /// Blobs the write added. Kept by calling `keep` just before the
+    /// commit; dropped, they go.
+    pub written: Uncommitted,
 }
 
 /// Delete the revisions of these items that are no longer kept, then the
@@ -826,13 +832,10 @@ async fn prune(
     }
     // A blob holds the chunks of one upload. It goes when the last of them
     // has.
-    let unused: Vec<String> = sqlx::query_scalar(
-        "SELECT key FROM UNNEST($1::text[]) AS key
-         WHERE NOT EXISTS (SELECT 1 FROM chunks c WHERE c.blob_key = key)",
-    )
-    .bind(&blobs)
-    .fetch_all(conn)
-    .await?;
+    let unused: Vec<String> = sqlx::query_scalar(chunks::UNUSED_BLOBS)
+        .bind(&blobs)
+        .fetch_all(conn)
+        .await?;
     Ok((bytes, unused))
 }
 
@@ -874,10 +877,12 @@ async fn store_revisions(
             .get(&item.uid)
             .is_none_or(|current| current.revision_uid != item.content.uid)
     });
+    let mut written = Uncommitted::new(&state.blobs);
     if items.is_empty() {
         return Ok(Stored {
             stoken: None,
             freed_blobs: Vec::new(),
+            written,
         });
     }
 
@@ -893,7 +898,8 @@ async fn store_revisions(
         limits.check(new_chunk_bytes + meta_bytes, largest_item, deletions_only)?;
     }
 
-    let (chunk_ids, chunk_bytes) = chunks::store(state, conn, collection, &mut items).await?;
+    let (chunk_ids, chunk_bytes) =
+        chunks::store(state, conn, collection, &mut items, &mut written).await?;
     let count = items.len() as i64;
     let first = next_changes(conn, count).await?;
 
@@ -1045,6 +1051,7 @@ async fn store_revisions(
     Ok(Stored {
         stoken: Some(stoken),
         freed_blobs,
+        written,
     })
 }
 
@@ -1157,6 +1164,7 @@ async fn write_items(
         };
         events::publish(&mut tx, &event).await?;
     }
+    stored.written.keep();
     tx.commit().await?;
     discard_blobs(&state, stored.freed_blobs).await;
     Ok(StatusCode::OK)

@@ -15,7 +15,9 @@
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use futures_util::stream::BoxStream;
 use futures_util::{StreamExt, TryStreamExt};
 use object_store::local::LocalFileSystem;
 use object_store::path::Path as Key;
@@ -24,6 +26,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 use crate::keys::{random_bytes, to_base64};
+use crate::wire::valid_uid;
 
 /// How many blobs one request reads at once.
 const CONCURRENCY: usize = 16;
@@ -81,6 +84,39 @@ impl BlobStore {
         format!("{prefix}/{collection_uid}")
     }
 
+    /// Whether a key is one [`BlobStore::new_key`] could have made. Other
+    /// files share the root, the server's secret key among them.
+    fn is_blob_key(key: &str) -> bool {
+        let mut parts = key.split('/');
+        let (Some(prefix), Some(collection), Some(name), None) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            return false;
+        };
+        valid_uid(collection)
+            && collection.starts_with(prefix)
+            && prefix.len() == collection.len().min(2)
+            && name.len() == 22
+            && valid_uid(name)
+    }
+
+    /// The keys of the blobs written more than `age` ago.
+    pub fn written_before(&self, age: Duration) -> BoxStream<'static, io::Result<String>> {
+        let cutoff = SystemTime::now()
+            .checked_sub(age)
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map_or(i64::MIN, |since| since.as_millis() as i64);
+        self.store
+            .list(None)
+            .map_err(failed)
+            .try_filter_map(move |blob| async move {
+                let key = blob.location.to_string();
+                let old = blob.last_modified.timestamp_millis() <= cutoff;
+                Ok((old && Self::is_blob_key(&key)).then_some(key))
+            })
+            .boxed()
+    }
+
     /// Remove every blob of a collection. Call it once the rows that
     /// pointed into them are gone for good: a blob that outlives its rows
     /// wastes space, and rows that outlive their blob lose data.
@@ -102,7 +138,7 @@ impl BlobStore {
 
     async fn remove_all(
         &self,
-        blobs: futures_util::stream::BoxStream<'static, object_store::Result<Key>>,
+        blobs: BoxStream<'static, object_store::Result<Key>>,
     ) -> io::Result<()> {
         let mut removed = self.store.delete_stream(blobs);
         while let Some(outcome) = removed.next().await {
@@ -175,6 +211,61 @@ impl BlobStore {
             blobs[index] = data;
         }
         Ok(blobs)
+    }
+}
+
+/// Blobs written for a transaction that has not committed. Dropped without
+/// [`Uncommitted::keep`], it removes them: the transaction failed or the
+/// request was abandoned, and no row will ever point into them.
+///
+/// Once the commit has been asked for they stay, whatever its answer: a
+/// commit whose answer was lost may have happened all the same, and a blob
+/// removed under committed rows is lost data. What is left behind that way,
+/// or by a crash, is for `chunks::reclaim_blobs` to find.
+pub struct Uncommitted {
+    store: BlobStore,
+    keys: Vec<String>,
+}
+
+impl Uncommitted {
+    pub fn new(store: &BlobStore) -> Self {
+        Self {
+            store: store.clone(),
+            keys: Vec::new(),
+        }
+    }
+
+    /// Store a blob, see [`BlobStore::put`].
+    pub async fn put(&mut self, key: String, data: Vec<u8>) -> io::Result<()> {
+        // Noted before the write: if the request is abandoned while the
+        // write is under way, the file may still appear.
+        self.keys.push(key);
+        let key = self.keys.last().expect("just pushed");
+        self.store.put(key, data).await
+    }
+
+    /// The transaction is about to commit, and the blobs are its to keep.
+    pub fn keep(mut self) {
+        self.keys.clear();
+    }
+}
+
+impl Drop for Uncommitted {
+    fn drop(&mut self) {
+        if self.keys.is_empty() {
+            return;
+        }
+        let keys = std::mem::take(&mut self.keys);
+        let store = self.store.clone();
+        // Dropped while a request unwinds, which cannot wait for the disk.
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        runtime.spawn(async move {
+            if let Err(err) = store.remove(keys).await {
+                tracing::warn!("could not remove the blobs of a write that failed: {err}");
+            }
+        });
     }
 }
 
@@ -266,6 +357,49 @@ mod tests {
         // A collection that never had a blob, or has none left, is fine.
         store.remove_collection("AbCdEf").await.unwrap();
         store.remove_collection("never-stored").await.unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn only_what_new_key_makes_is_taken_for_a_blob() {
+        assert!(BlobStore::is_blob_key(&BlobStore::new_key("AbCdEf")));
+        assert!(BlobStore::is_blob_key(&BlobStore::new_key("A")));
+        for other in [
+            "secret.key",
+            "Ab/secret.key",
+            "Ab/AbCdEf/secret.key",
+            "Xy/AbCdEf/AAAAAAAAAAAAAAAAAAAAAA",
+            "Ab/AbCdEf/AAAAAAAAAAAAAAAAAAAAAA/deeper",
+            "Ab/AbCdEf/AAAAAAAAAAAAAAAAAAAAA",
+        ] {
+            assert!(!BlobStore::is_blob_key(other), "{other}");
+        }
+    }
+
+    #[tokio::test]
+    async fn blobs_of_a_write_that_never_committed_go() {
+        let dir = scratch_dir();
+        let store = BlobStore::open(&dir).await.unwrap();
+        let whole = || vec![Range { offset: 0, len: 4 }];
+        let (failed, kept) = (BlobStore::new_key("AbCdEf"), BlobStore::new_key("AbCdEf"));
+
+        let mut written = Uncommitted::new(&store);
+        written.put(failed.clone(), b"data".to_vec()).await.unwrap();
+        drop(written);
+        let mut written = Uncommitted::new(&store);
+        written.put(kept.clone(), b"data".to_vec()).await.unwrap();
+        written.keep();
+
+        // The removal is left to run on its own.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while store.get_ranges(&failed, whole()).await.is_ok() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the blob of the failed write went");
+        assert!(store.get_ranges(&kept, whole()).await.is_ok());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

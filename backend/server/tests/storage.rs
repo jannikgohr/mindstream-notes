@@ -178,6 +178,70 @@ async fn chunk_named_before_its_content_is_charged_for_that_content() {
     assert_eq!(count(&pool, "chunks", &collection).await, 0);
 }
 
+/// A write that fails after its content went to the blob store takes the
+/// blob out again. Here it fails on a revision uid the item has used
+/// before, which comes to light only once the content is stored.
+#[tokio::test]
+async fn failed_write_leaves_no_blob_behind() {
+    let dir = std::env::temp_dir().join(format!("mindstream-failed-write-{}", new_uid()));
+    let url = {
+        let dir = dir.clone();
+        common::start_server(move |config| config.blob_dir = dir)
+    };
+    let device = Device::signup(&url, "failed-write").await;
+    let collection = device.create_collection().await;
+    let item = new_uid();
+    let first = revision(&item, false, vec![chunk(1, 100 * KIB)]);
+    let used_before = first.content.uid.clone();
+    assert_eq!(push(&device, &collection, vec![first]).await.0, 200);
+    let second = revision(&item, false, vec![chunk(2, KIB)]);
+    assert_eq!(push(&device, &collection, vec![second]).await.0, 200);
+
+    let mut again = revision(&item, false, vec![chunk(3, 100 * KIB)]);
+    again.content.uid = used_before;
+    assert_eq!(
+        push(&device, &collection, vec![again]).await,
+        (409, "item_failed".to_owned())
+    );
+
+    // What is on disk comes down to the one blob a row points into. The
+    // other goes as the failed request unwinds, so it may take a moment.
+    let pool = pool().await;
+    let kept: Vec<String> = sqlx::query_scalar(
+        "SELECT k.blob_key FROM chunks k JOIN collections c ON c.id = k.collection_id
+         WHERE c.uid = $1 AND k.blob_key IS NOT NULL",
+    )
+    .bind(&collection)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(kept.len(), 1);
+    let blobs = format!("{}/{collection}", &collection[..2]);
+    let on_disk = || -> Vec<String> {
+        std::fs::read_dir(dir.join(&blobs))
+            .map(|entries| {
+                entries
+                    .map(|entry| {
+                        let name = entry.unwrap().file_name();
+                        format!("{blobs}/{}", name.to_string_lossy())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let settled = async {
+        while on_disk() != kept {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    };
+    if tokio::time::timeout(std::time::Duration::from_secs(5), settled)
+        .await
+        .is_err()
+    {
+        panic!("on disk: {:?}, pointed into: {kept:?}", on_disk());
+    }
+}
+
 /// Deleting an item gives its storage back: the content goes, its earlier
 /// revisions go, and what is left is the tombstone.
 #[tokio::test]
