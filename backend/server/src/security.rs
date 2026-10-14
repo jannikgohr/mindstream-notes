@@ -10,11 +10,12 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use argon2::password_hash::{PasswordHasher, PasswordVerifier};
+use argon2::{Algorithm, Argon2, Params, Version};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
-use sha2::{Digest, Sha256};
 use sqlx::PgConnection;
 
 use crate::auth::{self, AuthUser, SignedBy};
@@ -147,10 +148,31 @@ fn display_backup_code(code: &str) -> String {
     format!("{head}-{tail}")
 }
 
-fn hash_backup_code(normalised: &str) -> [u8; 32] {
-    // A backup code is random and long enough that a plain hash cannot be
-    // searched, unlike a password.
-    Sha256::digest(normalised.as_bytes()).into()
+/// Hash a backup code with Argon2id, so a database read hands out nothing
+/// that opens an account. Unsalted fast hashes fell to offline brute force
+/// at fifty bits; these do not.
+fn argon2() -> Argon2<'static> {
+    // Nineteen megabytes and two passes: far past what fifty random bits
+    // need, while a rare backup-code sign-in still waits well under a second
+    // even trying every unused code in turn.
+    Argon2::new(
+        Algorithm::Argon2id,
+        Version::V0x13,
+        Params::new(19 * 1024, 2, 1, None).expect("valid parameters"),
+    )
+}
+
+fn hash_backup_code(normalised: &str) -> ApiResult<String> {
+    argon2()
+        .hash_password_with_salt(normalised.as_bytes(), &random_bytes::<16>())
+        .map(|hash| hash.to_string())
+        .map_err(|err| ApiError::internal(format!("a backup code could not be hashed: {err}")))
+}
+
+fn backup_code_matches(stored: &str, normalised: &str) -> bool {
+    argon2()
+        .verify_password(normalised.as_bytes(), stored)
+        .is_ok()
 }
 
 fn open_secret(state: &AppState, sealed: &[u8]) -> ApiResult<Vec<u8>> {
@@ -225,16 +247,38 @@ pub(crate) async fn check_second_factor(
             None => false,
         }
     } else {
-        sqlx::query(
-            "UPDATE backup_codes SET used_at = now()
-             WHERE account_id = $1 AND code_hash = $2 AND used_at IS NULL",
+        // Argon2 cannot be compared inside the database, so the unused
+        // hashes come out and each is tried in turn. Spending one is still
+        // atomic: the update only lands on a code nobody used first, so of
+        // two requests racing with the same code exactly one gets through.
+        let candidates: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT id, code_hash FROM backup_codes
+              WHERE account_id = $1 AND used_at IS NULL",
         )
         .bind(account_id)
-        .bind(&hash_backup_code(&code)[..])
-        .execute(&mut *conn)
-        .await?
-        .rows_affected()
-            == 1
+        .fetch_all(&mut *conn)
+        .await?;
+        let mut spent = None;
+        for (id, hash) in &candidates {
+            if backup_code_matches(hash, &code) {
+                spent = Some(*id);
+                break;
+            }
+        }
+        match spent {
+            Some(id) => {
+                sqlx::query(
+                    "UPDATE backup_codes SET used_at = now()
+                      WHERE id = $1 AND used_at IS NULL",
+                )
+                .bind(id)
+                .execute(&mut *conn)
+                .await?
+                .rows_affected()
+                    == 1
+            }
+            None => false,
+        }
     };
 
     if accepted {
@@ -267,19 +311,19 @@ pub(crate) async fn close_sessions(
 async fn replace_backup_codes(
     conn: &mut PgConnection,
     account_id: i64,
-) -> Result<Vec<String>, sqlx::Error> {
+) -> ApiResult<Vec<String>> {
     let codes: Vec<String> = (0..BACKUP_CODES).map(|_| new_backup_code()).collect();
-    let hashes: Vec<Vec<u8>> = codes
-        .iter()
-        .map(|code| hash_backup_code(code).to_vec())
-        .collect();
+    let mut hashes = Vec::with_capacity(codes.len());
+    for code in &codes {
+        hashes.push(hash_backup_code(code)?);
+    }
     sqlx::query("DELETE FROM backup_codes WHERE account_id = $1")
         .bind(account_id)
         .execute(&mut *conn)
         .await?;
     sqlx::query(
         "INSERT INTO backup_codes (account_id, code_hash)
-         SELECT $1, hash FROM UNNEST($2::bytea[]) AS hash",
+         SELECT $1, hash FROM UNNEST($2::text[]) AS hash",
     )
     .bind(account_id)
     .bind(&hashes)
@@ -787,5 +831,20 @@ mod tests {
         unique.sort();
         unique.dedup();
         assert_eq!(unique.len(), codes.len());
+    }
+
+    #[test]
+    fn backup_code_hashes_verify_and_nothing_else_verifies() {
+        let code = new_backup_code();
+        let hash = hash_backup_code(&code).expect("hash a code");
+        assert!(hash.starts_with("$argon2id$"));
+        assert!(backup_code_matches(&hash, &code));
+        assert!(!backup_code_matches(&hash, &new_backup_code()));
+        assert!(!backup_code_matches("not a hash", &code));
+        assert!(!backup_code_matches("", &code));
+        // Every code gets its own salt: the same code hashes differently.
+        let again = hash_backup_code(&code).expect("hash a code again");
+        assert_ne!(hash, again);
+        assert!(backup_code_matches(&again, &code));
     }
 }
