@@ -83,6 +83,42 @@ impl Vault {
     }
 }
 
+/// Nobody but the server's own user may read the key file. Unix does it
+/// with the file mode at creation; Windows files otherwise inherit their
+/// directory's access list, so the staged file gets an explicit one before
+/// it is linked into place (the link shares it). Fails closed: a key file
+/// that cannot be restricted is not created.
+#[cfg(windows)]
+fn restrict_key_file(staged: &Path) -> io::Result<()> {
+    let user = std::env::var("USERNAME").map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "cannot tell which user runs the server",
+        )
+    })?;
+    let output = std::process::Command::new("icacls")
+        .arg(staged)
+        .arg("/inheritance:r")
+        .arg("/grant:r")
+        .arg(format!("{user}:(R,W)"))
+        .output()
+        .map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("icacls is not available: {err}"),
+            )
+        })?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "icacls refused to restrict {}: {}",
+            staged.display(),
+            String::from_utf8_lossy(&output.stderr)
+        )))
+    }
+}
+
 /// Sync a directory, so that a name just made in it survives a power cut.
 /// Only Unix can open a directory to do it.
 fn sync_dir(dir: &Path) -> io::Result<()> {
@@ -125,6 +161,8 @@ fn create_key_file(file: &Path) -> io::Result<String> {
     out.write_all(URL_SAFE_NO_PAD.encode(random_bytes::<32>()).as_bytes())?;
     out.sync_all()?;
     drop(out);
+    #[cfg(windows)]
+    restrict_key_file(&staged)?;
 
     let named = std::fs::hard_link(&staged, file);
     let _ = std::fs::remove_file(&staged);
@@ -205,6 +243,19 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(&file).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600);
+        }
+
+        // Where the platform has an access list, the key file carries the
+        // server's user with read and write and nothing inherited.
+        #[cfg(windows)]
+        {
+            let output = std::process::Command::new("icacls")
+                .arg(&file)
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            let list = String::from_utf8_lossy(&output.stdout);
+            assert!(list.contains("(R,W)"), "{list}");
         }
 
         std::fs::remove_dir_all(&dir).unwrap();

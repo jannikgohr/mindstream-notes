@@ -121,6 +121,15 @@ impl BlobStore {
     /// pointed into them are gone for good: a blob that outlives its rows
     /// wastes space, and rows that outlive their blob lose data.
     pub async fn remove_collection(&self, collection_uid: &str) -> io::Result<()> {
+        if !valid_uid(collection_uid) {
+            // The directory below is built from this uid. Refuse anything
+            // that is not a uid rather than listing from a name that could
+            // point anywhere under the root.
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not a collection uid",
+            ));
+        }
         let dir = Key::from(Self::collection_dir(collection_uid));
         let blobs = self
             .store
@@ -130,9 +139,23 @@ impl BlobStore {
         self.remove_all(blobs).await
     }
 
-    /// Remove blobs by key. One that is already gone is not an error.
+    /// Remove blobs by key. One that is already gone is not an error. Keys
+    /// that could never have come from [`BlobStore::new_key`] are skipped
+    /// with a warning instead of removed: they name rows that do not point
+    /// at blobs, and deleting by them could take the server's own files.
     pub async fn remove(&self, keys: Vec<String>) -> io::Result<()> {
-        let blobs = futures_util::stream::iter(keys.into_iter().map(|key| Ok(Key::from(key))));
+        let kept: Vec<String> = keys
+            .into_iter()
+            .filter(|key| {
+                if Self::is_blob_key(key) {
+                    true
+                } else {
+                    tracing::warn!("not removing a file that is no blob: {key}");
+                    false
+                }
+            })
+            .collect();
+        let blobs = futures_util::stream::iter(kept.into_iter().map(|key| Ok(Key::from(key))));
         self.remove_all(blobs.boxed()).await
     }
 
@@ -154,6 +177,10 @@ impl BlobStore {
     /// into it must never outlive it. A reader sees the whole blob or none
     /// of it.
     pub async fn put(&self, key: &str, data: Vec<u8>) -> io::Result<()> {
+        debug_assert!(
+            Self::is_blob_key(key),
+            "blobs are only ever stored under keys BlobStore::new_key made"
+        );
         self.store
             .put(&Key::from(key), PutPayload::from(data))
             .await
@@ -162,8 +189,15 @@ impl BlobStore {
     }
 
     /// Read several ranges of one blob, returned in the order asked for.
+    /// Only keys [`BlobStore::new_key`] could have made are read: a chunk
+    /// row pointing anywhere else names damage, not a blob.
     pub async fn get_ranges(&self, key: &str, ranges: Vec<Range>) -> io::Result<Vec<Vec<u8>>> {
-        let wanted: Vec<std::ops::Range<u64>> = ranges
+        if !Self::is_blob_key(key) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not a blob key",
+            ));
+        }        let wanted: Vec<std::ops::Range<u64>> = ranges
             .iter()
             .map(|range| range.offset..range.offset + range.len as u64)
             .collect();
