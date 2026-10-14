@@ -10,6 +10,7 @@
 //! old relays could not do: it knows who each socket is, tells the room, and
 //! drops document changes from members who may only read.
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
@@ -41,6 +42,17 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 const SYNC_REQUESTS: u32 = 10;
 const SYNC_WINDOW: Duration = Duration::from_secs(10);
 
+/// Joins that keep an item `i` only while neither it nor its collection is
+/// marked deleted. Such an item has no room: deleting a shared collection is
+/// how its owner stops sharing it, and an open room would carry on what the
+/// deletion ended.
+const NOT_DELETED: &str = "JOIN revisions cur
+         ON cur.item_id = i.id AND cur.uid = i.revision_uid AND NOT cur.deleted
+     JOIN items main ON main.collection_id = i.collection_id AND main.is_main
+     JOIN revisions main_cur
+         ON main_cur.item_id = main.id AND main_cur.uid = main.revision_uid
+        AND NOT main_cur.deleted";
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TicketResponse {
@@ -59,12 +71,13 @@ pub async fn room_ticket(
     check_uid(&item_uid)?;
     let mut conn = state.pool.acquire().await?;
     let collection = membership(&mut conn, user.account_id, &collection_uid, false).await?;
-    let item_id: Option<i64> =
-        sqlx::query_scalar("SELECT id FROM items WHERE collection_id = $1 AND uid = $2")
-            .bind(collection.id)
-            .bind(&item_uid)
-            .fetch_optional(&mut *conn)
-            .await?;
+    let item_id: Option<i64> = sqlx::query_scalar(&format!(
+        "SELECT i.id FROM items i {NOT_DELETED} WHERE i.collection_id = $1 AND i.uid = $2"
+    ))
+    .bind(collection.id)
+    .bind(&item_uid)
+    .fetch_optional(&mut *conn)
+    .await?;
     let item_id = item_id.ok_or_else(|| ApiError::not_found("Item"))?;
     Ok(Msgpack(TicketResponse {
         ticket: state.keys.room_ticket(RoomTicket {
@@ -119,17 +132,18 @@ async fn close(socket: &mut WebSocket, code: u16) {
 /// now, and with what access and under what name.
 ///
 /// A ticket says what was true when it was issued. The member may have been
-/// removed, downgraded or disabled since, or signed out, or the item
-/// deleted.
+/// removed, downgraded or disabled since, or signed out, or the item or its
+/// collection deleted.
 async fn standing(state: &AppState, ticket: &RoomTicket) -> Result<(i16, String), u16> {
-    let row: Option<(i16, String)> = sqlx::query_as(
+    let row: Option<(i16, String)> = sqlx::query_as(&format!(
         "SELECT m.access_level, a.username
          FROM members m
          JOIN accounts a ON a.id = m.account_id AND NOT a.disabled
          JOIN sessions s ON s.account_id = a.id AND s.id = $4
          JOIN items i ON i.collection_id = m.collection_id AND i.id = $3
-         WHERE m.collection_id = $1 AND m.account_id = $2",
-    )
+         {NOT_DELETED}
+         WHERE m.collection_id = $1 AND m.account_id = $2"
+    ))
     .bind(ticket.collection_id)
     .bind(ticket.account_id)
     .bind(ticket.item_id)
@@ -141,6 +155,38 @@ async fn standing(state: &AppState, ticket: &RoomTicket) -> Result<(i16, String)
         CLOSE_UNAVAILABLE
     })?;
     row.ok_or(CLOSE_REMOVED)
+}
+
+/// Close the rooms of items that are marked deleted, or whose collection is.
+/// With `collection`, only that collection's rooms are looked at.
+pub(crate) async fn close_deleted_rooms(
+    state: &AppState,
+    collection: Option<i64>,
+) -> Result<(), sqlx::Error> {
+    let rooms: Vec<RoomKey> = state
+        .hub
+        .open_rooms()
+        .into_iter()
+        .filter(|key| collection.is_none_or(|id| key.collection_id == id))
+        .collect();
+    if rooms.is_empty() {
+        return Ok(());
+    }
+    let items: Vec<i64> = rooms.iter().map(|key| key.item_id).collect();
+    let live: HashSet<i64> = sqlx::query_scalar(&format!(
+        "SELECT i.id FROM items i {NOT_DELETED} WHERE i.id = ANY($1)"
+    ))
+    .bind(&items)
+    .fetch_all(&state.pool)
+    .await?
+    .into_iter()
+    .collect();
+    for key in rooms {
+        if !live.contains(&key.item_id) {
+            state.hub.room_closed(key);
+        }
+    }
+    Ok(())
 }
 
 /// Wait for the ticket and decide whether its holder may enter and with

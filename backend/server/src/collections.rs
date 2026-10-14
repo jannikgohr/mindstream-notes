@@ -759,6 +759,8 @@ pub(crate) struct Stored {
     /// Blobs the write added. Kept by calling `keep` just before the
     /// commit; dropped, they go.
     pub written: Uncommitted,
+    /// Whether any of the revisions marks its item deleted.
+    pub deletes: bool,
 }
 
 /// Delete the revisions of these items that are no longer kept, then the
@@ -883,8 +885,10 @@ async fn store_revisions(
             stoken: None,
             freed_blobs: Vec::new(),
             written,
+            deletes: false,
         });
     }
+    let deletes = items.iter().any(|item| item.content.deleted);
 
     // Only an owner with a plan has limits to look up, so a server without
     // any pays nothing here.
@@ -1052,6 +1056,7 @@ async fn store_revisions(
         stoken: Some(stoken),
         freed_blobs,
         written,
+        deletes,
     })
 }
 
@@ -1161,6 +1166,12 @@ async fn write_items(
         let event = Event::Changed {
             collection: collection.id,
             session: Some(user.session_id),
+        };
+        events::publish(&mut tx, &event).await?;
+    }
+    if stored.deletes {
+        let event = Event::ItemsDeleted {
+            collection: collection.id,
         };
         events::publish(&mut tx, &event).await?;
     }

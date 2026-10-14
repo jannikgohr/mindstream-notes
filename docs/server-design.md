@@ -376,14 +376,16 @@ a member at which access level.
    cannot hide an update inside a presence frame.
 5. When a member is removed or downgraded, the server closes or downgrades
    their sockets immediately. When a session ends, the sockets it opened close
-   with it.
+   with it. When a note or its collection is deleted, which is how an owner
+   stops sharing a folder, its rooms close and no ticket opens them again.
 
 The server learns that a session or a membership ended from a notification
 on a database connection, and that connection can drop. So it does not rely
 on having heard:
 
 - When the connection comes back, it asks the database about the session and
-  the membership behind every open socket, room or feed.
+  the membership behind every open socket, room or feed, and whether the note
+  behind each room is still there.
 - A socket is asked about once more after it is registered, because a session
   can end between being let in and being findable.
 - Everything is asked about again every five minutes regardless.

@@ -196,6 +196,24 @@ impl Device {
         (status, uid)
     }
 
+    /// Mark an item deleted, the way the app does: with a revision that
+    /// says so. Given the collection's own uid, it deletes the collection.
+    pub async fn delete_item(&self, collection: &str, uid: &str) {
+        #[derive(Serialize)]
+        struct Batch {
+            items: Vec<WireItem>,
+        }
+        let mut deletion = item(uid);
+        deletion.content.deleted = true;
+        let body = Batch {
+            items: vec![deletion],
+        };
+        let (status, _) = self
+            .post(&format!("/collection/{collection}/item/batch/"), &body)
+            .await;
+        assert_eq!(status, 200, "delete an item");
+    }
+
     /// Invite `guest` and have them accept.
     pub async fn share(&self, collection: &str, guest: &Device, access: i16) {
         let invitation = self.invite(collection, guest, access).await;

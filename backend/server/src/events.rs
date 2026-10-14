@@ -14,6 +14,7 @@ use sqlx::PgConnection;
 
 use crate::auth;
 use crate::hub::{FeedNews, Hub, CLOSE_UNAVAILABLE};
+use crate::rooms;
 use crate::AppState;
 
 const CHANNEL: &str = "mindstream_events";
@@ -55,6 +56,9 @@ pub enum Event {
     SessionsClosed { account: i64, keep: Option<i64> },
     /// The collection was deleted.
     CollectionClosed { collection: i64 },
+    /// Items of the collection, or the collection itself, were marked
+    /// deleted. Their rooms close.
+    ItemsDeleted { collection: i64 },
 }
 
 /// Queue an event for delivery when the surrounding transaction commits.
@@ -139,6 +143,9 @@ async fn apply(state: &AppState, event: Event) -> Result<(), sqlx::Error> {
         Event::SessionClosed { session } => state.hub.session_closed(session),
         Event::SessionsClosed { account, keep } => state.hub.sessions_closed(account, keep),
         Event::CollectionClosed { collection } => state.hub.collection_closed(collection),
+        Event::ItemsDeleted { collection } => {
+            rooms::close_deleted_rooms(state, Some(collection)).await?
+        }
     }
     Ok(())
 }
@@ -146,7 +153,8 @@ async fn apply(state: &AppState, event: Event) -> Result<(), sqlx::Error> {
 /// Events may have been missed while the connection was down. The ones
 /// that matter are the ones that take something away: check every socket
 /// against the database, and close those whose session has ended, whose
-/// account is disabled, or whose member no longer belongs in the room.
+/// account is disabled, whose member no longer belongs in the room, or
+/// whose room is of something deleted.
 pub(crate) async fn revalidate(state: &AppState) -> Result<(), sqlx::Error> {
     let open = state.hub.open_sessions();
     if !open.is_empty() {
@@ -169,7 +177,7 @@ pub(crate) async fn revalidate(state: &AppState) -> Result<(), sqlx::Error> {
         .await?;
         state.hub.membership_changed(collection, account, access);
     }
-    Ok(())
+    rooms::close_deleted_rooms(state, None).await
 }
 
 /// Keeps track of whether the open sockets can still be vouched for.
@@ -409,6 +417,7 @@ mod tests {
                 keep: None,
             },
             Event::CollectionClosed { collection: 4 },
+            Event::ItemsDeleted { collection: 4 },
         ];
         for event in events {
             let payload = serde_json::to_string(&event).unwrap();

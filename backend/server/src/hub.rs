@@ -478,6 +478,21 @@ impl Hub {
         });
     }
 
+    /// The item was deleted, or its collection was: close its room.
+    pub fn room_closed(&self, key: RoomKey) {
+        let Some(room) = self.lock().rooms.remove(&key) else {
+            return;
+        };
+        for peer in room.values() {
+            peer.kick.fire(CLOSE_REMOVED);
+        }
+    }
+
+    /// Every room with a socket in it.
+    pub fn open_rooms(&self) -> Vec<RoomKey> {
+        self.lock().rooms.keys().copied().collect()
+    }
+
     /// Every (collection, account) pair with a socket in a room, for checking
     /// them against the database after events may have been missed.
     pub fn room_memberships(&self) -> Vec<(i64, i64)> {

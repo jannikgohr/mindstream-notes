@@ -220,6 +220,57 @@ async fn ticket_issued_before_a_sign_out_no_longer_opens_the_room() {
     }
 }
 
+/// Deleting a shared collection is how its owner stops sharing it. Its rooms
+/// close for everyone in them, and no ticket opens them again, not even one
+/// issued before.
+#[tokio::test]
+async fn deleting_a_collection_closes_its_rooms() {
+    let (owner, collection, item) = space().await;
+    let guest = Device::signup(common::server(), "guest").await;
+    owner.share(&collection, &guest, READ_WRITE).await;
+    let (mut owner_socket, _) = owner.enter(&collection, &item).await;
+    let (mut guest_socket, _) = guest.enter(&collection, &item).await;
+    let ticket = guest.ticket(&collection, &item).await.unwrap();
+
+    owner.delete_item(&collection, &collection).await;
+
+    assert_eq!(guest_socket.close_code().await, Some(4403));
+    assert_eq!(owner_socket.close_code().await, Some(4403));
+    assert_eq!(guest.ticket(&collection, &item).await, Err(404));
+    assert_eq!(owner.ticket(&collection, &item).await, Err(404));
+    let mut socket = Socket::open(common::server(), "/api/v1/room/", None).await;
+    socket.hello(&ticket).await;
+    assert_eq!(socket.next().await, Frame::Closed(4403));
+}
+
+/// Deleting an item closes its room and leaves the others open.
+#[tokio::test]
+async fn deleting_an_item_closes_its_room_and_no_other() {
+    let (owner, collection, item) = space().await;
+    let other = owner.add_item(&collection).await;
+    let guest = Device::signup(common::server(), "guest").await;
+    owner.share(&collection, &guest, READ_WRITE).await;
+    let (mut deleted_room, _) = guest.enter(&collection, &item).await;
+    let (mut other_room, _) = guest.enter(&collection, &other).await;
+    let ticket = guest.ticket(&collection, &item).await.unwrap();
+
+    owner.delete_item(&collection, &item).await;
+
+    assert_eq!(deleted_room.close_code().await, Some(4403));
+    assert_eq!(guest.ticket(&collection, &item).await, Err(404));
+    let mut socket = Socket::open(common::server(), "/api/v1/room/", None).await;
+    socket.hello(&ticket).await;
+    assert_eq!(socket.next().await, Frame::Closed(4403));
+
+    let (mut owner_socket, _) = owner.enter(&collection, &other).await;
+    assert!(matches!(other_room.next().await, Frame::Control(JOINED, _)));
+    other_room.send(UPDATE, b"still here").await;
+    assert!(matches!(
+        owner_socket.next().await,
+        Frame::Relayed { class: UPDATE, .. }
+    ));
+}
+
 #[tokio::test]
 async fn read_only_member_watches_live_but_cannot_edit() {
     let (owner, collection, item) = space().await;
