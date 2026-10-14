@@ -62,6 +62,11 @@ pub async fn set_entitlements(
     Path(username): Path<String>,
     Json(entitlements): Json<Entitlements>,
 ) -> ApiResult<StatusCode> {
+    if let Err(field) = entitlements.validate() {
+        return Err(ApiError::bad_request(format!(
+            "A limit cannot be negative: {field}."
+        )));
+    }
     if admin::set_entitlements(&state, &username, Some(&entitlements)).await? {
         Ok(StatusCode::NO_CONTENT)
     } else {

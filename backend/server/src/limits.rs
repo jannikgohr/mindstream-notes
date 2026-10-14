@@ -47,6 +47,31 @@ pub struct Entitlements {
 const COLUMNS: &str =
     "plan, storage_limit_bytes, max_spaces, max_members_per_space, max_item_bytes, read_only";
 
+impl Entitlements {
+    /// A limit below zero refuses everything without saying anything useful,
+    /// so it is nonsense configuration, not a strict plan. Reject it where it
+    /// is set instead of storing it.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        for (name, value) in [
+            ("storage_limit_bytes", self.storage_limit_bytes),
+            ("max_item_bytes", self.max_item_bytes),
+        ] {
+            if value.is_some_and(|limit| limit < 0) {
+                return Err(name);
+            }
+        }
+        for (name, value) in [
+            ("max_spaces", self.max_spaces),
+            ("max_members_per_space", self.max_members_per_space),
+        ] {
+            if value.is_some_and(|limit| limit < 0) {
+                return Err(name);
+            }
+        }
+        Ok(())
+    }
+}
+
 /// The collections an account owns, less the deleted ones. A deleted
 /// collection holds nothing and can never be written to again.
 const SPACES: &str = "SELECT count(*) FROM collections c
@@ -283,5 +308,29 @@ mod tests {
             code(limits(true, Some(-50), Some(0)).check(40, 0, true)),
             None
         );
+    }
+
+    #[test]
+    fn negative_limits_are_rejected_where_they_are_set() {
+        let mut plan = Entitlements {
+            plan: "basic".into(),
+            storage_limit_bytes: Some(100),
+            max_spaces: Some(10),
+            max_members_per_space: Some(5),
+            max_item_bytes: Some(50),
+            read_only: false,
+        };
+        assert_eq!(plan.validate(), Ok(()));
+        plan.storage_limit_bytes = Some(-1);
+        assert!(plan.validate().is_err());
+        plan.storage_limit_bytes = Some(100);
+        plan.max_spaces = Some(-1);
+        assert!(plan.validate().is_err());
+        plan.max_spaces = Some(10);
+        plan.max_members_per_space = Some(-1);
+        assert!(plan.validate().is_err());
+        plan.max_members_per_space = Some(5);
+        plan.max_item_bytes = Some(-1);
+        assert!(plan.validate().is_err());
     }
 }
