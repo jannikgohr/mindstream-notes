@@ -382,6 +382,65 @@ async fn invitation_withdrawn_while_its_acceptance_waits_grants_nothing() {
     assert_eq!(guest.try_add_item(&collection).await.0, 404);
 }
 
+/// A chunk is uploaded without taking the collection's lock. One that
+/// arrives while the collection is being deleted would land after the
+/// deletion dropped everything in there, and stay charged for with nothing
+/// able to use it. It is refused once it has waited the deletion out.
+#[tokio::test]
+async fn chunk_uploaded_during_a_deletion_is_refused() {
+    let _turn = ONE_AT_A_TIME.lock().await;
+    let owner = Device::signup(common::server(), "owner").await;
+    let collection = owner.create_collection().await;
+
+    let pool = pool().await;
+    let mut deletion = pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM collections WHERE uid = $1 FOR UPDATE")
+        .bind(&collection)
+        .execute(&mut *deletion)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE revisions r SET deleted = TRUE FROM items i, collections c
+         WHERE c.uid = $1 AND i.collection_id = c.id AND i.is_main
+           AND r.item_id = i.id AND r.uid = i.revision_uid",
+    )
+    .bind(&collection)
+    .execute(&mut *deletion)
+    .await
+    .unwrap();
+    let upload = async {
+        reqwest::Client::new()
+            .put(format!(
+                "{}/api/v1/collection/{collection}/item/{}/chunk/{}/",
+                owner.url,
+                common::keyed::new_uid(),
+                common::keyed::new_uid()
+            ))
+            .header("Authorization", format!("Token {}", owner.token))
+            .body(vec![7u8; 1024])
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16()
+    };
+    let delete = async {
+        wait_until_blocked(&pool, "INSERT INTO chunks").await;
+        deletion.commit().await.unwrap();
+    };
+    let (status, ()) = tokio::join!(upload, delete);
+    assert_eq!(status, 403);
+    let chunks: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM chunks k JOIN collections c ON c.id = k.collection_id
+         WHERE c.uid = $1",
+    )
+    .bind(&collection)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(chunks, 0);
+}
+
 /// The server learns that a session ended from a notification, and
 /// notifications sent while its listening connection is down are lost. When
 /// the connection comes back it asks the database about every socket it

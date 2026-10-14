@@ -235,6 +235,7 @@ pub async fn create(
     let mut tx = state.pool.begin().await?;
     let collection = membership(&mut tx, user.account_id, &body.collection, true).await?;
     collection.require_admin()?;
+    collection.require_live()?;
     sqlx::query("DELETE FROM invite_links WHERE collection_id = $1 AND expires_at <= now()")
         .bind(collection.id)
         .execute(&mut *tx)

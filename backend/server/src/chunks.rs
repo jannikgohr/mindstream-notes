@@ -19,7 +19,7 @@ use sqlx::{PgConnection, PgPool};
 
 use crate::auth::AuthUser;
 use crate::blob::{BlobStore, Range, Uncommitted};
-use crate::collections::{membership, Membership};
+use crate::collections::{self, membership, Membership};
 use crate::error::{ApiError, ApiResult};
 use crate::limits;
 use crate::wire::{self, check_uid};
@@ -446,6 +446,7 @@ pub async fn upload_chunk(
     let mut tx = state.pool.begin().await?;
     let collection = membership(&mut tx, user.account_id, &collection_uid, false).await?;
     collection.require_write()?;
+    collection.require_live()?;
     if let Some(limits) = limits::for_writes(&mut tx, collection.owner_id).await? {
         limits.check(body.len() as i64, body.len() as i64, false)?;
     }
@@ -491,6 +492,12 @@ pub async fn upload_chunk(
         .bind(i64::from(size))
         .execute(&mut *tx)
         .await?;
+    // A deletion under way when this began has dropped what the collection
+    // held by now, and this chunk would outlive it. The writes above waited
+    // for the deletion to commit, so a statement after them sees it.
+    if collections::is_deleted(&mut tx, collection.id).await? {
+        return Err(ApiError::collection_deleted());
+    }
     written.keep();
     tx.commit().await?;
     Ok(StatusCode::CREATED)

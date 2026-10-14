@@ -450,7 +450,7 @@ async fn claim_that_waited_out_its_makers_removal_grants_nothing() {
 }
 
 /// Deleting the collection, which is how a share is stopped, withdraws the
-/// links into it.
+/// links into it, and no new one can be made.
 #[tokio::test]
 async fn stopping_a_share_withdraws_its_links() {
     let owner = Person::signup(url(), "owner", false).await;
@@ -461,6 +461,10 @@ async fn stopping_a_share_withdraws_its_links() {
     let guest = Person::signup(url(), "guest", false).await;
     assert_eq!(claim(&guest, &link).await.status, 404);
     assert!(!is_member(&guest, &collection).await);
+    let reply = owner
+        .post("/mindstream/link/", &Create::new(&new_link(), &collection))
+        .await;
+    assert_eq!(reply.outcome(), refused(403, "collection_deleted"));
 }
 
 #[tokio::test]

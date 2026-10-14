@@ -77,6 +77,20 @@ impl ApiError {
         )
     }
 
+    pub fn owner_required() -> Self {
+        Self::forbidden(
+            "owner_required",
+            "Only the collection's owner can delete it.",
+        )
+    }
+
+    pub fn collection_deleted() -> Self {
+        Self::forbidden(
+            "collection_deleted",
+            "The collection was deleted, and nothing more can be written to it.",
+        )
+    }
+
     /// A failure that is the server's fault. The cause goes to the log, never
     /// to the client.
     pub fn internal(cause: impl std::fmt::Display) -> Self {

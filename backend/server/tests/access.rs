@@ -74,10 +74,11 @@ fn read_only_member_can_read_but_not_write() {
 }
 
 /// The collection's own item names it and, for a shared folder, says who
-/// shared which folder; deleting it ends the share for every member. Write
-/// access to the collection's items is not enough for either.
+/// shared which folder. Write access to the collection's items is not
+/// enough to change it. Deleting it ends the share for every member and
+/// drops everything in it, which is for the owner alone.
 #[test]
-fn only_an_admin_renames_or_deletes_the_collection() {
+fn only_an_admin_renames_and_only_the_owner_deletes_the_collection() {
     let owner = signup("owner");
     let writer = signup("writer");
     let collection = new_collection(&owner, "shared");
@@ -120,6 +121,18 @@ fn only_an_admin_renames_or_deletes_the_collection() {
     let mut renamed = writer_collections.fetch(collection.uid(), None).unwrap();
     renamed.set_meta(&named("renamed by an admin")).unwrap();
     writer_collections.upload(&renamed, None).unwrap();
+    let mut deleted = writer_collections.fetch(collection.uid(), None).unwrap();
+    deleted.delete().unwrap();
+    assert_refused!(
+        writer_collections.upload(&deleted, None),
+        Error::PermissionDenied(_)
+    );
+    assert!(!owner
+        .collection_manager()
+        .unwrap()
+        .fetch(collection.uid(), None)
+        .unwrap()
+        .is_deleted());
 }
 
 /// Deleting a shared collection is how its owner stops sharing it. It ends
@@ -199,6 +212,16 @@ fn deleting_a_collection_takes_everyone_else_out() {
         .list(None)
         .unwrap();
     assert_eq!(members.data().len(), 1);
+    // And nobody is let in again.
+    assert_refused!(
+        owner_invites.invite(
+            &kept,
+            &invited.name,
+            profile.pubkey(),
+            CollectionAccessLevel::ReadOnly,
+        ),
+        Error::PermissionDenied(_)
+    );
 }
 
 #[test]

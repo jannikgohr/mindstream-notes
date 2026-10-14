@@ -47,6 +47,14 @@ pub struct Entitlements {
 const COLUMNS: &str =
     "plan, storage_limit_bytes, max_spaces, max_members_per_space, max_item_bytes, read_only";
 
+/// The collections an account owns, less the deleted ones. A deleted
+/// collection holds nothing and can never be written to again.
+const SPACES: &str = "SELECT count(*) FROM collections c
+     WHERE c.owner_id = $1 AND NOT EXISTS (
+         SELECT 1 FROM items i JOIN revisions r ON r.item_id = i.id AND r.uid = i.revision_uid
+         WHERE i.collection_id = c.id AND i.is_main AND r.deleted
+     )";
+
 pub async fn entitlements(
     conn: &mut PgConnection,
     account_id: i64,
@@ -142,7 +150,7 @@ pub async fn check_new_space(conn: &mut PgConnection, account_id: i64) -> ApiRes
     else {
         return Ok(());
     };
-    let owned: i64 = sqlx::query_scalar("SELECT count(*) FROM collections WHERE owner_id = $1")
+    let owned: i64 = sqlx::query_scalar(SPACES)
         .bind(account_id)
         .fetch_one(conn)
         .await?;
@@ -205,7 +213,7 @@ pub struct Usage {
 
 pub async fn usage_of(conn: &mut PgConnection, account_id: i64) -> Result<Usage, sqlx::Error> {
     let plan = entitlements(conn, account_id).await?;
-    let spaces: i64 = sqlx::query_scalar("SELECT count(*) FROM collections WHERE owner_id = $1")
+    let spaces: i64 = sqlx::query_scalar(SPACES)
         .bind(account_id)
         .fetch_one(&mut *conn)
         .await?;

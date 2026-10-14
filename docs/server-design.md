@@ -454,11 +454,18 @@ uses.
 - **Only an admin changes the folder itself.** The collection's own item
   holds the folder's name and the manifest, and marking it deleted ends the
   share. Writing it takes admin access, as inviting and removing members do,
-  not just write access to the folder's notes.
+  not just write access to the folder's notes. Marking it deleted takes the
+  owner, who pays for what it holds.
 - **Stopping sharing takes everyone else out.** Deleting the collection ends
   every membership but the owner's, the way removing a member does, so the
   server stops serving the others and their devices are told. Invitations
   not yet answered and links not yet used are withdrawn.
+- **A deleted collection is gone for good.** Everything in it but its own
+  item is dropped in the same transaction, and stops counting against the
+  owner, as a space and in bytes. The app has moved the owner's copy into
+  the vault by then. Nothing more can be written to it, chunks, invitations
+  and links included: the only write it takes is its own item, deleted
+  again.
 - **An invitation is only as good as its sender.** It is accepted on the
   authority of the admin who sent it. Accepting checks that the sender is
   still an admin of the space on an account that is still enabled, under the

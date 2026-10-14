@@ -47,9 +47,21 @@ pub(crate) struct Membership {
     pub owner_id: i64,
     pub stoken: i64,
     pub access_level: i16,
+    /// Whether the collection's own item is deleted, which is for good.
+    pub deleted: bool,
 }
 
 impl Membership {
+    /// Refuse to add anything to a deleted collection. What it held was
+    /// dropped when it was deleted, and nothing may take its place.
+    pub fn require_live(&self) -> ApiResult<()> {
+        if self.deleted {
+            Err(ApiError::collection_deleted())
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn require_write(&self) -> ApiResult<()> {
         if self.access_level == ACCESS_READ_ONLY {
             Err(ApiError::no_write_access())
@@ -94,17 +106,19 @@ pub(crate) async fn membership(
     // Never in the statement that locks. One that waits for the lock goes on
     // with the other rows as they were when it started, so a membership
     // taken away by whoever held the lock would still let this through.
-    let row: Option<(i64, i64, i64, i16)> = sqlx::query_as(
-        "SELECT c.id, c.owner_id, c.stoken, m.access_level
+    let row: Option<(i64, i64, i64, i16, bool)> = sqlx::query_as(
+        "SELECT c.id, c.owner_id, c.stoken, m.access_level, COALESCE(r.deleted, FALSE)
          FROM collections c
          JOIN members m ON m.collection_id = c.id AND m.account_id = $2
+         LEFT JOIN items i ON i.collection_id = c.id AND i.is_main
+         LEFT JOIN revisions r ON r.item_id = i.id AND r.uid = i.revision_uid
          WHERE c.uid = $1",
     )
     .bind(collection_uid)
     .bind(account_id)
     .fetch_optional(conn)
     .await?;
-    let (id, owner_id, stoken, access_level) =
+    let (id, owner_id, stoken, access_level, deleted) =
         row.ok_or_else(|| ApiError::not_found("Collection"))?;
     Ok(Membership {
         id,
@@ -112,7 +126,23 @@ pub(crate) async fn membership(
         owner_id,
         stoken,
         access_level,
+        deleted,
     })
+}
+
+/// Whether a collection's own item is deleted. For a writer that does not
+/// hold the collection's lock and has to look again once whatever did hold
+/// it is done.
+pub(crate) async fn is_deleted(conn: &mut PgConnection, collection_id: i64) -> ApiResult<bool> {
+    let deleted: Option<bool> = sqlx::query_scalar(
+        "SELECT r.deleted FROM items i
+         JOIN revisions r ON r.item_id = i.id AND r.uid = i.revision_uid
+         WHERE i.collection_id = $1 AND i.is_main",
+    )
+    .bind(collection_id)
+    .fetch_optional(conn)
+    .await?;
+    Ok(deleted.unwrap_or(false))
 }
 
 /// Lock a collection's row until the transaction ends, the way every writer
@@ -457,6 +487,7 @@ pub async fn create_collection(
         owner_id: user.account_id,
         stoken: 0,
         access_level: ACCESS_ADMIN,
+        deleted: false,
     };
 
     let stored = store_revisions(
@@ -842,6 +873,56 @@ async fn prune(
     Ok((bytes, unused))
 }
 
+/// Drop what a collection being deleted holds besides its own item: every
+/// other item with all its revisions, and the chunks nothing refers to any
+/// more. What the collection is charged for is counted again from what is
+/// left. Returns the blobs left without rows, to remove once the deletion
+/// is committed.
+///
+/// A deleted collection cannot be written to again, so nobody has a use for
+/// any of it. Its members are gone, and the owner keeps what they wanted of
+/// it elsewhere, such as the app does when it stops sharing a folder.
+async fn drop_content(conn: &mut PgConnection, collection_id: i64) -> ApiResult<Vec<String>> {
+    sqlx::query("DELETE FROM items WHERE collection_id = $1 AND NOT is_main")
+        .bind(collection_id)
+        .execute(&mut *conn)
+        .await?;
+    let freed: Vec<Option<String>> = sqlx::query_scalar(
+        "DELETE FROM chunks c
+         WHERE c.collection_id = $1
+           AND NOT EXISTS (
+               SELECT 1 FROM revisions r JOIN items i ON i.id = r.item_id
+               WHERE i.collection_id = $1 AND r.chunk_ids @> ARRAY[c.id]
+           )
+         RETURNING c.blob_key",
+    )
+    .bind(collection_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    sqlx::query(
+        "UPDATE collections SET bytes_used =
+             (SELECT COALESCE(sum(octet_length(r.meta)), 0)
+              FROM revisions r JOIN items i ON i.id = r.item_id
+              WHERE i.collection_id = $1)
+           + (SELECT COALESCE(sum(size), 0) FROM chunks WHERE collection_id = $1)
+         WHERE id = $1",
+    )
+    .bind(collection_id)
+    .execute(&mut *conn)
+    .await?;
+    let mut blobs: Vec<String> = freed.into_iter().flatten().collect();
+    blobs.sort_unstable();
+    blobs.dedup();
+    if blobs.is_empty() {
+        return Ok(blobs);
+    }
+    let unused: Vec<String> = sqlx::query_scalar(chunks::UNUSED_BLOBS)
+        .bind(&blobs)
+        .fetch_all(conn)
+        .await?;
+    Ok(unused)
+}
+
 async fn existing_items(
     conn: &mut PgConnection,
     collection_id: i64,
@@ -1111,15 +1192,27 @@ async fn write_items(
     let collection = membership(&mut tx, user.account_id, &collection_uid, true).await?;
     collection.require_write()?;
     // The collection's own item holds its name, and for a shared folder who
-    // shared which folder. Marking it deleted ends the share for everyone in
-    // it. Like inviting and removing members, that is for an admin.
+    // shared which folder. Like inviting and removing members, changing it
+    // is for an admin.
     if body.items.iter().any(|item| item.uid == collection.uid) {
         collection.require_admin()?;
     }
-    let ends_share = body
-        .items
-        .iter()
-        .any(|item| item.uid == collection.uid && item.content.deleted);
+    let is_deletion = |item: &wire::Item| item.uid == collection.uid && item.content.deleted;
+    // Deleting it ends the share for everyone and drops everything the
+    // collection holds, which the owner pays for. That is for the owner.
+    // Once deleted, the collection's own item may be marked deleted again,
+    // and nothing else may be written to it.
+    let deletes_collection = if collection.deleted {
+        if !body.items.iter().all(is_deletion) {
+            return Err(ApiError::collection_deleted());
+        }
+        false
+    } else {
+        body.items.iter().any(is_deletion)
+    };
+    if deletes_collection && user.account_id != collection.owner_id {
+        return Err(ApiError::owner_required());
+    }
 
     // The client may require that nothing at all changed in the collection
     // since it last looked. Anything that is not the current cursor fails,
@@ -1186,12 +1279,14 @@ async fn write_items(
         };
         events::publish(&mut tx, &event).await?;
     }
-    if ends_share {
+    let mut freed_blobs = stored.freed_blobs;
+    if deletes_collection {
         sharing::end_share(&mut tx, &collection).await?;
+        freed_blobs.extend(drop_content(&mut tx, collection.id).await?);
     }
     stored.written.keep();
     tx.commit().await?;
-    discard_blobs(&state, stored.freed_blobs).await;
+    discard_blobs(&state, freed_blobs).await;
     Ok(StatusCode::OK)
 }
 

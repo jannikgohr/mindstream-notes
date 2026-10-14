@@ -444,3 +444,99 @@ async fn content_past_the_budget_goes_out_as_references() {
     assert!(next.data[0].has_content());
     assert!(!next.data[1].has_content());
 }
+
+/// What the account's usage page reports.
+async fn usage(device: &Device) -> serde_json::Value {
+    reqwest::Client::new()
+        .get(format!("{}/api/v1/mindstream/usage/", device.url))
+        .header("Authorization", format!("Token {}", device.token))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+async fn put_chunk(device: &Device, collection: &str, content: Vec<u8>) -> u16 {
+    reqwest::Client::new()
+        .put(format!(
+            "{}/api/v1/collection/{collection}/item/{}/chunk/{}/",
+            device.url,
+            new_uid(),
+            new_uid()
+        ))
+        .header("Authorization", format!("Token {}", device.token))
+        .body(content)
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .as_u16()
+}
+
+/// Deleting a collection drops what it held: its items, their content, and
+/// chunks uploaded for items that never came. The owner stops paying for
+/// any of it, and for the collection as a space. Nothing can be put back.
+#[tokio::test]
+async fn deleting_a_collection_drops_what_it_held() {
+    let dir = std::env::temp_dir().join(format!("mindstream-deleted-space-{}", new_uid()));
+    let url = {
+        let dir = dir.clone();
+        common::start_server(move |config| config.blob_dir = dir)
+    };
+    let device = Device::signup(&url, "deleted-space").await;
+    let collection = device.create_collection().await;
+    let pool = pool().await;
+    let empty = bytes_used(&pool, &collection).await;
+    let items = vec![
+        revision(&new_uid(), false, vec![chunk(1, 4 * KIB)]),
+        revision(&new_uid(), false, vec![chunk(2, 100 * KIB)]),
+    ];
+    assert_eq!(push(&device, &collection, items).await.0, 200);
+    assert_eq!(
+        put_chunk(&device, &collection, vec![3; 100 * KIB]).await,
+        201
+    );
+    assert_eq!(count(&pool, "chunks", &collection).await, 3);
+    assert_eq!(usage(&device).await["spaces"], 1);
+
+    let deletion = revision(&collection, true, Vec::new());
+    assert_eq!(push(&device, &collection, vec![deletion]).await.0, 200);
+
+    assert_eq!(count(&pool, "chunks", &collection).await, 0);
+    assert_eq!(count(&pool, "revisions", &collection).await, 0);
+    let after = bytes_used(&pool, &collection).await;
+    assert!(
+        after < empty + KIB as i64,
+        "the deletion left {after} bytes charged, {empty} before anything was in it"
+    );
+    let reported = usage(&device).await;
+    assert_eq!(reported["spaces"], 0);
+    assert_eq!(reported["storageUsedBytes"], after);
+    let blobs = dir.join(format!("{}/{collection}", &collection[..2]));
+    let on_disk = || std::fs::read_dir(&blobs).map_or(0, |entries| entries.count());
+    let settled = async {
+        while on_disk() > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    };
+    if tokio::time::timeout(std::time::Duration::from_secs(5), settled)
+        .await
+        .is_err()
+    {
+        panic!("{} blob(s) outlived the collection", on_disk());
+    }
+
+    // The collection's own item may be marked deleted again, a retry by
+    // another name. Nothing else may be written.
+    let again = revision(&collection, true, Vec::new());
+    assert_eq!(push(&device, &collection, vec![again]).await.0, 200);
+    let refused = (403, "collection_deleted".to_owned());
+    let revived = revision(&collection, false, Vec::new());
+    assert_eq!(push(&device, &collection, vec![revived]).await, refused);
+    let late = revision(&new_uid(), false, vec![chunk(4, KIB)]);
+    assert_eq!(push(&device, &collection, vec![late]).await, refused);
+    assert_eq!(put_chunk(&device, &collection, vec![5; KIB]).await, 403);
+    assert_eq!(count(&pool, "chunks", &collection).await, 0);
+}

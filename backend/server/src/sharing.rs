@@ -346,8 +346,11 @@ pub async fn invite(
         return Err(ApiError::bad_request("Malformed invitation key."));
     }
     let mut tx = state.pool.begin().await?;
-    let collection = membership(&mut tx, user.account_id, &body.collection, false).await?;
+    // Locked, so a deletion of the collection, which withdraws everything
+    // still pending, is either done and seen here or waits for this.
+    let collection = membership(&mut tx, user.account_id, &body.collection, true).await?;
     collection.require_admin()?;
+    collection.require_live()?;
     let recipient = account_id_of(&mut tx, &body.username).await?;
     if recipient == user.account_id {
         return Err(ApiError::new(
