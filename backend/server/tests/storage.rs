@@ -146,6 +146,35 @@ async fn content_marked_deleted_is_held_to_the_plan_like_any_other() {
     assert_eq!(push(&device, &collection, vec![tombstone]).await.0, 200);
 }
 
+/// A chunk upload bigger than any chunk may be is refused before it is
+/// buffered, not after the whole body is in memory.
+#[tokio::test]
+async fn oversized_chunk_upload_is_refused_up_front() {
+    let device = Device::signup(common::server(), "chunk-cap").await;
+    let collection = device.create_collection().await;
+    let upload = |bytes: usize| upload_bytes(&device, &collection, bytes);
+    assert_eq!(upload(3 * 1024 * 1024).await, 413);
+    // A chunk of exactly the largest legal size still reaches the handler.
+    assert_eq!(upload(1024 * 1024).await, 201);
+}
+
+async fn upload_bytes(device: &Device, collection: &str, bytes: usize) -> u16 {
+    reqwest::Client::new()
+        .put(format!(
+            "{}/api/v1/collection/{collection}/item/{}/chunk/{}/",
+            device.url,
+            new_uid(),
+            new_uid()
+        ))
+        .header("Authorization", format!("Token {}", device.token))
+        .body(vec![7u8; bytes])
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .as_u16()
+}
+
 /// A deletion that names stored chunks is not a deletion: the references
 /// would keep those bytes alive without counting against any limit, past a
 /// plan that allows nothing.
