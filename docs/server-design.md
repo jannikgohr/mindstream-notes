@@ -455,6 +455,10 @@ uses.
   holds the folder's name and the manifest, and marking it deleted ends the
   share. Writing it takes admin access, as inviting and removing members do,
   not just write access to the folder's notes.
+- **Stopping sharing takes everyone else out.** Deleting the collection ends
+  every membership but the owner's, the way removing a member does, so the
+  server stops serving the others and their devices are told. Invitations
+  not yet answered and links not yet used are withdrawn.
 - **An invitation is only as good as its sender.** It is accepted on the
   authority of the admin who sent it. Accepting checks that the sender is
   still an admin of the space on an account that is still enabled, under the

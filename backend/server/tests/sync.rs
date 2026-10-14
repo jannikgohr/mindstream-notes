@@ -163,16 +163,15 @@ fn idle_check_names_every_collection_a_device_has_to_visit() {
     assert!(removed.is_empty());
     cursor = next;
 
-    // One that its owner deletes is named, as deleted.
+    // One that its owner deletes, which is how sharing stops, takes the
+    // guest out of it, and is reported as lost.
     let mut doomed = owner_collections.fetch(joined.uid(), None).unwrap();
     doomed.delete().unwrap();
     owner_collections.upload(&doomed, None).unwrap();
-    let options = FetchOptions::new().stoken(cursor.as_deref());
-    let page = guest_collections.list_multi(types, Some(&options)).unwrap();
-    assert_eq!(page.data().len(), 1);
-    assert_eq!(page.data()[0].uid(), joined.uid());
-    assert!(page.data()[0].is_deleted());
-    cursor = page.stoken().map(str::to_owned);
+    let (uids, removed, next) = changed_since(&cursor);
+    assert!(uids.is_empty());
+    assert_eq!(removed, vec![joined.uid().to_owned()]);
+    cursor = next;
 
     // One the guest is taken out of is reported as lost, and with that the
     // device is level again.

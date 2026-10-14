@@ -21,6 +21,7 @@ use crate::chunks;
 use crate::error::{ApiError, ApiResult, FieldError};
 use crate::events::{self, Event};
 use crate::limits;
+use crate::sharing;
 use crate::wire::{
     self, check_uid, valid_uid, CollectionCreate, CollectionList, FetchQuery, ItemBatch, ItemList,
     ItemRef, IteratorList, ListMulti, Msgpack, RemovedCollection, ACCESS_ADMIN, ACCESS_READ_ONLY,
@@ -1115,6 +1116,10 @@ async fn write_items(
     if body.items.iter().any(|item| item.uid == collection.uid) {
         collection.require_admin()?;
     }
+    let ends_share = body
+        .items
+        .iter()
+        .any(|item| item.uid == collection.uid && item.content.deleted);
 
     // The client may require that nothing at all changed in the collection
     // since it last looked. Anything that is not the current cursor fails,
@@ -1180,6 +1185,9 @@ async fn write_items(
             collection: collection.id,
         };
         events::publish(&mut tx, &event).await?;
+    }
+    if ends_share {
+        sharing::end_share(&mut tx, &collection).await?;
     }
     stored.written.keep();
     tx.commit().await?;

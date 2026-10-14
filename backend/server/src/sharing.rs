@@ -137,6 +137,40 @@ async fn remove_membership(
     Ok(true)
 }
 
+/// The collection was deleted, which for a shared folder is how its owner
+/// stops sharing it. Everyone else is taken out as a removed member is, so
+/// their devices hear of it and the server stops serving them, and every
+/// way in that is still open is withdrawn. The caller holds the lock on the
+/// collection.
+pub(crate) async fn end_share(conn: &mut PgConnection, collection: &Membership) -> ApiResult<()> {
+    let others: Vec<i64> = sqlx::query_scalar(
+        "SELECT account_id FROM members WHERE collection_id = $1 AND account_id <> $2",
+    )
+    .bind(collection.id)
+    .bind(collection.owner_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    for account in others {
+        remove_membership(conn, collection, account).await?;
+    }
+    let withdrawn: Vec<(i64, i64)> = sqlx::query_as(
+        "DELETE FROM invitations WHERE collection_id = $1
+         RETURNING from_account_id, to_account_id",
+    )
+    .bind(collection.id)
+    .fetch_all(&mut *conn)
+    .await?;
+    for (sender, recipient) in withdrawn {
+        events::publish(conn, &Event::Invitation { account: sender }).await?;
+        events::publish(conn, &Event::Invitation { account: recipient }).await?;
+    }
+    sqlx::query("DELETE FROM invite_links WHERE collection_id = $1")
+        .bind(collection.id)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
 fn owner_stays() -> ApiError {
     ApiError::forbidden(
         "owner_membership_fixed",

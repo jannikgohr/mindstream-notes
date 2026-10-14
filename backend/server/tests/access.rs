@@ -122,6 +122,85 @@ fn only_an_admin_renames_or_deletes_the_collection() {
     writer_collections.upload(&renamed, None).unwrap();
 }
 
+/// Deleting a shared collection is how its owner stops sharing it. It ends
+/// every other membership just as a removal does, and with it every way in
+/// that was still open: an invitation not yet answered, a link not yet used.
+#[test]
+fn deleting_a_collection_takes_everyone_else_out() {
+    let owner = signup("owner");
+    let writer = signup("writer");
+    let admin = signup("coadmin");
+    let invited = signup("invited");
+    let collection = new_collection(&owner, "shared");
+    let owner_collections = owner.collection_manager().unwrap();
+    let writer_view = share(
+        &owner,
+        &collection,
+        &writer,
+        CollectionAccessLevel::ReadWrite,
+    );
+    share(&owner, &collection, &admin, CollectionAccessLevel::Admin);
+    let writer_collections = writer.collection_manager().unwrap();
+    let cursor = writer_collections
+        .list(COLLECTION_TYPE, None)
+        .unwrap()
+        .stoken()
+        .map(str::to_owned);
+    let owner_invites = owner.invitation_manager().unwrap();
+    let profile = owner_invites.fetch_user_profile(&invited.name).unwrap();
+    owner_invites
+        .invite(
+            &collection,
+            &invited.name,
+            profile.pubkey(),
+            CollectionAccessLevel::ReadOnly,
+        )
+        .unwrap();
+
+    let mut deleted = owner_collections.fetch(collection.uid(), None).unwrap();
+    deleted.delete().unwrap();
+    owner_collections.upload(&deleted, None).unwrap();
+
+    for (account, view) in [(&writer, Some(&writer_view)), (&admin, None)] {
+        let collections = account.collection_manager().unwrap();
+        assert_refused!(
+            collections.fetch(collection.uid(), None),
+            Error::NotFound(_)
+        );
+        if let Some(view) = view {
+            let items = collections.item_manager(view).unwrap();
+            assert_refused!(items.list(None), Error::NotFound(_));
+            let note = items.create(&named("after"), b"too late").unwrap();
+            assert_refused!(items.batch(iter::once(&note), None), Error::NotFound(_));
+        }
+    }
+    let options = FetchOptions::new().stoken(cursor.as_deref());
+    let listed = writer_collections
+        .list(COLLECTION_TYPE, Some(&options))
+        .unwrap();
+    let removed = listed.removed_memberships().expect("a removal is reported");
+    assert_eq!(removed[0].uid(), collection.uid());
+    let incoming = invited
+        .invitation_manager()
+        .unwrap()
+        .list_incoming(None)
+        .unwrap();
+    assert!(
+        incoming.data().is_empty(),
+        "the invitation outlived the share"
+    );
+
+    // The owner keeps the collection, deleted, as Etebase does.
+    let kept = owner_collections.fetch(collection.uid(), None).unwrap();
+    assert!(kept.is_deleted());
+    let members = owner_collections
+        .member_manager(&kept)
+        .unwrap()
+        .list(None)
+        .unwrap();
+    assert_eq!(members.data().len(), 1);
+}
+
 #[test]
 fn removed_member_loses_access_at_once() {
     let owner = signup("owner");

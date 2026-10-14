@@ -449,6 +449,20 @@ async fn claim_that_waited_out_its_makers_removal_grants_nothing() {
     assert!(!is_member(&guest, &collection).await);
 }
 
+/// Deleting the collection, which is how a share is stopped, withdraws the
+/// links into it.
+#[tokio::test]
+async fn stopping_a_share_withdraws_its_links() {
+    let owner = Person::signup(url(), "owner", false).await;
+    let collection = owner.device().create_collection().await;
+    let link = share_by_link(&owner, &collection).await;
+    owner.device().delete_item(&collection, &collection).await;
+    assert_eq!(open(url(), &link).await.status, 404);
+    let guest = Person::signup(url(), "guest", false).await;
+    assert_eq!(claim(&guest, &link).await.status, 404);
+    assert!(!is_member(&guest, &collection).await);
+}
+
 #[tokio::test]
 async fn expired_link_is_refused() {
     let owner = Person::signup(url(), "owner", false).await;
