@@ -2,8 +2,8 @@
  * Yjs scene adapter for Excalidraw-backed freeform notes — local
  * persistence only.
  *
- * Live collaboration for freeform notes goes over excalidraw-room (see
- * excalidraw-room-client.ts), not Yjs. This module's job is narrower
+ * Live collaboration for freeform notes exchanges whole scenes (see
+ * excalidraw-room-client.ts), not Yjs updates. This module's job is narrower
  * now: keep the local Y.Doc in step with what Excalidraw is drawing so
  * the FreeformNoteEditor can serialise it as `yrs_state` into etebase
  * (and load it back unchanged on a different device).

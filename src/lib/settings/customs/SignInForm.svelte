@@ -1,14 +1,15 @@
 <script lang="ts">
-  import { tUi } from '$lib/settings/i18n.svelte';
   /**
-   * Etebase sign-in / sign-out panel. Only mounted when the surrounding
-   * `account.serverType` is "managed" or "self-hosted" (see schema.json).
+   * Sign-in, signup, recovery and sign-out panel. Only mounted when the
+   * surrounding `account.serverType` is "managed" or "self-hosted" (see
+   * schema.json).
    *
-   * Three rendering branches:
+   * Rendering branches:
+   *   - a recovery key waiting to be acknowledged → the key, nothing else
    *   - signed in  → "Signed in as X" + server URL + sync/logout
-   *   - signed out, managed     → fixed "Managed (api.mindstream-notes.invalid)" label,
-   *                                creds, submit
-   *   - signed out, self-hosted → URL input + creds + submit
+   *   - signed out → the server (fixed for managed, an input for
+   *                  self-hosted) and one of three forms: sign in, create
+   *                  an account, or get back in with a recovery key
    *
    * The URL field used to live as its own setting in schema.json. Moving
    * it in here means the user only sees it where it's actually relevant
@@ -18,12 +19,26 @@
    *
    * The Rust side stashes the encrypted session on disk and the
    * encryption key in the OS keystore — see src-tauri/src/auth/mod.rs.
-   * We never send the password anywhere except the etebase server, and
-   * never persist it.
+   * We never send the password anywhere, the server included: what goes
+   * out is a signature made with a key derived from it. And we never
+   * persist it.
    */
+  import {
+    parseInviteLink,
+    sameServer,
+    serverName
+  } from '$lib/sharing/invite-link';
   import { Button } from '$lib/components/ui/button';
   import { CheckCircle2, LogOut, Loader2, RefreshCw } from '@lucide/svelte';
   import {
+    accountRecover,
+    accountServerInfo,
+    accountSignup,
+    type ServerInfo,
+    type ServerTarget
+  } from '$lib/api/account';
+  import {
+    adoptSession,
     authSession,
     checkEtebaseServerUrl,
     etebaseLogin,
@@ -33,9 +48,23 @@
     type ServerType
   } from '$lib/api/auth.svelte';
   import { type SyncReport } from '$lib/api/sync';
-  import { toErrorMessage } from '$lib/api/errors';
   import { normalizeServerUrl } from '$lib/api/server-urls';
+  import SecretReveal from '$lib/account/SecretReveal.svelte';
+  import { pendingReveal } from '$lib/account/pending-reveal.svelte';
+  import { recoveryKeyFile } from '$lib/account/recovery-key-file';
+  import {
+    describeRefusal,
+    refusalReason,
+    REASON_CODE_REQUIRED
+  } from '$lib/account/refusal';
+  import {
+    FIELD_CLASS,
+    FIELD_LABEL_CLASS,
+    MIN_PASSWORD_LENGTH
+  } from '$lib/account/styles';
   import { upsertNotification } from '$lib/notifications/store.svelte';
+  import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
+  import { summariseSyncReport } from '$lib/sync/report-summary';
   import { runSync } from '$lib/sync/runner';
   import {
     getSettingValue,
@@ -43,8 +72,18 @@
     settingsDialog
   } from '../store.svelte';
 
+  type Mode = 'signin' | 'signup' | 'recover';
+
+  let mode = $state<Mode>('signin');
   let username = $state('');
+  let email = $state('');
   let password = $state('');
+  let passwordAgain = $state('');
+  let code = $state('');
+  /** The server has said the account needs a code. Shown from then on. */
+  let codeNeeded = $state(false);
+  let signupCode = $state('');
+  let recoveryKey = $state('');
   let busy = $state(false);
   let error = $state<string | null>(null);
   let syncing = $state(false);
@@ -52,6 +91,9 @@
   let checkingUrl = $state(false);
   let checkUrlStatus = $state<string | null>(null);
   let checkUrlOk = $state(false);
+  /** What the server said about itself, for the signup form. Null until
+   *  asked, and again when it could not be asked. */
+  let serverInfo = $state<ServerInfo | null>(null);
 
   const serverType = $derived(
     (getSettingValue('account.serverType') as string | undefined) ??
@@ -74,15 +116,74 @@
     serverUrlInput.trim().length > 0 ? serverUrlValidation.error : null
   );
 
-  const canSubmit = $derived(
-    !busy &&
-      username.trim().length > 0 &&
-      password.length > 0 &&
-      (serverType === 'managed' ||
-        (serverType === 'self-hosted' &&
-          serverUrlValidation.url.length > 0 &&
-          serverUrlValidation.error === null))
+  const serverReady = $derived(
+    serverType === 'managed' ||
+      (serverType === 'self-hosted' &&
+        serverUrlValidation.url.length > 0 &&
+        serverUrlValidation.error === null)
   );
+
+  const target = $derived<ServerTarget>({
+    serverType: serverType as ServerType,
+    serverUrl:
+      serverType === 'self-hosted' ? serverUrlValidation.url : undefined
+  });
+
+  /** What is wrong with the new password, if anything worth saying yet. */
+  const passwordProblem = $derived.by(() => {
+    if (mode === 'signin' || password.length === 0) return null;
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      return tUiFormat('account.password.tooShort', {
+        count: MIN_PASSWORD_LENGTH
+      });
+    }
+    if (passwordAgain.length > 0 && password !== passwordAgain) {
+      return tUi('account.password.mismatch');
+    }
+    return null;
+  });
+
+  const newPasswordReady = $derived(
+    password.length >= MIN_PASSWORD_LENGTH && password === passwordAgain
+  );
+
+  /** A server that takes anyone needs no code. One this app could not ask
+   *  gets the field anyway, left optional. */
+  const signupCodeShown = $derived(
+    serverInfo?.signup !== 'open' || signupCode.trim().length > 0
+  );
+  const signupCodeRequired = $derived(
+    serverInfo !== null && serverInfo.signup !== 'open'
+  );
+  /** What is in the code field, if it is an invite link and not a code. A
+   *  link is good on one server, so it only counts for the one above. */
+  const signupLink = $derived(
+    mode === 'signup' ? parseInviteLink(signupCode) : null
+  );
+  const signupLinkElsewhere = $derived(
+    signupLink !== null &&
+      !sameServer(
+        signupLink.serverUrl,
+        serverType === 'managed' ? MANAGED_SERVER_URL : serverUrlValidation.url
+      )
+  );
+
+  const canSubmit = $derived.by(() => {
+    if (busy || !serverReady || username.trim().length === 0) return false;
+    switch (mode) {
+      case 'signin':
+        return password.length > 0;
+      case 'signup':
+        return (
+          newPasswordReady &&
+          email.trim().length > 0 &&
+          !signupLinkElsewhere &&
+          (!signupCodeRequired || signupCode.trim().length > 0)
+        );
+      case 'recover':
+        return newPasswordReady && recoveryKey.trim().length > 0;
+    }
+  });
 
   // Re-check whenever the settings dialog opens — covers the case where
   // a different window signed in or logged out while this one was idle.
@@ -90,51 +191,166 @@
     if (settingsDialog.open) void refreshAuthSession();
   });
 
+  // The signup form asks for a code only where the server wants one, so
+  // it has to ask the server first. Asked again when the address changes.
+  $effect(() => {
+    if (mode !== 'signup' || !serverReady) {
+      serverInfo = null;
+      return;
+    }
+    const asked = target;
+    let stale = false;
+    accountServerInfo(asked)
+      .then((info) => {
+        if (!stale) serverInfo = info;
+      })
+      .catch((err) => {
+        if (stale) return;
+        serverInfo = null;
+        error = describeRefusal(err);
+      });
+    return () => {
+      stale = true;
+    };
+  });
+
+  function switchMode(next: Mode) {
+    mode = next;
+    error = null;
+    password = '';
+    passwordAgain = '';
+    code = '';
+    codeNeeded = false;
+  }
+
+  function notify(id: string, title: string, message: string) {
+    upsertNotification({
+      id: `auth:${id}:${Date.now()}`,
+      kind: 'generic',
+      widgetType: 'generic',
+      createdAt: Date.now(),
+      data: { title, message }
+    });
+  }
+
+  /** Persist the cleaned-up URL back so the next time the user opens
+   *  settings they see the form the app actually uses. Only after the
+   *  server accepted something: a network failure or wrong password
+   *  doesn't prove the URL was right, and rewriting on failure would
+   *  feel intrusive. */
+  async function keepNormalizedUrl() {
+    const normalizedUrl = serverUrlValidation.url;
+    if (
+      serverType !== 'self-hosted' ||
+      !normalizedUrl ||
+      normalizedUrl === serverUrlInput.trim()
+    ) {
+      return;
+    }
+    try {
+      await setSettingValue('account.serverUrl', normalizedUrl);
+    } catch (err) {
+      console.warn('[auth] persist normalized server URL', err);
+    }
+  }
+
+  /** Point the form at the server an invite link belongs to. */
+  async function useLinkServer() {
+    if (!signupLink) return;
+    try {
+      if (sameServer(signupLink.serverUrl, MANAGED_SERVER_URL)) {
+        await setSettingValue('account.serverType', 'managed');
+      } else {
+        await setSettingValue('account.serverType', 'self-hosted');
+        await setSettingValue('account.serverUrl', signupLink.serverUrl);
+      }
+    } catch (err) {
+      console.warn('[auth] use the server of an invite link', err);
+    }
+  }
+
+  /** The server asked for a code: show the field and say so, as a prompt
+   *  and not as a failure. */
+  function askForCode(err: unknown): boolean {
+    if (refusalReason(err) !== REASON_CODE_REQUIRED || codeNeeded) {
+      return false;
+    }
+    codeNeeded = true;
+    error = null;
+    return true;
+  }
+
   async function signIn() {
+    const connectedTo =
+      serverType === 'self-hosted'
+        ? serverUrlValidation.url
+        : MANAGED_SERVER_URL;
+    await etebaseLogin({
+      ...target,
+      username: username.trim(),
+      password,
+      code: codeNeeded ? code : undefined
+    });
+    notify(
+      'signin',
+      tUi('account.notify.signedIn.title'),
+      tUiFormat('account.notify.signedIn.message', { server: connectedTo })
+    );
+    password = '';
+    username = '';
+    await keepNormalizedUrl();
+  }
+
+  async function signUp() {
+    const created = await accountSignup({
+      ...target,
+      username: username.trim(),
+      email: email.trim(),
+      password,
+      // The field takes either. A link also joins what it leads to.
+      signupCode: signupLink === null ? signupCode : undefined,
+      inviteLink: signupLink === null ? undefined : signupCode.trim()
+    });
+    await keepNormalizedUrl();
+    pendingReveal.current = created;
+  }
+
+  async function recover() {
+    const recovered = await accountRecover({
+      ...target,
+      username: username.trim(),
+      recoveryKey,
+      newPassword: password,
+      code: codeNeeded ? code : undefined
+    });
+    await keepNormalizedUrl();
+    pendingReveal.current = recovered;
+  }
+
+  async function submit() {
     if (!canSubmit) return;
     busy = true;
     error = null;
-    const normalizedUrl = serverUrlValidation.url;
     try {
-      await etebaseLogin({
-        serverType: serverType as ServerType,
-        serverUrl: serverType === 'self-hosted' ? normalizedUrl : undefined,
-        username: username.trim(),
-        password
-      });
-      upsertNotification({
-        id: `auth:signin:${Date.now()}`,
-        kind: 'generic',
-        widgetType: 'generic',
-        createdAt: Date.now(),
-        data: {
-          title: 'Signed in',
-          message: `Connected to ${serverType === 'self-hosted' ? normalizedUrl : MANAGED_SERVER_URL}`
-        }
-      });
-      password = '';
-      username = '';
-      // Persist the cleaned-up URL back so the next time the user
-      // opens settings they see the form the app actually uses. We
-      // only do this after a successful login: a network failure or
-      // wrong password doesn't prove the URL was right, and rewriting
-      // on failure would feel intrusive.
-      if (
-        serverType === 'self-hosted' &&
-        normalizedUrl &&
-        normalizedUrl !== serverUrlInput.trim()
-      ) {
-        try {
-          await setSettingValue('account.serverUrl', normalizedUrl);
-        } catch (err) {
-          console.warn('[auth] persist normalized server URL', err);
-        }
-      }
+      if (mode === 'signin') await signIn();
+      else if (mode === 'signup') await signUp();
+      else await recover();
     } catch (err) {
-      error = toErrorMessage(err);
+      if (!askForCode(err)) error = describeRefusal(err);
     } finally {
       busy = false;
     }
+  }
+
+  /** The key is stored: take the session over, which reloads the window. */
+  function finishReveal() {
+    const revealed = pendingReveal.current;
+    if (!revealed) return;
+    pendingReveal.current = null;
+    password = '';
+    passwordAgain = '';
+    recoveryKey = '';
+    adoptSession(revealed.session);
   }
 
   async function signOut() {
@@ -142,19 +358,14 @@
     error = null;
     try {
       await etebaseLogout();
-      upsertNotification({
-        id: `auth:signout:${Date.now()}`,
-        kind: 'generic',
-        widgetType: 'generic',
-        createdAt: Date.now(),
-        data: {
-          title: 'Signed out',
-          message: 'Your local session was cleared.'
-        }
-      });
+      notify(
+        'signout',
+        tUi('account.notify.signedOut.title'),
+        tUi('account.notify.signedOut.message')
+      );
       lastReport = null;
     } catch (err) {
-      error = toErrorMessage(err);
+      error = describeRefusal(err);
     } finally {
       busy = false;
     }
@@ -167,30 +378,10 @@
     try {
       lastReport = await runSync();
     } catch (err) {
-      error = toErrorMessage(err);
+      error = describeRefusal(err);
     } finally {
       syncing = false;
     }
-  }
-
-  function summarise(r: SyncReport): string {
-    const parts: string[] = [];
-    if (r.notes_pulled || r.folders_pulled) {
-      parts.push(
-        `pulled ${r.notes_pulled} note${r.notes_pulled === 1 ? '' : 's'}, ${r.folders_pulled} folder${r.folders_pulled === 1 ? '' : 's'}`
-      );
-    }
-    if (r.notes_pushed || r.folders_pushed) {
-      parts.push(
-        `pushed ${r.notes_pushed} note${r.notes_pushed === 1 ? '' : 's'}, ${r.folders_pushed} folder${r.folders_pushed === 1 ? '' : 's'}`
-      );
-    }
-    if (r.conflicts_resolved) {
-      parts.push(
-        `${r.conflicts_resolved} conflict${r.conflicts_resolved === 1 ? '' : 's'} merged`
-      );
-    }
-    return parts.length > 0 ? parts.join(' · ') : 'Already up to date';
   }
 
   /** Two-way binding for the URL input. We can't `bind:value` against a
@@ -220,11 +411,14 @@
       const result = await checkEtebaseServerUrl(serverUrlValidation.url);
       checkUrlOk = result.ok;
       checkUrlStatus = result.ok
-        ? `Server replied at ${result.url}`
-        : `Health check returned HTTP ${result.status} at ${result.url}`;
+        ? tUiFormat('account.server.replied', { url: result.url })
+        : tUiFormat('account.server.unhealthy', {
+            status: result.status,
+            url: result.url
+          });
     } catch (err) {
       checkUrlStatus = null;
-      error = toErrorMessage(err);
+      error = describeRefusal(err);
     } finally {
       checkingUrl = false;
     }
@@ -232,18 +426,31 @@
 </script>
 
 <div class="rounded-md border border-border bg-muted/40 p-3 text-sm">
-  {#if !authSession.initialised}
+  {#if pendingReveal.current}
+    <SecretReveal
+      title={tUi('account.reveal.recoveryKey.title')}
+      explanation={tUi('account.reveal.recoveryKey.explanation')}
+      lines={[pendingReveal.current.recoveryKey]}
+      file={recoveryKeyFile(
+        pendingReveal.current.recoveryKey,
+        pendingReveal.current.session
+      )}
+      onDone={finishReveal}
+    />
+  {:else if !authSession.initialised}
     <div class="flex items-center gap-2 text-xs text-muted-foreground">
       <Loader2 class="size-3.5 animate-spin" />
-      Checking session…
+      {tUi('account.session.checking')}
     </div>
   {:else if authSession.current}
     <div class="grid gap-2">
       <div>
         <div class="text-xs uppercase tracking-wide text-muted-foreground">
-          Signed in
+          {tUi('account.session.signedIn')}
         </div>
-        <div class="mt-1 font-medium">{authSession.current.username}</div>
+        <div class="mt-1 font-medium" data-testid="account-username">
+          {authSession.current.username}
+        </div>
         <div
           class="mt-0.5 truncate font-mono text-xs text-muted-foreground"
           title={authSession.current.server_url}
@@ -255,10 +462,10 @@
         <Button size="sm" onclick={triggerSync} disabled={syncing || busy}>
           {#if syncing}
             <Loader2 class="mr-1.5 size-3.5 animate-spin" />
-            Syncing…
+            {tUi('account.session.syncing')}
           {:else}
             <RefreshCw class="mr-1.5 size-3.5" />
-            Sync now
+            {tUi('account.session.syncNow')}
           {/if}
         </Button>
         <Button
@@ -269,128 +476,304 @@
         >
           {#if busy}
             <Loader2 class="mr-1.5 size-3.5 animate-spin" />
-            Logging out…
+            {tUi('account.session.loggingOut')}
           {:else}
             <LogOut class="mr-1.5 size-3.5" />
-            Log out
+            {tUi('account.session.logOut')}
           {/if}
         </Button>
       </div>
       {#if lastReport && !error}
-        <p class="text-xs text-muted-foreground">{summarise(lastReport)}</p>
+        <p class="text-xs text-muted-foreground">
+          {summariseSyncReport(lastReport)}
+        </p>
       {/if}
       {#if error}
         <p class="text-xs text-destructive">{error}</p>
       {/if}
     </div>
   {:else}
-    <form
-      class="grid gap-2"
-      onsubmit={(e) => {
-        e.preventDefault();
-        void signIn();
-      }}
-    >
-      {#if serverType === 'self-hosted'}
-        <label class="grid gap-1">
-          <span class="text-xs text-muted-foreground">Server URL</span>
-          <div class="flex gap-2">
-            <input
-              type="url"
-              inputmode="url"
-              autocomplete="url"
-              aria-label={tUi('account.serverUrl')}
-              value={serverUrlInput}
-              oninput={onServerUrlInput}
-              placeholder="https://collab.example.com"
-              disabled={busy}
-              class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
-            />
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              onclick={checkUrl}
-              disabled={busy ||
-                checkingUrl ||
-                !serverUrlValidation.url ||
-                serverUrlValidation.error !== null}
+    <div>
+      <form
+        class="grid gap-2"
+        data-testid="account-form"
+        data-mode={mode}
+        onsubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
+      >
+        {#if serverType === 'self-hosted'}
+          <label class="grid gap-1">
+            <span class={FIELD_LABEL_CLASS}>{tUi('account.serverUrl')}</span>
+            <div class="flex gap-2">
+              <input
+                type="url"
+                inputmode="url"
+                autocomplete="url"
+                aria-label={tUi('account.serverUrl')}
+                value={serverUrlInput}
+                oninput={onServerUrlInput}
+                placeholder="https://collab.example.com"
+                disabled={busy}
+                class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onclick={checkUrl}
+                disabled={busy ||
+                  checkingUrl ||
+                  !serverUrlValidation.url ||
+                  serverUrlValidation.error !== null}
+              >
+                {#if checkingUrl}
+                  <Loader2 class="mr-1.5 size-3.5 animate-spin" />
+                  {tUi('account.server.checking')}
+                {:else}
+                  {tUi('account.server.check')}
+                {/if}
+              </Button>
+            </div>
+          </label>
+        {:else if serverType === 'managed'}
+          <div class="grid gap-1">
+            <span class={FIELD_LABEL_CLASS}>{tUi('account.server.label')}</span>
+            <div
+              class="flex h-8 items-center rounded-md border border-input bg-background/40 px-2 font-mono text-xs text-muted-foreground"
+              title={tUi('account.managedHint')}
             >
-              {#if checkingUrl}
-                <Loader2 class="mr-1.5 size-3.5 animate-spin" />
-                Checking…
-              {:else}
-                Check URL
-              {/if}
-            </Button>
+              {tUiFormat('account.server.managed', { url: MANAGED_SERVER_URL })}
+            </div>
           </div>
-        </label>
-      {:else if serverType === 'managed'}
-        <div class="grid gap-1">
-          <span class="text-xs text-muted-foreground">Server</span>
-          <div
-            class="flex h-8 items-center rounded-md border border-input bg-background/40 px-2 font-mono text-xs text-muted-foreground"
-            title={tUi('account.managedHint')}
-          >
-            Managed ({MANAGED_SERVER_URL})
-          </div>
-        </div>
-      {/if}
-      <label class="grid gap-1">
-        <span class="text-xs text-muted-foreground">Username or email</span>
-        <input
-          type="text"
-          autocomplete="username"
-          aria-label={tUi('account.usernameOrEmail')}
-          bind:value={username}
-          placeholder="you@example.com"
-          disabled={busy}
-          class="h-8 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
-        />
-      </label>
-      <label class="grid gap-1">
-        <span class="text-xs text-muted-foreground">Password</span>
-        <input
-          type="password"
-          autocomplete="current-password"
-          aria-label={tUi('account.password')}
-          bind:value={password}
-          disabled={busy}
-          class="h-8 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
-        />
-      </label>
-      <div class="flex items-center justify-between gap-3 pt-1">
-        <Button type="submit" size="sm" disabled={!canSubmit}>
-          {#if busy}
-            <Loader2 class="mr-1.5 size-3.5 animate-spin" />
-            Signing in…
-          {:else}
-            Sign in
-          {/if}
-        </Button>
-        {#if error}
-          <span class="text-xs text-destructive">{error}</span>
-        {:else if serverType === 'self-hosted' && serverUrlError}
-          <span class="text-xs text-destructive">{serverUrlError}</span>
-        {:else if serverType === 'self-hosted' && !serverUrlValidation.url}
-          <span class="text-xs text-muted-foreground"
-            >Enter your server URL above first.</span
-          >
-        {:else if serverType === 'self-hosted' && checkUrlStatus}
-          <span
-            class="inline-flex items-center gap-1 text-xs {checkUrlOk
-              ? 'text-muted-foreground'
-              : 'text-destructive'}"
-          >
-            <CheckCircle2
-              class="size-3.5 {checkUrlOk
-                ? 'text-primary'
-                : 'text-destructive'}"
-            />
-            {checkUrlStatus}
-          </span>
         {/if}
-      </div>
-    </form>
+
+        {#if mode === 'signup'}
+          <p class="text-xs text-muted-foreground">
+            {tUi('account.signup.explanation')}
+          </p>
+        {:else if mode === 'recover'}
+          <p class="text-xs text-muted-foreground">
+            {tUi('account.recover.explanation')}
+          </p>
+        {/if}
+
+        <label class="grid gap-1">
+          <span class={FIELD_LABEL_CLASS}>{tUi('account.username')}</span>
+          <input
+            type="text"
+            autocomplete="username"
+            autocapitalize="none"
+            spellcheck="false"
+            aria-label={tUi('account.username')}
+            bind:value={username}
+            disabled={busy}
+            class={FIELD_CLASS}
+          />
+        </label>
+
+        {#if mode === 'signup'}
+          <label class="grid gap-1">
+            <span class={FIELD_LABEL_CLASS}>{tUi('account.email')}</span>
+            <input
+              type="email"
+              autocomplete="email"
+              aria-label={tUi('account.email')}
+              bind:value={email}
+              placeholder="you@example.com"
+              disabled={busy}
+              class={FIELD_CLASS}
+            />
+          </label>
+        {/if}
+
+        {#if mode === 'recover'}
+          <label class="grid gap-1">
+            <span class={FIELD_LABEL_CLASS}>{tUi('account.recoveryKey')}</span>
+            <textarea
+              rows="2"
+              autocomplete="off"
+              autocapitalize="characters"
+              spellcheck="false"
+              aria-label={tUi('account.recoveryKey')}
+              bind:value={recoveryKey}
+              placeholder="ABCD-EFGH-…"
+              disabled={busy}
+              class="w-full resize-none rounded-md border border-input bg-background px-2 py-1 font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+            ></textarea>
+          </label>
+        {/if}
+
+        <label class="grid gap-1">
+          <span class={FIELD_LABEL_CLASS}>
+            {tUi(
+              mode === 'recover' ? 'account.newPassword' : 'account.password'
+            )}
+          </span>
+          <input
+            type="password"
+            autocomplete={mode === 'signin'
+              ? 'current-password'
+              : 'new-password'}
+            aria-label={tUi(
+              mode === 'recover' ? 'account.newPassword' : 'account.password'
+            )}
+            bind:value={password}
+            disabled={busy}
+            class={FIELD_CLASS}
+          />
+        </label>
+
+        {#if mode !== 'signin'}
+          <label class="grid gap-1">
+            <span class={FIELD_LABEL_CLASS}>{tUi('account.passwordAgain')}</span
+            >
+            <input
+              type="password"
+              autocomplete="new-password"
+              aria-label={tUi('account.passwordAgain')}
+              bind:value={passwordAgain}
+              disabled={busy}
+              class={FIELD_CLASS}
+            />
+          </label>
+          {#if passwordProblem}
+            <p class="text-xs text-destructive">{passwordProblem}</p>
+          {/if}
+        {/if}
+
+        {#if mode === 'signup' && signupCodeShown}
+          <label class="grid gap-1">
+            <span class={FIELD_LABEL_CLASS}>{tUi('account.signupCode')}</span>
+            <input
+              type="text"
+              autocomplete="off"
+              autocapitalize="characters"
+              spellcheck="false"
+              aria-label={tUi('account.signupCode')}
+              bind:value={signupCode}
+              disabled={busy}
+              class="{FIELD_CLASS} font-mono"
+            />
+            {#if !signupLinkElsewhere}
+              <span class="text-xs text-muted-foreground">
+                {tUi(
+                  signupLink
+                    ? 'account.signupLink.hint'
+                    : 'account.signupCode.hint'
+                )}
+              </span>
+            {/if}
+          </label>
+          <!-- Outside the label, so the button is not part of the field's
+               name and a click on it does not land in the field. -->
+          {#if signupLinkElsewhere && signupLink}
+            <div class="grid gap-1" data-testid="signup-link-elsewhere">
+              <p class="text-xs text-destructive">
+                {tUiFormat('account.signupLink.elsewhere', {
+                  server: serverName(signupLink.serverUrl)
+                })}
+              </p>
+              <button
+                type="button"
+                class="justify-self-start text-xs text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                disabled={busy}
+                onclick={() => void useLinkServer()}
+              >
+                {tUiFormat('account.signupLink.useServer', {
+                  server: serverName(signupLink.serverUrl)
+                })}
+              </button>
+            </div>
+          {/if}
+        {/if}
+
+        {#if codeNeeded && mode !== 'signup'}
+          <label class="grid gap-1">
+            <span class={FIELD_LABEL_CLASS}>{tUi('account.code')}</span>
+            <!-- svelte-ignore a11y_autofocus -->
+            <input
+              type="text"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              autofocus
+              aria-label={tUi('account.code')}
+              bind:value={code}
+              disabled={busy}
+              class="{FIELD_CLASS} font-mono"
+            />
+            <span class="text-xs text-muted-foreground">
+              {tUi('account.code.hint')}
+            </span>
+          </label>
+        {/if}
+
+        <div class="flex items-center justify-between gap-3 pt-1">
+          <Button type="submit" size="sm" disabled={!canSubmit}>
+            {#if busy}
+              <Loader2 class="mr-1.5 size-3.5 animate-spin" />
+              {tUi(`account.${mode}.busy`)}
+            {:else}
+              {tUi(`account.${mode}.submit`)}
+            {/if}
+          </Button>
+          {#if error}
+            <span class="text-xs text-destructive" data-testid="account-error">
+              {error}
+            </span>
+          {:else if serverType === 'self-hosted' && serverUrlError}
+            <span class="text-xs text-destructive">{serverUrlError}</span>
+          {:else if serverType === 'self-hosted' && !serverUrlValidation.url}
+            <span class="text-xs text-muted-foreground">
+              {tUi('account.server.enterFirst')}
+            </span>
+          {:else if serverType === 'self-hosted' && checkUrlStatus}
+            <span
+              class="inline-flex items-center gap-1 text-xs {checkUrlOk
+                ? 'text-muted-foreground'
+                : 'text-destructive'}"
+            >
+              <CheckCircle2
+                class="size-3.5 {checkUrlOk
+                  ? 'text-primary'
+                  : 'text-destructive'}"
+              />
+              {checkUrlStatus}
+            </span>
+          {/if}
+        </div>
+
+        <div class="flex flex-wrap gap-x-4 gap-y-1 pt-1 text-xs">
+          {#if mode === 'signin'}
+            <button
+              type="button"
+              class="text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              onclick={() => switchMode('signup')}
+              disabled={busy}
+            >
+              {tUi('account.mode.signup')}
+            </button>
+            <button
+              type="button"
+              class="text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              onclick={() => switchMode('recover')}
+              disabled={busy}
+            >
+              {tUi('account.mode.recover')}
+            </button>
+          {:else}
+            <button
+              type="button"
+              class="text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              onclick={() => switchMode('signin')}
+              disabled={busy}
+            >
+              {tUi('account.mode.signin')}
+            </button>
+          {/if}
+        </div>
+      </form>
+    </div>
   {/if}
 </div>

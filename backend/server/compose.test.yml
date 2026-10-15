@@ -1,0 +1,23 @@
+# Disposable test stack, layered on compose.yml.
+#
+# Gives the end-to-end suites a throwaway server that cannot collide with a
+# real one: its own container names, its own project and volumes (so
+# `down -v` wipes it clean), and its own port. Bring it up through
+# `pnpm backend:test:up`, which also loads .env.test.
+#
+# Never load this file for a real deployment. Signup is open and the
+# credentials in .env.test are published.
+
+services:
+  server:
+    container_name: mindstream-test-server
+    environment:
+      # The suites sign up their own accounts on every run.
+      MINDSTREAM_SIGNUP: open
+      # Every test client arrives from one address, so the limit a real
+      # server applies per address would throttle the suite itself. The
+      # limit has its own spec, which sets it back.
+      MINDSTREAM_AUTH_RATE_PER_MINUTE: ${MINDSTREAM_AUTH_RATE_PER_MINUTE:-0}
+
+  postgres:
+    container_name: mindstream-test-postgres

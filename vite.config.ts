@@ -180,7 +180,6 @@ export default defineConfig({
       'react',
       'react-dom',
       'react-dom/client',
-      'socket.io-client',
       'tailwind-merge',
       'tailwind-variants',
       'y-prosemirror',

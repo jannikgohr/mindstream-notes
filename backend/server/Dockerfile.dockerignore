@@ -1,0 +1,9 @@
+# The image is built from the repository root. Nothing reaches the build
+# unless it is listed here.
+*
+!backend/server/Cargo.toml
+!backend/server/Cargo.lock
+!backend/server/migrations
+!backend/server/src
+!vendor/etebase-rs
+vendor/etebase-rs/target

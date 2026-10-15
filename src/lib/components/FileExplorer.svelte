@@ -371,12 +371,12 @@
     selectTargetForContextMenu(target);
     const token = ++menuToken;
     const batchItems = selectedItemsForTarget(target);
+    // What the root offers where nothing can be created is the builder's
+    // call: nothing in most views, joining by a link in the shared one.
     const items =
       batchItems.length > 1
         ? await menuItemsForBatch(batchItems)
-        : target.kind === 'root' && !canCreate && source !== 'trash'
-          ? []
-          : await menuItemsForTarget(target);
+        : await menuItemsForTarget(target);
     if (token !== menuToken) return;
     if (items.length === 0) return;
     menuX = e.clientX;

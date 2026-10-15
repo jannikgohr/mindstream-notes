@@ -69,6 +69,18 @@ pub(super) async fn backup_now_inner(app: AppHandle) -> AppResult<Option<BackupR
     Ok(Some(report))
 }
 
+/// Take out of a copy of the database what is of use on this device only.
+///
+/// The room keys kept here are sealed for this device's session and open
+/// nowhere else. A backup is made to leave the device, so they are not in
+/// it. `secure_delete` has the freed pages overwritten, so that they are
+/// gone from the file and not only from the table. A restored backup gets
+/// them again from the server.
+pub(super) fn leave_device_secrets_out(snapshot: &Connection) -> AppResult<()> {
+    snapshot.pragma_update(None, "secure_delete", "ON")?;
+    crate::sync::room_keys::forget_all(snapshot)
+}
+
 pub(super) fn run_backup(
     app: &AppHandle,
     conn: &mut Connection,
@@ -111,6 +123,7 @@ pub(super) fn run_backup(
     // shipping. Counts taken from a different connection during the
     // export window could drift.
     let snapshot = Connection::open(&staging_db)?;
+    leave_device_secrets_out(&snapshot)?;
     let counts = read_counts(&snapshot)?;
     let identity = read_account_identity(&snapshot, session)?;
     let schema_version: u32 = snapshot.query_row("PRAGMA user_version", [], |r| r.get(0))?;

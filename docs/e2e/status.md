@@ -11,23 +11,26 @@ Tests we know we want but haven't written — the account/token-lifecycle flows
 
 ## What's landed
 
-| Spec                          | Tier | Covers                                                                                        |
-| ----------------------------- | ---- | --------------------------------------------------------------------------------------------- |
-| `editor-roundtrip.e2e.ts`     | T3   | flow 1.1 through real `save_note` + SQLite + restart                                          |
-| `history.e2e.ts`              | T3   | capture / restore / Undo / editor-undo isolation / restart persistence                        |
-| `import-notes.e2e.ts`         | T3   | real vault import, hierarchy, note bodies, links/assets, counts, and restart persistence      |
-| `plugins.e2e.ts`              | T3   | `plugins_discover` off disk + toolbar contribution; disable persists across restart           |
-| `trash-retention.e2e.ts`      | T3   | flows 1.5 + 3.3 (retention sweep on boot)                                                     |
-| `settings-persist.e2e.ts`     | T3   | flows 3.1 / 3.2                                                                               |
-| `spellcheck.e2e.ts`           | T3   | flows 5.1 / 5.2 / 5.3 / 5.5 / 5.6 against a seeded dictionary                                 |
-| `text-checker.e2e.ts`         | T3   | flow 5.4 against a LanguageTool-shaped stub server                                            |
-| `sync-history.e2e.ts`         | T4   | per-device-history negative assertion; 4.10 edit-wins-over-delete                             |
-| `sharing.e2e.ts`              | T4   | sharing flows 4.1–4.4 + core 4.7 subtree/asset convergence + 4.7b                             |
-| `sharing-multi-device.e2e.ts` | T4   | owner-second-device 4.8–4.9 re-home cases                                                     |
-| `collab.e2e.ts`               | T4   | live markdown propagation, restore convergence, restore-vs-paused-peer, reconnect convergence |
+| Spec                          | Tier | Covers                                                                                                                                 |
+| ----------------------------- | ---- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `editor-roundtrip.e2e.ts`     | T3   | flow 1.1 through real `save_note` + SQLite + restart                                                                                   |
+| `history.e2e.ts`              | T3   | capture / restore / Undo / editor-undo isolation / restart persistence                                                                 |
+| `import-notes.e2e.ts`         | T3   | real vault import, hierarchy, note bodies, links/assets, counts, and restart persistence                                               |
+| `plugins.e2e.ts`              | T3   | `plugins_discover` off disk + toolbar contribution; disable persists across restart                                                    |
+| `trash-retention.e2e.ts`      | T3   | flows 1.5 + 3.3 (retention sweep on boot)                                                                                              |
+| `settings-persist.e2e.ts`     | T3   | flows 3.1 / 3.2                                                                                                                        |
+| `spellcheck.e2e.ts`           | T3   | flows 5.1 / 5.2 / 5.3 / 5.5 / 5.6 against a seeded dictionary                                                                          |
+| `text-checker.e2e.ts`         | T3   | flow 5.4 against a LanguageTool-shaped stub server                                                                                     |
+| `invite-link-open.e2e.ts`     | T3   | flow 4.13: a link handed over by the operating system opens the join dialog, and nothing else does                                     |
+| `account-security.e2e.ts`     | T4   | signup with a recovery key, a code asked of a new device, remote sign-out, password change                                             |
+| `sync-history.e2e.ts`         | T4   | per-device-history negative assertion; 4.10 edit-wins-over-delete                                                                      |
+| `sharing.e2e.ts`              | T4   | sharing flows 4.1–4.4 + core 4.7 subtree/asset convergence + 4.7b + 4.11 + 4.12 keys + 4.14 limits + 4.15 access changed, then removed |
+| `sharing-multi-device.e2e.ts` | T4   | owner-second-device 4.8–4.9 re-home cases                                                                                              |
+| `collab.e2e.ts`               | T4   | live markdown propagation, restore convergence, restore-vs-paused-peer, reconnect convergence                                          |
 
 Validated app assertions cover live collab propagation, restore convergence,
-reconnect convergence, seeded-note convergence, sharing 4.1–4.7b, and
+reconnect convergence, seeded-note convergence, sharing 4.1–4.7b, joining
+by an invite link, held-back invitations when a key changed, and
 edit-wins-over-delete for plain vault notes.
 
 ## Previously red, now fixed — 2026-07-20
@@ -72,11 +75,12 @@ Two things worth carrying forward:
 - **A cascading first failure hides its own cause.** Both T4 specs reported
   timeouts several assertions downstream of the real break. Running a single
   test in isolation (`--mochaOpts.grep`) surfaced it immediately.
-- **The relay container must match the client.** A stack rebuilt from a
-  different commit leaves the relay without the join challenge, and the client
-  then hangs waiting for one. Symptoms look like app bugs. `docker exec
-mindstream-test-yjs-relay grep -c mindstream-collab-join /app/collab-server.mjs`
-  tells you which you have.
+- **The server container must match the client.** The test stack builds the
+  server from the working tree, and `pnpm backend:test:up` rebuilds it when
+  the source changed. A stack left running from a different commit can
+  disagree with the app about the room protocol, and the symptoms look like
+  app bugs. `curl http://localhost:18080/api/v1/mindstream/info/` shows the
+  protocol level the running server speaks.
 
 ## What's pending
 
@@ -109,5 +113,3 @@ pending because their providers don't report presence (see
       — unblocks live markdown propagation and ink/freeform presence prompts.
 - [ ] **Render synced markdown assets in the editor UI** (4.7) — currently only
       the asset bytes are fetched through the app API.
-- [ ] **Incomplete-bundle guard (4.5)** — needs a share with a required part
-      invite revoked server-side.

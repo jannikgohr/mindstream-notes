@@ -8,6 +8,7 @@
   import { commandPalette } from '$lib/command-palette/store.svelte';
   import { updaterProgress } from '$lib/updater/progress.svelte';
   import { shareDialog } from './share-dialog.svelte';
+  import { joinLinkDialog } from './join-link-dialog.svelte';
   import { toasts } from './toast.svelte';
   import PluginMenuHost from './PluginMenuHost.svelte';
 
@@ -21,6 +22,7 @@
   let CommandPalette = $state<any | null>(null);
   let ShareCollectionDialog = $state<any | null>(null);
   let ManageAccessDialog = $state<any | null>(null);
+  let JoinSharedFolderDialog = $state<any | null>(null);
   let ToastHost = $state<any | null>(null);
 
   let confirmToken = 0;
@@ -33,6 +35,7 @@
   let commandPaletteToken = 0;
   let shareToken = 0;
   let manageToken = 0;
+  let joinLinkToken = 0;
   let toastToken = 0;
 
   $effect(() => {
@@ -167,6 +170,20 @@
   });
 
   $effect(() => {
+    const active = joinLinkDialog.open;
+    const token = ++joinLinkToken;
+    if (!active) {
+      JoinSharedFolderDialog = null;
+      return;
+    }
+    void import('./JoinSharedFolderDialog.svelte').then((mod) => {
+      if (token === joinLinkToken && joinLinkDialog.open) {
+        JoinSharedFolderDialog = mod.default;
+      }
+    });
+  });
+
+  $effect(() => {
     const active =
       shareDialog.collectionId !== null && shareDialog.view === 'access';
     const token = ++manageToken;
@@ -231,6 +248,11 @@
 {/if}
 {#if ManageAccessDialog}
   <ManageAccessDialog />
+{/if}
+{#if JoinSharedFolderDialog}
+  {#key joinLinkDialog.opened}
+    <JoinSharedFolderDialog />
+  {/key}
 {/if}
 {#if ToastHost}
   <ToastHost />

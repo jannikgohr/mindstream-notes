@@ -31,6 +31,9 @@ export interface LoginInput {
   serverUrl?: string;
   username: string;
   password: string;
+  /** From the authenticator, or a backup code. Sent once the server has
+   *  asked for one. */
+  code?: string;
 }
 
 export interface SessionInfo {
@@ -143,14 +146,24 @@ export async function etebaseLogin(input: LoginInput): Promise<SessionInfo> {
         server_type: input.serverType,
         server_url: input.serverUrl ?? null,
         username: input.username,
-        password: input.password
+        password: input.password,
+        code: input.code?.trim() || null
       }
     })
   );
+  adoptSession(session);
+  return session;
+}
+
+/**
+ * Take over a session the Rust side has stored: after a sign-in, and after
+ * a signup or a recovery once their recovery key has been acknowledged.
+ * Reloads the window, for the reason given above `sessionEvents`.
+ */
+export function adoptSession(session: SessionInfo): void {
   authSession.current = session;
   authSession.initialised = true;
   window.location.reload();
-  return session;
 }
 
 export async function etebaseLogout(): Promise<void> {

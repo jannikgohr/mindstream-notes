@@ -1,125 +1,23 @@
+use super::super::load_stoken;
 use super::*;
 use crate::db::open_memory_for_tests;
 
 fn manifest(root_folder_id: &str, owner: Option<&str>) -> ShareManifest {
     ShareManifest {
         schema: crate::sharing::SHARE_MANIFEST_SCHEMA,
-        share_scope_id: "scope_1".into(),
-        name: "Shared".into(),
         root_folder_id: root_folder_id.into(),
         owner_username: owner.map(str::to_string),
-        collab_epoch: 1,
-        collab_salt: vec![7; crate::sharing::SHARE_COLLAB_SALT_BYTES],
-        collections: Vec::new(),
     }
-}
-
-fn part_ref(part: ShareScopePart, uid: &str) -> crate::sharing::ShareManifestCollectionRef {
-    crate::sharing::ShareManifestCollectionRef {
-        part,
-        collection_uid: uid.into(),
-        required: true,
-    }
-}
-
-#[test]
-fn part_uid_resolves_each_part_and_reports_missing() {
-    let mut m = manifest("folder_root", Some("alice"));
-    m.collections = vec![
-        part_ref(ShareScopePart::Folders, "folders_col"),
-        part_ref(ShareScopePart::Notes, "notes_col"),
-    ];
-
-    assert_eq!(part_uid(&m, ShareScopePart::Folders), Some("folders_col"));
-    assert_eq!(part_uid(&m, ShareScopePart::Notes), Some("notes_col"));
-    // The assets part isn't listed, so it resolves to None — this is the
-    // exact condition sync_one_scope uses to skip an incomplete scope.
-    assert_eq!(part_uid(&m, ShareScopePart::Assets), None);
-}
-
-#[test]
-fn part_uid_returns_first_match_for_duplicate_parts() {
-    let mut m = manifest("folder_root", None);
-    m.collections = vec![
-        part_ref(ShareScopePart::Folders, "first"),
-        part_ref(ShareScopePart::Folders, "second"),
-    ];
-    assert_eq!(part_uid(&m, ShareScopePart::Folders), Some("first"));
-}
-
-#[test]
-fn record_scope_collab_epoch_marks_scope_notes_when_epoch_first_seen_or_changed() {
-    let db = open_memory_for_tests();
-    db.with_conn(|conn| {
-        conn.execute(
-            "INSERT INTO notes(id, title, body, position, created, modified, share_scope_id)
-             VALUES ('note_b', 'B', '', 0, 't', 't', 'scope_1')",
-            [],
-        )?;
-        conn.execute(
-            "INSERT INTO notes(id, title, body, position, created, modified, share_scope_id)
-             VALUES ('note_a', 'A', '', 0, 't', 't', 'scope_1')",
-            [],
-        )?;
-        conn.execute(
-            "INSERT INTO notes(id, title, body, position, created, modified, share_scope_id)
-             VALUES ('other', 'Other', '', 0, 't', 't', 'scope_2')",
-            [],
-        )?;
-        Ok(())
-    })
-    .unwrap();
-
-    let mut m = manifest("folder_root", Some("alice"));
-    let mut delta = SyncDelta::default();
-    record_scope_collab_epoch(&db, &m, &mut delta).unwrap();
-    assert_eq!(
-        delta.collab_credentials_changed_note_ids,
-        vec!["note_a", "note_b"]
-    );
-
-    delta.collab_credentials_changed_note_ids.clear();
-    record_scope_collab_epoch(&db, &m, &mut delta).unwrap();
-    assert!(delta.collab_credentials_changed_note_ids.is_empty());
-
-    m.collab_epoch += 1;
-    record_scope_collab_epoch(&db, &m, &mut delta).unwrap();
-    assert_eq!(
-        delta.collab_credentials_changed_note_ids,
-        vec!["note_a", "note_b"]
-    );
-}
-
-#[test]
-fn record_scope_collab_epoch_ignores_legacy_manifest_without_salt() {
-    let db = open_memory_for_tests();
-    let mut m = manifest("folder_root", Some("alice"));
-    m.collab_salt.clear();
-    let mut delta = SyncDelta::default();
-
-    record_scope_collab_epoch(&db, &m, &mut delta).unwrap();
-
-    assert!(delta.collab_credentials_changed_note_ids.is_empty());
-    assert_eq!(
-        load_scope_collab_epoch(&db, &m.share_scope_id).unwrap(),
-        None
-    );
 }
 
 #[test]
 fn discard_read_only_scope_edits_removes_local_rows_and_rewinds_stokens() {
     let db = open_memory_for_tests();
     db.with_conn(|c| {
-        for kind in [
-            "scope-folders:scope_1",
-            "scope-notes:scope_1",
-            "scope-assets:scope_1",
-        ] {
-            c.execute(
-                "INSERT INTO sync_state(kind, stoken) VALUES (?1, 'old-stoken')",
-                params![kind],
-            )?;
-        }
+        c.execute(
+            "INSERT INTO sync_state(kind, stoken) VALUES (?1, 'old-stoken')",
+            params![scope_stoken_key("scope_1")],
+        )?;
         c.execute(
             "INSERT INTO collections(id, parent_collection_id, name, position,
                                      created, modified, dirty, etebase_uid,
@@ -188,7 +86,7 @@ fn discard_read_only_scope_edits_removes_local_rows_and_rewinds_stokens() {
     .unwrap();
 
     let repair = discard_read_only_scope_edits(&db, "scope_1").unwrap();
-    reset_scope_stokens(&db, "scope_1").unwrap();
+    save_stoken(&db, &scope_stoken_key("scope_1"), None).unwrap();
 
     assert_eq!(repair.folders_discarded, 1);
     assert_eq!(repair.folders_reset, 1);
@@ -251,15 +149,7 @@ fn discard_read_only_scope_edits_removes_local_rows_and_rewinds_stokens() {
         .unwrap();
     assert_eq!(local_count, 0);
     assert_eq!(
-        load_stoken(&db, &scope_folders_stoken_key("scope_1")).unwrap(),
-        None
-    );
-    assert_eq!(
-        load_stoken(&db, &scope_notes_stoken_key("scope_1")).unwrap(),
-        None
-    );
-    assert_eq!(
-        load_stoken(&db, &scope_assets_stoken_key("scope_1")).unwrap(),
+        load_stoken(&db, &scope_stoken_key("scope_1")).unwrap(),
         None
     );
 }
@@ -284,9 +174,9 @@ fn project_shared_root_marks_recipient_root_as_shared() {
     // Syncing account ("bob") is not the scope owner ("alice") → recipient.
     project_shared_root(
         &db,
+        "scope_1",
         &manifest("folder_root", Some("alice")),
         CollectionAccessLevel::ReadOnly,
-        "folders_uid",
         Some("bob"),
     )
     .unwrap();
@@ -303,8 +193,57 @@ fn project_shared_root_marks_recipient_root_as_shared() {
         .unwrap();
     assert_eq!(owner.as_deref(), Some("alice"));
     assert_eq!(role.as_deref(), Some("read_only"));
-    assert_eq!(share_id.as_deref(), Some("folders_uid"));
+    assert_eq!(share_id.as_deref(), Some("scope_1"));
     assert_eq!(by_me, 0);
+}
+
+/// The manifest is written by whoever shares the folder, so the folder it
+/// names as the root is a claim. A folder of that id that is not in the
+/// share is somebody's own, and must not be marked as shared with them:
+/// on a read-only share that would lock them out of their own folder.
+#[test]
+fn project_shared_root_leaves_a_folder_outside_the_share_alone() {
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        c.execute(
+            "INSERT INTO collections(id, parent_collection_id, name, position,
+                                     created, modified, dirty)
+             VALUES ('my_folder', NULL, 'Mine', 0, 't', 't', 0)",
+            [],
+        )?;
+        c.execute(
+            "INSERT INTO collections(id, parent_collection_id, name, position,
+                                     created, modified, dirty, share_scope_id)
+             VALUES ('other_share', NULL, 'Theirs', 1, 't', 't', 0, 'scope_2')",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+
+    for claimed_root in ["my_folder", "other_share"] {
+        project_shared_root(
+            &db,
+            "scope_1",
+            &manifest(claimed_root, Some("mallory")),
+            CollectionAccessLevel::ReadOnly,
+            Some("bob"),
+        )
+        .unwrap();
+    }
+
+    let stamped: i64 = db
+        .with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT COUNT(*) FROM collections
+                  WHERE shared_role IS NOT NULL OR share_id IS NOT NULL
+                     OR shared_owner IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(stamped, 0);
 }
 
 #[test]
@@ -330,9 +269,9 @@ fn project_shared_root_leaves_owner_row_untouched() {
     // authoritative shared_by_me = 1 — the guard must leave it untouched.
     project_shared_root(
         &db,
+        "scope_1",
         &manifest("folder_root", Some("carol")),
         CollectionAccessLevel::ReadOnly,
-        "folders_uid",
         Some("bob"),
     )
     .unwrap();
@@ -374,9 +313,9 @@ fn project_shared_root_stamps_owner_second_device() {
 
     project_shared_root(
         &db,
+        "scope_1",
         &manifest("folder_root", Some("alice")),
         CollectionAccessLevel::Admin,
-        "folders_uid",
         Some("alice"),
     )
     .unwrap();
@@ -393,5 +332,5 @@ fn project_shared_root_stamps_owner_second_device() {
         .unwrap();
     assert_eq!(by_me, 1, "owner's other device is stamped shared_by_me");
     assert_eq!(owner.as_deref(), Some("alice"));
-    assert_eq!(share_id.as_deref(), Some("folders_uid"));
+    assert_eq!(share_id.as_deref(), Some("scope_1"));
 }

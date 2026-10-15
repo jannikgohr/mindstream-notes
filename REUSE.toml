@@ -1,0 +1,87 @@
+# Who holds the copyright of each file here, and under which licence it is.
+#
+# This repository holds parts under different licences side by side. The
+# texts are in LICENSES/, and README.md has the same as a table. `reuse lint`
+# checks in CI that no file is left without an answer.
+#
+# When more than one entry matches a file, the last one that does applies.
+# So the general entry comes first and the exceptions follow it.
+
+version = 1
+
+# The app, and everything not named further down: the web and Rust code,
+# the plugins, the protocol files, the tests, the docs and the tooling.
+[[annotations]]
+path = "**"
+SPDX-FileCopyrightText = "2026 Jannik Gohr"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+
+# The sync server. Written here, by the same author, under another licence.
+# backend/billing and backend/scripts are not the server and stay with the
+# entry above.
+[[annotations]]
+path = "backend/server/**"
+SPDX-FileCopyrightText = "2026 Jannik Gohr"
+SPDX-License-Identifier = "AGPL-3.0-only"
+
+# The Etebase client library, taken from a fork of etesync/etebase-rs and
+# changed here. Its licence is BSD-3-Clause, by its LICENSE file and its
+# Cargo.toml.
+#
+# Twelve of its files carry a header that says LGPL-2.1-only. Upstream moved
+# from the LGPL to BSD-3-Clause on 2020-11-11, in commit f288e6fc of
+# etesync/etebase-rs, which changed LICENSE and Cargo.toml and left the
+# headers as they were. They are left alone here too. `override` makes this
+# entry speak for those files, in place of the headers.
+[[annotations]]
+path = "vendor/etebase-rs/**"
+precedence = "override"
+SPDX-FileCopyrightText = [
+  "2020 Tom Hacohen",
+  "2020 Etebase Authors",
+  "2026 Jannik Gohr",
+]
+SPDX-License-Identifier = "BSD-3-Clause"
+
+# What was added to the client library here, and is not upstream's.
+[[annotations]]
+path = [
+  "vendor/etebase-rs/src/mindstream.rs",
+  "vendor/etebase-rs/src/mindstream/**",
+]
+precedence = "override"
+SPDX-FileCopyrightText = "2026 Jannik Gohr"
+SPDX-License-Identifier = "BSD-3-Clause"
+
+# The board renderer, a fork of @svar-ui/svelte-kanban. See UPSTREAM.md in
+# that folder for where it came from and what was changed.
+[[annotations]]
+path = "packages/svelte-kanban/**"
+SPDX-FileCopyrightText = ["2026 XB Software Sp. z o.o.", "2026 Jannik Gohr"]
+SPDX-License-Identifier = "MIT"
+
+# The Gradle wrapper that Android builds start with. Not written here.
+[[annotations]]
+path = [
+  "src-tauri/gen/android/gradlew",
+  "src-tauri/gen/android/gradlew.bat",
+  "src-tauri/gen/android/gradle/wrapper/**",
+]
+SPDX-FileCopyrightText = "2015 the original author or authors of Gradle"
+SPDX-License-Identifier = "Apache-2.0"
+
+# Two plugin icons, taken from Lucide.
+[[annotations]]
+path = [
+  "plugins/languagetool/icons/spell-check.svg",
+  "plugins/templates/icons/templates.svg",
+]
+SPDX-FileCopyrightText = "2022 Lucide Contributors"
+SPDX-License-Identifier = "ISC"
+
+# The Typst plugin's icon, as Simple Icons draws it. The drawing is in the
+# public domain. The mark it shows is Typst's.
+[[annotations]]
+path = "plugins/typst/icons/typst.svg"
+SPDX-FileCopyrightText = "Simple Icons Collaborators"
+SPDX-License-Identifier = "CC0-1.0"

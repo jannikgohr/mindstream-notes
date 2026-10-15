@@ -1,68 +1,36 @@
 import { describe, expect, it } from 'vitest';
 import {
-  getExcalidrawRoomUrl,
+  getRoomSocketUrl,
   getServerHealthUrl,
-  getYjsRelayUrl,
   normalizeServerUrl
 } from './server-urls';
 
-describe('getYjsRelayUrl', () => {
-  it('rewrites https → wss and pins /yjs', () => {
-    expect(getYjsRelayUrl('https://collab.example.com')).toBe(
-      'wss://collab.example.com/yjs'
+describe('getRoomSocketUrl', () => {
+  it('names the room endpoint with a socket scheme', () => {
+    expect(getRoomSocketUrl('https://notes.example.com')).toBe(
+      'wss://notes.example.com/api/v1/room/'
+    );
+    expect(getRoomSocketUrl('http://localhost:8080')).toBe(
+      'ws://localhost:8080/api/v1/room/'
     );
   });
 
-  it('rewrites http → ws for local dev', () => {
-    expect(getYjsRelayUrl('http://localhost:8080')).toBe(
-      'ws://localhost:8080/yjs'
+  it('keeps a server behind a path where it is', () => {
+    expect(getRoomSocketUrl('https://example.com/notes/?x=1#h')).toBe(
+      'wss://example.com/notes/api/v1/room/'
     );
   });
 
-  it('keeps a configured subpath and appends /yjs beneath it', () => {
-    expect(getYjsRelayUrl('https://collab.example.com/something?x=1#h')).toBe(
-      'wss://collab.example.com/something/yjs'
+  it('accepts the address as people type it', () => {
+    expect(getRoomSocketUrl('  notes.example.com  ')).toBe(
+      'wss://notes.example.com/api/v1/room/'
     );
   });
 
-  it('trims whitespace', () => {
-    expect(getYjsRelayUrl('  https://collab.example.com  ')).toBe(
-      'wss://collab.example.com/yjs'
-    );
-  });
-
-  it('returns empty string for empty / invalid input', () => {
-    expect(getYjsRelayUrl('')).toBe('');
-    expect(getYjsRelayUrl('   ')).toBe('');
-    expect(getYjsRelayUrl('not a url')).toBe('');
-  });
-});
-
-describe('getExcalidrawRoomUrl', () => {
-  it('returns the configured base path of an https URL', () => {
-    expect(getExcalidrawRoomUrl('https://collab.example.com/some/path')).toBe(
-      'https://collab.example.com/some/path'
-    );
-  });
-
-  it('returns the origin of an http URL with explicit port', () => {
-    expect(getExcalidrawRoomUrl('http://localhost:8080')).toBe(
-      'http://localhost:8080'
-    );
-  });
-
-  it('returns empty string for empty / invalid input', () => {
-    expect(getExcalidrawRoomUrl('')).toBe('');
-    expect(getExcalidrawRoomUrl('not a url')).toBe('');
-  });
-
-  it('picks up the auto-scheme behaviour from normalizeServerUrl', () => {
-    // Bare hostname used to silently disable collab here — it had no
-    // scheme so `new URL(...)` threw and we collapsed to ''. The
-    // normalize step prepends https:// first.
-    expect(getExcalidrawRoomUrl('notes.example.com')).toBe(
-      'https://notes.example.com'
-    );
+  it('returns empty when there is no usable server address', () => {
+    expect(getRoomSocketUrl('')).toBe('');
+    expect(getRoomSocketUrl('   ')).toBe('');
+    expect(getRoomSocketUrl('not a url')).toBe('');
   });
 });
 

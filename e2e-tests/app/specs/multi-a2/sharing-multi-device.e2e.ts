@@ -474,11 +474,11 @@ describe('T4 collection sharing across the owner’s two devices', function () {
   });
 
   // --- Recipient sanity: the share (with the pre-share edit) reaches B ---
-  it('B accepts the bundle and receives the folder, note and pre-share edit', async () => {
-    // The bundle notification appears only after B's notification center scans
-    // the server-side invites on mount. Under this tier's load the first scan can
-    // race the invite's arrival, so reload + reopen until the Accept action is
-    // present rather than clicking a button that isn't there yet.
+  it('B accepts the share and receives the folder, note and pre-share edit', async () => {
+    // The notification appears once B's device has listed the invitation.
+    // Under this tier's load the first listing can race the invitation's
+    // arrival, so reload + reopen until the Accept action is present rather
+    // than clicking a button that isn't there yet.
     B = await reloadShell(browserB);
     const inviteVisible = async (): Promise<boolean> => {
       await B.openNotifications();
@@ -493,16 +493,16 @@ describe('T4 collection sharing across the owner’s two devices', function () {
 
     await B.click('Accept');
 
-    // Confirm the accept actually registered before reloading. Accept kicks off
-    // a scoped sync that joins B to the share's collections; reloading before it
-    // lands discards the pending action and B never joins (ends up with only its
-    // own vault). The bundle's pending title clearing is the signal it took.
-    const pendingTitle = `${accounts.sender.username} wants to share a folder with you`;
+    // Confirm the accept actually registered before reloading. Reloading
+    // before the request lands discards it and B never joins (ends up with
+    // only its own vault). The invitation's title clearing is the signal it
+    // took.
+    const shareTitle = `${accounts.sender.username} shared “${SHARED_FOLDER}” with you`;
     await browserB.waitUntil(
-      async () => !(await B.isDisplayed(pendingTitle, 500)),
+      async () => !(await B.isDisplayed(shareTitle, 500)),
       {
         timeout: 60_000,
-        timeoutMsg: 'share bundle did not clear after Accept'
+        timeoutMsg: 'share invitation did not clear after Accept'
       }
     );
     B = await reloadShell(browserB);

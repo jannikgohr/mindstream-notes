@@ -20,7 +20,11 @@ const notif = (
   // kinds render with the generic widget); keep the historical kind→widget
   // mapping for the kinds that are also widget types.
   widgetType:
-    kind === 'sync-offline' || kind === 'plugin-gated' || kind === 'plugin-new'
+    kind === 'sync-offline' ||
+    kind === 'session-ended' ||
+    kind === 'sync-limit' ||
+    kind === 'plugin-gated' ||
+    kind === 'plugin-new'
       ? 'generic'
       : kind,
   createdAt: Date.now(),

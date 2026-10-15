@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Settings2, Share2, X } from '@lucide/svelte';
+  import { Link, Settings2, Share2, X } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import {
@@ -16,11 +16,23 @@
   } from './share-dialog.svelte';
   import { parseRecipients } from './share-recipients';
   import { pushToast } from './toast.svelte';
-  import { toErrorMessage } from '$lib/api/errors';
+  import { describeRefusal, refusalReason } from '$lib/account/refusal';
+  import KeyChangedNotice from './KeyChangedNotice.svelte';
 
   interface InviteFailure {
     username: string;
     reason: string;
+    /** Held back because the recipient's key is not the one this device
+     *  remembers. The user can look at the new key and send it anyway. */
+    keyChanged: boolean;
+  }
+
+  function failureOf(recipient: string, err: unknown): InviteFailure {
+    return {
+      username: recipient,
+      reason: describeRefusal(err),
+      keyChanged: refusalReason(err) === 'key_changed'
+    };
   }
 
   let username = $state('');
@@ -75,10 +87,7 @@
         });
         invited.push(recipient);
       } catch (err) {
-        failed.push({
-          username: recipient,
-          reason: toErrorMessage(err)
-        });
+        failed.push(failureOf(recipient, err));
       }
     }
 
@@ -96,6 +105,33 @@
     // Keep the failed names for a quick retry; clear the field on a clean run.
     username = failed.map((f) => f.username).join(', ');
     pending = false;
+  }
+
+  /** Send the invitation that was held back for a changed key, now that the
+   *  user has been shown the new key and said to go on. */
+  async function inviteWithNewKey(recipient: string) {
+    if (!collectionId || pending) return;
+    pending = true;
+    try {
+      await inviteCollection({
+        collection_id: collectionId,
+        username: recipient,
+        access_level: accessLevel,
+        trust_changed_key: true
+      });
+      failures = failures.filter((f) => f.username !== recipient);
+      username = failures.map((f) => f.username).join(', ');
+      await loadTree();
+      pushToast(tUi('sharing.toast.invited').replace('{names}', recipient), {
+        variant: 'success'
+      });
+    } catch (err) {
+      failures = failures.map((f) =>
+        f.username === recipient ? failureOf(recipient, err) : f
+      );
+    } finally {
+      pending = false;
+    }
   }
 </script>
 
@@ -187,7 +223,15 @@
             <ul class="space-y-0.5">
               {#each failures as failure (failure.username)}
                 <li>
-                  <span class="font-medium">{failure.username}</span> — {failure.reason}
+                  {#if failure.keyChanged}
+                    <KeyChangedNotice
+                      username={failure.username}
+                      disabled={pending}
+                      onTrust={() => void inviteWithNewKey(failure.username)}
+                    />
+                  {:else}
+                    <span class="font-medium">{failure.username}</span> — {failure.reason}
+                  {/if}
                 </li>
               {/each}
             </ul>
@@ -213,20 +257,23 @@
         </div>
       </form>
 
-      {#if canManageSharing}
-        <div class="border-t border-border px-4 py-3">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            class="gap-1.5"
-            onclick={() => setShareDialogView('access')}
-          >
+      <div class="border-t border-border px-4 py-3">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          class="gap-1.5"
+          onclick={() => setShareDialogView('access')}
+        >
+          {#if canManageSharing}
             <Settings2 class="size-3.5" />
             {tUi('sharing.dialog.toManage')}
-          </Button>
-        </div>
-      {/if}
+          {:else}
+            <Link class="size-3.5" />
+            {tUi('sharing.dialog.toLinks')}
+          {/if}
+        </Button>
+      </div>
     </div>
   </div>
 {/if}

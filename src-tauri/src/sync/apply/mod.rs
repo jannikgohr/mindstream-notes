@@ -17,10 +17,3 @@ pub(in crate::sync) use assets::*;
 pub(in crate::sync) use folders::*;
 pub(in crate::sync) use notes::*;
 pub(in crate::sync) use signatures::*;
-
-/// The etebase item type tag, or `None` for an item with no metadata type.
-pub(in crate::sync) fn item_type(item: &Item) -> Option<String> {
-    item.meta()
-        .ok()
-        .and_then(|meta| meta.item_type().map(str::to_string))
-}

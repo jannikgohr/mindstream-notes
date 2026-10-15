@@ -13,6 +13,8 @@
     "ui.data.importNotes.field.format": "Format",
     "ui.data.importNotes.kind.evernote": "Evernote (.enex)",
     "ui.data.convertLegacyLinks.failed.message": "{error}",
+    "ui.account.code": "Code",
+    "ui.account.server.label": "Server",
     "ui.fileTree.title": "Explorer",
     "ui.noteSidebar.title": "Details",
     "ui.metadata.sync": "Sync",
@@ -37,6 +39,7 @@
     "values.account.syncInterval.live": "Live",
     "values.editor.defaultMode.wysiwyg": "WYSIWYG",
     "values.language.code.en": "English",
-    "values.language.code.de": "Deutsch"
+    "values.language.code.de": "Deutsch",
+    "ui.account.reveal.file.server": "Server: {server}"
   }
 }

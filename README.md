@@ -99,9 +99,26 @@ require a scope), the git hooks, and the local quality gates.
 
 ## License
 
-Mindstream Notes is licensed under either of:
+The app is licensed under either of:
 
 - Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
 - MIT License ([LICENSE-MIT](LICENSE-MIT))
 
-at your option.
+at your option. That covers everything in this repository except the parts in
+this table, which have a licence of their own:
+
+| Path                                                              | What it is                                    | Licence                                          |
+| ----------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------ |
+| [`backend/server/`](backend/server)                               | The sync server                               | AGPL-3.0-only ([text](backend/server/LICENSE))   |
+| [`vendor/etebase-rs/`](vendor/etebase-rs)                         | The Etebase client library, changed here      | BSD-3-Clause ([text](vendor/etebase-rs/LICENSE)) |
+| [`packages/svelte-kanban/`](packages/svelte-kanban)               | A fork of `@svar-ui/svelte-kanban`, the board | MIT ([text](packages/svelte-kanban/LICENSE))     |
+| `src-tauri/gen/android/gradlew`, `gradlew.bat`, `gradle/wrapper/` | The Gradle wrapper                            | Apache-2.0                                       |
+| `plugins/*/icons/`                                                | Plugin icons from Lucide and Simple Icons     | ISC, CC0-1.0                                     |
+
+The server is a program of its own. The app does not contain it and talks to
+it over the network. The files in [`protocol/`](protocol), which both are
+tested against, are under the app's licence.
+
+[REUSE.toml](REUSE.toml) says the same for every file, in a form tools can
+read. The licence texts are in [LICENSES/](LICENSES), and CI runs
+`reuse lint`.

@@ -36,13 +36,11 @@ impl<'a> From<&'a Collection> for VaultCollectionCandidate<'a> {
     }
 }
 
-pub(super) fn usable_vault_collection(
-    candidate: &VaultCollectionCandidate<'_>,
-    share_scope_part_uids: &HashSet<String>,
-) -> bool {
-    !candidate.is_deleted
-        && !share_scope_part_uids.contains(candidate.uid)
-        && !matches!(candidate.access_level, CollectionAccessLevel::ReadOnly)
+/// Whether a collection of the vault's type can be this account's vault.
+/// One the account can only read is somebody else's, shared by a client that
+/// is not this app.
+pub(super) fn usable_vault_collection(candidate: &VaultCollectionCandidate<'_>) -> bool {
+    !candidate.is_deleted && !matches!(candidate.access_level, CollectionAccessLevel::ReadOnly)
 }
 
 pub(super) struct DirtyNote {
@@ -126,11 +124,22 @@ pub(super) fn load_dirty_notes(db: &Db, scope: Option<&str>) -> AppResult<Vec<Di
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     })?;
 
-    // Hydrate tags in a second pass to keep the row mapping simple.
+    if rows.is_empty() {
+        return Ok(rows);
+    }
+
+    // Only the notes being pushed need tags. Walking the entire tag table
+    // once per visited space makes a small edit cost the size of the vault.
     let mut by_id: HashMap<String, Vec<String>> = HashMap::new();
     db.with_conn(|c| {
-        let mut stmt = c.prepare("SELECT note_id, tag FROM note_tags ORDER BY tag")?;
-        let mut rs = stmt.query([])?;
+        let mut stmt = c.prepare(
+            "SELECT t.note_id, t.tag FROM notes n
+             JOIN note_tags t ON t.note_id = n.id
+             WHERE n.dirty = 1
+               AND ((?1 IS NULL AND n.share_scope_id IS NULL) OR n.share_scope_id = ?1)
+             ORDER BY t.tag",
+        )?;
+        let mut rs = stmt.query(params![scope])?;
         while let Some(r) = rs.next()? {
             let id: String = r.get(0)?;
             let tag: String = r.get(1)?;
@@ -240,5 +249,54 @@ pub(super) fn save_stoken(db: &Db, kind: &str, stoken: Option<&str>) -> AppResul
             params![kind, stoken],
         )?;
         Ok(())
+    })
+}
+
+// ---------- what waits to be sent ----------
+//
+// A sync only visits a space the server changed or this device has work
+// for. These say whether it has. They must name every row the pushes above
+// would send: a row they miss is not sent until the next sync that visits
+// its space for another reason. Naming one row too many only costs a visit.
+
+/// Whether the vault has anything to send: a row to upload or a deletion to
+/// pass on.
+pub(super) fn vault_has_local_work(db: &Db) -> AppResult<bool> {
+    db.with_conn(|c| {
+        Ok(c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM collections
+                            WHERE dirty = 1 AND id <> 'trash' AND share_scope_id IS NULL)
+                 OR EXISTS(SELECT 1 FROM notes WHERE dirty = 1 AND share_scope_id IS NULL)
+                 OR EXISTS(SELECT 1 FROM assets
+                            WHERE dirty = 1 AND owning_note_id IS NOT NULL
+                              AND share_scope_id IS NULL)
+                 OR EXISTS(SELECT 1 FROM signatures WHERE dirty = 1)
+                 OR EXISTS(SELECT 1 FROM tombstones WHERE share_scope_id IS NULL)",
+            [],
+            |r| r.get(0),
+        )?)
+    })
+}
+
+/// The shared folders that have anything to send.
+pub(super) fn scopes_with_local_work(db: &Db) -> AppResult<Vec<String>> {
+    db.with_conn(|c| {
+        let mut stmt = c.prepare(
+            "SELECT share_scope_id FROM collections
+              WHERE dirty = 1 AND share_scope_id IS NOT NULL
+             UNION
+             SELECT share_scope_id FROM notes
+              WHERE dirty = 1 AND share_scope_id IS NOT NULL
+             UNION
+             SELECT share_scope_id FROM assets
+              WHERE dirty = 1 AND owning_note_id IS NOT NULL
+                AND share_scope_id IS NOT NULL
+             UNION
+             SELECT share_scope_id FROM tombstones
+              WHERE share_scope_id IS NOT NULL
+             ORDER BY 1",
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     })
 }

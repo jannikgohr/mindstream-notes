@@ -3,10 +3,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum AppEvent {
-    CollabCredentialsChanged,
     CustomWindowDecorationsChanged,
     ImportProgress,
+    InvitationsChanged,
+    InviteLinkOpened,
     NativeMenuCommand,
+    SessionEnded,
     ShowApp,
     SignaturesChanged,
     SyncCompleted,
@@ -17,10 +19,12 @@ pub enum AppEvent {
 impl AppEvent {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::CollabCredentialsChanged => "collab-credentials-changed",
             Self::CustomWindowDecorationsChanged => "custom-window-decorations-changed",
             Self::ImportProgress => "import-progress",
+            Self::InvitationsChanged => "invitations-changed",
+            Self::InviteLinkOpened => "invite-link-opened",
             Self::NativeMenuCommand => "native-menu-command",
+            Self::SessionEnded => "session-ended",
             Self::ShowApp => "show-app",
             Self::SignaturesChanged => "signatures-changed",
             Self::SyncCompleted => "sync-completed",
@@ -38,15 +42,14 @@ mod tests {
     fn event_names_match_tauri_wire_names() {
         let cases = [
             (
-                AppEvent::CollabCredentialsChanged,
-                "collab-credentials-changed",
-            ),
-            (
                 AppEvent::CustomWindowDecorationsChanged,
                 "custom-window-decorations-changed",
             ),
             (AppEvent::ImportProgress, "import-progress"),
+            (AppEvent::InvitationsChanged, "invitations-changed"),
+            (AppEvent::InviteLinkOpened, "invite-link-opened"),
             (AppEvent::NativeMenuCommand, "native-menu-command"),
+            (AppEvent::SessionEnded, "session-ended"),
             (AppEvent::ShowApp, "show-app"),
             (AppEvent::SignaturesChanged, "signatures-changed"),
             (AppEvent::SyncCompleted, "sync-completed"),

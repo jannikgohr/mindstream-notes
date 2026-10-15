@@ -5,6 +5,7 @@ import picomatch from 'picomatch';
 import {
   CODE_FILES,
   DOCS_ONLY,
+  SERVER_FILES,
   filterPatterns,
   readWorkflow,
   repoRoot
@@ -47,6 +48,30 @@ test('everything else selects the code jobs', () => {
   for (const file of CODE_FILES) {
     assert.equal(selectsCodeJobs(file), true, `${file} would be skipped`);
   }
+});
+
+test('a server-only change runs the server job and not the app jobs', () => {
+  const selectsServerJob = picomatch(filterPatterns(workflow, 'server'), {
+    dot: true
+  });
+  for (const file of SERVER_FILES) {
+    assert.equal(selectsServerJob(file), true, `${file} would skip its tests`);
+    assert.equal(
+      selectsCodeJobs(file),
+      false,
+      `${file} would run the whole app matrix`
+    );
+  }
+  // The rest of backend/ drives the stack the app's collaboration suites
+  // run against, so it still counts as app code.
+  assert.equal(selectsCodeJobs('backend/scripts/test-stack.mjs'), true);
+  assert.equal(selectsServerJob('backend/scripts/test-stack.mjs'), false);
+  // A workflow change can break either side, and so can a change to the
+  // client library: the app ships it and the server's tests are written
+  // with it.
+  assert.equal(selectsServerJob('.github/workflows/test.yml'), true);
+  assert.equal(selectsServerJob('vendor/etebase-rs/src/service.rs'), true);
+  assert.equal(selectsCodeJobs('vendor/etebase-rs/src/service.rs'), true);
 });
 
 test('every collaboration pattern matches something in the tree', () => {

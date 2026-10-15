@@ -108,18 +108,6 @@ pub(super) struct AssetPayload {
     pub(super) modified: String,
 }
 
-/// Public signing key a writable shared-folder member publishes into the
-/// scope's encrypted assets collection. It authorizes live-collab write frames
-/// for one collab epoch; rotating the epoch naturally retires old keys.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub(super) struct CollabWriterKeyPayload {
-    pub(super) schema: u32,
-    pub(super) share_scope_id: String,
-    pub(super) collab_epoch: u64,
-    pub(super) public_key_b64: String,
-    pub(super) username: Option<String>,
-}
-
 /// What ends up in `Item::content` for a signature. `data` is the opaque
 /// JSON geometry blob (see signatures/mod.rs); we keep our own `id` inside
 /// so pulled items correlate back to local rows. Etebase E2E-encrypts the

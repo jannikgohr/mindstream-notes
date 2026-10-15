@@ -1,4 +1,14 @@
 # Publish failed-run reports so coverage regressions remain visible.
+#
+# Three independent coverage streams are uploaded from
+# .github/workflows/test.yml, each under its own flag:
+#
+#   - frontend : vitest (v8) over src/ and packages/, from the coverage job
+#   - desktop  : cargo-llvm-cov over src-tauri/src, from the coverage job
+#   - server   : cargo-llvm-cov over backend/server/src, from the server job
+#
+# The floors that fail CI live with the tools (vitest.config.ts and the two
+# coverage scripts), so they hold even when an upload is unavailable.
 codecov:
   # Finalize and publish the report from the uploaded coverage regardless of
   # whether every CI check passed, so a sub-threshold build still gets a head
@@ -15,13 +25,26 @@ coverage:
         informational: false
 
 comment:
+  layout: 'reach, diff, flags, files'
   # Still post the PR comment even if the head/base report is late or missing,
   # instead of blocking on it.
   require_head: false
   require_base: false
 
-# Track the frontend and backend uploads as independent flags (the CI job tags
-# each lcov upload with the matching flag).
+# Carry each flag forward from the last upload that had it. The server job
+# only runs when the server changes, and the other two only when the app
+# does, so most commits upload one side.
 flag_management:
   default_rules:
     carryforward: true
+  individual_flags:
+    - name: frontend
+      paths:
+        - src/
+        - packages/
+    - name: desktop
+      paths:
+        - src-tauri/src/
+    - name: server
+      paths:
+        - backend/server/src/

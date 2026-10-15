@@ -1,0 +1,70 @@
+{
+  "appScheme": "mindstream-notes",
+  "links": {
+    "valid": [
+      {
+        "link": "https://notes.example.com/join/AbC-123_xyz#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "server": "https://notes.example.com/",
+        "uid": "AbC-123_xyz"
+      },
+      {
+        "link": "http://localhost:3735/join/uid1#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "server": "http://localhost:3735/",
+        "uid": "uid1"
+      },
+      {
+        "link": "https://example.com/notes/join/uid1#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "server": "https://example.com/notes/",
+        "uid": "uid1"
+      },
+      {
+        "link": "  https://notes.example.com/join/uid1#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n",
+        "server": "https://notes.example.com/",
+        "uid": "uid1"
+      }
+    ],
+    "invalid": [
+      "",
+      "ABCD-EFGH-JKLM-NPQR",
+      "hello there",
+      "https://notes.example.com/join/uid1",
+      "https://notes.example.com/join/uid1#",
+      "https://notes.example.com/join/uid1#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "https://notes.example.com/join/uid1#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "https://notes.example.com/uid1#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "https://notes.example.com/join/#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "https://notes.example.com/rejoin/uid1#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "mindstream-notes://notes.example.com/join/uid1#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "javascript:join/uid1#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    ]
+  },
+  "appAddresses": {
+    "valid": [
+      {
+        "address": "mindstream-notes://join?link=https%3A%2F%2Fnotes.example.com%2Fjoin%2Fuid1%23AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "link": "https://notes.example.com/join/uid1#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      },
+      {
+        "address": "mindstream-notes://join/?link=http%3A%2F%2Flocalhost%3A3735%2Fjoin%2Fuid1%23AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "link": "http://localhost:3735/join/uid1#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      },
+      {
+        "address": "mindstream-notes://join?link=https://example.com/notes/join/uid1#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "link": "https://example.com/notes/join/uid1#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    ],
+    "invalid": [
+      "",
+      "mindstream-notes://join",
+      "mindstream-notes://join?link=",
+      "mindstream-notes://join?link=https%3A%2F%2Fnotes.example.com%2F",
+      "mindstream-notes://join?link=https%3A%2F%2Fnotes.example.com%2Fjoin%2Fuid1",
+      "mindstream-notes://open?link=https%3A%2F%2Fnotes.example.com%2Fjoin%2Fuid1%23AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "mindstream-notes://join?other=https%3A%2F%2Fnotes.example.com%2Fjoin%2Fuid1%23AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "other-app://join?link=https%3A%2F%2Fnotes.example.com%2Fjoin%2Fuid1%23AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "https://notes.example.com/join/uid1#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "--autostart",
+      "C:\\Users\\someone\\note.md"
+    ]
+  }
+}

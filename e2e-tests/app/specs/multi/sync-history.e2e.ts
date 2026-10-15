@@ -93,6 +93,25 @@ async function purgeNoteFixture(
   await invokeTauri(client, 'purge_note', { id });
 }
 
+/** The app's default: scheduled sync on, every 30 seconds. */
+const DEFAULT_SYNC_INTERVAL_SECS = 30;
+
+/**
+ * Turn a client's background sync off or back on. Off, the device neither
+ * ticks nor listens on the server's change feed, so it learns of remote
+ * changes only when a test syncs it by hand. That is how a test gets a
+ * device that "has not synced yet".
+ */
+async function setBackgroundSync(
+  client: WebdriverIO.Browser,
+  enabled: boolean
+): Promise<void> {
+  await invokeTauri(client, 'set_sync_schedule', {
+    enabled,
+    intervalSecs: DEFAULT_SYNC_INTERVAL_SECS
+  });
+}
+
 async function noteMissingFixture(
   client: WebdriverIO.Browser,
   id: string
@@ -254,14 +273,23 @@ describe('T4 per-device history (sync negative assertion)', function () {
     await syncClient(browserB);
     await expectNoteBodyContains(browserB, dirtyNote.id, baseline);
 
-    await purgeNoteFixture(browserB, dirtyNote.id);
-    await syncClient(browserB);
+    // The scenario needs A to edit a note it does not yet know was deleted.
+    // Left alone, A hears of B's delete over the change feed and pulls it
+    // within a second, so there would be nothing left to edit. Hold A's
+    // background sync until the test syncs it by hand.
+    await setBackgroundSync(browserA, false);
+    try {
+      await purgeNoteFixture(browserB, dirtyNote.id);
+      await syncClient(browserB);
 
-    await saveNoteBodyFixture(browserA, dirtyNote.id, localEdit);
-    await expectNoteBodyContains(browserA, dirtyNote.id, localEdit);
+      await saveNoteBodyFixture(browserA, dirtyNote.id, localEdit);
+      await expectNoteBodyContains(browserA, dirtyNote.id, localEdit);
 
-    await syncClient(browserA);
-    await expectNoteBodyContains(browserA, dirtyNote.id, localEdit);
+      await syncClient(browserA);
+      await expectNoteBodyContains(browserA, dirtyNote.id, localEdit);
+    } finally {
+      await setBackgroundSync(browserA, true);
+    }
 
     await syncClient(browserB);
     await expectNoteBodyContains(browserB, dirtyNote.id, localEdit);

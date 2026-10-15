@@ -11,7 +11,8 @@
     type CollectionShareAccessLevel,
     type CollectionShareState
   } from '$lib/api/sharing';
-  import { authSession } from '$lib/api/auth.svelte';
+  import { accountServerInfo } from '$lib/api/account';
+  import { authSession, serverTypeForSession } from '$lib/api/auth.svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
@@ -20,6 +21,7 @@
     shareDialog
   } from './share-dialog.svelte';
   import { confirm } from './confirm-dialog.svelte';
+  import ShareLinksSection from './ShareLinksSection.svelte';
   import { pushToast } from './toast.svelte';
   import { toErrorMessage } from '$lib/api/errors';
 
@@ -38,7 +40,33 @@
   const canManage = $derived(
     shareState?.shared_by_me === true || shareState?.shared_role === 'admin'
   );
+  // Whoever manages a shared folder may make links into it. So may the
+  // owner of a folder that is not shared yet: making a link shares it.
+  const canMakeLinks = $derived(
+    canManage ||
+      (shareState !== null &&
+        shareState.share_id === null &&
+        shareState.shared_role === null)
+  );
+  /** The server lets a link create an account for someone without one. */
+  let signupByLink = $state(false);
   const myUsername = $derived(authSession.current?.username ?? null);
+
+  async function askServerAboutSignup() {
+    const session = authSession.current;
+    if (!session) return;
+    try {
+      const info = await accountServerInfo({
+        serverType: serverTypeForSession(session),
+        serverUrl: session.server_url
+      });
+      signupByLink = info.signup === 'invite';
+    } catch (err) {
+      // Not knowing is the same as no: the option is not offered.
+      console.debug('[ManageAccess] server info', err);
+      signupByLink = false;
+    }
+  }
 
   function isSelf(username: string): boolean {
     return (
@@ -128,6 +156,7 @@
 
   onMount(() => {
     void refresh();
+    void askServerAboutSignup();
   });
 </script>
 
@@ -235,6 +264,12 @@
           </ul>
         {/if}
       </div>
+
+      {#if canMakeLinks}
+        <div class="border-t border-border p-4">
+          <ShareLinksSection {collectionId} {signupByLink} />
+        </div>
+      {/if}
 
       <div class="flex items-center border-t border-border px-4 py-3">
         <Button

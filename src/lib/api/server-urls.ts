@@ -1,34 +1,22 @@
 /**
- * Derive the live-collab URLs from the single `account.serverUrl` the
- * user configures, plus the normalisation pass we run on raw user
- * input before any of those derivations happen.
+ * The addresses derived from the single `account.serverUrl` the user
+ * configures, plus the normalisation pass we run on raw user input before
+ * any of those derivations happen.
  *
- * The backend stack (see backend/docker-compose.yml) fronts three
- * services behind one nginx:
- *
- *   /socket.io/  → excalidraw-room    (freeform live sync)
- *   /yjs         → yjs-relay          (markdown + PDF Yjs collab)
- *   /            → etebase            (note storage + auth)
- *
- * Keeping the URL as a single field in settings (and a single thing
- * for users to memorise / share across devices) means each editor has
- * to translate that base into the shape its transport expects:
- *
- *   - `CollabProvider` (yjs-relay) uses `new WebSocket(...)`, which
- *     wants a ws:// or wss:// URL with the /yjs path baked in.
- *   - `ExcalidrawRoomClient` uses socket.io-client, which accepts
- *     http(s):// and appends /socket.io/ itself.
+ * One server answers everything: storage and accounts over HTTP, and live
+ * rooms for every kind of note on one WebSocket endpoint. Keeping the URL
+ * as a single field in settings means one thing for users to memorise and
+ * share across devices.
  *
  * `normalizeServerUrl` is the entry point everything else funnels
  * through. It accepts user input verbatim — bare hostname, trailing
  * slash, leading/trailing whitespace, etc. — and either produces a
- * canonical origin-form URL or reports why it can't. The two
- * `get*Url` helpers below run the normalisation first and silently
- * collapse to '' on error, because their call sites already treat
- * empty as "live collab not configured" (the editor still works,
- * just without realtime sync). The sign-in form uses
- * `normalizeServerUrl` directly so it can surface the error inline
- * before the user pushes the button.
+ * canonical origin-form URL or reports why it can't. The `get*Url`
+ * helpers below run the normalisation first and silently collapse to ''
+ * on error, because their call sites already treat empty as "live collab
+ * not configured" (the editor still works, just without realtime sync).
+ * The sign-in form uses `normalizeServerUrl` directly so it can surface
+ * the error inline before the user pushes the button.
  */
 
 export interface ServerUrlValidation {
@@ -100,21 +88,20 @@ export function normalizeServerUrl(raw: string): ServerUrlValidation {
   return { url, error: null };
 }
 
-/** WebSocket URL for the yjs-relay (markdown + PDF collab). */
-export function getYjsRelayUrl(serverUrl: string): string {
+/**
+ * WebSocket URL of the server's live rooms. Empty when no server is
+ * configured, which editors read as "no live collab".
+ *
+ * The Rust side reports the same address with each room it resolves, from
+ * the session it actually holds, and that one is what a socket connects to.
+ */
+export function getRoomSocketUrl(serverUrl: string): string {
   const { url } = normalizeServerUrl(serverUrl);
   if (!url) return '';
   const u = new URL(url);
   u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
-  u.pathname = joinPath(u.pathname, 'yjs');
+  u.pathname = joinPath(u.pathname, 'api/v1/room/');
   return u.toString();
-}
-
-/** Origin URL for excalidraw-room (freeform live sync). socket.io
- *  appends /socket.io/ and upgrades the scheme itself, so we hand it
- *  the bare origin. */
-export function getExcalidrawRoomUrl(serverUrl: string): string {
-  return normalizeServerUrl(serverUrl).url;
 }
 
 export function getServerHealthUrl(serverUrl: string): string {

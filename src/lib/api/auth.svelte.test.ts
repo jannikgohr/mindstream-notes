@@ -72,7 +72,8 @@ describe('auth session policy reload', () => {
         server_type: 'self-hosted',
         server_url: 'https://notes.example.test/base',
         username: 'alice',
-        password: 'secret'
+        password: 'secret',
+        code: null
       }
     });
     expect(reload).toHaveBeenCalledOnce();

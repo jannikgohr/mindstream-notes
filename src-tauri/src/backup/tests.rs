@@ -323,6 +323,63 @@ fn suggested_filename_is_path_safe() {
     assert!(!name.contains(':'), "{name} contains a colon");
 }
 
+/// A backup is a copy of the whole database, and the database holds the
+/// room keys this device keeps. They are sealed for this device and of no
+/// use anywhere else, so the copy is to go without them: not in the table,
+/// and not left behind in the file's freed pages either.
+#[test]
+fn backup_copy_leaves_the_room_keys_out_of_the_table_and_the_file() {
+    let tmp = std::env::temp_dir().join(format!("ms-backup-keys-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&tmp).unwrap();
+    let seal = crate::sync::room_keys::Seal::from_session_secret(&[5; 32]).unwrap();
+    let copy = tmp.join("copy.db");
+    let sealed: Vec<u8>;
+    {
+        let live = open_fresh_disk_db(&tmp, "live.db");
+        let now = chrono::Utc::now().to_rfc3339();
+        live.execute(
+            "INSERT INTO notes(id, parent_collection_id, title, body, position,
+                                created, modified, dirty, note_kind)
+             VALUES ('note_x', NULL, 't', 'b', 0, ?1, ?1, 0, 'markdown')",
+            params![now],
+        )
+        .unwrap();
+        crate::sync::room_keys::store(&live, &seal, "note_x", &[9; 32]).unwrap();
+        sealed = live
+            .query_row("SELECT sealed FROM room_keys", [], |row| row.get(0))
+            .unwrap();
+        let escaped = copy.to_str().unwrap().replace('\'', "''");
+        live.execute_batch(&format!("VACUUM INTO '{escaped}';"))
+            .unwrap();
+    }
+    let holds = |path: &Path| {
+        fs::read(path)
+            .unwrap()
+            .windows(sealed.len())
+            .any(|window| window == sealed)
+    };
+    // The copy starts out with everything the live database has.
+    assert!(holds(&copy));
+
+    {
+        let snapshot = Connection::open(&copy).unwrap();
+        leave_device_secrets_out(&snapshot).unwrap();
+        let left: i64 = snapshot
+            .query_row("SELECT COUNT(*) FROM room_keys", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(left, 0);
+        // The note itself is what the backup is for.
+        let notes: i64 = snapshot
+            .query_row("SELECT COUNT(*) FROM notes", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(notes, 1);
+    }
+    assert!(!holds(&copy), "the sealed key is still in the file");
+    // The live database was not touched.
+    assert!(holds(&tmp.join("live.db")));
+    fs::remove_dir_all(&tmp).unwrap();
+}
+
 // ---------- Import-side tests ----------
 
 fn open_fresh_disk_db(dir: &Path, filename: &str) -> Connection {

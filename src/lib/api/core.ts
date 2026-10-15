@@ -7,30 +7,50 @@ export enum CommandErrorCode {
   InvalidArgument = 'invalidArgument',
   Tauri = 'tauri',
   Task = 'task',
+  /** The sync server said no, or could not be asked. See `reason`. */
+  Refused = 'refused',
   Unknown = 'unknown'
 }
 
 export interface CommandError {
   code: CommandErrorCode;
   message: string;
+  /** Only with `Refused`: a fixed word for why, which
+   *  `$lib/account/refusal` turns into a sentence. */
+  reason?: string;
 }
 
 export enum TauriCommandName {
-  AcceptCollectionInvitation = 'accept_collection_invitation',
-  AcceptShareBundle = 'accept_share_bundle',
+  AcceptShare = 'accept_share',
+  AccountBeginAuthenticator = 'account_begin_authenticator',
+  AccountChangePassword = 'account_change_password',
+  AccountConfirmAuthenticator = 'account_confirm_authenticator',
+  AccountEndOtherSessions = 'account_end_other_sessions',
+  AccountEndSession = 'account_end_session',
+  AccountNewBackupCodes = 'account_new_backup_codes',
+  AccountNewRecoveryKey = 'account_new_recovery_key',
+  AccountRecover = 'account_recover',
+  AccountRemoveAuthenticator = 'account_remove_authenticator',
+  AccountSaveSecretFile = 'account_save_secret_file',
+  AccountSecurityStatus = 'account_security_status',
+  AccountServerInfo = 'account_server_info',
+  AccountSessions = 'account_sessions',
+  AccountSignup = 'account_signup',
   AuditCorruptRemoteItems = 'audit_corrupt_remote_items',
   BackupNow = 'backup_now',
   CaptureCurrentNoteVersion = 'capture_current_note_version',
   CaptureNoteVersion = 'capture_note_version',
+  ClaimShareLink = 'claim_share_link',
   CheckEtebaseServerUrl = 'check_etebase_server_url',
   CreateCollection = 'create_collection',
   ConvertLegacyWikilinks = 'convert_legacy_wikilinks_command',
   CreateNote = 'create_note',
+  CreateShareLink = 'create_share_link',
   CreateProfile = 'create_profile',
   CustomDictionaryAdd = 'custom_dictionary_add',
   CustomDictionaryList = 'custom_dictionary_list',
   CustomDictionaryRemove = 'custom_dictionary_remove',
-  DeclineShareBundle = 'decline_share_bundle',
+  DeclineShare = 'decline_share',
   DeleteCollection = 'delete_collection',
   DeleteProfile = 'delete_profile',
   DeleteSignature = 'delete_signature',
@@ -44,8 +64,6 @@ export enum TauriCommandName {
   DrawingSetLiveInkFingerDrawing = 'drawing_set_live_ink_finger_drawing',
   DrawingSetLiveInkStyle = 'drawing_set_live_ink_style',
   DrawingShowLiveInkOverlay = 'drawing_show_live_ink_overlay',
-  E2eAcceptShareManifestOnly = 'e2e_accept_share_manifest_only',
-  E2eCreateIncompleteShareBundle = 'e2e_create_incomplete_share_bundle',
   E2eCreateStandaloneCollectionInvite = 'e2e_create_standalone_collection_invite',
   EmptyTrash = 'empty_trash',
   EtebaseLogin = 'etebase_login',
@@ -69,13 +87,13 @@ export enum TauriCommandName {
   TextCheckerCheck = 'text_checker_check',
   TextCheckerTestConnection = 'text_checker_test_connection',
   LeaveSharedCollection = 'leave_shared_collection',
-  ListCollectionInvitations = 'list_collection_invitations',
   ListCollectionMembers = 'list_collection_members',
   LegacyWikilinkCount = 'legacy_wikilink_count',
   ListCollections = 'list_collections',
-  ListIncomingShareBundles = 'list_incoming_share_bundles',
+  ListIncomingShares = 'list_incoming_shares',
   ListNoteVersions = 'list_note_versions',
   ListNotes = 'list_notes',
+  ListShareLinks = 'list_share_links',
   ListProfiles = 'list_profiles',
   ListSignatures = 'list_signatures',
   LoadNote = 'load_note',
@@ -83,6 +101,7 @@ export enum TauriCommandName {
   LoadNoteVersion = 'load_note_version',
   MoveMany = 'move_many',
   NoteRoomInfo = 'note_room_info',
+  NoteRoomTicket = 'note_room_ticket',
   NoteWordCount = 'note_word_count',
   NotesExportPickDir = 'notes_export_pick_dir',
   NotesExportWriteFile = 'notes_export_write_file',
@@ -116,13 +135,15 @@ export enum TauriCommandName {
   PluginsSetLoadError = 'plugins_set_load_error',
   PluginsSettingsAll = 'plugins_settings_all',
   PluginsSettingsRemove = 'plugins_settings_remove',
+  OpenShareLink = 'open_share_link',
+  OwnKeyFingerprint = 'own_key_fingerprint',
   PluginsSettingsSet = 'plugins_settings_set',
   PruneNoteVersions = 'prune_note_versions',
   PurgeCorruptRemoteNote = 'purge_corrupt_remote_note',
   PurgeMany = 'purge_many',
   PurgeNote = 'purge_note',
-  RejectCollectionInvitation = 'reject_collection_invitation',
   RemoveCollectionMember = 'remove_collection_member',
+  RevokeShareLink = 'revoke_share_link',
   RenameProfile = 'rename_profile',
   RestartApp = 'restart_app',
   RestoreMany = 'restore_many',
@@ -155,11 +176,13 @@ export enum TauriCommandName {
   SwitchProfile = 'switch_profile',
   SyncGlobalShortcuts = 'sync_global_shortcuts',
   SyncNow = 'sync_now',
+  TakePendingInviteLink = 'take_pending_invite_link',
   TrashCounts = 'trash_counts',
   TrashMany = 'trash_many',
   TrashNote = 'trash_note',
   UpdateCollection = 'update_collection',
-  UploadDrawingAsset = 'upload_drawing_asset'
+  UploadDrawingAsset = 'upload_drawing_asset',
+  UserKeyInfo = 'user_key_info'
 }
 
 export type IpcValidator<T> = (value: unknown) => T;

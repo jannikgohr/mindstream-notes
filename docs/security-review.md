@@ -29,9 +29,18 @@ Both Mediums are the same shape: cryptographic material bound to a
 **self-declared** identity rather than an attested one. Worth designing
 together.
 
+M4 and L4 no longer apply, as each section notes. M5 stands until shared
+folders move to one collection per space, which removes the manifest. See
+[server-design.md](server-design.md).
+
 ---
 
 ## M4 — Writer-key username binding is self-asserted
+
+**Resolved.** The writer-key registry is gone. The sync server authenticates
+each room socket from a ticket only a member can get, names the sender of
+every frame itself, and drops document changes from members who may only
+read. What follows describes the code as it was.
 
 **Where:** [`sync/mod.rs`](../src-tauri/src/sync/mod.rs),
 `list_collab_writer_keys` / `filter_writable_collab_writers`.
@@ -94,7 +103,10 @@ recorded locally at accept time.
 
 ## L4 — Etebase image is pinned by tag
 
-**Where:** [`docker-compose.yml`](../backend/docker-compose.yml).
+**Resolved.** The Etebase image is no longer used. The server is built from
+this repository. What follows describes the stack as it was.
+
+**Where:** `backend/docker-compose.yml`, since removed.
 
 `victorrds/etebase` is pinned by tag (`0.14.2-alpine`) rather than by digest, so
 the image contents can change under a fixed tag without the compose file

@@ -1,12 +1,36 @@
-import { noteRoomInfo } from '$lib/api';
+import { noteRoomInfo, noteRoomTicket, type RoomInfo } from '$lib/api';
 import { base64ToBytes } from './base64';
-import {
-  collabAuthForRoom,
-  getOrCreateCollabSigningMaterial
-} from '$lib/sync/collab-signing-key';
-import type { CollabProviderOptions } from '$lib/sync/collab-provider';
+import type { RoomConnection } from '$lib/sync/room-socket';
 
-type ConnectionOptions = Omit<CollabProviderOptions, 'doc' | 'awareness'>;
+type ConnectionOptions = RoomConnection & {
+  onStatusChange?: (online: boolean) => void;
+};
+
+/** How long the ticket that came with the room info is used before a fresh
+ *  one is fetched. The server honours a ticket for about thirty seconds. */
+const FIRST_TICKET_MAX_AGE_MS = 15_000;
+
+/**
+ * Everything a room socket needs, from what the Rust side said about the
+ * room. The ticket that came along serves the first connection; every later
+ * one asks for its own, because a ticket is good for one socket.
+ */
+export function roomConnection(room: RoomInfo): RoomConnection {
+  let first: string | null = room.ticket;
+  const issued = Date.now();
+  return {
+    url: room.url,
+    keyBytes: base64ToBytes(room.key_b64),
+    getTicket: async () => {
+      const ticket = first;
+      first = null;
+      if (ticket && Date.now() - issued < FIRST_TICKET_MAX_AGE_MS) {
+        return ticket;
+      }
+      return noteRoomTicket(room.collection, room.item);
+    }
+  };
+}
 
 /** Owns pending room lookups as well as the live connection. */
 export function createCollabSession<
@@ -38,23 +62,10 @@ export function createCollabSession<
     const token = generation;
     const current = () => !destroyed && token === generation;
     try {
-      const signingMaterial = await getOrCreateCollabSigningMaterial();
-      if (!current()) return;
-      const room = await noteRoomInfo(
-        context.noteId,
-        signingMaterial?.publicKeyB64
-      );
+      const room = await noteRoomInfo(context.noteId);
       if (!current() || !room) return;
       provider = options.create(context.value, {
-        url: context.url,
-        roomId: room.room_id,
-        joinPrivateKeyPkcs8B64: room.join_private_key_pkcs8_b64,
-        keyBytes: base64ToBytes(room.key_b64),
-        auth: collabAuthForRoom(room, signingMaterial),
-        requireSignedWrites: room.collab_epoch > 0,
-        onAuthStale: () => {
-          if (current()) void setup();
-        },
+        ...roomConnection(room),
         onStatusChange: (online) => {
           if (current()) options.onStatusChange?.(online);
         }

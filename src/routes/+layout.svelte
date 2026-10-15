@@ -19,6 +19,7 @@
   import { setTrashRetention, sweepTrashRetention } from '$lib/api/data';
   import { setSyncSchedule } from '$lib/api/sync';
   import LazyRootSingletons from '$lib/components/LazyRootSingletons.svelte';
+  import { installOpenedInviteLinkBridge } from '$lib/sharing/opened-links';
   import DiagnosticPopover from '$lib/components/note-editor/DiagnosticPopover.svelte';
   import {
     HOTKEY_COMMANDS,
@@ -111,6 +112,8 @@
     // `sync-completed`; without this the file tree keeps showing pre-sync
     // state until something calls runSync from the UI.
     const teardownTreeRefresh = installSyncTreeRefreshBridge();
+    // An invite link clicked outside the app, now or to start it.
+    const teardownOpenedLinks = installOpenedInviteLinkBridge();
     const blockTouchZoom = (event: WheelEvent) => {
       if (!event.ctrlKey) return;
       event.preventDefault();
@@ -120,6 +123,7 @@
       window.removeEventListener('wheel', blockTouchZoom);
       teardownSyncStatus();
       teardownTreeRefresh();
+      teardownOpenedLinks();
       void teardownGlobalShortcuts();
       stopPickerPruning();
       stopSpellcheckWatch();

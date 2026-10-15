@@ -1,10 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createCollabSession } from './collab-session';
-const mocks = vi.hoisted(() => ({ room: vi.fn(), signing: vi.fn() }));
-vi.mock('$lib/api', () => ({ noteRoomInfo: mocks.room }));
-vi.mock('$lib/sync/collab-signing-key', () => ({
-  getOrCreateCollabSigningMaterial: mocks.signing,
-  collabAuthForRoom: () => undefined
+import { createCollabSession, roomConnection } from './collab-session';
+const mocks = vi.hoisted(() => ({ room: vi.fn(), ticket: vi.fn() }));
+vi.mock('$lib/api', () => ({
+  noteRoomInfo: mocks.room,
+  noteRoomTicket: mocks.ticket
 }));
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -13,7 +12,13 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
-const room = { room_id: 'room', key_b64: 'AQID', collab_epoch: 0 };
+const room = {
+  url: 'ws://server/api/v1/room/',
+  collection: 'col',
+  item: 'item',
+  ticket: 'first-ticket',
+  key_b64: 'AQID'
+};
 function harness() {
   const created: Array<{ destroy: ReturnType<typeof vi.fn> }> = [];
   const create = vi.fn(() => {
@@ -31,20 +36,9 @@ function harness() {
 }
 beforeEach(() => {
   mocks.room.mockReset().mockResolvedValue(room);
-  mocks.signing.mockReset().mockResolvedValue(null);
+  mocks.ticket.mockReset().mockResolvedValue('fresh-ticket');
 });
 describe('collab session', () => {
-  it('does not look up a room after unmount during signing lookup', async () => {
-    const signing = deferred<null>();
-    mocks.signing.mockReturnValue(signing.promise);
-    const { session, create } = harness();
-    const connecting = session.setup();
-    session.destroy();
-    signing.resolve(null);
-    await connecting;
-    expect(mocks.room).not.toHaveBeenCalled();
-    expect(create).not.toHaveBeenCalled();
-  });
   it('does not construct a provider after unmount during room lookup', async () => {
     const lookup = deferred<typeof room>();
     mocks.room.mockReturnValue(lookup.promise);
@@ -80,19 +74,44 @@ describe('collab session', () => {
     await connecting;
     expect(create).not.toHaveBeenCalled();
   });
-  it('ignores stale authentication callbacks after replacing the provider', async () => {
-    const callbacks: Array<(() => void) | undefined> = [];
+  it('hands the provider the room the lookup named', async () => {
+    const connections: Array<{ url: string; keyBytes: Uint8Array }> = [];
     const session = createCollabSession({
       getContext: () => ({ noteId: 'n', url: 'ws://r', value: {} }),
-      create: (_, options) => {
-        callbacks.push(options.onAuthStale);
+      create: (_, connection) => {
+        connections.push(connection);
         return { destroy() {} };
       }
     });
     await session.setup();
-    await session.setup();
-    callbacks[0]?.();
-    expect(mocks.room).toHaveBeenCalledTimes(2);
+    expect(connections[0].url).toBe(room.url);
+    expect([...connections[0].keyBytes]).toEqual([1, 2, 3]);
     session.destroy();
+  });
+});
+describe('room connection', () => {
+  it('uses the ticket that came with the room once, then asks for more', async () => {
+    const connection = roomConnection(room);
+    expect(await connection.getTicket()).toBe('first-ticket');
+    expect(mocks.ticket).not.toHaveBeenCalled();
+    // A ticket is good for one socket. A reconnect needs its own.
+    expect(await connection.getTicket()).toBe('fresh-ticket');
+    expect(mocks.ticket).toHaveBeenCalledWith('col', 'item');
+  });
+  it('does not trust a ticket that has been lying around', async () => {
+    vi.useFakeTimers();
+    try {
+      const connection = roomConnection(room);
+      vi.advanceTimersByTime(20_000);
+      expect(await connection.getTicket()).toBe('fresh-ticket');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('passes on that the server will not let the account in', async () => {
+    mocks.ticket.mockResolvedValue(null);
+    const connection = roomConnection(room);
+    await connection.getTicket();
+    expect(await connection.getTicket()).toBeNull();
   });
 });

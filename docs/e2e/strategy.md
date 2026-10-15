@@ -15,12 +15,12 @@ _multi-process, multi-device interaction_. A mock store cannot prove any of them
 
 ## The four tiers
 
-| Tier                          | Runs                                       | Backs the API with                         | Proves                                                                            |
-| ----------------------------- | ------------------------------------------ | ------------------------------------------ | --------------------------------------------------------------------------------- |
-| **T1 Unit**                   | `pnpm test`, `cargo test`                  | n/a (pure logic)                           | dedup, deltas, compression, doc model, restore math                               |
-| **T2 Browser-fallback**       | `pnpm test:e2e` (Playwright)               | in-memory mock store                       | pure-UI journeys: history list, restore button states, Undo banner, action labels |
-| **T3 Single-client Tauri**    | `tauri-driver` on the packaged app         | real Rust + SQLite + disk                  | the real capture/restore/undo round-trip + persistence across restart             |
-| **T4 Multi-client + backend** | two `tauri-driver` apps + the test backend | real Etebase + yjs-relay + excalidraw-room | sync convergence and live-collab restore semantics                                |
+| Tier                          | Runs                                       | Backs the API with                   | Proves                                                                            |
+| ----------------------------- | ------------------------------------------ | ------------------------------------ | --------------------------------------------------------------------------------- |
+| **T1 Unit**                   | `pnpm test`, `cargo test`                  | n/a (pure logic)                     | dedup, deltas, compression, doc model, restore math                               |
+| **T2 Browser-fallback**       | `pnpm test:e2e` (Playwright)               | in-memory mock store                 | pure-UI journeys: history list, restore button states, Undo banner, action labels |
+| **T3 Single-client Tauri**    | `tauri-driver` on the packaged app         | real Rust + SQLite + disk            | the real capture/restore/undo round-trip + persistence across restart             |
+| **T4 Multi-client + backend** | two `tauri-driver` apps + the test backend | the real sync server, rooms included | sync convergence and live-collab restore semantics                                |
 
 Test a feature at the **lowest tier that can actually prove it**: the Undo
 _banner rendering_ is T2 (the mock store implements `captureCurrentNoteVersion`

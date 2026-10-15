@@ -194,7 +194,7 @@
       </div>
       {#if lockedBySession}
         <p class="mt-1 text-xs text-muted-foreground">
-          Sign out to change server type.
+          {tUi('account.serverType.locked')}
         </p>
       {/if}
     {:else if setting.type === 'multi-select'}

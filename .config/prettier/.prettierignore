@@ -20,3 +20,6 @@ crates/**/Cargo.lock
 .vscode/
 .idea/
 .DS_Store
+
+# Third-party code kept in the repository, formatted as its authors left it
+vendor/

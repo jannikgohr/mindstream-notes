@@ -28,6 +28,9 @@ impl Db {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         migrations::run(&mut conn)?;
+        // The first sync of a run asks the server about everything, see
+        // `sync::changes`.
+        crate::sync::forget_account_cursor(&conn)?;
         Ok(Self(Mutex::new(conn)))
     }
 

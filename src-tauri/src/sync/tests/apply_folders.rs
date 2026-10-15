@@ -146,7 +146,7 @@ fn apply_remote_delete_removes_a_clean_row() {
     })
     .unwrap();
 
-    db.with_conn(|c| apply_remote_delete(c, "notes", "uid_clean"))
+    db.with_conn(|c| apply_remote_delete(c, "notes", "uid_clean", None))
         .unwrap();
 
     let count: i64 = db
@@ -180,7 +180,7 @@ fn apply_remote_delete_detaches_a_dirty_row() {
     })
     .unwrap();
 
-    db.with_conn(|c| apply_remote_delete(c, "notes", "uid_dirty"))
+    db.with_conn(|c| apply_remote_delete(c, "notes", "uid_dirty", None))
         .unwrap();
 
     let (uid, etag, dirty, title): (Option<String>, Option<String>, i64, String) = db

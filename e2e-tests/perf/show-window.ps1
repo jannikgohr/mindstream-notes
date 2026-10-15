@@ -22,8 +22,32 @@ param(
 )
 Add-Type @"
 using System;
+using System.Text;
 using System.Runtime.InteropServices;
-public class WShow { [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c); }
+public class WShow {
+  public delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr h, uint cmd);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+  // The app's own top-level window, found by its class.
+  public static IntPtr AppWindow(uint want) {
+    IntPtr found = IntPtr.Zero;
+    EnumWindows(delegate(IntPtr h, IntPtr l) {
+      uint pid;
+      GetWindowThreadProcessId(h, out pid);
+      // GW_OWNER = 4: an owned window is a dialog of the app, not the app.
+      if (pid != want || GetWindow(h, 4) != IntPtr.Zero) return true;
+      StringBuilder cls = new StringBuilder(64);
+      GetClassName(h, cls, 64);
+      if (cls.ToString() != "Tauri Window") return true;
+      found = h;
+      return false;
+    }, IntPtr.Zero);
+    return found;
+  }
+}
 "@
 if ($ProcId -gt 0) {
   $target = Get-Process -Id $ProcId -ErrorAction SilentlyContinue
@@ -38,5 +62,14 @@ if ($ProcId -gt 0) {
   $target = $p[0]
 }
 if ($Probe) { Write-Output $target.Id; exit 0 }
-$target.Refresh()
-[WShow]::ShowWindow($target.MainWindowHandle, $Cmd) | Out-Null
+# Not MainWindowHandle. The process has a second top-level window that
+# counts as visible, the windowing library's event target, and .NET takes
+# whichever comes first in the z-order. With the app's window on screen that
+# is the app's. Once it is minimised it can be the other one, depending on
+# what else is on the desktop, and a restore sent there restores nothing.
+$window = [WShow]::AppWindow([uint32]$target.Id)
+if ($window -eq [IntPtr]::Zero) {
+  Write-Error "process $($target.Id) has no app window"
+  exit 1
+}
+[WShow]::ShowWindow($window, $Cmd) | Out-Null

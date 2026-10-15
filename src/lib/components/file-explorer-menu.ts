@@ -53,6 +53,7 @@ import {
   sharedFolderIsEditable
 } from '$lib/stores/note-source.svelte';
 import { openCollectionShareDialog } from './share-dialog.svelte';
+import { openJoinLinkDialog } from './join-link-dialog.svelte';
 import type {
   DraftKind,
   MenuTarget,
@@ -68,6 +69,7 @@ import {
   ExternalLink,
   FolderInput,
   FolderPlus,
+  Link,
   Pencil,
   RotateCcw,
   Share2,
@@ -678,7 +680,19 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
       ];
     }
 
-    if (!ctx.canCreate) return [];
+    // Joining needs an account on a server, like the rest of sharing. The
+    // shared view offers it although nothing can be created at its root.
+    const joinItems: MenuItem[] = authSession.current
+      ? [
+          {
+            label: tUi('sharing.menu.joinByLink'),
+            icon: Link,
+            onSelect: () => openJoinLinkDialog()
+          }
+        ]
+      : [];
+
+    if (!ctx.canCreate) return ctx.source === 'shared' ? joinItems : [];
 
     const pluginItems = await pluginCreateMenuItems(ctx, null);
     return [
@@ -733,7 +747,10 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
         label: tUi('fileTree.newFolder'),
         icon: FolderPlus,
         onSelect: () => ctx.startDraft('folder', null)
-      }
+      },
+      ...(joinItems.length > 0
+        ? (['separator', ...joinItems] as (MenuItem | 'separator')[])
+        : [])
     ];
   }
 

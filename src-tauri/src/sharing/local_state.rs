@@ -3,36 +3,84 @@
 
 use super::*;
 
-/// Stamp the local root folder as shared-by-me and anchor the scope on it.
+/// Stamp the local root folder as shared by this account. `scope` is the
+/// uid of the shared collection, which is both what the rows under the root
+/// are tagged with and what marks the root as the top of a share. Whoever
+/// shares a folder is its admin.
 pub(super) fn record_outgoing_share(
     conn: &Connection,
     collection_id: &str,
-    share_scope_id: &str,
-    folders_uid: &str,
-    role: ShareAccessLevel,
+    scope: &str,
     owner: Option<&str>,
 ) -> AppResult<()> {
     let now = Utc::now().to_rfc3339();
-    let role_db = share_access_level_to_db(role);
+    let role_db = share_access_level_to_db(ShareAccessLevel::Admin);
     conn.execute(
         "UPDATE collections
             SET share_scope_id = ?1,
-                share_id = ?2,
-                shared_role = ?3,
-                shared_owner = ?4,
+                share_id = ?1,
+                shared_role = ?2,
+                shared_owner = ?3,
                 shared_by_me = 1,
-                modified = ?5
-          WHERE id = ?6",
-        params![
-            share_scope_id,
-            folders_uid,
-            role_db,
-            owner,
-            now,
-            collection_id
-        ],
+                modified = ?4
+          WHERE id = ?5",
+        params![scope, role_db, owner, now, collection_id],
     )?;
     Ok(())
+}
+
+/// Move a folder into its shared collection on this device: stamp every
+/// folder, note and attachment under it with the scope and detach it from
+/// where it was, so the next sync creates it there. `created` says the
+/// collection was made just now, which is when the folder's root is marked
+/// as shared by this account.
+///
+/// A folder that was shared already is in its collection, and what was
+/// added to it since inherited the scope as it was added. There is nothing
+/// to move then, and moving it anyway would delete and recreate every item
+/// for every member.
+pub(super) fn move_into_space(
+    conn: &Connection,
+    collection_id: &str,
+    scope: &str,
+    created: bool,
+    owner: Option<&str>,
+) -> AppResult<()> {
+    if created || subtree_outside_scope(conn, collection_id, scope)? {
+        rehome_folder_subtree(conn, collection_id, Some(scope))?;
+    }
+    if created {
+        record_outgoing_share(conn, collection_id, scope, owner)?;
+    }
+    Ok(())
+}
+
+/// Whether anything under a folder, the folder included, is tagged with
+/// something other than `scope`. Rows added to a shared folder inherit its
+/// scope as they are added, so this is false for a folder that has been
+/// shared all along, and inviting someone else then has nothing to move.
+pub(super) fn subtree_outside_scope(
+    conn: &Connection,
+    root_folder_id: &str,
+    scope: &str,
+) -> AppResult<bool> {
+    Ok(conn.query_row(
+        "WITH RECURSIVE subtree(id) AS (
+            SELECT ?1
+            UNION ALL
+            SELECT c.id FROM collections c JOIN subtree s ON c.parent_collection_id = s.id
+        )
+        SELECT EXISTS(
+            SELECT 1 FROM collections
+             WHERE id IN (SELECT id FROM subtree) AND share_scope_id IS NOT ?2
+        ) OR EXISTS(
+            SELECT 1 FROM notes
+             WHERE parent_collection_id IN (SELECT id FROM subtree)
+               AND share_scope_id IS NOT ?2
+        )",
+        params![root_folder_id, scope],
+        |row| row.get(0),
+    )?)
 }
 
 /// Reverse a share on the owner's side, locally: re-home the folder's subtree
@@ -134,11 +182,11 @@ pub(crate) fn rehome_folder_subtree(
 
     // 2. Stamp the target scope, detach from the source, and mark dirty.
     conn.execute(
-        &format!("{SUBTREE_CTE} UPDATE collections SET share_scope_id = ?2, etebase_uid = NULL, dirty = 1 WHERE id IN (SELECT id FROM subtree)"),
+        &format!("{SUBTREE_CTE} UPDATE collections SET share_scope_id = ?2, etebase_uid = NULL, dirty = 1, released = 0 WHERE id IN (SELECT id FROM subtree)"),
         params![root_folder_id, target_scope],
     )?;
     conn.execute(
-        &format!("{SUBTREE_CTE} UPDATE notes SET share_scope_id = ?2, etebase_uid = NULL, dirty = 1 WHERE parent_collection_id IN (SELECT id FROM subtree)"),
+        &format!("{SUBTREE_CTE} UPDATE notes SET share_scope_id = ?2, etebase_uid = NULL, dirty = 1, released = 0 WHERE parent_collection_id IN (SELECT id FROM subtree)"),
         params![root_folder_id, target_scope],
     )?;
     rehome_assets_for_notes(conn, &moving_notes, target_scope)?;
@@ -167,7 +215,7 @@ pub(crate) fn rehome_note_subtree(
         crate::sync::queue_tombstone(conn, "note", &uid)?;
     }
     conn.execute(
-        "UPDATE notes SET share_scope_id = ?2, etebase_uid = NULL, dirty = 1 WHERE id = ?1",
+        "UPDATE notes SET share_scope_id = ?2, etebase_uid = NULL, dirty = 1, released = 0 WHERE id = ?1",
         params![note_id, target_scope],
     )?;
     rehome_assets_for_notes(conn, &[note_id.to_string()], target_scope)?;
@@ -273,7 +321,7 @@ fn rehome_assets_for_notes(
             }
             conn.execute(
                 "UPDATE assets SET owning_note_id = ?1, share_scope_id = ?2,
-                        etebase_uid = NULL, modified = ?3, dirty = 1 WHERE id = ?4",
+                        etebase_uid = NULL, modified = ?3, dirty = 1, released = 0 WHERE id = ?4",
                 params![moving_refs[0], target_scope, now, asset.id],
             )?;
             continue;
@@ -410,11 +458,12 @@ pub(crate) fn note_scope(conn: &Connection, id: &str) -> AppResult<Option<String
         .flatten())
 }
 
-/// Whether a folder is a share anchor — the root of a share, whose scope is
-/// fixed by the share itself rather than inherited from its parent. Both the
-/// owner (`record_outgoing_share`) and recipient (`project_shared_root`) stamp
-/// `share_id` on the root only; descendants carry `share_scope_id` but no
-/// `share_id`. Callers use this to skip re-homing a share root on move.
+/// Whether a folder is a share anchor: the root of a share, whose scope is
+/// fixed by the share itself and not inherited from its parent. Both the
+/// owner (`record_outgoing_share`) and everyone else (`project_shared_root`)
+/// stamp `share_id` on the root only. What is under it carries
+/// `share_scope_id` and no `share_id`. Callers use this to leave a share's
+/// root in its scope when it is moved.
 pub(crate) fn is_share_anchor(conn: &Connection, id: &str) -> AppResult<bool> {
     Ok(conn
         .query_row(
@@ -437,62 +486,6 @@ pub(super) fn collect_uids(
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map(params![root_folder_id], |r| r.get::<_, String>(0))?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-}
-
-/// root so the folder shows up in "shared with me" before the scoped sync pulls
-/// its real contents.
-///
-/// `name_override` lets a manifest bundle name the root after the share (e.g.
-/// "Project X") instead of the generic "sender's shared collection" fallback
-/// used by a bare single-collection accept.
-/// Project an accepted remote share onto the local `collections` table: update
-/// the row already anchored to `collection_uid`, or insert a placeholder shared
-pub(super) fn record_accepted_share(
-    conn: &Connection,
-    collection_uid: &str,
-    role: ShareAccessLevel,
-    owner: Option<&str>,
-    name_override: Option<&str>,
-) -> AppResult<()> {
-    let now = Utc::now().to_rfc3339();
-    let role_db = share_access_level_to_db(role);
-    let changed = conn.execute(
-        "UPDATE collections
-            SET shared_role = ?1,
-                shared_owner = ?2,
-                shared_by_me = 0,
-                modified = ?3
-          WHERE share_id = ?4",
-        params![role_db, owner, now, collection_uid],
-    )?;
-    if changed > 0 {
-        return Ok(());
-    }
-
-    let position = conn
-        .query_row(
-            "SELECT MAX(position) FROM collections WHERE parent_collection_id IS NULL",
-            [],
-            |row| row.get::<_, Option<i64>>(0),
-        )
-        .optional()?
-        .flatten()
-        .unwrap_or(-1)
-        + 1;
-    let id = format!("coll_{}", uuid::Uuid::new_v4());
-    let name = name_override
-        .map(str::to_string)
-        .or_else(|| owner.map(|sender| format!("{sender}'s shared collection")))
-        .unwrap_or_else(|| "Shared collection".to_string());
-    conn.execute(
-        "INSERT INTO collections(
-            id, parent_collection_id, name, position, created, modified,
-            dirty, share_id, shared_role, shared_owner, shared_by_me
-         )
-         VALUES (?1, NULL, ?2, ?3, ?4, ?4, 0, ?5, ?6, ?7, 0)",
-        params![id, name, position, now, collection_uid, role_db, owner],
-    )?;
-    Ok(())
 }
 
 pub(super) fn local_share_state(
