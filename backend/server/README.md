@@ -372,6 +372,17 @@ recovery, so those tests speak the wire format by hand:
 - `tests/security.rs` signs its own requests with keys it makes up, and plays
   the authenticator app.
 
+CI runs the tests under `cargo-llvm-cov` and fails when line coverage drops
+below the floor in [`scripts/coverage.mjs`](scripts/coverage.mjs). The
+integration tests count too, because they run the server inside the test
+process. With the same Postgres up, from the repository root:
+
+```sh
+rustup component add llvm-tools-preview   # once
+cargo install cargo-llvm-cov --locked     # once
+pnpm test:coverage:server
+```
+
 ## Conformance
 
 The client library has its own integration suite. It runs against a server

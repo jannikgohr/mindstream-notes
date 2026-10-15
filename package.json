@@ -33,6 +33,7 @@
     "verify": "pnpm format:check && pnpm lint:theme && pnpm lint && pnpm lint:i18n && pnpm check && pnpm test && pnpm build",
     "verify:rust": "cd src-tauri && cargo test",
     "test:coverage:rust": "node src-tauri/scripts/rust-coverage.mjs",
+    "test:coverage:server": "node backend/server/scripts/coverage.mjs",
     "format": "pnpm run format:web && pnpm run format:rust",
     "format:check": "pnpm run format:web:check && pnpm run format:rust:check",
     "format:web": "node src-tauri/scripts/format-web.mjs",
