@@ -72,7 +72,6 @@ services:
     read_only: true
     tmpfs:
       - /tmp
-    pids_limit: 256
     deploy:
       resources:
         limits:
