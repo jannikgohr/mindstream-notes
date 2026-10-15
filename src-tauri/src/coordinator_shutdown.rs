@@ -111,7 +111,11 @@ mod tests {
             &endpoint,
             launch,
             operation,
-            Instant::now() + Duration::from_millis(300),
+            // Needs at least two loop iterations (accept, then one status
+            // poll) before the deadline: busy CI runners can stall the
+            // polling thread for hundreds of milliseconds, flaking a tight
+            // budget without changing what the test proves.
+            Instant::now() + Duration::from_secs(2),
             || {
                 Ok(if VaultLock::try_acquire(&root)?.is_some() {
                     Owner::Released
