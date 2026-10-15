@@ -1,0 +1,286 @@
+//! Server configuration, read from flags or `MINDSTREAM_*` variables.
+
+use std::path::PathBuf;
+
+use clap::{Args, ValueEnum};
+use ipnet::IpNet;
+
+/// Who may create an account.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum SignupPolicy {
+    /// Only someone holding a signup code from an administrator.
+    Closed,
+    /// Also someone holding an invite link whose maker let it create an
+    /// account.
+    Invite,
+    /// Anyone who can reach the server.
+    Open,
+}
+
+const DEFAULT_APP_URL: &str = "https://github.com/jannikgohr/mindstream-notes/releases";
+
+#[derive(Args, Clone, Debug)]
+pub struct Config {
+    /// Postgres connection string.
+    #[arg(long, env = "MINDSTREAM_DATABASE_URL")]
+    pub database_url: String,
+
+    /// Address to listen on. TLS is the reverse proxy's job.
+    #[arg(long, env = "MINDSTREAM_LISTEN", default_value = "0.0.0.0:3735")]
+    pub listen: String,
+
+    /// Directory for chunks too large to keep in the database.
+    #[arg(long, env = "MINDSTREAM_BLOB_DIR", default_value = "data/blobs")]
+    pub blob_dir: PathBuf,
+
+    /// Who may sign up.
+    #[arg(long, env = "MINDSTREAM_SIGNUP", value_enum, default_value = "closed")]
+    pub signup: SignupPolicy,
+
+    /// Hostnames clients reach this server by. A login names the host it was
+    /// made for, and the server refuses one made for somewhere else. Leave
+    /// empty to accept whatever the request's Host header says, which is
+    /// right when the reverse proxy passes that header through.
+    #[arg(long, env = "MINDSTREAM_PUBLIC_HOSTS", value_delimiter = ',')]
+    pub public_hosts: Vec<String>,
+
+    /// Networks whose `X-Forwarded-For` is believed. Leave unset to trust
+    /// only loopback, which is right when nothing but this machine connects
+    /// directly. If the server is reachable directly from addresses you do
+    /// not control, list only the networks of the proxies you actually run
+    /// — loopback included if one of them is local: whoever connects from
+    /// a trusted network picks the address they are counted under for the
+    /// sign-in limit and the connection caps.
+    #[arg(long, env = "MINDSTREAM_TRUSTED_PROXIES", value_delimiter = ',')]
+    pub trusted_proxies: Option<Vec<IpNet>>,
+
+    /// Sign-in attempts one address may make per minute, across signup, login
+    /// and password change. Zero turns the limit off.
+    #[arg(long, env = "MINDSTREAM_AUTH_RATE_PER_MINUTE", default_value_t = 10)]
+    pub auth_rate_per_minute: u32,
+
+    /// How many attempts an address may make at once before the rate applies.
+    #[arg(long, env = "MINDSTREAM_AUTH_RATE_BURST", default_value_t = 20)]
+    pub auth_rate_burst: u32,
+
+    /// Connections one address may hold open at once, and separately how
+    /// many sockets, the long-lived kind that rooms and the change feed
+    /// use. A connection past it is closed and a socket refused. A proxy
+    /// listed as trusted is exempt from the first, since every client
+    /// behind it shares its address. Zero turns the cap off.
+    #[arg(
+        long,
+        env = "MINDSTREAM_MAX_CONNECTIONS_PER_ADDRESS",
+        default_value_t = 128
+    )]
+    pub max_connections_per_address: usize,
+
+    /// The same for the whole server, a trusted proxy's connections
+    /// included. It is held under what the process may open files for,
+    /// whatever it says. Zero leaves only that.
+    #[arg(long, env = "MINDSTREAM_MAX_CONNECTIONS", default_value_t = 10_000)]
+    pub max_connections: usize,
+
+    /// Token for the admin interface another program uses to set account
+    /// limits. The interface does not exist unless this is set.
+    #[arg(long, env = "MINDSTREAM_ADMIN_TOKEN", hide_env_values = true)]
+    pub admin_token: Option<String>,
+
+    /// Key for the few secrets the server has to read back, which today are
+    /// the authenticator secrets: 32 bytes as URL-safe base64. Without it a
+    /// key is created in the key file on first start.
+    #[arg(long, env = "MINDSTREAM_SECRET_KEY", hide_env_values = true)]
+    pub secret_key: Option<String>,
+
+    /// Where that key is kept when it is not given directly. The default is
+    /// `secret.key` in the blob directory.
+    #[arg(long, env = "MINDSTREAM_SECRET_KEY_FILE")]
+    pub secret_key_file: Option<PathBuf>,
+
+    /// The name an authenticator app shows next to an account of this
+    /// server.
+    #[arg(
+        long,
+        env = "MINDSTREAM_TOTP_ISSUER",
+        default_value = "Mindstream Notes",
+        value_parser = issuer
+    )]
+    pub totp_issuer: String,
+
+    /// Where the page an invite link shows in a browser sends people who do
+    /// not have the app yet.
+    #[arg(long, env = "MINDSTREAM_APP_URL", default_value = DEFAULT_APP_URL)]
+    pub app_url: String,
+
+    /// Most content one page of a list carries, in bytes. A client asks for
+    /// a number of items, not a number of bytes, and a page of attachments
+    /// could otherwise run to gigabytes. The client fetches the rest with
+    /// the cursor it is given, as it would after any other page.
+    #[arg(long, env = "MINDSTREAM_MAX_PAGE_BYTES", default_value_t = 32 * 1024 * 1024)]
+    pub max_page_bytes: i64,
+
+    /// Largest request body accepted, in bytes.
+    #[arg(long, env = "MINDSTREAM_MAX_BODY_BYTES", default_value_t = 75 * 1024 * 1024)]
+    pub max_body_bytes: usize,
+
+    /// How many earlier revisions of an item are kept besides its current
+    /// one. Older ones are deleted when a new one arrives, and their
+    /// content with them unless something else still uses it. What is kept
+    /// counts towards the owner's storage. A deleted item keeps none,
+    /// whatever this says.
+    #[arg(long, env = "MINDSTREAM_KEEP_REVISIONS", default_value_t = 10)]
+    pub keep_revisions: u32,
+
+    /// Days a device's session may go unused before the server ends it.
+    /// The device then has to sign in again, with the second factor where
+    /// the account has one. A session is in use whenever its device syncs,
+    /// so only a device that was put away, or lost, runs into this. 0
+    /// never ends a session for being idle.
+    #[arg(long, env = "MINDSTREAM_SESSION_IDLE_DAYS", default_value_t = 90)]
+    pub session_idle_days: u32,
+
+    /// Chunks up to this size are stored in the database; larger ones go to
+    /// the blob directory. A note is nearly always a single chunk under the
+    /// default.
+    #[arg(long, env = "MINDSTREAM_INLINE_CHUNK_BYTES", default_value_t = 20 * 1024)]
+    pub inline_chunk_bytes: usize,
+
+    /// Connections kept to Postgres.
+    #[arg(long, env = "MINDSTREAM_DATABASE_CONNECTIONS", default_value_t = 16)]
+    pub database_connections: u32,
+
+    /// Serve the route that wipes and recreates an account. For the client
+    /// library's integration tests only; never enable it on a real server.
+    /// Release builds do not contain the route at all, and even a debug
+    /// build refuses to start with it on a non-loopback address.
+    #[arg(long, env = "MINDSTREAM_TEST_RESET", default_value_t = false)]
+    pub test_reset: bool,
+}
+
+fn issuer(text: &str) -> Result<String, String> {
+    if crate::totp::valid_issuer(text) {
+        Ok(text.to_owned())
+    } else {
+        Err("a name without a colon, which an authenticator cannot show".into())
+    }
+}
+
+impl Config {
+    /// Networks whose `X-Forwarded-For` is believed: what was configured,
+    /// or loopback alone when nothing was. An explicitly empty list trusts
+    /// nothing at all, loopback included.
+    pub fn trusted_proxies(&self) -> Vec<IpNet> {
+        match &self.trusted_proxies {
+            Some(configured) => configured.clone(),
+            None => vec![
+                "127.0.0.0/8".parse().expect("a valid network"),
+                "::1/128".parse().expect("a valid network"),
+            ],
+        }
+    }
+
+    /// Whether the operator named trusted networks themselves, as opposed
+    /// to running on the loopback-only default. Startup refuses a
+    /// non-loopback address with only the default, since that either cannot
+    /// see its clients through a proxy or believes strangers; it only warns
+    /// when the networks were chosen on purpose.
+    pub fn trusted_proxies_explicit(&self) -> bool {
+        self.trusted_proxies.is_some()
+    }
+
+    /// The admin token, when one is configured. An empty value, which is
+    /// what an unset variable in a compose file turns into, counts as none.
+    pub fn admin_token(&self) -> Option<&str> {
+        self.admin_token
+            .as_deref()
+            .filter(|token| !token.is_empty())
+    }
+
+    /// Where to send people who do not have the app. An empty value, which
+    /// is what an unset variable in a compose file turns into, means the
+    /// default.
+    pub fn app_url(&self) -> &str {
+        if self.app_url.trim().is_empty() {
+            DEFAULT_APP_URL
+        } else {
+            &self.app_url
+        }
+    }
+
+    pub fn secret_key_file(&self) -> PathBuf {
+        self.secret_key_file
+            .clone()
+            .unwrap_or_else(|| self.blob_dir.join("secret.key"))
+    }
+
+    /// Settings for a server started inside a test.
+    pub fn for_tests(database_url: String, blob_dir: PathBuf) -> Self {
+        Self {
+            database_url,
+            listen: "127.0.0.1:0".into(),
+            blob_dir,
+            signup: SignupPolicy::Open,
+            public_hosts: Vec::new(),
+            trusted_proxies: Some(vec!["127.0.0.0/8".parse().expect("a valid network")]),
+            auth_rate_per_minute: 0,
+            auth_rate_burst: 1,
+            // Every test connects from this machine.
+            max_connections_per_address: 0,
+            max_connections: 0,
+            admin_token: None,
+            secret_key: None,
+            secret_key_file: None,
+            totp_issuer: "Mindstream Tests".into(),
+            app_url: "https://example.com/app".into(),
+            max_page_bytes: 32 * 1024 * 1024,
+            max_body_bytes: 75 * 1024 * 1024,
+            keep_revisions: 10,
+            session_idle_days: 90,
+            inline_chunk_bytes: 20 * 1024,
+            database_connections: 4,
+            test_reset: true,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_settings_fall_back_to_their_defaults() {
+        let mut config = Config::for_tests(String::new(), PathBuf::from("blobs"));
+        assert_eq!(config.app_url(), "https://example.com/app");
+        config.app_url = String::new();
+        assert_eq!(config.app_url(), DEFAULT_APP_URL);
+        config.admin_token = Some(String::new());
+        assert_eq!(config.admin_token(), None);
+        assert_eq!(
+            config.secret_key_file(),
+            PathBuf::from("blobs").join("secret.key")
+        );
+    }
+
+    #[test]
+    fn trusted_proxies_default_to_loopback_and_stay_as_listed() {
+        let loopback_v4: IpNet = "127.0.0.0/8".parse().unwrap();
+        let loopback_v6: IpNet = "::1/128".parse().unwrap();
+        let mut config = Config::for_tests(String::new(), PathBuf::from("blobs"));
+
+        // Unset means the loopback-only default, which is implicit.
+        config.trusted_proxies = None;
+        assert!(!config.trusted_proxies_explicit());
+        assert_eq!(config.trusted_proxies(), vec![loopback_v4, loopback_v6]);
+
+        // As listed, even empty: an explicitly empty list trusts nothing.
+        config.trusted_proxies = Some(Vec::new());
+        assert!(config.trusted_proxies_explicit());
+        assert!(config.trusted_proxies().is_empty());
+
+        // A list is used as is, without loopback added back in.
+        let nets = vec!["10.0.0.0/8".parse().unwrap()];
+        config.trusted_proxies = Some(nets.clone());
+        assert!(config.trusted_proxies_explicit());
+        assert_eq!(config.trusted_proxies(), nets);
+    }
+}

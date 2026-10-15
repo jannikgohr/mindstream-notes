@@ -24,6 +24,7 @@ dialog-driven backup specs still self-skip, pending the native-dialog Rust seam.
 | `specs/single/trash-retention.e2e.ts`        | T3   | flows 1.5 + 3.3 (retention sweep on boot)                               |
 | `specs/single/settings-persist.e2e.ts`       | T3   | flows 3.1 / 3.2                                                         |
 | `specs/single/backup.e2e.ts`                 | T3   | flows 1.2–1.4 (pending a native-dialog hook)                            |
+| `specs/multi/account-security.e2e.ts`        | T4   | flows 6.1 / 6.2: a code for a new device, ended sessions sign out       |
 | `specs/multi/collab.e2e.ts`                  | T4   | markdown live-edit propagation (pending a deterministic relay hook)     |
 | `specs/multi/collab-confirm.e2e.ts`          | T4   | solo no-prompt; peer prompt + ink/freeform (partly pending)             |
 | `specs/multi/sync-history.e2e.ts`            | T4   | per-device-history negative assertion; 4.10 edit-wins-over-delete       |

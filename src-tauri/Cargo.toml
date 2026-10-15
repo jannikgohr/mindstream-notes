@@ -41,7 +41,10 @@ rusqlite = { version = "0.39.0", features = ["bundled"] }
 thiserror = "2.0.18"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-etebase = { git = "https://github.com/jannikgohr/etebase-rs", features = ["networking"] }
+etebase = { path = "../vendor/etebase-rs", features = ["networking"] }
+# The link an authenticator app scans when two-factor sign-in is set up.
+# Drawn here so the secret in it never passes through a web library.
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
 # Keyring — v4 architecture: the API lives in keyring-core, and each
 # OS backend is its own crate. Pulling them in via target.cfg blocks
@@ -50,7 +53,6 @@ etebase = { git = "https://github.com/jannikgohr/etebase-rs", features = ["netwo
 # from run() in this file so the right store is registered before any
 # auth code touches an Entry.
 keyring-core = "1"
-chacha20poly1305 = "0.10"
 zeroize = "1"
 
 # Sync — yrs CRDT for offline-merge-safe documents, similar for diffing
@@ -58,16 +60,19 @@ zeroize = "1"
 # msgpack wire format inside Etebase item content.
 yrs = "0.26"
 hkdf = "0.12"
-# Relay join challenge: we derive a deterministic P-256 keypair per room from
-# the same scope secret the room id comes from. P-256 (not Ed25519) because
-# the webview signs the challenge with WebCrypto, which supports ECDSA
-# everywhere but still has patchy Ed25519 support in WKWebView/WebView2.
-p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+# Seals the room keys kept on the device (sync::room_keys), the legacy
+# browser archive and the coordinator's IPC. The client library links the
+# same crate, so this adds nothing to the build.
+chacha20poly1305 = "0.10"
 similar = "3"
 rmp-serde = "1"
 serde_bytes = "0.11"
 sha2 = "0.10"
-tokio = { version = "1.52.3", features = ["time", "sync"] }
+tokio = { version = "1.52.3", features = ["time", "sync", "macros"] }
+# The change feed: one socket to the sync server, opened by the Rust side
+# because it carries the session token.
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false }
 
 # Backup format: backups are zip files containing manifest.json + the
 # SQLite snapshot (see src/backup.rs). default-features keeps DEFLATE
@@ -116,6 +121,10 @@ md-5 = "0.11.0"
 # plugin instead of taking down the process. `panic = "abort"` would make those
 # guards no-ops and turn any panic into a hard crash. The size cost of unwinding
 # tables is accepted for that safety.
+[dev-dependencies]
+# Paused time, for testing what the sync scheduler waits for.
+tokio = { version = "1.52.3", features = ["rt", "macros", "test-util"] }
+
 [profile.release]
 codegen-units = 1
 lto = true
@@ -128,6 +137,11 @@ tauri-plugin-process = "2"
 tauri-plugin-global-shortcut = "2.3.2"
 tauri-plugin-window-state = "2.4.1"
 tauri-plugin-updater = "2.10.1"
+# An invite link opened outside the app. The operating system hands the
+# app an address under its own scheme, and a second launch passes that
+# address to the instance already running and ends. See `deep_links`.
+tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 # `log` facade backend for desktop. Routes log::info!/warn!/error! to
 # stdout (visible under `cargo tauri dev`) and to a rotating file in
 # the OS-specific app log dir, so sync warnings like the corrupt-

@@ -71,6 +71,9 @@ vi.mock('./customs/SignInForm.svelte', () => ({
 vi.mock('./customs/HotkeysPanel.svelte', () => ({
   default: { placeholder: 'hotkeys' }
 }));
+vi.mock('./customs/AccountSecurity.svelte', () => ({
+  default: { placeholder: 'account-security' }
+}));
 
 // Outside Tauri (the test environment), the desktop-only bindings take
 // their no-op / false branches, so every get/set is safe to invoke.
@@ -339,6 +342,9 @@ describe('CUSTOM_COMPONENT_LOADERS', () => {
     });
     expect(await CUSTOM_COMPONENT_LOADERS['hotkeys-panel']()).toEqual({
       placeholder: 'hotkeys'
+    });
+    expect(await CUSTOM_COMPONENT_LOADERS['account-security']()).toEqual({
+      placeholder: 'account-security'
     });
   });
 });

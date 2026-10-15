@@ -4,13 +4,15 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub enum AppEvent {
     CaptureFailed,
-    CollabCredentialsChanged,
     CustomWindowDecorationsChanged,
     DesktopSettingsChanged,
     EnvironmentQuitFailed,
     ImportProgress,
+    InvitationsChanged,
+    InviteLinkOpened,
     NativeMenuCommand,
     PluginsChanged,
+    SessionEnded,
     ShowApp,
     SignaturesChanged,
     SyncCompleted,
@@ -23,13 +25,15 @@ impl AppEvent {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::CaptureFailed => "capture-failed",
-            Self::CollabCredentialsChanged => "collab-credentials-changed",
             Self::CustomWindowDecorationsChanged => "custom-window-decorations-changed",
             Self::DesktopSettingsChanged => "desktop-settings-changed",
             Self::EnvironmentQuitFailed => "environment-quit-failed",
             Self::ImportProgress => "import-progress",
-            Self::PluginsChanged => "plugins-changed",
+            Self::InvitationsChanged => "invitations-changed",
+            Self::InviteLinkOpened => "invite-link-opened",
             Self::NativeMenuCommand => "native-menu-command",
+            Self::PluginsChanged => "plugins-changed",
+            Self::SessionEnded => "session-ended",
             Self::ShowApp => "show-app",
             Self::SignaturesChanged => "signatures-changed",
             Self::SyncCompleted => "sync-completed",
@@ -49,10 +53,6 @@ mod tests {
         let cases = [
             (AppEvent::CaptureFailed, "capture-failed"),
             (
-                AppEvent::CollabCredentialsChanged,
-                "collab-credentials-changed",
-            ),
-            (
                 AppEvent::CustomWindowDecorationsChanged,
                 "custom-window-decorations-changed",
             ),
@@ -60,7 +60,10 @@ mod tests {
             (AppEvent::ImportProgress, "import-progress"),
             (AppEvent::DesktopSettingsChanged, "desktop-settings-changed"),
             (AppEvent::PluginsChanged, "plugins-changed"),
+            (AppEvent::InvitationsChanged, "invitations-changed"),
+            (AppEvent::InviteLinkOpened, "invite-link-opened"),
             (AppEvent::NativeMenuCommand, "native-menu-command"),
+            (AppEvent::SessionEnded, "session-ended"),
             (AppEvent::ShowApp, "show-app"),
             (AppEvent::SignaturesChanged, "signatures-changed"),
             (AppEvent::SyncCompleted, "sync-completed"),

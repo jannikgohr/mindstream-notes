@@ -4,11 +4,13 @@
   import { Bell } from '@jis3r/icons';
   import CuedIcon from '$lib/components/icons/CuedIcon.svelte';
   import { Button } from '$lib/components/ui/button';
+  import { isTauri } from '$lib/api/core';
+  import { listen, TauriEventName } from '$lib/api/events';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
   import {
     notificationState,
-    scanForCollectionInviteNotifications,
+    scanForShareInviteNotifications,
     scanForUpdateNotifications
   } from './store.svelte';
   import LazyNotificationWidget from './LazyNotificationWidget.svelte';
@@ -83,10 +85,18 @@
 
   onMount(() => {
     void scanForUpdateNotifications();
-    void scanForCollectionInviteNotifications();
+    void scanForShareInviteNotifications();
+    // The server says when an invitation arrives or goes away, so the list
+    // does not wait for a restart.
+    const unlistenInvitations = isTauri()
+      ? listen(TauriEventName.InvitationsChanged, () => {
+          void scanForShareInviteNotifications();
+        })
+      : null;
     document.addEventListener('pointerdown', handleDocumentPointerDown, true);
     document.addEventListener('keydown', handleKeydown);
     return () => {
+      void unlistenInvitations?.then((unlisten) => unlisten());
       document.removeEventListener(
         'pointerdown',
         handleDocumentPointerDown,

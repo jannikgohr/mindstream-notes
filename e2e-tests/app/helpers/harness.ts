@@ -676,6 +676,12 @@ export interface LoginInput {
   serverUrl: string;
   username: string;
   password: string;
+  /**
+   * For an account with two-factor sign-in: a code from its authenticator,
+   * or a backup code. The form asks for it only after the server has, so it
+   * is typed in a second step.
+   */
+  code?: string;
 }
 
 /**
@@ -880,7 +886,7 @@ async function selectSelfHosted(client: WebdriverIO.Browser): Promise<void> {
  * Accessible names are taken verbatim from src/lib/settings (the label-wrapped
  * inputs in SignInForm.svelte and the section labels in i18n/en.json):
  *   "Open settings" → "Account & Sync" → "Self-hosted" →
- *   "Server URL" / "Username or email" / "Password" → "Sign in".
+ *   "Server URL" / "Username" / "Password" → "Sign in".
  *
  * NOTE: written to the confirmed labels but not yet validated against a live
  * app session — see e2e-tests/app/README.md ("Not yet validated end-to-end").
@@ -957,7 +963,7 @@ export async function loginClient(
     };
 
     setInput('Server URL', formInput.serverUrl);
-    setInput('Username or email', formInput.username);
+    setInput('Username', formInput.username);
     setInput('Password', formInput.password);
   }, input);
 
@@ -976,13 +982,59 @@ export async function loginClient(
   );
 
   const previousDocument = await client.execute(() => performance.timeOrigin);
-  await client.execute(() => {
-    const button = Array.from(document.querySelectorAll('button')).find(
-      (candidate) => candidate.textContent?.trim() === 'Sign in'
-    ) as HTMLButtonElement | undefined;
-    if (!button) throw new Error('missing Sign in button');
-    button.click();
-  });
+  const clickSignIn = () =>
+    client.execute(() => {
+      const button = Array.from(document.querySelectorAll('button')).find(
+        (candidate) => candidate.textContent?.trim() === 'Sign in'
+      ) as HTMLButtonElement | undefined;
+      if (!button) throw new Error('missing Sign in button');
+      button.click();
+    });
+  await clickSignIn();
+
+  if (input.code !== undefined) {
+    // The password alone is refused with "a code is needed", and the form
+    // answers by showing the field. Nothing reloads until the code is in.
+    await client.waitUntil(
+      () =>
+        client.execute(
+          () => document.querySelector('input[aria-label="Code"]') !== null
+        ),
+      {
+        timeout: 60_000,
+        timeoutMsg: 'the sign-in form did not ask for a code'
+      }
+    );
+    await client.execute((code: string) => {
+      const field = document.querySelector<HTMLInputElement>(
+        'input[aria-label="Code"]'
+      );
+      if (!field) throw new Error('missing Code input');
+      field.focus();
+      field.value = code;
+      field.dispatchEvent(
+        new InputEvent('input', {
+          bubbles: true,
+          inputType: 'insertReplacementText',
+          data: code
+        })
+      );
+    }, input.code);
+    await client.waitUntil(
+      () =>
+        client.execute(() => {
+          const button = Array.from(document.querySelectorAll('button')).find(
+            (candidate) => candidate.textContent?.trim() === 'Sign in'
+          ) as HTMLButtonElement | undefined;
+          return button !== undefined && !button.disabled;
+        }),
+      {
+        timeout: 30_000,
+        timeoutMsg: 'sign-in button did not enable after the code was typed'
+      }
+    );
+    await clickSignIn();
+  }
 
   // Login reloads the document to apply the account's CSP. The old document
   // can briefly show the username before unloading, so wait for the new one
@@ -1008,7 +1060,7 @@ export async function loginClient(
       const text = document.body.innerText;
       return {
         serverUrl: value('Server URL'),
-        username: value('Username or email'),
+        username: value('Username'),
         hasPassword: (value('Password') ?? '').length > 0,
         visibleText: text.slice(0, 2_000)
       };
@@ -1068,6 +1120,15 @@ export async function syncClient(client: WebdriverIO.Browser): Promise<void> {
     timeoutMsg: 'sync did not return to idle'
   });
   await closeSettingsDialog(client);
+}
+
+/** Whether a driver error says the element it was handed is no longer in
+ *  the page. WebView2 and WebKit word it differently. */
+export function isStaleElement(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /stale element reference|Node with identifier .* was not found/i.test(
+    message
+  );
 }
 
 /**
@@ -1219,7 +1280,19 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
       await clickElement(action, { visibility: 'page' });
       return;
     }
-    await clickElement(byName(name), opts);
+    // The page may draw the element again between finding it and clicking
+    // it, and the driver then holds a node that is gone. The name still
+    // finds its successor, so look it up again. WebKit reports this where
+    // WebView2 mostly gets away with it. Seen in CI on a notice that was
+    // redrawn when the list of invitations was read again.
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await clickElement(byName(name), opts);
+        return;
+      } catch (err) {
+        if (attempt >= 3 || !isStaleElement(err)) throw err;
+      }
+    }
   };
 
   const setValue = async (name: string, value: string): Promise<void> => {

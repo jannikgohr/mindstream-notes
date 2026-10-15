@@ -10,8 +10,8 @@ node_modules
 .env.*
 !.env.example
 # Committed on purpose: throwaway, deterministic creds for the disposable
-# T4 test stack (backend/docker-compose.test.yml). Local-only, never prod.
-!backend/.env.test
+# test stack (backend/server/compose.test.yml). Local-only, never prod.
+!backend/server/.env.test
 
 # Cached T4 e2e account credentials (throwaway signups on the local test
 # stack, reused across runs — see e2e-tests/app/helpers/accounts.ts).

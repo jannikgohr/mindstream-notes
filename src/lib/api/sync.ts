@@ -25,6 +25,9 @@ export interface SyncReport {
   assets_pulled: number;
   assets_pushed: number;
   conflicts_resolved: number;
+  /** Spaces the server took nothing new for because a limit was reached.
+   *  Their changes are still on the device. */
+  held_back: number;
 }
 
 export async function syncNow(): Promise<SyncReport> {
@@ -59,41 +62,44 @@ export async function setSyncSchedule(input: SyncScheduleInput): Promise<void> {
  * The editor falls back to single-device mode in that case.
  */
 export interface RoomInfo {
-  /** Base64 of the room's derived P-256 SPKI — the room is *named* after the
-   *  public half of its join keypair, which is what lets the relay
-   *  authenticate joins without holding a secret. */
-  room_id: string;
-  /** Standard base64 of the 32-byte AES-GCM key. */
+  /** ws:// or wss:// address of the sync server's room endpoint. */
+  url: string;
+  /** The collection and item that name the room on the server. Handed back
+   *  to `noteRoomTicket` when the editor has to reconnect. */
+  collection: string;
+  item: string;
+  /** A pass into the room, good for one socket and about half a minute. */
+  ticket: string;
+  /** URL-safe base64 of the 32-byte AES-GCM key. */
   key_b64: string;
-  /** Share manifest live-collab epoch; 0 means no collection salt was applied. */
-  collab_epoch: number;
-  /** Present for salted shared-folder rooms. */
-  writer_auth?: {
-    authorized_writers: Array<{
-      username: string;
-      public_key_b64: string;
-    }>;
-  } | null;
-  /** Private half of the join keypair (PKCS#8 DER, base64), used to sign the
-   *  relay's challenge nonce. */
-  join_private_key_pkcs8_b64?: string;
 }
 
-export async function noteRoomInfo(
-  id: string,
-  writerPublicKeyB64?: string
-): Promise<RoomInfo | null> {
+export async function noteRoomInfo(id: string): Promise<RoomInfo | null> {
   assertRequiredString(id, 'id');
-  if (writerPublicKeyB64 !== undefined) {
-    assertRequiredString(writerPublicKeyB64, 'writerPublicKeyB64');
-  }
   if (!isTauri()) return null;
   return parseNullableRoomInfo(
-    await tauriInvoke<unknown>(TauriCommandName.NoteRoomInfo, {
-      id,
-      writerPublicKeyB64: writerPublicKeyB64 ?? null
-    })
+    await tauriInvoke<unknown>(TauriCommandName.NoteRoomInfo, { id })
   );
+}
+
+/**
+ * A fresh ticket for a room the editor already knows, for reconnecting.
+ * `null` means the server will not let this account in, and asking again
+ * will not change that. A rejection is worth retrying.
+ */
+export async function noteRoomTicket(
+  collection: string,
+  item: string
+): Promise<string | null> {
+  assertRequiredString(collection, 'collection');
+  assertRequiredString(item, 'item');
+  if (!isTauri()) return null;
+  const ticket = await tauriInvoke<unknown>(TauriCommandName.NoteRoomTicket, {
+    collection,
+    item
+  });
+  if (ticket === null || ticket === undefined) return null;
+  return assertString(ticket, 'room ticket');
 }
 
 function assertSyncScheduleInput(input: SyncScheduleInput): void {
@@ -128,59 +134,23 @@ function parseSyncReport(value: unknown): SyncReport {
     conflicts_resolved: assertNumber(
       raw.conflicts_resolved,
       'sync report.conflicts_resolved'
-    )
+    ),
+    held_back: assertNumber(raw.held_back, 'sync report.held_back')
   };
 }
 
 function parseRoomInfo(value: unknown): RoomInfo {
   const raw = assertRecord(value, 'room info');
-  const writerAuth =
-    raw.writer_auth === null || raw.writer_auth === undefined
-      ? null
-      : parseWriterAuth(raw.writer_auth);
   return {
-    room_id: assertString(raw.room_id, 'room info.room_id'),
-    key_b64: assertString(raw.key_b64, 'room info.key_b64'),
-    collab_epoch: assertNumber(raw.collab_epoch, 'room info.collab_epoch'),
-    writer_auth: writerAuth,
-    join_private_key_pkcs8_b64:
-      raw.join_private_key_pkcs8_b64 === undefined
-        ? undefined
-        : assertString(
-            raw.join_private_key_pkcs8_b64,
-            'room info.join_private_key_pkcs8_b64'
-          )
+    url: assertString(raw.url, 'room info.url'),
+    collection: assertString(raw.collection, 'room info.collection'),
+    item: assertString(raw.item, 'room info.item'),
+    ticket: assertString(raw.ticket, 'room info.ticket'),
+    key_b64: assertString(raw.key_b64, 'room info.key_b64')
   };
 }
 
 function parseNullableRoomInfo(value: unknown): RoomInfo | null {
   if (value === null || value === undefined) return null;
   return parseRoomInfo(value);
-}
-
-function parseWriterAuth(value: unknown): NonNullable<RoomInfo['writer_auth']> {
-  const raw = assertRecord(value, 'room info.writer_auth');
-  if (!Array.isArray(raw.authorized_writers)) {
-    throw new Error(
-      'room info.writer_auth.authorized_writers must be an array'
-    );
-  }
-  return {
-    authorized_writers: raw.authorized_writers.map((item, index) => {
-      const writer = assertRecord(
-        item,
-        `room info.writer_auth.authorized_writers[${index}]`
-      );
-      return {
-        username: assertString(
-          writer.username,
-          `room info.writer_auth.authorized_writers[${index}].username`
-        ),
-        public_key_b64: assertString(
-          writer.public_key_b64,
-          `room info.writer_auth.authorized_writers[${index}].public_key_b64`
-        )
-      };
-    })
-  };
 }

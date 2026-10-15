@@ -1,6 +1,6 @@
 //! Classification of a verified legacy export. Workers never replay its entire
 //! contents into localStorage or expose unopened accounts through settings IPC.
-use crate::browser_archive::{Snapshot, Values};
+use crate::browser_archive::Snapshot;
 
 pub struct Source(pub Snapshot);
 
@@ -30,20 +30,6 @@ impl Source {
             key.starts_with("notes-app:") && key != "notes-app:file-tree-create-toolbar:v1"
         })
     }
-
-    pub fn signing_raw(&self, server: &str, username: &str) -> Option<&str> {
-        signing_raw(&self.0.values, server, username)
-    }
-}
-
-pub(crate) fn signing_raw<'a>(values: &'a Values, server: &str, username: &str) -> Option<&'a str> {
-    values
-        .get(&format!(
-            "mindstream:collab-signing-key:v1:{}:{}",
-            encode_component(server),
-            encode_component(username)
-        ))
-        .map(String::as_str)
 }
 
 // Match the legacy JS encodeURIComponent exactly, including its unescaped
@@ -66,6 +52,7 @@ fn encode_component(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::browser_archive::Values;
 
     #[test]
     fn matching_accounts_and_vaults_get_only_their_exact_raw_sources() {
@@ -109,16 +96,6 @@ mod tests {
         assert_eq!(source.layout("work"), Some("work layout"));
         assert_eq!(source.layout("default"), Some("legacy default layout"));
         assert!(source.layout("new").is_none());
-        assert_eq!(
-            source.signing_raw("https://one.example/", "alice+é"),
-            Some("synthetic private value")
-        );
-        assert!(source
-            .signing_raw("https://two.example/", "alice+é")
-            .is_none());
-        assert!(source
-            .signing_raw("https://one.example/", "alice é")
-            .is_none());
         assert_eq!(source.raw("unknown.plugin.key"), Some("opaque raw value"));
     }
 }

@@ -19,71 +19,47 @@ Proves_ shape.
 
 ---
 
-## 6. Account session & token lifecycle
+## 6. Account sessions and security
 
-`auth/mod.rs` is excluded from unit coverage (network + keyring), and
-`sync::run_with_reauth` / `auth::refresh_token` need a live `Account` — there is
-no mock-runtime harness for etebase in this repo. So the silent-re-auth feature
-shipped with **zero automated coverage**; it was verified by hand on an Android
-device. That is the gap this section closes.
+`auth/mod.rs` is excluded from unit coverage (network + keyring), and anything
+that needs a live `Account` can only run against a server: there is no
+mock-runtime harness for the client library in this repo. The pure parts are
+unit-tested where they live. The server's own suite drives every account
+route through the client library (`backend/server/tests/client_account.rs`).
+What is left for this tier is the app end to end.
 
-Background on the mechanism is in the doc comments on `auth::refresh_token` and
-`sync::run_with_reauth`.
+The app no longer signs itself back in when the server rejects its session.
+The three entries that used to stand here were about that silent
+re-authentication, which is gone with the move to device sessions, see
+[server-design.md](../server-design.md#device-sessions). A rejected session
+now signs the device out, and that is what 6.1 and 6.2 cover.
 
-### Shared blocker: invalidating a token without breaking credentials
+### 6.1 A new device is asked for a code (written, T4)
 
-Most of §6 needs a token the server rejects _while the account's password and
-main key stay valid_ — that is the state that triggers a refresh. Reproducing it
-from the outside is awkward: the live token is inside the encrypted session
-blob, so the harness cannot simply replay it to the server's logout endpoint.
+`specs/multi/account-security.e2e.ts`. Device A creates an account and turns
+two-factor sign-in on. Device B signs in through the real form: the password
+alone brings up the code field, and a backup code lets it in. Proves the
+form's second step and the sign-in command's handling of the server's
+"a code is needed".
 
-Proposed hook, mirroring the existing `e2e_*` commands in `sharing/`:
+### 6.2 An ended session signs the device out (written, T4)
 
-```rust
-#[cfg(feature = "e2e-data-dir")]
-e2e_invalidate_session_token   // rewrite the stored blob's auth_token with garbage
-```
+Same spec. A ends B's session from the device list, then changes the
+password. Each time B is signed out without being asked, keeps its notes, and
+shows "Signed out on this device". A's list of devices then holds one, which
+is what shows B did not sign itself back in.
 
-That reproduces a forgotten token exactly (the server 401s it) while leaving
-`main_key` intact, which is precisely the refreshable case. It is one small
-command and it unblocks 6.1, 6.2 and 6.3.
+### 6.3 Recovery through the form (P2, T4)
 
-The alternative — deleting the DRF token row inside the backend container — also
-works and needs no product code, but couples the specs to the server's schema.
-Prefer the command.
-
-### 6.1 Silent re-auth when the server forgets the token (P1, T4)
-
-- **Why e2e:** `fetch_token` is a real challenge/signature handshake against a
-  real Etebase server. Nothing below T4 can execute it.
-- **Steps:** sign in → create a note and sync → invalidate the stored token
-  (hook above) → `sync_now` → assert the sync **succeeds** and the note still
-  round-trips, with no sign-in prompt and no user-visible error.
-- **Proves:** the 401 → refresh → retry path in `run_with_reauth`, end to end.
-
-### 6.2 The refreshed token is persisted (P1, T4)
-
-- **Why e2e:** the write-back goes through the keyring and the on-disk session
-  file. If it silently failed, every sync would still _work_ — it would just pay
-  a hidden extra round trip forever, which no assertion in 6.1 would catch.
-- **Steps:** after 6.1, restart the app and sync again → assert the second sync
-  performs **no** refresh.
-- **Proves:** `persist_session_blob` wrote the new token back, and the other
-  restore sites (live collab, repair, sharing) inherit it.
-- **Note:** needs a way to observe "did a refresh happen". A counter on the sync
-  report is cheaper and less brittle than scraping logs.
-
-### 6.3 A refused refresh tells the user to sign in (P2, T4)
-
-- **Why e2e:** this is the only path that should surface
-  `SESSION_EXPIRED_MESSAGE`, and getting it wrong means advising a sign-in the
-  app could have avoided — the exact regression 6.1 guards the other side of.
-- **Steps:** change the account password from a second client (which invalidates
-  key-based login, so the stored `main_key` can no longer sign a challenge) →
-  `sync_now` → assert the surfaced message is the "could not be renewed
-  automatically" one.
-- **Proves:** refresh failure is distinguished from refresh success; paired with
-  6.1 asserting that message is _absent_, it pins the whole policy.
+- **Why e2e:** recovery is two requests with keys derived on the device in
+  between, and it ends by showing a new recovery key before the window
+  reloads. The server suite covers the requests. Nothing covers the form
+  holding the reload back until the key is acknowledged.
+- **Steps:** sign up → note the recovery key → sign out → "Forgot your
+  password?" → type the key in lower case with spaces, and a new password →
+  assert the new key is shown and the window has not reloaded → acknowledge →
+  assert the device is signed in and the old password is refused.
+- **Proves:** the form's recovery path and the pending-key store.
 
 ### 6.4 Same-server sign-out/sign-in does not duplicate the vault (P1, T4)
 
@@ -196,7 +172,7 @@ Each stage is independently useful; stop wherever the value runs out.
 | **A1** | Smoke: launch, webview attaches, tree renders, open a note, type, reopen                | Appium + webview debugging |
 | **A2** | The mobile-specific journeys — text selection, IME, slash menu, mobile settings, sheets | A1 + isolation (blocker 1) |
 | **A3** | Restart persistence, Android keyring round-trip, backgrounding / process death          | A2                         |
-| **A4** | Sync against the backend stack, including §6 re-auth on-device                          | A3 + reachable backend     |
+| **A4** | Sync against the backend stack, including the §6 session flows on-device                | A3 + reachable backend     |
 
 ### 7.1 Android smoke (P1, A1)
 
@@ -223,12 +199,13 @@ Each stage is independently useful; stop wherever the value runs out.
   without a prompt.
 - **Proves:** the Android half of flow 3.5, which today is desktop-only.
 
-### 7.4 On-device re-auth (P2, A4)
+### 7.4 On-device sign-out (P2, A4)
 
-- **Why e2e:** this is where the bug was found. §6.1 covers the logic on
-  desktop; this covers it on the platform whose keyring and storage differ.
-- **Steps:** as 6.1, against a device pointed at the test stack.
-- **Proves:** refresh + persistence work through the Android keyring.
+- **Why e2e:** §6.2 covers the logic on desktop; this covers it on the
+  platform whose keyring and storage differ.
+- **Steps:** as 6.2, against a device pointed at the test stack.
+- **Proves:** an ended session clears the Android keyring entry and the
+  session file, and the device can sign in again afterwards.
 
 ### 7.5 Spellcheck on Android (P2, A2)
 
@@ -267,10 +244,6 @@ WebView, touch and IME, the platform keyring, and the app lifecycle.
 Consolidated, in rough dependency order. Existing desktop gaps stay in
 [status.md](status.md); these are the ones §6/§7 add.
 
-- [ ] **`e2e_invalidate_session_token`** behind `e2e-data-dir` — unblocks 6.1,
-      6.2, 6.3.
-- [ ] **Refresh counter on the sync report** so 6.2 can assert "no refresh
-      happened" without scraping logs.
 - [ ] **Confirm WebView debugging** is enabled in Tauri Android debug builds.
       Everything in §7 depends on it; check it first.
 - [ ] **Android data-dir isolation** — `pm clear` to start, an intent-extra

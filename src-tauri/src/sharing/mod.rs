@@ -1,26 +1,29 @@
-//! Collection sharing command layer.
+//! Sharing a folder.
 //!
-//! Etebase shares remote Collections. A shared folder scope is one manifest
-//! collection (`mindstream.share_manifest`, whose content is the manifest JSON)
-//! plus three required part collections — `mindstream.folders`,
-//! `mindstream.notes`, `mindstream.assets`. Incoming invitations are grouped
-//! into manifest-backed bundles (list/accept/decline); `invite_collection`
-//! creates the scope collections + manifest and invites the recipient.
+//! A shared folder is one collection on the server, of type
+//! `mindstream.shared`. Its folders, notes and attachments are items in that
+//! collection, told apart by the type in their metadata exactly as they are
+//! in the vault. The collection's own metadata carries the folder's name,
+//! which is what someone invited is shown before they answer. Its own
+//! content is a small manifest: which folder is the root and who shared it.
 //!
-//! Sharing a folder re-homes its subtree into the scope's collections: every
-//! folder/note/asset under the root is stamped with `share_scope_id` and
-//! detached from the vault-wide collections (see `rehome_folder_subtree`), and
-//! `sync::scopes` then pushes/pulls each scope's dedicated collections so a
-//! recipient receives the real content. Items created or moved into a shared
-//! folder *after* the share exists inherit the scope at create/move time
-//! (`collection_scope` lookups in `collections`/`notes`/`assets`), so they no
-//! longer wait for the next `invite_collection` to be re-homed.
+//! So sharing is one invitation and one membership, and there is no state
+//! in which someone holds part of a shared folder. An invite link is the
+//! same invitation, addressed to whoever holds the link (see `links`).
+//!
+//! Locally a row belongs to a shared folder when its `share_scope_id` is
+//! that collection's uid. Sharing a folder re-homes its subtree: every
+//! folder, note and attachment under the root is stamped with the uid and
+//! detached from the vault (see `rehome_folder_subtree`), and `sync::scopes`
+//! then pushes and pulls each shared collection with that routing. Items
+//! created in or moved into a shared folder later inherit the scope at that
+//! moment (the `collection_scope` lookups in `collections`, `notes` and
+//! `assets`).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use chrono::Utc;
 use etebase::managers::{CollectionInvitationManager, CollectionManager};
-use etebase::utils::randombytes;
 use etebase::{
     Account, Collection, CollectionAccessLevel, FetchOptions, InvitationPreview, ItemMetadata,
     SignedInvitation,
@@ -32,31 +35,30 @@ use tauri::{AppHandle, Manager};
 use crate::db::Db;
 use crate::error::{AppError, AppResult, CommandResult};
 
-pub const COLLECTION_TYPE_SHARE_MANIFEST: &str = "mindstream.share_manifest";
-pub const COLLECTION_TYPE_SHARE_FOLDERS: &str = "mindstream.folders";
-pub const COLLECTION_TYPE_SHARE_NOTES: &str = "mindstream.notes";
-pub const COLLECTION_TYPE_SHARE_ASSETS: &str = "mindstream.assets";
-pub const SHARE_MANIFEST_SCHEMA: u32 = 2;
-pub const SHARE_COLLAB_SALT_BYTES: usize = 32;
+/// The type of the one collection a shared folder is.
+pub const COLLECTION_TYPE_SHARED: &str = "mindstream.shared";
+pub const SHARE_MANIFEST_SCHEMA: u32 = 3;
 
-mod bundles;
 mod incoming;
 mod invite;
+mod links;
 mod local_state;
 mod members;
 mod permissions;
+mod pins;
 mod revoke;
-mod scope;
+mod space;
 mod types;
 
-pub use bundles::*;
 pub use incoming::*;
 pub use invite::*;
+pub use links::*;
 pub(crate) use local_state::*;
 pub use members::*;
 pub(crate) use permissions::*;
+pub use pins::*;
 pub use revoke::*;
-pub(crate) use scope::*;
+pub(crate) use space::*;
 pub use types::*;
 
 #[cfg(test)]

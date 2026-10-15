@@ -13,13 +13,13 @@ vi.mock('@tauri-apps/api/event', () => ({
 
 describe('TauriEventName', () => {
   it('matches Rust AppEvent wire names', () => {
-    expect(TauriEventName.CollabCredentialsChanged).toBe(
-      'collab-credentials-changed'
-    );
     expect(TauriEventName.CustomWindowDecorationsChanged).toBe(
       'custom-window-decorations-changed'
     );
+    expect(TauriEventName.InvitationsChanged).toBe('invitations-changed');
+    expect(TauriEventName.InviteLinkOpened).toBe('invite-link-opened');
     expect(TauriEventName.NativeMenuCommand).toBe('native-menu-command');
+    expect(TauriEventName.SessionEnded).toBe('session-ended');
     expect(TauriEventName.ShowApp).toBe('show-app');
     expect(TauriEventName.SignaturesChanged).toBe('signatures-changed');
     expect(TauriEventName.SyncCompleted).toBe('sync-completed');

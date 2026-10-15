@@ -70,7 +70,7 @@
     drawingSetLiveInkFingerDrawing,
     drawingSetLiveInkStyle,
     drawingShowLiveInkOverlay,
-    getYjsRelayUrl,
+    getRoomSocketUrl,
     loadNote,
     onSessionChange,
     isTauri,
@@ -105,8 +105,6 @@
     parseHistorySnapshot,
     serializeYjsSnapshot
   } from '$lib/history/snapshot';
-  import { listen, TauriEventName } from '$lib/api/events';
-  import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
   import {
     DEFAULT_COLOR,
     DEFAULT_WIDTH,
@@ -221,7 +219,6 @@
   let collabReady = false;
   let lastSeenPushed = false;
   let unsubSession: (() => void) | null = null;
-  let unsubCollabCredentials: (() => void) | null = null;
   let editorListener: EditorListener | null = null;
   let mobileToolbar = $state(false);
   let zoomMenuOpen = $state(false);
@@ -633,7 +630,7 @@
 
   const collabSession = createCollabSession({
     getContext: () => {
-      const url = getYjsRelayUrl(
+      const url = getRoomSocketUrl(
         (getSettingValue('account.serverUrl') as string | undefined) ?? ''
       );
       if (!url || !handle) return null;
@@ -2375,13 +2372,6 @@
     unsubSession = onSessionChange(() => {
       void setupCollabProvider();
     });
-    void listen(TauriEventName.CollabCredentialsChanged, (payload) => {
-      if (collabCredentialsChangedForNote(payload, noteId)) {
-        void setupCollabProvider();
-      }
-    }).then((unlisten) => {
-      unsubCollabCredentials = unlisten;
-    });
   });
 
   $effect(() => {
@@ -2454,9 +2444,7 @@
     disposed = true;
     collabReady = false;
     unsubSession?.();
-    unsubCollabCredentials?.();
     unsubSession = null;
-    unsubCollabCredentials = null;
     collabSession.destroy();
     collabConfigured = false;
     collabOnline = false;

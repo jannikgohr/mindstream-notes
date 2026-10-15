@@ -1,237 +1,302 @@
-//! Per-scope sync.
+//! Syncing shared folders.
 //!
-//! A shared folder scope (see `crate::sharing`) routes its folders, notes and
-//! assets into three dedicated Etebase collections instead of the vault-wide
-//! ones. Membership in the scope's `mindstream.share_manifest` collection is
-//! how both the owner and every recipient discover the scope, so this walks the
-//! manifest collections the account can see, decodes each, and pulls/pushes the
-//! three part collections with `share_scope_id` routing.
+//! A shared folder (see `crate::sharing`) is one collection, and its
+//! folders, notes and attachments are items in it. Being a member of the
+//! collection is what having the folder means, for the owner and for
+//! everyone invited alike. A sync visits the shared collections the server
+//! says changed and the ones this device has something to send to, and
+//! pulls and pushes each. The pull is the vault's own `pull_space`, told
+//! which scope the rows belong to.
 //!
-//! Scoped rows carry `share_scope_id` locally (migration 18); the vault
-//! pull/push paths exclude them, and the loaders/appliers here supply the scope
-//! so a row only ever lives in one collection ("one home").
+//! Rows of a shared folder carry its collection's uid as `share_scope_id`.
+//! The vault's pull and push leave those rows alone and the ones here take
+//! only them, so a row lives in one collection.
 //!
-//! This whole module is best-effort: `sync_scopes` is called after the vault
-//! sync and any error it returns is logged, never propagated, so a broken share
-//! can't wedge the user's own vault sync.
+//! The work is done in the same phases as the vault's, and `sync::run`
+//! runs each phase for the vault and for every shared folder before it
+//! starts the next: pull, then deletions, then what is new.
+//!
+//! All of this is best effort. What goes wrong with a shared folder is
+//! logged, never passed on, so a broken share cannot stop the user's own
+//! notes from syncing.
 
-use etebase::managers::CollectionManager;
-use etebase::{Collection, CollectionAccessLevel, FetchOptions};
+use std::collections::HashSet;
+
+use etebase::managers::{CollectionManager, ItemManager};
+use etebase::{Collection, CollectionAccessLevel};
 use rusqlite::{params, OptionalExtension};
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::sharing::{
-    share_access_level_to_db, ShareAccessLevel, ShareManifest, ShareScopePart,
-    COLLECTION_TYPE_SHARE_MANIFEST,
+    decode_manifest, open_space, purge_lost_shares, reconcile_revoked_shares, rename_space,
+    scope_stoken_key, share_access_level_to_db, ShareAccessLevel, ShareManifest,
 };
 
 use super::{
-    apply_asset, apply_folder, apply_note, is_corrupt_remote_content, load_stoken, push_assets,
-    push_folders, push_notes, repair_folder_parents, save_stoken, ApplyAssetOutcome, FolderPayload,
-    SyncDelta, SyncReport,
+    drain_tombstones, pull_space, push_assets, push_folders, push_notes, room_keys, save_stoken,
+    scopes_to_fetch, scopes_with_local_work, Changes, Held, LimitReached, SpacePull, SyncDelta,
 };
 
-/// Sync every share scope the account is a member of. Enumerated from the
-/// manifest collections; a scope we can't fully reach (e.g. a manifest whose
-/// invite was accepted but whose part collections weren't) is skipped.
-pub fn sync_scopes(
+/// A shared folder this sync has pulled, and may have to push to.
+pub(super) struct OpenScope {
+    collection: Collection,
+    im: ItemManager,
+    access: CollectionAccessLevel,
+    root_folder_id: String,
+}
+
+impl OpenScope {
+    fn scope(&self) -> &str {
+        self.collection.uid()
+    }
+
+    /// Someone who may only read cannot upload. Pushing anyway fails on the
+    /// server and leaves the edited row dirty, so every later sync would
+    /// retry the same doomed push. Such a member pulls and never pushes.
+    fn writable(&self) -> bool {
+        !matches!(self.access, CollectionAccessLevel::ReadOnly)
+    }
+}
+
+/// The shared folders a sync pulled, for its push phase.
+pub(super) struct PulledScopes {
+    pub(super) open: Vec<OpenScope>,
+    /// Whether every folder that had to be visited was pulled. When one
+    /// failed, the account's cursor must stay where it is, so the next sync
+    /// is told about that folder again.
+    pub(super) complete: bool,
+}
+
+/// Pull the shared folders that need it, and drop the ones the account has
+/// stopped being a member of. Items a pull could not apply yet go into
+/// `held`.
+///
+/// Which folders need it depends on the list the sync opened with:
+///
+/// - A list of everything, the first of each run. Every folder is pulled,
+///   and a folder this device holds that the list does not have is one the
+///   account lost.
+/// - A list of what changed. The changed folders are pulled, and so are the
+///   ones this device has something to send to: a pull goes before every
+///   push. The server names the folders the account lost.
+pub(super) fn pull_scopes(
     db: &Db,
     cm: &CollectionManager,
+    changes: &Changes,
     delta: &mut SyncDelta,
     self_username: Option<&str>,
-) -> AppResult<()> {
-    let list = cm
-        .list(COLLECTION_TYPE_SHARE_MANIFEST, None)
-        .map_err(|e| AppError::InvalidArg(format!("list manifest collections: {e}")))?;
-    for manifest_col in list.data() {
-        if manifest_col.is_deleted() {
+    held: &mut Vec<Held>,
+) -> AppResult<PulledScopes> {
+    let mut pulled = PulledScopes {
+        open: Vec::new(),
+        complete: true,
+    };
+    let mut live: HashSet<String> = HashSet::new();
+    let mut gone: Vec<String> = changes.removed.clone();
+
+    for collection in &changes.shared {
+        if collection.is_deleted() {
+            gone.push(collection.uid().to_string());
             continue;
         }
-        let manifest = match decode_manifest(manifest_col) {
-            Ok(manifest) => manifest,
-            Err(e) => {
-                log::warn!(
-                    "[sync] scope manifest {} decode failed: {e}",
-                    manifest_col.uid()
-                );
-                continue;
+        live.insert(collection.uid().to_string());
+        visit_scope(
+            db,
+            cm,
+            collection.clone(),
+            delta,
+            self_username,
+            held,
+            &mut pulled,
+        );
+    }
+
+    if changes.full {
+        // The list ran to its end, or `account_changes` would have failed.
+        // That matters: a folder is removed here for being absent from it.
+        reconcile_revoked_shares(db, &live)?;
+        return Ok(pulled);
+    }
+
+    // Folders the server did not name, with something to send.
+    let changed: Vec<&str> = changes.shared.iter().map(Collection::uid).collect();
+    for scope in scopes_to_fetch(&changed, &scopes_with_local_work(db)?) {
+        if gone.contains(&scope) {
+            continue;
+        }
+        match open_space(cm, &scope) {
+            Ok(Some(collection)) => {
+                visit_scope(db, cm, collection, delta, self_username, held, &mut pulled)
             }
-        };
-        if let Err(e) = sync_one_scope(db, cm, &manifest, delta, self_username) {
-            log::warn!("[sync] scope {} sync failed: {e}", manifest.share_scope_id);
+            // Gone without the list saying so. Left for the next full list
+            // to remove, which does not act on one answer alone.
+            Ok(None) => {
+                log::warn!("[sync] shared folder {scope} has work to send and is gone");
+                pulled.complete = false;
+            }
+            Err(e) => {
+                log::warn!("[sync] shared folder {scope} could not be fetched: {e}");
+                pulled.complete = false;
+            }
         }
     }
 
-    // Reconcile shares the owner revoked (deleted the scope collections): purge
-    // any local shared-with-me root whose collections are now deleted server-side.
-    // Isolated so a failure here can't wedge the rest of the sync.
-    if let Err(e) = crate::sharing::reconcile_revoked_shares(db, cm) {
-        log::warn!("[sync] revoked-share reconcile failed: {e}");
-    }
-    Ok(())
+    purge_lost_shares(db, &gone)?;
+    Ok(pulled)
 }
 
-fn decode_manifest(col: &Collection) -> AppResult<ShareManifest> {
-    let raw = col
-        .content()
-        .map_err(|e| AppError::InvalidArg(format!("manifest content: {e}")))?;
-    serde_json::from_slice(&raw)
-        .map_err(|e| AppError::InvalidArg(format!("decode manifest json: {e}")))
-}
-
-/// The local collection id of the shared root this account holds for `scope`, if
-/// any (a row tagged with the scope that isn't shared-by-me; the anchor — carrying
-/// `share_id` — is preferred). Best-effort, only used to make the
-/// incomplete-scope warning actionable.
-fn local_scope_root(db: &Db, scope: &str) -> Option<String> {
-    db.with_conn(|conn| {
-        Ok(conn
-            .query_row(
-                "SELECT id FROM collections
-                 WHERE share_scope_id = ?1 AND COALESCE(shared_by_me, 0) = 0
-                 ORDER BY (share_id IS NULL), id
-                 LIMIT 1",
-                params![scope],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?)
-    })
-    .ok()
-    .flatten()
-}
-
-fn part_uid(manifest: &ShareManifest, part: ShareScopePart) -> Option<&str> {
-    manifest
-        .collections
-        .iter()
-        .find(|collection| collection.part == part)
-        .map(|collection| collection.collection_uid.as_str())
-}
-
-fn sync_one_scope(
+fn visit_scope(
     db: &Db,
     cm: &CollectionManager,
-    manifest: &ShareManifest,
+    collection: Collection,
     delta: &mut SyncDelta,
     self_username: Option<&str>,
-) -> AppResult<()> {
-    let scope = manifest.share_scope_id.as_str();
-    let (Some(folders_uid), Some(notes_uid), Some(assets_uid)) = (
-        part_uid(manifest, ShareScopePart::Folders),
-        part_uid(manifest, ShareScopePart::Notes),
-        part_uid(manifest, ShareScopePart::Assets),
-    ) else {
-        // Incomplete manifest — it can never finish syncing. Name the local root
-        // (if this account already has one accepted) so the diagnostic is
-        // actionable: the fix is to Leave it. Never auto-delete here — a folder
-        // mid-first-sync must not be mistaken for an orphan.
-        match local_scope_root(db, scope) {
-            Some(root_id) => log::warn!(
-                "[sync] shared root {root_id} (scope {scope}) is incomplete (manifest missing a required part) and can't sync; use \"Leave shared folder\" to remove it"
-            ),
-            None => log::warn!(
-                "[sync] scope {scope} manifest is missing a required part; skipping"
-            ),
+    held: &mut Vec<Held>,
+    pulled: &mut PulledScopes,
+) {
+    let uid = collection.uid().to_string();
+    match pull_one_scope(db, cm, collection, delta, self_username, held) {
+        Ok(scope) => pulled.open.push(scope),
+        Err(e) => {
+            log::warn!("[sync] shared folder {uid} pull failed: {e}");
+            pulled.complete = false;
         }
-        return Ok(());
+    }
+}
+
+fn pull_one_scope(
+    db: &Db,
+    cm: &CollectionManager,
+    collection: Collection,
+    delta: &mut SyncDelta,
+    self_username: Option<&str>,
+    held: &mut Vec<Held>,
+) -> AppResult<OpenScope> {
+    let manifest = decode_manifest(&collection)?;
+    let im = cm
+        .item_manager(&collection)
+        .map_err(|e| AppError::InvalidArg(format!("item_manager(shared folder): {e}")))?;
+    let open = OpenScope {
+        access: collection.access_level(),
+        root_folder_id: manifest.root_folder_id.clone(),
+        collection,
+        im,
     };
+    let scope = open.scope();
 
-    record_scope_collab_epoch(db, manifest, delta)?;
-
-    // Fetch the part collections. Any failure (not a member yet — a manifest
-    // accepted but bundle not) means the scope isn't ready; skip it quietly.
-    let (Ok(folders_col), Ok(notes_col), Ok(assets_col)) = (
-        cm.fetch(folders_uid, None),
-        cm.fetch(notes_uid, None),
-        cm.fetch(assets_uid, None),
-    ) else {
-        log::debug!("[sync] scope {scope} part collections not reachable yet; skipping");
-        return Ok(());
-    };
-
-    // A read-only recipient can't upload into the scope's collections. Pushing
-    // anyway fails server-side and leaves the locally-edited row `dirty`, so
-    // every later sync retries the doomed push forever. When we only have read
-    // access, pull the scope but never push it. The part collections are all
-    // invited at the same level, so the folders collection is representative.
-    let writable = !matches!(folders_col.access_level(), CollectionAccessLevel::ReadOnly);
-
-    // For view-only shares, any dirty local row is a bug or stale state from a
-    // previous bug. Discard those local mutations, rewind this scope's cursors,
-    // and let the pull below restore the remote-authoritative content.
-    let preserve_dirty_local_edits = writable;
-    if !writable {
+    // In a folder that is read-only here, a dirty row is a bug or what is
+    // left of one. Drop those edits, rewind the cursor, and let the pull
+    // below put the server's content back.
+    if !open.writable() {
         let repair = discard_read_only_scope_edits(db, scope)?;
         if repair.total() > 0 {
-            reset_scope_stokens(db, scope)?;
+            save_stoken(db, &scope_stoken_key(scope), None)?;
             log::warn!(
-                "[sync] discarded {} local edit(s) from read-only scope {scope}; forcing remote pull",
+                "[sync] discarded {} local edit(s) from read-only shared folder {scope}; pulling it afresh",
                 repair.total()
             );
         }
     }
 
-    // Folders first so notes can resolve parents; assets last so their owning
-    // notes exist — same ordering rationale as the vault sync.
-    let folders_im = cm
-        .item_manager(&folders_col)
-        .map_err(|e| AppError::InvalidArg(format!("item_manager(scope folders): {e}")))?;
-    pull_scope_folders(
-        db,
-        &folders_im,
-        scope,
-        &mut delta.report,
-        preserve_dirty_local_edits,
-    )?;
-    // Mark the scope's root folder as shared-with-me so it lands in the "shared
-    // with me" view instead of Home. The folder itself arrives via the pull
-    // above carrying only placement metadata (name/parent/position) — the share
-    // membership (owner, role, share_id) lives in the manifest, so we project it
-    // onto the local row here. The owner's *other* device stamps shared_by_me
-    // instead so the folder stays in Home; a recipient's row is left alone if it
-    // already carries the authoritative shared_by_me = 1.
-    project_shared_root(
-        db,
-        manifest,
-        folders_col.access_level(),
-        folders_uid,
-        self_username,
-    )?;
-    if writable {
-        push_folders(db, &folders_im, &mut delta.report, Some(scope))?;
+    let stoken_key = scope_stoken_key(scope);
+    let space = SpacePull {
+        scope: Some(scope),
+        stoken_key: &stoken_key,
+        preserve_dirty_local_edits: open.writable(),
+    };
+    held.extend(pull_space(db, &open.im, &space, delta)?);
+
+    // The pull brings the root folder like any other, with a name and a
+    // place and nothing that says it is shared. That it is, by whom and
+    // with what rights is the collection's to say, so it is written onto
+    // the row here.
+    project_shared_root(db, scope, &manifest, open.access, self_username)?;
+    Ok(open)
+}
+
+/// Push the deletions queued for each shared folder this device may write
+/// to. Runs for every folder before anything new is pushed to any, see
+/// `sync::run`. A folder that fails is logged and the others go on.
+pub(super) fn drain_scope_tombstones(db: &Db, scopes: &[OpenScope]) {
+    for open in scopes.iter().filter(|open| open.writable()) {
+        for kind in ["folder", "note", "asset"] {
+            if let Err(e) = drain_tombstones(db, &open.im, kind, Some(open.scope())) {
+                log::warn!(
+                    "[sync] shared folder {}: deleting {kind}s failed: {e}",
+                    open.scope()
+                );
+            }
+        }
+    }
+}
+
+/// Push what changed locally in each shared folder this device may write
+/// to. A folder that fails is logged and the others go on.
+pub(super) fn push_scopes(
+    db: &Db,
+    cm: &CollectionManager,
+    scopes: &[OpenScope],
+    delta: &mut SyncDelta,
+    seal: Option<&room_keys::Seal>,
+) {
+    for open in scopes {
+        if let Err(e) = push_one_scope(db, cm, open, delta, seal) {
+            log::warn!("[sync] shared folder {} push failed: {e}", open.scope());
+            // The one failure the user can do something about, or ask the
+            // folder's owner to.
+            if let Some(reason) = e.limit() {
+                delta
+                    .limits
+                    .push(LimitReached::in_folder(db, &open.root_folder_id, reason));
+            }
+        }
+    }
+}
+
+fn push_one_scope(
+    db: &Db,
+    cm: &CollectionManager,
+    open: &OpenScope,
+    delta: &mut SyncDelta,
+    seal: Option<&room_keys::Seal>,
+) -> AppResult<()> {
+    let scope = open.scope();
+    if open.writable() {
+        // Folders first, so nobody pulls a note whose folder the server has
+        // not been told about.
+        push_folders(db, &open.im, &mut delta.report, Some(scope))?;
+        push_notes(
+            db,
+            &open.im,
+            &mut delta.report,
+            Some(scope),
+            &mut delta.room_keys,
+            seal,
+        )?;
+        push_assets(db, &open.im, &mut delta.report, Some(scope))?;
     }
 
-    let notes_im = cm
-        .item_manager(&notes_col)
-        .map_err(|e| AppError::InvalidArg(format!("item_manager(scope notes): {e}")))?;
-    pull_scope_notes(
-        db,
-        &notes_im,
-        scope,
-        &mut delta.report,
-        &mut delta.notes_pulled_ids,
-        preserve_dirty_local_edits,
-    )?;
-    if writable {
-        push_notes(db, &notes_im, &mut delta.report, Some(scope))?;
+    // An invitation shows the collection's name, so it follows the root
+    // folder's. Only an admin may change it.
+    if matches!(open.access, CollectionAccessLevel::Admin) {
+        if let Some(name) = local_root_name(db, &open.root_folder_id)? {
+            rename_space(cm, &open.collection, &name)?;
+        }
     }
-
-    let assets_im = cm
-        .item_manager(&assets_col)
-        .map_err(|e| AppError::InvalidArg(format!("item_manager(scope assets): {e}")))?;
-    pull_scope_assets(
-        db,
-        &assets_im,
-        scope,
-        &mut delta.report,
-        &mut delta.assets_pulled_ids,
-    )?;
-    if writable {
-        push_assets(db, &assets_im, &mut delta.report, Some(scope))?;
-    }
-
     Ok(())
+}
+
+fn local_root_name(db: &Db, root_folder_id: &str) -> AppResult<Option<String>> {
+    db.with_conn(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT name FROM collections WHERE id = ?1",
+                params![root_folder_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?)
+    })
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -313,107 +378,26 @@ fn discard_read_only_scope_edits(db: &Db, scope: &str) -> AppResult<ReadOnlyScop
     })
 }
 
-fn reset_scope_stokens(db: &Db, scope: &str) -> AppResult<()> {
-    save_stoken(db, &scope_folders_stoken_key(scope), None)?;
-    save_stoken(db, &scope_notes_stoken_key(scope), None)?;
-    save_stoken(db, &scope_assets_stoken_key(scope), None)?;
-    Ok(())
-}
-
-fn scope_folders_stoken_key(scope: &str) -> String {
-    format!("scope-folders:{scope}")
-}
-
-fn scope_notes_stoken_key(scope: &str) -> String {
-    format!("scope-notes:{scope}")
-}
-
-fn scope_assets_stoken_key(scope: &str) -> String {
-    format!("scope-assets:{scope}")
-}
-
-fn scope_collab_epoch_key(scope: &str) -> String {
-    format!("scope-collab-epoch:{scope}")
-}
-
-fn load_scope_collab_epoch(db: &Db, scope: &str) -> AppResult<Option<u64>> {
-    let key = scope_collab_epoch_key(scope);
-    db.with_conn(|conn| {
-        let raw: Option<String> = conn
-            .query_row(
-                "SELECT stoken FROM sync_state WHERE kind = ?1",
-                params![key],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten();
-        Ok(raw.and_then(|value| value.parse::<u64>().ok()))
-    })
-}
-
-fn save_scope_collab_epoch(db: &Db, scope: &str, epoch: u64) -> AppResult<()> {
-    let key = scope_collab_epoch_key(scope);
-    let value = epoch.to_string();
-    db.with_conn(|conn| {
-        conn.execute(
-            "INSERT INTO sync_state(kind, stoken)
-             VALUES (?1, ?2)
-             ON CONFLICT(kind) DO UPDATE SET stoken = excluded.stoken",
-            params![key, value],
-        )?;
-        Ok(())
-    })
-}
-
-fn record_scope_collab_epoch(
-    db: &Db,
-    manifest: &ShareManifest,
-    delta: &mut SyncDelta,
-) -> AppResult<()> {
-    if manifest.collab_salt.is_empty() {
-        return Ok(());
-    }
-
-    let scope = manifest.share_scope_id.as_str();
-    let previous = load_scope_collab_epoch(db, scope)?;
-    if previous == Some(manifest.collab_epoch) {
-        return Ok(());
-    }
-
-    save_scope_collab_epoch(db, scope, manifest.collab_epoch)?;
-    delta
-        .collab_credentials_changed_note_ids
-        .extend(crate::collab_events::note_ids_for_share_scope(db, scope)?);
-    Ok(())
-}
-
-/// Project the manifest's share membership onto the local root folder row so a
-/// recipient's shared folder shows up under "shared with me" (the frontend keys
-/// that off `shared_role` / `share_id`) rather than in their private Home tree.
+/// Write what the collection says about the share onto the local root
+/// folder, so the folder shows as shared. The frontend files a folder under
+/// "shared with me" by `shared_role` and `share_id`, and a root that was
+/// only pulled has neither.
 ///
-/// The scope pull only carries a folder's placement metadata, never the share
-/// membership, so without this a freshly pulled shared root has no `shared_role`
-/// and is indistinguishable from a personal folder.
+/// There are two cases, told apart by who the folder's owner is:
 ///
-/// Two distinct cases, keyed on whether the syncing account is the scope owner:
+/// - **A device of the owner.** `shared_by_me` is set on the device the
+///   folder was shared from. The owner's other devices pull the same folder
+///   and would file it under "shared with me". They get the same stamp
+///   here, which keeps the folder in Home with the shared badge.
 ///
-/// - **Owner's own device.** `shared_by_me = 1` is stamped only on the device
-///   that initiated the share (`record_outgoing_share`); the owner's *other*
-///   devices pull the same scope but arrive with `shared_by_me = 0`, so the
-///   recipient projection would mis-file the folder under "shared with me". We
-///   instead mirror the `shared_by_me = 1` stamp here, keeping the folder in
-///   Home with the shared-by-me badge — `collectionIsSharedWithMe`
-///   short-circuits to false whenever `shared_by_me` is set.
-///
-/// - **Recipient's device.** Stamp the share membership. The
-///   `COALESCE(shared_by_me, 0) = 0` guard is retained here so a row that
-///   already carries an authoritative `shared_by_me = 1` (e.g. the owner's first
-///   device) is never downgraded.
+/// - **Anyone else's device.** The share's owner, this account's role and
+///   the collection are stamped. A row that already says `shared_by_me` is
+///   left as it is.
 fn project_shared_root(
     db: &Db,
+    scope: &str,
     manifest: &ShareManifest,
     access_level: CollectionAccessLevel,
-    folders_uid: &str,
     self_username: Option<&str>,
 ) -> AppResult<()> {
     let role_db = share_access_level_to_db(ShareAccessLevel::from(access_level));
@@ -425,11 +409,11 @@ fn project_shared_root(
                 "UPDATE collections
                     SET shared_owner = ?1, shared_role = ?2, share_id = ?3,
                         shared_by_me = 1
-                  WHERE id = ?4",
+                  WHERE id = ?4 AND share_scope_id = ?3",
                 params![
                     manifest.owner_username,
                     role_db,
-                    folders_uid,
+                    scope,
                     manifest.root_folder_id,
                 ],
             )?;
@@ -437,138 +421,18 @@ fn project_shared_root(
             conn.execute(
                 "UPDATE collections
                     SET shared_owner = ?1, shared_role = ?2, share_id = ?3
-                  WHERE id = ?4 AND COALESCE(shared_by_me, 0) = 0",
+                  WHERE id = ?4 AND share_scope_id = ?3
+                    AND COALESCE(shared_by_me, 0) = 0",
                 params![
                     manifest.owner_username,
                     role_db,
-                    folders_uid,
+                    scope,
                     manifest.root_folder_id,
                 ],
             )?;
         }
         Ok(())
     })
-}
-
-fn pull_scope_folders(
-    db: &Db,
-    im: &etebase::managers::ItemManager,
-    scope: &str,
-    report: &mut SyncReport,
-    preserve_dirty_local_edits: bool,
-) -> AppResult<()> {
-    let stoken_key = scope_folders_stoken_key(scope);
-    let stoken = load_stoken(db, &stoken_key)?;
-    let mut new_stoken = stoken.clone();
-    let mut applied: Vec<FolderPayload> = Vec::new();
-    loop {
-        let opts = FetchOptions::new().stoken(new_stoken.as_deref());
-        let resp = im
-            .list(Some(&opts))
-            .map_err(|e| AppError::InvalidArg(format!("list scope folders: {e}")))?;
-        for item in resp.data() {
-            match apply_folder(db, item, Some(scope), preserve_dirty_local_edits) {
-                Ok(Some(payload)) => applied.push(payload),
-                Ok(None) => {}
-                Err(err) if is_corrupt_remote_content(&err) => {
-                    log::error!("[sync] skipping corrupt scope folder {}: {err}", item.uid());
-                }
-                Err(err) => return Err(err),
-            }
-            report.folders_pulled += 1;
-        }
-        new_stoken = resp.stoken().map(str::to_string).or(new_stoken);
-        if resp.done() {
-            break;
-        }
-    }
-    // Reattach any child whose parent hadn't arrived yet within this scope.
-    repair_folder_parents(db, &applied)?;
-    if new_stoken != stoken {
-        save_stoken(db, &stoken_key, new_stoken.as_deref())?;
-    }
-    Ok(())
-}
-
-fn pull_scope_notes(
-    db: &Db,
-    im: &etebase::managers::ItemManager,
-    scope: &str,
-    report: &mut SyncReport,
-    applied_ids: &mut Vec<String>,
-    preserve_dirty_local_edits: bool,
-) -> AppResult<()> {
-    let stoken_key = scope_notes_stoken_key(scope);
-    let stoken = load_stoken(db, &stoken_key)?;
-    let mut new_stoken = stoken.clone();
-    loop {
-        let opts = FetchOptions::new().stoken(new_stoken.as_deref());
-        let resp = im
-            .list(Some(&opts))
-            .map_err(|e| AppError::InvalidArg(format!("list scope notes: {e}")))?;
-        for item in resp.data() {
-            match apply_note(db, item, Some(scope), preserve_dirty_local_edits) {
-                Ok(Some(id)) => applied_ids.push(id),
-                Ok(None) => {}
-                Err(err) if is_corrupt_remote_content(&err) => {
-                    log::error!("[sync] skipping corrupt scope note {}: {err}", item.uid());
-                }
-                Err(err) => return Err(err),
-            }
-            report.notes_pulled += 1;
-        }
-        new_stoken = resp.stoken().map(str::to_string).or(new_stoken);
-        if resp.done() {
-            break;
-        }
-    }
-    if new_stoken != stoken {
-        save_stoken(db, &stoken_key, new_stoken.as_deref())?;
-    }
-    Ok(())
-}
-
-fn pull_scope_assets(
-    db: &Db,
-    im: &etebase::managers::ItemManager,
-    scope: &str,
-    report: &mut SyncReport,
-    applied_ids: &mut Vec<String>,
-) -> AppResult<()> {
-    let stoken_key = scope_assets_stoken_key(scope);
-    let stoken = load_stoken(db, &stoken_key)?;
-    let mut new_stoken = stoken.clone();
-    // An asset whose owning note hasn't been applied yet pins the stoken so the
-    // next sync retries once the note lands — mirrors the vault assets pull.
-    let mut had_orphans = false;
-    loop {
-        let opts = FetchOptions::new().stoken(new_stoken.as_deref());
-        let resp = im
-            .list(Some(&opts))
-            .map_err(|e| AppError::InvalidArg(format!("list scope assets: {e}")))?;
-        for item in resp.data() {
-            match apply_asset(db, item, Some(scope)) {
-                Ok(ApplyAssetOutcome::Applied(id)) => {
-                    report.assets_pulled += 1;
-                    applied_ids.push(id);
-                }
-                Ok(ApplyAssetOutcome::Orphaned) => had_orphans = true,
-                Ok(ApplyAssetOutcome::Skipped) => {}
-                Err(err) if is_corrupt_remote_content(&err) => {
-                    log::error!("[sync] skipping corrupt scope asset {}: {err}", item.uid());
-                }
-                Err(err) => return Err(err),
-            }
-        }
-        new_stoken = resp.stoken().map(str::to_string).or(new_stoken);
-        if resp.done() {
-            break;
-        }
-    }
-    if !had_orphans && new_stoken != stoken {
-        save_stoken(db, &stoken_key, new_stoken.as_deref())?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]

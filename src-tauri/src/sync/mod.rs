@@ -1,18 +1,20 @@
-//! Etebase sync — pull/push loop for notes and folders.
+//! Etebase sync — pull/push loop for everything the local store holds.
 //!
-//! Two parallel Etebase Collections back the local SQLite store:
+//! The vault is one Etebase Collection, `mindstream.vault`. What kind of
+//! thing an item is sits in its metadata:
 //!
-//!   * `mindstream.folders` — items typed `ms-md-folder`. Content is a
-//!     msgpack-encoded `FolderPayload`. No body, just placement metadata.
-//!   * `mindstream.notes`   — items typed `ms-md-note`. Content is a
-//!     msgpack-encoded `NotePayload`, which carries the yrs-encoded Doc
-//!     state (the CRDT source of truth) plus parent/position/tags/trash.
+//!   * `ms-md-folder` — content is a msgpack-encoded `FolderPayload`. No
+//!     body, just placement metadata.
+//!   * `ms-md-note` — content is a msgpack-encoded `NotePayload`, which
+//!     carries the yrs-encoded Doc state (the CRDT source of truth) plus
+//!     parent/position/tags/trash.
+//!   * `ms-md-asset` — an attachment, as an `AssetPayload`.
+//!   * `ms-md-signature` — a saved signature.
 //!
-//! On every sync we (1) bootstrap the two collections if they don't exist
-//! yet, then for each kind (2) pull by stoken — apply remote items to
-//! SQLite, (3) push dirty rows via `ItemManager::transaction` — and for
-//! folders we always go first so notes can resolve `parent_folder_id` on
-//! the way in.
+//! On every sync we (1) find or create the collection, (2) pull by its one
+//! stoken and apply remote items to SQLite in an order they can be applied
+//! in, see [`pull`], then (3) push dirty rows via
+//! `ItemManager::transaction`, folders first.
 //!
 //! Conflict handling: if `transaction` returns `Error::Conflict`, we
 //! refetch the colliding item, merge its yrs state into ours (or take
@@ -21,39 +23,47 @@
 //! Etebase exposes; the CRDT does the actual conflict-free merging.
 
 mod apply;
+mod changes;
+mod claim;
 pub mod collab_room;
 mod collections;
+pub mod feed;
+pub mod limits;
 mod local_rows;
 mod payloads;
 mod pull;
 mod push;
 pub mod repair;
+pub mod room_keys;
 pub mod scheduler;
 pub mod scopes;
 pub mod tags_crdt;
 pub mod yrs_doc;
 
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::Utc;
 use etebase::error::Error as EtebaseError;
 use etebase::managers::{CollectionManager, ItemManager};
 use etebase::utils::randombytes;
 use etebase::{Account, Collection, CollectionAccessLevel, FetchOptions, Item, ItemMetadata};
 use hkdf::Hkdf;
-use p256::pkcs8::{EncodePrivateKey, EncodePublicKey};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use tauri::{AppHandle, Emitter, Manager};
 
 use apply::*;
+pub(crate) use changes::forget_account_cursor;
+use changes::*;
+use claim::*;
 use collections::*;
+use limits::LimitReached;
 use local_rows::*;
 use payloads::*;
+pub(crate) use pull::held_key;
 use pull::*;
 use push::*;
 
@@ -61,33 +71,27 @@ use crate::app_events::AppEvent;
 use crate::auth;
 use crate::db::Db;
 use crate::error::{AppError, AppResult, CommandResult};
-use crate::sharing::{
-    share_scope_collab_info, ShareManifest, ShareScopeCollabInfo, COLLECTION_TYPE_SHARE_MANIFEST,
-};
 
-const COLLECTION_TYPE_NOTES: &str = "mindstream.notes";
-const COLLECTION_TYPE_FOLDERS: &str = "mindstream.folders";
-const COLLECTION_TYPE_ASSETS: &str = "mindstream.assets";
-const COLLECTION_TYPE_SIGNATURES: &str = "mindstream.signatures";
+/// The one collection that holds an account's own folders, notes, assets
+/// and signatures.
+const COLLECTION_TYPE_VAULT: &str = "mindstream.vault";
 const ITEM_TYPE_NOTE: &str = "ms-md-note";
 const ITEM_TYPE_FOLDER: &str = "ms-md-folder";
 const ITEM_TYPE_ASSET: &str = "ms-md-asset";
-const ITEM_TYPE_COLLAB_WRITER_KEY: &str = "ms-collab-writer-key";
 const ITEM_TYPE_SIGNATURE: &str = "ms-md-signature";
 
+/// The `sync_state` row of the vault collection: its uid and its cursor.
+const KIND_VAULT: &str = "vault";
+// What kind of row a tombstone or a remote uid belongs to.
 const KIND_NOTES: &str = "notes";
 const KIND_FOLDERS: &str = "folders";
 const KIND_ASSETS: &str = "assets";
 const KIND_SIGNATURES: &str = "signatures";
 
 const PAYLOAD_SCHEMA: u32 = 2;
-const LIVE_COLLAB_KEY_INFO: &[u8] = b"mindstream-live-collab-key/v1";
-const LIVE_COLLAB_JOIN_INFO: &[u8] = b"mindstream-live-collab-join/v1";
-const P256_SPKI_DER_LEN: usize = 91;
-const P256_SPKI_DER_PREFIX: &[u8] = &[
-    0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a,
-    0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04,
-];
+// v2: a room's key comes from the note's key and uid alone. v1 also took
+// eight bytes of an epoch, and a salt for a note in a shared folder.
+const LIVE_COLLAB_KEY_INFO: &[u8] = b"mindstream-live-collab-key/v2";
 
 pub(super) fn catch_blocking_panic<T>(
     label: &str,
@@ -160,8 +164,8 @@ fn is_bad_stoken_error(err: &AppError) -> bool {
 /// pulls before it pushes, so the pull re-attaches each uid by matching
 /// our own payload id. The push then updates in place instead of
 /// creating duplicates.
-const SESSION_EXPIRED_MESSAGE: &str =
-    "sync session could not be renewed automatically — sign out and sign in again to reconnect";
+const SESSION_ENDED_MESSAGE: &str =
+    "the server ended this device's session; sign in again to keep syncing";
 
 /// True for the `401` etebase returns when the stored session token is
 /// no longer recognised by the server — the account was logged out
@@ -184,99 +188,77 @@ fn is_auth_error(err: &AppError) -> bool {
 
 /// Stringify a [`run`] failure for the IPC boundary, translating the
 /// server's opaque 401 detail into something the user can act on.
-/// Shared by the manual `sync_now` command and the scheduler tick so
-/// both report an expired session identically.
 pub(crate) fn describe_run_error(err: AppError) -> String {
     if is_auth_error(&err) {
-        log::warn!("[sync] server rejected the stored session token: {err}");
-        SESSION_EXPIRED_MESSAGE.to_string()
+        SESSION_ENDED_MESSAGE.to_string()
     } else {
         err.to_string()
     }
 }
 
-/// [`run`] plus a single silent re-authentication.
-///
-/// A token the server has forgotten fails every request identically and
-/// never recovers on its own, so retrying it on a timer (which the
-/// scheduler does, every 30s) is pure noise. Instead, on the first 401
-/// we mint a new token from the main key the session already holds —
-/// see [`auth::refresh_token`], which needs no password — and run the
-/// sync again.
-///
-/// Exactly one retry: if the refreshed token is *also* rejected, the
-/// credentials themselves are no longer valid (password changed, user
-/// deleted) and only a real sign-in can fix it. A refresh that fails
-/// for any other reason (offline mid-sync) surfaces as itself rather
-/// than being reported as an expired session.
-///
-/// Blocking — the caller is already inside `spawn_blocking`.
-pub(crate) fn run_with_reauth(
-    app: &AppHandle,
-    db: &Db,
-    account: &mut Account,
-    self_username: Option<&str>,
-) -> Result<SyncDelta, String> {
-    let first = match run(db, account, self_username) {
-        Ok(delta) => return Ok(delta),
-        Err(e) => e,
-    };
-    if !is_auth_error(&first) {
-        return Err(describe_run_error(first));
-    }
-
-    log::info!("[sync] token rejected; refreshing it and retrying once");
-    if let Err(e) = auth::refresh_token(app, account) {
-        // The refresh handshake itself was refused: the account can no
-        // longer authenticate at all, so point at sign-in.
-        if is_auth_error(&e) {
-            log::warn!("[sync] re-authentication refused, a real sign-in is needed: {e}");
-            return Err(SESSION_EXPIRED_MESSAGE.to_string());
-        }
-        return Err(e.to_string());
-    }
-
-    run(db, account, self_username)
-        .inspect(|_| log::info!("[sync] re-authenticated; sync recovered without signing in"))
-        .map_err(describe_run_error)
+/// Why [`run`] stopped.
+pub(crate) enum RunError {
+    /// The request a sync opens with did not reach the server. Nothing was
+    /// pulled or pushed. Carries the transport's words.
+    Unreachable(String),
+    Failed(AppError),
 }
 
-fn load_share_scope_part_uids(cm: &CollectionManager) -> HashSet<String> {
-    let list = match cm.list(COLLECTION_TYPE_SHARE_MANIFEST, None) {
-        Ok(list) => list,
-        Err(e) => {
-            log::warn!("[sync] could not list share manifests before vault reconcile: {e}");
-            return HashSet::new();
-        }
-    };
-
-    let mut uids = HashSet::new();
-    for col in list.data() {
-        if col.is_deleted() {
-            continue;
-        }
-        let raw = match col.content() {
-            Ok(raw) => raw,
-            Err(e) => {
-                log::warn!("[sync] share manifest {} content failed: {e}", col.uid());
-                continue;
-            }
-        };
-        let manifest = match serde_json::from_slice::<ShareManifest>(&raw) {
-            Ok(manifest) => manifest,
-            Err(e) => {
-                log::warn!("[sync] share manifest {} decode failed: {e}", col.uid());
-                continue;
-            }
-        };
-        uids.extend(
-            manifest
-                .collections
-                .into_iter()
-                .map(|part| part.collection_uid),
-        );
+impl From<AppError> for RunError {
+    fn from(err: AppError) -> Self {
+        Self::Failed(err)
     }
-    uids
+}
+
+/// [`run`], and what follows when it could not finish for a reason that is
+/// not an error to report.
+///
+/// `Ok(None)` is a server that could not be reached. The UI has been told,
+/// see [`announce_unreachable`], and the caller remembers it so that the
+/// next attempt starts with the quick probe.
+///
+/// A session the server has ended does not come back, and asking again on
+/// a timer only repeats the refusal. So the device signs itself out, see
+/// [`auth::end_session_locally`], and the UI asks the user to sign in.
+/// Shared by the manual `sync_now` command and the scheduler tick so both
+/// treat an ended session identically.
+///
+/// Blocking — the caller is already inside `spawn_blocking`.
+pub(crate) fn run_session(
+    app: &AppHandle,
+    db: &Db,
+    account: &Account,
+    self_username: Option<&str>,
+) -> Result<Option<SyncDelta>, String> {
+    let seal = auth::room_key_seal(app);
+    match run(db, account, self_username, seal.as_ref()) {
+        Ok(mut delta) => {
+            // What the sync saw of the notes' keys is kept for the next
+            // time one of them is opened. Not keeping it costs requests
+            // then and nothing else, so a failure here is only logged.
+            let learned = std::mem::take(&mut delta.room_keys);
+            if let Err(err) = room_keys::keep(db, seal.as_ref(), learned) {
+                log::warn!("[sync] could not keep the room keys of this sync: {err}");
+            }
+            Ok(Some(delta))
+        }
+        Err(RunError::Unreachable(detail)) => {
+            let server_url = auth::read_session_info(app)
+                .ok()
+                .flatten()
+                .map(|info| info.server_url)
+                .unwrap_or_default();
+            announce_unreachable(app, server_url, detail);
+            Ok(None)
+        }
+        Err(RunError::Failed(err)) => {
+            if is_auth_error(&err) {
+                log::warn!("[sync] the server rejected this device's session: {err}");
+                auth::end_session_locally(app);
+            }
+            Err(describe_run_error(err))
+        }
+    }
 }
 
 fn mark_local_by_remote_uid_dirty(db: &Db, kind: &str, etebase_uid: &str) -> AppResult<bool> {
@@ -296,38 +278,6 @@ fn mark_local_by_remote_uid_dirty(db: &Db, kind: &str, etebase_uid: &str) -> App
     })
 }
 
-/// Apply a server-side deletion of `etebase_uid` in `table`.
-///
-/// Edit-wins-over-delete: a row with unpushed local edits (`dirty = 1`) is
-/// never destroyed by a remote tombstone. Instead we *detach* it — drop the
-/// server identity (`etebase_uid`/`etebase_etag`) but keep the row and its
-/// dirty flag — so the next push re-homes it. This makes re-home
-/// non-destructive: when a shared folder's items are tombstoned out of the
-/// vault and recreated in a scope, a device holding offline edits detaches its
-/// vault copy here, then the scope pull reclaims that same row by stable `id`
-/// and CRDT-merges the edits in (see `apply_note_payload`). It also turns a
-/// genuine delete-vs-offline-edit conflict into a resurrection of the edited
-/// copy rather than a silent loss. A clean row is a real delete and is removed.
-///
-/// `table` is always a crate-internal literal ("notes"/"collections"/
-/// "assets"), never user input, so the format! is injection-safe.
-fn apply_remote_delete(conn: &Connection, table: &str, etebase_uid: &str) -> AppResult<()> {
-    let detached = conn.execute(
-        &format!(
-            "UPDATE {table} SET etebase_uid = NULL, etebase_etag = NULL
-             WHERE etebase_uid = ?1 AND dirty = 1"
-        ),
-        params![etebase_uid],
-    )?;
-    if detached == 0 {
-        conn.execute(
-            &format!("DELETE FROM {table} WHERE etebase_uid = ?1"),
-            params![etebase_uid],
-        )?;
-    }
-    Ok(())
-}
-
 /// Result reported back to the UI after a sync attempt.
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct SyncReport {
@@ -340,6 +290,11 @@ pub struct SyncReport {
     pub signatures_pulled: usize,
     pub signatures_pushed: usize,
     pub conflicts_resolved: usize,
+    /// Spaces the server took nothing new for because a limit was reached,
+    /// see [`LimitReached`]. Their changes are still on the device, so a
+    /// sync that reports any did not bring everything up to date, whatever
+    /// the counts above say.
+    pub held_back: usize,
 }
 
 /// Payload of the `sync-completed` Tauri event. JS listeners use this
@@ -356,6 +311,10 @@ pub struct SyncCompletedEvent {
     pub report: SyncReport,
     pub notes_pulled_ids: Vec<String>,
     pub assets_pulled_ids: Vec<String>,
+    /// The spaces the server took nothing new for, see [`LimitReached`].
+    /// Empty when everything went up, which is also what takes an earlier
+    /// notice away.
+    pub limits: Vec<LimitReached>,
 }
 
 /// Emitted when the pre-sync reachability probe fails — the active
@@ -369,13 +328,28 @@ pub struct SyncUnreachableEvent {
     pub detail: String,
 }
 
-/// Pre-sync reachability guard shared by `sync_now` and the scheduler
-/// tick. Returns `true` to proceed with the sync; `false` to skip it
-/// because the active vault's server didn't answer — in which case a
-/// [`AppEvent::SyncUnreachable`] has already been emitted so the UI shows
-/// one clear offline notification instead of letting `run` fan out into
-/// a storm of failing requests (cached-collection fetch + list × 4
-/// kinds).
+/// Tell the UI the sync server did not answer. It shows one clear offline
+/// notification for it.
+fn announce_unreachable(app: &AppHandle, server_url: String, detail: String) {
+    log::warn!("[sync] server unreachable, skipping sync: {server_url} ({detail})");
+    let event = SyncUnreachableEvent { server_url, detail };
+    let event_name = AppEvent::SyncUnreachable.as_str();
+    if let Err(e) = app.emit(event_name, &event) {
+        log::warn!("[sync] failed to emit {event_name}: {e}");
+    }
+}
+
+/// Reachability guard for a sync that does not know whether the server is
+/// there: the first of a run, and any that follows one that could not
+/// reach it. Returns `true` to proceed with the sync; `false` to skip it
+/// because the active vault's server didn't answer, in which case
+/// [`announce_unreachable`] has told the UI.
+///
+/// The probe is small and gives up after a few seconds, where a sync's own
+/// requests wait much longer. So while the server is away, each tick costs
+/// one short question. Once a sync has gone through, the next ones skip
+/// the probe: the request a sync opens with finds out just as well, see
+/// [`RunError::Unreachable`], and an idle sync is then that one request.
 ///
 /// Signed-out installs return `true`; `run`'s `try_restore` then no-ops
 /// exactly as before. An error *reading* the session (not a transport
@@ -393,18 +367,7 @@ async fn preflight_reachable(app: &AppHandle) -> bool {
     match auth::probe_server_reachable(&info.server_url).await {
         Ok(()) => true,
         Err(detail) => {
-            log::warn!(
-                "[sync] server unreachable, skipping sync: {} ({detail})",
-                info.server_url
-            );
-            let event = SyncUnreachableEvent {
-                server_url: info.server_url,
-                detail,
-            };
-            let event_name = AppEvent::SyncUnreachable.as_str();
-            if let Err(e) = app.emit(event_name, &event) {
-                log::warn!("[sync] failed to emit {event_name}: {e}");
-            }
+            announce_unreachable(app, info.server_url, detail);
             false
         }
     }
@@ -422,36 +385,37 @@ pub async fn sync_now(app: AppHandle) -> CommandResult<SyncReport> {
     let _guard = scheduler_state.acquire_in_flight().await;
     let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
 
-    // Check the server is reachable before doing anything. On failure the
-    // probe emits `sync-unreachable` (one clear offline notification);
-    // bail out rather than fanning out into a storm of failing requests.
-    if !preflight_reachable(&app).await {
+    // While it is not known that the server is there, ask with the quick
+    // probe first. On failure it emits `sync-unreachable` (one clear
+    // offline notification); bail out rather than wait on a sync's own
+    // slower requests.
+    if !scheduler_state.server_reached() && !preflight_reachable(&app).await {
         return Err("sync server unreachable".into());
     }
 
     let app_for_blocking = app.clone();
     let blocking_job = job.clone();
-    let delta = tauri::async_runtime::spawn_blocking(move || -> Result<SyncDelta, String> {
-        let _job = blocking_job;
-        catch_blocking_panic("sync", || {
-            let mut account = auth::try_restore(&app_for_blocking)
-                .map_err(|e| format!("restore session: {e}"))?
-                .ok_or_else(|| "not signed in".to_string())?;
-            let self_username = auth::read_session_info(&app_for_blocking)
-                .ok()
-                .flatten()
-                .map(|info| info.username);
-            let db = app_for_blocking.state::<Db>();
-            run_with_reauth(
-                &app_for_blocking,
-                &db,
-                &mut account,
-                self_username.as_deref(),
-            )
+    let delta =
+        tauri::async_runtime::spawn_blocking(move || -> Result<Option<SyncDelta>, String> {
+            let _job = blocking_job;
+            catch_blocking_panic("sync", || {
+                let account = auth::try_restore(&app_for_blocking)
+                    .map_err(|e| format!("restore session: {e}"))?
+                    .ok_or_else(|| "not signed in".to_string())?;
+                let self_username = auth::read_session_info(&app_for_blocking)
+                    .ok()
+                    .flatten()
+                    .map(|info| info.username);
+                let db = app_for_blocking.state::<Db>();
+                run_session(&app_for_blocking, &db, &account, self_username.as_deref())
+            })
         })
-    })
-    .await
-    .map_err(|e| format!("sync task: {e}"))??;
+        .await
+        .map_err(|e| format!("sync task: {e}"))??;
+    scheduler_state.set_server_reached(delta.is_some());
+    let Some(delta) = delta else {
+        return Err("sync server unreachable".into());
+    };
 
     // Best-effort event emission — if no JS listeners are attached the
     // emit call is a no-op; if serialization fails (shouldn't, given
@@ -461,15 +425,12 @@ pub async fn sync_now(app: AppHandle) -> CommandResult<SyncReport> {
         report: delta.report.clone(),
         notes_pulled_ids: delta.notes_pulled_ids,
         assets_pulled_ids: delta.assets_pulled_ids,
+        limits: delta.limits,
     };
     let event_name = AppEvent::SyncCompleted.as_str();
     if let Err(err) = app.emit(event_name, &event) {
         log::warn!("[sync] failed to emit {event_name}: {err}");
     }
-    crate::collab_events::emit_collab_credentials_changed(
-        &app,
-        delta.collab_credentials_changed_note_ids,
-    );
 
     Ok(delta.report)
 }
@@ -492,109 +453,153 @@ pub struct SyncDelta {
     /// editors evict matching blob URLs from their AssetBridge cache
     /// and kick the corresponding image NodeView so it re-resolves.
     pub assets_pulled_ids: Vec<String>,
-    /// Note ids whose live-collab room credentials changed because a
-    /// share-scope manifest rotated its collab epoch/salt. Open editors
-    /// reconnect their active relay clients for these notes.
-    pub collab_credentials_changed_note_ids: Vec<String>,
+    /// The spaces whose push the server refused for a limit. Their rows
+    /// stay dirty and go up with the first sync that has room.
+    pub limits: Vec<LimitReached>,
+    /// The key of each note this sync pulled or pushed, to be sealed and
+    /// kept once it is over. See [`room_keys`].
+    pub room_keys: room_keys::Learned,
 }
 
-fn run(db: &Db, account: &Account, self_username: Option<&str>) -> AppResult<SyncDelta> {
+/// The vault's collection, when this sync visits the vault: the server
+/// changed it, this device has something to send to it, or the device has
+/// not settled on a vault collection yet. `None` when it is left alone.
+fn open_vault(db: &Db, cm: &CollectionManager, changes: &Changes) -> AppResult<Option<Collection>> {
+    let (cached_uid, passes_left) = load_collection_state(db, KIND_VAULT)?;
+    let settled = cached_uid.is_some() && passes_left == 0;
+    // Any vault collection in the answer counts, the one in use or another.
+    // A second one is what `ensure_collection` exists to sort out.
+    let changed = !changes.vault.is_empty();
+    if !visits_vault(changes.full, settled, changed, vault_has_local_work(db)?) {
+        return Ok(None);
+    }
+    ensure_collection(db, cm, KIND_VAULT, COLLECTION_TYPE_VAULT, &changes.vault).map(Some)
+}
+
+fn run(
+    db: &Db,
+    account: &Account,
+    self_username: Option<&str>,
+    seal: Option<&room_keys::Seal>,
+) -> Result<SyncDelta, RunError> {
     let mut delta = SyncDelta::default();
     let cm = account
         .collection_manager()
         .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
-    let share_scope_part_uids = load_share_scope_part_uids(&cm);
 
-    // Item managers for the four vault collections. Set up all of them up
-    // front so the sync runs in three ordered phases: pull everything, sync
-    // scopes, then push everything.
-    let folders_col = ensure_collection(
-        db,
-        &cm,
-        KIND_FOLDERS,
-        COLLECTION_TYPE_FOLDERS,
-        &share_scope_part_uids,
-    )?;
-    let folders_im = cm
-        .item_manager(&folders_col)
-        .map_err(|e| AppError::InvalidArg(format!("item_manager(folders): {e}")))?;
-    let notes_col = ensure_collection(
-        db,
-        &cm,
-        KIND_NOTES,
-        COLLECTION_TYPE_NOTES,
-        &share_scope_part_uids,
-    )?;
-    let notes_im = cm
-        .item_manager(&notes_col)
-        .map_err(|e| AppError::InvalidArg(format!("item_manager(notes): {e}")))?;
-    let assets_col = ensure_collection(
-        db,
-        &cm,
-        KIND_ASSETS,
-        COLLECTION_TYPE_ASSETS,
-        &share_scope_part_uids,
-    )?;
-    let assets_im = cm
-        .item_manager(&assets_col)
-        .map_err(|e| AppError::InvalidArg(format!("item_manager(assets): {e}")))?;
-    let signatures_col = ensure_collection(
-        db,
-        &cm,
-        KIND_SIGNATURES,
-        COLLECTION_TYPE_SIGNATURES,
-        &share_scope_part_uids,
-    )?;
-    let signatures_im = cm
-        .item_manager(&signatures_col)
-        .map_err(|e| AppError::InvalidArg(format!("item_manager(signatures): {e}")))?;
+    // One request says which spaces changed since the last sync. A space
+    // that did not, and that this device has nothing to send to, is not
+    // visited. When that is every space, the sync ends here.
+    let changes = account_changes(db, &cm)?;
+
+    let vault_im = match open_vault(db, &cm, &changes)? {
+        Some(vault_col) => Some(
+            cm.item_manager(&vault_col)
+                .map_err(|e| AppError::InvalidArg(format!("item_manager(vault): {e}")))?,
+        ),
+        None => None,
+    };
 
     // --- Pull phase ---
-    // Folders first so notes' parent_folder_id can resolve; assets last so
-    // notes — and the FK target rows they need — are already in place when
-    // apply_asset tries to upsert. If a brand-new remote note + its asset land
-    // in the same sync, the note pull populates it, then the asset pull
-    // resolves the FK cleanly. The narrow race where a remote creates a note
-    // *between* our notes pull and our assets pull is handled inside
-    // apply_asset (it skips orphan assets and leaves the stoken unadvanced so
-    // the next sync retries). Signatures are user-global (no FK back to
-    // notes), so their order doesn't matter.
-    pull_folders(db, &folders_im, &mut delta.report)?;
-    pull_notes(
-        db,
-        &notes_im,
-        &mut delta.report,
-        &mut delta.notes_pulled_ids,
-    )?;
-    pull_assets(
-        db,
-        &assets_im,
-        &mut delta.report,
-        &mut delta.assets_pulled_ids,
-    )?;
-    pull_signatures(db, &signatures_im, &mut delta.report)?;
-
-    // --- Scope sync ---
-    // Runs between the vault pull and the vault push on purpose. A shared
-    // subtree's items are tombstoned out of the vault and recreated in a
-    // scope; a device holding offline edits *detaches* its vault copy during
-    // the pull above (see `apply_remote_delete`) rather than deleting it. This
-    // scope sync then reclaims that row by stable `id` and stamps its scope,
-    // so the vault push below skips it — without this ordering the push would
-    // resurrect the detached row as an orphan vault copy. Isolated from the
-    // vault sync: a failure here (malformed manifest, unreachable scope) is
-    // logged and must never break the user's own vault sync.
-    if let Err(e) = scopes::sync_scopes(db, &cm, &mut delta, self_username) {
-        log::error!("[sync] scoped sync failed (vault sync unaffected): {e}");
+    // Every space that is visited is pulled before anything is pushed, the
+    // ones with only something to send included. A shared subtree's
+    // items are tombstoned out of the vault and recreated in a scope; a
+    // device holding offline edits *detaches* its vault copy during the
+    // vault pull (see `apply_remote_delete`) rather than deleting it. The
+    // scope's pull then reclaims that row by stable `id` and stamps its
+    // scope, so the vault push below skips it. Pushed any earlier, the
+    // detached row would go back up as an orphan vault copy.
+    //
+    // One stream for every kind. `pull_space` sees to it that a folder is
+    // applied before the notes in it and a note before its assets.
+    let vault = SpacePull {
+        scope: None,
+        stoken_key: KIND_VAULT,
+        preserve_dirty_local_edits: true,
+    };
+    let mut held: Vec<Held> = Vec::new();
+    if let Some(vault_im) = &vault_im {
+        held.extend(pull_space(db, vault_im, &vault, &mut delta)?);
     }
 
+    // The shared folders are kept apart from the vault's sync: a failure
+    // there (a manifest that does not decode, a folder that cannot be
+    // fetched) is logged and must never stop the user's own notes from
+    // syncing.
+    let shared = match scopes::pull_scopes(db, &cm, &changes, &mut delta, self_username, &mut held)
+    {
+        Ok(shared) => shared,
+        Err(e) => {
+            log::error!("[sync] shared folders not synced (vault sync unaffected): {e}");
+            scopes::PulledScopes {
+                open: Vec::new(),
+                complete: false,
+            }
+        }
+    };
+
+    // Items whose row was still at home in another space when they came.
+    // Every space has been pulled now, so a row that was moving has been
+    // let go by the space it left.
+    settle_held(db, held, &mut delta)?;
+
     // --- Push phase ---
-    push_folders(db, &folders_im, &mut delta.report, None)?;
-    push_notes(db, &notes_im, &mut delta.report, None)?;
-    push_assets(db, &assets_im, &mut delta.report, None)?;
-    push_signatures(db, &signatures_im, &mut delta.report)?;
+    // Deletions first, in every space, and only then what is new. A row
+    // that moves from one space to another is a deletion in the first and a
+    // creation in the second. In this order no device ever finds it in
+    // both, which is what lets a pull refuse an item whose row is at home
+    // somewhere else (see `claim`).
+    if let Some(vault_im) = &vault_im {
+        for kind in ["folder", "note", "asset"] {
+            drain_tombstones(db, vault_im, kind, None)?;
+        }
+    }
+    scopes::drain_scope_tombstones(db, &shared.open);
+    scopes::push_scopes(db, &cm, &shared.open, &mut delta, seal);
+
+    if let Some(vault_im) = &vault_im {
+        if let Err(err) = push_vault(db, vault_im, &mut delta.report, &mut delta.room_keys, seal) {
+            // A full vault is not a sync that failed. Everything was
+            // pulled, the shared folders were pushed, and what could not go
+            // up waits where it is. The user is told which limit it was.
+            let Some(reason) = err.limit() else {
+                return Err(err.into());
+            };
+            log::warn!("[sync] the server took nothing new for the vault: {err}");
+            delta.limits.push(LimitReached::in_vault(reason));
+        }
+    }
+
+    // The account's cursor moves last, and only when everything the list
+    // named was applied. A folder that failed, or a space still waiting for
+    // a row to be let go, has not moved its own cursor. Keeping this one
+    // back makes the next sync hear of the same spaces again.
+    //
+    // What this sync pushed is past the cursor, so the next sync is told
+    // those spaces changed and pulls its own changes back once.
+    if shared.complete && !holds_remain(db)? {
+        save_stoken(db, KIND_ACCOUNT, changes.stoken.as_deref())?;
+    }
+
+    delta.report.held_back = delta.limits.len();
 
     Ok(delta)
+}
+
+/// Push what changed locally in the vault.
+fn push_vault(
+    db: &Db,
+    im: &ItemManager,
+    report: &mut SyncReport,
+    room_keys: &mut room_keys::Learned,
+    seal: Option<&room_keys::Seal>,
+) -> AppResult<()> {
+    // Folders first, so that no device ever pulls a note whose folder the
+    // server has not been told about.
+    push_folders(db, im, report, None)?;
+    push_notes(db, im, report, None, room_keys, seal)?;
+    push_assets(db, im, report, None)?;
+    push_signatures(db, im, report)
 }
 
 fn now_unix_ms() -> i64 {

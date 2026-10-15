@@ -22,7 +22,6 @@ pub mod browser_archive;
 pub mod browser_identity;
 pub mod browser_migration;
 pub mod client_errors;
-pub mod collab_events;
 pub mod collections;
 pub mod content_stats;
 #[cfg(desktop)]
@@ -39,6 +38,7 @@ mod coordinator_shutdown;
 mod coordinator_updater;
 pub mod data;
 pub mod db;
+pub mod deep_links;
 #[cfg(desktop)]
 pub mod desktop_settings;
 #[cfg(desktop)]
@@ -73,7 +73,6 @@ mod shortcut_actions;
 #[cfg(desktop)]
 mod shortcut_routing;
 pub mod signatures;
-pub mod signing_credentials;
 pub mod spellcheck;
 pub mod storage_locks;
 pub mod sync;
@@ -216,12 +215,20 @@ pub fn run() {
         android_logger::init_once(
             android_logger::Config::default()
                 .with_max_level(level)
+                // The socket library traces its handshake, and the change
+                // feed's handshake carries the session token. See the same
+                // rule for the desktop logger below.
+                .with_filter(
+                    android_logger::FilterBuilder::new()
+                        .parse("trace,tungstenite=warn,tokio_tungstenite=warn")
+                        .build(),
+                )
                 .with_tag("Mindstream"),
         );
     }
 
     #[cfg(desktop)]
-    let app_handle = tauri::Builder::default()
+    let app_handle = deep_links::builder()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // Powers the relaunch-into-new-vault switch and the
         // restore-relaunch flow (frontend calls `relaunch()` from
@@ -354,6 +361,11 @@ pub fn run() {
                         .level_for("hyper_util", log::LevelFilter::Warn)
                         .level_for("reqwest", log::LevelFilter::Warn)
                         .level_for("rustls", log::LevelFilter::Warn)
+                        // Not only noise: the socket library traces its handshake
+                        // request, headers and all, and the change feed's carries
+                        // the session token. That must never reach a log.
+                        .level_for("tungstenite", log::LevelFilter::Warn)
+                        .level_for("tokio_tungstenite", log::LevelFilter::Warn)
                         .level_for("keyring_core", log::LevelFilter::Info)
                         .targets([
                             tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
@@ -586,6 +598,13 @@ pub fn run() {
             app.manage(vault_jobs::Saves::default());
             app.manage(sync::scheduler::SyncScheduler::new());
             sync::scheduler::spawn(app.handle().clone());
+            // An invite link opened outside the app, now or when it started.
+            app.manage(deep_links::PendingInviteLink::default());
+            #[cfg(desktop)]
+            deep_links::listen(app.handle());
+            // The server says when something changed elsewhere, so that
+            // sync does not have to wait for the next tick.
+            sync::feed::spawn(app.handle().clone());
 
             // Trash retention sweep — same setup pattern. Starts
             // disabled until the JS settings effect hands over the
@@ -720,8 +739,6 @@ pub fn run() {
                 auth::etebase_login,
                 auth::etebase_logout,
                 auth::etebase_session,
-                signing_credentials::get_vault_collab_signing_material,
-                signing_credentials::store_vault_collab_signing_material,
                 ui_settings::initialize_ui_settings,
                 #[cfg(desktop)]
                 browser_identity::get_worker_browser_options,
@@ -763,30 +780,50 @@ pub fn run() {
                 theme_presets::delete_theme_preset,
                 ui_settings::patch_ui_setting,
                 auth::check_etebase_server_url,
+                auth::account::account_server_info,
+                auth::account::account_signup,
+                auth::account::account_recover,
+                auth::account::account_security_status,
+                auth::account::account_begin_authenticator,
+                auth::account::account_confirm_authenticator,
+                auth::account::account_remove_authenticator,
+                auth::account::account_new_backup_codes,
+                auth::account::account_new_recovery_key,
+                auth::secret_file::account_save_secret_file,
+                auth::account::account_change_password,
+                auth::account::account_sessions,
+                auth::account::account_end_session,
+                auth::account::account_end_other_sessions,
                 // Sync
                 sync::sync_now,
                 sync::collab_room::note_room_info,
+                sync::collab_room::note_room_ticket,
                 sync::scheduler::set_sync_schedule,
                 // Sharing
-                sharing::list_collection_invitations,
-                sharing::list_incoming_share_bundles,
-                sharing::accept_share_bundle,
-                sharing::decline_share_bundle,
+                sharing::list_incoming_shares,
+                sharing::accept_share,
+                sharing::decline_share,
                 sharing::leave_shared_collection,
                 sharing::stop_sharing_collection,
                 sharing::list_collection_members,
                 sharing::set_collection_member_access,
                 sharing::remove_collection_member,
-                sharing::accept_collection_invitation,
-                sharing::reject_collection_invitation,
                 sharing::get_collection_share_state,
                 sharing::invite_collection,
+                sharing::create_share_link,
+                sharing::list_share_links,
+                sharing::revoke_share_link,
+                sharing::open_share_link,
+                sharing::claim_share_link,
+                sharing::user_key_info,
+                sharing::own_key_fingerprint,
+                deep_links::take_pending_invite_link,
+                #[cfg(feature = "e2e-data-dir")]
+                deep_links::e2e_open_address,
                 #[cfg(feature = "e2e-data-dir")]
                 sharing::e2e_create_standalone_collection_invite,
                 #[cfg(feature = "e2e-data-dir")]
-                sharing::e2e_create_incomplete_share_bundle,
-                #[cfg(feature = "e2e-data-dir")]
-                sharing::e2e_accept_share_manifest_only,
+                sharing::e2e_remember_other_key,
                 // One-shot recovery for items the pre-fix etebase encoder
                 // bug left corrupt on the server. Invoke from dev tools.
                 sync::repair::audit_corrupt_remote_items,

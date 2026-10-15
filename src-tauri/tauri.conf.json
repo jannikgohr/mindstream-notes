@@ -58,6 +58,11 @@
     }
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["mindstream-notes"]
+      }
+    },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY3NTVCRDA4MEE2RTRBMwpSV1NqNUthQTBGdDFENnJheFNHK0IzZ3pBMVRmTWFhbXNzTmJNR08xcnBuK1NZL3RPYXhqMXpNZQo=",
       "endpoints": [

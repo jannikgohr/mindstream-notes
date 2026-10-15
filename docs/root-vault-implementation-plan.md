@@ -67,7 +67,7 @@ exercise those failures in disposable roots.
 | User theme presets                                                               | Selected spellcheck languages and custom words                          |
 | Immutable plugin packages/artifacts and `D` plugin settings                      | Plugin approvals, enablement, `V` settings and writable `plugin-data`   |
 | Downloaded dictionary cache                                                      | Database, notes, attachments, imports, backups and restore journal      |
-| Vault index and startup preference                                               | Account session, sync identity and encrypted signing identity           |
+| Vault index and startup preference                                               | Account session and sync identity                                       |
 
 Only the coordinator owns global shortcut/tray/autostart registration. Shortcuts
 target the most recently focused eligible vault. A sole eligible closed vault can

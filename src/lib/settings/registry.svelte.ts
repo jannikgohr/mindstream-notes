@@ -183,6 +183,10 @@ export const CUSTOM_COMPONENT_LOADERS: Record<string, CustomComponentLoader> = {
     import('./customs/SignInForm.svelte').then(
       (mod) => mod.default as unknown as AnyComponent
     ),
+  'account-security': () =>
+    import('./customs/AccountSecurity.svelte').then(
+      (mod) => mod.default as unknown as AnyComponent
+    ),
   'hotkeys-panel': () =>
     import('./customs/HotkeysPanel.svelte').then(
       (mod) => mod.default as unknown as AnyComponent

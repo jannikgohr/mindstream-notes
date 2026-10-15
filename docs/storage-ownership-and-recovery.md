@@ -192,19 +192,12 @@ Malformed manifests or missing referenced files are preserved and refused.
 
 ## Collaboration identities
 
-Native collaboration signing credentials live in an encrypted vault file. A
-separate vault master key lives in the environment's OS keystore; authenticated
-encryption binds file contents to both environment and vault identity. Server
-and username determine the account entry. Reads/writes require the vault's active
-account. Main and note windows serialize creation and retain the winning identity.
-
-Existing browser keys import unchanged only for a matching account. Their source
-remains until browser migration is verified. A missing keystore key with an
-existing encrypted file, corrupt file, or malformed legacy key is a recovery
-error. These conditions must never create a replacement signing identity. Vault
-deletion attempts removal of both session and signing master keys. Vault settings
-and plugin data have a [portable backup contract](backup-restore-portability.md).
-Credentials and signing private keys remain bound to the destination device/vault.
+Live collaboration keeps no signing identity: the sync server admits a member
+to a room with a short-lived ticket. Legacy browser signing keys survive only in
+the encrypted legacy archive. Vault deletion attempts removal of the session key.
+Vault settings and plugin data have a
+[portable backup contract](backup-restore-portability.md). Credentials remain
+bound to the destination device/vault.
 
 Private worker close commands retain request IDs and expose queued, pending,
 committing or failed status. Repeated IDs never start another save attempt.

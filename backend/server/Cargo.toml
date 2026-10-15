@@ -1,0 +1,85 @@
+[package]
+name = "mindstream-server"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "Sync, account and live-collaboration server for Mindstream Notes"
+repository = "https://github.com/jannikgohr/mindstream-notes"
+publish = false
+
+[lib]
+name = "mindstream_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mindstream-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "fs", "io-util", "time", "sync"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+serde_json = "1"
+rmp-serde = "1"
+# Login is a signature over a msgpack body, made with a key the client derives
+# from the password. Verifying it is the only cryptography the server performs
+# on client material; everything it stores is opaque.
+ed25519-dalek = "2"
+hmac = "0.12"
+sha2 = "0.10"
+# One-time passwords: the arithmetic and the link an authenticator reads.
+# That a code is accepted once, the backup codes and the lockout are ours.
+totp-rs = { version = "6", default-features = false, features = ["std", "otpauth"] }
+# The encoding of an authenticator secret, which backup and signup codes
+# borrow. The same crate totp-rs uses.
+base32 = "0.5"
+# The bucket per caller behind the limit on sign-in attempts. Who the
+# caller is, looking through trusted proxies, stays ours.
+governor = { version = "0.10", default-features = false, features = ["std", "dashmap"] }
+# Seals the authenticator secrets, which the server has to read back.
+chacha20poly1305 = "0.10"
+# Hashes the backup codes, which the server only has to recognise.
+argon2 = "0.6"
+subtle = "2"
+rand = "0.8"
+base64 = "0.22"
+ipnet = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive", "env"] }
+tower-http = { version = "0.6", features = ["trace", "set-header"] }
+# Serving connections. axum's own `serve` sets no deadline for a request to
+# arrive in, so the server drives hyper itself. axum uses these already.
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body = "1"
+tower = { version = "0.5", features = ["util"] }
+# Blob storage. Its local filesystem can be told to sync a written file and
+# the directories the write touched, which is what makes an acknowledged
+# upload survive a power cut, and the same interface reaches S3 later.
+object_store = { version = "0.14", default-features = false, features = ["fs"] }
+futures-util = "0.3"
+
+[target.'cfg(unix)'.dependencies]
+# Raising the limit on open files the process starts with.
+libc = "0.2"
+
+[dev-dependencies]
+# The client the app ships. Driving the server with it in tests is what keeps
+# the two honest about the wire format.
+etebase = { path = "../../vendor/etebase-rs", features = ["networking"] }
+# A WebSocket client, for the room and feed tests.
+tokio-tungstenite = "0.29"
+reqwest = { version = "0.12", default-features = false }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+
+# The client library stretches a password with Argon2, which takes seconds
+# per call when built without optimisation. The tests that sign in with a
+# password would spend minutes on it.
+[profile.dev.package.dryoc]
+opt-level = 3

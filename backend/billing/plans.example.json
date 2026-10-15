@@ -1,0 +1,14 @@
+{
+  "free": {
+    "storageLimitBytes": 1073741824,
+    "maxSpaces": 3,
+    "maxMembersPerSpace": 2,
+    "maxItemBytes": 26214400
+  },
+  "plus": {
+    "storageLimitBytes": 53687091200,
+    "maxSpaces": 50,
+    "maxMembersPerSpace": 10,
+    "maxItemBytes": 524288000
+  }
+}

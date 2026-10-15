@@ -12,7 +12,7 @@
    * the shell. It owns the note's `Y.Doc`, hydrates it from `yrs_state`,
    * debounce-saves, and attaches the generic {@link CollabProvider} for live
    * co-editing once the note has been pushed — a Kanban board is just a plain
-   * `Y.Doc`, so it rides the same yjs-relay path as markdown notes.
+   * `Y.Doc`, so it rides the same room protocol as markdown notes.
    *
    * The SVAR `<Kanban>` widget is a controlled component: it renders from the
    * `board` props and re-inits when they change (see its internal `$effect`).
@@ -65,7 +65,7 @@
     loadNote,
     saveNote as apiSaveNote,
     TRASH_ID,
-    getYjsRelayUrl,
+    getRoomSocketUrl,
     onSessionChange,
     authSession
   } from '$lib/api';
@@ -82,7 +82,6 @@
   import type { MenuItem } from '$lib/components/context-menu-types';
   import { Toolbar, ToolbarButton } from '$lib/components/ui/toolbar';
   import { CollabProvider } from '$lib/sync/collab-provider';
-  import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
   import { pickCursorColor } from '$lib/editor/cursor-color';
   import { folderPathLabel } from '$lib/notes/folder-path';
   import { resolveShareScopeUsers } from '$lib/notes/share-users';
@@ -220,7 +219,6 @@
   let stopObserve: (() => void) | null = null;
   let unsubSession: (() => void) | null = null;
   let unsubSync: (() => void) | null = null;
-  let unsubCollabCredentials: (() => void) | null = null;
   let unregisterHistory: (() => void) | null = null;
   let editorListener: EditorListener | null = $state(null);
 
@@ -1195,10 +1193,10 @@
     return origin === KANBAN_LOCAL_ORIGIN || origin === undoManager;
   }
 
-  // ---- Collab provider (yjs-relay, same as markdown notes) ----
+  // ---- Collab provider (same as markdown notes) ----
   const collabSession = createCollabSession({
     getContext: () => {
-      const url = getYjsRelayUrl(
+      const url = getRoomSocketUrl(
         (getSettingValue('account.serverUrl') as string | undefined) ?? ''
       );
       if (!url || !(yDoc && awareness)) return null;
@@ -1291,13 +1289,6 @@
       }).then((unlisten) => {
         unsubSync = unlisten;
       });
-      void listen(TauriEventName.CollabCredentialsChanged, (payload) => {
-        if (collabCredentialsChangedForNote(payload, noteId)) {
-          void setupCollabProvider();
-        }
-      }).then((unlisten) => {
-        unsubCollabCredentials = unlisten;
-      });
 
       // Command-bus listener: handle app-level active-note search and displace
       // any hidden editor listener so markdown/pdf commands don't leak across
@@ -1389,8 +1380,6 @@
     stopObserve?.();
     unsubSession?.();
     unsubSync?.();
-    unsubCollabCredentials?.();
-    unsubCollabCredentials = null;
     unregisterHistory?.();
     if (editorListener) unregisterEditor(editorListener);
     collabSession.destroy();

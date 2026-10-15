@@ -23,16 +23,21 @@ use etebase::{Account, Client};
 use keyring_core::Entry;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::db::Db;
-use crate::error::{AppError, AppResult, CommandResult};
+use crate::error::{AppError, AppResult, CommandError, CommandResult};
+
+pub mod account;
+pub mod secret_file;
 
 const KEYRING_SERVICE: &str = "mindstream-notes";
 const KEYRING_ACCOUNT: &str = "etebase-session-key";
 const SESSION_FILENAME: &str = "etebase.session";
-const CLIENT_NAME: &str = "mindstream-notes";
-const MANAGED_SERVER_URL: &str = "https://api.etebase.com/";
+const APP_NAME: &str = "Mindstream Notes";
+/// Mirrors MANAGED_SERVER_URL in src/lib/api/auth.svelte.ts. There is no
+/// managed service yet, so the name does not resolve.
+const MANAGED_SERVER_URL: &str = "https://api.mindstream-notes.invalid/";
 /// Timeout for the pre-sync reachability probe. Short: it only proves the
 /// connection can be opened, and a doomed sync shouldn't stall behind a
 /// long connect timeout every scheduler tick while offline.
@@ -46,7 +51,7 @@ struct StoredSession {
     blob: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct LoginArgs {
     /// "managed" | "self-hosted". Anything else is rejected.
     pub server_type: String,
@@ -54,6 +59,10 @@ pub struct LoginArgs {
     pub server_url: Option<String>,
     pub username: String,
     pub password: String,
+    /// A code from the authenticator, or a backup code. Sent once the
+    /// server has asked for one.
+    #[serde(default)]
+    pub code: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -125,22 +134,16 @@ fn keyring_entry(identity: &CredentialIdentity) -> AppResult<Entry> {
 /// Silent on any failure — the entry may simply not exist (the vault was
 /// never signed in).
 pub fn forget_profile_keyring(app: &AppHandle, profile_id: &str) {
-    let mut identity = credential_identity(app, profile_id);
-    if let Ok(entry) = keyring_entry(&identity) {
-        let _ = entry.delete_credential();
-    }
-    identity.account = crate::signing_credentials::keyring_account(profile_id);
+    let identity = credential_identity(app, profile_id);
     if let Ok(entry) = keyring_entry(&identity) {
         let _ = entry.delete_credential();
     }
 }
 
-fn resolve_server_url(args: &LoginArgs) -> AppResult<String> {
-    match args.server_type.as_str() {
+fn resolve_server_url(server_type: &str, server_url: Option<&str>) -> AppResult<String> {
+    match server_type {
         "managed" => Ok(MANAGED_SERVER_URL.to_string()),
-        "self-hosted" => args
-            .server_url
-            .as_ref()
+        "self-hosted" => server_url
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .ok_or_else(|| AppError::InvalidArg("server URL is required for self-hosted".into())),
@@ -148,6 +151,47 @@ fn resolve_server_url(args: &LoginArgs) -> AppResult<String> {
             "unknown server type: {other}"
         ))),
     }
+}
+
+/// What this device calls itself to the server. It is the name the device
+/// goes by in the account's list of signed-in devices, so it should let the
+/// user tell their devices apart: the app, the machine's name where the
+/// system gives one, and the system. No word of any language, because the
+/// list shows it as it is to a user of any.
+fn device_name() -> String {
+    let machine = ["COMPUTERNAME", "HOSTNAME"]
+        .iter()
+        .find_map(|name| std::env::var(name).ok())
+        .unwrap_or_default();
+    describe_device(&machine, std::env::consts::OS)
+}
+
+fn describe_device(machine: &str, os: &str) -> String {
+    let system = match os {
+        "windows" => "Windows",
+        "macos" => "macOS",
+        "linux" => "Linux",
+        "android" => "Android",
+        "ios" => "iOS",
+        other => other,
+    };
+    // The name travels in a header. Keep what a header can carry.
+    let machine: String = machine
+        .trim()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ' '))
+        .take(60)
+        .collect();
+    if machine.is_empty() {
+        format!("{APP_NAME} ({system})")
+    } else {
+        format!("{APP_NAME} ({machine}, {system})")
+    }
+}
+
+pub(crate) fn client_for(server_url: &str) -> AppResult<Client> {
+    Client::new(&device_name(), server_url)
+        .map_err(|e| AppError::InvalidArg(format!("etebase client: {e}")))
 }
 
 fn health_url(server_url: &str) -> AppResult<Url> {
@@ -187,10 +231,83 @@ fn restore_account(
         .map_err(|e| AppError::InvalidArg(format!("keyring read: {e}")))?;
     let key =
         from_base64(&key_b64).map_err(|e| AppError::InvalidArg(format!("keyring decode: {e}")))?;
-    let client = Client::new(CLIENT_NAME, &stored.server_url)
-        .map_err(|e| AppError::InvalidArg(format!("etebase client: {e}")))?;
+    let client = client_for(&stored.server_url)?;
     Account::restore(client, &stored.blob, Some(&key))
         .map_err(|e| AppError::InvalidArg(format!("etebase restore: {e}")))
+}
+
+/// Keep a freshly opened session: the account goes to disk encrypted under
+/// a new random key, and the key goes to the system's keystore. Blocking,
+/// like everything that touches an `Account`.
+fn store_session(
+    path: &Path,
+    keyring_account: &CredentialIdentity,
+    username: &str,
+    server_url: &str,
+    account: &Account,
+) -> AppResult<SessionInfo> {
+    let key = randombytes(32);
+    let blob = account
+        .save(Some(&key))
+        .map_err(|e| AppError::InvalidArg(format!("save session: {e}")))?;
+    let key_b64 = to_base64(&key).map_err(|e| AppError::InvalidArg(format!("encode key: {e}")))?;
+    keyring_entry(keyring_account)?
+        .set_password(&key_b64)
+        .map_err(|e| AppError::InvalidArg(format!("keyring write: {e}")))?;
+
+    let stored = StoredSession {
+        username: username.to_string(),
+        server_url: server_url.to_string(),
+        blob,
+    };
+    let bytes = serde_json::to_vec(&stored).map_err(|e| AppError::InvalidArg(e.to_string()))?;
+    if let Err(e) = fs::write(path, bytes) {
+        // Roll back the keyring write so we don't leave half a session behind.
+        if let Ok(entry) = keyring_entry(keyring_account) {
+            let _ = entry.delete_credential();
+        }
+        return Err(AppError::InvalidArg(format!("write session: {e}")));
+    }
+    Ok(SessionInfo {
+        username: stored.username,
+        server_url: stored.server_url,
+    })
+}
+
+/// Write an account that changed, after a new password, over the session
+/// file, under the key the keystore already holds. Without this the next
+/// start would restore the keys of the old password and could not ask for
+/// the password again where the server wants proof of it.
+fn persist_account(app: &AppHandle, account: &Account) -> AppResult<()> {
+    let path = session_path(app)?;
+    // Signed out in the meantime: nothing to update.
+    let Some(stored) = read_stored(&path)? else {
+        return Ok(());
+    };
+    let key_b64 = keyring_entry(&active_keyring_account(app))?
+        .get_password()
+        .map_err(|e| AppError::InvalidArg(format!("keyring read: {e}")))?;
+    let key =
+        from_base64(&key_b64).map_err(|e| AppError::InvalidArg(format!("keyring decode: {e}")))?;
+    let blob = account
+        .save(Some(&key))
+        .map_err(|e| AppError::InvalidArg(format!("save session: {e}")))?;
+    let updated = StoredSession { blob, ..stored };
+    let bytes = serde_json::to_vec(&updated).map_err(|e| AppError::InvalidArg(e.to_string()))?;
+    fs::write(&path, bytes)?;
+    Ok(())
+}
+
+/// What seals the room keys this device keeps, for the session that is
+/// signed in. `None` when nobody is, or when the keystore will not say:
+/// then no key is kept or read, and the server is asked as before.
+pub(crate) fn room_key_seal(app: &AppHandle) -> Option<crate::sync::room_keys::Seal> {
+    let secret = keyring_entry(&active_keyring_account(app))
+        .ok()?
+        .get_password()
+        .ok()?;
+    let secret = from_base64(&secret).ok()?;
+    crate::sync::room_keys::Seal::from_session_secret(&secret).ok()
 }
 
 fn clear_local_state(path: &Path, keyring_account: &CredentialIdentity) {
@@ -241,6 +358,10 @@ fn reset_sync_cursors(db: &Db) -> AppResult<()> {
         let tx = c.transaction()?;
         tx.execute("DELETE FROM sync_state", [])?;
         tx.execute("DELETE FROM tombstones", [])?;
+        // The room keys kept here were sealed for the session that is
+        // ending. Nothing can open them once its secret is gone, and the
+        // next sign-in brings them again.
+        crate::sync::room_keys::forget_all(&tx)?;
         // Strip server-side identifiers from every row so the next
         // sync treats them as freshly-created locally.
         tx.execute(
@@ -286,62 +407,42 @@ pub fn read_session_info(app: &AppHandle) -> AppResult<Option<SessionInfo>> {
     }))
 }
 
-/// Mint a fresh auth token for an already-restored account, without the
-/// user's password.
+/// Do locally what a sign-out does, because the server has ended this
+/// device's session: it was signed out from another device, the password
+/// was changed, or the account was closed.
 ///
-/// Etebase tokens are bearer tokens with no clock expiry and no refresh
-/// endpoint, so a server that has forgotten one (logged out elsewhere,
-/// password changed, server DB rebuilt) 401s every request until the
-/// account re-authenticates. `Account::fetch_token` re-runs only the
-/// *signature* half of the login handshake: it asks for a new login
-/// challenge and signs it with the login key derived from `main_key`.
-/// That key is part of the saved session blob and is already in memory
-/// after [`try_restore`], so no password and no user interaction is
-/// needed — unlike [`Account::login`], this skips Argon2id entirely.
+/// There is no request to make, the server has forgotten us already. The
+/// session file and its key go, the sync cursors are reset as on any
+/// sign-out, and the UI is told so it can show the device as signed out.
+/// The notes stay.
 ///
-/// The refreshed token is written back to the session file so the next
-/// restore starts authenticated instead of paying another round trip —
-/// and so the other restore sites (live collab, repair) pick it up too.
-/// Failing to persist is logged, not fatal: the in-memory account is
-/// already usable for the caller's current operation.
+/// The app used to answer a rejected token by signing in again with the
+/// key it keeps, with nobody asked. That would undo each of the three
+/// things above, and it would step around a second factor. Signing in is
+/// now always something a person does.
 ///
-/// Blocking HTTP — call from inside `spawn_blocking`, like the other
-/// etebase entry points here.
-pub fn refresh_token(app: &AppHandle, account: &mut Account) -> AppResult<()> {
-    account
-        .fetch_token()
-        .map_err(|e| AppError::InvalidArg(format!("refresh token: {e}")))?;
-    if let Err(e) = persist_session_blob(app, account) {
-        log::warn!("[auth] token refreshed but could not be persisted: {e}");
+/// Does nothing when the device is already signed out.
+pub fn end_session_locally(app: &AppHandle) {
+    let Ok(path) = session_path(app) else {
+        return;
+    };
+    let Ok(Some(info)) = read_session_info(app) else {
+        return;
+    };
+    clear_local_state(&path, &active_keyring_account(app));
+    if let Some(db) = app.try_state::<Db>() {
+        if let Err(err) = reset_sync_cursors(db.inner()) {
+            log::warn!("[auth] reset_sync_cursors after the session ended: {err}");
+        }
     }
-    Ok(())
-}
-
-/// Re-encrypt and write the account's current state (including its new
-/// token) over the existing session file, reusing the keyring-held
-/// wrapper key so the on-disk format is unchanged.
-fn persist_session_blob(app: &AppHandle, account: &Account) -> AppResult<()> {
-    let path = session_path(app)?;
-    // Signed out while the refresh was in flight — nothing to update.
-    let Some(stored) = read_stored(&path)? else {
-        return Ok(());
-    };
-    let key_b64 = keyring_entry(&active_keyring_account(app))?
-        .get_password()
-        .map_err(|e| AppError::InvalidArg(format!("keyring read: {e}")))?;
-    let key =
-        from_base64(&key_b64).map_err(|e| AppError::InvalidArg(format!("keyring decode: {e}")))?;
-    let blob = account
-        .save(Some(&key))
-        .map_err(|e| AppError::InvalidArg(format!("save session: {e}")))?;
-    let updated = StoredSession {
-        username: stored.username,
-        server_url: stored.server_url,
-        blob,
-    };
-    let bytes = serde_json::to_vec(&updated).map_err(|e| AppError::InvalidArg(e.to_string()))?;
-    fs::write(&path, bytes)?;
-    Ok(())
+    log::warn!(
+        "[auth] {} ended this device's session; signed out locally",
+        info.server_url
+    );
+    let event_name = crate::app_events::AppEvent::SessionEnded.as_str();
+    if let Err(err) = app.emit(event_name, &info) {
+        log::warn!("[auth] failed to emit {event_name}: {err}");
+    }
 }
 
 pub fn try_restore(app: &AppHandle) -> AppResult<Option<Account>> {
@@ -376,13 +477,9 @@ pub fn has_session(app: &AppHandle) -> bool {
 #[tauri::command]
 pub async fn etebase_login(args: LoginArgs, app: AppHandle) -> CommandResult<SessionInfo> {
     let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
-    let server_url = resolve_server_url(&args).map_err(String::from)?;
-    let path = session_path(&app).map_err(String::from)?;
+    let server_url = resolve_server_url(&args.server_type, args.server_url.as_deref())?;
+    let path = session_path(&app)?;
     let keyring_account = active_keyring_account(&app);
-
-    let username = args.username.clone();
-    let password = args.password;
-    let server_for_login = server_url.clone();
 
     // Argon2id key derivation runs inside login — and reqwest's blocking
     // HTTP path constructs a private tokio runtime per Account. Keep the
@@ -390,46 +487,22 @@ pub async fn etebase_login(args: LoginArgs, app: AppHandle) -> CommandResult<Ses
     // spawn_blocking so the runtime is never dropped on an async worker,
     // which would panic with "Cannot drop a runtime in a context where
     // blocking is not allowed".
-    let key = randombytes(32);
-    let key_for_save = key.clone();
-    let blocking_job = job.clone();
-    let blob = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
-        let _job = blocking_job;
-        let client = Client::new(CLIENT_NAME, &server_for_login)
-            .map_err(|e| format!("etebase client: {e}"))?;
-        let account =
-            Account::login(client, &username, &password).map_err(|e| format!("login: {e}"))?;
-        account
-            .save(Some(&key_for_save))
-            .map_err(|e| format!("save session: {e}"))
+    tauri::async_runtime::spawn_blocking(move || -> CommandResult<SessionInfo> {
+        let _job = job;
+        let client = client_for(&server_url)?;
+        let code = account::typed(args.code.as_deref());
+        let account = Account::login_with_code(client, &args.username, &args.password, code)
+            .map_err(|e| account::refusal("sign in", e))?;
+        Ok(store_session(
+            &path,
+            &keyring_account,
+            &args.username,
+            &server_url,
+            &account,
+        )?)
     })
     .await
-    .map_err(|e| format!("login task: {e}"))??;
-    let key_b64 = to_base64(&key).map_err(|e| format!("encode key: {e}"))?;
-
-    keyring_entry(&keyring_account)
-        .map_err(String::from)?
-        .set_password(&key_b64)
-        .map_err(|e| format!("keyring write: {e}"))?;
-
-    let stored = StoredSession {
-        username: args.username.clone(),
-        server_url: server_url.clone(),
-        blob,
-    };
-    let bytes = serde_json::to_vec(&stored).map_err(|e| e.to_string())?;
-    if let Err(e) = fs::write(&path, bytes) {
-        // Roll back the keyring write so we don't leave half a session behind.
-        if let Ok(entry) = keyring_entry(&keyring_account) {
-            let _ = entry.delete_credential();
-        }
-        return Err(format!("write session: {e}").into());
-    }
-
-    Ok(SessionInfo {
-        username: args.username,
-        server_url,
-    })
+    .map_err(|e| CommandError::task(format!("login task: {e}")))?
 }
 
 #[tauri::command]
@@ -468,11 +541,10 @@ pub async fn etebase_logout(app: AppHandle) -> CommandResult<()> {
         }
     }
 
-    // Nothing key-shaped needs wiping locally: the crypto_key column
-    // was removed in migration v7. note_room_info now fetches the key
-    // directly from etebase each time a note is opened, so logging out
-    // (which deletes the keyring entry below) makes those fetches fail
-    // immediately and the editor falls back to single-device mode.
+    // The room keys this device keeps are sealed under a key derived from
+    // the secret that is deleted below, so they stop being readable here,
+    // and `reset_sync_cursors` deletes the rows. A room also takes a
+    // ticket, which only a signed-in device is given.
     clear_local_state(&path, &keyring_account);
 
     // Drop sync cursors after the session file is gone, so a crash here
@@ -603,13 +675,70 @@ mod tests {
     }
 
     #[test]
+    fn device_is_named_by_app_machine_and_system() {
+        assert_eq!(
+            describe_device("DESKTOP-7QK2", "windows"),
+            "Mindstream Notes (DESKTOP-7QK2, Windows)"
+        );
+        assert_eq!(
+            describe_device("anns-macbook.local", "macos"),
+            "Mindstream Notes (anns-macbook.local, macOS)"
+        );
+        // No machine name to be had, on a phone for one.
+        assert_eq!(describe_device("", "android"), "Mindstream Notes (Android)");
+        assert_eq!(
+            describe_device("  ", "freebsd"),
+            "Mindstream Notes (freebsd)"
+        );
+    }
+
+    #[test]
+    fn device_name_keeps_only_what_a_header_can_carry() {
+        assert_eq!(
+            describe_device("Büro\r\nX-Evil: 1", "linux"),
+            "Mindstream Notes (BroX-Evil 1, Linux)"
+        );
+        let long = "a".repeat(500);
+        assert_eq!(
+            describe_device(&long, "linux"),
+            format!("Mindstream Notes ({}, Linux)", "a".repeat(60))
+        );
+    }
+
+    #[test]
+    fn server_address_comes_from_the_kind_of_server() {
+        assert_eq!(
+            resolve_server_url("managed", Some("https://ignored.example")).unwrap(),
+            MANAGED_SERVER_URL
+        );
+        assert_eq!(
+            resolve_server_url("self-hosted", Some("  https://notes.example.com ")).unwrap(),
+            "https://notes.example.com"
+        );
+        assert!(resolve_server_url("self-hosted", Some("  ")).is_err());
+        assert!(resolve_server_url("self-hosted", None).is_err());
+        assert!(resolve_server_url("local-only", None).is_err());
+    }
+
+    #[test]
     fn reset_sync_cursors_wipes_server_side_state_and_re_dirties_rows() {
         let db = open_memory_for_tests();
         seed_synced_state(&db);
+        // A room key this device kept for the session that is ending.
+        let seal = crate::sync::room_keys::Seal::from_session_secret(&[3; 32]).unwrap();
+        db.with_conn(|c| {
+            assert_eq!(crate::sync::room_keys::store(c, &seal, "n1", &[8; 32])?, 1);
+            Ok(())
+        })
+        .unwrap();
 
         reset_sync_cursors(&db).unwrap();
 
         db.with_conn(|c| {
+            let room_keys: i64 = c
+                .query_row("SELECT COUNT(*) FROM room_keys", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(room_keys, 0, "kept room keys go at sign-out");
             // Cursor tables emptied
             let sync_state_count: i64 = c
                 .query_row("SELECT COUNT(*) FROM sync_state", [], |r| r.get(0))

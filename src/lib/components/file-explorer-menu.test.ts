@@ -4,6 +4,7 @@ import type { MenuItem } from './context-menu-types';
 import { authSession } from '$lib/api/auth.svelte';
 import type { Collection, NoteSummary } from '$lib/api';
 import { tree } from '$lib/stores/tree.svelte';
+import { closeJoinLinkDialog, joinLinkDialog } from './join-link-dialog.svelte';
 import {
   registerPlugin,
   resetPluginRegistry
@@ -128,6 +129,43 @@ describe('root menu', () => {
       context({ canCreate: false, canReorganize: false })
     );
     expect(await menuItemsForTarget({ kind: 'root' })).toEqual([]);
+  });
+
+  it('offers joining by a link to someone who is signed in', async () => {
+    const { menuItemsForTarget } = createMenuBuilder(context());
+    expect(labels(await menuItemsForTarget({ kind: 'root' }))).not.toContain(
+      'Join shared folder…'
+    );
+
+    authSession.current = {
+      username: 'alice',
+      server_url: 'https://example.invalid'
+    };
+    const items = await menuItemsForTarget({ kind: 'root' });
+    expect(labels(items).slice(-2)).toEqual(['---', 'Join shared folder…']);
+
+    item(items, 'Join shared folder…')?.onSelect?.();
+    expect(joinLinkDialog.open).toBe(true);
+    closeJoinLinkDialog();
+  });
+
+  it('offers joining in the shared view, where nothing can be created', async () => {
+    authSession.current = {
+      username: 'alice',
+      server_url: 'https://example.invalid'
+    };
+    const shared = createMenuBuilder(
+      context({ source: 'shared', canCreate: false, canReorganize: false })
+    );
+    expect(labels(await shared.menuItemsForTarget({ kind: 'root' }))).toEqual([
+      'Join shared folder…'
+    ]);
+
+    // Nowhere else that is read-only.
+    const favourites = createMenuBuilder(
+      context({ source: 'favourites', canCreate: false, canReorganize: false })
+    );
+    expect(await favourites.menuItemsForTarget({ kind: 'root' })).toEqual([]);
   });
 
   it('renders plugin file-tree openMenu effects as hover submenus', async () => {

@@ -25,8 +25,8 @@ use crate::db::Db;
 use crate::error::{AppError, AppResult, CommandResult};
 
 use super::{
-    catch_blocking_panic, ensure_collection, load_share_scope_part_uids, scheduler,
-    COLLECTION_TYPE_ASSETS, COLLECTION_TYPE_NOTES, KIND_ASSETS, KIND_NOTES,
+    catch_blocking_panic, ensure_collection, item_type, scheduler, ItemKind, COLLECTION_TYPE_VAULT,
+    KIND_VAULT,
 };
 
 #[derive(Debug, Default, Serialize, Clone)]
@@ -89,33 +89,15 @@ fn audit_impl(db: &Db, account: &Account) -> AppResult<CorruptAudit> {
     let cm = account
         .collection_manager()
         .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
-    let share_scope_part_uids = load_share_scope_part_uids(&cm);
 
     let mut audit = CorruptAudit::default();
 
-    let notes_col = ensure_collection(
-        db,
-        &cm,
-        KIND_NOTES,
-        COLLECTION_TYPE_NOTES,
-        &share_scope_part_uids,
-    )?;
-    let notes_im = cm
-        .item_manager(&notes_col)
-        .map_err(|e| AppError::InvalidArg(format!("item_manager(notes): {e}")))?;
-    audit.notes = scan_corrupt(&notes_im, "notes")?;
-
-    let assets_col = ensure_collection(
-        db,
-        &cm,
-        KIND_ASSETS,
-        COLLECTION_TYPE_ASSETS,
-        &share_scope_part_uids,
-    )?;
-    let assets_im = cm
-        .item_manager(&assets_col)
-        .map_err(|e| AppError::InvalidArg(format!("item_manager(assets): {e}")))?;
-    audit.assets = scan_corrupt(&assets_im, "assets")?;
+    let vault_col = ensure_collection(db, &cm, KIND_VAULT, COLLECTION_TYPE_VAULT, &[])?;
+    let vault_im = cm
+        .item_manager(&vault_col)
+        .map_err(|e| AppError::InvalidArg(format!("item_manager(vault): {e}")))?;
+    audit.notes = scan_corrupt(&vault_im, ItemKind::Note)?;
+    audit.assets = scan_corrupt(&vault_im, ItemKind::Asset)?;
 
     log::info!(
         "[repair] audit complete: {} corrupt note(s), {} corrupt asset(s)",
@@ -125,7 +107,15 @@ fn audit_impl(db: &Db, account: &Account) -> AppResult<CorruptAudit> {
     Ok(audit)
 }
 
-fn scan_corrupt(im: &ItemManager, kind: &str) -> AppResult<Vec<CorruptItem>> {
+/// Whether an item is of the kind a scan is after. The vault holds every
+/// kind in one collection, and an item's kind is in its metadata, which
+/// decodes even when its content does not.
+fn is_of_kind(item: &Item, wanted: ItemKind) -> bool {
+    ItemKind::from_item_type(item_type(item).as_deref()) == Some(wanted)
+}
+
+fn scan_corrupt(im: &ItemManager, wanted: ItemKind) -> AppResult<Vec<CorruptItem>> {
+    let kind = wanted.kind();
     let mut corrupt = Vec::new();
     let mut stoken: Option<String> = None;
     let mut page = 0usize;
@@ -145,6 +135,9 @@ fn scan_corrupt(im: &ItemManager, kind: &str) -> AppResult<Vec<CorruptItem>> {
             resp.stoken()
         );
         for item in resp.data() {
+            if !is_of_kind(item, wanted) {
+                continue;
+            }
             total_seen += 1;
             if item.is_deleted() {
                 log::debug!("[repair] {kind} {} skipped (deleted)", item.uid());
@@ -262,19 +255,12 @@ fn purge_impl(
     let cm = account
         .collection_manager()
         .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
-    let share_scope_part_uids = load_share_scope_part_uids(&cm);
 
     // --- Note: verify corrupt, then tombstone. ---
-    let notes_col = ensure_collection(
-        db,
-        &cm,
-        KIND_NOTES,
-        COLLECTION_TYPE_NOTES,
-        &share_scope_part_uids,
-    )?;
+    let vault_col = ensure_collection(db, &cm, KIND_VAULT, COLLECTION_TYPE_VAULT, &[])?;
     let notes_im = cm
-        .item_manager(&notes_col)
-        .map_err(|e| AppError::InvalidArg(format!("item_manager(notes): {e}")))?;
+        .item_manager(&vault_col)
+        .map_err(|e| AppError::InvalidArg(format!("item_manager(vault): {e}")))?;
 
     let mut note_item = notes_im
         .fetch(etebase_uid, None)
@@ -313,18 +299,10 @@ fn purge_impl(
     }
 
     // --- Orphaned assets: scan to find matches, then tombstone in batch. ---
-    let assets_col = ensure_collection(
-        db,
-        &cm,
-        KIND_ASSETS,
-        COLLECTION_TYPE_ASSETS,
-        &share_scope_part_uids,
-    )?;
-    let assets_im = cm
-        .item_manager(&assets_col)
-        .map_err(|e| AppError::InvalidArg(format!("item_manager(assets): {e}")))?;
+    // The note's assets are items of the same collection.
+    let assets_im = &notes_im;
 
-    let matching_uids = find_assets_for_note(&assets_im, note_id)?;
+    let matching_uids = find_assets_for_note(assets_im, note_id)?;
 
     let mut items: Vec<Item> = Vec::with_capacity(matching_uids.len());
     for uid in &matching_uids {
@@ -366,7 +344,7 @@ fn find_assets_for_note(im: &ItemManager, note_id: &str) -> AppResult<Vec<String
             .list(Some(&opts))
             .map_err(|e| AppError::InvalidArg(format!("list assets: {e}")))?;
         for item in resp.data() {
-            if item.is_deleted() {
+            if item.is_deleted() || !is_of_kind(item, ItemKind::Asset) {
                 continue;
             }
             // Same refetch + download-content pattern as scan_corrupt:

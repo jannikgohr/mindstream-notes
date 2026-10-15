@@ -80,27 +80,32 @@ pnpm format:rust
 
 ## Tests and coverage
 
-You don't have to remember to run the tests before pushing. The pre-push hook
-already runs the full `pnpm verify` (`check`, `test`, `build`) and
-`pnpm verify:rust` (`cargo test`), so a failing test or a broken build stops the
-push for you. While you're working it's usually quicker to run just the piece
-you care about:
+The pre-push hook runs `pnpm check` and `pnpm test`, so a type error or a
+failing frontend unit test stops the push for you. The build, `cargo test` and
+the server's tests are left to CI; [`.husky/pre-push`](.husky/pre-push) says
+why. While you're working it's usually quicker to run just the piece you care
+about:
 
 ```sh
 pnpm check          # svelte-check (types + Svelte diagnostics)
 pnpm test           # vitest (frontend unit)
 cd src-tauri && cargo test   # Rust unit
+cd backend/server && cargo test   # sync server, needs Postgres (see its README)
 ```
 
-The logic layer is held at 80% line coverage on both sides, frontend through the
-v8 provider and Rust through `cargo-llvm-cov`. Integration surfaces (IPC, network
-sync, native dialogs, editor and canvas code) are left out of that number and
-covered by the e2e suites instead. The pre-push hook doesn't measure coverage,
-but CI does, and you can check it yourself:
+The app's logic layer is held at 80% line coverage on both sides, frontend
+through the v8 provider and Rust through `cargo-llvm-cov`. Integration surfaces
+(IPC, network sync, native dialogs, editor and canvas code) are left out of that
+number and covered by the e2e suites instead. The sync server is measured
+differently: its integration tests run the server inside the test process, so
+they count, and its floor sits a little under the measured number and goes up as
+tests land. The pre-push hook doesn't measure coverage, but CI does, and you can
+check it yourself:
 
 ```sh
-pnpm test:coverage        # frontend, enforces 80%
-pnpm test:coverage:rust   # Rust, enforces 80%
+pnpm test:coverage          # frontend, enforces 80%
+pnpm test:coverage:rust     # desktop Rust, enforces 80%
+pnpm test:coverage:server   # sync server, enforces the floor in its script
 ```
 
 One Rust test asks a question the rest of the suite can't: whether the wire
@@ -116,11 +121,33 @@ Point it at whatever instance you already run. Everything else about the
 checker is tested against an in-process stub — the app's own behaviour is what
 those tests are about, and only a stub can assert what it received.
 
+## Licences
+
+Parts of this repository are under different licences. The
+[README](README.md#license) lists them, and [REUSE.toml](REUSE.toml) says it
+file by file. A contribution is made under the licence of the part it
+changes:
+
+- MIT OR Apache-2.0 for the app and everything not named below
+- AGPL-3.0-only for `backend/server/`
+- BSD-3-Clause for `vendor/etebase-rs/`
+- MIT for `packages/svelte-kanban/`
+
+A new file takes the licence of the folder it is in and needs no header. A
+file that comes from somewhere else, or a folder under another licence, needs
+an entry in `REUSE.toml`, and the text in `LICENSES/` if the licence is new
+here. CI runs `reuse lint`, which fails when a file has no answer.
+
+Whether a contribution to `backend/server/` from outside needs an agreement
+first is not decided yet. See
+[the design](docs/server-design.md#licensing-and-layout).
+
 ## CI
 
 Every push to `main` and every pull request runs
 [`.github/workflows/test.yml`](.github/workflows/test.yml): the `js` and `rust`
-unit tests (on Linux, Windows, and macOS), `coverage`, `e2e` (the Playwright
+unit tests (on Linux, Windows, and macOS), `coverage`, `server` (the sync
+server's tests under coverage, when the server changes), `e2e` (the Playwright
 browser-fallback suite), and `format` (prettier in check mode). The `app-e2e`
 Linux matrix runs the single-client and both multiremote Tauri suites under
 Xvfb, with a disposable collaboration backend for T4. Coverage thresholds fail
