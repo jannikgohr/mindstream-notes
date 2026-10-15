@@ -13,6 +13,9 @@
 #                score / badge / PR comment stay current. Kept separate from the
 #                matrix jobs because coverage instrumentation is slower and only
 #                needs to run once.
+#   - server   : the sync server's own crate, on Linux against a Postgres
+#                service. Its tests run once, under llvm-cov, and that report
+#                goes to Codecov as the `server` flag.
 #   - e2e      : Playwright drives the SvelteKit SPA (browser-fallback mode,
 #                mock store) on Linux to cover the Svelte components unit tests
 #                can't reach.
@@ -66,6 +69,8 @@ jobs:
       code: ${{ steps.decide.outputs.code }}
       e2e: ${{ steps.decide.outputs.e2e }}
       suites: ${{ steps.decide.outputs.list }}
+      # The filter step is skipped on a manual run, which runs everything.
+      server: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.server == 'true' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -82,9 +87,18 @@ jobs:
           # `README.md`, because `**/` does not match an empty path segment;
           # both spellings are needed. Verified against picomatch, which is
           # what paths-filter matches with.
+          # The sync server is a separate crate with its own job below, so
+          # a change confined to it leaves the app matrix alone. That
+          # exclusion has to live inside the same negated group. The client
+          # library in vendor/ is built into the app and drives the server's
+          # tests, so a change there runs both.
           filters: |
             code:
-              - '!(**/*.md|*.md)'
+              - '!(**/*.md|*.md|backend/server/**)'
+            server:
+              - 'backend/server/**'
+              - 'vendor/etebase-rs/**'
+              - '.github/workflows/test.yml'
             # The surfaces the two-client suites actually exercise. This is a
             # heuristic, not a proof: the Yjs/editor code they also depend on
             # is spread across src/lib/editor and friends, and listing that
@@ -95,7 +109,6 @@ jobs:
               - 'src/lib/sync/**'
               - 'src-tauri/src/sync/**'
               - 'src-tauri/src/sharing/**'
-              - 'src-tauri/src/collab_events.rs'
               - 'backend/**'
               - 'e2e-tests/app/specs/multi/**'
               - 'e2e-tests/app/specs/multi-a2/**'
@@ -224,6 +237,78 @@ jobs:
         working-directory: src-tauri
         run: cargo test --locked
 
+  # The sync server: its own crate, lockfile and tests. The tests start the
+  # server in-process and drive it with the client library the app ships, so
+  # all they need from outside is a Postgres.
+  #
+  # They run once, under llvm-cov: running them inside the process is what
+  # lets coverage see what the integration tests reach, so a separate plain
+  # `cargo test` would only repeat the same suite.
+  server:
+    name: Server test
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.server == 'true'
+    timeout-minutes: 30
+    env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mindstream
+          POSTGRES_PASSWORD: mindstream
+          POSTGRES_DB: mindstream
+        # The port and credentials the tests default to; see
+        # backend/server/compose.dev.yml.
+        ports:
+          - 15432:5432
+        options: >-
+          --health-cmd "pg_isready -U mindstream -d mindstream"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend/server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt, llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend/server
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: cargo fmt
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      # Fails on a failing test and on coverage under the floor in the script.
+      - name: cargo test (with coverage)
+        run: node scripts/coverage.mjs --lcov --output-path ../../.output/coverage/server/lcov.info
+
+      - name: Note skipped Codecov upload
+        if: ${{ env.CODECOV_TOKEN == '' }}
+        run: echo "::notice::Skipping Codecov upload because CODECOV_TOKEN is not configured."
+
+      # `uses` steps ignore the job's working-directory, so the path is from
+      # the repository root.
+      - name: Upload server coverage
+        if: ${{ !cancelled() && env.CODECOV_TOKEN != '' }}
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./.output/coverage/server/lcov.info
+          disable_search: true
+          flags: server
+          fail_ci_if_error: false
+          token: ${{ env.CODECOV_TOKEN }}
+
   # Coverage thresholds fail CI; reports upload even when tests fail.
   coverage:
     name: Coverage (Linux)
@@ -286,7 +371,7 @@ jobs:
 
       # `disable_search: true` stops codecov-action from auto-discovering every
       # lcov.info in the workspace — without it each flag uploads BOTH the
-      # frontend and backend reports, cross-contaminating the flags. We name the
+      # frontend and desktop reports, cross-contaminating the flags. We name the
       # single report explicitly via `files:` instead.
       - name: Upload frontend coverage
         if: ${{ !cancelled() && env.CODECOV_TOKEN != '' }}
@@ -298,13 +383,13 @@ jobs:
           fail_ci_if_error: false
           token: ${{ env.CODECOV_TOKEN }}
 
-      - name: Upload backend coverage
+      - name: Upload desktop coverage
         if: ${{ !cancelled() && env.CODECOV_TOKEN != '' }}
         uses: codecov/codecov-action@v5
         with:
           files: ./.output/coverage/rust/lcov.info
           disable_search: true
-          flags: backend
+          flags: desktop
           fail_ci_if_error: false
           token: ${{ env.CODECOV_TOKEN }}
 
@@ -392,6 +477,12 @@ jobs:
       # anything — it just quietly stops running tests, which is why the guard
       # lives in the one job no gate can skip.
       - run: pnpm lint:ci
+
+      # Every file has to say whose it is and under which licence. This
+      # repository holds parts under four licences side by side, and
+      # REUSE.toml is where each path gets its answer. A folder added under
+      # another licence, or a licence text that is missing, fails here.
+      - uses: fsfe/reuse-action@v6
 
   # One build for all three suites.
   #
@@ -532,7 +623,7 @@ jobs:
         if: ${{ !cancelled() && matrix.suite != 'single' }}
         run: |
           mkdir -p .output/wdio
-          docker compose -f backend/docker-compose.yml -f backend/docker-compose.test.yml --env-file backend/.env.test -p mindstream-test logs --no-color > .output/wdio/backend.log
+          node backend/scripts/test-stack.mjs logs --no-color > .output/wdio/backend.log
       - name: Stop disposable backend
         if: ${{ always() && matrix.suite != 'single' }}
         run: pnpm backend:test:down
@@ -556,7 +647,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always() && (github.event.action != 'labeled' || github.event.label.name == 'ci:app-e2e')
-    needs: [changes, js, rust, coverage, e2e, format, app-e2e-build, app-e2e]
+    needs:
+      [changes, js, rust, server, coverage, e2e, format, app-e2e-build, app-e2e]
     steps:
       # Plain expressions, no jq or node: this job is the one that must never
       # be the thing that broke. `needs.*.result` is an array of every needed

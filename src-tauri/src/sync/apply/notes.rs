@@ -29,7 +29,15 @@ pub(in crate::sync) struct LocalNoteState {
     pub(super) tags_state: Vec<u8>,
 }
 
-/// Apply one pulled note item. Returns Some(note_id) when a row was
+/// A note that a pull wrote to its row.
+pub(in crate::sync) struct AppliedNote {
+    pub id: String,
+    /// The key the note carries for its live room. Empty for a note from
+    /// before there were any.
+    pub room_key: Vec<u8>,
+}
+
+/// Apply one pulled note item. Returns the note when a row was
 /// written (insert or update) so the caller can include it in the
 /// `sync-completed` event payload — open editors merge the new
 /// yrs_state into their live Y.Doc instead of going stale. Returns None
@@ -39,28 +47,35 @@ pub(in crate::sync) fn apply_note(
     item: &Item,
     scope: Option<&str>,
     preserve_dirty_local_edits: bool,
-) -> AppResult<Option<String>> {
+) -> AppResult<Pulled<Option<AppliedNote>>> {
     if item.is_deleted() {
-        db.with_conn(|c| apply_remote_delete(c, "notes", item.uid()))?;
-        return Ok(None);
+        db.with_conn(|c| apply_remote_delete(c, "notes", item.uid(), scope))?;
+        return Ok(Pulled::Done(None));
     }
     if item.is_missing_content() {
-        return Ok(None);
+        return Ok(Pulled::Done(None));
     }
     let raw = item
         .content()
         .map_err(|e| AppError::InvalidArg(format!("note content: {e}")))?;
     let payload: NotePayload = rmp_serde::from_slice(&raw)
         .map_err(|e| AppError::InvalidArg(format!("note msgpack: {e}")))?;
+    if !db.with_conn(|c| may_claim(c, "notes", &payload.id, scope))? {
+        return Ok(Pulled::Refused);
+    }
     let etag = item.etag().to_string();
-    apply_note_payload(
+    let written = apply_note_payload(
         db,
         &payload,
         item.uid(),
         &etag,
         scope,
         preserve_dirty_local_edits,
-    )
+    )?;
+    Ok(Pulled::Done(written.map(|id| AppliedNote {
+        id,
+        room_key: payload.crypto_key,
+    })))
 }
 
 /// Apply a decoded note payload to local SQLite. Split out from `apply_note`
@@ -164,11 +179,9 @@ pub(in crate::sync) fn apply_note_payload(
         } else {
             yrs_doc::to_markdown(&merged_state)
         };
-        // payload.crypto_key is intentionally ignored on pull — the
-        // crypto_key column no longer exists locally. The editor fetches
-        // the current key directly from the etebase Item each time it
-        // opens a note (see note_room_info), so the server stays the
-        // sole authority and nothing sensitive lands on disk.
+        // payload.crypto_key has no column here. `apply_note` hands it on
+        // and the sync keeps it sealed in a table of its own, see
+        // `room_keys`.
         let now = Utc::now().to_rfc3339();
         let final_created = if keep_local_meta {
             existing
@@ -285,7 +298,7 @@ pub(in crate::sync) fn apply_note_payload(
                      created = ?5, modified = ?6, trashed_at = ?7, yrs_state = ?8,
                      etebase_uid = ?9, etebase_etag = ?10, dirty = ?11,
                      payload_schema = ?12, favourite = ?13, note_kind = ?14,
-                     tags_state = ?15, share_scope_id = ?16
+                     tags_state = ?15, share_scope_id = ?16, released = 0
                  WHERE id = ?17",
                 params![
                     final_parent,

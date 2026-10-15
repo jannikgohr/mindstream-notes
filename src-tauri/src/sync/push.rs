@@ -6,7 +6,89 @@
 
 use super::*;
 
+use etebase::PrefetchOption;
+
 // ---------- Push ----------
+
+/// How many items one request names when their content is not asked for.
+/// Each comes back as its revision alone, a few hundred bytes.
+const EXISTING_BATCH: usize = 500;
+
+/// What a push needs of the items it is about to change.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Existing {
+    /// The revision alone. Enough to put new content on an item or to
+    /// delete it, and nothing of the old content is downloaded.
+    Revision,
+    /// The content too. A note's holds the key of its live sessions, which
+    /// the next revision has to carry over.
+    Content,
+}
+
+/// The items the server has under these uids, keyed by uid.
+///
+/// A push that changes an item builds on the item as the server has it.
+/// Getting that used to be a request per item, each one downloading the
+/// content the push was about to replace. This names a batch at a time.
+///
+/// An item the server does not have is left out. The caller decides what
+/// that means.
+fn fetch_existing(
+    im: &ItemManager,
+    uids: &[&str],
+    need: Existing,
+) -> AppResult<HashMap<String, Item>> {
+    let mut found = HashMap::with_capacity(uids.len());
+    let without_content = PrefetchOption::Medium;
+    let batch = match need {
+        Existing::Revision => EXISTING_BATCH,
+        Existing::Content => ItemKind::Note.batch(),
+    };
+    for named in uids.chunks(batch) {
+        let mut wanted: Vec<String> = named.iter().map(|uid| uid.to_string()).collect();
+        // With content, the server gives it to as many items as fit one
+        // answer, from the first. The rest are asked for again, as a pull
+        // does it, see `Arrived`.
+        while !wanted.is_empty() {
+            let options = match need {
+                Existing::Revision => Some(FetchOptions::new().prefetch(&without_content)),
+                Existing::Content => None,
+            };
+            let fetched = im
+                .fetch_multi(wanted.iter().map(String::as_str), options.as_ref())
+                .map_err(|e| AppError::InvalidArg(format!("fetch items to push: {e}")))?;
+            let mut again = Vec::new();
+            for (place, item) in fetched.data().iter().enumerate() {
+                let item = match need {
+                    Existing::Revision => item.clone(),
+                    Existing::Content => match Arrived::at(place, held_back(item)) {
+                        Arrived::Whole => item.clone(),
+                        Arrived::TooLarge => whole(im, item)?,
+                        Arrived::Later => {
+                            again.push(item.uid().to_string());
+                            continue;
+                        }
+                    },
+                };
+                found.insert(item.uid().to_string(), item);
+            }
+            wanted = again;
+        }
+    }
+    Ok(found)
+}
+
+/// The uids of the rows that are on the server already.
+fn uids_on_server<'a>(uids: impl Iterator<Item = &'a Option<String>>) -> Vec<&'a str> {
+    uids.filter_map(|uid| uid.as_deref()).collect()
+}
+
+/// Take the item a row is on the server as out of what was fetched.
+fn take_existing(existing: &mut HashMap<String, Item>, what: &str, uid: &str) -> AppResult<Item> {
+    existing.remove(uid).ok_or_else(|| {
+        AppError::InvalidArg(format!("fetch {what} {uid}: the server does not have it"))
+    })
+}
 
 pub(super) fn push_folders(
     db: &Db,
@@ -18,6 +100,12 @@ pub(super) fn push_folders(
     if dirty.is_empty() {
         return drain_tombstones(db, im, "folder", scope);
     }
+
+    let mut existing = fetch_existing(
+        im,
+        &uids_on_server(dirty.iter().map(|row| &row.etebase_uid)),
+        Existing::Revision,
+    )?;
 
     // Build (Item, payload, local_id) tuples for each dirty row.
     let mut prepared: Vec<(Item, String)> = Vec::with_capacity(dirty.len());
@@ -38,9 +126,7 @@ pub(super) fn push_folders(
             .set_name(Some(row.name.clone()))
             .set_mtime(Some(now_unix_ms()));
         let item = if let Some(uid) = &row.etebase_uid {
-            let mut existing = im
-                .fetch(uid, None)
-                .map_err(|e| AppError::InvalidArg(format!("fetch folder {uid}: {e}")))?;
+            let mut existing = take_existing(&mut existing, "folder", uid)?;
             existing
                 .set_meta(&meta)
                 .map_err(|e| AppError::InvalidArg(format!("set_meta folder: {e}")))?;
@@ -57,7 +143,7 @@ pub(super) fn push_folders(
 
     let mut items: Vec<Item> = prepared.into_iter().map(|(i, _)| i).collect();
     transact_or_resolve(im, &mut items, &mut report.conflicts_resolved)
-        .map_err(|e| AppError::InvalidArg(format!("transaction folders: {e}")))?;
+        .map_err(|e| AppError::from_server("transaction folders", e))?;
 
     let pushed = items.len();
     // Persist new uids/etags + clear dirty flag.
@@ -91,35 +177,75 @@ pub(super) fn push_notes(
     im: &ItemManager,
     report: &mut SyncReport,
     scope: Option<&str>,
+    room_keys: &mut room_keys::Learned,
+    seal: Option<&room_keys::Seal>,
 ) -> AppResult<()> {
     let dirty = load_dirty_notes(db, scope)?;
     if dirty.is_empty() {
         return drain_tombstones(db, im, "note", scope);
     }
 
+    // The revision is enough when the key learned from that exact revision
+    // is still here. Prefer this sync's pull, then the sealed cache. A miss
+    // fetches the content as before; a stale key must never be pushed over
+    // a newer one. The transaction's etag handles changes after this read.
+    let mut existing = fetch_existing(
+        im,
+        &uids_on_server(dirty.iter().map(|row| &row.etebase_uid)),
+        Existing::Revision,
+    )?;
+    let mut cached = db.with_conn(|conn| {
+        let mut cached = HashMap::new();
+        for row in &dirty {
+            let Some(item) = row.etebase_uid.as_ref().and_then(|uid| existing.get(uid)) else {
+                continue;
+            };
+            if item.is_deleted() {
+                continue;
+            }
+            let key = match room_keys.for_revision(&row.id, item.uid(), item.etag()) {
+                Some(key) => Some(key.to_vec()),
+                None => match seal {
+                    Some(seal) => {
+                        room_keys::load_revision(conn, seal, &row.id, item.uid(), item.etag())?
+                    }
+                    None => None,
+                },
+            };
+            if let Some(key) = key {
+                cached.insert(item.uid().to_string(), key);
+            }
+        }
+        Ok(cached)
+    })?;
+    let missing: Vec<&str> = existing
+        .values()
+        .filter(|item| !item.is_deleted() && !cached.contains_key(item.uid()))
+        .map(Item::uid)
+        .collect();
+    let fetched = fetch_existing(im, &missing, Existing::Content)?;
+    existing.extend(fetched);
+
     let mut prepared: Vec<(Item, String)> = Vec::with_capacity(dirty.len());
+    // The key each note goes up with: carried over, or made here for a note
+    // that is new to the server.
+    let mut keys: Vec<(&str, Vec<u8>)> = Vec::with_capacity(dirty.len());
     for row in &dirty {
-        // For existing items we fetch first so we can extract the live
-        // crypto_key off the server-side payload and re-use it in the
-        // new one. Rotating the key on every push would break peers'
-        // in-progress live sessions. We'd need the fetch anyway to
-        // call set_meta/set_content, so there's no extra round-trip.
-        // For first-time pushes we mint a fresh key.
         let (existing_item, key_for_payload): (Option<Item>, Vec<u8>) = match &row.etebase_uid {
             Some(uid) => {
-                let existing = im
-                    .fetch(uid, None)
-                    .map_err(|e| AppError::InvalidArg(format!("fetch note {uid}: {e}")))?;
-                let extracted = if !existing.is_deleted() && !existing.is_missing_content() {
-                    existing
-                        .content()
-                        .ok()
-                        .and_then(|raw| rmp_serde::from_slice::<NotePayload>(&raw).ok())
-                        .map(|p| p.crypto_key)
-                        .filter(|k| !k.is_empty())
-                } else {
-                    None
-                };
+                let existing = take_existing(&mut existing, "note", uid)?;
+                let extracted = cached.remove(uid).or_else(|| {
+                    if !existing.is_deleted() && !existing.is_missing_content() {
+                        existing
+                            .content()
+                            .ok()
+                            .and_then(|raw| rmp_serde::from_slice::<NotePayload>(&raw).ok())
+                            .map(|p| p.crypto_key)
+                            .filter(|k| !k.is_empty())
+                    } else {
+                        None
+                    }
+                });
                 (Some(existing), extracted.unwrap_or_else(|| randombytes(32)))
             }
             None => (None, randombytes(32)),
@@ -138,7 +264,7 @@ pub(super) fn push_notes(
             trashed_at: row.trashed_at.clone(),
             yrs_state: row.yrs_state.clone(),
             body: row.body.clone(),
-            crypto_key: key_for_payload,
+            crypto_key: key_for_payload.clone(),
             favourite: row.favourite,
             note_kind: row.note_kind.clone(),
         };
@@ -161,11 +287,17 @@ pub(super) fn push_notes(
                 .map_err(|e| AppError::InvalidArg(format!("create note item: {e}")))?
         };
         prepared.push((item, row.id.clone()));
+        keys.push((&row.id, key_for_payload));
     }
 
     let mut items: Vec<Item> = prepared.into_iter().map(|(i, _)| i).collect();
     transact_or_resolve(im, &mut items, &mut report.conflicts_resolved)
-        .map_err(|e| AppError::InvalidArg(format!("transaction notes: {e}")))?;
+        .map_err(|e| AppError::from_server("transaction notes", e))?;
+    // Only now are these the keys the server has. A push that was refused
+    // made keys nobody will ever see.
+    for ((note_id, key), item) in keys.iter().zip(&items) {
+        room_keys.note(note_id, key, item.uid(), item.etag());
+    }
 
     let pushed = items.len();
     db.with_conn_mut(|c| {
@@ -214,6 +346,14 @@ pub(super) fn push_assets(
         return drain_tombstones(db, im, "asset", scope);
     }
 
+    // The revision alone: an attachment's old bytes are of no use to the
+    // push that replaces them.
+    let mut existing = fetch_existing(
+        im,
+        &uids_on_server(dirty.iter().map(|row| &row.etebase_uid)),
+        Existing::Revision,
+    )?;
+
     let mut prepared: Vec<(Item, String)> = Vec::with_capacity(dirty.len());
     for row in &dirty {
         let payload = AssetPayload {
@@ -236,9 +376,7 @@ pub(super) fn push_assets(
             .set_name(Some(row.id.clone()))
             .set_mtime(Some(now_unix_ms()));
         let item = if let Some(uid) = &row.etebase_uid {
-            let mut existing = im
-                .fetch(uid, None)
-                .map_err(|e| AppError::InvalidArg(format!("fetch asset {uid}: {e}")))?;
+            let mut existing = take_existing(&mut existing, "asset", uid)?;
             existing
                 .set_meta(&meta)
                 .map_err(|e| AppError::InvalidArg(format!("set_meta asset: {e}")))?;
@@ -255,7 +393,7 @@ pub(super) fn push_assets(
 
     let mut items: Vec<Item> = prepared.into_iter().map(|(i, _)| i).collect();
     transact_or_resolve(im, &mut items, &mut report.conflicts_resolved)
-        .map_err(|e| AppError::InvalidArg(format!("transaction assets: {e}")))?;
+        .map_err(|e| AppError::from_server("transaction assets", e))?;
 
     let pushed = items.len();
     db.with_conn_mut(|c| {
@@ -293,6 +431,12 @@ pub(super) fn push_signatures(db: &Db, im: &ItemManager, report: &mut SyncReport
         return drain_tombstones(db, im, "signature", None);
     }
 
+    let mut existing = fetch_existing(
+        im,
+        &uids_on_server(dirty.iter().map(|row| &row.etebase_uid)),
+        Existing::Revision,
+    )?;
+
     let mut prepared: Vec<(Item, String)> = Vec::with_capacity(dirty.len());
     for row in &dirty {
         let payload = SignaturePayload {
@@ -309,9 +453,7 @@ pub(super) fn push_signatures(db: &Db, im: &ItemManager, report: &mut SyncReport
             .set_name(Some(row.id.clone()))
             .set_mtime(Some(now_unix_ms()));
         let item = if let Some(uid) = &row.etebase_uid {
-            let mut existing = im
-                .fetch(uid, None)
-                .map_err(|e| AppError::InvalidArg(format!("fetch signature {uid}: {e}")))?;
+            let mut existing = take_existing(&mut existing, "signature", uid)?;
             existing
                 .set_meta(&meta)
                 .map_err(|e| AppError::InvalidArg(format!("set_meta signature: {e}")))?;
@@ -328,7 +470,7 @@ pub(super) fn push_signatures(db: &Db, im: &ItemManager, report: &mut SyncReport
 
     let mut items: Vec<Item> = prepared.into_iter().map(|(i, _)| i).collect();
     transact_or_resolve(im, &mut items, &mut report.conflicts_resolved)
-        .map_err(|e| AppError::InvalidArg(format!("transaction signatures: {e}")))?;
+        .map_err(|e| AppError::from_server("transaction signatures", e))?;
 
     let pushed = items.len();
     db.with_conn_mut(|c| {
@@ -400,7 +542,7 @@ pub(super) fn refetch_and_remerge(
             // etag was stale. Inherit the new etag and retry.
             let bytes = item.content()?;
             let meta = item.meta()?;
-            *item = im.fetch(server.uid(), None)?;
+            *item = server;
             item.set_meta(&meta)?;
             item.set_content(&bytes)?;
             continue;
@@ -427,7 +569,7 @@ pub(super) fn refetch_and_remerge(
                 local_payload.tags = tags_crdt::tags(&local_payload.tags_state);
                 let merged = rmp_serde::to_vec_named(&local_payload)
                     .map_err(|e| EtebaseError::Generic(format!("re-encode merged note: {e}")))?;
-                *item = im.fetch(server.uid(), None)?;
+                *item = server;
                 let local_meta = item.meta()?;
                 item.set_meta(&local_meta)?;
                 item.set_content(&merged)?;
@@ -437,7 +579,7 @@ pub(super) fn refetch_and_remerge(
         // Folder (or unknown): take the local payload, ride the server etag.
         let local_bytes = item.content()?;
         let local_meta = item.meta()?;
-        *item = im.fetch(server.uid(), None)?;
+        *item = server;
         item.set_meta(&local_meta)?;
         item.set_content(&local_bytes)?;
     }
@@ -480,17 +622,21 @@ pub(super) fn drain_tombstones(
         return Ok(());
     }
 
+    // Deleting an item takes its revision and none of its content.
+    let named: Vec<&str> = uids.iter().map(String::as_str).collect();
+    let mut existing = fetch_existing(im, &named, Existing::Revision)?;
     let mut items: Vec<Item> = Vec::with_capacity(uids.len());
     for uid in &uids {
-        match im.fetch(uid, None) {
-            Ok(mut item) => {
+        match existing.remove(uid) {
+            Some(mut item) => {
                 if !item.is_deleted() {
                     item.delete()
                         .map_err(|e| AppError::InvalidArg(format!("mark deleted {uid}: {e}")))?;
                 }
                 items.push(item);
             }
-            Err(e) => log::warn!("[sync] tombstone fetch {uid} failed: {e}"),
+            // Nothing there to delete. The queue entry goes all the same.
+            None => log::warn!("[sync] tombstone {uid}: the server does not have the item"),
         }
     }
 
@@ -540,10 +686,17 @@ fn acknowledge_push(conn: &Connection, receipt: PushReceipt<'_>) -> AppResult<()
     } else {
         "share_scope_id IS ?6"
     };
+    // A row that has an item again is nobody's to claim. Signatures never
+    // leave the vault and have no such mark.
+    let released = if matches!(receipt.kind, PushedKind::Signature) {
+        ""
+    } else {
+        "released = 0,"
+    };
     // Always retain a newly assigned identity, even if a concurrent edit must
     // remain dirty. Rehomed/deleted rows must not regain their old identity.
     let sql = format!(
-        "UPDATE {table} SET etebase_uid = ?1, etebase_etag = ?2,
+        "UPDATE {table} SET etebase_uid = ?1, etebase_etag = ?2, {released}
         dirty = CASE WHEN modified = ?4 THEN 0 ELSE dirty END
         WHERE id = ?3 AND etebase_uid IS ?5 AND {scope_guard}"
     );

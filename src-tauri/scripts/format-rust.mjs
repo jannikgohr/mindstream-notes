@@ -5,7 +5,10 @@ const manifests = ['src-tauri/Cargo.toml'];
 const check = process.argv.includes('--check');
 
 for (const manifest of manifests) {
-  const args = ['fmt', '--manifest-path', manifest];
+  // `--all` takes in the crates this one depends on by path, which is the
+  // client library in vendor/. CI runs `cargo fmt --all --check`, so without
+  // it a change there passes every hook here and fails there.
+  const args = ['fmt', '--all', '--manifest-path', manifest];
 
   if (check) {
     args.push('--', '--check');

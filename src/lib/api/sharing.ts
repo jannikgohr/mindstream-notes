@@ -3,7 +3,6 @@ import {
   assertBoolean,
   assertRecord,
   assertString,
-  assertStringArray,
   assertVoid,
   TauriCommandName,
   invokeOrFallback,
@@ -12,52 +11,99 @@ import {
 
 export type CollectionShareAccessLevel = 'read_only' | 'read_write' | 'admin';
 
-export interface CollectionInvitation {
+/**
+ * How a key stands against the one this device remembers for its owner:
+ * none remembered yet, the same one, or another one.
+ */
+export type KeyStanding = 'new' | 'known' | 'changed';
+
+/** A user's key, with what someone needs to check it. */
+export interface UserKey {
+  username: string;
+  standing: KeyStanding;
+  /** The key the server gives now, as digits two people can compare. */
+  fingerprint: string;
+  /** The key remembered, when it is another one. */
+  known_fingerprint: string | null;
+}
+
+/** An invitation to a shared folder that has not been answered. */
+export interface IncomingShare {
+  invitation_id: string;
+  /** The shared folder's collection on the server. */
+  collection_uid: string;
+  /** The folder's name. Null only when the server did not send it along. */
+  name: string | null;
+  sender_username: string | null;
+  access_level: CollectionShareAccessLevel;
+  /** The sender's key. Null when the invitation names no sender. */
+  sender_key: UserKey | null;
+}
+
+/** An invitation this account sent that has not been answered. */
+export interface OutgoingInvitation {
   id: string;
   username: string;
-  sender_username: string | null;
-  collection_uid: string;
   access_level: CollectionShareAccessLevel;
-  collection_type: string | null;
 }
 
-export type ShareScopePart = 'folders' | 'notes' | 'assets';
+/** What an invite link may give: a link never makes someone an admin. */
+export type ShareLinkAccessLevel = 'read_only' | 'read_write';
 
-export interface IncomingShareBundlePart {
-  part: ShareScopePart;
-  collection_uid: string | null;
-  expected_collection_type: string;
-  required: boolean;
-  invitation: CollectionInvitation | null;
+export interface CreateShareLinkInput {
+  collection_id: string;
+  access_level: ShareLinkAccessLevel;
+  /** How many people the link lets in. The server's default is one. */
+  max_uses?: number;
+  /** How long it lasts. The server's default is a week. */
+  expires_in_days?: number;
+  /** Whether it may create an account for someone who has none. */
+  allow_signup?: boolean;
 }
 
-export interface IncomingShareBundle {
-  manifest_invitation_id: string;
-  manifest_collection_uid: string;
-  // True while the manifest invitation is unaccepted: the scan reads it by
-  // non-mutating preview only, so name/share_scope_id/root_folder_id/parts are
-  // unknown until the user accepts. Accept/decline still work by uid.
-  pending: boolean;
-  share_scope_id: string | null;
+/** A link that was just made. `link` is the only copy of its secret. */
+export interface CreatedShareLink {
+  link: string;
+  uid: string;
+}
+
+/** A link as the people who manage a folder see it. */
+export interface ShareLink {
+  uid: string;
+  access_level: CollectionShareAccessLevel;
+  max_uses: number;
+  uses: number;
+  allows_signup: boolean;
+  /** Seconds since 1970. */
+  expires_at: number;
+  created_at: number;
+  sender_username: string;
+}
+
+/** What a link leads to, for someone deciding whether to join. */
+export interface ShareLinkPreview {
+  server_url: string;
+  collection_uid: string;
   name: string | null;
-  root_folder_id: string | null;
-  owner_username: string | null;
-  sender_username: string | null;
-  access_level: CollectionShareAccessLevel | null;
-  complete: boolean;
-  parts: IncomingShareBundlePart[];
-  warnings: string[];
-}
-
-export interface IncomingShareInvitations {
-  bundles: IncomingShareBundle[];
-  unbundled_invitations: CollectionInvitation[];
+  sender_username: string;
+  access_level: CollectionShareAccessLevel;
+  /** The link can still create an account on its server. */
+  can_signup: boolean;
+  /** This device is signed in to the link's server, so it can join. */
+  signed_in: boolean;
+  /** The folder is on this device already. */
+  already_member: boolean;
 }
 
 export interface InviteCollectionInput {
   collection_id: string;
   username: string;
   access_level: CollectionShareAccessLevel;
+  /**
+   * The user has seen that the recipient's key is not the one this device
+   * remembers, and said to share with the new one.
+   */
+  trust_changed_key?: boolean;
 }
 
 export interface CollectionMember {
@@ -72,55 +118,89 @@ export interface CollectionShareState {
   shared_owner: string | null;
   shared_by_me: boolean;
   members: CollectionMember[];
-  outgoing_invitations: CollectionInvitation[];
+  outgoing_invitations: OutgoingInvitation[];
 }
 
-export function listCollectionInvitations(): Promise<CollectionInvitation[]> {
-  return invokeOrFallback<CollectionInvitation[]>(
-    TauriCommandName.ListCollectionInvitations,
+/** The invitations to shared folders that wait for an answer. */
+export function listIncomingShares(): Promise<IncomingShare[]> {
+  return invokeOrFallback<IncomingShare[]>(
+    TauriCommandName.ListIncomingShares,
     undefined,
     async () => [],
-    parseCollectionInvitations
-  );
-}
-
-export function listIncomingShareBundles(): Promise<IncomingShareInvitations> {
-  return invokeOrFallback<IncomingShareInvitations>(
-    TauriCommandName.ListIncomingShareBundles,
-    undefined,
-    async () => ({ bundles: [], unbundled_invitations: [] }),
-    parseIncomingShareInvitations
-  );
-}
-
-export function acceptShareBundle(
-  manifestCollectionUid: string
-): Promise<void> {
-  assertRequiredString(manifestCollectionUid, 'manifestCollectionUid');
-  return invokeOrFallback<void>(
-    TauriCommandName.AcceptShareBundle,
-    { manifestCollectionUid },
-    async () => undefined,
-    (value) => assertVoid(value, 'accept_share_bundle response')
-  );
-}
-
-export function declineShareBundle(
-  manifestCollectionUid: string
-): Promise<void> {
-  assertRequiredString(manifestCollectionUid, 'manifestCollectionUid');
-  return invokeOrFallback<void>(
-    TauriCommandName.DeclineShareBundle,
-    { manifestCollectionUid },
-    async () => undefined,
-    (value) => assertVoid(value, 'decline_share_bundle response')
+    parseIncomingShares
   );
 }
 
 /**
- * Leave a folder shared *with* the current user. Relinquishes membership of the
- * scope's collections server-side and purges the locally-pulled subtree. No-op
- * fallback in browser mode (sharing is Tauri-only).
+ * Accept an invitation to a shared folder. Nothing appears at once: the next
+ * sync pulls the folder in.
+ *
+ * An invitation from a key that is not the one remembered for its sender is
+ * refused with the reason `key_changed`, unless `trustChangedKey` says the
+ * user has seen that and wants to go on.
+ */
+export function acceptShare(
+  invitationId: string,
+  options: { trustChangedKey?: boolean } = {}
+): Promise<void> {
+  assertRequiredString(invitationId, 'invitationId');
+  return invokeOrFallback<void>(
+    TauriCommandName.AcceptShare,
+    { invitationId, trustChangedKey: options.trustChangedKey === true },
+    async () => undefined,
+    (value) => assertVoid(value, 'accept_share response')
+  );
+}
+
+/**
+ * The key the server gives for a user now, held against the one this device
+ * remembers. For showing what changed before someone decides.
+ */
+export function userKeyInfo(username: string): Promise<UserKey> {
+  assertRequiredString(username, 'username');
+  return invokeOrFallback<UserKey>(
+    TauriCommandName.UserKeyInfo,
+    { username },
+    async () => {
+      throw new Error(
+        'Collection sharing is only available in the Tauri desktop app.'
+      );
+    },
+    (value) => parseUserKey(value, 'user key')
+  );
+}
+
+/**
+ * This account's own key as digits, for someone else to compare with what
+ * their app shows for this account.
+ */
+export function ownKeyFingerprint(): Promise<string> {
+  return invokeOrFallback<string>(
+    TauriCommandName.OwnKeyFingerprint,
+    undefined,
+    async () => {
+      throw new Error(
+        'Collection sharing is only available in the Tauri desktop app.'
+      );
+    },
+    (value) => assertString(value, 'own key fingerprint')
+  );
+}
+
+export function declineShare(invitationId: string): Promise<void> {
+  assertRequiredString(invitationId, 'invitationId');
+  return invokeOrFallback<void>(
+    TauriCommandName.DeclineShare,
+    { invitationId },
+    async () => undefined,
+    (value) => assertVoid(value, 'decline_share response')
+  );
+}
+
+/**
+ * Leave a folder shared *with* the current user. Gives up the membership on
+ * the server and removes the folder from this device. No-op fallback in
+ * browser mode (sharing is Tauri-only).
  */
 export function leaveSharedCollection(collectionId: string): Promise<void> {
   assertRequiredString(collectionId, 'collectionId');
@@ -133,10 +213,10 @@ export function leaveSharedCollection(collectionId: string): Promise<void> {
 }
 
 /**
- * Stop sharing a folder the current user owns. The owner keeps the folder (it
- * re-homes into their personal vault); the scope's collections are deleted
- * server-side so every recipient's device removes its copy on the next sync.
- * No-op fallback in browser mode (sharing is Tauri-only).
+ * Stop sharing a folder the current user owns. The owner keeps the folder,
+ * which goes back into their own vault. The shared collection is deleted on
+ * the server, so every other member's device removes its copy on its next
+ * sync. No-op fallback in browser mode (sharing is Tauri-only).
  */
 export function stopSharingCollection(collectionId: string): Promise<void> {
   assertRequiredString(collectionId, 'collectionId');
@@ -195,23 +275,83 @@ export function removeCollectionMember(input: {
   );
 }
 
-export function acceptCollectionInvitation(id: string): Promise<void> {
-  assertRequiredString(id, 'id');
-  return invokeOrFallback<void>(
-    TauriCommandName.AcceptCollectionInvitation,
-    { id },
-    async () => undefined,
-    (value) => assertVoid(value, 'accept_collection_invitation response')
+/**
+ * Make an invite link to a folder, sharing the folder first if it is not
+ * shared yet. The link comes back once and cannot be shown again.
+ */
+export function createShareLink(
+  input: CreateShareLinkInput
+): Promise<CreatedShareLink> {
+  assertRequiredString(input.collection_id, 'input.collection_id');
+  if (input.access_level !== 'read_only' && input.access_level !== 'read_write')
+    throw new Error('an invite link can let people view or edit');
+  return invokeOrFallback<CreatedShareLink>(
+    TauriCommandName.CreateShareLink,
+    { input },
+    async () => {
+      throw new Error(
+        'Collection sharing is only available in the Tauri desktop app.'
+      );
+    },
+    parseCreatedShareLink
   );
 }
 
-export function rejectCollectionInvitation(id: string): Promise<void> {
-  assertRequiredString(id, 'id');
+/**
+ * The links into a folder that have not run out of time. One that is used
+ * up stays listed until then, so that its maker sees it was used.
+ */
+export function listShareLinks(collectionId: string): Promise<ShareLink[]> {
+  assertRequiredString(collectionId, 'collectionId');
+  return invokeOrFallback<ShareLink[]>(
+    TauriCommandName.ListShareLinks,
+    { collectionId },
+    async () => [],
+    parseShareLinks
+  );
+}
+
+/** Remove a link, so that it lets nobody else in. */
+export function revokeShareLink(uid: string): Promise<void> {
+  assertRequiredString(uid, 'uid');
   return invokeOrFallback<void>(
-    TauriCommandName.RejectCollectionInvitation,
-    { id },
+    TauriCommandName.RevokeShareLink,
+    { uid },
     async () => undefined,
-    (value) => assertVoid(value, 'reject_collection_invitation response')
+    (value) => assertVoid(value, 'revoke_share_link response')
+  );
+}
+
+/** Look at what a pasted link leads to. Joins nothing. */
+export function openShareLink(link: string): Promise<ShareLinkPreview> {
+  assertRequiredString(link, 'link');
+  return invokeOrFallback<ShareLinkPreview>(
+    TauriCommandName.OpenShareLink,
+    { link },
+    async () => {
+      throw new Error(
+        'Collection sharing is only available in the Tauri desktop app.'
+      );
+    },
+    parseShareLinkPreview
+  );
+}
+
+/**
+ * Join the shared folder a link leads to. Nothing appears at once: the next
+ * sync pulls the folder in.
+ */
+export function claimShareLink(link: string): Promise<void> {
+  assertRequiredString(link, 'link');
+  return invokeOrFallback<void>(
+    TauriCommandName.ClaimShareLink,
+    { link },
+    async () => {
+      throw new Error(
+        'Collection sharing is only available in the Tauri desktop app.'
+      );
+    },
+    (value) => assertVoid(value, 'claim_share_link response')
   );
 }
 
@@ -278,137 +418,151 @@ function parseNullableAccessLevel(
   return parseAccessLevel(value, context);
 }
 
-function parseShareScopePart(value: unknown, context: string): ShareScopePart {
-  const part = assertString(value, context);
-  switch (part) {
-    case 'folders':
-    case 'notes':
-    case 'assets':
-      return part;
-    default: {
-      const _exhaustive: never = part as never;
-      throw new Error(`${context} has unknown share part: ${_exhaustive}`);
-    }
-  }
-}
-
-function parseCollectionInvitation(value: unknown): CollectionInvitation {
-  const raw = assertRecord(value, 'collection invitation');
+function parseIncomingShare(value: unknown): IncomingShare {
+  const raw = assertRecord(value, 'incoming share');
   return {
-    id: assertString(raw.id, 'collection invitation.id'),
-    username: assertString(raw.username, 'collection invitation.username'),
-    sender_username: optionalString(
-      raw.sender_username,
-      'collection invitation.sender_username'
+    invitation_id: assertString(
+      raw.invitation_id,
+      'incoming share.invitation_id'
     ),
     collection_uid: assertString(
       raw.collection_uid,
-      'collection invitation.collection_uid'
+      'incoming share.collection_uid'
+    ),
+    name: optionalString(raw.name, 'incoming share.name'),
+    sender_username: optionalString(
+      raw.sender_username,
+      'incoming share.sender_username'
     ),
     access_level: parseAccessLevel(
       raw.access_level,
-      'collection invitation.access_level'
+      'incoming share.access_level'
     ),
-    collection_type: optionalString(
-      raw.collection_type,
-      'collection invitation.collection_type'
+    sender_key:
+      raw.sender_key === null || raw.sender_key === undefined
+        ? null
+        : parseUserKey(raw.sender_key, 'incoming share.sender_key')
+  };
+}
+
+function parseUserKey(value: unknown, context: string): UserKey {
+  const raw = assertRecord(value, context);
+  const standing = raw.standing;
+  if (standing !== 'new' && standing !== 'known' && standing !== 'changed') {
+    throw new Error(`${context}.standing is not one this app knows`);
+  }
+  return {
+    username: assertString(raw.username, `${context}.username`),
+    standing,
+    fingerprint: assertString(raw.fingerprint, `${context}.fingerprint`),
+    known_fingerprint: optionalString(
+      raw.known_fingerprint,
+      `${context}.known_fingerprint`
     )
   };
 }
 
-function parseCollectionInvitations(value: unknown): CollectionInvitation[] {
+function parseIncomingShares(value: unknown): IncomingShare[] {
   if (!Array.isArray(value)) {
-    throw new Error('collection invitations must be an array');
+    throw new Error('incoming shares must be an array');
   }
-  return value.map((item) => parseCollectionInvitation(item));
+  return value.map((item) => parseIncomingShare(item));
 }
 
-function parseIncomingShareBundlePart(value: unknown): IncomingShareBundlePart {
-  const raw = assertRecord(value, 'incoming share bundle part');
-  const invitation =
-    raw.invitation === null || raw.invitation === undefined
-      ? null
-      : parseCollectionInvitation(raw.invitation);
+function parseOutgoingInvitation(value: unknown): OutgoingInvitation {
+  const raw = assertRecord(value, 'outgoing invitation');
   return {
-    part: parseShareScopePart(raw.part, 'incoming share bundle part.part'),
-    collection_uid: optionalString(
-      raw.collection_uid,
-      'incoming share bundle part.collection_uid'
-    ),
-    expected_collection_type: assertString(
-      raw.expected_collection_type,
-      'incoming share bundle part.expected_collection_type'
-    ),
-    required: assertBoolean(
-      raw.required,
-      'incoming share bundle part.required'
-    ),
-    invitation
-  };
-}
-
-function parseIncomingShareBundleParts(
-  value: unknown
-): IncomingShareBundlePart[] {
-  if (!Array.isArray(value)) {
-    throw new Error('incoming share bundle parts must be an array');
-  }
-  return value.map((item) => parseIncomingShareBundlePart(item));
-}
-
-function parseIncomingShareBundle(value: unknown): IncomingShareBundle {
-  const raw = assertRecord(value, 'incoming share bundle');
-  return {
-    manifest_invitation_id: assertString(
-      raw.manifest_invitation_id,
-      'incoming share bundle.manifest_invitation_id'
-    ),
-    manifest_collection_uid: assertString(
-      raw.manifest_collection_uid,
-      'incoming share bundle.manifest_collection_uid'
-    ),
-    pending: assertBoolean(raw.pending, 'incoming share bundle.pending'),
-    share_scope_id: optionalString(
-      raw.share_scope_id,
-      'incoming share bundle.share_scope_id'
-    ),
-    name: optionalString(raw.name, 'incoming share bundle.name'),
-    root_folder_id: optionalString(
-      raw.root_folder_id,
-      'incoming share bundle.root_folder_id'
-    ),
-    owner_username: optionalString(
-      raw.owner_username,
-      'incoming share bundle.owner_username'
-    ),
-    sender_username: optionalString(
-      raw.sender_username,
-      'incoming share bundle.sender_username'
-    ),
-    access_level: parseNullableAccessLevel(
+    id: assertString(raw.id, 'outgoing invitation.id'),
+    username: assertString(raw.username, 'outgoing invitation.username'),
+    access_level: parseAccessLevel(
       raw.access_level,
-      'incoming share bundle.access_level'
-    ),
-    complete: assertBoolean(raw.complete, 'incoming share bundle.complete'),
-    parts: parseIncomingShareBundleParts(raw.parts),
-    warnings: assertStringArray(raw.warnings, 'incoming share bundle.warnings')
+      'outgoing invitation.access_level'
+    )
   };
 }
 
-function parseIncomingShareBundles(value: unknown): IncomingShareBundle[] {
+function parseOutgoingInvitations(value: unknown): OutgoingInvitation[] {
   if (!Array.isArray(value)) {
-    throw new Error('incoming share bundles must be an array');
+    throw new Error('outgoing invitations must be an array');
   }
-  return value.map((item) => parseIncomingShareBundle(item));
+  return value.map((item) => parseOutgoingInvitation(item));
 }
 
-function parseIncomingShareInvitations(
-  value: unknown
-): IncomingShareInvitations {
-  const raw = assertRecord(value, 'incoming share invitations');
+/**
+ * The invite link that was opened from outside the app, once. Null when
+ * none waits. See `$lib/sharing/opened-links`.
+ */
+export function takePendingInviteLink(): Promise<string | null> {
+  return invokeOrFallback<string | null>(
+    TauriCommandName.TakePendingInviteLink,
+    undefined,
+    async () => null,
+    (value) => optionalString(value, 'pending invite link')
+  );
+}
+
+function parseCreatedShareLink(value: unknown): CreatedShareLink {
+  const raw = assertRecord(value, 'created share link');
   return {
-    bundles: parseIncomingShareBundles(raw.bundles),
-    unbundled_invitations: parseCollectionInvitations(raw.unbundled_invitations)
+    link: assertString(raw.link, 'created share link.link'),
+    uid: assertString(raw.uid, 'created share link.uid')
+  };
+}
+
+function assertCount(value: unknown, context: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`${context} must be a number`);
+  }
+  return value;
+}
+
+function parseShareLink(value: unknown): ShareLink {
+  const raw = assertRecord(value, 'share link');
+  return {
+    uid: assertString(raw.uid, 'share link.uid'),
+    access_level: parseAccessLevel(raw.access_level, 'share link.access_level'),
+    max_uses: assertCount(raw.max_uses, 'share link.max_uses'),
+    uses: assertCount(raw.uses, 'share link.uses'),
+    allows_signup: assertBoolean(raw.allows_signup, 'share link.allows_signup'),
+    expires_at: assertCount(raw.expires_at, 'share link.expires_at'),
+    created_at: assertCount(raw.created_at, 'share link.created_at'),
+    sender_username: assertString(
+      raw.sender_username,
+      'share link.sender_username'
+    )
+  };
+}
+
+function parseShareLinks(value: unknown): ShareLink[] {
+  if (!Array.isArray(value)) {
+    throw new Error('share links must be an array');
+  }
+  return value.map((item) => parseShareLink(item));
+}
+
+function parseShareLinkPreview(value: unknown): ShareLinkPreview {
+  const raw = assertRecord(value, 'share link preview');
+  return {
+    server_url: assertString(raw.server_url, 'share link preview.server_url'),
+    collection_uid: assertString(
+      raw.collection_uid,
+      'share link preview.collection_uid'
+    ),
+    name: optionalString(raw.name, 'share link preview.name'),
+    sender_username: assertString(
+      raw.sender_username,
+      'share link preview.sender_username'
+    ),
+    access_level: parseAccessLevel(
+      raw.access_level,
+      'share link preview.access_level'
+    ),
+    can_signup: assertBoolean(raw.can_signup, 'share link preview.can_signup'),
+    signed_in: assertBoolean(raw.signed_in, 'share link preview.signed_in'),
+    already_member: assertBoolean(
+      raw.already_member,
+      'share link preview.already_member'
+    )
   };
 }
 
@@ -451,6 +605,6 @@ function parseCollectionShareState(value: unknown): CollectionShareState {
       'collection share state.shared_by_me'
     ),
     members: parseCollectionMembers(raw.members),
-    outgoing_invitations: parseCollectionInvitations(raw.outgoing_invitations)
+    outgoing_invitations: parseOutgoingInvitations(raw.outgoing_invitations)
   };
 }

@@ -1,0 +1,16 @@
+# Postgres for developing and testing the server.
+#
+#   docker compose -f backend/server/compose.dev.yml up -d
+#
+# `cargo test` and a locally run server both default to this database.
+# Throwaway credentials on a loopback-only port; not for deployment.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mindstream-server-dev-pg
+    environment:
+      POSTGRES_USER: mindstream
+      POSTGRES_PASSWORD: mindstream
+      POSTGRES_DB: mindstream
+    ports:
+      - '127.0.0.1:15432:5432'

@@ -1,6 +1,5 @@
 <script lang="ts">
   import { ancestorIsTrash } from '$lib/editor/trash';
-  import { base64ToBytes } from '$lib/editor/base64';
 
   import { createSaveScheduler } from '$lib/editor/save-scheduler';
   /**
@@ -8,7 +7,7 @@
    *
    * Architecture: this Svelte component is just the shell — it owns the
    * local Y.Doc (for at-rest persistence), the ExcalidrawRoomClient
-   * (live sync over the official excalidraw-room protocol), debounced
+   * (live sync over the note's room on the sync server), debounced
    * save, and trashed-state detection. The actual drawing surface is
    * Excalidraw, mounted as a React island inside this shell. React +
    * Excalidraw + the bridge are dynamically imported so they only pay
@@ -17,10 +16,9 @@
    * Doc shape: Excalidraw elements/files are still keyed by id in
    * Y.Maps via `$lib/freeform/excalidraw-yjs.ts` — the etebase
    * `yrs_state` field on each note round-trips that doc unchanged. The
-   * Y.Doc is purely local persistence now; the wire goes through
-   * excalidraw-room, not the yjs-relay, and the room sees only AES-GCM
-   * ciphertext (per-note key HKDF-derived from the existing crypto_key,
-   * see excalidraw-room-client.ts).
+   * Y.Doc is purely local persistence now; the wire carries whole
+   * scenes, not Yjs updates, and the server sees only AES-GCM ciphertext
+   * (see excalidraw-room-client.ts).
    *
    * Mobile: Excalidraw has touch handling built in (pan, pinch, draw). The
    * existing mobile formatting toolbar only mounts inside markdown notes,
@@ -29,8 +27,8 @@
    * Deferred follow-ups (intentional):
    *   - Image insertion is disabled until Excalidraw files are backed by the
    *     shared asset table instead of inline data URLs.
-   *   - Presence (remote cursors). excalidraw-room emits room-user-change
-   *     and supports MOUSE_LOCATION; the client doesn't subscribe yet.
+   *   - Presence (remote cursors). The room has a presence class and
+   *     tells the client who is there; the client doesn't use either yet.
    */
 
   import { onDestroy, onMount, untrack } from 'svelte';
@@ -39,7 +37,7 @@
   import { Trash2 } from '@lucide/svelte';
   import { userPrefersMode } from 'mode-watcher';
   import {
-    getExcalidrawRoomUrl,
+    getRoomSocketUrl,
     loadNote,
     saveNote as apiSaveNote,
     TRASH_ID,
@@ -53,15 +51,8 @@
   } from '$lib/stores/note-status.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
-  import {
-    ExcalidrawRoomClient,
-    deriveExcalidrawKey
-  } from '$lib/freeform/excalidraw-room-client';
-  import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
-  import {
-    collabAuthForRoom,
-    getOrCreateCollabSigningMaterial
-  } from '$lib/sync/collab-signing-key';
+  import { ExcalidrawRoomClient } from '$lib/freeform/excalidraw-room-client';
+  import { roomConnection } from '$lib/editor/collab-session';
   import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types';
   import { isMobile } from '$lib/platform';
   import { listen, TauriEventName } from '$lib/api/events';
@@ -208,7 +199,6 @@
    *  the open Y.Doc via Y.applyUpdate (Yjs CRDT-safe). Asset
    *  invalidation for Excalidraw scene files lives inside the React island. */
   let unsubSync: (() => void) | null = null;
-  let unsubCollabCredentials: (() => void) | null = null;
 
   onMount(async () => {
     if (!mountEl) return;
@@ -326,13 +316,6 @@
         }
       }).then((unlisten) => {
         unsubSync = unlisten;
-      });
-      void listen(TauriEventName.CollabCredentialsChanged, (payload) => {
-        if (collabCredentialsChangedForNote(payload, noteId)) {
-          void setupExcalidrawRoom();
-        }
-      }).then((unlisten) => {
-        unsubCollabCredentials = unlisten;
       });
 
       loading = false;
@@ -463,40 +446,29 @@
     }
     collabConfigured = false;
 
-    // Derived from the single account.serverUrl setting: socket.io
-    // appends /socket.io/ which nginx routes to excalidraw-room (see
-    // backend/nginx/nginx.conf).
-    const collabUrl = getExcalidrawRoomUrl(
+    // No server configured means no live collab. The address a socket
+    // connects to comes with the room, from the session the Rust side holds.
+    const collabUrl = getRoomSocketUrl(
       (getSettingValue('account.serverUrl') as string | undefined) ?? ''
     );
     if (!collabUrl) return;
     if (!excalidrawApi) return;
 
     try {
-      const signingMaterial = await getOrCreateCollabSigningMaterial();
-      const room = await noteRoomInfo(noteId, signingMaterial?.publicKeyB64);
+      const room = await noteRoomInfo(noteId);
+      // Re-check the api after the await in case the panel was dismantled
+      // while we were fetching room info.
       if (!room || !excalidrawApi) return;
-      const keyBytes16 = await deriveExcalidrawKey(base64ToBytes(room.key_b64));
-      // Re-check the api after the awaits in case the panel was
-      // dismantled while we were fetching room info / deriving the key.
-      if (!excalidrawApi) return;
       collabConfigured = true;
       roomClient = new ExcalidrawRoomClient({
-        url: collabUrl,
-        roomId: room.room_id,
-        keyBytes16,
+        ...roomConnection(room),
         api: excalidrawApi,
-        auth: collabAuthForRoom(room, signingMaterial),
-        requireSignedWrites: room.collab_epoch > 0,
-        onAuthStale: () => {
-          void setupExcalidrawRoom();
-        },
         onStatusChange: (online) => {
           collabOnline = online;
         }
       });
     } catch (err) {
-      console.debug('[FreeformNoteEditor] excalidraw-room init failed', err);
+      console.debug('[FreeformNoteEditor] room init failed', err);
     }
   }
 
@@ -516,9 +488,7 @@
     }
     unsubSession?.();
     unsubSync?.();
-    unsubCollabCredentials?.();
     unsubSync = null;
-    unsubCollabCredentials = null;
     unsubSession = null;
     // Release our fullscreen ref if mobile auto-mode acquired one.
     // Ref-counted in the helper, so multiple freeform notes only flip
