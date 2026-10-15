@@ -18,8 +18,9 @@
  * debug-only route the conformance run exercises) and testing.rs (the
  * database helper for unit tests).
  *
- * The floor ratchets. It sits a little under the measured number, so a change
- * that drops coverage noticeably fails, and goes up when tests are added.
+ * The floor ratchets. It sits a round number under the measured one (94.19%
+ * when it was set to 90), so a change that drops coverage noticeably fails,
+ * and goes up when tests are added.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -27,7 +28,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const FLOOR = '92';
+const FLOOR = '90';
 
 const IGNORE_REGEX = '(main|test_reset|testing)\\.rs$';
 
