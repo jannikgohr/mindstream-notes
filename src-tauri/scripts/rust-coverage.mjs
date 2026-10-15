@@ -12,13 +12,17 @@
 // menu UI, global-shortcut + desktop-settings + drawing command shims, the
 // PDF render pipeline, backup file orchestration, the Etebase network sync
 // engine (sync orchestration/apply/push/pull) and collection-sharing command
-// layer (sharing) and network/keyring auth (auth/mod), plus the trivial
-// system/error/i18n/path shims and the migration runner. The pure helpers in
-// these files still have unit tests that run; they're just not part of the
-// line-coverage denominator.
+// layer (sharing) and network/keyring auth (auth/mod), the supervised
+// multi-vault runtime (vault_supervisor: window/tray/quit/handoff
+// orchestration against a live Tauri app, exercised by the app-e2e suites)
+// and its coordinator OS glue (autostart login registration, signed-update
+// installation, cross-process revival leases, window-state views), plus the
+// trivial system/error/i18n/path shims and the migration runner. The pure
+// helpers in these files still have unit tests that run; they're just not
+// part of the line-coverage denominator.
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -30,6 +34,8 @@ const IGNORE_REGEX = [
   'auth[/\\\\]mod\\.rs$',
   'drawing[/\\\\]mod\\.rs$',
   '(tray|native_menu|hotkeys|desktop_settings|pdf_export|system|error|i18n|paths)\\.rs$',
+  '(vault_supervisor|vault_window_state)\\.rs$',
+  'coordinator_(autostart|updater|revival)\\.rs$',
   '(lib|main)\\.rs$',
   'migrations\\.rs$'
 ].join('|');
@@ -65,5 +71,39 @@ const result = spawnSync('cargo', args, {
   stdio: 'inherit',
   shell: false
 });
+
+// `--lcov` prints no summary, so a threshold failure exits 1 with nothing in
+// the log saying what the percentage was. Parse the report we just wrote and
+// print the total — no test re-run, same in-scope set by construction.
+if (result.status === 0 || result.status === 1) {
+  const lcovIndex = reportArgs.indexOf('--lcov');
+  if (
+    lcovIndex !== -1 &&
+    outputPathIndex !== -1 &&
+    reportArgs[outputPathIndex + 1]
+  ) {
+    try {
+      const lcov = readFileSync(
+        path.resolve(srcTauri, reportArgs[outputPathIndex + 1]),
+        'utf8'
+      );
+      let found = 0;
+      let hit = 0;
+      for (const line of lcov.split('\n')) {
+        const match = /^DA:\d+,(\d+)/.exec(line.trim());
+        if (match) {
+          found += 1;
+          if (Number(match[1]) > 0) hit += 1;
+        }
+      }
+      const pct = found === 0 ? 0 : (100 * hit) / found;
+      console.log(
+        `Rust line coverage: ${pct.toFixed(2)}% (${hit}/${found}, gate: 80%)`
+      );
+    } catch {
+      // Reporting is best-effort; the gate exit status is what matters.
+    }
+  }
+}
 
 process.exit(result.status ?? 1);
