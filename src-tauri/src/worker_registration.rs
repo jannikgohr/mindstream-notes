@@ -53,7 +53,7 @@ pub struct RuntimeContract {
 impl RuntimeContract {
     pub fn current() -> &'static Self {
         static CONTRACT: LazyLock<RuntimeContract> = LazyLock::new(|| RuntimeContract {
-            protocol: 12,
+            protocol: 13,
             storage: 4,
             settings_schema: format!(
                 "{:x}",

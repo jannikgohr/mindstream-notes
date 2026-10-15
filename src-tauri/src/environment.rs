@@ -69,13 +69,7 @@ impl Environment {
                 "test builds require MINDSTREAM_ROOT_DIR or MINDSTREAM_PROFILE_DIR".into(),
             ));
         }
-        let kind = if override_root.is_some() || profile_override.is_some() {
-            Kind::Test
-        } else if cfg!(feature = "dev-environment") {
-            Kind::Dev
-        } else {
-            Kind::Release
-        };
+        let kind = kind_for(override_root.is_some() || profile_override.is_some());
         let root = match override_root {
             Some(value) if value.is_empty() => {
                 return Err(AppError::InvalidArg(
@@ -96,6 +90,24 @@ impl Environment {
             root,
             credential_service,
         })
+    }
+}
+
+/// The environment this process runs in, read before there is an app to
+/// resolve its directories with. Only the kind; see [`Environment::resolve`].
+pub fn kind() -> Kind {
+    let override_root =
+        crate::profiles::dir_override_allowed() && std::env::var_os(ROOT_DIR_ENV).is_some();
+    kind_for(override_root || crate::profiles::dir_override().is_some())
+}
+
+fn kind_for(data_overridden: bool) -> Kind {
+    if data_overridden {
+        Kind::Test
+    } else if cfg!(feature = "dev-environment") {
+        Kind::Dev
+    } else {
+        Kind::Release
     }
 }
 

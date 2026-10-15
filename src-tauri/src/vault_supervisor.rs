@@ -58,6 +58,10 @@ enum HostCommand {
     Tray {
         action: crate::shortcut_actions::TrayCommand,
     },
+    /// An invite link opened outside the app, for the vault used last.
+    InviteLink {
+        link: String,
+    },
     ShortcutRegistrationStatus,
     Autostart {
         vault_id: String,
@@ -153,6 +157,10 @@ enum WorkerCommand {
         launch_id: Uuid,
         action: crate::shortcut_actions::TrayCommand,
     },
+    InviteLink {
+        launch_id: Uuid,
+        link: String,
+    },
     QuitFailed {
         launch_id: Uuid,
         message: String,
@@ -231,6 +239,9 @@ struct Book {
     bootstrap_started: bool,
     activate_after_startup: bool,
     picker_open: bool,
+    /// An invite link that arrived before a vault could take it: during
+    /// startup, recovery or with only the picker open. The newest wins.
+    pending_invite_link: Option<String>,
     last: Option<String>,
     workers: BTreeMap<String, Launch>,
     operations: BTreeMap<Uuid, Operation>,
@@ -265,6 +276,7 @@ enum Action {
     RefreshDeviceSettings,
     Shortcut(crate::hotkeys::GlobalShortcutCommandId, Option<String>),
     Tray(crate::shortcut_actions::TrayCommand),
+    InviteLink(String),
     Autostart(Option<bool>),
     UpdateCheck(bool),
     UpdateInstall(Uuid),
@@ -556,6 +568,7 @@ impl Book {
                     | HostCommand::Activate
                     | HostCommand::Shortcut { .. }
                     | HostCommand::Tray { .. }
+                    | HostCommand::InviteLink { .. }
                     | HostCommand::Autostart { .. }
                     | HostCommand::UpdateCheck { .. }
                     | HostCommand::UpdateInstall { .. }
@@ -575,6 +588,7 @@ impl Book {
                     | HostCommand::Activate
                     | HostCommand::Shortcut { .. }
                     | HostCommand::Tray { .. }
+                    | HostCommand::InviteLink { .. }
                     | HostCommand::Quit
                     | HostCommand::UpdateCheck { .. }
                     | HostCommand::UpdateInstall { .. }
@@ -701,6 +715,18 @@ impl Book {
                     return Err(invalid());
                 }
                 action = Some(Action::Tray(tray));
+            }
+            HostCommand::InviteLink { link } => {
+                if !crate::deep_links::is_invite_link(&link) {
+                    return Err(invalid());
+                }
+                if self.recovering || !self.exported {
+                    // Startup delivers it once a vault can be opened. Showing
+                    // the picker is left to startup, which knows if it must.
+                    self.pending_invite_link = Some(link);
+                } else {
+                    action = Some(Action::InviteLink(link));
+                }
             }
             HostCommand::Shortcut {
                 command_id,
@@ -1137,9 +1163,28 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
             reply.map_err(AppError::InvalidArg)?;
             if !quiet {
                 crate::foreground::transfer(&endpoint);
-                endpoint
-                    .retry_call(&request(&HostCommand::Activate)?)?
-                    .map_err(AppError::InvalidArg)?;
+                // Started for an invite link: the running app shows it.
+                let forwarded = match crate::deep_links::invite_link_among(std::env::args().skip(1))
+                {
+                    Some(link) => match request(&HostCommand::InviteLink { link })
+                        .and_then(|request| endpoint.retry_call(&request))
+                        .and_then(|reply| reply.map_err(AppError::InvalidArg))
+                    {
+                        Ok(_) => true,
+                        Err(error) => {
+                            // An older build, or one that is quitting. The
+                            // window still comes to the front below.
+                            log::warn!("[deep-link] running app did not take the link: {error}");
+                            false
+                        }
+                    },
+                    None => false,
+                };
+                if !forwarded {
+                    endpoint
+                        .retry_call(&request(&HostCommand::Activate)?)?
+                        .map_err(AppError::InvalidArg)?;
+                }
             }
             app.handle().exit(0);
             return Ok(());
@@ -1184,6 +1229,8 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
     // may have their own icon, while system shortcuts/updaters remain gated.
     crate::tray::init(app)?;
     start_lifetime_monitor(app.handle())?;
+    // Kept until startup has a vault to show it in.
+    crate::deep_links::listen_for_vaults(app.handle());
     let initial = if crate::profiles::profile_dir(&root, &index.active).is_dir() {
         index.active.clone()
     } else if let Some(id) = surviving_startup_vault(&root, &index)? {
@@ -1376,6 +1423,7 @@ fn begin_host_startup(
                                 log::warn!("[vaults] deferred launch activation failed: {error}");
                             }
                         }
+                        deliver_pending_invite_link(&task_app);
                     }
                     broadcast_device_settings(&task_app);
                     crate::coordinator_shortcuts::refresh(&task_app);
@@ -1902,6 +1950,7 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
             | HostCommand::PickerOpen { .. }
             | HostCommand::Shortcut { .. }
             | HostCommand::Tray { .. }
+            | HostCommand::InviteLink { .. }
     );
     let status_request = matches!(command, HostCommand::Status);
     if matches!(
@@ -1915,6 +1964,7 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
             | HostCommand::PickerOpen { .. }
             | HostCommand::Shortcut { .. }
             | HostCommand::Tray { .. }
+            | HostCommand::InviteLink { .. }
     ) {
         reconcile_adopted(&host.book, &crate::paths::app_data_root(app)?)?;
     }
@@ -2070,6 +2120,7 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
                                     book.recovering = false;
                                     book.last.clone()
                                 });
+                        deliver_pending_invite_link(&task_app);
                         match last {
                             Some(id) => Ok(id),
                             None => crate::paths::app_data_root(&task_app)
@@ -2118,6 +2169,16 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
                         let result = dispatch_tray(&task_app, request_id, command);
                         if let Err(error) = &result {
                             report_capture_failure(&task_app, &error.to_string());
+                        }
+                        if let Ok(mut book) = task_app.state::<Host>().book.lock() {
+                            book.complete_open(request_id, result);
+                        }
+                        return;
+                    }
+                    Action::InviteLink(link) => {
+                        let result = dispatch_invite_link(&task_app, request_id, link);
+                        if let Err(error) = &result {
+                            log::error!("[deep-link] no vault took the invite link: {error}");
                         }
                         if let Ok(mut book) = task_app.state::<Host>().book.lock() {
                             book.complete_open(request_id, result);
@@ -3191,6 +3252,63 @@ fn dispatch_tray(
     request_id: Uuid,
     action: crate::shortcut_actions::TrayCommand,
 ) -> AppResult<()> {
+    let (endpoint, launch_id) = ready_tray_destination(app)?;
+    crate::foreground::transfer(&endpoint);
+    endpoint
+        .retry_call(&Request {
+            id: request_id,
+            payload: serde_json::to_value(WorkerCommand::Tray { launch_id, action })
+                .map_err(|_| invalid())?,
+        })?
+        .map(|_| ())
+        .map_err(AppError::InvalidArg)
+}
+
+/// An invite link opened outside the app, handed to this coordinator. It
+/// goes to a vault from a thread of its own; native callbacks never wait.
+pub(crate) fn run_invite_link(app: &AppHandle, link: String) {
+    let app = app.clone();
+    let _ = std::thread::Builder::new()
+        .name("invite-link".into())
+        .spawn(move || {
+            if let Ok(request) = request(&HostCommand::InviteLink { link }) {
+                if let Err(error) = handle_host(&app, request) {
+                    log::error!("[deep-link] invite link not accepted: {error}");
+                }
+            }
+        });
+}
+
+/// Startup kept a link that arrived before any vault could take it.
+fn deliver_pending_invite_link(app: &AppHandle) {
+    let link = app
+        .state::<Host>()
+        .book
+        .lock()
+        .ok()
+        .and_then(|mut book| book.pending_invite_link.take());
+    if let Some(link) = link {
+        run_invite_link(app, link);
+    }
+}
+
+/// The vault the tray would capture into shows the link. A link is not
+/// tied to any one vault; the user decides there where the folder goes.
+fn dispatch_invite_link(app: &AppHandle, request_id: Uuid, link: String) -> AppResult<()> {
+    let (endpoint, launch_id) = ready_tray_destination(app)?;
+    crate::foreground::transfer(&endpoint);
+    endpoint
+        .retry_call(&Request {
+            id: request_id,
+            payload: serde_json::to_value(WorkerCommand::InviteLink { launch_id, link })
+                .map_err(|_| invalid())?,
+        })?
+        .map(|_| ())
+        .map_err(AppError::InvalidArg)
+}
+
+/// Open the tray's vault if needed and wait until its worker is ready.
+fn ready_tray_destination(app: &AppHandle) -> AppResult<(Endpoint, Uuid)> {
     let root = crate::paths::app_data_root(app)?;
     let index = crate::profiles::prepare_coordinator_index(&root)?;
     let vault_id = {
@@ -3222,15 +3340,7 @@ fn dispatch_tray(
     {
         return Err(invalid());
     }
-    crate::foreground::transfer(&endpoint);
-    endpoint
-        .retry_call(&Request {
-            id: request_id,
-            payload: serde_json::to_value(WorkerCommand::Tray { launch_id, action })
-                .map_err(|_| invalid())?,
-        })?
-        .map(|_| ())
-        .map_err(AppError::InvalidArg)
+    Ok((endpoint, launch_id))
 }
 
 pub(crate) fn run_shortcut(
@@ -3765,6 +3875,20 @@ pub fn register_worker(
                     return Err("tray destination identity or readiness changed".into());
                 }
                 crate::shortcut_actions::execute_tray(&handle, request_id, action)
+            }
+            WorkerCommand::InviteLink { launch_id, link } => {
+                if launch_id != registration.launch_id || !worker_ready.load(Ordering::Acquire) {
+                    return Err("invite link destination identity or readiness changed".into());
+                }
+                if !crate::deep_links::is_invite_link(&link) {
+                    return Err("not an invite link".into());
+                }
+                crate::deep_links::hand_over(&handle, link);
+                let app = handle.clone();
+                handle
+                    .run_on_main_thread(move || crate::tray::focus_main_window(&app))
+                    .map_err(|_| "worker activation unavailable".to_string())?;
+                Ok(json!({"accepted":true}))
             }
             WorkerCommand::CaptureFailed { launch_id, message } => {
                 if launch_id != registration.launch_id {

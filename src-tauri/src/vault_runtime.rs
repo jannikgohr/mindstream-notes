@@ -45,6 +45,8 @@ impl Role {
                     | "--supervised-vaults"
                     | crate::coordinator_revival::BACKGROUND_ARG
             )
+            // An invite link opened outside the app. See `deep_links`.
+            && !crate::deep_links::is_app_address(arg)
         }) {
             return Err(invalid());
         }
@@ -98,6 +100,22 @@ mod tests {
             Role::Host
         );
     }
+    #[test]
+    fn an_opened_link_starts_an_ordinary_launch_and_never_a_worker() {
+        let address = "mindstream-notes://join?link=anything";
+        for kind in [Kind::Release, Kind::Dev] {
+            assert_eq!(Role::parse(kind, &[address.into()]).unwrap(), Role::Host);
+        }
+        assert_eq!(
+            Role::parse(Kind::Test, &[address.into()]).unwrap(),
+            Role::Direct
+        );
+        let mut worker = Role::worker_arguments("vault", Uuid::new_v4(), Uuid::new_v4()).unwrap();
+        worker.push(address.into());
+        assert!(Role::parse(Kind::Release, &worker).is_err());
+        assert!(Role::parse(Kind::Release, &["https://example.com".into()]).is_err());
+    }
+
     #[test]
     fn background_recovery_requires_explicit_supervision_and_cannot_be_a_worker_flag() {
         assert!(Role::parse(
