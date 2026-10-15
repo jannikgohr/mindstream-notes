@@ -193,6 +193,9 @@ pub fn router(state: AppState) -> Router {
     // Paths are written out in full. Nesting a router would make its root
     // answer at `/collection` but not at `/collection/`, and the client
     // always sends the trailing slash.
+    // Only the debug-only test reset route reassigns this; release builds
+    // keep it immutable.
+    #[cfg_attr(not(debug_assertions), allow(unused_mut))]
     let mut api = Router::new()
         .route("/mindstream/info/", get(info))
         .route("/mindstream/usage/", get(limits::usage))
@@ -344,12 +347,52 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// Whether `MINDSTREAM_LISTEN` keeps the server on this machine. Anything
+/// else may be reachable by strangers, so dangerous settings refuse it.
+pub fn listen_is_loopback(listen: &str) -> bool {
+    use std::net::ToSocketAddrs;
+
+    if let Ok(addr) = listen.parse::<std::net::SocketAddr>() {
+        return addr.ip().is_loopback();
+    }
+    // A hostname: every address it resolves to must be loopback, and it must
+    // resolve to something. Unresolvable or unparsable means not provably
+    // loopback, which fails closed.
+    if let Some((host, _)) = listen.rsplit_once(':') {
+        let host = host.trim_matches(|c| c == '[' || c == ']');
+        if let Ok(addrs) = format!("{host}:0").to_socket_addrs() {
+            let mut any = false;
+            for addr in addrs {
+                any = true;
+                if !addr.ip().is_loopback() {
+                    return false;
+                }
+            }
+            return any;
+        }
+    }
+    false
+}
+
 /// Serve until `shutdown` resolves, then let the requests under way finish.
 pub async fn serve(
     listener: tokio::net::TcpListener,
     state: AppState,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
+    // Backstop for the check in main: whoever serves through this function —
+    // the binary or a library consumer — refuses the reset route past
+    // loopback. Release builds do not contain the route at all.
+    if state.config.test_reset && !listen_is_loopback(&state.config.listen) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "refusing to start with MINDSTREAM_TEST_RESET=true on {}: \
+                 the account reset route must only ever listen on loopback",
+                state.config.listen
+            ),
+        ));
+    }
     let listener = edge::CappedListener::new(
         listener,
         Arc::clone(&state.connections),

@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use mindstream_server::limits::Entitlements;
-use mindstream_server::{admin, serve, AppState, Config};
+use mindstream_server::{admin, listen_is_loopback, serve, AppState, Config};
 
 #[derive(Parser)]
 #[command(name = "mindstream-server", version, about)]
@@ -279,33 +279,6 @@ async fn manage_signup_codes(
 
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
-}
-
-/// Whether `MINDSTREAM_LISTEN` keeps the server on this machine. Anything
-/// else may be reachable by strangers, so dangerous settings refuse it.
-fn listen_is_loopback(listen: &str) -> bool {
-    use std::net::ToSocketAddrs;
-
-    if let Ok(addr) = listen.parse::<std::net::SocketAddr>() {
-        return addr.ip().is_loopback();
-    }
-    // A hostname: every address it resolves to must be loopback, and it must
-    // resolve to something. Unresolvable or unparsable means not provably
-    // loopback, which fails closed.
-    if let Some((host, _)) = listen.rsplit_once(':') {
-        let host = host.trim_matches(|c| c == '[' || c == ']');
-        if let Ok(addrs) = format!("{host}:0").to_socket_addrs() {
-            let mut any = false;
-            for addr in addrs {
-                any = true;
-                if !addr.ip().is_loopback() {
-                    return false;
-                }
-            }
-            return any;
-        }
-    }
-    false
 }
 
 #[tokio::main]

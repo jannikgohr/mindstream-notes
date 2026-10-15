@@ -209,3 +209,27 @@ async fn connections_are_capped_per_address() {
         "closing a connection did not make room for another"
     );
 }
+
+/// The account reset route is refused past loopback by whoever serves, not
+/// only by the binary's own startup check: a library consumer serving
+/// through `serve` gets the same refusal.
+#[tokio::test]
+async fn test_reset_route_never_serves_past_loopback() {
+    use mindstream_server::{serve, AppState, Config};
+
+    let blob_dir = std::env::temp_dir().join(format!(
+        "mindstream-server-test-reset-{}",
+        std::process::id()
+    ));
+    let mut config = Config::for_tests(common::database_url(), blob_dir);
+    assert!(config.test_reset);
+    // Never actually served from here: the listener below stays loopback.
+    config.listen = "0.0.0.0:1".into();
+    let state = AppState::connect(config).await.expect("connect");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let refused = serve(listener, state, std::future::pending::<()>()).await;
+    let err = refused.expect_err("serving the reset route past loopback");
+    assert!(err.to_string().contains("refusing to start"), "{err}");
+}
