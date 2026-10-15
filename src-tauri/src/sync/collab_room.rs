@@ -85,8 +85,10 @@ pub async fn note_room_ticket(
     if !crate::auth::has_session(&app) {
         return Ok(None);
     }
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     Ok(
         tauri::async_runtime::spawn_blocking(move || -> Result<Option<String>, String> {
+            let _job = job;
             catch_blocking_panic("room_ticket", || {
                 let Some(account) =
                     crate::auth::try_restore(&app).map_err(|e| format!("restore session: {e}"))?
