@@ -80,27 +80,32 @@ pnpm format:rust
 
 ## Tests and coverage
 
-You don't have to remember to run the tests before pushing. The pre-push hook
-already runs the full `pnpm verify` (`check`, `test`, `build`) and
-`pnpm verify:rust` (`cargo test`), so a failing test or a broken build stops the
-push for you. While you're working it's usually quicker to run just the piece
-you care about:
+The pre-push hook runs `pnpm check` and `pnpm test`, so a type error or a
+failing frontend unit test stops the push for you. The build, `cargo test` and
+the server's tests are left to CI; [`.husky/pre-push`](.husky/pre-push) says
+why. While you're working it's usually quicker to run just the piece you care
+about:
 
 ```sh
 pnpm check          # svelte-check (types + Svelte diagnostics)
 pnpm test           # vitest (frontend unit)
 cd src-tauri && cargo test   # Rust unit
+cd backend/server && cargo test   # sync server, needs Postgres (see its README)
 ```
 
-The logic layer is held at 80% line coverage on both sides, frontend through the
-v8 provider and Rust through `cargo-llvm-cov`. Integration surfaces (IPC, network
-sync, native dialogs, editor and canvas code) are left out of that number and
-covered by the e2e suites instead. The pre-push hook doesn't measure coverage,
-but CI does, and you can check it yourself:
+The app's logic layer is held at 80% line coverage on both sides, frontend
+through the v8 provider and Rust through `cargo-llvm-cov`. Integration surfaces
+(IPC, network sync, native dialogs, editor and canvas code) are left out of that
+number and covered by the e2e suites instead. The sync server is measured
+differently: its integration tests run the server inside the test process, so
+they count, and its floor sits a little under the measured number and goes up as
+tests land. The pre-push hook doesn't measure coverage, but CI does, and you can
+check it yourself:
 
 ```sh
-pnpm test:coverage        # frontend, enforces 80%
-pnpm test:coverage:rust   # Rust, enforces 80%
+pnpm test:coverage          # frontend, enforces 80%
+pnpm test:coverage:rust     # desktop Rust, enforces 80%
+pnpm test:coverage:server   # sync server, enforces the floor in its script
 ```
 
 One Rust test asks a question the rest of the suite can't: whether the wire
@@ -141,7 +146,8 @@ first is not decided yet. See
 
 Every push to `main` and every pull request runs
 [`.github/workflows/test.yml`](.github/workflows/test.yml): the `js` and `rust`
-unit tests (on Linux, Windows, and macOS), `coverage`, `e2e` (the Playwright
+unit tests (on Linux, Windows, and macOS), `coverage`, `server` (the sync
+server's tests under coverage, when the server changes), `e2e` (the Playwright
 browser-fallback suite), and `format` (prettier in check mode). The `app-e2e`
 Linux matrix runs the single-client and both multiremote Tauri suites under
 Xvfb, with a disposable collaboration backend for T4. Coverage thresholds fail

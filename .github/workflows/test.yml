@@ -13,6 +13,9 @@
 #                score / badge / PR comment stay current. Kept separate from the
 #                matrix jobs because coverage instrumentation is slower and only
 #                needs to run once.
+#   - server   : the sync server's own crate, on Linux against a Postgres
+#                service. Its tests run once, under llvm-cov, and that report
+#                goes to Codecov as the `server` flag.
 #   - e2e      : Playwright drives the SvelteKit SPA (browser-fallback mode,
 #                mock store) on Linux to cover the Svelte components unit tests
 #                can't reach.
@@ -237,12 +240,18 @@ jobs:
   # The sync server: its own crate, lockfile and tests. The tests start the
   # server in-process and drive it with the client library the app ships, so
   # all they need from outside is a Postgres.
+  #
+  # They run once, under llvm-cov: running them inside the process is what
+  # lets coverage see what the integration tests reach, so a separate plain
+  # `cargo test` would only repeat the same suite.
   server:
     name: Server test
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.server == 'true'
-    timeout-minutes: 20
+    timeout-minutes: 30
+    env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     services:
       postgres:
         image: postgres:16-alpine
@@ -267,11 +276,12 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
+          components: clippy, rustfmt, llvm-tools-preview
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend/server
+      - uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: cargo fmt
         run: cargo fmt --check
@@ -279,8 +289,25 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --locked --all-targets -- -D warnings
 
-      - name: cargo test
-        run: cargo test --locked
+      # Fails on a failing test and on coverage under the floor in the script.
+      - name: cargo test (with coverage)
+        run: node scripts/coverage.mjs --lcov --output-path ../../.output/coverage/server/lcov.info
+
+      - name: Note skipped Codecov upload
+        if: ${{ env.CODECOV_TOKEN == '' }}
+        run: echo "::notice::Skipping Codecov upload because CODECOV_TOKEN is not configured."
+
+      # `uses` steps ignore the job's working-directory, so the path is from
+      # the repository root.
+      - name: Upload server coverage
+        if: ${{ !cancelled() && env.CODECOV_TOKEN != '' }}
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./.output/coverage/server/lcov.info
+          disable_search: true
+          flags: server
+          fail_ci_if_error: false
+          token: ${{ env.CODECOV_TOKEN }}
 
   # Coverage thresholds fail CI; reports upload even when tests fail.
   coverage:
@@ -344,7 +371,7 @@ jobs:
 
       # `disable_search: true` stops codecov-action from auto-discovering every
       # lcov.info in the workspace — without it each flag uploads BOTH the
-      # frontend and backend reports, cross-contaminating the flags. We name the
+      # frontend and desktop reports, cross-contaminating the flags. We name the
       # single report explicitly via `files:` instead.
       - name: Upload frontend coverage
         if: ${{ !cancelled() && env.CODECOV_TOKEN != '' }}
@@ -356,13 +383,13 @@ jobs:
           fail_ci_if_error: false
           token: ${{ env.CODECOV_TOKEN }}
 
-      - name: Upload backend coverage
+      - name: Upload desktop coverage
         if: ${{ !cancelled() && env.CODECOV_TOKEN != '' }}
         uses: codecov/codecov-action@v5
         with:
           files: ./.output/coverage/rust/lcov.info
           disable_search: true
-          flags: backend
+          flags: desktop
           fail_ci_if_error: false
           token: ${{ env.CODECOV_TOKEN }}
 
