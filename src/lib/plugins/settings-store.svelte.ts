@@ -3,6 +3,8 @@
  * Browser fallback is in memory. Runtime contexts are assembled by the backend.
  */
 
+/* eslint-disable svelte/prefer-svelte-reactivity -- Request bookkeeping must not trigger rendering or subscribe effects. */
+
 import { isTauri } from '$lib/api/core';
 import {
   pluginsSettingsAll,
