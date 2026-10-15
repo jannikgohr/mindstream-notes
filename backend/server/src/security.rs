@@ -308,10 +308,7 @@ pub(crate) async fn close_sessions(
     events::publish(conn, &closed).await
 }
 
-async fn replace_backup_codes(
-    conn: &mut PgConnection,
-    account_id: i64,
-) -> ApiResult<Vec<String>> {
+async fn replace_backup_codes(conn: &mut PgConnection, account_id: i64) -> ApiResult<Vec<String>> {
     let codes: Vec<String> = (0..BACKUP_CODES).map(|_| new_backup_code()).collect();
     let mut hashes = Vec::with_capacity(codes.len());
     for code in &codes {

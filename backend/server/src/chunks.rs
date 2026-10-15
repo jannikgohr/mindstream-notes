@@ -360,9 +360,10 @@ pub(crate) async fn store(
                 "Tried to create a new chunk without content",
             ));
         };
-        sizes.push(i32::try_from(content.len()).map_err(|_| {
-            ApiError::internal("a chunk is too large for its row")
-        })?);
+        sizes.push(
+            i32::try_from(content.len())
+                .map_err(|_| ApiError::internal("a chunk is too large for its row"))?,
+        );
         if content.len() <= state.config.inline_chunk_bytes {
             inline.push(Some(content));
             offsets.push(None);

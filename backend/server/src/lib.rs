@@ -276,8 +276,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/collection/{collection}/item/{item}/chunk/{chunk}/",
-            put(chunks::upload_chunk)
-                .layer(DefaultBodyLimit::max(chunks::MAX_CHUNK_UPLOAD_BYTES)),
+            put(chunks::upload_chunk).layer(DefaultBodyLimit::max(chunks::MAX_CHUNK_UPLOAD_BYTES)),
         )
         .route(
             "/collection/{collection}/item/{item}/chunk/{chunk}/download/",

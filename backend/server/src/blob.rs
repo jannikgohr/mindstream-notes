@@ -470,7 +470,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn removing_blobs_by_key_spares_the_rest_and_forgives_the_missing() {        let dir = scratch_dir();
+    async fn removing_blobs_by_key_spares_the_rest_and_forgives_the_missing() {
+        let dir = scratch_dir();
         let store = BlobStore::open(&dir).await.unwrap();
         let gone = BlobStore::new_key("AbCdEf");
         let kept = BlobStore::new_key("AbCdEf");

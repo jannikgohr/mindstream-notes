@@ -839,8 +839,7 @@ async fn one_use_signup_link_admits_one_person_either_way_round() {
 
     // Signup first: the new account still joins on the same link, and then
     // the link is spent for everyone else.
-    let welcoming: &'static Link =
-        Box::leak(Box::new(welcoming_link(&owner, &collection).await));
+    let welcoming: &'static Link = Box::leak(Box::new(welcoming_link(&owner, &collection).await));
     let guest = Person::signup_with(server, "guest", by(welcoming))
         .await
         .expect("signup by link");
