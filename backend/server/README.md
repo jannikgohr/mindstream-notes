@@ -33,7 +33,7 @@ list. Under compose a variable only reaches the server if
 | `MINDSTREAM_BLOB_DIR`                    | data/blobs        | Where large chunks are stored                                                       |
 | `MINDSTREAM_SIGNUP`                      | closed            | Who may sign up: `closed`, `invite` or `open`. See below                            |
 | `MINDSTREAM_PUBLIC_HOSTS`                | empty             | Hostnames clients use, when the proxy rewrites the Host header                      |
-| `MINDSTREAM_TRUSTED_PROXIES`             | see below         | Networks whose `X-Forwarded-For` is believed                                        |
+| `MINDSTREAM_TRUSTED_PROXIES`             | loopback only     | Networks whose `X-Forwarded-For` is believed                                        |
 | `MINDSTREAM_AUTH_RATE_PER_MINUTE`        | 10                | Sign-in attempts per address per minute. 0 turns the limit off                      |
 | `MINDSTREAM_AUTH_RATE_BURST`             | 20                | Attempts an address may make at once before the rate applies                        |
 | `MINDSTREAM_MAX_CONNECTIONS_PER_ADDRESS` | 128               | Connections, and separately sockets, one address may hold open. 0 turns the cap off |
@@ -48,7 +48,7 @@ list. Under compose a variable only reaches the server if
 | `MINDSTREAM_SESSION_IDLE_DAYS`           | 90                | Days a device's session may go unused before it ends. 0 never ends one for that     |
 | `MINDSTREAM_MAX_BODY_BYTES`              | 78643200          | Largest request body accepted                                                       |
 | `MINDSTREAM_INLINE_CHUNK_BYTES`          | 20480             | Chunks up to this size stay in the database                                         |
-| `MINDSTREAM_TEST_RESET`                  | false             | Serves a route that wipes accounts. For the client's tests only                     |
+| `MINDSTREAM_TEST_RESET`                  | false             | Serves a route that wipes accounts. Debug builds only, loopback only                |
 
 A login names the host it was made for, and the server refuses one made for
 another host. If logins fail with `wrong_host` behind a proxy, set
@@ -56,12 +56,17 @@ another host. If logins fail with `wrong_host` behind a proxy, set
 
 The sign-in limit counts per client address. Behind a proxy that address
 comes from `X-Forwarded-For`, which the server believes only from trusted
-networks: by default loopback and the private ranges. If the server is
-reachable directly from private addresses you do not control, narrow
-`MINDSTREAM_TRUSTED_PROXIES`, or a caller there can pick the address it is
-counted under. Under Docker that includes the port published on any address
-but loopback: Docker hands some of the connections it forwards to the
-server from its own network's gateway, which is a private address.
+networks: loopback alone unless `MINDSTREAM_TRUSTED_PROXIES` names more,
+and exactly what it names when it does — an explicitly empty list trusts
+nothing at all. Whoever connects from a trusted network picks the address
+they are counted under, so never trust networks with strangers on them.
+The server refuses to listen past loopback without the variable set at
+all: name the networks of the proxies you run, loopback included if one of
+them is local, or `127.0.0.1/32` for none. Under Docker the compose file
+sets the private ranges for you, since the port published on any address
+but loopback hands connections to the server from the Docker network's
+gateway, which is a private address — narrow it together with
+`MINDSTREAM_BIND`, and read the warning the server logs at startup.
 
 The connection caps count the same way. An address may hold
 `MINDSTREAM_MAX_CONNECTIONS_PER_ADDRESS` connections open and as many live
@@ -255,6 +260,77 @@ stores. Keep it off the public internet all the same, by not routing
 `/admin/` through the reverse proxy.
 
 A signed-in client reads its own usage from `GET /api/v1/mindstream/usage/`.
+
+### Reverse proxy
+
+The server speaks plain HTTP/1.1 on loopback; TLS, HTTP/2 and public
+headers are the reverse proxy's job. Pass the original `Host` through (or
+set `MINDSTREAM_PUBLIC_HOSTS`), forward `X-Forwarded-For`, route `/api/`
+and `/join/`, and keep `/admin/` off the public internet. A minimal nginx
+front looks like this:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name notes.example.com;
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:3735;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+    location /join/ {
+        proxy_pass http://127.0.0.1:3735;
+        proxy_set_header Host $host;
+    }
+}
+server {
+    listen 80;
+    server_name notes.example.com;
+    return 301 https://$host$request_uri;
+}
+```
+
+`MINDSTREAM_ADMIN_TOKEN` should be long and random (32 bytes from a
+generator, base64-encoded); the admin interface answers unlimited guessing
+with nothing but time, so entropy is the whole of its protection. Keep a
+copy where the billing system reads it, and nowhere else.
+
+### Threat model notes
+
+What the server deliberately does not defend, so nobody is surprised:
+
+- Usernames are enumerable: signing in names an account that either exists
+  or not, and any signed-in account can look up profiles to address
+  invitations. Usernames appear in sharing dialogs anyway.
+- A removed member keeps the ciphertext they already synced. The server
+  stops serving them anything new; forward secrecy needs a collection key
+  rotation among the remaining members, which the server cannot do for you.
+- Room messages are opaque to the server. It enforces who may send which
+  class of frame, but a malicious read-only client can stuff document bytes
+  into presence frames; receivers must act on the frame class, never on
+  anything inside the payload.
+- Password guessing is held back per address (10 a minute by default) and
+  per account (10 wrong passwords in 10 minutes). A botnet that spreads a
+  few guesses per address per account stays under both; length and a second
+  factor are what stop it.
+
+### Upgrading
+
+Breaking operator-facing changes, newest first:
+
+- Trusted proxies default to loopback only (`MINDSTREAM_TRUSTED_PROXIES`
+  unset), and the server refuses to listen past loopback without it set.
+  Name the networks of your proxies explicitly; the compose file keeps
+  passing the old private ranges, with a warning at startup. Refresh the
+  pinned image digests in `compose.yml` and `Dockerfile` when their tags
+  move, and rebuild for base-image security updates.
+- Backup codes issued before migration `0008` no longer work: their hashes
+  were unsalted SHA-256 and cannot be converted. Owners make new codes the
+  next time they sign in with a device that is still signed in.
+- The account reset route (`MINDSTREAM_TEST_RESET`) no longer exists in
+  release builds, and debug builds refuse to serve it past loopback.
 
 ## Releases
 

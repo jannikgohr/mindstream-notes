@@ -158,7 +158,7 @@ async fn connections_are_capped_per_address() {
     use tokio::net::TcpStream;
 
     let url = common::start_server(|config| {
-        config.trusted_proxies.clear();
+        config.trusted_proxies = Some(Vec::new());
         config.max_connections_per_address = 2;
     });
     let address = url.trim_start_matches("http://").to_owned();

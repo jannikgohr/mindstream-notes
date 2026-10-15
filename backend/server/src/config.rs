@@ -44,17 +44,15 @@ pub struct Config {
     #[arg(long, env = "MINDSTREAM_PUBLIC_HOSTS", value_delimiter = ',')]
     pub public_hosts: Vec<String>,
 
-    /// Networks whose `X-Forwarded-For` is believed. The default is loopback
-    /// and the private ranges a reverse proxy on the same host or container
-    /// network connects from. If the server is reachable directly from
-    /// addresses in these ranges that you do not control, narrow it.
-    #[arg(
-        long,
-        env = "MINDSTREAM_TRUSTED_PROXIES",
-        value_delimiter = ',',
-        default_value = "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1/128,fc00::/7"
-    )]
-    pub trusted_proxies: Vec<IpNet>,
+    /// Networks whose `X-Forwarded-For` is believed. Leave unset to trust
+    /// only loopback, which is right when nothing but this machine connects
+    /// directly. If the server is reachable directly from addresses you do
+    /// not control, list only the networks of the proxies you actually run
+    /// — loopback included if one of them is local: whoever connects from
+    /// a trusted network picks the address they are counted under for the
+    /// sign-in limit and the connection caps.
+    #[arg(long, env = "MINDSTREAM_TRUSTED_PROXIES", value_delimiter = ',')]
+    pub trusted_proxies: Option<Vec<IpNet>>,
 
     /// Sign-in attempts one address may make per minute, across signup, login
     /// and password change. Zero turns the limit off.
@@ -168,6 +166,28 @@ fn issuer(text: &str) -> Result<String, String> {
 }
 
 impl Config {
+    /// Networks whose `X-Forwarded-For` is believed: what was configured,
+    /// or loopback alone when nothing was. An explicitly empty list trusts
+    /// nothing at all, loopback included.
+    pub fn trusted_proxies(&self) -> Vec<IpNet> {
+        match &self.trusted_proxies {
+            Some(configured) => configured.clone(),
+            None => vec![
+                "127.0.0.0/8".parse().expect("a valid network"),
+                "::1/128".parse().expect("a valid network"),
+            ],
+        }
+    }
+
+    /// Whether the operator named trusted networks themselves, as opposed
+    /// to running on the loopback-only default. Startup refuses a
+    /// non-loopback address with only the default, since that either cannot
+    /// see its clients through a proxy or believes strangers; it only warns
+    /// when the networks were chosen on purpose.
+    pub fn trusted_proxies_explicit(&self) -> bool {
+        self.trusted_proxies.is_some()
+    }
+
     /// The admin token, when one is configured. An empty value, which is
     /// what an unset variable in a compose file turns into, counts as none.
     pub fn admin_token(&self) -> Option<&str> {
@@ -201,7 +221,7 @@ impl Config {
             blob_dir,
             signup: SignupPolicy::Open,
             public_hosts: Vec::new(),
-            trusted_proxies: vec!["127.0.0.0/8".parse().expect("a valid network")],
+            trusted_proxies: Some(vec!["127.0.0.0/8".parse().expect("a valid network")]),
             auth_rate_per_minute: 0,
             auth_rate_burst: 1,
             // Every test connects from this machine.
@@ -239,5 +259,28 @@ mod tests {
             config.secret_key_file(),
             PathBuf::from("blobs").join("secret.key")
         );
+    }
+
+    #[test]
+    fn trusted_proxies_default_to_loopback_and_stay_as_listed() {
+        let loopback_v4: IpNet = "127.0.0.0/8".parse().unwrap();
+        let loopback_v6: IpNet = "::1/128".parse().unwrap();
+        let mut config = Config::for_tests(String::new(), PathBuf::from("blobs"));
+
+        // Unset means the loopback-only default, which is implicit.
+        config.trusted_proxies = None;
+        assert!(!config.trusted_proxies_explicit());
+        assert_eq!(config.trusted_proxies(), vec![loopback_v4, loopback_v6]);
+
+        // As listed, even empty: an explicitly empty list trusts nothing.
+        config.trusted_proxies = Some(Vec::new());
+        assert!(config.trusted_proxies_explicit());
+        assert!(config.trusted_proxies().is_empty());
+
+        // A list is used as is, without loopback added back in.
+        let nets = vec!["10.0.0.0/8".parse().unwrap()];
+        config.trusted_proxies = Some(nets.clone());
+        assert!(config.trusted_proxies_explicit());
+        assert_eq!(config.trusted_proxies(), nets);
     }
 }

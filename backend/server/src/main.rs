@@ -343,6 +343,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if cli.config.test_reset {
                 tracing::warn!("the account reset route is on; never run a real server this way");
             }
+            if !listen_is_loopback(&listen) && !cli.config.trusted_proxies_explicit() {
+                // Whoever connects from a trusted network picks the address
+                // they are counted under. Listening past loopback with only
+                // the loopback default either blinds the sign-in limit and
+                // the connection caps behind a proxy, or believes strangers
+                // if the default ever widens again: name the networks.
+                return Err(format!(
+                    "refusing to start on {listen} without MINDSTREAM_TRUSTED_PROXIES: \
+                     set it to the networks of the proxies you run, or to 127.0.0.1/32 \
+                     for none"
+                )
+                .into());
+            }
+            if !listen_is_loopback(&listen) {
+                tracing::warn!(
+                    "X-Forwarded-For is believed from the configured networks; \
+                     narrow MINDSTREAM_TRUSTED_PROXIES to the proxies you run, \
+                     or a caller inside one can pick the address it is counted under"
+                );
+            }
             let state = AppState::connect(cli.config).await?;
             let listener = tokio::net::TcpListener::bind(&listen).await?;
             tracing::info!("listening on {}", listener.local_addr()?);

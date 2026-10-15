@@ -28,9 +28,14 @@ services:
       # does not pass the original Host header through.
       MINDSTREAM_PUBLIC_HOSTS: ${MINDSTREAM_PUBLIC_HOSTS:-}
       # Networks whose X-Forwarded-For is believed, comma separated. The
-      # default is the server's own: loopback and the private ranges, which
-      # is where a reverse proxy on this machine or this Docker network
-      # connects from.
+      # default below also trusts the private ranges, which is where a
+      # reverse proxy on this machine or this Docker network connects from
+      # — and where anyone else on those networks connects from too, who can
+      # then pick the address they are counted under for the sign-in limit
+      # and the connection caps. Without this file the server trusts only
+      # loopback and refuses to listen past it. Narrow this when the server
+      # is reachable from addresses you do not control, and read the warning
+      # the server logs at startup.
       MINDSTREAM_TRUSTED_PROXIES: ${MINDSTREAM_TRUSTED_PROXIES:-127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1/128,fc00::/7}
       MINDSTREAM_TEST_RESET: ${MINDSTREAM_TEST_RESET:-false}
       # Sign-in attempts one address may make per minute. 0 turns the limit off.
@@ -62,6 +67,19 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # The server writes only to its data volume. Everything else is read-only,
+    # with a small tmpfs for what expects a writable /tmp.
+    read_only: true
+    tmpfs:
+      - /tmp
+    pids_limit: 256
+    deploy:
+      resources:
+        limits:
+          # Starting points, not sizing advice: raise them with the
+          # connection and body limits above.
+          cpus: '4.0'
+          memory: 4G
     logging: &logging
       driver: json-file
       options:
@@ -69,7 +87,9 @@ services:
         max-file: '3'
 
   postgres:
-    image: postgres:16-alpine
+    # Pinned by digest so a fresh machine pulls what was reviewed. Refresh
+    # the pin with the server's base images when they move.
+    image: postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
     restart: always
     environment:
       POSTGRES_DB: mindstream

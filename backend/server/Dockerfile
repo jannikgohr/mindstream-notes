@@ -8,7 +8,7 @@
 # What reaches the build is listed in Dockerfile.dockerignore next to this
 # file.
 
-FROM rust:1-slim-bookworm AS build
+FROM rust:1-slim-bookworm@sha256:2c3a22f0a5533ea2dd5a16627bc841228151faa2d4de2644ac9987e4a2f1f2fa AS build
 WORKDIR /src/backend/server
 # Only the tests compile the client library, but cargo reads its manifest to
 # resolve the lockfile.
@@ -18,7 +18,9 @@ COPY backend/server/migrations ./migrations
 COPY backend/server/src ./src
 RUN cargo build --release --locked --bin mindstream-server
 
-FROM debian:bookworm-slim
+# Pinned by digest so a rebuild builds what was reviewed. Refresh the pins
+# when the base images move, and rebuild for their security updates.
+FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
 RUN useradd --system --uid 10001 --no-create-home mindstream \
  && mkdir -p /data/blobs \
  && chown -R mindstream /data

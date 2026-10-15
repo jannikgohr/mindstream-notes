@@ -353,7 +353,7 @@ pub async fn serve(
     let listener = edge::CappedListener::new(
         listener,
         Arc::clone(&state.connections),
-        state.config.trusted_proxies.clone(),
+        state.config.trusted_proxies(),
     );
     edge::serve(listener, router(state), shutdown).await;
     Ok(())

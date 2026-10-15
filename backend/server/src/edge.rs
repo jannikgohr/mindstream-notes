@@ -79,7 +79,7 @@ impl FromRequestParts<AppState> for ClientAddress {
         Ok(Self(client_address(
             peer,
             forwarded,
-            &state.config.trusted_proxies,
+            &state.config.trusted_proxies(),
         )))
     }
 }
