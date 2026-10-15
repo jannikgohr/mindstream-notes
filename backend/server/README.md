@@ -329,6 +329,10 @@ Breaking operator-facing changes, newest first:
 - Backup codes issued before migration `0008` no longer work: their hashes
   were unsalted SHA-256 and cannot be converted. Owners make new codes the
   next time they sign in with a device that is still signed in.
+- Migration `0009` adds CHECK constraints on chunk sizes, blob offsets,
+  stored bytes, entitlements and link budgets, and fails on rows that break
+  them. Fix or remove such rows before upgrading; fresh servers are
+  unaffected.
 - The account reset route (`MINDSTREAM_TEST_RESET`) no longer exists in
   release builds, and debug builds refuse to serve it past loopback.
 
