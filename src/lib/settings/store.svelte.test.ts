@@ -48,6 +48,28 @@ beforeEach(() => {
   settings.pending.clear();
 });
 
+describe('browser device appearance migration', () => {
+  it('seeds only the selected vault and keeps editor typography separate', async () => {
+    localStorage.removeItem('mindstream:appearance-migration:v1');
+    const source = JSON.stringify({
+      'appearance.accent': '#123456',
+      'appearance.uiFontSize': 14,
+      'appearance.editorFontSize': 20
+    });
+    localStorage.setItem('notes-app:settings:v1:vault:work', source);
+    await setSettingsVaultId('work');
+    // The browser's scoped key format is kept in sync with native migration inputs.
+    expect(getSettingValue('appearance.accent')).toBe('#123456');
+    expect(getSettingValue('appearance.editorFontSize')).toBe(20);
+    await setSettingsVaultId('other');
+    expect(getSettingValue('appearance.uiFontSize')).toBe(14);
+    expect(getSettingValue('appearance.editorFontSize')).toBe(16);
+    expect(localStorage.getItem('mindstream:appearance-source:v1:work')).toBe(
+      source
+    );
+  });
+});
+
 describe('external setting storage', () => {
   it('delegates plugin writes and resets to the registered store', async () => {
     const values = new Map<string, unknown>();

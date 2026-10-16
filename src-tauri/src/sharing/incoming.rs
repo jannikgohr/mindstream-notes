@@ -93,7 +93,9 @@ fn find_incoming_share(
 /// The invitations to shared folders that wait for an answer.
 #[tauri::command]
 pub async fn list_incoming_shares(app: AppHandle) -> CommandResult<Vec<IncomingShare>> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = job;
         let account = restore_required(&app)?;
         let server = session_server(&app)?;
         let manager = account
@@ -128,7 +130,9 @@ pub async fn accept_share(
     invitation_id: String,
     trust_changed_key: Option<bool>,
 ) -> CommandResult<()> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     tauri::async_runtime::spawn_blocking(move || -> CommandResult<()> {
+        let _job = job;
         let account = restore_required(&app)?;
         let server = session_server(&app)?;
         let manager = account
@@ -168,7 +172,9 @@ pub async fn accept_share(
 /// down as it can be.
 #[tauri::command]
 pub async fn decline_share(app: AppHandle, invitation_id: String) -> CommandResult<()> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = job;
         let account = restore_required(&app)?;
         let manager = account
             .invitation_manager()

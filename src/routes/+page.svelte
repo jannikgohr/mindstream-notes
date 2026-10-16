@@ -111,22 +111,17 @@
       return;
     }
 
-    let id: string | null = null;
+    const params = new URLSearchParams(window.location.search);
+    let id = params.get('window') === 'editor' ? params.get('id') : null;
     try {
       const { getCurrentWebviewWindow } = await withTimeout(
         import('@tauri-apps/api/webviewWindow'),
         3000
       );
       const label = getCurrentWebviewWindow().label;
-      if (label.startsWith('note_')) id = label;
+      if (!id && label.startsWith('note_')) id = label;
     } catch (err) {
       console.warn('[boot] window label probe unavailable', err);
-    }
-    if (!id) {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get('window') === 'editor') {
-        id = params.get('id');
-      }
     }
     if (!id && window.location.hash) {
       const hashParams = new URLSearchParams(

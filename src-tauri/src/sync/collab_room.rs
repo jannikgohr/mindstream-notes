@@ -85,8 +85,10 @@ pub async fn note_room_ticket(
     if !crate::auth::has_session(&app) {
         return Ok(None);
     }
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     Ok(
         tauri::async_runtime::spawn_blocking(move || -> Result<Option<String>, String> {
+            let _job = job;
             catch_blocking_panic("room_ticket", || {
                 let Some(account) =
                     crate::auth::try_restore(&app).map_err(|e| format!("restore session: {e}"))?
@@ -204,8 +206,10 @@ pub async fn note_room_info(
     // the blocking pool.
     let app_for_blocking = app.clone();
     let note_id = id;
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     Ok(
         tauri::async_runtime::spawn_blocking(move || -> Result<Option<RoomInfo>, String> {
+            let _job = job;
             catch_blocking_panic("room_info", || {
                 let account = match crate::auth::try_restore(&app_for_blocking)
                     .map_err(|e| format!("restore session: {e}"))?

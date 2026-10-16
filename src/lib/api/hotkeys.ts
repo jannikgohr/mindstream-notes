@@ -1,5 +1,7 @@
 import {
   assertString,
+  assertRecord,
+  assertBoolean,
   assertVoid,
   TauriCommandName,
   invokeOrFallback
@@ -77,4 +79,41 @@ export function syncNativeGlobalShortcuts(
 function parseOptionalString(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   return assertString(value, 'get_hotkey_display response');
+}
+
+export interface GlobalShortcutStatus {
+  coordinated: boolean;
+  settling: boolean;
+  registered: { commandId: string; accelerator: string }[];
+  error: string | null;
+}
+
+export function getGlobalShortcutStatus(): Promise<GlobalShortcutStatus> {
+  return invokeOrFallback(
+    TauriCommandName.GetGlobalShortcutStatus,
+    {},
+    () => ({
+      coordinated: false,
+      settling: false,
+      registered: [],
+      error: null
+    }),
+    (value) => {
+      const record = assertRecord(value, 'global shortcut status');
+      if (!Array.isArray(record.registered))
+        throw new Error('invalid shortcut registrations');
+      return {
+        coordinated: assertBoolean(record.coordinated, 'coordinated'),
+        settling: assertBoolean(record.settling, 'settling'),
+        registered: record.registered.map((entry) => {
+          const binding = assertRecord(entry, 'shortcut registration');
+          return {
+            commandId: assertString(binding.commandId, 'commandId'),
+            accelerator: assertString(binding.accelerator, 'accelerator')
+          };
+        }),
+        error: parseOptionalString(record.error)
+      };
+    }
+  );
 }

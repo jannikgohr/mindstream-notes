@@ -238,13 +238,15 @@ describe('Tauri-backed admin', () => {
     expect(pluginOverview()[0].enabled).toBe(false);
   });
 
-  it('setPluginEnabledAdmin keeps the optimistic flip when the backend throws', async () => {
+  it('setPluginEnabledAdmin rolls back and reports a failed write', async () => {
     noSettings('com.a.plugin');
+    api.disable.mockResolvedValue({ id: 'com.a.plugin', enabled: false });
     api.enable.mockRejectedValue(new Error('boom'));
     await setPluginEnabledAdmin('com.a.plugin', false);
-    await setPluginEnabledAdmin('com.a.plugin', true);
-    // Optimistic flip stands even though persistence failed.
-    expect(pluginOverview()[0].enabled).toBe(true);
+    await expect(setPluginEnabledAdmin('com.a.plugin', true)).rejects.toThrow(
+      'boom'
+    );
+    expect(pluginOverview()[0].enabled).toBe(false);
   });
 
   it('approvePluginAdmin re-discovers and refreshes after approval', async () => {
@@ -256,7 +258,7 @@ describe('Tauri-backed admin', () => {
 
   it('approvePluginAdmin bails out (no re-discovery) when approval fails', async () => {
     api.approve.mockRejectedValue(new Error('gated'));
-    await approvePluginAdmin('com.x.plugin');
+    await expect(approvePluginAdmin('com.x.plugin')).rejects.toThrow('gated');
     expect(loadPlugins).not.toHaveBeenCalled();
   });
 
@@ -273,7 +275,9 @@ describe('Tauri-backed admin', () => {
   it('removePluginAdmin keeps the plugin when the backend remove fails', async () => {
     noSettings('com.stay.plugin');
     api.remove.mockRejectedValue(new Error('locked'));
-    await removePluginAdmin('com.stay.plugin');
+    await expect(removePluginAdmin('com.stay.plugin')).rejects.toThrow(
+      'locked'
+    );
     expect(pluginOverview().some((e) => e.id === 'com.stay.plugin')).toBe(true);
   });
 });

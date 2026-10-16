@@ -14,22 +14,47 @@
 pub mod app_events;
 pub mod app_restart;
 pub mod assets;
+mod atomic_file;
 pub mod auth;
 pub mod backup;
+pub mod browser_archive;
+#[cfg(desktop)]
+pub mod browser_identity;
+pub mod browser_migration;
 pub mod client_errors;
 pub mod collections;
 pub mod content_stats;
+#[cfg(desktop)]
+pub mod coordinator_autostart;
+#[cfg(desktop)]
+pub mod coordinator_ipc;
+#[cfg(desktop)]
+pub mod coordinator_revival;
+#[cfg(desktop)]
+mod coordinator_shortcuts;
+#[cfg(desktop)]
+mod coordinator_shutdown;
+#[cfg(desktop)]
+mod coordinator_updater;
 pub mod data;
 pub mod db;
 pub mod deep_links;
 #[cfg(desktop)]
 pub mod desktop_settings;
+#[cfg(desktop)]
+mod device_notifications;
 pub mod drawing;
+pub mod environment;
 pub mod error;
+#[cfg(desktop)]
+pub mod foreground;
 pub mod history;
 pub mod hotkeys;
 pub mod i18n;
 pub mod import;
+pub mod legacy_content;
+#[cfg(desktop)]
+pub mod legacy_export;
 #[cfg(desktop)]
 pub mod native_menu;
 pub mod notes;
@@ -39,20 +64,44 @@ pub mod pdf_export;
 pub mod pdf_text;
 pub mod plugins;
 pub mod profiles;
+pub mod root_documents;
 pub mod search;
 pub mod serde_helpers;
 pub mod sharing;
+#[cfg(desktop)]
+mod shortcut_actions;
+#[cfg(desktop)]
+mod shortcut_routing;
 pub mod signatures;
 pub mod spellcheck;
+pub mod storage_locks;
 pub mod sync;
 pub mod system;
+pub mod theme_presets;
 #[cfg(desktop)]
 pub mod tray;
 pub mod tree;
 pub mod tree_batch;
+pub mod ui_settings;
+#[cfg(desktop)]
+mod update_recovery;
+#[cfg(desktop)]
+mod update_windows;
+#[cfg(desktop)]
+mod vault_handoff;
+pub mod vault_jobs;
+#[cfg(desktop)]
+pub mod vault_runtime;
+#[cfg(desktop)]
+pub mod vault_supervisor;
+pub mod vault_window_state;
 #[cfg(desktop)]
 pub mod webview_memory;
 pub mod webview_security;
+#[cfg(desktop)]
+pub mod worker_registration;
+#[cfg(desktop)]
+pub mod worker_shutdown;
 
 use std::borrow::Cow;
 
@@ -128,6 +177,24 @@ fn init_keyring() {
     }
 }
 
+#[cfg(not(desktop))]
+#[tauri::command]
+fn get_worker_browser_options() -> crate::error::CommandResult<Option<()>> {
+    Ok(None)
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+fn vault_worker_ready() -> crate::error::CommandResult<()> {
+    Ok(())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+fn vault_worker_failed() -> crate::error::CommandResult<()> {
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Route the `log` facade into logcat on Android. Without this
@@ -162,50 +229,7 @@ pub fn run() {
 
     #[cfg(desktop)]
     let app_handle = deep_links::builder()
-        .plugin(
-            tauri_plugin_log::Builder::new()
-                .level(if cfg!(debug_assertions) {
-                    log::LevelFilter::Trace
-                } else {
-                    log::LevelFilter::Info
-                })
-                // Silence noisy third-party crates that emit DEBUG/TRACE
-                // at high volume during normal operation — webview/window
-                // backend (wry/tao) and HTTP/TLS (hyper/reqwest/rustls).
-                // Our own modules stay at the global level.
-                .level_for("wry", log::LevelFilter::Warn)
-                .level_for("tao", log::LevelFilter::Warn)
-                .level_for("hyper", log::LevelFilter::Warn)
-                .level_for("hyper_util", log::LevelFilter::Warn)
-                .level_for("reqwest", log::LevelFilter::Warn)
-                .level_for("rustls", log::LevelFilter::Warn)
-                // Not only noise: the socket library traces its handshake
-                // request, headers and all, and the change feed's carries
-                // the session token. That must never reach a log.
-                .level_for("tungstenite", log::LevelFilter::Warn)
-                .level_for("tokio_tungstenite", log::LevelFilter::Warn)
-                .level_for("keyring_core", log::LevelFilter::Info)
-                .targets([
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
-                        file_name: Some("Mindstream".into()),
-                    }),
-                ])
-                .build(),
-        )
-        .plugin(
-            tauri_plugin_autostart::Builder::new()
-                .arg(AUTOSTART_ARG)
-                .build(),
-        )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(
-            tauri_plugin_window_state::Builder::new()
-                .with_state_flags(WINDOW_STATE_FLAGS)
-                .skip_initial_state("main")
-                .build(),
-        )
-        .plugin(tauri_plugin_updater::Builder::new().build())
         // Powers the relaunch-into-new-vault switch and the
         // restore-relaunch flow (frontend calls `relaunch()` from
         // @tauri-apps/plugin-process). Desktop-only; gated by
@@ -214,6 +238,18 @@ pub fn run() {
         .enable_macos_default_menu(false)
         .on_menu_event(native_menu::handle_menu_event)
         .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                worker_shutdown::window_destroyed(window.app_handle(), window.label());
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if worker_shutdown::closing(window.app_handle()) {
+                    api.prevent_close();
+                    return;
+                }
+            }
+            if matches!(event, tauri::WindowEvent::Focused(true)) {
+                vault_supervisor::window_focused(window.app_handle(), window.label());
+            }
             #[cfg(target_os = "macos")]
             if matches!(
                 event,
@@ -233,7 +269,12 @@ pub fn run() {
                             webview_memory::sync_to_visibility(app_handle);
                             return;
                         }
-                        app_handle.exit(0);
+                        if app_handle.try_state::<vault_supervisor::Worker>().is_some() {
+                            api.prevent_close();
+                            worker_shutdown::request_close(app_handle);
+                        } else {
+                            app_handle.exit(0);
+                        }
                     }
                     tauri::WindowEvent::Destroyed => {
                         let app_handle = window.app_handle();
@@ -255,6 +296,28 @@ pub fn run() {
     #[cfg(not(desktop))]
     let app_handle = tauri::Builder::default();
 
+    #[cfg(desktop)]
+    let app_handle = if environment::os_integrations_enabled() {
+        let app_handle = if std::env::args().any(|arg| arg == "--vault-worker") {
+            app_handle
+        } else {
+            let mut autostart = tauri_plugin_autostart::Builder::new().arg(AUTOSTART_ARG);
+            // Preserve the opt-in runtime across login while default startup
+            // remains direct. Never register a worker's private launch args.
+            if std::env::args().any(|arg| arg == "--supervised-vaults") {
+                autostart = autostart.arg("--supervised-vaults");
+            }
+            app_handle.plugin(autostart.build())
+        };
+        if std::env::args().any(|arg| arg == "--vault-worker") {
+            app_handle
+        } else {
+            app_handle.plugin(tauri_plugin_updater::Builder::new().build())
+        }
+    } else {
+        app_handle
+    };
+
     let app = app_handle
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -273,6 +336,47 @@ pub fn run() {
             },
         )
         .setup(|app| {
+            let os_root = app.path().app_data_dir()?;
+            let environment = environment::Environment::resolve(os_root)?;
+            environment.validate_browser_isolation(&app.config().identifier)?;
+            app.manage(environment);
+            #[cfg(desktop)]
+            {
+                let environment = app.state::<environment::Environment>();
+                let folder = if environment.kind == environment::Kind::Release {
+                    app.path().app_log_dir()?
+                } else {
+                    environment.root.join("logs")
+                };
+                app.handle().plugin(
+                    tauri_plugin_log::Builder::new()
+                        .level(if cfg!(debug_assertions) {
+                            log::LevelFilter::Trace
+                        } else {
+                            log::LevelFilter::Info
+                        })
+                        .level_for("wry", log::LevelFilter::Warn)
+                        .level_for("tao", log::LevelFilter::Warn)
+                        .level_for("hyper", log::LevelFilter::Warn)
+                        .level_for("hyper_util", log::LevelFilter::Warn)
+                        .level_for("reqwest", log::LevelFilter::Warn)
+                        .level_for("rustls", log::LevelFilter::Warn)
+                        // Not only noise: the socket library traces its handshake
+                        // request, headers and all, and the change feed's carries
+                        // the session token. That must never reach a log.
+                        .level_for("tungstenite", log::LevelFilter::Warn)
+                        .level_for("tokio_tungstenite", log::LevelFilter::Warn)
+                        .level_for("keyring_core", log::LevelFilter::Info)
+                        .targets([
+                            tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                            tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Folder {
+                                path: folder,
+                                file_name: Some(format!("Mindstream-{}", std::process::id())),
+                            }),
+                        ])
+                        .build(),
+                )?;
+            }
             // Register a credential store before any auth code can hit
             // it — Entry::new() returns Error::NoDefaultStore otherwise.
             init_keyring();
@@ -284,33 +388,91 @@ pub fn run() {
             // decides, migrating a pre-profiles vault into a "default"
             // profile first so notes aren't orphaned.
             let app_data_root = paths::app_data_root(app.handle())?;
-            let (active_id, app_data) = match profiles::dir_override() {
-                Some(over) => over,
-                None => {
-                    if let Err(e) = profiles::migrate_legacy_if_needed(&app_data_root) {
-                        log::error!("[profiles] legacy migration failed: {e}");
+            #[cfg(desktop)]
+            let role =
+                vault_supervisor::startup_role(app.state::<environment::Environment>().kind)?;
+            #[cfg(desktop)]
+            {
+                app.manage(role.clone());
+                if role == vault_runtime::Role::Host {
+                    return vault_supervisor::start_host(app).map_err(Into::into);
+                }
+                if matches!(role, vault_runtime::Role::Worker { .. }) {
+                    vault_supervisor::authorize_worker(app.handle(), &role)?;
+                }
+            }
+            #[cfg(desktop)]
+            let explicit_worker = match &role {
+                vault_runtime::Role::Worker { vault_id, .. } => Some(vault_id.clone()),
+                _ => None,
+            };
+            #[cfg(not(desktop))]
+            let explicit_worker: Option<String> = None;
+            let (active_id, ownership) = if let Some(id) = explicit_worker {
+                let ownership = profiles::resolve_worker(&app_data_root, &id)?;
+                (id, ownership)
+            } else {
+                match profiles::dir_override() {
+                    Some((id, dir)) => {
+                        let _root_lock = storage_locks::RootLock::acquire(&app_data_root)?;
+                        profiles::reconcile_root_locked(&app_data_root)?;
+                        (id, storage_locks::VaultLock::acquire(&dir)?)
                     }
-                    let index = profiles::load_or_init(&app_data_root)?;
-                    let dir = profiles::profile_dir(&app_data_root, &index.active);
-                    (index.active, dir)
+                    None => profiles::resolve_startup(&app_data_root)?,
                 }
             };
             log::info!("[boot] active profile = {active_id}");
+            let app_data = ownership.directory.clone();
+            plugins::packages::prepare(&app_data_root, &app_data)?;
+            plugins::settings::prepare(&app_data_root, &app_data)?;
+            ui_settings::prepare_device_appearance(&app_data_root, &app_data, &active_id)?;
+            legacy_content::initialize_owner(&app_data_root, &active_id, &app_data)?;
             app.manage(paths::ActiveProfile {
-                id: active_id,
+                id: active_id.clone(),
                 dir: app_data.clone(),
             });
+            #[cfg(desktop)]
+            if matches!(role, vault_runtime::Role::Worker { .. }) {
+                let browser =
+                    browser_identity::Identity::for_vault(&app_data_root, &active_id, &app_data)?;
+                let environment = app.state::<environment::Environment>();
+                let source = browser_archive::load(
+                    &app_data_root,
+                    &environment.credential_service,
+                    &legacy_export::origin(app.handle())?,
+                )?
+                .ok_or("worker legacy export is missing")?;
+                app.manage(browser_migration::Source(source));
+                app.manage(browser);
+                vault_supervisor::register_worker(app.handle(), &role, &ownership)?;
+            }
+            #[cfg(desktop)]
+            app.handle().plugin(
+                tauri_plugin_window_state::Builder::new()
+                    .with_state_flags(WINDOW_STATE_FLAGS)
+                    .with_filename(
+                        app_data
+                            .join("window-state.json")
+                            .to_string_lossy()
+                            .to_string(),
+                    )
+                    .skip_initial_state("main")
+                    .build(),
+            )?;
 
             // Apply any pending restore the user staged in a previous
             // session BEFORE opening the live DB. If the sentinel
             // file is present, we move the live DB aside and swap the
             // staged copy into place. No-op when nothing's pending.
-            backup::apply_pending_restore_if_any(app.handle());
+            backup::apply_pending_restore_if_any(app.handle())?;
+
+            #[cfg(desktop)]
+            app.manage(desktop_settings::DesktopSettings::load(app)?);
 
             let db_path = app_data.join("mindstream.db");
             log::info!("[boot] db path = {}", db_path.display());
 
-            let db = Db::open(&db_path)?;
+            let db = Db::open_owned(&db_path, ownership)?;
 
             // First-run seed.
             db.with_conn(|c| {
@@ -325,9 +487,8 @@ pub fn run() {
             app.manage(hotkeys::NativeHotkeyDisplays::default());
             #[cfg(desktop)]
             app.manage(hotkeys::DesktopGlobalShortcuts::default());
-
             #[cfg(desktop)]
-            app.manage(desktop_settings::DesktopSettings::load(app)?);
+            app.manage(shortcut_actions::Actions::default());
 
             // Create after profile selection so the first document gets the
             // correct account's CSP. A fresh document after sign-in/sign-out
@@ -344,7 +505,29 @@ pub fn run() {
                 .iter()
                 .find(|window| window.label == "main")
                 .ok_or("main window configuration is missing")?;
-            tauri::WebviewWindowBuilder::from_config(app, config)?
+            let title = if app.state::<environment::Environment>().kind == environment::Kind::Dev {
+                "Mindstream Notes Dev".to_owned()
+            } else {
+                "Mindstream Notes".to_owned()
+            };
+            #[cfg(desktop)]
+            let title = if matches!(role, vault_runtime::Role::Worker { .. }) {
+                let name = profiles::load(&app_data_root)?
+                    .and_then(|index| {
+                        index
+                            .profiles
+                            .into_iter()
+                            .find(|profile| profile.id == active_id)
+                    })
+                    .map(|profile| profile.name)
+                    .unwrap_or_else(|| active_id.clone());
+                format!("{title}: {name}")
+            } else {
+                title
+            };
+            let builder = tauri::WebviewWindowBuilder::from_config(app, config)?
+                .initialization_script(theme_presets::initialization_script(app.handle())?)
+                .title(title)
                 .on_web_resource_request(move |_request, response| {
                     if !response
                         .headers()
@@ -358,14 +541,22 @@ pub fn run() {
                         session.as_ref().map(|session| session.server_url.as_str()),
                         preview_port,
                     );
-                })
-                .build()?;
+                });
+            #[cfg(desktop)]
+            let builder = if let Some(identity) = app.try_state::<browser_identity::Identity>() {
+                identity.apply(builder)
+            } else {
+                builder
+            };
+            builder.build()?;
 
             #[cfg(target_os = "macos")]
             native_menu::init(app)?;
 
             #[cfg(desktop)]
-            tray::init(app)?;
+            if !matches!(role, vault_runtime::Role::Worker { .. }) {
+                tray::init(app)?;
+            }
 
             #[cfg(desktop)]
             if let Some(window) = app.get_webview_window("main") {
@@ -378,7 +569,10 @@ pub fn run() {
                 ) {
                     log::warn!("[window] apply decorations: {err}");
                 }
-                if was_started_by_autostart()
+                if matches!(role, vault_runtime::Role::Worker { .. }) {
+                    // First settings migration and readiness route activation
+                    // through the host; a failed worker cannot replace a source.
+                } else if was_started_by_autostart()
                     && desktop_settings::should_start_in_tray(app.handle())
                 {
                     let _ = window.hide();
@@ -400,6 +594,8 @@ pub fn run() {
             // in +layout.svelte. Starts disabled; the JS settings
             // effect calls `set_sync_schedule` once on mount with the
             // restored preference, which is what actually flips it on.
+            app.manage(vault_jobs::Jobs::default());
+            app.manage(vault_jobs::Saves::default());
             app.manage(sync::scheduler::SyncScheduler::new());
             sync::scheduler::spawn(app.handle().clone());
             // An invite link opened outside the app, now or when it started.
@@ -429,212 +625,275 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            // Collections
-            collections::list_collections,
-            collections::create_collection,
-            collections::update_collection,
-            collections::delete_collection,
-            // Notes
-            notes::list_notes,
-            tree::load_tree,
-            client_errors::report_client_error,
-            notes::load_note,
-            notes::create_note,
-            notes::save_note,
-            notes::trash_note,
-            notes::restore_note,
-            notes::purge_note,
-            tree_batch::move_many,
-            tree_batch::trash_many,
-            tree_batch::restore_many,
-            tree_batch::purge_many,
-            // Spellcheck (local dictionaries, no network at check time)
-            spellcheck::spellcheck_unknown_words,
-            spellcheck::spellcheck_suggest,
-            spellcheck::spellcheck_installed_dictionaries,
-            spellcheck::spellcheck_available_dictionaries,
-            spellcheck::spellcheck_install_dictionary,
-            spellcheck::spellcheck_remove_dictionary,
-            spellcheck::custom_dictionary_list,
-            spellcheck::custom_dictionary_add,
-            spellcheck::custom_dictionary_remove,
-            spellcheck::spellcheck_word_chars,
-            spellcheck::spellcheck_release_dictionaries,
-            spellcheck::http_checker::text_checker_check,
-            spellcheck::http_checker::text_checker_test_connection,
-            // Search
-            search::search_notes,
-            // PDF searchable-text index (derived, local-only)
-            pdf_text::set_pdf_text,
-            pdf_text::pdf_notes_missing_text,
-            pdf_text::pdf_note_needs_text,
-            // Note history (local, automatic versioning)
-            history::capture_note_version,
-            history::capture_current_note_version,
-            history::list_note_versions,
-            history::load_note_version,
-            history::prune_note_versions,
-            // Content stats (canonical word count, from DB content)
-            content_stats::note_word_count,
-            // Assets (freeform drawing attachments)
-            assets::upload_drawing_asset,
-            assets::fetch_drawing_asset,
-            assets::import_pdf_note,
-            assets::sweep_unreferenced_markdown_assets,
-            // Signatures (reusable, synced signature library)
-            signatures::list_signatures,
-            signatures::save_signature,
-            signatures::delete_signature,
-            // Plugins (per-profile registry + integrity)
-            plugins::plugins_list,
-            plugins::plugins_get,
-            plugins::plugins_discover,
-            plugins::plugins_enable,
-            plugins::plugins_disable,
-            plugins::plugins_approve,
-            plugins::plugins_set_load_error,
-            plugins::plugins_remove,
-            plugins::plugins_read_file,
-            plugins::plugins_artifacts_status,
-            plugins::plugins_download_artifact,
-            plugins::plugins_read_artifact,
-            plugins::plugins_native_tool_status,
-            plugins::plugins_run_native_tool,
-            plugins::plugins_settings_all,
-            plugins::plugins_settings_set,
-            plugins::plugins_settings_remove,
-            plugins::plugins_run_script,
-            plugins::preview_service::plugins_native_service_status,
-            plugins::preview_service::plugins_preview_start,
-            plugins::preview_service::plugins_preview_update,
-            plugins::preview_service::plugins_preview_stop,
-            // Profiles (vaults)
-            profiles::list_profiles,
-            profiles::create_profile,
-            profiles::switch_profile,
-            profiles::rename_profile,
-            profiles::delete_profile,
-            // Native app restart — mobile vault switch reboots into the
-            // newly-activated vault (desktop relaunches from JS instead).
-            #[cfg(target_os = "android")]
-            app_restart::restart_app,
-            // Auth (Etebase)
-            auth::etebase_login,
-            auth::etebase_logout,
-            auth::etebase_session,
-            auth::check_etebase_server_url,
-            auth::account::account_server_info,
-            auth::account::account_signup,
-            auth::account::account_recover,
-            auth::account::account_security_status,
-            auth::account::account_begin_authenticator,
-            auth::account::account_confirm_authenticator,
-            auth::account::account_remove_authenticator,
-            auth::account::account_new_backup_codes,
-            auth::account::account_new_recovery_key,
-            auth::secret_file::account_save_secret_file,
-            auth::account::account_change_password,
-            auth::account::account_sessions,
-            auth::account::account_end_session,
-            auth::account::account_end_other_sessions,
-            // Sync
-            sync::sync_now,
-            sync::collab_room::note_room_info,
-            sync::collab_room::note_room_ticket,
-            sync::scheduler::set_sync_schedule,
-            // Sharing
-            sharing::list_incoming_shares,
-            sharing::accept_share,
-            sharing::decline_share,
-            sharing::leave_shared_collection,
-            sharing::stop_sharing_collection,
-            sharing::list_collection_members,
-            sharing::set_collection_member_access,
-            sharing::remove_collection_member,
-            sharing::get_collection_share_state,
-            sharing::invite_collection,
-            sharing::create_share_link,
-            sharing::list_share_links,
-            sharing::revoke_share_link,
-            sharing::open_share_link,
-            sharing::claim_share_link,
-            sharing::user_key_info,
-            sharing::own_key_fingerprint,
-            deep_links::take_pending_invite_link,
-            #[cfg(feature = "e2e-data-dir")]
-            deep_links::e2e_open_address,
-            #[cfg(feature = "e2e-data-dir")]
-            sharing::e2e_create_standalone_collection_invite,
-            #[cfg(feature = "e2e-data-dir")]
-            sharing::e2e_remember_other_key,
-            // One-shot recovery for items the pre-fix etebase encoder
-            // bug left corrupt on the server. Invoke from dev tools.
-            sync::repair::audit_corrupt_remote_items,
-            sync::repair::purge_corrupt_remote_note,
-            // Data & Backup (Settings → Data)
-            data::open_data_folder,
-            data::open_folder,
-            data::trash_counts,
-            data::empty_trash,
-            data::set_trash_retention,
-            data::sweep_trash_retention,
-            backup::backup_now,
-            backup::import_begin,
-            backup::import_cleanup,
-            backup::import_restore,
-            backup::import_merge,
-            import::legacy_links::legacy_wikilink_count,
-            import::legacy_links::convert_legacy_wikilinks_command,
-            import::notes_import_pick_folder,
-            import::notes_import_pick_file,
-            import::notes_import_detect,
-            import::notes_import_run,
-            import::notes_import_cancel,
-            notes_export::notes_export_pick_dir,
-            notes_export::notes_export_write_file,
-            // PDF export
-            pdf_export::save_pdf_export,
-            // System introspection
-            system::is_appimage_install,
-            // Hotkey display state mirrored from the JS hotkey store
-            hotkeys::get_hotkey_display,
-            hotkeys::set_hotkey_displays,
+        .invoke_handler(|invoke| {
             #[cfg(desktop)]
-            hotkeys::sync_global_shortcuts,
-            #[cfg(desktop)]
-            desktop_settings::get_close_to_tray,
-            #[cfg(desktop)]
-            desktop_settings::set_close_to_tray,
-            #[cfg(desktop)]
-            desktop_settings::get_start_in_tray,
-            #[cfg(desktop)]
-            desktop_settings::set_start_in_tray,
-            #[cfg(desktop)]
-            desktop_settings::get_custom_window_decorations,
-            #[cfg(desktop)]
-            desktop_settings::set_custom_window_decorations,
-            #[cfg(desktop)]
-            desktop_settings::get_desktop_language,
-            #[cfg(desktop)]
-            desktop_settings::set_desktop_language,
-            #[cfg(desktop)]
-            desktop_settings::get_desktop_theme_mode,
-            #[cfg(desktop)]
-            desktop_settings::set_desktop_theme_mode,
-            // Ink note bridge — save + Android live-ink overlay control
-            // plane. The overlay commands are no-ops on desktop.
-            drawing::drawing_save_ink_state,
-            drawing::drawing_show_live_ink_overlay,
-            drawing::drawing_hide_live_ink_overlay,
-            drawing::drawing_enter_immersive_ink_mode,
-            drawing::drawing_exit_immersive_ink_mode,
-            drawing::drawing_cancel_live_ink,
-            drawing::drawing_set_live_ink_style,
-            drawing::drawing_set_live_ink_finger_drawing,
-            drawing::drawing_set_control_bounds,
-            drawing::drawing_set_document_bounds,
-        ])
+            if invoke
+                .message
+                .webview_ref()
+                .app_handle()
+                .try_state::<vault_runtime::Role>()
+                .is_some_and(|role| *role == vault_runtime::Role::Host)
+                && !vault_supervisor::allows_host_invoke(
+                    invoke.message.webview_ref().label(),
+                    invoke.message.command(),
+                )
+            {
+                invoke
+                    .resolver
+                    .reject("command unavailable in the coordinator");
+                return true;
+            }
+            let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+                // Collections
+                collections::list_collections,
+                collections::create_collection,
+                collections::update_collection,
+                collections::delete_collection,
+                // Notes
+                notes::list_notes,
+                tree::load_tree,
+                client_errors::report_client_error,
+                notes::load_note,
+                notes::create_note,
+                notes::save_note,
+                notes::trash_note,
+                notes::restore_note,
+                notes::purge_note,
+                tree_batch::move_many,
+                tree_batch::trash_many,
+                tree_batch::restore_many,
+                tree_batch::purge_many,
+                // Spellcheck (local dictionaries, no network at check time)
+                spellcheck::spellcheck_unknown_words,
+                spellcheck::spellcheck_suggest,
+                spellcheck::spellcheck_installed_dictionaries,
+                spellcheck::spellcheck_available_dictionaries,
+                spellcheck::spellcheck_install_dictionary,
+                spellcheck::spellcheck_remove_dictionary,
+                spellcheck::custom_dictionary_list,
+                spellcheck::custom_dictionary_add,
+                spellcheck::custom_dictionary_remove,
+                spellcheck::spellcheck_word_chars,
+                spellcheck::spellcheck_release_dictionaries,
+                spellcheck::http_checker::text_checker_check,
+                spellcheck::http_checker::text_checker_test_connection,
+                // Search
+                search::search_notes,
+                // PDF searchable-text index (derived, local-only)
+                pdf_text::set_pdf_text,
+                pdf_text::pdf_notes_missing_text,
+                pdf_text::pdf_note_needs_text,
+                // Note history (local, automatic versioning)
+                history::capture_note_version,
+                history::capture_current_note_version,
+                history::list_note_versions,
+                history::load_note_version,
+                history::prune_note_versions,
+                // Content stats (canonical word count, from DB content)
+                content_stats::note_word_count,
+                // Assets (freeform drawing attachments)
+                assets::upload_drawing_asset,
+                assets::fetch_drawing_asset,
+                assets::import_pdf_note,
+                assets::sweep_unreferenced_markdown_assets,
+                // Signatures (reusable, synced signature library)
+                signatures::list_signatures,
+                signatures::save_signature,
+                signatures::delete_signature,
+                // Plugins (per-profile registry + integrity)
+                plugins::plugins_list,
+                plugins::plugins_get,
+                plugins::plugins_discover,
+                plugins::plugins_enable,
+                plugins::plugins_disable,
+                plugins::plugins_approve,
+                plugins::plugins_set_load_error,
+                plugins::plugins_remove,
+                plugins::plugins_install,
+                plugins::plugins_read_file,
+                plugins::plugins_artifacts_status,
+                plugins::plugins_download_artifact,
+                plugins::plugins_read_artifact,
+                plugins::plugins_native_tool_status,
+                plugins::plugins_run_native_tool,
+                plugins::plugins_settings_all,
+                plugins::plugins_settings_set,
+                plugins::plugins_settings_remove,
+                plugins::plugins_run_script,
+                plugins::preview_service::plugins_native_service_status,
+                plugins::preview_service::plugins_preview_start,
+                plugins::preview_service::plugins_preview_update,
+                plugins::preview_service::plugins_preview_stop,
+                // Profiles (vaults)
+                profiles::list_profiles,
+                vault_window_state::get_vault_window_state,
+                profiles::create_profile,
+                profiles::switch_profile,
+                profiles::rename_profile,
+                profiles::delete_profile,
+                // Native app restart — mobile vault switch reboots into the
+                // newly-activated vault (desktop relaunches from JS instead).
+                #[cfg(target_os = "android")]
+                app_restart::restart_app,
+                // Auth (Etebase)
+                auth::etebase_login,
+                auth::etebase_logout,
+                auth::etebase_session,
+                ui_settings::initialize_ui_settings,
+                #[cfg(desktop)]
+                browser_identity::get_worker_browser_options,
+                #[cfg(not(desktop))]
+                get_worker_browser_options,
+                #[cfg(desktop)]
+                legacy_export::finish_legacy_browser_export,
+                #[cfg(desktop)]
+                vault_supervisor::vault_worker_ready,
+                #[cfg(desktop)]
+                vault_supervisor::vault_worker_failed,
+                #[cfg(desktop)]
+                vault_supervisor::open_profile_window,
+                #[cfg(desktop)]
+                vault_supervisor::get_picker_vaults,
+                #[cfg(desktop)]
+                vault_supervisor::open_picker_vault,
+                #[cfg(desktop)]
+                coordinator_updater::check_coordinated_update,
+                #[cfg(desktop)]
+                coordinator_updater::install_coordinated_update,
+                #[cfg(desktop)]
+                coordinator_autostart::get_start_on_login,
+                #[cfg(desktop)]
+                coordinator_autostart::set_start_on_login,
+                #[cfg(desktop)]
+                worker_shutdown::vault_window_close_ready,
+                #[cfg(desktop)]
+                worker_shutdown::vault_window_close_ack,
+                #[cfg(not(desktop))]
+                vault_worker_ready,
+                #[cfg(not(desktop))]
+                vault_worker_failed,
+                legacy_content::migrate_legacy_content,
+                ui_settings::load_ui_settings,
+                theme_presets::list_theme_presets,
+                theme_presets::get_theme_appearance,
+                theme_presets::save_theme_preset,
+                theme_presets::delete_theme_preset,
+                ui_settings::patch_ui_setting,
+                auth::check_etebase_server_url,
+                auth::account::account_server_info,
+                auth::account::account_signup,
+                auth::account::account_recover,
+                auth::account::account_security_status,
+                auth::account::account_begin_authenticator,
+                auth::account::account_confirm_authenticator,
+                auth::account::account_remove_authenticator,
+                auth::account::account_new_backup_codes,
+                auth::account::account_new_recovery_key,
+                auth::secret_file::account_save_secret_file,
+                auth::account::account_change_password,
+                auth::account::account_sessions,
+                auth::account::account_end_session,
+                auth::account::account_end_other_sessions,
+                // Sync
+                sync::sync_now,
+                sync::collab_room::note_room_info,
+                sync::collab_room::note_room_ticket,
+                sync::scheduler::set_sync_schedule,
+                // Sharing
+                sharing::list_incoming_shares,
+                sharing::accept_share,
+                sharing::decline_share,
+                sharing::leave_shared_collection,
+                sharing::stop_sharing_collection,
+                sharing::list_collection_members,
+                sharing::set_collection_member_access,
+                sharing::remove_collection_member,
+                sharing::get_collection_share_state,
+                sharing::invite_collection,
+                sharing::create_share_link,
+                sharing::list_share_links,
+                sharing::revoke_share_link,
+                sharing::open_share_link,
+                sharing::claim_share_link,
+                sharing::user_key_info,
+                sharing::own_key_fingerprint,
+                deep_links::take_pending_invite_link,
+                #[cfg(feature = "e2e-data-dir")]
+                deep_links::e2e_open_address,
+                #[cfg(feature = "e2e-data-dir")]
+                sharing::e2e_create_standalone_collection_invite,
+                #[cfg(feature = "e2e-data-dir")]
+                sharing::e2e_remember_other_key,
+                // One-shot recovery for items the pre-fix etebase encoder
+                // bug left corrupt on the server. Invoke from dev tools.
+                sync::repair::audit_corrupt_remote_items,
+                sync::repair::purge_corrupt_remote_note,
+                // Data & Backup (Settings → Data)
+                data::open_data_folder,
+                data::open_folder,
+                data::trash_counts,
+                data::empty_trash,
+                data::set_trash_retention,
+                data::sweep_trash_retention,
+                backup::backup_now,
+                backup::import_begin,
+                backup::import_cleanup,
+                backup::import_restore,
+                backup::import_merge,
+                import::legacy_links::legacy_wikilink_count,
+                import::legacy_links::convert_legacy_wikilinks_command,
+                import::notes_import_pick_folder,
+                import::notes_import_pick_file,
+                import::notes_import_detect,
+                import::notes_import_run,
+                import::notes_import_cancel,
+                notes_export::notes_export_pick_dir,
+                notes_export::notes_export_write_file,
+                // PDF export
+                pdf_export::save_pdf_export,
+                // System introspection
+                system::is_appimage_install,
+                // Hotkey display state mirrored from the JS hotkey store
+                hotkeys::get_hotkey_display,
+                hotkeys::set_hotkey_displays,
+                #[cfg(desktop)]
+                hotkeys::sync_global_shortcuts,
+                hotkeys::get_global_shortcut_status,
+                #[cfg(desktop)]
+                desktop_settings::get_close_to_tray,
+                #[cfg(desktop)]
+                desktop_settings::set_close_to_tray,
+                #[cfg(desktop)]
+                desktop_settings::get_start_in_tray,
+                #[cfg(desktop)]
+                desktop_settings::set_start_in_tray,
+                #[cfg(desktop)]
+                desktop_settings::get_custom_window_decorations,
+                #[cfg(desktop)]
+                desktop_settings::set_custom_window_decorations,
+                #[cfg(desktop)]
+                desktop_settings::get_desktop_language,
+                #[cfg(desktop)]
+                desktop_settings::set_desktop_language,
+                #[cfg(desktop)]
+                desktop_settings::get_desktop_theme_mode,
+                #[cfg(desktop)]
+                desktop_settings::set_desktop_theme_mode,
+                // Ink note bridge — save + Android live-ink overlay control
+                // plane. The overlay commands are no-ops on desktop.
+                drawing::drawing_save_ink_state,
+                drawing::drawing_show_live_ink_overlay,
+                drawing::drawing_hide_live_ink_overlay,
+                drawing::drawing_enter_immersive_ink_mode,
+                drawing::drawing_exit_immersive_ink_mode,
+                drawing::drawing_cancel_live_ink,
+                drawing::drawing_set_live_ink_style,
+                drawing::drawing_set_live_ink_finger_drawing,
+                drawing::drawing_set_control_bounds,
+                drawing::drawing_set_document_bounds,
+            ];
+            handler(invoke)
+        })
         .build(tauri::generate_context!());
 
     let app = match app {
@@ -647,6 +906,18 @@ pub fn run() {
     };
 
     app.run(|app, event| {
+        #[cfg(desktop)]
+        if app
+            .try_state::<vault_runtime::Role>()
+            .is_some_and(|role| *role == vault_runtime::Role::Host)
+        {
+            if let tauri::RunEvent::ExitRequested {
+                api, code: None, ..
+            } = &event
+            {
+                api.prevent_exit();
+            }
+        }
         // Reap any long-lived plugin preview servers so they don't outlive the
         // app (e.g. a leftover `tinymist preview` holding a port).
         if matches!(event, tauri::RunEvent::Exit) {
@@ -658,7 +929,7 @@ pub fn run() {
         }
         #[cfg(target_os = "macos")]
         if matches!(event, tauri::RunEvent::Reopen { .. }) {
-            crate::tray::focus_main_window(app);
+            crate::vault_supervisor::activate(app);
         }
         #[cfg(not(target_os = "macos"))]
         let _ = app;

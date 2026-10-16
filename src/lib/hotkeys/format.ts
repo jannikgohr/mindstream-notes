@@ -15,6 +15,7 @@
 
 import { isMac } from './platform';
 import { parseBinding } from './parse';
+import globalShortcutContract from './global-shortcuts.json';
 
 /** Pretty names for non-printables. Keys are the lowercased canonical
  *  forms produced by the parser; values are what we show the user. */
@@ -185,88 +186,8 @@ export function tauriAccelerator(binding: string | null): string | null {
  * tested against the plugin's actual behaviour, not just whether
  * `on_shortcut` returns Ok.
  */
-const GLOBAL_SHORTCUT_KEY_MAP: Record<string, string> = {
-  // Letters (a-z → KeyA-KeyZ). Generated rather than spelled out so
-  // the map can't drift out of sync with the alphabet.
-  ...Object.fromEntries(
-    Array.from({ length: 26 }, (_, i) => {
-      const ch = String.fromCharCode(97 + i);
-      return [ch, `Key${ch.toUpperCase()}`];
-    })
-  ),
-  // Digits 0-9
-  ...Object.fromEntries(
-    Array.from({ length: 10 }, (_, i) => [String(i), `Digit${i}`])
-  ),
-  // F1-F24
-  ...Object.fromEntries(
-    Array.from({ length: 24 }, (_, i) => [`f${i + 1}`, `F${i + 1}`])
-  ),
-  // Symbol keys (US-layout typed characters)
-  '`': 'Backquote',
-  '\\': 'Backslash',
-  '[': 'BracketLeft',
-  ']': 'BracketRight',
-  ',': 'Comma',
-  '=': 'Equal',
-  '.': 'Period',
-  "'": 'Quote',
-  ';': 'Semicolon',
-  '/': 'Slash',
-  // Minus is bound via the `-` → `minus` alias the parser emits.
-  // `plus` (Shift+= on US) isn't a base key on its own in the plugin
-  // vocabulary; users wanting "+" must bind `shift+=` instead.
-  minus: 'Minus',
-  // Named keys
-  backspace: 'Backspace',
-  capslock: 'CapsLock',
-  enter: 'Enter',
-  space: 'Space',
-  tab: 'Tab',
-  delete: 'Delete',
-  end: 'End',
-  home: 'Home',
-  insert: 'Insert',
-  pagedown: 'PageDown',
-  pageup: 'PageUp',
-  printscreen: 'PrintScreen',
-  scrolllock: 'ScrollLock',
-  arrowdown: 'ArrowDown',
-  arrowleft: 'ArrowLeft',
-  arrowright: 'ArrowRight',
-  arrowup: 'ArrowUp',
-  numlock: 'NumLock',
-  numpad0: 'Numpad0',
-  numpad1: 'Numpad1',
-  numpad2: 'Numpad2',
-  numpad3: 'Numpad3',
-  numpad4: 'Numpad4',
-  numpad5: 'Numpad5',
-  numpad6: 'Numpad6',
-  numpad7: 'Numpad7',
-  numpad8: 'Numpad8',
-  numpad9: 'Numpad9',
-  numpadadd: 'NumpadAdd',
-  numpaddecimal: 'NumpadDecimal',
-  numpaddivide: 'NumpadDivide',
-  numpadenter: 'NumpadEnter',
-  numpadequal: 'NumpadEqual',
-  numpadmultiply: 'NumpadMultiply',
-  numpadsubtract: 'NumpadSubtract',
-  escape: 'Escape',
-  // Media keys. `mediatrackprevious` (the typed event.key) maps to
-  // `MediaTrackPrev` (not `Previous`) — that's what the plugin's
-  // own map uses; copying that quirk verbatim.
-  audiovolumedown: 'AudioVolumeDown',
-  audiovolumeup: 'AudioVolumeUp',
-  audiovolumemute: 'AudioVolumeMute',
-  mediaplay: 'MediaPlay',
-  mediapause: 'MediaPause',
-  mediaplaypause: 'MediaPlayPause',
-  mediastop: 'MediaStop',
-  mediatracknext: 'MediaTrackNext',
-  mediatrackprevious: 'MediaTrackPrev'
-};
+const GLOBAL_SHORTCUT_KEY_MAP: Record<string, string> =
+  globalShortcutContract.keys;
 
 /** Reason codes returned by `globalShortcutSupportReason`. Surfaced
  *  as-is to the i18n layer so each case can have a tailored message. */

@@ -45,3 +45,6 @@ node_modules
 
 # Keys
 keystore.jks
+
+# Native Python fixture bytecode
+src-tauri/scripts/__pycache__/

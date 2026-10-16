@@ -6,7 +6,7 @@
 //!   - `core-plugins/` under the app's bundled **resource dir** → `builtin`.
 //!     These ship inside the (signed) app bundle and are trusted, so a shipped
 //!     update to a core plugin is auto-approved (see `plugins::upsert`).
-//!   - `plugins/` under the active profile's **app-data dir** → `installed`.
+//!   - `plugin-packages/` under the environment **app-data root** → `installed`.
 //!     User-writable third-party plugins, subject to the manifest hash-change
 //!     re-approval gate.
 //!
@@ -39,6 +39,9 @@ use crate::error::{AppError, AppResult};
 /// A plugin found on disk, with its trust `source` fixed by its location.
 #[derive(Debug)]
 pub struct DiscoveredPlugin {
+    pub generation: Option<String>,
+    pub legacy_generation: Option<String>,
+    pub lease: Option<std::sync::Arc<super::packages::PackageLease>>,
     pub id: String,
     pub version: String,
     pub permissions: Vec<String>,
@@ -98,7 +101,7 @@ pub enum PluginFiles {
 impl PluginFiles {
     /// Every file under the plugin as `(relpath, bytes)`, `/`-separated. Order is
     /// unspecified — [`signing::package_digest`] sorts.
-    fn collect(&self) -> AppResult<Vec<(String, Vec<u8>)>> {
+    pub(super) fn collect(&self) -> AppResult<Vec<(String, Vec<u8>)>> {
         match self {
             PluginFiles::Fs(dir) => collect_files(dir),
             PluginFiles::Embedded(dir) => Ok(collect_files_embedded(dir)),
@@ -192,9 +195,9 @@ impl PluginFiles {
     }
 }
 
-/// The active profile's third-party plugins directory.
+/// Root package input and catalog directory.
 pub fn third_party_plugins_dir(app: &AppHandle) -> AppResult<PathBuf> {
-    Ok(crate::paths::app_data_dir(app)?.join("plugins"))
+    Ok(crate::paths::app_data_root(app)?.join("plugins"))
 }
 
 /// Create the third-party plugins directory if absent (best-effort), so users
@@ -208,14 +211,30 @@ pub fn ensure_third_party_dir(dir: &Path) {
 /// Recursively read every file under `dir` as `(relpath, bytes)`, with `/`
 /// separators. Order is unspecified — [`signing::package_digest`] sorts.
 fn collect_files(dir: &Path) -> AppResult<Vec<(String, Vec<u8>)>> {
+    if fs::symlink_metadata(dir)?.file_type().is_symlink() {
+        return Err(AppError::InvalidArg(
+            "plugin directory cannot be a symlink".into(),
+        ));
+    }
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(cur) = stack.pop() {
         for entry in fs::read_dir(&cur)?.flatten() {
             let path = entry.path();
-            if path.is_dir() {
+            let kind = entry.file_type()?;
+            if kind.is_symlink() {
+                return Err(AppError::InvalidArg(
+                    "plugin packages cannot contain symlinks".into(),
+                ));
+            }
+            if kind.is_dir() {
                 stack.push(path);
                 continue;
+            }
+            if !kind.is_file() {
+                return Err(AppError::InvalidArg(
+                    "plugin packages require regular files".into(),
+                ));
             }
             let rel = path
                 .strip_prefix(dir)
@@ -254,7 +273,7 @@ fn collect_files_embedded(dir: &Dir<'static>) -> Vec<(String, Vec<u8>)> {
 /// Read one plugin directory into a [`DiscoveredPlugin`]. The integrity checksum
 /// and signature both cover the whole package (manifest + code + assets) via the
 /// [`signing::package_digest`] document, not just `manifest.json`.
-fn read_plugin(files: PluginFiles, source: &str) -> AppResult<DiscoveredPlugin> {
+pub(crate) fn read_plugin(files: PluginFiles, source: &str) -> AppResult<DiscoveredPlugin> {
     let all = files.collect()?;
     let digest = signing::package_digest(&all);
     let checksum = sha256_hex(&digest);
@@ -275,6 +294,9 @@ fn read_plugin(files: PluginFiles, source: &str) -> AppResult<DiscoveredPlugin> 
     let manifest_json: serde_json::Value = serde_json::from_slice(manifest_bytes)
         .map_err(|e| AppError::InvalidArg(format!("manifest.json: {e}")))?;
     Ok(DiscoveredPlugin {
+        generation: None,
+        legacy_generation: None,
+        lease: None,
         id: manifest.id.clone(),
         version: manifest.version.clone(),
         permissions: manifest.permission_strings(),
@@ -300,7 +322,10 @@ pub fn discover_dir(root: &Path, source: &str) -> Vec<DiscoveredPlugin> {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path.is_dir() || !path.join("manifest.json").exists() {
+        if entry.file_type().map_or(true, |kind| kind.is_symlink())
+            || !path.is_dir()
+            || !path.join("manifest.json").exists()
+        {
             continue;
         }
         match read_plugin(PluginFiles::Fs(path.clone()), source) {
@@ -332,7 +357,15 @@ pub fn discover_builtins() -> Vec<DiscoveredPlugin> {
 /// Discover builtin (embedded) then third-party (installed) plugins. Builtin ids
 /// win: a third-party plugin whose id collides with a builtin is dropped so it
 /// can neither shadow the builtin nor inherit its trust.
+#[cfg(test)]
 pub fn discover(third_party_dir: &Path) -> Vec<DiscoveredPlugin> {
+    try_discover(third_party_dir).unwrap_or_else(|e| {
+        log::error!("[plugins] discovery failed: {e}");
+        Vec::new()
+    })
+}
+
+pub fn try_discover(third_party_dir: &Path) -> AppResult<Vec<DiscoveredPlugin>> {
     let mut plugins: Vec<DiscoveredPlugin> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
@@ -340,7 +373,12 @@ pub fn discover(third_party_dir: &Path) -> Vec<DiscoveredPlugin> {
         seen.insert(plugin.id.clone());
         plugins.push(plugin);
     }
-    for plugin in discover_dir(third_party_dir, SOURCE_INSTALLED) {
+    let installed = if super::packages::is_global(third_party_dir) {
+        super::packages::discover(third_party_dir, None)?
+    } else {
+        discover_dir(third_party_dir, SOURCE_INSTALLED)
+    };
+    for plugin in installed {
         if seen.contains(&plugin.id) {
             log::warn!(
                 "[plugins] third-party '{}' collides with a bundled core plugin id; ignored",
@@ -351,7 +389,7 @@ pub fn discover(third_party_dir: &Path) -> Vec<DiscoveredPlugin> {
         seen.insert(plugin.id.clone());
         plugins.push(plugin);
     }
-    plugins
+    Ok(plugins)
 }
 
 /// The plugin `id` a directory declares, read from its `manifest.json` alone.
@@ -387,9 +425,17 @@ pub fn find(third_party_dir: &Path, id: &str) -> Option<DiscoveredPlugin> {
         }
         return read_plugin(files, SOURCE_BUILTIN).ok();
     }
+    if super::packages::is_global(third_party_dir) {
+        return super::packages::discover(third_party_dir, Some(id))
+            .ok()?
+            .pop();
+    }
     for entry in fs::read_dir(third_party_dir).ok()?.flatten() {
         let path = entry.path();
-        if !path.is_dir() || !path.join("manifest.json").exists() {
+        if entry.file_type().map_or(true, |kind| kind.is_symlink())
+            || !path.is_dir()
+            || !path.join("manifest.json").exists()
+        {
             continue;
         }
         let files = PluginFiles::Fs(path);

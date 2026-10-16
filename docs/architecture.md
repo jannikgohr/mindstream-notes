@@ -53,6 +53,44 @@ flowchart TB
     CP -->|"live updates (E2EE)"| NGINX
 ```
 
+## Desktop vault runtime
+
+An ordinary desktop launch elects one coordinator for its environment root.
+The coordinator owns the vault index, desktop integrations and root recovery.
+Each vault has one worker with a physical lifetime OS lease, its own SQLite
+connection, settings/account state and isolated browser store. Main and note
+popout windows share that worker. Authenticated private IPC pins launch identity
+and protocol compatibility; failed IPC never proves a released vault lease.
+Isolated e2e devices remain direct unless explicitly supervised, and mobile
+retains its existing single-vault runtime.
+
+Device settings live in locked root documents; content settings live in the
+vault. Revision notifications carry invalidations, and each worker reloads its
+own values. Before concurrency, a dedicated legacy-origin page exports browser
+storage into an encrypted archive with preserved original values. A missing
+startup directory opens an isolated picker before editor services initialize.
+
+Opening in this window prepares a hidden target, then saves and closes the
+source worker before showing the target. The durable `vault-handoff.json` record
+binds exact vault paths, launch/operation IDs, geometry and phase. Recovery keeps
+a still-open source; after source closure it finishes the target. Whole-app Quit
+and updates save every participating window before releasing worker ownership.
+Progress shares the bottom-right toast component and cannot be dismissed while
+native closure is deciding. Once its last worker has exited, the coordinator
+exits too unless close-to-tray is on. That setting alone decides, in `tauri dev`
+as in a release: a vault that enables global shortcuts does not keep a closed
+app in the tray, so capturing into a closed vault needs close-to-tray.
+
+Startup recovery never blocks opening vaults indefinitely. A handoff or update
+record that is corrupt or names another root, vault path or build is renamed to
+`<name>.unresumable-<uuid>` and startup continues. A resumable update session
+that fails to reopen is kept for one retry on the next launch, then set aside;
+a failing handoff gets three backed-off retries, then is set aside and its
+vault opened normally. Recovery as a whole is limited to five minutes. A worker
+whose window never becomes ready reports the failure and exits, releasing its
+vault, and a launch that finds an unresponsive coordinator tells the user
+instead of exiting silently.
+
 ## Frontend (`src/`)
 
 Svelte 5 + SvelteKit render the UI. Editors are surface-specific: markdown uses
@@ -84,8 +122,8 @@ Pointer Events; freeform embeds an Excalidraw island; PDFs render through pdf.js
 The frontend never imports Rust directly — it `invoke()`s `#[tauri::command]`
 functions. Errors flow back through `AppError`
 ([`src-tauri/src/error.rs`](../src-tauri/src/error.rs)), which maps Rust errors
-to IPC error strings. All non-window state lives in SQLite; the frontend holds
-only view state.
+to IPC error strings. Note data lives in SQLite. Root/vault configuration and recovery records use
+locked filesystem documents; the frontend holds view state and pending edits.
 
 ## Rust backend (`src-tauri/src/`)
 
@@ -110,11 +148,17 @@ thread pool, holding the lock only for a single query.
 - **Profiles / vaults — [`profiles.rs`](../src-tauri/src/profiles.rs).** Each
   profile is a self-contained directory `…/profiles/<id>/` with its own
   `mindstream.db`, Etebase session, settings, and backups. A `profiles.json`
-  index at the fixed OS app-data root records which profile is active; boot
-  reads it _before_ opening any database. A legacy single-vault layout is
+  index at the environment's app-data root records the last-used startup vault;
+  live ownership comes from physical OS vault locks, not this index. Boot
+  reads it before opening any database. A legacy single-vault layout is
   migrated into a `"default"` profile. The `MINDSTREAM_PROFILE_DIR` override
-  (dev/e2e only) points the whole app at a throwaway dir — the isolation/restart
-  seam the real-app tests use.
+  (dev/e2e only) selects a vault directory; `MINDSTREAM_ROOT_DIR` separately
+  isolates root documents and credentials for real-app test devices. Native
+  desktop/device preferences live at the root; content/account preferences
+  and layouts belong to the vault. Opt-in supervision uses a
+  long-lived coordinator with one process and isolated WebView store per vault.
+  Normal startup remains direct while menu/handoff and platform release gates
+  are completed. See the [implementation plan](root-vault-implementation-plan.md).
 - **Auth — [`auth/mod.rs`](../src-tauri/src/auth/mod.rs).** Etebase login. The
   password is never stored: a random 32-byte key encrypts the saved account
   state; the **key** goes in the OS keystore (Credential Manager / Keychain /

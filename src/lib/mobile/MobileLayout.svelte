@@ -19,6 +19,8 @@
    * under the Android status bar or gesture bar with edge-to-edge on.
    */
   import { onMount } from 'svelte';
+  import { isTauri } from '$lib/api/core';
+  import { nativeDeviceUi } from '$lib/native-device-ui.svelte';
   import {
     Feather,
     FilePlus2,
@@ -58,6 +60,12 @@
     mobileState,
     navigateToEditor
   } from './state.svelte';
+
+  $effect(() => {
+    void nativeDeviceUi.revision;
+    if (isTauri() && nativeDeviceUi.initialized)
+      mobileState.displayMode = nativeDeviceUi.displayMode;
+  });
 
   onMount(() => {
     if (!tree.ready) {

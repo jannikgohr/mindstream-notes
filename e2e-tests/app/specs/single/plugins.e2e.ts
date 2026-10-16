@@ -39,7 +39,7 @@ async function openPluginsCategory(): Promise<void> {
   // `aria/Plugins` resolves the settings category; clicking it shows the
   // PluginsOverview (whose per-plugin card carries the Enable switch).
   await clickName('Plugins');
-  await expect(byName('Enable plugin')).toBeDisplayed();
+  await expect(byName('Enable in this vault')).toBeDisplayed();
 }
 
 describe('T3 plugin framework', function () {
@@ -56,7 +56,7 @@ describe('T3 plugin framework', function () {
 
   it('lists the plugin in the settings overview', async () => {
     await openPluginsCategory();
-    await expect(byName('Enable plugin')).toBeDisplayed();
+    await expect(byName('Enable in this vault')).toBeDisplayed();
     await expect(byName('Plugin settings')).toBeDisplayed();
     await closeSettingsDialog(browser);
   });

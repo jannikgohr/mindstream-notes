@@ -1,12 +1,11 @@
 import { isRecord } from '$lib/validation';
+import { isTauri } from '$lib/api/core';
 /**
  * Persistent UI preferences.
  *
- * Currently backed by localStorage (works in both `pnpm dev` and `pnpm tauri
- * dev`). When you wire up real persistence in Rust, swap this implementation
- * for one that calls `invoke('load_preferences' | 'save_preferences', ...)`
- * — the rest of the app talks to `loadPreferences`/`savePreferences` only,
- * so the call sites won't change.
+ * Browser previews use localStorage. Native state initializes from the scoped
+ * settings documents and patches individual fields through state.svelte.ts.
+ * The unscoped browser bucket remains intact as migration evidence.
  */
 
 import type { SortDirection, SortStrategy } from './sort';
@@ -21,6 +20,15 @@ export interface Preferences {
   sortStrategy: SortStrategy;
   sortDirection: SortDirection;
 }
+
+export const UI_PREFERENCE_IDS: Record<keyof Preferences, string> = {
+  leftSidebarWidth: 'appearance.leftSidebarWidth',
+  rightSidebarWidth: 'appearance.rightSidebarWidth',
+  leftSidebarOpen: 'ui.leftSidebarOpen',
+  rightSidebarOpen: 'ui.rightSidebarOpen',
+  sortStrategy: 'appearance.sortStrategy',
+  sortDirection: 'ui.sortDirection'
+};
 
 export const DEFAULT_PREFERENCES: Preferences = {
   leftSidebarWidth: 240,
@@ -75,44 +83,50 @@ function optionalSortDirection(value: unknown): SortDirection {
 }
 
 export function loadPreferences(): Preferences {
-  if (!isBrowser()) return { ...DEFAULT_PREFERENCES };
+  if (isTauri() || !isBrowser()) return { ...DEFAULT_PREFERENCES };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULT_PREFERENCES };
     const parsed = JSON.parse(raw);
     if (!isRecord(parsed)) return { ...DEFAULT_PREFERENCES };
-    return {
-      leftSidebarWidth: optionalWidth(
-        parsed.leftSidebarWidth,
-        DEFAULT_PREFERENCES.leftSidebarWidth,
-        160,
-        600
-      ),
-      rightSidebarWidth: optionalWidth(
-        parsed.rightSidebarWidth,
-        DEFAULT_PREFERENCES.rightSidebarWidth,
-        180,
-        600
-      ),
-      leftSidebarOpen: optionalBoolean(
-        parsed.leftSidebarOpen,
-        DEFAULT_PREFERENCES.leftSidebarOpen
-      ),
-      rightSidebarOpen: optionalBoolean(
-        parsed.rightSidebarOpen,
-        DEFAULT_PREFERENCES.rightSidebarOpen
-      ),
-      sortStrategy: optionalSortStrategy(parsed.sortStrategy),
-      sortDirection: optionalSortDirection(parsed.sortDirection)
-    };
+    return normalizePreferences(parsed);
   } catch (err) {
     console.warn('[preferences] load failed, using defaults', err);
     return { ...DEFAULT_PREFERENCES };
   }
 }
 
+export function normalizePreferences(
+  parsed: Record<string, unknown>
+): Preferences {
+  return {
+    leftSidebarWidth: optionalWidth(
+      parsed.leftSidebarWidth,
+      DEFAULT_PREFERENCES.leftSidebarWidth,
+      160,
+      600
+    ),
+    rightSidebarWidth: optionalWidth(
+      parsed.rightSidebarWidth,
+      DEFAULT_PREFERENCES.rightSidebarWidth,
+      180,
+      600
+    ),
+    leftSidebarOpen: optionalBoolean(
+      parsed.leftSidebarOpen,
+      DEFAULT_PREFERENCES.leftSidebarOpen
+    ),
+    rightSidebarOpen: optionalBoolean(
+      parsed.rightSidebarOpen,
+      DEFAULT_PREFERENCES.rightSidebarOpen
+    ),
+    sortStrategy: optionalSortStrategy(parsed.sortStrategy),
+    sortDirection: optionalSortDirection(parsed.sortDirection)
+  };
+}
+
 export function savePreferences(prefs: Preferences): void {
-  if (!isBrowser()) return;
+  if (isTauri() || !isBrowser()) return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
   } catch (err) {

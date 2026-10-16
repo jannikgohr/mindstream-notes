@@ -10,7 +10,7 @@ describe('applyAccentColor', () => {
     applyAccentColor('#3b82f6');
     expect(root().style.getPropertyValue('--accent-brand')).toBe('#3b82f6');
     expect(root().style.getPropertyValue('--accent-brand-foreground')).toBe(
-      '#ffffff'
+      '#000000'
     );
     expect(root().style.getPropertyValue('--ring')).toBe('#3b82f6');
   });

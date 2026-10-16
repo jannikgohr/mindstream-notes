@@ -85,9 +85,49 @@ Appearance → Accent overrides `--accent-brand`, `--accent-brand-foreground` an
 It used to override `--primary`, which turned every neutral button in the app
 into the user's accent colour.
 
-The setting is applied only when the user has actually changed it. A single hex
-cannot carry separate light and dark values, so an untouched install keeps the
-theme's own `--accent-brand`, which does.
+An explicit stored accent overrides the preset in both modes. Without that
+value, the preset supplies separate light and dark accents. "Use preset accent"
+removes the override. Text on an explicit accent uses black or white according
+to its RGB luminance; neutral primary buttons keep the preset's values.
+
+## Theme presets
+
+Appearance settings offer Mindstream, Warm and Forest. Light/dark/system mode
+is independent of preset selection. Presets, accent and UI font size apply to
+every vault on this device. Editor font size and line height stay in the vault.
+
+Use "Show preset JSON" to start from a complete preset. Change its ID and name,
+then save it under "Import or edit a preset". Saving an existing custom ID
+replaces that preset on this device. Built-in IDs are reserved. Removing a
+selected preset keeps its selection and displays Mindstream; restoring the
+same ID restores the theme. The original data stays available during recovery.
+
+A preset has exactly `version`, `id`, `name`, `light` and `dark` fields.
+Version is `1`. IDs start with a lowercase letter and contain only lowercase
+letters, digits and hyphens, up to 64 characters. Names allow 160 UTF-8 bytes.
+Each palette contains these twelve required numeric OKLCH triples:
+
+| Tokens                                    | Purpose                                                           |
+| ----------------------------------------- | ----------------------------------------------------------------- |
+| `surface-0` through `surface-3`           | Increasing lightness for chrome, panels, containers and overlays. |
+| `border-subtle`, `border-strong`          | Divider and outline tiers.                                        |
+| `foreground`, `muted-foreground`          | Normal and secondary text.                                        |
+| `primary`, `primary-foreground`           | Neutral buttons and their text.                                   |
+| `accent-brand`, `accent-brand-foreground` | Preset accent and text on its fill.                               |
+
+Triples use `[L, C, H]`: lightness from 0 to 1, chroma from 0 to 0.4 and hue
+from 0 to 360. Values must be finite. Surface lightness strictly increases.
+Normal/secondary text and text on primary/accent fills require computed contrast
+of at least 4.5. Accent text requires 3 against every surface. Subtle/strong
+borders require 1.1/1.25 against every surface. Validation converts OKLCH to
+clipped linear sRGB for these ratios. Status, search and diff colors, shadows
+and radius continue to follow the app's mode and token rules.
+
+Unknown fields, CSS expressions, scripts and remote imports are rejected.
+An imported preset is limited to 16 KiB. Root `theme-presets.json` stores up to
+64 user presets in a versioned map. Use the settings UI to edit them so validation,
+locked publication and notifications run. Complete built-in examples live in
+[`src/lib/settings/theme-presets.json`](../src/lib/settings/theme-presets.json).
 
 ## Status colours
 
@@ -157,9 +197,12 @@ The linter also allows three things by design:
 ## Pre-paint bootstrap
 
 The inline `<style>` in [`src/app.html`](../src/app.html) hardcodes the
-`--surface-1` and `--foreground` values to avoid a flash of the wrong colour
-scheme before `app.css` loads. It cannot use tokens — it runs first. **If you
-change `--surface-1` or `--foreground`, update `app.html` in the same commit.**
+default `--surface-1` and `--foreground` values to avoid a flash before `app.css`
+loads. It first applies validated numeric preset tokens from the root bootstrap
+or browser cache. Its literal fallbacks must still match the default tokens.
+Update `app.html` when those defaults change. Main windows receive root mode,
+preset, accent and font size before document scripts run; popouts share their
+vault's cache and use its resolved surface color as the native background.
 
 ## Composing a panel
 

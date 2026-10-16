@@ -8,7 +8,7 @@
 //!
 //! Two distinct directories live here:
 //!
-//!   * [`app_data_root`] — the **fixed** OS `app_data_dir()`. Stable
+//!   * [`app_data_root`] — the managed environment root. Stable
 //!     across profiles; this is where the `profiles.json` index lives
 //!     and where the per-profile `profiles/<id>/` subdirectories hang
 //!     off. Used at boot *before* a profile is known.
@@ -36,10 +36,13 @@ pub struct ActiveProfile {
     pub dir: PathBuf,
 }
 
-/// The fixed OS app-data root (`%APPDATA%/<bundle>` etc.). Stable across
-/// profiles — the `profiles.json` index and the `profiles/` tree both
-/// live here. Boot code uses this before the active profile is resolved.
+/// The managed environment root. The index, desktop settings and profiles
+/// tree live here. Release retains its historical OS root; dev and tests
+/// use isolated roots. Before environment setup this returns the OS root.
 pub fn app_data_root<R: Runtime, M: Manager<R>>(manager: &M) -> AppResult<PathBuf> {
+    if let Some(environment) = manager.try_state::<crate::environment::Environment>() {
+        return Ok(environment.root.clone());
+    }
     manager
         .path()
         .app_data_dir()

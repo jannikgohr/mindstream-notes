@@ -1,0 +1,1423 @@
+# Root and vault implementation history
+
+Archived on 2026-10-13. This preserves the original plan, dated implementation
+slices, estimates and validation evidence. Pending lists describe their dates,
+not the current product. Use the [current delivery status](root-vault-implementation-plan.md)
+for completed work, remaining release QA and future scope.
+
+---
+
+# Root storage and concurrent vault implementation plan
+
+Status: the root settings and concurrent desktop vault implementation is complete.
+Ordinary desktop launches use the coordinator. Isolated test devices remain direct
+unless they request `--supervised-vaults`; mobile keeps its single-vault flow.
+The desktop switcher supports opening preferences, explicit alternatives,
+Ctrl/Command click, live ownership, and prepared-worker handoff. Durable recovery
+keeps an open source and finishes the target after a saved source has exited.
+Missing startup vaults open an isolated picker without recreating missing data.
+
+Theme presets, device appearance and global plugin packages shipped on
+2026-10-13. Their implementation and validation records are documented separately:
+
+- [Global plugins plan](global-plugins-implementation-plan.md)
+- [Theme presets plan](theme-presets-implementation-plan.md)
+
+## Current delivery status
+
+Reviewed against the implementation on 2026-10-13. Dated slices below are a
+history of incremental delivery; their older pending lists do not describe the
+current release gates.
+
+| Area                  | Current state                                                                                                                                                                                                                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Phase 0 safety        | Implemented; Windows process-crash checks pass. Reboot durability remains unverified.                                                                                                                                                                                                            |
+| Phase 1 storage       | Root/vault schema documents, locked field edits, validated recovery, credential migration, browser export/classification and isolated worker stores are implemented.                                                                                                                             |
+| Phase 2 runtime       | Concurrent workers, duplicate/focus routing, cross-worker settings invalidation, service/save drains, whole-app Quit, shortcuts, tray, autostart, coordinator revival and update-session recovery pass documented Windows checks.                                                                |
+| Phase 3 menu/handoff  | Implemented: remembered opening preference, accessible choices, modifier override, prepared hidden target, all-window saves, geometry transfer and durable handoff recovery.                                                                                                                     |
+| Phase 4 release gates | Windows native checks and the real development launcher pass. Linux X11 and nested Wayland lifecycle/recovery checks pass; platform evidence is recorded below. Packaged macOS checks retain the owner's accepted deferral; reboot durability and signed updater installation remain release QA. |
+| Theme presets         | Root presets and device appearance implemented. See the [theme plan](theme-presets-implementation-plan.md).                                                                                                                                                                                      |
+| Global plugins        | Shared immutable packages/artifacts, per-vault approvals, installation generations, leases, migration and device plugin settings implemented. See the [global plugin plan](global-plugins-implementation-plan.md).                                                                               |
+
+Normal desktop startup uses the supervised runtime. Direct isolated-device tests,
+browser fallback and mobile retain their existing single-vault behavior. Global
+plugin packages remain an independent follow-up. Accent, UI font size and
+preset selection are device preferences; editor typography remains vault-scoped.
+
+### Completed handoff and startup slice on 2026-10-12
+
+`general.vaultOpening` is a device preference with Ask, This window and New
+window choices. The switcher offers the two opening actions and a remember
+checkbox. Ctrl or Command click requests a new window. An existing target
+always receives focus while its source remains open.
+
+Handoff writes `vault-handoff.json` before preparing a target. The record pins
+canonical root/vault paths, exact launch identities, source and target close
+requests, hidden and visible restore requests, and source main-window geometry.
+Preparing, Closing and Closed phases precede terminal Completed or Cancelled.
+Terminal records remain as evidence and cannot replay a close. Corrupt records
+and changed physical ownership fail safely without inventing replacement data.
+No root lock crosses worker IPC or a service/save drain.
+
+A hidden target must finish startup and register every content window before
+source closure. The source freezes editing, drains services, saves main/popout
+editors and settings, drains final writes and exits. Physical OS lease release
+proves closure. The target then becomes visible at the saved geometry and gets
+focus. Visible placement follows native mapping so GTK uses the resized window
+rather than its previous hidden size. A failed source close cancels the prepared
+target and keeps the source usable. If the prepared target cannot close safely,
+its active intent and ownership evidence remain available for retry.
+
+After coordinator loss, recovery cancels an exact source close if that source
+is still open. If its close committed and its OS lease has released, recovery
+finishes opening the target. A changed source identity never inherits the old
+close request. A released target can restart under a freshly journaled launch
+identity. Cancellation tombstones reject delayed close requests for the existing
+bounded replay interval.
+
+Startup with an unavailable last-used directory opens `vault-picker/` in its
+own browser store. The picker can select an available vault or create a new one;
+it imports no editor/database services. The selected vault supplies the initial
+legacy migration source. Ordinary development keeps the coordinator alive after
+its last worker closes, so `tauri dev` retains the frontend server until Quit.
+Configured loopback Vite origins support alternate hostnames/ports; export calls
+must still match the exact configured origin and dedicated export window.
+
+Close progress uses the ordinary bottom-right toast stack. Its spinner toast
+has no close button, stays until completion/cancellation, and updates between
+preparing to close and saving. Short operations avoid a flash. Recovery cancellation
+is informational; service timeouts and unsafe closes retain actionable errors.
+The save-failure and busy-job fixtures deliberately exercise those errors in
+disposable roots.
+
+Validation includes the complete Rust suite, Svelte/ESLint/localization checks,
+175 relevant frontend tests and a separate 20-test close/toast run, production builds,
+Windows native handoff/recovery checks, unsaved main/popout edits with automatic
+saving disabled, and real `tauri dev` handoff/last-worker closure. Commands and
+Linux platform evidence are in [the harness guide](e2e/harness.md#concurrent-vault-checks).
+
+### Startup hardening on 2026-10-12
+
+The picker now reads existing root language/theme preferences before choosing a
+vault. It preserves unknown settings and does not seed defaults, choose a legacy
+migration source or recreate an unavailable vault. Its native title bar stays
+available when settings refresh. The coordinator permits listing, opening and
+creating vaults from the picker window while keeping content commands blocked.
+
+Discovery failures publish a terminal opening failure and release the initial
+startup reservation. Retrying can initialize the selected vault. A repeated
+request retains its original result. Once initialization has completed, retries
+use ordinary opening instead of repeating migration.
+
+When the last-used directory is missing, startup first looks for an indexed,
+compatible, ready worker with authenticated registration and a held OS lease.
+It prefers saved recency tied to the same physical directory. Stale registrations
+cannot authorize adoption. Launch activation waits until recovery completes.
+Other opening requests during recovery receive retry feedback.
+
+The disposable startup fixture covers discovery failure/retry and adoption of
+a surviving worker after coordinator loss. Its optional WebView2 checks exercise
+picker selection and creation with German/light root preferences. Validation
+commands and results are recorded in [the harness guide](e2e/harness.md#concurrent-vault-checks).
+
+## Required behavior
+
+Update restart policy confirmed by the owner on 2026-10-12: reopen every vault
+that was open before the update. Preserve hidden/visible state and restore focus
+to the previously focused window. Save the restart record before closing workers;
+consume it after every saved vault is ready in the updated version, or after
+a failed install has restored the session in the original version. Retain the
+consumed record as evidence without replaying it on later normal starts. Normal
+cold startup without an update record still opens only the last-used vault.
+
+| Action                                              | Result                                                                               |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Normal launch with open workers in this environment | Restore and focus the most recently used vault window, including a hidden window.    |
+| Normal launch with no workers                       | Open the last-used vault, or show a picker if unavailable.                           |
+| Select a closed vault without a preference          | Offer "Open in this window" and "Open in new window", with "Remember this decision". |
+| Select a closed vault with a preference             | Use it; explicit alternative actions remain available.                               |
+| Ctrl + left click a vault                           | Request a new window regardless of the preference.                                   |
+| Request an already-open vault                       | Focus its existing window and keep the source vault running.                         |
+| System-wide shortcut with one eligible vault        | Route to that vault, opening it first if needed.                                     |
+| System-wide shortcut with several eligible vaults   | Route to the most recently used eligible vault.                                      |
+| No vault enables system-wide shortcuts              | Register no system-wide shortcuts; window-local shortcuts continue to work.          |
+| Change the opening preference                       | Device settings offer "Ask every time", "This window", and "New window".             |
+| Open two vaults using one account                   | Allow. Account identity is not a local ownership key.                                |
+| Delete an open or hidden vault                      | Refuse, including ownership by another worker.                                       |
+| Reboot after a crash                                | Acquire OS locks and reconcile operations without manual lock-file removal.          |
+
+"Open in this window" means worker handoff. Prepare the target at the source
+window's geometry, flush the source, then activate the target and exit the
+source. The native window may be replaced. Failed preparation or flushing keeps
+the source open. Preserving the exact native window is outside this plan.
+
+Concurrent-window UI is desktop-only. Mobile retains its single-vault/restart
+flow and adopts compatible storage and recovery fixes.
+
+## Ownership
+
+| Shared root within an environment                                             | Vault                                                                                     |
+| ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Desktop settings, language, opening preference, device appearance preferences | Content/editor settings, selected spellcheck languages, custom words                      |
+| Downloaded dictionaries                                                       | Database, notes, assets, backups, imports, restore records                                |
+| Vault index and last-used startup preference                                  | Account session, sync state, credential identity                                          |
+| Root transaction and coordinator records                                      | Lifetime ownership and vault recovery records                                             |
+| Global plugin packages, artifacts, presets, device plugin settings            | Plugin enablement, accepted hashes/signers/grants, vault settings, writable `plugin-data` |
+
+Account remains vault-specific. Mode and preset selection are independent. The
+appearance follow-up moves accent and UI font size to device scope; editor font
+size and line height remain vault preferences.
+
+### Global shortcut decision on 2026-10-11
+
+The owner chose vault-specific `hotkeys.globalShortcuts` eligibility. Bindings
+remain device preferences at the root. Only the coordinator registers with the
+OS; a worker changing its eligibility never competes for registration itself.
+Keeping exactly one vault enabled makes it the capture vault without a separate
+capture-destination setting. Several enabled vaults use the most recently used
+eligible vault, excluding disabled vaults even when they have focus.
+
+Eligibility includes configured closed vaults. Open the chosen vault and await
+readiness before executing; do not create an empty replacement for a missing
+vault. Remember eligible-vault recency independently of the overall last-used
+vault. Pin the destination at keypress and recheck eligibility before writing.
+Failure, disablement or a closing target reports failure without silently
+rerouting to a different vault. Show app uses the same eligible-vault routing;
+tray and ordinary launch continue their overall last-used-vault behavior.
+
+With no eligible vaults, unregister OS shortcuts. Window-local commands remain
+available in every vault. When OS shortcuts are active, their chords route to
+the eligible destination even if a disabled vault is foreground. Coordinate
+native and frontend dispatch so one press cannot also execute a local duplicate.
+Keep the current shared bindings rather than introducing separate local/global
+bindings. Dev and test instances retain OS registration disabled. Explicit Quit
+releases registrations; shortcut use requires a running coordinator.
+
+Migrate the old root enable flag once to its recorded legacy owner, or the
+selected migration vault if no owner was recorded. Existing vault values win;
+retain recovery evidence and never copy an enabled flag into every new vault.
+Default eligibility remains false. The settings UI identifies this toggle as
+vault-specific and exposes actual registration failures separately from saved
+preferences. Test zero/one/multiple eligible vaults, closed capture vaults,
+disabled foreground vaults, recency, shutdown races and IPC retries.
+
+## Architecture checks and accepted platform risk
+
+Run a two-day spike before committing to process-per-vault. Use disposable data
+and record OS/build versions, commands, observations, and unresolved behavior.
+Assumed platform behavior does not count as verification.
+
+Progress: [Windows spike results and runnable probe](vault-runtime-spike.md)
+confirm shared browser ownership/storage and separate-folder isolation, including
+native popouts and worker restart. The [browser storage audit](vault-browser-storage-audit.md)
+records the broader migration scope. On 2026-10-10 the owner accepted macOS 14+
+and proceeding without an accessible Mac test machine. The packaged Dock/menu/
+Reopen check is deferred to their next release test. This is accepted unverified
+platform risk, not a successful macOS spike. Linux and supervised dev-host checks
+remain required during implementation.
+
+### macOS process and lifecycle spike
+
+- Launch a packaged app with two workers and a coordinator. Check Dock icons,
+  menu bars, Cmd + Q, Dock Reopen, hide/show, worker crashes, and focus.
+- Verify worker activation policy, normal desktop windows, deterministic Reopen
+  forwarding, signing, `.app` executable launches, and updater/shutdown behavior.
+- If acceptable app identity and routing cannot be achieved, stop and revise the
+  architecture before implementing Windows/Linux coordination. A single app
+  host with vault contexts requires a separately estimated backend refactor.
+  It is not an automatic fallback hidden in this plan.
+
+### WebView stores and migration spike
+
+- Default to a WebView data directory per vault and environment. Verify Tauri
+  support on Windows/Linux and available macOS store isolation. Workers cannot
+  rely on unsupported sharing of a WebKitGTK data directory.
+- Check WebView2 browser-process ownership and `--renderer-process-limit=1`
+  across simultaneous windows. Scope or revise the setting using measurements.
+  Harness cleanup must not kill another worker's browser process.
+- Decide legacy storage migration before concurrency: serialize legacy-store
+  export/classification, or move vault-owned values to backend storage first.
+  New workers cannot fall back silently to the shared legacy store.
+- Audit every localStorage consumer, including `preferences.ts`, collaboration
+  signing keys, hotkeys, dock/layout preferences, plugins, settings, and startup
+  appearance. Classify root, vault, ephemeral, and credential state and define
+  migration ownership. Preserve keys and existing values without copying
+  unrelated vault/account state into new vaults.
+- Verify restart and separation across vaults, dev/release origins, and test
+  devices. Database-path isolation alone does not isolate browser state.
+
+### Development launcher lifetime
+
+The process owned by `tauri dev` must stay alive across worker handoffs and
+closure. Prototype a long-lived host/coordinator that spawns workers. Verify
+the CLI preserves Vite and sibling workers. Packaged/dev launch routing uses
+explicit targets. Do not launch the coordinator as a disposable child of a
+worker that exits on handoff, or retain the manual-restart workaround.
+
+## Phase 0: independent data-safety fixes
+
+Estimate: 2 to 3 working days. Implementation starts here before the spike.
+
+Primary areas: `backup/restore.rs`, backup tests, `profiles.rs`,
+`desktop_settings.rs`, `lib.rs`, and a shared atomic-file helper.
+
+- Preserve committed WAL content before moving the live DB to its safety copy.
+  Check checkpoint results, refuse unsafe preservation when another connection
+  holds SQLite locks, and validate pending data before altering live files.
+- Propagate restore failure to startup. Retain inputs and stop before opening
+  an ambiguous or newly created database.
+- Record repeatable restore steps so crashes after preserving the old database
+  or installing the replacement can resume. Preserve ambiguous recovery state.
+- Replace plain index/settings writes with same-folder temporary writes,
+  flushing, and replace-without-delete publication. Corrupt/unreadable existing
+  settings must not silently become defaults.
+- Test real WAL commits, busy readers, replacement failures, and restore
+  interruption boundaries. Byte-only DB fixtures do not prove content safety.
+- Document limits: atomic replacement does not serialize read/modify/write;
+  full vault ownership and concurrent merging follow below. Reboot durability
+  needs platform flush tests beyond process termination.
+
+Acceptance: safety DB contains WAL commits; ambiguous/failed restore stops boot
+with inputs intact; replacement never deletes the old document first; invalid
+settings remain intact.
+
+Initial slice implemented on 2026-10-10: checkpointed safety copies, versioned
+restore records with replacement hashes, startup error propagation, atomic index
+and desktop-settings publication, and corrupt-settings errors. Regression tests
+cover a terminated WAL writer, busy readers, interrupted move boundaries,
+unexpected replacement WAL content, and concurrent document readers. Windows
+`cargo test`, `cargo clippy -- -D warnings`, and `cargo fmt -- --check` pass.
+Desktop settings move to the root in the Phase 1 slice below. macOS/Linux and
+reboot durability checks are still pending.
+
+## Phase 1: environments, ownership, and storage migration
+
+Estimate: 3 to 4 working days. Proceed with the accepted macOS risk above.
+
+Primary areas: paths/profiles/auth, launcher/config, WebView setup, frontend
+persistence consumers, and all three WDIO real-app configs.
+
+- Add release/dev/test identity independent of debug/optimized builds. Preserve
+  production root and historical credential entries. Dev gets a persistent
+  separate root and visible Dev identity; optionally namespace worktrees.
+- Add gated root overrides for debug and `e2e-data-dir`. Isolate browser storage,
+  credentials, logs, IPC/ports, and coordinator names. Harness restarts retain
+  identity; simulated devices get separate identities. Disable dev/test updater,
+  autostart, and global shortcuts by default; root names do not isolate those
+  OS resources.
+- Add lifetime OS vault locks using canonical physical vault identity across
+  environments. Prevent lock-handle inheritance. File presence, PIDs, and
+  heartbeat age are diagnostic only. Document that older binaries without
+  ownership locks cannot be made safe by the new binary alone.
+- Complete WebView migration and the full frontend scope audit. Root device
+  state becomes backend-owned, with revisioned worker caches.
+- Move desktop settings once: valid root values win; otherwise seed from the
+  selected vault and journal completion. Never reseed on vault changes.
+- Add locked root read/modify/write transactions, validation, previous-copy
+  recovery, and explicit lock ordering/filesystem support.
+- Recover interrupted legacy profile migration, including a moved root database
+  whose index was never committed.
+- Add dictionary locking before concurrent workers ship. Publish `.aff`/`.dic`
+  together as a validated installation, recover interrupted operations, and
+  invalidate resident dictionaries on remove/replace.
+
+Acceptance: browser/environment isolation and credential migration pass;
+duplicate physical-vault ownership is rejected; concurrent root edits preserve
+both changes; concurrent dictionary operations are safe.
+
+Phase 1 implementation slice on 2026-10-10:
+
+- Explicit dev feature and bundle identity, stable dev root, gated test roots,
+  per-root test credentials, isolated logs, and disabled dev/test autostart,
+  updater and global shortcut registration. Release keyring entries retain
+  their historical service and per-vault account names.
+- Canonical vault OS locks acquired before restore/SQLite and retained until
+  the database connection closes. Root locks serialize index mutations and
+  individual revisioned desktop-settings edits. Existing lock files are reused.
+- One-time desktop-settings migration from the selected vault. Valid root
+  settings win; source files and unknown fields survive. Missing settings after
+  the completion marker and corrupt documents require recovery.
+- Journaled deletion blocks open vaults, removes the index entry, releases the
+  in-directory lock before Windows deletion, and resumes interrupted deletion.
+  Legacy migration resumes interrupted moves and rejects conflicting copies.
+- All three real-app harnesses now set root overrides alongside their existing
+  isolated WebView folders. macOS minimum is explicitly 14.0.
+
+Windows validation for this slice: Rust fmt/clippy pass; serial full Rust suite
+passes 731 unit tests and one integration test, with two existing ignored tests.
+Focused frontend tests pass 35 checks; Svelte diagnostics and affected ESLint
+files pass. The native app was launched through the dev wrapper with disposable
+root/vault/browser folders. A duplicate launch refused ownership before SQLite,
+a UI close-to-tray edit persisted root revision 1, and forced termination plus
+restart reused the surviving lock file and retained the setting. Raw logs are
+under `.output/ownership-app-check`. These are process-crash checks, not reboot
+durability evidence. Serial Rust execution avoids the existing ts-rs export/read
+race in generated-binding tests.
+
+Shared dictionary slice on 2026-10-10: unique immutable `.aff`/`.dic`
+generations publish through one atomic versioned manifest under a dictionary
+operation lock. Network and validation run outside that lock. Legacy flat pairs
+remain readable until replacement; removal tombstones override leftover flat
+files. Readers and installed-list/WORDCHARS queries use the same ownership rule.
+Resident caches check the published generation once per request. Corrupt or
+missing referenced pairs are retained for recovery. Interrupted unpublished
+generations are ignored, and old generations are retained pending bounded
+cleanup. Concurrent pair readers, interrupted publication/removal, unsafe IDs,
+missing/corrupt manifests, and two worker caches are tested. Windows Rust gates
+pass 737 unit tests and one integration test, with two existing ignored tests.
+
+Root recovery slice on 2026-10-10: index/settings saves preserve a validated
+`.previous` copy under the root lock. Startup validates current documents first,
+quarantines corrupt bytes before promoting a valid previous copy, and stops when
+both copies are invalid. Index recovery checks referenced directories and pending
+deletion records before selecting a vault. Missing selected directories cannot
+be recreated as empty replacements. Missing indexes with multiple existing
+vault directories require recovery. Desktop settings recover before restore or
+SQLite mutation, and an invalid migration marker is preserved and refused.
+Windows Rust gates pass 747 unit tests and one integration test, with two existing
+ignored tests. Recovery selection UI and orphan-vault index salvage remain work
+for the coordinator/picker. [Ownership and recovery rules](storage-ownership-and-recovery.md)
+record lock ordering and filesystem limits.
+
+Signing credential slice on 2026-10-10: collaboration identities are now owned
+by a vault encrypted file with a separate vault key in the environment's OS
+keystore. Native reads prefer the vault credential, then import only the matching
+legacy browser account key without changing it. Sources are retained. Main and
+note window create races return one persisted identity. Missing/locked keystore
+keys, corrupt credentials and malformed legacy keys cannot silently generate a
+replacement. Deleting a vault also attempts to remove its signing master key.
+Windows fmt/clippy and the full Rust suite pass 753 unit tests and one integration
+test. Three tests are ignored in the normal suite; the new Windows native keystore
+test was run explicitly and passed with disposable entries. WebCrypto compatibility,
+cryptographic scope binding and tamper rejection are tested. Affected frontend
+checks pass, including 35 signing/frame/API tests. Legacy export for unopened
+vaults still must preserve signing identities before isolated stores launch.
+
+Schema-settings slice on 2026-10-10: native device settings live in root
+`ui-settings.json`; content/account preferences live in vault
+`content-settings.json`. The backend derives scope from the bundled schema,
+keeps dynamic `hotkey.*` bindings at the root, and preserves unknown/plugin
+entries with the vault. Existing documents win over browser migration inputs.
+Only the default vault inherits content from the old unscoped bucket; another
+vault requires its own bucket. Original browser bytes remain intact. Malformed
+inputs stop migration before either candidate is published; completion records
+prevent reseeding lost documents. Individual field edits reread under the root
+lock, increment revisions and retain validated previous copies. Native caches
+initialize before profile readiness, serialize writes, report failed saves, and
+refresh on focus and same-worker popout events, including recovered older
+revisions. Browser preview persistence remains unchanged. Cross-process
+notifications still require the coordinator. Windows Rust gates pass 757 unit
+tests and one integration test; three tests remain ignored. Focused frontend
+settings/event/profile and hotkey checks pass 134 tests, with Svelte and affected
+ESLint checks clean.
+
+Native Windows verification for schema settings used disposable root/vault/
+WebView folders through the dev wrapper. A UI edit saved Reduce motion to root
+revision 1 and editor font size 18 to vault revision 1. After forced termination
+and restart, the settings panel restored both values and the documents retained
+their revisions. Logs are under `.output/ui-settings-app-check`. This verifies
+process restart; it does not establish reboot durability.
+
+Still pending in Phase 1: remaining legacy browser-store migration and root worker cache
+broadcasts. Duplicate vault
+launches currently refuse startup; focusing an existing owner requires Phase 2.
+
+Toolbar/mobile device preference slice on 2026-10-11: file-tree toolbar order
+and mobile list/grid preference use root fields with a one-time receipt. Unknown
+plugin toolbar IDs and the old installation's default arrangement survive import.
+Raw browser inputs are retained. Native saves patch one locked field; canonical
+refresh and failed-write rollback update the rendered controls. Signature and
+favourite source retention/assignment and full browser export remain pending.
+
+Windows native verification used the existing disposable vault/root/browser
+folders. Dragging "New note" ahead of "New folder" saved root revision 5 and
+the toolbar retained that order after a WebView reload. Logs are under
+`.output/toolbar-app-check`. Focused frontend checks pass 51 tests; Svelte
+diagnostics are clean. Affected ESLint has no errors and reports the pre-existing
+mobile `Set` warning.
+Rust fmt/clippy and the serial full suite pass 766 unit tests and one integration
+test; three tests remain ignored.
+
+Legacy content slice on 2026-10-11: startup pins unscoped browser content to one
+vault ID and canonical directory. Native signatures/favourites import only into
+that owner and retain browser sources. A new local DB receipt commits with all
+imported rows. Existing signature edits win; stable generated IDs and receipts
+prevent replay after crashes or later deletions. Invalid JSON/geometry, conflicting
+signature IDs and failed DB writes leave the receipt absent. Favourite imports
+check write access, mark sync changes dirty, and patch only committed frontend
+IDs. Tests exercise a simulated failure on the second DB insert, full rollback
+and retry, malformed evidence, later deletion/unfavourite, and deleted owners.
+Windows Rust fmt/clippy and the serial full suite pass 772 unit tests and one
+integration test, with three ignored tests. Focused frontend checks pass 56 tests;
+Svelte diagnostics are clean and affected ESLint has no errors.
+
+Browser archive storage slice on 2026-10-11: root storage retains encrypted raw
+WebView exports, with a separate OS-keystore migration key bound to environment
+and canonical root. Captures are origin-specific and retain unopened accounts,
+unknown plugin values and malformed bytes. Immutable per-origin completion
+receipts prevent recapture after isolation. Atomic updates and recovery validate
+checksums and every completed capture; missing keys, missing completed archives,
+invalid receipts and incompatible previous copies require recovery. Key creation
+before first publication, export-before-seal interruption and retries are tested.
+The hidden export window and coordinator hookup remain pending; production
+startup still uses its existing browser store.
+Windows Rust fmt/clippy and the serial full suite pass 779 unit tests and one
+integration test, with four ignored tests. The new real-keystore export test was
+run explicitly and passed using disposable Windows Credential Manager entries.
+Older binaries without locks remain unsafe against the same physical vault.
+
+Mixed UI preferences slice on 2026-10-10: sidebar widths now use root document
+fields; sorting and sidebar open/closed state use vault fields. Migration seeds
+unscoped content preferences only into the selected legacy vault and records
+completion at the root, retaining the browser source. Existing fields win and
+malformed inputs/records refuse initialization. The schema's old device scope
+for sort strategy is corrected; an existing root value moves to the selected
+vault before source removal, and a recovered old root copy cannot leak sorting
+into a different vault. Native sidebar/sort setters patch individual fields;
+canonical snapshot refresh updates the live UI, and failures restore values and
+show localized feedback. Browser preview behavior remains unchanged.
+
+Windows validation for mixed preferences: Rust fmt/clippy and the full serial
+suite pass 760 unit tests and one integration test, with three ignored tests.
+Focused settings/preferences/state/profile/registry/hotkey checks pass 167
+frontend tests. Svelte, affected ESLint, and localization checks pass. The native
+dev app saved sort strategy and sidebar visibility to the vault while resizing
+the right sidebar to 330 pixels updated the root. A WebView reload restored the
+hidden left sidebar and shared width. Logs are under
+`.output/preferences-app-check`; this is not a reboot durability check.
+
+Dock-layout slice on 2026-10-10: saved notes/splits now use vault field
+`ui.dockLayout`. Migration reads the matching encoded bucket; only the default
+vault inherits the historical unscoped layout. Existing values win, malformed
+required inputs stop publication, and source bytes remain intact. A vault
+completion record plus explicit clear tombstone prevent old layouts from
+reappearing. Native reads return a copy of the canonical snapshot, and writes
+check the running vault ID and patch the content document. Windows Rust gates
+pass 763 unit tests and one integration test, with three ignored tests. Focused
+layout/settings/profile tests pass 49 frontend checks, and Svelte/affected ESLint
+checks pass. Other browser consumers and full WebView export/isolation remain
+pending.
+
+Native dock-layout verification used the dev wrapper with disposable folders.
+The legacy Welcome tab migrated into the vault document. Creating a second note
+and dragging it into a split produced two saved groups and two panels. Reloading
+the WebView restored both note panes from the canonical document. Logs are under
+`.output/layout-app-check`; the original browser bucket remains retained.
+
+## Phase 2: coordination and simultaneous vaults
+
+Coordinator transport slice on 2026-10-11: `.coordinator.lock` grants ownership
+through the OS only. Its owner publishes a private, versioned loopback endpoint
+with a random authentication secret. Requests/replies are length-bounded and
+correlated by operation/instance IDs, with whole-message deadlines and limited
+incoming connections. Discovery retries preserve operation IDs; the runtime
+dispatcher still must deduplicate mutations. Worker replies use separate
+listeners and retain vault ownership. Shutdown holds the root coordinator lease
+until accepted calls finish. Tests cover election races, independent roots,
+authentication/version/size rejection, partial frames, live ownership during
+shutdown, and force-terminating a real child process with stale records retained.
+Unix endpoint files use owner-only mode; Windows inherits app-data ACLs. Runtime
+worker registration, launch/focus routing and the supervised dev host are pending.
+Windows Rust fmt/clippy and the serial full suite pass 788 unit tests and one
+integration test, with five ignored tests including the coordinator subprocess
+fixture. That fixture runs automatically through its parent crash test.
+
+Startup contracts slice on 2026-10-11: explicit workers resolve an indexed vault
+under the root lock without changing the last-used preference. Coordinators can
+read/reconcile the index while workers hold vault ownership. Launch arguments
+carry separate launch/coordinator identities; existing test devices retain direct
+mode, while shared-root tests opt into supervision. Browser identities derive
+from canonical root, vault ID and physical directory. Main/popout windows have a
+native bridge for the same directory or macOS persistent store ID. This defines
+the contracts; role selection and browser isolation are not activated in startup
+until export and supervisor integration are complete.
+
+This slice also fixes native popouts: all windows sharing a WebView2 environment
+receive the main window's browser arguments. Tabs detach only after the SDK's
+successful creation event. Seeded/imported note IDs receive the `note_*`
+capability namespace and an explicit editor URL. The Windows native check opened
+Welcome in a single-note popout, removed the source tab, then returned it with
+Pop in and confirmed that only the main window remained. Disposable test logs
+are in `.output/popout-browser-app-check-capability`. Rust fmt/clippy and the
+full serial suite pass 793 unit tests and one integration test, with five ignored
+tests. Seven focused frontend tests and Svelte checks pass. Affected ESLint has
+no errors; the route retains its existing dynamic-component `any` warning.
+
+Archive classification slice on 2026-10-11: a worker with a verified retained
+source reads only its settings/layout bucket and matching server/username signing
+key. Signature and favourite imports still check the physical legacy owner.
+Unknown values remain in the encrypted archive. Backend initialization uses
+these raw sources rather than a fresh worker's empty browser store. Version 2
+of the root preference receipt records device migration separately from the
+owner vault's content receipt, so opening another vault first cannot consume
+sidebar/sort preferences. Existing version 1 receipts prevent reseeding. Native
+signing import prefers an existing vault identity, then the matching retained
+identity, then newly supplied material. Malformed candidates cannot create a
+replacement identity. Rust gates pass 797 unit tests and one integration test;
+five tests remain ignored. The supervisor still must load/register the verified
+source before opening isolated workers.
+
+Estimate: 5 to 7 working days, plus changes required by the spike.
+
+Supervised startup slice on 2026-10-11: `--supervised-vaults` starts a long-lived
+host without a vault database. A hidden legacy-origin document snapshots raw
+localStorage before running any app code, retains it encrypted, and seals it
+before workers can launch. Original browser values remain intact. A restart
+between capture and sealing finishes the saved capture rather than exporting
+changed bytes. Workers require an authorized launch identity, own their physical
+vault before registering, load the verified migration source, and use isolated
+WebView stores. Main windows remain hidden until native settings initialization
+finishes. Repeated readiness reports do not reactivate old windows. Requests
+deduplicate by operation ID and reserve one launch per vault. Filesystem or
+spawn failure cannot leave a permanent starting reservation; an unknown worker
+exit retains ownership rather than assuming the worker died.
+
+The Windows native fixture opened Default and Second simultaneously with one
+host and two workers, two browser directories and two vault databases. Reopening
+Second reused its window. The host had no database. This verifies basic launch
+and visibility, not Windows foreground permission, most-recent focus routing,
+graceful editor shutdown or crash adoption. Logs remain in
+`.output/supervised-startup-app-check`. The computer-use connection subsequently
+failed with a missing native pipe, including after retry and kernel reset.
+Normal startup stays direct until the remaining coordination gates pass. Root
+hotkeys/tray/updater ownership, persisted worker registration and recovery,
+cross-process settings events, macOS lifecycle, Linux activation and the handoff
+UI remain required. Shared-root fixtures use only `MINDSTREAM_ROOT_DIR`; the
+existing vault-directory override is rejected in supervised mode.
+Rust fmt, clippy with warnings denied, and the full serial suite pass 801 unit
+tests and one integration test, with five ignored tests. The affected frontend
+checks pass 23 tests, including delayed/failed native settings readiness. Svelte
+checks and affected ESLint pass without errors.
+
+Worker recovery slice on 2026-10-11: workers publish private discovery records
+while holding their physical vault lease. Records bind the canonical root,
+indexed vault ID, physical directory, launch identity and authenticated endpoint.
+Startup clears stale records only after acquiring the vault's OS lock. With a
+live owner, the new host requires an authenticated matching identity reply and
+authorizes adoption of that exact launch. The worker verifies the current root
+endpoint before changing its host connection. Corrupt, oversized, mismatched or
+unresponsive live records retain ownership. An unavailable vault does not prevent
+other indexed vaults from opening. Accepted worker IPC retains the physical lease
+through shutdown even if database state drops first. Transport retries preserve
+operation IDs and stop on explicit rejection.
+
+The Windows embedded-frontend fixture force-stopped its host while Default and
+Second remained alive. A replacement host adopted both with unchanged worker
+PIDs, launch identities and endpoints. Opening Second reused its worker. After
+force-stopping the adopted Default worker, an open request acquired the released
+OS lock, removed its stale registration and launched a new Default worker;
+Second retained its PID and launch identity. Logs are in
+`.output/supervised-startup-app-check/embedded-*.log` and `recovery-*.log`.
+Fixture process cleanup verified executable/launch identities before stopping
+only its workers and host. These checks cover process crashes, not power-loss
+durability or foreground activation. A normal launch can recover a crashed host;
+automatic host revival without a launch remains pending. The supervised path
+stays opt-in while OS integrations, focus events and handoff are implemented.
+Rust fmt, clippy with warnings denied, and the full serial suite pass 808 unit
+tests and one integration test, with five ignored tests. The embedded frontend
+build passes. Native recovery checks do not depend on the unavailable
+computer-use connection.
+
+Focus routing slice on 2026-10-11: native focus notifications identify the vault,
+authorized launch and main/note window. Readiness does not mark a vault as used.
+The host tracks focus order, removes exited workers from that order and routes
+activation to the last focused window, falling back to main when a popout has
+closed. Adoption retains a surviving worker's last window. Startup seeds recency
+from the persisted last-used vault when native focus order is unavailable.
+Last-used writes check the latest focus revision after acquiring the root lock;
+an older queued notification cannot overwrite a newer selection. macOS Reopen
+events now route through the coordinator from either host or worker; packaged
+Dock/menu behavior still requires the owner's release test.
+
+The embedded Windows fixture delivered native main-window focus events for
+Default and Second. Host status and `profiles.json.active` changed to Second.
+A second supervised launch exited successfully and left exactly one host and two
+workers; it reused the latest vault. Logs remain in
+`.output/supervised-startup-app-check/focus-*.log`. Popout routing and close-order
+fallback pass unit tests; native popout focus across the coordinator is still
+unverified. Windows foreground grants and Wayland activation remain pending.
+Rust fmt/clippy and the full serial suite pass 811 unit tests and one integration
+test, with five ignored tests. This remains an opt-in startup path.
+
+Windows foreground transfer slice on 2026-10-11: endpoints include optional
+process IDs solely as activation metadata. Zero and broadcast targets are
+rejected; PID presence never grants vault/coordinator ownership. A relaunching
+process authenticates the existing host, transfers foreground permission to it,
+then sends activation. The `open_profile_window` bridge for the future vault menu
+similarly transfers from its worker to the host. Before granting a worker, the host authenticates its endpoint and
+checks the canonical root, physical vault, launch identity and readiness.
+`AllowSetForegroundWindow` denial does not prevent opening a window. The OS
+continues to decide foreground activation. See the
+[Microsoft API contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-allowsetforegroundwindow).
+
+The embedded Windows fixture logged successful permission transfer on both legs
+of a duplicate launch, which exited without creating another host or worker.
+One background open logged a denied grant and still opened its vault. Logs are in
+`.output/supervised-startup-app-check/foreground-*.log`. Interactive vault-menu,
+taskbar/Explorer, popout and denied-grant attention behavior still need native UI
+checks; Wayland activation remains pending. Rust fmt/clippy and the full serial
+suite pass 813 unit tests and one integration test, with five ignored tests.
+
+Controlled worker-close slice on 2026-10-11: main-window exit and a worker's
+native Quit action now prepare every main/popout WebView, block input, and wait
+for editor saves, dock layout, and accepted settings writes. Markdown source
+debounce is flushed before capture. Markdown/Kanban retain manual edits when
+autosave is disabled and save them on explicit close or editor teardown;
+read-only/trash guards still apply. Readiness is registered only after the
+close listener exists. Missing/loading windows, failed saves, changed window
+sets, and a 15-second timeout cancel exit and keep the worker alive. Correlated
+acknowledgements cannot close a later attempt. A lost success reply does not
+unfreeze input before the native decision, and a cancelled preparation is
+ignored even when its notification arrives late.
+
+The embedded Windows fixture rejected a mismatched launch identity. With both
+disposable root UI-settings copies made invalid under the root transaction lock,
+the real WebView close handshake cancelled and retained the worker. Restoring
+the documents and retrying closed it after native save acknowledgement, with
+the host still alive after its last worker exited. With Default and Second
+open, closing Default left Second's process and launch identity unchanged;
+closing Second then left only the host. Logs remain in
+`.output/supervised-startup-app-check/close-*.log` and the fixture's per-process
+root logs. Native main/popout pending-edit interaction and the saving/failure UI
+still need computer-use checks; the native pipe is unavailable in this session.
+Root tray quit, updater restart, coordinated source/target handoff, and backend
+service quiescence remain separate work. This does not make a worker's Quit a
+whole-app Quit yet. Normal/direct test launches remain compatible.
+
+Validation: Rust fmt/clippy, 816 unit tests and one integration test pass, with
+five ignored tests. The 45 focused frontend tests, Svelte checks, frontend and
+embedded-app builds pass. Affected ESLint checks have no errors and retain 13
+existing warnings in the dock and Kanban components.
+
+Root UI-document notification slice on 2026-10-11: successful device-scoped
+patches now notify the coordinator, which invalidates every ready worker's UI
+settings snapshot. Vault-only patches retain their local window notification.
+Messages contain launch identity and a refresh command, never document values;
+each receiver reloads the shared document with its own vault/account document.
+Delivery holds neither a root transaction lock nor the coordinator book mutex.
+It fans out to at most eight peers at once and coalesces edits during delivery.
+Only the latest device notice per source occupies the lifecycle replay cache,
+so frequent slider/toolbar edits cannot exhaust it. A new worker reloads once
+more after readiness, and a replacement coordinator invalidates adopted workers.
+Focus refresh remains the fallback when the coordinator is unavailable.
+
+Authenticated IPC tests prove that a blocked peer does not delay a healthy peer
+in its delivery group, concurrent notices coalesce, stale/unregistered launches
+and payload values are rejected, and unavailable/loading workers are excluded.
+The frontend test verifies that invalidation reloads the worker's own vault
+without issuing another write. Rust fmt/clippy, 819 unit tests and one
+integration test pass, with five ignored tests. The 16 focused frontend tests,
+Svelte checks, affected ESLint checks and the embedded-app build pass. The
+embedded Windows fixture accepted a notice with two ready vaults, rejected a
+mismatched launch identity, and accepted refresh in each worker without changing
+focus. Logs remain in `.output/supervised-startup-app-check/device-*.log`.
+Visible cross-worker UI refresh still needs a native interaction check.
+Desktop runtime notification slice on 2026-10-11: all desktop-setting writes
+now use the same authenticated invalidation route. Receivers read the canonical
+desktop document on the native event thread, release its root lock, then apply
+window decorations and native language changes and notify their WebViews.
+Unchanged decorations avoid another native update. Theme/language binding reads
+have no runtime side effects until the store accepts them. Focus and post-ready
+refresh cover missed notifications. Corrupt/missing refresh reads preserve the
+last valid cache and disk evidence without seeding defaults.
+
+Binding writes are serialized per field. Pending counts and read/write versions
+prevent an older read or completed save from overwriting a newer local edit;
+failed writes restore the canonical or last confirmed runtime value. Toolbar and
+dock-layout auxiliary caches now use the same merged snapshot as the settings
+store, including newer queued writes. The layout is unwrapped before caching so
+Svelte proxies cannot reach `structuredClone`. Regression checks cover overlapping
+writes, reordered reads, runtime rollback and desktop-only invalidation.
+Native cross-worker visual checks and OS shortcut/tray coordination remain pending.
+
+Validation: 84 focused frontend tests and the frontend/embedded-app builds pass.
+Rust fmt/clippy and 820 unit tests plus one integration test pass, with five
+ignored tests. In the disposable Windows fixture, two ready workers accepted
+desktop invalidation after theme/language/decoration edits under the root OS
+lock, then accepted invalidation after the original file bytes were restored.
+Neither worker logged a desktop-refresh failure, both retained their launch
+identities, and controlled close still succeeded. This verifies native dispatch
+and lifecycle behavior; it does not replace a visual theme/decoration check.
+Fixture scripts and logs remain in `.output/supervised-startup-app-check/desktop-*`.
+
+Worker compatibility slice on 2026-10-11: identity replies include IPC/storage
+versions and a SHA-256 hash of the bundled settings schema. After election, a
+replacement coordinator probes physical vault ownership before index recovery,
+legacy export or settings migration. Every live owner must identify itself over
+authenticated IPC and match the current contract. Unknown/direct owners and
+older replies without a contract stop startup; stale files and released locks
+do not. The preflight includes unindexed profile directories and legacy root
+ownership and neither creates vault-lock files nor interprets deletion markers.
+It releases the root transaction before any IPC request. Adoption is gated in
+both directions, and later focus probes recheck compatibility.
+
+This is deliberately conservative: even a schema text change requires surviving
+workers to close before a coordinator using the changed schema can start.
+Incompatible workers keep running with their OS leases and existing files intact.
+Close their windows, then restart; no process is force-terminated. Developers
+must bump the IPC version for incompatible wire changes and the storage version
+for shared-document formats, native ownership rules or validation changes not
+covered by the bundled schema hash. This guard cannot retrofit compatibility
+checks into older binaries or the temporary direct startup path. Production
+enablement still requires completing the supervised routing and upgrade gates.
+
+Validation: tests cover compatible replies, missing contracts, each contract
+mismatch, unidentified/direct owners, released ownership, deletion markers,
+and retained document bytes. Rust fmt/clippy and 823 unit tests plus one
+integration test pass, with five ignored tests; the embedded-app build passes.
+The Windows fixture recovered two compatible workers after force-stopping only
+its coordinator. Both workers retained their launch/endpoint identities and
+closed through their save handshake after adoption. The replacement host's
+status book retained their ready entries after exit; open requests already
+recheck ownership, but status needs reconciliation before the vault menu uses it.
+One Python identity probe hit a
+transient Windows socket abort; retry succeeded. Logs remain in
+`.output/supervised-startup-app-check/compat-*`.
+
+Adopted-worker status slice on 2026-10-11: status and normal activation now
+reconcile adopted launches without child wait handles. A launch is removed only
+after the OS grants its physical vault lease; unavailable endpoints and missing
+discovery records do not free an owner. Reconciliation copies candidates under
+the short book mutex, probes outside it, and removes the exact launch generation
+while retaining new launch reservations and explicit recovery for missing or
+deleting vaults. It updates the live focus fallback without changing the
+last-used startup document. Regression tests cover held/released owners,
+reservations, missing directories and retained deletion markers. Rust fmt/clippy
+and 824 unit tests plus one integration test pass, with five ignored tests;
+the embedded-app build passes.
+
+The disposable Windows fixture adopted two live workers after a coordinator
+crash, closed one and reported only the remaining ready vault, then closed the
+other and reported no live workers or focus target. The host remained alive
+until fixture cleanup. Logs remain in
+`.output/supervised-startup-app-check/status-*`.
+
+Coordinator desktop-migration slice on 2026-10-11: after compatibility preflight
+and index reconciliation, the host initializes root desktop settings from the
+startup-selected vault before browser export or any worker launch. Another
+worker cannot win the first-migration race by booting faster. The host owns its
+desktop-settings cache for the upcoming shared OS integrations. Existing root
+settings and their validated previous copy remain independent of the last-used
+vault's availability; only first migration requires an existing source directory.
+Invalid source IDs and missing initial sources do not create defaults or a
+completion marker. Tests cover concurrent worker loads, conflicting legacy
+preferences, unknown fields, retained legacy files and unavailable source vaults.
+Rust fmt/clippy and 826 unit tests plus one integration test pass, with five
+ignored tests.
+
+The fresh Windows fixture supplied conflicting desktop preferences in vaults
+`a` and `b`. Root settings already matched startup-selected `a` while its worker
+was still loading; a request opened `b` before `a` reported ready. Both became
+ready while the root retained `a`'s preferences and the conflicting `b` legacy
+document remained intact. Both closed through the save handshake. The embedded
+build passes; fixture logs remain in
+`.output/coordinator-desktop-migration-check/`.
+
+Worker-admission compatibility slice on 2026-10-11: workers now verify the
+authenticated coordinator status contract before vault ownership or settings
+migration. Authorization, registration and adoption authorization carry the
+worker's own contract, which the host must match before admitting it. This also
+covers a live host spawning a changed executable at the same path during an
+upgrade; checking recovery alone was insufficient. The IPC contract version is
+now 2 because admission packets require the new field. Older packets cannot
+bypass the gate. No file formats changed. Dev schema edits require restarting
+the host and all workers; frontend hot reload cannot update the native schema.
+
+Validation: Rust formatting and clippy pass. The full Rust suite passes 827
+unit tests and one integration test, with five tests ignored. The embedded
+Windows app ran two ready workers; matching admission succeeded, while missing
+and mismatched protocol/storage/schema contracts were rejected without changing
+the live workers. Both workers closed through their save handshake. The local
+probe needed the same bounded transport retries used by the production client
+after a Windows socket abort. Visual UI checks remain open because the native
+computer-use helper is unavailable in this session.
+
+Opening-result slice on 2026-10-11: `open_profile_window` waits for a terminal
+result rather than treating request acceptance as success. The host pins each
+request to a worker launch ID, waits for readiness, checks authenticated worker
+identity and compatibility, then requests activation. Errors from validation,
+startup, replacement, exit or activation reach the caller. A bounded timeout
+leaves live owners intact. Result polls reuse the operation ID and do not use
+the mutation replay budget. Completed results cannot be changed by a later
+completion or replay. This prepares the menu API; source shutdown and prepared
+handoff are still separate work.
+
+Validation: formatting, clippy and the full Rust suite pass, with 830 unit
+tests, one integration test and five ignored tests. The embedded Windows app
+returned ready results for two vaults and a failed result for a missing target.
+Replaying each request retained its result and both live workers remained ready.
+Both workers then closed through their save handshake. Native focus was
+requested successfully; visual foreground behavior remains unverified.
+
+Service-draining slice on 2026-10-11: controlled close pauses admission for
+manual/scheduled sync, imports, retention sweeps, hotkey note creation, plugin
+artifact downloads, native tools/scripts, preview startup/update, spellchecking
+and dictionary changes. Accepted blocking tasks retain their job registration
+even if an async caller disappears. Close requests import cancellation and
+waits up to 30 seconds for these jobs before asking content windows to save.
+Admission stays paused through the save decision and resumes on cancellation;
+only a successful close leaves it stopped. The vault OS lease stays held.
+This covers the listed services. Account/sharing commands, backup operations
+and other delayed writes still need the shutdown audit before handoff ships.
+Known preview servers continue to use the existing registry exit cleanup.
+
+Validation: formatting, clippy and the full Rust suite pass, with 832 unit
+tests, one integration test and five ignored tests. Tests hold a detached job
+through caller cancellation, reject admission while paused, and verify timeout
+recovery and permanent stop after commit. The embedded Windows app opened two
+ready workers and closed both through the drain/save path; the host then
+reported no workers. This native check exercised an idle drain. Busy-job
+timeouts are covered by unit tests, not a visual app test.
+
+Account/sharing drain audit on 2026-10-11: login/logout, sharing commands,
+collaboration room lookups, remote repair and backup export/staging now enter the
+same service gate. Blocking closures keep a registration until their account,
+network and database work finishes. Login/logout also retain the outer
+registration through local session updates. A file dialog does not itself hold
+a job; after choosing a file, backup work must pass admission before starting.
+History and settings writes used by the editor save phase still need a separate
+final drain, so they can finish after service admission has stopped.
+
+Validation: formatting, clippy and the full Rust suite pass, with 832 unit
+tests, one integration test and five ignored tests. No account actions were
+performed against a real server or keyring during this audit. Clippy also passes
+with `e2e-data-dir`, including the isolated-account harness commands.
+
+Final-save drain on 2026-10-11: history and UI settings use a separate gate that
+remains open while editors save. After every content window acknowledges, native
+close stops admission to that gate and drains its accepted writes before exit.
+Both gates must validate before either stop becomes permanent; a failed commit
+resumes both. Signing-material access, legacy content/link migrations and PDF
+export writes also enter service admission. Preview stop is allowed during the
+save phase and tracked by the final gate.
+
+Windows receive a waiting notice as soon as services pause, which freezes input
+without taking an editor snapshot yet. Only the subsequent prepare notice
+flushes and acknowledges. Native menu commands also respect the close freeze.
+The frontend close protocol is now 2 and must be supplied when registering a
+content window. A missing or old protocol cannot mark a window ready; this
+prevents an older frontend from interpreting waiting as an early save request.
+The coordinator IPC contract and stored documents did not change.
+
+Validation: Rust formatting and clippy pass. The full Rust suite passes 834
+unit tests and one integration test, with five ignored tests. The close/event
+and hotkey catalogue suites pass all 26 frontend tests. Frontend type checks,
+lint and the production frontend build pass. Embedded native checks opened
+both vaults and observed both worker exits on a fresh root, then twice on an
+existing test root, including reversed close order. These checks exercised
+idle services and editors. One earlier native run accepted close while a
+worker remained unresponsive; its cause is unresolved and it did not recur
+in these three checks. Close milestones are logged for the next reproduction.
+Keep supervised mode opt-in until busy-job, dirty-editor and handoff checks
+are complete. The full lint run also found an unhandled sidebar-opening
+promise in the hotkey catalogue; its rejection is now handled.
+
+Vault shortcut eligibility slice on 2026-10-11: `hotkeys.globalShortcuts` is now
+vault-scoped in the schema and native content settings. Bindings stay at the
+root. The migration records one physical legacy owner before publication,
+preserves an explicit vault choice and publishes a vault receipt before removing
+the root source. Recovered old root copies cannot re-enable a cleared owner or
+leak enablement into another vault. Unscoped browser input follows the recorded
+owner; explicit vault buckets keep their own choice. Invalid flags and receipts
+stop initialization with evidence intact. The worker storage contract is now 2;
+the schema fingerprint also changed. Supervised workers refuse OS registration
+until coordinator-owned registration and routing are implemented.
+
+Validation: Rust fmt/clippy and the full serial suite pass 840 unit tests and one
+integration test, with five ignored tests. The affected settings and hotkey
+suites pass 72 frontend tests. Type checks, affected lint, localization and both
+frontend/native builds pass. The native fixture opened Second before the
+recorded Default owner: Second remained ineligible, the root source remained
+pending, then Default alone imported it. The shared binding stayed at the root,
+both vault receipts were published and both workers closed cleanly. This tests
+eligibility storage and migration; test roots keep real OS shortcuts disabled.
+Coordinator registration, eligible-vault recency and system-wide action dispatch
+remain pending. The checks also corrected an earlier sidebar hotkey call to
+handle the already-open case, where no promise is returned.
+
+Coordinator shortcut selection slice on 2026-10-11: authenticated native focus
+updates an independent root recency document, including disabled vaults so a
+later enablement change can use real usage order. Live focus history takes
+precedence while its queued disk write is pending; closed vaults remain in the
+shortcut history. Selection reads canonical vault eligibility under the root
+lock without repairing vault documents or opening a DB. A sole closed capture
+vault can be selected before its pending legacy migration finishes. Disabled
+vaults and pending deletions are excluded. Persisted identities include the
+physical directory, and stale focus jobs cannot overwrite newer recency.
+When no eligible usage history exists, the eligible last-used vault wins, then
+stable index order. Selection is exposed in authenticated coordinator status.
+
+Corrupt history is recovered from a validated previous copy on coordinator
+startup. If neither copy is usable, files stay intact and selection reports
+unavailable; manual vault opening and ownership status continue working.
+Corrupt vault settings similarly prevent selecting an uncertain destination.
+The selected vault still must pass readiness, eligibility and close-state checks
+at action execution. This slice does not register shortcuts or execute actions.
+
+Validation: Rust fmt/clippy and the serial suite pass 846 unit tests and one
+integration test, with five ignored tests. Native fixtures verified zero/one/
+multiple eligibility, authenticated focus notices from a disabled vault, closed
+capture selection, and recency across coordinator restart. Fixture setting edits
+obtained actual root and vault OS locks after worker exit. A second restart with
+both recency copies invalid retained their exact bytes, reported no shortcut
+destination, still opened both vaults manually and closed both workers cleanly.
+Real OS shortcut registration remains disabled for these disposable test roots.
+
+Preview-service cleanup slice on 2026-10-11: a session owns its child, input and
+proxy routes immediately during startup. Dropping a partial session, failed
+startup, replaced session or an abandoned async result reaps those resources.
+The queued startup result retains its service job until registration or cleanup,
+so close cannot finish its service drain before an abandoned child is reaped.
+Concurrent restarts use unique inputs and cannot delete each other's source file.
+Rust fmt/clippy and the full serial suite pass 836 unit tests and one integration
+test, with five ignored tests. A real subprocess fixture verifies that dropping
+an unclaimed startup result releases its OS lease, removes both proxy routes and
+the input, and permits the service drain to complete.
+
+Coordinator shortcut execution slice on 2026-10-11: the coordinator registers
+from canonical root bindings and a shared frontend/native manifest of defaults
+and supported keys. Workers submit invalidations and never register or remove
+peer shortcuts. Enablement edits, readiness and vault deletion trigger refresh.
+Unchanged registrations are retained. Failed additions/removals remain visible
+and retry on the next invalidation; invalid settings disable the desired plan.
+A failed removal remains tracked, and stale callbacks cannot execute a binding
+that has since changed. Held-key repeats do not start another action.
+
+Each action selects one eligible physical vault, opens it if closed, waits for
+readiness, authenticates its launch/storage identity and transfers foreground
+permission. The worker rechecks index membership, eligibility, current binding
+and service admission before writing. Root and worker request receipts preserve
+success/failure during bounded retries; a lost reply or notification cannot
+create a second note. Failure never selects another vault. Only the main window
+receives the created-note notification. Native ownership is checked before local
+frontend dispatch, including in disabled foreground vaults. Registration and
+latest action failures are visible in the shortcut settings panel. The runtime
+protocol advances to 3; compatibility hashing includes the shortcut manifest.
+
+Validation: Rust formatting/clippy and the full serial suite pass 851 unit tests
+and one integration test, with five ignored tests. Six focused frontend suites
+pass 98 tests; affected lint, type checks and frontend/embedded native builds
+pass. The repeatable Windows smoke check is
+`python src-tauri/scripts/supervised-shortcuts-check.py --output <fresh-directory>`.
+It verified closed capture startup, all note kinds, Show app without note writes,
+disabled foreground isolation, root/private request retries, wrong launch and
+stale binding rejection, zero eligibility with visible failure, closed eligible
+MRU routing and actual worker exits. OS integrations remain disabled in these
+fresh test roots; real keyboard/registration platform QA is still required.
+Whole-app Quit, tray/updater ownership and default supervised startup remain
+pending. Individual worker closure deliberately retains closed capture routing.
+
+Tracked worker-close slice on 2026-10-12: private close requests now expose
+queued, pending, committing and failed status by request ID. Repeated requests
+reuse their result. Requests queued before native dispatch join one save batch;
+a delayed callback cannot restart a cancelled close. Existing in-progress closes
+also accept aliases. Failure survives cancellation and a later independent
+attempt, and success remains committing until the process/OS ownership observer
+confirms exit. Unknown status reads do not mutate the request budget. The worker
+protocol advances to 4 before using this new private command.
+
+Validation: Rust formatting/clippy and the full serial suite pass 854 unit tests
+and one integration test, with five ignored tests. The embedded native build and
+Windows shortcut smoke check pass again, including unknown close status, repeated
+close requests and status polling while workers remain reachable. Socket loss is
+never treated as exit; every fixture worker actually exited before cleanup. This
+adds the close tracking needed by whole-app Quit and handoff; their coordinator
+orchestration remains the next implementation step.
+
+Whole-app Quit slice on 2026-10-12: native menu and tray Quit now route to
+this environment's coordinator. The headless macOS coordinator installs an app
+menu with Quit; editor menus/settings remain in workers. One repeatable operation
+fences new launches,
+activation and shortcut actions. Concurrent Quit requests join that operation
+and retain its failure on retries. Previously reserved workers may still
+register and become ready, and final settings/focus notices can finish.
+
+The coordinator suspends OS shortcuts, authenticates each worker's current
+launch/root/physical directory and closes workers in bounded parallel batches.
+Queued/pending/committing close status never proves exit. Launched workers need
+the actual child-exit observer and a free physical vault lease; adopted workers
+need that free OS lease. Socket errors, PIDs and file presence never release
+ownership. After workers exit, the coordinator drains accepted root background
+work before exiting. No root/document lock crosses IPC or a save wait.
+
+Cancellation, unknown owners or a timeout keep the coordinator and remaining
+workers running, retain the failed operation, resume shortcut registration and
+notify reachable windows. Some workers may already have saved and exited when
+another cancels. Main-window close remains an individual vault close. Direct
+mode keeps its existing Quit behavior. Runtime protocol 5 includes authenticated
+whole-app failure notices. Native platform behavior and dirty/popout shutdown
+QA still gate default supervised startup.
+
+Validation: Rust formatting/clippy and the full serial suite pass 858 unit tests
+and one integration test, with five ignored tests. Fifteen focused frontend
+close/shortcut tests, affected lint, type checks and production/embedded native
+builds pass. The fresh Windows app smoke check passes shortcut routing again and
+whole-app Quit with two vaults. Computer use entered disposable markdown in the
+main window and a note popout. Authenticated coordinator Quit closed both main
+windows and the popout, and exited the host. The check acquired every physical
+vault/coordinator lease afterward, and SQLite retained both main/popout edits.
+No owned fixture processes remained. Test roots keep OS integrations disabled.
+
+The smoke helper supports `--wait-for-external-quit`, exposing `quit-ready.json`
+before waiting for external menu or authenticated IPC Quit. Windows has no native
+app menu in this build; macOS menu, Windows tray and real OS keyboard checks remain
+pending. The coordinator IPC path was used for this native UI save check.
+
+Coordinator tray slice on 2026-10-12: one tray belongs to the coordinator;
+workers create none. Tray left click activates the last-used open worker or
+opens the persisted last-used vault when all workers are closed. Tray Quit uses
+the coordinated shutdown flow. Tray note/drawing/ink/diagram actions pin the
+overall most recent vault independently of shortcut eligibility. With all workers
+closed, in-memory focus history avoids a race with asynchronous recency writes.
+Unavailable destinations fail without writing in another vault.
+
+Tray actions await readiness and authenticate the launch/root/physical directory.
+Workers recheck index/deletion state and closing/service admission. Typed tray and
+shortcut receipts cannot be reused across origins or note kinds. Creation and
+notification share the existing at-most-once worker receipt, including diagram
+content. Capture failures produce persistent window toasts or a coordinator
+dialog when no window can receive them. Root device notices refresh tray/menu
+language. Runtime protocol 6 includes private tray capture and failure notices.
+The coordinator shutdown module is desktop-gated to retain mobile compilation.
+
+The user confirmed the lifetime policy on 2026-10-12. After the last worker
+actually exits, the coordinator exits when no vault enables global shortcuts
+and close-to-tray is off. An eligible closed capture vault or close-to-tray
+keeps it available. A background monitor also reconciles adopted workers using
+their physical OS leases. Failed startup, unavailable canonical settings and
+unknown ownership retain the coordinator. Accepted launch/capture/root-write
+jobs prevent an idle exit until they finish. The final eligibility/settings
+read and Quit admission share RootLock; worker IPC and job draining run after
+releasing it.
+
+Validation on 2026-10-12: Rust fmt/clippy and the full serial suite passed,
+862 unit tests plus one integration test, with five opt-in tests ignored.
+Frontend check, affected ESLint, 15 close/shortcut tests and the production
+frontend/embedded Windows builds passed. The fresh-root native fixture verified
+all tray templates into a disabled overall MRU vault, closed-vault tray capture,
+cross-origin receipt rejection, eligible shortcut routing, whole-app Quit and
+automatic last-worker exit. Coordinator/vault leases were reacquired after exit.
+Computer use clicked both vault title-bar Close buttons in a separate fixture.
+The first close left the other worker and coordinator alive; the final close
+exited the coordinator and released every lease. Artifacts remain under
+`.output/coordinator-tray-app-check` and `.output/coordinator-idle-ui-check`.
+The actual Windows tray menu input, real OS shortcut registration and macOS
+Dock/menu behavior remain unverified. Updater centralization and autostart
+behavior remain separate work before default supervision.
+
+Supervised autostart visibility slice on 2026-10-12: readiness no longer implies
+activation. Each reserved worker records whether startup requested activation;
+tracked opens and captures activate only after their own readiness/identity
+checks. Autostart respects root start-in-tray, while a normal duplicate launch
+focuses the existing hidden worker. A duplicate autostart launch does not steal
+focus. Manual activation during startup can still request activation on ready.
+This also allows the handoff path to prepare a target without showing it.
+
+Rust fmt/clippy and all 864 enabled Rust tests passed, five tests ignored.
+The embedded Windows build passed. In `.output/coordinator-autostart-ui-check`,
+computer use found no visible windows while the autostart worker was ready.
+A normal executable launch activated that worker, then two title-bar closes
+released every lease and exited the coordinator. OS autostart registration
+ownership is still pending along with updater centralization.
+
+OS autostart ownership slice on 2026-10-12: supervised workers no longer load
+the autostart plugin. The typed desktop settings bridge asks the coordinator
+to read or update the environment's startup registration. It requires a ready,
+registered worker identity and rejects new settings work while quitting.
+Accepted jobs are tracked before releasing coordinator admission. OS calls run
+off the event loop under RootLock, without contacting workers from that lock.
+Operation receipts retain success/failure, reject reused IDs across commands,
+and prevent retries from applying an older setting after a newer one. Direct
+desktop mode uses the same backend bridge; browser/mobile fallback stays inert.
+Dev/test reads report disabled and mutations fail without changing OS state.
+The opt-in runtime flag is preserved in the login launch entry. Start-in-tray
+changes only the root document, so it no longer disables/re-enables OS login
+registration. Runtime protocol 7 adds autostart requests and terminal status.
+
+Validation: Rust fmt/clippy and 865 enabled Rust tests passed, five ignored.
+The frontend check, affected ESLint, 48 settings/close tests, production frontend
+and embedded Windows builds passed. The fresh-root native check verified
+autostart reads, terminal replay, changed command/worker rejection and failure
+of dev/test registration writes, followed by the full tray/shortcut/shutdown
+regression scenarios. Computer use opened General settings and attempted to
+enable start on login in the isolated test root. The switch reverted to disabled,
+the saved root setting remained absent, and a coordinator read reported false.
+Both native title-bar closes exited the app and released every lease. Artifacts
+remain under `.output/coordinator-autostart-owner-app-check` and
+`.output/coordinator-autostart-owner-ui-check`. Real OS registration changes
+remain unverified.
+
+Automatic coordinator revival slice on 2026-10-12: packaged/embedded workers
+probe the existing coordinator OS lease and take a separate OS launch lease
+before starting a replacement. Stale file contents and failed sockets grant
+no ownership. Missing/unreadable lease evidence fails closed. Simultaneous
+workers coalesce their launch attempts; a racing normal launch still elects
+only one coordinator. Replacement startup uses background recovery, adopts
+existing physical vault owners and does not open another vault or activate a
+window. Worker vault leases and original launch IDs remain unchanged.
+
+Recovery keeps bounded child observers and retries, skips queued, pending and
+committed worker closes, and resumes after a cancelled close. It never
+force-releases a lease. It uses a separate Windows
+recovery browser folder and refuses to export an unsealed legacy store from a
+background launch. Vite/dev sessions require a normal manual dev launch after
+the CLI/native host crashes; automatic native restart cannot restore Vite.
+When no workers survive a crash, a normal app launch remains necessary.
+Rust fmt/clippy and 868 enabled Rust tests passed, five ignored. The first
+embedded Windows crash check terminated the fixture's owned coordinator,
+observed both vault leases still held, and automatically adopted both original
+launch IDs in a replacement without a manual app launch. Capture then wrote to
+the expected vault. Quit released every coordinator/vault lease. The complete
+autostart/tray/shortcut/shutdown regression also passed. The final embedded build
+and repeated crash/adoption/capture/Quit check passed with the shutdown guard.
+Its queued, pending, cancelled and committed states are covered by a lifecycle
+unit test. Artifacts remain under `.output/coordinator-revival-final-app-check`
+and `.output/coordinator-revival-regression-check`. No fixture app processes
+remained after cleanup. An empty update session also counts as a completed
+startup, allowing normal idle exit when no vault enables shortcuts and
+close-to-tray is off. It must not be retained as a failed first startup. Rust
+fmt/clippy and all 874 enabled tests passed for this follow-up. The native fixture
+in `.output/coordinator-updater-empty-session-app-check` repeated the two-vault,
+popout, hidden-state and ordinary-cold-start checks, then consumed an empty update
+session and exited with no eligible shortcuts and close-to-tray off. Every lease
+was free after exit. Real packaged macOS/Linux lifecycle and focus checks
+remain outstanding.
+
+Coordinator updater slice on 2026-10-12: supervised workers use a typed native
+bridge and never load the updater plugin. The root coalesces automatic checks,
+retains an identified offer and fences new launches/captures while installing.
+Checking holds a tracked job; installation holds no worker job, since its own
+worker must be able to close. Downloads/signatures complete before any worker
+closes. Progress reaches the requesting UI through private worker IPC.
+
+Before closing workers, the coordinator drains earlier root work, snapshots
+all ready vaults and their main/note windows, then atomically saves an update
+restart record under RootLock. Close uses the existing all-window save/service
+drain protocol and requires child-exit/physical-lease release. No root document
+lock crosses network work, worker IPC or waiting. Windows installation runs
+only in the root because the SDK starts an installer and exits its caller.
+Other desktop platforms restart from the coordinator after native installation.
+
+Startup validates the record's root, source/target version and physical indexed
+vault paths. Valid update recovery takes precedence over background/autostart
+launch flags inherited by an installer. It prepares workers without automatic
+activation, recreates note windows with vault-isolated browser options/account
+policy, and restores saved bounds, visibility and minimization/maximization.
+Every restored window must register persistence readiness before its vault is
+acknowledged. Final activation targets only the saved focus window. Note windows
+store their explicit note IDs, since IDs may already contain the window-label
+prefix. They use the app's root editor URL. Hidden-created popouts synchronize
+the WebView's visibility as well as their native window; activation shows and
+focuses their WebView explicitly.
+
+Per-vault acknowledgements survive interrupted startup. Surviving acknowledged
+workers retain their current windows; missing workers reopen even when an older
+acknowledgement exists. Completion writes an atomic consumed tombstone, so a
+normal cold start opens only the last-used vault. There is no previous-copy
+fallback for this journal: replaying an older update intent could revive windows
+the user has since closed. Invalid/foreign records remain intact and cannot be
+overwritten by a new update. Failed close/install drops the reversible drain,
+resumes root admission/shortcuts and restores closed vaults in the old version;
+an incomplete recovery retains its evidence.
+
+Validation: Rust fmt/clippy and 874 enabled tests passed, five ignored. Frontend
+check and affected ESLint passed, along with 28 updater/close-participant tests,
+the production frontend build and embedded Windows build. The fresh-root native
+fixture checked ready-owner authentication, operation replay and disabled test
+installation. Simulated installer completion reopened both vaults despite an
+inherited background-recovery flag, restored main/popout bounds and hidden state,
+and automatically focused the saved note window. Persistence readiness completed
+before the record was consumed. A subsequent normal cold start opened only the
+last-used vault and no old popout. Final Quit released every physical vault and
+coordinator lease.
+
+Computer use verified the actual editor URL/note identity and entered text in
+the restored popout. SQLite retained the text in that exact note after coordinated
+Quit. This caught and fixed an editor-route 404 and a hidden WebView2 controller
+that prevented restored popouts from receiving focus/input. Artifacts remain in
+`.output/coordinator-updater-visible-webview-ui-check`. Earlier failed fixtures
+were closed gracefully and left their evidence for inspection. The full native
+tray/shortcut/autostart/Quit/last-window regression also passed in
+`.output/coordinator-updater-full-regression-check`. No fixture app processes
+remained after cleanup.
+
+Actual signed updater installation, packaged macOS/Linux restart, and monitor/DPI
+changes remain release QA requirements. The native fixture simulates installer
+completion and never changes the installed application.
+
+Vault menu observation slice on 2026-10-12: a typed native query identifies the
+supervised runtime and lists its ready, starting and unavailable vault workers.
+The coordinator requires the exact ready caller identity. It reconciles adopted
+workers using physical OS leases, preserves unavailable owners and does not infer
+closure from socket failure or PID state. Observations cannot authorize a launch
+or source close; the eventual opening action must recheck ownership. The bridge
+holds a tracked read job off the event loop and never waits on IPC under RootLock.
+Direct, browser and mobile devices explicitly report their existing single-vault
+mode; coordinator errors cannot become an empty closed-vault list. Frontend
+validation rejects unknown states, duplicate/empty IDs and contradictory direct
+mode data. Runtime protocol 9 adds the authenticated read request.
+
+Rust fmt/clippy and 875 enabled tests passed, five ignored. Frontend check,
+affected ESLint, 15 bridge/profile-store tests and the production build passed.
+The embedded Windows build and fresh-root native check passed authentication,
+live-window state, tray/shortcut routing, autostart, whole-app Quit and last-window
+exit. Artifacts are in `.output/vault-window-state-retry-app-check`. A transient
+Windows endpoint read failure during atomic publication is now retried within
+the harness's bounded startup wait. It never authorizes takeover; the failed
+fixture was closed through authenticated coordinated Quit. No fixture processes
+remained after cleanup. Menu choices/preferences and handoff remain pending;
+normal startup remains direct during the rollout.
+
+Keep one vault per worker for its lifetime. Use the validated long-lived
+host/coordinator arrangement. Do not add in-process session swapping.
+
+- Add protected local IPC, coordinator election, readiness registration,
+  request IDs, bounded retries, and stale-registration reconciliation. Real
+  locks determine ownership; unresponsive processes do not lose their locks.
+  Avoid general root locks across IPC waits or network work.
+- Before adding incompatible shared-document fields or ownership migrations,
+  extend the worker protocol/storage compatibility check during coordinator recovery.
+  Surviving workers from an older binary must not recover a newer valid document
+  as corrupt or publish an older schema over it. Refuse incompatible adoption
+  and new writers before root migrations while retaining the old owner's OS
+  lease; never force ownership transfer or kill an unresponsive worker.
+- Launch explicit vault targets. Convert `profiles.json.active` to last-used
+  startup preference, separate from live ownership.
+- Implement normal launch, new-window requests, duplicates, and racing requests.
+  Transfer Windows foreground permission with `AllowSetForegroundWindow` and
+  propagate Wayland activation tokens where available. Verify menu, taskbar,
+  Dock, and tray activation.
+- Register worker main windows and note popouts labelled by note ID. Include
+  them in focus, restoration, geometry, close-to-tray, and shutdown rules.
+  Geometry is scoped by environment, vault, and window identity.
+- Make root hotkey bindings authoritative and the enable flag vault-specific,
+  following the global shortcut decision above. Workers submit edits and
+  eligibility notifications rather than registering globally. Tray actions
+  target the overall most recent vault; shortcuts target the most recent
+  eligible vault, including a closed sole capture vault. Await readiness before
+  executing. Define no-worker coordinator lifetime using shortcut/tray/autostart
+  preferences and preserve failed requests without writing into another vault.
+- Centralize tray and updates. Tray Quit flushes/closes this environment's
+  workers. Update installation waits for workers, popouts, and services to stop.
+- Broadcast device revisions and apply language/theme/decorations/tray changes.
+  Recover coordinator crashes through election and worker re-registration.
+- Deletion obtains exclusive vault ownership, journals/tombstones the vault,
+  removes it from the index under the root lock, releases the in-directory
+  lock handle, then deletes files on Windows. Tombstones and launch checks block
+  reopening during deletion. Resume failures without reviving the index or
+  deleting unrelated paths.
+
+Acceptance: independent concurrent vaults, deterministic duplicate/focus
+routing, correct popout lifecycle, one tray/shortcut owner, propagated device
+changes, and recoverable deletion/shutdown.
+
+## Phase 3: menu UI and worker handoff
+
+Supervised menu opening slice on 2026-10-12: the desktop switcher reads live
+window observations on opening and while visible. It shows open, starting and
+unavailable owners and hides deletion for all of them. Failed observations show
+localized retry feedback and block opening/deletion; they never select the
+legacy restart flow. Generation checks discard responses from an older menu
+session. Direct desktop/browser and mobile behavior remain compatible.
+
+Primary selection and the accessible new-window button route to the coordinator.
+Ready targets focus their existing window; closed targets open a worker while
+the source remains running. Newly created vaults use this same supervised path,
+including development builds. This slice intentionally exposes only the
+new-window/focus action while safe this-window handoff is unfinished. Remembered
+preferences and the two-choice prompt follow with handoff.
+
+The native action holds a source service job, supplies the exact source launch
+identity and waits for the terminal opening result. The coordinator rechecks
+source readiness, target index membership and physical ownership. Quit/update
+fences reject new requests. Identical request IDs replay without redispatch, and
+failed opening cannot trigger a legacy switch or close the source. Runtime
+protocol 10 adds the source-authenticated opening request.
+
+Validation: Rust fmt/clippy and the full serial suite pass, with 875 unit tests
+and one integration test passing, five ignored overall. All 33 focused menu,
+profile, live-state bridge and profile-readiness frontend tests pass. Svelte,
+affected ESLint, localization and production frontend/embedded Windows builds
+pass. The fresh-root native fixture checks authenticated focus/replay, a missing
+target with a retained source, opening another vault without replacing the source,
+tray/shortcut/autostart/update routing, whole-app Quit and last-window exit.
+Final build artifacts and the repeated native regression remain in
+`.output/vault-menu-final-build.log` and `.output/vault-menu-final-app-check`.
+The first successful regression remains in `.output/vault-menu-opening-retry-app-check`. The earlier
+fixture attempted to open from an already closed source and correctly failed;
+its graceful cleanup and evidence remain in `.output/vault-menu-opening-app-check`.
+The collaborative browser checked direct-mode rendering and a disposable
+supervised-state fixture: status labels, deletion visibility and accessible
+focus/new-window buttons rendered correctly, both actions kept the source label
+unchanged and no browser error was recorded. Its opening API was simulated;
+the native fixture separately verified real coordinator requests. Native visual
+interaction with the new menu remains a release QA check.
+
+Estimate: 4 to 6 working days including persistence/shutdown verification.
+
+Primary areas: `VaultSwitcher.svelte`, profile APIs/stores, coordinator launch,
+editor persistence, and secondary-window lifecycle.
+
+- Add opening actions, remember checkbox, three-choice device preference,
+  Ctrl + left click override, and accessible alternatives. Apply the same rules
+  to newly created vaults; consider Command + click on macOS.
+  Handoff recovery policy confirmed by the owner on 2026-10-12: if the coordinator
+  crashes after the source has saved and closed, finish opening the target.
+  Retain the source if it is still open. Ownership changes, unknown close receipts
+  and failed saves must never authorize closing a different source process.
+
+- Reserve/start the target as a prepared worker at source geometry. Ready means
+  locks, recovery, settings, and account policy succeeded. Then flush main and
+  popout editors and stop source services. Activation is a separate commit step.
+  Cancel the prepared target when source persistence cannot finish.
+- Keep the source alive on target failure, cancellation, or failed flush. Handle
+  crashes/lost acknowledgements with operation IDs and repeatable handoff state.
+  Target preparation cannot perform source-session-derived writes.
+- Focus an existing target without closing the source, including Ctrl + click.
+  Suppress repeated requests during handoff.
+- Remove desktop global-active/relaunch/manual-restart switching. Retain browser
+  fallback and mobile restart compatibility. Dev's supervised host stays alive.
+
+Acceptance: handoff keeps geometry/content, failure leaves a usable source,
+new-window leaves it running, preference/Ctrl + click work, and no backend
+session swap or `State<Db>` refactor is required.
+
+## Phase 4: recovery, platform checks, and documentation
+
+Estimate: 3 to 4 working days. Add focused tests with each earlier change.
+
+- Test shared-root/different-vault workers separately from isolated devices
+  sharing a remote account. Preserve both existing multiremote suites.
+- Race launches/root edits; test hung owners, PID reuse, crash-released locks,
+  missing/corrupt documents, and last-used fallback. Keep ownership rules enabled
+  in tests.
+- Interrupt restore/migration/deletion/dictionary publication at every phase;
+  reopen repeatedly. Use VM/reboot tests for durability. Never sweep DB WAL files.
+- Startup routes launch, recovers locked root operations, acquires vault
+  ownership, reconciles restore, lets SQLite recover, checks schema/unclean
+  integrity, then registers ready and starts services. Preserve dirty rows and
+  tombstones during recovery.
+- Verify foreground grants, Wayland activation, macOS app identity/Reopen,
+  `tauri dev`, popouts, tray, and multi-window shutdown.
+- Harness cleanup tracks only its root's host/workers/browser processes and
+  waits for lock release before restart. Add isolation preflight checks and
+  readiness/focus failure artifacts.
+- Run required Rust gates and affected frontend/real-app checks. Update build,
+  architecture, recovery, storage-scope, and harness documentation.
+
+## Estimate and delivery
+
+Core work is roughly 19 to 26 working days including the spike and safety slice,
+about four to six weeks. The original combined scope with plugins/themes needs
+five to seven weeks or more if the spike rejects process-per-vault. These are
+planning ranges; platform constraints remain to be tested.
+
+Ship safety fixes independently, then spike findings and an explicit architecture
+decision, environments/ownership, coordination, and UI handoff. Keep migrations
+and recovery tests in the same reviewable change. Commit automatically after
+required checks using scoped Conventional Commit messages.
+
+Out of scope: exact native-window preservation through backend session swapping,
+multiple local writers, ordinary cold-start previous-session reopening, network-filesystem
+vaults and full settings/plugin-data backup portability. Plugins and themes
+are implemented in their linked follow-up plans.

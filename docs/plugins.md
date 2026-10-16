@@ -10,12 +10,40 @@ script when they need real logic.
 | Kind                    | Location                                                                  | Trust                                                           |
 | ----------------------- | ------------------------------------------------------------------------- | --------------------------------------------------------------- |
 | First-party (bundled)   | repo-root `plugins/<name>/` → embedded in the app binary (`include_dir!`) | `builtin` — trusted by location, ships inside the signed binary |
-| Third-party (installed) | `<profile>/plugins/<name>/` in the app-data dir                           | `installed` — subject to the integrity gate below               |
+| Third-party (installed) | `<root>/plugin-packages/<digest>/` via the root catalog                   | `installed` — subject to the integrity gate below               |
 
-Trust is decided **only by which directory a plugin was read from**, never by
-anything inside its manifest. Dropping a copy of a built-in plugin into the
-app-data dir loads it as a gated third-party plugin, so core plugins double as
-worked examples.
+Builtins are trusted because their bytes are embedded in the signed binary.
+Installed packages are always third-party, regardless of manifest fields. A
+third-party package cannot replace or inherit trust from a builtin ID.
+
+Use Settings → Plugins → **Install or update from folder** to select a folder
+containing `manifest.json`. Installation makes the package available to every
+vault on this device. Each vault must approve it separately before it contributes
+or executes. Enable/disable also applies only to the current vault. A valid update
+from the already approved signer can retain approval only when it adds no
+permissions. Unsigned edits, changed signers and broader permissions require review.
+
+**Remove from device** lists the device's vaults before removal. Settings,
+approval records and writable plugin data are kept. Running tasks keep their old
+package files until they finish; new calls cannot use a removed package. A later
+reinstall requires fresh approval in every vault, even for identical bytes and
+vaults that were closed during removal. Missing packages remain visible in the
+management list with a disabled state.
+
+The root catalog is `plugins/catalog.json`. Packages are immutable, addressed by
+all package bytes, including signature metadata. Downloads use
+`plugin-artifacts/<plugin>/<artifact>/<version>/<sha256>/<filename>` so two builds
+with the same declared version cannot overwrite each other. Scripts and preview
+services receive effective settings from the backend. Settings with `scope: "D"`
+are shared in root `plugin-settings.json`; `scope: "V"` stays in the vault database.
+Writable `plugin-data/<plugin>` always stays inside its vault.
+
+Migration prefers an existing valid root package, then the startup-selected vault,
+then other vaults. Identical packages deduplicate. Original vault plugin folders,
+settings rows and conflicting files remain intact as migration evidence; receipts
+prevent them from reversing a later removal or reset. Root `plugins/<name>/`
+folders can also serve as package input. Folder selection is the explicit way to
+reinstall unchanged bytes after removal.
 
 ## First-party plugins
 
@@ -348,13 +376,13 @@ plugin lists the notes in its configured folder or tag and returns a menu of
 
 Every export is called with one `ctx` table. It is assembled from two halves:
 
-| Field          | Built by | Notes                                                      |
-| -------------- | -------- | ---------------------------------------------------------- |
-| `settings`     | backend  | the plugin's stored settings, read from the vault database |
-| `folders`      | backend  | the vault folder tree; empty without `notes.read`          |
-| `now`          | backend  | RFC3339, from the host clock                               |
-| `activeNoteId` | frontend | the note on screen, or `nil`                               |
-| `locale`       | frontend | the window's current locale                                |
+| Field          | Built by | Notes                                                                               |
+| -------------- | -------- | ----------------------------------------------------------------------------------- |
+| `settings`     | backend  | the plugin's stored settings, read from the backend's effective root/vault settings |
+| `folders`      | backend  | the vault folder tree; empty without `notes.read`                                   |
+| `now`          | backend  | RFC3339, from the host clock                                                        |
+| `activeNoteId` | frontend | the note on screen, or `nil`                                                        |
+| `locale`       | frontend | the window's current locale                                                         |
 
 Plus whatever the call itself is about — `noteId` and `body` for a note-kind
 render, `format` for an exporter, `variables` for a template.

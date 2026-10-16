@@ -25,6 +25,7 @@ mod catalogue;
 mod custom;
 mod dictionary;
 pub mod http_checker;
+mod storage;
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -119,6 +120,7 @@ struct Resident {
     /// Most-recently-used first, so eviction is a `pop()`.
     order: Vec<String>,
     dictionaries: HashMap<String, spellbook::Dictionary>,
+    sources: HashMap<String, (PathBuf, PathBuf)>,
     /// When a dictionary was last read. `None` means nothing is resident.
     /// Drives [`Resident::evict_if_idle`].
     last_used: Option<Instant>,
@@ -138,6 +140,7 @@ impl Resident {
         while self.order.len() > MAX_RESIDENT {
             if let Some(evicted) = self.order.pop() {
                 self.dictionaries.remove(&evicted);
+                self.sources.remove(&evicted);
             }
         }
     }
@@ -164,6 +167,7 @@ impl Resident {
     fn release_all(&mut self) -> usize {
         let freed = self.dictionaries.len();
         self.dictionaries.clear();
+        self.sources.clear();
         self.order.clear();
         self.last_used = None;
         freed
@@ -175,15 +179,28 @@ impl Resident {
         if self.dictionaries.contains_key(id) {
             self.touch(id);
         } else {
-            let dictionary = dictionary::load_dictionary(
-                &dir.join(format!("{id}.aff")),
-                &dir.join(format!("{id}.dic")),
-            )?;
+            let dictionary = storage::load(dir, id)?;
             self.insert(id.to_string(), dictionary);
         }
         self.dictionaries
             .get(id)
             .ok_or_else(|| AppError::NotFound(format!("dictionary {id}")))
+    }
+
+    /// Once per request, invalidate dictionaries replaced/removed by workers.
+    fn refresh(&mut self, dir: &Path, languages: &[String]) {
+        for id in languages {
+            let source = storage::resolve(dir, id).ok().flatten();
+            if source.as_ref() != self.sources.get(id) {
+                self.dictionaries.remove(id);
+                self.order.retain(|held| held != id);
+            }
+            if let Some(source) = source {
+                self.sources.insert(id.clone(), source);
+            } else {
+                self.sources.remove(id);
+            }
+        }
     }
 }
 
@@ -192,36 +209,7 @@ impl Resident {
 /// A lone `.aff` is ignored rather than reported: it cannot be loaded, and
 /// offering it in the UI would only produce an error when selected.
 pub fn installed_dictionaries(dir: &Path) -> AppResult<Vec<InstalledDictionary>> {
-    let mut found = Vec::new();
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        // Nothing downloaded yet is a normal state, not a failure.
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(found),
-        Err(err) => return Err(err.into()),
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("aff") {
-            continue;
-        }
-        let Some(id) = path.file_stem().and_then(|stem| stem.to_str()) else {
-            continue;
-        };
-        let dic = dir.join(format!("{id}.dic"));
-        if !dic.exists() {
-            continue;
-        }
-        let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
-            + std::fs::metadata(&dic).map(|m| m.len()).unwrap_or(0);
-        found.push(InstalledDictionary {
-            id: id.to_string(),
-            bytes,
-        });
-    }
-
-    found.sort_by(|a, b| a.id.cmp(&b.id));
-    Ok(found)
+    storage::installed(dir)
 }
 
 /// The subset of `words` that no LOADED dictionary recognises.
@@ -240,6 +228,7 @@ fn unknown_words(
     languages: &[String],
     words: Vec<String>,
 ) -> Vec<String> {
+    resident.refresh(dir, languages);
     let mut usable: Vec<&str> = Vec::new();
     for language in languages {
         match resident.get_or_load(dir, language) {
@@ -286,6 +275,7 @@ pub async fn spellcheck_unknown_words(
     languages: Vec<String>,
     words: Vec<String>,
 ) -> CommandResult<Vec<String>> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let dir = dictionary_dir(&app)?;
     let resident = app.state::<SpellcheckState>().inner.clone();
 
@@ -293,6 +283,7 @@ pub async fn spellcheck_unknown_words(
     // tables is CPU-bound, so keep it off the async runtime's threads.
     let unknown = tauri::async_runtime::spawn_blocking({
         move || -> AppResult<Vec<String>> {
+            let _job = job;
             let mut guard = resident
                 .lock()
                 .map_err(|_| AppError::InvalidArg("spellcheck state poisoned".into()))?;
@@ -316,14 +307,17 @@ pub async fn spellcheck_suggest(
     languages: Vec<String>,
     word: String,
 ) -> CommandResult<Vec<String>> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let dir = dictionary_dir(&app)?;
     let resident = app.state::<SpellcheckState>().inner.clone();
 
     let suggestions = tauri::async_runtime::spawn_blocking(move || -> AppResult<Vec<String>> {
+        let _job = job;
         let mut guard = resident
             .lock()
             .map_err(|_| AppError::InvalidArg("spellcheck state poisoned".into()))?;
 
+        guard.refresh(&dir, &languages);
         let mut out: Vec<String> = Vec::new();
         for language in &languages {
             let Ok(dictionary) = guard.get_or_load(&dir, language) else {
@@ -414,6 +408,26 @@ pub async fn spellcheck_installed_dictionaries(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn requests_refresh_resident_dictionaries_changed_by_other_workers() {
+        let dir = std::env::temp_dir().join(format!("ms-dict-refresh-{}", uuid::Uuid::new_v4()));
+        let languages = vec!["en_US".into()];
+        let mut first = Resident::default();
+        let mut second = Resident::default();
+        storage::publish(&dir, "en_US", b"SET UTF-8\n", b"1\nalpha\n").unwrap();
+        assert!(unknown_words(&mut first, &dir, &languages, vec!["alpha".into()]).is_empty());
+        assert!(unknown_words(&mut second, &dir, &languages, vec!["alpha".into()]).is_empty());
+        storage::publish(&dir, "en_US", b"SET UTF-8\n", b"1\nbeta\n").unwrap();
+        assert!(unknown_words(&mut first, &dir, &languages, vec!["beta".into()]).is_empty());
+        assert!(unknown_words(&mut second, &dir, &languages, vec!["beta".into()]).is_empty());
+        storage::remove(&dir, "en_US").unwrap();
+        assert!(unknown_words(&mut first, &dir, &languages, vec!["unchecked".into()]).is_empty());
+        assert!(first.dictionaries.is_empty());
+        assert!(unknown_words(&mut second, &dir, &languages, vec!["unchecked".into()]).is_empty());
+        assert!(second.dictionaries.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     fn tempdir(name: &str) -> PathBuf {
         let mut dir = std::env::temp_dir();
@@ -766,6 +780,7 @@ pub async fn spellcheck_available_dictionaries(
 /// never touches the network.
 #[tauri::command]
 pub async fn spellcheck_install_dictionary(app: AppHandle, id: String) -> CommandResult<()> {
+    let _job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let dir = dictionary_dir(&app)?;
     catalogue::install(&dir, &id).await?;
     Ok(())
@@ -773,6 +788,7 @@ pub async fn spellcheck_install_dictionary(app: AppHandle, id: String) -> Comman
 
 #[tauri::command]
 pub async fn spellcheck_remove_dictionary(app: AppHandle, id: String) -> CommandResult<()> {
+    let _job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let dir = dictionary_dir(&app)?;
     catalogue::remove(&dir, &id)?;
 
@@ -781,6 +797,7 @@ pub async fn spellcheck_remove_dictionary(app: AppHandle, id: String) -> Command
     let resident = app.state::<SpellcheckState>().inner.clone();
     if let Ok(mut guard) = resident.lock() {
         guard.dictionaries.remove(&id);
+        guard.sources.remove(&id);
         guard.order.retain(|held| held != &id);
     }
     Ok(())
@@ -825,8 +842,7 @@ pub async fn spellcheck_word_chars(
     let dir = dictionary_dir(&app)?;
     let mut chars: Vec<char> = Vec::new();
     for language in languages {
-        let path = dir.join(format!("{language}.aff"));
-        match dictionary::read_word_chars(&path) {
+        match storage::word_chars(&dir, &language) {
             Ok(declared) => {
                 for ch in declared.chars() {
                     if !chars.contains(&ch) {

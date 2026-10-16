@@ -208,7 +208,7 @@ async function setSettingText(label: string, value: string): Promise<void> {
 async function openPluginsCategory(): Promise<void> {
   await clickName('Open settings');
   await clickName('Plugins');
-  await expect(byName('Enable plugin')).toBeDisplayed();
+  await expect(byName('Enable in this vault')).toBeDisplayed();
 }
 
 /**

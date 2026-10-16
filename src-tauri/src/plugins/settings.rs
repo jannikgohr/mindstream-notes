@@ -1,24 +1,6 @@
-//! Plugin settings, stored in the vault database.
-//!
-//! # Why these are not in the settings store
-//!
-//! App settings live in the WebView's `localStorage`. That is fine for
-//! settings the WebView is the only consumer of, but plugin settings are not
-//! one of those: a scripted plugin receives them as `ctx.settings`, and every
-//! decision about *what* a plugin sees is the backend's to make. While they sat
-//! in `localStorage`, the backend could not read them — so the frontend had to
-//! assemble the script context and hand it over, which meant the backend could
-//! never invoke a plugin on its own. No events, no watchers, no scheduled work:
-//! not because the effect model forbids it, but because nothing except a UI
-//! action could build the argument.
-//!
-//! Keeping them here also fixes the thing `{setting:<id>}` had to work around
-//! in `preview_service`, where a settings snapshot was passed down from the
-//! frontend at launch precisely because the backend had no way to read one.
-//!
-//! Values are stored as JSON text so a setting keeps its type — a toggle comes
-//! back as a boolean, a slider as a number — rather than everything becoming a
-//! string on the way through.
+//! Backend plugin settings. D values belong to the root document; V values
+//! remain in the vault database. Legacy rows are retained as migration evidence.
+//! Runtime consumers receive the effective values plus manifest defaults.
 
 use std::collections::BTreeMap;
 
@@ -26,6 +8,217 @@ use chrono::Utc;
 use rusqlite::{params, Connection};
 
 use crate::error::AppResult;
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeviceSettings {
+    owner: String,
+    values: BTreeMap<String, PluginSettings>,
+    migrated: std::collections::BTreeSet<String>,
+}
+
+fn parse_device(raw: &[u8]) -> AppResult<DeviceSettings> {
+    serde_json::from_slice(raw)
+        .map_err(|e| crate::error::AppError::InvalidArg(format!("device plugin settings: {e}")))
+}
+
+fn read_device(root: &std::path::Path) -> AppResult<DeviceSettings> {
+    let path = root.join("plugin-settings.json");
+    crate::root_documents::recover(
+        &path,
+        |raw| parse_device(raw).map(|_| ()),
+        |raw| parse_device(raw).map(|_| ()),
+    )?;
+    match std::fs::read(path) {
+        Ok(raw) => parse_device(&raw),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(DeviceSettings::default()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn save_device(root: &std::path::Path, document: &DeviceSettings) -> AppResult<()> {
+    let bytes = serde_json::to_vec_pretty(document)
+        .map_err(|e| crate::error::AppError::InvalidArg(e.to_string()))?;
+    crate::root_documents::write(&root.join("plugin-settings.json"), &bytes, |raw| {
+        parse_device(raw).map(|_| ())
+    })
+}
+
+/// Backup callers hold RootLock. Physical migration owners stay on this device.
+pub(crate) fn backup_values(root: &std::path::Path) -> AppResult<BTreeMap<String, PluginSettings>> {
+    Ok(read_device(root)?.values)
+}
+
+pub(crate) fn restore_backup_values(
+    root: &std::path::Path,
+    values: &BTreeMap<String, PluginSettings>,
+) -> AppResult<()> {
+    let mut document = read_device(root)?;
+    for (id, settings) in values {
+        for (key, value) in settings {
+            if document.migrated.contains(&format!("{id}:{key}"))
+                && !document
+                    .values
+                    .get(id)
+                    .is_some_and(|settings| settings.contains_key(key))
+            {
+                continue;
+            }
+            document.migrated.insert(format!("{id}:{key}"));
+            document
+                .values
+                .entry(id.clone())
+                .or_default()
+                .entry(key.clone())
+                .or_insert_with(|| value.clone());
+        }
+    }
+    save_device(root, &document)
+}
+
+pub(crate) fn scoped_device_keys(
+    plugin: &super::discovery::DiscoveredPlugin,
+) -> std::collections::BTreeSet<String> {
+    device_keys(plugin)
+}
+
+/// Imported database rows are vault configuration, never legacy D migration
+/// input. Even an unavailable plugin must not seed shared values when installed
+/// later. Existing root values and reset receipts remain authoritative.
+pub(crate) fn seal_restored_rows(
+    root: &std::path::Path,
+    rows: &[(String, String)],
+) -> AppResult<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let _lock = crate::storage_locks::RootLock::acquire(root)?;
+    let mut document = read_device(root)?;
+    for (id, key) in rows {
+        document.migrated.insert(format!("{id}:{key}"));
+    }
+    save_device(root, &document)
+}
+
+/// Pin the selected migration source before workers can race to seed D values.
+pub fn prepare(root: &std::path::Path, selected: &std::path::Path) -> AppResult<()> {
+    let _lock = crate::storage_locks::RootLock::acquire(root)?;
+    let mut document = read_device(root)?;
+    if document.owner.is_empty() {
+        document.owner = selected
+            .canonicalize()
+            .unwrap_or_else(|_| selected.to_path_buf())
+            .to_string_lossy()
+            .into_owned();
+        save_device(root, &document)?;
+    }
+    Ok(())
+}
+
+fn device_keys(plugin: &super::discovery::DiscoveredPlugin) -> std::collections::BTreeSet<String> {
+    plugin.manifest_json["contributes"]["settings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|section| section["settings"].as_array().into_iter().flatten())
+        .filter(|setting| setting["scope"] == "D")
+        .filter_map(|setting| setting["id"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// Runtime consumers receive defaults as well as stored values. The UI cache
+/// receives stored values only, so its reset/default indicators remain exact.
+pub fn with_defaults(
+    plugin: &super::discovery::DiscoveredPlugin,
+    mut values: PluginSettings,
+) -> PluginSettings {
+    for section in plugin.manifest_json["contributes"]["settings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        for setting in section["settings"].as_array().into_iter().flatten() {
+            if let (Some(id), Some(value)) = (setting["id"].as_str(), setting.get("default")) {
+                values.entry(id.into()).or_insert_with(|| value.clone());
+            }
+        }
+    }
+    values
+}
+
+pub fn effective(
+    root: &std::path::Path,
+    vault: &std::path::Path,
+    conn: &Connection,
+    plugin: &super::discovery::DiscoveredPlugin,
+) -> AppResult<PluginSettings> {
+    let mut values = all(conn, &plugin.id)?;
+    let _lock = crate::storage_locks::RootLock::acquire(root)?;
+    let mut document = read_device(root)?;
+    let owner = vault.canonicalize()?.to_string_lossy() == document.owner;
+    let mut changed = false;
+    for key in device_keys(plugin) {
+        let legacy = values.remove(&key);
+        let receipt = format!("{}:{key}", plugin.id);
+        if owner && document.migrated.insert(receipt) {
+            if let Some(value) = legacy {
+                document
+                    .values
+                    .entry(plugin.id.clone())
+                    .or_default()
+                    .entry(key.clone())
+                    .or_insert(value);
+            }
+            changed = true;
+        }
+        if let Some(value) = document
+            .values
+            .get(&plugin.id)
+            .and_then(|settings| settings.get(&key))
+        {
+            values.insert(key, value.clone());
+        }
+    }
+    if changed {
+        save_device(root, &document)?;
+    }
+    Ok(values)
+}
+
+pub fn set_scoped(
+    root: &std::path::Path,
+    conn: &Connection,
+    plugin: &super::discovery::DiscoveredPlugin,
+    key: &str,
+    value: Option<&serde_json::Value>,
+) -> AppResult<()> {
+    if !device_keys(plugin).contains(key) {
+        return match value {
+            Some(value) => set(conn, &plugin.id, key, value),
+            None => remove(conn, &plugin.id, key),
+        };
+    }
+    let _lock = crate::storage_locks::RootLock::acquire(root)?;
+    let mut document = read_device(root)?;
+    document.migrated.insert(format!("{}:{key}", plugin.id));
+    let values = document.values.entry(plugin.id.clone()).or_default();
+    match value {
+        Some(value) => {
+            values.insert(key.into(), value.clone());
+        }
+        None => {
+            values.remove(key);
+        }
+    }
+    save_device(root, &document)
+}
+
+pub fn notify(app: &tauri::AppHandle) {
+    use tauri::Emitter;
+    let _ = app.emit(crate::app_events::AppEvent::PluginsChanged.as_str(), ());
+    #[cfg(desktop)]
+    crate::vault_supervisor::device_settings_changed(app);
+}
 
 /// Every setting stored for one plugin, keyed by its plugin-local id.
 ///
@@ -82,9 +275,7 @@ pub fn remove(conn: &Connection, plugin_id: &str, key: &str) -> AppResult<()> {
     Ok(())
 }
 
-/// Drop every setting for a plugin. Called when it is uninstalled: leaving its
-/// configuration behind would silently reapply to a later reinstall the user
-/// may have meant as a fresh start.
+/// Drop vault settings for an explicit reset. Package removal preserves them.
 pub fn clear(conn: &Connection, plugin_id: &str) -> AppResult<()> {
     conn.execute(
         "DELETE FROM plugin_settings WHERE plugin_id = ?1",

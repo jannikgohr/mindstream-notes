@@ -551,7 +551,9 @@ pub async fn capture_note_version(
     ref_version_id: Option<String>,
     markdown: String,
 ) -> CommandResult<Option<VersionSummary>> {
+    let job = app.state::<crate::vault_jobs::Saves>().enter()?;
     tauri::async_runtime::spawn_blocking(move || -> CommandResult<Option<VersionSummary>> {
+        let _job = job;
         let db = app.state::<Db>();
         capture_off_lock(
             &db,
@@ -574,7 +576,9 @@ pub async fn capture_current_note_version(
     action: VersionAction,
     ref_version_id: Option<String>,
 ) -> CommandResult<Option<VersionSummary>> {
+    let job = app.state::<crate::vault_jobs::Saves>().enter()?;
     tauri::async_runtime::spawn_blocking(move || -> CommandResult<Option<VersionSummary>> {
+        let _job = job;
         let db = app.state::<Db>();
         // Read the saved state under the lock; build the (possibly large) base64
         // snapshot with the lock released.
@@ -599,7 +603,9 @@ pub async fn list_note_versions(
     app: AppHandle,
     note_id: String,
 ) -> CommandResult<Vec<VersionSummary>> {
+    let job = app.state::<crate::vault_jobs::Saves>().enter()?;
     tauri::async_runtime::spawn_blocking(move || -> CommandResult<Vec<VersionSummary>> {
+        let _job = job;
         let db = app.state::<Db>();
         db.with_conn(|c| list(c, &note_id)).map_err(Into::into)
     })
@@ -609,7 +615,9 @@ pub async fn list_note_versions(
 
 #[tauri::command]
 pub async fn load_note_version(app: AppHandle, version_id: String) -> CommandResult<Version> {
+    let job = app.state::<crate::vault_jobs::Saves>().enter()?;
     tauri::async_runtime::spawn_blocking(move || -> CommandResult<Version> {
+        let _job = job;
         let db = app.state::<Db>();
         db.with_conn(|c| load(c, &version_id)).map_err(Into::into)
     })
@@ -622,7 +630,9 @@ pub async fn prune_note_versions(
     app: AppHandle,
     retention_days: Option<u32>,
 ) -> CommandResult<usize> {
+    let job = app.state::<crate::vault_jobs::Saves>().enter()?;
     tauri::async_runtime::spawn_blocking(move || -> CommandResult<usize> {
+        let _job = job;
         let db = app.state::<Db>();
         db.with_conn(|c| prune(c, retention_days))
             .map_err(Into::into)

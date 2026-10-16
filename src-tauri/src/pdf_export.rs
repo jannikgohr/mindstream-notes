@@ -11,7 +11,7 @@
 //! triggered, that's the wrong behaviour — they expect a save dialog.
 
 use serde::Deserialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
 use tokio::sync::oneshot;
 
@@ -59,6 +59,7 @@ async fn save_pdf_export_inner(app: AppHandle, input: SavePdfExportInput) -> App
     let path = file_path
         .into_path()
         .map_err(|e| AppError::InvalidArg(format!("path conversion: {e}")))?;
+    let _job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     std::fs::write(&path, &input.bytes)?;
     Ok(true)
 }

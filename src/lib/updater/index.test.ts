@@ -7,7 +7,11 @@ const {
   getPlatform,
   alert,
   confirm,
-  relaunch
+  relaunch,
+  checkCoordinatedUpdate,
+  installCoordinatedUpdate,
+  listen,
+  unlisten
 } = vi.hoisted(() => ({
   check: vi.fn(),
   isTauri: vi.fn(),
@@ -15,10 +19,20 @@ const {
   getPlatform: vi.fn(),
   alert: vi.fn(),
   confirm: vi.fn(),
-  relaunch: vi.fn()
+  relaunch: vi.fn(),
+  checkCoordinatedUpdate: vi.fn(),
+  installCoordinatedUpdate: vi.fn(),
+  listen: vi.fn(),
+  unlisten: vi.fn()
 }));
 
 vi.mock('@tauri-apps/plugin-updater', () => ({ check }));
+vi.mock('$lib/api/updater', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/api/updater')>()),
+  checkCoordinatedUpdate,
+  installCoordinatedUpdate
+}));
+vi.mock('@tauri-apps/api/event', () => ({ listen }));
 vi.mock('@tauri-apps/plugin-process', () => ({ relaunch }));
 vi.mock('$lib/platform', () => ({ getPlatform }));
 vi.mock('$lib/api', () => ({ isTauri, isAppImageInstall }));
@@ -48,6 +62,12 @@ beforeEach(() => {
   alert.mockReset().mockResolvedValue(undefined);
   confirm.mockReset().mockResolvedValue(false);
   relaunch.mockReset().mockResolvedValue(undefined);
+  checkCoordinatedUpdate
+    .mockReset()
+    .mockResolvedValue({ supervised: false, available: null });
+  installCoordinatedUpdate.mockReset().mockResolvedValue(undefined);
+  unlisten.mockReset();
+  listen.mockReset().mockResolvedValue(unlisten);
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(console, 'info').mockImplementation(() => {});
 });
@@ -57,6 +77,35 @@ afterEach(() => {
 });
 
 describe('checkForAvailableUpdate', () => {
+  it('uses the root offer and avoids the worker updater plugin', async () => {
+    checkCoordinatedUpdate.mockResolvedValue({
+      supervised: true,
+      available: { id: 'offer', version: '2.0.0', currentVersion: '1.0.0' }
+    });
+    const offer = await checkForAvailableUpdate({ force: true });
+    expect(offer).toMatchObject({
+      coordinated: true,
+      coordinatedId: 'offer',
+      version: '2.0.0'
+    });
+    expect(checkCoordinatedUpdate).toHaveBeenCalledWith(true);
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  it('does not fall back to a worker plugin after a coordinator failure', async () => {
+    checkCoordinatedUpdate.mockRejectedValue(new Error('owner unavailable'));
+    expect(await checkForAvailableUpdate()).toBeNull();
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  it('does not check in a worker when the root has no offer', async () => {
+    checkCoordinatedUpdate.mockResolvedValue({
+      supervised: true,
+      available: null
+    });
+    expect(await checkForAvailableUpdate()).toBeNull();
+    expect(check).not.toHaveBeenCalled();
+  });
   it('returns null outside Tauri', async () => {
     isTauri.mockReturnValue(false);
     expect(await checkForAvailableUpdate()).toBeNull();
@@ -100,6 +149,39 @@ describe('checkForAvailableUpdate', () => {
 });
 
 describe('installAvailableUpdate', () => {
+  it('lets the coordinator close and restart every vault without worker relaunch', async () => {
+    confirm.mockResolvedValueOnce(true);
+    await installAvailableUpdate({
+      update: fakeUpdate(),
+      version: '2',
+      currentVersion: '1',
+      coordinated: true,
+      coordinatedId: 'offer'
+    });
+    expect(installCoordinatedUpdate).toHaveBeenCalledWith('offer');
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(listen).toHaveBeenCalledWith(
+      'coordinator-update-progress',
+      expect.any(Function)
+    );
+    expect(unlisten).toHaveBeenCalledOnce();
+    expect(relaunch).not.toHaveBeenCalled();
+  });
+
+  it('removes the progress listener and reports coordinated install failures', async () => {
+    confirm.mockResolvedValueOnce(true);
+    installCoordinatedUpdate.mockRejectedValue(new Error('save failed'));
+    await installAvailableUpdate({
+      update: fakeUpdate(),
+      version: '2',
+      currentVersion: '1',
+      coordinated: true,
+      coordinatedId: 'offer'
+    });
+    expect(unlisten).toHaveBeenCalledOnce();
+    expect(alert).toHaveBeenCalledOnce();
+    expect(relaunch).not.toHaveBeenCalled();
+  });
   const available = (
     downloadAndInstall = vi.fn().mockResolvedValue(undefined)
   ): AvailableUpdate => ({

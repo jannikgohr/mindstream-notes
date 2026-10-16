@@ -13,6 +13,7 @@ name = "mindstream_notes_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
+dev-environment = []
 # Permit the MINDSTREAM_PROFILE_DIR env override of the active profile
 # directory in a *release* build. Dev (debug_assertions) builds always
 # allow it; production release builds do NOT unless this feature is
@@ -52,14 +53,16 @@ qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 # from run() in this file so the right store is registered before any
 # auth code touches an Entry.
 keyring-core = "1"
+zeroize = "1"
 
 # Sync — yrs CRDT for offline-merge-safe documents, similar for diffing
 # the editor's "full body" save back into Y.Text ops, rmp-serde for the
 # msgpack wire format inside Etebase item content.
 yrs = "0.26"
 hkdf = "0.12"
-# Seals the room keys kept on the device, see sync::room_keys. The client
-# library links the same crate, so this adds nothing to the build.
+# Seals the room keys kept on the device (sync::room_keys), the legacy
+# browser archive and the coordinator's IPC. The client library links the
+# same crate, so this adds nothing to the build.
 chacha20poly1305 = "0.10"
 similar = "3"
 rmp-serde = "1"
@@ -169,6 +172,7 @@ windows-native-keyring-store = "1"
 # here for `Interface::cast`.
 webview2-com = "0.38"
 windows-core = "0.61"
+windows = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Matches the v3 `sync-secret-service` feature we were using before.

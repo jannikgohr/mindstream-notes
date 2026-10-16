@@ -6,6 +6,9 @@ export const SAVE_DEBOUNCE_MS = 800;
  * Capture runs synchronously; persistence runs in capture order. */
 export function createSaveScheduler(options: {
   canSave: () => boolean;
+  /** Explicit close can save manual edits while automatic saving is disabled. */
+  canSaveOnClose?: () => boolean;
+  beforeFlush?: () => void;
   capture: () => (() => Promise<void>) | null;
   delayMs?: () => number;
   onError?: (error: unknown) => void;
@@ -20,9 +23,19 @@ export function createSaveScheduler(options: {
     timer = null;
     pending = false;
   }
-  async function flush(): Promise<void> {
+  async function flush(closing = false): Promise<void> {
+    options.beforeFlush?.();
     while (true) {
-      const shouldSave = pending && options.canSave();
+      const allowed = closing
+        ? (options.canSaveOnClose ?? options.canSave)()
+        : options.canSave();
+      // Keep manual edits pending for explicit close without spinning or
+      // arming an autosave timer. Read-only/trash guards still take precedence.
+      if (pending && !allowed && options.canSaveOnClose?.()) {
+        await saveTail;
+        return;
+      }
+      const shouldSave = pending && allowed;
       cancel();
       if (shouldSave) {
         const version = ++captureVersion;
@@ -52,8 +65,9 @@ export function createSaveScheduler(options: {
   }
   function schedule() {
     cancel();
-    if (disposed || !options.canSave()) return;
+    if (disposed || !(options.canSave() || options.canSaveOnClose?.())) return;
     pending = true;
+    if (!options.canSave()) return;
     timer = setTimeout(() => {
       void flush().catch(() => {});
     }, options.delayMs?.() ?? SAVE_DEBOUNCE_MS);
@@ -74,10 +88,14 @@ export function createSaveScheduler(options: {
     get pending() {
       return pending;
     },
-    subscribeSuspend: () => onAppSuspend(flush),
+    subscribeSuspend: () =>
+      onAppSuspend(
+        () => flush(),
+        () => flush(true)
+      ),
     destroy() {
       // Start the final capture while the component's document still exists.
-      const saving = flush();
+      const saving = flush(true);
       disposed = true;
       return saving.catch(() => {});
     }

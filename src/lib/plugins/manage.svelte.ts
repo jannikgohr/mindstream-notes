@@ -38,6 +38,7 @@ import type { PluginDocSection } from './types';
 /** One row of the management overview. */
 export interface PluginOverviewEntry {
   id: string;
+  missing: boolean;
   name: string;
   version: string;
   /** `'builtin'` or `'installed'`. */
@@ -88,33 +89,61 @@ export async function refreshPluginAdmin(): Promise<void> {
 
 /** Every installed plugin, enriched with backend metadata when present. */
 export function pluginOverview(): PluginOverviewEntry[] {
-  return allPlugins().map(({ manifest, enabled }) => {
-    const record = adminState.records[manifest.id];
-    return {
-      id: manifest.id,
-      name: manifest.name,
-      version: manifest.version,
-      source: record?.source ?? SOURCE_BUILTIN,
-      enabled,
-      description:
-        resolvePluginStringOptional(manifest.id, manifest.descriptionKey) ??
-        null,
-      documentation: manifest.contributes.documentation ?? [],
-      loadError: pluginLoadError(manifest.id) ?? record?.lastLoadError ?? null,
-      signatureStatus: record?.signatureStatus ?? 'unsigned',
-      signer: record?.signer ?? null,
-      author: manifest.author ?? null,
-      hasSettings: (manifest.contributes.settings ?? []).length > 0,
-      hasCommands: (manifest.contributes.commands ?? []).length > 0,
-      permissions: manifest.permissions,
-      nativeToolBinaries: (manifest.contributes.nativeTools ?? []).map(
-        (tool) => tool.binaryName
-      ),
-      nativeServiceBinaries: (manifest.contributes.nativeServices ?? []).map(
-        (service) => service.binaryName
-      )
-    };
-  });
+  const entries: PluginOverviewEntry[] = allPlugins().map(
+    ({ manifest, enabled }) => {
+      const record = adminState.records[manifest.id];
+      return {
+        id: manifest.id,
+        missing: false,
+        name: manifest.name,
+        version: manifest.version,
+        source: record?.source ?? SOURCE_BUILTIN,
+        enabled,
+        description:
+          resolvePluginStringOptional(manifest.id, manifest.descriptionKey) ??
+          null,
+        documentation: manifest.contributes.documentation ?? [],
+        loadError:
+          pluginLoadError(manifest.id) ?? record?.lastLoadError ?? null,
+        signatureStatus: record?.signatureStatus ?? 'unsigned',
+        signer: record?.signer ?? null,
+        author: manifest.author ?? null,
+        hasSettings: (manifest.contributes.settings ?? []).length > 0,
+        hasCommands: (manifest.contributes.commands ?? []).length > 0,
+        permissions: manifest.permissions,
+        nativeToolBinaries: (manifest.contributes.nativeTools ?? []).map(
+          (tool) => tool.binaryName
+        ),
+        nativeServiceBinaries: (manifest.contributes.nativeServices ?? []).map(
+          (service) => service.binaryName
+        )
+      };
+    }
+  );
+  const registered = entries.map((entry) => entry.id);
+  for (const record of Object.values(adminState.records)) {
+    if (registered.includes(record.id)) continue;
+    entries.push({
+      id: record.id,
+      missing: true,
+      name: record.id,
+      version: record.version,
+      source: record.source,
+      enabled: false,
+      description: null,
+      documentation: [],
+      loadError: record.lastLoadError,
+      signatureStatus: record.signatureStatus,
+      signer: record.signer,
+      author: null,
+      hasSettings: false,
+      hasCommands: false,
+      permissions: record.grantedPermissions,
+      nativeToolBinaries: [],
+      nativeServiceBinaries: []
+    });
+  }
+  return entries;
 }
 
 /** Enabled plugins that contribute settings — the settings-rail children. */
@@ -128,8 +157,8 @@ export function pluginsWithSettings(): { id: string; name: string }[] {
 
 /**
  * Toggle a plugin on/off. Flips the reactive registry immediately, then
- * persists to the backend (best-effort; a no-op / thrown fallback outside
- * Tauri is swallowed so the in-memory state still applies).
+ * persists to the backend. A failed write restores the old state and reports
+ * the error. Browser fallback remains in memory.
  */
 export async function setPluginEnabledAdmin(
   id: string,
@@ -140,8 +169,10 @@ export async function setPluginEnabledAdmin(
   try {
     const record = enabled ? await pluginsEnable(id) : await pluginsDisable(id);
     setPluginEnabled(id, record.enabled);
+    adminState.records[id] = record;
   } catch (err) {
-    console.error('[plugins] failed to persist enable/disable', id, err);
+    setPluginEnabled(id, !enabled);
+    throw err;
   }
 }
 
@@ -151,30 +182,17 @@ export async function setPluginEnabledAdmin(
  * notification refreshes.
  */
 export async function approvePluginAdmin(id: string): Promise<void> {
-  try {
-    await pluginsApprove(id);
-  } catch (err) {
-    console.error('[plugins] failed to approve plugin', id, err);
-    return;
-  }
+  await pluginsApprove(id);
   await loadPlugins();
   await refreshPluginAdmin();
 }
 
-/**
- * Uninstall a third-party plugin: delete it from disk + the durable registry
- * (backend), then drop it from the reactive frontend registry so its row and
- * every contribution vanish immediately. Only third-party plugins are
- * removable — a built-in ships with the app and its "removal" would just
- * reappear on next discovery — so the UI gates the trash affordance on source.
+/** Remove a third-party package from every vault on this device. Configuration
+ * stays in its vault; the row can show that the package is missing. Running
+ * work retains its files until its version lease is released.
  */
 export async function removePluginAdmin(id: string): Promise<void> {
-  try {
-    await pluginsRemove(id);
-  } catch (err) {
-    console.error('[plugins] failed to remove plugin', id, err);
-    return;
-  }
+  await pluginsRemove(id);
   unregisterPlugin(id);
   await refreshPluginAdmin();
 }

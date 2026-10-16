@@ -1,4 +1,9 @@
 import { isRecord } from '$lib/validation';
+import { isTauri } from '$lib/api/core';
+import {
+  nativeDeviceUi,
+  writeNativeDeviceUi
+} from '$lib/native-device-ui.svelte';
 export const FILE_TREE_TOOLBAR_STORAGE_KEY =
   'notes-app:file-tree-create-toolbar:v1';
 
@@ -111,7 +116,7 @@ export function normalizeFileTreeToolbarPreferences(
   return { toolbar, more };
 }
 
-function hasExistingAppData(): boolean {
+export function hasExistingAppData(): boolean {
   if (typeof localStorage === 'undefined') return false;
   for (let i = 0; i < localStorage.length; i += 1) {
     const key = localStorage.key(i);
@@ -128,6 +133,11 @@ function hasExistingAppData(): boolean {
 export function loadFileTreeToolbarPreferences(
   availableIds: readonly string[]
 ): FileTreeToolbarPreferences {
+  if (isTauri())
+    return normalizeFileTreeToolbarPreferences(
+      nativeDeviceUi.toolbar,
+      availableIds
+    );
   if (typeof localStorage === 'undefined') {
     return normalizeFileTreeToolbarPreferences(null, availableIds);
   }
@@ -147,7 +157,8 @@ export function loadFileTreeToolbarPreferences(
 
 export function saveFileTreeToolbarPreferences(
   preferences: FileTreeToolbarPreferences
-): void {
+): void | Promise<void> {
+  if (isTauri()) return writeNativeDeviceUi('ui.fileTreeToolbar', preferences);
   if (typeof localStorage === 'undefined') return;
   try {
     localStorage.setItem(

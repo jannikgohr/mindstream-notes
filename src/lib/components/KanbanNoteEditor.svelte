@@ -1119,6 +1119,7 @@
 
   const saveScheduler = createSaveScheduler({
     canSave: () => !isTrashed && saveReady && autoSaveEnabled && !!yDoc,
+    canSaveOnClose: () => !isTrashed && saveReady && !!yDoc,
     capture: captureSave,
     delayMs: () => saveDebounceMs,
     onError: (error) => {

@@ -171,7 +171,9 @@ pub async fn create_share_link(
     app: AppHandle,
     input: CreateShareLinkInput,
 ) -> CommandResult<CreatedShareLink> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     tauri::async_runtime::spawn_blocking(move || -> CommandResult<CreatedShareLink> {
+        let _job = job;
         let options = link_options(&input)?;
         let collection_id = input.collection_id.as_str();
         let db = app.state::<Db>();
@@ -230,7 +232,9 @@ pub async fn list_share_links(
     app: AppHandle,
     collection_id: String,
 ) -> CommandResult<Vec<ShareLink>> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     tauri::async_runtime::spawn_blocking(move || -> CommandResult<Vec<ShareLink>> {
+        let _job = job;
         let account = restore_required(&app)?;
         let db = app.state::<Db>();
         let Some(scope) = db.with_conn(|conn| collection_scope(conn, &collection_id))? else {
@@ -255,7 +259,9 @@ pub async fn list_share_links(
 /// stays.
 #[tauri::command]
 pub async fn revoke_share_link(app: AppHandle, uid: String) -> CommandResult<()> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     tauri::async_runtime::spawn_blocking(move || -> CommandResult<()> {
+        let _job = job;
         let account = restore_required(&app)?;
         account
             .revoke_invite_link(&uid)
@@ -268,7 +274,9 @@ pub async fn revoke_share_link(app: AppHandle, uid: String) -> CommandResult<()>
 /// Look at what a pasted link leads to. Joins nothing and needs no account.
 #[tauri::command]
 pub async fn open_share_link(app: AppHandle, link: String) -> CommandResult<ShareLinkPreview> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     tauri::async_runtime::spawn_blocking(move || -> CommandResult<ShareLinkPreview> {
+        let _job = job;
         let link = parse_link(&link)?;
         let preview = open_link(&link)?;
         let signed_in = account_for(&app, &link)?.is_some();
@@ -303,7 +311,9 @@ pub async fn open_share_link(app: AppHandle, link: String) -> CommandResult<Shar
 /// this creates nothing locally: the next sync pulls the folder in.
 #[tauri::command]
 pub async fn claim_share_link(app: AppHandle, link: String) -> CommandResult<()> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     tauri::async_runtime::spawn_blocking(move || -> CommandResult<()> {
+        let _job = job;
         let link = parse_link(&link)?;
         if crate::auth::read_session_info(&app)?.is_none() {
             return Err(CommandError::refused(REASON_NOT_SIGNED_IN, "not signed in"));

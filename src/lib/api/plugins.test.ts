@@ -8,6 +8,7 @@ import {
   pluginsDownloadArtifact,
   pluginsEnable,
   pluginsGet,
+  pluginsInstall,
   pluginsList,
   pluginsNativeServiceStatus,
   pluginsNativeToolStatus,
@@ -143,6 +144,7 @@ describe('no-Tauri fallbacks', () => {
     await expect(pluginsRunScript('x', 'fn', {})).rejects.toThrow(
       /only available in the app/
     );
+    await expect(pluginsInstall()).rejects.toThrow(/requires the desktop app/);
   });
 });
 
@@ -382,5 +384,19 @@ describe('in Tauri (IPC + validation path)', () => {
       id: 'p',
       key: 'theme'
     });
+  });
+
+  it('install publishes a package and returns its id, or null when cancelled', async () => {
+    invoke.mockResolvedValueOnce('com.example.plugin');
+    await expect(pluginsInstall('/tmp/plugin.zip')).resolves.toBe(
+      'com.example.plugin'
+    );
+    expect(invoke).toHaveBeenLastCalledWith('plugins_install', {
+      sourcePath: '/tmp/plugin.zip'
+    });
+    invoke.mockResolvedValueOnce(null);
+    await expect(pluginsInstall()).resolves.toBeNull();
+    invoke.mockResolvedValueOnce(42);
+    await expect(pluginsInstall()).rejects.toThrow();
   });
 });

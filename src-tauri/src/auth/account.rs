@@ -15,7 +15,7 @@ use qrcode::render::svg;
 use qrcode::QrCode;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::error::{AppError, CommandError, CommandErrorCode, CommandResult};
 
@@ -70,7 +70,9 @@ async fn with_account<T: Send + 'static>(
     doing: &'static str,
     task: impl FnOnce(&mut Account) -> Result<T, ServerError> + Send + 'static,
 ) -> CommandResult<T> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = job;
         let mut account = try_restore(&app)?
             .ok_or_else(|| CommandError::refused(REASON_NOT_SIGNED_IN, "not signed in"))?;
         task(&mut account).map_err(|err| {
@@ -134,7 +136,9 @@ pub async fn account_signup(args: SignupArgs, app: AppHandle) -> CommandResult<N
     let path = session_path(&app)?;
     let keyring_account = active_keyring_account(&app);
 
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     tauri::async_runtime::spawn_blocking(move || -> CommandResult<NewAccount> {
+        let _job = job;
         let client = client_for(&server_url)?;
         let user = User::new(args.username.trim(), args.email.trim());
         let mut with = SignupWith::new();
@@ -201,7 +205,9 @@ pub async fn account_recover(args: RecoverArgs, app: AppHandle) -> CommandResult
     let path = session_path(&app)?;
     let keyring_account = active_keyring_account(&app);
 
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     tauri::async_runtime::spawn_blocking(move || -> CommandResult<NewAccount> {
+        let _job = job;
         let client = client_for(&server_url)?;
         let username = args.username.trim();
         let recovery = Account::recover(client, username, &key, typed(args.code.as_deref()))

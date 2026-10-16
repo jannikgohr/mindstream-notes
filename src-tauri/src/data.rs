@@ -262,8 +262,14 @@ pub fn spawn_retention_sweep(app: AppHandle) {
                 continue;
             }
 
+            let Ok(job) = app.state::<crate::vault_jobs::Jobs>().enter() else {
+                tokio::time::sleep(Duration::from_secs(DISABLED_POLL_SECS)).await;
+                continue;
+            };
+
             let app_for_blocking = app.clone();
             let result = tauri::async_runtime::spawn_blocking(move || {
+                let _job = job;
                 let db = app_for_blocking.state::<Db>();
                 db.with_conn_mut(|c| sweep(c, days))
             })
@@ -424,10 +430,15 @@ pub fn set_trash_retention(
 /// purged. The settings effect calls this once on startup so the user
 /// doesn't have to wait up to an hour for the first scheduled tick.
 #[tauri::command]
-pub fn sweep_trash_retention(db: tauri::State<'_, Db>, days: u32) -> CommandResult<u32> {
+pub fn sweep_trash_retention(
+    db: tauri::State<'_, Db>,
+    jobs: tauri::State<'_, crate::vault_jobs::Jobs>,
+    days: u32,
+) -> CommandResult<u32> {
     if days == 0 {
         return Ok(0);
     }
+    let _job = jobs.enter()?;
     db.with_conn_mut(|c| sweep(c, days)).map_err(Into::into)
 }
 

@@ -11,19 +11,20 @@
 
 import type { Component } from 'svelte';
 import { setMode } from 'mode-watcher';
-import type * as autostartPlugin from '@tauri-apps/plugin-autostart';
 import {
   getCloseToTray,
   getCustomWindowDecorations,
   getDesktopLanguage,
   getDesktopThemeMode,
   getStartInTray,
+  getStartOnLogin,
   isDesktopThemeMode,
   setCloseToTray,
   setCustomWindowDecorations,
   setDesktopLanguage,
   setDesktopThemeMode,
-  setStartInTray
+  setStartInTray,
+  setStartOnLogin
 } from '$lib/api/desktop-settings';
 import { isTauri } from '$lib/api/core';
 import { splitAvailable } from '$lib/editor/source/split-available.svelte';
@@ -45,38 +46,45 @@ export interface Binding {
   get: () => Promise<unknown>;
   set: (value: unknown) => Promise<void>;
   hydrate?: 'startup' | 'on-demand';
+  document?: 'desktop';
+  /** Apply only after the store has accepted a current read or local edit. */
+  apply?: (value: unknown) => void;
+}
+
+function applyMode(value: unknown): void {
+  if (!isDesktopThemeMode(value)) return;
+  localStorage.setItem('mode-watcher-mode', value);
+  setMode(value);
+}
+
+function applyLanguage(value: unknown): void {
+  const code = String(value ?? 'en');
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('notes-app:language', code);
+  }
+  setLanguage(code);
 }
 
 /**
- * Autostart is a desktop-only Tauri plugin (see Cargo.toml's cfg-gated
- * dep). Outside Tauri — `vite preview` in a plain browser, or the
- * Android build — the plugin's invoke() crashes because
- * window.__TAURI_INTERNALS__ doesn't exist (or doesn't carry the
- * autostart command). Report 'false' / no-op instead of throwing so
- * the settings dialog hydrates cleanly.
+ * The coordinator owns OS startup registration. Browser/mobile settings report
+ * false and skip writes; desktop vaults use the same typed backend bridge.
  */
 const autostartAvailable = () => isTauri() && !isMobile();
-
-function loadAutostart(): Promise<typeof autostartPlugin> {
-  return import('@tauri-apps/plugin-autostart');
-}
 
 export const SETTING_BINDINGS: Record<string, Binding> = {
   'general.startOnLogin': {
     hydrate: 'on-demand',
     get: async () => {
       if (!autostartAvailable()) return false;
-      const { isEnabled } = await loadAutostart();
-      return await isEnabled();
+      return await getStartOnLogin();
     },
     set: async (v) => {
       if (!autostartAvailable()) return;
-      const { enable, disable } = await loadAutostart();
-      if (v) await enable();
-      else await disable();
+      await setStartOnLogin(v === true);
     }
   },
   'general.closeToTray': {
+    document: 'desktop',
     get: async () =>
       isTauri() && !isMobile() ? await getCloseToTray() : false,
     set: async (v) => {
@@ -85,19 +93,16 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
     }
   },
   'general.startInTray': {
+    document: 'desktop',
     get: async () =>
       isTauri() && !isMobile() ? await getStartInTray() : false,
     set: async (v) => {
       if (!isTauri() || isMobile()) return;
       await setStartInTray(v === true);
-      const { isEnabled, enable, disable } = await loadAutostart();
-      if (await isEnabled()) {
-        await disable();
-        await enable();
-      }
     }
   },
   'appearance.customWindowDecorations': {
+    document: 'desktop',
     get: async () =>
       isTauri() && !isMobile()
         ? await getCustomWindowDecorations()
@@ -108,12 +113,11 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
     }
   },
   'appearance.mode': {
+    document: 'desktop',
+    apply: applyMode,
     get: async () => {
       if (isTauri() && !isMobile()) {
-        const mode = await getDesktopThemeMode();
-        localStorage.setItem('mode-watcher-mode', mode);
-        setMode(mode);
-        return mode;
+        return await getDesktopThemeMode();
       }
       // mode-watcher writes/reads from localStorage; mirror its key here so
       // the radio reflects whatever the user's last choice was.
@@ -125,8 +129,8 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
         throw new Error('appearance.mode must be light, dark, or system');
       }
       const mode = v;
-      setMode(mode);
       if (isTauri() && !isMobile()) await setDesktopThemeMode(mode);
+      else applyMode(mode);
     }
   },
   'appearance.sortStrategy': {
@@ -144,33 +148,23 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
     set: async (v) => setRightSidebarWidth(Number(v))
   },
   'language.code': {
+    document: 'desktop',
+    apply: applyLanguage,
     get: async () => {
       let code =
         typeof localStorage === 'undefined'
           ? 'en'
           : localStorage.getItem('notes-app:language');
-      if (!code && isTauri() && !isMobile()) {
+      if (isTauri() && !isMobile()) {
         code = await getDesktopLanguage();
       }
-      code = code ?? 'en';
-      if (isTauri() && !isMobile()) {
-        await setDesktopLanguage(code);
-      }
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem('notes-app:language', code);
-      }
-      setLanguage(code);
-      return code;
+      return code ?? 'en';
     },
     set: async (v) => {
       const code = String(v);
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem('notes-app:language', code);
-      }
-      setLanguage(code);
       if (isTauri() && !isMobile()) {
         await setDesktopLanguage(code);
-      }
+      } else applyLanguage(code);
     }
   }
 };
@@ -181,6 +175,10 @@ export type CustomComponentLoader = () => Promise<AnyComponent>;
 
 /** Components rendered in place of a generic control. */
 export const CUSTOM_COMPONENT_LOADERS: Record<string, CustomComponentLoader> = {
+  'theme-presets': () =>
+    import('./customs/ThemePresets.svelte').then(
+      (mod) => mod.default as unknown as AnyComponent
+    ),
   'sign-in-form': () =>
     import('./customs/SignInForm.svelte').then(
       (mod) => mod.default as unknown as AnyComponent

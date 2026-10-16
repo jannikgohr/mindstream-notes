@@ -1,1 +1,4 @@
 patches/*.patch text eol=lf
+
+# Linux native fixture runners must keep shell line endings on Windows.
+src-tauri/scripts/*.sh text eol=lf

@@ -68,6 +68,21 @@ export function switchProfile(id: string): Promise<void> {
   );
 }
 
+/** Open or focus a supervised vault, keeping this worker and its editors alive. */
+export function openProfileWindow(
+  id: string,
+  inThisWindow = false
+): Promise<void> {
+  return invokeOrFallback<void>(
+    TauriCommandName.OpenProfileWindow,
+    inThisWindow ? { id, inThisWindow: true } : { id },
+    () => {
+      throw new Error('Concurrent vault windows require the desktop runtime');
+    },
+    (value) => assertVoid(value, 'open_profile_window response')
+  );
+}
+
 export function renameProfile(id: string, name: string): Promise<Profile> {
   return invokeOrFallback<Profile>(
     TauriCommandName.RenameProfile,

@@ -73,7 +73,7 @@ test.describe('plugin framework — bundled Templates plugin', () => {
       dialog.getByText('Reusable templates from your own notes.')
     ).toBeVisible();
     await expect(
-      dialog.getByRole('switch', { name: 'Enable plugin' })
+      dialog.getByRole('switch', { name: 'Enable in this vault' })
     ).toBeVisible();
   });
 
@@ -98,7 +98,7 @@ test.describe('plugin framework — bundled Templates plugin', () => {
 
     // Disable → the contribution and the "Plugin settings" affordance vanish.
     const dialog = await openPluginsCategory(page);
-    await dialog.getByRole('switch', { name: 'Enable plugin' }).click();
+    await dialog.getByRole('switch', { name: 'Enable in this vault' }).click();
     await expect(
       dialog.getByRole('button', { name: 'Plugin settings' })
     ).toBeHidden();
@@ -108,7 +108,7 @@ test.describe('plugin framework — bundled Templates plugin', () => {
 
     // Re-enable → the toolbar button comes back.
     const dialog2 = await openPluginsCategory(page);
-    await dialog2.getByRole('switch', { name: 'Enable plugin' }).click();
+    await dialog2.getByRole('switch', { name: 'Enable in this vault' }).click();
     await dialog2.getByRole('button', { name: 'Close' }).click();
     await openFileTreeCreateMore(page);
     await expect(templateButton).toBeVisible();

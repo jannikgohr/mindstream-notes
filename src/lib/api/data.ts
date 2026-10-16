@@ -137,6 +137,9 @@ export interface ImportPreview {
   same_account: boolean;
   backup_account: AccountDisplay | null;
   current_account: AccountDisplay | null;
+  portable: boolean;
+  plugin_packages: number;
+  plugin_data_bytes: number;
 }
 
 export interface RestoreStaged {
@@ -179,17 +182,21 @@ export async function importCleanup(token: string): Promise<void> {
  */
 export async function importRestore(
   token: string,
-  sameAccount: boolean
+  sameAccount: boolean,
+  includeDevice = false
 ): Promise<RestoreStaged> {
   assertRequiredString(token, 'token');
   if (typeof sameAccount !== 'boolean') {
     throw new Error('sameAccount must be a boolean');
   }
+  if (typeof includeDevice !== 'boolean')
+    throw new Error('includeDevice must be a boolean');
   if (!isTauri()) return { restart_required: false, sanitized: !sameAccount };
   return parseRestoreStaged(
     await tauriInvoke<unknown>(TauriCommandName.ImportRestore, {
       token,
-      sameAccount
+      sameAccount,
+      includeDevice
     })
   );
 }
@@ -299,7 +306,22 @@ function parseImportPreview(value: unknown): ImportPreview {
     current_account: parseNullableAccountDisplay(
       raw.current_account,
       'import preview.current_account'
-    )
+    ),
+    portable:
+      raw.portable === undefined
+        ? false
+        : assertBoolean(raw.portable, 'import preview.portable'),
+    plugin_packages:
+      raw.plugin_packages === undefined
+        ? 0
+        : assertNumber(raw.plugin_packages, 'import preview.plugin_packages'),
+    plugin_data_bytes:
+      raw.plugin_data_bytes === undefined
+        ? 0
+        : assertNumber(
+            raw.plugin_data_bytes,
+            'import preview.plugin_data_bytes'
+          )
   };
 }
 

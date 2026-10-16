@@ -1,12 +1,11 @@
 /**
  * Schema-driven settings store.
  *
- * Two storage layers sit behind a single reactive map:
+ * Persistence and runtime bindings sit behind a reactive cache:
  *
- *   1. **Scoped persistence** — vault settings (`scope: 'V'`) are stored
- *      under a per-vault key; device settings (`scope: 'D'`) stay in the
- *      existing app/device key. Account dynamic values such as
- *      `account.serverUrl` are also vault-scoped by prefix.
+ *   1. **Scoped persistence** — native vault and device settings live in
+ *      separate backend documents with field-level writes. Browser previews
+ *      keep scoped localStorage buckets. Account values belong to the vault.
  *
  *   2. **Local-first cache** — every value (including binding-backed ones)
  *      lives in `settings.values`. Reads are synchronous so consumers like
@@ -27,7 +26,34 @@
  * instant.
  */
 
-import { SvelteSet } from 'svelte/reactivity';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+import { isTauri } from '$lib/api/core';
+import { createPersistenceDrain } from '$lib/persistence/drain';
+import { UI_PREFERENCE_IDS } from '$lib/preferences';
+import {
+  FILE_TREE_TOOLBAR_STORAGE_KEY,
+  hasExistingAppData
+} from '$lib/components/file-tree-toolbar-preferences';
+import {
+  applyNativeDeviceUi,
+  registerNativeDeviceUiWriter
+} from '$lib/native-device-ui.svelte';
+import {
+  applyNativeSavedLayout,
+  legacyLayoutRaw,
+  registerNativeLayoutWriter
+} from '$lib/api/layout';
+import {
+  applyNativeUiPreferences,
+  registerNativeUiPreferenceWriter
+} from '$lib/state.svelte';
+import { listen, TauriEventName } from '$lib/api/events';
+import {
+  initializeUiSettings,
+  loadUiSettings,
+  patchUiSetting,
+  type UiSettingsSnapshot
+} from '$lib/api/ui-settings';
 import schemaData from './schema.json';
 import { SETTING_BINDINGS } from './registry.svelte';
 import { getPlatform, matchesPlatformFilter } from '$lib/platform';
@@ -177,6 +203,11 @@ function loadRaw(vaultId = activeSettingsVaultId): Record<string, unknown> {
   // exists; new/non-default vaults start from schema defaults.
   const legacyVaultRaw =
     vaultRaw === null && vaultId === DEFAULT_VAULT_ID ? deviceRaw : null;
+  const content = { ...(vaultRaw ?? legacyVaultRaw ?? {}) };
+  if (localStorage.getItem('mindstream:appearance-migration:v1')) {
+    delete content['appearance.accent'];
+    delete content['appearance.uiFontSize'];
+  }
   return {
     // Device bucket: only its device-scoped ids. This key historically also
     // held vault-scoped values (pre-scoping), so it stays filtered or those
@@ -189,8 +220,50 @@ function loadRaw(vaultId = activeSettingsVaultId): Record<string, unknown> {
     // Templates folder/tag) is loaded at startup *before* its plugin registers,
     // so `scopeForId` would misclassify it as device-scoped and drop it —
     // silently losing the value on every restart.
-    ...(vaultRaw ?? legacyVaultRaw ?? {})
+    ...content
   };
+}
+
+function migrateBrowserAppearance(vaultId: string): boolean {
+  if (localStorage.getItem('mindstream:appearance-migration:v1')) return false;
+  const read = (key: string) => {
+    const raw = localStorage.getItem(key);
+    const value = raw === null ? {} : parseStoredSettings(raw);
+    if (value === null)
+      throw new Error(
+        'Appearance migration refused malformed browser settings; original data retained'
+      );
+    return value;
+  };
+  const device = read(DEVICE_STORAGE_KEY);
+  const source =
+    localStorage.getItem(vaultStorageKey(vaultId)) === null &&
+    vaultId === DEFAULT_VAULT_ID
+      ? device
+      : read(vaultStorageKey(vaultId));
+  for (const id of ['appearance.accent', 'appearance.uiFontSize']) {
+    if (!Object.hasOwn(device, id) && Object.hasOwn(source, id))
+      device[id] = source[id];
+  }
+  archiveBrowserAppearance(vaultId);
+  localStorage.setItem(DEVICE_STORAGE_KEY, JSON.stringify(device));
+  localStorage.setItem('mindstream:appearance-migration:v1', vaultId);
+  return true;
+}
+
+function archiveBrowserAppearance(vaultId: string): void {
+  const raw = localStorage.getItem(vaultStorageKey(vaultId));
+  const key = `mindstream:appearance-source:v1:${vaultId}`;
+  if (raw !== null && !localStorage.getItem(key)) {
+    const values = parseStoredSettings(raw);
+    if (
+      values &&
+      ['appearance.accent', 'appearance.uiFontSize'].some((id) =>
+        Object.hasOwn(values, id)
+      )
+    )
+      localStorage.setItem(key, raw);
+  }
 }
 
 interface SettingsState {
@@ -200,18 +273,226 @@ interface SettingsState {
 }
 
 export const settings = $state<SettingsState>({
-  values: loadRaw(activeSettingsVaultId),
+  values: isTauri() ? {} : loadRaw(activeSettingsVaultId),
   pending: new SvelteSet<string>()
 });
 
-export function setSettingsVaultId(id: string): void {
-  const next = id || DEFAULT_VAULT_ID;
-  if (next === activeSettingsVaultId) return;
+let nativeReady: Promise<void> | null = null;
+const acceptedWrites = createPersistenceDrain();
+
+export async function flushSettingsWrites(): Promise<void> {
+  await nativeReady;
+  await acceptedWrites.flush();
   persistNow();
+}
+let nativeQueue: Promise<unknown> = Promise.resolve();
+const nativePending = new SvelteMap<string, number>();
+const bindingPending = new SvelteMap<string, number>();
+const bindingVersions = new SvelteMap<string, number>();
+const bindingReads = new SvelteMap<string, number>();
+const bindingQueues = new SvelteMap<string, Promise<void>>();
+const bindingConfirmed = new SvelteMap<string, unknown>();
+let nativeListenersStarted = false;
+
+function updatePending(id: string): void {
+  if (nativePending.has(id) || bindingPending.has(id)) settings.pending.add(id);
+  else settings.pending.delete(id);
+}
+
+function enqueueNative<T>(work: () => Promise<T>): Promise<T> {
+  const task = nativeQueue.then(work);
+  nativeQueue = task.catch(() => {});
+  return task;
+}
+
+function applyNativeSnapshot(snapshot: UiSettingsSnapshot): void {
+  const previous = settings.values;
+  const values = { ...snapshot.values };
+  // Bindings and optimistic writes keep their own in-flight state. A refresh
+  // can restore an older revision after recovery, so do not reject it by number.
+  for (const id of Object.keys(previous)) {
+    if (
+      (id in SETTING_BINDINGS &&
+        !Object.values(UI_PREFERENCE_IDS).includes(id)) ||
+      nativePending.has(id)
+    )
+      values[id] = previous[id];
+  }
+  for (const id of nativePending.keys()) {
+    if (!(id in previous)) delete values[id];
+  }
+  settings.values = values;
+  applyNativeUiPreferences(values);
+  applyNativeSavedLayout(
+    activeSettingsVaultId,
+    $state.snapshot(values['ui.dockLayout'])
+  );
+  applyNativeDeviceUi(values);
+}
+
+export async function refreshNativeSettings(): Promise<void> {
+  if (!isTauri() || !nativeReady) return;
+  await nativeReady;
+  await enqueueNative(async () => {
+    applyNativeSnapshot(await loadUiSettings(activeSettingsVaultId));
+  });
+}
+
+function startNativeListeners(): void {
+  if (nativeListenersStarted) return;
+  nativeListenersStarted = true;
+  const refresh = () => {
+    void refreshNativeSettings().catch((err) =>
+      console.warn('[settings] document refresh failed', err)
+    );
+  };
+  window.addEventListener('focus', refresh);
+  void listen(TauriEventName.UiSettingsChanged, refresh).catch((err) =>
+    console.warn('[settings] document listener failed', err)
+  );
+  const refreshDesktop = () => {
+    void hydrateSettings('desktop');
+  };
+  window.addEventListener('focus', refreshDesktop);
+  void listen(TauriEventName.DesktopSettingsChanged, refreshDesktop).catch(
+    (err) => console.warn('[settings] desktop listener failed', err)
+  );
+}
+
+export async function setSettingsVaultId(id: string): Promise<void> {
+  const next = id || DEFAULT_VAULT_ID;
+  if (isTauri()) {
+    if (nativeReady) {
+      if (next !== activeSettingsVaultId) {
+        throw new Error('a native worker cannot change its settings vault');
+      }
+      return nativeReady;
+    }
+    activeSettingsVaultId = next;
+    nativeReady = (async () => {
+      // Pass the raw bytes: malformed legacy buckets must stop migration,
+      // rather than being interpreted as an empty map by readStorage.
+      const snapshot = await initializeUiSettings(
+        next,
+        localStorage.getItem(DEVICE_STORAGE_KEY),
+        localStorage.getItem(vaultStorageKey(next)),
+        localStorage.getItem('notes-app:preferences:v1'),
+        legacyLayoutRaw(next),
+        {
+          toolbarRaw: localStorage.getItem(FILE_TREE_TOOLBAR_STORAGE_KEY),
+          hadExistingData: hasExistingAppData(),
+          displayModeRaw: localStorage.getItem('notes-app:mobile:displayMode')
+        }
+      );
+      applyNativeSnapshot(snapshot);
+      startNativeListeners();
+      await hydrateSettings('startup');
+    })();
+    try {
+      await nativeReady;
+    } catch (err) {
+      nativeReady = null;
+      throw err;
+    }
+    return;
+  }
+  const migratedAppearance = migrateBrowserAppearance(next);
+  if (next === activeSettingsVaultId) {
+    if (migratedAppearance) settings.values = loadRaw(next);
+    return;
+  }
+  if (!migratedAppearance) persistNow();
   activeSettingsVaultId = next;
   settings.values = loadRaw(activeSettingsVaultId);
   void hydrateSettings('startup');
 }
+
+function writeNativeSetting(
+  id: string,
+  value: unknown,
+  remove = false
+): Promise<void> {
+  return acceptedWrites.track(persistNativeSetting(id, value, remove));
+}
+
+async function persistNativeSetting(
+  id: string,
+  value: unknown,
+  remove = false
+): Promise<void> {
+  if (!nativeReady) throw new Error('native settings have not initialized');
+  await nativeReady;
+  const hadPrevious = id in settings.values;
+  const previous = settings.values[id];
+  nativePending.set(id, (nativePending.get(id) ?? 0) + 1);
+  settings.pending.add(id);
+  if (remove) delete settings.values[id];
+  else settings.values[id] = value;
+  try {
+    await enqueueNative(async () => {
+      try {
+        const snapshot = await patchUiSetting(
+          activeSettingsVaultId,
+          id,
+          value,
+          remove
+        );
+        // Adopt the canonical response for this completed write unless a newer
+        // local write to the same field is already queued.
+        if (nativePending.get(id) === 1 && (bindingPending.get(id) ?? 0) <= 1) {
+          if (id in snapshot.values) settings.values[id] = snapshot.values[id];
+          else delete settings.values[id];
+        }
+        applyNativeSnapshot(snapshot);
+      } catch (err) {
+        if (nativePending.get(id) === 1 && (bindingPending.get(id) ?? 0) <= 1) {
+          try {
+            const snapshot = await loadUiSettings(activeSettingsVaultId);
+            if (id in snapshot.values)
+              settings.values[id] = snapshot.values[id];
+            else delete settings.values[id];
+            applyNativeSnapshot(snapshot);
+          } catch {
+            if (hadPrevious) settings.values[id] = previous;
+            else delete settings.values[id];
+          }
+        }
+        throw err;
+      }
+    });
+  } finally {
+    const remaining = (nativePending.get(id) ?? 1) - 1;
+    if (remaining) nativePending.set(id, remaining);
+    else {
+      nativePending.delete(id);
+    }
+    updatePending(id);
+  }
+}
+
+registerNativeUiPreferenceWriter(async (id, value) => {
+  try {
+    await writeNativeSetting(id, value);
+  } catch (err) {
+    applyNativeUiPreferences(settings.values);
+    throw err;
+  }
+});
+
+registerNativeLayoutWriter(async (vaultId, value) => {
+  if (vaultId !== activeSettingsVaultId)
+    throw new Error('layout vault does not match the running worker');
+  await writeNativeSetting('ui.dockLayout', value);
+});
+
+registerNativeDeviceUiWriter(async (id, value) => {
+  try {
+    await writeNativeSetting(id, value);
+  } catch (err) {
+    applyNativeDeviceUi(settings.values);
+    throw err;
+  }
+});
 
 /**
  * Pull binding-backed settings into the cache. Errors are logged and
@@ -219,16 +500,13 @@ export function setSettingsVaultId(id: string): void {
  * stripped-down build) doesn't poison the rest of the dialog.
  */
 export async function hydrateSettings(
-  scope: 'startup' | 'all' = 'startup'
+  scope: 'startup' | 'all' | 'desktop' = 'startup'
 ): Promise<void> {
   await Promise.all(
     Object.entries(SETTING_BINDINGS).map(async ([id, binding]) => {
       if (scope === 'startup' && binding.hydrate === 'on-demand') return;
-      try {
-        settings.values[id] = await binding.get();
-      } catch (err) {
-        console.warn('[settings] hydrate failed for', id, err);
-      }
+      if (scope === 'desktop' && binding.document !== 'desktop') return;
+      await refreshSetting(id);
     })
   );
 }
@@ -240,9 +518,21 @@ export async function hydrateSettings(
  */
 export async function refreshSetting(id: string): Promise<void> {
   const binding = SETTING_BINDINGS[id];
-  if (!binding) return;
+  if (!binding || bindingPending.has(id)) return;
+  const version = bindingVersions.get(id);
+  const read = (bindingReads.get(id) ?? 0) + 1;
+  bindingReads.set(id, read);
   try {
-    settings.values[id] = await binding.get();
+    const value = await binding.get();
+    if (
+      bindingPending.has(id) ||
+      bindingVersions.get(id) !== version ||
+      bindingReads.get(id) !== read
+    )
+      return;
+    bindingConfirmed.set(id, value);
+    settings.values[id] = value;
+    binding.apply?.(value);
   } catch (err) {
     console.warn('[settings] refresh failed for', id, err);
   }
@@ -281,10 +571,11 @@ export function hasSettingValue(id: string): boolean {
  * binding to pick up whatever value actually stuck. Rolls back the cache
  * if the binding throws so a failed Tauri call doesn't leave the UI lying.
  */
-export async function setSettingValue(
-  id: string,
-  value: unknown
-): Promise<void> {
+export function setSettingValue(id: string, value: unknown): Promise<void> {
+  return acceptedWrites.track(persistSettingValue(id, value));
+}
+
+async function persistSettingValue(id: string, value: unknown): Promise<void> {
   if (externalStore?.owns(id)) {
     await externalStore.write(id, value);
     return;
@@ -292,31 +583,71 @@ export async function setSettingValue(
   const binding = SETTING_BINDINGS[id];
   if (binding) {
     const prev = settings.values[id];
+    const version = (bindingVersions.get(id) ?? 0) + 1;
+    bindingVersions.set(id, version);
+    bindingPending.set(id, (bindingPending.get(id) ?? 0) + 1);
     settings.values[id] = value;
-    settings.pending.add(id);
-    try {
+    updatePending(id);
+    binding.apply?.(value);
+    const previous = bindingQueues.get(id) ?? Promise.resolve();
+    const task = previous.then(async () => {
       await binding.set(value);
-      // Re-read so we reflect any transformation the source did (autostart
-      // can silently end up disabled if the OS denies permission, etc.).
       try {
-        settings.values[id] = await binding.get();
+        const canonical = await binding.get();
+        bindingConfirmed.set(id, canonical);
+        if (bindingVersions.get(id) === version) {
+          settings.values[id] = canonical;
+          binding.apply?.(canonical);
+        }
       } catch {
-        /* fall through with optimistic value */
+        /* Keep the optimistic value when read-back is unavailable. */
       }
+    });
+    const tail = task.catch(() => {});
+    bindingQueues.set(id, tail);
+    try {
+      await task;
     } catch (err) {
       console.error('[settings] write failed for', id, err);
-      settings.values[id] = prev;
+      if (bindingVersions.get(id) === version) {
+        let canonical = bindingConfirmed.has(id)
+          ? bindingConfirmed.get(id)
+          : prev;
+        try {
+          canonical = await binding.get();
+          if (bindingVersions.get(id) === version)
+            bindingConfirmed.set(id, canonical);
+        } catch {
+          /* Use the last confirmed value. */
+        }
+        if (bindingVersions.get(id) === version) {
+          settings.values[id] = canonical;
+          binding.apply?.(canonical);
+        }
+      }
       throw err;
     } finally {
-      settings.pending.delete(id);
+      const remaining = (bindingPending.get(id) ?? 1) - 1;
+      if (remaining) bindingPending.set(id, remaining);
+      else bindingPending.delete(id);
+      updatePending(id);
+      if (bindingQueues.get(id) === tail) bindingQueues.delete(id);
     }
+    return;
+  }
+  if (isTauri()) {
+    await writeNativeSetting(id, value);
     return;
   }
   settings.values[id] = value;
   persist();
 }
 
-export async function resetSettingValue(id: string): Promise<void> {
+export function resetSettingValue(id: string): Promise<void> {
+  return acceptedWrites.track(persistResetSettingValue(id));
+}
+
+async function persistResetSettingValue(id: string): Promise<void> {
   const def = settingDef(id);
   if (!def) return;
   if (externalStore?.owns(id)) {
@@ -325,6 +656,10 @@ export async function resetSettingValue(id: string): Promise<void> {
   }
   if ('default' in def || def.defaultByPlatform) {
     await setSettingValue(id, defaultForSetting(def));
+    return;
+  }
+  if (isTauri()) {
+    await writeNativeSetting(id, null, true);
     return;
   }
   delete settings.values[id];
@@ -340,6 +675,9 @@ function persist() {
 }
 
 function persistNow() {
+  // Preserve migration inputs. Native documents own persistence; a browser
+  // snapshot from another window must never become a whole-document save.
+  if (isTauri()) return;
   if (typeof localStorage === 'undefined') return;
   if (persistTimer) {
     clearTimeout(persistTimer);
@@ -355,6 +693,7 @@ function persistNow() {
       if (scopeForId(id) === 'V') vault[id] = value;
       else device[id] = value;
     }
+    archiveBrowserAppearance(activeSettingsVaultId);
     localStorage.setItem(DEVICE_STORAGE_KEY, JSON.stringify(device));
     localStorage.setItem(
       vaultStorageKey(activeSettingsVaultId),
@@ -407,6 +746,9 @@ export const settingsDialog = $state<{
   requestedCategory: string | null;
 }>({ open: false, requestedCategory: null });
 export function openSettings(category?: string) {
+  void refreshNativeSettings().catch((err) =>
+    console.warn('[settings] document refresh failed', err)
+  );
   // Refresh binding-backed values so the panel reflects any out-of-band
   // changes (autostart toggled from the OS, theme switched in another
   // window, …). Fire-and-forget — the cache update is reactive.

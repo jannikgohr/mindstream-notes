@@ -10,6 +10,11 @@ const { pushState, setActiveNote, setNoteFavourite, tree } = vi.hoisted(() => ({
   setNoteFavourite: vi.fn().mockResolvedValue(undefined),
   tree: { notesById: {} as Record<string, { favourite: boolean }> }
 }));
+const legacy = vi.hoisted(() => ({ native: false, migrate: vi.fn() }));
+vi.mock('$lib/api/core', () => ({ isTauri: () => legacy.native }));
+vi.mock('$lib/api/legacy-content', () => ({
+  migrateLegacyContent: legacy.migrate
+}));
 vi.mock('$app/navigation', () => ({ pushState }));
 vi.mock('$lib/state.svelte', () => ({ setActiveNote }));
 vi.mock('$lib/stores/tree.svelte', () => ({ tree, setNoteFavourite }));
@@ -39,6 +44,8 @@ import {
 } from './state.svelte';
 
 beforeEach(() => {
+  legacy.native = false;
+  legacy.migrate.mockReset().mockResolvedValue([]);
   pushState.mockClear();
   setActiveNote.mockClear();
   setNoteFavourite.mockClear();
@@ -170,6 +177,32 @@ describe('favourites', () => {
 });
 
 describe('migrateLegacyFavourites', () => {
+  it('uses the native receipt and patches only the IDs committed by the backend', async () => {
+    legacy.native = true;
+    tree.notesById = { a: { favourite: false }, b: { favourite: false } };
+    const raw = '["a","b"]';
+    localStorage.setItem('notes-app:mobile:favourites', raw);
+    legacy.migrate.mockResolvedValue(['a']);
+    await migrateLegacyFavourites();
+    expect(legacy.migrate).toHaveBeenCalledWith('favourites', raw);
+    expect(tree.notesById.a.favourite).toBe(true);
+    expect(tree.notesById.b.favourite).toBe(false);
+    expect(setNoteFavourite).not.toHaveBeenCalled();
+    expect(localStorage.getItem('notes-app:mobile:favourites')).toBe(raw);
+  });
+
+  it('keeps malformed native evidence and tree state when the backend refuses import', async () => {
+    legacy.native = true;
+    tree.notesById = { a: { favourite: false } };
+    localStorage.setItem('notes-app:mobile:favourites', 'malformed');
+    legacy.migrate.mockRejectedValueOnce(new Error('malformed'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await migrateLegacyFavourites();
+    expect(tree.notesById.a.favourite).toBe(false);
+    expect(localStorage.getItem('notes-app:mobile:favourites')).toBe(
+      'malformed'
+    );
+  });
   it('hoists legacy ids that are not already favourited, then clears the key', async () => {
     tree.notesById = { a: { favourite: false }, b: { favourite: true } };
     localStorage.setItem(

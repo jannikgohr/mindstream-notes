@@ -37,6 +37,7 @@ import { formatChord, normalizeKey, parseBinding } from './parse';
 import {
   allHotkeyCommands,
   isGlobalShortcutOnlyCommand,
+  isGlobalShortcutCommand,
   type CommandDefinition
 } from './catalogue';
 import {
@@ -47,6 +48,7 @@ import {
 import { activeEditor, emitCommand } from './bus.svelte';
 import { isMac } from './platform';
 import type { Chord } from './types';
+import { nativeOwnsGlobalShortcut } from './global-ownership.svelte';
 
 /**
  * Direct representation of which DOM-level modifier flags the matcher
@@ -365,6 +367,18 @@ export function initHotkeys(): () => void {
     }
     const cmd = findMatchingCommand(flags);
     if (cmd) {
+      const ownership = isGlobalShortcutCommand(cmd)
+        ? nativeOwnsGlobalShortcut(cmd.id, getBinding(cmd.id))
+        : null;
+      if (ownership) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat)
+          void ownership.then((owned) => {
+            if (!owned) emitCommand(cmd);
+          });
+        return;
+      }
       // Emit first, then preventDefault only if the bus actually
       // handled it. An editor-scoped binding fired with no matching
       // editor active should fall through to the editor / browser

@@ -55,6 +55,7 @@
   import { confirm } from '$lib/components/confirm-dialog.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
+  import { globalShortcutOwnership } from '$lib/hotkeys/global-ownership.svelte';
 
   interface Props {
     searchQuery?: string;
@@ -535,6 +536,11 @@
 </div>
 
 <div class="mt-2 space-y-6">
+  {#if globalShortcutOwnership.error}
+    <p role="alert" class="text-sm text-destructive">
+      {globalShortcutOwnership.error}
+    </p>
+  {/if}
   {#each groups as group (`${group.displayScope ?? group.scope}:${group.editorKind ?? ''}`)}
     {@const title = groupLabel(group)}
     {@const visibleCommands = group.commands.filter((cmd) =>

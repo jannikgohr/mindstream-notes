@@ -48,6 +48,9 @@ pub struct ImportPreview {
     /// `None` for the relevant side means "local-only" there.
     pub backup_account: Option<AccountDisplay>,
     pub current_account: Option<AccountDisplay>,
+    pub portable: bool,
+    pub plugin_packages: u32,
+    pub plugin_data_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -79,9 +82,11 @@ pub(super) async fn import_begin_inner(app: AppHandle) -> AppResult<Option<Impor
         .into_path()
         .map_err(|e| AppError::InvalidArg(format!("path conversion: {e}")))?;
 
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let session = auth::read_session_info(&app)?;
     let app_for_blocking = app.clone();
     let preview = tauri::async_runtime::spawn_blocking(move || {
+        let _job = job;
         let db = app_for_blocking.state::<Db>();
         db.with_conn(|live_conn| {
             stage_import(&app_for_blocking, &source, live_conn, session.as_ref())
@@ -98,15 +103,30 @@ pub(super) fn stage_import(
     live_conn: &Connection,
     session: Option<&auth::SessionInfo>,
 ) -> AppResult<ImportPreview> {
-    // One staging dir per import attempt. Sweep prior dirs first —
-    // they're either a crashed import (nothing to recover) or a
-    // user-cancelled choice that never reached `import_cleanup`.
-    let staging_root = imports_staging_root(app)?;
-    sweep_staging_root(&staging_root);
+    stage_import_at(
+        &crate::paths::app_data_dir(app)?,
+        source_zip,
+        live_conn,
+        session,
+    )
+}
+
+pub(super) fn stage_import_at(
+    vault: &Path,
+    source_zip: &Path,
+    live_conn: &Connection,
+    session: Option<&auth::SessionInfo>,
+) -> AppResult<ImportPreview> {
+    // One staging dir per import attempt. Another window may still hold a
+    // choice dialog on an earlier token, so abandoned dirs are swept at the
+    // next startup instead (`sweep_abandoned_staging`).
+    let staging_root = vault.join("imports").join(".staging");
+    fs::create_dir_all(&staging_root)?;
 
     let token = uuid::Uuid::new_v4().to_string();
     let dir = staging_root.join(&token);
     fs::create_dir_all(&dir)?;
+    let cleanup = DirectoryCleanup(dir.clone());
 
     let staged_db = dir.join("data.db");
     let manifest = extract_zip_into(source_zip, &dir, &staged_db)?;
@@ -170,7 +190,34 @@ pub(super) fn stage_import(
         same_account,
         backup_account,
         current_account,
+        portable: manifest.portable.is_some(),
+        plugin_packages: manifest
+            .portable
+            .as_ref()
+            .map(|index| {
+                index
+                    .directories
+                    .iter()
+                    .filter(|path| {
+                        path.starts_with("portable/packages/") && path.split('/').count() == 3
+                    })
+                    .count() as u32
+            })
+            .unwrap_or(0),
+        plugin_data_bytes: manifest
+            .portable
+            .as_ref()
+            .map(|index| {
+                index
+                    .files
+                    .iter()
+                    .filter(|entry| entry.path.starts_with("portable/plugin-data/"))
+                    .map(|entry| entry.size)
+                    .sum()
+            })
+            .unwrap_or(0),
     })
+    .inspect(|_| cleanup.keep())
 }
 
 pub(super) fn extract_zip_into(
@@ -183,14 +230,44 @@ pub(super) fn extract_zip_into(
 
     // Manifest first — we need it to decide whether to trust the rest.
     let manifest: Manifest = {
-        let mut entry = archive
+        let entry = archive
             .by_name(MANIFEST_ENTRY_NAME)
             .map_err(|_| AppError::InvalidArg("backup is missing manifest.json".into()))?;
         let mut bytes = Vec::new();
-        entry.read_to_end(&mut bytes)?;
+        if entry.size() > 128 * 1024 * 1024 {
+            return Err(AppError::InvalidArg("backup manifest is too large".into()));
+        }
+        entry.take(128 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
         serde_json::from_slice(&bytes)
             .map_err(|e| AppError::InvalidArg(format!("manifest parse: {e}")))?
     };
+
+    if manifest.format_version == 0 || manifest.format_version > MANIFEST_FORMAT_VERSION {
+        return Err(AppError::InvalidArg("unsupported backup format".into()));
+    }
+    if manifest.contents.db_filename != DB_ENTRY_NAME {
+        return Err(AppError::InvalidArg("invalid database entry name".into()));
+    }
+    let mut names = std::collections::BTreeSet::new();
+    for i in 0..archive.len() {
+        let entry = archive.by_index(i).map_err(zip_to_app)?;
+        if !names.insert(entry.name().to_lowercase()) {
+            return Err(AppError::InvalidArg("duplicate backup entry".into()));
+        }
+    }
+    if manifest.format_version == 2 {
+        let index = manifest
+            .portable
+            .as_ref()
+            .ok_or_else(|| AppError::InvalidArg("backup resources missing".into()))?;
+        if archive.len() != index.files.len() + 2 || manifest.data_db_sha256.is_none() {
+            return Err(AppError::InvalidArg("incomplete backup".into()));
+        }
+    } else if manifest.portable.is_some() {
+        return Err(AppError::InvalidArg(
+            "legacy backup has unsupported resources".into(),
+        ));
+    }
 
     let db_name = manifest.contents.db_filename.clone();
     let mut entry = archive.by_name(&db_name).map_err(|_| {
@@ -198,7 +275,30 @@ pub(super) fn extract_zip_into(
     })?;
     fs::create_dir_all(dir)?;
     let mut out = fs::File::create(db_target)?;
-    std::io::copy(&mut entry, &mut out)?;
+    if entry.size() > 16 * 1024 * 1024 * 1024 {
+        return Err(AppError::InvalidArg("backup database is too large".into()));
+    }
+    std::io::copy(
+        &mut entry.by_ref().take(16 * 1024 * 1024 * 1024 + 1),
+        &mut out,
+    )?;
+    out.sync_all()?;
+    drop(entry);
+    drop(out);
+    if let Some(hash) = &manifest.data_db_sha256 {
+        if super::restore::restore_file_hash(db_target)? != *hash {
+            return Err(AppError::InvalidArg(
+                "backup database checksum mismatch".into(),
+            ));
+        }
+    }
+    if let Some(index) = &manifest.portable {
+        portable::extract(&mut archive, dir, index)?;
+    }
+    crate::atomic_file::write(
+        &dir.join(MANIFEST_ENTRY_NAME),
+        &serde_json::to_vec(&manifest).map_err(|e| AppError::InvalidArg(e.to_string()))?,
+    )?;
     Ok(manifest)
 }
 
@@ -228,7 +328,8 @@ pub(super) fn validate_looks_like_mindstream_db(conn: &Connection) -> AppResult<
 /// cancels the import-choice dialog; safe to call on a stale token.
 #[tauri::command]
 pub fn import_cleanup(app: AppHandle, token: String) -> CommandResult<()> {
-    let dir = imports_staging_root(&app)?.join(&token);
+    let _job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let dir = portable::token_directory(&imports_staging_root(&app)?, &token)?;
     if dir.exists() {
         fs::remove_dir_all(&dir)?;
     }

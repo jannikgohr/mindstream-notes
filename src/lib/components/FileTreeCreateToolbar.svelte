@@ -23,6 +23,8 @@
   import type { PluginEffect, PluginToolbarButton } from '$lib/plugins/types';
   import { noteTypeEnabled } from '$lib/notes/note-types';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { isTauri } from '$lib/api/core';
+  import { nativeDeviceUi } from '$lib/native-device-ui.svelte';
   import {
     CORE_FILE_TREE_ACTION_IDS,
     DEFAULT_FILE_TREE_TOOLBAR_PREFERENCES,
@@ -194,6 +196,13 @@
     };
   });
 
+  $effect(() => {
+    void nativeDeviceUi.revision;
+    if (isTauri() && preferencesLoaded && nativeDeviceUi.initialized) {
+      preferences = loadFileTreeToolbarPreferences(availableIds);
+    }
+  });
+
   function labelFor(action: CreateAction): string {
     return action.type === 'core' ? tUi(action.labelKey) : action.label;
   }
@@ -271,7 +280,7 @@
 
   function persist(next: FileTreeToolbarPreferences) {
     preferences = normalizeFileTreeToolbarPreferences(next, availableIds);
-    saveFileTreeToolbarPreferences(preferences);
+    void saveFileTreeToolbarPreferences(preferences);
   }
 
   function resetPreferences() {

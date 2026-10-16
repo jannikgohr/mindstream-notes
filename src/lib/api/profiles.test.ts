@@ -9,6 +9,7 @@ import {
   createProfile,
   deleteProfile,
   listProfiles,
+  openProfileWindow,
   renameProfile,
   switchProfile
 } from './profiles';
@@ -46,6 +47,10 @@ describe('profiles api fallback (non-Tauri)', () => {
   it('switch/delete resolve without throwing', async () => {
     await expect(switchProfile('default')).resolves.toBeUndefined();
     await expect(deleteProfile('p1')).resolves.toBeUndefined();
+  });
+
+  it('does not pretend that a browser preview opened a concurrent window', async () => {
+    await expect(openProfileWindow('p1')).rejects.toThrow(/desktop runtime/);
   });
 });
 
@@ -93,6 +98,26 @@ describe('profiles api (Tauri parse path)', () => {
     await expect(switchProfile('p1')).resolves.toBeUndefined();
     invoke.mockResolvedValueOnce('oops');
     await expect(deleteProfile('p1')).rejects.toThrow(
+      /must not return a value/
+    );
+  });
+
+  it('opens through the coordinator and propagates failed or malformed results', async () => {
+    invoke.mockResolvedValueOnce(undefined);
+    await expect(openProfileWindow('p1')).resolves.toBeUndefined();
+    expect(invoke).toHaveBeenLastCalledWith('open_profile_window', {
+      id: 'p1'
+    });
+    invoke.mockResolvedValueOnce(undefined);
+    await expect(openProfileWindow('p1', true)).resolves.toBeUndefined();
+    expect(invoke).toHaveBeenLastCalledWith('open_profile_window', {
+      id: 'p1',
+      inThisWindow: true
+    });
+    invoke.mockRejectedValueOnce(new Error('target still owns its lease'));
+    await expect(openProfileWindow('p1')).rejects.toThrow(/owns its lease/);
+    invoke.mockResolvedValueOnce({ accepted: true });
+    await expect(openProfileWindow('p1')).rejects.toThrow(
       /must not return a value/
     );
   });

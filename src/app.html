@@ -25,6 +25,107 @@
       })();
     </script>
     <script>
+      // Numeric preset tokens and root appearance cached before first paint.
+      (function () {
+        try {
+          var cache =
+            window.__MINDSTREAM_APPEARANCE__ ||
+            JSON.parse(
+              localStorage.getItem('mindstream:appearance:v1') || 'null'
+            );
+          if (!cache || !cache.preset || cache.preset.version !== 1) return;
+          var palette = document.documentElement.classList.contains('dark')
+            ? cache.preset.dark
+            : cache.preset.light;
+          var tokens = [
+            'surface-0',
+            'surface-1',
+            'surface-2',
+            'surface-3',
+            'border-subtle',
+            'border-strong',
+            'foreground',
+            'muted-foreground',
+            'primary',
+            'primary-foreground',
+            'accent-brand',
+            'accent-brand-foreground'
+          ];
+          if (
+            !palette ||
+            tokens.some(function (token) {
+              var c = palette[token];
+              return (
+                !Array.isArray(c) ||
+                c.length !== 3 ||
+                c.some(function (n) {
+                  return typeof n !== 'number' || !Number.isFinite(n);
+                }) ||
+                c[0] < 0 ||
+                c[0] > 1 ||
+                c[1] < 0 ||
+                c[1] > 0.4 ||
+                c[2] < 0 ||
+                c[2] > 360
+              );
+            })
+          )
+            return;
+          tokens.forEach(function (token) {
+            document.documentElement.style.setProperty(
+              '--' + token,
+              'oklch(' + palette[token].join(' ') + ')'
+            );
+          });
+          if (
+            typeof cache.accent === 'string' &&
+            /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(cache.accent)
+          ) {
+            document.documentElement.style.setProperty(
+              '--accent-brand',
+              cache.accent
+            );
+            var hex = cache.accent.slice(1);
+            if (hex.length === 3 || hex.length === 4)
+              hex = hex
+                .slice(0, 3)
+                .split('')
+                .map(function (char) {
+                  return char + char;
+                })
+                .join('');
+            var rgb = [0, 2, 4].map(function (index) {
+              var c = parseInt(hex.slice(index, index + 2), 16) / 255;
+              return c <= 0.04045
+                ? c / 12.92
+                : Math.pow((c + 0.055) / 1.055, 2.4);
+            });
+            var foreground =
+              0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2] > 0.179
+                ? '#000000'
+                : '#ffffff';
+            document.documentElement.style.setProperty(
+              '--accent-brand-foreground',
+              foreground
+            );
+            document.documentElement.style.setProperty('--ring', cache.accent);
+          }
+          if (
+            typeof cache.uiFontSize === 'number' &&
+            cache.uiFontSize >= 12 &&
+            cache.uiFontSize <= 18
+          )
+            document.documentElement.style.setProperty(
+              '--ui-font-size',
+              cache.uiFontSize + 'px'
+            );
+          document.documentElement.dataset.themePreset = cache.preset.id;
+        } catch (_) {
+          /* malformed caches use the default tokens */
+        }
+      })();
+    </script>
+    <script>
       // Resolve reduce-motion before paint, mirroring the logic in
       // src/lib/reduce-motion.svelte.ts: the app setting ('on'/'off')
       // wins, 'system' (or the legacy boolean false) follows the OS
@@ -127,12 +228,13 @@
        * the cross-fade is invisible — update both together.
        */
       :root {
-        background-color: oklch(0.976 0.002 247.84);
-        color: oklch(0.145 0 0);
+        background-color: var(--surface-1, oklch(0.976 0.002 247.84));
+        color: var(--foreground, oklch(0.145 0 0));
+        font-size: var(--ui-font-size, 16px);
       }
       :root.dark {
-        background-color: oklch(0.185 0.003 286.2);
-        color: oklch(0.985 0 0);
+        background-color: var(--surface-1, oklch(0.185 0.003 286.2));
+        color: var(--foreground, oklch(0.985 0 0));
       }
     </style>
     %sveltekit.head%

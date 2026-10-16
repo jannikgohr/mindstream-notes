@@ -1,0 +1,820 @@
+//! A supervised worker exits only after every content window acknowledges saves.
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Condvar, Mutex};
+use std::time::{Duration, Instant};
+
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
+use uuid::Uuid;
+
+use crate::error::{AppError, AppResult, CommandResult};
+
+const CLOSE_EVENT: &str = "vault-worker-close";
+const CLOSE_PROTOCOL: u32 = 2;
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(15);
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[derive(Default)]
+struct Book {
+    ready: BTreeSet<String>,
+    pending: Option<Batch>,
+    committed: bool,
+    requests: BTreeMap<Uuid, CloseRequest>,
+    #[cfg(any(debug_assertions, feature = "e2e-data-dir"))]
+    fail_next_close: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(tag = "state", rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) enum CloseProgress {
+    Queued,
+    Pending,
+    Committing,
+    Failed { message: String },
+}
+
+struct CloseRequest {
+    batch: Option<Uuid>,
+    progress: CloseProgress,
+    at: Instant,
+    cancelled: bool,
+}
+
+struct Batch {
+    id: Uuid,
+    windows: BTreeSet<String>,
+    waiting: BTreeSet<String>,
+    failed: bool,
+}
+
+impl Book {
+    fn permits_coordinator_revival(&self) -> bool {
+        self.pending.is_none()
+            && !self.committed
+            && !self
+                .requests
+                .values()
+                .any(|request| request.progress == CloseProgress::Queued)
+    }
+
+    fn enqueue(&mut self, request_id: Uuid) -> AppResult<bool> {
+        self.requests.retain(|_, request| {
+            if request.cancelled {
+                request.at.elapsed() < Duration::from_secs(600)
+            } else {
+                !matches!(request.progress, CloseProgress::Failed { .. })
+                    || request.at.elapsed() < Duration::from_secs(600)
+            }
+        });
+        if self.requests.contains_key(&request_id) {
+            return Ok(false);
+        }
+        if self.requests.len() >= 1024 {
+            return Err(unavailable());
+        }
+        self.requests.insert(
+            request_id,
+            CloseRequest {
+                batch: None,
+                progress: CloseProgress::Queued,
+                at: Instant::now(),
+                cancelled: false,
+            },
+        );
+        if self.pending.is_some() {
+            self.attach(request_id)?;
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    fn progress(&self, request_id: Uuid) -> AppResult<CloseProgress> {
+        let request = self.requests.get(&request_id).ok_or_else(unavailable)?;
+        if request.batch.is_some_and(|id| {
+            self.pending
+                .as_ref()
+                .is_some_and(|batch| batch.id == id && batch.failed)
+        }) {
+            return Ok(CloseProgress::Failed {
+                message: unavailable().to_string(),
+            });
+        }
+        Ok(request.progress.clone())
+    }
+
+    fn attach(&mut self, request_id: Uuid) -> AppResult<()> {
+        let batch = self.pending.as_ref().ok_or_else(unavailable)?;
+        let request = self.requests.get_mut(&request_id).ok_or_else(unavailable)?;
+        request.batch = Some(batch.id);
+        request.progress = if self.committed {
+            CloseProgress::Committing
+        } else {
+            CloseProgress::Pending
+        };
+        Ok(())
+    }
+
+    fn fail_request(&mut self, request_id: Uuid) {
+        if let Some(request) = self.requests.get_mut(&request_id) {
+            request.progress = CloseProgress::Failed {
+                message: unavailable().to_string(),
+            };
+        }
+    }
+
+    fn window_ready(&mut self, label: &str, protocol: u32) -> AppResult<()> {
+        if protocol != CLOSE_PROTOCOL
+            || !content_window(label)
+            || self.pending.is_some()
+            || self.committed
+        {
+            return Err(unavailable());
+        }
+        self.ready.insert(label.into());
+        Ok(())
+    }
+    fn begin(&mut self, windows: BTreeSet<String>) -> AppResult<Option<Uuid>> {
+        if self.pending.is_some() || self.committed {
+            return Ok(None);
+        }
+        if !windows.contains("main") || !windows.is_subset(&self.ready) {
+            return Err(unavailable());
+        }
+        let id = Uuid::new_v4();
+        #[cfg(any(debug_assertions, feature = "e2e-data-dir"))]
+        let failed = std::mem::take(&mut self.fail_next_close);
+        #[cfg(not(any(debug_assertions, feature = "e2e-data-dir")))]
+        let failed = false;
+        self.pending = Some(Batch {
+            id,
+            waiting: windows.clone(),
+            windows,
+            failed,
+        });
+        // Requests can arrive before their native callbacks execute. Attach
+        // all queued aliases now, so a cancellation cannot turn a delayed
+        // callback into a second, unintended close attempt.
+        for request in self
+            .requests
+            .values_mut()
+            .filter(|request| request.progress == CloseProgress::Queued)
+        {
+            request.batch = Some(id);
+            request.progress = CloseProgress::Pending;
+        }
+        Ok(Some(id))
+    }
+
+    fn ack(&mut self, id: Uuid, window: &str, saved: bool) -> AppResult<()> {
+        let batch = self.pending.as_mut().ok_or_else(unavailable)?;
+        if batch.id != id || !batch.windows.contains(window) || self.committed {
+            return Err(unavailable());
+        }
+        batch.waiting.remove(window);
+        // A later successful retry cannot erase an earlier failure in this close.
+        batch.failed |= !saved;
+        Ok(())
+    }
+
+    fn finished(&self, id: Uuid) -> bool {
+        self.pending
+            .as_ref()
+            .is_none_or(|batch| batch.id != id || batch.failed || batch.waiting.is_empty())
+    }
+
+    fn can_commit(&self, id: Uuid, windows: &BTreeSet<String>) -> bool {
+        self.pending.as_ref().is_some_and(|batch| {
+            batch.id == id && !batch.failed && batch.waiting.is_empty() && &batch.windows == windows
+        })
+    }
+
+    fn commit(&mut self, id: Uuid, windows: &BTreeSet<String>) -> bool {
+        let succeeds = self.can_commit(id, windows);
+        if succeeds {
+            self.committed = true;
+            for request in self
+                .requests
+                .values_mut()
+                .filter(|request| request.batch == Some(id))
+            {
+                request.progress = CloseProgress::Committing;
+            }
+        }
+        succeeds
+    }
+
+    fn cancel(&mut self, id: Uuid) -> bool {
+        if self.committed || !self.pending.as_ref().is_some_and(|batch| batch.id == id) {
+            return false;
+        }
+        self.pending = None;
+        for request in self
+            .requests
+            .values_mut()
+            .filter(|request| request.batch == Some(id))
+        {
+            request.progress = CloseProgress::Failed {
+                message: unavailable().to_string(),
+            };
+            request.cancelled = true;
+        }
+        true
+    }
+
+    fn cancel_request(&mut self, id: Uuid) -> AppResult<Option<Uuid>> {
+        if self.committed {
+            return Err(unavailable());
+        }
+        if !self.requests.contains_key(&id) && self.requests.len() >= 1024 {
+            return Err(unavailable());
+        }
+        let batch = self.requests.get(&id).and_then(|request| request.batch);
+        if let Some(batch) = batch {
+            self.cancel(batch);
+        }
+        // A tombstone also covers a close request that was never received.
+        // Delayed callbacks and bounded IPC retries cannot allocate a new
+        // close during the shared ten-minute replay window.
+        self.requests.insert(
+            id,
+            CloseRequest {
+                batch,
+                at: Instant::now(),
+                cancelled: true,
+                progress: CloseProgress::Failed {
+                    message: unavailable().to_string(),
+                },
+            },
+        );
+        Ok(batch)
+    }
+}
+
+#[derive(Default)]
+pub struct Shutdown {
+    book: Mutex<Book>,
+    changed: Condvar,
+}
+
+#[derive(Clone, Serialize)]
+struct Notice {
+    id: Uuid,
+    phase: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'static str>,
+}
+
+fn unavailable() -> AppError {
+    AppError::InvalidArg("vault close could not be completed; the vault remains open".into())
+}
+
+fn content_window(label: &str) -> bool {
+    label == "main" || label.starts_with("note_")
+}
+
+fn windows(app: &AppHandle) -> BTreeSet<String> {
+    app.webview_windows()
+        .into_keys()
+        .filter(|label| content_window(label))
+        .collect()
+}
+
+#[cfg(desktop)]
+pub(crate) fn all_windows_ready(app: &AppHandle) -> bool {
+    let actual = windows(app);
+    !actual.is_empty()
+        && app.try_state::<Shutdown>().is_some_and(|state| {
+            state
+                .book
+                .lock()
+                .is_ok_and(|book| actual.is_subset(&book.ready))
+        })
+}
+
+#[tauri::command]
+pub fn vault_window_close_ready(
+    app: AppHandle,
+    window: WebviewWindow,
+    protocol: u32,
+) -> CommandResult<bool> {
+    let Some(state) = app.try_state::<Shutdown>() else {
+        return Ok(false);
+    };
+    let mut book = state.book.lock().map_err(|_| unavailable())?;
+    book.window_ready(window.label(), protocol)?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn vault_window_close_ack(
+    app: AppHandle,
+    window: WebviewWindow,
+    id: Uuid,
+    saved: bool,
+) -> CommandResult<()> {
+    let state = app.try_state::<Shutdown>().ok_or_else(unavailable)?;
+    state
+        .book
+        .lock()
+        .map_err(|_| unavailable())?
+        .ack(id, window.label(), saved)?;
+    state.changed.notify_all();
+    Ok(())
+}
+
+/// Prevent secondary windows disappearing while another window is saving.
+pub fn closing(app: &AppHandle) -> bool {
+    app.try_state::<Shutdown>().is_some_and(|state| {
+        state
+            .book
+            .lock()
+            .map(|book| book.pending.is_some() && !book.committed)
+            .unwrap_or(true)
+    })
+}
+
+/// A queued or committed close must not revive a crashed environment. A
+/// cancelled/failed close resumes recovery together with the worker services.
+pub(crate) fn coordinator_revival_allowed(app: &AppHandle) -> bool {
+    app.try_state::<Shutdown>().is_some_and(|state| {
+        state
+            .book
+            .lock()
+            .is_ok_and(|book| book.permits_coordinator_revival())
+    })
+}
+
+pub fn window_destroyed(app: &AppHandle, label: &str) {
+    if let Some(state) = app.try_state::<Shutdown>() {
+        if let Ok(mut book) = state.book.lock() {
+            book.ready.remove(label);
+            if let Some(batch) = &mut book.pending {
+                batch.failed |= batch.windows.contains(label);
+            }
+            state.changed.notify_all();
+        }
+    }
+}
+
+fn cancel(app: &AppHandle, id: Uuid) {
+    cancel_with_reason(app, id, None);
+}
+
+fn cancel_with_reason(app: &AppHandle, id: Uuid, reason: Option<&'static str>) {
+    let Some(state) = app.try_state::<Shutdown>() else {
+        return;
+    };
+    if state.book.lock().is_ok_and(|mut book| book.cancel(id)) {
+        log::warn!("[vaults] controlled close cancelled; worker retained");
+        let _ = app.emit(
+            CLOSE_EVENT,
+            Notice {
+                id,
+                phase: "cancel",
+                reason,
+            },
+        );
+    }
+}
+
+fn notify(app: &AppHandle, participants: &BTreeSet<String>, id: Uuid, phase: &'static str) -> bool {
+    participants.iter().all(|label| {
+        app.get_webview_window(label).is_some_and(|_| {
+            app.emit_to(
+                label.clone(),
+                CLOSE_EVENT,
+                Notice {
+                    id,
+                    phase,
+                    reason: None,
+                },
+            )
+            .is_ok()
+        })
+    })
+}
+
+/// Called from the native close event; all waits happen off the event-loop thread.
+pub fn request_close(app: &AppHandle) {
+    request_close_inner(app, None);
+}
+
+pub(crate) fn queue_close(app: &AppHandle, request_id: Uuid) -> AppResult<()> {
+    let state = app.try_state::<Shutdown>().ok_or_else(unavailable)?;
+    if !state
+        .book
+        .lock()
+        .map_err(|_| unavailable())?
+        .enqueue(request_id)?
+    {
+        return Ok(());
+    }
+    let handle = app.clone();
+    if let Err(error) =
+        app.run_on_main_thread(move || request_close_inner(&handle, Some(request_id)))
+    {
+        if let Ok(mut book) = state.book.lock() {
+            book.fail_request(request_id);
+        }
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+pub(crate) fn close_progress(app: &AppHandle, request_id: Uuid) -> AppResult<CloseProgress> {
+    app.try_state::<Shutdown>()
+        .ok_or_else(unavailable)?
+        .book
+        .lock()
+        .map_err(|_| unavailable())?
+        .progress(request_id)
+}
+
+pub(crate) fn cancel_close(app: &AppHandle, request_id: Uuid) -> AppResult<()> {
+    let state = app.try_state::<Shutdown>().ok_or_else(unavailable)?;
+    let batch = state
+        .book
+        .lock()
+        .map_err(|_| unavailable())?
+        .cancel_request(request_id)?;
+    state.changed.notify_all();
+    if let Some(id) = batch {
+        app.emit(
+            CLOSE_EVENT,
+            Notice {
+                id,
+                phase: "cancel",
+                reason: Some("recovery"),
+            },
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(any(debug_assertions, feature = "e2e-data-dir"))]
+pub(crate) fn test_close_failure(app: &AppHandle) -> AppResult<()> {
+    if app.state::<crate::environment::Environment>().kind != crate::environment::Kind::Test {
+        return Err(unavailable());
+    }
+    let state = app.state::<Shutdown>();
+    let mut book = state.book.lock().map_err(|_| unavailable())?;
+    if !book.permits_coordinator_revival() {
+        return Err(unavailable());
+    }
+    book.fail_next_close = true;
+    Ok(())
+}
+
+fn request_close_inner(app: &AppHandle, request_id: Option<Uuid>) {
+    log::debug!("[vaults] controlled close callback started");
+    let Some(state) = app.try_state::<Shutdown>() else {
+        return;
+    };
+    if let Some(request_id) = request_id {
+        if !state
+            .book
+            .lock()
+            .is_ok_and(|book| matches!(book.progress(request_id), Ok(CloseProgress::Queued)))
+        {
+            return;
+        }
+    }
+    let participants = windows(app);
+    let started = state
+        .book
+        .lock()
+        .map_err(|_| unavailable())
+        .and_then(|mut book| {
+            if !crate::vault_supervisor::ready_for_close(app) {
+                return Err(unavailable());
+            }
+            let started = book.begin(participants.clone())?;
+            if let Some(request_id) = request_id {
+                book.attach(request_id)?;
+            }
+            Ok(started)
+        });
+    let id = match started {
+        Ok(Some(id)) => id,
+        Ok(None) => return,
+        Err(_) => {
+            if let Some(request_id) = request_id {
+                if let Ok(mut book) = state.book.lock() {
+                    book.fail_request(request_id);
+                }
+            }
+            log::warn!("[vaults] content windows are not ready for close");
+            let _ = app.emit(
+                CLOSE_EVENT,
+                Notice {
+                    id: Uuid::nil(),
+                    phase: "cancel",
+                    reason: None,
+                },
+            );
+            return;
+        }
+    };
+    let handle = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("vault-close".into())
+        .spawn(move || {
+            log::debug!("[vaults] controlled close drain started");
+            let Some(jobs) = handle.try_state::<crate::vault_jobs::Jobs>() else {
+                cancel(&handle, id);
+                return;
+            };
+            let Ok(paused) = jobs.pause() else {
+                cancel(&handle, id);
+                return;
+            };
+            if !notify(&handle, &participants, id, "waiting") {
+                cancel(&handle, id);
+                return;
+            }
+            if let Some(import) = handle.try_state::<crate::import::ImportState>() {
+                import.cancel();
+            }
+            if let Err(error) = paused.wait(DRAIN_TIMEOUT) {
+                log::warn!("[vaults] service drain failed: {error}");
+                cancel_with_reason(&handle, id, Some("background"));
+                return;
+            }
+            log::debug!("[vaults] services drained; preparing content saves");
+            // Services have emitted their final updates before editor saves.
+            // Keep admission paused through the save/commit decision.
+            if !notify(&handle, &participants, id, "prepare") {
+                cancel(&handle, id);
+                return;
+            }
+            let Some(state) = handle.try_state::<Shutdown>() else {
+                return;
+            };
+            let Ok(book) = state.book.lock() else {
+                cancel(&handle, id);
+                return;
+            };
+            let waited = state
+                .changed
+                .wait_timeout_while(book, CLOSE_TIMEOUT, |book| !book.finished(id));
+            // Release the book before scheduling work on the native event loop.
+            if waited.is_err() {
+                cancel(&handle, id);
+                return;
+            }
+            drop(waited);
+            log::debug!("[vaults] content acknowledgement wait finished");
+            let Some(saves) = handle.try_state::<crate::vault_jobs::Saves>() else {
+                cancel(&handle, id);
+                return;
+            };
+            let Ok(saved) = saves.pause() else {
+                cancel(&handle, id);
+                return;
+            };
+            if let Err(error) = saved.wait(DRAIN_TIMEOUT) {
+                log::warn!("[vaults] final save drain failed: {error}");
+                cancel(&handle, id);
+                return;
+            }
+            log::debug!("[vaults] final writes drained; scheduling close decision");
+            let final_handle = handle.clone();
+            if handle
+                .run_on_main_thread(move || {
+                    let Some(state) = final_handle.try_state::<Shutdown>() else {
+                        return;
+                    };
+                    let current_windows = windows(&final_handle);
+                    let committed = state.book.lock().is_ok_and(|mut book| {
+                        if !book.can_commit(id, &current_windows)
+                            || crate::vault_jobs::Pause::commit_all(vec![paused, saved]).is_err()
+                        {
+                            return false;
+                        }
+                        book.commit(id, &current_windows)
+                    });
+                    if committed {
+                        log::info!("[vaults] every content window saved; closing worker");
+                        final_handle.exit(0);
+                    } else {
+                        cancel(&final_handle, id);
+                    }
+                })
+                .is_err()
+            {
+                cancel(&handle, id);
+            }
+        });
+    if spawned.is_err() {
+        cancel(app, id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recovery_cancellation_tombstones_unreceived_close_and_cannot_cancel_commit() {
+        let mut book = Book::default();
+        let unknown = Uuid::new_v4();
+        assert!(book.cancel_request(unknown).unwrap().is_none());
+        assert!(!book.enqueue(unknown).unwrap());
+        assert!(matches!(
+            book.progress(unknown).unwrap(),
+            CloseProgress::Failed { .. }
+        ));
+        let (mut book, windows) = ready();
+        let request = Uuid::new_v4();
+        book.enqueue(request).unwrap();
+        let batch = book.begin(windows.clone()).unwrap().unwrap();
+        assert_eq!(book.cancel_request(request).unwrap(), Some(batch));
+        assert!(!book.enqueue(request).unwrap());
+        assert!(book.pending.is_none());
+        assert!(book.permits_coordinator_revival());
+        let next = Uuid::new_v4();
+        book.enqueue(next).unwrap();
+        let batch = book.begin(windows.clone()).unwrap().unwrap();
+        for window in &windows {
+            book.ack(batch, window, true).unwrap();
+        }
+        assert!(book.commit(batch, &windows));
+        assert!(book.cancel_request(next).is_err());
+        assert_eq!(book.progress(next).unwrap(), CloseProgress::Committing);
+    }
+
+    #[test]
+    fn recovery_stops_before_close_callback_and_resumes_only_after_cancellation() {
+        let (mut book, windows) = ready();
+        assert!(book.permits_coordinator_revival());
+        let request = Uuid::new_v4();
+        book.enqueue(request).unwrap();
+        assert!(!book.permits_coordinator_revival());
+        let batch = book.begin(windows.clone()).unwrap().unwrap();
+        assert!(!book.permits_coordinator_revival());
+        assert!(book.cancel(batch));
+        assert!(book.permits_coordinator_revival());
+        let request = Uuid::new_v4();
+        book.enqueue(request).unwrap();
+        let batch = book.begin(windows.clone()).unwrap().unwrap();
+        book.ack(batch, "main", true).unwrap();
+        book.ack(batch, "note_seed_welcome", true).unwrap();
+        assert!(book.commit(batch, &windows));
+        assert!(!book.permits_coordinator_revival());
+    }
+
+    #[test]
+    fn tracked_close_retries_preserve_cancelled_outcome_and_new_requests_can_retry() {
+        let (mut book, windows) = ready();
+        let request = Uuid::new_v4();
+        assert!(book.enqueue(request).unwrap());
+        assert_eq!(book.progress(request).unwrap(), CloseProgress::Queued);
+        let batch = book.begin(windows.clone()).unwrap().unwrap();
+        book.attach(request).unwrap();
+        assert!(!book.enqueue(request).unwrap());
+        assert_eq!(book.progress(request).unwrap(), CloseProgress::Pending);
+        let alias = Uuid::new_v4();
+        book.enqueue(alias).unwrap();
+        assert!(book.begin(windows.clone()).unwrap().is_none());
+        book.attach(alias).unwrap();
+        book.ack(batch, "main", false).unwrap();
+        assert!(matches!(
+            book.progress(request).unwrap(),
+            CloseProgress::Failed { .. }
+        ));
+        assert!(book.cancel(batch));
+        assert!(matches!(
+            book.progress(alias).unwrap(),
+            CloseProgress::Failed { .. }
+        ));
+        assert!(!book.enqueue(request).unwrap());
+        let retry = Uuid::new_v4();
+        book.enqueue(retry).unwrap();
+        let next = book.begin(windows).unwrap().unwrap();
+        book.attach(retry).unwrap();
+        assert_ne!(batch, next);
+        assert_eq!(book.progress(retry).unwrap(), CloseProgress::Pending);
+        assert!(matches!(
+            book.progress(request).unwrap(),
+            CloseProgress::Failed { .. }
+        ));
+    }
+
+    #[test]
+    fn tracked_commit_requires_every_window_and_never_claims_process_exit() {
+        let (mut book, windows) = ready();
+        let request = Uuid::new_v4();
+        book.enqueue(request).unwrap();
+        let batch = book.begin(windows.clone()).unwrap().unwrap();
+        book.attach(request).unwrap();
+        book.ack(batch, "main", true).unwrap();
+        assert!(!book.commit(batch, &windows));
+        assert_eq!(book.progress(request).unwrap(), CloseProgress::Pending);
+        book.ack(batch, "note_seed_welcome", true).unwrap();
+        assert!(book.commit(batch, &windows));
+        assert_eq!(
+            serde_json::to_value(book.progress(request).unwrap()).unwrap(),
+            serde_json::json!({"state":"committing"})
+        );
+        let alias = Uuid::new_v4();
+        book.enqueue(alias).unwrap();
+        book.attach(alias).unwrap();
+        assert_eq!(book.progress(alias).unwrap(), CloseProgress::Committing);
+    }
+
+    #[test]
+    fn unknown_status_does_not_mutate_and_admission_failure_remains_repeatable() {
+        let mut book = Book::default();
+        let request = Uuid::new_v4();
+        for _ in 0..2048 {
+            assert!(book.progress(request).is_err());
+        }
+        assert!(book.requests.is_empty());
+        book.enqueue(request).unwrap();
+        book.fail_request(request);
+        assert!(matches!(
+            book.progress(request).unwrap(),
+            CloseProgress::Failed { .. }
+        ));
+        assert!(!book.enqueue(request).unwrap());
+        book.requests.get_mut(&request).unwrap().at = Instant::now() - Duration::from_secs(601);
+        assert!(book.enqueue(Uuid::new_v4()).unwrap());
+        assert!(!book.requests.contains_key(&request));
+        for _ in 1..1024 {
+            book.enqueue(Uuid::new_v4()).unwrap();
+        }
+        assert!(book.enqueue(Uuid::new_v4()).is_err());
+        assert_eq!(book.requests.len(), 1024);
+    }
+
+    #[test]
+    fn a_frontend_without_the_wait_phase_cannot_authorize_close() {
+        let mut book = Book::default();
+        assert!(book.window_ready("main", 1).is_err());
+        assert!(book.ready.is_empty());
+        assert!(book.begin(BTreeSet::from(["main".into()])).is_err());
+        assert!(book.window_ready("plugin_preview", CLOSE_PROTOCOL).is_err());
+        book.window_ready("main", CLOSE_PROTOCOL).unwrap();
+        book.begin(BTreeSet::from(["main".into()])).unwrap();
+        assert!(book.window_ready("main", CLOSE_PROTOCOL).is_err());
+    }
+
+    fn ready() -> (Book, BTreeSet<String>) {
+        let windows = BTreeSet::from(["main".into(), "note_seed_welcome".into()]);
+        (
+            Book {
+                ready: windows.clone(),
+                ..Book::default()
+            },
+            windows,
+        )
+    }
+
+    #[test]
+    fn main_ack_cannot_exit_before_popout_and_duplicate_close_reuses_batch() {
+        let (mut book, windows) = ready();
+        let id = book.begin(windows.clone()).unwrap().unwrap();
+        assert_eq!(book.begin(windows.clone()).unwrap(), None);
+        book.ack(id, "main", true).unwrap();
+        assert!(!book.finished(id));
+        assert!(!book.commit(id, &windows));
+        book.ack(id, "note_seed_welcome", true).unwrap();
+        assert!(book.commit(id, &windows));
+        assert!(!book.cancel(id));
+    }
+
+    #[test]
+    fn failure_stale_ack_and_changed_window_set_never_allow_exit() {
+        let (mut book, windows) = ready();
+        let id = book.begin(windows.clone()).unwrap().unwrap();
+        assert!(book.ack(id, "plugin_export", true).is_err());
+        assert!(book.ack(Uuid::new_v4(), "main", true).is_err());
+        book.ack(id, "main", false).unwrap();
+        book.ack(id, "main", true).unwrap();
+        book.ack(id, "note_seed_welcome", true).unwrap();
+        assert!(!book.commit(id, &windows));
+        assert!(book.cancel(id));
+        assert!(book.ack(id, "main", true).is_err());
+        let retry = book.begin(windows.clone()).unwrap().unwrap();
+        assert_ne!(retry, id);
+        for window in &windows {
+            book.ack(retry, window, true).unwrap();
+        }
+        assert!(!book.commit(retry, &BTreeSet::from(["main".into()])));
+        let mut added = windows.clone();
+        added.insert("note_new".into());
+        assert!(!book.commit(retry, &added));
+        assert!(book.commit(retry, &windows));
+    }
+
+    #[test]
+    fn loading_or_missing_main_window_cannot_be_declared_saved() {
+        let (mut book, mut windows) = ready();
+        windows.insert("note_loading".into());
+        assert!(book.begin(windows).is_err());
+        assert!(book
+            .begin(BTreeSet::from(["note_seed_welcome".into()]))
+            .is_err());
+        assert!(book.pending.is_none());
+    }
+}

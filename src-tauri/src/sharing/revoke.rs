@@ -34,7 +34,10 @@ fn share_metadata(db: &Db, collection_id: &str) -> AppResult<Option<ShareMetadat
 /// and the other members are unaffected, and the user can be invited again.
 #[tauri::command]
 pub async fn leave_shared_collection(app: AppHandle, collection_id: String) -> CommandResult<()> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let blocking_job = job.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         let account = restore_required(&app)?;
         let db = app.state::<Db>();
 
@@ -249,7 +252,10 @@ pub(crate) fn purge_lost_shares(db: &Db, lost: &[String]) -> AppResult<()> {
 /// to drop its copy.
 #[tauri::command]
 pub async fn stop_sharing_collection(app: AppHandle, collection_id: String) -> CommandResult<()> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let blocking_job = job.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         let account = restore_required(&app)?;
         let db = app.state::<Db>();
 
