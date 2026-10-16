@@ -37,6 +37,7 @@
     openNoteWindow
   } from '$lib/api';
   import { clearSavedLayout, loadSavedLayout, saveLayout } from '$lib/api';
+  import { onAppClose } from '$lib/editor/suspend-flush';
   import { sanitizeDockBlob } from '$lib/desktop/dock-layout-restore';
   import { startPdfSearchIndexing } from '$lib/pdf/search-index-backfill';
   import { pruneHistoryOnStartup } from '$lib/history/retention';
@@ -317,7 +318,7 @@
         };
       });
       if (!sanitized) {
-        clearSavedLayout(vaultId);
+        void clearSavedLayout(vaultId);
         return false;
       }
       const api = dock as unknown as { fromJSON: (s: unknown) => void };
@@ -337,25 +338,30 @@
       return openPanels.size > 0;
     } catch (err) {
       console.warn('[layout] restore failed, falling back', err);
-      clearSavedLayout(vaultId);
+      void clearSavedLayout(vaultId);
       return false;
     }
+  }
+
+  async function persistLayout() {
+    if (saveLayoutTimer) clearTimeout(saveLayoutTimer);
+    saveLayoutTimer = null;
+    if (!dock || !layoutPersistenceReady) return;
+    const json = (dock as unknown as { toJSON: () => unknown }).toJSON();
+    await saveLayout(
+      profilesState.active,
+      json,
+      dock.activePanel?.params?.noteId ?? null
+    );
   }
 
   function schedulePersist() {
     if (!dock || !layoutPersistenceReady) return;
     if (saveLayoutTimer) clearTimeout(saveLayoutTimer);
     saveLayoutTimer = setTimeout(() => {
-      try {
-        const json = (dock as unknown as { toJSON: () => unknown }).toJSON();
-        saveLayout(
-          profilesState.active,
-          json,
-          dock?.activePanel?.params?.noteId ?? null
-        );
-      } catch (err) {
-        console.warn('[layout] save failed', err);
-      }
+      void persistLayout().catch((err) =>
+        console.warn('[layout] save failed', err)
+      );
     }, 250);
   }
 
@@ -695,6 +701,7 @@
   }
 
   onMount(() => {
+    const stopCloseFlush = onAppClose(persistLayout);
     // Load the tree independently of the dockview bootstrap. The two used to
     // be coupled (loadTree lived inside setupDockview), so any failure or
     // early-return in the UI setup — e.g. a flaky `import('dockview')`
@@ -802,6 +809,7 @@
       // Defensive — if we unmount mid-drag (HMR, route change), don't
       // leave the class stuck on <body>.
       clearDragging();
+      stopCloseFlush();
       unsub();
       void trayUnlisten.then((unlisten) => unlisten());
       void showAppUnlisten.then((unlisten) => unlisten());

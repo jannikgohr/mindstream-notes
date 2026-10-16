@@ -89,6 +89,44 @@ Start the Tauri desktop app:
 pnpm tauri-dev
 ```
 
+The desktop development wrapper adds `tauri.dev.conf.json` and the
+`dev-environment` feature. Dev uses the `.dev` bundle identity and a persistent
+separate data root, WebView store and credential namespace. It can run alongside
+a release build. Dev/test builds do not register global shortcuts or install
+autostart/updater plugins. Use the wrapper rather than enabling the dev feature
+with the production config. Optimization level alone does not choose identity.
+Release builds keep the historical root and credential entries. Accounts remain
+vault-specific within each environment. Never run an older binary that lacks
+vault locking against the same physical vault as a new binary.
+
+Normal desktop launches run a persistent coordinator and isolated vault workers.
+The coordinator survives vault handoffs in `tauri dev`. As in a release, closing
+the last vault window ends it, and with it the development session, unless
+close-to-tray is on. Test devices remain direct by default. Use
+`--supervised-vaults` when testing several vaults in one root.
+
+For an embedded native debug fixture, build the production frontend first and
+use Tauri's production protocol feature. Clearing `devUrl` alone still leaves
+`tauri::is_dev()` enabled and deliberately disables automatic coordinator revival:
+
+```powershell
+pnpm build
+$env:TAURI_CONFIG = '{"build":{"devUrl":null}}'
+cd src-tauri
+cargo build --features tauri/custom-protocol
+```
+
+Debug and `e2e-data-dir` builds accept `MINDSTREAM_ROOT_DIR` and
+`MINDSTREAM_PROFILE_DIR`. The real-app harness sets both and isolates browser
+storage before launching. Manual Windows test launches also require an absolute
+`WEBVIEW2_USER_DATA_FOLDER`; Linux tests require absolute isolated
+`XDG_DATA_HOME` and `XDG_CACHE_HOME`. A backend path override alone is insufficient.
+Without an explicit root, a profile override uses `<profile>/.app-root` for
+legacy harness compatibility. Test builds without any override refuse startup.
+
+Desktop macOS builds now require macOS 14. The owner accepted deferring packaged
+Dock/menu/Reopen testing until a release can be tested on a Mac.
+
 ## Desktop Builds
 
 Build a production frontend bundle:

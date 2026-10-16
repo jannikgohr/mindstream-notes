@@ -1,21 +1,9 @@
-/**
- * Plugin settings, backed by the vault database rather than `localStorage`.
- *
- * Every other app setting lives in the WebView's `localStorage`, which is right
- * for settings the WebView is the only consumer of. Plugin settings are not
- * one of those: a scripted plugin receives them as `ctx.settings`, and the
- * backend is what decides what a plugin sees. While they sat in `localStorage`
- * the backend could not read them, so the frontend had to assemble the script
- * context and pass it down — which quietly made a UI action the only thing that
- * could ever invoke a plugin, since nothing else could build the argument.
- *
- * So the backend owns them (`src-tauri/src/plugins/settings.rs`) and this
- * module is the cache in front of it: reads stay synchronous, because the
- * settings dialog and every `$derived` chain expect that, and writes go through
- * Tauri. Outside Tauri (`vite preview`, the web build) there is no backend and
- * no persistence — the cache is all there is, which matches how plugins behave
- * there anyway.
+/** Synchronous cache of backend plugin settings. Device values live at the root;
+ * vault values live in the vault database. Windows refresh on plugin invalidation.
+ * Browser fallback is in memory. Runtime contexts are assembled by the backend.
  */
+
+/* eslint-disable svelte/prefer-svelte-reactivity -- Request bookkeeping must not trigger rendering or subscribe effects. */
 
 import { isTauri } from '$lib/api/core';
 import {
@@ -26,6 +14,22 @@ import {
 
 /** `plugins.<pluginId>.<settingId>` → value. */
 const cache = $state<{ values: Record<string, unknown> }>({ values: {} });
+const revisions = new Map<string, number>();
+const pending = new Map<string, number>();
+const reads = new Map<string, symbol>();
+
+function beginWrite(id: string): number {
+  const revision = (revisions.get(id) ?? 0) + 1;
+  revisions.set(id, revision);
+  pending.set(id, (pending.get(id) ?? 0) + 1);
+  return revision;
+}
+
+function endWrite(id: string): void {
+  const remaining = (pending.get(id) ?? 1) - 1;
+  if (remaining) pending.set(id, remaining);
+  else pending.delete(id);
+}
 
 /** The full setting id the settings store and dialog use. */
 export function pluginSettingId(pluginId: string, settingId: string): string {
@@ -68,10 +72,34 @@ export function hasPluginSettingValue(id: string): boolean {
  */
 export async function hydratePluginSettings(pluginId: string): Promise<void> {
   if (!isTauri()) return;
+  const read = Symbol();
+  reads.set(pluginId, read);
+  const before = new Map(revisions);
+  const writing = new Set(pending.keys());
   try {
     const stored = await pluginsSettingsAll(pluginId);
-    for (const [settingId, value] of Object.entries(stored)) {
-      cache.values[pluginSettingId(pluginId, settingId)] = value;
+    if (reads.get(pluginId) !== read) return;
+    const incoming = Object.fromEntries(
+      Object.entries(stored).map(([key, value]) => [
+        pluginSettingId(pluginId, key),
+        value
+      ])
+    );
+    for (const id of new Set([
+      ...Object.keys(cache.values),
+      ...Object.keys(incoming)
+    ])) {
+      if (parsePluginSettingId(id)?.pluginId !== pluginId) continue;
+      // An invalidation can read the old document while a local edit is saving.
+      // Keep that edit, including resets, until a later read can confirm it.
+      if (
+        writing.has(id) ||
+        pending.has(id) ||
+        before.get(id) !== revisions.get(id)
+      )
+        continue;
+      if (id in incoming) cache.values[id] = incoming[id];
+      else delete cache.values[id];
     }
   } catch (err) {
     console.warn('[plugins] failed to load settings for', pluginId, err);
@@ -93,12 +121,17 @@ export async function setPluginSettingValue(
   const previous = cache.values[id];
   cache.values[id] = value;
   if (!isTauri()) return;
+  const revision = beginWrite(id);
   try {
     await pluginsSettingsSet(parsed.pluginId, parsed.settingId, value);
   } catch (err) {
-    if (had) cache.values[id] = previous;
-    else delete cache.values[id];
+    if (revisions.get(id) === revision) {
+      if (had) cache.values[id] = previous;
+      else delete cache.values[id];
+    }
     throw err;
+  } finally {
+    endWrite(id);
   }
 }
 
@@ -110,15 +143,21 @@ export async function resetPluginSettingValue(id: string): Promise<void> {
   const previous = cache.values[id];
   delete cache.values[id];
   if (!isTauri()) return;
+  const revision = beginWrite(id);
   try {
     await pluginsSettingsRemove(parsed.pluginId, parsed.settingId);
   } catch (err) {
-    if (had) cache.values[id] = previous;
+    if (had && revisions.get(id) === revision) cache.values[id] = previous;
     throw err;
+  } finally {
+    endWrite(id);
   }
 }
 
 /** Drop all cached values. Test-only; keeps suites isolated. */
 export function resetPluginSettingsCache(): void {
   cache.values = {};
+  revisions.clear();
+  pending.clear();
+  reads.clear();
 }

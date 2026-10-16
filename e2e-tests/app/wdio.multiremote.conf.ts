@@ -82,6 +82,7 @@ function spawnDriver(client: ClientProc): ChildProcess {
       // the two clients distinct users' devices. The profile id namespaces the
       // OS keyring entry; without it both clients default to `e2e`.
       MINDSTREAM_PROFILE_DIR: client.profileDir,
+      MINDSTREAM_ROOT_DIR: join(client.profileDir, '.app-root'),
       MINDSTREAM_PROFILE_ID: client.profileId,
       MINDSTREAM_DICTIONARY_DIR: dictionaryDir,
       ...webviewEnvironment(client.profileDir)

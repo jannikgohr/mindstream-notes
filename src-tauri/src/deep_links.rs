@@ -7,6 +7,12 @@
 //! starts the app, and through the instance already running when there is
 //! one (see `builder`).
 //!
+//! Under the supervised runtime the process that receives a link is the
+//! coordinator, which has no window. It passes the link to the vault used
+//! last, whose window shows it (see `vault_supervisor`). A second launch is
+//! handed to the coordinator by the runtime's own election, not by the
+//! single-instance plugin, which would end every vault process it starts.
+//!
 //! Receiving a link does nothing but show it. The app comes to the front and
 //! opens the dialog for joining a shared folder with the link filled in.
 //! Nothing is asked of any server until the user goes on from there. That
@@ -30,6 +36,28 @@ pub const SCHEME: &str = "mindstream-notes";
 /// What follows the scheme in an address that carries an invite link.
 const JOIN: &str = "join";
 const LINK_PARAMETER: &str = "link";
+/// Far more than a link needs. Bounds what one process passes another.
+const MAX_LINK_LENGTH: usize = 4096;
+
+/// Whether a launch argument is an address under the app's scheme, which the
+/// operating system passes when a link is opened. It may still carry no
+/// invite link; then nothing comes of it.
+pub(crate) fn is_app_address(argument: &str) -> bool {
+    Url::parse(argument.trim()).is_ok_and(|url| url.scheme() == SCHEME)
+}
+
+/// The first invite link among addresses the operating system handed over.
+/// The rest are not this app's to act on.
+pub(crate) fn invite_link_among(addresses: impl IntoIterator<Item = String>) -> Option<String> {
+    addresses
+        .into_iter()
+        .find_map(|address| invite_link_in(&address))
+}
+
+/// Whether text that came from another process is an invite link.
+pub(crate) fn is_invite_link(link: &str) -> bool {
+    link.len() <= MAX_LINK_LENGTH && etebase::InviteLink::parse(link).is_ok()
+}
 
 /// The invite link an address under the app's scheme carries. `None` for
 /// any other address, and for one whose link is not an invite link, so
@@ -81,19 +109,8 @@ impl PendingInviteLink {
     }
 }
 
-/// Take in addresses the operating system handed over. The first one that
-/// carries an invite link is kept for the window, which is told to come and
-/// get it. The rest are not this app's to act on.
-pub(crate) fn received<R: Runtime>(
-    app: &AppHandle<R>,
-    addresses: impl IntoIterator<Item = String>,
-) -> bool {
-    let Some(link) = addresses
-        .into_iter()
-        .find_map(|address| invite_link_in(&address))
-    else {
-        return false;
-    };
+/// Keep an invite link for the window and tell it to come and get it.
+pub(crate) fn hand_over<R: Runtime>(app: &AppHandle<R>, link: String) {
     // Never the link itself in a log: its secret is the right to join.
     log::info!("[deep-link] an invite link was opened from outside the app");
     if let Some(pending) = app.try_state::<PendingInviteLink>() {
@@ -103,7 +120,6 @@ pub(crate) fn received<R: Runtime>(
     if let Err(err) = app.emit(event, ()) {
         log::warn!("[deep-link] failed to emit {event}: {err}");
     }
-    true
 }
 
 /// The invite link that was opened from outside the app, once. The window
@@ -119,7 +135,11 @@ pub fn take_pending_invite_link(pending: State<'_, PendingInviteLink>) -> Option
 #[cfg(feature = "e2e-data-dir")]
 #[tauri::command]
 pub fn e2e_open_address(app: AppHandle, address: String) -> bool {
-    received(&app, [address])
+    let Some(link) = invite_link_in(&address) else {
+        return false;
+    };
+    hand_over(&app, link);
+    true
 }
 
 /// Asks a build that runs on a data directory of its own to take part in
@@ -129,13 +149,30 @@ pub fn e2e_open_address(app: AppHandle, address: String) -> bool {
 #[cfg(desktop)]
 const SINGLE_INSTANCE_ENV: &str = "MINDSTREAM_SINGLE_INSTANCE";
 
-/// Whether this process hands a second launch over to the first.
+/// Whether this process hands a second launch over to the first through
+/// the single-instance plugin.
 ///
-/// A build pointed at a data directory of its own is an extra instance on
-/// purpose: a second device in a test, or a developer's second window on
-/// another vault. It stays out of it unless it is asked in.
-fn hands_over_to_first_instance(own_data_directory: bool, asked_in: bool) -> bool {
-    !own_data_directory || asked_in
+/// Never under the supervised runtime: its coordinator and its vault
+/// processes are instances of the same app, and the coordinator's election
+/// already hands a second launch over. That leaves a direct process, which
+/// only a test environment runs. A build pointed at a data directory of its
+/// own is an extra instance on purpose: a second device in a test, or a
+/// developer's second window on another vault. It stays out of it unless it
+/// is asked in.
+fn hands_over_to_first_instance(
+    supervised: bool,
+    own_data_directory: bool,
+    asked_in: bool,
+) -> bool {
+    !supervised && (!own_data_directory || asked_in)
+}
+
+/// Whether this launch runs under the supervised runtime. A launch whose
+/// arguments make no sense counts as one; its setup refuses them.
+#[cfg(desktop)]
+fn supervised(kind: crate::environment::Kind) -> bool {
+    crate::vault_supervisor::startup_role(kind)
+        .map_or(true, |role| role != crate::vault_runtime::Role::Direct)
 }
 
 /// The app builder with what has to come before every other plugin.
@@ -149,8 +186,10 @@ fn hands_over_to_first_instance(own_data_directory: bool, asked_in: bool) -> boo
 #[cfg(desktop)]
 pub fn builder() -> tauri::Builder<tauri::Wry> {
     let builder = tauri::Builder::default();
+    let kind = crate::environment::kind();
     let builder = if hands_over_to_first_instance(
-        crate::profiles::dir_override().is_some(),
+        supervised(kind),
+        kind == crate::environment::Kind::Test,
         std::env::var_os(SINGLE_INSTANCE_ENV).is_some(),
     ) {
         builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -168,21 +207,56 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
 /// with, if it was. Called once the app's state is in place.
 #[cfg(desktop)]
 pub fn listen(app: &AppHandle) {
+    watch(
+        app,
+        |app, link| {
+            hand_over(app, link);
+            crate::tray::focus_main_window(app);
+        },
+        // Started by a link. The plugin read the argument before anything
+        // was listening, and the window is not there yet, so the link waits.
+        hand_over,
+    );
+}
+
+/// The same for the coordinator, which has no window to show a link in.
+/// Every link it receives goes on to a vault.
+#[cfg(desktop)]
+pub fn listen_for_vaults(app: &AppHandle) {
+    let mut started = None;
+    watch(app, crate::vault_supervisor::run_invite_link, |_, link| {
+        started = Some(link)
+    });
+    // The plugin takes a link from the arguments only when it is the one
+    // argument. Read them as a second launch does, so that a launch with
+    // `--supervised-vaults` before the link starts the same way.
+    if let Some(link) = started.or_else(|| invite_link_among(std::env::args().skip(1))) {
+        crate::vault_supervisor::run_invite_link(app, link);
+    }
+}
+
+/// Pass each invite link the operating system hands this process to
+/// `opened`, and the one it started with, if any, to `started`.
+#[cfg(desktop)]
+fn watch(
+    app: &AppHandle,
+    opened: impl Fn(&AppHandle, String) + Send + Sync + 'static,
+    started: impl FnOnce(&AppHandle, String),
+) {
     use tauri_plugin_deep_link::DeepLinkExt;
 
     let handle = app.clone();
     app.deep_link().on_open_url(move |event| {
-        let addresses = event.urls().into_iter().map(|url| url.to_string());
-        if received(&handle, addresses) {
-            crate::tray::focus_main_window(&handle);
+        if let Some(link) = invite_link_among(event.urls().into_iter().map(|url| url.to_string())) {
+            opened(&handle, link);
         }
     });
 
-    // Started by a link. The plugin read the argument before anything was
-    // listening, and the window is not there yet, so the link waits.
     match app.deep_link().get_current() {
         Ok(Some(urls)) => {
-            received(app, urls.into_iter().map(|url| url.to_string()));
+            if let Some(link) = invite_link_among(urls.into_iter().map(|url| url.to_string())) {
+                started(app, link);
+            }
         }
         Ok(None) => {}
         Err(err) => {
@@ -253,12 +327,78 @@ mod tests {
 
     #[test]
     fn extra_instance_on_its_own_data_stays_out_unless_asked_in() {
-        // The installed app: one instance, a second launch is handed over.
-        assert!(hands_over_to_first_instance(false, false));
-        assert!(hands_over_to_first_instance(false, true));
+        // A direct process on shared data: a second launch is handed over.
+        assert!(hands_over_to_first_instance(false, false, false));
+        assert!(hands_over_to_first_instance(false, false, true));
         // A test device or a second vault runs beside the others.
-        assert!(!hands_over_to_first_instance(true, false));
-        assert!(hands_over_to_first_instance(true, true));
+        assert!(!hands_over_to_first_instance(false, true, false));
+        assert!(hands_over_to_first_instance(false, true, true));
+    }
+
+    #[test]
+    fn supervised_processes_never_use_the_single_instance_plugin() {
+        // The coordinator's election hands a second launch over, and every
+        // vault process is an instance of the same app.
+        for own_data_directory in [false, true] {
+            for asked_in in [false, true] {
+                assert!(!hands_over_to_first_instance(
+                    true,
+                    own_data_directory,
+                    asked_in
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn the_first_invite_link_among_launch_arguments_is_the_one_taken() {
+        let valid = written_down()["appAddresses"]["valid"].clone();
+        let first = valid[0]["address"].as_str().unwrap();
+        let addresses = |items: &[&str]| {
+            items
+                .iter()
+                .map(|item| item.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            invite_link_among(addresses(&[
+                "--supervised-vaults",
+                "mindstream-notes://join?link=nonsense",
+                first,
+            ])),
+            invite_link_in(first)
+        );
+        assert_eq!(
+            invite_link_among(addresses(&["--supervised-vaults", "/home/user/notes.md"])),
+            None
+        );
+    }
+
+    #[test]
+    fn launch_arguments_under_the_scheme_are_addresses_whatever_they_carry() {
+        for example in written_down()["appAddresses"]["valid"].as_array().unwrap() {
+            assert!(is_app_address(example["address"].as_str().unwrap()));
+        }
+        assert!(is_app_address("mindstream-notes://join?link=nonsense"));
+        assert!(!is_app_address("--supervised-vaults"));
+        assert!(!is_app_address("https://example.com/join"));
+        assert!(!is_app_address("/home/user/notes.md"));
+    }
+
+    #[test]
+    fn only_an_invite_link_passes_between_processes() {
+        let written = written_down();
+        for example in written["links"]["valid"].as_array().unwrap() {
+            assert!(is_invite_link(example["link"].as_str().unwrap()));
+        }
+        for text in written["links"]["invalid"].as_array().unwrap() {
+            assert!(!is_invite_link(text.as_str().unwrap()));
+        }
+        let valid = written["links"]["valid"][0]["link"].as_str().unwrap();
+        assert!(!is_invite_link(&format!(
+            "{valid}{}",
+            "a".repeat(MAX_LINK_LENGTH)
+        )));
     }
 
     #[test]

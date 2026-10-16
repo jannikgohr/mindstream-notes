@@ -14,19 +14,16 @@ import {
   getDesktopLanguage,
   getDesktopThemeMode,
   getStartInTray,
+  getStartOnLogin,
   setCloseToTray,
   setCustomWindowDecorations,
   setDesktopLanguage,
   setDesktopThemeMode,
-  setStartInTray
+  setStartInTray,
+  setStartOnLogin
 } from '$lib/api/desktop-settings';
 import { isTauri } from '$lib/api/core';
 
-const autostart = vi.hoisted(() => ({
-  isEnabled: vi.fn(),
-  enable: vi.fn(),
-  disable: vi.fn()
-}));
 const dataAction = vi.hoisted(() => vi.fn());
 const checkForUpdatesInteractively = vi.hoisted(() => vi.fn());
 const splitAvailable = vi.hoisted(() => vi.fn());
@@ -43,13 +40,14 @@ vi.mock('$lib/api/desktop-settings', async (importOriginal) => ({
   getCloseToTray: vi.fn(),
   setCloseToTray: vi.fn(),
   getStartInTray: vi.fn(),
+  getStartOnLogin: vi.fn(),
   setStartInTray: vi.fn(),
+  setStartOnLogin: vi.fn(),
   getDesktopThemeMode: vi.fn(),
   setDesktopThemeMode: vi.fn(),
   getDesktopLanguage: vi.fn(),
   setDesktopLanguage: vi.fn()
 }));
-vi.mock('@tauri-apps/plugin-autostart', () => autostart);
 vi.mock('./actions/data', () => ({
   DATA_ACTIONS: {
     'open-data-folder': dataAction,
@@ -173,9 +171,11 @@ describe('SETTING_BINDINGS — appearance', () => {
 });
 
 describe('SETTING_BINDINGS — language', () => {
-  it('get defaults to en and persists to localStorage', async () => {
+  it('reads without changing language, then applies an accepted value', async () => {
     const code = await SETTING_BINDINGS['language.code'].get();
     expect(code).toBe('en');
+    expect(localStorage.getItem('notes-app:language')).toBeNull();
+    SETTING_BINDINGS['language.code'].apply?.(code);
     expect(localStorage.getItem('notes-app:language')).toBe('en');
   });
 
@@ -223,17 +223,16 @@ describe('SETTING_BINDINGS — Tauri (desktop) branches', () => {
     vi.mocked(setDesktopThemeMode).mockResolvedValue(undefined);
     vi.mocked(getDesktopLanguage).mockResolvedValue('de');
     vi.mocked(setDesktopLanguage).mockResolvedValue(undefined);
-    autostart.isEnabled.mockResolvedValue(true);
-    autostart.enable.mockResolvedValue(undefined);
-    autostart.disable.mockResolvedValue(undefined);
+    vi.mocked(getStartOnLogin).mockReset().mockResolvedValue(true);
+    vi.mocked(setStartOnLogin).mockReset().mockResolvedValue(undefined);
   });
 
-  it('startOnLogin reads and writes the autostart plugin', async () => {
+  it('startOnLogin reads and writes through the coordinator bridge', async () => {
     expect(await SETTING_BINDINGS['general.startOnLogin'].get()).toBe(true);
     await SETTING_BINDINGS['general.startOnLogin'].set(true);
-    expect(autostart.enable).toHaveBeenCalled();
+    expect(setStartOnLogin).toHaveBeenCalledWith(true);
     await SETTING_BINDINGS['general.startOnLogin'].set(false);
-    expect(autostart.disable).toHaveBeenCalled();
+    expect(setStartOnLogin).toHaveBeenCalledWith(false);
   });
 
   it('closeToTray / startInTray round-trip through desktop settings', async () => {
@@ -243,10 +242,15 @@ describe('SETTING_BINDINGS — Tauri (desktop) branches', () => {
     expect(await SETTING_BINDINGS['general.startInTray'].get()).toBe(true);
     await SETTING_BINDINGS['general.startInTray'].set(true);
     expect(setStartInTray).toHaveBeenCalledWith(true);
+    expect(setStartOnLogin).not.toHaveBeenCalled();
   });
 
   it('appearance.mode reads the desktop theme and persists a change', async () => {
+    localStorage.setItem('mode-watcher-mode', 'light');
     expect(await SETTING_BINDINGS['appearance.mode'].get()).toBe('dark');
+    expect(localStorage.getItem('mode-watcher-mode')).toBe('light');
+    SETTING_BINDINGS['appearance.mode'].apply?.('dark');
+    expect(localStorage.getItem('mode-watcher-mode')).toBe('dark');
     await SETTING_BINDINGS['appearance.mode'].set('light');
     expect(setDesktopThemeMode).toHaveBeenCalledWith('light');
   });
@@ -257,6 +261,14 @@ describe('SETTING_BINDINGS — Tauri (desktop) branches', () => {
     expect(code).toBe('de');
     await SETTING_BINDINGS['language.code'].set('en');
     expect(setDesktopLanguage).toHaveBeenCalledWith('en');
+  });
+
+  it('language hydration prefers device settings over a stale browser value', async () => {
+    localStorage.setItem('notes-app:language', 'en');
+    vi.mocked(setDesktopLanguage).mockClear();
+    expect(await SETTING_BINDINGS['language.code'].get()).toBe('de');
+    expect(setDesktopLanguage).not.toHaveBeenCalled();
+    localStorage.clear();
   });
 });
 

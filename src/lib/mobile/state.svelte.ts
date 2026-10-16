@@ -17,6 +17,9 @@ import { pushState } from '$app/navigation';
 import { setNoteFavourite } from '$lib/stores/tree.svelte';
 import { tree } from '$lib/stores/tree.svelte';
 import { setActiveNote } from '$lib/state.svelte';
+import { isTauri } from '$lib/api/core';
+import { writeNativeDeviceUi } from '$lib/native-device-ui.svelte';
+import { migrateLegacyContent } from '$lib/api/legacy-content';
 
 const DISPLAY_MODE_KEY = 'notes-app:mobile:displayMode';
 const LEGACY_FAVOURITES_KEY = 'notes-app:mobile:favourites';
@@ -55,6 +58,7 @@ interface MobileState {
 }
 
 function loadDisplayMode(): DisplayMode {
+  if (isTauri()) return 'list';
   if (typeof localStorage === 'undefined') return 'list';
   const raw = localStorage.getItem(DISPLAY_MODE_KEY);
   return raw === 'grid' ? 'grid' : 'list';
@@ -132,7 +136,8 @@ export function toggleFavourite(noteId: string) {
 
 /**
  * One-shot migration: hoist any localStorage favourites left over from
- * the pre-database mobile build into the backend, then clear the key.
+ * the pre-database mobile build into the backend. Native builds retain the key
+ * and commit a DB receipt with the favourite edits; browser previews clear it.
  * Safe to call on every load — the predicate skips notes that are
  * already favourited and waits until the tree is hydrated.
  */
@@ -140,6 +145,21 @@ export async function migrateLegacyFavourites(): Promise<void> {
   if (typeof localStorage === 'undefined') return;
   const raw = localStorage.getItem(LEGACY_FAVOURITES_KEY);
   if (!raw) return;
+  if (isTauri()) {
+    try {
+      const ids = await migrateLegacyContent('favourites', raw);
+      for (const id of ids) {
+        const note = tree.notesById[id];
+        if (note) tree.notesById[id] = { ...note, favourite: true };
+      }
+    } catch (err) {
+      console.warn(
+        '[mobile] legacy favourite import failed; source retained',
+        err
+      );
+    }
+    return;
+  }
   let ids: string[];
   try {
     const parsed = JSON.parse(raw);
@@ -435,6 +455,7 @@ export function setCurrentFolder(id: string | null) {
 
 export function setDisplayMode(mode: DisplayMode) {
   mobileState.displayMode = mode;
+  if (isTauri()) return writeNativeDeviceUi('ui.mobileDisplayMode', mode);
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem(DISPLAY_MODE_KEY, mode);
   }

@@ -34,7 +34,7 @@ use crate::error::{AppError, AppResult, CommandResult};
 
 /// Bump only when the on-disk layout becomes incompatible with older
 /// readers — adding new optional manifest fields shouldn't require it.
-pub const MANIFEST_FORMAT_VERSION: u32 = 1;
+pub const MANIFEST_FORMAT_VERSION: u32 = 2;
 
 /// Name of the SQLite snapshot inside the zip. Hardcoded so import
 /// always knows where to look; `manifest.contents.db_filename` echoes
@@ -57,6 +57,10 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<AccountIdentity>,
     pub contents: Contents,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_db_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portable: Option<PortableIndex>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,13 +108,17 @@ pub struct BackupReport {
 
 mod export;
 mod merge;
+mod portable;
 mod restore;
 mod staging;
+pub use portable::Index as PortableIndex;
 
 pub use export::*;
 pub use merge::*;
 pub use restore::*;
 pub use staging::*;
 
+#[cfg(test)]
+mod portable_tests;
 #[cfg(test)]
 mod tests;

@@ -26,6 +26,14 @@ import {
 import { hotkeys } from './store.svelte';
 import type { EditorKind } from './types';
 import { setActiveNote } from '$lib/state.svelte';
+import { commandById } from './catalogue';
+
+const ownership = vi.hoisted(() =>
+  vi.fn<() => Promise<boolean> | null>(() => null)
+);
+vi.mock('./global-ownership.svelte', () => ({
+  nativeOwnsGlobalShortcut: ownership
+}));
 
 let teardownHotkeys: (() => void) | null = null;
 let listeners: EditorListener[] = [];
@@ -81,6 +89,8 @@ function press(init: KeyboardEventInit, target?: EventTarget) {
 }
 
 afterEach(() => {
+  ownership.mockReturnValue(null);
+  vi.restoreAllMocks();
   for (const listener of listeners) {
     unregisterEditor(listener);
     listener.host.remove();
@@ -97,6 +107,33 @@ afterEach(() => {
 });
 
 describe('initHotkeys — match and dispatch', () => {
+  it('consumes a native-owned shortcut without creating a local duplicate', async () => {
+    forceWindowsModKey();
+    const command = commandById('global.newMarkdownNote')!;
+    if (command.scope !== 'global')
+      throw new Error('expected root note command');
+    const run = vi.spyOn(command, 'run').mockImplementation(() => {});
+    ownership.mockResolvedValue(true);
+    teardownHotkeys = initHotkeys();
+    expect(
+      press({ key: 'n', ctrlKey: true, altKey: true }).defaultPrevented
+    ).toBe(true);
+    await Promise.resolve();
+    expect(run).not.toHaveBeenCalled();
+  });
+  it('runs an unregistered shortcut locally once and ignores held-key repeats', async () => {
+    forceWindowsModKey();
+    const command = commandById('global.newMarkdownNote')!;
+    if (command.scope !== 'global')
+      throw new Error('expected root note command');
+    const run = vi.spyOn(command, 'run').mockImplementation(() => {});
+    ownership.mockResolvedValue(false);
+    teardownHotkeys = initHotkeys();
+    press({ key: 'n', ctrlKey: true, altKey: true });
+    press({ key: 'n', ctrlKey: true, altKey: true, repeat: true });
+    await Promise.resolve();
+    expect(run).toHaveBeenCalledOnce();
+  });
   it('dispatches simple markdown modifier shortcuts', () => {
     forceWindowsModKey();
     const onCommand = vi.fn(() => true);

@@ -463,6 +463,7 @@ pub async fn notes_import_run(
     app: AppHandle,
     options: ImportOptions,
 ) -> CommandResult<ImportReport> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let cancelled = app.state::<ImportState>().begin();
     let progress_handle = app.clone();
 
@@ -470,6 +471,7 @@ pub async fn notes_import_run(
     // filesystem and SQLite work, and running it on the command thread would
     // hold up the WebView's IPC.
     let result = tauri::async_runtime::spawn_blocking(move || {
+        let _job = job;
         let db = progress_handle.state::<Db>();
         run_import(&db, options, &cancelled, |progress| {
             if let Err(err) = progress_handle.emit(AppEvent::ImportProgress.as_str(), &progress) {

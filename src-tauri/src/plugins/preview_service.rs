@@ -62,7 +62,8 @@ fn require_service<'a>(
 
 /// One running preview server.
 struct Session {
-    child: Child,
+    _package_lease: Option<std::sync::Arc<super::packages::PackageLease>>,
+    child: Option<Child>,
     input_path: PathBuf,
     /// The server's data-plane HTTP port — where the reverse-proxy fetches the
     /// frontend HTML from.
@@ -79,10 +80,18 @@ impl Session {
         if let Some(proxy) = self.control_proxy.take() {
             proxy.shutdown();
         }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
         // Best-effort cleanup of the materialized source file.
         let _ = std::fs::remove_file(&self.input_path);
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.kill();
     }
 }
 
@@ -201,9 +210,7 @@ impl PreviewServiceRegistry {
     /// Reap every running server. Called on app exit so nothing is orphaned.
     pub fn shutdown_all(&self) {
         if let Ok(mut sessions) = self.sessions.lock() {
-            for (_, mut session) in sessions.drain() {
-                session.kill();
-            }
+            sessions.clear();
         }
     }
 
@@ -279,6 +286,21 @@ fn sanitize_setting_value(value: &str) -> String {
         .take(64)
         .collect();
     cleaned.trim_start_matches('-').to_string()
+}
+
+/// Values for `{setting:<id>}` placeholders: text as written, anything else
+/// as JSON, each reduced to the safe CLI charset.
+fn cli_settings(values: super::settings::PluginSettings) -> HashMap<String, String> {
+    values
+        .into_iter()
+        .map(|(key, value)| {
+            let text = value
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| value.to_string());
+            (key, sanitize_setting_value(&text))
+        })
+        .collect()
 }
 
 /// Poll the data port until the server accepts a connection or we time out.
@@ -677,20 +699,26 @@ pub async fn plugins_preview_start(
     input: String,
     settings: Option<HashMap<String, String>>,
 ) -> CommandResult<PreviewServiceHandle> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     if cfg!(mobile) {
         return Err(AppError::InvalidArg("preview services are desktop-only".into()).into());
     }
     // Snapshot of the plugin's own settings (id → value) fed into `{setting:<id>}`
     // arg placeholders, each restricted to a safe CLI charset.
-    let settings: HashMap<String, String> = settings
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(k, v)| (k, sanitize_setting_value(&v)))
-        .collect();
+    let _ = settings;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
     let (_, plugin) = db.with_conn(|c| {
         super::load_runnable(c, &third_party_dir, &id, Some(PERM_NATIVE_SERVICES_RUN))
     })?;
+    let effective = db.with_conn(|c| {
+        super::settings::effective(
+            &crate::paths::app_data_root(&app)?,
+            &crate::paths::app_data_dir(&app)?,
+            c,
+            &plugin,
+        )
+    })?;
+    let settings = cli_settings(super::settings::with_defaults(&plugin, effective));
     let service = require_service(&plugin.manifest, &service_id)?.clone();
     // Absent  means direct, so resolve it once and read from that.
     let iframe = service.iframe();
@@ -720,15 +748,32 @@ pub async fn plugins_preview_start(
     let preview_dir = cwd.join("preview");
     std::fs::create_dir_all(&preview_dir)?;
     let ext = service.input_extension.as_deref().unwrap_or("typ");
-    let input_path = preview_dir.join(format!("{}.{ext}", safe_stem(&session_key)));
+    // Concurrent restarts must never share a source file: dropping an older
+    // session must not remove the replacement's input.
+    let input_path = preview_dir.join(format!(
+        "{}-{}.{ext}",
+        safe_stem(&session_key),
+        uuid::Uuid::new_v4()
+    ));
 
     // Stop any prior server for this session before starting a fresh one.
     stop_session(&registry, &session_key);
 
-    let handle = tauri::async_runtime::spawn_blocking(move || {
-        std::fs::write(&input_path, input.as_bytes())?;
+    let blocking_job = job.clone();
+    let handle = tauri::async_runtime::spawn_blocking(move || -> AppResult<_> {
+        let startup_job = blocking_job;
+        let mut session = Session {
+            _package_lease: plugin.lease,
+            child: None,
+            input_path,
+            data_port: free_port()?,
+            proxy: None,
+            control_proxy: None,
+        };
+        std::fs::write(&session.input_path, input.as_bytes())?;
+        let input_path = &session.input_path;
         let input_str = input_path.to_string_lossy().into_owned();
-        let data_port = free_port()?;
+        let data_port = session.data_port;
         let control_port = free_port()?;
         let args: Vec<String> = service
             .args
@@ -737,11 +782,14 @@ pub async fn plugins_preview_start(
             .collect();
         let mut command = Command::new(&binary);
         command.args(&args).current_dir(&cwd);
-        let child = super::hide_console_window(&mut command).spawn()?;
+        session.child = Some(super::hide_console_window(&mut command).spawn()?);
         let proxy = start_loopback_proxy(data_port, proxy_styles.clone().unwrap_or_default())?;
         let data_url = proxy.url();
+        session.proxy = Some(proxy);
         let proxy_url = proxy_styles.map(|_| data_url.clone());
         let control_proxy = start_loopback_proxy(control_port, PreviewProxyStyles::default())?;
+        let control_base = control_proxy.url().replacen("http:", "ws:", 1);
+        session.control_proxy = Some(control_proxy);
         let original_control = substitute(
             &service.control_url,
             data_port,
@@ -753,30 +801,23 @@ pub async fn plugins_preview_start(
             .map_err(|e| AppError::InvalidArg(format!("invalid preview control URL: {e}")))?;
         let control_url = format!(
             "{}{}{}",
-            control_proxy.url().replacen("http:", "ws:", 1),
+            control_base,
             control_path.path().trim_start_matches('/'),
             control_path
                 .query()
                 .map(|q| format!("?{q}"))
                 .unwrap_or_default()
         );
-        let mut session = Session {
-            child,
-            input_path,
-            data_port,
-            proxy: Some(proxy),
-            control_proxy: Some(control_proxy),
-        };
-        if let Err(e) = wait_until_ready(data_port) {
-            session.kill();
-            return Err(e);
-        }
-        Ok((session, data_url, control_url, proxy_url))
+        wait_until_ready(data_port)?;
+        // The result may be queued after its async caller was cancelled. Keep
+        // admission counted until that result is registered or dropped. Tuple
+        // field order drops the session before releasing the startup job.
+        Ok((session, data_url, control_url, proxy_url, startup_job))
     })
     .await
     .map_err(|e| AppError::InvalidArg(format!("preview service task failed: {e}")))??;
 
-    let (session, data_url, control_url, proxy_url) = handle;
+    let (session, data_url, control_url, proxy_url, _startup_job) = handle;
     registry
         .sessions
         .lock()
@@ -794,10 +835,12 @@ pub async fn plugins_preview_start(
 /// Rewrite the materialized source file so the watching server recompiles.
 #[tauri::command]
 pub async fn plugins_preview_update(
+    jobs: State<'_, crate::vault_jobs::Jobs>,
     registry: State<'_, PreviewServiceRegistry>,
     session_key: String,
     input: String,
 ) -> CommandResult<()> {
+    let job = jobs.enter()?;
     let path = {
         let sessions = registry
             .sessions
@@ -810,6 +853,7 @@ pub async fn plugins_preview_update(
     };
     // Write atomically-ish (truncate + write) off the async runtime.
     tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
+        let _job = job;
         let mut file = std::fs::File::create(&path)?;
         file.write_all(input.as_bytes())?;
         Ok(())
@@ -821,17 +865,17 @@ pub async fn plugins_preview_update(
 
 fn stop_session(registry: &PreviewServiceRegistry, session_key: &str) {
     if let Ok(mut sessions) = registry.sessions.lock() {
-        if let Some(mut session) = sessions.remove(session_key) {
-            session.kill();
-        }
+        sessions.remove(session_key);
     }
 }
 
 #[tauri::command]
 pub async fn plugins_preview_stop(
+    saves: State<'_, crate::vault_jobs::Saves>,
     registry: State<'_, PreviewServiceRegistry>,
     session_key: String,
 ) -> CommandResult<()> {
+    let _job = saves.enter()?;
     stop_session(&registry, &session_key);
     Ok(())
 }
@@ -1023,6 +1067,89 @@ mod tests {
     use super::*;
 
     #[test]
+    fn abandoned_startup_result_reaps_child_and_routes_before_service_drain() {
+        let root = std::env::temp_dir().join(format!("ms-preview-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let input_path = root.join("input.typ");
+        std::fs::write(&input_path, "retained input").unwrap();
+        let jobs = crate::vault_jobs::Jobs::default();
+        let caller_job = jobs.enter().unwrap();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", "storage_locks::tests::lock_child"])
+            .env("MINDSTREAM_TEST_LOCK_ROOT", &root);
+        let mut session = Session {
+            _package_lease: None,
+            child: Some(
+                super::super::hide_console_window(&mut command)
+                    .spawn()
+                    .unwrap(),
+            ),
+            input_path: input_path.clone(),
+            data_port: 1,
+            proxy: Some(start_loopback_proxy(1, PreviewProxyStyles::default()).unwrap()),
+            control_proxy: Some(start_loopback_proxy(2, PreviewProxyStyles::default()).unwrap()),
+        };
+        let tokens = [
+            session.proxy.as_ref().unwrap().token.clone(),
+            session.control_proxy.as_ref().unwrap().token.clone(),
+        ];
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !root.join("ready").exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        let ready = root.join("ready").exists();
+        if !ready {
+            session.kill();
+        }
+        assert!(ready, "preview child did not acquire its fixture lease");
+        assert!(crate::storage_locks::VaultLock::is_owned(&root).unwrap());
+        let completed_result = (session, caller_job.clone());
+        // The caller has gone away, but its queued result still owns resources.
+        drop(caller_job);
+        let pause = jobs.pause().unwrap();
+        assert!(pause.wait(Duration::ZERO).is_err());
+        drop(completed_result);
+        pause.wait(Duration::ZERO).unwrap();
+        assert!(!input_path.exists());
+        assert!(!crate::storage_locks::VaultLock::is_owned(&root).unwrap());
+        let routes = preview_gateway().unwrap().routes.lock().unwrap();
+        assert!(tokens.iter().all(|token| !routes.contains_key(token)));
+        drop(routes);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dropping_partial_or_replaced_session_preserves_replacement_input() {
+        let root = std::env::temp_dir().join(format!("ms-preview-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let old_input = root.join("old.typ");
+        let new_input = root.join("new.typ");
+        for path in [&old_input, &new_input] {
+            std::fs::write(path, "input").unwrap();
+        }
+        let registry = PreviewServiceRegistry::default();
+        for path in [&old_input, &new_input] {
+            registry.sessions.lock().unwrap().insert(
+                "same-session".into(),
+                Session {
+                    _package_lease: None,
+                    child: None,
+                    input_path: path.clone(),
+                    data_port: 1,
+                    proxy: None,
+                    control_proxy: None,
+                },
+            );
+        }
+        assert!(!old_input.exists());
+        assert!(new_input.exists());
+        stop_session(&registry, "same-session");
+        assert!(!new_input.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn substitutes_all_placeholders() {
         let out = substitute(
             "preview --data-plane-host 127.0.0.1:{dataPort} --control-plane-host 127.0.0.1:{controlPort} {input}",
@@ -1056,6 +1183,20 @@ mod tests {
         assert_eq!(sanitize_setting_value("--danger"), "danger");
         // Shell/space/quote characters are dropped entirely.
         assert_eq!(sanitize_setting_value("a b; rm -rf /"), "abrm-rf");
+    }
+
+    #[test]
+    fn cli_settings_render_every_value_through_the_sanitizer() {
+        let settings = cli_settings(super::super::settings::PluginSettings::from([
+            ("mode".to_string(), serde_json::json!("--split")),
+            ("enabled".to_string(), serde_json::json!(true)),
+            ("zoom".to_string(), serde_json::json!(1.5)),
+            ("args".to_string(), serde_json::json!(["a b"])),
+        ]));
+        assert_eq!(settings["mode"], "split");
+        assert_eq!(settings["enabled"], "true");
+        assert_eq!(settings["zoom"], "1.5");
+        assert_eq!(settings["args"], "ab");
     }
 
     #[test]

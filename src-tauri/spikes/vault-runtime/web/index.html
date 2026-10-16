@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Vault runtime spike</title>
+    <style>
+      body {
+        font: 18px system-ui;
+        padding: 24px;
+        background: #18202b;
+        color: #edf2f8;
+      }
+      button {
+        font: inherit;
+        margin: 8px 12px 8px 0;
+        padding: 8px 16px;
+      }
+      pre {
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1 id="title">Vault runtime spike</h1>
+    <p>This disposable probe never opens a vault database or account.</p>
+    <button id="write" type="button">Write marker</button>
+    <button id="popout" type="button">Open popout</button>
+    <button id="quit" type="button">Quit worker</button>
+    <pre id="status">Waiting for native initialization</pre>
+    <script>
+      const probe = window.__SPIKE__;
+      const key = 'mindstream:runtime-spike:marker';
+      const invoke = window.__TAURI_INTERNALS__.invoke;
+      const output = document.getElementById('status');
+      document.getElementById('title').textContent =
+        `${probe.vault}: ${probe.label}`;
+      const report = async (event, payload) => {
+        output.textContent += `\n${event}: ${JSON.stringify(payload)}`;
+        await invoke('spike_report', { event, payload });
+      };
+      window.addEventListener('storage', (event) => {
+        if (event.key === key)
+          void report('storage', { value: event.newValue });
+      });
+      document.getElementById('write').onclick = async () => {
+        const value = `${probe.vault}:${Date.now()}`;
+        localStorage.setItem(key, value);
+        await report('write', { value });
+      };
+      document.getElementById('popout').onclick = () => invoke('spike_popout');
+      document.getElementById('quit').onclick = () => invoke('spike_exit');
+      (async () => {
+        const initial = localStorage.getItem(key);
+        if (probe.label === 'main') localStorage.setItem(key, probe.vault);
+        output.textContent = `Store: ${probe.store}\nWindow: ${probe.label}`;
+        await report('ready', {
+          initial,
+          current: localStorage.getItem(key),
+          label: probe.label
+        });
+      })().catch((error) => {
+        output.textContent += `\nERROR: ${error}`;
+      });
+    </script>
+  </body>
+</html>

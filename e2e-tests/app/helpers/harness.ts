@@ -687,7 +687,7 @@ export interface LoginInput {
 /**
  * Switch one plugin on or off from the Plugins overview.
  *
- * Every card's toggle carries the same accessible name ("Enable plugin"), so
+ * Every card's toggle carries the same accessible name ("Enable in this vault"), so
  * clicking by name hits whichever card happens to be first — which changed the
  * moment the app bundled a second plugin. The row is found by the plugin it
  * belongs to instead.

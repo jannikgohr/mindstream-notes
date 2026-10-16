@@ -11,10 +11,14 @@
 import type { ImportPreview } from '$lib/api';
 
 export type ImportChoice = 'restore' | 'merge' | 'cancel';
+export interface ImportOptions {
+  includeDevice: boolean;
+}
 
 export interface PendingImportChoice {
   preview: ImportPreview;
-  resolve: (choice: ImportChoice) => void;
+  options: ImportOptions;
+  resolve: (choice: ImportChoice, includeDevice?: boolean) => void;
 }
 
 export const importChoiceQueue = $state<{ items: PendingImportChoice[] }>({
@@ -26,12 +30,20 @@ export const importChoiceQueue = $state<{ items: PendingImportChoice[] }>({
  * `'cancel'` if the user closes the dialog with Escape / outside-tap.
  */
 export function pickImportChoice(
-  preview: ImportPreview
+  preview: ImportPreview,
+  options: ImportOptions = { includeDevice: false }
 ): Promise<ImportChoice> {
   return new Promise((resolve) => {
     importChoiceQueue.items = [
       ...importChoiceQueue.items,
-      { preview, resolve }
+      {
+        preview,
+        resolve: (choice, includeDevice = false) => {
+          options.includeDevice = includeDevice;
+          resolve(choice);
+        },
+        options
+      }
     ];
   });
 }

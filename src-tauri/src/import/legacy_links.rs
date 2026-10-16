@@ -158,8 +158,10 @@ pub async fn convert_legacy_wikilinks_command(
     app: tauri::AppHandle,
 ) -> CommandResult<LegacyLinkReport> {
     use tauri::Manager;
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     // A vault-wide body rewrite is far too much work for the command thread.
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = job;
         let db = app.state::<Db>();
         convert_legacy_wikilinks(&db)
     })

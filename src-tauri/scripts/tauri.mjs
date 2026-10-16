@@ -8,6 +8,18 @@ const projectRoot = resolve(scriptDir, '../..');
 const args = process.argv.slice(2);
 const env = { ...process.env };
 
+if (args[0] === 'dev') {
+  const separator = args.indexOf('--');
+  args.splice(
+    separator < 0 ? args.length : separator,
+    0,
+    '--config',
+    join(projectRoot, 'src-tauri', 'tauri.dev.conf.json'),
+    '--features',
+    'dev-environment'
+  );
+}
+
 configureLinuxTrayPkgConfig(env);
 
 const tauriCli = join(

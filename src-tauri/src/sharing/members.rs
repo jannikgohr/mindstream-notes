@@ -43,7 +43,10 @@ pub async fn list_collection_members(
     app: AppHandle,
     collection_id: String,
 ) -> CommandResult<Vec<CollectionMember>> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let blocking_job = job.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         let account = restore_required(&app)?;
         let db = app.state::<Db>();
         let Some(scope) = db.with_conn(|conn| collection_scope(conn, &collection_id))? else {
@@ -72,7 +75,10 @@ pub async fn set_collection_member_access(
     app: AppHandle,
     input: SetMemberAccessInput,
 ) -> CommandResult<()> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let blocking_job = job.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         let SetMemberAccessInput {
             collection_id,
             username,
@@ -108,7 +114,10 @@ pub async fn remove_collection_member(
     app: AppHandle,
     input: RemoveMemberInput,
 ) -> CommandResult<()> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let blocking_job = job.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         let RemoveMemberInput {
             collection_id,
             username,

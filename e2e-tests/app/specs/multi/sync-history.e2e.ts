@@ -199,6 +199,27 @@ describe('T4 per-device history (sync negative assertion)', function () {
 
     await A.newRootNote(title);
     await A.click(title);
+    // Opening captures the initial version asynchronously. Typing before that
+    // capture can make "Note created" contain the edit we intend to undo.
+    // Query this note specifically so a previous note's sidebar cannot satisfy
+    // the wait while the new editor is still mounting.
+    const notes = await invokeTauri<NoteRow[]>(browserA, 'list_notes');
+    const note = notes.find((candidate) => candidate.title === title);
+    if (!note) throw new Error(`created note not found: ${title}`);
+    await browserA.waitUntil(
+      async () => {
+        const versions = await invokeTauri<{ action: string }[]>(
+          browserA,
+          'list_note_versions',
+          { noteId: note.id }
+        );
+        return versions.some((version) => version.action === 'created');
+      },
+      {
+        timeout: 30_000,
+        timeoutMsg: 'initial history version was not captured before editing'
+      }
+    );
     await A.insertText(browserA.$('.ProseMirror'), changedText);
     await A.click('Refresh history');
     await expect(browserA.$('.ProseMirror')).toHaveText(
@@ -237,6 +258,7 @@ describe('T4 per-device history (sync negative assertion)', function () {
     }
     await expect(A.byName('Restored to an earlier version.')).toBeDisplayed();
     const restoredText = await browserA.$('.ProseMirror').getText();
+    expect(restoredText).not.toContain(changedText);
 
     await syncClient(browserA);
     await syncClient(browserB);

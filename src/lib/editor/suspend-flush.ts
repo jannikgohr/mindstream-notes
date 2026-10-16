@@ -26,6 +26,23 @@
  */
 type SuspendFlush = () => void | Promise<void>;
 const pendingFlushes = new Set<SuspendFlush>();
+const closeFlushes = new Set<SuspendFlush>();
+
+/** A controlled close must await every participant, even if one save fails. */
+export async function flushBeforeAppClose(): Promise<void> {
+  const results = await Promise.allSettled(
+    [...closeFlushes].map((flush) => Promise.resolve().then(flush))
+  );
+  const failed = results.find((result) => result.status === 'rejected');
+  if (failed?.status === 'rejected') throw failed.reason;
+}
+
+export function onAppClose(flush: SuspendFlush): () => void {
+  closeFlushes.add(flush);
+  return () => {
+    closeFlushes.delete(flush);
+  };
+}
 
 /** Save all mounted editors before an intentional full-page reload. */
 export async function flushPendingEditorSaves(): Promise<void> {
@@ -35,9 +52,10 @@ export async function flushPendingEditorSaves(): Promise<void> {
   await Promise.all(flushes);
 }
 
-export function onAppSuspend(flush: SuspendFlush): () => void {
+export function onAppSuspend(flush: SuspendFlush, close = flush): () => void {
   if (typeof document === 'undefined') return () => {};
   pendingFlushes.add(flush);
+  const stopClose = onAppClose(close);
   const run = () => {
     try {
       void Promise.resolve(flush()).catch((error) => {
@@ -58,6 +76,7 @@ export function onAppSuspend(flush: SuspendFlush): () => void {
 
   return () => {
     pendingFlushes.delete(flush);
+    stopClose();
     document.removeEventListener('visibilitychange', onVisibility);
     window.removeEventListener('pagehide', onPageHide);
   };

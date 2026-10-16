@@ -15,14 +15,15 @@ pub fn import_merge(
     db: tauri::State<'_, Db>,
     token: String,
 ) -> CommandResult<MergeReport> {
-    let staged = imports_staging_root(&app)?.join(&token).join("data.db");
+    let _job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let dir = portable::token_directory(&imports_staging_root(&app)?, &token)?;
+    let staged = dir.join("data.db");
     if !staged.exists() {
         return Err(format!("staged backup '{token}' not found").into());
     }
     let backup_conn = Connection::open(&staged)?;
     let report = db.with_conn_mut(|live| merge_into(live, &backup_conn))?;
     // Merge consumed the staged DB; drop the dir so it doesn't linger.
-    let dir = imports_staging_root(&app)?.join(&token);
     let _ = fs::remove_dir_all(&dir);
     Ok(report)
 }

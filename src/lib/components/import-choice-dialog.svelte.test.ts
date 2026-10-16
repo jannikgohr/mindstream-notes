@@ -40,4 +40,14 @@ describe('pickImportChoice', () => {
     void pickImportChoice(preview());
     expect(importChoiceQueue.items).toHaveLength(2);
   });
+  it('starts with device import unchecked and returns the selected option', async () => {
+    const options = { includeDevice: false };
+    const result = pickImportChoice(preview(), options);
+    expect(importChoiceQueue.items[0].options.includeDevice).toBe(false);
+    const item = importChoiceQueue.items[0];
+    item.options.includeDevice = true;
+    item.resolve('restore', item.options.includeDevice);
+    await expect(result).resolves.toBe('restore');
+    expect(options.includeDevice).toBe(true);
+  });
 });

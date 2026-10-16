@@ -383,6 +383,7 @@ pub async fn sync_now(app: AppHandle) -> CommandResult<SyncReport> {
     // scheduler tick's worth of wait — typically <1s of no-op pulls.
     let scheduler_state = app.state::<scheduler::SyncScheduler>();
     let _guard = scheduler_state.acquire_in_flight().await;
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
 
     // While it is not known that the server is there, ask with the quick
     // probe first. On failure it emits `sync-unreachable` (one clear
@@ -393,8 +394,10 @@ pub async fn sync_now(app: AppHandle) -> CommandResult<SyncReport> {
     }
 
     let app_for_blocking = app.clone();
+    let blocking_job = job.clone();
     let delta =
         tauri::async_runtime::spawn_blocking(move || -> Result<Option<SyncDelta>, String> {
+            let _job = blocking_job;
             catch_blocking_panic("sync", || {
                 let account = auth::try_restore(&app_for_blocking)
                     .map_err(|e| format!("restore session: {e}"))?
