@@ -378,3 +378,204 @@ fn catalog_recovery_restores_an_available_previous_package() {
         "first"
     );
 }
+
+fn write_package(path: &Path, id: &str, extra: serde_json::Value) {
+    fs::create_dir_all(path).unwrap();
+    let mut manifest = serde_json::json!({
+        "manifestVersion": 1, "id": id, "name": "Package QA", "version": "1.0.0",
+        "runtime": "luau", "entry": "main.luau", "permissions": []
+    });
+    if let (Some(manifest), Some(extra)) = (manifest.as_object_mut(), extra.as_object()) {
+        manifest.extend(extra.clone());
+    }
+    fs::write(path.join("manifest.json"), manifest.to_string()).unwrap();
+    fs::write(path.join("main.luau"), "return {}").unwrap();
+}
+
+#[test]
+fn installation_refuses_non_packages_and_builtins_and_restore_keeps_existing_entries() {
+    let fixture = Fixture::new();
+    let empty = fixture.0.join("empty");
+    fs::create_dir_all(&empty).unwrap();
+    assert!(install(&fixture.0, &empty).is_err());
+    let builtin = fixture.0.join("builtin");
+    write_package(
+        &builtin,
+        "com.mindstream.templates.core",
+        serde_json::json!({}),
+    );
+    assert!(install(&fixture.0, &builtin).is_err());
+    assert!(uninstall(&fixture.0, "com.mindstream.templates.core").is_err());
+
+    let input = fixture.0.join("input");
+    fixture.package(&input, "first");
+    assert_eq!(restore_missing(&fixture.0, &input).unwrap(), ID);
+    fixture.package(&input, "second");
+    assert_eq!(restore_missing(&fixture.0, &input).unwrap(), ID);
+    assert_eq!(
+        fixture
+            .plugin()
+            .files
+            .read_text("main.luau")
+            .unwrap()
+            .unwrap(),
+        "first",
+        "restore never replaces an installed package"
+    );
+}
+
+#[test]
+fn modified_package_bytes_are_refused_by_publication_and_discovery() {
+    let fixture = Fixture::new();
+    let input = fixture.0.join("input");
+    fixture.package(&input, "return {}");
+    install(&fixture.0, &input).unwrap();
+    let package = fixture.plugin().files.fs_path().unwrap().to_path_buf();
+    fs::write(package.join("main.luau"), "tampered").unwrap();
+    assert!(discover(&fixture.0.join("plugins"), None)
+        .unwrap()
+        .is_empty());
+    assert!(discover(&fixture.0.join("plugins"), Some(ID)).is_err());
+    assert!(
+        install(&fixture.0, &input).is_err(),
+        "an immutable package cannot be republished over modified bytes"
+    );
+    fs::remove_file(package.join("manifest.json")).unwrap();
+    assert!(discover(&fixture.0.join("plugins"), None)
+        .unwrap()
+        .is_empty());
+    assert!(discover(&fixture.0.join("plugins"), Some(ID)).is_err());
+}
+
+#[test]
+fn catalog_with_an_unsafe_digest_is_rejected() {
+    let fixture = Fixture::new();
+    fs::create_dir_all(fixture.0.join("plugins")).unwrap();
+    let generation = Uuid::new_v4();
+    fs::write(
+        fixture.0.join("plugins/catalog.json"),
+        serde_json::json!({
+            "entries": { ID: {
+                "generation": generation,
+                "hash": "../escape",
+                "legacy_generation": generation
+            }},
+            "imported": {}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert!(discover(&fixture.0.join("plugins"), None).is_err());
+}
+
+#[test]
+fn legacy_vault_artifacts_move_to_the_shared_store_and_are_collected_after_removal() {
+    let fixture = Fixture::new();
+    let bytes = b"legacy artifact";
+    let sha = super::sha256_hex(bytes);
+    write_package(
+        &fixture.source().join("plugins/qa"),
+        ID,
+        serde_json::json!({
+            "permissions": ["pluginArtifacts.download"],
+            "contributes": { "artifacts": [{
+                "id": "data", "kind": "data", "version": "1",
+                "url": "https://example.invalid/data",
+                "sha256": sha, "fileName": "data.bin", "sizeBytes": bytes.len()
+            }]}
+        }),
+    );
+    let legacy = fixture
+        .source()
+        .join("plugin-artifacts")
+        .join(ID)
+        .join("data/1");
+    fs::create_dir_all(&legacy).unwrap();
+    fs::write(legacy.join("data.bin"), bytes).unwrap();
+    // Only digest directories are managed; anything else is an archive.
+    let unmanaged = fixture.0.join("plugin-artifacts/other/data/1/not-a-digest");
+    fs::create_dir_all(&unmanaged).unwrap();
+    fs::write(
+        fixture.0.join("plugin-artifacts/other/data/1/stray.bin"),
+        b"",
+    )
+    .unwrap();
+
+    prepare(&fixture.0, &fixture.source()).unwrap();
+    let shared = fixture
+        .0
+        .join("plugin-artifacts")
+        .join(ID)
+        .join("data/1")
+        .join(&sha);
+    assert_eq!(fs::read(shared.join("data.bin")).unwrap(), bytes);
+    assert!(
+        legacy.join("data.bin").exists(),
+        "source bytes are retained"
+    );
+    // A second start finds the shared copy and leaves it alone.
+    prepare(&fixture.0, &fixture.source()).unwrap();
+    assert!(shared.join("data.bin").exists());
+
+    uninstall(&fixture.0, ID).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while shared.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        prepare(&fixture.0, &fixture.target()).unwrap();
+    }
+    assert!(
+        !shared.exists(),
+        "unreferenced digest directories are reclaimed"
+    );
+    assert!(unmanaged.exists());
+}
+
+#[test]
+fn runtime_settings_fill_manifest_defaults_and_vault_keys_stay_in_the_vault() {
+    let fixture = Fixture::new();
+    let input = fixture.0.join("input");
+    fixture.package(&input, "return {}");
+    install(&fixture.0, &input).unwrap();
+    let plugin = fixture.plugin();
+    let stored =
+        super::settings::PluginSettings::from([("vault".to_string(), serde_json::json!("mine"))]);
+    let runtime = super::settings::with_defaults(&plugin, stored);
+    assert_eq!(runtime["vault"], "mine");
+    assert_eq!(runtime["device"], "default");
+
+    let db = open_memory_for_tests();
+    let value = serde_json::json!("vault value");
+    db.with_conn(|c| super::settings::set_scoped(&fixture.0, c, &plugin, "vault", Some(&value)))
+        .unwrap();
+    assert_eq!(
+        db.with_conn(|c| super::settings::all(c, ID)).unwrap()["vault"],
+        "vault value"
+    );
+    assert!(!fixture.0.join("plugin-settings.json").exists());
+    db.with_conn(|c| super::settings::set_scoped(&fixture.0, c, &plugin, "vault", None))
+        .unwrap();
+    assert!(!db
+        .with_conn(|c| super::settings::all(c, ID))
+        .unwrap()
+        .contains_key("vault"));
+}
+
+#[test]
+fn damaged_device_settings_recover_their_previous_copy() {
+    let fixture = Fixture::new();
+    let input = fixture.0.join("input");
+    fixture.package(&input, "return {}");
+    install(&fixture.0, &input).unwrap();
+    let plugin = fixture.plugin();
+    let db = open_memory_for_tests();
+    for value in ["first", "second"] {
+        let value = serde_json::json!(value);
+        db.with_conn(|c| {
+            super::settings::set_scoped(&fixture.0, c, &plugin, "device", Some(&value))
+        })
+        .unwrap();
+    }
+    fs::write(fixture.0.join("plugin-settings.json"), b"broken").unwrap();
+    let values = super::settings::backup_values(&fixture.0).unwrap();
+    assert_eq!(values[ID]["device"], "first");
+}

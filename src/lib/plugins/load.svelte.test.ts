@@ -1,16 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { isTauri, pluginsDiscover } = vi.hoisted(() => ({
-  isTauri: vi.fn(),
-  pluginsDiscover: vi.fn()
-}));
+const { isTauri, pluginsDiscover, listen, refreshPluginAdmin } = vi.hoisted(
+  () => ({
+    isTauri: vi.fn(),
+    pluginsDiscover: vi.fn(),
+    listen: vi.fn(),
+    refreshPluginAdmin: vi.fn()
+  })
+);
 vi.mock('$lib/api/core', async (orig) => {
   const actual = await orig<typeof import('$lib/api/core')>();
   return { ...actual, isTauri };
 });
 vi.mock('$lib/api/plugins', () => ({ pluginsDiscover }));
+vi.mock('$lib/api/events', async (orig) => {
+  const actual = await orig<typeof import('$lib/api/events')>();
+  return { ...actual, listen };
+});
+vi.mock('./manage.svelte', () => ({ refreshPluginAdmin }));
 
-import { loadPlugins } from './load';
+import { loadPlugins, watchPluginChanges } from './load';
 import {
   allPlugins,
   enabledPlugins,
@@ -72,6 +81,8 @@ function view(
 beforeEach(() => {
   isTauri.mockReset();
   pluginsDiscover.mockReset();
+  listen.mockReset();
+  refreshPluginAdmin.mockReset();
 });
 afterEach(() => {
   resetPluginRegistry();
@@ -188,5 +199,101 @@ describe('loadPlugins — Tauri (backend discovery)', () => {
     await loadPlugins();
     expect(allPlugins()).toHaveLength(0);
     expect(pluginLoadError('<unknown>')).toBeTruthy();
+  });
+});
+
+describe('watchPluginChanges', () => {
+  /** Resolve the listener registration and hand back the change handler. */
+  async function subscribe(): Promise<{
+    notify: () => void;
+    unlisten: ReturnType<typeof vi.fn>;
+    stop: () => void;
+  }> {
+    const unlisten = vi.fn();
+    let handler: (() => void) | undefined;
+    listen.mockImplementation((_event: string, next: () => void) => {
+      handler = next;
+      return Promise.resolve(unlisten);
+    });
+    const stop = watchPluginChanges();
+    await vi.waitFor(() => expect(handler).toBeDefined());
+    return { notify: () => handler?.(), unlisten, stop };
+  }
+
+  it('does nothing outside the desktop runtime', () => {
+    isTauri.mockReturnValue(false);
+    watchPluginChanges()();
+    expect(listen).not.toHaveBeenCalled();
+  });
+
+  it('reloads the registry and the admin overview on every root change', async () => {
+    isTauri.mockReturnValue(true);
+    pluginsDiscover.mockResolvedValue([view({ enabled: true })]);
+    refreshPluginAdmin.mockResolvedValue(undefined);
+    const { notify, unlisten, stop } = await subscribe();
+    expect(listen).toHaveBeenCalledWith(
+      'plugins-changed',
+      expect.any(Function)
+    );
+    notify();
+    await vi.waitFor(() => expect(refreshPluginAdmin).toHaveBeenCalledTimes(1));
+    expect(pluginsDiscover).toHaveBeenCalledTimes(1);
+    expect(pluginById(CORE_ID)?.enabled).toBe(true);
+    stop();
+    expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+
+  it('coalesces changes that arrive during a reload into one more pass', async () => {
+    isTauri.mockReturnValue(true);
+    let release: () => void = () => {};
+    pluginsDiscover
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = () => resolve([]);
+          })
+      )
+      .mockResolvedValue([]);
+    refreshPluginAdmin.mockResolvedValue(undefined);
+    const { notify, stop } = await subscribe();
+    notify();
+    await vi.waitFor(() => expect(pluginsDiscover).toHaveBeenCalledTimes(1));
+    notify();
+    notify();
+    release();
+    await vi.waitFor(() => expect(refreshPluginAdmin).toHaveBeenCalledTimes(2));
+    expect(pluginsDiscover).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  it('unsubscribes a listener that registers after the watcher stopped', async () => {
+    isTauri.mockReturnValue(true);
+    const unlisten = vi.fn();
+    let register: (stop: () => void) => void = () => {};
+    listen.mockReturnValue(
+      new Promise((resolve) => {
+        register = resolve;
+      })
+    );
+    const stop = watchPluginChanges();
+    stop();
+    await vi.waitFor(() => expect(listen).toHaveBeenCalled());
+    register(unlisten);
+    await vi.waitFor(() => expect(unlisten).toHaveBeenCalledTimes(1));
+  });
+
+  it('reports a listener that cannot be registered', async () => {
+    isTauri.mockReturnValue(true);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    listen.mockRejectedValue(new Error('no event bus'));
+    const stop = watchPluginChanges();
+    await vi.waitFor(() =>
+      expect(error).toHaveBeenCalledWith(
+        '[plugins] change listener failed',
+        expect.any(Error)
+      )
+    );
+    stop();
+    error.mockRestore();
   });
 });

@@ -235,14 +235,19 @@ fn appearance(app: &AppHandle) -> AppResult<serde_json::Value> {
         .unwrap_or_default();
     #[cfg(not(desktop))]
     let mode: Option<&str> = None;
-    let _lock = RootLock::acquire(&root)?;
-    let values = crate::ui_settings::appearance_values(&root)?;
+    appearance_at(&root, mode)
+}
+
+/// The appearance a new window paints before its settings load.
+fn appearance_at(root: &Path, mode: impl Serialize) -> AppResult<serde_json::Value> {
+    let _lock = RootLock::acquire(root)?;
+    let values = crate::ui_settings::appearance_values(root)?;
     let id = values
         .get("appearance.preset")
         .and_then(|id| id.as_str())
         .unwrap_or("default");
     let mut presets = builtins();
-    match load(&root) {
+    match load(root) {
         Ok(document) => presets.extend(document.presets.into_values()),
         Err(error) => log::warn!("theme catalog unavailable; using built-in fallback: {error}"),
     }
@@ -262,10 +267,14 @@ pub(crate) fn initialization_script(app: &AppHandle) -> AppResult<String> {
 
 #[tauri::command]
 pub fn list_theme_presets(app: AppHandle) -> CommandResult<Vec<Preset>> {
-    let root = crate::paths::app_data_root(&app)?;
-    let _lock = RootLock::acquire(&root)?;
+    Ok(catalog(&crate::paths::app_data_root(&app)?)?)
+}
+
+/// Built-ins first, then the root's user presets.
+fn catalog(root: &Path) -> AppResult<Vec<Preset>> {
+    let _lock = RootLock::acquire(root)?;
     let mut presets = builtins();
-    presets.extend(load(&root)?.presets.into_values());
+    presets.extend(load(root)?.presets.into_values());
     Ok(presets)
 }
 
@@ -357,6 +366,47 @@ mod tests {
         let document = load(&root).unwrap();
         assert!(document.presets.contains_key("first") && document.presets.contains_key("second"));
         assert!(edit(&root, Some(builtins().remove(0)), "default").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn new_windows_paint_the_selected_preset_or_fall_back_to_the_first_builtin() {
+        let root = std::env::temp_dir().join(format!("ms-theme-paint-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let first = builtins().remove(0);
+        let fresh = appearance_at(&root, "dark").unwrap();
+        assert_eq!(fresh["preset"]["id"], first.id.as_str());
+        assert_eq!(fresh["accent"], serde_json::Value::Null);
+        assert_eq!(fresh["uiFontSize"], 16);
+        assert_eq!(fresh["mode"], "dark");
+
+        let mut custom = first.clone();
+        custom.id = "custom".into();
+        edit(&root, Some(custom), "custom").unwrap();
+        fs::write(
+            root.join("ui-settings.json"),
+            r##"{"version":1,"revision":1,"values":{"appearance.preset":"custom","appearance.accent":"#abcdef","appearance.uiFontSize":14}}"##,
+        )
+        .unwrap();
+        let selected = appearance_at(&root, Option::<&str>::None).unwrap();
+        assert_eq!(selected["preset"]["id"], "custom");
+        assert_eq!(selected["accent"], "#abcdef");
+        assert_eq!(selected["uiFontSize"], 14);
+        assert_eq!(selected["mode"], serde_json::Value::Null);
+        let ids: Vec<_> = catalog(&root)
+            .unwrap()
+            .into_iter()
+            .map(|preset| preset.id)
+            .collect();
+        assert_eq!(ids.first(), Some(&first.id));
+        assert_eq!(ids.last().map(String::as_str), Some("custom"));
+
+        // A damaged catalog cannot block painting; listing reports it.
+        fs::write(root.join(FILE), b"broken").unwrap();
+        fs::remove_file(root.join(format!("{FILE}.previous"))).ok();
+        let fallback = appearance_at(&root, "light").unwrap();
+        assert_eq!(fallback["preset"]["id"], first.id.as_str());
+        assert!(catalog(&root).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 }

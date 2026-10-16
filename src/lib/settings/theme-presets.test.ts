@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import {
   BUILTIN_PRESETS,
   applyThemeAppearance,
+  currentThemeWindowBackground,
   parseThemePreset,
   resolvedPreset,
   themeContrast
@@ -104,5 +105,56 @@ describe('theme preset contract', () => {
     );
     new Function(script!)();
     expect(document.documentElement.style.length).toBe(0);
+  });
+});
+
+describe('native window background', () => {
+  const brightness = ({
+    red,
+    green,
+    blue
+  }: {
+    red: number;
+    green: number;
+    blue: number;
+  }) => red + green + blue;
+
+  it('paints the cached preset surface in the current mode', () => {
+    const fallback = currentThemeWindowBackground();
+    expect(fallback.alpha).toBe(255);
+    for (const channel of [fallback.red, fallback.green, fallback.blue]) {
+      expect(Number.isInteger(channel)).toBe(true);
+      expect(channel).toBeGreaterThanOrEqual(0);
+      expect(channel).toBeLessThanOrEqual(255);
+    }
+    localStorage.setItem(
+      'mindstream:appearance:v1',
+      JSON.stringify({ preset: BUILTIN_PRESETS[1] })
+    );
+    const light = currentThemeWindowBackground();
+    document.documentElement.classList.add('dark');
+    const dark = currentThemeWindowBackground();
+    expect(brightness(dark)).toBeLessThan(brightness(light));
+  });
+
+  it('falls back to the first built-in surface for a corrupt cache', () => {
+    const fallback = currentThemeWindowBackground();
+    localStorage.setItem('mindstream:appearance:v1', '{broken');
+    expect(currentThemeWindowBackground()).toEqual(fallback);
+  });
+
+  it('still applies a theme when the appearance cache cannot be written', () => {
+    const setItem = vi
+      .spyOn(Storage.prototype, 'setItem')
+      .mockImplementation(() => {
+        throw new Error('quota exceeded');
+      });
+    expect(() =>
+      applyThemeAppearance(BUILTIN_PRESETS[0], false, null, 16)
+    ).not.toThrow();
+    expect(document.documentElement.dataset.themePreset).toBe(
+      BUILTIN_PRESETS[0].id
+    );
+    setItem.mockRestore();
   });
 });

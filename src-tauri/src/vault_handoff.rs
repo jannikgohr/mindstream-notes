@@ -345,4 +345,48 @@ mod tests {
         assert!(!moved.join(FILE).exists());
         fs::remove_dir_all(moved).unwrap();
     }
+
+    #[test]
+    fn a_replacement_target_gets_fresh_identities_only_while_the_intent_is_active() {
+        let (root, source, target, geometry) = fixture();
+        assert!(replace_target(&root, Uuid::new_v4()).is_err());
+        let record = prepare(&root, Uuid::new_v4(), source, target, geometry).unwrap();
+        assert!(replace_target(&root, Uuid::new_v4()).is_err());
+        let replaced = replace_target(&root, record.operation_id).unwrap();
+        assert_eq!(replaced.target.id, record.target.id);
+        assert_ne!(replaced.target.launch_id, record.target.launch_id);
+        assert_ne!(replaced.restore, record.restore);
+        assert_ne!(replaced.activation_restore, record.activation_restore);
+        assert_ne!(replaced.target_close, record.target_close);
+        assert_eq!(replaced.source_close, record.source_close);
+        assert_eq!(load(&root).unwrap().unwrap(), replaced);
+        advance(&root, record.operation_id, Phase::Cancelled).unwrap();
+        assert!(replace_target(&root, record.operation_id).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn records_naming_unsafe_or_identical_workers_are_refused() {
+        let (root, source, target, geometry) = fixture();
+        let record = prepare(&root, Uuid::new_v4(), source, target, geometry).unwrap();
+        let mut same = record.clone();
+        same.target = same.source.clone();
+        let mut nil = record.clone();
+        nil.restore = Uuid::nil();
+        let mut popout = record.clone();
+        popout.geometry.label = "note_a".into();
+        let mut unsafe_id = record.clone();
+        unsafe_id.target.id = "../escape".into();
+        let mut relative = record.clone();
+        relative.source.directory = PathBuf::from("relative");
+        for invalid in [same, nil, popout, unsafe_id, relative] {
+            assert!(invalid.validate().is_err());
+        }
+        let mut moved = record.clone();
+        moved.root = root.join("elsewhere");
+        assert!(moved.verify_paths(&root).is_err());
+        fs::write(root.join(FILE), vec![b' '; 65537]).unwrap();
+        assert!(load(&root).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
 }

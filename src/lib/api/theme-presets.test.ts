@@ -64,4 +64,18 @@ describe('theme preset persistence bridge', () => {
     invoke.mockResolvedValue({ ...value, uiFontSize: 99 });
     await expect(getThemeAppearance()).rejects.toThrow();
   });
+  it('falls back to the first built-in appearance outside the desktop runtime', async () => {
+    await expect(getThemeAppearance()).resolves.toEqual({
+      preset: BUILTIN_PRESETS[0],
+      accent: null,
+      uiFontSize: 16,
+      mode: 'system'
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+  it('rejects a native catalog that repeats a preset ID', async () => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    invoke.mockResolvedValue([BUILTIN_PRESETS[0], BUILTIN_PRESETS[0]]);
+    await expect(listThemePresets()).rejects.toThrow(/Duplicate/);
+  });
 });

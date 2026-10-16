@@ -236,22 +236,34 @@ pub async fn migrate_legacy_content(
             return Ok(Vec::new());
         }
         let source = app.try_state::<crate::browser_migration::Source>();
-        let (array_raw, single_raw) = if let Some(source) = source.as_ref() {
-            match kind {
-                Kind::Signatures => (
-                    source.raw("mindstream.pdf.signatures.v1"),
-                    source.raw("mindstream.pdf.signature.v1"),
-                ),
-                Kind::Favourites => (source.raw("notes-app:mobile:favourites"), None),
-            }
-        } else {
-            (array_raw.as_deref(), single_raw.as_deref())
-        };
+        let (array_raw, single_raw) = browser_values(
+            source.as_deref(),
+            kind,
+            array_raw.as_deref(),
+            single_raw.as_deref(),
+        );
         app.state::<crate::db::Db>()
             .with_conn_mut(|conn| import(conn, kind, array_raw, single_raw))
     })
     .await
     .map_err(|_| invalid())??)
+}
+
+/// A retained browser export replaces whatever the window still sent.
+fn browser_values<'a>(
+    source: Option<&'a crate::browser_migration::Source>,
+    kind: Kind,
+    array_raw: Option<&'a str>,
+    single_raw: Option<&'a str>,
+) -> (Option<&'a str>, Option<&'a str>) {
+    match (source, kind) {
+        (Some(source), Kind::Signatures) => (
+            source.raw("mindstream.pdf.signatures.v1"),
+            source.raw("mindstream.pdf.signature.v1"),
+        ),
+        (Some(source), Kind::Favourites) => (source.raw("notes-app:mobile:favourites"), None),
+        (None, _) => (array_raw, single_raw),
+    }
 }
 
 #[cfg(test)]
@@ -391,5 +403,76 @@ mod tests {
         assert!(initialize_owner(&root, "b", &b).is_err());
         assert_eq!(fs::read(root.join(OWNER_FILE)).unwrap(), b"corrupt owner");
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn owner_records_are_bounded_and_a_missing_record_has_no_owner() {
+        let root = std::env::temp_dir().join(format!("ms-content-owner-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        assert!(settings_owner(&root).unwrap().is_none());
+        assert!(decode_owner(&[b' '; 16385]).is_err());
+        for owner in [
+            serde_json::json!({"version": 2, "vaultId": "a", "directory": root}),
+            serde_json::json!({"version": 1, "vaultId": "", "directory": root}),
+            serde_json::json!({"version": 1, "vaultId": "a".repeat(129), "directory": root}),
+            serde_json::json!({"version": 1, "vaultId": "a", "directory": "relative"}),
+        ] {
+            assert!(decode_owner(owner.to_string().as_bytes()).is_err());
+        }
+        fs::write(root.join(OWNER_FILE), b"corrupt owner").unwrap();
+        assert!(settings_owner(&root).is_err());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn oversized_or_ambiguous_sources_never_record_completion() {
+        let db = crate::db::open_memory_for_tests();
+        db.with_conn_mut(|conn| {
+            let huge = " ".repeat(MAX_BYTES + 1);
+            assert!(import(conn, Kind::Signatures, Some(&huge), None).is_err());
+            let many = serde_json::json!(vec![record("same"); 4097]).to_string();
+            assert!(import(conn, Kind::Signatures, Some(&many), None).is_err());
+            let long = record(&"x".repeat(513)).to_string();
+            assert!(import(conn, Kind::Signatures, None, Some(&long)).is_err());
+            assert!(import(conn, Kind::Signatures, None, Some("[]")).is_err());
+            assert!(import(conn, Kind::Favourites, Some("[]"), Some("[]")).is_err());
+            assert!(import(conn, Kind::Favourites, Some("{}"), None).is_err());
+            let ids = serde_json::json!(vec!["note"; 4097]).to_string();
+            assert!(import(conn, Kind::Favourites, Some(&ids), None).is_err());
+            assert_eq!(receipts(conn), 0);
+            // A completed migration ignores every later source.
+            assert!(import(conn, Kind::Favourites, Some("[]"), None)?.is_empty());
+            assert_eq!(receipts(conn), 1);
+            assert!(import(conn, Kind::Favourites, Some("broken"), None)?.is_empty());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn a_retained_export_replaces_what_the_window_sent() {
+        let source = crate::browser_migration::Source(
+            serde_json::from_value(serde_json::json!({
+                "origin": "http://localhost:1420", "vaultId": "default", "checksum": "test",
+                "values": {
+                    "mindstream.pdf.signatures.v1": "array",
+                    "mindstream.pdf.signature.v1": "single",
+                    "notes-app:mobile:favourites": "favourites"
+                }
+            }))
+            .unwrap(),
+        );
+        assert_eq!(
+            browser_values(Some(&source), Kind::Signatures, Some("sent"), None),
+            (Some("array"), Some("single"))
+        );
+        assert_eq!(
+            browser_values(Some(&source), Kind::Favourites, Some("sent"), Some("sent")),
+            (Some("favourites"), None)
+        );
+        assert_eq!(
+            browser_values(None, Kind::Signatures, Some("array"), Some("single")),
+            (Some("array"), Some("single"))
+        );
     }
 }

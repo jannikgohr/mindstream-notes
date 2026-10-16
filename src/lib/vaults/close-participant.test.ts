@@ -142,4 +142,31 @@ describe('controlled worker close', () => {
     ]);
     expect(window.restore).not.toHaveBeenCalled();
   });
+
+  it('releases input and reports an unsaved close when the window goes away mid-close', async () => {
+    const window = participant(async () => {});
+    window.acknowledge.mockRejectedValueOnce(new Error('window gone'));
+    await window.receive({ id: 'first', phase: 'waiting' });
+    window.dispose();
+    expect(window.restore).toHaveBeenCalledTimes(1);
+    expect(window.acknowledge.mock.calls).toEqual([['first', false]]);
+    await vi.waitFor(() => expect(window.onError).toHaveBeenCalledTimes(1));
+    await window.receive({ id: 'second', phase: 'prepare' });
+    expect(window.freeze).toHaveBeenCalledTimes(1);
+    window.dispose();
+    expect(window.acknowledge).toHaveBeenCalledTimes(1);
+  });
+
+  it('remembers a bounded number of cancellations', async () => {
+    const window = participant(async () => {});
+    for (let index = 0; index <= 64; index += 1) {
+      await window.receive({ id: `cancelled-${index}`, phase: 'cancel' });
+    }
+    // The newest cancellations still suppress their delayed notifications.
+    await window.receive({ id: 'cancelled-64', phase: 'waiting' });
+    expect(window.freeze).not.toHaveBeenCalled();
+    // The oldest one was forgotten to keep the set bounded.
+    await window.receive({ id: 'cancelled-0', phase: 'waiting' });
+    expect(window.freeze).toHaveBeenCalledTimes(1);
+  });
 });

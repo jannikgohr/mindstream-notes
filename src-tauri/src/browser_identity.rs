@@ -80,9 +80,22 @@ pub struct Options {
     additional_browser_args: Option<String>,
 }
 
+impl Options {
+    fn new(identity: Option<&Identity>, additional_browser_args: Option<String>) -> Self {
+        Self {
+            data_directory: identity.and_then(|identity| {
+                (!cfg!(target_os = "macos")).then(|| identity.directory.clone())
+            }),
+            data_store_identifier: identity.and_then(|identity| {
+                cfg!(target_os = "macos").then_some(identity.store_identifier)
+            }),
+            additional_browser_args,
+        }
+    }
+}
+
 #[tauri::command]
 pub fn get_worker_browser_options(app: tauri::AppHandle) -> CommandResult<Option<Options>> {
-    let identity = app.try_state::<Identity>();
     // WebView2 windows sharing a browser process must use identical environment
     // options, including in direct test instances without a worker identity.
     let additional_browser_args = app
@@ -92,15 +105,10 @@ pub fn get_worker_browser_options(app: tauri::AppHandle) -> CommandResult<Option
         .iter()
         .find(|window| window.label == "main")
         .and_then(|window| window.additional_browser_args.clone());
-    Ok(Some(Options {
-        data_directory: identity
-            .as_ref()
-            .and_then(|identity| (!cfg!(target_os = "macos")).then(|| identity.directory.clone())),
-        data_store_identifier: identity
-            .as_ref()
-            .and_then(|identity| cfg!(target_os = "macos").then_some(identity.store_identifier)),
+    Ok(Some(Options::new(
+        app.try_state::<Identity>().as_deref(),
         additional_browser_args,
-    }))
+    )))
 }
 
 #[cfg(test)]
@@ -143,5 +151,47 @@ mod tests {
         );
         assert!(Identity::for_vault(&dev, "../unsafe", &a).is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn popouts_get_the_worker_store_and_the_shared_browser_arguments() {
+        let identity = Identity {
+            directory: PathBuf::from("store"),
+            store_identifier: [7; 16],
+        };
+        let options =
+            serde_json::to_value(Options::new(Some(&identity), Some("--flag".into()))).unwrap();
+        assert_eq!(options["additionalBrowserArgs"], "--flag");
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                options["dataStoreIdentifier"],
+                serde_json::to_value([7u8; 16]).unwrap()
+            );
+            assert!(options["dataDirectory"].is_null());
+        } else {
+            assert_eq!(options["dataDirectory"], "store");
+            assert!(options["dataStoreIdentifier"].is_null());
+        }
+        let direct = serde_json::to_value(Options::new(None, None)).unwrap();
+        assert!(direct["dataDirectory"].is_null());
+        assert!(direct["dataStoreIdentifier"].is_null());
+        assert!(direct["additionalBrowserArgs"].is_null());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn webview2_receives_paths_without_the_verbatim_prefix() {
+        assert_eq!(
+            webview_path(Path::new(r"\\?\C:\Users\me\store")),
+            PathBuf::from(r"C:\Users\me\store")
+        );
+        assert_eq!(
+            webview_path(Path::new(r"\\?\UNC\server\share\store")),
+            PathBuf::from(r"\\server\share\store")
+        );
+        assert_eq!(
+            webview_path(Path::new(r"C:\plain")),
+            PathBuf::from(r"C:\plain")
+        );
     }
 }

@@ -16,10 +16,13 @@
 // multi-vault runtime (vault_supervisor: window/tray/quit/handoff
 // orchestration against a live Tauri app, exercised by the app-e2e suites)
 // and its coordinator OS glue (autostart login registration, signed-update
-// installation, cross-process revival leases, window-state views), plus the
-// trivial system/error/i18n/path shims and the migration runner. The pure
-// helpers in these files still have unit tests that run; they're just not
-// part of the line-coverage denominator.
+// installation, cross-process revival leases, window-state views), the
+// worker's main-thread window glue (worker_shutdown close orchestration,
+// update_windows snapshot/restore) and the legacy browser export window
+// (legacy_export), plus the trivial system/error/i18n/path shims and the
+// migration runner. The pure helpers in these files still have unit tests
+// that run (worker_shutdown's close book, for one); they're just not part of
+// the line-coverage denominator.
 
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync } from 'node:fs';
@@ -35,6 +38,7 @@ const IGNORE_REGEX = [
   'drawing[/\\\\]mod\\.rs$',
   '(tray|native_menu|hotkeys|desktop_settings|pdf_export|system|error|i18n|paths)\\.rs$',
   '(vault_supervisor|vault_window_state)\\.rs$',
+  '(worker_shutdown|update_windows|legacy_export)\\.rs$',
   'coordinator_(autostart|updater|revival)\\.rs$',
   '(lib|main)\\.rs$',
   'migrations\\.rs$'

@@ -288,49 +288,62 @@ pub(crate) fn suspend(app: &AppHandle, suspended: bool) {
 }
 
 pub(crate) fn status(app: &AppHandle) -> AppResult<Status> {
-    let state = app.state::<Shortcuts>();
-    let registry = state
-        .registry
-        .lock()
-        .map_err(|_| invalid("shortcut registration state unavailable"))?;
-    Ok(Status {
-        coordinated: true,
-        settling: registry.settled != state.generation.load(Ordering::Acquire),
-        registered: registry.registered.clone(),
-        error: registry.error.clone(),
-    })
+    app.state::<Shortcuts>().status()
 }
 
 /// Called off the native event thread. Coalesce edits without holding RootLock
 /// across OS registration or contacting worker processes. Keep failed removals
 /// tracked and retry on the next notice, rather than silently leaking bindings.
 pub(crate) fn refresh(app: &AppHandle) {
-    let state = app.state::<Shortcuts>();
-    state.generation.fetch_add(1, Ordering::AcqRel);
-    if state.running.swap(true, Ordering::AcqRel) {
-        return;
+    app.state::<Shortcuts>()
+        .refresh_with(|| desired(app), &mut Native(app));
+}
+
+impl Shortcuts {
+    fn status(&self) -> AppResult<Status> {
+        let registry = self
+            .registry
+            .lock()
+            .map_err(|_| invalid("shortcut registration state unavailable"))?;
+        Ok(Status {
+            coordinated: true,
+            settling: registry.settled != self.generation.load(Ordering::Acquire),
+            registered: registry.registered.clone(),
+            error: registry.error.clone(),
+        })
     }
-    loop {
-        let generation = state.generation.load(Ordering::Acquire);
-        let desired = desired(app);
-        if let Ok(mut registry) = state.registry.lock() {
-            registry.reconcile(desired, &mut Native(app));
-            registry.settled = generation;
-            if let Some(error) = &registry.error {
-                log::warn!("[shortcuts] registration failed: {error}");
-            }
-        }
-        if state.generation.load(Ordering::Acquire) != generation {
-            continue;
-        }
-        state.running.store(false, Ordering::Release);
-        if state.generation.load(Ordering::Acquire) == generation
-            || state
-                .running
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_err()
-        {
+
+    fn refresh_with(
+        &self,
+        mut desired: impl FnMut() -> AppResult<Vec<Binding>>,
+        os: &mut impl Registration,
+    ) {
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        if self.running.swap(true, Ordering::AcqRel) {
             return;
+        }
+        loop {
+            let generation = self.generation.load(Ordering::Acquire);
+            let desired = desired();
+            if let Ok(mut registry) = self.registry.lock() {
+                registry.reconcile(desired, os);
+                registry.settled = generation;
+                if let Some(error) = &registry.error {
+                    log::warn!("[shortcuts] registration failed: {error}");
+                }
+            }
+            if self.generation.load(Ordering::Acquire) != generation {
+                continue;
+            }
+            self.running.store(false, Ordering::Release);
+            if self.generation.load(Ordering::Acquire) == generation
+                || self
+                    .running
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_err()
+            {
+                return;
+            }
         }
     }
 }
@@ -398,6 +411,71 @@ mod tests {
                 .id()
         );
     }
+    #[test]
+    fn unmodified_navigation_and_function_keys_are_allowed() {
+        assert_eq!(accelerator("esc").unwrap(), "Escape");
+        assert_eq!(accelerator("F13").unwrap(), "F13");
+        assert!(accelerator("f25").is_err());
+        assert!(accelerator("mod").is_err());
+    }
+
+    #[test]
+    fn a_stale_native_callback_cannot_run_a_rebound_command() {
+        let root =
+            std::env::temp_dir().join(format!("ms-shortcut-binding-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let command = GlobalShortcutCommandId::NewMarkdownNote;
+        let default = &bindings(&BTreeMap::new()).unwrap()[0];
+        assert_eq!(default.command_id, command.hotkey_catalogue_id());
+        require_current_binding(&root, command, None).unwrap();
+        require_current_binding(&root, command, Some(&default.accelerator)).unwrap();
+        std::fs::write(
+            root.join("ui-settings.json"),
+            r#"{"version":1,"revision":1,"values":{"hotkey.global.newMarkdownNote":"mod+alt+m"}}"#,
+        )
+        .unwrap();
+        assert!(require_current_binding(&root, command, Some(&default.accelerator)).is_err());
+        require_current_binding(&root, command, Some("CommandOrControl+Alt+KeyM")).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn edits_during_a_refresh_are_coalesced_into_one_more_pass() {
+        let shortcuts = Shortcuts::default();
+        let defaults = bindings(&BTreeMap::new()).unwrap();
+        let mut os = Fake::default();
+        let mut passes = 0;
+        shortcuts.refresh_with(
+            || {
+                passes += 1;
+                if passes == 1 {
+                    // A notice arriving mid-pass only bumps the generation.
+                    shortcuts.refresh_with(|| unreachable!(), &mut Fake::default());
+                    shortcuts.refresh_with(|| unreachable!(), &mut Fake::default());
+                    Ok(Vec::new())
+                } else {
+                    Ok(defaults.clone())
+                }
+            },
+            &mut os,
+        );
+        assert_eq!(passes, 2);
+        assert_eq!(os.live, defaults);
+        let status = shortcuts.status().unwrap();
+        assert!(status.coordinated);
+        assert!(!status.settling);
+        assert_eq!(status.registered, defaults);
+        assert_eq!(status.error, None);
+
+        shortcuts.generation.fetch_add(1, Ordering::AcqRel);
+        assert!(shortcuts.status().unwrap().settling);
+        shortcuts.refresh_with(|| Err(invalid("corrupt settings")), &mut os);
+        let status = shortcuts.status().unwrap();
+        assert!(!status.settling);
+        assert!(status.registered.is_empty());
+        assert!(status.error.is_some());
+    }
+
     #[test]
     fn failed_registration_and_removal_remain_visible_and_retry_without_leaks() {
         let desired = bindings(&BTreeMap::new()).unwrap();

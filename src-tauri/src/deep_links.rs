@@ -351,6 +351,30 @@ mod tests {
     }
 
     #[test]
+    fn the_first_invite_link_among_launch_arguments_is_the_one_taken() {
+        let valid = written_down()["appAddresses"]["valid"].clone();
+        let first = valid[0]["address"].as_str().unwrap();
+        let addresses = |items: &[&str]| {
+            items
+                .iter()
+                .map(|item| item.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            invite_link_among(addresses(&[
+                "--supervised-vaults",
+                "mindstream-notes://join?link=nonsense",
+                first,
+            ])),
+            invite_link_in(first)
+        );
+        assert_eq!(
+            invite_link_among(addresses(&["--supervised-vaults", "/home/user/notes.md"])),
+            None
+        );
+    }
+
+    #[test]
     fn launch_arguments_under_the_scheme_are_addresses_whatever_they_carry() {
         for example in written_down()["appAddresses"]["valid"].as_array().unwrap() {
             assert!(is_app_address(example["address"].as_str().unwrap()));

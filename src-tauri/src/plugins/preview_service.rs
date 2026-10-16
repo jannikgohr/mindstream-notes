@@ -288,6 +288,21 @@ fn sanitize_setting_value(value: &str) -> String {
     cleaned.trim_start_matches('-').to_string()
 }
 
+/// Values for `{setting:<id>}` placeholders: text as written, anything else
+/// as JSON, each reduced to the safe CLI charset.
+fn cli_settings(values: super::settings::PluginSettings) -> HashMap<String, String> {
+    values
+        .into_iter()
+        .map(|(key, value)| {
+            let text = value
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| value.to_string());
+            (key, sanitize_setting_value(&text))
+        })
+        .collect()
+}
+
 /// Poll the data port until the server accepts a connection or we time out.
 fn wait_until_ready(port: u16) -> AppResult<()> {
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
@@ -703,16 +718,7 @@ pub async fn plugins_preview_start(
             &plugin,
         )
     })?;
-    let settings: HashMap<String, String> = super::settings::with_defaults(&plugin, effective)
-        .into_iter()
-        .map(|(key, value)| {
-            let text = value
-                .as_str()
-                .map(str::to_owned)
-                .unwrap_or_else(|| value.to_string());
-            (key, sanitize_setting_value(&text))
-        })
-        .collect();
+    let settings = cli_settings(super::settings::with_defaults(&plugin, effective));
     let service = require_service(&plugin.manifest, &service_id)?.clone();
     // Absent  means direct, so resolve it once and read from that.
     let iframe = service.iframe();
@@ -1177,6 +1183,20 @@ mod tests {
         assert_eq!(sanitize_setting_value("--danger"), "danger");
         // Shell/space/quote characters are dropped entirely.
         assert_eq!(sanitize_setting_value("a b; rm -rf /"), "abrm-rf");
+    }
+
+    #[test]
+    fn cli_settings_render_every_value_through_the_sanitizer() {
+        let settings = cli_settings(super::super::settings::PluginSettings::from([
+            ("mode".to_string(), serde_json::json!("--split")),
+            ("enabled".to_string(), serde_json::json!(true)),
+            ("zoom".to_string(), serde_json::json!(1.5)),
+            ("args".to_string(), serde_json::json!(["a b"])),
+        ]));
+        assert_eq!(settings["mode"], "split");
+        assert_eq!(settings["enabled"], "true");
+        assert_eq!(settings["zoom"], "1.5");
+        assert_eq!(settings["args"], "ab");
     }
 
     #[test]

@@ -458,6 +458,7 @@ pub(crate) fn shortcut_eligible(root: &Path, vault_id: &str, vault: &Path) -> Ap
     }
 }
 
+#[cfg(test)]
 fn initialize_with_browser_state(
     root: &Path,
     vault: &Path,
@@ -877,6 +878,54 @@ fn access(
     Ok(snapshot(device, content))
 }
 
+/// A retained browser export, when there is one, replaces whatever the window
+/// sent; only its recorded owner imports the unscoped preferences.
+fn initialize_from(
+    root: &Path,
+    vault: &Path,
+    vault_id: &str,
+    source: Option<&crate::browser_migration::Source>,
+    window: BrowserState<'_>,
+    device_ui: Option<DeviceBrowserState>,
+) -> AppResult<Snapshot> {
+    if let Some(source) = source {
+        let owner = crate::legacy_content::is_owner(root, vault_id, vault)?;
+        initialize_classified(
+            root,
+            vault,
+            vault_id,
+            BrowserState {
+                device_raw: source.raw("notes-app:settings:v1"),
+                vault_raw: source.vault_settings(vault_id),
+                preferences_raw: source.raw("notes-app:preferences:v1"),
+                layout_raw: source.layout(vault_id),
+                archive_owner: Some(owner),
+            },
+        )?;
+        migrate_device_ui(
+            root,
+            &DeviceBrowserState {
+                toolbar_raw: source
+                    .raw("notes-app:file-tree-create-toolbar:v1")
+                    .map(str::to_owned),
+                had_existing_data: source.had_existing_data(),
+                display_mode_raw: source
+                    .raw("notes-app:mobile:displayMode")
+                    .map(str::to_owned),
+            },
+        )?;
+        return access(root, vault, None);
+    }
+    let snapshot = initialize_classified(root, vault, vault_id, window)?;
+    match device_ui {
+        Some(input) => {
+            migrate_device_ui(root, &input)?;
+            access(root, vault, None)
+        }
+        None => Ok(snapshot),
+    }
+}
+
 fn context(
     app: &AppHandle,
     expected_vault_id: &str,
@@ -905,49 +954,21 @@ pub async fn initialize_ui_settings(
     let notify = app.clone();
     let snapshot = tauri::async_runtime::spawn_blocking(move || {
         let _job = job;
-        if let Some(source) = app.try_state::<crate::browser_migration::Source>() {
-            let owner = crate::legacy_content::is_owner(&root, &expected_vault_id, &vault)?;
-            initialize_classified(
-                &root,
-                &vault,
-                &expected_vault_id,
-                BrowserState {
-                    device_raw: source.raw("notes-app:settings:v1"),
-                    vault_raw: source.vault_settings(&expected_vault_id),
-                    preferences_raw: source.raw("notes-app:preferences:v1"),
-                    layout_raw: source.layout(&expected_vault_id),
-                    archive_owner: Some(owner),
-                },
-            )?;
-            migrate_device_ui(
-                &root,
-                &DeviceBrowserState {
-                    toolbar_raw: source
-                        .raw("notes-app:file-tree-create-toolbar:v1")
-                        .map(str::to_owned),
-                    had_existing_data: source.had_existing_data(),
-                    display_mode_raw: source
-                        .raw("notes-app:mobile:displayMode")
-                        .map(str::to_owned),
-                },
-            )?;
-            return access(&root, &vault, None);
-        }
-        let snapshot = initialize_with_browser_state(
+        let source = app.try_state::<crate::browser_migration::Source>();
+        initialize_from(
             &root,
             &vault,
             &expected_vault_id,
-            device_raw.as_deref(),
-            vault_raw.as_deref(),
-            preferences_raw.as_deref(),
-            layout_raw.as_deref(),
-        )?;
-        if let Some(input) = device_ui {
-            migrate_device_ui(&root, &input)?;
-            access(&root, &vault, None)
-        } else {
-            Ok(snapshot)
-        }
+            source.as_deref(),
+            BrowserState {
+                device_raw: device_raw.as_deref(),
+                vault_raw: vault_raw.as_deref(),
+                preferences_raw: preferences_raw.as_deref(),
+                layout_raw: layout_raw.as_deref(),
+                archive_owner: None,
+            },
+            device_ui,
+        )
     })
     .await
     .map_err(|_| invalid())??;
@@ -1838,5 +1859,212 @@ mod tests {
             fs::read(dirs.a.join(".dock-layout-migrated")).unwrap(),
             b"broken"
         );
+    }
+
+    #[cfg(desktop)]
+    #[test]
+    fn coordinator_binding_reads_refuse_an_interrupted_root_document() {
+        let dirs = TestDirs::new();
+        assert!(shortcut_bindings(&dirs.root).unwrap().is_empty());
+        let path = dirs.root.join("ui-settings.json");
+        fs::write(marker(&path), b"1").unwrap();
+        assert!(shortcut_bindings(&dirs.root).is_err());
+        fs::remove_file(marker(&path)).unwrap();
+        fs::write(dirs.root.join("ui-settings.json.previous"), b"{}").unwrap();
+        assert!(shortcut_bindings(&dirs.root).is_err());
+        fs::write(
+            &path,
+            r#"{"version":1,"revision":1,"values":{"hotkey.global.showApp":"F12"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            shortcut_bindings(&dirs.root).unwrap()["hotkey.global.showApp"],
+            "F12"
+        );
+    }
+
+    #[cfg(desktop)]
+    #[test]
+    fn shortcut_eligibility_follows_vault_choice_receipt_and_recorded_owner() {
+        let dirs = TestDirs::new();
+        let eligible = |vault: &Path, id: &str| shortcut_eligible(&dirs.root, id, vault);
+        // Nothing recorded anywhere: not eligible, and nothing is written.
+        assert!(!eligible(&dirs.a, "default").unwrap());
+        assert!(!dirs.a.join("content-settings.json").exists());
+        // A device document without the old flag enables nothing.
+        fs::write(
+            dirs.root.join("ui-settings.json"),
+            r#"{"version":1,"revision":1,"values":{}}"#,
+        )
+        .unwrap();
+        assert!(!eligible(&dirs.a, "default").unwrap());
+        // The old device-wide flag belongs to the recorded settings owner only.
+        old_shortcut_root(&dirs);
+        assert!(eligible(&dirs.a, "default").unwrap());
+        assert!(!eligible(&dirs.b, "other").unwrap());
+        // A receipt without its vault document means an interrupted migration.
+        fs::write(dirs.b.join(SHORTCUT_RECEIPT), b"1").unwrap();
+        assert!(eligible(&dirs.b, "other").is_err());
+        // A completed migration without a vault choice means disabled.
+        let content = dirs.b.join("content-settings.json");
+        fs::write(&content, r#"{"version":1,"revision":1,"values":{}}"#).unwrap();
+        assert!(!eligible(&dirs.b, "other").unwrap());
+        fs::write(dirs.b.join(SHORTCUT_RECEIPT), b"2").unwrap();
+        assert!(eligible(&dirs.b, "other").is_err());
+        fs::remove_file(dirs.b.join(SHORTCUT_RECEIPT)).unwrap();
+        // The vault's own choice wins, and must be a boolean.
+        fs::write(
+            &content,
+            r#"{"version":1,"revision":1,"values":{"hotkeys.globalShortcuts":true}}"#,
+        )
+        .unwrap();
+        assert!(eligible(&dirs.b, "other").unwrap());
+        fs::write(
+            &content,
+            r#"{"version":1,"revision":1,"values":{"hotkeys.globalShortcuts":"yes"}}"#,
+        )
+        .unwrap();
+        assert!(eligible(&dirs.b, "other").is_err());
+        // A vault document lost after its migration cannot be read as default.
+        fs::remove_file(&content).unwrap();
+        fs::write(marker(&content), b"1").unwrap();
+        assert!(eligible(&dirs.b, "other").is_err());
+        fs::remove_file(marker(&content)).unwrap();
+        // A damaged migration intent is never guessed around.
+        fs::write(dirs.root.join("global-shortcuts-migration.json"), b"{}").unwrap();
+        assert!(eligible(&dirs.a, "default").is_err());
+    }
+
+    #[test]
+    fn oversized_or_misplaced_documents_and_backups_are_refused() {
+        let dirs = TestDirs::new();
+        let many: Values = (0..4097)
+            .map(|index| (format!("plugins.qa.{index}"), Value::Null))
+            .collect();
+        assert!(validate_values(&many).is_err());
+        assert!(decode(&vec![b' '; MAX_BYTES + 1], true).is_err());
+        assert!(legacy(Some(&" ".repeat(MAX_BYTES + 1))).is_err());
+        let vault_value = r#"{"version":1,"revision":1,"values":{"appearance.editorFontSize":20}}"#;
+        assert!(decode(vault_value.as_bytes(), true).is_err());
+        assert!(decode(vault_value.as_bytes(), false).is_ok());
+
+        assert!(backup_values(&dirs.root, true).unwrap().is_empty());
+        // A legacy field a device document may still carry is never backed up
+        // as a device value.
+        let mut device = Values::new();
+        device.insert("appearance.sortStrategy".into(), Value::from("modified"));
+        assert!(validate_backup_values(&device, true).is_err());
+
+        let path = dirs.root.join("ui-settings.json");
+        fs::write(marker(&path), b"interrupted").unwrap();
+        assert!(backup_values(&dirs.root, true).is_err());
+        fs::write(marker(&path), b"1").unwrap();
+        assert!(
+            backup_values(&dirs.root, true).is_err(),
+            "a migrated document cannot be missing"
+        );
+    }
+
+    #[test]
+    fn migration_records_are_validated_and_the_pinned_appearance_owner_is_kept() {
+        let dirs = TestDirs::new();
+        assert!(appearance_owner_bytes(&[b' '; 16385]).is_err());
+        assert!(decode_shortcut_migration(&[b' '; 16385]).is_err());
+        for invalid in [
+            serde_json::json!({"version": 2, "vault_id": "default", "directory": dirs.a}),
+            serde_json::json!({"version": 1, "vault_id": "../x", "directory": dirs.a}),
+            serde_json::json!({"version": 1, "vault_id": "default", "directory": "relative"}),
+        ] {
+            assert!(appearance_owner_bytes(invalid.to_string().as_bytes()).is_err());
+        }
+        assert!(decode_shortcut_migration(
+            serde_json::json!({"version": 1, "vault_id": "default", "directory": "relative", "enabled": true})
+                .to_string()
+                .as_bytes()
+        )
+        .is_err());
+        assert!(prepare_device_appearance(&dirs.root, &dirs.a, "../bad").is_err());
+        prepare_device_appearance(&dirs.root, &dirs.a, "default").unwrap();
+        prepare_device_appearance(&dirs.root, &dirs.b, "other").unwrap();
+        let owner = appearance_owner(&dirs.root, &dirs.b, "other").unwrap();
+        assert_eq!(
+            owner.vault_id, "default",
+            "the first selection stays pinned"
+        );
+    }
+
+    #[test]
+    fn a_retained_export_replaces_what_the_window_sent() {
+        let dirs = TestDirs::new();
+        crate::legacy_content::initialize_owner(&dirs.root, "default", &dirs.a).unwrap();
+        let source = crate::browser_migration::Source(
+            serde_json::from_value(serde_json::json!({
+                "origin": "http://localhost:1420", "vaultId": "default", "checksum": "test",
+                "values": {
+                    "notes-app:settings:v1": r#"{"appearance.reduceMotion":"on"}"#,
+                    "notes-app:settings:v1:vault:default": r#"{"appearance.editorFontSize":20}"#,
+                    "notes-app:mobile:displayMode": "grid"
+                }
+            }))
+            .unwrap(),
+        );
+        let window = || BrowserState {
+            device_raw: Some(r#"{"appearance.reduceMotion":"off"}"#),
+            vault_raw: Some(r#"{"appearance.editorFontSize":14}"#),
+            preferences_raw: None,
+            layout_raw: None,
+            archive_owner: None,
+        };
+        let imported = initialize_from(
+            &dirs.root,
+            &dirs.a,
+            "default",
+            Some(&source),
+            window(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(imported.values["appearance.reduceMotion"], "on");
+        assert_eq!(imported.values["appearance.editorFontSize"], 20);
+        assert_eq!(imported.values["ui.mobileDisplayMode"], "grid");
+        assert_eq!(
+            imported.values["ui.fileTreeToolbar"]["toolbar"]
+                .as_array()
+                .unwrap()
+                .len(),
+            6,
+            "an export with app data keeps the existing installation toolbar"
+        );
+
+        // Without an export the window's values seed the vault, and the device
+        // UI migration runs only when the window sent its inputs.
+        let fresh = TestDirs::new();
+        let seeded =
+            initialize_from(&fresh.root, &fresh.a, "default", None, window(), None).unwrap();
+        assert_eq!(seeded.values["appearance.reduceMotion"], "off");
+        assert!(!seeded.values.contains_key("ui.mobileDisplayMode"));
+        let migrated = initialize_from(
+            &fresh.root,
+            &fresh.b,
+            "other",
+            None,
+            window(),
+            Some(DeviceBrowserState {
+                toolbar_raw: None,
+                had_existing_data: false,
+                display_mode_raw: Some("grid".into()),
+            }),
+        )
+        .unwrap();
+        assert_eq!(migrated.values["ui.mobileDisplayMode"], "grid");
+    }
+
+    #[test]
+    fn patches_need_a_bounded_setting_id() {
+        let dirs = TestDirs::new();
+        initialize(&dirs.root, &dirs.a, "default", None, None).unwrap();
+        for id in [String::new(), "x".repeat(513)] {
+            assert!(access(&dirs.root, &dirs.a, Some((id, Some(Value::Null)))).is_err());
+        }
     }
 }

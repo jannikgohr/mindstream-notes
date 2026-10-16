@@ -1,4 +1,5 @@
 //! Environment identity is explicit and does not depend on optimization level.
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -32,6 +33,14 @@ impl Environment {
     /// Test processes must isolate the browser as well as backend files. The
     /// harness sets these before the native runtime starts, including popouts.
     pub fn validate_browser_isolation(&self, identifier: &str) -> AppResult<()> {
+        self.validate_browser_isolation_with(identifier, |name| std::env::var_os(name))
+    }
+
+    fn validate_browser_isolation_with(
+        &self,
+        identifier: &str,
+        var: impl Fn(&str) -> Option<OsString>,
+    ) -> AppResult<()> {
         if self.kind == Kind::Dev && !identifier.ends_with(".dev") {
             return Err(AppError::InvalidArg(
                 "dev-environment requires tauri.dev.conf.json; launch with pnpm tauri-dev".into(),
@@ -45,7 +54,7 @@ impl Environment {
             #[cfg(not(any(target_os = "windows", target_os = "linux")))]
             let required: &[&str] = &[];
             for name in required {
-                let value = std::env::var_os(name).ok_or_else(|| {
+                let value = var(name).ok_or_else(|| {
                     AppError::InvalidArg(format!(
                         "test environment requires {name} for browser isolation"
                     ))
@@ -62,8 +71,20 @@ impl Environment {
 
     pub fn resolve(os_root: PathBuf) -> AppResult<Self> {
         let permitted = crate::profiles::dir_override_allowed();
-        let override_root = permitted.then(|| std::env::var_os(ROOT_DIR_ENV)).flatten();
-        let profile_override = crate::profiles::dir_override();
+        Self::resolve_from(
+            os_root,
+            permitted.then(|| std::env::var_os(ROOT_DIR_ENV)).flatten(),
+            crate::profiles::dir_override(),
+        )
+    }
+
+    /// Pure core of [`Environment::resolve`]: the permitted overrides are read
+    /// by the caller, so the decision is testable without process env.
+    fn resolve_from(
+        os_root: PathBuf,
+        override_root: Option<OsString>,
+        profile_override: Option<(String, PathBuf)>,
+    ) -> AppResult<Self> {
         if cfg!(feature = "e2e-data-dir") && override_root.is_none() && profile_override.is_none() {
             return Err(AppError::InvalidArg(
                 "test builds require MINDSTREAM_ROOT_DIR or MINDSTREAM_PROFILE_DIR".into(),
@@ -172,5 +193,77 @@ mod tests {
         assert!(environment
             .validate_browser_isolation("com.app.dev")
             .is_ok());
+    }
+
+    #[test]
+    fn test_environment_requires_absolute_isolated_browser_directories() {
+        let environment = Environment {
+            kind: Kind::Test,
+            root: PathBuf::from("test"),
+            credential_service: "test".into(),
+        };
+        let absolute = std::env::temp_dir().into_os_string();
+        assert!(environment
+            .validate_browser_isolation_with("com.app", |_| Some(absolute.clone()))
+            .is_ok());
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        {
+            assert!(environment
+                .validate_browser_isolation_with("com.app", |_| None)
+                .is_err());
+            assert!(environment
+                .validate_browser_isolation_with("com.app", |_| Some(OsString::new()))
+                .is_err());
+            assert!(environment
+                .validate_browser_isolation_with("com.app", |_| Some("relative".into()))
+                .is_err());
+        }
+        let release = Environment {
+            kind: Kind::Release,
+            ..environment
+        };
+        assert!(release
+            .validate_browser_isolation_with("com.app", |_| None)
+            .is_ok());
+    }
+
+    #[test]
+    fn overrides_select_an_isolated_test_root_with_its_own_credentials() {
+        let base = std::env::temp_dir().join(format!("ms-environment-{}", uuid::Uuid::new_v4()));
+        let os_root = base.join("os");
+        assert!(Environment::resolve_from(os_root.clone(), Some(OsString::new()), None).is_err());
+
+        let root = base.join("override");
+        let environment =
+            Environment::resolve_from(os_root.clone(), Some(root.clone().into()), None).unwrap();
+        assert_eq!(environment.kind, Kind::Test);
+        assert_eq!(environment.root, std::fs::canonicalize(&root).unwrap());
+        assert_eq!(
+            environment.credential_service,
+            credential_service(Kind::Test, &environment.root)
+        );
+
+        let profile = base.join("profile");
+        let environment = Environment::resolve_from(
+            os_root.clone(),
+            None,
+            Some(("default".into(), profile.clone())),
+        )
+        .unwrap();
+        assert_eq!(environment.kind, Kind::Test);
+        assert_eq!(
+            environment.root,
+            std::fs::canonicalize(profile.join(".app-root")).unwrap()
+        );
+
+        if !cfg!(feature = "e2e-data-dir") {
+            let environment = Environment::resolve_from(os_root.clone(), None, None).unwrap();
+            assert_eq!(environment.kind, kind_for(false));
+            assert_eq!(
+                environment.root,
+                std::fs::canonicalize(root_for_kind(&os_root, environment.kind)).unwrap()
+            );
+        }
+        std::fs::remove_dir_all(base).unwrap();
     }
 }

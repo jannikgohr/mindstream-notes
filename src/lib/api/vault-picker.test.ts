@@ -3,7 +3,7 @@ const invoke = vi.fn();
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => invoke(...args)
 }));
-import { getVaultPickerState } from './vault-picker';
+import { getVaultPickerState, openPickerVault } from './vault-picker';
 
 afterEach(() => {
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
@@ -42,4 +42,37 @@ describe('isolated picker state', () => {
       await expect(getVaultPickerState()).rejects.toThrow();
     }
   );
+
+  it('rejects a vault list that is not an array', async () => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    invoke.mockResolvedValue({
+      vaults: {},
+      languageCode: 'de',
+      themeMode: 'dark'
+    });
+    await expect(getVaultPickerState()).rejects.toThrow(/array/);
+  });
+});
+
+describe('picker outside the desktop runtime', () => {
+  it('shows no vaults and cannot open one', async () => {
+    await expect(getVaultPickerState()).resolves.toEqual({
+      vaults: [],
+      languageCode: 'en',
+      themeMode: 'system'
+    });
+    await expect(openPickerVault('target')).rejects.toThrow(/desktop runtime/);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe('opening a picked vault', () => {
+  it('forwards the id and expects no reply value', async () => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    invoke.mockResolvedValueOnce(null);
+    await openPickerVault('target');
+    expect(invoke).toHaveBeenCalledWith('open_picker_vault', { id: 'target' });
+    invoke.mockResolvedValueOnce({ opened: true });
+    await expect(openPickerVault('target')).rejects.toThrow();
+  });
 });

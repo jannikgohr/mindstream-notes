@@ -16,7 +16,8 @@ import {
   currentProfile,
   loadProfiles,
   loadProfilesAtStartup,
-  profilesState
+  profilesState,
+  reportWorkerStartupFailure
 } from './profiles.svelte';
 
 const VIEW = {
@@ -131,5 +132,35 @@ describe('loadProfiles', () => {
     await expect(loadProfiles()).resolves.toBeUndefined();
     expect(profilesState.loaded).toBe(false);
     expect(setSettingsVaultId).not.toHaveBeenCalled();
+  });
+
+  it('expects no value back from the readiness and failure reports', async () => {
+    listProfiles.mockResolvedValue(VIEW);
+    await loadProfiles();
+    const [, , fallback, validate] = workerReady.mock.calls[0];
+    expect(fallback()).toBeUndefined();
+    expect(validate(null)).toBeUndefined();
+    expect(() => validate('ready')).toThrow();
+    workerReady.mockClear();
+    await reportWorkerStartupFailure('plain failure');
+    const [command, args, failFallback, failValidate] =
+      workerReady.mock.calls[0];
+    expect(command).toBe('vault_worker_failed');
+    expect(args).toEqual({ message: 'plain failure' });
+    expect(failFallback()).toBeUndefined();
+    expect(() => failValidate('reported')).toThrow();
+  });
+
+  it('keeps going when the startup failure cannot be reported', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    workerReady.mockRejectedValue(new Error('coordinator gone'));
+    await expect(
+      reportWorkerStartupFailure(new Error('no vault'))
+    ).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(
+      '[profiles] startup failure report unavailable',
+      expect.any(Error)
+    );
+    warn.mockRestore();
   });
 });

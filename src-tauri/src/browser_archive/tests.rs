@@ -342,3 +342,81 @@ fn development_origins_allow_configured_loopback_ports_without_remote_or_credent
         assert!(!super::valid_origin(origin), "{origin}");
     }
 }
+
+#[test]
+fn unparsable_origins_empty_keys_and_damaged_seals_are_refused() {
+    assert!(!super::valid_origin("not an origin"));
+    let mut values = values();
+    values.insert(String::new(), "value".into());
+    assert!(checksum(ORIGIN, "default", &values).is_err());
+    assert!(checksum(ORIGIN, "", &BTreeMap::new()).is_err());
+
+    let fixture = Fixture::new();
+    let path = seal_path(&fixture.root, ORIGIN);
+    fs::write(&path, vec![b' '; 4097]).unwrap();
+    assert!(seals(&fixture.root).is_err());
+    let seal = |version: u32, origin: &str, checksum: &str| {
+        serde_json::to_vec(&Seal {
+            version,
+            origin: origin.into(),
+            checksum: checksum.into(),
+        })
+        .unwrap()
+    };
+    let digest = "a".repeat(64);
+    for raw in [
+        b"not json".to_vec(),
+        seal(2, ORIGIN, &digest),
+        seal(1, "https://example.com", &digest),
+        seal(1, ORIGIN, "short"),
+        seal(1, ORIGIN, &"G".repeat(64)),
+        seal(1, "tauri://localhost", &digest),
+    ] {
+        fs::write(&path, raw).unwrap();
+        assert!(seals(&fixture.root).is_err());
+    }
+    fs::write(&path, seal(1, ORIGIN, &digest)).unwrap();
+    assert_eq!(seals(&fixture.root).unwrap()[ORIGIN], digest);
+}
+
+#[test]
+fn malformed_envelopes_and_archives_are_refused_before_decryption() {
+    let key = [7u8; 32];
+    let aad = b"test environment and canonical root";
+    let none = BTreeMap::new();
+    assert!(decrypt(&vec![b' '; MAX_BYTES * 2 + 1], &key, aad, &none).is_err());
+    for envelope in [
+        serde_json::json!({"version": 2, "nonce": "", "ciphertext": ""}),
+        serde_json::json!({"version": 1, "nonce": "%%%", "ciphertext": ""}),
+        serde_json::json!({"version": 1, "nonce": STANDARD.encode([0u8; 8]), "ciphertext": ""}),
+        serde_json::json!({"version": 1, "nonce": STANDARD.encode([0u8; 12]), "ciphertext": "%%%"}),
+    ] {
+        assert!(decrypt(envelope.to_string().as_bytes(), &key, aad, &none).is_err());
+    }
+    let archive = |captures: usize| Archive {
+        version: 1,
+        revision: 1,
+        captures: (0..captures)
+            .map(|port| {
+                let origin = format!("http://localhost:{}", 1420 + port);
+                let values = values();
+                let snapshot = Snapshot {
+                    checksum: checksum(&origin, "default", &values).unwrap(),
+                    origin: origin.clone(),
+                    vault_id: "default".into(),
+                    values,
+                };
+                (origin, snapshot)
+            })
+            .collect(),
+    };
+    let sealed = encrypt(&archive(1), &key, aad).unwrap();
+    assert!(decrypt(&sealed, &key, aad, &none).is_ok());
+    assert!(encrypt(&archive(5), &key, aad).is_err());
+    let mut renamed = archive(1);
+    let snapshot = renamed.captures.remove("http://localhost:1420").unwrap();
+    renamed
+        .captures
+        .insert("http://localhost:1999".into(), snapshot);
+    assert!(encrypt(&renamed, &key, aad).is_err());
+}
