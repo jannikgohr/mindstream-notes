@@ -56,24 +56,26 @@
 {/if}
 
 {#snippet TopBarContent(customDecorations = false)}
+  <!-- "deep" makes every empty pixel of both halves move the window; buttons
+       still block the drag. Sized to the sidebar so the path starts over the
+       editor, with the toggle beside the title so collapsing the sidebar
+       does not move it out from under the pointer. -->
   <div
-    data-tauri-drag-region={customDecorations || undefined}
+    data-tauri-drag-region={customDecorations ? 'deep' : undefined}
     class="flex h-full shrink-0 items-center gap-2.5 overflow-hidden px-5"
     style:width={ui.leftSidebarOpen ? `${ui.leftSidebarWidth}px` : undefined}
   >
     <img src={appIcon} alt="" draggable="false" class="size-6 shrink-0" />
-    <span
-      data-tauri-drag-region={customDecorations || undefined}
-      class="truncate text-base font-semibold tracking-tight"
+    <span class="truncate text-base font-semibold tracking-tight"
       >mindstream<span class="text-accent-brand">.</span></span
     >
-  </div>
-  <div class="flex min-w-0 flex-1 items-center gap-2 px-3">
     <Button
       variant="ghost"
       size="icon"
       onclick={toggleLeftSidebar}
-      title={ui.leftSidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+      title={ui.leftSidebarOpen
+        ? tUi('topBar.hideLeftSidebar')
+        : tUi('topBar.showLeftSidebar')}
       aria-label={tUi('topBar.toggleLeftSidebar')}
       aria-expanded={ui.leftSidebarOpen}
       class="shrink-0 text-muted-foreground"
@@ -85,11 +87,20 @@
         class="-scale-x-100"
       />
     </Button>
-    {#if !ui.leftSidebarOpen}<div class="min-w-0 max-w-60 shrink-0">
+  </div>
+  <div
+    data-tauri-drag-region={customDecorations ? 'deep' : undefined}
+    class="flex min-w-0 flex-1 items-center gap-2 px-3"
+  >
+    <!-- Popovers open inside the bar; a press on their padding must not
+         start a window drag. -->
+    {#if !ui.leftSidebarOpen}<div
+        data-tauri-drag-region="false"
+        class="min-w-0 max-w-60 shrink-0"
+      >
         <VaultSwitcher />
       </div>{/if}
     <div
-      data-tauri-drag-region={customDecorations || undefined}
       class="flex min-w-0 flex-1 items-center gap-2 overflow-hidden px-1 text-xs text-muted-foreground"
       aria-label={tUi('metadata.folder')}
     >
@@ -118,7 +129,9 @@
     >
       <CuedIcon icon={SquareChevronRight} size={16} />
     </Button>
-    <NotificationCenter />
+    <div data-tauri-drag-region="false" class="contents">
+      <NotificationCenter />
+    </div>
     <Button
       variant="ghost"
       size="icon"

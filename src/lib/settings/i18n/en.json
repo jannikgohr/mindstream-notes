@@ -1001,6 +1001,8 @@
     "loading": "Loading",
     "window.minimize": "Minimize",
     "topBar.toggleLeftSidebar": "Toggle left sidebar",
+    "topBar.hideLeftSidebar": "Hide left sidebar",
+    "topBar.showLeftSidebar": "Show left sidebar",
     "topBar.settings": "Settings",
     "topBar.openSettings": "Open settings",
     "fileTree.emptyTrash": "Empty trash",

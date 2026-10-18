@@ -1001,6 +1001,8 @@
     "loading": "Wird geladen",
     "window.minimize": "Minimieren",
     "topBar.toggleLeftSidebar": "Linke Seitenleiste umschalten",
+    "topBar.hideLeftSidebar": "Linke Seitenleiste ausblenden",
+    "topBar.showLeftSidebar": "Linke Seitenleiste anzeigen",
     "topBar.settings": "Einstellungen",
     "topBar.openSettings": "Einstellungen öffnen",
     "fileTree.emptyTrash": "Papierkorb leeren",
