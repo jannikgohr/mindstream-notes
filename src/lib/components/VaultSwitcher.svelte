@@ -16,7 +16,7 @@
    */
   import { onMount } from 'svelte';
   import { Vault } from '@jis3r/icons';
-  import { Check, Pencil, Plus, Trash2 } from '@lucide/svelte';
+  import { Check, ChevronDown, Pencil, Plus, Trash2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { confirm, alert } from '$lib/components/confirm-dialog.svelte';
@@ -269,18 +269,19 @@
   });
 </script>
 
-<div bind:this={root} class="relative">
+<div bind:this={root} class="vault-switcher relative min-w-0">
   <Button
     variant="ghost"
     size="sm"
-    class="h-7 gap-1.5 px-2"
+    class="h-8 w-full justify-start gap-2 px-2 text-xs"
     onclick={toggle}
     title={currentName}
     aria-label={tUi('vault.switch')}
     aria-expanded={open}
   >
     <Vault size={16} animate={open} />
-    <span class="vault-name">{currentName}</span>
+    <span class="vault-name min-w-0 flex-1 text-left">{currentName}</span>
+    <ChevronDown class="size-3 shrink-0 text-muted-foreground" />
   </Button>
 
   {#if open}

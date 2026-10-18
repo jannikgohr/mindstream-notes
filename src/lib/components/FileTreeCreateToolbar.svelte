@@ -3,12 +3,12 @@
   import { Popover, Portal } from 'bits-ui';
   import {
     ChevronRight,
+    ChevronDown,
     Feather,
     FilePlus2,
     FileUp,
     FolderPlus,
     GripVertical,
-    MoreHorizontal,
     PencilRuler,
     RotateCcw,
     Settings2,
@@ -85,6 +85,7 @@
   ];
 
   let root = $state<HTMLDivElement | null>(null);
+  let noteLabelMeasure: HTMLSpanElement | null = null;
   let moreOpen = $state(false);
   let customizing = $state(false);
   let preferences = $state<FileTreeToolbarPreferences>({
@@ -138,10 +139,9 @@
       .filter((action): action is CreateAction => !!action)
   );
   const displayedToolbarActions = $derived(
-    configuredToolbarActions.slice(0, visibleCapacity)
-  );
-  const responsiveOverflowActions = $derived(
-    configuredToolbarActions.slice(visibleCapacity)
+    [...configuredToolbarActions]
+      .sort((a, b) => Number(b.id === 'note') - Number(a.id === 'note'))
+      .slice(0, visibleCapacity)
   );
   const configuredMoreActions = $derived(
     preferences.more
@@ -149,7 +149,7 @@
       .filter((action): action is CreateAction => !!action)
   );
   const menuActions = $derived([
-    ...responsiveOverflowActions,
+    ...configuredToolbarActions,
     ...configuredMoreActions
   ]);
   const draggedId = $derived(pointerDrag?.moved ? pointerDrag.id : null);
@@ -184,14 +184,30 @@
     preferences = loadFileTreeToolbarPreferences(availableIds);
     preferencesLoaded = true;
 
-    const observer = new ResizeObserver(([entry]) => {
-      visibleCapacity = fileTreeToolbarCapacity(entry.contentRect.width);
-    });
+    const observer = new ResizeObserver(measureCapacity);
     if (root) observer.observe(root);
+    if (noteLabelMeasure) observer.observe(noteLabelMeasure);
     return () => {
       observer.disconnect();
       cleanupPointerDrag();
     };
+  });
+
+  function measureCapacity() {
+    if (!root) return;
+    const noteLabelWidth = configuredToolbarActions.some(
+      (action) => action.id === 'note'
+    )
+      ? (noteLabelMeasure?.offsetWidth ?? 64) + 10
+      : 0;
+    visibleCapacity = fileTreeToolbarCapacity(
+      root.clientWidth - noteLabelWidth - 4
+    );
+  }
+
+  $effect(() => {
+    void configuredToolbarActions;
+    queueMicrotask(measureCapacity);
   });
 
   function labelFor(action: CreateAction): string {
@@ -434,6 +450,30 @@
     pluginEffects = {};
     cleanupPointerDrag();
   }
+
+  function handleMenuKeydown(event: KeyboardEvent) {
+    if (
+      customizing ||
+      !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)
+    )
+      return;
+    const items = Array.from(
+      (event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>(
+        '[role="menuitem"]'
+      )
+    );
+    if (!items.length) return;
+    event.preventDefault();
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? items.length - 1
+          : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) %
+            items.length;
+    items[next].focus();
+  }
 </script>
 
 {#snippet actionIcon(action: CreateAction, className = 'size-3.5')}
@@ -473,10 +513,16 @@
   data-file-tree-drop-container="top"
   data-section="toolbar"
   data-orientation="horizontal"
-  class="flex flex-1 justify-end gap-1"
+  class="relative flex min-w-0 flex-1 items-center justify-end gap-1"
   style="min-width: {FILE_TREE_TOOLBAR_MIN_PX}px;"
 >
-  <div class="flex min-w-0 flex-1 justify-end gap-1 overflow-hidden">
+  <span
+    bind:this={noteLabelMeasure}
+    aria-hidden="true"
+    class="pointer-events-none invisible absolute whitespace-nowrap text-xs font-medium"
+    >{tUi('fileTree.newNote')}</span
+  >
+  <div class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
     {#each renderedTopActions as action, index (action.id)}
       {#if placeholderAt('top', index)}
         <div
@@ -488,19 +534,24 @@
         role="group"
         aria-label={labelFor(action)}
         data-file-tree-action-id={action.id}
-        class="relative shrink-0 touch-none"
+        class={action.id === 'note'
+          ? 'relative min-w-0 flex-1 touch-none'
+          : 'relative shrink-0 touch-none'}
         onpointerdown={(event) =>
           startPointerDrag(event, action.id, 'horizontal')}
       >
         <Button
           variant="ghost"
-          size="icon"
+          size={action.id === 'note' ? 'sm' : 'icon'}
           onclick={(event) => runAction(action, event.currentTarget)}
           title={labelFor(action)}
           aria-label={labelFor(action)}
-          class="size-7 cursor-grab focus-visible:ring-0 focus-visible:ring-offset-0 active:cursor-grabbing"
+          class={action.id === 'note'
+            ? 'h-8 w-full justify-start gap-2 border border-border bg-surface-3 px-2 text-xs shadow-raised hover:bg-accent'
+            : 'size-7 cursor-grab text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0 active:cursor-grabbing'}
         >
           {@render actionIcon(action)}
+          {#if action.id === 'note'}<span>{labelFor(action)}</span>{/if}
         </Button>
       </div>
     {/each}
@@ -527,9 +578,9 @@
           size="icon"
           title={tUi('fileTree.toolbar.more')}
           aria-label={tUi('fileTree.toolbar.more')}
-          class="size-7 shrink-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+          class="h-8 w-7 shrink-0 text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
         >
-          <MoreHorizontal class="size-3.5" />
+          <ChevronDown class="size-3.5" />
         </Button>
       {/snippet}
     </Popover.Trigger>
@@ -538,7 +589,10 @@
         side="bottom"
         align="end"
         sideOffset={4}
-        class="z-[400] w-72 rounded-md border border-border bg-popover text-popover-foreground shadow-md focus:outline-none"
+        role={customizing ? 'dialog' : 'menu'}
+        aria-label={tUi('fileTree.toolbar.more')}
+        onkeydown={handleMenuKeydown}
+        class="z-[400] w-64 rounded-lg border border-border bg-popover text-popover-foreground shadow-overlay focus:outline-none"
       >
         {#if customizing}
           <div class="border-b border-border px-3 py-2">
@@ -662,7 +716,7 @@
             </Button>
           </div>
         {:else}
-          <div class="select-none py-1">
+          <div class="select-none p-1">
             {#each menuActions as action (action.id)}
               <button
                 type="button"
@@ -675,7 +729,7 @@
                 action.button.opensMenu
                   ? hoveredMenuActionId === action.id
                   : undefined}
-                class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+                class="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-xs transition-colors hover:bg-accent hover:text-accent-foreground"
                 class:bg-accent={hoveredMenuActionId === action.id &&
                   action.type === 'plugin' &&
                   action.button.opensMenu}
@@ -700,6 +754,7 @@
             {/if}
             <button
               type="button"
+              role="menuitem"
               class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
               onpointerenter={() => {
                 hoveredMenuActionId = null;

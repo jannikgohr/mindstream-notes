@@ -218,12 +218,12 @@
   <div class="mt-2 flex flex-wrap items-center gap-1">
     {#each noteTags as tag (tag)}
       <span
-        class="inline-flex h-6 items-center gap-1 rounded-full border border-border bg-background pl-2 pr-0.5 text-xs leading-none"
+        class="inline-flex h-6 items-center gap-1 rounded-md border border-border bg-background pl-2 pr-0.5 text-xs leading-none"
       >
         {@render path(tag)}
         <button
           type="button"
-          class="inline-flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+          class="inline-flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
           aria-label={tUi('tags.remove').replace('{tag}', tag)}
           onclick={() => handleRemove(tag)}
         >
@@ -234,7 +234,7 @@
 
     <button
       type="button"
-      class="inline-flex h-6 items-center gap-1 rounded-full border border-dashed border-border px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+      class="inline-flex h-6 items-center gap-1 rounded-md border border-dashed border-border px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
       aria-label={tUi('tags.add')}
       aria-expanded={pickerOpen}
       onclick={() => (pickerOpen ? closePicker() : openPicker())}

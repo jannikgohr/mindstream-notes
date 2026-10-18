@@ -38,10 +38,11 @@
    *
    * Light mode starts at a real grey rather than near-white so all four
    * steps fit below pure white with room to breathe. */
-  --surface-0: oklch(0.955 0.003 247.84);
-  --surface-1: oklch(0.976 0.002 247.84);
-  --surface-2: oklch(0.99 0.002 247.84);
+  --surface-0: oklch(0.975 0.003 260);
+  --surface-1: oklch(0.985 0.002 260);
+  --surface-2: oklch(0.992 0.001 260);
   --surface-3: oklch(1 0 0);
+  --editor-surface: var(--surface-3);
 
   /* The wash behind a modal, sheet or palette. Always black — a scrim's job
    * is to darken whatever is behind it, so it does not follow the surface
@@ -63,8 +64,8 @@
    * container outlines that must survive against a raised surface. In the
    * old palette --border was identical to --muted in dark mode, so a
    * bordered card on a muted surface had no visible outline at all. */
-  --border-subtle: oklch(0.905 0.003 247.84);
-  --border-strong: oklch(0.855 0.004 247.84);
+  --border-subtle: oklch(0.92 0.005 260);
+  --border-strong: oklch(0.85 0.008 260);
 
   /* -- Brand accent ------------------------------------------------------
    * Distinct from --primary. --primary is the neutral high-contrast button
@@ -76,7 +77,7 @@
    * Naming hazard: --accent (in the compatibility layer below) is shadcn's
    * HOVER WASH, not a brand colour. Reach for --accent-brand when you mean
    * identity. */
-  --accent-brand: oklch(0.55 0.16 255);
+  --accent-brand: oklch(0.56 0.17 275);
   --accent-brand-foreground: oklch(0.99 0 0);
 
   /* -- Status ------------------------------------------------------------
@@ -143,7 +144,7 @@
   /* -- shadcn compatibility layer ----------------------------------------
    * Derived, not authored. Change the scale above, not these. */
   --background: var(--surface-1);
-  --foreground: oklch(0.145 0 0);
+  --foreground: oklch(0.295 0.016 265);
   --card: var(--surface-3);
   --card-foreground: var(--foreground);
   --popover: var(--surface-3);
@@ -153,7 +154,7 @@
   --secondary: var(--surface-2);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: var(--surface-2);
-  --muted-foreground: oklch(0.556 0 0);
+  --muted-foreground: oklch(0.52 0.018 265);
   /* Hover wash. Translucent rather than opaque so one token reads
    * correctly on every elevation step — the old opaque value was equal to
    * --muted, which made hover invisible on any surface that happened to
@@ -200,14 +201,15 @@ html {
 }
 
 .dark {
-  /* Same ordering as light: index up = lighter. Even 0.030 steps, so each
+  /* Same ordering as light: index up = lighter. Even 0.025 steps, so each
    * boundary is perceptible without any step becoming a pale slab — the
    * old --muted sat at 0.269, nearly 0.10 above the background, which is
    * what made Kanban columns dominate the dark board. */
-  --surface-0: oklch(0.155 0.003 286.2);
-  --surface-1: oklch(0.185 0.003 286.2);
-  --surface-2: oklch(0.215 0.004 286.2);
-  --surface-3: oklch(0.245 0.004 286.2);
+  --surface-0: oklch(0.22 0.009 270);
+  --surface-1: oklch(0.245 0.009 270);
+  --surface-2: oklch(0.27 0.01 270);
+  --surface-3: oklch(0.295 0.012 270);
+  --editor-surface: var(--surface-1);
 
   /* Stronger than light mode: over already-dark content a 45% wash barely
    * separates the overlay from the page behind it. */
@@ -219,13 +221,13 @@ html {
   --elevation-overlay:
     0 10px 15px -3px oklch(0 0 0 / 0.6), 0 4px 6px -4px oklch(0 0 0 / 0.45);
 
-  /* Both tiers sit clear of every surface step (max 0.245), so a border is
+  /* Both tiers sit clear of every surface step (max 0.295), so a border is
    * visible no matter which elevation it lands on. */
-  --border-subtle: oklch(0.285 0.004 286.2);
-  --border-strong: oklch(0.345 0.005 286.2);
+  --border-subtle: oklch(0.32 0.012 270);
+  --border-strong: oklch(0.4 0.015 270);
 
-  --accent-brand: oklch(0.72 0.14 255);
-  --accent-brand-foreground: oklch(0.17 0.02 255);
+  --accent-brand: oklch(0.76 0.12 275);
+  --accent-brand-foreground: oklch(0.2 0.02 275);
 
   /* Lifted into the 0.7–0.8 band so these read as TEXT against a dark
    * surface. The old dark --destructive was 0.396 — a dark red that left
@@ -255,6 +257,7 @@ html {
   --color-surface-1: var(--surface-1);
   --color-surface-2: var(--surface-2);
   --color-surface-3: var(--surface-3);
+  --color-editor-surface: var(--editor-surface);
 
   --color-scrim: var(--scrim);
   --color-highlight-search: var(--highlight-search);
@@ -421,7 +424,7 @@ body {
 .dockview-theme-bridge {
   /* v7 renamed the panel-body background var; the old --dv-background-color
    * is no longer read by dockview's stylesheet. */
-  --dv-group-view-background-color: var(--background);
+  --dv-group-view-background-color: var(--editor-surface);
   --dv-paneview-active-outline-color: var(--ring);
   /* Floating groups are enabled, so their titlebar is ours to theme; v6 had
    * no variable for it. */
@@ -430,17 +433,17 @@ body {
    * scale and the active tab pill (surface-1, the panel it reveals) comes
    * forward out of it — the same relationship Chrome uses. */
   --dv-tabs-and-actions-container-background-color: var(--surface-0);
-  --dv-tabs-and-actions-container-font-size: 13px;
-  --dv-tabs-and-actions-container-height: 40px;
+  --dv-tabs-and-actions-container-font-size: 12px;
+  --dv-tabs-and-actions-container-height: 42px;
   /* Chrome uses its own hairline-via-pseudo-element separator (see
    * .dv-tab::before rule below) — dockview's full-height divider isn't
    * the right look. */
   --dv-tab-divider-color: transparent;
   /* Chrome-style: only the active tab carries a background, inactive
    * tabs are transparent against the strip until hovered. */
-  --dv-activegroup-visiblepanel-tab-background-color: var(--background);
+  --dv-activegroup-visiblepanel-tab-background-color: var(--editor-surface);
   --dv-activegroup-hiddenpanel-tab-background-color: transparent;
-  --dv-inactivegroup-visiblepanel-tab-background-color: var(--background);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--editor-surface);
   --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
   /* (No `--dv-tab-hover-background-color` var here — dockview-core's CSS
    * doesn't reference such a var, so setting it would be a no-op. The
@@ -503,11 +506,12 @@ body {
  */
 .dockview-theme-bridge .dv-tabs-container > .dv-tab {
   position: relative;
-  align-self: center;
-  height: calc(var(--dv-tabs-and-actions-container-height) - 8px);
-  border-radius: 8px;
-  margin: 0 1px;
-  padding: 0 12px;
+  align-self: stretch;
+  height: var(--dv-tabs-and-actions-container-height);
+  border-radius: 0;
+  border-right: 1px solid var(--border);
+  margin: 0;
+  padding: 0 14px;
   transition: background-color 120ms ease-out;
 }
 
@@ -563,17 +567,25 @@ body.dv-tab-dragging
 }
 
 .dockview-theme-bridge .dv-tabs-container > .dv-tab:first-child {
-  margin-left: 4px;
+  margin-left: 0;
 }
 
 .dockview-theme-bridge .dv-tabs-container > .dv-tab:last-child {
-  margin-right: 4px;
+  margin-right: 0;
 }
 
-/* Subtle elevation so the active tab reads as the foreground card sitting
- * on the strip, the way Chrome's selected tab does. */
+/* A selected tab shares the editor surface and one accent underline. */
 .dockview-theme-bridge .dv-tabs-container > .dv-tab.dv-active-tab {
-  box-shadow: var(--elevation-raised);
+  box-shadow: none;
+}
+.dockview-theme-bridge .dv-tabs-container > .dv-tab.dv-active-tab::after {
+  content: '';
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 0;
+  height: 2px;
+  background: var(--accent-brand);
 }
 
 /* Hover pill — most of the way toward the active tab's --background but
@@ -601,27 +613,6 @@ body.dv-tab-dragging
   .dv-tabs-container
   > .dv-tab.dv-inactive-tab:hover {
   background-color: color-mix(in oklch, var(--surface-0), var(--surface-1) 80%);
-}
-
-/* Hairline separator between two adjacent inactive-and-unhovered tabs.
- * The `prev:not(:hover) + next:not(:hover)::before` chain renders the
- * line on the LATER of two siblings, anchored at `left: -1px` so it
- * sits in the gap between them. Hides the moment either neighbour is
- * hovered or becomes active, which matches Chrome — the slighter hover
- * pill replaces the separator as the visual cue, so showing both at
- * once would feel busy. */
-.dockview-theme-bridge
-  .dv-tabs-container
-  > .dv-tab:not(.dv-active-tab):not(:hover)
-  + .dv-tab:not(.dv-active-tab):not(:hover)::before {
-  content: '';
-  position: absolute;
-  left: -1px;
-  top: 25%;
-  bottom: 25%;
-  width: 1px;
-  background-color: oklch(from var(--foreground) l c h / 0.15);
-  pointer-events: none;
 }
 
 /*
@@ -929,9 +920,8 @@ body.dv-tab-dragging
   display: none !important;
 }
 
-.ProseMirror {
-  padding-left: 90px !important;
-  padding-right: 90px !important;
+.milkdown .ProseMirror {
+  padding-inline: 90px;
 }
 
 /*
@@ -1611,5 +1601,54 @@ body.dv-tab-dragging .freeform-canvas-host * {
 @media (prefers-reduced-motion: no-preference) {
   .cm-diagnostic {
     transition: background 120ms ease;
+  }
+}
+
+/* Desktop shell: navigation stays in the chrome; the document is the canvas. */
+.desktop-shell .note-editor,
+.desktop-shell .desktop-editor-header {
+  background: var(--editor-surface);
+}
+.desktop-shell .desktop-editor-header [role='toolbar'] {
+  background: transparent;
+}
+.desktop-shell .milkdown {
+  --crepe-color-background: var(--editor-surface);
+  --crepe-font-title: var(--crepe-font-default);
+  padding: 0 0 4rem;
+}
+.desktop-shell .milkdown .ProseMirror {
+  padding: 2.5rem clamp(3rem, 4vw, 4rem);
+  line-height: var(--editor-line-height, 1.75);
+}
+.desktop-shell .milkdown .ProseMirror p {
+  line-height: var(--editor-line-height, 1.75);
+}
+.desktop-shell .milkdown .ProseMirror h1 {
+  font-size: 2.25em;
+  letter-spacing: -0.035em;
+}
+.desktop-shell .milkdown .ProseMirror h2 {
+  font-size: 1.5em;
+  letter-spacing: -0.02em;
+}
+.desktop-shell .milkdown .ProseMirror h3 {
+  font-size: 1.25em;
+}
+.desktop-shell .milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6) {
+  scroll-margin-block-start: 1.5rem;
+}
+.desktop-shell .milkdown .ProseMirror :is(h4, h5, h6) {
+  font-size: 1.125em;
+}
+.desktop-shell .milkdown-floating-portal {
+  padding: 0;
+}
+.desktop-search {
+  width: clamp(8rem, 18vw, 15rem);
+}
+@media (max-width: 900px) {
+  .desktop-search {
+    width: auto;
   }
 }

@@ -18,9 +18,10 @@
 
   interface Props {
     noteId: string;
+    flat?: boolean;
   }
 
-  let { noteId }: Props = $props();
+  let { noteId, flat = false }: Props = $props();
   let relations = $state<NoteRelations>({ backlinks: [], outgoing: [] });
   let loading = $state(false);
   let failed = $state(false);
@@ -90,7 +91,12 @@
   {/if}
 {/snippet}
 
-<Surface as="section" padding="lg">
+<Surface
+  as="section"
+  variant={flat ? 'panel' : 'section'}
+  padding={flat ? 'none' : 'lg'}
+  class={flat ? 'bg-transparent' : undefined}
+>
   <SectionHeader class="mb-3">
     <Link2 class="size-3.5" />
     {tUi('sidebar.links')}

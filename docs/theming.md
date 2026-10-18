@@ -40,10 +40,10 @@ the other.
 
 | Token         | Use for                                                                                     | Light `L` | Dark `L` |
 | ------------- | ------------------------------------------------------------------------------------------- | --------- | -------- |
-| `--surface-0` | window chrome behind everything — title bar, dock strip, mobile top/bottom bars             | 0.955     | 0.155    |
-| `--surface-1` | panels — sidebars, editor panel, board background (this is what `--background` resolves to) | 0.976     | 0.185    |
-| `--surface-2` | containers on a panel — Kanban columns, sidebar sections, grouped wells                     | 0.990     | 0.215    |
-| `--surface-3` | items and overlays — cards, popovers, dialogs, menus                                        | 1.000     | 0.245    |
+| `--surface-0` | window chrome behind everything — title bar, dock strip, mobile top/bottom bars             | 0.975     | 0.220    |
+| `--surface-1` | panels — sidebars, editor panel, board background (this is what `--background` resolves to) | 0.985     | 0.245    |
+| `--surface-2` | containers on a panel — Kanban columns, sidebar sections, grouped wells                     | 0.992     | 0.270    |
+| `--surface-3` | items and overlays — cards, popovers, dialogs, menus                                        | 1.000     | 0.295    |
 
 Utilities: `bg-surface-0` … `bg-surface-3`.
 
@@ -170,12 +170,15 @@ variant="panel">` for a pane of the shell, `variant="section"` for a grouped
   region inside it, `variant="raised"` for a discrete item on a section, and
   `variant="overlay"` for something genuinely floating. The `padding` prop
   covers the common insets.
-- [`ui/section-header`](../src/lib/components/ui/section-header) — the small
-  uppercase label that titles a region.
+- [`ui/section-header`](../src/lib/components/ui/section-header) — the compact
+  heading that titles a region.
 
-Both sidebars are built this way, which is what makes them read as one design:
-the panel is `surface-1`, its sections are `surface-2`, and items on a section
-(the content-stat tiles) are `surface-3`.
+The desktop navigation uses `surface-0`; the details pane uses `surface-1`.
+Sections inside the details pane share its background and use dividers rather
+than nested cards. The `--editor-surface` token selects `surface-3` in light mode
+and `surface-1` in dark mode; the active document tab shares that surface.
+Use `bg-editor-surface` when a desktop document surface needs a utility class.
+The toolbar and right sidebar header align with the 42px document tab strip.
 
 ## Migration status
 

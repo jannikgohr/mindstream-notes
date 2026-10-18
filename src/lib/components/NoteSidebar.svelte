@@ -7,11 +7,13 @@
     Paperclip,
     Share2,
     ShieldCheck,
-    Tag,
     User,
     UserPlus,
-    Users
+    Users,
+    X
   } from '@lucide/svelte';
+  import NoteOutline from './NoteOutline.svelte';
+  import { Button } from '$lib/components/ui/button';
   import FavouriteStar from './FavouriteStar.svelte';
   import TagsSection from '$lib/components/TagsSection.svelte';
   import NoteHistorySection from '$lib/components/NoteHistorySection.svelte';
@@ -43,6 +45,8 @@
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { ui } from '$lib/state.svelte';
   import { setNoteFavourite, tree } from '$lib/stores/tree.svelte';
+
+  let { onClose }: { onClose?: () => void } = $props();
 
   // Summary only — bodies live with the editor and would force every tree
   // refresh through a load_note round trip.
@@ -364,10 +368,8 @@
 </script>
 
 {#snippet attachmentsRow()}
-  <dl class="border-t border-border">
-    <div
-      class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-    >
+  <dl class="space-y-3">
+    <div class="flex min-w-0 items-center justify-between gap-3">
       <dt
         class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
       >
@@ -386,28 +388,44 @@
 <Surface
   as="aside"
   variant="panel"
-  class="relative flex h-full w-full min-w-0 flex-col text-sm"
+  class="note-details-panel relative flex h-full w-full min-w-0 flex-col text-sm"
 >
+  <header
+    class="flex h-[42px] shrink-0 items-center justify-between border-b border-border bg-surface-0 px-5"
+  >
+    <h2 class="text-xs font-medium">{tUi('sidebar.details')}</h2>
+    {#if onClose}<Button
+        variant="ghost"
+        size="icon"
+        class="size-6 text-muted-foreground"
+        onclick={onClose}
+        aria-label={tUi('sidebar.close')}
+        title={tUi('sidebar.hide')}><X class="size-3.5" /></Button
+      >{/if}
+  </header>
   <div
     bind:this={metadataScroller}
-    class="scrollbar-none flex-1 overflow-y-auto p-3"
+    class="scrollbar-none min-h-0 flex-1 overflow-y-auto px-5 py-5"
   >
     {#if note}
       {#if showMetadata}
-        <Surface as="section" padding="lg">
-          <SectionHeader as="h2" class="mb-3">
-            {tUi('sidebar.metadata')}
-          </SectionHeader>
+        <Surface as="section" variant="panel" class="bg-transparent">
           <div class="flex min-w-0 items-start justify-between gap-3">
             <div class="min-w-0">
-              <h3 class="truncate text-base font-semibold leading-6">
+              <div
+                class="mb-2 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground"
+              >
+                <NoteKindIcon
+                  kind={note.note_kind}
+                  class="size-3 shrink-0"
+                />{noteKindLabel(note.note_kind)}
+              </div>
+              <h3
+                class="truncate text-sm font-semibold leading-6"
+                title={note.title}
+              >
                 {note.title}
               </h3>
-              <p
-                class="mt-0.5 truncate font-mono text-[11px] text-muted-foreground"
-              >
-                {note.id}
-              </p>
             </div>
             <button
               type="button"
@@ -425,14 +443,12 @@
             </button>
           </div>
 
-          <section class="mt-5">
+          <section class="mt-5 border-t border-border pt-5">
             <SectionHeader class="mb-2">
-              {tUi('metadata.organization')}
+              {tUi('sidebar.properties')}
             </SectionHeader>
-            <dl class="border-y border-border">
-              <div
-                class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-              >
+            <dl class="space-y-3">
+              <div class="flex min-w-0 items-center justify-between gap-3">
                 <dt
                   class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
                 >
@@ -440,35 +456,14 @@
                   {tUi('metadata.folder')}
                 </dt>
                 <dd
-                  class="max-w-[9rem] truncate rounded-full bg-accent-brand/10 px-2 py-0.5 text-right text-[11px] font-medium text-accent-brand"
+                  class="max-w-[9rem] truncate text-right text-xs text-muted-foreground"
                   title={folderTitle}
                 >
                   {folderLabel}
                 </dd>
               </div>
-              <div
-                class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-              >
-                <dt
-                  class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                >
-                  <Tag class="size-3.5" />
-                  {tUi('metadata.type')}
-                </dt>
-                <dd
-                  class="flex min-w-0 items-center justify-end gap-1.5 text-right text-xs font-medium text-muted-foreground"
-                >
-                  <NoteKindIcon
-                    kind={note.note_kind}
-                    class="size-3.5 shrink-0"
-                  />
-                  <span class="truncate">{noteKindLabel(note.note_kind)}</span>
-                </dd>
-              </div>
               {#if showPendingSync}
-                <div
-                  class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-                >
+                <div class="flex min-w-0 items-center justify-between gap-3">
                   <dt
                     class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
                   >
@@ -482,19 +477,44 @@
                   </dd>
                 </div>
               {/if}
+
+              <div class="flex min-w-0 items-center justify-between gap-3">
+                <dt
+                  class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
+                >
+                  <CalendarPlus class="size-3.5" />
+                  {tUi('metadata.created')}
+                </dt>
+                <dd
+                  class="min-w-0 truncate text-right text-xs font-medium tabular-nums"
+                >
+                  {formatNoteDateTime(note.created)}
+                </dd>
+              </div>
+              <div class="flex min-w-0 items-center justify-between gap-3">
+                <dt
+                  class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
+                >
+                  <Edit3 class="size-3.5" />
+                  {tUi('metadata.modified')}
+                </dt>
+                <dd
+                  class="min-w-0 truncate text-right text-xs font-medium tabular-nums"
+                >
+                  {formatNoteDateTime(note.modified)}
+                </dd>
+              </div>
             </dl>
           </section>
 
           {#if showSharingMetadata && shareScope}
-            <section class="mt-5">
+            <section class="mt-5 border-t border-border pt-5">
               <SectionHeader class="mb-2">
                 {tUi('metadata.sharing')}
               </SectionHeader>
-              <dl class="border-y border-border">
+              <dl class="space-y-3">
                 {#if showShareScopeRow}
-                  <div
-                    class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-                  >
+                  <div class="flex min-w-0 items-center justify-between gap-3">
                     <dt
                       class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
                     >
@@ -502,7 +522,7 @@
                       {tUi('metadata.sharing.scope')}
                     </dt>
                     <dd
-                      class="max-w-[9rem] truncate rounded-full bg-accent-brand/10 px-2 py-0.5 text-right text-[11px] font-medium text-accent-brand"
+                      class="max-w-[9rem] truncate text-right text-xs text-muted-foreground"
                       title={shareScope.name}
                     >
                       {shareScope.name}
@@ -510,9 +530,7 @@
                   </div>
                 {/if}
                 {#if authorName}
-                  <div
-                    class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-                  >
+                  <div class="flex min-w-0 items-center justify-between gap-3">
                     <dt
                       class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
                     >
@@ -527,9 +545,7 @@
                   </div>
                 {/if}
                 {#if permissionLabel}
-                  <div
-                    class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-                  >
+                  <div class="flex min-w-0 items-center justify-between gap-3">
                     <dt
                       class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
                     >
@@ -544,9 +560,7 @@
                   </div>
                 {/if}
                 {#if collaborators.length > 0}
-                  <div
-                    class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-                  >
+                  <div class="flex min-w-0 items-center justify-between gap-3">
                     <dt
                       class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
                     >
@@ -562,9 +576,7 @@
                   </div>
                 {/if}
                 {#if pendingInviteCount > 0}
-                  <div
-                    class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-                  >
+                  <div class="flex min-w-0 items-center justify-between gap-3">
                     <dt
                       class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
                     >
@@ -582,51 +594,13 @@
             </section>
           {/if}
 
-          <section class="mt-5">
-            <SectionHeader class="mb-2">
-              {tUi('metadata.dates')}
-            </SectionHeader>
-            <dl class="border-y border-border">
-              <div
-                class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-              >
-                <dt
-                  class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                >
-                  <CalendarPlus class="size-3.5" />
-                  {tUi('metadata.created')}
-                </dt>
-                <dd
-                  class="min-w-0 truncate text-right text-xs font-medium tabular-nums"
-                >
-                  {formatNoteDateTime(note.created)}
-                </dd>
-              </div>
-              <div
-                class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-              >
-                <dt
-                  class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                >
-                  <Edit3 class="size-3.5" />
-                  {tUi('metadata.modified')}
-                </dt>
-                <dd
-                  class="min-w-0 truncate text-right text-xs font-medium tabular-nums"
-                >
-                  {formatNoteDateTime(note.modified)}
-                </dd>
-              </div>
-            </dl>
-          </section>
-
           {#if showContentStats}
-            <section class="mt-5">
+            <section class="mt-5 border-t border-border pt-5">
               <SectionHeader class="mb-2">
                 {tUi('metadata.content')}
               </SectionHeader>
               <div class="grid grid-cols-3 gap-2">
-                <Surface variant="raised" class="px-2.5 py-2">
+                <Surface variant="panel" class="bg-transparent">
                   <div class="truncate text-base font-semibold leading-none">
                     {statValue(contentStats.words)}
                   </div>
@@ -634,7 +608,7 @@
                     {tUi('metadata.content.words')}
                   </div>
                 </Surface>
-                <Surface variant="raised" class="px-2.5 py-2">
+                <Surface variant="panel" class="bg-transparent">
                   <div class="truncate text-base font-semibold leading-none">
                     {readValue(contentStats.readMinutes)}
                   </div>
@@ -642,7 +616,7 @@
                     {tUi('metadata.content.read')}
                   </div>
                 </Surface>
-                <Surface variant="raised" class="px-2.5 py-2">
+                <Surface variant="panel" class="bg-transparent">
                   <div class="truncate text-base font-semibold leading-none">
                     {statValue(contentStats.links)}
                   </div>
@@ -658,7 +632,7 @@
               {/if}
             </section>
           {:else if showAttachments}
-            <section class="mt-5">
+            <section class="mt-5 border-t border-border pt-5">
               <SectionHeader class="mb-2">
                 {tUi('metadata.attachments')}
               </SectionHeader>
@@ -666,35 +640,36 @@
             </section>
           {/if}
 
-          <div
-            class="mt-5 border-border"
-            class:border-t={showContentStats || showAttachments}
-            class:pt-5={showContentStats || showAttachments}
-          >
+          <div class="mt-5 border-t border-border pt-5">
             <TagsSection noteId={note.id} />
           </div>
+          {#if supportsNoteLinks}<NoteOutline noteId={note.id} />{/if}
         </Surface>
       {/if}
 
       {#if showHistory && noteHistoryEnabled(note.note_kind)}
-        <Surface as="section" padding="lg" class="mt-3">
+        <Surface
+          as="section"
+          variant="panel"
+          class="mt-5 border-t border-border bg-transparent pt-5"
+        >
           <NoteHistorySection noteId={note.id} noteKind={note.note_kind} />
         </Surface>
       {/if}
 
       {#if supportsNoteLinks && showLinks}
-        <div class="mt-3">
-          <NoteLinksSection noteId={note.id} />
+        <div class="mt-5 border-t border-border pt-5">
+          <NoteLinksSection noteId={note.id} flat />
         </div>
       {/if}
 
       {#if !showMetadata && !(showHistory && noteHistoryEnabled(note.note_kind)) && !(supportsNoteLinks && showLinks)}
-        <Surface as="p" padding="lg" class="text-xs text-muted-foreground">
+        <Surface as="p" variant="panel" class="text-xs text-muted-foreground">
           {tUi('sidebar.sections.empty')}
         </Surface>
       {/if}
     {:else}
-      <Surface as="p" padding="lg" class="text-xs text-muted-foreground">
+      <Surface as="p" variant="panel" class="text-xs text-muted-foreground">
         {tUi('metadata.noNote')}
       </Surface>
     {/if}
