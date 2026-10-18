@@ -9,7 +9,6 @@ import { isDesktopThemeMode, DesktopThemeMode } from './desktop-settings';
 const STORAGE_KEY = 'mindstream:user-theme-presets:v1';
 export interface ThemeAppearance {
   preset: ThemePreset;
-  accent: string | null;
   uiFontSize: number;
   mode: DesktopThemeMode;
 }
@@ -19,7 +18,6 @@ export function getThemeAppearance(): Promise<ThemeAppearance> {
     undefined,
     () => ({
       preset: BUILTIN_PRESETS[0],
-      accent: null,
       uiFontSize: 16,
       mode: DesktopThemeMode.System
     }),
@@ -27,12 +25,6 @@ export function getThemeAppearance(): Promise<ThemeAppearance> {
       if (!value || typeof value !== 'object')
         throw new Error('Invalid theme appearance');
       const raw = value as Record<string, unknown>;
-      if (
-        raw.accent !== null &&
-        (typeof raw.accent !== 'string' ||
-          !/^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(raw.accent))
-      )
-        throw new Error('Invalid accent');
       if (
         typeof raw.uiFontSize !== 'number' ||
         raw.uiFontSize < 12 ||
@@ -45,7 +37,6 @@ export function getThemeAppearance(): Promise<ThemeAppearance> {
       if (!isDesktopThemeMode(mode)) throw new Error('Invalid theme mode');
       return {
         preset: parseThemePreset(raw.preset),
-        accent: raw.accent as string | null,
         uiFontSize: raw.uiFontSize,
         mode
       };

@@ -1101,7 +1101,6 @@
     "theme.preset.forest": "Forest",
     "theme.missingOption": "Missing preset: {id}",
     "theme.missing": "This preset is unavailable. Apollo is displayed while your selection is retained.",
-    "theme.useAccent": "Use preset accent",
     "theme.editJson": "Show preset JSON",
     "theme.remove": "Remove preset",
     "theme.import": "Import or edit a preset",
@@ -1387,9 +1386,6 @@
     "appearance.mode": {
       "label": "Mode"
     },
-    "appearance.accent": {
-      "label": "Accent colour"
-    },
     "appearance.reduceMotion": {
       "label": "Reduce motion"
     },
@@ -1599,7 +1595,7 @@
     },
     "appearance.preset": {
       "label": "Theme preset",
-      "description": "Applies to every vault on this device. Light/dark mode and your accent override are independent."
+      "description": "Applies to every vault on this device. Each preset has a light and a dark version; the mode above picks which one you see."
     }
   },
   "values": {

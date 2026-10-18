@@ -256,7 +256,7 @@ fn appearance_at(root: &Path, mode: impl Serialize) -> AppResult<serde_json::Val
         .find(|preset| preset.id == id)
         .unwrap_or(&presets[0]);
     Ok(
-        serde_json::json!({"preset":preset,"accent":values.get("appearance.accent"),"uiFontSize":values.get("appearance.uiFontSize").cloned().unwrap_or(serde_json::json!(16)),"mode":mode}),
+        serde_json::json!({"preset":preset,"uiFontSize":values.get("appearance.uiFontSize").cloned().unwrap_or(serde_json::json!(16)),"mode":mode}),
     )
 }
 
@@ -376,7 +376,6 @@ mod tests {
         let first = builtins().remove(0);
         let fresh = appearance_at(&root, "dark").unwrap();
         assert_eq!(fresh["preset"]["id"], first.id.as_str());
-        assert_eq!(fresh["accent"], serde_json::Value::Null);
         assert_eq!(fresh["uiFontSize"], 16);
         assert_eq!(fresh["mode"], "dark");
 
@@ -390,7 +389,8 @@ mod tests {
         .unwrap();
         let selected = appearance_at(&root, Option::<&str>::None).unwrap();
         assert_eq!(selected["preset"]["id"], "custom");
-        assert_eq!(selected["accent"], "#abcdef");
+        // A root document from before the accent setting was retired still loads.
+        assert!(selected.get("accent").is_none());
         assert_eq!(selected["uiFontSize"], 14);
         assert_eq!(selected["mode"], serde_json::Value::Null);
         let ids: Vec<_> = catalog(&root)

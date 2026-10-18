@@ -16,7 +16,11 @@ type Values = BTreeMap<String, Value>;
 const MAX_BYTES: usize = 1024 * 1024;
 const GLOBAL_SHORTCUTS: &str = "hotkeys.globalShortcuts";
 const SHORTCUT_RECEIPT: &str = ".global-shortcuts-migrated";
-const DEVICE_APPEARANCE: [&str; 2] = ["appearance.accent", "appearance.uiFontSize"];
+const DEVICE_APPEARANCE: [&str; 1] = ["appearance.uiFontSize"];
+/// Settings that no longer exist. Documents, browser imports and backups from
+/// older builds may still carry them; they are dropped on read instead of
+/// failing the whole document, and the next save leaves them out.
+const RETIRED: [&str; 1] = ["appearance.accent"];
 const APPEARANCE_OWNER: &str = "appearance-migration-owner.json";
 const APPEARANCE_RECEIPT: &str = ".device-appearance-migrated";
 static SCOPES: LazyLock<BTreeMap<String, bool>> = LazyLock::new(|| {
@@ -85,7 +89,8 @@ fn decode(raw: &[u8], device: bool) -> AppResult<Document> {
     if raw.len() > MAX_BYTES {
         return Err(invalid());
     }
-    let document: Document = serde_json::from_slice(raw).map_err(|_| invalid())?;
+    let mut document: Document = serde_json::from_slice(raw).map_err(|_| invalid())?;
+    drop_retired(&mut document.values);
     validate_values(&document.values)?;
     for (id, value) in &document.values {
         validate_preference(id, value)?;
@@ -100,6 +105,10 @@ fn decode(raw: &[u8], device: bool) -> AppResult<Document> {
         return Err(invalid());
     }
     Ok(document)
+}
+
+fn drop_retired(values: &mut Values) {
+    values.retain(|id, _| !RETIRED.contains(&id.as_str()));
 }
 
 fn read(path: &Path, device: bool) -> AppResult<Document> {
@@ -150,7 +159,8 @@ fn legacy(raw: Option<&str>) -> AppResult<Values> {
     if raw.len() > MAX_BYTES {
         return Err(invalid());
     }
-    let values: Values = serde_json::from_str(raw).map_err(|_| invalid())?;
+    let mut values: Values = serde_json::from_str(raw).map_err(|_| invalid())?;
+    drop_retired(&mut values);
     validate_values(&values)?;
     Ok(values)
 }
@@ -179,6 +189,8 @@ pub(crate) fn backup_values(directory: &Path, device: bool) -> AppResult<Values>
 }
 
 pub(crate) fn validate_backup_values(values: &Values, device: bool) -> AppResult<()> {
+    let mut values = values.clone();
+    drop_retired(&mut values);
     let raw = serde_json::to_vec(&Document {
         version: 1,
         revision: 0,
@@ -214,15 +226,14 @@ pub(crate) fn restore_backup_values(
             values: Values::new(),
         }
     };
+    let mut values = values.clone();
+    drop_retired(&mut values);
     if device {
         for (key, value) in values {
-            document
-                .values
-                .entry(key.clone())
-                .or_insert_with(|| value.clone());
+            document.values.entry(key).or_insert(value);
         }
     } else {
-        document.values = values.clone();
+        document.values = values;
     }
     document.revision = document.revision.checked_add(1).ok_or_else(invalid)?;
     save(&path, &document, device)?;
@@ -722,11 +733,6 @@ fn initialize_classified(
 fn validate_preference(id: &str, value: &Value) -> AppResult<()> {
     let valid = match id {
         "appearance.preset" => value.as_str().is_some_and(crate::theme_presets::valid_id),
-        "appearance.accent" => value.as_str().is_some_and(|color| {
-            color.starts_with('#')
-                && [4, 5, 7, 9].contains(&color.len())
-                && color[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
-        }),
         "appearance.uiFontSize" => value
             .as_f64()
             .is_some_and(|size| size.is_finite() && (12.0..=18.0).contains(&size)),
@@ -857,7 +863,7 @@ fn access(
         save(&device_path, &device, true)?;
     }
     if let Some((id, value)) = patch {
-        if id.is_empty() || id.len() > 512 {
+        if id.is_empty() || id.len() > 512 || RETIRED.contains(&id.as_str()) {
             return Err(invalid());
         }
         let is_device = device_scope(&id);
@@ -1033,22 +1039,20 @@ mod tests {
         let dirs = TestDirs::new();
         prepare_device_appearance(&dirs.root, &dirs.a, "default").unwrap();
         let other = initialize(&dirs.root, &dirs.b, "other", None, Some(r##"{"appearance.accent":"#abcdef","appearance.uiFontSize":18,"appearance.editorFontSize":22}"##)).unwrap();
-        assert!(!other.values.contains_key("appearance.accent"));
+        assert!(!other.values.contains_key("appearance.uiFontSize"));
         assert_eq!(other.values["appearance.editorFontSize"], 22);
         assert!(!dirs.root.join(APPEARANCE_RECEIPT).exists());
         let selected = initialize(&dirs.root, &dirs.a, "default", None, Some(r##"{"appearance.accent":"#123456","appearance.uiFontSize":14,"appearance.editorFontSize":20}"##)).unwrap();
-        assert_eq!(selected.values["appearance.accent"], "#123456");
         assert_eq!(selected.values["appearance.uiFontSize"], 14);
+        // The retired accent setting is never migrated or stored.
+        assert!(!selected.values.contains_key("appearance.accent"));
         assert_eq!(
-            access(&dirs.root, &dirs.b, None).unwrap().values["appearance.accent"],
-            "#123456"
+            access(&dirs.root, &dirs.b, None).unwrap().values["appearance.uiFontSize"],
+            14
         );
-        assert_eq!(
-            read(&dirs.b.join("content-settings.json"), false)
-                .unwrap()
-                .values["appearance.accent"],
-            "#abcdef"
-        );
+        let retained = read(&dirs.b.join("content-settings.json"), false).unwrap();
+        assert_eq!(retained.values["appearance.uiFontSize"], 18);
+        assert!(!retained.values.contains_key("appearance.accent"));
         assert_eq!(
             read(&dirs.a.join("content-settings.json"), false)
                 .unwrap()
@@ -1058,15 +1062,78 @@ mod tests {
         access(
             &dirs.root,
             &dirs.a,
-            Some(("appearance.accent".into(), None)),
+            Some(("appearance.uiFontSize".into(), None)),
         )
         .unwrap();
         let reopened = initialize(&dirs.root, &dirs.a, "default", None, None).unwrap();
         assert!(
-            !reopened.values.contains_key("appearance.accent"),
+            !reopened.values.contains_key("appearance.uiFontSize"),
             "reset cannot resurrect a retained vault value"
         );
         assert_eq!(reopened.values["appearance.editorFontSize"], 20);
+    }
+
+    #[test]
+    fn retired_accent_is_dropped_from_old_documents_and_refused_as_a_patch() {
+        let dirs = TestDirs::new();
+        let imported = initialize(
+            &dirs.root,
+            &dirs.a,
+            "default",
+            Some(r##"{"appearance.accent":"#999999","appearance.reduceMotion":"on"}"##),
+            None,
+        )
+        .unwrap();
+        assert!(!imported.values.contains_key("appearance.accent"));
+        assert_eq!(imported.values["appearance.reduceMotion"], "on");
+        let device_path = dirs.root.join("ui-settings.json");
+        let vault_path = dirs.a.join("content-settings.json");
+        fs::write(&device_path, r##"{"version":1,"revision":4,"values":{"appearance.accent":"#3b6fd4","appearance.preset":"slate"}}"##).unwrap();
+        fs::write(&vault_path, r##"{"version":1,"revision":2,"values":{"appearance.accent":"#112233","appearance.editorFontSize":19}}"##).unwrap();
+        let loaded = access(&dirs.root, &dirs.a, None).unwrap();
+        assert!(!loaded.values.contains_key("appearance.accent"));
+        assert_eq!(loaded.values["appearance.preset"], "slate");
+        assert_eq!(loaded.values["appearance.editorFontSize"], 19);
+        assert!(access(
+            &dirs.root,
+            &dirs.a,
+            Some(("appearance.accent".into(), Some(Value::from("#abcdef")))),
+        )
+        .is_err());
+        // The next write of each document leaves the retired key out.
+        access(
+            &dirs.root,
+            &dirs.a,
+            Some(("appearance.uiFontSize".into(), Some(Value::from(15)))),
+        )
+        .unwrap();
+        access(
+            &dirs.root,
+            &dirs.a,
+            Some(("appearance.editorFontSize".into(), Some(Value::from(18)))),
+        )
+        .unwrap();
+        for path in [&device_path, &vault_path] {
+            assert!(!fs::read_to_string(path)
+                .unwrap()
+                .contains("appearance.accent"));
+        }
+        let mut backup: Values = [
+            ("appearance.accent".into(), Value::from("#abcdef")),
+            ("appearance.uiFontSize".into(), Value::from(13)),
+        ]
+        .into();
+        // Backups made before the retirement still restore.
+        validate_backup_values(&backup, true).unwrap();
+        let fresh = TestDirs::new();
+        restore_backup_values(&fresh.root, &backup, true).unwrap();
+        backup.remove("appearance.accent");
+        assert_eq!(
+            read(&fresh.root.join("ui-settings.json"), true)
+                .unwrap()
+                .values,
+            backup
+        );
     }
 
     #[test]
@@ -1081,7 +1148,7 @@ mod tests {
             Some(r##"{"appearance.accent":"#112233","appearance.uiFontSize":13}"##),
         )
         .unwrap();
-        assert_eq!(migrated.values["appearance.accent"], "#aabbcc");
+        assert!(!migrated.values.contains_key("appearance.accent"));
         assert_eq!(migrated.values["appearance.uiFontSize"], 17);
         // Simulate a crash after root publication and before the completion receipt.
         fs::remove_file(dirs.root.join(APPEARANCE_RECEIPT)).unwrap();
@@ -1482,10 +1549,7 @@ mod tests {
         access(
             &root,
             &vault,
-            Some((
-                "appearance.accent".into(),
-                Some(serde_json::json!("#abcdef")),
-            )),
+            Some(("appearance.preset".into(), Some(serde_json::json!("slate")))),
         )
         .unwrap();
         for sequence in 1..=36_000u64 {

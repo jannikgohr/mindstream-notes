@@ -55,7 +55,6 @@ describe('theme preset persistence bridge', () => {
     (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
     const value = {
       preset: BUILTIN_PRESETS[1],
-      accent: '#aabbcc',
       uiFontSize: 14,
       mode: 'dark'
     };
@@ -67,7 +66,6 @@ describe('theme preset persistence bridge', () => {
   it('falls back to the first built-in appearance outside the desktop runtime', async () => {
     await expect(getThemeAppearance()).resolves.toEqual({
       preset: BUILTIN_PRESETS[0],
-      accent: null,
       uiFontSize: 16,
       mode: 'system'
     });

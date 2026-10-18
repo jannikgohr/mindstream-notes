@@ -59,7 +59,8 @@ describe('browser device appearance migration', () => {
     localStorage.setItem('notes-app:settings:v1:vault:work', source);
     await setSettingsVaultId('work');
     // The browser's scoped key format is kept in sync with native migration inputs.
-    expect(getSettingValue('appearance.accent')).toBe('#123456');
+    // The retired accent setting is dropped rather than carried along.
+    expect(settings.values).not.toHaveProperty('appearance.accent');
     expect(getSettingValue('appearance.editorFontSize')).toBe(20);
     await setSettingsVaultId('other');
     expect(getSettingValue('appearance.uiFontSize')).toBe(14);
@@ -270,11 +271,11 @@ describe('setSettingValue / resetSettingValue', () => {
 
 describe('persisted settings parsing', () => {
   it('accepts only object records from localStorage JSON', () => {
-    expect(parseStoredSettings('{"appearance.accent":"#abc"}')).toEqual({
-      'appearance.accent': '#abc'
+    expect(parseStoredSettings('{"appearance.uiFontSize":14}')).toEqual({
+      'appearance.uiFontSize': 14
     });
     expect(parseStoredSettings('[]')).toBeNull();
-    expect(parseStoredSettings('"appearance.accent"')).toBeNull();
+    expect(parseStoredSettings('"appearance.uiFontSize"')).toBeNull();
     expect(parseStoredSettings('false')).toBeNull();
     expect(parseStoredSettings('null')).toBeNull();
   });

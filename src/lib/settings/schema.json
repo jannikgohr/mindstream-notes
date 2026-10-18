@@ -141,12 +141,6 @@
               "customId": "theme-presets"
             },
             {
-              "id": "appearance.accent",
-              "scope": "D",
-              "type": "color",
-              "default": "#3b6fd4"
-            },
-            {
               "id": "appearance.reduceMotion",
               "scope": "D",
               "type": "radio",

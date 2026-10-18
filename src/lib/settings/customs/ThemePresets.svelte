@@ -1,11 +1,7 @@
 <script lang="ts">
   import { BUILTIN_PRESETS, resolvedPreset } from '../theme-presets';
   import { themeCatalog, refreshThemePresets } from '../theme.svelte';
-  import {
-    getSettingValue,
-    setSettingValue,
-    resetSettingValue
-  } from '../store.svelte';
+  import { getSettingValue, setSettingValue } from '../store.svelte';
   import { saveThemePreset, deleteThemePreset } from '$lib/api/theme-presets';
   import { tUi, tUiFormat } from '../i18n.svelte';
   import { toErrorMessage } from '$lib/api/errors';
@@ -98,13 +94,6 @@
       {error || themeCatalog.error}
     </p>{/if}
   <div class="flex flex-wrap gap-2">
-    <button
-      type="button"
-      class="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
-      disabled={busy}
-      onclick={() => resetSettingValue('appearance.accent')}
-      >{tUi('theme.useAccent')}</button
-    >
     <button
       type="button"
       class="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"

@@ -35,7 +35,6 @@
       applyThemeAppearance(
         appearance.preset,
         $mode === 'dark',
-        appearance.accent,
         appearance.uiFontSize
       );
   });

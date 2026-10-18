@@ -1,5 +1,4 @@
 import builtinData from './theme-presets.json';
-import { applyAccentColor, clearAccentColor } from './accent';
 import { applyUiFontSize } from './appearance';
 
 export const THEME_TOKENS = [
@@ -147,28 +146,21 @@ export function resolvedPreset(
 export function applyThemeAppearance(
   preset: ThemePreset,
   dark: boolean,
-  accent: unknown,
   uiFontSize: unknown
 ): void {
   if (typeof document === 'undefined') return;
-  clearAccentColor();
   const palette = dark ? preset.dark : preset.light;
   for (const token of THEME_TOKENS)
     document.documentElement.style.setProperty(
       `--${token}`,
       `oklch(${palette[token].join(' ')})`
     );
-  if (
-    typeof accent === 'string' &&
-    /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(accent)
-  )
-    applyAccentColor(accent);
   applyUiFontSize(uiFontSize);
   document.documentElement.dataset.themePreset = preset.id;
   try {
     localStorage.setItem(
       THEME_CACHE_KEY,
-      JSON.stringify({ preset, accent, uiFontSize })
+      JSON.stringify({ preset, uiFontSize })
     );
   } catch {
     /* storage can be unavailable */

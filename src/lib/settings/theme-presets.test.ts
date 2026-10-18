@@ -55,29 +55,30 @@ describe('theme preset contract', () => {
     preset.dark.foreground = preset.dark['surface-1'];
     expect(() => parseThemePreset(preset)).toThrow();
   });
-  it('switches mode independently and applies an explicit accent after preset tokens', () => {
+  it('switches mode independently and takes the accent from the preset', () => {
     const warm = BUILTIN_PRESETS.find((preset) => preset.id === 'warm')!;
-    applyThemeAppearance(warm, false, '#123456', 14);
+    applyThemeAppearance(warm, false, 14);
     expect(document.documentElement.style.getPropertyValue('--surface-1')).toBe(
       `oklch(${warm.light['surface-1'].join(' ')})`
     );
     expect(
       document.documentElement.style.getPropertyValue('--accent-brand')
-    ).toBe('#123456');
+    ).toBe(`oklch(${warm.light['accent-brand'].join(' ')})`);
     expect(
       document.documentElement.style.getPropertyValue('--ui-font-size')
     ).toBe('14px');
-    applyThemeAppearance(warm, true, '#123456', 14);
+    applyThemeAppearance(warm, true, 14);
     expect(document.documentElement.style.getPropertyValue('--surface-1')).toBe(
       `oklch(${warm.dark['surface-1'].join(' ')})`
     );
     expect(document.documentElement.style.getPropertyValue('--primary')).toBe(
       `oklch(${warm.dark.primary.join(' ')})`
     );
-    applyThemeAppearance(warm, true, undefined, 16);
     expect(
       document.documentElement.style.getPropertyValue('--accent-brand')
     ).toBe(`oklch(${warm.dark['accent-brand'].join(' ')})`);
+    // Focus rings follow the preset accent through app.css, not an inline value.
+    expect(document.documentElement.style.getPropertyValue('--ring')).toBe('');
   });
   it('makes Apollo the default and keeps the earlier presets', () => {
     expect(BUILTIN_PRESETS.map((preset) => [preset.id, preset.name])).toEqual([
@@ -133,6 +134,7 @@ describe('theme preset contract', () => {
       .replace(/^<script>|<\/script>$/g, '');
     expect(script).toBeTruthy();
     const preset = BUILTIN_PRESETS[2];
+    // Caches written before the accent setting was retired still carry it.
     localStorage.setItem(
       'mindstream:appearance:v1',
       JSON.stringify({ preset, accent: '#ffffff', uiFontSize: 18 })
@@ -143,10 +145,12 @@ describe('theme preset contract', () => {
       `oklch(${preset.dark['surface-1'].join(' ')})`
     );
     expect(
-      document.documentElement.style.getPropertyValue(
-        '--accent-brand-foreground'
-      )
-    ).toBe('#000000');
+      document.documentElement.style.getPropertyValue('--accent-brand')
+    ).toBe(`oklch(${preset.dark['accent-brand'].join(' ')})`);
+    expect(document.documentElement.style.getPropertyValue('--ring')).toBe('');
+    expect(
+      document.documentElement.style.getPropertyValue('--ui-font-size')
+    ).toBe('18px');
     document.documentElement.removeAttribute('style');
     localStorage.setItem(
       'mindstream:appearance:v1',
@@ -204,7 +208,7 @@ describe('native window background', () => {
         throw new Error('quota exceeded');
       });
     expect(() =>
-      applyThemeAppearance(BUILTIN_PRESETS[0], false, null, 16)
+      applyThemeAppearance(BUILTIN_PRESETS[0], false, 16)
     ).not.toThrow();
     expect(document.documentElement.dataset.themePreset).toBe(
       BUILTIN_PRESETS[0].id

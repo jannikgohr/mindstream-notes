@@ -1101,7 +1101,6 @@
     "theme.preset.forest": "Wald",
     "theme.missingOption": "Fehlende Vorlage: {id}",
     "theme.missing": "Diese Vorlage ist nicht verfügbar. Apollo wird angezeigt, deine Auswahl bleibt erhalten.",
-    "theme.useAccent": "Akzent der Vorlage verwenden",
     "theme.editJson": "Vorlagen-JSON anzeigen",
     "theme.remove": "Vorlage entfernen",
     "theme.import": "Vorlage importieren oder bearbeiten",
@@ -1381,9 +1380,6 @@
     "appearance.mode": {
       "label": "Modus"
     },
-    "appearance.accent": {
-      "label": "Akzentfarbe"
-    },
     "appearance.reduceMotion": {
       "label": "Animationen reduzieren"
     },
@@ -1599,7 +1595,7 @@
     },
     "appearance.preset": {
       "label": "Designvorlage",
-      "description": "Gilt für alle Tresore auf diesem Gerät. Hell-/Dunkelmodus und dein eigener Akzent sind unabhängig."
+      "description": "Gilt für alle Tresore auf diesem Gerät. Jede Vorlage hat eine helle und eine dunkle Fassung; der Modus oben bestimmt, welche du siehst."
     }
   },
   "values": {

@@ -80,15 +80,14 @@ These are different things and the naming is a known hazard:
   text selection, active-state emphasis. **This is the one you want when you
   mean "accent" in the everyday sense.**
 
-Appearance → Accent overrides `--accent-brand`, `--accent-brand-foreground` and
-`--ring` only (see [`src/lib/settings/accent.ts`](../src/lib/settings/accent.ts)).
-It used to override `--primary`, which turned every neutral button in the app
-into the user's accent colour.
-
-An explicit stored accent overrides the preset in both modes. Without that
-value, the preset supplies separate light and dark accents. "Use preset accent"
-removes the override. Text on an explicit accent uses black or white according
-to its RGB luminance; neutral primary buttons keep the preset's values.
+The accent comes from the theme preset, which has separate light and dark
+values for it. `--ring` follows `--accent-brand` in `app.css`, so focus rings
+match. There is no separate accent setting any more: the old Appearance →
+Accent colour override was one hex value for both modes, which a preset can
+always do better, and it hid the preset's own accent. Values saved by older
+builds (`appearance.accent`) are dropped when settings, browser imports or
+backups load, and the next save leaves them out. To change the accent, save a
+custom preset.
 
 ## Theme presets
 
@@ -97,8 +96,8 @@ Paper & Teal, Warm and Forest. Apollo pairs blue-slate neutrals with an ochre
 accent; Slate & Indigo is cool and neutral; Paper & Teal is warm paper with a
 teal accent. The default preset's values are also the base tokens in
 `app.css`, so the two must change together. Light/dark/system mode
-is independent of preset selection. Presets, accent and UI font size apply to
-every vault on this device. Editor font size and line height stay in the vault.
+is independent of preset selection. Presets and UI font size apply to every
+vault on this device. Editor font size and line height stay in the vault.
 
 Use "Show preset JSON" to start from a complete preset. Change its ID and name,
 then save it under "Import or edit a preset". Saving an existing custom ID
@@ -178,7 +177,7 @@ which runs on staged files at commit time and over all of `src/` as part of
 ### Documented exceptions
 
 Some things are deliberately not on the surface or accent scales, because the
-colour _is_ the meaning and must not follow a user-chosen accent. They are still
+colour _is_ the meaning and must not follow the preset's accent. They are still
 tokens with light and dark values — the exception is the fixed hue, not the
 absence of a token:
 
@@ -210,7 +209,7 @@ default `--surface-1` and `--foreground` values to avoid a flash before `app.css
 loads. It first applies validated numeric preset tokens from the root bootstrap
 or browser cache. Its literal fallbacks must still match the default tokens.
 Update `app.html` when those defaults change. Main windows receive root mode,
-preset, accent and font size before document scripts run; popouts share their
+preset and font size before document scripts run; popouts share their
 vault's cache and use its resolved surface color as the native background.
 
 ## Composing a panel
