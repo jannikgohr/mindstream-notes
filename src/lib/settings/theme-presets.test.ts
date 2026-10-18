@@ -6,8 +6,20 @@ import {
   currentThemeWindowBackground,
   parseThemePreset,
   resolvedPreset,
-  themeContrast
+  themeContrast,
+  THEME_TOKENS,
+  type ThemeColor
 } from './theme-presets';
+
+const css = readFileSync('src/app.css', 'utf8');
+/** First `--name: oklch(…)` after the given block opener, as [L, C, H]. */
+function cssToken(block: RegExp, name: string): ThemeColor | undefined {
+  const source = css.slice(css.search(block));
+  const value = source.match(new RegExp(`--${name}:\\s*oklch\\(([^)]*)\\);`));
+  return value?.[1].split(' ').map(Number) as ThemeColor | undefined;
+}
+const ROOT = /^:root\s*\{/m;
+const DARK = /^\.dark\s*\{/m;
 
 afterEach(() => {
   document.documentElement.removeAttribute('style');
@@ -44,7 +56,7 @@ describe('theme preset contract', () => {
     expect(() => parseThemePreset(preset)).toThrow();
   });
   it('switches mode independently and applies an explicit accent after preset tokens', () => {
-    const warm = BUILTIN_PRESETS[1];
+    const warm = BUILTIN_PRESETS.find((preset) => preset.id === 'warm')!;
     applyThemeAppearance(warm, false, '#123456', 14);
     expect(document.documentElement.style.getPropertyValue('--surface-1')).toBe(
       `oklch(${warm.light['surface-1'].join(' ')})`
@@ -66,6 +78,48 @@ describe('theme preset contract', () => {
     expect(
       document.documentElement.style.getPropertyValue('--accent-brand')
     ).toBe(`oklch(${warm.dark['accent-brand'].join(' ')})`);
+  });
+  it('makes Apollo the default and keeps the earlier presets', () => {
+    expect(BUILTIN_PRESETS.map((preset) => [preset.id, preset.name])).toEqual([
+      ['default', 'Apollo'],
+      ['slate', 'Slate & Indigo'],
+      ['paper', 'Paper & Teal'],
+      ['warm', 'Warm'],
+      ['forest', 'Forest']
+    ]);
+  });
+  it('mirrors the default preset in the app.css base tokens and pre-paint colours', () => {
+    const [preset] = BUILTIN_PRESETS;
+    for (const name of THEME_TOKENS) {
+      expect(cssToken(ROOT, name), name).toEqual(preset.light[name]);
+      expect(cssToken(DARK, name), name).toEqual(preset.dark[name]);
+    }
+    const html = readFileSync('src/app.html', 'utf8');
+    for (const mode of ['light', 'dark'] as const)
+      for (const name of ['surface-1', 'foreground'] as const)
+        expect(html).toContain(
+          `var(--${name}, oklch(${preset[mode][name].join(' ')}))`
+        );
+  });
+  it('keeps the shared status colours readable as text on every built-in preset', () => {
+    for (const status of ['success', 'warning', 'info', 'destructive'])
+      for (const [block, mode] of [
+        [ROOT, 'light'],
+        [DARK, 'dark']
+      ] as const) {
+        const color = cssToken(block, status)!;
+        for (const preset of BUILTIN_PRESETS)
+          for (const surface of [
+            'surface-0',
+            'surface-1',
+            'surface-2',
+            'surface-3'
+          ] as const)
+            expect(
+              themeContrast(color, preset[mode][surface]),
+              `${status} on ${preset.id} ${mode} ${surface}`
+            ).toBeGreaterThanOrEqual(4.5);
+      }
   });
   it('falls back without mutating a missing user selection', () => {
     const selection = { id: 'missing-user-theme' };

@@ -92,14 +92,18 @@ to its RGB luminance; neutral primary buttons keep the preset's values.
 
 ## Theme presets
 
-Appearance settings offer Mindstream, Warm and Forest. Light/dark/system mode
+Appearance settings offer Apollo (the default, ID `default`), Slate & Indigo,
+Paper & Teal, Warm and Forest. Apollo pairs blue-slate neutrals with an ochre
+accent; Slate & Indigo is cool and neutral; Paper & Teal is warm paper with a
+teal accent. The default preset's values are also the base tokens in
+`app.css`, so the two must change together. Light/dark/system mode
 is independent of preset selection. Presets, accent and UI font size apply to
 every vault on this device. Editor font size and line height stay in the vault.
 
 Use "Show preset JSON" to start from a complete preset. Change its ID and name,
 then save it under "Import or edit a preset". Saving an existing custom ID
 replaces that preset on this device. Built-in IDs are reserved. Removing a
-selected preset keeps its selection and displays Mindstream; restoring the
+selected preset keeps its selection and displays Apollo; restoring the
 same ID restores the theme. The original data stays available during recovery.
 
 A preset has exactly `version`, `id`, `name`, `light` and `dark` fields.
@@ -134,6 +138,11 @@ locked publication and notifications run. Complete built-in examples live in
 `--success`, `--warning`, `--info` and `--destructive`. `--destructive` is the
 fourth member of this ramp and keeps its shadcn name — there is no `--danger`
 alias, so there is exactly one word for the concept.
+
+Presets do not carry status colours, so one set serves every preset. They come
+from Apollo's green, teal and red, with a yellower amber for `--warning` so it
+stays apart from Apollo's ochre accent. Each base colour is checked as text
+against every built-in preset's surfaces (at least 4.6:1).
 
 Each has three companions:
 

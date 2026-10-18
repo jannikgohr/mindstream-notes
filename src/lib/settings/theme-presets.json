@@ -2,34 +2,100 @@
   {
     "version": 1,
     "id": "default",
-    "name": "Mindstream",
+    "name": "Apollo",
     "light": {
-      "surface-0": [0.975, 0.003, 260.0],
-      "surface-1": [0.985, 0.002, 260.0],
-      "surface-2": [0.992, 0.001, 260.0],
-      "surface-3": [1.0, 0.0, 0.0],
-      "border-subtle": [0.92, 0.005, 260.0],
-      "border-strong": [0.85, 0.008, 260.0],
-      "accent-brand": [0.56, 0.17, 275.0],
-      "accent-brand-foreground": [0.99, 0.0, 0.0],
-      "foreground": [0.295, 0.016, 265.0],
-      "muted-foreground": [0.52, 0.018, 265.0],
-      "primary": [0.205, 0.0, 0.0],
-      "primary-foreground": [0.985, 0.0, 0.0]
+      "surface-0": [0.955, 0.008, 195],
+      "surface-1": [0.968, 0.007, 195],
+      "surface-2": [0.98, 0.005, 195],
+      "surface-3": [0.995, 0.003, 195],
+      "border-subtle": [0.895, 0.011, 200],
+      "border-strong": [0.825, 0.015, 205],
+      "accent-brand": [0.53, 0.115, 60],
+      "accent-brand-foreground": [0.99, 0.005, 85],
+      "foreground": [0.26, 0.026, 252],
+      "muted-foreground": [0.49, 0.03, 222],
+      "primary": [0.29, 0.026, 245],
+      "primary-foreground": [0.965, 0.006, 190]
     },
     "dark": {
-      "surface-0": [0.22, 0.009, 270.0],
-      "surface-1": [0.245, 0.009, 270.0],
-      "surface-2": [0.27, 0.01, 270.0],
-      "surface-3": [0.295, 0.012, 270.0],
-      "border-subtle": [0.325, 0.012, 270.0],
-      "border-strong": [0.4, 0.015, 270.0],
-      "accent-brand": [0.76, 0.12, 275.0],
-      "accent-brand-foreground": [0.2, 0.02, 275.0],
-      "foreground": [0.985, 0.0, 0.0],
-      "muted-foreground": [0.708, 0.0, 0.0],
-      "primary": [0.985, 0.0, 0.0],
-      "primary-foreground": [0.205, 0.0, 0.0]
+      "surface-0": [0.175, 0.024, 266],
+      "surface-1": [0.2, 0.025, 262],
+      "surface-2": [0.225, 0.025, 257],
+      "surface-3": [0.25, 0.025, 250],
+      "border-subtle": [0.295, 0.025, 244],
+      "border-strong": [0.37, 0.026, 234],
+      "accent-brand": [0.76, 0.13, 74],
+      "accent-brand-foreground": [0.2, 0.03, 60],
+      "foreground": [0.93, 0.008, 170],
+      "muted-foreground": [0.7, 0.022, 196],
+      "primary": [0.93, 0.008, 170],
+      "primary-foreground": [0.2, 0.025, 262]
+    }
+  },
+  {
+    "version": 1,
+    "id": "slate",
+    "name": "Slate & Indigo",
+    "light": {
+      "surface-0": [0.972, 0.004, 265],
+      "surface-1": [0.983, 0.003, 265],
+      "surface-2": [0.991, 0.002, 265],
+      "surface-3": [1, 0, 0],
+      "border-subtle": [0.918, 0.006, 265],
+      "border-strong": [0.855, 0.01, 265],
+      "accent-brand": [0.54, 0.18, 276],
+      "accent-brand-foreground": [0.99, 0.002, 276],
+      "foreground": [0.29, 0.02, 268],
+      "muted-foreground": [0.52, 0.02, 265],
+      "primary": [0.3, 0.03, 272],
+      "primary-foreground": [0.985, 0.002, 265]
+    },
+    "dark": {
+      "surface-0": [0.205, 0.012, 270],
+      "surface-1": [0.23, 0.013, 270],
+      "surface-2": [0.255, 0.014, 270],
+      "surface-3": [0.28, 0.015, 270],
+      "border-subtle": [0.32, 0.015, 270],
+      "border-strong": [0.39, 0.018, 270],
+      "accent-brand": [0.75, 0.128, 278],
+      "accent-brand-foreground": [0.2, 0.03, 278],
+      "foreground": [0.95, 0.006, 270],
+      "muted-foreground": [0.72, 0.015, 270],
+      "primary": [0.95, 0.006, 270],
+      "primary-foreground": [0.23, 0.013, 270]
+    }
+  },
+  {
+    "version": 1,
+    "id": "paper",
+    "name": "Paper & Teal",
+    "light": {
+      "surface-0": [0.955, 0.012, 80],
+      "surface-1": [0.97, 0.01, 80],
+      "surface-2": [0.982, 0.008, 80],
+      "surface-3": [0.995, 0.005, 85],
+      "border-subtle": [0.9, 0.014, 75],
+      "border-strong": [0.83, 0.018, 70],
+      "accent-brand": [0.5, 0.084, 200],
+      "accent-brand-foreground": [0.985, 0.005, 85],
+      "foreground": [0.27, 0.015, 60],
+      "muted-foreground": [0.5, 0.02, 65],
+      "primary": [0.27, 0.015, 60],
+      "primary-foreground": [0.975, 0.008, 85]
+    },
+    "dark": {
+      "surface-0": [0.185, 0.008, 65],
+      "surface-1": [0.21, 0.009, 65],
+      "surface-2": [0.235, 0.01, 65],
+      "surface-3": [0.26, 0.011, 65],
+      "border-subtle": [0.305, 0.012, 65],
+      "border-strong": [0.375, 0.014, 65],
+      "accent-brand": [0.76, 0.1, 195],
+      "accent-brand-foreground": [0.2, 0.03, 200],
+      "foreground": [0.93, 0.012, 85],
+      "muted-foreground": [0.7, 0.015, 75],
+      "primary": [0.93, 0.012, 85],
+      "primary-foreground": [0.21, 0.009, 65]
     }
   },
   {
@@ -40,15 +106,15 @@
       "surface-0": [0.955, 0.008, 75],
       "surface-1": [0.976, 0.008, 75],
       "surface-2": [0.99, 0.008, 75],
-      "surface-3": [1.0, 0.008, 75],
+      "surface-3": [1, 0.008, 75],
       "border-subtle": [0.905, 0.008, 75],
       "border-strong": [0.855, 0.008, 75],
       "accent-brand": [0.55, 0.1, 75],
-      "accent-brand-foreground": [0.99, 0.0, 75],
-      "foreground": [0.145, 0.0, 0.0],
-      "muted-foreground": [0.53, 0.0, 0.0],
-      "primary": [0.205, 0.0, 0.0],
-      "primary-foreground": [0.985, 0.0, 0.0]
+      "accent-brand-foreground": [0.99, 0, 75],
+      "foreground": [0.145, 0, 0],
+      "muted-foreground": [0.53, 0, 0],
+      "primary": [0.205, 0, 0],
+      "primary-foreground": [0.985, 0, 0]
     },
     "dark": {
       "surface-0": [0.155, 0.008, 75],
@@ -59,10 +125,10 @@
       "border-strong": [0.345, 0.008, 75],
       "accent-brand": [0.72, 0.1, 75],
       "accent-brand-foreground": [0.17, 0.02, 75],
-      "foreground": [0.985, 0.0, 0.0],
-      "muted-foreground": [0.708, 0.0, 0.0],
-      "primary": [0.985, 0.0, 0.0],
-      "primary-foreground": [0.205, 0.0, 0.0]
+      "foreground": [0.985, 0, 0],
+      "muted-foreground": [0.708, 0, 0],
+      "primary": [0.985, 0, 0],
+      "primary-foreground": [0.205, 0, 0]
     }
   },
   {
@@ -73,15 +139,15 @@
       "surface-0": [0.955, 0.008, 155],
       "surface-1": [0.976, 0.008, 155],
       "surface-2": [0.99, 0.008, 155],
-      "surface-3": [1.0, 0.008, 155],
+      "surface-3": [1, 0.008, 155],
       "border-subtle": [0.905, 0.008, 155],
       "border-strong": [0.855, 0.008, 155],
       "accent-brand": [0.54, 0.1, 155],
-      "accent-brand-foreground": [0.99, 0.0, 155],
-      "foreground": [0.145, 0.0, 0.0],
-      "muted-foreground": [0.53, 0.0, 0.0],
-      "primary": [0.205, 0.0, 0.0],
-      "primary-foreground": [0.985, 0.0, 0.0]
+      "accent-brand-foreground": [0.99, 0, 155],
+      "foreground": [0.145, 0, 0],
+      "muted-foreground": [0.53, 0, 0],
+      "primary": [0.205, 0, 0],
+      "primary-foreground": [0.985, 0, 0]
     },
     "dark": {
       "surface-0": [0.155, 0.008, 155],
@@ -92,10 +158,10 @@
       "border-strong": [0.345, 0.008, 155],
       "accent-brand": [0.72, 0.1, 155],
       "accent-brand-foreground": [0.17, 0.02, 155],
-      "foreground": [0.985, 0.0, 0.0],
-      "muted-foreground": [0.708, 0.0, 0.0],
-      "primary": [0.985, 0.0, 0.0],
-      "primary-foreground": [0.205, 0.0, 0.0]
+      "foreground": [0.985, 0, 0],
+      "muted-foreground": [0.708, 0, 0],
+      "primary": [0.985, 0, 0],
+      "primary-foreground": [0.205, 0, 0]
     }
   }
 ]

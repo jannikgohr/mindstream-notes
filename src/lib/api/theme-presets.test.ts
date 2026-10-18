@@ -26,7 +26,7 @@ describe('theme preset persistence bridge', () => {
     expect(presets.find((preset) => preset.id === 'custom')?.name).toBe(
       'Revised'
     );
-    expect(presets).toHaveLength(5);
+    expect(presets).toHaveLength(BUILTIN_PRESETS.length + 2);
     await deleteThemePreset('custom');
     presets = await listThemePresets();
     expect(presets.some((preset) => preset.id === 'second')).toBe(true);

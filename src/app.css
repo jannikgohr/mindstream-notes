@@ -38,10 +38,10 @@
    *
    * Light mode starts at a real grey rather than near-white so all four
    * steps fit below pure white with room to breathe. */
-  --surface-0: oklch(0.975 0.003 260);
-  --surface-1: oklch(0.985 0.002 260);
-  --surface-2: oklch(0.992 0.001 260);
-  --surface-3: oklch(1 0 0);
+  --surface-0: oklch(0.955 0.008 195);
+  --surface-1: oklch(0.968 0.007 195);
+  --surface-2: oklch(0.98 0.005 195);
+  --surface-3: oklch(0.995 0.003 195);
   --editor-surface: var(--surface-3);
 
   /* The wash behind a modal, sheet or palette. Always black — a scrim's job
@@ -64,8 +64,8 @@
    * container outlines that must survive against a raised surface. In the
    * old palette --border was identical to --muted in dark mode, so a
    * bordered card on a muted surface had no visible outline at all. */
-  --border-subtle: oklch(0.92 0.005 260);
-  --border-strong: oklch(0.85 0.008 260);
+  --border-subtle: oklch(0.895 0.011 200);
+  --border-strong: oklch(0.825 0.015 205);
 
   /* -- Brand accent ------------------------------------------------------
    * Distinct from --primary. --primary is the neutral high-contrast button
@@ -77,8 +77,8 @@
    * Naming hazard: --accent (in the compatibility layer below) is shadcn's
    * HOVER WASH, not a brand colour. Reach for --accent-brand when you mean
    * identity. */
-  --accent-brand: oklch(0.56 0.17 275);
-  --accent-brand-foreground: oklch(0.99 0 0);
+  --accent-brand: oklch(0.53 0.115 60);
+  --accent-brand-foreground: oklch(0.99 0.005 85);
 
   /* -- Status ------------------------------------------------------------
    * Replaces the per-component raw Tailwind palette pairs
@@ -90,14 +90,14 @@
    * --destructive is the fourth member of this ramp. It keeps its shadcn
    * name rather than gaining a `--danger` alias, so there is exactly one
    * word for the concept. */
-  --success: oklch(0.52 0.13 158);
+  --success: oklch(0.52 0.12 135);
   --success-foreground: oklch(0.99 0 0);
-  --warning: oklch(0.55 0.13 75);
+  --warning: oklch(0.525 0.106 88);
   --warning-foreground: oklch(0.99 0 0);
-  --info: oklch(0.54 0.15 250);
+  --info: oklch(0.52 0.08 210);
   --info-foreground: oklch(0.99 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.54 0.115 32);
+  --destructive-foreground: oklch(0.99 0 0);
 
   /* Find-and-replace and PDF search highlights. Another fixed-hue set — a
    * highlighter is yellow and the focused hit is orange, in either theme —
@@ -144,17 +144,17 @@
   /* -- shadcn compatibility layer ----------------------------------------
    * Derived, not authored. Change the scale above, not these. */
   --background: var(--surface-1);
-  --foreground: oklch(0.295 0.016 265);
+  --foreground: oklch(0.26 0.026 252);
   --card: var(--surface-3);
   --card-foreground: var(--foreground);
   --popover: var(--surface-3);
   --popover-foreground: var(--foreground);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.29 0.026 245);
+  --primary-foreground: oklch(0.965 0.006 190);
   --secondary: var(--surface-2);
   --secondary-foreground: var(--foreground);
   --muted: var(--surface-2);
-  --muted-foreground: oklch(0.52 0.018 265);
+  --muted-foreground: oklch(0.49 0.03 222);
   /* Hover wash. Translucent rather than opaque so one token reads
    * correctly on every elevation step — the old opaque value was equal to
    * --muted, which made hover invisible on any surface that happened to
@@ -205,10 +205,10 @@ html {
    * boundary is perceptible without any step becoming a pale slab — the
    * old --muted sat at 0.269, nearly 0.10 above the background, which is
    * what made Kanban columns dominate the dark board. */
-  --surface-0: oklch(0.22 0.009 270);
-  --surface-1: oklch(0.245 0.009 270);
-  --surface-2: oklch(0.27 0.01 270);
-  --surface-3: oklch(0.295 0.012 270);
+  --surface-0: oklch(0.175 0.024 266);
+  --surface-1: oklch(0.2 0.025 262);
+  --surface-2: oklch(0.225 0.025 257);
+  --surface-3: oklch(0.25 0.025 250);
   --editor-surface: var(--surface-1);
 
   /* Stronger than light mode: over already-dark content a 45% wash barely
@@ -221,31 +221,31 @@ html {
   --elevation-overlay:
     0 10px 15px -3px oklch(0 0 0 / 0.6), 0 4px 6px -4px oklch(0 0 0 / 0.45);
 
-  /* Both tiers sit clear of every surface step (max 0.295), so a border is
+  /* Both tiers sit clear of every surface step (max 0.25), so a border is
    * visible no matter which elevation it lands on. */
-  --border-subtle: oklch(0.325 0.012 270);
-  --border-strong: oklch(0.4 0.015 270);
+  --border-subtle: oklch(0.295 0.025 244);
+  --border-strong: oklch(0.37 0.026 234);
 
-  --accent-brand: oklch(0.76 0.12 275);
-  --accent-brand-foreground: oklch(0.2 0.02 275);
+  --accent-brand: oklch(0.76 0.13 74);
+  --accent-brand-foreground: oklch(0.2 0.03 60);
 
   /* Lifted into the 0.7–0.8 band so these read as TEXT against a dark
    * surface. The old dark --destructive was 0.396 — a dark red that left
    * `text-destructive` (used in the file-tree menus) barely legible. */
-  --success: oklch(0.78 0.15 158);
-  --success-foreground: oklch(0.17 0.02 158);
-  --warning: oklch(0.8 0.14 75);
-  --warning-foreground: oklch(0.17 0.02 75);
-  --info: oklch(0.75 0.14 250);
-  --info-foreground: oklch(0.17 0.02 250);
-  --destructive: oklch(0.7 0.19 25);
-  --destructive-foreground: oklch(0.17 0.02 25);
+  --success: oklch(0.75 0.12 135);
+  --success-foreground: oklch(0.18 0.02 135);
+  --warning: oklch(0.83 0.12 90);
+  --warning-foreground: oklch(0.18 0.02 90);
+  --info: oklch(0.75 0.085 210);
+  --info-foreground: oklch(0.18 0.02 210);
+  --destructive: oklch(0.75 0.105 32);
+  --destructive-foreground: oklch(0.18 0.02 32);
 
-  --foreground: oklch(0.985 0 0);
-  --primary: oklch(0.985 0 0);
-  --primary-foreground: oklch(0.205 0 0);
+  --foreground: oklch(0.93 0.008 170);
+  --primary: oklch(0.93 0.008 170);
+  --primary-foreground: oklch(0.2 0.025 262);
   --secondary-foreground: var(--foreground);
-  --muted-foreground: oklch(0.708 0 0);
+  --muted-foreground: oklch(0.7 0.022 196);
   /* Slightly stronger than light mode: a white wash at 6% disappears on a
    * dark ground. */
   --accent: oklch(from var(--foreground) l c h / 0.09);

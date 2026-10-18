@@ -21,6 +21,19 @@
   const custom = $derived(
     !BUILTIN_PRESETS.some((preset) => preset.id === selected)
   );
+  // Built-in names are UI copy; a user preset keeps the name it was saved with.
+  const BUILTIN_NAMES = {
+    default: 'theme.preset.default',
+    slate: 'theme.preset.slate',
+    paper: 'theme.preset.paper',
+    warm: 'theme.preset.warm',
+    forest: 'theme.preset.forest'
+  } as const;
+  function presetLabel(item: { id: string; name: string }): string {
+    return Object.hasOwn(BUILTIN_NAMES, item.id)
+      ? tUi(BUILTIN_NAMES[item.id as keyof typeof BUILTIN_NAMES])
+      : item.name;
+  }
   async function select(id: string) {
     error = '';
     busy = true;
@@ -72,7 +85,7 @@
         >{tUiFormat('theme.missingOption', { id: selected })}</option
       >{/if}
     {#each themeCatalog.presets as item (item.id)}<option value={item.id}
-        >{item.name}</option
+        >{presetLabel(item)}</option
       >{/each}
   </select>
   {#if missing}<p role="status" class="text-sm text-muted-foreground">
