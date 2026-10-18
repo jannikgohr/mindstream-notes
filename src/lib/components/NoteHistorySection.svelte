@@ -334,7 +334,7 @@
 </script>
 
 <section>
-  <div class="mb-2 flex items-center justify-between">
+  <div class="mb-3 flex items-center justify-between">
     <SectionHeader>
       {tUi('history.title')}
     </SectionHeader>

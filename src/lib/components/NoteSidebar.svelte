@@ -1,18 +1,15 @@
 <script lang="ts">
   import {
     CalendarPlus,
-    Clock,
     Cloud,
     Edit3,
     Folder,
-    Link2,
     Paperclip,
     Share2,
     ShieldCheck,
     User,
     UserPlus,
     Users,
-    WholeWord,
     X
   } from '@lucide/svelte';
   import NoteOutline from './NoteOutline.svelte';
@@ -23,7 +20,6 @@
   import NoteLinksSection from '$lib/components/NoteLinksSection.svelte';
   import PageOverlayScrollbar from '$lib/layout/page-overlay-scrollbar.svelte';
   import { Surface } from '$lib/components/ui/surface';
-  import { SectionHeader } from '$lib/components/ui/section-header';
   import {
     loadNote,
     noteWordCount,
@@ -176,12 +172,15 @@
     Boolean(note && authSession.current && !note.pushed)
   );
 
-  // Body is loaded only for the link/attachment regexes; the word count comes
-  // from Rust (note_word_count) so it shares one definition with the History
-  // delta and never re-derives note content in JS.
+  // Body is loaded only for the attachment scan; the word count comes from
+  // Rust (note_word_count) so it shares one definition with the History delta
+  // and never re-derives note content in JS.
   let noteBody = $state('');
   let wordCount = $state(0);
-  let contentLoading = $state(false);
+  // The note the two values above describe. Every save reloads them; keeping
+  // the previous values meanwhile stops the summary flashing on each autosave,
+  // while switching notes shows a placeholder until the new note's arrive.
+  let statsNoteId = $state<string | null>(null);
   const showContentStats = $derived(
     note ? hasContentStats(note.note_kind) : false
   );
@@ -196,14 +195,13 @@
     ) {
       noteBody = '';
       wordCount = 0;
-      contentLoading = false;
+      statsNoteId = null;
       return;
     }
 
     let cancelled = false;
     const id = note.id;
     void note.modified;
-    contentLoading = true;
     Promise.all([
       noteWordCount(id),
       loadNote(id).then((loaded) => loaded.body ?? '')
@@ -212,6 +210,7 @@
         if (!cancelled && ui.activeNoteId === id) {
           wordCount = words;
           noteBody = body;
+          statsNoteId = id;
         }
       })
       .catch((err) => {
@@ -219,11 +218,7 @@
         if (!cancelled && ui.activeNoteId === id) {
           wordCount = 0;
           noteBody = '';
-        }
-      })
-      .finally(() => {
-        if (!cancelled && ui.activeNoteId === id) {
-          contentLoading = false;
+          statsNoteId = id;
         }
       });
 
@@ -232,8 +227,25 @@
     };
   });
 
-  const contentStats = $derived.by(() =>
-    analyzeContent(noteBody, wordCount, note?.note_kind ?? null)
+  const statsReady = $derived(note !== null && statsNoteId === note.id);
+  const attachmentCount = $derived(extractAssetIds(noteBody).length);
+  const contentSummary = $derived.by(() => {
+    if (!statsReady) return '…';
+    const words = tUi(
+      wordCount === 1
+        ? 'metadata.content.wordCount.one'
+        : 'metadata.content.wordCount.other'
+    ).replace('{count}', String(wordCount));
+    if (wordCount === 0) return words;
+    const minutes = Math.max(1, Math.ceil(wordCount / 200));
+    return `${words} · ${tUi('metadata.content.readingTime').replace(
+      '{minutes}',
+      String(minutes)
+    )}`;
+  });
+  // "0 files" is noise in a details list; the row appears once there is one.
+  const showAttachmentRow = $derived(
+    showAttachments && statsReady && attachmentCount > 0
   );
 
   function noteKindLabel(kind: string | null | undefined): string {
@@ -271,28 +283,6 @@
     return kind === 'markdown' || kind === 'freeform' || kind === 'pdf';
   }
 
-  // `words` is the canonical count from Rust; links/attachments are still
-  // derived in JS from the body (the lookbehind link rule has no Rust regex
-  // equivalent yet). PDF notes only ever have attachments.
-  function analyzeContent(
-    body: string,
-    words: number,
-    kind: string | null | undefined
-  ) {
-    return {
-      words,
-      readMinutes: words === 0 ? 0 : Math.max(1, Math.ceil(words / 200)),
-      links: kind === 'pdf' ? 0 : countLinks(body),
-      attachments: extractAssetIds(body).length
-    };
-  }
-
-  function countLinks(body: string): number {
-    const markdownLinks = body.match(/(?<!!)\[[^\]]+]\([^)]*\)/g)?.length ?? 0;
-    const wikilinks = body.match(/\[\[[^\]]+]]/g)?.length ?? 0;
-    return markdownLinks + wikilinks;
-  }
-
   function extractAssetIds(body: string): string[] {
     const ids = new Set<string>();
     for (const match of body.matchAll(/asset:mindstream\/([A-Za-z0-9_-]+)/g)) {
@@ -303,20 +293,7 @@
     return [...ids];
   }
 
-  function statValue(value: number): string {
-    return contentLoading ? '…' : String(value);
-  }
-
-  function readValue(minutes: number): string {
-    if (contentLoading) return '…';
-    return tUi('metadata.content.readValue').replace(
-      '{minutes}',
-      String(minutes)
-    );
-  }
-
   function attachmentsValue(count: number): string {
-    if (contentLoading) return '…';
     const key =
       count === 1 ? 'metadata.attachments.one' : 'metadata.attachments.other';
     return tUi(key).replace('{count}', String(count));
@@ -370,28 +347,23 @@
   }
 </script>
 
-{#snippet statRow(Icon: typeof Paperclip, label: string, value: string)}
-  <div class="flex min-w-0 items-center justify-between gap-3">
+{#snippet detailRow(
+  Icon: typeof Paperclip,
+  label: string,
+  value: string,
+  title?: string
+)}
+  <div class="flex min-w-0 items-center justify-between gap-4">
     <dt
-      class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
+      class="inline-flex shrink-0 items-center gap-2 text-xs text-muted-foreground"
     >
       <Icon class="size-3.5" />
       {label}
     </dt>
-    <dd class="min-w-0 truncate text-right text-xs font-medium tabular-nums">
+    <dd class="min-w-0 truncate text-right text-xs tabular-nums" {title}>
       {value}
     </dd>
   </div>
-{/snippet}
-
-{#snippet attachmentsRow()}
-  <dl class="space-y-3">
-    {@render statRow(
-      Paperclip,
-      tUi('metadata.attachments'),
-      attachmentsValue(contentStats.attachments)
-    )}
-  </dl>
 {/snippet}
 
 <Surface
@@ -418,235 +390,124 @@
   >
     {#if note}
       {#if showMetadata}
-        <Surface as="section" variant="panel" class="bg-transparent">
-          <div class="flex min-w-0 items-start justify-between gap-3">
-            <div class="min-w-0">
-              <div
-                class="mb-2 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground"
-              >
-                <NoteKindIcon
-                  kind={note.note_kind}
-                  class="size-3 shrink-0"
-                />{noteKindLabel(note.note_kind)}
-              </div>
-              <h3
-                class="truncate text-sm font-semibold leading-6"
-                title={note.title}
-              >
-                {note.title}
-              </h3>
-            </div>
-            <button
-              type="button"
-              class="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              onclick={() => void setNoteFavourite(note.id, !note.favourite)}
-              aria-pressed={note.favourite}
-              aria-label={note.favourite
-                ? tUi('favourite.remove')
-                : tUi('favourite.add')}
-              title={note.favourite
-                ? tUi('favourite.remove')
-                : tUi('favourite.add')}
+        <!-- Identity, then one untitled list of facts. The labels name
+             themselves, so the list needs no section heading; sharing facts
+             follow after a gap when the note sits in a shared folder. -->
+        <div class="flex min-w-0 items-start justify-between gap-3">
+          <div class="min-w-0">
+            <div
+              class="mb-2 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground"
             >
-              <FavouriteStar size={16} favourited={note.favourite} />
-            </button>
+              <NoteKindIcon
+                kind={note.note_kind}
+                class="size-3 shrink-0"
+              />{noteKindLabel(note.note_kind)}
+            </div>
+            <h3
+              class="truncate text-base font-semibold leading-6"
+              title={note.title}
+            >
+              {note.title}
+            </h3>
+            {#if showContentStats}
+              <p
+                class="mt-0.5 truncate text-xs tabular-nums text-muted-foreground"
+              >
+                {contentSummary}
+              </p>
+            {/if}
           </div>
+          <button
+            type="button"
+            class="-mr-1 shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            onclick={() => void setNoteFavourite(note.id, !note.favourite)}
+            aria-pressed={note.favourite}
+            aria-label={note.favourite
+              ? tUi('favourite.remove')
+              : tUi('favourite.add')}
+            title={note.favourite
+              ? tUi('favourite.remove')
+              : tUi('favourite.add')}
+          >
+            <FavouriteStar size={16} favourited={note.favourite} />
+          </button>
+        </div>
 
-          <section class="mt-5 border-t border-border pt-5">
-            <SectionHeader class="mb-2">
-              {tUi('sidebar.properties')}
-            </SectionHeader>
-            <dl class="space-y-3">
-              <div class="flex min-w-0 items-center justify-between gap-3">
-                <dt
-                  class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                >
-                  <Folder class="size-3.5" />
-                  {tUi('metadata.folder')}
-                </dt>
-                <dd
-                  class="max-w-[9rem] truncate text-right text-xs text-muted-foreground"
-                  title={folderTitle}
-                >
-                  {folderLabel}
-                </dd>
-              </div>
-              {#if showPendingSync}
-                <div class="flex min-w-0 items-center justify-between gap-3">
-                  <dt
-                    class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                  >
-                    <Cloud class="size-3.5" />
-                    {tUi('metadata.sync')}
-                  </dt>
-                  <dd
-                    class="min-w-0 truncate text-right text-xs font-medium text-muted-foreground"
-                  >
-                    {tUi('metadata.sync.pending')}
-                  </dd>
-                </div>
-              {/if}
-
-              <div class="flex min-w-0 items-center justify-between gap-3">
-                <dt
-                  class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                >
-                  <CalendarPlus class="size-3.5" />
-                  {tUi('metadata.created')}
-                </dt>
-                <dd
-                  class="min-w-0 truncate text-right text-xs font-medium tabular-nums"
-                >
-                  {formatNoteDateTime(note.created)}
-                </dd>
-              </div>
-              <div class="flex min-w-0 items-center justify-between gap-3">
-                <dt
-                  class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                >
-                  <Edit3 class="size-3.5" />
-                  {tUi('metadata.modified')}
-                </dt>
-                <dd
-                  class="min-w-0 truncate text-right text-xs font-medium tabular-nums"
-                >
-                  {formatNoteDateTime(note.modified)}
-                </dd>
-              </div>
-            </dl>
-          </section>
-
-          {#if showSharingMetadata && shareScope}
-            <section class="mt-5 border-t border-border pt-5">
-              <SectionHeader class="mb-2">
-                {tUi('metadata.sharing')}
-              </SectionHeader>
-              <dl class="space-y-3">
-                {#if showShareScopeRow}
-                  <div class="flex min-w-0 items-center justify-between gap-3">
-                    <dt
-                      class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                    >
-                      <Share2 class="size-3.5" />
-                      {tUi('metadata.sharing.scope')}
-                    </dt>
-                    <dd
-                      class="max-w-[9rem] truncate text-right text-xs text-muted-foreground"
-                      title={shareScope.name}
-                    >
-                      {shareScope.name}
-                    </dd>
-                  </div>
-                {/if}
-                {#if authorName}
-                  <div class="flex min-w-0 items-center justify-between gap-3">
-                    <dt
-                      class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                    >
-                      <User class="size-3.5" />
-                      {tUi('metadata.author')}
-                    </dt>
-                    <dd
-                      class="min-w-0 truncate text-right text-xs font-medium text-muted-foreground"
-                    >
-                      {authorName}
-                    </dd>
-                  </div>
-                {/if}
-                {#if permissionLabel}
-                  <div class="flex min-w-0 items-center justify-between gap-3">
-                    <dt
-                      class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                    >
-                      <ShieldCheck class="size-3.5" />
-                      {tUi('metadata.permission')}
-                    </dt>
-                    <dd
-                      class="min-w-0 truncate text-right text-xs font-medium text-muted-foreground"
-                    >
-                      {permissionLabel}
-                    </dd>
-                  </div>
-                {/if}
-                {#if collaborators.length > 0}
-                  <div class="flex min-w-0 items-center justify-between gap-3">
-                    <dt
-                      class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                    >
-                      <Users class="size-3.5" />
-                      {tUi('metadata.collaborators')}
-                    </dt>
-                    <dd
-                      class="min-w-0 truncate text-right text-xs font-medium text-muted-foreground"
-                      title={collaborators.join(', ')}
-                    >
-                      {compactList(collaborators)}
-                    </dd>
-                  </div>
-                {/if}
-                {#if pendingInviteCount > 0}
-                  <div class="flex min-w-0 items-center justify-between gap-3">
-                    <dt
-                      class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                    >
-                      <UserPlus class="size-3.5" />
-                      {tUi('metadata.sharing.pending')}
-                    </dt>
-                    <dd
-                      class="min-w-0 truncate text-right text-xs font-medium text-muted-foreground"
-                    >
-                      {pendingInvitesLabel(pendingInviteCount)}
-                    </dd>
-                  </div>
-                {/if}
-              </dl>
-            </section>
+        <dl class="mt-5 space-y-2.5">
+          {@render detailRow(
+            Folder,
+            tUi('metadata.folder'),
+            folderLabel,
+            folderTitle
+          )}
+          {@render detailRow(
+            CalendarPlus,
+            tUi('metadata.created'),
+            formatNoteDateTime(note.created)
+          )}
+          {@render detailRow(
+            Edit3,
+            tUi('metadata.modified'),
+            formatNoteDateTime(note.modified)
+          )}
+          {#if showPendingSync}
+            {@render detailRow(
+              Cloud,
+              tUi('metadata.sync'),
+              tUi('metadata.sync.pending')
+            )}
           {/if}
-
-          {#if showContentStats}
-            <section class="mt-5 border-t border-border pt-5">
-              <SectionHeader class="mb-2">
-                {tUi('metadata.content')}
-              </SectionHeader>
-              <dl class="space-y-3">
-                {@render statRow(
-                  WholeWord,
-                  tUi('metadata.content.words'),
-                  statValue(contentStats.words)
-                )}
-                {@render statRow(
-                  Clock,
-                  tUi('metadata.content.read'),
-                  readValue(contentStats.readMinutes)
-                )}
-                {@render statRow(
-                  Link2,
-                  tUi('metadata.content.links'),
-                  statValue(contentStats.links)
-                )}
-                {#if showAttachments}
-                  {@render statRow(
-                    Paperclip,
-                    tUi('metadata.attachments'),
-                    attachmentsValue(contentStats.attachments)
-                  )}
-                {/if}
-              </dl>
-            </section>
-          {:else if showAttachments}
-            <section class="mt-5 border-t border-border pt-5">
-              <SectionHeader class="mb-2">
-                {tUi('metadata.attachments')}
-              </SectionHeader>
-              {@render attachmentsRow()}
-            </section>
+          {#if showAttachmentRow}
+            {@render detailRow(
+              Paperclip,
+              tUi('metadata.attachments'),
+              attachmentsValue(attachmentCount)
+            )}
           {/if}
+        </dl>
 
-          <div class="mt-5 border-t border-border pt-5">
-            <TagsSection noteId={note.id} />
-          </div>
-          {#if supportsNoteLinks}<NoteOutline noteId={note.id} />{/if}
-        </Surface>
+        {#if showSharingMetadata && shareScope}
+          <dl class="mt-4 space-y-2.5">
+            {#if showShareScopeRow}
+              {@render detailRow(
+                Share2,
+                tUi('metadata.sharing.scope'),
+                shareScope.name,
+                shareScope.name
+              )}
+            {/if}
+            {#if authorName}
+              {@render detailRow(User, tUi('metadata.author'), authorName)}
+            {/if}
+            {#if permissionLabel}
+              {@render detailRow(
+                ShieldCheck,
+                tUi('metadata.permission'),
+                permissionLabel
+              )}
+            {/if}
+            {#if collaborators.length > 0}
+              {@render detailRow(
+                Users,
+                tUi('metadata.collaborators'),
+                compactList(collaborators),
+                collaborators.join(', ')
+              )}
+            {/if}
+            {#if pendingInviteCount > 0}
+              {@render detailRow(
+                UserPlus,
+                tUi('metadata.sharing.pending'),
+                pendingInvitesLabel(pendingInviteCount)
+              )}
+            {/if}
+          </dl>
+        {/if}
+
+        <div class="mt-5 border-t border-border pt-5">
+          <TagsSection noteId={note.id} />
+        </div>
+        {#if supportsNoteLinks}<NoteOutline noteId={note.id} />{/if}
       {/if}
 
       {#if showHistory && noteHistoryEnabled(note.note_kind)}

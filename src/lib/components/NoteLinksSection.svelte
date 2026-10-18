@@ -1,10 +1,5 @@
 <script lang="ts">
-  import {
-    ArrowUpRight,
-    CornerUpLeft,
-    Link2,
-    LoaderCircle
-  } from '@lucide/svelte';
+  import { ArrowUpRight, CornerUpLeft, LoaderCircle } from '@lucide/svelte';
   import NoteKindIcon from './NoteKindIcon.svelte';
   import { Surface } from '$lib/components/ui/surface';
   import { SectionHeader } from '$lib/components/ui/section-header';
@@ -98,7 +93,6 @@
   class={flat ? 'bg-transparent' : undefined}
 >
   <SectionHeader class="mb-3">
-    <Link2 class="size-3.5" />
     {tUi('sidebar.links')}
   </SectionHeader>
 
@@ -122,7 +116,7 @@
       {@render noteList(relations.backlinks, tUi('sidebar.backlinks.empty'))}
     </div>
 
-    <div class="mt-4 border-t border-border pt-4">
+    <div class="mt-4">
       <h4
         class="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground"
       >

@@ -215,7 +215,7 @@
   <SectionHeader as="h4">
     {tUi('tags.label')}
   </SectionHeader>
-  <div class="mt-2 flex flex-wrap items-center gap-1">
+  <div class="mt-3 flex flex-wrap items-center gap-1">
     {#each noteTags as tag (tag)}
       <span
         class="inline-flex h-6 items-center gap-1 rounded-md border border-border bg-background pl-2 pr-0.5 text-xs leading-none"

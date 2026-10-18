@@ -49,7 +49,7 @@ test('selects a seeded note and shows its metadata', async ({ page }) => {
 
   // The right-hand metadata panel reflects the selected note.
   await expect(page.getByText('Markdown note')).toBeVisible();
-  await expect(page.getByText('Words', { exact: true })).toBeVisible();
+  await expect(page.getByText(/^\d+ words?( · \d+ min read)?$/)).toBeVisible();
 });
 
 test('switches between desktop note sources', async ({ page }) => {

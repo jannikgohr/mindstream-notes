@@ -4,8 +4,8 @@
   import type { HTMLAttributes } from 'svelte/elements';
 
   /**
-   * The compact heading shared by panel sections — Properties, Tags,
-   * History, Links, and so on.
+   * The compact heading shared by panel sections — Tags, Outline, History,
+   * Links, and so on.
    *
    * Before this existed the same label was spelled four different ways across
    * NoteSidebar, NoteLinksSection, NoteHistorySection and TagsSection (which

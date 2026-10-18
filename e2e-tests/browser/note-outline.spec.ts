@@ -64,11 +64,13 @@ test('outline follows the open note and scrolls to its live headings', async ({
     outline.getByRole('button', { name: 'Go to Decisions', exact: true })
   ).toHaveCount(0);
 
-  // Collapsing the outline leaves properties and history available in the same pane.
+  // Collapsing the outline leaves the details and history available in the same pane.
   await page.locator('.note-details-panel summary').click();
   await expect(outline).toBeHidden();
   await expect(
-    page.getByRole('heading', { name: 'Properties', exact: true })
+    page
+      .locator('.note-details-panel dt')
+      .filter({ hasText: /^\s*Created\s*$/ })
   ).toBeVisible();
   await expect(
     page.getByRole('heading', { name: 'History', exact: true })
