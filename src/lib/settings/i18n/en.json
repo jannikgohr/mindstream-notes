@@ -1,11 +1,27 @@
 {
   "language": "en",
   "ui": {
+    "preferences.saveFailed": "Could not save this preference. Please try again.",
     "boot.loading": "Loading…",
     "boot.error.title": "Couldn't load the app",
     "boot.error.message": "Something went wrong while starting Mindstream Notes.",
     "boot.error.reload": "Reload",
     "vault.title": "Vaults",
+    "vault.closeFailed": "Could not close the vault safely. It remains open. Check your changes and try again.",
+    "vault.waitingForTasks": "Preparing to close vault…",
+    "vault.savingChanges": "Saving changes…",
+    "vault.backgroundBusy": "Pending work did not finish in time. The vault remains open. Try closing it again when that work finishes.",
+    "vault.switchCancelled": "Vault switching was cancelled during recovery. Your vault remains open.",
+    "vault.open.focus": "Focus existing window",
+    "vault.open.newWindow": "Open in new window",
+    "vault.open.failed.title": "Couldn't open vault",
+    "vault.open.failed.message": "Opening the vault failed: {error}. Your current vault remains open.",
+    "vault.windows.checking": "Checking open vaults...",
+    "vault.windows.failed": "Couldn't check open vaults. Retry to continue.",
+    "vault.windows.retry": "Retry",
+    "vault.windows.ready": "Open",
+    "vault.windows.starting": "Opening",
+    "vault.windows.unavailable": "Unavailable",
     "vault.switch": "Switch vault",
     "vault.unknown": "Unknown vault",
     "vault.create": "Create vault",
@@ -75,6 +91,10 @@
     "data.result.chip.attachments.label": "Attachments",
     "data.import.title": "Import Mindstream Notes backup",
     "data.import.description": "From Mindstream Notes {version}, created {createdAt}.",
+    "data.import.portable.vault": "Restore also replaces this vault's settings and plugin data ({bytes}). Third-party plugins need approval again.",
+    "data.import.portable.device": "Also import shared device preferences, custom themes and {packages} plugin package(s). Existing values and packages are kept on conflicts.",
+    "data.import.portable.merge": "Merge imports only missing notes, folders and attachments. The shared-device option applies only to Restore.",
+    "data.import.portable.legacy": "This older backup restores database content only. Vault files and device preferences stay unchanged.",
     "data.import.column.backup": "Backup",
     "data.import.column.current": "Current vault",
     "data.import.row.notes": "Notes",
@@ -87,7 +107,7 @@
     "data.import.notice.differentAccount": "The backup is from a different account or has no account info. On restore, sync metadata will be dropped so your data re-syncs from scratch.",
     "data.import.button.cancel": "Cancel",
     "data.import.button.merge": "Merge missing items",
-    "data.import.button.restore": "Restore (replace everything)",
+    "data.import.button.restore": "Restore this vault",
     "data.import.merge.success.title": "Merge complete",
     "data.import.merge.success.message": "Added {notes} note(s), {folders} folder(s), and {assets} attachment(s). {orphaned} note(s) lost their original folder and landed at the root.",
     "data.import.result.close": "Close",
@@ -852,11 +872,15 @@
     "nav.create.kanban": "New Kanban board",
     "nav.create.kanbanInFolder": "New Kanban board",
     "fab.fromTemplate": "New from template",
+    "plugins.manage.scope": "Packages and updates are shared by all vaults on this device. Approvals and enablement apply to this vault.",
+    "plugins.manage.install": "Install or update from folder…",
+    "plugins.manage.missing": "Package not installed",
+    "plugins.manage.error": "Plugin operation failed",
     "plugins.manage.title": "Installed plugins",
     "plugins.manage.empty": "No plugins installed.",
-    "plugins.manage.toggle": "Enable plugin",
+    "plugins.manage.toggle": "Enable in this vault",
     "plugins.manage.notLoaded": "Not loaded",
-    "plugins.manage.approve": "Approve",
+    "plugins.manage.approve": "Approve in this vault",
     "notifications.plugins.gated.title": "Plugins changed - re-approval required",
     "notifications.plugins.gated.message": "{plugins} changed since you approved them and won't load until you review and re-approve them.",
     "notifications.plugins.new.title": "New plugins need approval",
@@ -890,10 +914,10 @@
     "plugins.author": "By",
     "plugins.settings.open": "Plugin settings",
     "plugins.hotkeys.open": "Plugin hotkeys",
-    "plugins.delete": "Delete plugin",
-    "plugins.delete.confirm.title": "Delete plugin?",
-    "plugins.delete.confirm.message": "This permanently deletes \"{name}\" and its files. This can't be undone.",
-    "plugins.delete.confirm.confirm": "Delete",
+    "plugins.delete": "Remove from device",
+    "plugins.delete.confirm.title": "Remove plugin from this device?",
+    "plugins.delete.confirm.message": "Remove \"{name}\" from all vaults on this device? Vaults: {vaults}. Settings and plugin data are kept. Running work finishes before old package files are deleted.",
+    "plugins.delete.confirm.confirm": "Remove from device",
     "fab.newKanban": "New Kanban board",
     "fab.placeholder.kanbanTitle": "Kanban board title",
     "editor.kanban.labels": "Labels",
@@ -1064,6 +1088,23 @@
     "account.serverUrl": "Server URL",
     "account.managedHint": "Hosted for you. Switch to self-hosted in the radio above to use your own server.",
     "account.password": "Password",
+    "hotkeys.placeholder": "Cmd+K",
+    "vault.open.thisWindow": "Open in this window",
+    "vault.open.choose": "How would you like to open this vault?",
+    "vault.open.remember": "Remember this decision",
+    "vault.open.cancel": "Cancel",
+    "vault.picker.title": "Choose a vault",
+    "vault.picker.message": "The last-used vault could not be opened. Choose another vault or create a new one.",
+    "theme.select": "Theme preset",
+    "theme.missingOption": "Missing preset: {id}",
+    "theme.missing": "This preset is unavailable. Mindstream is displayed while your selection is retained.",
+    "theme.useAccent": "Use preset accent",
+    "theme.editJson": "Show preset JSON",
+    "theme.remove": "Remove preset",
+    "theme.import": "Import or edit a preset",
+    "theme.importHelp": "Paste preset JSON here. Give a built-in preset a new ID to save your own copy. Saving an existing custom ID replaces that preset on this device.",
+    "theme.json": "Preset JSON",
+    "theme.save": "Save preset",
     "account.serverType.locked": "Sign out to change server type.",
     "account.username": "Username",
     "account.email": "Email",
@@ -1461,7 +1502,7 @@
     },
     "hotkeys.globalShortcuts": {
       "label": "Enable global shortcuts",
-      "description": "Let application-level shortcuts fire while Mindstream Notes is in the background. Editor formatting shortcuts stay in-app only."
+      "description": "Allow this vault to receive system-wide shortcuts. With several vaults enabled, the most recently used enabled vault receives them. Key bindings are shared across vaults."
     },
     "editor.autoSaveDebounce": {
       "label": "Auto-save debounce"
@@ -1548,6 +1589,14 @@
     "language.spellcheck.customWords": {
       "label": "Personal dictionary",
       "description": "Words you have accepted. They apply in every language and are stored with this vault, not with the machine."
+    },
+    "general.vaultOpening": {
+      "label": "Vault opening",
+      "description": "Choose whether another vault replaces this window or opens a new window."
+    },
+    "appearance.preset": {
+      "label": "Theme preset",
+      "description": "Applies to every vault on this device. Light/dark mode and your accent override are independent."
     }
   },
   "values": {
@@ -1611,6 +1660,9 @@
     "language.spellcheck.languages.pl_PL": "Polish",
     "language.spellcheck.languages.sv_SE": "Swedish",
     "language.spellcheck.languages.cs_CZ": "Czech",
-    "language.spellcheck.languages.ru_RU": "Russian"
+    "language.spellcheck.languages.ru_RU": "Russian",
+    "general.vaultOpening.ask": "Ask every time",
+    "general.vaultOpening.thisWindow": "This window",
+    "general.vaultOpening.newWindow": "New window"
   }
 }

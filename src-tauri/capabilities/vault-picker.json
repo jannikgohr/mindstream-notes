@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "vault-picker",
+  "platforms": ["macOS", "windows", "linux"],
+  "windows": ["vault-picker"],
+  "permissions": ["core:default", "core:window:allow-close"]
+}

@@ -1,7 +1,10 @@
 import { isRecord } from '$lib/validation';
+import { isTauri } from './core';
+import { pushToast } from '$lib/components/toast.svelte';
+import { tUi } from '$lib/settings/i18n.svelte';
 /**
- * Last-session dock layout. Stored in localStorage per vault/profile so
- * each vault reopens its own notes and split arrangement.
+ * Last-session dock layout. Native builds use the vault settings document;
+ * browser previews use per-vault localStorage buckets.
  *
  * The blob is whatever dockview's `dock.toJSON()` returns plus a small
  * meta header — we don't crack the dockview format ourselves, just round
@@ -11,6 +14,50 @@ import { isRecord } from '$lib/validation';
 const LEGACY_STORAGE_KEY = 'notes-app:dock-layout:v1';
 const STORAGE_KEY_PREFIX = 'notes-app:dock-layout:v1:vault:';
 const DEFAULT_VAULT_ID = 'default';
+
+let nativeVaultId: string | null = null;
+let nativeSavedLayout: SavedLayout | null = null;
+let nativeWriter:
+  | ((vaultId: string, layout: SavedLayout | null) => Promise<void>)
+  | null = null;
+
+export function registerNativeLayoutWriter(
+  writer: (vaultId: string, layout: SavedLayout | null) => Promise<void>
+): void {
+  nativeWriter = writer;
+}
+
+export function applyNativeSavedLayout(vaultId: string, value: unknown): void {
+  nativeVaultId = vaultId;
+  nativeSavedLayout = validateSavedLayout(value);
+}
+
+export function legacyLayoutRaw(vaultId: string): string | null {
+  const scoped = localStorage.getItem(storageKey(vaultId));
+  return (
+    scoped ??
+    (vaultId === DEFAULT_VAULT_ID
+      ? localStorage.getItem(LEGACY_STORAGE_KEY)
+      : null)
+  );
+}
+
+function writeNativeLayout(
+  vaultId: string,
+  value: SavedLayout | null
+): Promise<void> {
+  const task =
+    nativeWriter && nativeVaultId === vaultId
+      ? nativeWriter(vaultId, value)
+      : Promise.reject(
+          new Error('layout vault has not initialized or does not match')
+        );
+  void task.catch((err) => {
+    console.warn('[layout] save failed', err);
+    pushToast(tUi('preferences.saveFailed'), { variant: 'error' });
+  });
+  return task;
+}
 
 export interface SavedLayout {
   version: number;
@@ -65,6 +112,10 @@ function readSavedLayout(key: string): SavedLayout | null {
 export function loadSavedLayout(
   vaultId = DEFAULT_VAULT_ID
 ): SavedLayout | null {
+  if (isTauri())
+    return nativeVaultId === vaultId && nativeSavedLayout
+      ? structuredClone(nativeSavedLayout)
+      : null;
   const saved = readSavedLayout(storageKey(vaultId));
   if (saved) return saved;
   // Back-compat: before profiles, the default vault used one device-wide key.
@@ -76,7 +127,16 @@ export function saveLayout(
   vaultId: string,
   dock: unknown,
   activeNoteId: string | null
-): void {
+): void | Promise<void> {
+  if (isTauri()) {
+    if (!isRecord(dock)) return;
+    return writeNativeLayout(vaultId, {
+      version: 1,
+      dock: structuredClone(dock),
+      activeNoteId,
+      savedAt: new Date().toISOString()
+    });
+  }
   if (typeof localStorage === 'undefined') return;
   try {
     if (!isRecord(dock)) return;
@@ -92,7 +152,10 @@ export function saveLayout(
   }
 }
 
-export function clearSavedLayout(vaultId = DEFAULT_VAULT_ID): void {
+export function clearSavedLayout(
+  vaultId = DEFAULT_VAULT_ID
+): void | Promise<void> {
+  if (isTauri()) return writeNativeLayout(vaultId, null);
   if (typeof localStorage === 'undefined') return;
   localStorage.removeItem(storageKey(vaultId));
   if (vaultId === DEFAULT_VAULT_ID) localStorage.removeItem(LEGACY_STORAGE_KEY);

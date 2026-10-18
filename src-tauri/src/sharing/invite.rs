@@ -9,7 +9,10 @@ pub async fn invite_collection(
     app: AppHandle,
     input: InviteCollectionInput,
 ) -> CommandResult<CollectionShareState> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let blocking_job = job.clone();
     tauri::async_runtime::spawn_blocking(move || -> CommandResult<CollectionShareState> {
+        let _job = blocking_job;
         let InviteCollectionInput {
             collection_id,
             username,
@@ -137,7 +140,10 @@ pub async fn e2e_create_standalone_collection_invite(
     app: AppHandle,
     input: E2eStandaloneInviteInput,
 ) -> CommandResult<E2eStandaloneInviteResult> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let blocking_job = job.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
         let recipient = input.username.trim();
         let collection_type = input.collection_type.trim();
         if recipient.is_empty() || collection_type.is_empty() {

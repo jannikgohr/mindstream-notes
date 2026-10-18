@@ -66,6 +66,77 @@ describe('parsePluginSettingId', () => {
 });
 
 describe('hydratePluginSettings', () => {
+  it('keeps a pending edit while refreshing unrelated settings', async () => {
+    let finishWrite!: () => void;
+    h.set.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishWrite = resolve;
+        })
+    );
+    const saving = setPluginSettingValue(
+      'plugins.com.a.plugin.endpoint',
+      'new'
+    );
+    h.all.mockResolvedValue({ endpoint: 'old', other: 'remote' });
+    await hydratePluginSettings('com.a.plugin');
+    expect(pluginSettingValue('plugins.com.a.plugin.endpoint')).toBe('new');
+    expect(pluginSettingValue('plugins.com.a.plugin.other')).toBe('remote');
+    finishWrite();
+    await saving;
+  });
+
+  it('does not resurrect a reset value from an older read', async () => {
+    await setPluginSettingValue('plugins.com.a.plugin.endpoint', 'old');
+    let finishRead!: (values: Record<string, unknown>) => void;
+    h.all.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRead = resolve;
+        })
+    );
+    const refreshing = hydratePluginSettings('com.a.plugin');
+    await resetPluginSettingValue('plugins.com.a.plugin.endpoint');
+    finishRead({ endpoint: 'old' });
+    await refreshing;
+    expect(hasPluginSettingValue('plugins.com.a.plugin.endpoint')).toBe(false);
+  });
+
+  it('ignores a read that completes after a newer refresh', async () => {
+    let finishRead!: (values: Record<string, unknown>) => void;
+    h.all.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRead = resolve;
+        })
+    );
+    const older = hydratePluginSettings('com.a.plugin');
+    h.all.mockResolvedValue({ endpoint: 'new' });
+    await hydratePluginSettings('com.a.plugin');
+    finishRead({ endpoint: 'old' });
+    await older;
+    expect(pluginSettingValue('plugins.com.a.plugin.endpoint')).toBe('new');
+  });
+
+  it('does not replace a newer edit with an older hydration response', async () => {
+    let finishRead!: (values: Record<string, unknown>) => void;
+    h.all.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRead = resolve;
+        })
+    );
+    const refreshing = hydratePluginSettings('com.a.plugin');
+    await setPluginSettingValue(
+      'plugins.com.a.plugin.endpoint',
+      'http://localhost:8081'
+    );
+    finishRead({});
+    await refreshing;
+    expect(pluginSettingValue('plugins.com.a.plugin.endpoint')).toBe(
+      'http://localhost:8081'
+    );
+  });
   it('loads stored values so the first synchronous read is real', async () => {
     h.all.mockResolvedValue({ 'source-folder': 'f1', 'open-on-create': true });
     await hydratePluginSettings('com.a.plugin');
@@ -89,6 +160,15 @@ describe('hydratePluginSettings', () => {
 });
 
 describe('setPluginSettingValue', () => {
+  it('refresh removes reset values without clearing a plugin with a dotted prefix', async () => {
+    h.all.mockResolvedValue({ k: 'stored' });
+    await hydratePluginSettings('com.a.plugin');
+    await hydratePluginSettings('com.a.plugin.child');
+    h.all.mockResolvedValue({});
+    await hydratePluginSettings('com.a.plugin');
+    expect(hasPluginSettingValue('plugins.com.a.plugin.k')).toBe(false);
+    expect(pluginSettingValue('plugins.com.a.plugin.child.k')).toBe('stored');
+  });
   it('persists through the backend with the id split apart', async () => {
     await setPluginSettingValue('plugins.com.a.plugin.source-folder', 'f2');
     expect(h.set).toHaveBeenCalledWith('com.a.plugin', 'source-folder', 'f2');

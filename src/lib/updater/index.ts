@@ -10,6 +10,11 @@ import {
   recordChunk
 } from './progress.svelte';
 import pkg from '../../../package.json';
+import {
+  checkCoordinatedUpdate,
+  installCoordinatedUpdate,
+  parseUpdateProgress
+} from '$lib/api/updater';
 
 type Update = NonNullable<Awaited<ReturnType<typeof check>>>;
 
@@ -19,12 +24,15 @@ async function relaunchApp() {
 }
 
 export interface AvailableUpdate {
-  update: Update;
+  update: Pick<Update, 'version' | 'downloadAndInstall'>;
   version: string;
   currentVersion: string;
+  coordinated?: boolean;
+  coordinatedId?: string;
 }
 
 interface CheckOptions {
+  force?: boolean;
   alertOnError?: boolean;
   alertOnCurrent?: boolean;
   alertOnUnsupported?: boolean;
@@ -48,6 +56,34 @@ export async function checkForAvailableUpdate(
 
   let update: Update | null;
   try {
+    if (getPlatform() !== 'android' && getPlatform() !== 'ios') {
+      const reply = await checkCoordinatedUpdate(options.force ?? false);
+      if (reply.supervised) {
+        if (!reply.available) {
+          if (options.alertOnCurrent)
+            await alert({
+              title: tUi('updater.upToDate.title'),
+              message: tUi('updater.upToDate.message').replace(
+                '{version}',
+                pkg.version
+              ),
+              confirmLabel: tUi('updater.dismiss')
+            });
+          return null;
+        }
+        const offer = reply.available;
+        return {
+          coordinated: true,
+          coordinatedId: offer.id,
+          version: offer.version,
+          currentVersion: offer.currentVersion,
+          update: {
+            version: offer.version,
+            downloadAndInstall: async () => installCoordinatedUpdate(offer.id)
+          }
+        };
+      }
+    }
     update = await check();
   } catch (err) {
     console.error('[updater] check failed', err);
@@ -100,6 +136,32 @@ export async function installAvailableUpdate(
   if (!installNow) return;
 
   try {
+    if (available.coordinated && available.coordinatedId) {
+      const { listen } = await import('@tauri-apps/api/event');
+      let downloaded = 0;
+      let total: number | null = null;
+      beginDownload(0);
+      const unlisten = await listen<unknown>(
+        'coordinator-update-progress',
+        ({ payload }) => {
+          const progress = parseUpdateProgress(payload);
+          if (progress.total !== total) {
+            total = progress.total;
+            beginDownload(total ?? 0);
+            downloaded = 0;
+          }
+          recordChunk(Math.max(0, progress.downloaded - downloaded));
+          downloaded = progress.downloaded;
+          if (progress.finished) finishDownload();
+        }
+      );
+      try {
+        await installCoordinatedUpdate(available.coordinatedId);
+      } finally {
+        unlisten();
+      }
+      return;
+    }
     await available.update.downloadAndInstall((event) => {
       switch (event.event) {
         case 'Started':
@@ -140,6 +202,7 @@ export async function installAvailableUpdate(
 
 export async function checkForUpdatesInteractively(): Promise<void> {
   const available = await checkForAvailableUpdate({
+    force: true,
     alertOnCurrent: true,
     alertOnError: true,
     alertOnUnsupported: true

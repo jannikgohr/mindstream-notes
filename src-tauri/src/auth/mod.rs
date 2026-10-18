@@ -99,24 +99,43 @@ fn keyring_account_name(profile_id: &str) -> String {
 /// Resolve the keyring account key for the currently-active profile.
 /// Falls back to the default (un-namespaced) key if profile state isn't
 /// managed yet — matches the boot fallback in [`crate::paths`].
-fn active_keyring_account(app: &AppHandle) -> String {
+#[derive(Clone)]
+struct CredentialIdentity {
+    service: String,
+    account: String,
+}
+
+fn credential_identity(app: &AppHandle, id: &str) -> CredentialIdentity {
+    let service = app
+        .try_state::<crate::environment::Environment>()
+        .map(|environment| environment.credential_service.clone())
+        .unwrap_or_else(|| KEYRING_SERVICE.to_string());
+    CredentialIdentity {
+        service,
+        account: keyring_account_name(id),
+    }
+}
+
+fn active_keyring_account(app: &AppHandle) -> CredentialIdentity {
     let id = app
         .try_state::<crate::paths::ActiveProfile>()
         .map(|p| p.id.clone())
         .unwrap_or_else(|| crate::profiles::DEFAULT_PROFILE_ID.to_string());
-    keyring_account_name(&id)
+    credential_identity(app, &id)
 }
 
-fn keyring_entry(account: &str) -> AppResult<Entry> {
-    Entry::new(KEYRING_SERVICE, account).map_err(|e| AppError::InvalidArg(format!("keyring: {e}")))
+fn keyring_entry(identity: &CredentialIdentity) -> AppResult<Entry> {
+    Entry::new(&identity.service, &identity.account)
+        .map_err(|e| AppError::InvalidArg(format!("keyring: {e}")))
 }
 
 /// Best-effort removal of a profile's stored Etebase session key. Called
 /// when a vault is deleted so its credential doesn't outlive its data.
 /// Silent on any failure — the entry may simply not exist (the vault was
 /// never signed in).
-pub fn forget_profile_keyring(profile_id: &str) {
-    if let Ok(entry) = keyring_entry(&keyring_account_name(profile_id)) {
+pub fn forget_profile_keyring(app: &AppHandle, profile_id: &str) {
+    let identity = credential_identity(app, profile_id);
+    if let Ok(entry) = keyring_entry(&identity) {
         let _ = entry.delete_credential();
     }
 }
@@ -203,7 +222,10 @@ fn read_stored(path: &Path) -> AppResult<Option<StoredSession>> {
     Ok(Some(stored))
 }
 
-fn restore_account(stored: &StoredSession, keyring_account: &str) -> AppResult<Account> {
+fn restore_account(
+    stored: &StoredSession,
+    keyring_account: &CredentialIdentity,
+) -> AppResult<Account> {
     let key_b64 = keyring_entry(keyring_account)?
         .get_password()
         .map_err(|e| AppError::InvalidArg(format!("keyring read: {e}")))?;
@@ -219,7 +241,7 @@ fn restore_account(stored: &StoredSession, keyring_account: &str) -> AppResult<A
 /// like everything that touches an `Account`.
 fn store_session(
     path: &Path,
-    keyring_account: &str,
+    keyring_account: &CredentialIdentity,
     username: &str,
     server_url: &str,
     account: &Account,
@@ -288,7 +310,7 @@ pub(crate) fn room_key_seal(app: &AppHandle) -> Option<crate::sync::room_keys::S
     crate::sync::room_keys::Seal::from_session_secret(&secret).ok()
 }
 
-fn clear_local_state(path: &Path, keyring_account: &str) {
+fn clear_local_state(path: &Path, keyring_account: &CredentialIdentity) {
     let _ = fs::remove_file(path);
     if let Ok(entry) = keyring_entry(keyring_account) {
         let _ = entry.delete_credential();
@@ -454,6 +476,7 @@ pub fn has_session(app: &AppHandle) -> bool {
 
 #[tauri::command]
 pub async fn etebase_login(args: LoginArgs, app: AppHandle) -> CommandResult<SessionInfo> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let server_url = resolve_server_url(&args.server_type, args.server_url.as_deref())?;
     let path = session_path(&app)?;
     let keyring_account = active_keyring_account(&app);
@@ -465,6 +488,7 @@ pub async fn etebase_login(args: LoginArgs, app: AppHandle) -> CommandResult<Ses
     // which would panic with "Cannot drop a runtime in a context where
     // blocking is not allowed".
     tauri::async_runtime::spawn_blocking(move || -> CommandResult<SessionInfo> {
+        let _job = job;
         let client = client_for(&server_url)?;
         let code = account::typed(args.code.as_deref());
         let account = Account::login_with_code(client, &args.username, &args.password, code)
@@ -483,6 +507,7 @@ pub async fn etebase_login(args: LoginArgs, app: AppHandle) -> CommandResult<Ses
 
 #[tauri::command]
 pub async fn etebase_logout(app: AppHandle) -> CommandResult<()> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let path = session_path(&app).map_err(String::from)?;
     let stored = read_stored(&path).map_err(String::from)?;
     let keyring_account = active_keyring_account(&app);
@@ -500,7 +525,9 @@ pub async fn etebase_logout(app: AppHandle) -> CommandResult<()> {
         // server gone) we still wipe local state below — that's the
         // user's clear intent.
         let keyring_account = keyring_account.clone();
+        let blocking_job = job.clone();
         let logout_result = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+            let _job = blocking_job;
             let account = restore_account(&stored, &keyring_account)
                 .map_err(|e| format!("restore session: {e}"))?;
             account.logout().map_err(|e| format!("logout: {e}"))?;

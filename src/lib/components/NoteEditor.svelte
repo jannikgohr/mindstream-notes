@@ -1465,6 +1465,8 @@
 
   const saveScheduler = createSaveScheduler({
     canSave: () => !isReadOnly && autoSaveEnabled,
+    canSaveOnClose: () => !isReadOnly && !!getMarkdown,
+    beforeFlush: () => sourceEditor?.flush(),
     capture: captureCurrentNoteSave,
     delayMs: () => saveDebounceMs,
     onError: (error) => {

@@ -152,7 +152,7 @@
   --primary: oklch(0.205 0 0);
   --primary-foreground: oklch(0.985 0 0);
   --secondary: var(--surface-2);
-  --secondary-foreground: oklch(0.205 0 0);
+  --secondary-foreground: var(--foreground);
   --muted: var(--surface-2);
   --muted-foreground: oklch(0.52 0.018 265);
   /* Hover wash. Translucent rather than opaque so one token reads
@@ -223,7 +223,7 @@ html {
 
   /* Both tiers sit clear of every surface step (max 0.295), so a border is
    * visible no matter which elevation it lands on. */
-  --border-subtle: oklch(0.32 0.012 270);
+  --border-subtle: oklch(0.325 0.012 270);
   --border-strong: oklch(0.4 0.015 270);
 
   --accent-brand: oklch(0.76 0.12 275);
@@ -244,7 +244,7 @@ html {
   --foreground: oklch(0.985 0 0);
   --primary: oklch(0.985 0 0);
   --primary-foreground: oklch(0.205 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
+  --secondary-foreground: var(--foreground);
   --muted-foreground: oklch(0.708 0 0);
   /* Slightly stronger than light mode: a white wash at 6% disappears on a
    * dark ground. */

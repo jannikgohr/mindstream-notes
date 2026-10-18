@@ -12,7 +12,7 @@
    * without stealing focus — the confirmation is informational, and focus stays
    * wherever the user was working.
    */
-  import { CheckCircle2, Info, X, XCircle } from '@lucide/svelte';
+  import { CheckCircle2, Info, LoaderCircle, X, XCircle } from '@lucide/svelte';
   import type { Component } from 'svelte';
   import { fly } from 'svelte/transition';
   import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
@@ -31,7 +31,8 @@
   const icons: Record<ToastVariant, Component> = {
     success: CheckCircle2,
     error: XCircle,
-    info: Info
+    info: Info,
+    progress: LoaderCircle
   };
 
   // Accent per variant. Success uses the status ramp, shared with
@@ -40,7 +41,8 @@
   const accents: Record<ToastVariant, string> = {
     success: 'text-success',
     error: 'text-destructive',
-    info: 'text-primary'
+    info: 'text-primary',
+    progress: 'text-primary motion-safe:animate-spin'
   };
 
   // Reduced motion → appear instantly rather than sliding in.
@@ -54,6 +56,7 @@
 {#if toasts.items.length > 0}
   <div
     use:portal
+    data-toast-region
     class="pointer-events-none fixed bottom-4 right-4 z-500 flex w-[min(22rem,calc(100vw-2rem))] flex-col gap-2"
     role="region"
     aria-live="polite"
@@ -73,14 +76,16 @@
         <p class="min-w-0 flex-1 whitespace-pre-line text-sm">
           {toast.message}
         </p>
-        <button
-          type="button"
-          class="-mr-1 -mt-0.5 rounded-md p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          aria-label={tUi('close')}
-          onclick={() => dismissToast(toast.id)}
-        >
-          <X class="size-3.5" />
-        </button>
+        {#if toast.dismissible}
+          <button
+            type="button"
+            class="-mr-1 -mt-0.5 rounded-md p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label={tUi('close')}
+            onclick={() => dismissToast(toast.id)}
+          >
+            <X class="size-3.5" />
+          </button>
+        {/if}
       </div>
     {/each}
   </div>

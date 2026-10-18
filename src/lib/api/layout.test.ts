@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   clearSavedLayout,
   loadSavedLayout,
+  legacyLayoutRaw,
   saveLayout,
   validateSavedLayout
 } from './layout';
@@ -29,6 +30,16 @@ const dock = {
 beforeEach(() => localStorage.clear());
 
 describe('dock layout persistence', () => {
+  it('uses the exact vault bucket for migration and retains malformed raw input', () => {
+    localStorage.setItem('notes-app:dock-layout:v1', 'legacy default raw');
+    localStorage.setItem(
+      'notes-app:dock-layout:v1:vault:work',
+      'corrupt matching raw'
+    );
+    expect(legacyLayoutRaw('default')).toBe('legacy default raw');
+    expect(legacyLayoutRaw('work')).toBe('corrupt matching raw');
+    expect(legacyLayoutRaw('other')).toBeNull();
+  });
   it('saves and loads layouts per vault', () => {
     saveLayout('default', dock, 'a');
     saveLayout(

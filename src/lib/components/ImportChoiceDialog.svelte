@@ -19,7 +19,7 @@
     const item = importChoiceQueue.items[0];
     if (!item) return;
     importChoiceQueue.items = importChoiceQueue.items.slice(1);
-    item.resolve(choice);
+    item.resolve(choice, item.options.includeDevice);
   }
 
   function formatAccount(
@@ -98,6 +98,35 @@
             {tUi('data.import.notice.differentAccount')}
           {/if}
         </div>
+
+        {#if current.preview.portable}
+          <p class="mt-3 text-xs text-muted-foreground">
+            {tUi('data.import.portable.vault').replace(
+              '{bytes}',
+              formatBytes(current.preview.plugin_data_bytes)
+            )}
+          </p>
+          <label class="mt-3 flex items-start gap-2 text-xs">
+            <input
+              type="checkbox"
+              bind:checked={current.options.includeDevice}
+              class="mt-0.5 accent-primary"
+            />
+            <span
+              >{tUi('data.import.portable.device').replace(
+                '{packages}',
+                String(current.preview.plugin_packages)
+              )}</span
+            >
+          </label>
+          <p class="mt-2 text-xs text-muted-foreground">
+            {tUi('data.import.portable.merge')}
+          </p>
+        {:else}
+          <p class="mt-3 text-xs text-muted-foreground">
+            {tUi('data.import.portable.legacy')}
+          </p>
+        {/if}
 
         <div class="mt-5 flex flex-wrap justify-end gap-2">
           <AlertDialog.Cancel onclick={() => resolveWith('cancel')}>

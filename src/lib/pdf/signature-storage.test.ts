@@ -4,6 +4,11 @@ import type { SignatureRecord } from '$lib/api/signatures';
 const listSignatures = vi.fn();
 const saveSignature = vi.fn();
 const deleteSignature = vi.fn();
+let native = false;
+const migrateLegacyContent = vi.fn();
+
+vi.mock('$lib/api/core', () => ({ isTauri: () => native }));
+vi.mock('$lib/api/legacy-content', () => ({ migrateLegacyContent }));
 
 vi.mock('$lib/api/signatures', () => ({
   listSignatures,
@@ -34,6 +39,8 @@ const record = (id: string): SignatureRecord => ({
 
 beforeEach(async () => {
   vi.resetModules();
+  native = false;
+  migrateLegacyContent.mockReset().mockResolvedValue([]);
   localStorage.clear();
   listSignatures.mockReset().mockResolvedValue([]);
   saveSignature.mockReset().mockResolvedValue(undefined);
@@ -100,6 +107,42 @@ describe('readLegacySnapshots', () => {
 });
 
 describe('loadReusableSignatures', () => {
+  it('passes unchanged native sources to the transactional import and retains them', async () => {
+    native = true;
+    const array = JSON.stringify([geom('legacy')]);
+    const single = JSON.stringify(geom());
+    localStorage.setItem(ARRAY_KEY, array);
+    localStorage.setItem(SINGLE_KEY, single);
+    listSignatures.mockResolvedValue([record('imported')]);
+    expect((await mod.loadReusableSignatures()).map((s) => s.id)).toEqual([
+      'imported'
+    ]);
+    expect(migrateLegacyContent).toHaveBeenCalledWith(
+      'signatures',
+      array,
+      single
+    );
+    expect(saveSignature).not.toHaveBeenCalled();
+    expect(localStorage.getItem(ARRAY_KEY)).toBe(array);
+    expect(localStorage.getItem(SINGLE_KEY)).toBe(single);
+  });
+
+  it('retains malformed native bytes after an import error and still loads the existing library', async () => {
+    native = true;
+    localStorage.setItem(ARRAY_KEY, 'malformed evidence');
+    migrateLegacyContent.mockRejectedValueOnce(new Error('invalid source'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    listSignatures.mockResolvedValue([record('existing')]);
+    expect((await mod.loadReusableSignatures()).map((s) => s.id)).toEqual([
+      'existing'
+    ]);
+    expect(migrateLegacyContent).toHaveBeenCalledWith(
+      'signatures',
+      'malformed evidence',
+      null
+    );
+    expect(localStorage.getItem(ARRAY_KEY)).toBe('malformed evidence');
+  });
   it('maps synced records into snapshots when there is no legacy data', async () => {
     listSignatures.mockResolvedValue([record('r1'), record('r2')]);
     const out = await mod.loadReusableSignatures();

@@ -22,7 +22,12 @@
 import { isTauri } from '$lib/api/core';
 import { pluginsDiscover, type DiscoveredPluginView } from '$lib/api/plugins';
 import templatesManifest from '../../../plugins/templates/manifest.json';
-import { recordPluginLoadError, registerPlugin } from './registry.svelte';
+import {
+  allPlugins,
+  unregisterPlugin,
+  recordPluginLoadError,
+  registerPlugin
+} from './registry.svelte';
 import { hydratePluginSettings } from './settings-store.svelte';
 import { reportGatedPlugins, type GatedPlugin } from './gate-notify';
 import { SOURCE_INSTALLED } from './source';
@@ -109,6 +114,10 @@ export async function loadPlugins(): Promise<void> {
   }
   try {
     const views = await pluginsDiscover();
+    const present = new Set(views.map((view) => view.record.id));
+    for (const { manifest } of allPlugins()) {
+      if (!present.has(manifest.id)) unregisterPlugin(manifest.id);
+    }
     for (const view of views) applyDiscovered(view);
     // Pull each plugin's stored settings into the cache so the first
     // synchronous read (a settings control, a `$derived`) already has the real
@@ -122,4 +131,43 @@ export async function loadPlugins(): Promise<void> {
   } catch (err) {
     console.error('[plugins] discovery failed', err);
   }
+}
+
+/** Keep every window's registry and settings synchronized with root changes. */
+export function watchPluginChanges(): () => void {
+  if (!isTauri()) return () => {};
+  let stopped = false;
+  let pending = false;
+  let running = false;
+  let unlisten: (() => void) | undefined;
+  const refresh = async () => {
+    pending = true;
+    if (running) return;
+    running = true;
+    try {
+      while (pending && !stopped) {
+        pending = false;
+        await loadPlugins();
+        const { refreshPluginAdmin } = await import('./manage.svelte');
+        await refreshPluginAdmin();
+      }
+    } finally {
+      running = false;
+    }
+  };
+  void import('$lib/api/events')
+    .then(({ listen, TauriEventName }) =>
+      listen(TauriEventName.PluginsChanged, () => {
+        void refresh();
+      })
+    )
+    .then((stop) => {
+      if (stopped) stop();
+      else unlisten = stop;
+    })
+    .catch((err) => console.error('[plugins] change listener failed', err));
+  return () => {
+    stopped = true;
+    unlisten?.();
+  };
 }

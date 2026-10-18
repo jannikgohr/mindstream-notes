@@ -30,6 +30,7 @@ import {
   captureFailureArtifacts,
   installPageDiagnostics
 } from './helpers/failure-capture.js';
+import { webviewEnvironment } from './helpers/worker-isolation.js';
 import {
   appBinary as application,
   preflight,
@@ -82,8 +83,12 @@ function spawnDriver(client: ClientProc): ChildProcess {
     {
       ...process.env,
       MINDSTREAM_PROFILE_DIR: client.profileDir,
+      MINDSTREAM_ROOT_DIR: join(client.profileDir, '.app-root'),
       MINDSTREAM_PROFILE_ID: client.profileId,
-      MINDSTREAM_DICTIONARY_DIR: dictionaryDir
+      MINDSTREAM_DICTIONARY_DIR: dictionaryDir,
+      // Browser isolation (XDG_DATA_HOME/XDG_CACHE_HOME on Linux): without
+      // this the test build refuses to boot (environment::validate_browser_isolation).
+      ...webviewEnvironment(client.profileDir)
     },
     join(outputDir, `tauri-driver-${client.profileId}.log`)
   );

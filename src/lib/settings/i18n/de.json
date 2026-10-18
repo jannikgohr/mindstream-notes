@@ -1,11 +1,27 @@
 {
   "language": "de",
   "ui": {
+    "preferences.saveFailed": "Diese Einstellung konnte nicht gespeichert werden. Bitte versuche es erneut.",
     "boot.loading": "Wird geladen…",
     "boot.error.title": "App konnte nicht geladen werden",
     "boot.error.message": "Beim Starten von Mindstream Notes ist ein Fehler aufgetreten.",
     "boot.error.reload": "Neu laden",
     "vault.title": "Tresore",
+    "vault.closeFailed": "Der Tresor konnte nicht sicher geschlossen werden. Er bleibt geöffnet. Prüfe deine Änderungen und versuche es erneut.",
+    "vault.waitingForTasks": "Tresor wird zum Schließen vorbereitet…",
+    "vault.savingChanges": "Änderungen werden gespeichert…",
+    "vault.backgroundBusy": "Ausstehende Aufgaben wurden nicht rechtzeitig abgeschlossen. Der Tresor bleibt geöffnet. Versuche ihn erneut zu schließen, wenn diese Aufgaben fertig sind.",
+    "vault.switchCancelled": "Der Tresorwechsel wurde bei der Wiederherstellung abgebrochen. Dein Tresor bleibt geöffnet.",
+    "vault.open.focus": "Vorhandenes Fenster anzeigen",
+    "vault.open.newWindow": "In neuem Fenster öffnen",
+    "vault.open.failed.title": "Tresor konnte nicht geöffnet werden",
+    "vault.open.failed.message": "Das Öffnen des Tresors ist fehlgeschlagen: {error}. Dein aktueller Tresor bleibt geöffnet.",
+    "vault.windows.checking": "Offene Tresore werden geprüft...",
+    "vault.windows.failed": "Offene Tresore konnten nicht geprüft werden. Versuche es erneut.",
+    "vault.windows.retry": "Erneut versuchen",
+    "vault.windows.ready": "Offen",
+    "vault.windows.starting": "Wird geöffnet",
+    "vault.windows.unavailable": "Nicht verfügbar",
     "vault.switch": "Tresor wechseln",
     "vault.unknown": "Unbekannter Tresor",
     "vault.create": "Tresor erstellen",
@@ -727,6 +743,10 @@
     "data.result.chip.attachments.label": "Anhänge",
     "data.import.title": "Mindstream-Notes-Backup importieren",
     "data.import.description": "Aus Mindstream Notes {version}, erstellt am {createdAt}.",
+    "data.import.portable.vault": "Beim Wiederherstellen werden auch die Einstellungen und Plugin-Daten dieses Vaults ersetzt ({bytes}). Drittanbieter-Plugins müssen erneut freigegeben werden.",
+    "data.import.portable.device": "Auch gemeinsame Geräteeinstellungen, eigene Designs und {packages} Plugin-Paket(e) importieren. Bei Konflikten bleiben vorhandene Werte und Pakete erhalten.",
+    "data.import.portable.merge": "Zusammenführen importiert nur fehlende Notizen, Ordner und Anhänge. Die Geräteoption gilt nur beim Wiederherstellen.",
+    "data.import.portable.legacy": "Dieses ältere Backup stellt nur Datenbankinhalte wieder her. Vault-Dateien und Geräteeinstellungen bleiben unverändert.",
     "data.import.column.backup": "Backup",
     "data.import.column.current": "Aktueller Datenbestand",
     "data.import.row.notes": "Notizen",
@@ -739,7 +759,7 @@
     "data.import.notice.differentAccount": "Das Backup gehört zu einem anderen Konto oder hat keine Kontodaten. Beim Wiederherstellen werden die Sync-Metadaten entfernt, sodass deine Daten neu synchronisiert werden.",
     "data.import.button.cancel": "Abbrechen",
     "data.import.button.merge": "Fehlende Einträge zusammenführen",
-    "data.import.button.restore": "Wiederherstellen (alles ersetzen)",
+    "data.import.button.restore": "Diesen Vault wiederherstellen",
     "data.import.merge.success.title": "Zusammenführung abgeschlossen",
     "data.import.merge.success.message": "{notes} Notiz(en), {folders} Ordner und {assets} Anhang/Anhänge hinzugefügt. {orphaned} Notiz(en) haben ihren ursprünglichen Ordner verloren und landeten im Stamm.",
     "data.import.result.close": "Schließen",
@@ -852,11 +872,15 @@
     "nav.create.kanban": "Neues Kanban-Board",
     "nav.create.kanbanInFolder": "Neues Kanban-Board",
     "fab.fromTemplate": "Neu aus Vorlage",
+    "plugins.manage.scope": "Pakete und Updates gelten für alle Tresore auf diesem Gerät. Genehmigungen und Aktivierung gelten für diesen Tresor.",
+    "plugins.manage.install": "Aus Ordner installieren oder aktualisieren…",
+    "plugins.manage.missing": "Paket nicht installiert",
+    "plugins.manage.error": "Plugin-Aktion fehlgeschlagen",
     "plugins.manage.title": "Installierte Plugins",
     "plugins.manage.empty": "Keine Plugins installiert.",
-    "plugins.manage.toggle": "Plugin aktivieren",
+    "plugins.manage.toggle": "In diesem Tresor aktivieren",
     "plugins.manage.notLoaded": "Nicht geladen",
-    "plugins.manage.approve": "Genehmigen",
+    "plugins.manage.approve": "In diesem Tresor genehmigen",
     "notifications.plugins.gated.title": "Plugins geändert - erneute Freigabe nötig",
     "notifications.plugins.gated.message": "{plugins} wurde seit der Freigabe geändert und wird erst geladen, wenn du es prüfst und erneut freigibst.",
     "notifications.plugins.new.title": "Neue Plugins benötigen Freigabe",
@@ -890,10 +914,10 @@
     "plugins.author": "Von",
     "plugins.settings.open": "Plugin-Einstellungen",
     "plugins.hotkeys.open": "Plugin-Tastenkürzel",
-    "plugins.delete": "Plugin löschen",
-    "plugins.delete.confirm.title": "Plugin löschen?",
-    "plugins.delete.confirm.message": "Dies löscht „{name}“ und seine Dateien dauerhaft. Das kann nicht rückgängig gemacht werden.",
-    "plugins.delete.confirm.confirm": "Löschen",
+    "plugins.delete": "Vom Gerät entfernen",
+    "plugins.delete.confirm.title": "Plugin von diesem Gerät entfernen?",
+    "plugins.delete.confirm.message": "\"{name}\" aus allen Tresoren auf diesem Gerät entfernen? Tresore: {vaults}. Einstellungen und Plugin-Daten bleiben erhalten. Laufende Aufgaben werden abgeschlossen, bevor alte Paketdateien gelöscht werden.",
+    "plugins.delete.confirm.confirm": "Vom Gerät entfernen",
     "fab.newKanban": "Neues Kanban-Board",
     "fab.placeholder.kanbanTitle": "Titel des Kanban-Boards",
     "editor.kanban.labels": "Labels",
@@ -1064,6 +1088,23 @@
     "account.serverUrl": "Server-URL",
     "account.managedHint": "Für dich betrieben. Wähle oben „Selbst gehostet“, um einen eigenen Server zu nutzen.",
     "account.password": "Passwort",
+    "hotkeys.placeholder": "Strg+K",
+    "vault.open.thisWindow": "In diesem Fenster öffnen",
+    "vault.open.choose": "Wie möchtest du diesen Tresor öffnen?",
+    "vault.open.remember": "Diese Entscheidung merken",
+    "vault.open.cancel": "Abbrechen",
+    "vault.picker.title": "Tresor auswählen",
+    "vault.picker.message": "Der zuletzt verwendete Tresor konnte nicht geöffnet werden. Wähle einen anderen Tresor oder erstelle einen neuen.",
+    "theme.select": "Designvorlage",
+    "theme.missingOption": "Fehlende Vorlage: {id}",
+    "theme.missing": "Diese Vorlage ist nicht verfügbar. Mindstream wird angezeigt, deine Auswahl bleibt erhalten.",
+    "theme.useAccent": "Akzent der Vorlage verwenden",
+    "theme.editJson": "Vorlagen-JSON anzeigen",
+    "theme.remove": "Vorlage entfernen",
+    "theme.import": "Vorlage importieren oder bearbeiten",
+    "theme.importHelp": "Füge hier Vorlagen-JSON ein. Gib einer integrierten Vorlage eine neue ID, um eine eigene Kopie zu speichern. Eine vorhandene eigene ID wird auf diesem Gerät ersetzt.",
+    "theme.json": "Vorlagen-JSON",
+    "theme.save": "Vorlage speichern",
     "account.serverType.locked": "Melde dich ab, um den Servertyp zu ändern.",
     "account.username": "Benutzername",
     "account.email": "E-Mail",
@@ -1455,7 +1496,7 @@
     },
     "hotkeys.globalShortcuts": {
       "label": "Globale Tastenkürzel aktivieren",
-      "description": "Anwendungsweite Tastenkürzel auch auslösen, wenn Mindstream Notes im Hintergrund ist. Formatierungs-Tastenkürzel bleiben auf die App beschränkt."
+      "description": "Erlaubt diesem Tresor, systemweite Tastenkürzel zu empfangen. Sind mehrere Tresore aktiviert, erhält sie der zuletzt verwendete aktivierte Tresor. Die Tastenbelegungen gelten für alle Tresore."
     },
     "editor.autoSaveDebounce": {
       "label": "Auto-Speichern-Verzögerung"
@@ -1548,6 +1589,14 @@
     },
     "data.openFolder": {
       "label": "Datenordner öffnen"
+    },
+    "general.vaultOpening": {
+      "label": "Tresore öffnen",
+      "description": "Wähle, ob ein anderer Tresor dieses Fenster ersetzt oder in einem neuen Fenster geöffnet wird."
+    },
+    "appearance.preset": {
+      "label": "Designvorlage",
+      "description": "Gilt für alle Tresore auf diesem Gerät. Hell-/Dunkelmodus und dein eigener Akzent sind unabhängig."
     }
   },
   "values": {
@@ -1611,6 +1660,9 @@
     "data.trashRetentionDays.7": "7 Tage",
     "data.trashRetentionDays.30": "30 Tage",
     "data.trashRetentionDays.90": "90 Tage",
-    "data.trashRetentionDays.forever": "Unbegrenzt"
+    "data.trashRetentionDays.forever": "Unbegrenzt",
+    "general.vaultOpening.ask": "Jedes Mal fragen",
+    "general.vaultOpening.thisWindow": "Dieses Fenster",
+    "general.vaultOpening.newWindow": "Neues Fenster"
   }
 }

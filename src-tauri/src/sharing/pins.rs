@@ -167,7 +167,9 @@ pub(super) fn check_key(
 /// device remembers. For showing someone what changed before they decide.
 #[tauri::command]
 pub async fn user_key_info(app: AppHandle, username: String) -> CommandResult<UserKey> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     tauri::async_runtime::spawn_blocking(move || -> CommandResult<UserKey> {
+        let _job = job;
         let account = restore_required(&app)?;
         let server = session_server(&app)?;
         let name = username.trim();
@@ -190,7 +192,9 @@ pub async fn user_key_info(app: AppHandle, username: String) -> CommandResult<Us
 /// their app shows for this account.
 #[tauri::command]
 pub async fn own_key_fingerprint(app: AppHandle) -> CommandResult<String> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     tauri::async_runtime::spawn_blocking(move || -> CommandResult<String> {
+        let _job = job;
         let account = restore_required(&app)?;
         let manager = account
             .invitation_manager()
@@ -207,7 +211,9 @@ pub async fn own_key_fingerprint(app: AppHandle) -> CommandResult<String> {
 #[cfg(feature = "e2e-data-dir")]
 #[tauri::command]
 pub async fn e2e_remember_other_key(app: AppHandle, username: String) -> CommandResult<()> {
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     tauri::async_runtime::spawn_blocking(move || -> CommandResult<()> {
+        let _job = job;
         let server = session_server(&app)?;
         let db = app.state::<Db>();
         db.with_conn(|conn| remember_key(conn, &server, &username, &[0xE2; 32]))?;

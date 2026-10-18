@@ -6,18 +6,24 @@ import {
 import type { SyncReport } from './sync';
 
 export enum TauriEventName {
+  CaptureFailed = 'capture-failed',
   CustomWindowDecorationsChanged = 'custom-window-decorations-changed',
+  DesktopSettingsChanged = 'desktop-settings-changed',
+  EnvironmentQuitFailed = 'environment-quit-failed',
   FullscreenNote = 'fullscreen-note',
   ImportProgress = 'import-progress',
   InvitationsChanged = 'invitations-changed',
   InviteLinkOpened = 'invite-link-opened',
   NativeMenuCommand = 'native-menu-command',
+  PluginsChanged = 'plugins-changed',
   SessionEnded = 'session-ended',
   ShowApp = 'show-app',
   SignaturesChanged = 'signatures-changed',
   SyncCompleted = 'sync-completed',
   SyncUnreachable = 'sync-unreachable',
-  TrayNoteCreated = 'tray-note-created'
+  TrayNoteCreated = 'tray-note-created',
+  UiSettingsChanged = 'ui-settings-changed',
+  VaultWorkerClose = 'vault-worker-close'
 }
 
 export type TauriEventKey = `${TauriEventName}`;
@@ -62,6 +68,8 @@ export interface SyncLimitReached {
 }
 
 export type TauriEvents = {
+  'capture-failed': { message: string };
+  'environment-quit-failed': { message: string };
   'fullscreen-note': { noteId: string; title: string };
   'custom-window-decorations-changed': boolean;
   'native-menu-command': unknown;
@@ -109,6 +117,14 @@ export type TauriEvents = {
    * (already-persisted) library when this fires. See stores/signatures.svelte.
    */
   'signatures-changed': null;
+  'plugins-changed': null;
+  'ui-settings-changed': null;
+  'desktop-settings-changed': null;
+  'vault-worker-close': {
+    id: string;
+    phase: 'waiting' | 'prepare' | 'cancel';
+    reason?: 'background' | 'recovery';
+  };
 };
 
 export function emit<K extends keyof TauriEvents>(

@@ -83,6 +83,14 @@
           "id": "general.behavior",
           "settings": [
             {
+              "id": "general.vaultOpening",
+              "scope": "D",
+              "type": "select",
+              "default": "ask",
+              "options": ["ask", "thisWindow", "newWindow"],
+              "platforms": ["desktop"]
+            },
+            {
               "id": "general.startOnLogin",
               "scope": "D",
               "type": "toggle",
@@ -126,8 +134,15 @@
               "options": ["light", "dark", "system"]
             },
             {
+              "id": "appearance.preset",
+              "scope": "D",
+              "type": "custom",
+              "default": "default",
+              "customId": "theme-presets"
+            },
+            {
               "id": "appearance.accent",
-              "scope": "V",
+              "scope": "D",
               "type": "color",
               "default": "#3b6fd4"
             },
@@ -155,7 +170,7 @@
           "settings": [
             {
               "id": "appearance.uiFontSize",
-              "scope": "V",
+              "scope": "D",
               "type": "slider",
               "default": 16,
               "min": 12,
@@ -189,7 +204,7 @@
           "settings": [
             {
               "id": "appearance.sortStrategy",
-              "scope": "D",
+              "scope": "V",
               "type": "radio",
               "default": "alphabetical",
               "options": ["alphabetical", "modified", "created"]
@@ -478,7 +493,7 @@
           "settings": [
             {
               "id": "hotkeys.globalShortcuts",
-              "scope": "D",
+              "scope": "V",
               "type": "toggle",
               "default": false,
               "platforms": ["desktop"]

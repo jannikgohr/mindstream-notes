@@ -137,6 +137,7 @@ export default defineConfig({
       '@milkdown/kit/core',
       '@milkdown/kit/plugin/history',
       '@milkdown/kit/plugin/listener',
+      '@milkdown/kit/plugin/upload',
       '@milkdown/kit/preset/commonmark',
       '@milkdown/kit/preset/gfm',
       '@milkdown/kit/prose/commands',

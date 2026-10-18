@@ -31,7 +31,7 @@
   } from '@lucide/svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { tooltip } from '$lib/actions/tooltip';
-  import { confirm } from '$lib/components/confirm-dialog.svelte';
+  import { confirm, alert } from '$lib/components/confirm-dialog.svelte';
   import {
     approvePluginAdmin,
     pluginOverview,
@@ -40,6 +40,11 @@
     setPluginEnabledAdmin,
     type PluginOverviewEntry
   } from './manage.svelte';
+  import { isMobile } from '$lib/platform';
+  import { isTauri } from '$lib/api/core';
+  import { pluginsInstall } from '$lib/api/plugins';
+  import { listProfiles } from '$lib/api/profiles';
+  import { loadPlugins } from './load';
   import { SOURCE_BUILTIN, SOURCE_INSTALLED } from './source';
   import type { PluginDocSection } from './types';
   import PluginDocsDialog from './PluginDocsDialog.svelte';
@@ -73,16 +78,50 @@
 
   /** Confirm, then uninstall a third-party plugin. */
   async function requestDelete(entry: PluginOverviewEntry) {
+    let vaultNames: string;
+    try {
+      vaultNames = (await listProfiles()).profiles
+        .map((vault) => vault.name)
+        .join(', ');
+    } catch (err) {
+      await showError(err);
+      return;
+    }
     const ok = await confirm({
       title: tUi('plugins.delete.confirm.title'),
-      message: tUi('plugins.delete.confirm.message').replace(
-        '{name}',
-        entry.name
-      ),
+      message: tUi('plugins.delete.confirm.message')
+        .replace('{name}', entry.name)
+        .replace('{vaults}', vaultNames),
       confirmLabel: tUi('plugins.delete.confirm.confirm'),
       destructive: true
     });
-    if (ok) await removePluginAdmin(entry.id);
+    if (ok) await action(() => removePluginAdmin(entry.id));
+  }
+
+  let installing = $state(false);
+  async function showError(err: unknown) {
+    await alert({ title: tUi('plugins.manage.error'), message: String(err) });
+  }
+  async function action(run: () => Promise<void>) {
+    try {
+      await run();
+    } catch (err) {
+      await showError(err);
+    }
+  }
+  async function installPackage() {
+    installing = true;
+    try {
+      const id = await pluginsInstall();
+      if (id) {
+        await loadPlugins();
+        await refreshPluginAdmin();
+      }
+    } catch (err) {
+      await showError(err);
+    } finally {
+      installing = false;
+    }
   }
 
   /** Human label for a permission id (falls back to the raw id if untranslated). */
@@ -144,6 +183,19 @@
 </script>
 
 <div class="mt-4">
+  <p class="mb-3 text-sm text-muted-foreground">
+    {tUi('plugins.manage.scope')}
+  </p>
+  {#if isTauri() && !isMobile()}
+    <button
+      type="button"
+      disabled={installing}
+      onclick={() => void installPackage()}
+      class="mb-4 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent disabled:opacity-50"
+    >
+      {tUi('plugins.manage.install')}
+    </button>
+  {/if}
   {#if entries.length === 0}
     <p class="py-6 text-center text-sm text-muted-foreground">
       {tUi('plugins.manage.empty')}
@@ -303,10 +355,14 @@
               </button>
             {/if}
 
-            {#if gated}
+            {#if entry.missing}
+              <span class="text-xs text-muted-foreground"
+                >{tUi('plugins.manage.missing')}</span
+              >
+            {:else if gated}
               <button
                 type="button"
-                onclick={() => void approvePluginAdmin(entry.id)}
+                onclick={() => void action(() => approvePluginAdmin(entry.id))}
                 class="ml-1 rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {tUi('plugins.manage.approve')}
@@ -318,7 +374,9 @@
                 aria-checked={entry.enabled}
                 aria-label={tUi('plugins.manage.toggle')}
                 onclick={() =>
-                  void setPluginEnabledAdmin(entry.id, !entry.enabled)}
+                  void action(() =>
+                    setPluginEnabledAdmin(entry.id, !entry.enabled)
+                  )}
                 class="relative ml-1 inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 {entry.enabled
                   ? 'bg-primary'
                   : 'bg-input'}"

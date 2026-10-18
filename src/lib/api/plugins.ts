@@ -521,3 +521,15 @@ export function pluginsSettingsRemove(id: string, key: string): Promise<void> {
     () => undefined
   );
 }
+
+/** Publish a package for all vaults. Approval remains a separate vault action. */
+export function pluginsInstall(sourcePath?: string): Promise<string | null> {
+  return invokeOrFallback(
+    TauriCommandName.PluginsInstall,
+    { sourcePath },
+    () => {
+      throw new Error('Plugin installation requires the desktop app');
+    },
+    (value) => optionalString(value, 'plugins_install response')
+  );
+}

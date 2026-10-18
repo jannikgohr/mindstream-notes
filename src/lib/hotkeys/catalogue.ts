@@ -35,6 +35,8 @@
  *      each other.
  */
 
+import globalShortcutContract from './global-shortcuts.json';
+
 import { openSettings } from '$lib/settings/store.svelte';
 import { openSearch } from '$lib/search/store.svelte';
 import { openCommandPalette } from '$lib/command-palette/store.svelte';
@@ -97,7 +99,9 @@ function runCreateRootNote(kind: RootNoteKind) {
 const ADD_TAG_HOTKEY_EVENT = 'mindstream:hotkeys:add-tag';
 
 function requestAddTag() {
-  openRightSidebar();
+  void openRightSidebar()?.catch((error) => {
+    console.error('[hotkeys] failed to open metadata panel', error);
+  });
   if (!ui.activeNoteId || typeof window === 'undefined') return;
   setTimeout(() => {
     window.dispatchEvent(new CustomEvent(ADD_TAG_HOTKEY_EVENT));
@@ -186,21 +190,27 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     id: 'global.newMarkdownNote',
     scope: 'global',
     labelKey: 'hotkeys.command.global.newMarkdownNote',
-    defaultBinding: 'mod+alt+n',
+    defaultBinding: globalShortcutContract.commands.find(
+      (command) => command.id === 'global.newMarkdownNote'
+    )!.defaultBinding,
     run: () => runCreateRootNote('markdown')
   },
   {
     id: 'global.newDrawing',
     scope: 'global',
     labelKey: 'hotkeys.command.global.newDrawing',
-    defaultBinding: 'mod+alt+d',
+    defaultBinding: globalShortcutContract.commands.find(
+      (command) => command.id === 'global.newDrawing'
+    )!.defaultBinding,
     run: () => runCreateRootNote('freeform')
   },
   {
     id: 'global.newInkNote',
     scope: 'global',
     labelKey: 'hotkeys.command.global.newInkNote',
-    defaultBinding: 'mod+alt+i',
+    defaultBinding: globalShortcutContract.commands.find(
+      (command) => command.id === 'global.newInkNote'
+    )!.defaultBinding,
     run: () => runCreateRootNote('ink')
   },
   {
@@ -291,7 +301,9 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     id: 'global.showApp',
     scope: 'global',
     labelKey: 'hotkeys.command.global.showApp',
-    defaultBinding: null,
+    defaultBinding: globalShortcutContract.commands.find(
+      (command) => command.id === 'global.showApp'
+    )!.defaultBinding,
     run: () => runShowApp()
   },
 

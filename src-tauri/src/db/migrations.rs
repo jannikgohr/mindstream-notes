@@ -871,6 +871,27 @@ const MIGRATIONS: &[Migration] = &[
             ) WITHOUT ROWID;
         "#,
     },
+    Migration {
+        to: 32,
+        // Local receipts must commit with imported rows and survive restores.
+        // They contain no browser values and are never synced to an account.
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS local_migrations (
+                id TEXT PRIMARY KEY,
+                completed TEXT NOT NULL,
+                source_hash TEXT NOT NULL
+            );
+        "#,
+    },
+    Migration {
+        to: 33,
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS plugin_installations (
+                plugin_id TEXT PRIMARY KEY,
+                generation TEXT NOT NULL
+            );
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

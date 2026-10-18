@@ -1,0 +1,165 @@
+# Vault browser storage audit
+
+Initial inventory: 2026-10-10; delivery reviewed on 2026-10-13. The inventory
+records legacy persistence outside the vault database. Native browser export,
+classification, credential migration and worker store isolation are implemented.
+Current delivery and remaining release QA are in the [root/vault status](root-vault-implementation-plan.md).
+
+The settings schema is only part of the problem. Searching `src` for
+`localStorage`, `sessionStorage`, and `indexedDB` finds 26 source files including
+comments and consumers. The table below groups actual readers/writers; remaining
+matches describe or consume these stores. No direct IndexedDB use was found in
+application sources. Browser libraries/caches still need a runtime inventory.
+
+## Persistence owners and destinations
+
+| Current key or store                                                      | Source                                                                                              | Scope and migration                                                                                                                                                                                                   |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `notes-app:settings:v1`                                                   | `settings/store.svelte.ts`, `app.html`                                                              | Mixed legacy document. Export device settings to the locked root settings document. Legacy vault values seed only the migrated default vault, as current load rules specify. Keep unknown keys as migration evidence. |
+| `notes-app:settings:v1:vault:<id>`                                        | `settings/store.svelte.ts`                                                                          | Vault settings and account dynamic values. Export only to the matching vault, preserving the raw bucket's unknown plugin values for classification. Do not classify unknown plugin values as device-owned.            |
+| `notes-app:preferences:v1`                                                | `preferences.ts`, `state.svelte.ts`                                                                 | Mixed and unscoped. Sidebar widths are device UI preferences; sorting and open/closed layout state belong to the vault. Existing unscoped values can only seed the selected legacy vault.                             |
+| `notes-app:dock-layout:v1`, `notes-app:dock-layout:v1:vault:<encoded id>` | `api/layout.ts`                                                                                     | Vault layout, open note IDs, active note. Preserve per-vault snapshots. The unscoped legacy snapshot seeds default only. Never copy note IDs into unrelated vaults.                                                   |
+| `notes-app:file-tree-create-toolbar:v1`                                   | `components/file-tree-toolbar-preferences.ts`                                                       | Device toolbar preferences. Preserve together with the existing legacy-toolbar detection rules.                                                                                                                       |
+| `notes-app:language`                                                      | `settings/i18n.svelte.ts`, `settings/registry.svelte.ts`                                            | Device language cache. Root/backend becomes authoritative. Hydration must not save an old cache over a newer root revision.                                                                                           |
+| `mode-watcher-mode`                                                       | mode-watcher, `settings/registry.svelte.ts`, `api/window.ts`, `api/desktop-settings.ts`, `app.html` | Device mode cache. Root mode wins; maintain per-store first-paint caches and update popouts.                                                                                                                          |
+| First-paint appearance values in `notes-app:settings:v1`                  | `app.html`                                                                                          | Device appearance cache. Seed from root before showing the window and refresh on revisions. Vault editor typography remains vault-scoped.                                                                             |
+| `mindstream:collab-signing-key:v1:<encoded server>:<encoded username>`    | `sync/collab-signing-key.ts`                                                                        | Obsolete: live collaboration uses server room tickets. Kept only in the encrypted legacy archive; never export private key material to logs or generic root settings.                                                 |
+| `notes-app:mobile:displayMode`                                            | `mobile/state.svelte.ts`                                                                            | Device mobile display preference. Mobile keeps its current single-vault behavior.                                                                                                                                     |
+| `notes-app:mobile:favourites`                                             | `mobile/state.svelte.ts`                                                                            | Legacy content migration into note data. Assign to the selected legacy vault; retain source until DB commit.                                                                                                          |
+| `mindstream.pdf.signatures.v1`, `mindstream.pdf.signature.v1`             | `pdf/signature-storage.ts`                                                                          | Legacy content migration into vault signatures. Current migration writes DB then removes keys. Isolation migration must assign them once, not replicate them into every vault.                                        |
+| `mindstream.mock.signatures.v1`                                           | `api/mock-store.ts`                                                                                 | Browser-only mock content. Keep separate from Tauri credentials/content migration.                                                                                                                                    |
+| `mindstream:boot-reloads` in sessionStorage                               | `app.html`, `routes/+page.svelte`                                                                   | Ephemeral document reload budget. Do not migrate or share across worker lifetimes.                                                                                                                                    |
+| Hotkey settings, including dynamic command bindings                       | `hotkeys/store.svelte.ts`, `hotkeys/migrations.ts`, settings store                                  | Device settings. Migrate legacy command IDs, publish one root revision, and give the coordinator authoritative bindings. No per-window global registration.                                                           |
+| Plugin settings                                                           | `plugins/settings-store.svelte.ts`, `plugins/settings-bridge.ts`, `api/plugins.ts`                  | Vault values remain in the vault DB; device values use root plugin-settings.json. Enabled/approved state remains per vault.                                                                                           |
+
+The settings schema declares device and vault scopes, with additional
+action/custom entries. Dynamic account
+and hotkey/plugin IDs require their existing resolver rules. Counting schema
+entries is not proof that browser state is isolated.
+
+## Credential migration progress
+
+Native schema settings now migrate to root `ui-settings.json` and vault
+`content-settings.json`, with individual locked edits and validated recovery
+copies. Dynamic `hotkey.*` bindings use the root; unknown/plugin entries remain
+with the vault until their persistence owner migrates them. Raw browser buckets
+remain intact. Account preferences require the matching vault bucket, except
+the default vault's historical unscoped fallback. Focus and same-worker events
+reload canonical settings; authenticated cross-worker invalidation now reloads
+each worker's own root/vault documents. This covers
+the schema store only, not the other browser consumers listed above.
+
+The mixed `notes-app:preferences:v1` bucket is also migrated in native builds.
+Sidebar widths use root fields; sort strategy/direction and sidebar open state
+use vault fields. Existing documents win, and the unscoped content preferences
+seed only the first selected legacy vault. Native writes leave that browser
+bucket intact and patch individual document fields. Live UI state refreshes
+with the canonical snapshot; failed writes roll back and show feedback. The
+schema's sort-strategy scope changed from device to vault, with compatibility
+for the preceding root document and recovery copies.
+
+Native dock layouts now use vault field `ui.dockLayout`. Initialization reads
+only that vault's encoded bucket, with the historical unscoped fallback limited
+to the default vault. Malformed required input blocks migration; existing values
+and clear tombstones win. A vault completion record and retained browser bytes
+make retries safe. Native reads use the backend snapshot; writes patch the vault
+document and leave the browser bucket untouched.
+
+Native file-tree toolbar order and mobile list/grid display now use root fields
+`ui.fileTreeToolbar` and `ui.mobileDisplayMode`. A root receipt records their
+one-time import. The toolbar keeps its existing-installation fallback and unknown
+plugin action IDs. Required malformed inputs stop the import without a partial
+root update. Existing values win; browser sources remain intact. Native consumers
+refresh from canonical snapshots and failed edits restore canonical UI state.
+
+Native signature/favourite migration now pins the first selected legacy vault in
+root `legacy-content-owner.json`, including its canonical directory. Deleting that
+vault does not reassign its unscoped browser content. Required malformed sources
+are retained and refused. Signature rows and favourite changes commit with a
+vault DB `local_migrations` receipt. Existing signatures win; absent signature
+IDs receive stable content hashes. A receipt prevents later retries from undoing
+edits/deletions. Favourites use the normal write-access guard and sync dirty flag.
+Both browser sources remain unchanged. Browser previews keep their old behavior.
+This completes the two native consumers, not the full legacy-store export.
+
+On 2026-10-10 native collaboration signing material moved to
+`<vault>/collab-signing-credentials.json`, encrypted with ChaCha20-Poly1305 and
+a vault master key in the environment's OS keystore. The authenticated context
+binds it to that environment and vault. Username/server account IDs are separate
+inside the encrypted vault map. The backend checks the active account before
+serving credentials and validates matching P-256 public/private keys.
+
+Native reads prefer stored vault material. If none exists, they import only the
+matching legacy browser key and retain its source. Corrupt legacy/native keys
+and unavailable keystore keys stop migration rather than regenerate identities.
+Native writes no longer put new private keys in localStorage. Browser-only mode
+keeps its existing localStorage fallback. Export of legacy keys for accounts in
+unopened vaults is now covered by the encrypted archive and supervised export
+below. Lazy import alone does not complete that export. Generic root settings
+snapshots must exclude private keys.
+
+On 2026-10-15 the sync server replaced the relay's signed frames with room
+tickets, so nothing reads collaboration signing material any more. The native
+store and its browser import were removed. Legacy keys remain only inside the
+encrypted archive.
+
+Encrypted export storage is implemented in `browser_archive.rs`. It preserves
+raw values from known app origins in one versioned ciphertext archive, including
+unknown keys and unopened accounts. The OS keystore holds a separate migration
+key; both its identity and authenticated encryption bind to the environment and
+canonical root. Private values have no Debug implementation and serialized
+plaintext/key buffers are zeroed. Root locking, atomic publication and validated
+previous copies cover updates before an origin is sealed. An immutable receipt
+binds each sealed origin to its capture checksum. Recovery refuses an older
+archive that lacks a completed capture. A missing keystore key cannot be replaced
+when ciphertext or completion receipts exist. Opt-in supervised startup now
+exports from the legacy origin before opening isolated workers. Normal startup
+uses isolated worker stores through the coordinator.
+
+Per-vault classification is now implemented in `browser_migration.rs` and wired
+into the native settings and content consumers when a worker has a verified
+`Source`. Settings/layout buckets remain raw until validated by their
+destination. Unscoped content checks the pinned physical owner. Existing vault credentials win over stale retained bytes. The archive
+preference path has separate device and owner-content receipts, including when a
+different vault opens first. Supervised workers now load a verified `Source`
+before database/frontend initialization. Ordinary desktop startup is supervised;
+isolated direct fixtures, mobile and browser fallback keep their existing flows.
+
+`legacy_export.rs`, `legacy-export.js` and the standalone export page perform
+the host-side capture without loading app code, plugins or account sessions.
+All localStorage values are captured synchronously, including unknown and
+malformed strings. A read error stops worker startup and displays a migration
+failure window. The native command validates the window, page and origin before
+publication. Incoming private values are zeroed on validation failures and when
+a saved capture already exists. Interrupted capture/seal publication resumes
+from the encrypted saved capture; it cannot replace retained bytes by reopening
+the browser. Original localStorage is never removed by this migration.
+
+## Migration sequence
+
+1. Acquire environment/root migration ownership before opening the legacy
+   browser store. Keep older and new workers out of it during export.
+2. Export a versioned snapshot with source origin, selected vault identity,
+   schema version, and checksums. Treat credential material separately. Retain
+   unknown keys and malformed values for recovery rather than discarding them.
+3. Classify using schema scopes, raw vault buckets, known unscoped stores, and
+   matching account metadata. Resolve root values first; never overwrite valid
+   root values with a stale browser cache.
+4. Commit root and per-vault destinations using operation records. Record each
+   destination receipt so interruption/retry does not reseed user changes.
+5. Open the isolated store for the selected vault and seed only its values and
+   current root caches. Main and popout windows use the same store identity.
+   Unopened vaults can migrate from the retained snapshot when first opened.
+6. Mark completion only after verifying destinations and a restart. Keep the
+   legacy snapshot until the recovery/retention policy permits removal.
+
+Tests must cover two existing vaults, identical account names on different
+servers, same-account vaults, a new vault, default/unscoped legacy values,
+unknown plugin IDs, invalid JSON, interrupted export/import, dev/release origins,
+and stale first-paint caches. Fixtures must not contain real credentials.
+
+The WDIO harness already overrides WebView2 folders on Windows and XDG data/cache
+paths on Linux through `helpers/worker-isolation.ts`. Those protect simulated
+devices. Phase 1 now also gives each simulated device an explicit root and
+root-specific credential service. Shared-root concurrent-vault tests and isolated-device tests must be
+separate modes. Keep both multiremote configurations.

@@ -11,12 +11,13 @@
  * the moment it fires.
  */
 
-export type ToastVariant = 'success' | 'error' | 'info';
+export type ToastVariant = 'success' | 'error' | 'info' | 'progress';
 
 export interface Toast {
   id: number;
   message: string;
   variant: ToastVariant;
+  dismissible: boolean;
 }
 
 /** How long a toast stays up before auto-dismissing. */
@@ -33,10 +34,19 @@ let nextId = 0;
  */
 export function pushToast(
   message: string,
-  opts: { variant?: ToastVariant; durationMs?: number } = {}
+  opts: {
+    variant?: ToastVariant;
+    durationMs?: number;
+    dismissible?: boolean;
+  } = {}
 ): number {
   const id = ++nextId;
-  toasts.items.push({ id, message, variant: opts.variant ?? 'info' });
+  toasts.items.push({
+    id,
+    message,
+    variant: opts.variant ?? 'info',
+    dismissible: opts.dismissible ?? true
+  });
 
   const duration = opts.durationMs ?? TOAST_DURATION_MS;
   // Guard on `window` so a toast pushed during SSR/prerender doesn't schedule a
@@ -50,4 +60,10 @@ export function pushToast(
 export function dismissToast(id: number): void {
   const index = toasts.items.findIndex((t) => t.id === id);
   if (index !== -1) toasts.items.splice(index, 1);
+}
+
+/** Update an operation's existing toast without adding another card. */
+export function updateToast(id: number, message: string): void {
+  const toast = toasts.items.find((entry) => entry.id === id);
+  if (toast) toast.message = message;
 }

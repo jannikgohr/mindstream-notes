@@ -8,7 +8,7 @@ use crate::error::{CommandError, CommandErrorCode, CommandResult};
 #[cfg(desktop)]
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
 pub enum GlobalShortcutCommandId {
     NewMarkdownNote,
@@ -149,6 +149,18 @@ pub fn sync_global_shortcuts(
     state: State<'_, DesktopGlobalShortcuts>,
     registrations: Vec<GlobalShortcutRegistration>,
 ) -> CommandResult<()> {
+    if !crate::environment::os_integrations_enabled() {
+        return Ok(());
+    }
+    if app
+        .try_state::<crate::vault_runtime::Role>()
+        .is_some_and(|role| matches!(role.inner(), crate::vault_runtime::Role::Worker { .. }))
+    {
+        // Worker payloads are mirrors, not authority. Teardown must never
+        // unregister a peer's shortcuts. Reload the canonical root instead.
+        crate::vault_supervisor::device_settings_changed(&app);
+        return Ok(());
+    }
     eprintln!(
         "[global-shortcuts] sync_global_shortcuts called with {} registration(s): {:?}",
         registrations.len(),
@@ -244,4 +256,24 @@ pub fn sync_global_shortcuts(
     );
 
     Ok(())
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub(crate) async fn get_global_shortcut_status(
+    app: AppHandle,
+) -> CommandResult<crate::coordinator_shortcuts::Status> {
+    if app.try_state::<crate::vault_supervisor::Worker>().is_none() {
+        return Ok(crate::coordinator_shortcuts::Status {
+            coordinated: false,
+            settling: false,
+            registered: Vec::new(),
+            error: None,
+        });
+    }
+    Ok(tauri::async_runtime::spawn_blocking(move || {
+        crate::vault_supervisor::shortcut_registration_status(&app)
+    })
+    .await
+    .map_err(|_| CommandError::new(CommandErrorCode::Task, "shortcut status task failed"))??)
 }
