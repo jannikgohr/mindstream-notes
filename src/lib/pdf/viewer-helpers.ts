@@ -59,19 +59,27 @@ export const MAX_CANVAS_DIM = 16384;
 export const MAX_CANVAS_PIXELS = 2 ** 25;
 export { SAVE_DEBOUNCE_MS } from '$lib/editor/save-scheduler';
 export const SEARCH_DEBOUNCE_MS = 220;
-export const HIGHLIGHT_COLOR = '#facc15';
-export const COMMENT_COLOR = '#3b82f6';
-export const SIGNATURE_COLOR = '#111827';
-export const INK_COLOR = '#111827';
+/** Apollo ink, the default for pens and signatures. oklch(0.26 0.026 252) */
+const APOLLO_INK = '#1b2530';
+export const HIGHLIGHT_COLOR = '#fdd343';
+/** Apollo blue. oklch(0.6 0.13 255) */
+export const COMMENT_COLOR = '#4682cc';
+export const SIGNATURE_COLOR = APOLLO_INK;
+export const INK_COLOR = APOLLO_INK;
 export const INK_WIDTH = 2.25;
+/**
+ * Highlighter tints of Apollo's named colours (docs/theming.md), light enough
+ * to read text through at highlight opacity, then Apollo ink. Annotations
+ * store and export sRGB, so these are hex.
+ */
 export const ANNOTATION_COLORS = [
-  '#facc15',
-  '#fb923c',
-  '#f87171',
-  '#4ade80',
-  '#60a5fa',
-  '#c084fc',
-  '#111827'
+  HIGHLIGHT_COLOR, // yellow, oklch(0.88 0.16 92)
+  '#fda258', // orange, oklch(0.79 0.14 58)
+  '#f5765f', // red, oklch(0.71 0.16 32)
+  '#95db6c', // green, oklch(0.82 0.16 135)
+  '#6bb9f8', // blue, oklch(0.76 0.12 245)
+  '#c98be4', // violet, oklch(0.73 0.14 315)
+  APOLLO_INK
 ];
 export const LOCAL_ORIGIN = Symbol('pdf-local-change');
 /**

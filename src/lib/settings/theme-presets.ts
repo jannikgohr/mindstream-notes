@@ -44,6 +44,24 @@ export function themeColorRgb([l, c, h]: ThemeColor): [number, number, number] {
   ].map((value) => Math.max(0, Math.min(1, value))) as [number, number, number];
 }
 
+/** Gamma-encoded sRGB bytes. */
+function themeColorBytes(color: ThemeColor): [number, number, number] {
+  return themeColorRgb(color).map((value) =>
+    Math.round(
+      255 *
+        (value <= 0.0031308
+          ? 12.92 * value
+          : 1.055 * value ** (1 / 2.4) - 0.055)
+    )
+  ) as [number, number, number];
+}
+
+/** A preset colour as `rgba()`, for canvas painting where `var()` cannot reach. */
+export function themeColorCss(color: ThemeColor, alpha = 1): string {
+  const [red, green, blue] = themeColorBytes(color);
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
 function luminance(color: ThemeColor): number {
   const [r, g, b] = themeColorRgb(color);
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
@@ -183,15 +201,8 @@ export function currentThemeWindowBackground(): {
   } catch {
     /* validated default */
   }
-  const rgb = themeColorRgb(
+  const [red, green, blue] = themeColorBytes(
     (dark ? preset.dark : preset.light)['surface-1']
-  ).map((value) =>
-    Math.round(
-      255 *
-        (value <= 0.0031308
-          ? 12.92 * value
-          : 1.055 * value ** (1 / 2.4) - 0.055)
-    )
   );
-  return { red: rgb[0], green: rgb[1], blue: rgb[2], alpha: 255 };
+  return { red, green, blue, alpha: 255 };
 }

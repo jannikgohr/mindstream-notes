@@ -189,6 +189,14 @@ absence of a token:
 
 - `--highlight-search` / `-active` / `-selection`, shared by the editor's
   find decorations and the PDF viewer's overlay.
+- Ink pen swatches and PDF annotation colours
+  ([`src/lib/ink/editor-helpers.ts`](../src/lib/ink/editor-helpers.ts),
+  [`src/lib/pdf/viewer-helpers.ts`](../src/lib/pdf/viewer-helpers.ts)). They
+  are content: strokes and annotations store sRGB hex and PDF export writes it,
+  so they cannot follow a preset. The pens are Apollo ink plus its named
+  colours, dark enough for the white page; the PDF set is lighter highlighter
+  tints of the same hues. The ink editor's selection and lasso marks are
+  chrome, so they use the preset accent for the page's own light or dark mode.
 
 The linter also allows three things by design:
 
