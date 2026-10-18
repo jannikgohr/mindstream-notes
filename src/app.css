@@ -574,10 +574,17 @@ body.dv-tab-dragging
   margin-right: 0;
 }
 
-/* A selected tab shares the editor surface and one accent underline. */
-.dockview-theme-bridge .dv-tabs-container > .dv-tab.dv-active-tab {
-  box-shadow: none;
+/* One hairline under the whole strip, level with the note details header's
+ * bottom border. An inset shadow paints above an element's own background,
+ * so repeating it on each tab keeps the line unbroken under the active and
+ * hovered tabs, whose fills would otherwise cover the strip's. */
+.dockview-theme-bridge .dv-tabs-and-actions-container,
+.dockview-theme-bridge .dv-tabs-container > .dv-tab {
+  box-shadow: inset 0 -1px 0 var(--border);
 }
+
+/* A selected tab shares the editor surface and one accent underline, which
+ * sits over the hairline. */
 .dockview-theme-bridge .dv-tabs-container > .dv-tab.dv-active-tab::after {
   content: '';
   position: absolute;
@@ -689,7 +696,9 @@ body.dv-tab-dragging
   position: relative;
   z-index: 1;
   clip-path: inset(0 0 0 -100px);
-  box-shadow: -1px 0 2px -1px rgb(0 0 0 / 0.25);
+  box-shadow:
+    -1px 0 2px -1px rgb(0 0 0 / 0.25),
+    inset 0 -1px 0 var(--border);
 }
 
 .dockview-theme-bridge .dv-tabs-overflow-dropdown-default:hover,
