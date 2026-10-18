@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
   import { loadNoteKindComponent } from './note-editor/lazy-components';
   import { tree } from '$lib/stores/tree.svelte';
-  import { pluginNoteKind } from '$lib/plugins/registry.svelte';
+  import { pluginById, pluginNoteKind } from '$lib/plugins/registry.svelte';
 
   interface Props {
     noteId: string;
@@ -30,16 +30,28 @@
   // remount even when both are the same kind.
   const currentNoteId = $derived(noteId);
   const currentKind = $derived(noteKind ?? tree.notesById[noteId]?.note_kind);
+  // The same applies to the plugin registry. Every device-settings change
+  // re-registers each plugin with a fresh object, and resolving any kind —
+  // markdown included — scans all of them. Reduce that to the plugin owning
+  // this kind and its manifest checksum, so only a real change of owner
+  // remounts the editor.
+  const pluginOwner = $derived.by(() => {
+    const ref = pluginNoteKind(currentKind);
+    if (!ref) return null;
+    return `${ref.pluginId}:${pluginById(ref.pluginId)?.checksum ?? ''}`;
+  });
 
   $effect(() => {
     void currentNoteId;
+    void pluginOwner;
     const kind = currentKind;
-    void pluginNoteKind(kind);
     const token = ++loadToken;
     LoadedComponent = null;
     loadError = null;
 
-    void loadNoteKindComponent(kind)
+    // The loader resolves the kind against the registry synchronously; keep
+    // that read out of this effect's dependencies.
+    void untrack(() => loadNoteKindComponent(kind))
       .then((component) => {
         if (destroyed || token !== loadToken) return;
         LoadedComponent = component;

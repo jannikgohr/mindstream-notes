@@ -291,7 +291,7 @@
     "metadata.modified": "Modified",
     "metadata.content": "Content",
     "metadata.content.words": "Words",
-    "metadata.content.read": "Read",
+    "metadata.content.read": "Reading time",
     "metadata.content.readValue": "{minutes} min",
     "metadata.content.links": "Links",
     "metadata.attachments": "Attachments",

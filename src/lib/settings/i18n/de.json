@@ -132,7 +132,7 @@
     "metadata.modified": "Geändert",
     "metadata.content": "Inhalt",
     "metadata.content.words": "Wörter",
-    "metadata.content.read": "Lesen",
+    "metadata.content.read": "Lesezeit",
     "metadata.content.readValue": "{minutes} Min.",
     "metadata.content.links": "Links",
     "metadata.attachments": "Anhänge",

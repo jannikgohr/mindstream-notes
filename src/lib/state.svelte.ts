@@ -105,6 +105,16 @@ export function setLeftSidebarWidth(px: number) {
   return setPreference('leftSidebarWidth', px);
 }
 
+/** Drag feedback only; setLeftSidebarWidth persists the final width. */
+export function previewLeftSidebarWidth(px: number) {
+  ui.leftSidebarWidth = px;
+}
+
+/** Drag feedback only; setRightSidebarWidth persists the final width. */
+export function previewRightSidebarWidth(px: number) {
+  ui.rightSidebarWidth = px;
+}
+
 export function setRightSidebarWidth(px: number) {
   return setPreference('rightSidebarWidth', px);
 }

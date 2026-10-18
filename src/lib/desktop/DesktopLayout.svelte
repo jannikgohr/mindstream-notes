@@ -44,6 +44,8 @@
   import { listen, TauriEventName } from '$lib/api/events';
   import {
     setActiveNote,
+    previewLeftSidebarWidth,
+    previewRightSidebarWidth,
     setLeftSidebarWidth,
     setRightSidebarWidth,
     ui,
@@ -920,7 +922,8 @@
         value={ui.leftSidebarWidth}
         min={245}
         max={500}
-        onChange={setLeftSidebarWidth}
+        onChange={previewLeftSidebarWidth}
+        onCommit={setLeftSidebarWidth}
       />
     {/if}
 
@@ -954,7 +957,8 @@
         value={ui.rightSidebarWidth}
         min={200}
         max={500}
-        onChange={setRightSidebarWidth}
+        onChange={previewRightSidebarWidth}
+        onCommit={setRightSidebarWidth}
       />
       <div
         class="shrink-0 border-l border-border"

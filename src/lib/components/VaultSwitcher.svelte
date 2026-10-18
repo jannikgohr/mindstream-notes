@@ -399,7 +399,7 @@
   <Button
     variant="ghost"
     size="sm"
-    class="h-8 w-full justify-start gap-2 px-2 text-xs"
+    class="h-8 w-full justify-start gap-2 pl-2 pr-0 text-xs"
     onclick={toggle}
     title={currentName}
     aria-label={tUi('vault.switch')}
@@ -407,9 +407,12 @@
     disabled={busy}
   >
     <Vault size={16} animate={open} />
-    <span class="min-w-0 max-w-48 flex-1 truncate text-left">{currentName}</span
-    >
-    <ChevronDown class="size-3 shrink-0 text-muted-foreground" />
+    <span class="min-w-0 flex-1 truncate text-left">{currentName}</span>
+    <!-- The same 28px box as the file-tree toolbar's menu button below, so
+         both chevrons sit in one column. -->
+    <span class="flex w-7 shrink-0 justify-center text-muted-foreground">
+      <ChevronDown class="size-3.5" />
+    </span>
   </Button>
 
   {#if open}

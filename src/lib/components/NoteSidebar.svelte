@@ -1,15 +1,18 @@
 <script lang="ts">
   import {
     CalendarPlus,
+    Clock,
     Cloud,
     Edit3,
     Folder,
+    Link2,
     Paperclip,
     Share2,
     ShieldCheck,
     User,
     UserPlus,
     Users,
+    WholeWord,
     X
   } from '@lucide/svelte';
   import NoteOutline from './NoteOutline.svelte';
@@ -367,21 +370,27 @@
   }
 </script>
 
+{#snippet statRow(Icon: typeof Paperclip, label: string, value: string)}
+  <div class="flex min-w-0 items-center justify-between gap-3">
+    <dt
+      class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
+    >
+      <Icon class="size-3.5" />
+      {label}
+    </dt>
+    <dd class="min-w-0 truncate text-right text-xs font-medium tabular-nums">
+      {value}
+    </dd>
+  </div>
+{/snippet}
+
 {#snippet attachmentsRow()}
   <dl class="space-y-3">
-    <div class="flex min-w-0 items-center justify-between gap-3">
-      <dt
-        class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-      >
-        <Paperclip class="size-3.5" />
-        {tUi('metadata.attachments')}
-      </dt>
-      <dd
-        class="min-w-0 truncate text-right text-xs font-medium text-muted-foreground"
-      >
-        {attachmentsValue(contentStats.attachments)}
-      </dd>
-    </div>
+    {@render statRow(
+      Paperclip,
+      tUi('metadata.attachments'),
+      attachmentsValue(contentStats.attachments)
+    )}
   </dl>
 {/snippet}
 
@@ -599,37 +608,30 @@
               <SectionHeader class="mb-2">
                 {tUi('metadata.content')}
               </SectionHeader>
-              <div class="grid grid-cols-3 gap-2">
-                <Surface variant="panel" class="bg-transparent">
-                  <div class="truncate text-base font-semibold leading-none">
-                    {statValue(contentStats.words)}
-                  </div>
-                  <div class="mt-1 truncate text-[10px] text-muted-foreground">
-                    {tUi('metadata.content.words')}
-                  </div>
-                </Surface>
-                <Surface variant="panel" class="bg-transparent">
-                  <div class="truncate text-base font-semibold leading-none">
-                    {readValue(contentStats.readMinutes)}
-                  </div>
-                  <div class="mt-1 truncate text-[10px] text-muted-foreground">
-                    {tUi('metadata.content.read')}
-                  </div>
-                </Surface>
-                <Surface variant="panel" class="bg-transparent">
-                  <div class="truncate text-base font-semibold leading-none">
-                    {statValue(contentStats.links)}
-                  </div>
-                  <div class="mt-1 truncate text-[10px] text-muted-foreground">
-                    {tUi('metadata.content.links')}
-                  </div>
-                </Surface>
-              </div>
-              {#if showAttachments}
-                <div class="mt-4">
-                  {@render attachmentsRow()}
-                </div>
-              {/if}
+              <dl class="space-y-3">
+                {@render statRow(
+                  WholeWord,
+                  tUi('metadata.content.words'),
+                  statValue(contentStats.words)
+                )}
+                {@render statRow(
+                  Clock,
+                  tUi('metadata.content.read'),
+                  readValue(contentStats.readMinutes)
+                )}
+                {@render statRow(
+                  Link2,
+                  tUi('metadata.content.links'),
+                  statValue(contentStats.links)
+                )}
+                {#if showAttachments}
+                  {@render statRow(
+                    Paperclip,
+                    tUi('metadata.attachments'),
+                    attachmentsValue(contentStats.attachments)
+                  )}
+                {/if}
+              </dl>
             </section>
           {:else if showAttachments}
             <section class="mt-5 border-t border-border pt-5">

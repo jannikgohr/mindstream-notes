@@ -1190,7 +1190,6 @@
   .file-tree-note-row.active-note {
     background: color-mix(in oklch, var(--accent-brand) 10%, transparent);
     color: var(--accent-brand);
-    box-shadow: inset 2px 0 var(--accent-brand);
   }
 
   .file-tree-note-row:has(:focus-visible) {

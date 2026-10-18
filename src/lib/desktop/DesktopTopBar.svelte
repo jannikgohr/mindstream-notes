@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  // A copy of src-tauri/icons/64x64.png: the dev server cannot serve src-tauri.
+  import appIcon from './app-icon.png';
   import { ChevronRight } from '@lucide/svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { folderPath } from '$lib/notes/folder-path';
@@ -59,16 +61,7 @@
     class="flex h-full shrink-0 items-center gap-2.5 overflow-hidden px-5"
     style:width={ui.leftSidebarOpen ? `${ui.leftSidebarWidth}px` : undefined}
   >
-    <svg
-      class="size-6 shrink-0 text-accent-brand"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.8"
-      stroke-linecap="round"
-      aria-hidden="true"
-      ><path d="M4 16V8a4 4 0 0 1 8 0v8a4 4 0 0 0 8 0V8M8 5v14M16 5v14" /></svg
-    >
+    <img src={appIcon} alt="" draggable="false" class="size-6 shrink-0" />
     <span
       data-tauri-drag-region={customDecorations || undefined}
       class="truncate text-base font-semibold tracking-tight"
@@ -92,7 +85,9 @@
         class="-scale-x-100"
       />
     </Button>
-    {#if !ui.leftSidebarOpen}<VaultSwitcher />{/if}
+    {#if !ui.leftSidebarOpen}<div class="min-w-0 max-w-60 shrink-0">
+        <VaultSwitcher />
+      </div>{/if}
     <div
       data-tauri-drag-region={customDecorations || undefined}
       class="flex min-w-0 flex-1 items-center gap-2 overflow-hidden px-1 text-xs text-muted-foreground"
