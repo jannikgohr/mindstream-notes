@@ -4,7 +4,7 @@ use std::sync::Arc;
 use rusqlite::params;
 use yrs::{Any, Doc, Map, ReadTxn, StateVector, Transact};
 
-use crate::{assets, db::open_memory_for_tests, notes, pdf_text, sync::yrs_doc};
+use crate::{assets, db::open_memory_for_tests, error::AppError, notes, pdf_text, sync::yrs_doc};
 
 fn pages_state(asset_id: &str) -> Vec<u8> {
     let doc = Doc::new();
@@ -148,6 +148,95 @@ fn ink_pages_sign_visible_sources_and_remap_asset_ids() {
         yrs_doc::ink_background_signature(&rewritten),
         r#"[["page_a","asset_new",4]]"#
     );
+}
+
+#[test]
+fn ink_signature_skips_deleted_and_bare_pages_and_signs_text_assets() {
+    let background = |entries: &[(&str, Any)]| {
+        Any::Map(Arc::new(
+            entries
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.clone()))
+                .collect(),
+        ))
+    };
+    let page = |id: &str, background: Option<Any>| {
+        let mut fields = HashMap::from([("id".to_string(), Any::String(id.into()))]);
+        if let Some(background) = background {
+            fields.insert("background".into(), background);
+        }
+        Any::Map(Arc::new(fields))
+    };
+    let doc = Doc::new();
+    let pages = doc.get_or_insert_map("ink:pages");
+    let order = doc.get_or_insert_map("ink:pageOrder");
+    let deleted = doc.get_or_insert_map("ink:deletedPages");
+    {
+        let mut txn = doc.transact_mut();
+        let image = background(&[
+            ("assetId", Any::String("asset_image".into())),
+            ("textAssetId", Any::String("asset_pdf".into())),
+            ("pageIndex", Any::Number(2.0)),
+        ]);
+        pages.insert(&mut txn, "page_a", page("page_a", Some(image)));
+        order.insert(&mut txn, "page_a", 1.0);
+        let removed = background(&[
+            ("assetId", Any::String("asset_removed".into())),
+            ("pageIndex", Any::Number(0.0)),
+        ]);
+        pages.insert(&mut txn, "page_b", page("page_b", Some(removed)));
+        order.insert(&mut txn, "page_b", 0.5);
+        deleted.insert(&mut txn, "page_b", true);
+        pages.insert(&mut txn, "page_c", page("page_c", None));
+        order.insert(&mut txn, "page_c", 2.0);
+        // A page whose order entry has not synced yet sorts first.
+        let unordered = background(&[
+            ("assetId", Any::String("asset_late".into())),
+            ("pageIndex", Any::Number(1.0)),
+        ]);
+        pages.insert(&mut txn, "page_d", page("page_d", Some(unordered)));
+        pages.insert(&mut txn, "page_e", "not a page");
+    }
+    let state = doc
+        .transact()
+        .encode_state_as_update_v1(&StateVector::default());
+    // Deleted pages keep their assets alive for undo, but are not signed.
+    assert_eq!(
+        yrs_doc::ink_asset_ids(&state),
+        ["asset_image", "asset_late", "asset_pdf", "asset_removed"]
+    );
+    assert_eq!(
+        yrs_doc::ink_background_signature(&state),
+        r#"[["page_d","asset_late",1],["page_a","asset_pdf",2]]"#
+    );
+}
+
+#[test]
+fn ink_conversion_rejects_assets_the_page_document_does_not_reference() {
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        let before: i64 = c.query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0))?;
+        for (asset_id, state) in [
+            ("asset_other", pages_state("asset_pdf")),
+            ("note_pdf", pages_state("note_pdf")),
+        ] {
+            let result = assets::import_ink_pdf_note_inner(
+                c,
+                assets::ImportInkPdfNote {
+                    title: None,
+                    parent_collection_id: None,
+                    bytes: vec![37, 80, 68, 70],
+                    asset_id: asset_id.into(),
+                    yrs_state: state,
+                },
+            );
+            assert!(matches!(result, Err(AppError::InvalidArg(_))));
+        }
+        let after: i64 = c.query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0))?;
+        assert_eq!(before, after);
+        Ok(())
+    })
+    .unwrap();
 }
 
 #[test]

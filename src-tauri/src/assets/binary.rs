@@ -47,8 +47,8 @@ struct PdfMetadata {
 }
 
 #[tauri::command]
-pub async fn upload_asset_bytes(
-    app: tauri::AppHandle,
+pub async fn upload_asset_bytes<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     request: Request<'_>,
 ) -> CommandResult<AssetSummary> {
     let (metadata, bytes) = decode::<UploadMetadata>(request.body())?;
@@ -72,8 +72,8 @@ pub async fn upload_asset_bytes(
 }
 
 #[tauri::command]
-pub async fn import_pdf_note_bytes(
-    app: tauri::AppHandle,
+pub async fn import_pdf_note_bytes<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     request: Request<'_>,
 ) -> CommandResult<Note> {
     let (metadata, bytes) = decode::<PdfMetadata>(request.body())?;
@@ -98,8 +98,8 @@ pub async fn import_pdf_note_bytes(
 }
 
 #[tauri::command]
-pub async fn fetch_asset_bytes(
-    app: tauri::AppHandle,
+pub async fn fetch_asset_bytes<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     id: String,
     mime_type: Option<String>,
 ) -> CommandResult<Response> {

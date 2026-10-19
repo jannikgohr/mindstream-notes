@@ -12,7 +12,8 @@ import {
   clipPoints,
   INK_PAGES,
   INK_PAGE_ORDER,
-  INK_DELETED_PAGES
+  INK_DELETED_PAGES,
+  pageOffset
 } from './page-document';
 import { backgroundSignature } from './pdf-backgrounds';
 import { parsePageRange, migratePdfInk } from './pdf-import';
@@ -37,6 +38,73 @@ const stroke = {
 };
 
 describe('explicit ink pages', () => {
+  it('restores snapshot PDF annotations and form values alongside pages and handwriting', () => {
+    const ink = new InkDocument(),
+      snapshot = new InkDocument();
+    snapshot.restorePages(pages);
+    snapshot.addStrokes([stroke]);
+    snapshot.doc
+      .getMap('pdf_annotations')
+      .set('restored', { type: 'comment', body: 'keep me' });
+    snapshot.doc.getMap('pdf_form_values').set('name', 'Restored value');
+    ink.doc.getMap('pdf_annotations').set('obsolete', { type: 'comment' });
+    ink.doc.getMap('pdf_form_values').set('obsolete', 'remove me');
+    try {
+      ink.restoreSnapshot(snapshot);
+      expect(ink.pages()).toEqual(snapshot.pages());
+      expect([...ink.doc.getMap('pdf_annotations').entries()]).toEqual([
+        ['restored', { type: 'comment', body: 'keep me' }]
+      ]);
+      expect([...ink.doc.getMap('pdf_form_values').entries()]).toEqual([
+        ['name', 'Restored value']
+      ]);
+      expect(ink.visibleStrokes().map(({ points }) => points)).toEqual(
+        snapshot.visibleStrokes().map(({ points }) => points)
+      );
+      expect(ink.undo).toHaveLength(0);
+      expect(ink.redo).toHaveLength(0);
+      const reopened = InkDocument.fromBytes(ink.encode());
+      expect([...reopened.doc.getMap('pdf_form_values').entries()]).toEqual([
+        ['name', 'Restored value']
+      ]);
+      reopened.doc.destroy();
+    } finally {
+      ink.doc.destroy();
+      snapshot.doc.destroy();
+    }
+  });
+
+  it('redos page reordering while preserving page-local strokes', () => {
+    const ink = new InkDocument();
+    try {
+      ink.restorePages(pages);
+      ink.addStrokes([stroke]);
+      ink.movePage('a', 1);
+      ink.undoLast();
+      expect(ink.pages().map((p) => p.id)).toEqual(['a', 'b']);
+      ink.redoLast();
+      expect(ink.pages().map((p) => p.id)).toEqual(['b', 'a']);
+      expect(ink.pageStrokes('a')).toHaveLength(1);
+      expect(pageOffset(ink.pages(), 'unknown')).toBeNull();
+    } finally {
+      ink.doc.destroy();
+    }
+  });
+
+  it('clips pen taps and disconnected out-of-page paths without adding false ink', () => {
+    const point = { x: 20, y: 30, pressure: 0.5 };
+    expect(clipPoints([point], [0, 0, 100, 100])).toEqual([[point]]);
+    expect(clipPoints([{ ...point, x: -10 }], [0, 0, 100, 100])).toEqual([]);
+    expect(
+      clipPoints(
+        [
+          { ...point, x: -10 },
+          { ...point, x: -10, y: 80 }
+        ],
+        [0, 0, 100, 100]
+      )
+    ).toEqual([]);
+  });
   it('keeps appending a saved blank page when writing after manual page operations', () => {
     const ink = new InkDocument();
     ink.insertPages([{ id: 'manual-blank', ...DEFAULT_PAGE }]);
