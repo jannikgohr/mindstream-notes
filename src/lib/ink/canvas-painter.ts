@@ -19,12 +19,7 @@ import {
   type PageBackgroundMode
 } from '$lib/ink/editor-helpers';
 import { canvasPageSurface } from '$lib/layout/page-layout';
-import {
-  pageRect,
-  strideY,
-  type DocumentLayout,
-  type InkPoint
-} from '$lib/ink/page';
+import { pageRect, type DocumentLayout, type InkPoint } from '$lib/ink/page';
 import type { StrokeBounds } from '$lib/ink/stroke-types';
 import { pageToScreen, type InkView } from '$lib/ink/view-transform';
 
@@ -56,16 +51,11 @@ export function drawPages(
   scene: InkScene
 ) {
   const { view, layout, pageDark, displayCssColor } = scene;
-  const stride = strideY(layout);
-  const firstPage = Math.max(0, Math.floor(visible.minY / stride) - 1);
-  const lastPage = Math.min(
-    layout.pageCount - 1,
-    Math.floor(visible.maxY / stride) + 1
-  );
-  for (let i = firstPage; i <= lastPage; i += 1) {
+  for (let i = 0; i < layout.pageCount; i += 1) {
     const rect = pageRect(layout, i);
     if (!rect) continue;
     const [x0, y0, x1, y1] = rect;
+    if (y1 < visible.minY || y0 > visible.maxY) continue;
     const a = pageToScreen(view, { x: x0, y: y0 });
     const b = pageToScreen(view, { x: x1, y: y1 });
     if (b.y < -32 || a.y > view.height + 32) continue;

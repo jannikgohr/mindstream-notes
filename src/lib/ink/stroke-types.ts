@@ -6,7 +6,7 @@
  * runtime) along with it.
  */
 
-import type { InkPoint } from '$lib/ink/page';
+import type { InkPoint, InkPage } from '$lib/ink/page';
 
 export const DEFAULT_COLOR = 0xff000000;
 export const DEFAULT_WIDTH = 4;
@@ -30,6 +30,7 @@ export interface StrokeTransform {
 }
 
 export interface InkStrokeInput {
+  id?: string;
   color: number;
   width: number;
   points: InkPoint[];
@@ -47,6 +48,7 @@ export interface StrokeStylePatch {
 }
 
 export type UndoOp =
+  | { kind: 'pages'; before: InkPage[]; after: InkPage[] }
   | { kind: 'strokeAdded'; id: string }
   | { kind: 'strokesAdded'; ids: string[] }
   | { kind: 'eraserDrag'; ids: string[] }

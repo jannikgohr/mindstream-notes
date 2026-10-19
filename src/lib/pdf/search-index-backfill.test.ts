@@ -10,7 +10,11 @@ const listenMock = vi.fn();
 vi.mock('$lib/api', () => ({
   pdfNotesMissingText: (...a: unknown[]) => pdfNotesMissingTextMock(...a),
   loadNote: (...a: unknown[]) => loadNoteMock(...a),
-  fetchDrawingAsset: (...a: unknown[]) => fetchDrawingAssetMock(...a),
+  fetchAssetBytes: async (id: string, mime: string) => {
+    const asset = await fetchDrawingAssetMock(id);
+    if (asset.mime_type !== mime) throw new Error('Unexpected file type');
+    return new Uint8Array(asset.bytes);
+  },
   setPdfText: (...a: unknown[]) => setPdfTextMock(...a)
 }));
 

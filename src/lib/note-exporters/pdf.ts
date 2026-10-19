@@ -1,6 +1,6 @@
 import * as Y from 'yjs';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
-import { fetchDrawingAsset, loadNote, type Note } from '$lib/api';
+import { fetchAssetBytes, loadNote, type Note } from '$lib/api';
 import { saveAnnotatedPdf } from '$lib/api/pdf-export';
 import { exportAnnotatedPdf } from '$lib/pdf/export-annotated-pdf';
 import { sanitizePdfFilename } from '$lib/pdf/filename';
@@ -12,6 +12,7 @@ import {
   type PdfFormValue
 } from '$lib/pdf/types';
 import type { NoteExporter } from './types';
+import { sharedInkAnnotations } from '$lib/ink/pdf-annotations';
 
 function liveAnnotationsFrom(note: Note): PdfAnnotation[] {
   const doc = new Y.Doc();
@@ -71,7 +72,11 @@ async function applyFormValuesToPdf(
   }
 }
 
-export async function exportAnnotatedPdfNote(noteId: string): Promise<void> {
+export async function buildPdfNoteBytes(
+  noteId: string,
+  includeSharedInk = true,
+  includeLegacyInk = true
+): Promise<Uint8Array> {
   const note = await loadNote(noteId);
   if (note.note_kind !== 'pdf') {
     throw new Error('Annotated PDF export is only available for PDF notes.');
@@ -80,20 +85,23 @@ export async function exportAnnotatedPdfNote(noteId: string): Promise<void> {
   const assetId = pdfAssetIdFromBody(note.body);
   if (!assetId) throw new Error('PDF asset is missing.');
 
-  const asset = await fetchDrawingAsset(assetId);
-  if (asset.mime_type !== 'application/pdf') {
-    throw new Error('Stored file is not a PDF.');
-  }
+  const bytes = await fetchAssetBytes(assetId, 'application/pdf');
 
   const formFilledPdf = await applyFormValuesToPdf(
-    new Uint8Array(asset.bytes),
+    bytes,
     liveFormValuesFrom(note)
   );
-  const out = await exportAnnotatedPdf(
-    formFilledPdf,
-    liveAnnotationsFrom(note)
-  );
+  return exportAnnotatedPdf(formFilledPdf, [
+    ...liveAnnotationsFrom(note).filter(
+      (annotation) => includeLegacyInk || annotation.type !== 'ink'
+    ),
+    ...(includeSharedInk ? sharedInkAnnotations(note.yrs_state) : [])
+  ]);
+}
 
+export async function exportAnnotatedPdfNote(noteId: string): Promise<void> {
+  const note = await loadNote(noteId);
+  const out = await buildPdfNoteBytes(noteId);
   await saveAnnotatedPdf({
     suggestedName: `${sanitizePdfFilename(note.title)}.pdf`,
     dialogTitle: 'Save annotated PDF',
