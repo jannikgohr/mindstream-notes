@@ -231,6 +231,9 @@ test('running, failure, and retry preserve focus and submitted choices', async (
   await expect(
     dialog.getByRole('heading', { name: 'Import finished' })
   ).toBeVisible();
+  // The result dialog focuses itself a timer tick after it renders. Focus
+  // moved before that is taken back, so let it land first.
+  await expectFocusInside(dialog);
   const close = dialog.getByRole('button', { name: 'Close', exact: true });
   await close.focus();
   await expect(close).toBeFocused();
@@ -259,6 +262,7 @@ test('an immediate import result can close and return focus to Settings', async 
   await expect(
     dialog.getByRole('heading', { name: 'Import finished' })
   ).toBeVisible();
+  await expectFocusInside(dialog);
   await dialog.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(dialog).toBeHidden();
   await expect(
@@ -280,6 +284,7 @@ test('Stop keeps the running dialog open until the partial report arrives', asyn
   await expect(
     dialog.getByRole('heading', { name: 'Import stopped' })
   ).toBeVisible();
+  await expectFocusInside(dialog);
   await dialog.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(dialog).toBeHidden();
   await expect(
