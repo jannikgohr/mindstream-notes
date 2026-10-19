@@ -63,6 +63,74 @@ function arrayNumbers(value: unknown): number[] {
 }
 
 describe('exportAnnotatedPdf', () => {
+  it('preserves shared ink pressure in an appearance stream readable by external PDF readers', async () => {
+    const out = await exportAnnotatedPdf(await makeBlankPdfBytes(), [
+      annotation({
+        id: 'shared:stroke',
+        type: 'ink',
+        opacity: 0.4,
+        strokes: [
+          {
+            id: 's',
+            color: '#ff0000',
+            width: 4,
+            points: [
+              { x: 100, y: 100, pressure: 0.2 },
+              { x: 120, y: 110, pressure: 0.4 },
+              { x: 150, y: 100, pressure: 1.5 }
+            ]
+          }
+        ]
+      })
+    ]);
+    const doc = await PDFDocument.load(out);
+    const [annot] = await readPageAnnots(out);
+    const appearance = annot.get(PDFName.of('AP')) as PDFDict;
+    const stream = doc.context.lookup(
+      appearance.get(PDFName.of('N'))
+    ) as unknown as { getContents(): Uint8Array; dict: PDFDict };
+    const commands = inflateSync(stream.getContents()).toString('utf8');
+    const widths = [...commands.matchAll(/([\d.]+) w/g)].map((m) =>
+      Number(m[1])
+    );
+    expect(widths).toHaveLength(2);
+    expect(widths[1]).toBeGreaterThan(widths[0]);
+    expect(commands).toContain('1 0 0 RG');
+    expect(commands.match(/\nS/g)).toHaveLength(2);
+    expect(
+      arrayNumbers(stream.dict.get(PDFName.of('BBox')))
+        .slice(2)
+        .every((size) => size > 0)
+    ).toBe(true);
+    const resources = stream.dict.lookup(PDFName.of('Resources'), PDFDict);
+    const graphics = resources
+      .lookup(PDFName.of('ExtGState'), PDFDict)
+      .lookup(PDFName.of('GS0'), PDFDict);
+    expect(Number(graphics.get(PDFName.of('CA'))!.toString())).toBe(0.4);
+    expect(annot.get(PDFName.of('InkList'))).toBeInstanceOf(PDFArray);
+  });
+
+  it('exports shared strokes without pressure using the normal pen width', async () => {
+    const out = await exportAnnotatedPdf(await makeBlankPdfBytes(), [
+      annotation({
+        id: 'shared:legacy',
+        type: 'ink',
+        strokes: [
+          {
+            id: 's',
+            color: '#000000',
+            width: 2,
+            points: [
+              { x: 1, y: 1 },
+              { x: 10, y: 10 }
+            ]
+          }
+        ]
+      })
+    ]);
+    const [annot] = await readPageAnnots(out);
+    expect(annot.get(PDFName.of('AP'))).toBeInstanceOf(PDFDict);
+  });
   it('returns a parseable PDF when no annotations are present', async () => {
     const source = await makeBlankPdfBytes();
     const out = await exportAnnotatedPdf(source, []);

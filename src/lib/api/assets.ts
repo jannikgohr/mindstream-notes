@@ -23,6 +23,8 @@ import {
 } from './core';
 import { mockApi } from './mock-store';
 import { parseNote, type Note } from './notes';
+import { invoke } from '@tauri-apps/api/core';
+import { isTauri } from './core';
 
 export interface AssetSummary {
   id: string;
@@ -63,6 +65,78 @@ export interface ImportPdfNoteInput {
   bytes: number[];
 }
 
+export interface ImportInkPdfNoteInput extends ImportPdfNoteInput {
+  asset_id: string;
+  yrs_state: number[];
+}
+
+/** Transfer file bytes without expanding them into a JSON number array. */
+async function invokeFile<T>(
+  command: TauriCommandName,
+  input: Record<string, unknown>,
+  bytes: Uint8Array
+): Promise<T> {
+  const metadata = new TextEncoder().encode(JSON.stringify(input));
+  const payload = new Uint8Array(4 + metadata.length + bytes.length);
+  new DataView(payload.buffer).setUint32(0, metadata.length, true);
+  payload.set(metadata, 4);
+  payload.set(bytes, 4 + metadata.length);
+  return invoke<T>(command, payload);
+}
+
+export async function uploadDrawingAssetBytes(
+  input: Omit<UploadAssetInput, 'bytes'> & { bytes: Uint8Array }
+): Promise<AssetSummary> {
+  const { bytes, ...metadata } = input;
+  if (!isTauri())
+    return mockApi.uploadDrawingAsset({
+      ...metadata,
+      bytes: Array.from(bytes)
+    });
+  return parseAssetSummary(
+    await invokeFile(TauriCommandName.UploadAssetBytes, metadata, bytes)
+  );
+}
+
+export async function fetchAssetBytes(
+  id: string,
+  mimeType?: string
+): Promise<Uint8Array> {
+  if (!isTauri()) {
+    const asset = await mockApi.fetchDrawingAsset(id);
+    if (mimeType && asset.mime_type !== mimeType)
+      throw new Error('Stored file has an unexpected type.');
+    return new Uint8Array(asset.bytes);
+  }
+  // Mobile Tauri bridges may return a number array instead of an ArrayBuffer.
+  return new Uint8Array(
+    await invoke<ArrayBuffer | number[]>(TauriCommandName.FetchAssetBytes, {
+      id,
+      mimeType
+    })
+  );
+}
+
+export async function importPdfNoteBytes(
+  input: Omit<ImportPdfNoteInput, 'bytes'> & { bytes: Uint8Array }
+): Promise<Note> {
+  const { bytes, ...metadata } = input;
+  if (!isTauri())
+    return mockApi.importPdfNote({ ...metadata, bytes: Array.from(bytes) });
+  return parseNote(
+    await invokeFile(TauriCommandName.ImportPdfNoteBytes, metadata, bytes)
+  );
+}
+
+export function importInkPdfNote(input: ImportInkPdfNoteInput): Promise<Note> {
+  return invokeOrFallback<Note>(
+    TauriCommandName.ImportInkPdfNote,
+    { input },
+    () => mockApi.importInkPdfNote(input),
+    parseNote
+  );
+}
+
 export function uploadDrawingAsset(input: UploadAssetInput): Promise<Asset> {
   return invokeOrFallback<Asset>(
     TauriCommandName.UploadDrawingAsset,
@@ -100,7 +174,7 @@ export function sweepUnreferencedMarkdownAssets(): Promise<number> {
   );
 }
 
-function parseAsset(value: unknown): Asset {
+function parseAssetSummary(value: unknown): AssetSummary {
   const raw = assertRecord(value, 'asset');
   return {
     id: assertString(raw.id, 'asset.id'),
@@ -109,7 +183,14 @@ function parseAsset(value: unknown): Asset {
     size: assertNumber(raw.size, 'asset.size'),
     created: assertString(raw.created, 'asset.created'),
     modified: assertString(raw.modified, 'asset.modified'),
-    pushed: assertBoolean(raw.pushed, 'asset.pushed'),
+    pushed: assertBoolean(raw.pushed, 'asset.pushed')
+  };
+}
+
+function parseAsset(value: unknown): Asset {
+  const raw = assertRecord(value, 'asset');
+  return {
+    ...parseAssetSummary(value),
     bytes: assertNumberArray(raw.bytes, 'asset.bytes')
   };
 }

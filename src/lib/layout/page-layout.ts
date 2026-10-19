@@ -27,9 +27,8 @@
  * hair, ~0.06%, taller than the 210:297 ideal — but matching the PDF is
  * what page parity needs, so we mirror it rather than the ideal.)
  *
- * The ink editor's pages are always this size; only the page *count*
- * grows. A note looking "taller" than a PDF is the editor's trailing
- * blank page + 2-page minimum (room to keep drawing), not the page.
+ * This is the default for new blank pages and legacy inferred ink pages.
+ * Explicit PDF-backed ink pages retain their own dimensions and orientation.
  */
 export const A4_PAGE: { width: number; height: number } = {
   width: 1190,

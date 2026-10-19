@@ -109,6 +109,7 @@ export interface MenuBuildContext {
     parentId: string | null
   ): void;
   startPdfImport(parentId: string | null): void;
+  convertPdfNote(id: string): Promise<void>;
   startRename(kind: 'note' | 'folder', id: string, current: string): void;
   startEmptyTrash(): Promise<void>;
   leaveShared(id: string): Promise<void>;
@@ -451,6 +452,22 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
       const exporters = note
         ? (await import('$lib/note-exporters')).exportersForNote(note)
         : [];
+      if (
+        note?.note_kind === 'pdf' &&
+        noteTypeEnabled('ink') &&
+        (!(
+          ctx.source === 'shared' ||
+          noteIsUnderShared(note, tree.collectionsById)
+        ) ||
+          ctx.sharedItemEditable({ kind: 'note', id }))
+      ) {
+        items.push('separator', {
+          id: 'pdf.convert-to-ink',
+          label: tUi('ink.pdf.convert'),
+          noteKind: 'ink',
+          onSelect: () => void ctx.convertPdfNote(id)
+        });
+      }
       if (exporters.length > 0) {
         items.push('separator', {
           label: tUi('fileTree.menu.export'),
