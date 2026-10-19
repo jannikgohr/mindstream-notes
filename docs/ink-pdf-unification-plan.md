@@ -329,14 +329,18 @@ schema stored under an already-known `ink` or `pdf` kind.
   per-source-page cache. Background signatures reject stale extraction results.
 - Single-note and bulk exports include backgrounds and handwriting. Source page
   sizes, crop boxes, rotation, and deliberately blank pages are retained.
-- Frontend unit suite: 3,427 tests passed. Focused ink/PDF tests cover legacy
+- Frontend unit suite: 3,432 tests passed. Focused ink/PDF tests cover legacy
   migration, pressure, history restore, mixed-size export, crop, and rotation.
 - Rust suite: 1,026 passed, six pre-existing platform/environment tests ignored.
 - Browser integration: both PDF/ink flows and the optional large-file raster import passed in Chromium. Svelte checks,
   theme/i18n lint, and the production build passed during implementation.
 - Tool changes retain the mounted editor across native plugin-settings refreshes.
   Resize notifications preserve the viewport instead of fitting back to the top.
-  The regression fails against the old host code. Native Windows checks with the
+  All six note-kind host regressions fail against the old loader code. Playwright
+  coverage resizes both sidebars, changes tools, and refreshes the plugin registry
+  for Markdown WYSIWYG/source/split, drawing canvases, ink, PDF reading/handwriting,
+  and Kanban. It checks DOM identity and retained editor state, including scroll
+  position, zoom, and canvas pixels. Native Windows checks with the
   existing 100 MB PDF ink note retained scroll position while switching pen,
   eraser, and lasso at fit-width zoom and while returning to pen at 75% zoom.
 - Physical Android pen/palm behavior and mixed-version editing with older app
