@@ -65,7 +65,7 @@
 </script>
 
 <nav
-  class="flex h-8 shrink-0 items-center gap-1 overflow-x-auto px-3 pt-2 text-xs text-muted-foreground"
+  class="scrollbar-none flex h-8 min-w-0 flex-1 items-center gap-1 overflow-x-auto text-xs text-muted-foreground"
   aria-label={tUi('breadcrumb.label')}
 >
   {#each segments as seg, i (i)}

@@ -15,10 +15,12 @@ test('mobile Kanban supports list management and card actions', async ({
 }) => {
   await page.goto('/');
 
-  await page.getByRole('button', { name: 'More actions' }).last().click();
-  await page.getByRole('button', { name: 'New Kanban board' }).click();
+  await page
+    .getByRole('button', { name: 'Show everything you can create' })
+    .click();
+  await page.getByRole('menuitem', { name: 'New Kanban board' }).click();
   await page.getByPlaceholder('Kanban board title').fill('Mobile board');
-  await page.getByRole('button', { name: 'Create' }).click();
+  await page.getByRole('button', { name: 'Create', exact: true }).click();
 
   const board = page.locator('.kanban-scope.mobile .wx-board');
   const column = page.locator('.kanban-scope.mobile .wx-column');

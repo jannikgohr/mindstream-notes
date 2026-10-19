@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
 
-  let { onClose }: { onClose?: () => void } = $props();
+  let { onClose, header }: { onClose?: () => void; header?: boolean } =
+    $props();
 
   let NoteSidebar = $state<any | null>(null);
   let alive = true;
@@ -19,5 +20,5 @@
 </script>
 
 {#if NoteSidebar}
-  <NoteSidebar {onClose} />
+  <NoteSidebar {onClose} {header} />
 {/if}

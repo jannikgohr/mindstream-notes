@@ -1,11 +1,8 @@
 <script lang="ts">
   /**
-   * Note-view toolbar: split sort control on the left, list/grid
-   * switcher on the right. Lives at the top of the note-view area
-   * (not inside the bg-card top-controls group), so it blends with
-   * the note/folder list below rather than reading as a third bar
-   * of chrome. The controls themselves carry their own outlined
-   * pills, so no parent border or background is needed.
+   * Note-view controls beside the breadcrumb: the sort menu and the
+   * list/grid switch, as ghost icons like the desktop file-tree header, so
+   * the breadcrumb and the controls share one row above the list.
    */
   import { LayoutGrid, List } from '@lucide/svelte';
   import SortControl from '$lib/components/SortControl.svelte';
@@ -14,44 +11,46 @@
   import { mobileState, setDisplayMode } from './state.svelte';
 </script>
 
-<div class="flex shrink-0 items-center justify-between gap-2 px-3 pb-2 pt-1">
+<div class="flex shrink-0 items-center gap-1">
   <SortControl
     strategy={ui.sortStrategy}
     direction={ui.sortDirection}
     onStrategyChange={setSortStrategy}
     onDirectionChange={setSortDirection}
+    variant="ghost"
+    collapsed
   />
 
   <div
-    class="inline-flex items-center rounded-md border border-border bg-background p-0.5"
+    class="inline-flex items-center gap-0.5"
     role="group"
     aria-label={tUi('display.mode')}
   >
     <button
       type="button"
-      class="flex size-7 items-center justify-center rounded-sm transition-colors {mobileState.displayMode ===
+      class="flex size-8 items-center justify-center rounded-md transition-colors {mobileState.displayMode ===
       'list'
-        ? 'bg-accent text-accent-foreground'
-        : 'text-muted-foreground hover:bg-accent/50'}"
+        ? 'bg-accent-brand/10 text-accent-brand'
+        : 'text-muted-foreground hover:bg-accent'}"
       onclick={() => setDisplayMode('list')}
       aria-pressed={mobileState.displayMode === 'list'}
       aria-label={tUi('display.list')}
       title={tUi('display.list')}
     >
-      <List class="size-3.5" />
+      <List class="size-4" />
     </button>
     <button
       type="button"
-      class="flex size-7 items-center justify-center rounded-sm transition-colors {mobileState.displayMode ===
+      class="flex size-8 items-center justify-center rounded-md transition-colors {mobileState.displayMode ===
       'grid'
-        ? 'bg-accent text-accent-foreground'
-        : 'text-muted-foreground hover:bg-accent/50'}"
+        ? 'bg-accent-brand/10 text-accent-brand'
+        : 'text-muted-foreground hover:bg-accent'}"
       onclick={() => setDisplayMode('grid')}
       aria-pressed={mobileState.displayMode === 'grid'}
       aria-label={tUi('display.grid')}
       title={tUi('display.grid')}
     >
-      <LayoutGrid class="size-3.5" />
+      <LayoutGrid class="size-4" />
     </button>
   </div>
 </div>

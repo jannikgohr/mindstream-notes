@@ -45,7 +45,9 @@
   import { ui } from '$lib/state.svelte';
   import { setNoteFavourite, tree } from '$lib/stores/tree.svelte';
 
-  let { onClose }: { onClose?: () => void } = $props();
+  // `header: false` when the host draws its own (the mobile details sheet).
+  let { onClose, header = true }: { onClose?: () => void; header?: boolean } =
+    $props();
 
   // Summary only — bodies live with the editor and would force every tree
   // refresh through a load_note round trip.
@@ -371,19 +373,19 @@
   variant="panel"
   class="note-details-panel relative flex h-full w-full min-w-0 flex-col text-sm"
 >
-  <header
-    class="flex h-[42px] shrink-0 items-center justify-between border-b border-border bg-surface-0 px-5"
-  >
-    <h2 class="text-xs font-medium">{tUi('sidebar.details')}</h2>
-    {#if onClose}<Button
-        variant="ghost"
-        size="icon"
-        class="size-6 text-muted-foreground"
-        onclick={onClose}
-        aria-label={tUi('sidebar.close')}
-        title={tUi('sidebar.hide')}><X class="size-3.5" /></Button
-      >{/if}
-  </header>
+  {#if header}<header
+      class="flex h-[42px] shrink-0 items-center justify-between border-b border-border bg-surface-0 px-5"
+    >
+      <h2 class="text-xs font-medium">{tUi('sidebar.details')}</h2>
+      {#if onClose}<Button
+          variant="ghost"
+          size="icon"
+          class="size-6 text-muted-foreground"
+          onclick={onClose}
+          aria-label={tUi('sidebar.close')}
+          title={tUi('sidebar.hide')}><X class="size-3.5" /></Button
+        >{/if}
+    </header>{/if}
   <div
     bind:this={metadataScroller}
     class="scrollbar-none min-h-0 flex-1 overflow-y-auto px-5 py-5"
