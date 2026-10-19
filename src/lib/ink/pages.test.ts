@@ -37,6 +37,55 @@ const stroke = {
 };
 
 describe('explicit ink pages', () => {
+  it('keeps appending a saved blank page when writing after manual page operations', () => {
+    const ink = new InkDocument();
+    ink.insertPages([{ id: 'manual-blank', ...DEFAULT_PAGE }]);
+    const before = ink.pages();
+    const last = before.at(-1)!;
+    const rect = pageRect(ink.layout(), before.length - 1)!;
+    ink.beginStroke();
+    ink.pushPoint(rect[0] + 100, rect[1] + 100);
+    const { update } = ink.endStroke();
+    expect(update).not.toBeNull();
+    expect(ink.pages()).toHaveLength(before.length + 1);
+    expect(ink.pageStrokes(last.id)).toHaveLength(1);
+    expect(ink.pageStrokes(ink.pages().at(-1)!.id)).toHaveLength(0);
+    const reopened = InkDocument.fromBytes(ink.encode());
+    expect(reopened.pages()).toEqual(ink.pages());
+    const nextRect = pageRect(reopened.layout(), reopened.pages().length - 1)!;
+    reopened.addStrokes([
+      { ...stroke, points: [{ x: 100, y: nextRect[1] + 100, pressure: 1 }] }
+    ]);
+    expect(reopened.pages()).toHaveLength(before.length + 2);
+  });
+
+  it('does not append while drawing before the last page or on PDF backgrounds', () => {
+    const ink = new InkDocument();
+    ink.insertPages([{ id: 'manual-blank', ...DEFAULT_PAGE }]);
+    const count = ink.pages().length;
+    ink.addStrokes([stroke]);
+    expect(ink.pages()).toHaveLength(count);
+    const pdf = new InkDocument();
+    pdf.restorePages([pages[1]]);
+    pdf.addStrokes([stroke]);
+    expect(pdf.pages()).toHaveLength(1);
+  });
+
+  it('merges simultaneous automatic appends into a single blank page', () => {
+    const a = new InkDocument();
+    a.restorePages([{ id: 'last', ...DEFAULT_PAGE }]);
+    const b = InkDocument.fromBytes(a.encode());
+    a.addStrokes([stroke]);
+    b.addStrokes([stroke]);
+    const aa = a.encode(),
+      bb = b.encode();
+    a.applyRemoteUpdate(bb);
+    b.applyRemoteUpdate(aa);
+    expect(a.pages()).toEqual(b.pages());
+    expect(a.pages()).toHaveLength(2);
+    expect(a.pageStrokes('last')).toHaveLength(2);
+  });
+
   it('lays out differently sized pages with centered widths and actual heights', () => {
     const layout = layoutForPages(pages);
     expect(pageRect(layout, 0)).toEqual([100, 0, 300, 300]);

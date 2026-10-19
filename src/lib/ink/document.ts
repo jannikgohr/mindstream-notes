@@ -51,6 +51,7 @@ import {
 import { applyRedoOp, applyUndoOp } from './document-undo';
 import {
   defaultLayout,
+  DEFAULT_PAGE,
   layoutForPages,
   pageCountForContentMaxY,
   pageIndexAt,
@@ -168,6 +169,36 @@ export class InkDocument {
     this.invalidateStrokeMapCache();
     this.invalidateVisibleStrokeCache();
     this.resetUndoHistory();
+  }
+
+  /** Keep ordinary ink notes open-ended after page management materializes them. */
+  private appendTrailingBlankPage(): void {
+    if (!this.hasPages()) return;
+    const pages = readPages(this.doc);
+    if (pages.some((page) => page.background)) return;
+    const last = pages.at(-1);
+    if (
+      !last ||
+      !this.strokes
+        .toArray()
+        .some(
+          (stroke) =>
+            stroke.get('pageId') === last.id &&
+            stroke.get(FIELD_TOMBSTONED) !== true
+        )
+    )
+      return;
+    const records = this.doc.getMap<InkPage>(INK_PAGES);
+    // Peers writing on the same final page choose the same unused identity.
+    // Count retained records too, so deleting a page never revives its strokes.
+    let index = records.size;
+    while (records.has(`auto-blank-${index}`)) index++;
+    const id = `auto-blank-${index}`;
+    records.set(id, { id, ...DEFAULT_PAGE });
+    this.doc.getMap<boolean>(INK_DELETED_PAGES).set(id, false);
+    const order = this.doc.getMap<number>(INK_PAGE_ORDER);
+    order.set(id, (order.get(last.id) ?? pages.length - 1) + 1);
+    this.invalidateVisibleStrokeCache();
   }
 
   /** Page identities and deletion flags are separate from order: concurrent moves cannot resurrect a deleted page. */
@@ -469,6 +500,7 @@ export class InkDocument {
       this.strokes.push([map]);
       this.strokeMapCache?.set(id, map);
       this.invalidateVisibleStrokeCache();
+      this.appendTrailingBlankPage();
       if (recordUndo) {
         this.recordOp({ kind: 'strokeAdded', id });
       }
@@ -498,6 +530,7 @@ export class InkDocument {
       }
       if (added.length > 0) {
         this.invalidateVisibleStrokeCache();
+        this.appendTrailingBlankPage();
         this.recordOp({ kind: 'strokesAdded', ids: added });
       }
       return added;

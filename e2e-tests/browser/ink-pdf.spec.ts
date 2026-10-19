@@ -1,8 +1,50 @@
 import { expect, test, type Page } from '@playwright/test';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { statSync } from 'node:fs';
+import { clickFileTreeCreateAction } from './file-tree-toolbar';
 
 test.use({ hasTouch: true });
+
+test('normal ink notes keep appending blank pages after using page management', async ({
+  page
+}) => {
+  await page.goto('/');
+  await expect(
+    page.getByRole('button', { name: 'Welcome', exact: true })
+  ).toBeVisible();
+  await clickFileTreeCreateAction(page, 'New handwritten note');
+  await page
+    .getByRole('textbox', { name: 'New handwritten note', exact: true })
+    .press('Enter');
+  const sorter = page.getByRole('button', { name: 'Pages', exact: true });
+  await sorter.click();
+  const manager = page.getByRole('region', { name: 'Pages', exact: true });
+  await expect(manager.getByRole('listitem')).toHaveCount(2);
+  await manager
+    .getByRole('button', { name: 'Insert blank page', exact: true })
+    .click();
+  await expect(manager.getByRole('listitem')).toHaveCount(3);
+  await manager
+    .getByRole('button', { name: 'Go to page 3', exact: true })
+    .click();
+  await page.keyboard.press('Escape');
+  await draw(page, 'Handwritten note canvas');
+  await sorter.click();
+  await expect(manager.getByRole('listitem')).toHaveCount(4);
+  await page.keyboard.press('Escape');
+  await page
+    .getByRole('button', {
+      name: 'Close Untitled handwritten note',
+      exact: true
+    })
+    .click();
+  await page
+    .getByRole('group', { name: 'File tree' })
+    .getByRole('button', { name: 'Untitled handwritten note', exact: true })
+    .click();
+  await sorter.click();
+  await expect(manager.getByRole('listitem')).toHaveCount(4);
+});
 
 test('imports a large local PDF as compressed image pages', async ({
   page

@@ -31,7 +31,9 @@ editor for handwriting and retain their existing reader for PDF interactions.
   version.
 - New blank pages default to A4. Legacy ink notes keep their inferred trailing
   blank pages until a page operation materializes their explicit page list.
-  Explicit documents retain exactly their saved pages and always keep one page.
+  Blank-only ink notes keep appending a saved blank page when the final page is
+  written on, including after manual page operations. Documents containing PDF
+  backgrounds retain exactly their saved pages and always keep one page.
 
 No scope has been agreed for movable PDF objects, crop/rotate/background
 replacement tools, OCR, or editing the page order of ordinary PDF notes. The
@@ -327,7 +329,7 @@ schema stored under an already-known `ink` or `pdf` kind.
   per-source-page cache. Background signatures reject stale extraction results.
 - Single-note and bulk exports include backgrounds and handwriting. Source page
   sizes, crop boxes, rotation, and deliberately blank pages are retained.
-- Frontend unit suite: 3,424 tests passed. Focused ink/PDF tests cover legacy
+- Frontend unit suite: 3,427 tests passed. Focused ink/PDF tests cover legacy
   migration, pressure, history restore, mixed-size export, crop, and rotation.
 - Rust suite: 1,026 passed, six pre-existing platform/environment tests ignored.
 - Browser integration: both PDF/ink flows and the optional large-file raster import passed in Chromium. Svelte checks,
