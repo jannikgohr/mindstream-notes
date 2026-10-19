@@ -100,12 +100,16 @@
       >
         <VaultSwitcher />
       </div>{/if}
+    <!-- pl-1.5 lines the first folder up with the first tab's label below. -->
     <div
-      class="flex min-w-0 flex-1 items-center gap-2 overflow-hidden px-1 text-xs text-muted-foreground"
+      class="flex min-w-0 flex-1 items-center gap-2 overflow-hidden pl-1.5 text-xs text-muted-foreground"
       aria-label={tUi('metadata.folder')}
     >
-      {#each path as folder (folder.id)}
-        <ChevronRight class="size-3 shrink-0" />
+      <!-- Chevrons separate; a leading one only follows the vault switcher. -->
+      {#each path as folder, index (folder.id)}
+        {#if index > 0 || !ui.leftSidebarOpen}<ChevronRight
+            class="size-3 shrink-0"
+          />{/if}
         <span class="min-w-0 truncate" title={folder.name}>{folder.name}</span>
       {/each}
     </div>
