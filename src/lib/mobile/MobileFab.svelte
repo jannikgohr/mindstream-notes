@@ -1,7 +1,7 @@
 <script lang="ts">
   /**
-   * The create bar, anchored bottom-right. It mirrors the desktop file-tree
-   * toolbar on this device: the bar section's first kind is the main button
+   * The create bar, anchored bottom-right. It uses the desktop file-tree
+   * toolbar's action IDs with its own layout: the first bar action is the main button
    * (the default) and the rest of the section are pinned quick buttons beside
    * it, as many as fit in one row; the More section is menu only.
    *
@@ -15,6 +15,7 @@
    */
   import { ChevronUp, GripVertical, Pin } from '@lucide/svelte';
   import type { IconComponent } from '$lib/settings/icons';
+  import PluginIcon from '$lib/plugins/PluginIcon.svelte';
   import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
   import { mobileState, toggleFabExpanded, collapseFab } from './state.svelte';
 
@@ -22,7 +23,8 @@
     id: string;
     label: string;
     icon: IconComponent;
-    onSelect: () => void;
+    pluginIcon?: { pluginId: string; file: string };
+    onSelect: (anchor: HTMLElement) => void;
   }
 
   export type FabSection = 'toolbar' | 'more';
@@ -47,8 +49,6 @@
   let mainWidth = $state(0);
 
   const primary = $derived(actions[0]);
-  // Rebind to a PascalCase local so the markup can render it as a component.
-  const PrimaryIcon = $derived(primary?.icon);
   const bar = $derived(actions.slice(0, Math.max(1, barCount)));
   const more = $derived(actions.slice(Math.max(1, barCount)));
   // Pinned kinds that do not fit beside the main button stay in the menu.
@@ -58,9 +58,9 @@
       .slice(0, Math.max(0, Math.floor((rowWidth - mainWidth) / QUICK_PX)))
   );
 
-  function run(action: FabAction) {
+  function run(action: FabAction, anchor: HTMLElement) {
     collapseFab();
-    action.onSelect();
+    action.onSelect(anchor);
   }
 
   // --- Sorting -------------------------------------------------------------
@@ -196,6 +196,15 @@
   }
 </script>
 
+{#snippet actionIcon(action: FabAction, className: string)}
+  {#if action.pluginIcon}
+    <PluginIcon {...action.pluginIcon} class={className} />
+  {:else}
+    {@const Icon = action.icon}
+    <Icon class={className} />
+  {/if}
+{/snippet}
+
 {#snippet badge()}
   <span class="shrink-0 px-3 text-[11px] font-medium text-accent-brand"
     >{tUi('fab.default')}</span
@@ -218,13 +227,12 @@
 {/snippet}
 
 {#snippet create(action: FabAction)}
-  {@const Icon = action.icon}
   <button
     type="button"
     class="flex min-w-0 flex-1 items-center gap-3 rounded-lg py-2.5 pl-1 pr-3 text-left text-sm hover:bg-accent"
-    onclick={() => run(action)}
+    onclick={(event) => run(action, event.currentTarget)}
   >
-    <Icon class="size-4 shrink-0 text-muted-foreground" />
+    {@render actionIcon(action, 'size-4 shrink-0 text-muted-foreground')}
     <span class="truncate">{action.label}</span>
   </button>
 {/snippet}
@@ -333,15 +341,14 @@
         bind:clientWidth={rowWidth}
       >
         {#each quickActions as action (action.id)}
-          {@const Icon = action.icon}
           <button
             type="button"
             class="pointer-events-auto grid size-11 shrink-0 place-items-center rounded-full border border-border bg-surface-3 text-foreground shadow-raised hover:bg-accent"
             aria-label={action.label}
             title={action.label}
-            onclick={() => run(action)}
+            onclick={(event) => run(action, event.currentTarget)}
           >
-            <Icon class="size-5" />
+            {@render actionIcon(action, 'size-5')}
           </button>
         {/each}
         <div
@@ -351,9 +358,9 @@
           <button
             type="button"
             class="flex min-w-0 items-center gap-2 pl-4 pr-3 text-[13px] font-medium hover:bg-primary-foreground/10"
-            onclick={() => run(primary)}
+            onclick={(event) => run(primary, event.currentTarget)}
           >
-            <PrimaryIcon class="size-4 shrink-0" />
+            {@render actionIcon(primary, 'size-4 shrink-0')}
             <span class="max-w-44 truncate">{primary.label}</span>
           </button>
           <span class="my-3 w-px bg-primary-foreground/25" aria-hidden="true"
@@ -388,7 +395,6 @@
 {/if}
 
 {#if drag?.moved && dragged}
-  {@const Icon = dragged.icon}
   {@const becomesDefault = previewDefault === dragged.id}
   <!-- The row under the finger; it says what the drop will make it. -->
   <div
@@ -405,7 +411,7 @@
       <GripVertical class="size-4" />
     </span>
     <span class="flex min-w-0 flex-1 items-center gap-3 pl-1">
-      <Icon class="size-4 shrink-0 text-muted-foreground" />
+      {@render actionIcon(dragged, 'size-4 shrink-0 text-muted-foreground')}
       <span class="truncate">{dragged.label}</span>
     </span>
     {#if becomesDefault}

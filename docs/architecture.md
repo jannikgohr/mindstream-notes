@@ -155,10 +155,11 @@ thread pool, holding the lock only for a single query.
   (dev/e2e only) selects a vault directory; `MINDSTREAM_ROOT_DIR` separately
   isolates root documents and credentials for real-app test devices. Native
   desktop/device preferences live at the root; content/account preferences
-  and layouts belong to the vault. Opt-in supervision uses a
+  and layouts belong to the vault. Ordinary desktop startup uses a
   long-lived coordinator with one process and isolated WebView store per vault.
-  Normal startup remains direct while menu/handoff and platform release gates
-  are completed. See the [implementation plan](root-vault-implementation-plan.md).
+  Isolated test devices and mobile retain their single-vault flows. See
+  [storage ownership and recovery](storage-ownership-and-recovery.md) and
+  [remaining platform checks](known-limitations.md#concurrent-vault-platform-checks).
 - **Auth — [`auth/mod.rs`](../src-tauri/src/auth/mod.rs).** Etebase login. The
   password is never stored: a random 32-byte key encrypts the saved account
   state; the **key** goes in the OS keystore (Credential Manager / Keychain /

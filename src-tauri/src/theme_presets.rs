@@ -55,6 +55,7 @@ struct Document {
 }
 
 pub(crate) fn valid_id(id: &str) -> bool {
+    let id = id.strip_prefix("builtin:").unwrap_or(id);
     !id.is_empty()
         && id.len() <= 64
         && id.as_bytes()[0].is_ascii_lowercase()
@@ -162,7 +163,10 @@ fn decode(raw: &[u8]) -> AppResult<Document> {
     }
     for (id, preset) in &document.presets {
         validate(preset)?;
-        if id != &preset.id || builtins().iter().any(|builtin| builtin.id == *id) {
+        if id != &preset.id
+            || id.starts_with("builtin:")
+            || builtins().iter().any(|builtin| builtin.id == *id)
+        {
             return Err(invalid());
         }
     }
@@ -191,7 +195,10 @@ fn load(root: &Path) -> AppResult<Document> {
 
 fn edit(root: &Path, preset: Option<Preset>, id: &str) -> AppResult<()> {
     let _lock = RootLock::acquire(root)?;
-    if !valid_id(id) || builtins().iter().any(|preset| preset.id == id) {
+    if !valid_id(id)
+        || id.starts_with("builtin:")
+        || builtins().iter().any(|preset| preset.id == id)
+    {
         return Err(invalid());
     }
     let mut document = load(root)?;
@@ -339,6 +346,30 @@ mod tests {
         for preset in builtins() {
             validate(&preset).unwrap();
         }
+    }
+    #[test]
+    fn namespaced_builtins_leave_old_custom_ids_available() {
+        let root = std::env::temp_dir().join(format!("ms-theme-ids-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        for id in ["slate", "paper"] {
+            let mut preset = builtins().remove(0);
+            preset.id = id.into();
+            edit(&root, Some(preset), id).unwrap();
+        }
+        let presets = catalog(&root).unwrap();
+        for id in [
+            "slate",
+            "paper",
+            "builtin:slate-indigo",
+            "builtin:paper-teal",
+        ] {
+            assert!(presets.iter().any(|preset| preset.id == id));
+        }
+        let mut reserved = builtins().remove(0);
+        reserved.id = "builtin:future".into();
+        assert!(edit(&root, Some(reserved.clone()), &reserved.id).is_err());
+        assert!(validate_backup_presets(&[reserved]).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn invalid_tokens_paths_and_low_contrast_are_rejected() {

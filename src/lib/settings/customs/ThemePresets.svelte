@@ -20,8 +20,8 @@
   // Built-in names are UI copy; a user preset keeps the name it was saved with.
   const BUILTIN_NAMES = {
     default: 'theme.preset.default',
-    slate: 'theme.preset.slate',
-    paper: 'theme.preset.paper',
+    'builtin:slate-indigo': 'theme.preset.slate',
+    'builtin:paper-teal': 'theme.preset.paper',
     warm: 'theme.preset.warm',
     forest: 'theme.preset.forest'
   } as const;

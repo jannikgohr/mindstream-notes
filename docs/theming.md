@@ -92,7 +92,9 @@ custom preset.
 ## Theme presets
 
 Appearance settings offer Apollo (the default, ID `default`), Slate & Indigo,
-Paper & Teal, Warm and Forest. Apollo pairs blue-slate neutrals with an ochre
+Paper & Teal, Warm and Forest. The two new presets use the reserved IDs
+`builtin:slate-indigo` and `builtin:paper-teal`, leaving existing custom IDs
+such as `slate` and `paper` available. Apollo pairs blue-slate neutrals with an ochre
 accent; Slate & Indigo is cool and neutral; Paper & Teal is warm paper with a
 teal accent. The default preset's values are also the base tokens in
 `app.css`, so the two must change together. Light/dark/system mode
@@ -106,8 +108,10 @@ selected preset keeps its selection and displays Apollo; restoring the
 same ID restores the theme. The original data stays available during recovery.
 
 A preset has exactly `version`, `id`, `name`, `light` and `dark` fields.
-Version is `1`. IDs start with a lowercase letter and contain only lowercase
+Version is `1`. Custom IDs start with a lowercase letter and contain only lowercase
 letters, digits and hyphens, up to 64 characters. Names allow 160 UTF-8 bytes.
+The `builtin:` namespace is reserved for bundled presets. The older bundled
+IDs `default`, `warm` and `forest` remain reserved for compatibility.
 Each palette contains these twelve required numeric OKLCH triples:
 
 | Tokens                                    | Purpose                                                           |

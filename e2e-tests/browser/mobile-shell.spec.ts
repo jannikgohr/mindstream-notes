@@ -103,3 +103,55 @@ test('note details open as one sheet with a single heading', async ({
     sheet.getByRole('heading', { name: 'Note details' })
   ).toHaveCount(1);
 });
+
+test('plugin create actions keep their IDs in a separate mobile layout', async ({
+  page
+}) => {
+  const desktopKey = 'notes-app:file-tree-create-toolbar:v1';
+  const mobileKey = 'notes-app:mobile-create-toolbar:v1';
+  const pluginId = 'plugin:com.mindstream.templates.core:new-from-template';
+  const desktop = {
+    toolbar: ['note', 'folder'],
+    more: ['drawing', 'ink', 'kanban', 'pdf', pluginId]
+  };
+  await page.addInitScript(
+    ({ desktopKey, desktop }) => {
+      if (!localStorage.getItem(desktopKey))
+        localStorage.setItem(desktopKey, JSON.stringify(desktop));
+    },
+    { desktopKey, desktop }
+  );
+  await page.goto('/');
+  await page
+    .getByRole('button', { name: 'Show everything you can create' })
+    .click();
+  const menu = page.getByRole('dialog', { name: 'Create' });
+  await expect(
+    menu.getByRole('button', { name: 'New from template', exact: true })
+  ).toBeVisible();
+  await menu
+    .getByRole('button', { name: 'Show New from template beside the button' })
+    .click();
+  const handle = menu.getByRole('button', { name: 'Move New from template' });
+  await handle.focus();
+  await handle.press('ArrowUp');
+  await handle.press('ArrowUp');
+  await expect(menu.locator('[data-create-row]').first()).toHaveAttribute(
+    'data-create-row',
+    pluginId
+  );
+  await page.getByRole('button', { name: 'Close action menu' }).first().click();
+  const stored = await page.evaluate(
+    ({ desktopKey, mobileKey }) => ({
+      desktop: JSON.parse(localStorage.getItem(desktopKey)!),
+      mobile: JSON.parse(localStorage.getItem(mobileKey)!)
+    }),
+    { desktopKey, mobileKey }
+  );
+  expect(stored.desktop).toEqual(desktop);
+  expect(stored.mobile.toolbar[0]).toBe(pluginId);
+  await page.reload();
+  await expect(
+    page.getByRole('button', { name: 'New from template', exact: true })
+  ).toBeVisible();
+});

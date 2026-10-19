@@ -5,6 +5,7 @@ import {
   FILE_TREE_ACTION_GAP_PX,
   FILE_TREE_TOOLBAR_MIN_PX,
   FILE_TREE_TOOLBAR_STORAGE_KEY,
+  MOBILE_CREATE_TOOLBAR_STORAGE_KEY,
   fileTreeToolbarCapacity,
   LEGACY_FILE_TREE_TOOLBAR_PREFERENCES,
   loadFileTreeToolbarPreferences,
@@ -125,6 +126,58 @@ describe('file tree toolbar preferences', () => {
       toolbar: ['folder'],
       more: ['note']
     });
+  });
+
+  it('keeps plugin IDs and mobile edits separate from the desktop layout', () => {
+    const plugin = 'plugin:com.example.templates:create';
+    const available = [...actions, plugin];
+    const desktop = {
+      toolbar: ['note', plugin, 'folder'],
+      more: ['drawing', 'ink', 'kanban', 'pdf']
+    };
+    saveFileTreeToolbarPreferences(desktop);
+    const initialMobile = loadFileTreeToolbarPreferences(available, 'mobile');
+    expect(initialMobile).toEqual(desktop);
+    const mobile = normalizeFileTreeToolbarPreferences(
+      moveFileTreeToolbarAction(initialMobile, plugin, 'toolbar', 'note'),
+      available
+    );
+    saveFileTreeToolbarPreferences(mobile, 'mobile');
+    expect(loadFileTreeToolbarPreferences(available, 'mobile')).toEqual(mobile);
+    expect(loadFileTreeToolbarPreferences(available)).toEqual(desktop);
+    expect(
+      localStorage.getItem(MOBILE_CREATE_TOOLBAR_STORAGE_KEY)
+    ).not.toBeNull();
+    saveFileTreeToolbarPreferences({ toolbar: ['folder'], more: ['note'] });
+    expect(loadFileTreeToolbarPreferences(available, 'mobile')).toEqual(mobile);
+  });
+
+  it('writes each native layout to its own device field', async () => {
+    const { applyNativeDeviceUi, registerNativeDeviceUiWriter } =
+      await import('$lib/native-device-ui.svelte');
+    const desktop = { toolbar: ['note'], more: ['folder'] };
+    const mobile = {
+      toolbar: ['plugin:com.example.templates:create'],
+      more: ['note', 'folder']
+    };
+    const writer = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('__TAURI_INTERNALS__', {});
+    applyNativeDeviceUi({
+      'ui.fileTreeToolbar': desktop,
+      'ui.mobileCreateToolbar': mobile
+    });
+    registerNativeDeviceUiWriter(writer);
+    expect(loadFileTreeToolbarPreferences(['note', 'folder'])).toEqual(desktop);
+    expect(
+      loadFileTreeToolbarPreferences(
+        [...mobile.toolbar, 'note', 'folder'],
+        'mobile'
+      )
+    ).toEqual(mobile);
+    await saveFileTreeToolbarPreferences(mobile, 'mobile');
+    expect(writer).toHaveBeenCalledWith('ui.mobileCreateToolbar', mobile);
+    await saveFileTreeToolbarPreferences(desktop);
+    expect(writer).toHaveBeenLastCalledWith('ui.fileTreeToolbar', desktop);
   });
 
   it('uses defaults when storage is unavailable or contains invalid JSON', () => {

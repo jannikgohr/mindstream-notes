@@ -46,6 +46,7 @@ fn device_scope(id: &str) -> bool {
         "appearance.leftSidebarWidth"
             | "appearance.rightSidebarWidth"
             | "ui.fileTreeToolbar"
+            | "ui.mobileCreateToolbar"
             | "ui.mobileDisplayMode"
     ) {
         return true;
@@ -740,7 +741,7 @@ fn validate_preference(id: &str, value: &Value) -> AppResult<()> {
             matches!(value.as_str(), Some("ask" | "thisWindow" | "newWindow"))
         }
         "ui.mobileDisplayMode" => matches!(value.as_str(), Some("list" | "grid")),
-        "ui.fileTreeToolbar" => {
+        "ui.fileTreeToolbar" | "ui.mobileCreateToolbar" => {
             value.is_object()
                 && ["toolbar", "more"].iter().all(|key| {
                     value[*key].as_array().is_some_and(|ids| {
@@ -1438,6 +1439,48 @@ mod tests {
         assert_eq!(
             access(&dirs.root, &dirs.b, None).unwrap().values["ui.mobileDisplayMode"],
             "list"
+        );
+    }
+
+    #[test]
+    fn mobile_create_toolbar_is_validated_device_state_independent_of_desktop() {
+        let dirs = TestDirs::new();
+        initialize(&dirs.root, &dirs.a, "default", None, None).unwrap();
+        initialize(&dirs.root, &dirs.b, "other", None, None).unwrap();
+        let desktop = serde_json::json!({"toolbar":["note"],"more":["folder"]});
+        let mobile =
+            serde_json::json!({"toolbar":["plugin:com.example:create"],"more":["note","folder"]});
+        for (id, value) in [
+            ("ui.fileTreeToolbar", &desktop),
+            ("ui.mobileCreateToolbar", &mobile),
+        ] {
+            access(&dirs.root, &dirs.a, Some((id.into(), Some(value.clone())))).unwrap();
+        }
+        let other = access(&dirs.root, &dirs.b, None).unwrap();
+        assert_eq!(other.values["ui.fileTreeToolbar"], desktop);
+        assert_eq!(other.values["ui.mobileCreateToolbar"], mobile);
+        assert!(!read(&dirs.a.join("content-settings.json"), false)
+            .unwrap()
+            .values
+            .contains_key("ui.mobileCreateToolbar"));
+        assert!(access(
+            &dirs.root,
+            &dirs.a,
+            Some((
+                "ui.mobileCreateToolbar".into(),
+                Some(serde_json::json!({"toolbar":[42],"more":[]}))
+            ))
+        )
+        .is_err());
+        access(
+            &dirs.root,
+            &dirs.a,
+            Some(("ui.mobileCreateToolbar".into(), None)),
+        )
+        .unwrap();
+        assert_eq!(
+            access(&dirs.root, &dirs.b, None).unwrap().values["ui.fileTreeToolbar"],
+            desktop
         );
     }
 

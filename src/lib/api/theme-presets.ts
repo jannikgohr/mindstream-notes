@@ -52,8 +52,10 @@ function browserPresets(): ThemePreset[] {
   const presets = values.map(parseThemePreset);
   if (
     new Set(presets.map((preset) => preset.id)).size !== presets.length ||
-    presets.some((preset) =>
-      BUILTIN_PRESETS.some((builtin) => builtin.id === preset.id)
+    presets.some(
+      (preset) =>
+        preset.id.startsWith('builtin:') ||
+        BUILTIN_PRESETS.some((builtin) => builtin.id === preset.id)
     )
   )
     throw new Error('Invalid stored preset IDs; original data retained');
@@ -65,7 +67,7 @@ export function listThemePresets(): Promise<ThemePreset[]> {
     undefined,
     () => [...BUILTIN_PRESETS, ...browserPresets()],
     (value) => {
-      if (!Array.isArray(value) || value.length > 67)
+      if (!Array.isArray(value) || value.length > BUILTIN_PRESETS.length + 64)
         throw new Error('Invalid theme preset catalog');
       const presets = value.map(parseThemePreset);
       if (new Set(presets.map((preset) => preset.id)).size !== presets.length)
@@ -78,7 +80,10 @@ export function saveThemePreset(raw: string): Promise<void> {
   if (new TextEncoder().encode(raw).length > 16384)
     return Promise.reject(new Error('Theme preset is too large'));
   const preset = parseThemePreset(JSON.parse(raw));
-  if (BUILTIN_PRESETS.some((builtin) => builtin.id === preset.id))
+  if (
+    preset.id.startsWith('builtin:') ||
+    BUILTIN_PRESETS.some((builtin) => builtin.id === preset.id)
+  )
     return Promise.reject(new Error('Choose a new ID for a custom preset'));
   return invokeOrFallback(
     TauriCommandName.SaveThemePreset,

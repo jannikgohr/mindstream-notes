@@ -6,6 +6,9 @@ import {
 } from '$lib/native-device-ui.svelte';
 export const FILE_TREE_TOOLBAR_STORAGE_KEY =
   'notes-app:file-tree-create-toolbar:v1';
+export const MOBILE_CREATE_TOOLBAR_STORAGE_KEY =
+  'notes-app:mobile-create-toolbar:v1';
+export type CreateToolbarLayout = 'desktop' | 'mobile';
 
 export const CORE_FILE_TREE_ACTION_IDS = [
   'note',
@@ -147,7 +150,8 @@ export function hasExistingAppData(): boolean {
     const key = localStorage.key(i);
     if (
       key?.startsWith('notes-app:') &&
-      key !== FILE_TREE_TOOLBAR_STORAGE_KEY
+      key !== FILE_TREE_TOOLBAR_STORAGE_KEY &&
+      key !== MOBILE_CREATE_TOOLBAR_STORAGE_KEY
     ) {
       return true;
     }
@@ -156,18 +160,26 @@ export function hasExistingAppData(): boolean {
 }
 
 export function loadFileTreeToolbarPreferences(
-  availableIds: readonly string[]
+  availableIds: readonly string[],
+  layout: CreateToolbarLayout = 'desktop'
 ): FileTreeToolbarPreferences {
   if (isTauri())
     return normalizeFileTreeToolbarPreferences(
-      leadLegacyWithNote(nativeDeviceUi.toolbar),
+      leadLegacyWithNote(
+        layout === 'mobile'
+          ? (nativeDeviceUi.mobileToolbar ?? nativeDeviceUi.toolbar)
+          : nativeDeviceUi.toolbar
+      ),
       availableIds
     );
   if (typeof localStorage === 'undefined') {
     return normalizeFileTreeToolbarPreferences(null, availableIds);
   }
   try {
-    const raw = localStorage.getItem(FILE_TREE_TOOLBAR_STORAGE_KEY);
+    const raw =
+      (layout === 'mobile'
+        ? localStorage.getItem(MOBILE_CREATE_TOOLBAR_STORAGE_KEY)
+        : null) ?? localStorage.getItem(FILE_TREE_TOOLBAR_STORAGE_KEY);
     if (raw) {
       return normalizeFileTreeToolbarPreferences(
         leadLegacyWithNote(JSON.parse(raw)),
@@ -184,13 +196,20 @@ export function loadFileTreeToolbarPreferences(
 }
 
 export function saveFileTreeToolbarPreferences(
-  preferences: FileTreeToolbarPreferences
+  preferences: FileTreeToolbarPreferences,
+  layout: CreateToolbarLayout = 'desktop'
 ): void | Promise<void> {
-  if (isTauri()) return writeNativeDeviceUi('ui.fileTreeToolbar', preferences);
+  if (isTauri())
+    return writeNativeDeviceUi(
+      layout === 'mobile' ? 'ui.mobileCreateToolbar' : 'ui.fileTreeToolbar',
+      preferences
+    );
   if (typeof localStorage === 'undefined') return;
   try {
     localStorage.setItem(
-      FILE_TREE_TOOLBAR_STORAGE_KEY,
+      layout === 'mobile'
+        ? MOBILE_CREATE_TOOLBAR_STORAGE_KEY
+        : FILE_TREE_TOOLBAR_STORAGE_KEY,
       JSON.stringify(preferences)
     );
   } catch (error) {

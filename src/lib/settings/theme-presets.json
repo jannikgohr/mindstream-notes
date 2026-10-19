@@ -52,7 +52,7 @@
   },
   {
     "version": 1,
-    "id": "slate",
+    "id": "builtin:slate-indigo",
     "name": "Slate & Indigo",
     "light": {
       "surface-0": [0.972, 0.004, 265],
@@ -103,7 +103,7 @@
   },
   {
     "version": 1,
-    "id": "paper",
+    "id": "builtin:paper-teal",
     "name": "Paper & Teal",
     "light": {
       "surface-0": [0.955, 0.012, 80],

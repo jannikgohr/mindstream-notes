@@ -40,6 +40,9 @@
     type CoreFileTreeActionId
   } from '$lib/components/file-tree-toolbar-preferences';
   import { templateMenuEntries, runTemplateEntry } from '$lib/plugins/menu';
+  import { pluginToolbarButtons } from '$lib/plugins/registry.svelte';
+  import { resolvePluginString } from '$lib/plugins/plugin-i18n';
+  import { runPluginButton } from '$lib/plugins/effects';
   import type { IconComponent } from '$lib/settings/icons';
   import MobileTopBar from './MobileTopBar.svelte';
   import MobileBreadcrumb from './MobileBreadcrumb.svelte';
@@ -187,18 +190,44 @@
     }
   }
 
-  // The create bar is the file-tree toolbar's model on this device (shared
-  // with desktop): the first enabled kind is the default main button, the
+  // Mobile keeps its own layout, using the same action IDs as desktop.
+  // The first enabled kind is the default main button, the
   // rest of the toolbar section are pinned quick buttons, and More is menu
   // only. Labels go through tUi() inside $derived so a language switch
   // refreshes them without a remount.
+  const pluginCreateActions = $derived<FabAction[]>(
+    pluginToolbarButtons('file-tree').map(({ pluginId, button }) => ({
+      id: `plugin:${pluginId}:${button.id}`,
+      label: resolvePluginString(pluginId, button.labelKey ?? button.id),
+      icon: FileText as unknown as IconComponent,
+      pluginIcon: button.icon ? { pluginId, file: button.icon } : undefined,
+      onSelect: (anchor) => {
+        const rect = anchor.getBoundingClientRect();
+        void runPluginButton(
+          pluginId,
+          button,
+          { x: rect.left, y: rect.top },
+          {
+            defaultParentId: targetParent()
+          }
+        );
+      }
+    }))
+  );
+  const availableCreateIds = $derived([
+    ...CORE_FILE_TREE_ACTION_IDS,
+    ...pluginCreateActions.map((action) => action.id)
+  ]);
   let createOrder = $state(
-    loadFileTreeToolbarPreferences(CORE_FILE_TREE_ACTION_IDS)
+    loadFileTreeToolbarPreferences(CORE_FILE_TREE_ACTION_IDS, 'mobile')
   );
   $effect(() => {
     void nativeDeviceUi.revision;
     if (!isTauri() || nativeDeviceUi.initialized)
-      createOrder = loadFileTreeToolbarPreferences(CORE_FILE_TREE_ACTION_IDS);
+      createOrder = loadFileTreeToolbarPreferences(
+        availableCreateIds,
+        'mobile'
+      );
   });
 
   const createKinds = $derived<Record<CoreFileTreeActionId, FabAction | null>>({
@@ -248,9 +277,16 @@
       : null
   });
 
+  const createActionMap = $derived(
+    new Map(
+      [...Object.values(createKinds), ...pluginCreateActions]
+        .filter((action): action is FabAction => !!action)
+        .map((action) => [action.id, action])
+    )
+  );
   const createActions = $derived(
     [...createOrder.toolbar, ...createOrder.more]
-      .map((id) => createKinds[id as CoreFileTreeActionId])
+      .map((id) => createActionMap.get(id))
       .filter((action): action is FabAction => !!action)
   );
 
@@ -278,11 +314,8 @@
   );
 
   function saveCreateOrder(next: typeof createOrder) {
-    createOrder = normalizeFileTreeToolbarPreferences(
-      next,
-      CORE_FILE_TREE_ACTION_IDS
-    );
-    void saveFileTreeToolbarPreferences(createOrder);
+    createOrder = normalizeFileTreeToolbarPreferences(next, availableCreateIds);
+    void saveFileTreeToolbarPreferences(createOrder, 'mobile');
   }
 
   /** Sort a kind: the bar section's first kind is the default. */

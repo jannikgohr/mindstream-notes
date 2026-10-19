@@ -57,7 +57,10 @@ export interface ThemePreset {
 export const THEME_CACHE_KEY = 'mindstream:appearance:v1';
 
 export function validPresetId(value: unknown): value is string {
-  return typeof value === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(value);
+  return (
+    typeof value === 'string' &&
+    /^(?:builtin:)?[a-z][a-z0-9-]{0,63}$/.test(value)
+  );
 }
 
 export function themeColorRgb([l, c, h]: ThemeColor): [number, number, number] {

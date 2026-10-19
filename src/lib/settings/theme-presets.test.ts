@@ -85,8 +85,8 @@ describe('theme preset contract', () => {
   it('makes Apollo the default and keeps the earlier presets', () => {
     expect(BUILTIN_PRESETS.map((preset) => [preset.id, preset.name])).toEqual([
       ['default', 'Apollo'],
-      ['slate', 'Slate & Indigo'],
-      ['paper', 'Paper & Teal'],
+      ['builtin:slate-indigo', 'Slate & Indigo'],
+      ['builtin:paper-teal', 'Paper & Teal'],
       ['warm', 'Warm'],
       ['forest', 'Forest']
     ]);
