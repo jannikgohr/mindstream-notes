@@ -35,11 +35,15 @@ test('normal launches skip setup, and quick start persists the skip decision', a
       return box ? Math.round(box.y + box.height) : 0;
     })
     .toBe(page.viewportSize()!.height);
-  const skip = footer.getByRole('button', {
-    name: 'Skip and use offline with default settings',
+  const header = page.locator('.setup-header');
+  const skip = header.getByRole('button', {
+    name: 'Skip setup',
     exact: true
   });
-  await expect(skip).toHaveClass(/bg-secondary/);
+  await expect(skip).toHaveAccessibleDescription(
+    'Skipping starts offline with default settings.'
+  );
+  await expect(footer.locator('.setup-skip')).toHaveCount(0);
   await expect(
     footer.getByRole('button', { name: 'Continue', exact: true })
   ).toBeVisible();
@@ -53,19 +57,11 @@ test('normal launches skip setup, and quick start persists the skip decision', a
     page.locator('main[aria-labelledby="onboarding-heading"]')
   ).toHaveCount(0);
   await page.goto('/?onboarding');
-  await expect(
-    footer.getByRole('button', {
-      name: 'Skip and keep current settings',
-      exact: true
-    })
-  ).toBeVisible();
+  await expect(skip).toHaveAccessibleDescription(
+    'Skipping keeps your current settings.'
+  );
   await page.getByRole('button', { name: /^Your own server/ }).click();
-  await footer
-    .getByRole('button', {
-      name: 'Skip and keep current settings',
-      exact: true
-    })
-    .click();
+  await skip.click();
   await expect(
     page.locator('main[aria-labelledby="onboarding-heading"]')
   ).toHaveCount(0);
@@ -197,14 +193,23 @@ test('setup fits a narrow screen and keeps the language choice', async ({
     .getByRole('button', { name: /^On this device/ })
     .boundingBox();
   expect(choice!.height).toBeLessThan(120);
-  await page.getByRole('combobox', { name: 'Language' }).selectOption('de');
+  await page.getByRole('button', { name: 'Language', exact: true }).click();
+  await expect(page.getByRole('option', { name: 'English' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  );
+  await expect(page.getByRole('option', { name: 'Deutsch' })).toHaveCSS(
+    'min-height',
+    '44px'
+  );
+  await page.getByRole('option', { name: 'Deutsch' }).click();
   await expect(
     page.getByRole('heading', { name: 'Richte Mindstream ein' })
   ).toBeVisible();
   await expectBottomControls();
   await expect(
-    footer.getByRole('button', {
-      name: 'Überspringen und aktuelle Einstellungen beibehalten',
+    page.locator('.setup-header').getByRole('button', {
+      name: 'Setup überspringen',
       exact: true
     })
   ).toBeInViewport();
@@ -212,10 +217,10 @@ test('setup fits a narrow screen and keeps the language choice', async ({
   const accountContinue = await footer
     .getByRole('button', { name: 'Weiter', exact: true })
     .boundingBox();
-  const skip = await footer.locator('.setup-skip').boundingBox();
+  const skip = await page.locator('.setup-header .setup-skip').boundingBox();
   const scrollArea = await content.boundingBox();
-  // Skip floats over the scroll area, rather than occupying a footer strip.
-  expect(skip!.y + skip!.height).toBeLessThan(accountFooter!.y);
+  // Skip exits setup from the header, separate from step navigation.
+  expect(skip!.y + skip!.height).toBeLessThan(scrollArea!.y);
   expect(scrollArea!.y + scrollArea!.height).toBeCloseTo(accountFooter!.y, 1);
   expect(skip!.y + skip!.height).toBeLessThan(accountContinue!.y);
   await page.getByRole('button', { name: 'Weiter', exact: true }).click();
@@ -273,5 +278,5 @@ test('setup fits a narrow screen and keeps the language choice', async ({
   await expect(
     page.getByRole('heading', { name: 'Richte Mindstream ein' })
   ).toBeVisible();
-  await expect(footer.locator('.setup-skip')).toBeVisible();
+  await expect(page.locator('.setup-header .setup-skip')).toBeVisible();
 });

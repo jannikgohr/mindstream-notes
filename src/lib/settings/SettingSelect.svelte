@@ -12,6 +12,7 @@
    */
   import { Select } from 'bits-ui';
   import { Check, ChevronDown } from '@lucide/svelte';
+  import { cn } from '$lib/utils';
   import { tValue } from './i18n.svelte';
 
   interface Props {
@@ -20,21 +21,37 @@
     options: string[];
     onChange: (next: string) => void;
     ariaLabel?: string;
+    class?: string;
+    disabled?: boolean;
+    touchFriendly?: boolean;
   }
-  let { settingId, value, options, onChange, ariaLabel }: Props = $props();
+  let {
+    settingId,
+    value,
+    options,
+    onChange,
+    ariaLabel,
+    class: className,
+    disabled = false,
+    touchFriendly = false
+  }: Props = $props();
 
   const currentLabel = $derived(value ? tValue(settingId, value) : '');
 </script>
 
 <Select.Root
   type="single"
+  {disabled}
   value={value ?? ''}
   onValueChange={(v) => onChange(v)}
   items={options.map((o) => ({ value: o, label: tValue(settingId, o) }))}
 >
   <Select.Trigger
     aria-label={ariaLabel}
-    class="inline-flex h-8 w-44 items-center justify-between gap-2 rounded-md border border-input bg-background px-2 text-sm transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    class={cn(
+      'inline-flex h-8 w-44 items-center justify-between gap-2 rounded-md border border-input bg-background px-2 text-sm transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50',
+      className
+    )}
   >
     <span class="truncate">{currentLabel || '—'}</span>
     <ChevronDown class="size-3.5 shrink-0 text-muted-foreground" />
@@ -50,7 +67,10 @@
           <Select.Item
             value={opt}
             label={tValue(settingId, opt)}
-            class="flex cursor-pointer select-none items-center justify-between gap-2 rounded-sm px-2 py-1.5 outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50"
+            class={cn(
+              touchFriendly && 'min-h-11',
+              'flex cursor-pointer select-none items-center justify-between gap-2 rounded-sm px-2 py-1.5 outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50'
+            )}
           >
             {#snippet child({ props, selected })}
               <div {...props}>
