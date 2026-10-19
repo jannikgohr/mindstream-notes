@@ -228,7 +228,22 @@ test('setup fits a narrow screen and keeps the language choice', async ({
     accountContinue!.x + accountContinue!.width,
     1
   );
-  expect(accountFooter!.height).toBeLessThanOrEqual(60);
+  // Continue sits in an even gutter: the same space above, below and right
+  // (the 1px top border is the footer's divider, not gutter).
+  const gutter =
+    accountFooter!.x +
+    accountFooter!.width -
+    (accountContinue!.x + accountContinue!.width);
+  expect(accountContinue!.y - accountFooter!.y - 1).toBeCloseTo(gutter, 0);
+  expect(
+    accountFooter!.y +
+      accountFooter!.height -
+      (accountContinue!.y + accountContinue!.height)
+  ).toBeCloseTo(gutter, 0);
+  expect(accountFooter!.height).toBeLessThanOrEqual(64);
+  await expect(
+    page.getByRole('button', { name: 'Sprache', exact: true }).locator('svg')
+  ).toHaveCount(2);
   expect(accountContinue!.height).toBeGreaterThanOrEqual(44);
   expect(skip!.y + skip!.height).toBeLessThan(accountFooter!.y);
   expect(scrollArea!.y + scrollArea!.height).toBeCloseTo(accountFooter!.y, 1);

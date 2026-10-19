@@ -8,8 +8,10 @@
    *
    * `value` is bound — parent `commit()` runs on every change. The
    * trigger renders the active option's translated label, falling back
-   * to the raw value when an i18n entry is missing.
+   * to the raw value when an i18n entry is missing. An optional `icon`
+   * leads the trigger label.
    */
+  import type { Component } from 'svelte';
   import { Select } from 'bits-ui';
   import { Check, ChevronDown } from '@lucide/svelte';
   import { cn } from '$lib/utils';
@@ -24,6 +26,7 @@
     class?: string;
     disabled?: boolean;
     touchFriendly?: boolean;
+    icon?: Component;
   }
   let {
     settingId,
@@ -33,7 +36,8 @@
     ariaLabel,
     class: className,
     disabled = false,
-    touchFriendly = false
+    touchFriendly = false,
+    icon: Icon
   }: Props = $props();
 
   const currentLabel = $derived(value ? tValue(settingId, value) : '');
@@ -53,7 +57,13 @@
       className
     )}
   >
-    <span class="truncate">{currentLabel || '—'}</span>
+    <span class="flex min-w-0 items-center gap-1.5">
+      {#if Icon}<Icon
+          class="size-4 shrink-0 text-muted-foreground"
+          aria-hidden="true"
+        />{/if}
+      <span class="truncate">{currentLabel || '—'}</span>
+    </span>
     <ChevronDown class="size-3.5 shrink-0 text-muted-foreground" />
   </Select.Trigger>
 

@@ -18,10 +18,10 @@
     Moon,
     FileText,
     Upload,
-    ArchiveRestore
+    ArchiveRestore,
+    Languages
   } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
-  import { Surface } from '$lib/components/ui/surface';
   import {
     getSettingValue,
     setSettingValue,
@@ -201,7 +201,8 @@
         value={String(getSettingValue('language.code'))}
         options={['en', 'de']}
         ariaLabel={tUi('onboarding.language')}
-        class="h-11 w-28 text-xs max-[600px]:w-[5.5rem]"
+        icon={Languages}
+        class="h-11 w-auto text-xs"
         disabled={busy}
         touchFriendly
         onChange={(value) => write('language.code', value)}
@@ -285,7 +286,7 @@
           {/each}
         </div>
         {#if !local || signedIn}
-          <Surface padding="lg" class="mt-5"><SignInForm /></Surface>
+          <div class="mt-5"><SignInForm /></div>
         {/if}
         <p class="mt-5 text-sm text-muted-foreground">
           {tUi(
@@ -771,7 +772,7 @@
     }
     .setup-footer {
       position: relative;
-      padding: 0.375rem 1rem calc(0.375rem + env(safe-area-inset-bottom));
+      padding: 0.5rem 0.5rem max(0.5rem, env(safe-area-inset-bottom));
       border-top: 1px solid var(--color-border);
       background: transparent;
     }
@@ -789,11 +790,11 @@
     }
     .setup-footer :global(.setup-skip) {
       position: absolute;
-      right: 1rem;
+      right: 0.5rem;
       bottom: calc(100% + 0.5rem);
       justify-content: flex-start;
       width: fit-content;
-      max-width: calc(100% - 2rem);
+      max-width: calc(100% - 1rem);
       min-width: 0;
       padding-inline: 0.75rem;
       border: 1px solid
@@ -826,6 +827,8 @@
     .setup-footer :global(.setup-back) {
       grid-area: 1 / 1;
       justify-self: start;
+      /* Line the arrow up with the content's 1rem gutter. */
+      padding-inline-start: 0.5rem;
     }
     .setup-footer :global(.setup-next) {
       grid-area: 1 / 2;
