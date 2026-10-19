@@ -747,6 +747,15 @@
   .setup-footer :global(.setup-skip-placeholder) {
     display: none;
   }
+  @media (min-width: 601px) {
+    .steps li {
+      flex: 0 1 auto;
+    }
+    .steps li:not(:last-child)::after {
+      flex: 0 1 auto;
+      width: 2rem;
+    }
+  }
   @media (max-width: 900px) {
     .appearance-grid,
     .editing-grid {
