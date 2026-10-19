@@ -29,7 +29,10 @@ Appearance uses the app's shared Surface, SectionHeader, Input, Button, and
 Toolbar components. Apollo, Slate & Indigo, Paper & Teal, Warm, Forest, and custom
 presets provide their own light and dark accents. Preset, mode, UI size, editor
 size, and line spacing update the sample workspace immediately. The preview uses
-the same editor surface as the workspace. The editing step has a temporary Milkdown
+the same editor surface as the workspace. While dragging UI font size, only the
+sample scales; the rest of the app applies the size on release so the slider
+stays in place. Editor text size remains independent of UI size.
+The editing step has a temporary Milkdown
 editor, Markdown source, and a synchronized split preview. Practice changes do
 not create or modify real notes.
 

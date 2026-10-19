@@ -19,6 +19,17 @@
     ToolbarSeparator
   } from '$lib/components/ui/toolbar';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { getSettingValue } from '$lib/settings/store.svelte';
+
+  let { uiFontSize = null }: { uiFontSize?: number | null } = $props();
+  const appliedUiFontSize = $derived(
+    Number(getSettingValue('appearance.uiFontSize'))
+  );
+  // Shared controls use rem units. Zoom only this sample while the root stays
+  // fixed, then return to normal once the released value applies globally.
+  const uiScale = $derived(
+    (uiFontSize ?? appliedUiFontSize) / appliedUiFontSize
+  );
 
   let bold = $state(false);
   let italic = $state(false);
@@ -35,6 +46,8 @@
   class="preview"
   aria-label={tUi('onboarding.preview.label')}
   data-testid="appearance-preview"
+  style:zoom={uiScale}
+  style:--preview-ui-scale={uiScale}
 >
   <div class="preview-title">
     <span class="size-2 rounded-full bg-accent-brand"></span> Mindstream
@@ -166,7 +179,8 @@
   }
   .preview-document {
     padding: 1.75rem;
-    font-size: var(--editor-font-size);
+    /* Editor text is sized independently of UI zoom in the real workspace. */
+    font-size: calc(var(--editor-font-size) / var(--preview-ui-scale));
     line-height: var(--editor-line-height, 1.6);
   }
   .preview-document h3 {

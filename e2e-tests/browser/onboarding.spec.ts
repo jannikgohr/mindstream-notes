@@ -1,5 +1,84 @@
 import { expect, test } from '@playwright/test';
 
+for (const width of [1280, 375]) {
+  test(`UI font size previews locally until slider release at ${width}px`, async ({
+    page
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/?onboarding');
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    const slider = page.getByRole('slider', {
+      name: 'UI font size',
+      exact: true
+    });
+    const root = page.locator('html');
+    const preview = page.getByTestId('appearance-preview');
+    const bold = preview.getByRole('button', { name: 'Bold', exact: true });
+    await expect(root).toHaveCSS('font-size', '16px');
+    await slider.scrollIntoViewIfNeeded();
+    const track = (await slider.boundingBox())!;
+    const initialButton = (await bold.boundingBox())!;
+    // Start at the current thumb, then move to the maximum while holding down.
+    await page.mouse.move(
+      track.x + 8 + ((track.width - 16) * 4) / 6,
+      track.y + track.height / 2
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      track.x + track.width - 1,
+      track.y + track.height / 2
+    );
+    await expect(slider).toHaveValue('18');
+    await expect(preview).toHaveCSS('zoom', '1.125');
+    await expect(root).toHaveCSS('font-size', '16px');
+    expect(await slider.boundingBox()).toEqual(track);
+    expect((await bold.boundingBox())!.height).toBeCloseTo(
+      (initialButton.height * 18) / 16,
+      1
+    );
+    // UI scaling must leave the sample's independent editor text size alone.
+    const editorSize = await page
+      .getByTestId('preview-document')
+      .evaluate(
+        (element) =>
+          parseFloat(getComputedStyle(element).fontSize) *
+          Number(
+            getComputedStyle(
+              element.closest('[data-testid="appearance-preview"]')!
+            ).zoom
+          )
+      );
+    expect(editorSize).toBeCloseTo(16, 1);
+    if (width === 1280)
+      await page.screenshot({
+        path: test.info().outputPath('ui-size-during-drag.png'),
+        animations: 'disabled'
+      });
+    await page.mouse.up();
+    await expect(root).toHaveCSS('font-size', '18px');
+    await expect(preview).toHaveCSS('zoom', '1');
+    // Reload verifies that the released value goes through normal persistence.
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            JSON.parse(localStorage.getItem('notes-app:settings:v1') ?? '{}')[
+              'appearance.uiFontSize'
+            ]
+        )
+      )
+      .toBe(18);
+    await page.reload();
+    await expect(root).toHaveCSS('font-size', '18px');
+    await expect(slider).toHaveValue('18');
+    // Keyboard steps also commit through the native range's change event.
+    await slider.focus();
+    await page.keyboard.press('ArrowLeft');
+    await expect(root).toHaveCSS('font-size', '17px');
+    await expect(preview).toHaveCSS('zoom', '1');
+  });
+}
+
 test('normal launches skip setup, and quick start persists the skip decision', async ({
   page
 }) => {

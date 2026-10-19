@@ -57,6 +57,7 @@
   let { oncomplete }: { oncomplete: () => void } = $props();
   let busy = $state(false);
   let error = $state('');
+  let previewUiFontSize = $state<number | null>(null);
   let heading: HTMLHeadingElement;
   let container: HTMLElement;
   onMount(() => {
@@ -110,6 +111,7 @@
   }
   async function navigate(target: OnboardingStep) {
     await perform(async () => {
+      previewUiFontSize = null;
       await flushSettingsWrites();
       onboarding.progress = await saveOnboardingStep(
         onboarding.progress!.id,
@@ -349,7 +351,10 @@
               >
                 {themeCatalog.error}
               </p>{/if}
-            <SettingControl live setting={setting('appearance.uiFontSize')} />
+            <SettingControl
+              setting={setting('appearance.uiFontSize')}
+              bind:sliderPreview={previewUiFontSize}
+            />
             <SettingControl
               live
               setting={setting('appearance.editorFontSize')}
@@ -369,7 +374,7 @@
             </details>
           </div>
           <div class="min-w-0">
-            <AppearancePreview />
+            <AppearancePreview uiFontSize={previewUiFontSize} />
             <p class="mt-3 text-xs text-muted-foreground">
               {tUi('onboarding.appearance.previewHint')}
             </p>
