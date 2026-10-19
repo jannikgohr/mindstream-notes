@@ -285,6 +285,20 @@ test('setup fits a narrow screen and keeps the language choice', async ({
   const footer = page.locator('.setup-footer');
   const content = page.locator('.setup-content');
   const expectBottomControls = async () => {
+    const progress = page.locator('.setup-progress');
+    await expect(progress.getByRole('listitem')).toHaveCount(4);
+    await expect(progress.locator('[aria-current="step"]')).toHaveCount(1);
+    // The visible step label must not steal length from just one connector.
+    await expect
+      .poll(() =>
+        progress.locator('li:not(:last-child)').evaluateAll((items) => {
+          const lengths = items.map((item) =>
+            parseFloat(getComputedStyle(item, '::after').width)
+          );
+          return Math.max(...lengths) - Math.min(...lengths);
+        })
+      )
+      .toBeLessThan(1);
     await expect
       .poll(async () => {
         const box = await footer.boundingBox();

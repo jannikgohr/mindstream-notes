@@ -81,8 +81,16 @@ dialog leaves the workspace ready to use.
 
 ```sh
 pnpm test -- src/lib/api/onboarding.test.ts src/lib/hotkeys/presets.test.ts
-pnpm test:e2e onboarding.spec.ts --project chromium --workers 1
+pnpm test:e2e onboarding --project chromium --workers 1
 cd src-tauri
 cargo test --lib onboarding::tests
 cargo test --lib vault_runtime::tests
 ```
+
+The browser suites cover opt-in development launches and fresh-install progress,
+both skip labels, remote-account gating, all completion choices, settings relaunch,
+temporary practice edits, live appearance previews, keyboard preset selection,
+progress recovery, and import/restore cancellation. Mobile coverage includes
+320 px layouts, equal step connectors, fixed bottom controls, and repeated Back
+taps. They use the browser fallback store; native sign-in and the backup file
+picker remain part of packaged-app validation.
