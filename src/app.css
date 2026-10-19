@@ -679,6 +679,8 @@ body.dv-tab-dragging
   top: var(--dv-tabs-and-actions-container-height) !important;
   left: auto !important;
   right: 0 !important;
+  /* Align the straight top edge with the trigger, past the rounded corner. */
+  translate: var(--radius-md) 0;
 }
 
 /* Full-height borders separate the overflow control from the tabs and the
