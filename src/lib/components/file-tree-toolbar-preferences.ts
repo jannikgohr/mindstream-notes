@@ -76,6 +76,19 @@ export const LEGACY_FILE_TREE_TOOLBAR_PREFERENCES: FileTreeToolbarPreferences =
     more: []
   };
 
+/**
+ * "New note" is the toolbar's wide, labelled primary button, so while it is in
+ * the toolbar it always comes first, wherever it was stored or dropped. It can
+ * still move to More and back.
+ */
+export const PRIMARY_FILE_TREE_ACTION_ID = 'note';
+
+function leadWithPrimary(toolbar: string[]): string[] {
+  const index = toolbar.indexOf(PRIMARY_FILE_TREE_ACTION_ID);
+  if (index > 0) toolbar.unshift(...toolbar.splice(index, 1));
+  return toolbar;
+}
+
 function uniqueStrings(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return [
@@ -113,7 +126,7 @@ export function normalizeFileTreeToolbarPreferences(
     toolbar.push(more.splice(fallbackIndex, 1)[0]);
   }
 
-  return { toolbar, more };
+  return { toolbar: leadWithPrimary(toolbar), more };
 }
 
 export function hasExistingAppData(): boolean {
@@ -181,5 +194,5 @@ export function moveFileTreeToolbarAction(
   const target = destination === 'toolbar' ? toolbar : more;
   const beforeIndex = beforeId ? target.indexOf(beforeId) : -1;
   target.splice(beforeIndex >= 0 ? beforeIndex : target.length, 0, actionId);
-  return { toolbar, more };
+  return { toolbar: leadWithPrimary(toolbar), more };
 }

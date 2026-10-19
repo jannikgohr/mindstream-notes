@@ -33,6 +33,7 @@
     loadFileTreeToolbarPreferences,
     moveFileTreeToolbarAction,
     normalizeFileTreeToolbarPreferences,
+    PRIMARY_FILE_TREE_ACTION_ID,
     saveFileTreeToolbarPreferences,
     type CoreFileTreeActionId,
     type FileTreeToolbarPreferences
@@ -141,17 +142,17 @@
       .filter((action): action is CreateAction => !!action)
   );
   const displayedToolbarActions = $derived(
-    [...configuredToolbarActions]
-      .sort((a, b) => Number(b.id === 'note') - Number(a.id === 'note'))
-      .slice(0, visibleCapacity)
+    configuredToolbarActions.slice(0, visibleCapacity)
   );
   const configuredMoreActions = $derived(
     preferences.more
       .map((id) => actionMap.get(id))
       .filter((action): action is CreateAction => !!action)
   );
+  // Only what the row has no room for, then More: never a button that is
+  // already showing beside the menu.
   const menuActions = $derived([
-    ...configuredToolbarActions,
+    ...configuredToolbarActions.slice(displayedToolbarActions.length),
     ...configuredMoreActions
   ]);
   const draggedId = $derived(pointerDrag?.moved ? pointerDrag.id : null);
@@ -388,6 +389,16 @@
         index = i;
         break;
       }
+    }
+    // "New note" leads the toolbar (moveFileTreeToolbarAction keeps it there),
+    // so show the drop where the action will actually land.
+    if (section === 'toolbar') {
+      if (pointerDrag?.id === PRIMARY_FILE_TREE_ACTION_ID) index = 0;
+      else if (
+        index === 0 &&
+        rows[0]?.dataset.fileTreeActionId === PRIMARY_FILE_TREE_ACTION_ID
+      )
+        index = 1;
     }
     dropContainer = containerId;
     dropSection = section;
@@ -764,7 +775,7 @@
             <button
               type="button"
               role="menuitem"
-              class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+              class="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-xs transition-colors hover:bg-accent hover:text-accent-foreground"
               onpointerenter={() => {
                 hoveredMenuActionId = null;
                 closePluginMenu();
