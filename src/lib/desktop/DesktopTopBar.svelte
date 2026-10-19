@@ -49,13 +49,10 @@
   <!-- "deep" makes every empty pixel of both halves move the window; buttons
        still block the drag. Sized to the sidebar, with the toggle beside the
        title so collapsing the sidebar does not move it out from under the
-       pointer. Its border continues the sidebar's edge, so the bar reads as
-       the same columns as the window. -->
+       pointer. -->
   <div
     data-tauri-drag-region={customDecorations ? 'deep' : undefined}
-    class="flex h-full shrink-0 items-center gap-2.5 overflow-hidden px-5 {ui.leftSidebarOpen
-      ? 'border-r border-border'
-      : ''}"
+    class="flex h-full shrink-0 items-center gap-2.5 overflow-hidden px-5"
     style:width={ui.leftSidebarOpen ? `${ui.leftSidebarWidth}px` : undefined}
   >
     <img src={appIcon} alt="" draggable="false" class="size-6 shrink-0" />
