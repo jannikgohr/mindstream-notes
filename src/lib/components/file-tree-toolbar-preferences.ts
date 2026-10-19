@@ -6,6 +6,9 @@ import {
 } from '$lib/native-device-ui.svelte';
 export const FILE_TREE_TOOLBAR_STORAGE_KEY =
   'notes-app:file-tree-create-toolbar:v1';
+export const MOBILE_CREATE_TOOLBAR_STORAGE_KEY =
+  'notes-app:mobile-create-toolbar:v1';
+export type CreateToolbarLayout = 'desktop' | 'mobile';
 
 export const CORE_FILE_TREE_ACTION_IDS = [
   'note',
@@ -76,6 +79,31 @@ export const LEGACY_FILE_TREE_TOOLBAR_PREFERENCES: FileTreeToolbarPreferences =
     more: []
   };
 
+/**
+ * The first toolbar action is the wide, labelled main button, so its order is
+ * how people pick their default note type. Installs from before the toolbar
+ * could be customised were migrated to every action in the toolbar with New
+ * note last and More empty; untouched, that layout leads with New note
+ * instead of New folder. A layout saved since lists every other available
+ * action in More, so with any plugin action it is never mistaken for this one.
+ */
+function leadLegacyWithNote<T>(value: T): T | FileTreeToolbarPreferences {
+  const legacy = LEGACY_FILE_TREE_TOOLBAR_PREFERENCES.toolbar;
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.toolbar) ||
+    !Array.isArray(value.more) ||
+    value.more.length > 0 ||
+    value.toolbar.length !== legacy.length ||
+    value.toolbar.some((id, index) => id !== legacy[index])
+  )
+    return value;
+  return {
+    toolbar: ['note', ...legacy.filter((id) => id !== 'note')],
+    more: []
+  };
+}
+
 function uniqueStrings(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return [
@@ -122,7 +150,8 @@ export function hasExistingAppData(): boolean {
     const key = localStorage.key(i);
     if (
       key?.startsWith('notes-app:') &&
-      key !== FILE_TREE_TOOLBAR_STORAGE_KEY
+      key !== FILE_TREE_TOOLBAR_STORAGE_KEY &&
+      key !== MOBILE_CREATE_TOOLBAR_STORAGE_KEY
     ) {
       return true;
     }
@@ -131,23 +160,34 @@ export function hasExistingAppData(): boolean {
 }
 
 export function loadFileTreeToolbarPreferences(
-  availableIds: readonly string[]
+  availableIds: readonly string[],
+  layout: CreateToolbarLayout = 'desktop'
 ): FileTreeToolbarPreferences {
   if (isTauri())
     return normalizeFileTreeToolbarPreferences(
-      nativeDeviceUi.toolbar,
+      leadLegacyWithNote(
+        layout === 'mobile'
+          ? (nativeDeviceUi.mobileToolbar ?? nativeDeviceUi.toolbar)
+          : nativeDeviceUi.toolbar
+      ),
       availableIds
     );
   if (typeof localStorage === 'undefined') {
     return normalizeFileTreeToolbarPreferences(null, availableIds);
   }
   try {
-    const raw = localStorage.getItem(FILE_TREE_TOOLBAR_STORAGE_KEY);
+    const raw =
+      (layout === 'mobile'
+        ? localStorage.getItem(MOBILE_CREATE_TOOLBAR_STORAGE_KEY)
+        : null) ?? localStorage.getItem(FILE_TREE_TOOLBAR_STORAGE_KEY);
     if (raw) {
-      return normalizeFileTreeToolbarPreferences(JSON.parse(raw), availableIds);
+      return normalizeFileTreeToolbarPreferences(
+        leadLegacyWithNote(JSON.parse(raw)),
+        availableIds
+      );
     }
     const fallback = hasExistingAppData()
-      ? LEGACY_FILE_TREE_TOOLBAR_PREFERENCES
+      ? leadLegacyWithNote(LEGACY_FILE_TREE_TOOLBAR_PREFERENCES)
       : DEFAULT_FILE_TREE_TOOLBAR_PREFERENCES;
     return normalizeFileTreeToolbarPreferences(null, availableIds, fallback);
   } catch {
@@ -156,13 +196,20 @@ export function loadFileTreeToolbarPreferences(
 }
 
 export function saveFileTreeToolbarPreferences(
-  preferences: FileTreeToolbarPreferences
+  preferences: FileTreeToolbarPreferences,
+  layout: CreateToolbarLayout = 'desktop'
 ): void | Promise<void> {
-  if (isTauri()) return writeNativeDeviceUi('ui.fileTreeToolbar', preferences);
+  if (isTauri())
+    return writeNativeDeviceUi(
+      layout === 'mobile' ? 'ui.mobileCreateToolbar' : 'ui.fileTreeToolbar',
+      preferences
+    );
   if (typeof localStorage === 'undefined') return;
   try {
     localStorage.setItem(
-      FILE_TREE_TOOLBAR_STORAGE_KEY,
+      layout === 'mobile'
+        ? MOBILE_CREATE_TOOLBAR_STORAGE_KEY
+        : FILE_TREE_TOOLBAR_STORAGE_KEY,
       JSON.stringify(preferences)
     );
   } catch (error) {

@@ -5,8 +5,15 @@ export const nativeDeviceUi = $state<{
   initialized: boolean;
   revision: number;
   toolbar: unknown;
+  mobileToolbar: unknown;
   displayMode: 'list' | 'grid';
-}>({ initialized: false, revision: 0, toolbar: null, displayMode: 'list' });
+}>({
+  initialized: false,
+  revision: 0,
+  toolbar: null,
+  mobileToolbar: null,
+  displayMode: 'list'
+});
 
 let writer: ((id: string, value: unknown) => Promise<void>) | null = null;
 
@@ -18,6 +25,7 @@ export function registerNativeDeviceUiWriter(
 
 export function applyNativeDeviceUi(values: Record<string, unknown>): void {
   nativeDeviceUi.toolbar = values['ui.fileTreeToolbar'] ?? null;
+  nativeDeviceUi.mobileToolbar = values['ui.mobileCreateToolbar'] ?? null;
   nativeDeviceUi.displayMode =
     values['ui.mobileDisplayMode'] === 'grid' ? 'grid' : 'list';
   nativeDeviceUi.initialized = true;

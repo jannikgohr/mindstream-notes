@@ -113,7 +113,7 @@ def verify_restore(fixture, boundary):
     assert (vault / "plugin-data/com.test.portable/empty").is_dir()
     assert json.loads((vault / "content-settings.json").read_text())["values"]["appearance.editorFontSize"] == 19
     settings = json.loads((fixture.root / "ui-settings.json").read_text())["values"]
-    assert settings["appearance.accent"] == "#abcdef"
+    assert settings["appearance.uiFontSize"] == 17
     assert settings["appearance.preset"] == "portable-theme"
     desktop = json.loads((fixture.root / "desktop-settings.json").read_text())
     # This preparation has no desktop document until resource publication.
@@ -140,7 +140,7 @@ def verify(args):
     assert settings["revision"] >= receipt["revision"], (settings, receipt)
     sequence = receipt["sequence"] + settings["revision"] - receipt["revision"]
     assert settings["values"]["appearance.uiFontSize"] == 12 + sequence % 7
-    assert settings["values"]["appearance.accent"] == "#abcdef"
+    assert settings["values"]["appearance.preset"] == "slate"
     print(f"Durable settings retained receipt {receipt['revision']}; recovered {settings['revision']}", flush=True)
     for name in ["handoff-preparing", "handoff-source-closed",
                  "files-preserved", "resources-published", "database-installed"]:

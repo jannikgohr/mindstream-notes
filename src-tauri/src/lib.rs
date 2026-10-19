@@ -416,6 +416,13 @@ pub fn run() {
             } else {
                 match profiles::dir_override() {
                     Some((id, dir)) => {
+                        // Only dev and e2e builds honour the override. Their
+                        // harness restarts the app straight after killing it,
+                        // so the old process can still hold the vault here.
+                        storage_locks::VaultLock::wait_until_released(
+                            &dir,
+                            std::time::Duration::from_secs(10),
+                        )?;
                         let _root_lock = storage_locks::RootLock::acquire(&app_data_root)?;
                         profiles::reconcile_root_locked(&app_data_root)?;
                         (id, storage_locks::VaultLock::acquire(&dir)?)

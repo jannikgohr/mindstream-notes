@@ -123,16 +123,17 @@
     onclick={() => (metadataOpen = false)}
   ></button>
   <div
-    class="safe-bottom safe-x fixed inset-x-0 bottom-0 z-50 flex h-[85dvh] max-h-[85vh] min-h-[45vh] flex-col overflow-hidden rounded-t-xl border border-border bg-card shadow-2xl"
+    class="safe-bottom safe-x fixed inset-x-0 bottom-0 z-50 flex h-[85dvh] max-h-[85vh] min-h-[45vh] flex-col overflow-hidden rounded-t-2xl border border-border bg-surface-1 shadow-overlay"
     role="dialog"
     aria-modal="true"
     aria-labelledby="mobile-metadata-title"
   >
+    <!-- The sheet's own header replaces the sidebar's, so it reads once. -->
     <header
-      class="flex h-12 shrink-0 items-center justify-between border-b border-border px-3"
+      class="flex h-12 shrink-0 items-center justify-between border-b border-border bg-surface-0 pl-5 pr-2"
     >
-      <h2 id="mobile-metadata-title" class="truncate text-sm font-semibold">
-        {tUi('noteSidebar.title')}
+      <h2 id="mobile-metadata-title" class="truncate text-sm font-medium">
+        {tUi('sidebar.details')}
       </h2>
       <Button
         variant="ghost"
@@ -145,7 +146,7 @@
       </Button>
     </header>
     <div class="h-full min-h-0 flex-1 overflow-hidden overscroll-contain">
-      <LazyNoteSidebar />
+      <LazyNoteSidebar header={false} />
     </div>
   </div>
 {/if}

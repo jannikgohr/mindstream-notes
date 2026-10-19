@@ -54,23 +54,26 @@
     {@const active = mobileState.view === tab.id}
     {@const Icon = tab.icon}
     {@const label = tUi(tab.labelKey)}
+    <!-- Active is the desktop sidebar's accent wash, behind the icon. -->
     <button
       type="button"
-      class="relative flex flex-1 flex-col items-center justify-center gap-0.5 py-2 transition-colors {active
-        ? 'text-foreground'
+      class="flex flex-1 flex-col items-center justify-center gap-1 pb-2 pt-2.5 transition-colors {active
+        ? 'text-accent-brand'
         : 'text-muted-foreground hover:text-foreground'}"
       onclick={() => setMobileView(tab.id)}
       aria-current={active ? 'page' : undefined}
       aria-label={label}
     >
-      {#if active}
-        <span
-          class="absolute inset-x-6 top-0 h-0.5 rounded-b-full bg-primary"
-          aria-hidden="true"
-        ></span>
-      {/if}
-      <Icon class="size-5" />
-      <span class="text-[10px] font-medium">{label}</span>
+      <span
+        class="flex h-7 w-14 items-center justify-center rounded-full transition-colors {active
+          ? 'bg-accent-brand/10'
+          : ''}"
+      >
+        <Icon class="size-5" />
+      </span>
+      <span class="text-[11px] {active ? 'font-semibold' : 'font-medium'}"
+        >{label}</span
+      >
     </button>
   {/each}
 </nav>

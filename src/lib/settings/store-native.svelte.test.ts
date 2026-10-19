@@ -246,7 +246,7 @@ describe('native settings documents', () => {
     );
   });
 
-  it.each(['ui.fileTreeToolbar', 'ui.dockLayout'])(
+  it.each(['ui.fileTreeToolbar', 'ui.mobileCreateToolbar', 'ui.dockLayout'])(
     'keeps the latest queued %s in the auxiliary cache after an older save',
     async (id) => {
       const store = await import('./store.svelte');
@@ -254,7 +254,7 @@ describe('native settings documents', () => {
       const layout = await import('$lib/api/layout');
       await store.setSettingsVaultId('default');
       const value = (name: string) =>
-        id === 'ui.fileTreeToolbar'
+        id !== 'ui.dockLayout'
           ? { toolbar: [name], more: [] }
           : {
               version: 1,
@@ -265,7 +265,9 @@ describe('native settings documents', () => {
       const read = () =>
         id === 'ui.fileTreeToolbar'
           ? device.nativeDeviceUi.toolbar
-          : layout.loadSavedLayout('default');
+          : id === 'ui.mobileCreateToolbar'
+            ? device.nativeDeviceUi.mobileToolbar
+            : layout.loadSavedLayout('default');
       let finishFirst!: (value: UiSettingsSnapshot) => void;
       let finishSecond!: (value: UiSettingsSnapshot) => void;
       api.patch.mockImplementationOnce(

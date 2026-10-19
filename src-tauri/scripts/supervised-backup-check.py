@@ -113,7 +113,7 @@ try:
     content = json.loads((vault / "content-settings.json").read_text())
     assert content["values"]["appearance.editorFontSize"] == 19
     device = json.loads((fixture.root / "ui-settings.json").read_text())
-    assert device["values"]["appearance.accent"] == "#abcdef"
+    assert device["values"]["appearance.uiFontSize"] == 17
     assert device["values"]["appearance.preset"] == "portable-theme"
     desktop = json.loads((fixture.root / "desktop-settings.json").read_text())
     assert desktop["language_code"] == "de" and desktop["theme_mode"] == "dark"
