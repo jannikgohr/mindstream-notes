@@ -2,9 +2,6 @@
   import { onMount } from 'svelte';
   // A copy of src-tauri/icons/64x64.png: the dev server cannot serve src-tauri.
   import appIcon from './app-icon.png';
-  import { ChevronRight } from '@lucide/svelte';
-  import { tree } from '$lib/stores/tree.svelte';
-  import { folderPath } from '$lib/notes/folder-path';
   import {
     PanelRight,
     Search as SearchIcon,
@@ -28,13 +25,6 @@
     windowChrome
   } from '$lib/window/decorations.svelte';
 
-  const activeNote = $derived(
-    ui.activeNoteId ? tree.notesById[ui.activeNoteId] : null
-  );
-  const path = $derived(
-    folderPath(activeNote?.parent_collection_id ?? null, tree.collectionsById)
-  );
-
   onMount(() => {
     initWindowChrome();
   });
@@ -57,10 +47,10 @@
 
 {#snippet TopBarContent(customDecorations = false)}
   <!-- "deep" makes every empty pixel of both halves move the window; buttons
-       still block the drag. Sized to the sidebar so the path starts over the
-       editor, with the toggle beside the title so collapsing the sidebar
-       does not move it out from under the pointer. Its border continues the
-       sidebar's edge, so the bar reads as the same two columns as below. -->
+       still block the drag. Sized to the sidebar, with the toggle beside the
+       title so collapsing the sidebar does not move it out from under the
+       pointer. Its border continues the sidebar's edge, so the bar reads as
+       the same columns as the window. -->
   <div
     data-tauri-drag-region={customDecorations ? 'deep' : undefined}
     class="flex h-full shrink-0 items-center gap-2.5 overflow-hidden px-5 {ui.leftSidebarOpen
@@ -103,19 +93,7 @@
       >
         <VaultSwitcher />
       </div>{/if}
-    <!-- pl-1.5 lines the first folder up with the first tab's label below. -->
-    <div
-      class="flex min-w-0 flex-1 items-center gap-2 overflow-hidden pl-1.5 text-xs text-muted-foreground"
-      aria-label={tUi('metadata.folder')}
-    >
-      <!-- Chevrons separate; a leading one only follows the vault switcher. -->
-      {#each path as folder, index (folder.id)}
-        {#if index > 0 || !ui.leftSidebarOpen}<ChevronRight
-            class="size-3 shrink-0"
-          />{/if}
-        <span class="min-w-0 truncate" title={folder.name}>{folder.name}</span>
-      {/each}
-    </div>
+    <div class="flex-1"></div>
     <Button
       variant="outline"
       size="sm"
