@@ -773,6 +773,16 @@
       grid-template-rows: minmax(2.75rem, auto) minmax(3.5rem, auto);
       gap: 0.5rem;
     }
+    .setup-footer-inner::before {
+      content: '';
+      grid-area: 2 / 1 / 3 / 3;
+      align-self: start;
+      height: 1px;
+      margin-inline: -1rem;
+      background: var(--color-border);
+      transform: translateY(-0.25rem);
+      pointer-events: none;
+    }
     .setup-actions {
       display: contents;
     }
@@ -786,8 +796,8 @@
       padding-inline: 0.75rem;
       border: 1px solid var(--color-border);
       border-radius: 999px;
-      background: var(--color-surface-1);
-      box-shadow: var(--shadow-sm);
+      background: transparent;
+      box-shadow: none;
       color: var(--color-muted-foreground);
       font-size: 0.75rem;
       font-weight: 400;
