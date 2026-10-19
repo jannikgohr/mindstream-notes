@@ -1,29 +1,22 @@
 <script lang="ts">
   /**
-   * A vault's letter tile. The name is always shown beside it, so the tile
-   * is decoration for screen readers. `vaultIds` is the whole vault list in
-   * creation order, so tiles in one list never share a colour.
+   * A vault's letter tile on its named colour. The name is always shown
+   * beside it, so the tile is decoration for screen readers.
    */
   import { cn } from '$lib/utils';
-  import {
-    vaultTileColor,
-    vaultTileLetter,
-    vaultTileSlots
-  } from '$lib/vaults/tile';
+  import { vaultColor, vaultTileLetter } from '$lib/vaults/tile';
 
   let {
     id,
     name,
-    vaultIds,
+    color,
     class: className = ''
   }: {
     id: string;
     name: string;
-    vaultIds: readonly string[];
+    color?: string | null;
     class?: string;
   } = $props();
-
-  const slot = $derived(vaultTileSlots(vaultIds).get(id) ?? vaultTileColor(id));
 </script>
 
 <span
@@ -32,6 +25,6 @@
     'grid size-4.5 shrink-0 place-items-center rounded-[5px] text-[10.5px] font-bold leading-none',
     className
   )}
-  style:background-color={`var(--vault-tile-${slot})`}
-  style:color="var(--vault-tile-foreground)">{vaultTileLetter(name)}</span
+  style:background-color={`var(--named-${vaultColor({ id, color })})`}
+  style:color="var(--named-foreground)">{vaultTileLetter(name)}</span
 >

@@ -23,6 +23,19 @@ const TOKENS: [&str; 12] = [
     "accent-brand",
     "accent-brand-foreground",
 ];
+/// Optional named colours (`NAMED_TOKENS` in theme-presets.ts): a palette sets
+/// all nine or none. The last is the text on any of them.
+const NAMED: [&str; 9] = [
+    "named-red",
+    "named-orange",
+    "named-amber",
+    "named-green",
+    "named-teal",
+    "named-blue",
+    "named-violet",
+    "named-pink",
+    "named-foreground",
+];
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -83,7 +96,11 @@ fn validate(preset: &Preset) -> AppResult<()> {
         return Err(invalid());
     }
     for palette in [&preset.light, &preset.dark] {
-        if palette.len() != TOKENS.len() || TOKENS.iter().any(|key| !palette.contains_key(*key)) {
+        let named = NAMED.iter().any(|key| palette.contains_key(*key));
+        if palette.len() != TOKENS.len() + if named { NAMED.len() } else { 0 }
+            || TOKENS.iter().any(|key| !palette.contains_key(*key))
+            || (named && NAMED.iter().any(|key| !palette.contains_key(*key)))
+        {
             return Err(invalid());
         }
         for [l, c, h] in palette.values() {
@@ -113,6 +130,16 @@ fn validate(preset: &Preset) -> AppResult<()> {
         }
         if contrast(palette["primary"], palette["primary-foreground"]) < 4.5
             || contrast(palette["accent-brand"], palette["accent-brand-foreground"]) < 4.5
+        {
+            return Err(invalid());
+        }
+        if named
+            && NAMED[..8].iter().any(|key| {
+                contrast(palette[*key], palette["named-foreground"]) < 4.5
+                    || surfaces
+                        .iter()
+                        .any(|surface| contrast(*surface, palette[*key]) < 3.0)
+            })
         {
             return Err(invalid());
         }

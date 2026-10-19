@@ -118,10 +118,16 @@ Each palette contains these twelve required numeric OKLCH triples:
 | `primary`, `primary-foreground`           | Neutral buttons and their text.                                   |
 | `accent-brand`, `accent-brand-foreground` | Preset accent and text on its fill.                               |
 
+A palette may also set the named colours (`named-red`, `named-orange`,
+`named-amber`, `named-green`, `named-teal`, `named-blue`, `named-violet`,
+`named-pink`) and `named-foreground`, the text on them. It sets all nine or none;
+without them the `app.css` values apply. See [Named colours](#named-colours).
+
 Triples use `[L, C, H]`: lightness from 0 to 1, chroma from 0 to 0.4 and hue
 from 0 to 360. Values must be finite. Surface lightness strictly increases.
 Normal/secondary text and text on primary/accent fills require computed contrast
-of at least 4.5. Accent text requires 3 against every surface. Subtle/strong
+of at least 4.5. Accent text requires 3 against every surface. Each named colour
+requires 4.5 with `named-foreground` and 3 against every surface. Subtle/strong
 borders require 1.1/1.25 against every surface. Validation converts OKLCH to
 clipped linear sRGB for these ratios. Status, search and diff colors, shadows
 and radius continue to follow the app's mode and token rules.
@@ -131,6 +137,24 @@ An imported preset is limited to 16 KiB. Root `theme-presets.json` stores up to
 64 user presets in a versioned map. Use the settings UI to edit them so validation,
 locked publication and notifications run. Complete built-in examples live in
 [`src/lib/settings/theme-presets.json`](../src/lib/settings/theme-presets.json).
+
+## Named colours
+
+`--named-red` … `--named-pink` are eight hues for things that carry a colour
+of their own, starting with vault tiles. Code stores the name, never the value:
+a vault's entry in `profiles.json` says `"color": "teal"`, and the active
+preset decides what teal looks like in each mode. Apollo, Slate & Indigo and
+Paper & Teal set their own; Warm and Forest use the `app.css` values, which
+mirror Apollo. Light values sit around L 0.55 with near-white
+`--named-foreground`; dark values sit around L 0.75 with dark text, so the same
+colour also reads as text on the matching surfaces.
+
+The backend gives each vault a colour when it is created, and gives one to every
+vault in an index written before colours existed, the first time it loads. It
+picks the ID's colour (FNV-1a, the same hash as `vaultTileColor` in
+[`src/lib/vaults/tile.ts`](../src/lib/vaults/tile.ts)) unless an older vault
+already has it, then steps three colours on until one is free. Stored colours
+never change, so deleting or renaming a vault leaves every colour alone.
 
 ## Status colours
 
@@ -189,12 +213,6 @@ absence of a token:
 
 - `--highlight-search` / `-active` / `-selection`, shared by the editor's
   find decorations and the PDF viewer's overlay.
-- `--vault-tile-0` … `-7`, the letter tiles that mark vaults in the switcher,
-  the vault picker and the mobile menu. Apollo's eight named colours at one
-  lightness, each keeping its letter at 4.5:1. A vault's colour comes from
-  its ID ([`src/lib/vaults/tile.ts`](../src/lib/vaults/tile.ts)), moved to a
-  free colour when an older vault already has it, so it never changes with
-  the preset.
 - Ink pen swatches and PDF annotation colours
   ([`src/lib/ink/editor-helpers.ts`](../src/lib/ink/editor-helpers.ts),
   [`src/lib/pdf/viewer-helpers.ts`](../src/lib/pdf/viewer-helpers.ts)). They

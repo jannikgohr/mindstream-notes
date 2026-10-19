@@ -47,11 +47,65 @@ const LEGACY_DB_FILE: &str = "mindstream.db";
 
 /// One profile in the index. `name` is the user-facing label (lifecycle
 /// commands edit it later); `id` is the stable directory + keyring key.
+/// `color` names the vault's tile colour (one of `VAULT_COLORS`); indexes
+/// written before it existed get one on their next load.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Profile {
     pub id: String,
     pub name: String,
     pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+/// The theme's named colours (`NAMED_COLORS` in theme-presets.ts). The index
+/// stores the name, so each theme renders it in its own way.
+pub const VAULT_COLORS: [&str; 8] = [
+    "red", "orange", "amber", "green", "teal", "blue", "violet", "pink",
+];
+
+/// FNV-1a over the ID, matching `vaultTileColor` in src/lib/vaults/tile.ts.
+fn color_slot(id: &str) -> usize {
+    let mut hash: u32 = 0x811c_9dc5;
+    for byte in id.bytes() {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash as usize % VAULT_COLORS.len()
+}
+
+/// Give each vault without a colour one, in index (creation) order: its ID's
+/// colour unless another vault already has it, then three colours on (so not
+/// a neighbouring hue) until a free one. Up to eight vaults never share a
+/// colour. A stored colour never changes, so deleting a vault recolours
+/// nothing. Returns whether any vault was given a colour.
+fn assign_colors(profiles: &mut [Profile]) -> bool {
+    let mut taken = [false; VAULT_COLORS.len()];
+    for color in profiles
+        .iter()
+        .filter_map(|profile| profile.color.as_deref())
+    {
+        if let Some(slot) = VAULT_COLORS.iter().position(|name| *name == color) {
+            taken[slot] = true;
+        }
+    }
+    let mut changed = false;
+    for profile in profiles
+        .iter_mut()
+        .filter(|profile| profile.color.is_none())
+    {
+        let mut slot = color_slot(&profile.id);
+        if taken.contains(&false) {
+            // 3 and 8 share no factor, so the steps reach every colour.
+            while taken[slot] {
+                slot = (slot + 3) % VAULT_COLORS.len();
+            }
+        }
+        taken[slot] = true;
+        profile.color = Some(VAULT_COLORS[slot].to_string());
+        changed = true;
+    }
+    changed
 }
 
 /// The `profiles.json` document. `active` is the id of the profile boot
@@ -66,13 +120,16 @@ impl Index {
     /// A fresh index with a single active "Default" profile. Used for
     /// brand-new installs and as the post-migration index.
     fn default_single() -> Self {
+        let mut profiles = vec![Profile {
+            id: DEFAULT_PROFILE_ID.to_string(),
+            name: "Default".to_string(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            color: None,
+        }];
+        assign_colors(&mut profiles);
         Index {
             active: DEFAULT_PROFILE_ID.to_string(),
-            profiles: vec![Profile {
-                id: DEFAULT_PROFILE_ID.to_string(),
-                name: "Default".to_string(),
-                created_at: chrono::Utc::now().to_rfc3339(),
-            }],
+            profiles,
         }
     }
 }
@@ -117,10 +174,17 @@ pub(crate) fn valid_id(id: &str) -> bool {
 fn validate_index(index: &Index) -> AppResult<()> {
     let mut ids = std::collections::HashSet::new();
     if index.profiles.is_empty()
-        || index
-            .profiles
-            .iter()
-            .any(|profile| !valid_id(&profile.id) || !ids.insert(&profile.id))
+        || index.profiles.iter().any(|profile| {
+            !valid_id(&profile.id)
+                || !ids.insert(&profile.id)
+                // Any short name is kept, so a colour added later does not
+                // invalidate the index for an older build.
+                || profile.color.as_deref().is_some_and(|color| {
+                    color.is_empty()
+                        || color.len() > 32
+                        || !color.bytes().all(|byte| byte.is_ascii_lowercase() || byte == b'-')
+                })
+        })
         || !ids.contains(&index.active)
     {
         return Err(AppError::InvalidArg(
@@ -190,7 +254,11 @@ pub fn load_or_init(root: &Path) -> AppResult<Index> {
 
 fn load_or_init_locked(root: &Path) -> AppResult<Index> {
     reconcile_deletions(root)?;
-    if let Some(index) = load(root)? {
+    if let Some(mut index) = load(root)? {
+        // Indexes from before vault colours: lock a colour in for each vault.
+        if assign_colors(&mut index.profiles) {
+            save_locked(root, &index)?;
+        }
         return Ok(index);
     }
     if profiles_dir(root).try_exists()? {
@@ -406,13 +474,15 @@ pub fn add_profile(root: &Path, name: &str) -> AppResult<Profile> {
         return Err(AppError::InvalidArg("vault name cannot be empty".into()));
     }
     let mut index = load_or_init_locked(root)?;
-    let profile = Profile {
+    index.profiles.push(Profile {
         id: uuid::Uuid::new_v4().to_string(),
         name: name.to_string(),
         created_at: chrono::Utc::now().to_rfc3339(),
-    };
+        color: None,
+    });
+    assign_colors(&mut index.profiles);
+    let profile = index.profiles.last().cloned().expect("vault just added");
     fs::create_dir_all(profile_dir(root, &profile.id))?;
-    index.profiles.push(profile.clone());
     save_locked(root, &index)?;
     log::info!(
         "[profiles] created vault '{}' ({})",

@@ -17,7 +17,6 @@
   import VaultTile from '$lib/components/VaultTile.svelte';
   import { toErrorMessage } from '$lib/api/errors';
   let vaults = $state<PickerVault[]>([]);
-  const vaultIds = $derived(vaults.map((vault) => vault.id));
   let loading = $state(true);
   let busy = $state(false);
   let error = $state('');
@@ -120,8 +119,11 @@
           class="flex items-center gap-2.5 rounded-md border border-border p-3 text-left text-sm hover:bg-accent disabled:opacity-50"
           disabled={busy || !vault.available}
           onclick={() => open(vault.id)}
-          ><VaultTile id={vault.id} name={vault.name} {vaultIds} /><span
-            class="min-w-0 truncate">{vault.name}</span
+          ><VaultTile
+            id={vault.id}
+            name={vault.name}
+            color={vault.color}
+          /><span class="min-w-0 truncate">{vault.name}</span
           >{#if !vault.available}<span class="text-muted-foreground"
               >{tUi('vault.windows.unavailable')}</span
             >{/if}</button

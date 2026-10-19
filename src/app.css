@@ -99,6 +99,21 @@
   --destructive: oklch(0.54 0.115 32);
   --destructive-foreground: oklch(0.99 0 0);
 
+  /* Named colours: Apollo's eight hues for things that carry a colour of
+   * their own, such as vault tiles. Code stores the name ("blue"), never the
+   * value, so each preset can render it (a preset sets all nine or none and
+   * these apply). Each stays >= 3:1 on every surface, and --named-foreground
+   * keeps text on any of them at 4.5:1. These mirror the default preset. */
+  --named-red: oklch(0.56 0.12 32);
+  --named-orange: oklch(0.56 0.12 58);
+  --named-amber: oklch(0.56 0.115 75);
+  --named-green: oklch(0.54 0.12 135);
+  --named-teal: oklch(0.54 0.09 210);
+  --named-blue: oklch(0.55 0.12 255);
+  --named-violet: oklch(0.56 0.12 315);
+  --named-pink: oklch(0.56 0.12 348);
+  --named-foreground: oklch(0.99 0.005 85);
+
   /* Find-and-replace and PDF search highlights. Another fixed-hue set — a
    * highlighter is yellow and the focused hit is orange, in either theme —
    * but shared by the editor decorations here and the PDF viewer's overlay,
@@ -240,6 +255,17 @@ html {
   --info-foreground: oklch(0.18 0.02 210);
   --destructive: oklch(0.75 0.105 32);
   --destructive-foreground: oklch(0.18 0.02 32);
+
+  /* Lifted into the 0.75 band, with dark text on them. */
+  --named-red: oklch(0.75 0.105 32);
+  --named-orange: oklch(0.75 0.105 58);
+  --named-amber: oklch(0.8 0.12 75);
+  --named-green: oklch(0.75 0.12 135);
+  --named-teal: oklch(0.75 0.085 210);
+  --named-blue: oklch(0.75 0.105 255);
+  --named-violet: oklch(0.75 0.105 315);
+  --named-pink: oklch(0.75 0.105 348);
+  --named-foreground: oklch(0.2 0.025 262);
 
   --foreground: oklch(0.93 0.008 170);
   --primary: oklch(0.93 0.008 170);
@@ -1533,27 +1559,6 @@ body.dv-tab-dragging .freeform-canvas-host * {
 .milkdown-diff .diff-del-cell {
   border-color: color-mix(in oklch, var(--diff-remove) 45%, transparent);
   background: var(--diff-remove-subtle);
-}
-
-/* -------------------------------------------------------------------------
- * Vault tiles
- *
- * A vault is marked by the first letter of its name on one of Apollo's eight
- * named colours, picked from its ID (`$lib/vaults/tile.ts`). Fixed hues rather
- * than preset tokens: the colour tells vaults apart, so it must not change
- * with the theme. Each one keeps the letter at 4.5:1 or better.
- * ------------------------------------------------------------------------- */
-
-:root {
-  --vault-tile-0: oklch(0.56 0.12 32); /* red */
-  --vault-tile-1: oklch(0.56 0.12 58); /* orange */
-  --vault-tile-2: oklch(0.56 0.115 75); /* amber */
-  --vault-tile-3: oklch(0.54 0.12 135); /* green */
-  --vault-tile-4: oklch(0.54 0.09 210); /* teal */
-  --vault-tile-5: oklch(0.55 0.12 255); /* blue */
-  --vault-tile-6: oklch(0.56 0.12 315); /* violet */
-  --vault-tile-7: oklch(0.56 0.12 348); /* pink */
-  --vault-tile-foreground: oklch(0.99 0.005 85);
 }
 
 /* -------------------------------------------------------------------------

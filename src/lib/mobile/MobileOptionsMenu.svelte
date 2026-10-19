@@ -21,7 +21,7 @@
   import { Bell, CircleUserRound, Settings } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import VaultTile from '$lib/components/VaultTile.svelte';
-  import { currentProfile, profilesState } from '$lib/stores/profiles.svelte';
+  import { currentProfile } from '$lib/stores/profiles.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { notificationState } from '$lib/notifications/store.svelte';
   import {
@@ -43,9 +43,6 @@
 
   const notificationCount = $derived(notificationState.items.length);
   const activeVault = $derived(currentProfile());
-  const vaultIds = $derived(
-    profilesState.profiles.map((profile) => profile.id)
-  );
   const countLabel = $derived(
     notificationCount > 99 ? '99+' : String(notificationCount)
   );
@@ -184,7 +181,7 @@
         <VaultTile
           id={activeVault?.id ?? ''}
           name={activeVault?.name ?? ''}
-          {vaultIds}
+          color={activeVault?.color}
           class="size-5 text-[11px]"
         />
         <span>{tUi('options.vaults')}</span>

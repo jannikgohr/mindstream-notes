@@ -4,6 +4,8 @@ import {
   BUILTIN_PRESETS,
   applyThemeAppearance,
   currentThemeWindowBackground,
+  NAMED_COLORS,
+  NAMED_TOKENS,
   parseThemePreset,
   resolvedPreset,
   themeContrast,
@@ -91,7 +93,7 @@ describe('theme preset contract', () => {
   });
   it('mirrors the default preset in the app.css base tokens and pre-paint colours', () => {
     const [preset] = BUILTIN_PRESETS;
-    for (const name of THEME_TOKENS) {
+    for (const name of [...THEME_TOKENS, ...NAMED_TOKENS]) {
       expect(cssToken(ROOT, name), name).toEqual(preset.light[name]);
       expect(cssToken(DARK, name), name).toEqual(preset.dark[name]);
     }
@@ -121,6 +123,62 @@ describe('theme preset contract', () => {
               `${status} on ${preset.id} ${mode} ${surface}`
             ).toBeGreaterThanOrEqual(4.5);
       }
+  });
+  it('keeps every named colour readable, with its text, on every built-in preset', () => {
+    for (const preset of BUILTIN_PRESETS)
+      for (const [block, mode] of [
+        [ROOT, 'light'],
+        [DARK, 'dark']
+      ] as const) {
+        // A preset without its own named colours uses the app.css ones.
+        const token = (name: (typeof NAMED_TOKENS)[number]) =>
+          preset[mode][name] ?? cssToken(block, name)!;
+        for (const name of NAMED_COLORS) {
+          const color = token(`named-${name}`);
+          expect(
+            themeContrast(color, token('named-foreground')),
+            `${name} text on ${preset.id} ${mode}`
+          ).toBeGreaterThanOrEqual(4.5);
+          for (const surface of [
+            'surface-0',
+            'surface-1',
+            'surface-2',
+            'surface-3'
+          ] as const)
+            expect(
+              themeContrast(color, preset[mode][surface]),
+              `${name} on ${preset.id} ${mode} ${surface}`
+            ).toBeGreaterThanOrEqual(3);
+        }
+      }
+  });
+  it('accepts named colours only as a complete, readable set', () => {
+    const [apollo] = BUILTIN_PRESETS;
+    const partial = structuredClone(apollo);
+    delete partial.dark['named-pink'];
+    expect(() => parseThemePreset(partial)).toThrow();
+    const unreadable = structuredClone(apollo);
+    unreadable.light['named-red'] = unreadable.light['named-foreground']!;
+    expect(() => parseThemePreset(unreadable)).toThrow();
+    const without = structuredClone(apollo);
+    for (const name of NAMED_TOKENS) {
+      delete without.light[name];
+      delete without.dark[name];
+    }
+    expect(parseThemePreset(without)).toEqual(without);
+  });
+  it("applies a preset's named colours and clears them for one without", () => {
+    const [apollo] = BUILTIN_PRESETS;
+    const warm = BUILTIN_PRESETS.find((preset) => preset.id === 'warm')!;
+    expect(warm.light['named-red']).toBeUndefined();
+    applyThemeAppearance(apollo, false, 16);
+    expect(document.documentElement.style.getPropertyValue('--named-red')).toBe(
+      `oklch(${apollo.light['named-red']!.join(' ')})`
+    );
+    applyThemeAppearance(warm, false, 16);
+    expect(document.documentElement.style.getPropertyValue('--named-red')).toBe(
+      ''
+    );
   });
   it('falls back without mutating a missing user selection', () => {
     const selection = { id: 'missing-user-theme' };

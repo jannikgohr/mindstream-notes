@@ -51,32 +51,43 @@
             'accent-brand',
             'accent-brand-foreground'
           ];
-          if (
-            !palette ||
-            tokens.some(function (token) {
-              var c = palette[token];
-              return (
-                !Array.isArray(c) ||
-                c.length !== 3 ||
-                c.some(function (n) {
-                  return typeof n !== 'number' || !Number.isFinite(n);
-                }) ||
-                c[0] < 0 ||
-                c[0] > 1 ||
-                c[1] < 0 ||
-                c[1] > 0.4 ||
-                c[2] < 0 ||
-                c[2] > 360
-              );
-            })
-          )
-            return;
-          tokens.forEach(function (token) {
+          var valid = function (token) {
+            var c = palette[token];
+            return (
+              Array.isArray(c) &&
+              c.length === 3 &&
+              c.every(function (n) {
+                return typeof n === 'number' && Number.isFinite(n);
+              }) &&
+              c[0] >= 0 &&
+              c[0] <= 1 &&
+              c[1] >= 0 &&
+              c[1] <= 0.4 &&
+              c[2] >= 0 &&
+              c[2] <= 360
+            );
+          };
+          var apply = function (token) {
             document.documentElement.style.setProperty(
               '--' + token,
               'oklch(' + palette[token].join(' ') + ')'
             );
-          });
+          };
+          if (!palette || !tokens.every(valid)) return;
+          tokens.forEach(apply);
+          // Optional: a preset sets all nine named colours or none.
+          var named = [
+            'named-red',
+            'named-orange',
+            'named-amber',
+            'named-green',
+            'named-teal',
+            'named-blue',
+            'named-violet',
+            'named-pink',
+            'named-foreground'
+          ];
+          if (named.every(valid)) named.forEach(apply);
           if (
             typeof cache.uiFontSize === 'number' &&
             cache.uiFontSize >= 12 &&

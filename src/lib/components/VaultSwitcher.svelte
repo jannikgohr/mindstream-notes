@@ -60,9 +60,6 @@
 
   const current = $derived(currentProfile());
   const currentName = $derived(current?.name ?? tUi('vault.unknown'));
-  const vaultIds = $derived(
-    profilesState.profiles.map((profile) => profile.id)
-  );
 
   // Tinted like the app's other status chips. Plain muted text next to the
   // row's icon buttons read as one more action ("Open") rather than a state.
@@ -407,7 +404,11 @@
     aria-expanded={open}
     disabled={busy}
   >
-    <VaultTile id={current?.id ?? ''} name={current?.name ?? ''} {vaultIds} />
+    <VaultTile
+      id={current?.id ?? ''}
+      name={current?.name ?? ''}
+      color={current?.color}
+    />
     <span class="min-w-0 flex-1 truncate text-left">{currentName}</span>
     <!-- The same 28px box as the file-tree toolbar's menu button below, so
          both chevrons sit in one column. -->
@@ -528,7 +529,11 @@
                 onclick={(event) =>
                   selectProfile(profile.id, profile.name, undefined, event)}
               >
-                <VaultTile id={profile.id} name={profile.name} {vaultIds} />
+                <VaultTile
+                  id={profile.id}
+                  name={profile.name}
+                  color={profile.color}
+                />
                 <span class="truncate">{profile.name}</span>
                 {#if profile.id === profilesState.active}
                   <Check class="size-3.5 shrink-0 text-accent-brand" />

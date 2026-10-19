@@ -16,8 +16,37 @@ export const THEME_TOKENS = [
   'accent-brand-foreground'
 ] as const;
 export type ThemeToken = (typeof THEME_TOKENS)[number];
+/**
+ * Apollo's eight named colours, for things with a colour of their own (vault
+ * tiles). Code stores the name; `--named-<name>` renders it.
+ */
+export const NAMED_COLORS = [
+  'red',
+  'orange',
+  'amber',
+  'green',
+  'teal',
+  'blue',
+  'violet',
+  'pink'
+] as const;
+export type NamedColor = (typeof NAMED_COLORS)[number];
+export type NamedToken = `named-${NamedColor}` | 'named-foreground';
+/**
+ * Optional preset tokens. A palette sets all nine or none; without them the
+ * app.css values apply. `named-foreground` is text on a named colour.
+ */
+export const NAMED_TOKENS: readonly NamedToken[] = [
+  ...NAMED_COLORS.map((name) => `named-${name}` as const),
+  'named-foreground'
+];
 export type ThemeColor = [number, number, number];
-export type ThemePalette = Record<ThemeToken, ThemeColor>;
+export type ThemePalette = Record<ThemeToken, ThemeColor> &
+  Partial<Record<NamedToken, ThemeColor>>;
+
+export function isNamedColor(value: unknown): value is NamedColor {
+  return NAMED_COLORS.includes(value as NamedColor);
+}
 export interface ThemePreset {
   version: 1;
   id: string;
@@ -95,12 +124,13 @@ export function parseThemePreset(value: unknown): ThemePreset {
     return fail();
   for (const mode of ['light', 'dark']) {
     const palette = raw[mode] as ThemePalette;
+    if (!palette || Array.isArray(palette) || typeof palette !== 'object')
+      return fail();
+    const named = NAMED_TOKENS.some((key) => Object.hasOwn(palette, key));
+    const expected = named ? [...THEME_TOKENS, ...NAMED_TOKENS] : THEME_TOKENS;
     if (
-      !palette ||
-      Array.isArray(palette) ||
-      typeof palette !== 'object' ||
-      Object.keys(palette).length !== THEME_TOKENS.length ||
-      THEME_TOKENS.some((key) => !Object.hasOwn(palette, key))
+      Object.keys(palette).length !== expected.length ||
+      expected.some((key) => !Object.hasOwn(palette, key))
     )
       return fail();
     for (const color of Object.values(palette)) {
@@ -148,6 +178,17 @@ export function parseThemePreset(value: unknown): ThemePreset {
       ) < 4.5
     )
       return fail();
+    if (
+      named &&
+      NAMED_COLORS.some((name) => {
+        const color = palette[`named-${name}`]!;
+        return (
+          themeContrast(color, palette['named-foreground']!) < 4.5 ||
+          surfaces.some((surface) => themeContrast(surface, color) < 3)
+        );
+      })
+    )
+      return fail();
   }
   return structuredClone(raw) as unknown as ThemePreset;
 }
@@ -173,6 +214,15 @@ export function applyThemeAppearance(
       `--${token}`,
       `oklch(${palette[token].join(' ')})`
     );
+  for (const token of NAMED_TOKENS) {
+    const color = palette[token];
+    if (color)
+      document.documentElement.style.setProperty(
+        `--${token}`,
+        `oklch(${color.join(' ')})`
+      );
+    else document.documentElement.style.removeProperty(`--${token}`);
+  }
   applyUiFontSize(uiFontSize);
   document.documentElement.dataset.themePreset = preset.id;
   try {

@@ -43,9 +43,6 @@
   let renameValue = $state('');
   let createInput: HTMLInputElement | null = $state(null);
   let renameInput: HTMLInputElement | null = $state(null);
-  const vaultIds = $derived(
-    profilesState.profiles.map((profile) => profile.id)
-  );
 
   // Refresh the vault list on open and reset the inline edit affordances
   // on close so it reopens on the plain list rather than mid-edit.
@@ -298,7 +295,7 @@
                   <VaultTile
                     id={profile.id}
                     name={profile.name}
-                    {vaultIds}
+                    color={profile.color}
                     class="size-6 rounded-md text-xs"
                   />
                   <span class="truncate">{profile.name}</span>
