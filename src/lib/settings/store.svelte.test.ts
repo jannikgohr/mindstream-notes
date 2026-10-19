@@ -32,7 +32,7 @@ const setting = (over: Partial<Setting> = {}): Setting =>
     ...over
   }) as Setting;
 
-beforeEach(() => {
+beforeEach(async () => {
   registerDynamicSettingResolver(null);
   registerExternalSettingStore(null);
   // Pin a desktop UA so platform-filtered visibility is deterministic
@@ -43,7 +43,10 @@ beforeEach(() => {
   });
   for (const key of Object.keys(settings.values)) delete settings.values[key];
   localStorage.clear();
-  setSettingsVaultId('default');
+  // Switching vaults re-hydrates bindings asynchronously. Left running, those
+  // writes land in whichever test comes next (with the UA pinned above, not
+  // the one that test sets), so let them finish before clearing.
+  await setSettingsVaultId('default');
   for (const key of Object.keys(settings.values)) delete settings.values[key];
   settings.pending.clear();
 });
