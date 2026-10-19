@@ -23,6 +23,7 @@
   import type { PluginEffect, PluginToolbarButton } from '$lib/plugins/types';
   import { noteTypeEnabled } from '$lib/notes/note-types';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { settingsDialog } from '$lib/settings/store.svelte';
   import { isTauri } from '$lib/api/core';
   import { nativeDeviceUi } from '$lib/native-device-ui.svelte';
   import {
@@ -185,6 +186,13 @@
     const current = untrack(() => preferences);
     const next = normalizeFileTreeToolbarPreferences(current, ids);
     if (JSON.stringify(next) !== JSON.stringify(current)) preferences = next;
+  });
+
+  $effect(() => {
+    if (settingsDialog.open) {
+      closeMenu();
+      closePluginMenu();
+    }
   });
 
   onMount(() => {
@@ -609,6 +617,9 @@
         role={customizing ? 'dialog' : 'menu'}
         aria-label={tUi('fileTree.toolbar.more')}
         onkeydown={handleMenuKeydown}
+        onCloseAutoFocus={(event) => {
+          if (settingsDialog.open) event.preventDefault();
+        }}
         class="z-[400] w-64 rounded-lg border border-border bg-popover text-popover-foreground shadow-overlay focus:outline-none"
       >
         {#if customizing}

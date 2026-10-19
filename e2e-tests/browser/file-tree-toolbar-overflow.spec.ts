@@ -105,3 +105,48 @@ test('moves create buttons into the ⋯ menu instead of clipping them', async ({
     'notes-app:file-tree-create-toolbar:v1'
   );
 });
+
+for (const state of ['actions', 'reorder'] as const) {
+  test(`dismisses ${state} when Settings opens from the keyboard`, async ({
+    page
+  }) => {
+    const moreButton = page.getByRole('button', {
+      name: 'More actions',
+      exact: true
+    });
+    const settings = page.getByRole('dialog', {
+      name: 'Settings',
+      exact: true
+    });
+    const search = settings.getByPlaceholder(/Search settings/);
+
+    // Exercise both the lazy-loaded first open and subsequent opens.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await moreButton.click();
+      await expect(
+        page.getByRole('menu', { name: 'More actions' })
+      ).toBeVisible();
+      if (state === 'reorder') {
+        await page.getByRole('menuitem', { name: 'Reorder actions' }).click();
+        await expect(
+          page.getByRole('dialog', { name: 'More actions' })
+        ).toBeVisible();
+      }
+
+      await page.keyboard.press('ControlOrMeta+,');
+      await expect(settings).toBeVisible();
+      await expect(page.getByRole('menu')).toHaveCount(0);
+      await expect(
+        page.getByRole('dialog', { name: 'More actions' })
+      ).toBeHidden();
+      await expect(search).toBeFocused();
+      await search.pressSequentially('sync');
+      await expect(search).toHaveValue('sync');
+      await settings
+        .getByRole('button', { name: 'Close', exact: true })
+        .click();
+      await expect(settings).toBeHidden();
+      await expect(moreButton).toHaveAttribute('aria-expanded', 'false');
+    }
+  });
+}
