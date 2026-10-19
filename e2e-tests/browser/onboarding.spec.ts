@@ -228,10 +228,8 @@ test('setup fits a narrow screen and keeps the language choice', async ({
     accountContinue!.x + accountContinue!.width,
     1
   );
-  await expect(footer.locator('.setup-skip')).toHaveCSS(
-    'backdrop-filter',
-    'blur(12px)'
-  );
+  expect(accountFooter!.height).toBeLessThanOrEqual(60);
+  expect(accountContinue!.height).toBeGreaterThanOrEqual(44);
   expect(skip!.y + skip!.height).toBeLessThan(accountFooter!.y);
   expect(scrollArea!.y + scrollArea!.height).toBeCloseTo(accountFooter!.y, 1);
   expect(skip!.y + skip!.height).toBeLessThan(accountContinue!.y);

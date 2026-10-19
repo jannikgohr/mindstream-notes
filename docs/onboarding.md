@@ -12,7 +12,8 @@ unavailable until a working service is configured.
 Back and Continue stay in a bottom bar while the step content scrolls above it.
 On phones, choices use compact rows and the progress indicator shows the current
 step name. Skip floats above the footer, aligned with Continue's right edge.
-Its translucent pill background blurs the content beneath it. Extra scroll
+Its faint pill background and reduced opacity keep it secondary. The mobile
+footer uses 44 px touch targets with 6 px padding above and below. Extra scroll
 spacing keeps the last controls clear of the button. The divider sits immediately
 above Back and Continue, whose positions remain fixed across steps. Repeated
 taps on Back cannot activate Skip after returning to the first screen.

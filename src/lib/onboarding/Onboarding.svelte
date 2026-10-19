@@ -734,10 +734,10 @@
       padding: calc(0.75rem + env(safe-area-inset-top)) 1rem 0.75rem;
     }
     .setup-body {
-      padding: 1.25rem 1rem 6.5rem;
+      padding: 1.25rem 1rem 4.5rem;
     }
     .setup-content {
-      scroll-padding-bottom: 6.5rem;
+      scroll-padding-bottom: 4.5rem;
     }
     .setup-progress {
       margin-bottom: 1.25rem;
@@ -771,7 +771,7 @@
     }
     .setup-footer {
       position: relative;
-      padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom));
+      padding: 0.375rem 1rem calc(0.375rem + env(safe-area-inset-bottom));
       border-top: 1px solid var(--color-border);
       background: transparent;
     }
@@ -781,7 +781,7 @@
     .setup-footer-inner {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      grid-template-rows: minmax(3.5rem, auto);
+      grid-template-rows: minmax(2.75rem, auto);
       gap: 0.5rem;
     }
     .setup-actions {
@@ -790,28 +790,33 @@
     .setup-footer :global(.setup-skip) {
       position: absolute;
       right: 1rem;
-      bottom: calc(100% + 0.75rem);
+      bottom: calc(100% + 0.5rem);
       justify-content: flex-start;
       width: fit-content;
       max-width: calc(100% - 2rem);
       min-width: 0;
       padding-inline: 0.75rem;
       border: 1px solid
-        color-mix(in oklab, var(--color-border) 70%, transparent);
+        color-mix(in oklab, var(--color-border) 35%, transparent);
       border-radius: 999px;
-      background: color-mix(in oklab, var(--color-surface-1) 65%, transparent);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      box-shadow: var(--shadow-sm);
-      color: var(--color-muted-foreground);
+      background: color-mix(in oklab, var(--color-surface-1) 20%, transparent);
+      backdrop-filter: blur(2px);
+      -webkit-backdrop-filter: blur(2px);
+      box-shadow: none;
+      opacity: 0.7;
+      transition:
+        opacity 150ms,
+        background-color 150ms;
+      color: var(--color-foreground);
       font-size: 0.75rem;
       font-weight: 400;
       line-height: 1.4;
       text-align: left;
     }
-    .setup-footer :global(.setup-skip:hover:not(:disabled)) {
-      background: color-mix(in oklab, var(--color-surface-2) 80%, transparent);
-      color: var(--color-foreground);
+    .setup-footer :global(.setup-skip:hover:not(:disabled)),
+    .setup-footer :global(.setup-skip:focus-visible) {
+      background: color-mix(in oklab, var(--color-surface-2) 35%, transparent);
+      opacity: 1;
     }
     .setup-footer :global(.setup-skip-placeholder) {
       display: inline-flex;
