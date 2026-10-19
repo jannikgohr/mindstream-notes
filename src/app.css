@@ -681,50 +681,28 @@ body.dv-tab-dragging
   right: 0 !important;
 }
 
-/*
- * Tabs-overflow chevron — interactive states so it reads as a button,
- * not "just another inactive tab". Three states:
- *   default  — same muted look as inactive tabs (dockview's default)
- *   hover    — bg-accent + accent-foreground, matches tab hover
- *   active   — same surface as hover; covers mouse-down feedback
- *   open     — sustained "pressed" state while the popup is showing,
- *              keyed via `:has(.dv-tabs-overflow-container)` on the
- *              theme root (dockview doesn't add an "is-open" class to
- *              the chevron itself, so we infer presence from the
- *              popup being in the DOM — there's only ever one popup
- *              open at a time, so targeting all chevrons is safe).
- * Rounded corners + a subtle transition match how the inline tabs
- * already feel.
- */
+/* Full-height borders separate the overflow control from the tabs and the
+ * panel actions. Dockview places this root inside the right-actions container. */
+.dockview-theme-bridge .dv-tabs-overflow-dropdown-root {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  height: 100%;
+  border-inline: 1px solid var(--border);
+}
+
+/* Square edges and an opaque fill continue the tab strip's boxed chrome. */
 .dockview-theme-bridge .dv-tabs-overflow-dropdown-default {
-  border-radius: var(--radius-sm);
+  border-radius: 0;
+  margin: 0;
+  padding: 0 10px;
+  background-color: var(--surface-0);
   transition:
     background-color 100ms ease-out,
     color 100ms ease-out;
-  /* Subtle leftward shadow so the chevron reads as elevated above the
-   * tabs scrolling under it. `position: relative; z-index: 1` is doing
-   * the actual layering work — without it the chevron paints as a
-   * static element while the tabs are `position: relative`, so within
-   * the strip's stacking context the positioned tabs paint AFTER the
-   * chevron and the hovered/active tab background ends up drawing on
-   * top of the shadow. Promoting the chevron to z-index 1 puts it (and
-   * its shadow) above every tab, regardless of hover/active state.
-   *
-   * `clip-path: inset(0 0 0 -100px)` constrains the shadow to the
-   * strip's vertical bounds. The chevron is `height: 100%` so its top
-   * and bottom edges line up with the strip's, meaning a `top: 0` /
-   * `bottom: 0` inset clips exactly at the strip edges — without this
-   * the blurred shadow leaks ~10px above (into the title bar) and ~10px
-   * below (into the panel toolbar / content). The `-100px` left inset
-   * lets the leftward portion extend freely over the tabs; `right: 0`
-   * keeps the shadow off the right-actions cluster sitting next to the
-   * chevron on the right. */
   position: relative;
   z-index: 1;
-  clip-path: inset(0 0 0 -100px);
-  box-shadow:
-    -1px 0 2px -1px rgb(0 0 0 / 0.25),
-    inset 0 -1px 0 var(--border);
+  box-shadow: inset 0 -1px 0 var(--border);
 }
 
 .dockview-theme-bridge .dv-tabs-overflow-dropdown-default:hover,
@@ -735,84 +713,30 @@ body.dv-tab-dragging
   color: var(--accent-foreground);
 }
 
-/*
- * Breathing room between the overflow chevron and the right-actions
- * cluster (status icons + popout button). Without this, the chevron
- * sits flush against the popout button so they read as a single
- * interactive blob — the gap + hairline divider clearly demarcate
- * "this opens the tab overflow" from "these act on the active panel".
- *
- * Scoped via `:has(> .dv-tabs-overflow-dropdown-default)` so the gap
- * only appears when the chevron is actually present — when no overflow
- * is happening, the right actions stay tucked next to the rightmost
- * tab and we don't waste strip width.
- *
- * The divider matches the inter-tab separators (same colour + ~50%
- * height, vertically centred) so the dockview chrome reads as a single
- * coherent design language.
- */
-.dockview-theme-bridge
-  .dv-tabs-and-actions-container:has(> .dv-tabs-overflow-dropdown-default)
-  .dv-right-actions-container {
-  position: relative;
-  margin-left: 8px;
-  padding-left: 12px;
+/* Keep the pop-out area distinct without adding a gap to the strip's border. */
+.dockview-theme-bridge .dv-tabs-overflow-dropdown-root + .dv-popout-host {
+  padding-inline: 8px;
 }
 
-.dockview-theme-bridge
-  .dv-tabs-and-actions-container:has(> .dv-tabs-overflow-dropdown-default)
-  .dv-right-actions-container::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 25%;
-  bottom: 25%;
-  width: 1px;
-  background-color: oklch(from var(--foreground) l c h / 0.15);
-  pointer-events: none;
-}
-
-/*
- * The overflow popup is the strip's "more tabs" menu, so we style it as
- * a vertical mirror of the inline tab chrome — same surface colour,
- * same pill shape, same hover/active treatments, same hairline
- * separators between unselected siblings. Only difference is the
- * orientation flip (separators become horizontal, sit in the inter-row
- * margin instead of the inter-tab gap).
- *
- * The container is a floating menu, so it takes the overlay step and the
- * app's standard popover chrome — the same surface, border and shadow as
- * ContextMenu and the dropdowns. It used to borrow the tab strip's colour
- * to read as a continuation of the strip, which put a floating element on
- * the darkest chrome step and made the dockview overflow the one menu in
- * the app that looked like something else.
- */
+/* The overflow list uses square, contiguous rows with persistent dividers. */
 .dockview-theme-bridge .dv-tabs-overflow-container {
   background-color: var(--popover);
   color: var(--popover-foreground);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 4px;
+  border-radius: 0;
+  padding: 0;
   min-width: 200px;
   box-shadow: var(--elevation-overlay);
 }
 
-/* Drop dockview's full-width per-row divider — replaced by the pseudo
- * separator further down (kept consistent with the inline tab strip,
- * where the same swap happens). */
 .dockview-theme-bridge .dv-tabs-overflow-container .dv-tab:not(:last-child) {
-  border-bottom: none;
+  border-bottom: 1px solid var(--border);
 }
 
-/* Each overflow row is a pill — same 8px radius and transition timing
- * as the inline tabs. Transparent until hovered so the strip colour
- * shows through, and position: relative anchors the ::before hairline
- * separator added below. */
 .dockview-theme-bridge .dv-tabs-overflow-container .dv-tab {
-  position: relative;
-  border-radius: 8px;
-  padding: 6px 10px;
-  margin: 2px 0;
+  border-radius: 0;
+  padding: 9px 12px;
+  margin: 0;
   cursor: pointer;
   background-color: transparent;
   transition: background-color 120ms ease-out;
@@ -821,6 +745,7 @@ body.dv-tab-dragging
 /* Hover wash — the same one every other menu row in the app uses. */
 .dockview-theme-bridge .dv-tabs-overflow-container .dv-tab:hover {
   background-color: var(--accent);
+  color: var(--accent-foreground);
 }
 
 /* Active row — the selected cue on a menu is a filled row, not a raised
@@ -829,25 +754,6 @@ body.dv-tab-dragging
   background-color: var(--accent);
   color: var(--accent-foreground);
   font-weight: 500;
-}
-
-/* Horizontal hairline between two adjacent inactive-and-unhovered rows
- * — vertical-axis analogue of the inline tab strip's separator. Sits
- * at `top: -2px` in the 2px margin gap above the row, 8%/8% inset
- * from the sides so it doesn't run edge-to-edge. Vanishes the moment
- * either neighbour is hovered or active, same as the strip. */
-.dockview-theme-bridge
-  .dv-tabs-overflow-container
-  .dv-tab:not(.dv-active-tab):not(:hover)
-  + .dv-tab:not(.dv-active-tab):not(:hover)::before {
-  content: '';
-  position: absolute;
-  top: -2px;
-  left: 8%;
-  right: 8%;
-  height: 1px;
-  background-color: oklch(from var(--foreground) l c h / 0.15);
-  pointer-events: none;
 }
 
 /* Milkdown / Crepe surface tweaks so the editor feels at home in our chrome. */
