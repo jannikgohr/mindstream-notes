@@ -221,12 +221,14 @@
               class:current={step === item}
               class:completed={index < stepIndex}
             >
-              <span class="step-dot"
-                >{#if index < stepIndex}<Check
-                    class="size-3.5"
-                  />{:else}{index + 1}{/if}</span
-              >
-              <span class="step-label">{tUi(`onboarding.step.${item}`)}</span>
+              <span class="step-content">
+                <span class="step-dot"
+                  >{#if index < stepIndex}<Check
+                      class="size-3.5"
+                    />{:else}{index + 1}{/if}</span
+                >
+                <span class="step-label">{tUi(`onboarding.step.${item}`)}</span>
+              </span>
             </li>
           {/each}
         </ol>
@@ -629,7 +631,10 @@
   .steps li.completed::after {
     background: var(--color-accent-brand);
   }
-  .step-label {
+  .step-content {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
     white-space: nowrap;
   }
   .steps li.current {
@@ -794,9 +799,20 @@
       padding: 0.875rem;
     }
     .steps {
+      display: grid;
+      grid-template-columns: auto 1fr auto 1fr auto 1fr auto;
       gap: 0.5rem;
     }
     .steps li {
+      display: grid;
+      grid-column: span 2;
+      grid-template-columns: subgrid;
+      gap: 0.5rem;
+    }
+    .steps li:last-child {
+      grid-column: span 1;
+    }
+    .step-content {
       gap: 0.375rem;
     }
     .steps li:not(:last-child)::after {
