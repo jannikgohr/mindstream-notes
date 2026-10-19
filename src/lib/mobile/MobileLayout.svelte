@@ -345,7 +345,7 @@
   const showHome = $derived(mobileState.screen === 'home');
 </script>
 
-<div class="safe-x flex h-full w-full flex-col">
+<div data-app-shell class="safe-x flex h-full w-full flex-col">
   {#if showHome}
     <div class="safe-top flex shrink-0 flex-col bg-surface-0">
       <MobileTopBar />

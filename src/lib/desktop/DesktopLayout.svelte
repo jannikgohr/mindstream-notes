@@ -899,7 +899,7 @@
   };
 </script>
 
-<div class="desktop-shell flex h-full w-full flex-col">
+<div data-app-shell class="desktop-shell flex h-full w-full flex-col">
   <TopBar />
 
   <div class="flex min-h-0 flex-1">
