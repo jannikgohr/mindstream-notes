@@ -82,6 +82,29 @@ async function caretInside(page: Page, selector: string): Promise<void> {
     .toBe(true);
 }
 
+/**
+ * Wait until Crepe's list-item component has mounted and settled.
+ *
+ * The component moves the item's content into its own `.children` element,
+ * remembers the selection, and puts it back one animation frame later. A key
+ * typed in that frame is kept, but the caret returns to before it, so the
+ * rest of the text lands in front ("lashed bulletS"). `caretInside` cannot
+ * see this: the caret is already inside the `li` before and after the move.
+ */
+async function listItemSettled(page: Page): Promise<void> {
+  await expect(
+    editor(page).locator('li .children [data-content-dom]').first()
+  ).toBeAttached();
+  // The component's frame was requested on mount, so a frame requested now
+  // runs after it; the second covers a mount that lands in the same frame.
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      )
+  );
+}
+
 /** What the browser currently has selected, as plain text. */
 function selectedText(page: Page): Promise<string> {
   return page.evaluate(() => window.getSelection()?.toString() ?? '');
@@ -256,6 +279,7 @@ test.describe('slash menu', () => {
     await menu.getByText('Bullet List', { exact: true }).click();
     const listItem = editor(page).locator('ul li');
     await expect(listItem).toBeVisible();
+    await listItemSettled(page);
     await caretInside(page, 'li');
     await page.keyboard.type(item);
 

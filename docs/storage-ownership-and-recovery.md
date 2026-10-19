@@ -85,7 +85,7 @@ readiness waits for migration, and failed writes surface to callers. Focus and
 same-worker popout notifications refresh caches from disk. A recovery can reduce
 the revision, so caches accept that refreshed snapshot. Cross-worker invalidations reload each worker's own canonical documents.
 Supervised desktop startup and browser migration are implemented. Remaining
-release QA is tracked in the [current implementation status](root-vault-implementation-plan.md).
+release QA is tracked in the [platform checks](known-limitations.md#concurrent-vault-platform-checks).
 
 Native sidebar widths use root fields `appearance.leftSidebarWidth` and
 `appearance.rightSidebarWidth`. Sorting, direction, and sidebar open/closed
@@ -260,7 +260,7 @@ the vault. Settings and migration sources survive removal.
 Root `plugin-settings.json` records the startup-selected canonical vault directory
 and one-time `D` key receipts. Existing root values win. Retained vault rows cannot
 resurrect a reset value. RootLock guards field edits and catalog publication;
-notifications are sent after its release. See the [global plugin plan](global-plugins-implementation-plan.md).
+notifications are sent after its release. See the [plugin guide](plugins.md).
 
 Portable backup format 2 carries vault settings and writable plugin data along
 with immutable package files and portable device values. Restore replaces the

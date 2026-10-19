@@ -28,6 +28,7 @@ import {
   pluginsWithSettings,
   refreshPluginAdmin,
   removePluginAdmin,
+  resetPluginAdmin,
   setPluginEnabledAdmin
 } from './manage.svelte';
 
@@ -94,7 +95,10 @@ function noSettings(id: string) {
   });
 }
 
-afterEach(() => resetPluginRegistry());
+afterEach(() => {
+  resetPluginRegistry();
+  resetPluginAdmin();
+});
 
 describe('pluginOverview', () => {
   it('lists every installed plugin with name, version, source and settings flag', () => {

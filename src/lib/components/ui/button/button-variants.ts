@@ -25,7 +25,11 @@ export const buttonVariants = tv({
       outline:
         'border border-input bg-background hover:bg-accent hover:text-accent-foreground',
       secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
-      ghost: 'hover:bg-accent hover:text-accent-foreground',
+      // No ring offset: the offset band is painted in --background, which is
+      // not the surface a ghost button sits on (the top bar, sidebars), so it
+      // showed as a stray frame between the hover fill and the ring.
+      ghost:
+        'hover:bg-accent hover:text-accent-foreground focus-visible:ring-offset-0',
       link: 'text-primary underline-offset-4 hover:underline'
     },
     size: {

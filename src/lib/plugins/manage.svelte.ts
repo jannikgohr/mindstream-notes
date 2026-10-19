@@ -74,6 +74,11 @@ const adminState = $state<{ records: Record<string, PluginRecord> }>({
   records: {}
 });
 
+/** Drop the cached backend records. Test-only; keeps suites isolated. */
+export function resetPluginAdmin(): void {
+  adminState.records = {};
+}
+
 /** Pull the durable backend records into the reactive cache (Tauri only). */
 export async function refreshPluginAdmin(): Promise<void> {
   if (!isTauri()) return;

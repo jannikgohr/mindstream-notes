@@ -359,7 +359,9 @@ export async function waitForClientReady(
             return {
               readyState: document.readyState,
               hasTauri: '__TAURI_INTERNALS__' in window,
-              hasShellText: bodyText.includes('Mindstream Notes'),
+              // Match the layout root rather than brand copy, which the
+              // top bar restyles and translations may change.
+              hasShell: document.querySelector('[data-app-shell]') !== null,
               buttonCount: buttonLabels.length,
               buttonLabels: buttonLabels.filter(Boolean).slice(0, 10),
               bodyText: bodyText.slice(0, 300),
@@ -382,7 +384,7 @@ export async function waitForClientReady(
           return (
             state.hasTauri &&
             state.readyState === 'complete' &&
-            state.hasShellText &&
+            state.hasShell &&
             state.buttonCount > 0
           );
         } catch (err) {

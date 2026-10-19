@@ -14,6 +14,7 @@
   } from '$lib/api/vault-picker';
   import { createProfile } from '$lib/api/profiles';
   import { setLanguage, tUi } from '$lib/settings/i18n.svelte';
+  import VaultTile from '$lib/components/VaultTile.svelte';
   import { toErrorMessage } from '$lib/api/errors';
   let vaults = $state<PickerVault[]>([]);
   let loading = $state(true);
@@ -35,7 +36,6 @@
       applyThemeAppearance(
         appearance.preset,
         $mode === 'dark',
-        appearance.accent,
         appearance.uiFontSize
       );
   });
@@ -116,11 +116,15 @@
       {#each vaults as vault (vault.id)}
         <button
           type="button"
-          class="rounded-md border border-border p-3 text-left text-sm hover:bg-accent disabled:opacity-50"
+          class="flex items-center gap-2.5 rounded-md border border-border p-3 text-left text-sm hover:bg-accent disabled:opacity-50"
           disabled={busy || !vault.available}
           onclick={() => open(vault.id)}
-          >{vault.name}{#if !vault.available}<span
-              class="ml-2 text-muted-foreground"
+          ><VaultTile
+            id={vault.id}
+            name={vault.name}
+            color={vault.color}
+          /><span class="min-w-0 truncate">{vault.name}</span
+          >{#if !vault.available}<span class="text-muted-foreground"
               >{tUi('vault.windows.unavailable')}</span
             >{/if}</button
         >

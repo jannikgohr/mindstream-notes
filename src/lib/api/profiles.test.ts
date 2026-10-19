@@ -93,6 +93,18 @@ describe('profiles api (Tauri parse path)', () => {
     await expect(createProfile('x')).rejects.toThrow(/profile.id/);
   });
 
+  it('keeps a stored tile colour and rejects a malformed one', async () => {
+    invoke.mockResolvedValue({ ...P, color: 'teal' });
+    await expect(createProfile('Work')).resolves.toEqual({
+      ...P,
+      color: 'teal'
+    });
+    invoke.mockResolvedValue({ ...P, color: null });
+    await expect(createProfile('Work')).resolves.toEqual(P);
+    invoke.mockResolvedValue({ ...P, color: 3 });
+    await expect(createProfile('Work')).rejects.toThrow(/profile.color/);
+  });
+
   it('switch/delete validate a void response', async () => {
     invoke.mockResolvedValueOnce(undefined);
     await expect(switchProfile('p1')).resolves.toBeUndefined();

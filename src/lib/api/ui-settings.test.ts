@@ -12,7 +12,7 @@ import {
 const snapshot = {
   deviceRevision: 3,
   vaultRevision: 7,
-  values: { 'appearance.accent': '#123456' }
+  values: { 'appearance.uiFontSize': 14 }
 };
 
 afterEach(() => {
@@ -64,17 +64,17 @@ describe('UI settings documents', () => {
   it('sends removals as an explicit null value', async () => {
     (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
     invoke.mockResolvedValue(snapshot);
-    await patchUiSetting('default', 'appearance.accent', '#abcdef');
+    await patchUiSetting('default', 'appearance.uiFontSize', 15);
     expect(invoke).toHaveBeenLastCalledWith('patch_ui_setting', {
       expectedVaultId: 'default',
-      id: 'appearance.accent',
-      value: '#abcdef',
+      id: 'appearance.uiFontSize',
+      value: 15,
       remove: false
     });
-    await patchUiSetting('default', 'appearance.accent', '#abcdef', true);
+    await patchUiSetting('default', 'appearance.uiFontSize', 15, true);
     expect(invoke).toHaveBeenLastCalledWith('patch_ui_setting', {
       expectedVaultId: 'default',
-      id: 'appearance.accent',
+      id: 'appearance.uiFontSize',
       value: null,
       remove: true
     });

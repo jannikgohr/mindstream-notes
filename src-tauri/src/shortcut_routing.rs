@@ -217,6 +217,7 @@ mod tests {
                         id: id.into(),
                         name: id.into(),
                         created_at: "2026-10-11T00:00:00Z".into(),
+                        color: None,
                     })
                     .collect(),
             };

@@ -12,6 +12,8 @@ export interface PickerVault {
   id: string;
   name: string;
   available: boolean;
+  /** The tile's named colour from profiles.json (NAMED_COLORS). */
+  color?: string;
 }
 
 export interface VaultPickerState {
@@ -40,7 +42,10 @@ export function getVaultPickerState(): Promise<VaultPickerState> {
         return {
           id: assertString(raw.id, 'vault id'),
           name: assertString(raw.name, 'vault name'),
-          available: assertBoolean(raw.available, 'vault availability')
+          available: assertBoolean(raw.available, 'vault availability'),
+          ...(raw.color == null
+            ? {}
+            : { color: assertString(raw.color, 'vault color') })
         };
       });
       return {

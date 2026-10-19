@@ -3,12 +3,12 @@
   import { Popover, Portal } from 'bits-ui';
   import {
     ChevronRight,
+    ChevronDown,
     Feather,
     FilePlus2,
     FileUp,
     FolderPlus,
     GripVertical,
-    MoreHorizontal,
     PencilRuler,
     RotateCcw,
     Settings2,
@@ -23,6 +23,7 @@
   import type { PluginEffect, PluginToolbarButton } from '$lib/plugins/types';
   import { noteTypeEnabled } from '$lib/notes/note-types';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { settingsDialog } from '$lib/settings/store.svelte';
   import { isTauri } from '$lib/api/core';
   import { nativeDeviceUi } from '$lib/native-device-ui.svelte';
   import {
@@ -87,6 +88,7 @@
   ];
 
   let root = $state<HTMLDivElement | null>(null);
+  let mainLabelMeasure: HTMLSpanElement | null = null;
   let moreOpen = $state(false);
   let customizing = $state(false);
   let preferences = $state<FileTreeToolbarPreferences>({
@@ -139,19 +141,23 @@
       .map((id) => actionMap.get(id))
       .filter((action): action is CreateAction => !!action)
   );
+  // The first toolbar action is the wide, labelled main button: reordering
+  // it is how people choose their default note type.
+  const mainAction = $derived<CreateAction | undefined>(
+    configuredToolbarActions[0]
+  );
   const displayedToolbarActions = $derived(
     configuredToolbarActions.slice(0, visibleCapacity)
-  );
-  const responsiveOverflowActions = $derived(
-    configuredToolbarActions.slice(visibleCapacity)
   );
   const configuredMoreActions = $derived(
     preferences.more
       .map((id) => actionMap.get(id))
       .filter((action): action is CreateAction => !!action)
   );
+  // Only what the row has no room for, then More: never a button that is
+  // already showing beside the menu.
   const menuActions = $derived([
-    ...responsiveOverflowActions,
+    ...configuredToolbarActions.slice(displayedToolbarActions.length),
     ...configuredMoreActions
   ]);
   const draggedId = $derived(pointerDrag?.moved ? pointerDrag.id : null);
@@ -182,18 +188,39 @@
     if (JSON.stringify(next) !== JSON.stringify(current)) preferences = next;
   });
 
+  $effect(() => {
+    if (settingsDialog.open) {
+      closeMenu();
+      closePluginMenu();
+    }
+  });
+
   onMount(() => {
     preferences = loadFileTreeToolbarPreferences(availableIds);
     preferencesLoaded = true;
 
-    const observer = new ResizeObserver(([entry]) => {
-      visibleCapacity = fileTreeToolbarCapacity(entry.contentRect.width);
-    });
+    const observer = new ResizeObserver(measureCapacity);
     if (root) observer.observe(root);
+    if (mainLabelMeasure) observer.observe(mainLabelMeasure);
     return () => {
       observer.disconnect();
       cleanupPointerDrag();
     };
+  });
+
+  function measureCapacity() {
+    if (!root) return;
+    const mainLabelWidth = mainAction
+      ? (mainLabelMeasure?.offsetWidth ?? 64) + 10
+      : 0;
+    visibleCapacity = fileTreeToolbarCapacity(
+      root.clientWidth - mainLabelWidth - 4
+    );
+  }
+
+  $effect(() => {
+    void configuredToolbarActions;
+    queueMicrotask(measureCapacity);
   });
 
   $effect(() => {
@@ -443,6 +470,30 @@
     pluginEffects = {};
     cleanupPointerDrag();
   }
+
+  function handleMenuKeydown(event: KeyboardEvent) {
+    if (
+      customizing ||
+      !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)
+    )
+      return;
+    const items = Array.from(
+      (event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>(
+        '[role="menuitem"]'
+      )
+    );
+    if (!items.length) return;
+    event.preventDefault();
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? items.length - 1
+          : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) %
+            items.length;
+    items[next].focus();
+  }
 </script>
 
 {#snippet actionIcon(action: CreateAction, className = 'size-3.5')}
@@ -482,14 +533,24 @@
   data-file-tree-drop-container="top"
   data-section="toolbar"
   data-orientation="horizontal"
-  class="flex flex-1 justify-end gap-1"
+  class="relative flex min-w-0 flex-1 items-center justify-end gap-1"
   style="min-width: {FILE_TREE_TOOLBAR_MIN_PX}px;"
 >
-  <div class="flex min-w-0 flex-1 justify-end gap-1 overflow-hidden">
+  <span
+    bind:this={mainLabelMeasure}
+    aria-hidden="true"
+    class="pointer-events-none invisible absolute whitespace-nowrap text-xs font-medium"
+    >{mainAction ? labelFor(mainAction) : ''}</span
+  >
+  <div class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
     {#each renderedTopActions as action, index (action.id)}
+      {@const main = index === 0 && !placeholderAt('top', 0)}
+      <!-- A drop in front of the row previews the new main button. -->
       {#if placeholderAt('top', index)}
         <div
-          class="h-7 w-7 shrink-0 rounded-md border border-dashed border-primary bg-primary/10"
+          class={index === 0
+            ? 'h-8 min-w-0 flex-1 rounded-md border border-dashed border-primary bg-primary/10'
+            : 'h-7 w-7 shrink-0 rounded-md border border-dashed border-primary bg-primary/10'}
           aria-hidden="true"
         ></div>
       {/if}
@@ -497,19 +558,25 @@
         role="group"
         aria-label={labelFor(action)}
         data-file-tree-action-id={action.id}
-        class="relative shrink-0 touch-none"
+        class={main
+          ? 'relative min-w-0 flex-1 touch-none'
+          : 'relative shrink-0 touch-none'}
         onpointerdown={(event) =>
           startPointerDrag(event, action.id, 'horizontal')}
       >
         <Button
           variant="ghost"
-          size="icon"
+          size={main ? 'sm' : 'icon'}
           onclick={(event) => runAction(action, event.currentTarget)}
           title={labelFor(action)}
           aria-label={labelFor(action)}
-          class="size-7 cursor-grab focus-visible:ring-0 focus-visible:ring-offset-0 active:cursor-grabbing"
+          class={main
+            ? 'h-8 w-full justify-start gap-2 border border-border bg-surface-3 px-2 text-xs shadow-raised hover:bg-accent'
+            : 'size-7 cursor-grab text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0 active:cursor-grabbing'}
         >
           {@render actionIcon(action)}
+          {#if main}<span class="min-w-0 truncate">{labelFor(action)}</span
+            >{/if}
         </Button>
       </div>
     {/each}
@@ -536,9 +603,9 @@
           size="icon"
           title={tUi('fileTree.toolbar.more')}
           aria-label={tUi('fileTree.toolbar.more')}
-          class="size-7 shrink-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+          class="h-8 w-7 shrink-0 text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
         >
-          <MoreHorizontal class="size-3.5" />
+          <ChevronDown class="size-3.5" />
         </Button>
       {/snippet}
     </Popover.Trigger>
@@ -547,7 +614,13 @@
         side="bottom"
         align="end"
         sideOffset={4}
-        class="z-[400] w-72 rounded-md border border-border bg-popover text-popover-foreground shadow-md focus:outline-none"
+        role={customizing ? 'dialog' : 'menu'}
+        aria-label={tUi('fileTree.toolbar.more')}
+        onkeydown={handleMenuKeydown}
+        onCloseAutoFocus={(event) => {
+          if (settingsDialog.open) event.preventDefault();
+        }}
+        class="z-[400] w-64 rounded-lg border border-border bg-popover text-popover-foreground shadow-overlay focus:outline-none"
       >
         {#if customizing}
           <div class="border-b border-border px-3 py-2">
@@ -671,7 +744,7 @@
             </Button>
           </div>
         {:else}
-          <div class="select-none py-1">
+          <div class="select-none p-1">
             {#each menuActions as action (action.id)}
               <button
                 type="button"
@@ -684,7 +757,7 @@
                 action.button.opensMenu
                   ? hoveredMenuActionId === action.id
                   : undefined}
-                class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+                class="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-xs transition-colors hover:bg-accent hover:text-accent-foreground"
                 class:bg-accent={hoveredMenuActionId === action.id &&
                   action.type === 'plugin' &&
                   action.button.opensMenu}
@@ -709,7 +782,8 @@
             {/if}
             <button
               type="button"
-              class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+              role="menuitem"
+              class="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-xs transition-colors hover:bg-accent hover:text-accent-foreground"
               onpointerenter={() => {
                 hoveredMenuActionId = null;
                 closePluginMenu();

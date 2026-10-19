@@ -98,6 +98,8 @@
     hasSettingValue,
     setSettingValue
   } from '$lib/settings/store.svelte';
+  import { resolvedPreset, themeColorCss } from '$lib/settings/theme-presets';
+  import { themeCatalog } from '$lib/settings/theme.svelte';
   import {
     clearNoteStatus,
     setNoteStatus,
@@ -334,10 +336,12 @@
   const pageDark = $derived(
     pageThemeMode === 'dark' || (pageThemeMode === 'system' && $mode === 'dark')
   );
-  // The toolbar is app chrome, so it follows the app theme — not the
-  // page theme, which only governs the drawing surface (`pageDark`).
-  const toolbarThemeClass = $derived(
-    $mode === 'dark' ? 'ink-toolbar-theme-dark' : 'ink-toolbar-theme-light'
+  // Selection and lasso marks use the theme accent for the page's own mode,
+  // not the app's, so they stay readable when the two differ.
+  const pageAccent = $derived(
+    resolvedPreset(themeCatalog.presets, getSettingValue('appearance.preset'))[
+      pageDark ? 'dark' : 'light'
+    ]['accent-brand']
   );
   const colorHex = $derived(argbToColorHex(colorArgb));
   const inkZoomLabel = $derived.by(() => {
@@ -933,12 +937,8 @@
       const radiusY = 11;
       ctx.setLineDash(TOOL_PREVIEW_DASH);
       ctx.lineWidth = 1.5;
-      ctx.strokeStyle = pageDark
-        ? 'rgba(96, 165, 250, 0.9)'
-        : 'rgba(37, 99, 235, 0.82)';
-      ctx.fillStyle = pageDark
-        ? 'rgba(96, 165, 250, 0.1)'
-        : 'rgba(37, 99, 235, 0.07)';
+      ctx.strokeStyle = themeColorCss(pageAccent, 0.85);
+      ctx.fillStyle = themeColorCss(pageAccent, 0.08);
       ctx.beginPath();
       ctx.ellipse(center.x, center.y, radiusX, radiusY, -0.24, 0, Math.PI * 2);
       ctx.fill();
@@ -1078,9 +1078,10 @@
       x: (corners.nw.x + corners.ne.x) * 0.5,
       y: (corners.nw.y + corners.ne.y) * 0.5
     };
+    const accent = themeColorCss(pageAccent);
     ctx.save();
-    ctx.strokeStyle = '#2563eb';
-    ctx.fillStyle = 'rgba(37, 99, 235, 0.08)';
+    ctx.strokeStyle = accent;
+    ctx.fillStyle = themeColorCss(pageAccent, 0.08);
     ctx.lineWidth = 1.5;
     ctx.setLineDash([6, 4]);
     ctx.beginPath();
@@ -1104,7 +1105,7 @@
       rotate
     ]) {
       ctx.fillStyle = '#ffffff';
-      ctx.strokeStyle = '#2563eb';
+      ctx.strokeStyle = accent;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(point.x, point.y, SELECTION_HANDLE_RADIUS_PX, 0, Math.PI * 2);
@@ -1117,8 +1118,8 @@
   function drawLassoOverlay(ctx: CanvasRenderingContext2D) {
     if (lassoPoints.length < 2) return;
     ctx.save();
-    ctx.strokeStyle = '#2563eb';
-    ctx.fillStyle = 'rgba(37, 99, 235, 0.06)';
+    ctx.strokeStyle = themeColorCss(pageAccent);
+    ctx.fillStyle = themeColorCss(pageAccent, 0.06);
     ctx.lineWidth = 1.5;
     ctx.setLineDash([5, 4]);
     ctx.beginPath();
@@ -2843,7 +2844,7 @@
                   onclick={() => selectPresetColor(swatch)}
                 >
                   <span
-                    class="size-5 rounded-full border border-black/20 shadow-sm"
+                    class="size-5 rounded-full border border-border-strong shadow-sm"
                     style="background-color: {swatch};"
                     aria-hidden="true"
                   ></span>
@@ -3099,7 +3100,7 @@
   {#if mobileToolbar}
     <div
       bind:this={toolbarEl}
-      class="pointer-events-auto absolute left-3 top-3 z-30 max-w-[calc(100%-4.5rem)] {toolbarThemeClass}"
+      class="pointer-events-auto absolute left-3 top-3 z-30 max-w-[calc(100%-4.5rem)]"
     >
       {@render inkToolbar(
         false,
@@ -3108,16 +3109,13 @@
     </div>
     {#if allowPageEditing}
       <div
-        class="absolute right-3 top-3 z-30 rounded-md border border-border bg-background/95 p-1 shadow-sm backdrop-blur {toolbarThemeClass}"
+        class="absolute right-3 top-3 z-30 rounded-md border border-border bg-background/95 p-1 shadow-sm backdrop-blur"
       >
         {@render pageSorterControl()}
       </div>
     {/if}
   {:else}
-    <div
-      bind:this={toolbarEl}
-      class="flex shrink-0 border-b border-border {toolbarThemeClass}"
-    >
+    <div bind:this={toolbarEl} class="flex shrink-0 border-b border-border">
       <div class="min-w-0 flex-1">
         {@render inkToolbar(true, 'bg-background')}
       </div>
@@ -3187,7 +3185,7 @@
 
   {#if !mobileToolbar}
     <div
-      class="absolute bottom-3 left-3 z-20 {toolbarThemeClass}"
+      class="absolute bottom-3 left-3 z-20"
       role="toolbar"
       aria-label={tUi('ink.toolbar.zoom')}
     >
@@ -3211,49 +3209,3 @@
     </div>
   {/if}
 </div>
-
-<style>
-  .ink-toolbar-theme-light {
-    --background: oklch(0.9846 0.002 247.84);
-    --foreground: oklch(0.145 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
-    --destructive: oklch(0.577 0.245 27.325);
-    --destructive-foreground: oklch(0.985 0 0);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
-  }
-
-  .ink-toolbar-theme-dark {
-    --background: oklch(0.1735 0.002 286.18);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.18 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.18 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.985 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.396 0.141 25.723);
-    --destructive-foreground: oklch(0.985 0 0);
-    --border: oklch(0.269 0 0);
-    --input: oklch(0.269 0 0);
-    --ring: oklch(0.439 0 0);
-  }
-</style>

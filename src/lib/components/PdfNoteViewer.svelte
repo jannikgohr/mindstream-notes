@@ -1867,7 +1867,7 @@
     class="size-5 rounded-full transition hover:scale-110"
     style="background-color: {color}; box-shadow: {activeColor === color
       ? '0 0 0 2px var(--ring)'
-      : '0 0 0 1px var(--border)'}"
+      : '0 0 0 1px var(--border-strong)'}"
     aria-label={tUi('pdf.toolbar.colorSwatch').replace('{color}', color)}
     aria-pressed={activeColor === color}
     onclick={() => {
@@ -1904,7 +1904,7 @@
       <Palette aria-hidden="true" />
       <span
         class="size-3 rounded-full"
-        style="background-color: {activeColor}; box-shadow: 0 0 0 1px var(--border)"
+        style="background-color: {activeColor}; box-shadow: 0 0 0 1px var(--border-strong)"
         aria-hidden="true"
       ></span>
     </ToolbarButton>
@@ -2472,7 +2472,11 @@
     z-index: 2;
     pointer-events: none;
     transform-origin: 0 0;
-    --annotation-unfocused-field-background: rgba(0, 54, 255, 0.13);
+    --annotation-unfocused-field-background: color-mix(
+      in oklch,
+      var(--accent-brand) 13%,
+      transparent
+    );
     --input-focus-border-color: Highlight;
   }
 

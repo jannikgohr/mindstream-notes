@@ -2,10 +2,8 @@
   /**
    * Top-bar vault (profile) switcher. Sits right of the app title.
    *
-   * The current vault name is always shown next to the icon. The jis3r
-   * Vault icon animates only while the menu is open (i.e. on click) —
-   * driven by the `animate` prop from the `open` state rather than the
-   * library's built-in mouseenter, so hovering the top bar stays quiet.
+   * The current vault name is always shown next to its letter tile
+   * (VaultTile), which tells vaults apart at a glance.
    *
    * Click: opens a dropdown (same outside-pointerdown + Escape pattern as
    * NotificationCenter) listing every vault with the active one checked.
@@ -14,10 +12,10 @@
    * ownership; the native action rechecks the target.
    */
   import { onMount } from 'svelte';
-  import { Vault } from '@jis3r/icons';
   import {
     ArrowLeftRight,
     Check,
+    ChevronDown,
     ExternalLink,
     Pencil,
     Plus,
@@ -25,6 +23,7 @@
   } from '@lucide/svelte';
   import { tooltip } from '$lib/actions/tooltip';
   import { Button } from '$lib/components/ui/button';
+  import VaultTile from '$lib/components/VaultTile.svelte';
   import { Input } from '$lib/components/ui/input';
   import { confirm, alert } from '$lib/components/confirm-dialog.svelte';
   import { isTauri } from '$lib/api';
@@ -394,19 +393,28 @@
   });
 </script>
 
-<div bind:this={root} class="relative">
+<div bind:this={root} class="vault-switcher relative min-w-0">
   <Button
     variant="ghost"
     size="sm"
-    class="h-7 gap-1.5 px-2"
+    class="h-8 w-full justify-start gap-2 pl-2 pr-0 text-xs"
     onclick={toggle}
     title={currentName}
     aria-label={tUi('vault.switch')}
     aria-expanded={open}
     disabled={busy}
   >
-    <Vault size={16} animate={open} />
-    <span class="inline-block max-w-48 truncate">{currentName}</span>
+    <VaultTile
+      id={current?.id ?? ''}
+      name={current?.name ?? ''}
+      color={current?.color}
+    />
+    <span class="min-w-0 flex-1 truncate text-left">{currentName}</span>
+    <!-- The same 28px box as the file-tree toolbar's menu button below, so
+         both chevrons sit in one column. -->
+    <span class="flex w-7 shrink-0 justify-center text-muted-foreground">
+      <ChevronDown class="size-3.5" />
+    </span>
   </Button>
 
   {#if open}
@@ -521,12 +529,15 @@
                 onclick={(event) =>
                   selectProfile(profile.id, profile.name, undefined, event)}
               >
-                <span class="flex size-4 shrink-0 items-center justify-center">
-                  {#if profile.id === profilesState.active}
-                    <Check class="size-4" />
-                  {/if}
-                </span>
+                <VaultTile
+                  id={profile.id}
+                  name={profile.name}
+                  color={profile.color}
+                />
                 <span class="truncate">{profile.name}</span>
+                {#if profile.id === profilesState.active}
+                  <Check class="size-3.5 shrink-0 text-accent-brand" />
+                {/if}
                 {#if status}
                   <span
                     class="ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-medium leading-none {STATUS_BADGE[

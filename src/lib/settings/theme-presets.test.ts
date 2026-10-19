@@ -4,10 +4,25 @@ import {
   BUILTIN_PRESETS,
   applyThemeAppearance,
   currentThemeWindowBackground,
+  NAMED_COLORS,
+  NAMED_TOKENS,
   parseThemePreset,
   resolvedPreset,
-  themeContrast
+  themeColorCss,
+  themeContrast,
+  THEME_TOKENS,
+  type ThemeColor
 } from './theme-presets';
+
+const css = readFileSync('src/app.css', 'utf8');
+/** First `--name: oklch(…)` after the given block opener, as [L, C, H]. */
+function cssToken(block: RegExp, name: string): ThemeColor | undefined {
+  const source = css.slice(css.search(block));
+  const value = source.match(new RegExp(`--${name}:\\s*oklch\\(([^)]*)\\);`));
+  return value?.[1].split(' ').map(Number) as ThemeColor | undefined;
+}
+const ROOT = /^:root\s*\{/m;
+const DARK = /^\.dark\s*\{/m;
 
 afterEach(() => {
   document.documentElement.removeAttribute('style');
@@ -43,29 +58,132 @@ describe('theme preset contract', () => {
     preset.dark.foreground = preset.dark['surface-1'];
     expect(() => parseThemePreset(preset)).toThrow();
   });
-  it('switches mode independently and applies an explicit accent after preset tokens', () => {
-    const warm = BUILTIN_PRESETS[1];
-    applyThemeAppearance(warm, false, '#123456', 14);
+  it('rejects a palette that is missing, a list or a single value', () => {
+    for (const dark of [undefined, null, [], 'oklch(0.2 0 0)'])
+      expect(() => parseThemePreset({ ...BUILTIN_PRESETS[0], dark })).toThrow();
+  });
+  it('switches mode independently and takes the accent from the preset', () => {
+    const warm = BUILTIN_PRESETS.find((preset) => preset.id === 'warm')!;
+    applyThemeAppearance(warm, false, 14);
     expect(document.documentElement.style.getPropertyValue('--surface-1')).toBe(
       `oklch(${warm.light['surface-1'].join(' ')})`
     );
     expect(
       document.documentElement.style.getPropertyValue('--accent-brand')
-    ).toBe('#123456');
+    ).toBe(`oklch(${warm.light['accent-brand'].join(' ')})`);
     expect(
       document.documentElement.style.getPropertyValue('--ui-font-size')
     ).toBe('14px');
-    applyThemeAppearance(warm, true, '#123456', 14);
+    applyThemeAppearance(warm, true, 14);
     expect(document.documentElement.style.getPropertyValue('--surface-1')).toBe(
       `oklch(${warm.dark['surface-1'].join(' ')})`
     );
     expect(document.documentElement.style.getPropertyValue('--primary')).toBe(
       `oklch(${warm.dark.primary.join(' ')})`
     );
-    applyThemeAppearance(warm, true, undefined, 16);
     expect(
       document.documentElement.style.getPropertyValue('--accent-brand')
     ).toBe(`oklch(${warm.dark['accent-brand'].join(' ')})`);
+    // Focus rings follow the preset accent through app.css, not an inline value.
+    expect(document.documentElement.style.getPropertyValue('--ring')).toBe('');
+  });
+  it('makes Apollo the default and keeps the earlier presets', () => {
+    expect(BUILTIN_PRESETS.map((preset) => [preset.id, preset.name])).toEqual([
+      ['default', 'Apollo'],
+      ['builtin:slate-indigo', 'Slate & Indigo'],
+      ['builtin:paper-teal', 'Paper & Teal'],
+      ['warm', 'Warm'],
+      ['forest', 'Forest']
+    ]);
+  });
+  it('mirrors the default preset in the app.css base tokens and pre-paint colours', () => {
+    const [preset] = BUILTIN_PRESETS;
+    for (const name of [...THEME_TOKENS, ...NAMED_TOKENS]) {
+      expect(cssToken(ROOT, name), name).toEqual(preset.light[name]);
+      expect(cssToken(DARK, name), name).toEqual(preset.dark[name]);
+    }
+    const html = readFileSync('src/app.html', 'utf8');
+    for (const mode of ['light', 'dark'] as const)
+      for (const name of ['surface-1', 'foreground'] as const)
+        expect(html).toContain(
+          `var(--${name}, oklch(${preset[mode][name].join(' ')}))`
+        );
+  });
+  it('keeps the shared status colours readable as text on every built-in preset', () => {
+    for (const status of ['success', 'warning', 'info', 'destructive'])
+      for (const [block, mode] of [
+        [ROOT, 'light'],
+        [DARK, 'dark']
+      ] as const) {
+        const color = cssToken(block, status)!;
+        for (const preset of BUILTIN_PRESETS)
+          for (const surface of [
+            'surface-0',
+            'surface-1',
+            'surface-2',
+            'surface-3'
+          ] as const)
+            expect(
+              themeContrast(color, preset[mode][surface]),
+              `${status} on ${preset.id} ${mode} ${surface}`
+            ).toBeGreaterThanOrEqual(4.5);
+      }
+  });
+  it('keeps every named colour readable, with its text, on every built-in preset', () => {
+    for (const preset of BUILTIN_PRESETS)
+      for (const [block, mode] of [
+        [ROOT, 'light'],
+        [DARK, 'dark']
+      ] as const) {
+        // A preset without its own named colours uses the app.css ones.
+        const token = (name: (typeof NAMED_TOKENS)[number]) =>
+          preset[mode][name] ?? cssToken(block, name)!;
+        for (const name of NAMED_COLORS) {
+          const color = token(`named-${name}`);
+          expect(
+            themeContrast(color, token('named-foreground')),
+            `${name} text on ${preset.id} ${mode}`
+          ).toBeGreaterThanOrEqual(4.5);
+          for (const surface of [
+            'surface-0',
+            'surface-1',
+            'surface-2',
+            'surface-3'
+          ] as const)
+            expect(
+              themeContrast(color, preset[mode][surface]),
+              `${name} on ${preset.id} ${mode} ${surface}`
+            ).toBeGreaterThanOrEqual(3);
+        }
+      }
+  });
+  it('accepts named colours only as a complete, readable set', () => {
+    const [apollo] = BUILTIN_PRESETS;
+    const partial = structuredClone(apollo);
+    delete partial.dark['named-pink'];
+    expect(() => parseThemePreset(partial)).toThrow();
+    const unreadable = structuredClone(apollo);
+    unreadable.light['named-red'] = unreadable.light['named-foreground']!;
+    expect(() => parseThemePreset(unreadable)).toThrow();
+    const without = structuredClone(apollo);
+    for (const name of NAMED_TOKENS) {
+      delete without.light[name];
+      delete without.dark[name];
+    }
+    expect(parseThemePreset(without)).toEqual(without);
+  });
+  it("applies a preset's named colours and clears them for one without", () => {
+    const [apollo] = BUILTIN_PRESETS;
+    const warm = BUILTIN_PRESETS.find((preset) => preset.id === 'warm')!;
+    expect(warm.light['named-red']).toBeUndefined();
+    applyThemeAppearance(apollo, false, 16);
+    expect(document.documentElement.style.getPropertyValue('--named-red')).toBe(
+      `oklch(${apollo.light['named-red']!.join(' ')})`
+    );
+    applyThemeAppearance(warm, false, 16);
+    expect(document.documentElement.style.getPropertyValue('--named-red')).toBe(
+      ''
+    );
   });
   it('falls back without mutating a missing user selection', () => {
     const selection = { id: 'missing-user-theme' };
@@ -79,6 +197,7 @@ describe('theme preset contract', () => {
       .replace(/^<script>|<\/script>$/g, '');
     expect(script).toBeTruthy();
     const preset = BUILTIN_PRESETS[2];
+    // Caches written before the accent setting was retired still carry it.
     localStorage.setItem(
       'mindstream:appearance:v1',
       JSON.stringify({ preset, accent: '#ffffff', uiFontSize: 18 })
@@ -89,10 +208,12 @@ describe('theme preset contract', () => {
       `oklch(${preset.dark['surface-1'].join(' ')})`
     );
     expect(
-      document.documentElement.style.getPropertyValue(
-        '--accent-brand-foreground'
-      )
-    ).toBe('#000000');
+      document.documentElement.style.getPropertyValue('--accent-brand')
+    ).toBe(`oklch(${preset.dark['accent-brand'].join(' ')})`);
+    expect(document.documentElement.style.getPropertyValue('--ring')).toBe('');
+    expect(
+      document.documentElement.style.getPropertyValue('--ui-font-size')
+    ).toBe('18px');
     document.documentElement.removeAttribute('style');
     localStorage.setItem(
       'mindstream:appearance:v1',
@@ -137,6 +258,16 @@ describe('native window background', () => {
     expect(brightness(dark)).toBeLessThan(brightness(light));
   });
 
+  it('gives canvas painting the same sRGB bytes, with alpha', () => {
+    const { red, green, blue } = currentThemeWindowBackground();
+    expect(themeColorCss(BUILTIN_PRESETS[0].light['surface-1'])).toBe(
+      `rgba(${red}, ${green}, ${blue}, 1)`
+    );
+    // Black takes the linear segment of the sRGB curve, white the power one.
+    expect(themeColorCss([0, 0, 0], 0.08)).toBe('rgba(0, 0, 0, 0.08)');
+    expect(themeColorCss([1, 0, 0])).toBe('rgba(255, 255, 255, 1)');
+  });
+
   it('falls back to the first built-in surface for a corrupt cache', () => {
     const fallback = currentThemeWindowBackground();
     localStorage.setItem('mindstream:appearance:v1', '{broken');
@@ -150,7 +281,7 @@ describe('native window background', () => {
         throw new Error('quota exceeded');
       });
     expect(() =>
-      applyThemeAppearance(BUILTIN_PRESETS[0], false, null, 16)
+      applyThemeAppearance(BUILTIN_PRESETS[0], false, 16)
     ).not.toThrow();
     expect(document.documentElement.dataset.themePreset).toBe(
       BUILTIN_PRESETS[0].id

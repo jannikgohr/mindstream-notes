@@ -40,10 +40,10 @@ the other.
 
 | Token         | Use for                                                                                     | Light `L` | Dark `L` |
 | ------------- | ------------------------------------------------------------------------------------------- | --------- | -------- |
-| `--surface-0` | window chrome behind everything — title bar, dock strip, mobile top/bottom bars             | 0.955     | 0.155    |
-| `--surface-1` | panels — sidebars, editor panel, board background (this is what `--background` resolves to) | 0.976     | 0.185    |
-| `--surface-2` | containers on a panel — Kanban columns, sidebar sections, grouped wells                     | 0.990     | 0.215    |
-| `--surface-3` | items and overlays — cards, popovers, dialogs, menus                                        | 1.000     | 0.245    |
+| `--surface-0` | window chrome behind everything — title bar, dock strip, mobile top/bottom bars             | 0.975     | 0.220    |
+| `--surface-1` | panels — sidebars, editor panel, board background (this is what `--background` resolves to) | 0.985     | 0.245    |
+| `--surface-2` | containers on a panel — Kanban columns, sidebar sections, grouped wells                     | 0.992     | 0.270    |
+| `--surface-3` | items and overlays — cards, popovers, dialogs, menus                                        | 1.000     | 0.295    |
 
 Utilities: `bg-surface-0` … `bg-surface-3`.
 
@@ -80,31 +80,38 @@ These are different things and the naming is a known hazard:
   text selection, active-state emphasis. **This is the one you want when you
   mean "accent" in the everyday sense.**
 
-Appearance → Accent overrides `--accent-brand`, `--accent-brand-foreground` and
-`--ring` only (see [`src/lib/settings/accent.ts`](../src/lib/settings/accent.ts)).
-It used to override `--primary`, which turned every neutral button in the app
-into the user's accent colour.
-
-An explicit stored accent overrides the preset in both modes. Without that
-value, the preset supplies separate light and dark accents. "Use preset accent"
-removes the override. Text on an explicit accent uses black or white according
-to its RGB luminance; neutral primary buttons keep the preset's values.
+The accent comes from the theme preset, which has separate light and dark
+values for it. `--ring` follows `--accent-brand` in `app.css`, so focus rings
+match. There is no separate accent setting any more: the old Appearance →
+Accent colour override was one hex value for both modes, which a preset can
+always do better, and it hid the preset's own accent. Values saved by older
+builds (`appearance.accent`) are dropped when settings, browser imports or
+backups load, and the next save leaves them out. To change the accent, save a
+custom preset.
 
 ## Theme presets
 
-Appearance settings offer Mindstream, Warm and Forest. Light/dark/system mode
-is independent of preset selection. Presets, accent and UI font size apply to
-every vault on this device. Editor font size and line height stay in the vault.
+Appearance settings offer Apollo (the default, ID `default`), Slate & Indigo,
+Paper & Teal, Warm and Forest. The two new presets use the reserved IDs
+`builtin:slate-indigo` and `builtin:paper-teal`, leaving existing custom IDs
+such as `slate` and `paper` available. Apollo pairs blue-slate neutrals with an ochre
+accent; Slate & Indigo is cool and neutral; Paper & Teal is warm paper with a
+teal accent. The default preset's values are also the base tokens in
+`app.css`, so the two must change together. Light/dark/system mode
+is independent of preset selection. Presets and UI font size apply to every
+vault on this device. Editor font size and line height stay in the vault.
 
 Use "Show preset JSON" to start from a complete preset. Change its ID and name,
 then save it under "Import or edit a preset". Saving an existing custom ID
 replaces that preset on this device. Built-in IDs are reserved. Removing a
-selected preset keeps its selection and displays Mindstream; restoring the
+selected preset keeps its selection and displays Apollo; restoring the
 same ID restores the theme. The original data stays available during recovery.
 
 A preset has exactly `version`, `id`, `name`, `light` and `dark` fields.
-Version is `1`. IDs start with a lowercase letter and contain only lowercase
+Version is `1`. Custom IDs start with a lowercase letter and contain only lowercase
 letters, digits and hyphens, up to 64 characters. Names allow 160 UTF-8 bytes.
+The `builtin:` namespace is reserved for bundled presets. The older bundled
+IDs `default`, `warm` and `forest` remain reserved for compatibility.
 Each palette contains these twelve required numeric OKLCH triples:
 
 | Tokens                                    | Purpose                                                           |
@@ -115,10 +122,16 @@ Each palette contains these twelve required numeric OKLCH triples:
 | `primary`, `primary-foreground`           | Neutral buttons and their text.                                   |
 | `accent-brand`, `accent-brand-foreground` | Preset accent and text on its fill.                               |
 
+A palette may also set the named colours (`named-red`, `named-orange`,
+`named-amber`, `named-green`, `named-teal`, `named-blue`, `named-violet`,
+`named-pink`) and `named-foreground`, the text on them. It sets all nine or none;
+without them the `app.css` values apply. See [Named colours](#named-colours).
+
 Triples use `[L, C, H]`: lightness from 0 to 1, chroma from 0 to 0.4 and hue
 from 0 to 360. Values must be finite. Surface lightness strictly increases.
 Normal/secondary text and text on primary/accent fills require computed contrast
-of at least 4.5. Accent text requires 3 against every surface. Subtle/strong
+of at least 4.5. Accent text requires 3 against every surface. Each named colour
+requires 4.5 with `named-foreground` and 3 against every surface. Subtle/strong
 borders require 1.1/1.25 against every surface. Validation converts OKLCH to
 clipped linear sRGB for these ratios. Status, search and diff colors, shadows
 and radius continue to follow the app's mode and token rules.
@@ -129,11 +142,34 @@ An imported preset is limited to 16 KiB. Root `theme-presets.json` stores up to
 locked publication and notifications run. Complete built-in examples live in
 [`src/lib/settings/theme-presets.json`](../src/lib/settings/theme-presets.json).
 
+## Named colours
+
+`--named-red` … `--named-pink` are eight hues for things that carry a colour
+of their own, starting with vault tiles. Code stores the name, never the value:
+a vault's entry in `profiles.json` says `"color": "teal"`, and the active
+preset decides what teal looks like in each mode. Apollo, Slate & Indigo and
+Paper & Teal set their own; Warm and Forest use the `app.css` values, which
+mirror Apollo. Light values sit around L 0.55 with near-white
+`--named-foreground`; dark values sit around L 0.75 with dark text, so the same
+colour also reads as text on the matching surfaces.
+
+The backend gives each vault a colour when it is created, and gives one to every
+vault in an index written before colours existed, the first time it loads. It
+picks the ID's colour (FNV-1a, the same hash as `vaultTileColor` in
+[`src/lib/vaults/tile.ts`](../src/lib/vaults/tile.ts)) unless an older vault
+already has it, then steps three colours on until one is free. Stored colours
+never change, so deleting or renaming a vault leaves every colour alone.
+
 ## Status colours
 
 `--success`, `--warning`, `--info` and `--destructive`. `--destructive` is the
 fourth member of this ramp and keeps its shadcn name — there is no `--danger`
 alias, so there is exactly one word for the concept.
+
+Presets do not carry status colours, so one set serves every preset. They come
+from Apollo's green, teal and red, with a yellower amber for `--warning` so it
+stays apart from Apollo's ochre accent. Each base colour is checked as text
+against every built-in preset's surfaces (at least 4.6:1).
 
 Each has three companions:
 
@@ -169,7 +205,7 @@ which runs on staged files at commit time and over all of `src/` as part of
 ### Documented exceptions
 
 Some things are deliberately not on the surface or accent scales, because the
-colour _is_ the meaning and must not follow a user-chosen accent. They are still
+colour _is_ the meaning and must not follow the preset's accent. They are still
 tokens with light and dark values — the exception is the fixed hue, not the
 absence of a token:
 
@@ -181,6 +217,14 @@ absence of a token:
 
 - `--highlight-search` / `-active` / `-selection`, shared by the editor's
   find decorations and the PDF viewer's overlay.
+- Ink pen swatches and PDF annotation colours
+  ([`src/lib/ink/editor-helpers.ts`](../src/lib/ink/editor-helpers.ts),
+  [`src/lib/pdf/viewer-helpers.ts`](../src/lib/pdf/viewer-helpers.ts)). They
+  are content: strokes and annotations store sRGB hex and PDF export writes it,
+  so they cannot follow a preset. The pens are Apollo ink plus its named
+  colours, dark enough for the white page; the PDF set is lighter highlighter
+  tints of the same hues. The ink editor's selection and lasso marks are
+  chrome, so they use the preset accent for the page's own light or dark mode.
 
 The linter also allows three things by design:
 
@@ -201,7 +245,7 @@ default `--surface-1` and `--foreground` values to avoid a flash before `app.css
 loads. It first applies validated numeric preset tokens from the root bootstrap
 or browser cache. Its literal fallbacks must still match the default tokens.
 Update `app.html` when those defaults change. Main windows receive root mode,
-preset, accent and font size before document scripts run; popouts share their
+preset and font size before document scripts run; popouts share their
 vault's cache and use its resolved surface color as the native background.
 
 ## Composing a panel
@@ -213,12 +257,15 @@ variant="panel">` for a pane of the shell, `variant="section"` for a grouped
   region inside it, `variant="raised"` for a discrete item on a section, and
   `variant="overlay"` for something genuinely floating. The `padding` prop
   covers the common insets.
-- [`ui/section-header`](../src/lib/components/ui/section-header) — the small
-  uppercase label that titles a region.
+- [`ui/section-header`](../src/lib/components/ui/section-header) — the compact
+  heading that titles a region.
 
-Both sidebars are built this way, which is what makes them read as one design:
-the panel is `surface-1`, its sections are `surface-2`, and items on a section
-(the content-stat tiles) are `surface-3`.
+The desktop navigation uses `surface-0`; the details pane uses `surface-1`.
+Sections inside the details pane share its background and use dividers rather
+than nested cards. The `--editor-surface` token selects `surface-3` in light mode
+and `surface-1` in dark mode; the active document tab shares that surface.
+Use `bg-editor-surface` when a desktop document surface needs a utility class.
+The toolbar and right sidebar header align with the 42px document tab strip.
 
 ## Migration status
 

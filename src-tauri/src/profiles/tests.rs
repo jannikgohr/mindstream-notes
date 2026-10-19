@@ -554,3 +554,81 @@ fn migrate_is_noop_for_brand_new_install() {
     assert!(!index_path(&root).exists());
     fs::remove_dir_all(&root).ok();
 }
+
+#[test]
+fn vault_colours_hash_like_the_frontend_fallback() {
+    // The same slots as vaultTileColor in src/lib/vaults/tile.ts.
+    assert_eq!(color_slot("default"), 6);
+    assert_eq!(color_slot("work"), 0);
+    assert_eq!(color_slot("uni"), 1);
+    assert_eq!(
+        Index::default_single().profiles[0].color.as_deref(),
+        Some("violet")
+    );
+}
+
+#[test]
+fn old_indexes_get_distinct_colours_locked_in_once() {
+    let root = tmp_root();
+    // vault-4 and vault-17 hash to violet, the same colour as default.
+    for id in ["default", "vault-4", "vault-17", "vault-26"] {
+        fs::create_dir_all(profile_dir(&root, id)).unwrap();
+    }
+    fs::write(
+        index_path(&root),
+        r#"{"active":"default","profiles":[
+            {"id":"default","name":"Default","created_at":""},
+            {"id":"vault-4","name":"Work","created_at":""},
+            {"id":"vault-17","name":"Uni","created_at":""},
+            {"id":"vault-26","name":"Old","created_at":"","color":"teal"}]}"#,
+    )
+    .unwrap();
+    let colors = |index: &Index| -> Vec<String> {
+        index
+            .profiles
+            .iter()
+            .map(|profile| profile.color.clone().unwrap())
+            .collect()
+    };
+    let index = load_or_init(&root).unwrap();
+    // The stored teal stays; the rest step three colours on from violet.
+    assert_eq!(colors(&index), ["violet", "orange", "pink", "teal"]);
+    assert_eq!(load(&root).unwrap().unwrap(), index, "colours are saved");
+    let saved = fs::read(index_path(&root)).unwrap();
+    load_or_init(&root).unwrap();
+    assert_eq!(fs::read(index_path(&root)).unwrap(), saved);
+
+    // Deleting a vault recolours nothing, and a new vault takes a free colour.
+    delete(&root, "vault-4", "default").unwrap();
+    assert_eq!(
+        colors(&load_or_init(&root).unwrap()),
+        ["violet", "pink", "teal"]
+    );
+    let added = add_profile(&root, "New").unwrap();
+    let color = added.color.unwrap();
+    assert!(VAULT_COLORS.contains(&color.as_str()));
+    assert!(!["violet", "pink", "teal"].contains(&color.as_str()));
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn unknown_colour_names_are_kept_and_malformed_ones_rejected() {
+    let root = tmp_root();
+    fs::create_dir_all(profile_dir(&root, "default")).unwrap();
+    let index = |color: &str| {
+        format!(
+            r#"{{"active":"default","profiles":[{{"id":"default","name":"D","created_at":"","color":"{color}"}}]}}"#
+        )
+    };
+    // A colour a newer build added stays as it is.
+    fs::write(index_path(&root), index("slate-blue")).unwrap();
+    assert_eq!(
+        load_or_init(&root).unwrap().profiles[0].color.as_deref(),
+        Some("slate-blue")
+    );
+    for malformed in ["", "Red", "red;}", &"a".repeat(33)] {
+        fs::write(index_path(&root), index(malformed)).unwrap();
+        assert!(load(&root).is_err(), "{malformed:?}");
+    }
+    fs::remove_dir_all(root).ok();
+}

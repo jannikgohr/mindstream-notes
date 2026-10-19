@@ -3,7 +3,8 @@ import { expect, type Locator, type Page } from '@playwright/test';
 export function fileTreeCreateAction(page: Page, name: string): Locator {
   return page
     .getByRole('button', { name, exact: true })
-    .or(page.getByRole('menuitem', { name, exact: true }));
+    .or(page.getByRole('menuitem', { name, exact: true }))
+    .last();
 }
 
 export async function openFileTreeCreateMore(page: Page): Promise<void> {

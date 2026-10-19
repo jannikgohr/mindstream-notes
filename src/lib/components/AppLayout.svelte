@@ -193,7 +193,7 @@
   });
 
   // Native startup injects the root appearance before paint. Keep it until
-  // settings are ready, then apply preset tokens before an explicit accent.
+  // settings are ready, then apply the selected preset's tokens.
   $effect(() => {
     if (isTauri() && !profilesState.loaded) return;
     const preset = resolvedPreset(
@@ -204,7 +204,6 @@
       preset,
       $mode === 'dark' ||
         (!$mode && document.documentElement.classList.contains('dark')),
-      settings.values['appearance.accent'],
       getSettingValue('appearance.uiFontSize')
     );
   });

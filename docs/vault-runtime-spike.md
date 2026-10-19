@@ -92,5 +92,5 @@ probe cannot prove signed `.app` behavior.
 - Implement and test the [browser-storage migration](vault-browser-storage-audit.md)
   before new workers use isolated stores.
 
-Track the remaining checks in the [implementation plan](root-vault-implementation-plan.md).
+Track the remaining checks in the [platform checks](known-limitations.md#concurrent-vault-platform-checks).
 The macOS support decision is recorded; the deferred lifecycle test still needs results.

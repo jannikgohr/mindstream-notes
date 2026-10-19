@@ -1,5 +1,4 @@
 import builtinData from './theme-presets.json';
-import { applyAccentColor, clearAccentColor } from './accent';
 import { applyUiFontSize } from './appearance';
 
 export const THEME_TOKENS = [
@@ -17,8 +16,37 @@ export const THEME_TOKENS = [
   'accent-brand-foreground'
 ] as const;
 export type ThemeToken = (typeof THEME_TOKENS)[number];
+/**
+ * Apollo's eight named colours, for things with a colour of their own (vault
+ * tiles). Code stores the name; `--named-<name>` renders it.
+ */
+export const NAMED_COLORS = [
+  'red',
+  'orange',
+  'amber',
+  'green',
+  'teal',
+  'blue',
+  'violet',
+  'pink'
+] as const;
+export type NamedColor = (typeof NAMED_COLORS)[number];
+export type NamedToken = `named-${NamedColor}` | 'named-foreground';
+/**
+ * Optional preset tokens. A palette sets all nine or none; without them the
+ * app.css values apply. `named-foreground` is text on a named colour.
+ */
+export const NAMED_TOKENS: readonly NamedToken[] = [
+  ...NAMED_COLORS.map((name) => `named-${name}` as const),
+  'named-foreground'
+];
 export type ThemeColor = [number, number, number];
-export type ThemePalette = Record<ThemeToken, ThemeColor>;
+export type ThemePalette = Record<ThemeToken, ThemeColor> &
+  Partial<Record<NamedToken, ThemeColor>>;
+
+export function isNamedColor(value: unknown): value is NamedColor {
+  return NAMED_COLORS.includes(value as NamedColor);
+}
 export interface ThemePreset {
   version: 1;
   id: string;
@@ -29,7 +57,10 @@ export interface ThemePreset {
 export const THEME_CACHE_KEY = 'mindstream:appearance:v1';
 
 export function validPresetId(value: unknown): value is string {
-  return typeof value === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(value);
+  return (
+    typeof value === 'string' &&
+    /^(?:builtin:)?[a-z][a-z0-9-]{0,63}$/.test(value)
+  );
 }
 
 export function themeColorRgb([l, c, h]: ThemeColor): [number, number, number] {
@@ -43,6 +74,24 @@ export function themeColorRgb([l, c, h]: ThemeColor): [number, number, number] {
     -1.2684380046 * ll + 2.6097574011 * mm - 0.3413193965 * ss,
     -0.0041960863 * ll - 0.7034186147 * mm + 1.707614701 * ss
   ].map((value) => Math.max(0, Math.min(1, value))) as [number, number, number];
+}
+
+/** Gamma-encoded sRGB bytes. */
+function themeColorBytes(color: ThemeColor): [number, number, number] {
+  return themeColorRgb(color).map((value) =>
+    Math.round(
+      255 *
+        (value <= 0.0031308
+          ? 12.92 * value
+          : 1.055 * value ** (1 / 2.4) - 0.055)
+    )
+  ) as [number, number, number];
+}
+
+/** A preset colour as `rgba()`, for canvas painting where `var()` cannot reach. */
+export function themeColorCss(color: ThemeColor, alpha = 1): string {
+  const [red, green, blue] = themeColorBytes(color);
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
 }
 
 function luminance(color: ThemeColor): number {
@@ -78,12 +127,13 @@ export function parseThemePreset(value: unknown): ThemePreset {
     return fail();
   for (const mode of ['light', 'dark']) {
     const palette = raw[mode] as ThemePalette;
+    if (!palette || Array.isArray(palette) || typeof palette !== 'object')
+      return fail();
+    const named = NAMED_TOKENS.some((key) => Object.hasOwn(palette, key));
+    const expected = named ? [...THEME_TOKENS, ...NAMED_TOKENS] : THEME_TOKENS;
     if (
-      !palette ||
-      Array.isArray(palette) ||
-      typeof palette !== 'object' ||
-      Object.keys(palette).length !== THEME_TOKENS.length ||
-      THEME_TOKENS.some((key) => !Object.hasOwn(palette, key))
+      Object.keys(palette).length !== expected.length ||
+      expected.some((key) => !Object.hasOwn(palette, key))
     )
       return fail();
     for (const color of Object.values(palette)) {
@@ -131,6 +181,17 @@ export function parseThemePreset(value: unknown): ThemePreset {
       ) < 4.5
     )
       return fail();
+    if (
+      named &&
+      NAMED_COLORS.some((name) => {
+        const color = palette[`named-${name}`]!;
+        return (
+          themeContrast(color, palette['named-foreground']!) < 4.5 ||
+          surfaces.some((surface) => themeContrast(surface, color) < 3)
+        );
+      })
+    )
+      return fail();
   }
   return structuredClone(raw) as unknown as ThemePreset;
 }
@@ -147,28 +208,30 @@ export function resolvedPreset(
 export function applyThemeAppearance(
   preset: ThemePreset,
   dark: boolean,
-  accent: unknown,
   uiFontSize: unknown
 ): void {
   if (typeof document === 'undefined') return;
-  clearAccentColor();
   const palette = dark ? preset.dark : preset.light;
   for (const token of THEME_TOKENS)
     document.documentElement.style.setProperty(
       `--${token}`,
       `oklch(${palette[token].join(' ')})`
     );
-  if (
-    typeof accent === 'string' &&
-    /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(accent)
-  )
-    applyAccentColor(accent);
+  for (const token of NAMED_TOKENS) {
+    const color = palette[token];
+    if (color)
+      document.documentElement.style.setProperty(
+        `--${token}`,
+        `oklch(${color.join(' ')})`
+      );
+    else document.documentElement.style.removeProperty(`--${token}`);
+  }
   applyUiFontSize(uiFontSize);
   document.documentElement.dataset.themePreset = preset.id;
   try {
     localStorage.setItem(
       THEME_CACHE_KEY,
-      JSON.stringify({ preset, accent, uiFontSize })
+      JSON.stringify({ preset, uiFontSize })
     );
   } catch {
     /* storage can be unavailable */
@@ -191,15 +254,8 @@ export function currentThemeWindowBackground(): {
   } catch {
     /* validated default */
   }
-  const rgb = themeColorRgb(
+  const [red, green, blue] = themeColorBytes(
     (dark ? preset.dark : preset.light)['surface-1']
-  ).map((value) =>
-    Math.round(
-      255 *
-        (value <= 0.0031308
-          ? 12.92 * value
-          : 1.055 * value ** (1 / 2.4) - 0.055)
-    )
   );
-  return { red: rgb[0], green: rgb[1], blue: rgb[2], alpha: 255 };
+  return { red, green, blue, alpha: 255 };
 }

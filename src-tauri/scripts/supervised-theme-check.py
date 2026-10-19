@@ -31,6 +31,7 @@ class Fixture(h.Fixture):
         if not self.children:
             (self.root / "desktop-settings.json").write_text(json.dumps({"close_to_tray": True, "theme_mode": "light"}))
             (self.root / "ui-settings.json").write_text(json.dumps({"version": 1, "revision": 0, "values": {"appearance.preset": "warm"}}))
+            # The accent values are left over from builds before that setting was retired.
             for name, accent, font, editor in [("source", "#112233", 14, 20), ("target", "#abcdef", 18, 22)]:
                 (self.root / "profiles" / name / "content-settings.json").write_text(json.dumps({"version": 1, "revision": 0, "values": {"appearance.accent": accent, "appearance.uiFontSize": font, "appearance.editorFontSize": editor}}))
         self.env["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = "--remote-debugging-port=0"
@@ -104,10 +105,11 @@ def state(handle):
     return execute("const root=document.documentElement;return {preset:root.dataset.themePreset,dark:root.classList.contains('dark'),font:getComputedStyle(root).fontSize,editor:root.style.getPropertyValue('--editor-font-size'),accent:root.style.getPropertyValue('--accent-brand'),surface:root.style.getPropertyValue('--surface-1')};")
 
 
-def check_windows(handles, preset, font, dark, accent=None):
+def check_windows(handles, preset, font, dark):
+    # The accent always comes from the preset; a stored hex accent must never paint.
     def ready():
         states = [state(handle) for handle in handles]
-        return states if all(item["preset"] == preset and item["font"] == f"{font}px" and item["dark"] == dark and (accent is None or item["accent"] == accent) for item in states) else None
+        return states if all(item["preset"] == preset and item["font"] == f"{font}px" and item["dark"] == dark and item["accent"].startswith("oklch(") for item in states) else None
     return h.wait(ready)
 
 
@@ -129,7 +131,7 @@ try:
     h.wait(lambda: request("/status"))
     session = attach("source")
     source = h.wait(lambda: find_window("source"))
-    check_windows([source], "warm", 14, False, "#112233")
+    check_windows([source], "warm", 14, False)
     geometry = next(window for window in fixture.windows("source") if window["label"] == "main")
     popout = {**geometry, "label": "note_seed_sprint", "note_id": "seed_sprint", "visible": True}
     operation = h.uid()
@@ -139,15 +141,13 @@ try:
     fixture.operation("open", vault_id="target")
     attach("target")
     target = h.wait(lambda: find_window("target"))
-    states = check_windows([source, note, target], "warm", 14, False, "#112233")
+    states = check_windows([source, note, target], "warm", 14, False)
     assert [item["editor"] for item in states] == ["20px", "20px", "22px"], states
     select_window(source)
-    patch("appearance.accent", remove=True)
     invoke("set_desktop_theme_mode", mode="dark")
     patch("appearance.uiFontSize", 17)
-    states = check_windows([source, note, target], "warm", 17, True)
-    assert all(item["accent"].startswith("oklch(") for item in states), states
-    print("Root accent/font and mode reached both vaults and the popout; editor typography stayed separate", flush=True)
+    check_windows([source, note, target], "warm", 17, True)
+    print("Root font and mode reached both vaults and the popout; editor typography stayed separate", flush=True)
 
     select_window(source)
     execute("document.querySelector('button[aria-label=\"Open settings\"]').click();return true;")
@@ -167,8 +167,8 @@ try:
     root_values = json.loads((fixture.root / "ui-settings.json").read_text())["values"]
     assert root_values["appearance.preset"] == "qa-forest"
     assert "appearance.accent" not in root_values
-    for name, accent in [("source", "#112233"), ("target", "#abcdef")]:
-        assert json.loads((fixture.root / "profiles" / name / "content-settings.json").read_text())["values"]["appearance.accent"] == accent
+    for name, font in [("source", 14), ("target", 18)]:
+        assert json.loads((fixture.root / "profiles" / name / "content-settings.json").read_text())["values"]["appearance.uiFontSize"] == font
     select_window(source)
     invoke("save_theme_preset", raw=json.dumps(custom))
     check_windows([source, note, target], "qa-forest", 17, True)

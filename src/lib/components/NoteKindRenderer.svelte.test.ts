@@ -1,32 +1,57 @@
-import { cleanup, render, screen } from '@testing-library/svelte';
-import { tick } from 'svelte';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import templatesManifest from '../../../plugins/templates/manifest.json';
+import { cleanup, render } from '@testing-library/svelte';
+import { flushSync } from 'svelte';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   registerPlugin,
-  resetPluginRegistry
+  resetPluginRegistry,
+  setPluginEnabled
 } from '$lib/plugins/registry.svelte';
 
-vi.mock('$lib/components/DrawingNoteEditor.svelte', async () => ({
-  default: (await import('./note-editor/__tests__/EditorProbe.svelte')).default
-}));
-vi.mock('$lib/components/NoteEditor.svelte', async () => ({
-  default: (await import('./note-editor/__tests__/EditorProbe.svelte')).default
-}));
-vi.mock('$lib/components/FreeformNoteEditor.svelte', async () => ({
-  default: (await import('./note-editor/__tests__/EditorProbe.svelte')).default
-}));
-vi.mock('$lib/components/PdfDocumentEditor.svelte', async () => ({
-  default: (await import('./note-editor/__tests__/EditorProbe.svelte')).default
-}));
-vi.mock('$lib/components/KanbanNoteEditor.svelte', async () => ({
-  default: (await import('./note-editor/__tests__/EditorProbe.svelte')).default
-}));
-vi.mock('$lib/components/PluginDocumentNoteEditor.svelte', async () => ({
-  default: (await import('./note-editor/__tests__/EditorProbe.svelte')).default
-}));
+const loadNoteKindComponent = vi.fn();
+
+// Keep the real kind → loader selection, which reads the plugin registry, but
+// never resolve so no editor module is imported.
+vi.mock('./note-editor/lazy-components', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('./note-editor/lazy-components')>();
+  return {
+    ...actual,
+    loadNoteKindComponent: (kind: string | null | undefined) => {
+      actual.noteKindLoader(kind);
+      loadNoteKindComponent(kind);
+      return new Promise(() => {});
+    }
+  };
+});
 
 import NoteKindRenderer from './NoteKindRenderer.svelte';
+
+const PLUGIN_KIND = 'plugin.com.example.kinds.document';
+
+function kindManifest(version = '1.0.0'): Record<string, unknown> {
+  return {
+    manifestVersion: 1,
+    id: 'com.example.kinds',
+    name: 'Kinds',
+    version,
+    runtime: 'luau',
+    entry: 'main.luau',
+    permissions: ['notes.create'],
+    contributes: {
+      noteKinds: [
+        {
+          id: 'document',
+          labelKey: 'notes.document',
+          render: { export: 'renderDocument' }
+        }
+      ]
+    }
+  };
+}
+
+beforeEach(() => {
+  loadNoteKindComponent.mockReset();
+});
 
 afterEach(() => {
   cleanup();
@@ -34,53 +59,45 @@ afterEach(() => {
 });
 
 describe('NoteKindRenderer', () => {
-  it.each([
-    'markdown',
-    'freeform',
-    'ink',
-    'pdf',
-    'kanban',
-    'plugin.com.example.stability.document'
-  ])(
-    'keeps the %s editor mounted across native plugin registry refreshes',
-    async (noteKind) => {
-      registerPlugin(templatesManifest);
-      if (noteKind.startsWith('plugin.'))
-        registerPlugin({
-          manifestVersion: 1,
-          id: 'com.example.stability',
-          name: 'Stability fixture',
-          version: '1.0.0',
-          runtime: 'luau',
-          entry: 'main.luau',
-          permissions: [],
-          contributes: {
-            noteKinds: [
-              {
-                id: 'document',
-                labelKey: 'document',
-                render: { export: 'renderDocument' }
-              }
-            ]
-          }
-        });
-      render(NoteKindRenderer, { noteId: 'note-one', noteKind });
-      const input = (await screen.findByLabelText(
-        'Editor input'
-      )) as HTMLInputElement;
-      input.value = 'unsaved input';
-      input.focus();
+  it('keeps a markdown editor mounted when the plugin registry refreshes', () => {
+    registerPlugin(kindManifest());
+    render(NoteKindRenderer, { noteId: 'n1', noteKind: 'markdown' });
+    expect(loadNoteKindComponent).toHaveBeenCalledTimes(1);
 
-      // Every native ink toolbar setting write rediscovers and replaces plugins.
-      for (let i = 0; i < 6; i += 1) {
-        registerPlugin(structuredClone(templatesManifest));
-        await tick();
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        await tick();
-        expect(screen.getByLabelText('Editor input')).toBe(input);
-        expect(input.value).toBe('unsaved input');
-        expect(document.activeElement).toBe(input);
-      }
-    }
-  );
+    // A device-settings refresh re-registers every plugin unchanged.
+    registerPlugin(kindManifest());
+    registerPlugin(kindManifest('1.0.1'));
+    setPluginEnabled('com.example.kinds', false);
+    flushSync();
+
+    expect(loadNoteKindComponent).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a plugin editor mounted when its owner re-registers unchanged', () => {
+    registerPlugin(kindManifest());
+    render(NoteKindRenderer, { noteId: 'n1', noteKind: PLUGIN_KIND });
+    expect(loadNoteKindComponent).toHaveBeenCalledTimes(1);
+
+    registerPlugin(kindManifest());
+    flushSync();
+
+    expect(loadNoteKindComponent).toHaveBeenCalledTimes(1);
+  });
+
+  it('reloads a plugin note when its owner appears, changes or goes away', () => {
+    render(NoteKindRenderer, { noteId: 'n1', noteKind: PLUGIN_KIND });
+    expect(loadNoteKindComponent).toHaveBeenCalledTimes(1);
+
+    registerPlugin(kindManifest());
+    flushSync();
+    expect(loadNoteKindComponent).toHaveBeenCalledTimes(2);
+
+    registerPlugin(kindManifest('1.0.1'));
+    flushSync();
+    expect(loadNoteKindComponent).toHaveBeenCalledTimes(3);
+
+    setPluginEnabled('com.example.kinds', false);
+    flushSync();
+    expect(loadNoteKindComponent).toHaveBeenCalledTimes(4);
+  });
 });

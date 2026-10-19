@@ -1,6 +1,8 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   openRightSidebar,
+  previewLeftSidebarWidth,
+  previewRightSidebarWidth,
   setActiveNote,
   setLeftSidebarWidth,
   setRightSidebarWidth,
@@ -49,6 +51,21 @@ describe('sidebars', () => {
     setRightSidebarWidth(289);
     expect(ui.leftSidebarWidth).toBe(321);
     expect(ui.rightSidebarWidth).toBe(289);
+  });
+
+  it('previews widths during a drag without saving them', () => {
+    vi.useFakeTimers();
+    try {
+      localStorage.clear();
+      previewLeftSidebarWidth(300);
+      previewRightSidebarWidth(260);
+      vi.runAllTimers();
+      expect(ui.leftSidebarWidth).toBe(300);
+      expect(ui.rightSidebarWidth).toBe(260);
+      expect(localStorage.length).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

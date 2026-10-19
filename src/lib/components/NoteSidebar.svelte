@@ -7,18 +7,19 @@
     Paperclip,
     Share2,
     ShieldCheck,
-    Tag,
     User,
     UserPlus,
-    Users
+    Users,
+    X
   } from '@lucide/svelte';
+  import NoteOutline from './NoteOutline.svelte';
+  import { Button } from '$lib/components/ui/button';
   import FavouriteStar from './FavouriteStar.svelte';
   import TagsSection from '$lib/components/TagsSection.svelte';
   import NoteHistorySection from '$lib/components/NoteHistorySection.svelte';
   import NoteLinksSection from '$lib/components/NoteLinksSection.svelte';
   import PageOverlayScrollbar from '$lib/layout/page-overlay-scrollbar.svelte';
   import { Surface } from '$lib/components/ui/surface';
-  import { SectionHeader } from '$lib/components/ui/section-header';
   import {
     loadNote,
     noteWordCount,
@@ -43,6 +44,10 @@
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { ui } from '$lib/state.svelte';
   import { setNoteFavourite, tree } from '$lib/stores/tree.svelte';
+
+  // `header: false` when the host draws its own (the mobile details sheet).
+  let { onClose, header = true }: { onClose?: () => void; header?: boolean } =
+    $props();
 
   // Summary only — bodies live with the editor and would force every tree
   // refresh through a load_note round trip.
@@ -169,12 +174,15 @@
     Boolean(note && authSession.current && !note.pushed)
   );
 
-  // Body is loaded only for the link/attachment regexes; the word count comes
-  // from Rust (note_word_count) so it shares one definition with the History
-  // delta and never re-derives note content in JS.
+  // Body is loaded only for the attachment scan; the word count comes from
+  // Rust (note_word_count) so it shares one definition with the History delta
+  // and never re-derives note content in JS.
   let noteBody = $state('');
   let wordCount = $state(0);
-  let contentLoading = $state(false);
+  // The note the two values above describe. Every save reloads them; keeping
+  // the previous values meanwhile stops the summary flashing on each autosave,
+  // while switching notes shows a placeholder until the new note's arrive.
+  let statsNoteId = $state<string | null>(null);
   const showContentStats = $derived(
     note ? hasContentStats(note.note_kind) : false
   );
@@ -189,14 +197,13 @@
     ) {
       noteBody = '';
       wordCount = 0;
-      contentLoading = false;
+      statsNoteId = null;
       return;
     }
 
     let cancelled = false;
     const id = note.id;
     void note.modified;
-    contentLoading = true;
     Promise.all([
       noteWordCount(id),
       loadNote(id).then((loaded) => loaded.body ?? '')
@@ -205,6 +212,7 @@
         if (!cancelled && ui.activeNoteId === id) {
           wordCount = words;
           noteBody = body;
+          statsNoteId = id;
         }
       })
       .catch((err) => {
@@ -212,11 +220,7 @@
         if (!cancelled && ui.activeNoteId === id) {
           wordCount = 0;
           noteBody = '';
-        }
-      })
-      .finally(() => {
-        if (!cancelled && ui.activeNoteId === id) {
-          contentLoading = false;
+          statsNoteId = id;
         }
       });
 
@@ -225,8 +229,25 @@
     };
   });
 
-  const contentStats = $derived.by(() =>
-    analyzeContent(noteBody, wordCount, note?.note_kind ?? null)
+  const statsReady = $derived(note !== null && statsNoteId === note.id);
+  const attachmentCount = $derived(extractAssetIds(noteBody).length);
+  const contentSummary = $derived.by(() => {
+    if (!statsReady) return '…';
+    const words = tUi(
+      wordCount === 1
+        ? 'metadata.content.wordCount.one'
+        : 'metadata.content.wordCount.other'
+    ).replace('{count}', String(wordCount));
+    if (wordCount === 0) return words;
+    const minutes = Math.max(1, Math.ceil(wordCount / 200));
+    return `${words} · ${tUi('metadata.content.readingTime').replace(
+      '{minutes}',
+      String(minutes)
+    )}`;
+  });
+  // "0 files" is noise in a details list; the row appears once there is one.
+  const showAttachmentRow = $derived(
+    showAttachments && statsReady && attachmentCount > 0
   );
 
   function noteKindLabel(kind: string | null | undefined): string {
@@ -264,28 +285,6 @@
     return kind === 'markdown' || kind === 'freeform' || kind === 'pdf';
   }
 
-  // `words` is the canonical count from Rust; links/attachments are still
-  // derived in JS from the body (the lookbehind link rule has no Rust regex
-  // equivalent yet). PDF notes only ever have attachments.
-  function analyzeContent(
-    body: string,
-    words: number,
-    kind: string | null | undefined
-  ) {
-    return {
-      words,
-      readMinutes: words === 0 ? 0 : Math.max(1, Math.ceil(words / 200)),
-      links: kind === 'pdf' ? 0 : countLinks(body),
-      attachments: extractAssetIds(body).length
-    };
-  }
-
-  function countLinks(body: string): number {
-    const markdownLinks = body.match(/(?<!!)\[[^\]]+]\([^)]*\)/g)?.length ?? 0;
-    const wikilinks = body.match(/\[\[[^\]]+]]/g)?.length ?? 0;
-    return markdownLinks + wikilinks;
-  }
-
   function extractAssetIds(body: string): string[] {
     const ids = new Set<string>();
     for (const match of body.matchAll(/asset:mindstream\/([A-Za-z0-9_-]+)/g)) {
@@ -296,20 +295,7 @@
     return [...ids];
   }
 
-  function statValue(value: number): string {
-    return contentLoading ? '…' : String(value);
-  }
-
-  function readValue(minutes: number): string {
-    if (contentLoading) return '…';
-    return tUi('metadata.content.readValue').replace(
-      '{minutes}',
-      String(minutes)
-    );
-  }
-
   function attachmentsValue(count: number): string {
-    if (contentLoading) return '…';
     const key =
       count === 1 ? 'metadata.attachments.one' : 'metadata.attachments.other';
     return tUi(key).replace('{count}', String(count));
@@ -363,338 +349,192 @@
   }
 </script>
 
-{#snippet attachmentsRow()}
-  <dl class="border-t border-border">
-    <div
-      class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
+{#snippet detailRow(
+  Icon: typeof Paperclip,
+  label: string,
+  value: string,
+  title?: string
+)}
+  <div class="flex min-w-0 items-center justify-between gap-4">
+    <dt
+      class="inline-flex shrink-0 items-center gap-2 text-xs text-muted-foreground"
     >
-      <dt
-        class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-      >
-        <Paperclip class="size-3.5" />
-        {tUi('metadata.attachments')}
-      </dt>
-      <dd
-        class="min-w-0 truncate text-right text-xs font-medium text-muted-foreground"
-      >
-        {attachmentsValue(contentStats.attachments)}
-      </dd>
-    </div>
-  </dl>
+      <Icon class="size-3.5" />
+      {label}
+    </dt>
+    <dd class="min-w-0 truncate text-right text-xs tabular-nums" {title}>
+      {value}
+    </dd>
+  </div>
 {/snippet}
 
 <Surface
   as="aside"
   variant="panel"
-  class="relative flex h-full w-full min-w-0 flex-col text-sm"
+  class="note-details-panel relative flex h-full w-full min-w-0 flex-col text-sm"
 >
+  {#if header}<header
+      class="flex h-[42px] shrink-0 items-center justify-between border-b border-border bg-surface-0 px-5"
+    >
+      <h2 class="text-xs font-medium">{tUi('sidebar.details')}</h2>
+      {#if onClose}<Button
+          variant="ghost"
+          size="icon"
+          class="size-6 text-muted-foreground"
+          onclick={onClose}
+          aria-label={tUi('sidebar.close')}
+          title={tUi('sidebar.hide')}><X class="size-3.5" /></Button
+        >{/if}
+    </header>{/if}
   <div
     bind:this={metadataScroller}
-    class="scrollbar-none flex-1 overflow-y-auto p-3"
+    class="scrollbar-none min-h-0 flex-1 overflow-y-auto px-5 py-5"
   >
     {#if note}
       {#if showMetadata}
-        <Surface as="section" padding="lg">
-          <SectionHeader as="h2" class="mb-3">
-            {tUi('sidebar.metadata')}
-          </SectionHeader>
-          <div class="flex min-w-0 items-start justify-between gap-3">
-            <div class="min-w-0">
-              <h3 class="truncate text-base font-semibold leading-6">
-                {note.title}
-              </h3>
-              <p
-                class="mt-0.5 truncate font-mono text-[11px] text-muted-foreground"
-              >
-                {note.id}
-              </p>
-            </div>
-            <button
-              type="button"
-              class="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              onclick={() => void setNoteFavourite(note.id, !note.favourite)}
-              aria-pressed={note.favourite}
-              aria-label={note.favourite
-                ? tUi('favourite.remove')
-                : tUi('favourite.add')}
-              title={note.favourite
-                ? tUi('favourite.remove')
-                : tUi('favourite.add')}
+        <!-- Identity, then one untitled list of facts. The labels name
+             themselves, so the list needs no section heading; sharing facts
+             follow after a gap when the note sits in a shared folder. -->
+        <div class="flex min-w-0 items-start justify-between gap-3">
+          <div class="min-w-0">
+            <div
+              class="mb-2 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground"
             >
-              <FavouriteStar size={16} favourited={note.favourite} />
-            </button>
+              <NoteKindIcon
+                kind={note.note_kind}
+                class="size-3 shrink-0"
+              />{noteKindLabel(note.note_kind)}
+            </div>
+            <h3
+              class="truncate text-base font-semibold leading-6"
+              title={note.title}
+            >
+              {note.title}
+            </h3>
+            {#if showContentStats}
+              <p
+                class="mt-0.5 truncate text-xs tabular-nums text-muted-foreground"
+              >
+                {contentSummary}
+              </p>
+            {/if}
           </div>
-
-          <section class="mt-5">
-            <SectionHeader class="mb-2">
-              {tUi('metadata.organization')}
-            </SectionHeader>
-            <dl class="border-y border-border">
-              <div
-                class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-              >
-                <dt
-                  class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                >
-                  <Folder class="size-3.5" />
-                  {tUi('metadata.folder')}
-                </dt>
-                <dd
-                  class="max-w-[9rem] truncate rounded-full bg-accent-brand/10 px-2 py-0.5 text-right text-[11px] font-medium text-accent-brand"
-                  title={folderTitle}
-                >
-                  {folderLabel}
-                </dd>
-              </div>
-              <div
-                class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-              >
-                <dt
-                  class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                >
-                  <Tag class="size-3.5" />
-                  {tUi('metadata.type')}
-                </dt>
-                <dd
-                  class="flex min-w-0 items-center justify-end gap-1.5 text-right text-xs font-medium text-muted-foreground"
-                >
-                  <NoteKindIcon
-                    kind={note.note_kind}
-                    class="size-3.5 shrink-0"
-                  />
-                  <span class="truncate">{noteKindLabel(note.note_kind)}</span>
-                </dd>
-              </div>
-              {#if showPendingSync}
-                <div
-                  class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-                >
-                  <dt
-                    class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                  >
-                    <Cloud class="size-3.5" />
-                    {tUi('metadata.sync')}
-                  </dt>
-                  <dd
-                    class="min-w-0 truncate text-right text-xs font-medium text-muted-foreground"
-                  >
-                    {tUi('metadata.sync.pending')}
-                  </dd>
-                </div>
-              {/if}
-            </dl>
-          </section>
-
-          {#if showSharingMetadata && shareScope}
-            <section class="mt-5">
-              <SectionHeader class="mb-2">
-                {tUi('metadata.sharing')}
-              </SectionHeader>
-              <dl class="border-y border-border">
-                {#if showShareScopeRow}
-                  <div
-                    class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-                  >
-                    <dt
-                      class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                    >
-                      <Share2 class="size-3.5" />
-                      {tUi('metadata.sharing.scope')}
-                    </dt>
-                    <dd
-                      class="max-w-[9rem] truncate rounded-full bg-accent-brand/10 px-2 py-0.5 text-right text-[11px] font-medium text-accent-brand"
-                      title={shareScope.name}
-                    >
-                      {shareScope.name}
-                    </dd>
-                  </div>
-                {/if}
-                {#if authorName}
-                  <div
-                    class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-                  >
-                    <dt
-                      class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                    >
-                      <User class="size-3.5" />
-                      {tUi('metadata.author')}
-                    </dt>
-                    <dd
-                      class="min-w-0 truncate text-right text-xs font-medium text-muted-foreground"
-                    >
-                      {authorName}
-                    </dd>
-                  </div>
-                {/if}
-                {#if permissionLabel}
-                  <div
-                    class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-                  >
-                    <dt
-                      class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                    >
-                      <ShieldCheck class="size-3.5" />
-                      {tUi('metadata.permission')}
-                    </dt>
-                    <dd
-                      class="min-w-0 truncate text-right text-xs font-medium text-muted-foreground"
-                    >
-                      {permissionLabel}
-                    </dd>
-                  </div>
-                {/if}
-                {#if collaborators.length > 0}
-                  <div
-                    class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-                  >
-                    <dt
-                      class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                    >
-                      <Users class="size-3.5" />
-                      {tUi('metadata.collaborators')}
-                    </dt>
-                    <dd
-                      class="min-w-0 truncate text-right text-xs font-medium text-muted-foreground"
-                      title={collaborators.join(', ')}
-                    >
-                      {compactList(collaborators)}
-                    </dd>
-                  </div>
-                {/if}
-                {#if pendingInviteCount > 0}
-                  <div
-                    class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-                  >
-                    <dt
-                      class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                    >
-                      <UserPlus class="size-3.5" />
-                      {tUi('metadata.sharing.pending')}
-                    </dt>
-                    <dd
-                      class="min-w-0 truncate text-right text-xs font-medium text-muted-foreground"
-                    >
-                      {pendingInvitesLabel(pendingInviteCount)}
-                    </dd>
-                  </div>
-                {/if}
-              </dl>
-            </section>
-          {/if}
-
-          <section class="mt-5">
-            <SectionHeader class="mb-2">
-              {tUi('metadata.dates')}
-            </SectionHeader>
-            <dl class="border-y border-border">
-              <div
-                class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-              >
-                <dt
-                  class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                >
-                  <CalendarPlus class="size-3.5" />
-                  {tUi('metadata.created')}
-                </dt>
-                <dd
-                  class="min-w-0 truncate text-right text-xs font-medium tabular-nums"
-                >
-                  {formatNoteDateTime(note.created)}
-                </dd>
-              </div>
-              <div
-                class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-              >
-                <dt
-                  class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                >
-                  <Edit3 class="size-3.5" />
-                  {tUi('metadata.modified')}
-                </dt>
-                <dd
-                  class="min-w-0 truncate text-right text-xs font-medium tabular-nums"
-                >
-                  {formatNoteDateTime(note.modified)}
-                </dd>
-              </div>
-            </dl>
-          </section>
-
-          {#if showContentStats}
-            <section class="mt-5">
-              <SectionHeader class="mb-2">
-                {tUi('metadata.content')}
-              </SectionHeader>
-              <div class="grid grid-cols-3 gap-2">
-                <Surface variant="raised" class="px-2.5 py-2">
-                  <div class="truncate text-base font-semibold leading-none">
-                    {statValue(contentStats.words)}
-                  </div>
-                  <div class="mt-1 truncate text-[10px] text-muted-foreground">
-                    {tUi('metadata.content.words')}
-                  </div>
-                </Surface>
-                <Surface variant="raised" class="px-2.5 py-2">
-                  <div class="truncate text-base font-semibold leading-none">
-                    {readValue(contentStats.readMinutes)}
-                  </div>
-                  <div class="mt-1 truncate text-[10px] text-muted-foreground">
-                    {tUi('metadata.content.read')}
-                  </div>
-                </Surface>
-                <Surface variant="raised" class="px-2.5 py-2">
-                  <div class="truncate text-base font-semibold leading-none">
-                    {statValue(contentStats.links)}
-                  </div>
-                  <div class="mt-1 truncate text-[10px] text-muted-foreground">
-                    {tUi('metadata.content.links')}
-                  </div>
-                </Surface>
-              </div>
-              {#if showAttachments}
-                <div class="mt-4">
-                  {@render attachmentsRow()}
-                </div>
-              {/if}
-            </section>
-          {:else if showAttachments}
-            <section class="mt-5">
-              <SectionHeader class="mb-2">
-                {tUi('metadata.attachments')}
-              </SectionHeader>
-              {@render attachmentsRow()}
-            </section>
-          {/if}
-
-          <div
-            class="mt-5 border-border"
-            class:border-t={showContentStats || showAttachments}
-            class:pt-5={showContentStats || showAttachments}
+          <button
+            type="button"
+            class="-mr-1 shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            onclick={() => void setNoteFavourite(note.id, !note.favourite)}
+            aria-pressed={note.favourite}
+            aria-label={note.favourite
+              ? tUi('favourite.remove')
+              : tUi('favourite.add')}
+            title={note.favourite
+              ? tUi('favourite.remove')
+              : tUi('favourite.add')}
           >
-            <TagsSection noteId={note.id} />
-          </div>
-        </Surface>
+            <FavouriteStar size={16} favourited={note.favourite} />
+          </button>
+        </div>
+
+        <dl class="mt-5 space-y-2.5">
+          {@render detailRow(
+            Folder,
+            tUi('metadata.folder'),
+            folderLabel,
+            folderTitle
+          )}
+          {@render detailRow(
+            CalendarPlus,
+            tUi('metadata.created'),
+            formatNoteDateTime(note.created)
+          )}
+          {@render detailRow(
+            Edit3,
+            tUi('metadata.modified'),
+            formatNoteDateTime(note.modified)
+          )}
+          {#if showPendingSync}
+            {@render detailRow(
+              Cloud,
+              tUi('metadata.sync'),
+              tUi('metadata.sync.pending')
+            )}
+          {/if}
+          {#if showAttachmentRow}
+            {@render detailRow(
+              Paperclip,
+              tUi('metadata.attachments'),
+              attachmentsValue(attachmentCount)
+            )}
+          {/if}
+        </dl>
+
+        {#if showSharingMetadata && shareScope}
+          <dl class="mt-4 space-y-2.5">
+            {#if showShareScopeRow}
+              {@render detailRow(
+                Share2,
+                tUi('metadata.sharing.scope'),
+                shareScope.name,
+                shareScope.name
+              )}
+            {/if}
+            {#if authorName}
+              {@render detailRow(User, tUi('metadata.author'), authorName)}
+            {/if}
+            {#if permissionLabel}
+              {@render detailRow(
+                ShieldCheck,
+                tUi('metadata.permission'),
+                permissionLabel
+              )}
+            {/if}
+            {#if collaborators.length > 0}
+              {@render detailRow(
+                Users,
+                tUi('metadata.collaborators'),
+                compactList(collaborators),
+                collaborators.join(', ')
+              )}
+            {/if}
+            {#if pendingInviteCount > 0}
+              {@render detailRow(
+                UserPlus,
+                tUi('metadata.sharing.pending'),
+                pendingInvitesLabel(pendingInviteCount)
+              )}
+            {/if}
+          </dl>
+        {/if}
+
+        <div class="mt-5 border-t border-border pt-5">
+          <TagsSection noteId={note.id} />
+        </div>
+        {#if supportsNoteLinks}<NoteOutline noteId={note.id} />{/if}
       {/if}
 
       {#if showHistory && noteHistoryEnabled(note.note_kind)}
-        <Surface as="section" padding="lg" class="mt-3">
+        <Surface
+          as="section"
+          variant="panel"
+          class="mt-5 border-t border-border bg-transparent pt-5"
+        >
           <NoteHistorySection noteId={note.id} noteKind={note.note_kind} />
         </Surface>
       {/if}
 
       {#if supportsNoteLinks && showLinks}
-        <div class="mt-3">
-          <NoteLinksSection noteId={note.id} />
+        <div class="mt-5 border-t border-border pt-5">
+          <NoteLinksSection noteId={note.id} flat />
         </div>
       {/if}
 
       {#if !showMetadata && !(showHistory && noteHistoryEnabled(note.note_kind)) && !(supportsNoteLinks && showLinks)}
-        <Surface as="p" padding="lg" class="text-xs text-muted-foreground">
+        <Surface as="p" variant="panel" class="text-xs text-muted-foreground">
           {tUi('sidebar.sections.empty')}
         </Surface>
       {/if}
     {:else}
-      <Surface as="p" padding="lg" class="text-xs text-muted-foreground">
+      <Surface as="p" variant="panel" class="text-xs text-muted-foreground">
         {tUi('metadata.noNote')}
       </Surface>
     {/if}

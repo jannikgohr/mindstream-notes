@@ -11,6 +11,17 @@ import {
   waitForShell
 } from '../../helpers/harness.js';
 
+/** The theme mode on disk: `get_desktop_theme_mode` reads the settings file. */
+function savedThemeMode(): Promise<unknown> {
+  return browser.execute(() =>
+    (
+      window as unknown as {
+        __TAURI_INTERNALS__: { invoke(command: string): Promise<unknown> };
+      }
+    ).__TAURI_INTERNALS__.invoke('get_desktop_theme_mode')
+  );
+}
+
 describe('T3 settings persistence', function () {
   beforeEach(async () => {
     await waitForShell();
@@ -23,6 +34,15 @@ describe('T3 settings persistence', function () {
     await clickElement(themeButton);
     const after = await themeButton.getAttribute('aria-label');
     expect(after).not.toBe(before);
+
+    // The label changes before the setting is saved, and a save is two synced
+    // writes (backup, then file). Restarting at once can kill the app between
+    // them, which a fresh Windows build does often, so wait for the file.
+    const chosen = after?.match(/^Theme: (\w+)/)?.[1].toLowerCase();
+    await browser.waitUntil(async () => (await savedThemeMode()) === chosen, {
+      timeout: 10_000,
+      timeoutMsg: `the theme mode "${chosen}" was not saved`
+    });
 
     await restartApp();
     await waitForShell();

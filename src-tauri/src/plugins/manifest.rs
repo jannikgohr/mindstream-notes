@@ -679,13 +679,25 @@ mod tests {
             "ServiceProtocol",
         ] {
             let path = dir.join(format!("{name}.ts"));
+            let declaration = format!("export type {name}");
+            // The ts-rs `export_bindings_*` tests rewrite these files while
+            // this one runs, and a rewrite truncates first. Read until the
+            // declaration is there instead of failing on a file caught
+            // mid-write; a binding that is really stale stays stale.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let body = loop {
+                let body = std::fs::read_to_string(&path).unwrap_or_default();
+                if body.contains(&declaration) || std::time::Instant::now() >= deadline {
+                    break body;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            };
             assert!(
                 path.exists(),
                 "missing generated binding {name}.ts — run  and commit src/lib/plugins/generated/"
             );
-            let body = std::fs::read_to_string(&path).unwrap();
             assert!(
-                body.contains(&format!("export type {name}")),
+                body.contains(&declaration),
                 "{name}.ts does not declare {name}"
             );
         }

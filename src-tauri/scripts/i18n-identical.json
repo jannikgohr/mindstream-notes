@@ -1,5 +1,7 @@
 {
   "de": {
+    "ui.theme.preset.default": "Apollo",
+    "ui.theme.preset.warm": "Warm",
     "ui.data.openFolder.failed.message": "{error}",
     "ui.data.emptyTrash.failed.message": "{error}",
     "ui.data.backupNow.failed.message": "{error}",

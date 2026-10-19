@@ -15,6 +15,8 @@ export interface Profile {
   id: string;
   name: string;
   created_at: string;
+  /** The tile's named colour, stored once by the backend (NAMED_COLORS). */
+  color?: string;
 }
 
 /** Mirrors `profiles::ProfilesView` — the list plus live and persisted active ids. */
@@ -110,7 +112,10 @@ function parseProfile(value: unknown): Profile {
   return {
     id: assertString(raw.id, 'profile.id'),
     name: assertString(raw.name, 'profile.name'),
-    created_at: assertString(raw.created_at, 'profile.created_at')
+    created_at: assertString(raw.created_at, 'profile.created_at'),
+    ...(raw.color == null
+      ? {}
+      : { color: assertString(raw.color, 'profile.color') })
   };
 }
 

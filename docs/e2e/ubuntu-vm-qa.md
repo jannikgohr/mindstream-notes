@@ -1,6 +1,6 @@
 # Ubuntu VM QA
 
-The current delivery contract remains in [the root/vault plan](../root-vault-implementation-plan.md).
+The current delivery contract is documented in [storage ownership and recovery](../storage-ownership-and-recovery.md).
 These checks use disposable devices and local packages. No release was published.
 
 ## Environment

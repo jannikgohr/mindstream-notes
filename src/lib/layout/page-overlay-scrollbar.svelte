@@ -14,7 +14,7 @@
    * and keyboard scrolling stay available. Must be placed inside a
    * `position: relative` wrapper around `target`.
    */
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, untrack } from 'svelte';
   import { cn } from '$lib/utils';
 
   type Props = {
@@ -90,7 +90,10 @@
 
   $effect(() => {
     const el = target;
-    observe();
+    // observe() measures straight away, and update() reads `overflow`. Tracked,
+    // the observer's first report re-ran this effect and replaced the observer
+    // mid-delivery, which Chromium logs as a ResizeObserver loop error.
+    untrack(observe);
     if (!el) return;
     el.addEventListener('scroll', onScroll, { passive: true });
     el.addEventListener('mousemove', onMouseMove);
