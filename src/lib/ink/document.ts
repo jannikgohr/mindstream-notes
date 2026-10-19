@@ -49,6 +49,27 @@ import {
   validTransform
 } from './stroke-transform';
 import { applyRedoOp, applyUndoOp } from './document-undo';
+import {
+  defaultLayout,
+  DEFAULT_PAGE,
+  layoutForPages,
+  pageCountForContentMaxY,
+  pageIndexAt,
+  pageRect,
+  type InkPage,
+  type DocumentLayout
+} from './page';
+import {
+  readPages,
+  legacyPages,
+  pageOffset,
+  clipPoints,
+  INK_PAGES,
+  INK_PAGE_ORDER,
+  INK_DELETED_PAGES,
+  INK_META,
+  INK_SCHEMA
+} from './page-document';
 
 const STROKES_KEY = 'strokes';
 const FIELD_ID = 'id';
@@ -79,12 +100,264 @@ export class InkDocument {
   private visibleStrokeCache: StrokeMeta[] | null = null;
   private strokeMapCache: Map<string, Y.Map<unknown>> | null = null;
   private spatialIndexCache: StrokeSpatialIndex | null = null;
+  private pageOffsetsCache: Map<string, { x: number; y: number }> | null = null;
   readonly undo: UndoOp[] = [];
   readonly redo: UndoOp[] = [];
 
   constructor(doc = new Y.Doc()) {
     this.doc = doc;
     this.strokes = doc.getArray<Y.Map<unknown>>(STROKES_KEY);
+    const version = doc.getMap<number>(INK_META).get('schema') ?? 0;
+    if (version > INK_SCHEMA)
+      throw new Error('This ink document requires a newer app version.');
+  }
+
+  hasPages(): boolean {
+    return this.doc.getMap<InkPage>(INK_PAGES).size > 0;
+  }
+
+  pages(): InkPage[] {
+    return this.hasPages()
+      ? readPages(this.doc)
+      : legacyPages(pageCountForContentMaxY(this.contentMaxY()));
+  }
+
+  layout(): DocumentLayout {
+    return this.hasPages()
+      ? layoutForPages(readPages(this.doc))
+      : defaultLayout(pageCountForContentMaxY(this.contentMaxY()));
+  }
+
+  private ensurePages(): void {
+    if (this.hasPages()) return;
+    const pages = this.pages();
+    this.restorePages(pages);
+    const layout = layoutForPages(pages);
+    for (const map of this.strokes.toArray()) {
+      const bytes = map.get(FIELD_PAYLOAD);
+      const id = map.get(FIELD_ID);
+      if (!(bytes instanceof Uint8Array) || typeof id !== 'string') continue;
+      const data = decodePayload(bytes);
+      if (!data) continue;
+      let first = true;
+      for (let i = 0; i < pages.length; i++) {
+        const rect = pageRect(layout, i)!;
+        const fragments = clipPoints(data.points, rect);
+        for (let j = 0; j < fragments.length; j++) {
+          const target = first ? map : new Y.Map<unknown>();
+          if (!first) {
+            target.set(FIELD_ID, `${id}:page:${i}:${j}`);
+            target.set(FIELD_TOMBSTONED, map.get(FIELD_TOMBSTONED) === true);
+            this.strokes.push([target]);
+          }
+          target.set('pageId', pages[i].id);
+          target.set(
+            FIELD_PAYLOAD,
+            encodePayloadV2({
+              ...data,
+              points: fragments[j].map((p) => ({
+                ...p,
+                x: p.x - rect[0],
+                y: p.y - rect[1]
+              }))
+            })
+          );
+          first = false;
+        }
+      }
+    }
+    this.invalidateStrokeMapCache();
+    this.invalidateVisibleStrokeCache();
+    this.resetUndoHistory();
+  }
+
+  /** Keep ordinary ink notes open-ended after page management materializes them. */
+  private appendTrailingBlankPage(): void {
+    if (!this.hasPages()) return;
+    const pages = readPages(this.doc);
+    if (pages.some((page) => page.background)) return;
+    const last = pages.at(-1);
+    if (
+      !last ||
+      !this.strokes
+        .toArray()
+        .some(
+          (stroke) =>
+            stroke.get('pageId') === last.id &&
+            stroke.get(FIELD_TOMBSTONED) !== true
+        )
+    )
+      return;
+    const records = this.doc.getMap<InkPage>(INK_PAGES);
+    // Peers writing on the same final page choose the same unused identity.
+    // Count retained records too, so deleting a page never revives its strokes.
+    let index = records.size;
+    while (records.has(`auto-blank-${index}`)) index++;
+    const id = `auto-blank-${index}`;
+    records.set(id, { id, ...DEFAULT_PAGE });
+    this.doc.getMap<boolean>(INK_DELETED_PAGES).set(id, false);
+    const order = this.doc.getMap<number>(INK_PAGE_ORDER);
+    order.set(id, (order.get(last.id) ?? pages.length - 1) + 1);
+    this.invalidateVisibleStrokeCache();
+  }
+
+  /** Page identities and deletion flags are separate from order: concurrent moves cannot resurrect a deleted page. */
+  restorePages(pages: InkPage[]): void {
+    const records = this.doc.getMap<InkPage>(INK_PAGES);
+    const deleted = this.doc.getMap<boolean>(INK_DELETED_PAGES);
+    const order = this.doc.getMap<number>(INK_PAGE_ORDER);
+    const ids = new Set(pages.map((p) => p.id));
+    for (const id of records.keys()) if (!ids.has(id)) deleted.set(id, true);
+    pages.forEach((page, index) => {
+      if (JSON.stringify(records.get(page.id)) !== JSON.stringify(page))
+        records.set(page.id, page);
+      deleted.set(page.id, false);
+      order.set(page.id, index);
+    });
+    this.doc.getMap<number>(INK_META).set('schema', INK_SCHEMA);
+    this.invalidateVisibleStrokeCache();
+  }
+
+  insertPages(
+    pages: InkPage[],
+    at = this.pages().length
+  ): MutationResult<string[]> {
+    return this.transactLocalUpdate(() => {
+      this.ensurePages();
+      const before = this.pages();
+      const index = Math.max(0, Math.min(before.length, at));
+      const after = [
+        ...before.slice(0, index),
+        ...pages,
+        ...before.slice(index)
+      ];
+      this.restorePages(after);
+      this.recordOp({ kind: 'pages', before, after });
+      return pages.map((p) => p.id);
+    });
+  }
+
+  movePage(id: string, to: number): MutationResult<boolean> {
+    return this.transactLocalUpdate(() => {
+      this.ensurePages();
+      const before = this.pages();
+      const page = before.find((p) => p.id === id);
+      if (!page || to < 0 || to >= before.length) return false;
+      const after = before.filter((p) => p.id !== id);
+      after.splice(to, 0, page);
+      // Change only this page's order. Simultaneous moves of different pages merge.
+      const order = this.doc.getMap<number>(INK_PAGE_ORDER);
+      const left =
+        to > 0
+          ? (order.get(after[to - 1].id) ?? to - 1)
+          : (order.get(after[1]?.id) ?? 0) - 2;
+      const right =
+        to < after.length - 1
+          ? (order.get(after[to + 1].id) ?? to + 1)
+          : left + 2;
+      order.set(id, (left + right) / 2);
+      this.invalidateVisibleStrokeCache();
+      this.recordOp({ kind: 'pages', before, after });
+      return true;
+    });
+  }
+
+  deletePage(id: string): MutationResult<boolean> {
+    return this.transactLocalUpdate(() => {
+      this.ensurePages();
+      const before = this.pages();
+      if (before.length <= 1 || !before.some((p) => p.id === id)) return false;
+      this.doc.getMap<boolean>(INK_DELETED_PAGES).set(id, true);
+      this.invalidateVisibleStrokeCache();
+      this.recordOp({ kind: 'pages', before, after: this.pages() });
+      return true;
+    });
+  }
+
+  restoreSnapshot(snapshot: InkDocument): MutationResult<void> {
+    return this.transactLocalUpdate(() => {
+      for (const key of ['pdf_annotations', 'pdf_form_values']) {
+        const target = this.doc.getMap(key),
+          source = snapshot.doc.getMap(key);
+        if (target.size || source.size) {
+          target.clear();
+          for (const [id, value] of source)
+            target.set(id, structuredClone(value));
+        }
+      }
+      this.clearAll();
+      if (snapshot.hasPages() || this.hasPages())
+        this.restorePages(snapshot.pages());
+      this.addStrokes(
+        snapshot
+          .visibleStrokes()
+          .map(({ color, width, points }) => ({ color, width, points }))
+      );
+      this.resetUndoHistory();
+    });
+  }
+
+  private globalPayload(map: Y.Map<unknown>) {
+    const payload = map.get(FIELD_PAYLOAD);
+    if (!(payload instanceof Uint8Array)) return null;
+    const decoded = decodePayload(payload);
+    if (!decoded) return null;
+    const pageId = map.get('pageId');
+    if (typeof pageId !== 'string') return decoded;
+    if (!this.pageOffsetsCache) {
+      const pages = readPages(this.doc);
+      const width = Math.max(0, ...pages.map((p) => p.width));
+      let y = 0;
+      this.pageOffsetsCache = new Map(
+        pages.map((page) => {
+          const result: [string, { x: number; y: number }] = [
+            page.id,
+            { x: (width - page.width) / 2, y }
+          ];
+          y += page.height + defaultLayout().pageGap;
+          return result;
+        })
+      );
+    }
+    const offset = this.pageOffsetsCache.get(pageId);
+    if (!offset) return null;
+    return {
+      ...decoded,
+      points: decoded.points.map((p) => ({
+        ...p,
+        x: p.x + offset.x,
+        y: p.y + offset.y
+      }))
+    };
+  }
+
+  private writePayload(map: Y.Map<unknown>, data: InProgressStroke): void {
+    if (!this.hasPages()) {
+      map.set(FIELD_PAYLOAD, encodePayloadV2(data));
+      return;
+    }
+    const pages = readPages(this.doc);
+    const layout = layoutForPages(pages);
+    const point = data.points[Math.floor(data.points.length / 2)];
+    const index = point ? pageIndexAt(layout, point.x, point.y) : null;
+    const page =
+      index !== null
+        ? pages[index]
+        : (pages.find((p) => p.id === map.get('pageId')) ?? pages[0]);
+    if (!page) return;
+    const offset = pageOffset(pages, page.id)!;
+    map.set('pageId', page.id);
+    map.set(
+      FIELD_PAYLOAD,
+      encodePayloadV2({
+        ...data,
+        points: data.points.map((p) => ({
+          ...p,
+          x: p.x - offset.x,
+          y: p.y - offset.y
+        }))
+      })
+    );
   }
 
   static fromBytes(bytes: Uint8Array | number[]): InkDocument {
@@ -124,7 +397,10 @@ export class InkDocument {
 
   transactLocalUpdate<T>(fn: () => T): MutationResult<T> {
     const before = Y.encodeStateVector(this.doc);
-    const value = fn();
+    let value!: T;
+    this.doc.transact(() => {
+      value = fn();
+    });
     const update = Y.encodeStateAsUpdate(this.doc, before);
     return {
       value,
@@ -134,6 +410,21 @@ export class InkDocument {
 
   visibleStrokes(): InkStroke[] {
     return this.ensureVisibleStrokeCache().map(strokeFromMeta);
+  }
+
+  pageStrokes(pageId: string): InkStroke[] {
+    const offset = pageOffset(this.pages(), pageId);
+    if (!offset) return [];
+    return this.visibleStrokes()
+      .filter((s) => this.findStrokeMap(s.id)?.get('pageId') === pageId)
+      .map((s) => ({
+        ...s,
+        points: s.points.map((p) => ({
+          ...p,
+          x: p.x - offset.x,
+          y: p.y - offset.y
+        }))
+      }));
   }
 
   visibleStrokeCount(): number {
@@ -205,10 +496,11 @@ export class InkDocument {
       const map = new Y.Map<unknown>();
       map.set(FIELD_ID, id);
       map.set(FIELD_TOMBSTONED, false);
-      map.set(FIELD_PAYLOAD, encodePayloadV2(stroke));
+      this.writePayload(map, stroke);
       this.strokes.push([map]);
       this.strokeMapCache?.set(id, map);
       this.invalidateVisibleStrokeCache();
+      this.appendTrailingBlankPage();
       if (recordUndo) {
         this.recordOp({ kind: 'strokeAdded', id });
       }
@@ -222,24 +514,23 @@ export class InkDocument {
       for (const input of strokes) {
         const points = sanitizedPoints(input.points);
         if (points.length === 0) continue;
-        const id = `stroke_${randomId()}`;
+        const id = input.id ?? `stroke_${randomId()}`;
+        if (this.ensureStrokeMapCache().has(id)) continue;
         const map = new Y.Map<unknown>();
         map.set(FIELD_ID, id);
         map.set(FIELD_TOMBSTONED, false);
-        map.set(
-          FIELD_PAYLOAD,
-          encodePayloadV2({
-            color: input.color >>> 0,
-            width: sanitizeWidth(input.width),
-            points
-          })
-        );
+        this.writePayload(map, {
+          color: input.color >>> 0,
+          width: sanitizeWidth(input.width),
+          points
+        });
         this.strokes.push([map]);
         this.strokeMapCache?.set(id, map);
         added.push(id);
       }
       if (added.length > 0) {
         this.invalidateVisibleStrokeCache();
+        this.appendTrailingBlankPage();
         this.recordOp({ kind: 'strokesAdded', ids: added });
       }
       return added;
@@ -473,14 +764,11 @@ export class InkDocument {
           const newMap = new Y.Map<unknown>();
           newMap.set(FIELD_ID, newId);
           newMap.set(FIELD_TOMBSTONED, false);
-          newMap.set(
-            FIELD_PAYLOAD,
-            encodePayloadV2({
-              color: meta.color,
-              width: meta.width,
-              points
-            })
-          );
+          this.writePayload(newMap, {
+            color: meta.color,
+            width: meta.width,
+            points
+          });
           this.strokes.push([newMap]);
           strokeMaps.set(newId, newMap);
           added.push(newId);
@@ -572,14 +860,14 @@ export class InkDocument {
   private ensureVisibleStrokeCache(): StrokeMeta[] {
     if (this.visibleStrokeCache) return this.visibleStrokeCache;
     const out: StrokeMeta[] = [];
-    for (const stroke of this.strokes.toArray()) {
+    for (const stroke of this.ensureStrokeMapCache().values()) {
       if (stroke.get(FIELD_TOMBSTONED) === true) continue;
       const id = stroke.get(FIELD_ID);
       const payload = stroke.get(FIELD_PAYLOAD);
       if (typeof id !== 'string' || !(payload instanceof Uint8Array)) {
         continue;
       }
-      const decoded = decodePayload(payload);
+      const decoded = this.globalPayload(stroke);
       if (!decoded) continue;
       out.push({
         id,
@@ -679,6 +967,7 @@ export class InkDocument {
 
   private invalidateVisibleStrokeCache(): void {
     this.visibleStrokeCache = null;
+    this.pageOffsetsCache = null;
     this.invalidateSpatialIndexCache();
   }
 
@@ -724,18 +1013,13 @@ export class InkDocument {
       if (!stroke || stroke.get(FIELD_TOMBSTONED) === true) continue;
       const payload = stroke.get(FIELD_PAYLOAD);
       if (!(payload instanceof Uint8Array)) continue;
-      const decoded = decodePayload(payload);
+      const decoded = this.globalPayload(stroke);
       if (!decoded) continue;
-      stroke.set(
-        FIELD_PAYLOAD,
-        encodePayloadV2({
-          color: decoded.color,
-          width: sanitizeWidth(decoded.width * transform.widthScale),
-          points: decoded.points.map((point) =>
-            transformPoint(point, transform)
-          )
-        })
-      );
+      this.writePayload(stroke, {
+        color: decoded.color,
+        width: sanitizeWidth(decoded.width * transform.widthScale),
+        points: decoded.points.map((point) => transformPoint(point, transform))
+      });
       moved.push(id);
     }
     if (moved.length > 0) {

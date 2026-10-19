@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { SvelteSet } from 'svelte/reactivity';
   import { createMenuBuilder } from './file-explorer-menu';
   import {
     ChevronRight,
@@ -61,7 +62,8 @@
     sharedMoveIsLegal,
     type DesktopNoteSource
   } from '$lib/stores/note-source.svelte';
-  import { pushToast } from './toast.svelte';
+  import { pushToast, dismissToast, updateToast } from './toast.svelte';
+  import { flushPendingEditorSaves } from '$lib/editor/suspend-flush';
   import {
     FILE_EXPLORER_SOURCES,
     defaultDraftText,
@@ -406,6 +408,33 @@
     }
   }
 
+  const convertingPdfs = new SvelteSet<string>();
+  async function convertPdfNote(id: string) {
+    if (convertingPdfs.has(id)) return;
+    convertingPdfs.add(id);
+    const toast = pushToast(tUi('ink.pdf.converting'), {
+      variant: 'progress',
+      durationMs: 0
+    });
+    try {
+      await flushPendingEditorSaves();
+      const { convertPdfToInk } = await import('$lib/ink/pdf-import');
+      onOpenNote(
+        await convertPdfToInk(id, (page, total) => {
+          updateToast(
+            toast,
+            tUiFormat('ink.pages.rasterizing', { page, total })
+          );
+        })
+      );
+    } catch (error) {
+      pushToast(toErrorMessage(error), { variant: 'error' });
+    } finally {
+      convertingPdfs.delete(id);
+      dismissToast(toast);
+    }
+  }
+
   async function startEmptyTrash() {
     if (emptyTrashPending || trashItemCount === 0) return;
     if (
@@ -532,6 +561,7 @@
     startDraft,
     startPluginTemplateDraft,
     startPdfImport,
+    convertPdfNote,
     startRename,
     startEmptyTrash,
     leaveShared,

@@ -20,7 +20,7 @@ import type {
   UpdateNoteInput
 } from './notes';
 import type { Asset, UploadAssetInput } from './assets';
-import type { ImportPdfNoteInput } from './assets';
+import type { ImportPdfNoteInput, ImportInkPdfNoteInput } from './assets';
 import type { SearchHit } from './search';
 import type { SaveSignatureInput, SignatureRecord } from './signatures';
 import type { Version, VersionAction, VersionSummary } from './history';
@@ -367,6 +367,23 @@ export const mockApi = {
     if (input.position !== undefined) n.position = input.position;
     if (input.tags !== undefined) n.tags = [...input.tags];
     if (input.yrs_state !== undefined) {
+      if (n.note_kind === 'ink') {
+        const { InkDocument } = await import('$lib/ink/document');
+        const { backgroundSignature } =
+          await import('$lib/ink/pdf-backgrounds');
+        const before = InkDocument.fromBytes(n.yrs_state),
+          after = InkDocument.fromBytes(input.yrs_state);
+        try {
+          if (
+            backgroundSignature(before.pages()) !==
+            backgroundSignature(after.pages())
+          )
+            pdfTexts.delete(n.id);
+        } finally {
+          before.doc.destroy();
+          after.doc.destroy();
+        }
+      }
       n.yrs_state = [...input.yrs_state];
       n.payload_schema = 2;
     }
@@ -405,7 +422,10 @@ export const mockApi = {
         ...n,
         // For PDF notes the body is just a JSON asset pointer; the searchable
         // text lives in the derived pdf_text index (mirrors the Rust side).
-        body: n.note_kind === 'pdf' ? (pdfTexts.get(n.id) ?? '') : n.body,
+        body:
+          n.note_kind === 'pdf' || n.note_kind === 'ink'
+            ? (pdfTexts.get(n.id) ?? '')
+            : n.body,
         tags: n.tags
       }));
     const hits = mockSearchNotes(pool, query);
@@ -457,28 +477,74 @@ export const mockApi = {
     notes.set(note.id, note);
     return { ...note };
   },
-  async setPdfText(noteId: string, text: string): Promise<void> {
+  async importInkPdfNote(input: ImportInkPdfNoteInput): Promise<Note> {
+    if (!input.bytes.length && !assets.has(input.asset_id))
+      throw new Error(`asset ${input.asset_id} not found`);
+    const note = await mockApi.createNote({
+      title: input.title,
+      parent_collection_id: input.parent_collection_id,
+      note_kind: 'ink'
+    });
+    const asset: Asset = {
+      id: input.asset_id,
+      owning_note_id: note.id,
+      mime_type: 'application/pdf',
+      bytes: input.bytes,
+      size: input.bytes.length,
+      created: nowIso(),
+      modified: nowIso(),
+      pushed: false
+    };
+    if (input.bytes.length) assets.set(asset.id, asset);
+    note.yrs_state = input.yrs_state;
+    notes.set(note.id, note);
+    return { ...note };
+  },
+  async setPdfText(
+    noteId: string,
+    text: string,
+    expectedSignature?: string
+  ): Promise<void> {
     const n = notes.get(noteId);
     // Idempotent + PDF-only, mirroring the Rust `pdf_text IS NULL` guard.
-    if (n?.note_kind === 'pdf' && !pdfTexts.has(noteId)) {
+    if (n?.note_kind === 'ink' && expectedSignature !== undefined) {
+      const { InkDocument } = await import('$lib/ink/document');
+      const { backgroundSignature } = await import('$lib/ink/pdf-backgrounds');
+      const doc = InkDocument.fromBytes(n.yrs_state);
+      try {
+        if (backgroundSignature(doc.pages()) === expectedSignature)
+          pdfTexts.set(noteId, text);
+      } finally {
+        doc.doc.destroy();
+      }
+    } else if (n?.note_kind === 'pdf' && !pdfTexts.has(noteId)) {
       pdfTexts.set(noteId, text);
     }
   },
   async pdfNotesMissingText(): Promise<string[]> {
     return [...notes.values()]
-      .filter((n) => n.note_kind === 'pdf' && !n.trashed && !pdfTexts.has(n.id))
+      .filter(
+        (n) =>
+          (n.note_kind === 'pdf' || n.note_kind === 'ink') &&
+          !n.trashed &&
+          !pdfTexts.has(n.id)
+      )
       .map((n) => n.id);
   },
   async pdfNoteNeedsText(noteId: string): Promise<boolean> {
     const n = notes.get(noteId);
-    return n?.note_kind === 'pdf' && !pdfTexts.has(noteId);
+    return (
+      (n?.note_kind === 'pdf' || n?.note_kind === 'ink') &&
+      !pdfTexts.has(noteId)
+    );
   },
 
   // ---- Content stats ----
   async noteWordCount(noteId: string): Promise<number> {
     const n = notes.get(noteId);
     if (!n) return 0;
-    if (n.note_kind === 'pdf') return countWords(pdfTexts.get(noteId) ?? '');
+    if (n.note_kind === 'pdf' || n.note_kind === 'ink')
+      return countWords(pdfTexts.get(noteId) ?? '');
     return countWords(markdownToPlain(n.body));
   },
 

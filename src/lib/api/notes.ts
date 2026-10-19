@@ -27,11 +27,10 @@ import { mockApi } from './mock-store';
  *
  *   markdown — Crepe / y-prosemirror text editor (the original kind)
  *   freeform — Excalidraw canvas backed by granular Y.Doc scene state
- *   ink      — native egui+wgpu drawing surface (Android-only POC; see
- *              docs/native-egui-layer/01-audit.md). Desktop dispatch
- *              shows a placeholder until Phase 2 lands.
+ *   ink      — shared Pointer Events handwriting editor, with explicit pages,
+ *              page-local strokes, and optional PDF background assets.
  *   pdf      — imported PDF binary stored as an app-owned asset, with
- *              yrs_state reserved for collaborative annotations.
+ *              yrs_state holding collaborative annotations and shared ink.
  *   kanban   — SVAR Kanban board whose columns/cards live directly in the
  *              note's Y.Doc (yrs_state), synced like any collaborative doc.
  */

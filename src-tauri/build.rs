@@ -4,13 +4,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     track_builtin_plugins()?;
     tauri_build::build();
     // tauri-build links its Common Controls v6 manifest into binaries only.
-    // The native runtime spike is an example and needs that manifest too, or
-    // Windows cannot resolve comctl32!TaskDialogIndirect before main runs.
+    // The native runtime spike and IPC test harness need that manifest too,
+    // or Windows cannot resolve comctl32!TaskDialogIndirect before main runs.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
         && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
     {
         let resource = std::path::PathBuf::from(std::env::var("OUT_DIR")?).join("resource.lib");
         println!("cargo:rustc-link-arg-examples={}", resource.display());
+        println!("cargo:rustc-link-arg-tests={}", resource.display());
     }
     Ok(())
 }

@@ -34,6 +34,7 @@ import {
 import type { PageRenderContext } from './page-render';
 import { annotationAriaLabel } from './annotation-labels';
 import { annotationCanMove } from './annotation-interaction';
+import { pressureWidth } from '$lib/ink/editor-helpers';
 
 /** The per-page draw state the overlays read. Owned by the render action. */
 export interface PageOverlayHost {
@@ -138,6 +139,10 @@ export function createPageOverlays(
   }
 
   function activateAnnotation(annotation: PdfAnnotation) {
+    if (annotation.id.startsWith('shared:')) {
+      ctx.selectAnnotation(annotation.id);
+      return;
+    }
     if (host.params.activeTool === 'delete' && !ctx.isTrashed) {
       ctx.deleteAnnotation(annotation.id);
     } else {
@@ -321,6 +326,37 @@ export function createPageOverlays(
           svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
           svg.classList.add('pdf-app-stroke-svg');
           for (const stroke of annotation.strokes) {
+            if (annotation.id.startsWith('shared:')) {
+              for (let i = 1; i < stroke.points.length; i++) {
+                const first = stroke.points[i - 1],
+                  last = stroke.points[i];
+                const line = document.createElementNS(
+                  'http://www.w3.org/2000/svg',
+                  'polyline'
+                );
+                line.setAttribute(
+                  'points',
+                  [first, last]
+                    .map((point) => {
+                      const [x, y] = viewport.convertToViewportPoint(
+                        point.x,
+                        point.y
+                      );
+                      return `${x - left},${y - top}`;
+                    })
+                    .join(' ')
+                );
+                line.setAttribute('fill', 'none');
+                line.setAttribute('stroke', stroke.color);
+                line.setAttribute(
+                  'stroke-width',
+                  `${stroke.width * viewport.scale * pressureWidth(((first.pressure ?? 1) + (last.pressure ?? 1)) / 2)}`
+                );
+                line.setAttribute('stroke-linecap', 'round');
+                svg.append(line);
+              }
+              continue;
+            }
             const polyline = document.createElementNS(
               'http://www.w3.org/2000/svg',
               'polyline'
@@ -352,6 +388,7 @@ export function createPageOverlays(
         // stay anchored to the text they mark and are not movable.
         const movable =
           !ctx.isTrashed &&
+          !annotation.id.startsWith('shared:') &&
           annotationCanMove(annotation.type, host.params.activeTool, textMode);
         if (movable) {
           node.style.pointerEvents = 'auto';

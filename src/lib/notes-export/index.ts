@@ -18,6 +18,7 @@ import type { Note, NoteSummary, Collection } from '$lib/api';
 import { pdfAssetIdFromBody } from '$lib/pdf/viewer-helpers';
 import { tree } from '$lib/stores/tree.svelte';
 import { buildExcalidrawFile } from './excalidraw';
+import { buildPdfNoteBytes } from '$lib/note-exporters/pdf';
 import { buildInkPdf } from './ink-pdf';
 import {
   extractAssetIds,
@@ -337,16 +338,12 @@ async function exportPdf(
     );
     return { assets_written: 0 };
   }
-  const asset = await api.fetchDrawingAsset(pdfAssetId);
+  const bytes = await buildPdfNoteBytes(note.id);
   const basename = dedupeAgainst(
     takenFor(parentDir),
     `${sanitizeName(note.title)}.pdf`
   );
-  await writeExportFile(
-    root,
-    joinRel(parentDir, basename),
-    new Uint8Array(asset.bytes)
-  );
+  await writeExportFile(root, joinRel(parentDir, basename), bytes);
   return { assets_written: 0 };
 }
 

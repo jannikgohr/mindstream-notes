@@ -96,7 +96,7 @@ fn load_candidates(conn: &Connection, query: &str) -> AppResult<Vec<Candidate>> 
         // searchable text lives in `pdf_text` (extracted from the PDF, NULL
         // until indexed). Substitute it so the matcher/snippet never sees the
         // pointer and PDF content becomes searchable.
-        let searchable_body = if note_kind == NoteKind::Pdf {
+        let searchable_body = if matches!(note_kind, NoteKind::Pdf | NoteKind::Ink) {
             row.get::<_, Option<String>>("pdf_text")?
                 .unwrap_or_default()
         } else {

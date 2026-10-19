@@ -1,4 +1,14 @@
 <script lang="ts">
+  import InkPageManager from '$lib/ink/InkPageManager.svelte';
+  import { migratePdfInk, upgradePdfBackgrounds } from '$lib/ink/pdf-import';
+  import type { PageImageProgress } from '$lib/ink/page-images';
+  import {
+    createPdfBackgroundCache,
+    indexInkNote,
+    type PreparedPdfImport
+  } from '$lib/ink/pdf-backgrounds';
+  import { INK_PAGES, INK_META, INK_SCHEMA } from '$lib/ink/page-document';
+  import { DEFAULT_PAGE, type InkPage } from '$lib/ink/page';
   import { ancestorIsTrash } from '$lib/editor/trash';
   import { createCanvasResizeLifecycle } from '$lib/ink/canvas-resize-lifecycle';
   import { createInkSaveController } from '$lib/ink/save-controller';
@@ -15,8 +25,8 @@
     displayInkZoom,
     fitWidthScale,
     fitWidthView,
-    minScale as viewMinScale,
     pageToScreen as viewPageToScreen,
+    resizeView,
     scaleFromDisplayInkZoom,
     screenToPage as viewScreenToPage,
     zoomAroundPoint,
@@ -26,6 +36,7 @@
   import { onDestroy, onMount, tick } from 'svelte';
   import {
     AlignJustify,
+    ArrowLeft,
     CircleDashed,
     ClipboardPaste,
     Copy,
@@ -40,6 +51,7 @@
     Pointer,
     PointerOff,
     PocketKnife,
+    PanelsTopLeft,
     Redo2,
     Scissors,
     Settings2,
@@ -80,7 +92,7 @@
   } from '$lib/api';
   import { isAndroid, isMobile } from '$lib/platform';
   import {} from '$lib/layout/page-layout';
-  import { tUi, tValue } from '$lib/settings/i18n.svelte';
+  import { tUi, tUiFormat, tValue } from '$lib/settings/i18n.svelte';
   import {
     getSettingValue,
     hasSettingValue,
@@ -177,8 +189,8 @@
   } from '$lib/ink/editor-helpers';
   import {
     containsPagePoint,
+    pageIndexAt,
     defaultLayout,
-    pageCountForContentMaxY,
     pageRect,
     type InkPoint
   } from '$lib/ink/page';
@@ -187,9 +199,29 @@
   interface Props {
     noteId: string;
     ariaLabel: string;
+    seedPages?: InkPage[];
+    allowPageEditing?: boolean;
+    onBack?: () => void;
   }
 
-  let { noteId, ariaLabel }: Props = $props();
+  let {
+    noteId,
+    ariaLabel,
+    seedPages,
+    allowPageEditing = true,
+    onBack
+  }: Props = $props();
+  let pageManagerOpen = $state(false);
+  let pageSorterButton = $state<HTMLButtonElement | null>(null);
+  let sorterPageId = $state<string | null>(null);
+  let documentPages = $state<InkPage[]>([]);
+  let backgroundError = $state('');
+  let backgroundProgress = $state('');
+  const backgroundUpgrade = new AbortController();
+  let upgradingBackgrounds = false;
+  const backgrounds = createPdfBackgroundCache(scheduleDraw, (error) => {
+    backgroundError = String(error);
+  });
 
   const historyCapture = createHistoryCapture({
     noteId: () => noteId,
@@ -430,16 +462,18 @@
    * pixels, the format Kotlin's `setControlBoundsFromNative` expects.
    */
   function collectControlBounds(): number[] {
-    if (!toolbarEl) return [];
     const dpr = window.devicePixelRatio || 1;
-    const rect = toolbarEl.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return [];
-    return [
-      rect.left * dpr,
-      rect.top * dpr,
-      rect.right * dpr,
-      rect.bottom * dpr
-    ];
+    return [toolbarEl, pageSorterButton].flatMap((element) => {
+      if (!element) return [];
+      const rect = element.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return [];
+      return [
+        rect.left * dpr,
+        rect.top * dpr,
+        rect.right * dpr,
+        rect.bottom * dpr
+      ];
+    });
   }
 
   /**
@@ -450,7 +484,7 @@
    * is trashed; Kotlin treats empty as "block all painting".
    */
   function collectDocumentBounds(): number[] {
-    if (!canvasEl || isTrashed) return [];
+    if (!canvasEl || isTrashed || pageManagerOpen) return [];
     const canvasRect = canvasEl.getBoundingClientRect();
     if (canvasRect.width <= 0 || canvasRect.height <= 0) return [];
     const dpr = window.devicePixelRatio || 1;
@@ -545,34 +579,38 @@
   const inkSave = createInkSaveController({
     canSave: () => !isTrashed,
     encode: () => doc?.encode() ?? null,
-    persist: (state) => drawingSaveInkState(noteId, state),
+    persist: async (state) => {
+      await drawingSaveInkState(noteId, state);
+      if (allowPageEditing && !upgradingBackgrounds)
+        void indexInkNote(noteId).catch((error) =>
+          console.warn('[ink] indexing failed', error)
+        );
+    },
     onStatus: (status) => {
       savingState = status;
     }
   });
   $effect(() => inkSave.subscribeSuspend());
   const queueSaveUpdates = inkSave.queue;
+  export async function flush(): Promise<void> {
+    await inkSave.flush();
+  }
 
   function currentInkSnapshot(): string {
-    return serializeYjsSnapshot('ink', doc?.encode() ?? new Uint8Array());
+    return serializeYjsSnapshot(
+      allowPageEditing ? 'ink' : 'pdf',
+      doc?.encode() ?? new Uint8Array()
+    );
   }
 
   function restoreInkSnapshot(body: string): void {
-    const parsed = parseHistorySnapshot(body, 'ink');
-    if (parsed.noteKind !== 'ink' || !doc) return;
+    const kind = allowPageEditing ? 'ink' : 'pdf';
+    const parsed = parseHistorySnapshot(body, kind);
+    if (parsed.noteKind !== kind || !doc) return;
 
     const snapshotDoc = InkDocument.fromBytes(parsed.bytes);
-    const snapshotStrokes = snapshotDoc.visibleStrokes().map((stroke) => ({
-      color: stroke.color,
-      width: stroke.width,
-      points: stroke.points
-    }));
-
-    const updates: Uint8Array[] = [];
-    const { update: clearUpdate } = doc.clearAll();
-    if (clearUpdate) updates.push(clearUpdate);
-    const { update: addUpdate } = doc.addStrokes(snapshotStrokes);
-    if (addUpdate) updates.push(addUpdate);
+    const { update } = doc.restoreSnapshot(snapshotDoc);
+    const updates = update ? [update] : [];
     snapshotDoc.doc.destroy();
 
     // A restore is reversed through history (the Undo affordance), not the
@@ -607,8 +645,8 @@
     strokeCount = doc.visibleStrokeCount();
     pruneSelection();
     syncHistoryState();
-    const maxY = doc.contentMaxY();
-    layout = defaultLayout(pageCountForContentMaxY(maxY));
+    layout = doc.layout();
+    documentPages = doc.pages();
     clampView();
     scheduleDraw();
   }
@@ -656,36 +694,31 @@
 
   function resizeCanvas() {
     if (!canvasHostEl || !canvasEl) return;
-    const wasAtFitWidth = view.scale <= fitWidthScale(view, layout) + 0.001;
     const rect = canvasHostEl.getBoundingClientRect();
     const usableSize = rect.width > 2 && rect.height > 2;
+    // Hidden dock panels must not clear the canvas or replace its viewport.
+    if (!usableSize) return;
     const dpr = window.devicePixelRatio || 1;
     const widthPx = Math.max(1, Math.floor(rect.width * dpr));
     const heightPx = Math.max(1, Math.floor(rect.height * dpr));
     const backingStoreChanged =
       canvasEl.width !== widthPx || canvasEl.height !== heightPx;
     if (backingStoreChanged) {
-      if (usableSize) canvasResize.captureSnapshot();
-      else canvasResize.suppressSnapshot();
-      canvasEl.width = widthPx;
-      canvasEl.height = heightPx;
+      canvasResize.captureSnapshot();
+      if (canvasEl.width !== widthPx) canvasEl.width = widthPx;
+      if (canvasEl.height !== heightPx) canvasEl.height = heightPx;
     }
-    view.width = rect.width;
-    view.height = rect.height;
-    const nextMinScale = minScale();
-    if (!viewInitialized || wasAtFitWidth) {
+    if (!viewInitialized) {
+      view.width = rect.width;
+      view.height = rect.height;
       fitWidth();
       viewInitialized = true;
     } else {
       Object.assign(
         view,
-        viewClamp(
-          { ...view, scale: Math.max(view.scale, nextMinScale) },
-          layout,
-          {
-            mobileToolbar
-          }
-        )
+        resizeView(view, { width: rect.width, height: rect.height }, layout, {
+          mobileToolbar
+        })
       );
     }
     if (backingStoreChanged) {
@@ -709,10 +742,6 @@
   // gutters so both renderers frame an A4 sheet identically.
   // Viewport maths lives in ink/view-transform.ts; these bind the pure
   // helpers to this editor's live view + layout.
-  function minScale(): number {
-    return viewMinScale(view, layout);
-  }
-
   function screenToPage(x: number, y: number): InkPoint {
     return viewScreenToPage(view, x, y);
   }
@@ -770,7 +799,12 @@
         selectionColorPreview !== null && selectedStrokeSet.has(stroke.id)
           ? selectionColorPreview
           : stroke.color;
-      drawStroke(ctx, stroke.points, displayCssColor(color), stroke.width);
+      drawStroke(
+        ctx,
+        stroke.points,
+        strokeCssColor(color, stroke.points),
+        stroke.width
+      );
     }
     if (selectionMoveActive) {
       const transform = currentSelectionTransform();
@@ -779,12 +813,15 @@
         drawStroke(
           ctx,
           transformedPoints(stroke.points, transform),
-          displayCssColor(selectionColorPreview ?? stroke.color),
+          strokeCssColor(
+            selectionColorPreview ?? stroke.color,
+            transformedPoints(stroke.points, transform)
+          ),
           stroke.width * transform.widthScale
         );
       }
     }
-    drawStroke(ctx, inFlight, displayCssColor(colorArgb), width);
+    drawStroke(ctx, inFlight, strokeCssColor(colorArgb, inFlight), width);
     drawSelectionOverlay(ctx);
     drawLassoOverlay(ctx);
     drawToolPreview(ctx);
@@ -810,7 +847,44 @@
   }
 
   function drawPages(ctx: CanvasRenderingContext2D, visible: StrokeBounds) {
+    backgrounds.beginFrame();
     paintPages(ctx, visible, inkScene());
+    for (let i = 0; i < documentPages.length; i++) {
+      const page = documentPages[i];
+      if (!page.background) continue;
+      const rect = pageRect(layout, i);
+      if (!rect || rect[3] < visible.minY || rect[1] > visible.maxY) continue;
+      const top = pageToScreen({ x: rect[0], y: rect[1] });
+      const image = backgrounds.get(
+        page,
+        view.scale * (window.devicePixelRatio || 1)
+      );
+      // PDF page colors stay faithful to the source, independently of ink paper theme.
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(
+        top.x,
+        top.y,
+        page.width * view.scale,
+        page.height * view.scale
+      );
+      if (image)
+        ctx.drawImage(
+          image,
+          top.x,
+          top.y,
+          page.width * view.scale,
+          page.height * view.scale
+        );
+    }
+    backgrounds.endFrame();
+  }
+
+  function strokeCssColor(argb: number, points: InkPoint[]): string {
+    const point = points[0];
+    const index = point ? pageIndexAt(layout, point.x, point.y) : null;
+    return index !== null && documentPages[index]?.background
+      ? cssColor(argb)
+      : displayCssColor(argb);
   }
 
   function drawStroke(
@@ -1488,6 +1562,18 @@
         continue;
       }
       if (!drawingStrokeActive) {
+        doc.beginStroke(colorArgb, width);
+        drawingStrokeActive = true;
+      }
+      const previous = next[next.length - 1];
+      if (
+        previous &&
+        pageIndexAt(layout, previous.x, previous.y) !==
+          pageIndexAt(layout, point.x, point.y)
+      ) {
+        inFlight = next;
+        finishActiveStroke();
+        next.length = 0;
         doc.beginStroke(colorArgb, width);
         drawingStrokeActive = true;
       }
@@ -2277,6 +2363,66 @@
     return cssColor(displayColor(argb, pageDark), cssColorCache);
   }
 
+  async function importBackgrounds(
+    source: PreparedPdfImport,
+    indices: number[],
+    at: number,
+    progress?: PageImageProgress
+  ) {
+    if (!doc || isTrashed) return;
+    const pages = await source.images(
+      indices,
+      noteId,
+      progress,
+      backgroundUpgrade.signal
+    );
+    if (disposed || !doc) return;
+    applyDocumentMutation(doc.insertPages(pages, at).update);
+    await inkSave.flush();
+  }
+
+  function insertBlankPage(at: number) {
+    if (!doc || isTrashed) return;
+    applyDocumentMutation(
+      doc.insertPages(
+        [{ id: `page_${crypto.randomUUID()}`, ...DEFAULT_PAGE }],
+        at
+      ).update
+    );
+  }
+
+  function togglePageManager() {
+    if (pageManagerOpen) {
+      closePageManager();
+      return;
+    }
+    toolbarMenuOpen = null;
+    zoomMenuOpen = false;
+    const center = screenToPage(view.width / 2, view.height / 2);
+    const index = pageIndexAt(layout, center.x, center.y) ?? 0;
+    sorterPageId = documentPages[index]?.id ?? null;
+    pageManagerOpen = true;
+  }
+
+  function closePageManager() {
+    pageManagerOpen = false;
+    pageSorterButton?.focus();
+  }
+
+  function goToPage(id: string) {
+    const index = documentPages.findIndex((p) => p.id === id);
+    const rect = pageRect(layout, index);
+    if (!rect) return;
+    view.panY = 24 - rect[1] * view.scale;
+    clampView();
+    scheduleDraw();
+  }
+
+  $effect(() => {
+    void pageManagerOpen;
+    scheduleBoundsPush();
+  });
+
   onMount(async () => {
     const mountStartedAt = performance.now();
     const mobile = isMobile();
@@ -2324,6 +2470,17 @@
     if (disposed) return;
     const noteLoadedAt = performance.now();
     doc = InkDocument.fromBytes(new Uint8Array(note.yrs_state));
+    if (seedPages) {
+      const mutation = doc.transactLocalUpdate(() => {
+        doc!.doc.getMap<number>(INK_META).set('schema', INK_SCHEMA);
+        if (!doc!.hasPages()) doc!.restorePages(seedPages!);
+        else
+          for (const page of seedPages!)
+            doc!.doc.getMap<InkPage>(INK_PAGES).set(page.id, page);
+        migratePdfInk(doc!);
+      });
+      if (mutation.update) queueSaveUpdates([mutation.update]);
+    }
     const decodedAt = performance.now();
     handle = {
       encode_state_vector: () => doc?.encodeStateVector() ?? new Uint8Array(),
@@ -2348,6 +2505,38 @@
     refreshFromDoc();
     resizeCanvas();
     updateLiveInkOverlayStyle();
+    if (
+      allowPageEditing &&
+      !isTrashed &&
+      doc.pages().some((p) => p.background && p.background.kind !== 'image')
+    ) {
+      const ink = doc;
+      upgradingBackgrounds = true;
+      void upgradePdfBackgrounds(
+        noteId,
+        ink,
+        async (update) => {
+          if (disposed) return;
+          applyDocumentMutation(update);
+          await inkSave.flush();
+        },
+        (page, total) => {
+          backgroundProgress = tUiFormat('ink.pages.rasterizing', {
+            page,
+            total
+          });
+        },
+        backgroundUpgrade.signal
+      )
+        .catch((error) => {
+          if (!disposed) backgroundError = String(error);
+        })
+        .finally(() => {
+          backgroundProgress = '';
+          upgradingBackgrounds = false;
+          if (!disposed) void indexInkNote(noteId).catch(console.warn);
+        });
+    }
     await new Promise<void>((resolve) =>
       requestAnimationFrame(() => resolve())
     );
@@ -2403,10 +2592,12 @@
   });
 
   onDestroy(() => {
+    backgroundUpgrade.abort();
     window.removeEventListener(
       'mindstream:android-stylus-eraser',
       handleAndroidStylusEraser
     );
+    backgrounds.destroy();
     canvasResize.destroy();
     if (boundsFrame !== null) {
       cancelAnimationFrame(boundsFrame);
@@ -2567,6 +2758,11 @@
 {#snippet inkToolbar(dense: boolean, className: string)}
   <Toolbar {dense} aria-label={tUi('ink.toolbar.label')} class={className}>
     <div class="flex min-w-0 flex-1 items-center gap-0.5">
+      {#if onBack}<ToolbarButton
+          aria-label={tUi('ink.pdf.read')}
+          title={tUi('ink.pdf.read')}
+          onclick={onBack}><ArrowLeft aria-hidden="true" /></ToolbarButton
+        >{/if}
       <div class="flex shrink-0 items-center gap-0.5">
         <ToolbarButton
           active={tool === 'pen'}
@@ -2884,6 +3080,19 @@
   </Toolbar>
 {/snippet}
 
+{#snippet pageSorterControl()}
+  <ToolbarButton
+    bind:ref={pageSorterButton}
+    active={pageManagerOpen}
+    aria-label={tUi('ink.pages.title')}
+    title={tUi('ink.pages.title')}
+    aria-expanded={pageManagerOpen}
+    onclick={togglePageManager}
+  >
+    <PanelsTopLeft aria-hidden="true" />
+  </ToolbarButton>
+{/snippet}
+
 <div
   bind:this={hostEl}
   class="relative flex h-full w-full flex-col overflow-hidden bg-background"
@@ -2891,23 +3100,63 @@
   {#if mobileToolbar}
     <div
       bind:this={toolbarEl}
-      class="pointer-events-auto absolute left-3 top-3 z-30"
+      class="pointer-events-auto absolute left-3 top-3 z-30 max-w-[calc(100%-4.5rem)]"
     >
       {@render inkToolbar(
         false,
         'rounded-md border border-border bg-background/95 shadow-sm backdrop-blur'
       )}
     </div>
+    {#if allowPageEditing}
+      <div
+        class="absolute right-3 top-3 z-30 rounded-md border border-border bg-background/95 p-1 shadow-sm backdrop-blur"
+      >
+        {@render pageSorterControl()}
+      </div>
+    {/if}
   {:else}
-    <div bind:this={toolbarEl} class="shrink-0">
-      {@render inkToolbar(
-        true,
-        'shrink-0 border-b border-border bg-background'
-      )}
+    <div bind:this={toolbarEl} class="flex shrink-0 border-b border-border">
+      <div class="min-w-0 flex-1">
+        {@render inkToolbar(true, 'bg-background')}
+      </div>
+      {#if allowPageEditing}
+        <div class="flex shrink-0 items-center border-l border-border px-1">
+          {@render pageSorterControl()}
+        </div>
+      {/if}
     </div>
   {/if}
 
+  {#if backgroundError}<p class="p-2 text-sm text-destructive" role="alert">
+      {backgroundError}
+    </p>{/if}
+  {#if backgroundProgress}<p
+      class="p-2 text-xs text-muted-foreground"
+      role="status"
+    >
+      {backgroundProgress}
+    </p>{/if}
   <div bind:this={canvasHostEl} class="relative min-h-0 flex-1">
+    {#if pageManagerOpen && allowPageEditing}
+      <InkPageManager
+        pages={documentPages}
+        disabled={isTrashed || !doc}
+        initialPageId={sorterPageId}
+        strokesForPage={(id) => doc?.pageStrokes(id) ?? []}
+        onSelect={goToPage}
+        onBlank={insertBlankPage}
+        onMove={(id, to) => {
+          if (doc && !isTrashed)
+            applyDocumentMutation(doc.movePage(id, to).update);
+        }}
+        onDelete={(id) => {
+          if (doc && !isTrashed)
+            applyDocumentMutation(doc.deletePage(id).update);
+        }}
+        onImport={importBackgrounds}
+        onClose={closePageManager}
+      />
+    {/if}
     <canvas
       bind:this={resizeSnapshotCanvasEl}
       aria-hidden="true"

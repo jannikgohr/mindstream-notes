@@ -156,7 +156,7 @@ pub fn note_word_count_inner(conn: &Connection, note_id: &str) -> AppResult<i64>
     let Some((kind, body, pdf_text)) = row else {
         return Ok(0);
     };
-    let words = if kind == "pdf" {
+    let words = if kind == "pdf" || kind == "ink" {
         count_words(&pdf_text.unwrap_or_default())
     } else {
         count_words(&markdown_to_plain(&body))
