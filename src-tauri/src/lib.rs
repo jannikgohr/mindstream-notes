@@ -52,6 +52,8 @@ pub mod history;
 pub mod hotkeys;
 pub mod i18n;
 pub mod import;
+#[cfg(test)]
+mod ink_pages_tests;
 pub mod legacy_content;
 #[cfg(desktop)]
 pub mod legacy_export;
@@ -426,6 +428,13 @@ pub fn run() {
             } else {
                 match profiles::dir_override() {
                     Some((id, dir)) => {
+                        // Only dev and e2e builds honour the override. Their
+                        // harness restarts the app straight after killing it,
+                        // so the old process can still hold the vault here.
+                        storage_locks::VaultLock::wait_until_released(
+                            &dir,
+                            std::time::Duration::from_secs(10),
+                        )?;
                         let _root_lock = storage_locks::RootLock::acquire(&app_data_root)?;
                         profiles::reconcile_root_locked(&app_data_root)?;
                         (id, storage_locks::VaultLock::acquire(&dir)?)
@@ -698,6 +707,7 @@ pub fn run() {
                 search::search_notes,
                 // PDF searchable-text index (derived, local-only)
                 pdf_text::set_pdf_text,
+                pdf_text::pdf_page_text,
                 pdf_text::pdf_notes_missing_text,
                 pdf_text::pdf_note_needs_text,
                 // Note history (local, automatic versioning)
@@ -711,7 +721,11 @@ pub fn run() {
                 // Assets (freeform drawing attachments)
                 assets::upload_drawing_asset,
                 assets::fetch_drawing_asset,
+                assets::binary::fetch_asset_bytes,
+                assets::binary::upload_asset_bytes,
+                assets::binary::import_pdf_note_bytes,
                 assets::import_pdf_note,
+                assets::import_ink_pdf_note,
                 assets::sweep_unreferenced_markdown_assets,
                 // Signatures (reusable, synced signature library)
                 signatures::list_signatures,

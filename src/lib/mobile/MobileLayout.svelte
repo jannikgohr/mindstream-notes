@@ -2,11 +2,11 @@
   /**
    * Mobile shell.
    *
-   *   Home screen      → top bar (search + settings)
-   *                    → breadcrumb of the current folder path
-   *                    → sort + display-mode toolbar
+   *   Home screen      → top bar (vault tile, search, notifications,
+   *                      settings)
+   *                    → one row: folder breadcrumb, sort, list/grid
    *                    → note list / grid for the active bucket
-   *                    → FAB stack (new note + expandable plus)
+   *                    → create bar (default kind, pinned kinds, menu)
    *                    → bottom nav (Home / Shared / Favourites / Trash)
    *
    *   Editor screen    → MobileEditor (its own header, no FAB/nav)
@@ -31,14 +31,26 @@
     SquareKanban
   } from '@lucide/svelte';
   import { noteTypeEnabled } from '$lib/notes/note-types';
+  import {
+    CORE_FILE_TREE_ACTION_IDS,
+    loadFileTreeToolbarPreferences,
+    moveFileTreeToolbarAction,
+    normalizeFileTreeToolbarPreferences,
+    saveFileTreeToolbarPreferences,
+    type CoreFileTreeActionId
+  } from '$lib/components/file-tree-toolbar-preferences';
   import { templateMenuEntries, runTemplateEntry } from '$lib/plugins/menu';
+  import { pluginToolbarButtons } from '$lib/plugins/registry.svelte';
+  import { resolvePluginString } from '$lib/plugins/plugin-i18n';
+  import { runPluginButton } from '$lib/plugins/effects';
   import type { IconComponent } from '$lib/settings/icons';
   import MobileTopBar from './MobileTopBar.svelte';
   import MobileBreadcrumb from './MobileBreadcrumb.svelte';
   import MobileToolbar from './MobileToolbar.svelte';
   import MobileNoteList from './MobileNoteList.svelte';
   import { mobileBatchSelection } from './state.svelte';
-  import MobileFab, { type FabAction } from './MobileFab.svelte';
+  import MobileFab from './MobileFab.svelte';
+  import type { FabAction, FabSection } from './MobileFab.svelte';
   import MobileBottomNav from './MobileBottomNav.svelte';
   import MobileEditor from './MobileEditor.svelte';
   import LazyMobileSettingsDialog from './LazyMobileSettingsDialog.svelte';
@@ -181,81 +193,148 @@
     }
   }
 
-  // Both actions resolve their labels via tUi() inside $derived so a
-  // language switch refreshes the FAB without forcing a remount. The
-  // primary action is $derived too (rather than a plain const) for the
-  // same reason — its label feeds aria-label / tooltip on the button.
-  const primaryAction = $derived<FabAction>({
-    id: 'new-note',
-    label: tUi('fab.newNote'),
-    icon: FilePlus2 as unknown as IconComponent,
-    onSelect: createNote
+  // Mobile keeps its own layout, using the same action IDs as desktop.
+  // The first enabled kind is the default main button, the
+  // rest of the toolbar section are pinned quick buttons, and More is menu
+  // only. Labels go through tUi() inside $derived so a language switch
+  // refreshes them without a remount.
+  const pluginCreateActions = $derived<FabAction[]>(
+    pluginToolbarButtons('file-tree').map(({ pluginId, button }) => ({
+      id: `plugin:${pluginId}:${button.id}`,
+      label: resolvePluginString(pluginId, button.labelKey ?? button.id),
+      icon: FileText as unknown as IconComponent,
+      pluginIcon: button.icon ? { pluginId, file: button.icon } : undefined,
+      onSelect: (anchor) => {
+        const rect = anchor.getBoundingClientRect();
+        void runPluginButton(
+          pluginId,
+          button,
+          { x: rect.left, y: rect.top },
+          {
+            defaultParentId: targetParent()
+          }
+        );
+      }
+    }))
+  );
+  const availableCreateIds = $derived([
+    ...CORE_FILE_TREE_ACTION_IDS,
+    ...pluginCreateActions.map((action) => action.id)
+  ]);
+  let createOrder = $state(
+    loadFileTreeToolbarPreferences(CORE_FILE_TREE_ACTION_IDS, 'mobile')
+  );
+  $effect(() => {
+    void nativeDeviceUi.revision;
+    if (!isTauri() || nativeDeviceUi.initialized)
+      createOrder = loadFileTreeToolbarPreferences(
+        availableCreateIds,
+        'mobile'
+      );
   });
 
-  // Extend by appending FabAction entries here.
-  const secondaryActions = $derived<FabAction[]>(
-    mobileState.view === 'trash'
-      ? []
-      : [
-          ...(noteTypeEnabled('freeform')
-            ? [
-                {
-                  id: 'new-drawing',
-                  label: tUi('fab.newDrawing'),
-                  icon: PencilRuler as unknown as IconComponent,
-                  onSelect: createDrawing
-                }
-              ]
-            : []),
-          ...(noteTypeEnabled('ink')
-            ? [
-                {
-                  id: 'new-ink',
-                  label: tUi('fab.newInk'),
-                  icon: Feather as unknown as IconComponent,
-                  onSelect: createInk
-                }
-              ]
-            : []),
-          ...(noteTypeEnabled('kanban')
-            ? [
-                {
-                  id: 'new-kanban',
-                  label: tUi('fab.newKanban'),
-                  icon: SquareKanban as unknown as IconComponent,
-                  onSelect: createKanban
-                }
-              ]
-            : []),
-          {
-            id: 'new-folder',
-            label: tUi('fab.newFolder'),
-            icon: FolderPlus as unknown as IconComponent,
-            onSelect: createFolder
-          },
-          ...(noteTypeEnabled('pdf')
-            ? [
-                {
-                  id: 'import-pdf',
-                  label: tUi('fab.importPdf'),
-                  icon: FileUp as unknown as IconComponent,
-                  onSelect: importPdf
-                }
-              ]
-            : []),
-          // Templates (premade + user) create + open directly (auto-titled), so
-          // they skip the name sheet the built-in kinds use.
-          ...templateMenuEntries().map((entry) => ({
-            id:
-              entry.kind === 'plugin'
-                ? `plugin-template:${entry.pluginId}:${entry.templateId}`
-                : `user-template:${entry.noteId}`,
-            label: entry.label,
-            icon: FileText as unknown as IconComponent,
-            onSelect: () => void runTemplateEntry(entry, targetParent())
-          }))
-        ]
+  const createKinds = $derived<Record<CoreFileTreeActionId, FabAction | null>>({
+    note: {
+      id: 'note',
+      label: tUi('fab.newNote'),
+      icon: FilePlus2 as unknown as IconComponent,
+      onSelect: createNote
+    },
+    folder: {
+      id: 'folder',
+      label: tUi('fab.newFolder'),
+      icon: FolderPlus as unknown as IconComponent,
+      onSelect: createFolder
+    },
+    drawing: noteTypeEnabled('freeform')
+      ? {
+          id: 'drawing',
+          label: tUi('fab.newDrawing'),
+          icon: PencilRuler as unknown as IconComponent,
+          onSelect: createDrawing
+        }
+      : null,
+    ink: noteTypeEnabled('ink')
+      ? {
+          id: 'ink',
+          label: tUi('fab.newInk'),
+          icon: Feather as unknown as IconComponent,
+          onSelect: createInk
+        }
+      : null,
+    kanban: noteTypeEnabled('kanban')
+      ? {
+          id: 'kanban',
+          label: tUi('fab.newKanban'),
+          icon: SquareKanban as unknown as IconComponent,
+          onSelect: createKanban
+        }
+      : null,
+    pdf: noteTypeEnabled('pdf')
+      ? {
+          id: 'pdf',
+          label: tUi('fab.importPdf'),
+          icon: FileUp as unknown as IconComponent,
+          onSelect: importPdf
+        }
+      : null
+  });
+
+  const createActionMap = $derived(
+    new Map(
+      [...Object.values(createKinds), ...pluginCreateActions]
+        .filter((action): action is FabAction => !!action)
+        .map((action) => [action.id, action])
+    )
   );
+  const createActions = $derived(
+    [...createOrder.toolbar, ...createOrder.more]
+      .map((id) => createActionMap.get(id))
+      .filter((action): action is FabAction => !!action)
+  );
+
+  // Templates (premade + user) create + open directly (auto-titled), so they
+  // skip the name sheet the built-in kinds use.
+  const templateActions = $derived<FabAction[]>(
+    templateMenuEntries().map((entry) => ({
+      id:
+        entry.kind === 'plugin'
+          ? `plugin-template:${entry.pluginId}:${entry.templateId}`
+          : `user-template:${entry.noteId}`,
+      label: entry.label,
+      icon: FileText as unknown as IconComponent,
+      onSelect: () => void runTemplateEntry(entry, targetParent())
+    }))
+  );
+
+  // The bar section leads `createActions`; it always holds the default.
+  const createBarCount = $derived(
+    Math.max(
+      1,
+      createActions.filter((action) => createOrder.toolbar.includes(action.id))
+        .length
+    )
+  );
+
+  function saveCreateOrder(next: typeof createOrder) {
+    createOrder = normalizeFileTreeToolbarPreferences(next, availableCreateIds);
+    void saveFileTreeToolbarPreferences(createOrder, 'mobile');
+  }
+
+  /** Sort a kind: the bar section's first kind is the default. */
+  function moveCreate(id: string, section: FabSection, beforeId?: string) {
+    saveCreateOrder(
+      moveFileTreeToolbarAction(createOrder, id, section, beforeId)
+    );
+  }
+
+  /** Pin or unpin a kind: it moves between the toolbar section and More. */
+  function togglePinnedCreate(id: string) {
+    const pinned = createOrder.toolbar.includes(id);
+    saveCreateOrder(
+      moveFileTreeToolbarAction(createOrder, id, pinned ? 'more' : 'toolbar')
+    );
+  }
 
   // Hide create affordances when the active bucket isn't a place where
   // creating notes makes sense (favourites is a virtual filter, trash
@@ -269,18 +348,26 @@
   const showHome = $derived(mobileState.screen === 'home');
 </script>
 
-<div class="safe-x flex h-full w-full flex-col">
+<div data-app-shell class="safe-x flex h-full w-full flex-col">
   {#if showHome}
     <div class="safe-top flex shrink-0 flex-col bg-surface-0">
       <MobileTopBar />
     </div>
 
     <div class="relative flex min-h-0 flex-1 flex-col">
-      <MobileBreadcrumb />
-      <MobileToolbar />
+      <div class="flex shrink-0 items-center gap-2 px-3 pb-1 pt-1.5">
+        <MobileBreadcrumb />
+        <MobileToolbar />
+      </div>
       <MobileNoteList onOpenNote={openNote} reserveFabSpace={fabVisible} />
       {#if fabVisible}
-        <MobileFab primary={primaryAction} actions={secondaryActions} />
+        <MobileFab
+          actions={createActions}
+          barCount={createBarCount}
+          extras={templateActions}
+          onMove={moveCreate}
+          onTogglePin={togglePinnedCreate}
+        />
       {/if}
     </div>
 

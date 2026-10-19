@@ -16,7 +16,7 @@ describe('isolated picker state', () => {
     const state = {
       vaults: [
         { id: 'missing', name: 'Missing', available: false },
-        { id: 'target', name: 'Target', available: true }
+        { id: 'target', name: 'Target', available: true, color: 'teal' }
       ],
       languageCode: 'de',
       themeMode: 'light'
@@ -31,6 +31,11 @@ describe('isolated picker state', () => {
     { vaults: [], languageCode: null, themeMode: 'dark' },
     {
       vaults: [{ id: 'missing', name: 'Missing', available: 'true' }],
+      languageCode: 'de',
+      themeMode: 'dark'
+    },
+    {
+      vaults: [{ id: 'target', name: 'Target', available: true, color: 4 }],
       languageCode: 'de',
       themeMode: 'dark'
     }

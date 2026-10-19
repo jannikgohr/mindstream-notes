@@ -16,6 +16,48 @@ afterEach(() => {
   invoke.mockReset();
 });
 describe('theme preset persistence bridge', () => {
+  it('preserves custom slate and paper IDs alongside namespaced built-ins', async () => {
+    for (const id of ['slate', 'paper'])
+      await saveThemePreset(
+        JSON.stringify({ ...BUILTIN_PRESETS[0], id, name: `My ${id}` })
+      );
+    const presets = await listThemePresets();
+    expect(presets.find((preset) => preset.id === 'slate')?.name).toBe(
+      'My slate'
+    );
+    expect(presets.find((preset) => preset.id === 'paper')?.name).toBe(
+      'My paper'
+    );
+    expect(presets.some((preset) => preset.id === 'builtin:slate-indigo')).toBe(
+      true
+    );
+    await expect(
+      saveThemePreset(
+        JSON.stringify({ ...BUILTIN_PRESETS[0], id: 'builtin:future' })
+      )
+    ).rejects.toThrow();
+  });
+
+  it('accepts all 64 native user presets and rejects larger catalogues', async () => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    const users = Array.from({ length: 64 }, (_, index) => ({
+      ...BUILTIN_PRESETS[0],
+      id: `custom-${index}`
+    }));
+    invoke.mockResolvedValue([...BUILTIN_PRESETS, ...users]);
+    await expect(listThemePresets()).resolves.toHaveLength(
+      BUILTIN_PRESETS.length + 64
+    );
+    invoke.mockResolvedValue([
+      ...BUILTIN_PRESETS,
+      ...users,
+      { ...users[0], id: 'one-too-many' }
+    ]);
+    await expect(listThemePresets()).rejects.toThrow(
+      'Invalid theme preset catalog'
+    );
+  });
+
   it('shares browser user presets and preserves other presets on replacement/removal', async () => {
     const custom = { ...BUILTIN_PRESETS[0], id: 'custom', name: 'Custom' };
     const second = { ...custom, id: 'second' };
@@ -26,7 +68,7 @@ describe('theme preset persistence bridge', () => {
     expect(presets.find((preset) => preset.id === 'custom')?.name).toBe(
       'Revised'
     );
-    expect(presets).toHaveLength(5);
+    expect(presets).toHaveLength(BUILTIN_PRESETS.length + 2);
     await deleteThemePreset('custom');
     presets = await listThemePresets();
     expect(presets.some((preset) => preset.id === 'second')).toBe(true);
@@ -55,7 +97,6 @@ describe('theme preset persistence bridge', () => {
     (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
     const value = {
       preset: BUILTIN_PRESETS[1],
-      accent: '#aabbcc',
       uiFontSize: 14,
       mode: 'dark'
     };
@@ -67,7 +108,6 @@ describe('theme preset persistence bridge', () => {
   it('falls back to the first built-in appearance outside the desktop runtime', async () => {
     await expect(getThemeAppearance()).resolves.toEqual({
       preset: BUILTIN_PRESETS[0],
-      accent: null,
       uiFontSize: 16,
       mode: 'system'
     });

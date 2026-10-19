@@ -87,6 +87,28 @@ test('appearance updates live, setup resumes, and shortcuts work in the practice
   await page.goto('/?onboarding');
   await page.getByRole('button', { name: 'Continue', exact: true }).click();
   await expect(page.getByTestId('appearance-preview')).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Apollo', exact: true })
+  ).toHaveAttribute('aria-pressed', 'true');
+  // Preset changes must complete without touching the retired accent setting.
+  // Exercise the new built-ins in both modes before resuming the flow.
+  for (const mode of ['Light', 'Dark']) {
+    await page.getByRole('button', { name: mode, exact: true }).click();
+    for (const name of ['Slate & Indigo', 'Paper & Teal', 'Apollo']) {
+      const preset = page.getByRole('button', { name, exact: true });
+      await preset.click();
+      await expect(preset).toHaveAttribute('aria-pressed', 'true');
+      await expect(preset).toBeEnabled();
+      await expect(page.getByRole('alert')).toHaveCount(0);
+    }
+    await expect(
+      page.getByRole('button', { name: 'Continue', exact: true })
+    ).toBeEnabled();
+    await page.screenshot({
+      path: test.info().outputPath(`appearance-${mode.toLowerCase()}.png`),
+      animations: 'disabled'
+    });
+  }
   await page.getByRole('button', { name: 'Dark', exact: true }).click();
   await expect(page.locator('html')).toHaveClass(/dark/);
   await page.getByRole('button', { name: 'Forest', exact: true }).click();
@@ -218,6 +240,7 @@ test('setup fits a narrow screen and keeps the language choice', async ({
     64
   );
   const accountFooter = await footer.boundingBox();
+  await page.screenshot({ path: test.info().outputPath('mobile-account.png') });
   const accountContinue = await footer
     .getByRole('button', { name: 'Weiter', exact: true })
     .boundingBox();
@@ -250,6 +273,15 @@ test('setup fits a narrow screen and keeps the language choice', async ({
   expect(skip!.y + skip!.height).toBeLessThan(accountContinue!.y);
   await page.getByRole('button', { name: 'Weiter', exact: true }).click();
   await expect(page.getByTestId('appearance-preview')).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Schiefer & Indigo', exact: true })
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Papier & Petrol', exact: true })
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Wald', exact: true })
+  ).toBeVisible();
   await expectBottomControls();
   expect(await footer.boundingBox()).toEqual(accountFooter);
   expect(

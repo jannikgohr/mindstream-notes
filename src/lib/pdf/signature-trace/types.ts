@@ -14,7 +14,7 @@ import type { PdfInkStroke } from '../types';
 // hand-drawn signatures are interchangeable everywhere downstream.
 export const SIGNATURE_PAD_WIDTH = 420;
 export const SIGNATURE_PAD_HEIGHT = 168;
-export const SIGNATURE_STROKE_COLOR = '#111827';
+export const SIGNATURE_STROKE_COLOR = '#1b2530';
 export const SIGNATURE_STROKE_WIDTH = 3.5;
 
 /** Breathing room inside the pad box when fitting traced strokes/images. */

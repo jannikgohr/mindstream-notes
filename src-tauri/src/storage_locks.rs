@@ -76,6 +76,18 @@ impl VaultLock {
         Self::try_acquire(directory)?.ok_or_else(|| Self::busy(directory))
     }
 
+    /// Wait up to `timeout` for the OS owner to let go. Only for the dev and
+    /// e2e data-dir override, where a harness restart can start this process
+    /// while the one it replaced is still exiting. Returns either way; the
+    /// caller's `acquire` still refuses a vault that stayed owned.
+    pub(crate) fn wait_until_released(directory: &Path, timeout: Duration) -> AppResult<()> {
+        let deadline = Instant::now() + timeout;
+        while Self::is_owned(directory)? && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        Ok(())
+    }
+
     /// Probe ownership through the OS. None means a live lock owner, never a
     /// stale file, PID, timeout or heartbeat decision.
     pub fn try_acquire(directory: &Path) -> AppResult<Option<Self>> {
@@ -128,6 +140,25 @@ mod tests {
             b"retained journal"
         );
         assert!(root.join(".vault.lock").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn waiting_for_release_outlasts_an_exiting_owner_but_not_a_live_one() {
+        let root = std::env::temp_dir().join(format!("ms-wait-{}", uuid::Uuid::new_v4()));
+        let exiting = VaultLock::acquire(&root).unwrap();
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            drop(exiting);
+        });
+        VaultLock::wait_until_released(&root, Duration::from_secs(10)).unwrap();
+        releaser.join().unwrap();
+        let live = VaultLock::acquire(&root).unwrap();
+
+        let started = Instant::now();
+        VaultLock::wait_until_released(&root, Duration::from_millis(100)).unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        assert!(VaultLock::acquire(&root).is_err());
+        drop(live);
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

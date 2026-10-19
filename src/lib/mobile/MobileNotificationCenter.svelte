@@ -32,14 +32,15 @@
   }}
 >
   <Dialog.Portal>
+    <!-- A bottom sheet, like the other mobile overlays. -->
+    <Dialog.Overlay class="fixed inset-0 z-50 bg-scrim" />
     <Dialog.Content
-      class="safe-top safe-bottom safe-x fixed inset-0 z-50 flex flex-col bg-background text-foreground focus:outline-none"
+      class="safe-bottom safe-x fixed inset-x-0 bottom-0 z-50 flex max-h-[85dvh] min-h-[30vh] flex-col overflow-hidden rounded-t-2xl border border-border bg-surface-1 text-foreground shadow-overlay focus:outline-none"
     >
       <header
-        class="flex h-12 shrink-0 items-center justify-between border-b border-border bg-card px-2"
+        class="flex h-12 shrink-0 items-center justify-between border-b border-border bg-surface-0 pl-5 pr-2"
       >
-        <div class="w-9 shrink-0"></div>
-        <Dialog.Title class="truncate text-sm font-semibold">
+        <Dialog.Title class="truncate text-sm font-medium">
           {tUi('notifications.title')}
         </Dialog.Title>
         <Dialog.Close

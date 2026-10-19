@@ -8,6 +8,7 @@ import {
   fitWidthView,
   minScale,
   pageToScreen,
+  resizeView,
   scaleFromDisplayInkZoom,
   screenToPage,
   zoomAroundPoint,
@@ -136,6 +137,56 @@ describe('fitWidthView', () => {
     const once = fitWidthView(desktop, layout, fit);
     const twice = fitWidthView(once, layout, fit);
     expect(twice).toEqual(once);
+  });
+});
+
+describe('resizeView', () => {
+  const scrolled = { ...fitWidthView(desktop, layout, fit), panY: -700 };
+
+  it('leaves the viewport untouched for toolbar or focus notifications with no size change', () => {
+    expect(resizeView(scrolled, desktop, layout, fit)).toBe(scrolled);
+  });
+
+  it('keeps the same document point below the top gutter when fit width changes', () => {
+    const before = screenToPage(scrolled, scrolled.width / 2, 16);
+    const resized = resizeView(
+      scrolled,
+      { width: 900, height: 800 },
+      layout,
+      fit
+    );
+    expect(resized.scale).toBeCloseTo(fitWidthScale(resized, layout));
+    const after = screenToPage(resized, resized.width / 2, 16);
+    expect(after.x).toBeCloseTo(before.x);
+    expect(after.y).toBeCloseTo(before.y);
+    expect(resized.panY).toBeLessThan(0);
+  });
+
+  it('preserves scroll and zoom when only the toolbar height changes', () => {
+    const resized = resizeView(
+      scrolled,
+      { width: scrolled.width, height: scrolled.height - 40 },
+      layout,
+      fit
+    );
+    expect(resized.panY).toBe(scrolled.panY);
+    expect(resized.scale).toBe(scrolled.scale);
+  });
+
+  it('keeps custom zoom levels on either side of fit width', () => {
+    for (const scale of [scrolled.scale * 0.8, scrolled.scale * 1.5]) {
+      const view = { ...scrolled, scale };
+      const resized = resizeView(
+        view,
+        { width: 1100, height: 800 },
+        layout,
+        fit
+      );
+      expect(resized.scale).toBe(scale);
+      expect(screenToPage(resized, resized.width / 2, 16).y).toBeCloseTo(
+        screenToPage(view, view.width / 2, 16).y
+      );
+    }
   });
 });
 

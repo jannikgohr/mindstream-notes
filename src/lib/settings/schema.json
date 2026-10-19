@@ -147,12 +147,6 @@
               "customId": "theme-presets"
             },
             {
-              "id": "appearance.accent",
-              "scope": "D",
-              "type": "color",
-              "default": "#3b6fd4"
-            },
-            {
               "id": "appearance.reduceMotion",
               "scope": "D",
               "type": "radio",
@@ -397,7 +391,7 @@
               "id": "editor.ink.color",
               "scope": "D",
               "type": "color",
-              "default": "#000000"
+              "default": "#1b2530"
             },
             {
               "id": "editor.ink.width",
@@ -440,7 +434,7 @@
               "id": "editor.ink.pageBackgroundColor",
               "scope": "D",
               "type": "color",
-              "default": "#334155",
+              "default": "#3d505b",
               "showIf": {
                 "id": "editor.ink.pageBackground",
                 "notEquals": "clear"

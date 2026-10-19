@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onMount } from 'svelte';
+  import { SvelteSet } from 'svelte/reactivity';
   import { createMenuBuilder } from './file-explorer-menu';
   import {
     ChevronRight,
@@ -29,6 +30,7 @@
   import { menuItemForShortcut } from './context-menu-shortcuts';
   import { alert, confirm } from './confirm-dialog.svelte';
   import SortControl from './SortControl.svelte';
+  import VaultSwitcher from './VaultSwitcher.svelte';
   import FileTreeCreateToolbar from './FileTreeCreateToolbar.svelte';
   import type { CoreFileTreeActionId } from './file-tree-toolbar-preferences';
   import { sortTree } from '$lib/sort';
@@ -47,7 +49,7 @@
     trashNote
   } from '$lib/stores/tree.svelte';
   import { setSortDirection, setSortStrategy, ui } from '$lib/state.svelte';
-  import { i18n, tUi, tUiFormat } from '$lib/settings/i18n.svelte';
+  import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
   import type { TreeNode } from '$lib/api';
   import {
     collectionIsSharedByMe,
@@ -60,7 +62,8 @@
     sharedMoveIsLegal,
     type DesktopNoteSource
   } from '$lib/stores/note-source.svelte';
-  import { pushToast } from './toast.svelte';
+  import { pushToast, dismissToast, updateToast } from './toast.svelte';
+  import { flushPendingEditorSaves } from '$lib/editor/suspend-flush';
   import {
     FILE_EXPLORER_SOURCES,
     defaultDraftText,
@@ -188,12 +191,6 @@
   let emptyTrashParticleCount = $state(0);
   let deleteConfirmId = $state<string | null>(null);
   let explorerRoot = $state<HTMLElement | null>(null);
-  let sourceChipRow = $state<HTMLElement | null>(null);
-  let sourceChipsCollapsed = $state(false);
-  let expandedSourceChipWidth = 0;
-  let toolbarRow = $state<HTMLElement | null>(null);
-  let sortControlCollapsed = $state(false);
-  let expandedToolbarWidth = 0;
   let selectedKeys = $state<SelectionKey[]>([]);
   let selectionAnchor = $state<SelectionKey | null>(null);
   let activeKey = $state<SelectionKey | null>(null);
@@ -411,6 +408,33 @@
     }
   }
 
+  const convertingPdfs = new SvelteSet<string>();
+  async function convertPdfNote(id: string) {
+    if (convertingPdfs.has(id)) return;
+    convertingPdfs.add(id);
+    const toast = pushToast(tUi('ink.pdf.converting'), {
+      variant: 'progress',
+      durationMs: 0
+    });
+    try {
+      await flushPendingEditorSaves();
+      const { convertPdfToInk } = await import('$lib/ink/pdf-import');
+      onOpenNote(
+        await convertPdfToInk(id, (page, total) => {
+          updateToast(
+            toast,
+            tUiFormat('ink.pages.rasterizing', { page, total })
+          );
+        })
+      );
+    } catch (error) {
+      pushToast(toErrorMessage(error), { variant: 'error' });
+    } finally {
+      convertingPdfs.delete(id);
+      dismissToast(toast);
+    }
+  }
+
   async function startEmptyTrash() {
     if (emptyTrashPending || trashItemCount === 0) return;
     if (
@@ -537,6 +561,7 @@
     startDraft,
     startPluginTemplateDraft,
     startPdfImport,
+    convertPdfNote,
     startRename,
     startEmptyTrash,
     leaveShared,
@@ -812,39 +837,7 @@
     clearFileTreeInteractionState(true);
   }
 
-  function updateSourceChipCollapse() {
-    if (!sourceChipRow) return;
-    if (!sourceChipsCollapsed) {
-      expandedSourceChipWidth = sourceChipRow.scrollWidth;
-    }
-    const needed = expandedSourceChipWidth || sourceChipRow.scrollWidth;
-    sourceChipsCollapsed = needed > sourceChipRow.clientWidth;
-  }
-
-  /**
-   * Collapse the sort control to its icon when the header row can't hold it
-   * next to the create toolbar.
-   *
-   * This reads `scrollWidth > clientWidth`, which only means anything because
-   * FileTreeCreateToolbar carries a `min-width` (FILE_TREE_TOOLBAR_MIN_PX). It
-   * is the only shrinkable item here, so without that floor it would absorb
-   * every pixel of overflow, the row would always measure as fitting, and the
-   * sort control would stay expanded while the create buttons got clipped.
-   */
-  function updateSortControlCollapse() {
-    if (!toolbarRow) return;
-    if (!sortControlCollapsed) {
-      expandedToolbarWidth = toolbarRow.scrollWidth;
-    }
-    const needed = expandedToolbarWidth || toolbarRow.scrollWidth;
-    sortControlCollapsed = needed > toolbarRow.clientWidth;
-  }
-
   onMount(() => {
-    const sourceObserver = new ResizeObserver(() => updateSourceChipCollapse());
-    const toolbarObserver = new ResizeObserver(() =>
-      updateSortControlCollapse()
-    );
     const onDocumentPointerDown = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof Node)) return;
@@ -860,20 +853,12 @@
     const onWindowFileDrop = (event: DragEvent) => {
       if (isFileDrag(event)) dragOver = null;
     };
-    if (sourceChipRow) sourceObserver.observe(sourceChipRow);
-    if (toolbarRow) toolbarObserver.observe(toolbarRow);
     document.addEventListener('pointerdown', onDocumentPointerDown, {
       capture: true
     });
     document.addEventListener('keydown', onDocumentKeyDown);
     window.addEventListener('drop', onWindowFileDrop, true);
-    requestAnimationFrame(() => {
-      updateSourceChipCollapse();
-      updateSortControlCollapse();
-    });
     return () => {
-      sourceObserver.disconnect();
-      toolbarObserver.disconnect();
       document.removeEventListener('pointerdown', onDocumentPointerDown, {
         capture: true
       });
@@ -881,47 +866,17 @@
       window.removeEventListener('drop', onWindowFileDrop, true);
     };
   });
-
-  $effect(() => {
-    void source;
-    void sourceChipRow;
-    void toolbarRow;
-    void i18n.language;
-    void ui.sortStrategy;
-    void ui.sortDirection;
-    sourceChipsCollapsed = false;
-    expandedSourceChipWidth = 0;
-    sortControlCollapsed = false;
-    expandedToolbarWidth = 0;
-    void tick().then(() =>
-      requestAnimationFrame(() => {
-        updateSourceChipCollapse();
-        updateSortControlCollapse();
-      })
-    );
-  });
 </script>
 
 <Surface
   as="aside"
   variant="panel"
   bind:ref={explorerRoot}
-  class="flex h-full w-full flex-col text-sm"
+  class="file-explorer flex h-full w-full flex-col bg-surface-0 text-xs"
   oncontextmenu={(e) => openMenu(e, { kind: 'root' })}
 >
-  <div
-    bind:this={toolbarRow}
-    class="flex items-center justify-between gap-2 overflow-hidden px-3 py-1.5"
-  >
-    <SortControl
-      strategy={ui.sortStrategy}
-      direction={ui.sortDirection}
-      onStrategyChange={setSortStrategy}
-      onDirectionChange={setSortDirection}
-      variant="ghost"
-      compact
-      collapsed={sortControlCollapsed}
-    />
+  <div class="px-3 pb-1 pt-2"><VaultSwitcher /></div>
+  <div class="flex shrink-0 items-center gap-1 px-3 pb-3 pt-1">
     {#if canCreate}
       <FileTreeCreateToolbar
         pluginButtons={pluginToolbarButtons('file-tree')}
@@ -940,7 +895,7 @@
         {#if emptyTrashAnimation > 0}
           {#key emptyTrashAnimation}
             <span class="trash-suck-particles" aria-hidden="true">
-              {#each Array.from({ length: emptyTrashParticleCount }) as _, i}
+              {#each Array.from( { length: emptyTrashParticleCount } ) as _, i (i)}
                 <span
                   class="trash-suck-particle"
                   style="--i: {i}; --x: {(i -
@@ -958,9 +913,7 @@
   </div>
 
   <nav
-    bind:this={sourceChipRow}
-    class="source-chip-row flex shrink-0 gap-1 overflow-hidden px-3 pb-2"
-    class:source-chip-row-collapsed={sourceChipsCollapsed}
+    class="flex shrink-0 flex-col gap-0.5 px-3 pb-3"
     aria-label={tUi('nav.primary')}
     oncontextmenu={(e) => {
       e.preventDefault();
@@ -973,27 +926,44 @@
       {@const label = tUi(item.labelKey)}
       <button
         type="button"
-        class="source-chip inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors {active
-          ? 'border-accent-brand bg-accent-brand text-accent-brand-foreground'
-          : 'border-border bg-surface-2 text-muted-foreground hover:bg-accent hover:text-foreground'}"
-        class:source-chip-active={active}
+        class="inline-flex h-8 min-w-0 shrink-0 items-center gap-2.5 rounded-md px-2.5 text-left text-xs transition-colors {active
+          ? 'bg-accent-brand/10 font-medium text-accent-brand'
+          : 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
         use:tooltip={active ? undefined : label}
         aria-current={active ? 'page' : undefined}
         aria-label={label}
         onclick={() => onSourceChange?.(item.id)}
       >
         <Icon class="size-3.5 shrink-0" />
-        <span class="source-chip-label truncate">{label}</span>
+        <span class="truncate">{label}</span>
       </button>
     {/each}
   </nav>
 
   <Separator />
-
+  <div class="flex h-11 shrink-0 items-center justify-between gap-2 px-4">
+    <span
+      class="min-w-0 truncate text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
+      >{source === 'home'
+        ? tUi('fileTree.notes')
+        : tUi(
+            FILE_EXPLORER_SOURCES.find((item) => item.id === source)!.labelKey
+          )}</span
+    >
+    <SortControl
+      strategy={ui.sortStrategy}
+      direction={ui.sortDirection}
+      onStrategyChange={setSortStrategy}
+      onDirectionChange={setSortDirection}
+      variant="ghost"
+      compact
+      collapsed
+    />
+  </div>
   <div
     role="group"
     aria-label={tUi('fileTree.tree')}
-    class="flex-1 overflow-y-auto px-1 pb-2 pt-3"
+    class="min-h-0 flex-1 overflow-y-auto px-2 pb-3"
     class:ring-1={dragOver === 'root'}
     class:ring-ring={dragOver === 'root'}
     data-file-drop-accept={fileDropAccept}
@@ -1092,7 +1062,7 @@
       data-file-tree-node
       type="button"
       draggable={canDragItem({ kind: 'folder', id: node.id })}
-      class="flex w-full items-center gap-1 rounded-md px-2 py-1 text-left ring-offset-background hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      class="flex min-h-8 w-full items-center gap-1.5 rounded-md px-2 py-1 text-left ring-offset-background hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       class:bg-accent={isOver || isSelected}
       class:opacity-60={drag?.kind === 'folder' && drag.id === node.id}
       onclick={(e) => {
@@ -1159,6 +1129,7 @@
       draggable={canDragItem({ kind: 'note', id: node.id })}
       class="file-tree-note-row group flex w-full items-center gap-0.5 rounded-md pr-1 hover:bg-accent hover:text-accent-foreground"
       class:bg-accent={isOver || isSelected}
+      class:active-note={ui.activeNoteId === node.id}
       class:opacity-60={drag?.kind === 'note' && drag.id === node.id}
       ondragstart={(e) => onNoteDragStart(e, node.id)}
       ondragend={onDragEnd}
@@ -1168,7 +1139,8 @@
     >
       <button
         type="button"
-        class="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left focus-visible:outline-none"
+        aria-current={ui.activeNoteId === node.id ? 'page' : undefined}
+        class="flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1 text-left focus-visible:outline-none"
         onclick={(e) => {
           const modified = selectNodeFromClick(e, node);
           if (!modified) onOpenNote(node.id);
@@ -1245,21 +1217,10 @@
 {/if}
 
 <style>
-  .source-chip-row-collapsed .source-chip:not(.source-chip-active) {
-    width: 1.75rem;
-    justify-content: center;
-    padding-inline: 0;
+  .file-tree-note-row.active-note {
+    background: color-mix(in oklch, var(--accent-brand) 10%, transparent);
+    color: var(--accent-brand);
   }
-
-  .source-chip-row-collapsed
-    .source-chip:not(.source-chip-active)
-    .source-chip-label {
-    display: none;
-  }
-
-  /* Active chip stays content-sized in the collapsed row — it keeps its
-   * base `shrink-0` width just like every chip does in the expanded form,
-   * rather than stretching to eat the leftover space. */
 
   .file-tree-note-row:has(:focus-visible) {
     outline: 2px solid var(--ring);

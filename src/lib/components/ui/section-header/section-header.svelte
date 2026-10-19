@@ -4,8 +4,8 @@
   import type { HTMLAttributes } from 'svelte/elements';
 
   /**
-   * The small uppercase label that titles a region of a panel — METADATA,
-   * ORGANIZATION, DATES, TAGS, HISTORY, and so on.
+   * The compact heading shared by panel sections — Tags, Outline, History,
+   * Links, and so on.
    *
    * Before this existed the same label was spelled four different ways across
    * NoteSidebar, NoteLinksSection, NoteHistorySection and TagsSection (which
@@ -29,7 +29,7 @@
 <svelte:element
   this={as}
   class={cn(
-    'flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground',
+    'flex items-center gap-2 text-xs font-semibold text-foreground',
     className
   )}
   {...rest}

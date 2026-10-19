@@ -863,12 +863,12 @@
 
   .mobile-note-list.fab-space {
     /*
-     * MobileFab is anchored 1rem from the bottom and its collapsed stack is:
-     * primary 3.5rem + gap 0.75rem + plus 3rem. Keeping this as scrollable
-     * padding lets the last row clear the buttons at max scroll.
+     * MobileFab is one 2.75rem row anchored 1rem from the bottom. Keeping
+     * this as scrollable padding, plus a little air, lets the last row
+     * clear the buttons at max scroll.
      */
-    padding-bottom: 9.5rem;
-    scroll-padding-bottom: 9.5rem;
+    padding-bottom: 4.75rem;
+    scroll-padding-bottom: 4.75rem;
   }
 
   .mobile-note-list.batch-space {

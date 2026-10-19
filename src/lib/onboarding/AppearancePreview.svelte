@@ -82,7 +82,7 @@
         }}><Plus class="size-4" />{tUi('onboarding.preview.newNote')}</Button
       >
     </Surface>
-    <Surface variant="panel" class="min-w-0">
+    <Surface variant="panel" class="min-w-0 bg-editor-surface">
       <div class="border-b border-border px-4 py-2 text-sm">
         {notes[selected]}
       </div>
@@ -145,7 +145,7 @@
     border: 1px solid var(--color-border-strong);
     border-radius: 0.75rem;
     background: var(--color-surface-0);
-    box-shadow: var(--shadow-sm);
+    box-shadow: var(--shadow-raised);
   }
   .preview-title {
     display: flex;

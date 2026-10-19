@@ -195,6 +195,9 @@ function pickScoped(
   return picked;
 }
 
+/** Settings that no longer exist. Values saved by older builds are dropped on load. */
+const RETIRED_SETTINGS = ['appearance.accent'];
+
 function loadRaw(vaultId = activeSettingsVaultId): Record<string, unknown> {
   const deviceRaw = readStorage(DEVICE_STORAGE_KEY);
   const vaultRaw = readStorage(vaultStorageKey(vaultId));
@@ -204,11 +207,9 @@ function loadRaw(vaultId = activeSettingsVaultId): Record<string, unknown> {
   const legacyVaultRaw =
     vaultRaw === null && vaultId === DEFAULT_VAULT_ID ? deviceRaw : null;
   const content = { ...(vaultRaw ?? legacyVaultRaw ?? {}) };
-  if (localStorage.getItem('mindstream:appearance-migration:v1')) {
-    delete content['appearance.accent'];
+  if (localStorage.getItem('mindstream:appearance-migration:v1'))
     delete content['appearance.uiFontSize'];
-  }
-  return {
+  const values = {
     // Device bucket: only its device-scoped ids. This key historically also
     // held vault-scoped values (pre-scoping), so it stays filtered or those
     // would leak into every vault.
@@ -222,6 +223,8 @@ function loadRaw(vaultId = activeSettingsVaultId): Record<string, unknown> {
     // silently losing the value on every restart.
     ...content
   };
+  for (const id of RETIRED_SETTINGS) delete values[id];
+  return values;
 }
 
 function migrateBrowserAppearance(vaultId: string): boolean {
@@ -241,10 +244,9 @@ function migrateBrowserAppearance(vaultId: string): boolean {
     vaultId === DEFAULT_VAULT_ID
       ? device
       : read(vaultStorageKey(vaultId));
-  for (const id of ['appearance.accent', 'appearance.uiFontSize']) {
-    if (!Object.hasOwn(device, id) && Object.hasOwn(source, id))
-      device[id] = source[id];
-  }
+  const id = 'appearance.uiFontSize';
+  if (!Object.hasOwn(device, id) && Object.hasOwn(source, id))
+    device[id] = source[id];
   archiveBrowserAppearance(vaultId);
   localStorage.setItem(DEVICE_STORAGE_KEY, JSON.stringify(device));
   localStorage.setItem('mindstream:appearance-migration:v1', vaultId);
@@ -256,12 +258,7 @@ function archiveBrowserAppearance(vaultId: string): void {
   const key = `mindstream:appearance-source:v1:${vaultId}`;
   if (raw !== null && !localStorage.getItem(key)) {
     const values = parseStoredSettings(raw);
-    if (
-      values &&
-      ['appearance.accent', 'appearance.uiFontSize'].some((id) =>
-        Object.hasOwn(values, id)
-      )
-    )
+    if (values && Object.hasOwn(values, 'appearance.uiFontSize'))
       localStorage.setItem(key, raw);
   }
 }

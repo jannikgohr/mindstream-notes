@@ -31,13 +31,17 @@ export const INK_ZOOM_DISPLAY_SCALE = 2;
 export const INK_ZOOM_STEP = 1.2;
 export const RESIZE_SNAPSHOT_RESTORE_SUPPRESS_MS = 350;
 export const INK_QUICK_ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
+/**
+ * Pen colours: Apollo ink plus five of its named colours (docs/theming.md),
+ * dark enough to read on the white page. Strokes store sRGB, so these are hex.
+ */
 export const INK_COLOR_SWATCHES = [
-  '#111827',
-  '#dc2626',
-  '#2563eb',
-  '#16a34a',
-  '#f59e0b',
-  '#7c3aed'
+  '#1b2530', // ink, oklch(0.26 0.026 252)
+  '#ad4d3c', // red, oklch(0.54 0.13 32)
+  '#2e64a6', // blue, oklch(0.5 0.12 255)
+  '#49782a', // green, oklch(0.52 0.12 135)
+  '#bc7d19', // amber, oklch(0.64 0.13 72)
+  '#7d4b92' // violet, oklch(0.5 0.12 315)
 ];
 
 export const POINTER_BUTTON_SECONDARY = 2;

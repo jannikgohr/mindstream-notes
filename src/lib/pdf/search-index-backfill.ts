@@ -14,13 +14,14 @@
  */
 
 import {
-  fetchDrawingAsset,
+  fetchAssetBytes,
   loadNote,
   pdfNotesMissingText,
   setPdfText
 } from '$lib/api';
 import { listen, TauriEventName } from '$lib/api/events';
 import { extractPdfText } from './extract-text';
+import { indexInkNote } from '$lib/ink/pdf-backgrounds';
 import { pdfAssetIdFromBody } from './viewer-helpers';
 
 let running = false;
@@ -45,11 +46,15 @@ function idle(): Promise<void> {
 
 async function indexOne(noteId: string): Promise<void> {
   const note = await loadNote(noteId);
+  if (note.note_kind === 'ink') {
+    await indexInkNote(noteId);
+    return;
+  }
   const assetId = pdfAssetIdFromBody(note.body);
   if (!assetId) return;
-  const asset = await fetchDrawingAsset(assetId);
-  if (asset.mime_type !== 'application/pdf') return;
-  const text = await extractPdfText(new Uint8Array(asset.bytes));
+  const text = await extractPdfText(
+    await fetchAssetBytes(assetId, 'application/pdf')
+  );
   await setPdfText(noteId, text);
 }
 

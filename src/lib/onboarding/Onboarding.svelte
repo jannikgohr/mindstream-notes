@@ -25,7 +25,6 @@
   import {
     getSettingValue,
     setSettingValue,
-    resetSettingValue,
     SCHEMA,
     flushSettingsWrites
   } from '$lib/settings/store.svelte';
@@ -35,6 +34,7 @@
   import SpellcheckDictionaries from '$lib/settings/customs/SpellcheckDictionaries.svelte';
   import { tUi, tUiFormat, tValue } from '$lib/settings/i18n.svelte';
   import { themeCatalog } from '$lib/settings/theme.svelte';
+  import { BUILTIN_PRESET_NAMES } from '$lib/settings/theme-presets';
   import { authSession } from '$lib/api/auth.svelte';
   import {
     ONBOARDING_STEPS,
@@ -106,10 +106,7 @@
     void perform(() => setSettingValue(id, value));
   }
   function selectPreset(id: string) {
-    void perform(async () => {
-      await setSettingValue('appearance.preset', id);
-      await resetSettingValue('appearance.accent');
-    });
+    write('appearance.preset', id);
   }
   async function navigate(target: OnboardingStep) {
     await perform(async () => {
@@ -192,7 +189,9 @@
         width="24"
         height="24"
         draggable="false"
-      />Mindstream</span
+      /><span class="text-base font-semibold tracking-tight"
+        >mindstream<span class="text-accent-brand">.</span></span
+      ></span
     >
     <div class="ml-auto flex items-center gap-2 text-sm text-muted-foreground">
       <span class="hidden sm:inline">{tUi('onboarding.language')}</span>
@@ -333,7 +332,13 @@
                     aria-pressed={getSettingValue('appearance.preset') ===
                       preset.id}
                     onclick={() => selectPreset(preset.id)}
-                    >{preset.name}</Button
+                    >{Object.hasOwn(BUILTIN_PRESET_NAMES, preset.id)
+                      ? tUi(
+                          BUILTIN_PRESET_NAMES[
+                            preset.id as keyof typeof BUILTIN_PRESET_NAMES
+                          ]
+                        )
+                      : preset.name}</Button
                   >
                 {/each}
               </div>
@@ -344,7 +349,6 @@
               >
                 {themeCatalog.error}
               </p>{/if}
-            <SettingControl setting={setting('appearance.accent')} />
             <SettingControl live setting={setting('appearance.uiFontSize')} />
             <SettingControl
               live

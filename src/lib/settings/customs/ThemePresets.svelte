@@ -1,11 +1,11 @@
 <script lang="ts">
-  import { BUILTIN_PRESETS, resolvedPreset } from '../theme-presets';
-  import { themeCatalog, refreshThemePresets } from '../theme.svelte';
   import {
-    getSettingValue,
-    setSettingValue,
-    resetSettingValue
-  } from '../store.svelte';
+    BUILTIN_PRESETS,
+    BUILTIN_PRESET_NAMES,
+    resolvedPreset
+  } from '../theme-presets';
+  import { themeCatalog, refreshThemePresets } from '../theme.svelte';
+  import { getSettingValue, setSettingValue } from '../store.svelte';
   import { saveThemePreset, deleteThemePreset } from '$lib/api/theme-presets';
   import { tUi, tUiFormat } from '../i18n.svelte';
   import { toErrorMessage } from '$lib/api/errors';
@@ -21,6 +21,11 @@
   const custom = $derived(
     !BUILTIN_PRESETS.some((preset) => preset.id === selected)
   );
+  function presetLabel(item: { id: string; name: string }): string {
+    return Object.hasOwn(BUILTIN_PRESET_NAMES, item.id)
+      ? tUi(BUILTIN_PRESET_NAMES[item.id as keyof typeof BUILTIN_PRESET_NAMES])
+      : item.name;
+  }
   async function select(id: string) {
     error = '';
     busy = true;
@@ -72,7 +77,7 @@
         >{tUiFormat('theme.missingOption', { id: selected })}</option
       >{/if}
     {#each themeCatalog.presets as item (item.id)}<option value={item.id}
-        >{item.name}</option
+        >{presetLabel(item)}</option
       >{/each}
   </select>
   {#if missing}<p role="status" class="text-sm text-muted-foreground">
@@ -85,13 +90,6 @@
       {error || themeCatalog.error}
     </p>{/if}
   <div class="flex flex-wrap gap-2">
-    <button
-      type="button"
-      class="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
-      disabled={busy}
-      onclick={() => resetSettingValue('appearance.accent')}
-      >{tUi('theme.useAccent')}</button
-    >
     <button
       type="button"
       class="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"

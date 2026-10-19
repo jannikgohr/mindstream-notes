@@ -25,6 +25,7 @@
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
+    previewRightSidebarWidth,
     setActiveNote,
     setRightSidebarWidth,
     toggleRightSidebar,
@@ -208,7 +209,8 @@
           value={ui.rightSidebarWidth}
           min={200}
           max={500}
-          onChange={setRightSidebarWidth}
+          onChange={previewRightSidebarWidth}
+          onCommit={setRightSidebarWidth}
         />
         <div
           class="shrink-0 border-l border-border"

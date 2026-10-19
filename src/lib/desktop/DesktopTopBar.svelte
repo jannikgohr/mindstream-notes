@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  // A copy of src-tauri/icons/64x64.png: the dev server cannot serve src-tauri.
+  import appIcon from './app-icon.png';
   import {
     PanelRight,
     Search as SearchIcon,
@@ -31,96 +33,118 @@
 {#if windowChrome.customDecorations}
   <header
     data-tauri-drag-region
-    class="flex h-10 shrink-0 select-none items-center gap-1 border-b border-border bg-surface-0 px-2"
+    class="desktop-topbar flex h-13 shrink-0 select-none items-center border-b border-border bg-surface-0"
   >
     {@render TopBarContent(true)}
   </header>
 {:else}
   <header
-    class="flex h-10 shrink-0 select-none items-center gap-1 border-b border-border bg-surface-0 px-2"
+    class="desktop-topbar flex h-13 shrink-0 select-none items-center border-b border-border bg-surface-0"
   >
     {@render TopBarContent(false)}
   </header>
 {/if}
 
 {#snippet TopBarContent(customDecorations = false)}
-  <Button
-    variant="ghost"
-    size="icon"
-    onclick={toggleLeftSidebar}
-    title={ui.leftSidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
-    aria-label={tUi('topBar.toggleLeftSidebar')}
+  <!-- "deep" makes every empty pixel of both halves move the window; buttons
+       still block the drag. Sized to the sidebar, with the toggle beside the
+       title so collapsing the sidebar does not move it out from under the
+       pointer. Collapsed, the vault switcher follows the toggle at about the
+       spacing between the title and the toggle. -->
+  <div
+    data-tauri-drag-region={customDecorations ? 'deep' : undefined}
+    class="flex h-full shrink-0 items-center gap-2.5 overflow-hidden pl-5 {ui.leftSidebarOpen
+      ? 'pr-5'
+      : ''}"
+    style:width={ui.leftSidebarOpen ? `${ui.leftSidebarWidth}px` : undefined}
   >
-    <!--
-      One glyph for both rails: the left button mirrors `panel-right`
-      rather than pulling in a second icon, so the two toggles animate
-      identically and the divider always nudges towards its own edge.
-      The nudge fires on the toggle, never on hover.
-    -->
-    <CuedIcon
-      icon={PanelRight}
-      cue={ui.leftSidebarOpen}
-      duration={300}
-      class="-scale-x-100"
-    />
-  </Button>
-  <Separator orientation="vertical" class="mx-1 h-5" />
-  {#if customDecorations}
-    <span data-tauri-drag-region class="text-xs font-medium text-foreground">
-      Mindstream Notes
-    </span>
-
-    <Separator orientation="vertical" class="mx-1 h-5" />
-  {/if}
-  <VaultSwitcher />
-
-  {#if customDecorations}
-    <div data-tauri-drag-region class="flex-1"></div>
-  {:else}
+    <img src={appIcon} alt="" draggable="false" class="size-6 shrink-0" />
+    <span class="truncate text-base font-semibold tracking-tight"
+      >mindstream<span class="text-accent-brand">.</span></span
+    >
+    <Button
+      variant="ghost"
+      size="icon"
+      onclick={toggleLeftSidebar}
+      title={ui.leftSidebarOpen
+        ? tUi('topBar.hideLeftSidebar')
+        : tUi('topBar.showLeftSidebar')}
+      aria-label={tUi('topBar.toggleLeftSidebar')}
+      aria-expanded={ui.leftSidebarOpen}
+      class="shrink-0 text-muted-foreground"
+    >
+      <CuedIcon
+        icon={PanelRight}
+        cue={ui.leftSidebarOpen}
+        duration={300}
+        class="-scale-x-100"
+      />
+    </Button>
+  </div>
+  <div
+    data-tauri-drag-region={customDecorations ? 'deep' : undefined}
+    class="flex min-w-0 flex-1 items-center gap-2 pr-3 {ui.leftSidebarOpen
+      ? 'pl-3'
+      : 'pl-1'}"
+  >
+    <!-- Popovers open inside the bar; a press on their padding must not
+         start a window drag. -->
+    {#if !ui.leftSidebarOpen}<div
+        data-tauri-drag-region="false"
+        class="min-w-0 max-w-60 shrink-0"
+      >
+        <VaultSwitcher />
+      </div>{/if}
     <div class="flex-1"></div>
-  {/if}
+    <Button
+      variant="outline"
+      size="sm"
+      onclick={openSearch}
+      title={tUi('search.open')}
+      aria-label={tUi('search.open')}
+      class="desktop-search h-8 shrink-0 justify-start gap-2 border-border bg-surface-1 text-xs font-normal text-muted-foreground shadow-none"
+    >
+      <CuedIcon icon={SearchIcon} size={14} />
+      <span class="hidden sm:inline">{tUi('search.open')}</span>
+    </Button>
+    <Button
+      variant="ghost"
+      size="icon"
+      onclick={openCommandPalette}
+      title={tUi('commandPalette.open')}
+      aria-label={tUi('commandPalette.open')}
+    >
+      <CuedIcon icon={SquareChevronRight} size={16} />
+    </Button>
+    <div data-tauri-drag-region="false" class="contents">
+      <NotificationCenter />
+    </div>
+    <Button
+      variant="ghost"
+      size="icon"
+      onclick={() => openSettings()}
+      title={tUi('topBar.settings')}
+      aria-label={tUi('topBar.openSettings')}
+    >
+      <CuedIcon icon={SettingsIcon} size={16} />
+    </Button>
+    <ThemeToggle />
+    <Button
+      variant="ghost"
+      size="icon"
+      onclick={toggleRightSidebar}
+      title={ui.rightSidebarOpen ? tUi('sidebar.hide') : tUi('sidebar.show')}
+      aria-label={ui.rightSidebarOpen
+        ? tUi('sidebar.hide')
+        : tUi('sidebar.show')}
+      aria-expanded={ui.rightSidebarOpen}
+    >
+      <CuedIcon icon={PanelRight} cue={ui.rightSidebarOpen} duration={300} />
+    </Button>
 
-  <Button
-    variant="ghost"
-    size="icon"
-    onclick={openSearch}
-    title={tUi('search.open')}
-    aria-label={tUi('search.open')}
-  >
-    <CuedIcon icon={SearchIcon} size={16} />
-  </Button>
-  <Button
-    variant="ghost"
-    size="icon"
-    onclick={openCommandPalette}
-    title={tUi('commandPalette.open')}
-    aria-label={tUi('commandPalette.open')}
-  >
-    <CuedIcon icon={SquareChevronRight} size={16} />
-  </Button>
-  <NotificationCenter />
-  <Button
-    variant="ghost"
-    size="icon"
-    onclick={() => openSettings()}
-    title={tUi('topBar.settings')}
-    aria-label={tUi('topBar.openSettings')}
-  >
-    <CuedIcon icon={SettingsIcon} size={16} />
-  </Button>
-  <ThemeToggle />
-  <Button
-    variant="ghost"
-    size="icon"
-    onclick={toggleRightSidebar}
-    title={ui.rightSidebarOpen ? tUi('sidebar.hide') : tUi('sidebar.show')}
-    aria-label={ui.rightSidebarOpen ? tUi('sidebar.hide') : tUi('sidebar.show')}
-  >
-    <CuedIcon icon={PanelRight} cue={ui.rightSidebarOpen} duration={300} />
-  </Button>
-
-  {#if customDecorations}
-    <Separator orientation="vertical" class="mx-1 h-5" />
-    <WindowControls />
-  {/if}
+    {#if customDecorations}
+      <Separator orientation="vertical" class="mx-1 h-5" />
+      <WindowControls />
+    {/if}
+  </div>
 {/snippet}

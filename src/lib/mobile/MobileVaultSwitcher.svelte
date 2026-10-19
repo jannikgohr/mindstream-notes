@@ -17,6 +17,7 @@
   import { Dialog } from 'bits-ui';
   import { Check, Pencil, Plus, Trash2, X } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
+  import VaultTile from '$lib/components/VaultTile.svelte';
   import { Input } from '$lib/components/ui/input';
   import { confirm, alert } from '$lib/components/confirm-dialog.svelte';
   import { isTauri } from '$lib/api';
@@ -242,14 +243,16 @@
   }}
 >
   <Dialog.Portal>
+    <!-- A bottom sheet, like the other mobile overlays, opened from the vault
+         tile in the top bar. -->
+    <Dialog.Overlay class="fixed inset-0 z-50 bg-scrim" />
     <Dialog.Content
-      class="safe-top safe-bottom safe-x fixed inset-0 z-50 flex flex-col bg-background text-foreground focus:outline-none"
+      class="safe-bottom safe-x fixed inset-x-0 bottom-0 z-50 flex max-h-[85dvh] flex-col overflow-hidden rounded-t-2xl border border-border bg-surface-1 text-foreground shadow-overlay focus:outline-none"
     >
       <header
-        class="flex h-12 shrink-0 items-center justify-between border-b border-border bg-card px-2"
+        class="flex h-12 shrink-0 items-center justify-between border-b border-border bg-surface-0 pl-5 pr-2"
       >
-        <div class="w-9 shrink-0"></div>
-        <Dialog.Title class="truncate text-sm font-semibold">
+        <Dialog.Title class="truncate text-sm font-medium">
           {tUi('vault.title')}
         </Dialog.Title>
         <Dialog.Close
@@ -283,7 +286,10 @@
               </div>
             {:else}
               <div
-                class="flex items-center rounded-md border border-border bg-card"
+                class="flex items-center rounded-lg {profile.id ===
+                profilesState.active
+                  ? 'bg-accent-brand/10'
+                  : 'hover:bg-accent'}"
               >
                 <button
                   type="button"
@@ -291,14 +297,16 @@
                   disabled={busy}
                   onclick={() => confirmAndSwitch(profile.id, profile.name)}
                 >
-                  <span
-                    class="flex size-5 shrink-0 items-center justify-center text-primary"
-                  >
-                    {#if profile.id === profilesState.active}
-                      <Check class="size-5" />
-                    {/if}
-                  </span>
+                  <VaultTile
+                    id={profile.id}
+                    name={profile.name}
+                    color={profile.color}
+                    class="size-6 rounded-md text-xs"
+                  />
                   <span class="truncate">{profile.name}</span>
+                  {#if profile.id === profilesState.active}
+                    <Check class="size-4 shrink-0 text-accent-brand" />
+                  {/if}
                 </button>
                 <div class="flex shrink-0 items-center gap-1 pr-2">
                   <button

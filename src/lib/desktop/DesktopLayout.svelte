@@ -44,9 +44,12 @@
   import { listen, TauriEventName } from '$lib/api/events';
   import {
     setActiveNote,
+    previewLeftSidebarWidth,
+    previewRightSidebarWidth,
     setLeftSidebarWidth,
     setRightSidebarWidth,
-    ui
+    ui,
+    toggleRightSidebar
   } from '$lib/state.svelte';
   import { loadTree, tree } from '$lib/stores/tree.svelte';
   import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
@@ -900,13 +903,13 @@
   };
 </script>
 
-<div class="flex h-full w-full flex-col">
+<div data-app-shell class="desktop-shell flex h-full w-full flex-col">
   <TopBar />
 
   <div class="flex min-h-0 flex-1">
     {#if ui.leftSidebarOpen}
       <div
-        class="shrink-0 border-r border-border"
+        class="shrink-0 border-r border-border bg-surface-0"
         style="width: {ui.leftSidebarWidth}px;"
       >
         <LazyFileExplorer
@@ -923,7 +926,8 @@
         value={ui.leftSidebarWidth}
         min={245}
         max={500}
-        onChange={setLeftSidebarWidth}
+        onChange={previewLeftSidebarWidth}
+        onCommit={setLeftSidebarWidth}
       />
     {/if}
 
@@ -937,9 +941,7 @@
           <div
             class="pointer-events-none absolute inset-0 flex items-center justify-center p-6"
           >
-            <section
-              class="pointer-events-auto max-w-md rounded-2xl border border-border bg-card/95 px-6 py-7 text-center shadow-lg backdrop-blur"
-            >
+            <section class="pointer-events-auto max-w-md px-6 py-7 text-center">
               <FileText class="mx-auto size-8 text-muted-foreground" />
               <h2 class="mt-4 text-lg font-semibold">
                 {tUi('desktop.emptyState.title')}
@@ -959,13 +961,14 @@
         value={ui.rightSidebarWidth}
         min={200}
         max={500}
-        onChange={setRightSidebarWidth}
+        onChange={previewRightSidebarWidth}
+        onCommit={setRightSidebarWidth}
       />
       <div
         class="shrink-0 border-l border-border"
         style="width: {ui.rightSidebarWidth}px;"
       >
-        <LazyNoteSidebar />
+        <LazyNoteSidebar onClose={toggleRightSidebar} />
       </div>
     {/if}
   </div>

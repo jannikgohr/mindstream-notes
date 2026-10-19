@@ -10,7 +10,11 @@
    *     min={200}
    *     max={500}
    *     onChange={(w) => state.leftWidth = w}
+   *     onCommit={(w) => save(w)}
    *   />
+   *
+   * onChange follows the pointer; onCommit fires once on release, so a drag
+   * persists one value instead of one per pointer move.
    */
   interface Props {
     /** Which sidebar this handle belongs to — determines drag direction. */
@@ -20,19 +24,30 @@
     min?: number;
     max?: number;
     onChange: (next: number) => void;
+    /** Final width after a drag that moved the handle. */
+    onCommit?: (next: number) => void;
   }
 
-  let { side, value, min = 160, max = 600, onChange }: Props = $props();
+  let {
+    side,
+    value,
+    min = 160,
+    max = 600,
+    onChange,
+    onCommit
+  }: Props = $props();
 
   let dragging = $state(false);
   let startX = 0;
   let startValue = 0;
+  let latest = 0;
 
   function onPointerDown(e: PointerEvent) {
     if (e.button !== 0) return;
     dragging = true;
     startX = e.clientX;
     startValue = value;
+    latest = value;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     e.preventDefault();
   }
@@ -45,6 +60,8 @@
     // left, so we invert the delta there.
     const next = side === 'left' ? startValue + delta : startValue - delta;
     const clamped = Math.min(Math.max(next, min), max);
+    if (clamped === latest) return;
+    latest = clamped;
     onChange(clamped);
   }
 
@@ -56,6 +73,7 @@
     } catch {
       // Pointer may already be released.
     }
+    if (latest !== startValue) onCommit?.(latest);
   }
 </script>
 

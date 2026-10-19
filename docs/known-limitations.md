@@ -211,10 +211,22 @@ choices, handoff, shortcuts, tray, autostart, Quit and update recovery are
 implemented. Isolated test devices and mobile retain their single-vault flows.
 Handoff may replace the native window while preserving its content and geometry.
 
-Packaged macOS 14+ Dock/menu/Reopen testing remains deferred with the owner's
-approval. Linux compositor behavior and geometry constraints are recorded in
-[the harness guide](e2e/harness.md#concurrent-vault-checks). Reboot durability,
-monitor/DPI transitions and signed updater installation still need release QA.
 Global plugin packages, theme presets and settings/plugin-data backup portability
-are implemented. Credentials and downloaded caches stay device-local. See the
-[root/vault plan](root-vault-implementation-plan.md#current-delivery-status).
+are implemented. Credentials and downloaded caches stay device-local. Current
+contracts are in [storage ownership and recovery](storage-ownership-and-recovery.md),
+[plugin usage](plugins.md), [theming](theming.md) and
+[backup portability](backup-restore-portability.md).
+
+Linux compositor behavior and geometry constraints are recorded in
+[the harness guide](e2e/harness.md#concurrent-vault-checks). The
+[Ubuntu VM report](e2e/ubuntu-vm-qa.md) records passing Linux guest hard-reset
+checks on ext4, packaged installation and updater restart using a disposable QA
+signing key, real backup pickers and integer 200% scaling.
+
+Remaining release QA:
+
+- Windows directory-entry and physical host power-loss durability.
+- Production-key updater installation and packaged restart on Windows/macOS.
+- Real monitor, DPI and display-change behavior.
+- Packaged macOS 14+ Dock/menu/Reopen, focus, hide/show and Cmd+Q behavior.
+  The owner accepted deferral until a Mac is available for release testing.

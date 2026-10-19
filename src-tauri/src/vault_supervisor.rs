@@ -1517,6 +1517,7 @@ pub struct PickerVault {
     id: String,
     name: String,
     available: bool,
+    color: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1577,6 +1578,7 @@ pub fn get_picker_vaults(app: AppHandle, window: WebviewWindow) -> CommandResult
             available: crate::profiles::profile_dir(&root, &vault.id).is_dir(),
             id: vault.id,
             name: vault.name,
+            color: vault.color,
         })
         .collect();
     Ok(PickerView {
@@ -4718,6 +4720,7 @@ mod tests {
                     id: id.into(),
                     name: id.into(),
                     created_at: String::new(),
+                    color: None,
                 })
                 .collect(),
         };
@@ -5312,11 +5315,13 @@ mod tests {
                     id: "missing".into(),
                     name: "Missing".into(),
                     created_at: String::new(),
+                    color: None,
                 },
                 crate::profiles::Profile {
                     id: "target".into(),
                     name: "Target".into(),
                     created_at: String::new(),
+                    color: None,
                 },
             ],
         };

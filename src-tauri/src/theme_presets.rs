@@ -23,6 +23,19 @@ const TOKENS: [&str; 12] = [
     "accent-brand",
     "accent-brand-foreground",
 ];
+/// Optional named colours (`NAMED_TOKENS` in theme-presets.ts): a palette sets
+/// all nine or none. The last is the text on any of them.
+const NAMED: [&str; 9] = [
+    "named-red",
+    "named-orange",
+    "named-amber",
+    "named-green",
+    "named-teal",
+    "named-blue",
+    "named-violet",
+    "named-pink",
+    "named-foreground",
+];
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -42,6 +55,7 @@ struct Document {
 }
 
 pub(crate) fn valid_id(id: &str) -> bool {
+    let id = id.strip_prefix("builtin:").unwrap_or(id);
     !id.is_empty()
         && id.len() <= 64
         && id.as_bytes()[0].is_ascii_lowercase()
@@ -83,7 +97,11 @@ fn validate(preset: &Preset) -> AppResult<()> {
         return Err(invalid());
     }
     for palette in [&preset.light, &preset.dark] {
-        if palette.len() != TOKENS.len() || TOKENS.iter().any(|key| !palette.contains_key(*key)) {
+        let named = NAMED.iter().any(|key| palette.contains_key(*key));
+        if palette.len() != TOKENS.len() + if named { NAMED.len() } else { 0 }
+            || TOKENS.iter().any(|key| !palette.contains_key(*key))
+            || (named && NAMED.iter().any(|key| !palette.contains_key(*key)))
+        {
             return Err(invalid());
         }
         for [l, c, h] in palette.values() {
@@ -116,6 +134,16 @@ fn validate(preset: &Preset) -> AppResult<()> {
         {
             return Err(invalid());
         }
+        if named
+            && NAMED[..8].iter().any(|key| {
+                contrast(palette[*key], palette["named-foreground"]) < 4.5
+                    || surfaces
+                        .iter()
+                        .any(|surface| contrast(*surface, palette[*key]) < 3.0)
+            })
+        {
+            return Err(invalid());
+        }
     }
     Ok(())
 }
@@ -135,7 +163,10 @@ fn decode(raw: &[u8]) -> AppResult<Document> {
     }
     for (id, preset) in &document.presets {
         validate(preset)?;
-        if id != &preset.id || builtins().iter().any(|builtin| builtin.id == *id) {
+        if id != &preset.id
+            || id.starts_with("builtin:")
+            || builtins().iter().any(|builtin| builtin.id == *id)
+        {
             return Err(invalid());
         }
     }
@@ -164,7 +195,10 @@ fn load(root: &Path) -> AppResult<Document> {
 
 fn edit(root: &Path, preset: Option<Preset>, id: &str) -> AppResult<()> {
     let _lock = RootLock::acquire(root)?;
-    if !valid_id(id) || builtins().iter().any(|preset| preset.id == id) {
+    if !valid_id(id)
+        || id.starts_with("builtin:")
+        || builtins().iter().any(|preset| preset.id == id)
+    {
         return Err(invalid());
     }
     let mut document = load(root)?;
@@ -256,7 +290,7 @@ fn appearance_at(root: &Path, mode: impl Serialize) -> AppResult<serde_json::Val
         .find(|preset| preset.id == id)
         .unwrap_or(&presets[0]);
     Ok(
-        serde_json::json!({"preset":preset,"accent":values.get("appearance.accent"),"uiFontSize":values.get("appearance.uiFontSize").cloned().unwrap_or(serde_json::json!(16)),"mode":mode}),
+        serde_json::json!({"preset":preset,"uiFontSize":values.get("appearance.uiFontSize").cloned().unwrap_or(serde_json::json!(16)),"mode":mode}),
     )
 }
 
@@ -314,6 +348,30 @@ mod tests {
         }
     }
     #[test]
+    fn namespaced_builtins_leave_old_custom_ids_available() {
+        let root = std::env::temp_dir().join(format!("ms-theme-ids-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        for id in ["slate", "paper"] {
+            let mut preset = builtins().remove(0);
+            preset.id = id.into();
+            edit(&root, Some(preset), id).unwrap();
+        }
+        let presets = catalog(&root).unwrap();
+        for id in [
+            "slate",
+            "paper",
+            "builtin:slate-indigo",
+            "builtin:paper-teal",
+        ] {
+            assert!(presets.iter().any(|preset| preset.id == id));
+        }
+        let mut reserved = builtins().remove(0);
+        reserved.id = "builtin:future".into();
+        assert!(edit(&root, Some(reserved.clone()), &reserved.id).is_err());
+        assert!(validate_backup_presets(&[reserved]).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn invalid_tokens_paths_and_low_contrast_are_rejected() {
         let mut preset = builtins().remove(0);
         preset.id = "../outside".into();
@@ -325,6 +383,16 @@ mod tests {
         preset
             .dark
             .insert("foreground".into(), preset.dark["surface-1"]);
+        assert!(validate(&preset).is_err());
+    }
+    #[test]
+    fn named_colours_are_rejected_when_their_text_is_unreadable() {
+        let mut preset = builtins().remove(0);
+        preset.id = "custom".into();
+        assert!(preset.light.contains_key("named-red"));
+        assert!(validate(&preset).is_ok());
+        let text = preset.light["named-foreground"];
+        preset.light.insert("named-red".into(), text);
         assert!(validate(&preset).is_err());
     }
     #[test]
@@ -376,7 +444,6 @@ mod tests {
         let first = builtins().remove(0);
         let fresh = appearance_at(&root, "dark").unwrap();
         assert_eq!(fresh["preset"]["id"], first.id.as_str());
-        assert_eq!(fresh["accent"], serde_json::Value::Null);
         assert_eq!(fresh["uiFontSize"], 16);
         assert_eq!(fresh["mode"], "dark");
 
@@ -390,7 +457,8 @@ mod tests {
         .unwrap();
         let selected = appearance_at(&root, Option::<&str>::None).unwrap();
         assert_eq!(selected["preset"]["id"], "custom");
-        assert_eq!(selected["accent"], "#abcdef");
+        // A root document from before the accent setting was retired still loads.
+        assert!(selected.get("accent").is_none());
         assert_eq!(selected["uiFontSize"], 14);
         assert_eq!(selected["mode"], serde_json::Value::Null);
         let ids: Vec<_> = catalog(&root)

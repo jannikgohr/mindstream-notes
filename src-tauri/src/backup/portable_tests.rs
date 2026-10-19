@@ -65,7 +65,7 @@ impl Fixture {
         crate::ui_settings::restore_backup_values(
             &fixture.root,
             &[
-                ("appearance.accent".into(), json!("#112233")),
+                ("appearance.uiFontSize".into(), json!(13)),
                 ("appearance.preset".into(), json!("portable-theme")),
             ]
             .into(),
@@ -200,8 +200,8 @@ fn portable_round_trip_restores_values_data_and_gates_packages_on_another_device
         json!(19)
     );
     assert_eq!(
-        crate::ui_settings::backup_values(&root, true).unwrap()["appearance.accent"],
-        json!("#112233")
+        crate::ui_settings::backup_values(&root, true).unwrap()["appearance.uiFontSize"],
+        json!(13)
     );
     assert_eq!(
         crate::desktop_settings::backup_values(&root).unwrap()["theme_mode"],
@@ -224,7 +224,7 @@ fn vault_only_restore_leaves_the_device_and_other_vault_untouched() {
         let _lock = RootLock::acquire(&root).unwrap();
         crate::ui_settings::restore_backup_values(
             &root,
-            &[("appearance.accent".into(), json!("#abcdef"))].into(),
+            &[("appearance.uiFontSize".into(), json!(17))].into(),
             true,
         )
         .unwrap();
@@ -263,7 +263,7 @@ fn device_import_keeps_conflicting_values_packages_and_uninstall_receipts() {
             let _lock = RootLock::acquire(&root).unwrap();
             crate::ui_settings::restore_backup_values(
                 &root,
-                &[("appearance.accent".into(), json!("#abcdef"))].into(),
+                &[("appearance.uiFontSize".into(), json!(17))].into(),
                 true,
             )
             .unwrap();
@@ -284,8 +284,8 @@ fn device_import_keeps_conflicting_values_packages_and_uninstall_receipts() {
         }
         let _lock = RootLock::acquire(&root).unwrap();
         assert_eq!(
-            crate::ui_settings::backup_values(&root, true).unwrap()["appearance.accent"],
-            json!("#abcdef")
+            crate::ui_settings::backup_values(&root, true).unwrap()["appearance.uiFontSize"],
+            json!(17)
         );
     }
 }
@@ -522,7 +522,7 @@ fn produce_native_restore_fixture() {
         let _lock = RootLock::acquire(&root).unwrap();
         crate::ui_settings::restore_backup_values(
             &root,
-            &[("appearance.accent".into(), json!("#abcdef"))].into(),
+            &[("appearance.uiFontSize".into(), json!(17))].into(),
             true,
         )
         .unwrap();

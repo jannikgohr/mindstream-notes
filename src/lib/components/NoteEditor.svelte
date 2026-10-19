@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { registerNoteOutline } from '$lib/stores/note-outline.svelte';
   import { ancestorIsTrash } from '$lib/editor/trash';
   import { createSaveScheduler } from '$lib/editor/save-scheduler';
   import { createCollabSession } from '$lib/editor/collab-session';
@@ -1685,12 +1686,16 @@
       readOnly: isReadOnlyScope
     });
   });
+  $effect(() => {
+    if (mobile || !crepeReady || !host || viewMode === 'source') return;
+    return registerNoteOutline(noteId, host);
+  });
 </script>
 
-<div class="flex h-full w-full flex-col">
+<div class="note-editor flex h-full w-full flex-col" data-note-editor={noteId}>
   {#if showEditorHeader}
     <div
-      class="flex items-center gap-1 border-b border-border bg-background pr-1"
+      class="desktop-editor-header flex min-h-[42px] items-center gap-1 border-b border-border bg-background px-2"
     >
       <div class="min-w-0 flex-1">
         {#if showDesktopToolbar}

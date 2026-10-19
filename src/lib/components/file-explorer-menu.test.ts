@@ -55,6 +55,7 @@ function context(overrides: Partial<MenuBuildContext> = {}): MenuBuildContext {
     startDraft: () => {},
     startPluginTemplateDraft: () => {},
     startPdfImport: () => {},
+    convertPdfNote: async () => {},
     startRename: () => {},
     startEmptyTrash: async () => {},
     leaveShared: async () => {},
@@ -268,6 +269,34 @@ describe('root menu', () => {
       pluginId: 'com.example.documents',
       file: 'icons/document.svg'
     });
+  });
+});
+
+describe('PDF conversion menu', () => {
+  it('offers conversion only for PDFs with an editable destination', async () => {
+    tree.notesById = { n1: note({ note_kind: 'pdf' }) };
+    const target = { kind: 'note', id: 'n1' } as const;
+    expect(
+      labels(await createMenuBuilder(context()).menuItemsForTarget(target))
+    ).toContain('Convert to handwritten note');
+    expect(
+      labels(
+        await createMenuBuilder(
+          context({ source: 'trash' })
+        ).menuItemsForTarget(target)
+      )
+    ).not.toContain('Convert to handwritten note');
+    expect(
+      labels(
+        await createMenuBuilder(
+          context({ source: 'shared', sharedItemEditable: () => false })
+        ).menuItemsForTarget(target)
+      )
+    ).not.toContain('Convert to handwritten note');
+    tree.notesById = { n1: note({ note_kind: 'ink' }) };
+    expect(
+      labels(await createMenuBuilder(context()).menuItemsForTarget(target))
+    ).not.toContain('Convert to handwritten note');
   });
 });
 

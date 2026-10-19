@@ -78,7 +78,7 @@
           class="swatch"
           style="background-color: {color}; box-shadow: {activeColor === color
             ? '0 0 0 2px var(--ring)'
-            : '0 0 0 1px var(--border)'}"
+            : '0 0 0 1px var(--border-strong)'}"
           aria-label={tUi('pdf.toolbar.colorSwatch').replace('{color}', color)}
           aria-pressed={activeColor === color}
           onclick={() => onPickColor(color)}
