@@ -26,7 +26,7 @@ test('the vault tile opens the vault sheet', async ({ page }) => {
   await expect(sheet.getByText('Default', { exact: true })).toBeVisible();
 });
 
-test('the create menu pins quick buttons and picks one default', async ({
+test('the create menu pins quick buttons and a hold picks the default', async ({
   page
 }) => {
   await page.goto('/');
@@ -48,13 +48,18 @@ test('the create menu pins quick buttons and picks one default', async ({
   await expect(pinFolder).toHaveAttribute('aria-pressed', 'true');
   await pinFolder.click();
   await expect(pinFolder).toHaveAttribute('aria-pressed', 'false');
-  // The default is a radio: picking one unpicks the other.
-  const ink = menu.getByRole('radio', {
-    name: 'Make New handwritten note the default'
+  // Holding a type makes it the default; a toast confirms the hidden gesture.
+  const ink = menu.getByRole('button', {
+    name: 'New handwritten note',
+    exact: true
   });
-  await ink.click();
-  await expect(ink).toBeChecked();
-  await expect(menu.getByRole('radio', { checked: true })).toHaveCount(1);
+  const touch = { button: 0, pointerId: 7, pointerType: 'touch' };
+  await ink.dispatchEvent('pointerdown', touch);
+  await page.waitForTimeout(700);
+  await ink.dispatchEvent('pointerup', touch);
+  await expect(
+    page.getByText('New handwritten note is now the default')
+  ).toBeVisible();
   await page.getByRole('button', { name: 'Close action menu' }).first().click();
 
   const main = page.getByRole('button', {
