@@ -12,9 +12,10 @@ hosting is shown as unavailable until a working managed service is configured.
 
 Back and Continue stay in a bottom bar while the step content scrolls above it.
 On phones, choices use compact rows and the progress indicator shows the current
-step name. Skip is a muted, left-aligned button above the navigation divider on
-phones, with its space reserved on every step so Back never becomes Skip after
-returning to the first screen.
+step name. Skip is a small, left-aligned floating button above the mobile
+navigation controls. They have no bar background or divider. Skip's space is
+reserved on every step so Back never becomes Skip after returning to the first
+screen.
 The header and bottom bar respect the device's safe areas.
 
 Appearance uses the app's shared Surface, SectionHeader, Input, Button, and

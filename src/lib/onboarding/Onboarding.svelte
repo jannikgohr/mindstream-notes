@@ -762,6 +762,7 @@
     .setup-footer {
       padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom));
       border-top: 0;
+      background: transparent;
     }
     .setup-saved {
       display: none;
@@ -771,16 +772,6 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
       grid-template-rows: minmax(2.75rem, auto) minmax(3.5rem, auto);
       gap: 0.5rem;
-    }
-    .setup-footer-inner::before {
-      content: '';
-      grid-area: 2 / 1 / 3 / 3;
-      align-self: start;
-      height: 1px;
-      margin-inline: -1rem;
-      background: var(--color-border);
-      transform: translateY(-0.25rem);
-      pointer-events: none;
     }
     .setup-actions {
       display: contents;
@@ -793,7 +784,10 @@
       max-width: 100%;
       min-width: 0;
       padding-inline: 0.75rem;
-      background: transparent;
+      border: 1px solid var(--color-border);
+      border-radius: 999px;
+      background: var(--color-surface-1);
+      box-shadow: var(--shadow-sm);
       color: var(--color-muted-foreground);
       font-size: 0.75rem;
       font-weight: 400;
