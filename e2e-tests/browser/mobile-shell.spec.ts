@@ -3,7 +3,8 @@ import { expect, test } from '@playwright/test';
 /**
  * The mobile shell's chrome, which follows the desktop's: the vault tile
  * opens the vault sheet, the create bar shows the default kind and pinned
- * kinds and its menu changes both, and the note details sheet reads once.
+ * kinds and its sortable menu changes both, and the note details sheet reads
+ * once.
  *
  * The mobile shell is chosen from navigator.userAgent (see lib/platform.ts).
  */
@@ -26,7 +27,7 @@ test('the vault tile opens the vault sheet', async ({ page }) => {
   await expect(sheet.getByText('Default', { exact: true })).toBeVisible();
 });
 
-test('the create menu pins quick buttons and a hold picks the default', async ({
+test('the create menu pins quick buttons and sorts the default to the top', async ({
   page
 }) => {
   await page.goto('/');
@@ -48,18 +49,25 @@ test('the create menu pins quick buttons and a hold picks the default', async ({
   await expect(pinFolder).toHaveAttribute('aria-pressed', 'true');
   await pinFolder.click();
   await expect(pinFolder).toHaveAttribute('aria-pressed', 'false');
-  // Holding a type makes it the default; a toast confirms the hidden gesture.
-  const ink = menu.getByRole('button', {
-    name: 'New handwritten note',
-    exact: true
+  // Dragging a type to the top makes it the default, and the list says so
+  // before the drop: the marker reads "Default" and the old default loses it.
+  const handle = menu.getByRole('button', {
+    name: 'Move New handwritten note'
   });
-  const touch = { button: 0, pointerId: 7, pointerType: 'touch' };
-  await ink.dispatchEvent('pointerdown', touch);
-  await page.waitForTimeout(700);
-  await ink.dispatchEvent('pointerup', touch);
-  await expect(
-    page.getByText('New handwritten note is now the default')
-  ).toBeVisible();
+  const top = menu.locator('[data-create-row]').first();
+  const from = (await handle.boundingBox())!;
+  const to = (await top.boundingBox())!;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(from.x + from.width / 2, to.y + 4, { steps: 12 });
+  await expect(menu.locator('.border-dashed')).toHaveText('Default');
+  await expect(menu.locator('[data-create-row="note"]')).not.toContainText(
+    'Default'
+  );
+  await page.mouse.up();
+  await expect(menu.locator('[data-create-row]').first()).toContainText(
+    'New handwritten note'
+  );
   await page.getByRole('button', { name: 'Close action menu' }).first().click();
 
   const main = page.getByRole('button', {

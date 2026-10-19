@@ -46,7 +46,8 @@
   import MobileToolbar from './MobileToolbar.svelte';
   import MobileNoteList from './MobileNoteList.svelte';
   import { mobileBatchSelection } from './state.svelte';
-  import MobileFab, { type FabAction } from './MobileFab.svelte';
+  import MobileFab from './MobileFab.svelte';
+  import type { FabAction, FabSection } from './MobileFab.svelte';
   import MobileBottomNav from './MobileBottomNav.svelte';
   import MobileEditor from './MobileEditor.svelte';
   import LazyMobileSettingsDialog from './LazyMobileSettingsDialog.svelte';
@@ -267,10 +268,12 @@
     }))
   );
 
-  const pinnedCreate = $derived(
-    createOrder.toolbar.filter(
-      (id) =>
-        id !== createActions[0]?.id && createKinds[id as CoreFileTreeActionId]
+  // The bar section leads `createActions`; it always holds the default.
+  const createBarCount = $derived(
+    Math.max(
+      1,
+      createActions.filter((action) => createOrder.toolbar.includes(action.id))
+        .length
     )
   );
 
@@ -282,12 +285,10 @@
     void saveFileTreeToolbarPreferences(createOrder);
   }
 
-  /** Make a kind the default: it moves to the front of the toolbar. */
-  function setDefaultCreate(id: string) {
-    const first = createOrder.toolbar[0];
-    if (id === createActions[0]?.id || id === first) return;
+  /** Sort a kind: the bar section's first kind is the default. */
+  function moveCreate(id: string, section: FabSection, beforeId?: string) {
     saveCreateOrder(
-      moveFileTreeToolbarAction(createOrder, id, 'toolbar', first)
+      moveFileTreeToolbarAction(createOrder, id, section, beforeId)
     );
   }
 
@@ -326,9 +327,9 @@
       {#if fabVisible}
         <MobileFab
           actions={createActions}
-          pinned={pinnedCreate}
+          barCount={createBarCount}
           extras={templateActions}
-          onSetDefault={setDefaultCreate}
+          onMove={moveCreate}
           onTogglePin={togglePinnedCreate}
         />
       {/if}
