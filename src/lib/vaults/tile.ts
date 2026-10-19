@@ -38,10 +38,11 @@ export function vaultColor(vault: {
 export function vaultTileLetter(name: string): string {
   const trimmed = name.trim();
   if (!trimmed) return '?';
+  // A non-empty name always has a first segment and a first code point.
   const first =
     typeof Intl.Segmenter === 'function'
-      ? new Intl.Segmenter().segment(trimmed)[Symbol.iterator]().next().value
-          ?.segment
+      ? new Intl.Segmenter().segment(trimmed)[Symbol.iterator]().next().value!
+          .segment
       : Array.from(trimmed)[0];
-  return (first ?? trimmed[0]).toLocaleUpperCase();
+  return first.toLocaleUpperCase();
 }

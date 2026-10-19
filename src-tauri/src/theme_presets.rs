@@ -386,6 +386,16 @@ mod tests {
         assert!(validate(&preset).is_err());
     }
     #[test]
+    fn named_colours_are_rejected_when_their_text_is_unreadable() {
+        let mut preset = builtins().remove(0);
+        preset.id = "custom".into();
+        assert!(preset.light.contains_key("named-red"));
+        assert!(validate(&preset).is_ok());
+        let text = preset.light["named-foreground"];
+        preset.light.insert("named-red".into(), text);
+        assert!(validate(&preset).is_err());
+    }
+    #[test]
     fn edits_keep_other_presets_and_recover_corruption_without_discarding_bytes() {
         let root = std::env::temp_dir().join(format!("ms-themes-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();

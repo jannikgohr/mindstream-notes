@@ -8,6 +8,7 @@ import {
   NAMED_TOKENS,
   parseThemePreset,
   resolvedPreset,
+  themeColorCss,
   themeContrast,
   THEME_TOKENS,
   type ThemeColor
@@ -56,6 +57,10 @@ describe('theme preset contract', () => {
     expect(() => parseThemePreset(border)).toThrow();
     preset.dark.foreground = preset.dark['surface-1'];
     expect(() => parseThemePreset(preset)).toThrow();
+  });
+  it('rejects a palette that is missing, a list or a single value', () => {
+    for (const dark of [undefined, null, [], 'oklch(0.2 0 0)'])
+      expect(() => parseThemePreset({ ...BUILTIN_PRESETS[0], dark })).toThrow();
   });
   it('switches mode independently and takes the accent from the preset', () => {
     const warm = BUILTIN_PRESETS.find((preset) => preset.id === 'warm')!;
@@ -251,6 +256,16 @@ describe('native window background', () => {
     document.documentElement.classList.add('dark');
     const dark = currentThemeWindowBackground();
     expect(brightness(dark)).toBeLessThan(brightness(light));
+  });
+
+  it('gives canvas painting the same sRGB bytes, with alpha', () => {
+    const { red, green, blue } = currentThemeWindowBackground();
+    expect(themeColorCss(BUILTIN_PRESETS[0].light['surface-1'])).toBe(
+      `rgba(${red}, ${green}, ${blue}, 1)`
+    );
+    // Black takes the linear segment of the sRGB curve, white the power one.
+    expect(themeColorCss([0, 0, 0], 0.08)).toBe('rgba(0, 0, 0, 0.08)');
+    expect(themeColorCss([1, 0, 0])).toBe('rgba(255, 255, 255, 1)');
   });
 
   it('falls back to the first built-in surface for a corrupt cache', () => {

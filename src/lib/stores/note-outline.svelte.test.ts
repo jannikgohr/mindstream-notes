@@ -60,8 +60,17 @@ describe('note outline', () => {
       closeOld,
       registerNoteOutline('same', editor('<h1>New</h1>'))
     );
+    // Observers are notified in the order they were created, so once this
+    // later one has seen the edit, the older editor's observer has run too.
+    const seen = new Promise<void>((resolve) =>
+      new MutationObserver((_records, observer) => {
+        observer.disconnect();
+        resolve();
+      }).observe(oldRoot, { childList: true, subtree: true })
+    );
     oldRoot.querySelector('h1')!.textContent = 'Stale';
-    await Promise.resolve();
+    await seen;
+    expect(noteOutline.byNote.same).toEqual([{ title: 'New', level: 1 }]);
     closeOld();
     expect(noteOutline.byNote.same).toEqual([{ title: 'New', level: 1 }]);
   });

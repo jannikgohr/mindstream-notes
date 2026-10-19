@@ -180,6 +180,17 @@ describe('file tree toolbar preferences', () => {
     expect(writer).toHaveBeenLastCalledWith('ui.fileTreeToolbar', desktop);
   });
 
+  it('starts a native phone layout from the desktop one until it is edited', async () => {
+    const { applyNativeDeviceUi } =
+      await import('$lib/native-device-ui.svelte');
+    const desktop = { toolbar: ['folder'], more: ['note'] };
+    vi.stubGlobal('__TAURI_INTERNALS__', {});
+    applyNativeDeviceUi({ 'ui.fileTreeToolbar': desktop });
+    expect(
+      loadFileTreeToolbarPreferences(['note', 'folder'], 'mobile')
+    ).toEqual(desktop);
+  });
+
   it('uses defaults when storage is unavailable or contains invalid JSON', () => {
     vi.stubGlobal('localStorage', undefined);
     expect(loadFileTreeToolbarPreferences(actions)).toEqual(

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { vaultColor, vaultTileColor, vaultTileLetter } from './tile';
 
 describe('vaultColor', () => {
@@ -29,5 +29,19 @@ describe('vaultTileLetter', () => {
   it('falls back to a question mark for an empty name', () => {
     expect(vaultTileLetter('')).toBe('?');
     expect(vaultTileLetter('   ')).toBe('?');
+  });
+
+  it('still keeps accents and emoji whole without Intl.Segmenter', () => {
+    vi.stubGlobal(
+      'Intl',
+      Object.assign(Object.create(Intl), { Segmenter: undefined })
+    );
+    try {
+      expect(vaultTileLetter('éCole')).toBe('É');
+      // One code point, two UTF-16 units: indexing would split the pair.
+      expect(vaultTileLetter('📚 Reading')).toBe('📚');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
