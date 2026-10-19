@@ -691,9 +691,9 @@ body.dv-tab-dragging
   border-inline: 1px solid var(--border);
 }
 
-/* Square edges and an opaque fill continue the tab strip's boxed chrome. */
+/* A small radius softens the control while the borders keep it distinct. */
 .dockview-theme-bridge .dv-tabs-overflow-dropdown-default {
-  border-radius: 0;
+  border-radius: var(--radius-sm);
   margin: 0;
   padding: 0 10px;
   background-color: var(--surface-0);
@@ -718,14 +718,15 @@ body.dv-tab-dragging
   padding-inline: 8px;
 }
 
-/* The overflow list uses square, contiguous rows with persistent dividers. */
+/* Match other menus' outer radius; keep contiguous rows and their dividers. */
 .dockview-theme-bridge .dv-tabs-overflow-container {
   background-color: var(--popover);
   color: var(--popover-foreground);
   border: 1px solid var(--border);
-  border-radius: 0;
+  border-radius: var(--radius-md);
   padding: 0;
   min-width: 200px;
+  overflow-x: hidden;
   box-shadow: var(--elevation-overlay);
 }
 
