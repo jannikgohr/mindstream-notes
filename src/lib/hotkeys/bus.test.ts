@@ -15,6 +15,7 @@ import {
   unregisterEditor,
   activeEditor,
   emitCommand,
+  commandAvailability,
   searchActiveNote,
   runActiveEditorCommand,
   SEARCH_ACTIVE_NOTE_COMMAND,
@@ -50,6 +51,7 @@ function track(listener: EditorListener): EditorListener {
 }
 
 afterEach(() => {
+  commandAvailability.onboarding = false;
   for (const l of owned) {
     unregisterEditor(l);
     l.host.remove();
@@ -61,6 +63,37 @@ afterEach(() => {
 });
 
 describe('bus.editorStack', () => {
+  it('suppresses workspace commands during setup while allowing editor practice', () => {
+    const run = vi.fn();
+    commandAvailability.onboarding = true;
+    expect(
+      emitCommand({
+        id: 'global.newMarkdownNote',
+        scope: 'global',
+        labelKey: '',
+        defaultBinding: 'mod+n',
+        run
+      })
+    ).toBe(true);
+    expect(run).not.toHaveBeenCalled();
+    const listener = track(
+      makeListener(
+        'markdown',
+        vi.fn(() => true)
+      )
+    );
+    expect(emitCommand(COMMAND_BY_ID['editor.markdown.bold'])).toBe(true);
+    expect(listener.onCommand).toHaveBeenCalledWith('editor.markdown.bold');
+    commandAvailability.onboarding = false;
+    emitCommand({
+      id: 'global.newMarkdownNote',
+      scope: 'global',
+      labelKey: '',
+      defaultBinding: 'mod+n',
+      run
+    });
+    expect(run).toHaveBeenCalledOnce();
+  });
   it('pushes onto an empty stack', () => {
     const a = track(makeListener('markdown'));
     expect(activeEditor()).toBe(a);

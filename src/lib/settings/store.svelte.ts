@@ -649,12 +649,17 @@ export function resetSettingValue(id: string): Promise<void> {
 
 async function persistResetSettingValue(id: string): Promise<void> {
   const def = settingDef(id);
-  if (!def) return;
+  if (!def && !id.startsWith('hotkey.')) return;
   if (externalStore?.owns(id)) {
     await externalStore.clear(id);
     return;
   }
-  if ('default' in def || def.defaultByPlatform) {
+  // An absent accent inherits the selected theme's light/dark palette.
+  if (
+    def &&
+    id !== 'appearance.accent' &&
+    ('default' in def || def.defaultByPlatform)
+  ) {
     await setSettingValue(id, defaultForSetting(def));
     return;
   }

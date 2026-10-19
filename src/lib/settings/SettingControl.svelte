@@ -41,8 +41,10 @@
   interface Props {
     setting: Setting;
     searchQuery?: string;
+    /** Update dependent previews during a slider drag. */
+    live?: boolean;
   }
-  let { setting, searchQuery = '' }: Props = $props();
+  let { setting, searchQuery = '', live = false }: Props = $props();
 
   const label = $derived(tLabel('settings', setting.id));
   const description = $derived(tDescription('settings', setting.id));
@@ -302,12 +304,15 @@
         -->
         <input
           type="range"
+          aria-label={label}
           min={s.min}
           max={s.max}
           step={s.step}
           value={display}
-          oninput={(e) =>
-            (sliderDrag = Number((e.currentTarget as HTMLInputElement).value))}
+          oninput={(e) => {
+            sliderDrag = Number((e.currentTarget as HTMLInputElement).value);
+            if (live) commit(sliderDrag);
+          }}
           onchange={(e) => {
             const v = Number((e.currentTarget as HTMLInputElement).value);
             sliderDrag = null;
@@ -354,6 +359,7 @@
       <div class="flex items-center gap-2">
         <input
           type="color"
+          aria-label={label}
           value={(value as string | undefined) ?? '#000000'}
           oninput={(e) => commit((e.currentTarget as HTMLInputElement).value)}
           class="size-7 cursor-pointer rounded border border-border bg-background"

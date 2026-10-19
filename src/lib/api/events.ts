@@ -15,6 +15,7 @@ export enum TauriEventName {
   InvitationsChanged = 'invitations-changed',
   InviteLinkOpened = 'invite-link-opened',
   NativeMenuCommand = 'native-menu-command',
+  OnboardingChanged = 'onboarding-changed',
   PluginsChanged = 'plugins-changed',
   SessionEnded = 'session-ended',
   ShowApp = 'show-app',
@@ -120,6 +121,7 @@ export type TauriEvents = {
   'plugins-changed': null;
   'ui-settings-changed': null;
   'desktop-settings-changed': null;
+  'onboarding-changed': null;
   'vault-worker-close': {
     id: string;
     phase: 'waiting' | 'prepare' | 'cancel';

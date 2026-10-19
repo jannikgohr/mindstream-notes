@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { isMobile } from '$lib/platform';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import OnboardingGate from '$lib/onboarding/OnboardingGate.svelte';
 
   /**
    * Three-way render decision, made client-side because both branches
@@ -172,11 +173,11 @@
     </div>
   {/if}
 {:else if mode === 'mobile'}
-  <Shell />
+  <OnboardingGate><Shell /></OnboardingGate>
 {:else if mode === 'popout' && popoutNoteId}
   <Shell noteId={popoutNoteId} />
 {:else}
-  <Shell />
+  <OnboardingGate><Shell /></OnboardingGate>
 {/if}
 
 <style>

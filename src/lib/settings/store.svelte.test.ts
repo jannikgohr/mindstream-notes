@@ -49,6 +49,12 @@ beforeEach(() => {
 });
 
 describe('browser device appearance migration', () => {
+  it('resetting the accent restores theme inheritance instead of saving a blue override', async () => {
+    await setSettingValue('appearance.accent', '#123456');
+    expect(hasSettingValue('appearance.accent')).toBe(true);
+    await resetSettingValue('appearance.accent');
+    expect(hasSettingValue('appearance.accent')).toBe(false);
+  });
   it('seeds only the selected vault and keeps editor typography separate', async () => {
     localStorage.removeItem('mindstream:appearance-migration:v1');
     const source = JSON.stringify({

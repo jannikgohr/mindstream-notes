@@ -21,6 +21,10 @@ export interface CommandError {
 }
 
 export enum TauriCommandName {
+  GetOnboarding = 'get_onboarding',
+  RestartOnboarding = 'restart_onboarding',
+  SaveOnboardingStep = 'save_onboarding_step',
+  FinishOnboarding = 'finish_onboarding',
   ListThemePresets = 'list_theme_presets',
   GetThemeAppearance = 'get_theme_appearance',
   SaveThemePreset = 'save_theme_preset',

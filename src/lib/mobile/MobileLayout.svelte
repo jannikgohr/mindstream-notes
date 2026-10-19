@@ -51,6 +51,7 @@
     tree
   } from '$lib/stores/tree.svelte';
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
+  import { takeOnboardingNote } from '$lib/onboarding/store.svelte';
   import { startPdfSearchIndexing } from '$lib/pdf/search-index-backfill';
   import { pruneHistoryOnStartup } from '$lib/history/retention';
   import { tUi } from '$lib/settings/i18n.svelte';
@@ -68,6 +69,8 @@
   });
 
   onMount(() => {
+    const onboardingNote = takeOnboardingNote();
+    if (onboardingNote) void loadTree().then(() => openNote(onboardingNote));
     if (!tree.ready) {
       void loadTree().then(() => migrateLegacyFavourites());
     } else {

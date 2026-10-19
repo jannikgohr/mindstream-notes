@@ -57,6 +57,7 @@
     setDesktopNoteSource
   } from '$lib/stores/note-source.svelte';
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
+  import { takeOnboardingNote } from '$lib/onboarding/store.svelte';
   import { runSync } from '$lib/sync/runner';
   import { pluginNoteKind } from '$lib/plugins/registry.svelte';
   import { installFileDropRouter } from '$lib/file-drop';
@@ -274,7 +275,10 @@
 
     const restored = tryRestoreLayout();
     layoutPersistenceReady = true;
-    if (!restored) {
+    const onboardingNote = takeOnboardingNote();
+    if (onboardingNote && tree.notesById[onboardingNote]) {
+      void openNote(onboardingNote);
+    } else if (!restored) {
       const first = pickInitialNote();
       if (first) void openNote(first);
     } else {

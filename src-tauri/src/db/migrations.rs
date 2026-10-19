@@ -1024,7 +1024,7 @@ pub fn seed(conn: &Connection) -> AppResult<()> {
     Ok(())
 }
 
-fn insert_note(
+pub(crate) fn insert_note(
     conn: &Connection,
     id: &str,
     title: &str,

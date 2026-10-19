@@ -59,6 +59,7 @@ pub mod legacy_export;
 pub mod native_menu;
 pub mod notes;
 pub mod notes_export;
+pub mod onboarding;
 pub mod paths;
 pub mod pdf_export;
 pub mod pdf_text;
@@ -392,6 +393,17 @@ pub fn run() {
             let role =
                 vault_supervisor::startup_role(app.state::<environment::Environment>().kind)?;
             #[cfg(desktop)]
+            let initialize_onboarding = role == vault_runtime::Role::Direct;
+            #[cfg(not(desktop))]
+            let initialize_onboarding = true;
+            if initialize_onboarding {
+                onboarding::initialize(
+                    &app_data_root,
+                    app.state::<environment::Environment>().kind,
+                    onboarding::force_requested(),
+                )?;
+            }
+            #[cfg(desktop)]
             {
                 app.manage(role.clone());
                 if role == vault_runtime::Role::Host {
@@ -476,7 +488,12 @@ pub fn run() {
 
             // First-run seed.
             db.with_conn(|c| {
-                if migrations::was_freshly_created(c)? {
+                if migrations::was_freshly_created(c)?
+                    && onboarding::should_seed_demo(
+                        &app_data_root,
+                        app.state::<environment::Environment>().kind,
+                    )?
+                {
                     log::info!("[boot] empty database — seeding demo content");
                     migrations::seed(c)?;
                 }
@@ -731,6 +748,10 @@ pub fn run() {
                 profiles::switch_profile,
                 profiles::rename_profile,
                 profiles::delete_profile,
+                onboarding::get_onboarding,
+                onboarding::restart_onboarding,
+                onboarding::save_onboarding_step,
+                onboarding::finish_onboarding,
                 // Native app restart — mobile vault switch reboots into the
                 // newly-activated vault (desktop relaunches from JS instead).
                 #[cfg(target_os = "android")]
