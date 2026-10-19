@@ -17,6 +17,7 @@
   import { Dialog } from 'bits-ui';
   import { Check, Pencil, Plus, Trash2, X } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
+  import VaultTile from '$lib/components/VaultTile.svelte';
   import { Input } from '$lib/components/ui/input';
   import { confirm, alert } from '$lib/components/confirm-dialog.svelte';
   import { isTauri } from '$lib/api';
@@ -42,6 +43,9 @@
   let renameValue = $state('');
   let createInput: HTMLInputElement | null = $state(null);
   let renameInput: HTMLInputElement | null = $state(null);
+  const vaultIds = $derived(
+    profilesState.profiles.map((profile) => profile.id)
+  );
 
   // Refresh the vault list on open and reset the inline edit affordances
   // on close so it reopens on the plain list rather than mid-edit.
@@ -291,14 +295,16 @@
                   disabled={busy}
                   onclick={() => confirmAndSwitch(profile.id, profile.name)}
                 >
-                  <span
-                    class="flex size-5 shrink-0 items-center justify-center text-primary"
-                  >
-                    {#if profile.id === profilesState.active}
-                      <Check class="size-5" />
-                    {/if}
-                  </span>
+                  <VaultTile
+                    id={profile.id}
+                    name={profile.name}
+                    {vaultIds}
+                    class="size-6 rounded-md text-xs"
+                  />
                   <span class="truncate">{profile.name}</span>
+                  {#if profile.id === profilesState.active}
+                    <Check class="size-4 shrink-0 text-accent-brand" />
+                  {/if}
                 </button>
                 <div class="flex shrink-0 items-center gap-1 pr-2">
                   <button

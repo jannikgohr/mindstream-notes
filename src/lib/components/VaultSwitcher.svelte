@@ -2,10 +2,8 @@
   /**
    * Top-bar vault (profile) switcher. Sits right of the app title.
    *
-   * The current vault name is always shown next to the icon. The jis3r
-   * Vault icon animates only while the menu is open (i.e. on click) —
-   * driven by the `animate` prop from the `open` state rather than the
-   * library's built-in mouseenter, so hovering the top bar stays quiet.
+   * The current vault name is always shown next to its letter tile
+   * (VaultTile), which tells vaults apart at a glance.
    *
    * Click: opens a dropdown (same outside-pointerdown + Escape pattern as
    * NotificationCenter) listing every vault with the active one checked.
@@ -14,7 +12,6 @@
    * ownership; the native action rechecks the target.
    */
   import { onMount } from 'svelte';
-  import { Vault } from '@jis3r/icons';
   import {
     ArrowLeftRight,
     Check,
@@ -26,6 +23,7 @@
   } from '@lucide/svelte';
   import { tooltip } from '$lib/actions/tooltip';
   import { Button } from '$lib/components/ui/button';
+  import VaultTile from '$lib/components/VaultTile.svelte';
   import { Input } from '$lib/components/ui/input';
   import { confirm, alert } from '$lib/components/confirm-dialog.svelte';
   import { isTauri } from '$lib/api';
@@ -62,6 +60,9 @@
 
   const current = $derived(currentProfile());
   const currentName = $derived(current?.name ?? tUi('vault.unknown'));
+  const vaultIds = $derived(
+    profilesState.profiles.map((profile) => profile.id)
+  );
 
   // Tinted like the app's other status chips. Plain muted text next to the
   // row's icon buttons read as one more action ("Open") rather than a state.
@@ -406,7 +407,7 @@
     aria-expanded={open}
     disabled={busy}
   >
-    <Vault size={16} animate={open} />
+    <VaultTile id={current?.id ?? ''} name={current?.name ?? ''} {vaultIds} />
     <span class="min-w-0 flex-1 truncate text-left">{currentName}</span>
     <!-- The same 28px box as the file-tree toolbar's menu button below, so
          both chevrons sit in one column. -->
@@ -527,12 +528,11 @@
                 onclick={(event) =>
                   selectProfile(profile.id, profile.name, undefined, event)}
               >
-                <span class="flex size-4 shrink-0 items-center justify-center">
-                  {#if profile.id === profilesState.active}
-                    <Check class="size-4" />
-                  {/if}
-                </span>
+                <VaultTile id={profile.id} name={profile.name} {vaultIds} />
                 <span class="truncate">{profile.name}</span>
+                {#if profile.id === profilesState.active}
+                  <Check class="size-3.5 shrink-0 text-accent-brand" />
+                {/if}
                 {#if status}
                   <span
                     class="ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-medium leading-none {STATUS_BADGE[

@@ -1536,6 +1536,27 @@ body.dv-tab-dragging .freeform-canvas-host * {
 }
 
 /* -------------------------------------------------------------------------
+ * Vault tiles
+ *
+ * A vault is marked by the first letter of its name on one of Apollo's eight
+ * named colours, picked from its ID (`$lib/vaults/tile.ts`). Fixed hues rather
+ * than preset tokens: the colour tells vaults apart, so it must not change
+ * with the theme. Each one keeps the letter at 4.5:1 or better.
+ * ------------------------------------------------------------------------- */
+
+:root {
+  --vault-tile-0: oklch(0.56 0.12 32); /* red */
+  --vault-tile-1: oklch(0.56 0.12 58); /* orange */
+  --vault-tile-2: oklch(0.56 0.115 75); /* amber */
+  --vault-tile-3: oklch(0.54 0.12 135); /* green */
+  --vault-tile-4: oklch(0.54 0.09 210); /* teal */
+  --vault-tile-5: oklch(0.55 0.12 255); /* blue */
+  --vault-tile-6: oklch(0.56 0.12 315); /* violet */
+  --vault-tile-7: oklch(0.56 0.12 348); /* pink */
+  --vault-tile-foreground: oklch(0.99 0.005 85);
+}
+
+/* -------------------------------------------------------------------------
  * Text diagnostics
  *
  * Squiggles from `$lib/diagnostics`, drawn identically on both editing

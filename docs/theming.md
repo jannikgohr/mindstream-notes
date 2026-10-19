@@ -189,6 +189,12 @@ absence of a token:
 
 - `--highlight-search` / `-active` / `-selection`, shared by the editor's
   find decorations and the PDF viewer's overlay.
+- `--vault-tile-0` … `-7`, the letter tiles that mark vaults in the switcher,
+  the vault picker and the mobile menu. Apollo's eight named colours at one
+  lightness, each keeping its letter at 4.5:1. A vault's colour comes from
+  its ID ([`src/lib/vaults/tile.ts`](../src/lib/vaults/tile.ts)), moved to a
+  free colour when an older vault already has it, so it never changes with
+  the preset.
 - Ink pen swatches and PDF annotation colours
   ([`src/lib/ink/editor-helpers.ts`](../src/lib/ink/editor-helpers.ts),
   [`src/lib/pdf/viewer-helpers.ts`](../src/lib/pdf/viewer-helpers.ts)). They

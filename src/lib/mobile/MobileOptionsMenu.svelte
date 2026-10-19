@@ -18,8 +18,10 @@
    * surfaces are controlled children hosted here.
    */
   import { onMount } from 'svelte';
-  import { Bell, CircleUserRound, Settings, Vault } from '@lucide/svelte';
+  import { Bell, CircleUserRound, Settings } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
+  import VaultTile from '$lib/components/VaultTile.svelte';
+  import { currentProfile, profilesState } from '$lib/stores/profiles.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { notificationState } from '$lib/notifications/store.svelte';
   import {
@@ -40,6 +42,10 @@
   const NAV_ID = 'mobile-options';
 
   const notificationCount = $derived(notificationState.items.length);
+  const activeVault = $derived(currentProfile());
+  const vaultIds = $derived(
+    profilesState.profiles.map((profile) => profile.id)
+  );
   const countLabel = $derived(
     notificationCount > 99 ? '99+' : String(notificationCount)
   );
@@ -175,7 +181,12 @@
         class="flex w-full items-center gap-3 px-3 py-3 text-left text-sm hover:bg-accent hover:text-accent-foreground"
         onclick={pickVaults}
       >
-        <Vault class="size-5 shrink-0 text-muted-foreground" />
+        <VaultTile
+          id={activeVault?.id ?? ''}
+          name={activeVault?.name ?? ''}
+          {vaultIds}
+          class="size-5 text-[11px]"
+        />
         <span>{tUi('options.vaults')}</span>
       </button>
     </div>
