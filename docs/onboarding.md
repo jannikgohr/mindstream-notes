@@ -10,8 +10,9 @@ or **Skip and keep current settings** for an existing vault. Managed hosting is
 unavailable until a working service is configured.
 
 Back and Continue stay in a bottom bar while the step content scrolls above it.
-On phones, choices use compact rows and the progress indicator shows the current
-step name. Skip floats above the footer, aligned with Continue's right edge.
+The progress indicator connects steps with lines, highlighting completed
+connections. On phones, choices use compact rows and only the current step name
+is shown. Skip floats above the footer, aligned with Continue's right edge.
 Its faint pill background and reduced opacity keep it secondary. The mobile
 footer uses 44 px touch targets with an even 8 px gutter on every side; on
 devices with a home indicator the bottom safe area replaces that gutter rather

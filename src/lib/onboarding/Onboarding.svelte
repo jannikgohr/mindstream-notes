@@ -219,6 +219,7 @@
             <li
               aria-current={step === item ? 'step' : undefined}
               class:current={step === item}
+              class:completed={index < stepIndex}
             >
               <span class="step-dot"
                 >{#if index < stepIndex}<Check
@@ -604,21 +605,39 @@
   }
   .steps {
     display: flex;
-    gap: 1.5rem;
-    flex-wrap: wrap;
+    gap: 0.75rem;
+    max-width: 44rem;
   }
   .steps li {
     display: flex;
+    flex: 1;
     align-items: center;
     gap: 0.5rem;
     font-size: 0.75rem;
     color: var(--color-muted-foreground);
+  }
+  .steps li:last-child {
+    flex: 0 0 auto;
+  }
+  .steps li:not(:last-child)::after {
+    content: '';
+    flex: 1;
+    min-width: 0.75rem;
+    height: 1px;
+    background: var(--color-border-strong);
+  }
+  .steps li.completed::after {
+    background: var(--color-accent-brand);
+  }
+  .step-label {
+    white-space: nowrap;
   }
   .steps li.current {
     color: var(--color-foreground);
   }
   .step-dot {
     display: grid;
+    flex-shrink: 0;
     place-items: center;
     width: 1.5rem;
     height: 1.5rem;
@@ -766,9 +785,13 @@
       padding: 0.875rem;
     }
     .steps {
-      flex-wrap: nowrap;
-      justify-content: space-between;
-      gap: 0.75rem;
+      gap: 0.5rem;
+    }
+    .steps li {
+      gap: 0.375rem;
+    }
+    .steps li:not(:last-child)::after {
+      min-width: 0.5rem;
     }
     .steps li:not(.current) .step-label {
       position: absolute;
