@@ -651,12 +651,7 @@ async function persistResetSettingValue(id: string): Promise<void> {
     await externalStore.clear(id);
     return;
   }
-  // An absent accent inherits the selected theme's light/dark palette.
-  if (
-    def &&
-    id !== 'appearance.accent' &&
-    ('default' in def || def.defaultByPlatform)
-  ) {
+  if (def && ('default' in def || def.defaultByPlatform)) {
     await setSettingValue(id, defaultForSetting(def));
     return;
   }
