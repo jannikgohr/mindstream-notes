@@ -509,7 +509,6 @@
         >{tUi('onboarding.saved')}</span
       >
       <div class="setup-actions">
-        <!-- Retain the hidden label's wrapped height in the mobile grid. -->
         <Button
           variant="secondary"
           class={`setup-skip h-auto min-h-11 whitespace-normal text-center ${step !== 'account' ? 'setup-skip-placeholder' : ''}`}
@@ -727,7 +726,10 @@
       padding: calc(0.75rem + env(safe-area-inset-top)) 1rem 0.75rem;
     }
     .setup-body {
-      padding: 1.25rem 1rem;
+      padding: 1.25rem 1rem 6.5rem;
+    }
+    .setup-content {
+      scroll-padding-bottom: 6.5rem;
     }
     .setup-progress {
       margin-bottom: 1.25rem;
@@ -760,8 +762,9 @@
       white-space: nowrap;
     }
     .setup-footer {
+      position: relative;
       padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom));
-      border-top: 0;
+      border-top: 1px solid var(--color-border);
       background: transparent;
     }
     .setup-saved {
@@ -770,34 +773,25 @@
     .setup-footer-inner {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      grid-template-rows: minmax(2.75rem, auto) minmax(3.5rem, auto);
+      grid-template-rows: minmax(3.5rem, auto);
       gap: 0.5rem;
-    }
-    .setup-footer-inner::before {
-      content: '';
-      grid-area: 2 / 1 / 3 / 3;
-      align-self: start;
-      height: 1px;
-      margin-inline: -1rem;
-      background: var(--color-border);
-      transform: translateY(-0.25rem);
-      pointer-events: none;
     }
     .setup-actions {
       display: contents;
     }
     .setup-footer :global(.setup-skip) {
-      grid-area: 1 / 1 / 2 / 3;
-      justify-self: start;
+      position: absolute;
+      left: 1rem;
+      bottom: calc(100% + 0.75rem);
       justify-content: flex-start;
       width: fit-content;
-      max-width: 100%;
+      max-width: calc(100% - 2rem);
       min-width: 0;
       padding-inline: 0.75rem;
       border: 1px solid var(--color-border);
       border-radius: 999px;
-      background: transparent;
-      box-shadow: none;
+      background: var(--color-surface-1);
+      box-shadow: var(--shadow-sm);
       color: var(--color-muted-foreground);
       font-size: 0.75rem;
       font-weight: 400;
@@ -814,11 +808,11 @@
       pointer-events: none;
     }
     .setup-footer :global(.setup-back) {
-      grid-area: 2 / 1;
+      grid-area: 1 / 1;
       justify-self: start;
     }
     .setup-footer :global(.setup-next) {
-      grid-area: 2 / 2;
+      grid-area: 1 / 2;
       min-width: 0;
       height: auto;
       white-space: normal;

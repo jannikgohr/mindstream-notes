@@ -12,11 +12,11 @@ hosting is shown as unavailable until a working managed service is configured.
 
 Back and Continue stay in a bottom bar while the step content scrolls above it.
 On phones, choices use compact rows and the progress indicator shows the current
-step name. Skip is a small, left-aligned floating button with a transparent
-background above the mobile navigation divider. The divider sits immediately
-above Back and Continue. Skip's space is
-reserved on every step so Back never becomes Skip after returning to the first
-screen.
+step name. Skip floats above the mobile footer without a full-width container.
+Only the compact button paints a surface so its label stays readable over
+scrolling content. Extra bottom spacing lets the last controls scroll clear of
+it. The divider sits immediately above Back and Continue. Their positions stay
+fixed so Back never becomes Skip after returning to the first screen.
 The header and bottom bar respect the device's safe areas.
 
 Appearance uses the app's shared Surface, SectionHeader, Input, Button, and

@@ -213,6 +213,10 @@ test('setup fits a narrow screen and keeps the language choice', async ({
     .getByRole('button', { name: 'Weiter', exact: true })
     .boundingBox();
   const skip = await footer.locator('.setup-skip').boundingBox();
+  const scrollArea = await content.boundingBox();
+  // Skip floats over the scroll area, rather than occupying a footer strip.
+  expect(skip!.y + skip!.height).toBeLessThan(accountFooter!.y);
+  expect(scrollArea!.y + scrollArea!.height).toBeCloseTo(accountFooter!.y, 1);
   expect(skip!.y + skip!.height).toBeLessThan(accountContinue!.y);
   await page.getByRole('button', { name: 'Weiter', exact: true }).click();
   await expect(page.getByTestId('appearance-preview')).toBeVisible();
