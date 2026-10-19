@@ -33,7 +33,6 @@
     loadFileTreeToolbarPreferences,
     moveFileTreeToolbarAction,
     normalizeFileTreeToolbarPreferences,
-    PRIMARY_FILE_TREE_ACTION_ID,
     saveFileTreeToolbarPreferences,
     type CoreFileTreeActionId,
     type FileTreeToolbarPreferences
@@ -88,7 +87,7 @@
   ];
 
   let root = $state<HTMLDivElement | null>(null);
-  let noteLabelMeasure: HTMLSpanElement | null = null;
+  let mainLabelMeasure: HTMLSpanElement | null = null;
   let moreOpen = $state(false);
   let customizing = $state(false);
   let preferences = $state<FileTreeToolbarPreferences>({
@@ -141,6 +140,11 @@
       .map((id) => actionMap.get(id))
       .filter((action): action is CreateAction => !!action)
   );
+  // The first toolbar action is the wide, labelled main button: reordering
+  // it is how people choose their default note type.
+  const mainAction = $derived<CreateAction | undefined>(
+    configuredToolbarActions[0]
+  );
   const displayedToolbarActions = $derived(
     configuredToolbarActions.slice(0, visibleCapacity)
   );
@@ -189,7 +193,7 @@
 
     const observer = new ResizeObserver(measureCapacity);
     if (root) observer.observe(root);
-    if (noteLabelMeasure) observer.observe(noteLabelMeasure);
+    if (mainLabelMeasure) observer.observe(mainLabelMeasure);
     return () => {
       observer.disconnect();
       cleanupPointerDrag();
@@ -198,13 +202,11 @@
 
   function measureCapacity() {
     if (!root) return;
-    const noteLabelWidth = configuredToolbarActions.some(
-      (action) => action.id === 'note'
-    )
-      ? (noteLabelMeasure?.offsetWidth ?? 64) + 10
+    const mainLabelWidth = mainAction
+      ? (mainLabelMeasure?.offsetWidth ?? 64) + 10
       : 0;
     visibleCapacity = fileTreeToolbarCapacity(
-      root.clientWidth - noteLabelWidth - 4
+      root.clientWidth - mainLabelWidth - 4
     );
   }
 
@@ -390,16 +392,6 @@
         break;
       }
     }
-    // "New note" leads the toolbar (moveFileTreeToolbarAction keeps it there),
-    // so show the drop where the action will actually land.
-    if (section === 'toolbar') {
-      if (pointerDrag?.id === PRIMARY_FILE_TREE_ACTION_ID) index = 0;
-      else if (
-        index === 0 &&
-        rows[0]?.dataset.fileTreeActionId === PRIMARY_FILE_TREE_ACTION_ID
-      )
-        index = 1;
-    }
     dropContainer = containerId;
     dropSection = section;
     dropIndex = index;
@@ -537,16 +529,20 @@
   style="min-width: {FILE_TREE_TOOLBAR_MIN_PX}px;"
 >
   <span
-    bind:this={noteLabelMeasure}
+    bind:this={mainLabelMeasure}
     aria-hidden="true"
     class="pointer-events-none invisible absolute whitespace-nowrap text-xs font-medium"
-    >{tUi('fileTree.newNote')}</span
+    >{mainAction ? labelFor(mainAction) : ''}</span
   >
   <div class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
     {#each renderedTopActions as action, index (action.id)}
+      {@const main = index === 0 && !placeholderAt('top', 0)}
+      <!-- A drop in front of the row previews the new main button. -->
       {#if placeholderAt('top', index)}
         <div
-          class="h-7 w-7 shrink-0 rounded-md border border-dashed border-primary bg-primary/10"
+          class={index === 0
+            ? 'h-8 min-w-0 flex-1 rounded-md border border-dashed border-primary bg-primary/10'
+            : 'h-7 w-7 shrink-0 rounded-md border border-dashed border-primary bg-primary/10'}
           aria-hidden="true"
         ></div>
       {/if}
@@ -554,7 +550,7 @@
         role="group"
         aria-label={labelFor(action)}
         data-file-tree-action-id={action.id}
-        class={action.id === 'note'
+        class={main
           ? 'relative min-w-0 flex-1 touch-none'
           : 'relative shrink-0 touch-none'}
         onpointerdown={(event) =>
@@ -562,16 +558,17 @@
       >
         <Button
           variant="ghost"
-          size={action.id === 'note' ? 'sm' : 'icon'}
+          size={main ? 'sm' : 'icon'}
           onclick={(event) => runAction(action, event.currentTarget)}
           title={labelFor(action)}
           aria-label={labelFor(action)}
-          class={action.id === 'note'
+          class={main
             ? 'h-8 w-full justify-start gap-2 border border-border bg-surface-3 px-2 text-xs shadow-raised hover:bg-accent'
             : 'size-7 cursor-grab text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0 active:cursor-grabbing'}
         >
           {@render actionIcon(action)}
-          {#if action.id === 'note'}<span>{labelFor(action)}</span>{/if}
+          {#if main}<span class="min-w-0 truncate">{labelFor(action)}</span
+            >{/if}
         </Button>
       </div>
     {/each}

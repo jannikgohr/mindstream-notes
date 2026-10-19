@@ -67,9 +67,10 @@ describe('file tree toolbar preferences', () => {
       DEFAULT_FILE_TREE_TOOLBAR_PREFERENCES,
       'drawing',
       'toolbar',
-      'folder'
+      'note'
     );
-    expect(reordered.toolbar).toEqual(['note', 'drawing', 'folder']);
+    // The first action is the main button, so this makes drawings the default.
+    expect(reordered.toolbar).toEqual(['drawing', 'note', 'folder']);
 
     const hidden = moveFileTreeToolbarAction(
       reordered,
@@ -78,38 +79,26 @@ describe('file tree toolbar preferences', () => {
       'pdf'
     );
     expect(hidden).toEqual({
-      toolbar: ['note', 'drawing'],
+      toolbar: ['drawing', 'note'],
       more: ['ink', 'folder', 'pdf', 'kanban']
     });
   });
 
-  it('keeps New note first in the toolbar but lets it move to More', () => {
-    // Dropped before New note, an action lands right after it.
-    expect(
-      moveFileTreeToolbarAction(
-        DEFAULT_FILE_TREE_TOOLBAR_PREFERENCES,
-        'drawing',
-        'toolbar',
-        'note'
-      ).toolbar
-    ).toEqual(['note', 'drawing', 'folder']);
-    // Dropped anywhere in the toolbar, New note goes back to the front.
-    const hidden = moveFileTreeToolbarAction(
-      DEFAULT_FILE_TREE_TOOLBAR_PREFERENCES,
-      'note',
-      'more'
+  it('leads an untouched migrated layout with New note but keeps a chosen order', () => {
+    localStorage.setItem(
+      FILE_TREE_TOOLBAR_STORAGE_KEY,
+      JSON.stringify(LEGACY_FILE_TREE_TOOLBAR_PREFERENCES)
     );
-    expect(hidden.toolbar).toEqual(['folder', 'drawing']);
+    expect(loadFileTreeToolbarPreferences(actions).toolbar[0]).toBe('note');
+    // Saved since, a layout lists every other action in More.
+    const chosen = {
+      toolbar: LEGACY_FILE_TREE_TOOLBAR_PREFERENCES.toolbar,
+      more: ['plugin:templates:new']
+    };
+    localStorage.setItem(FILE_TREE_TOOLBAR_STORAGE_KEY, JSON.stringify(chosen));
     expect(
-      moveFileTreeToolbarAction(hidden, 'note', 'toolbar').toolbar
-    ).toEqual(['note', 'folder', 'drawing']);
-    // A stored order with New note later is read back with it first.
-    expect(
-      normalizeFileTreeToolbarPreferences(
-        { toolbar: ['folder', 'note'], more: [] },
-        actions
-      ).toolbar
-    ).toEqual(['note', 'folder']);
+      loadFileTreeToolbarPreferences([...actions, 'plugin:templates:new'])
+    ).toEqual(chosen);
   });
 
   it('moves the middle item around its neighbour without appending it', () => {

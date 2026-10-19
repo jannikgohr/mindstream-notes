@@ -77,16 +77,28 @@ export const LEGACY_FILE_TREE_TOOLBAR_PREFERENCES: FileTreeToolbarPreferences =
   };
 
 /**
- * "New note" is the toolbar's wide, labelled primary button, so while it is in
- * the toolbar it always comes first, wherever it was stored or dropped. It can
- * still move to More and back.
+ * The first toolbar action is the wide, labelled main button, so its order is
+ * how people pick their default note type. Installs from before the toolbar
+ * could be customised were migrated to every action in the toolbar with New
+ * note last and More empty; untouched, that layout leads with New note
+ * instead of New folder. A layout saved since lists every other available
+ * action in More, so with any plugin action it is never mistaken for this one.
  */
-export const PRIMARY_FILE_TREE_ACTION_ID = 'note';
-
-function leadWithPrimary(toolbar: string[]): string[] {
-  const index = toolbar.indexOf(PRIMARY_FILE_TREE_ACTION_ID);
-  if (index > 0) toolbar.unshift(...toolbar.splice(index, 1));
-  return toolbar;
+function leadLegacyWithNote<T>(value: T): T | FileTreeToolbarPreferences {
+  const legacy = LEGACY_FILE_TREE_TOOLBAR_PREFERENCES.toolbar;
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.toolbar) ||
+    !Array.isArray(value.more) ||
+    value.more.length > 0 ||
+    value.toolbar.length !== legacy.length ||
+    value.toolbar.some((id, index) => id !== legacy[index])
+  )
+    return value;
+  return {
+    toolbar: ['note', ...legacy.filter((id) => id !== 'note')],
+    more: []
+  };
 }
 
 function uniqueStrings(value: unknown): string[] {
@@ -126,7 +138,7 @@ export function normalizeFileTreeToolbarPreferences(
     toolbar.push(more.splice(fallbackIndex, 1)[0]);
   }
 
-  return { toolbar: leadWithPrimary(toolbar), more };
+  return { toolbar, more };
 }
 
 export function hasExistingAppData(): boolean {
@@ -148,7 +160,7 @@ export function loadFileTreeToolbarPreferences(
 ): FileTreeToolbarPreferences {
   if (isTauri())
     return normalizeFileTreeToolbarPreferences(
-      nativeDeviceUi.toolbar,
+      leadLegacyWithNote(nativeDeviceUi.toolbar),
       availableIds
     );
   if (typeof localStorage === 'undefined') {
@@ -157,10 +169,13 @@ export function loadFileTreeToolbarPreferences(
   try {
     const raw = localStorage.getItem(FILE_TREE_TOOLBAR_STORAGE_KEY);
     if (raw) {
-      return normalizeFileTreeToolbarPreferences(JSON.parse(raw), availableIds);
+      return normalizeFileTreeToolbarPreferences(
+        leadLegacyWithNote(JSON.parse(raw)),
+        availableIds
+      );
     }
     const fallback = hasExistingAppData()
-      ? LEGACY_FILE_TREE_TOOLBAR_PREFERENCES
+      ? leadLegacyWithNote(LEGACY_FILE_TREE_TOOLBAR_PREFERENCES)
       : DEFAULT_FILE_TREE_TOOLBAR_PREFERENCES;
     return normalizeFileTreeToolbarPreferences(null, availableIds, fallback);
   } catch {
@@ -194,5 +209,5 @@ export function moveFileTreeToolbarAction(
   const target = destination === 'toolbar' ? toolbar : more;
   const beforeIndex = beforeId ? target.indexOf(beforeId) : -1;
   target.splice(beforeIndex >= 0 ? beforeIndex : target.length, 0, actionId);
-  return { toolbar: leadWithPrimary(toolbar), more };
+  return { toolbar, more };
 }

@@ -245,7 +245,7 @@
     "fileTree.newFolder": "New folder",
     "fileTree.toolbar.more": "More actions",
     "fileTree.toolbar.customize": "Reorder actions",
-    "fileTree.toolbar.customizeHint": "Drag actions to reorder them or move them between sections.",
+    "fileTree.toolbar.customizeHint": "Drag actions to reorder them or move them between sections. The first one becomes the main button.",
     "fileTree.toolbar.shown": "Shown in toolbar",
     "fileTree.toolbar.restore": "Restore defaults",
     "fileTree.toolbar.done": "Done",
