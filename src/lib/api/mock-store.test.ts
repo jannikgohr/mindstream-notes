@@ -1,5 +1,128 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { mockApi } from './mock-store';
+import { InkDocument } from '$lib/ink/document';
+import { backgroundSignature } from '$lib/ink/pdf-backgrounds';
+
+describe('mock-store PDF-backed ink notes', () => {
+  it('imports an independent note using an existing image asset or supplied bytes', async () => {
+    const source = await mockApi.createNote({
+      title: 'Source',
+      note_kind: 'pdf'
+    });
+    const asset = await mockApi.uploadDrawingAsset({
+      owning_note_id: source.id,
+      mime_type: 'image/jpeg',
+      bytes: [1, 2, 3]
+    });
+    const ink = new InkDocument();
+    ink.restorePages([
+      {
+        id: 'page',
+        width: 100,
+        height: 200,
+        background: { kind: 'image', assetId: asset.id, pageIndex: 0 }
+      }
+    ]);
+    try {
+      const imported = await mockApi.importInkPdfNote({
+        title: 'Converted',
+        bytes: [],
+        asset_id: asset.id,
+        yrs_state: Array.from(ink.encode())
+      });
+      expect(imported.id).not.toBe(source.id);
+      expect(imported.note_kind).toBe('ink');
+      expect(imported.yrs_state).toEqual(Array.from(ink.encode()));
+      expect((await mockApi.fetchDrawingAsset(asset.id)).bytes).toEqual([
+        1, 2, 3
+      ]);
+      expect((await mockApi.loadNote(source.id)).note_kind).toBe('pdf');
+      const copied = await mockApi.importInkPdfNote({
+        bytes: [4, 5],
+        asset_id: 'new-pdf-asset',
+        yrs_state: []
+      });
+      expect(
+        (await mockApi.fetchDrawingAsset('new-pdf-asset')).owning_note_id
+      ).toBe(copied.id);
+      expect((await mockApi.fetchDrawingAsset('new-pdf-asset')).bytes).toEqual([
+        4, 5
+      ]);
+      await expect(
+        mockApi.importInkPdfNote({
+          bytes: [],
+          asset_id: 'missing-asset',
+          yrs_state: []
+        })
+      ).rejects.toThrow('not found');
+    } finally {
+      ink.doc.destroy();
+    }
+  });
+
+  it('rejects stale text and invalidates search only when backgrounds change', async () => {
+    const note = await mockApi.createNote({
+      title: 'Search fixture',
+      note_kind: 'ink'
+    });
+    const ink = new InkDocument();
+    const page = {
+      id: 'page',
+      width: 100,
+      height: 200,
+      background: { kind: 'image' as const, assetId: 'first', pageIndex: 0 }
+    };
+    ink.restorePages([page]);
+    try {
+      await mockApi.saveNote({
+        id: note.id,
+        yrs_state: Array.from(ink.encode())
+      });
+      const signature = backgroundSignature(ink.pages());
+      await mockApi.setPdfText(note.id, 'stale dragonfruit', 'wrong');
+      expect(await mockApi.pdfNoteNeedsText(note.id)).toBe(true);
+      await mockApi.setPdfText(note.id, 'searchable dragonfruit', signature);
+      expect(await mockApi.pdfNoteNeedsText(note.id)).toBe(false);
+      expect(
+        (await mockApi.searchNotes('dragonfruit')).some(
+          (n) => n.note.id === note.id
+        )
+      ).toBe(true);
+      await mockApi.saveNote({
+        id: note.id,
+        yrs_state: Array.from(ink.encode())
+      });
+      expect(await mockApi.pdfNoteNeedsText(note.id)).toBe(false);
+      ink.restorePages([
+        { ...page, background: { ...page.background, assetId: 'second' } }
+      ]);
+      await mockApi.saveNote({
+        id: note.id,
+        yrs_state: Array.from(ink.encode())
+      });
+      expect(await mockApi.pdfNoteNeedsText(note.id)).toBe(true);
+      expect(
+        (await mockApi.searchNotes('dragonfruit')).some(
+          (n) => n.note.id === note.id
+        )
+      ).toBe(false);
+      await mockApi.setPdfText(note.id, 'late dragonfruit', signature);
+      expect(await mockApi.pdfNoteNeedsText(note.id)).toBe(true);
+      await mockApi.setPdfText(
+        note.id,
+        'current rambutan',
+        backgroundSignature(ink.pages())
+      );
+      expect(
+        (await mockApi.searchNotes('rambutan')).some(
+          (n) => n.note.id === note.id
+        )
+      ).toBe(true);
+    } finally {
+      ink.doc.destroy();
+    }
+  });
+});
 
 /**
  * The mock store is a module-level singleton seeded once at import. Tests

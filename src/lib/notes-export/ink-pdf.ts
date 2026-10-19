@@ -3,10 +3,9 @@
  * page per ink page, strokes drawn as vector polylines with
  * pressure-modulated widths matching the on-screen renderer.
  *
- * Page size: the PDF page mirrors the ink layout's page size 1:1 in
- * PDF user-space units (~A4 at 2× pixel density). Strokes that cross
- * page boundaries get emitted on each page they intersect; the PDF
- * MediaBox crops the off-page portion in viewers.
+ * Explicit pages retain source PDF dimensions, rotation and crop. Blank pages
+ * convert ink units to PDF points at 2:1. Legacy inferred pages retain their
+ * original export sizing for compatibility.
  *
  * Coordinates: ink space has Y growing downward; PDF user space has
  * Y growing upward. Per-stroke conversion is `pdfY = pageHeight - (y - pageTop)`.
@@ -16,6 +15,8 @@ import { InkDocument } from '$lib/ink/document';
 import type { InkStroke } from '$lib/ink/document';
 import { defaultLayout, strideY } from '$lib/ink/page';
 import type { DocumentLayout } from '$lib/ink/page';
+import { fetchAssetBytes } from '$lib/api/assets';
+import { pressureWidth } from '$lib/ink/editor-helpers';
 
 const WIDTH_QUANTUM = 0.25;
 
@@ -37,6 +38,13 @@ export async function buildInkPdf(
   }
 
   const strokes = inkDoc.visibleStrokes();
+  if (inkDoc.hasPages()) {
+    try {
+      return await buildPagedInkPdf(inkDoc);
+    } finally {
+      inkDoc.doc.destroy();
+    }
+  }
   // The editor keeps a trailing blank page (and a 2-page minimum) so
   // there's always room to keep drawing. The export wants the opposite
   // — just the pages that actually contain ink, with a single blank
@@ -56,6 +64,65 @@ export async function buildInkPdf(
   }
 
   return await pdf.save();
+}
+
+async function buildPagedInkPdf(ink: InkDocument): Promise<Uint8Array> {
+  const lib = await import('pdf-lib');
+  const pdf = await lib.PDFDocument.create();
+  const sources = new Map<
+    string,
+    Awaited<ReturnType<typeof lib.PDFDocument.load>>
+  >();
+  for (const record of ink.pages()) {
+    let page: import('pdf-lib').PDFPage;
+    if (record.background?.kind === 'image') {
+      page = pdf.addPage([record.width / 2, record.height / 2]);
+      const image = await pdf.embedJpg(
+        await fetchAssetBytes(record.background.assetId, 'image/jpeg')
+      );
+      page.drawImage(image, {
+        x: 0,
+        y: 0,
+        width: record.width / 2,
+        height: record.height / 2
+      });
+    } else if (record.background) {
+      const { assetId, pageIndex } = record.background;
+      let source = sources.get(assetId);
+      if (!source) {
+        source = await lib.PDFDocument.load(await fetchAssetBytes(assetId));
+        sources.set(assetId, source);
+      }
+      const [copied] = await pdf.copyPages(source, [pageIndex]);
+      page = pdf.addPage(copied);
+    } else page = pdf.addPage([record.width / 2, record.height / 2]);
+    const [a, b, c, d, e, f] = (record.background?.kind === 'image'
+      ? undefined
+      : record.pdfTransform) ?? [2, 0, 0, -2, 0, record.height];
+    const det = a * d - b * c;
+    const strokes = ink.pageStrokes(record.id).map((stroke) => ({
+      ...stroke,
+      width: stroke.width / 2,
+      bounds: undefined,
+      points: stroke.points.map((p) => ({
+        ...p,
+        x: (d * (p.x - e) - c * (p.y - f)) / det,
+        y: page.getHeight() - (-b * (p.x - e) + a * (p.y - f)) / det
+      }))
+    }));
+    drawPageStrokes(
+      page,
+      strokes,
+      {
+        page: { width: page.getWidth(), height: page.getHeight() },
+        pageCount: 1,
+        pageGap: 0
+      },
+      0,
+      lib
+    );
+  }
+  return pdf.save();
 }
 
 function drawPageStrokes(
@@ -137,10 +204,6 @@ function appendStrokeOps(
   }
 
   if (pathOpen) ops.push(lib.stroke());
-}
-
-function pressureWidth(pressure: number): number {
-  return 0.25 + 0.75 * Math.min(1, Math.max(0, pressure));
 }
 
 function argbToRgb01(argb: number): [number, number, number] {

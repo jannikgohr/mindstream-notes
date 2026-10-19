@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { sharedInkAnnotations } from '$lib/ink/pdf-annotations';
+  import { InkDocument } from '$lib/ink/document';
   import { createPdfSearchController } from '$lib/pdf/search-controller';
   import { createSaveScheduler } from '$lib/editor/save-scheduler';
   import { createCollabSession } from '$lib/editor/collab-session';
@@ -36,7 +38,7 @@
   } from '$lib/components/ui/toolbar';
   import {
     etebaseSession,
-    fetchDrawingAsset,
+    fetchAssetBytes,
     getRoomSocketUrl,
     isTauri,
     loadNote,
@@ -145,8 +147,9 @@
 
   interface Props {
     noteId: string;
+    onHandwriting?: () => void;
   }
-  let { noteId }: Props = $props();
+  let { noteId, onHandwriting }: Props = $props();
 
   const historyCapture = createHistoryCapture({
     noteId: () => noteId,
@@ -890,6 +893,10 @@
   }
 
   function selectAnnotation(id: string | null) {
+    if (id?.startsWith('shared:') && onHandwriting) {
+      onHandwriting();
+      return;
+    }
     selectedAnnotationId = id;
     const annotation = id ? annotationsMap?.get(id) : null;
     if (annotation && isCommentLikeAnnotation(annotation)) {
@@ -912,9 +919,10 @@
   }
 
   function syncAnnotationsFromYDoc() {
-    annotations = Array.from(annotationsMap?.values() ?? []).sort((a, b) =>
-      a.createdAt.localeCompare(b.createdAt)
-    );
+    annotations = [
+      ...Array.from(annotationsMap?.values() ?? []),
+      ...(yDoc ? sharedInkAnnotations(Y.encodeStateAsUpdate(yDoc)) : [])
+    ].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     annotationVersion += 1;
   }
 
@@ -1136,6 +1144,8 @@
       yDoc.transact(() => {
         replaceYMapValues(targetAnnotations, snapshotAnnotations);
         replaceYMapValues(targetFormValues, snapshotFormValues);
+        const ink = new InkDocument(yDoc!);
+        ink.restoreSnapshot(new InkDocument(snapshotDoc));
       }, HISTORY_RESTORE_ORIGIN);
       if (
         selectedAnnotationId &&
@@ -1164,6 +1174,9 @@
     saveScheduler.schedule();
     savingState = saveScheduler.pending ? 'pending' : 'idle';
   }
+  export async function flush(): Promise<void> {
+    await saveScheduler.flush();
+  }
 
   function captureSave(): (() => Promise<void>) | null {
     if (!yDoc || isTrashed) return null;
@@ -1189,6 +1202,10 @@
   }
 
   function setTool(tool: PdfTool) {
+    if (tool === 'pen' && onHandwriting) {
+      onHandwriting();
+      return;
+    }
     if (tool === 'signature') {
       if (savedSignatures.length === 0) {
         openSignaturePad();
@@ -1589,17 +1606,14 @@
       const assetId = pdfAssetIdFromBody(note.body);
       if (!assetId) throw new Error('PDF asset is missing.');
 
-      const asset = await fetchDrawingAsset(assetId);
-      if (asset.mime_type !== 'application/pdf') {
-        throw new Error('Stored file is not a PDF.');
-      }
+      const bytes = await fetchAssetBytes(assetId, 'application/pdf');
 
       const pdfjs = await import('pdfjs-dist');
       const pdfViewer = await import('pdfjs-dist/web/pdf_viewer.mjs');
       pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
       pdfjsLib = pdfjs;
       pdfViewerLib = pdfViewer;
-      const task = pdfjs.getDocument({ data: new Uint8Array(asset.bytes) });
+      const task = pdfjs.getDocument({ data: bytes });
       pdfDoc = await task.promise;
       installPdfFormStorageSync(pdfDoc);
       applyStoredFormValuesToPdfStorage();

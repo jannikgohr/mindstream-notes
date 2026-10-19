@@ -6,11 +6,17 @@ const fetchDrawingAssetMock = vi.fn();
 const setPdfTextMock = vi.fn();
 const extractPdfTextMock = vi.fn();
 const listenMock = vi.fn();
+const indexInkNoteMock = vi.hoisted(() => vi.fn());
+vi.mock('$lib/ink/pdf-backgrounds', () => ({ indexInkNote: indexInkNoteMock }));
 
 vi.mock('$lib/api', () => ({
   pdfNotesMissingText: (...a: unknown[]) => pdfNotesMissingTextMock(...a),
   loadNote: (...a: unknown[]) => loadNoteMock(...a),
-  fetchDrawingAsset: (...a: unknown[]) => fetchDrawingAssetMock(...a),
+  fetchAssetBytes: async (id: string, mime: string) => {
+    const asset = await fetchDrawingAssetMock(id);
+    if (asset.mime_type !== mime) throw new Error('Unexpected file type');
+    return new Uint8Array(asset.bytes);
+  },
   setPdfText: (...a: unknown[]) => setPdfTextMock(...a)
 }));
 
@@ -36,6 +42,7 @@ async function importBackfill() {
 }
 
 beforeEach(() => {
+  indexInkNoteMock.mockReset().mockResolvedValue(undefined);
   vi.resetModules();
   pdfNotesMissingTextMock.mockReset().mockResolvedValue([]);
   loadNoteMock.mockReset();
@@ -56,6 +63,18 @@ afterEach(() => {
 });
 
 describe('startPdfSearchIndexing', () => {
+  it('indexes ink notes through their saved backgrounds instead of opening a PDF body', async () => {
+    const { startPdfSearchIndexing } = await importBackfill();
+    pdfNotesMissingTextMock.mockResolvedValueOnce(['ink']);
+    loadNoteMock.mockResolvedValue({ id: 'ink', note_kind: 'ink', body: '' });
+    startPdfSearchIndexing();
+    await vi.waitFor(() =>
+      expect(indexInkNoteMock).toHaveBeenCalledWith('ink')
+    );
+    expect(fetchDrawingAssetMock).not.toHaveBeenCalled();
+    expect(extractPdfTextMock).not.toHaveBeenCalled();
+    expect(setPdfTextMock).not.toHaveBeenCalled();
+  });
   it('extracts and persists text for each un-indexed PDF', async () => {
     const { startPdfSearchIndexing } = await importBackfill();
     pdfNotesMissingTextMock.mockResolvedValueOnce(['n1', 'n2']);

@@ -16,16 +16,39 @@ import {
   assertBoolean,
   assertStringArray,
   assertVoid,
+  assertString,
   TauriCommandName,
   invokeOrFallback
 } from './core';
 import { mockApi } from './mock-store';
 
-export function setPdfText(noteId: string, text: string): Promise<void> {
+export function cachedPdfPageText(
+  assetId: string,
+  pageIndex: number,
+  text?: string
+): Promise<string | null> {
+  return invokeOrFallback<string | null>(
+    TauriCommandName.PdfPageText,
+    { assetId, pageIndex, ...(text !== undefined ? { text } : {}) },
+    async () => text ?? null,
+    (value) =>
+      value === null ? null : assertString(value, 'pdf_page_text response')
+  );
+}
+
+export function setPdfText(
+  noteId: string,
+  text: string,
+  expectedSignature?: string
+): Promise<void> {
   return invokeOrFallback<void>(
     TauriCommandName.SetPdfText,
-    { noteId, text },
-    () => mockApi.setPdfText(noteId, text),
+    {
+      noteId,
+      text,
+      ...(expectedSignature !== undefined ? { expectedSignature } : {})
+    },
+    () => mockApi.setPdfText(noteId, text, expectedSignature),
     (value) => assertVoid(value, 'set_pdf_text response')
   );
 }

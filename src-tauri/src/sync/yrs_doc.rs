@@ -27,6 +27,66 @@ use yrs::{
 
 const TEXT_KEY: &str = "body";
 
+/// All page assets, including tombstoned pages retained for undo/history.
+pub(crate) fn ink_asset_ids(state: &[u8]) -> Vec<String> {
+    let doc = load(state);
+    let pages = doc.get_or_insert_map("ink:pages");
+    let txn = doc.transact();
+    let mut ids = Vec::new();
+    for (_, value) in pages.iter(&txn) {
+        if let Out::Any(Any::Map(page)) = value {
+            if let Some(Any::Map(background)) = page.get("background") {
+                for key in ["assetId", "textAssetId", "thumbnailAssetId"] {
+                    if let Some(Any::String(id)) = background.get(key) {
+                        ids.push(id.to_string());
+                    }
+                }
+            }
+        }
+    }
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+pub(crate) fn ink_background_signature(state: &[u8]) -> String {
+    let doc = load(state);
+    let pages = doc.get_or_insert_map("ink:pages");
+    let order = doc.get_or_insert_map("ink:pageOrder");
+    let deleted = doc.get_or_insert_map("ink:deletedPages");
+    let txn = doc.transact();
+    let mut rows = Vec::new();
+    for (id, value) in pages.iter(&txn) {
+        if matches!(deleted.get(&txn, id), Some(Out::Any(Any::Bool(true)))) {
+            continue;
+        }
+        if let Out::Any(Any::Map(page)) = value {
+            if let Some(Any::Map(background)) = page.get("background") {
+                let asset = background
+                    .get("textAssetId")
+                    .or_else(|| background.get("assetId"));
+                if let (Some(Any::String(asset)), Some(Any::Number(index))) =
+                    (asset, background.get("pageIndex"))
+                {
+                    let rank = match order.get(&txn, id) {
+                        Some(Out::Any(Any::Number(n))) => n,
+                        _ => 0.0,
+                    };
+                    rows.push((rank, id.to_string(), asset.to_string(), *index as u32));
+                }
+            }
+        }
+    }
+    rows.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    serde_json::to_string(
+        &rows
+            .into_iter()
+            .map(|(_, id, asset, index)| (id, asset, index))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap_or_else(|_| "[]".into())
+}
+
 /// First-time state for a brand-new note. The yrs Doc is initialised by
 /// inserting the entire current markdown into the `body` Y.Text in one
 /// op, then encoding the resulting state.
@@ -165,6 +225,7 @@ pub(crate) fn replace_asset_id(state: &[u8], old_id: &str, new_id: &str) -> Vec<
     let body = doc.get_or_insert_text(TEXT_KEY);
     let prosemirror = doc.get_or_insert_xml_fragment("prosemirror");
     let files = doc.get_or_insert_map("excalidraw:files");
+    let ink_pages = doc.get_or_insert_map("ink:pages");
 
     let mut text_changes = Vec::new();
     let mut xml_text_changes = Vec::new();
@@ -197,11 +258,15 @@ pub(crate) fn replace_asset_id(state: &[u8], old_id: &str, new_id: &str) -> Vec<
                 XmlOut::Fragment(_) => {}
             }
         }
-        for (key, value) in files.iter(&txn) {
+        for (map, key, value) in files
+            .iter(&txn)
+            .map(|(k, v)| (files.clone(), k, v))
+            .chain(ink_pages.iter(&txn).map(|(k, v)| (ink_pages.clone(), k, v)))
+        {
             if let yrs::Out::Any(any) = value {
                 let replacement = replace_in_any(&any, old_id, new_id);
                 if replacement != any {
-                    map_changes.push((files.clone(), key.to_string(), replacement));
+                    map_changes.push((map, key.to_string(), replacement));
                 }
             }
         }

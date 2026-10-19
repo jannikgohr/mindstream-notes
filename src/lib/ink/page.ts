@@ -9,6 +9,36 @@ export interface DocumentLayout {
   page: PageSize;
   pageCount: number;
   pageGap: number;
+  pages?: InkPage[];
+}
+
+export interface InkPage extends PageSize {
+  id: string;
+  background?: {
+    assetId: string;
+    pageIndex: number;
+    textAssetId?: string;
+    /** Absent on legacy PDF backgrounds. Images are already rotated/cropped. */
+    kind?: 'image';
+    thumbnailAssetId?: string;
+    pixelWidth?: number;
+    pixelHeight?: number;
+    text?: string;
+    sourceSignature?: string;
+  };
+  pdfTransform?: number[];
+}
+
+export function layoutForPages(pages: InkPage[]): DocumentLayout {
+  return {
+    pages,
+    page: {
+      width: Math.max(1, ...pages.map((page) => page.width)),
+      height: Math.max(1, ...pages.map((page) => page.height))
+    },
+    pageCount: pages.length,
+    pageGap: DEFAULT_PAGE_GAP
+  };
 }
 
 export interface InkPoint {
@@ -37,11 +67,20 @@ export function strideY(layout: DocumentLayout): number {
 }
 
 export function documentHeight(layout: DocumentLayout): number {
+  if (layout.pages)
+    return (
+      layout.pages.reduce((sum, page) => sum + page.height, 0) +
+      Math.max(0, layout.pages.length - 1) * layout.pageGap
+    );
   const pages = Math.max(1, layout.pageCount);
   return layout.page.height * pages + layout.pageGap * (pages - 1);
 }
 
 export function pageTop(layout: DocumentLayout, index: number): number {
+  if (layout.pages)
+    return layout.pages
+      .slice(0, index)
+      .reduce((sum, page) => sum + page.height + layout.pageGap, 0);
   return index * strideY(layout);
 }
 
@@ -51,6 +90,11 @@ export function pageRect(
 ): [number, number, number, number] | null {
   if (index < 0 || index >= layout.pageCount) return null;
   const top = pageTop(layout, index);
+  if (layout.pages) {
+    const page = layout.pages[index];
+    const left = (layout.page.width - page.width) / 2;
+    return [left, top, left + page.width, top + page.height];
+  }
   return [0, top, layout.page.width, top + layout.page.height];
 }
 
@@ -59,6 +103,14 @@ export function pageIndexAt(
   x: number,
   y: number
 ): number | null {
+  if (layout.pages) {
+    for (let i = 0; i < layout.pages.length; i++) {
+      const rect = pageRect(layout, i)!;
+      if (x >= rect[0] && x <= rect[2] && y >= rect[1] && y <= rect[3])
+        return i;
+    }
+    return null;
+  }
   if (x < 0 || x > layout.page.width || y < 0 || y > documentHeight(layout)) {
     return null;
   }

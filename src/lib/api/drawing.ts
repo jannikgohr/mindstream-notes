@@ -125,7 +125,14 @@ export function drawingSaveInkState(
     TauriCommandName.DrawingSaveInkState,
     { noteId, yrsState },
     async () => {
-      await mockApi.saveNote({ id: noteId, yrs_state: yrsState });
+      const Y = await import('yjs');
+      const note = await mockApi.loadNote(noteId);
+      const merged = Y.mergeUpdates(
+        [new Uint8Array(note.yrs_state), new Uint8Array(yrsState)].filter(
+          (b) => b.length > 0
+        )
+      );
+      await mockApi.saveNote({ id: noteId, yrs_state: Array.from(merged) });
     },
     (value) => assertVoid(value, 'drawing_save_ink_state response')
   );

@@ -172,7 +172,7 @@ pub(in crate::sync) fn apply_asset_payload(
             let pattern = format!("%{}%", payload.id);
             let mut stmt = tx.prepare(
                 "SELECT id, body FROM notes
-                 WHERE body LIKE ?1 AND share_scope_id IS ?2",
+                 WHERE (body LIKE ?1 OR note_kind IN ('ink', 'pdf')) AND share_scope_id IS ?2",
             )?;
             let rows = stmt.query_map(params![pattern, scope], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))

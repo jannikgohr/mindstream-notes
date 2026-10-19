@@ -340,6 +340,8 @@ pub fn save_yrs_state(conn: &mut Connection, id: &str, bytes: &[u8]) -> AppResul
         return Ok(false);
     };
     let existing_state = existing_state.unwrap_or_default();
+    let (_, normalized) = crate::assets::normalize_asset_ids_for_note(&tx, id, "", Some(bytes))?;
+    let bytes = normalized.as_deref().unwrap_or(bytes);
     let merged_state = if existing_state.is_empty() {
         bytes.to_vec()
     } else if bytes.is_empty() {
@@ -351,6 +353,7 @@ pub fn save_yrs_state(conn: &mut Connection, id: &str, bytes: &[u8]) -> AppResul
         "UPDATE notes SET yrs_state = ?1, modified = ?2, dirty = 1 WHERE id = ?3",
         params![merged_state, now, id],
     )?;
+    crate::assets::register_body_refs(&tx, id, "")?;
     tx.commit()?;
     Ok(true)
 }
@@ -548,6 +551,7 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
             params![normalized_state, now, input.id],
         )?;
     }
+    crate::assets::register_body_refs(&tx, &input.id, "")?;
     if let Some(parent) = &input.parent_collection_id {
         tx.execute(
             "UPDATE notes SET parent_collection_id = ?1, modified = ?2 WHERE id = ?3",

@@ -1,8 +1,10 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
-  import { loadNoteKindComponent } from './note-editor/lazy-components';
+  import { onDestroy, untrack } from 'svelte';
+  import {
+    loadNoteKindComponent,
+    noteKindLoader
+  } from './note-editor/lazy-components';
   import { tree } from '$lib/stores/tree.svelte';
-  import { pluginNoteKind } from '$lib/plugins/registry.svelte';
 
   interface Props {
     noteId: string;
@@ -30,16 +32,20 @@
   // remount even when both are the same kind.
   const currentNoteId = $derived(noteId);
   const currentKind = $derived(noteKind ?? tree.notesById[noteId]?.note_kind);
+  // Native plugin settings writes refresh the registry, including when an ink
+  // tool changes. Resolve through a derived value so an unchanged loader never
+  // unloads the current editor and loses its scroll position or pending input.
+  const currentLoader = $derived(noteKindLoader(currentKind));
 
   $effect(() => {
     void currentNoteId;
     const kind = currentKind;
-    void pluginNoteKind(kind);
+    void currentLoader;
     const token = ++loadToken;
     LoadedComponent = null;
     loadError = null;
 
-    void loadNoteKindComponent(kind)
+    void untrack(() => loadNoteKindComponent(kind))
       .then((component) => {
         if (destroyed || token !== loadToken) return;
         LoadedComponent = component;

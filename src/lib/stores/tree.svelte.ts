@@ -129,12 +129,11 @@ export async function importPdfIn(
   file: File
 ): Promise<string> {
   const raw = new Uint8Array(await file.arrayBuffer());
-  const bytes = Array.from(raw);
   const title = file.name.replace(/\.pdf$/i, '').trim() || 'Untitled PDF';
-  const note = await api.importPdfNote({
+  const note = await api.importPdfNoteBytes({
     parent_collection_id: parentId,
     title,
-    bytes
+    bytes: raw
   });
   await applyNoteSummary(note);
   // Index the PDF's text for cross-note search. Derived/local-only, so it

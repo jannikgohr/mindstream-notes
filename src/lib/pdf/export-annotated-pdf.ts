@@ -24,6 +24,7 @@ import type {
   PdfSignatureSnapshot
 } from './types';
 import { strokeOutlinePath } from './stroke-utils';
+import { pressureWidth } from '$lib/ink/editor-helpers';
 
 const ANNOT_FLAG_PRINT = 4;
 
@@ -163,7 +164,11 @@ function buildComment(annotation: PdfAnnotation, lib: PdfLibModule) {
   };
 }
 
-function buildInk(annotation: PdfAnnotation, lib: PdfLibModule) {
+function buildInk(
+  annotation: PdfAnnotation,
+  lib: PdfLibModule,
+  context: PdfContext
+) {
   if (!annotation.strokes || annotation.strokes.length === 0) return null;
   const inkList = inkListFromStrokes(annotation.strokes);
   if (inkList.length === 0) return null;
@@ -188,6 +193,41 @@ function buildInk(annotation: PdfAnnotation, lib: PdfLibModule) {
   };
   if (annotation.body) {
     dict.Contents = lib.PDFHexString.fromText(annotation.body);
+  }
+  if (annotation.id.startsWith('shared:')) {
+    const commands = ['q', '/GS0 gs', '1 J', '1 j'];
+    for (const stroke of annotation.strokes) {
+      const [red, green, blue] = hexToRgb(stroke.color);
+      commands.push(`${red} ${green} ${blue} RG`);
+      for (let i = 1; i < stroke.points.length; i++) {
+        const a = stroke.points[i - 1],
+          b = stroke.points[i];
+        const width =
+          stroke.width *
+          pressureWidth(((a.pressure ?? 1) + (b.pressure ?? 1)) / 2);
+        commands.push(
+          `${pdfNumber(width)} w`,
+          `${pdfNumber(a.x - bbox.x)} ${pdfNumber(a.y - bbox.y)} m`,
+          `${pdfNumber(b.x - bbox.x)} ${pdfNumber(b.y - bbox.y)} l`,
+          'S'
+        );
+      }
+    }
+    commands.push('Q');
+    dict.AP = {
+      N: context.register(
+        context.flateStream(commands.join('\n'), {
+          Type: 'XObject',
+          Subtype: 'Form',
+          BBox: [0, 0, bbox.width, bbox.height],
+          Resources: {
+            ExtGState: {
+              GS0: { CA: annotation.opacity, ca: annotation.opacity }
+            }
+          }
+        })
+      )
+    };
   }
   return dict;
 }
@@ -403,7 +443,7 @@ async function buildAnnotationDict(
     case 'comment':
       return buildComment(annotation, lib);
     case 'ink':
-      return buildInk(annotation, lib);
+      return buildInk(annotation, lib, context);
     case 'signature':
       return buildSignature(annotation, lib, out, context);
     default:

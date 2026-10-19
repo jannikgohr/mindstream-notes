@@ -11,6 +11,9 @@ import type { UndoOp } from './stroke-types';
 
 export function applyUndoOp(doc: InkDocument, op: UndoOp): void {
   switch (op.kind) {
+    case 'pages':
+      doc.restorePages(op.before);
+      break;
     case 'strokeAdded':
       doc.setStrokeTombstoned(op.id, true);
       break;
@@ -41,6 +44,9 @@ export function applyUndoOp(doc: InkDocument, op: UndoOp): void {
 
 export function applyRedoOp(doc: InkDocument, op: UndoOp): void {
   switch (op.kind) {
+    case 'pages':
+      doc.restorePages(op.after);
+      break;
     case 'strokeAdded':
       doc.setStrokeTombstoned(op.id, false);
       break;

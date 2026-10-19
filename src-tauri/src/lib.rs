@@ -52,6 +52,8 @@ pub mod history;
 pub mod hotkeys;
 pub mod i18n;
 pub mod import;
+#[cfg(test)]
+mod ink_pages_tests;
 pub mod legacy_content;
 #[cfg(desktop)]
 pub mod legacy_export;
@@ -681,6 +683,7 @@ pub fn run() {
                 search::search_notes,
                 // PDF searchable-text index (derived, local-only)
                 pdf_text::set_pdf_text,
+                pdf_text::pdf_page_text,
                 pdf_text::pdf_notes_missing_text,
                 pdf_text::pdf_note_needs_text,
                 // Note history (local, automatic versioning)
@@ -694,7 +697,11 @@ pub fn run() {
                 // Assets (freeform drawing attachments)
                 assets::upload_drawing_asset,
                 assets::fetch_drawing_asset,
+                assets::binary::fetch_asset_bytes,
+                assets::binary::upload_asset_bytes,
+                assets::binary::import_pdf_note_bytes,
                 assets::import_pdf_note,
+                assets::import_ink_pdf_note,
                 assets::sweep_unreferenced_markdown_assets,
                 // Signatures (reusable, synced signature library)
                 signatures::list_signatures,

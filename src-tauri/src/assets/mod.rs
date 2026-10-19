@@ -24,9 +24,10 @@
 //!   - **markdown / pdf** notes reference assets from their body text, so
 //!     [`register_body_refs`] adds rows on save and the reconciliation sweep
 //!     ([`sweep_unreferenced_markdown_assets_inner`]) is authoritative.
-//!   - **freeform / ink** notes reference assets from `yrs_state`, which the
-//!     backend cannot cheaply scan. Their upload-time ref row is never
-//!     reconciled away, which is what keeps drawing assets alive.
+//!   - **ink** pages reference PDF assets in `yrs_state`; their page maps are
+//!     collected on save/pull, including deleted pages retained for undo.
+//!   - **freeform / ink** references remain additive. Reconciliation never
+//!     frees their assets based only on the note body, preserving undo/history.
 //!
 //! # Deduplication
 //!
@@ -52,6 +53,8 @@ use sha2::{Digest, Sha256};
 use crate::db::Db;
 use crate::error::{AppError, AppResult, CommandResult};
 use crate::notes::{self, CreateNote, Note, NoteKind};
+
+pub mod binary;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetSummary {
@@ -91,6 +94,78 @@ pub struct ImportPdfNote {
     pub title: Option<String>,
     pub parent_collection_id: Option<String>,
     pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImportInkPdfNote {
+    pub title: Option<String>,
+    pub parent_collection_id: Option<String>,
+    pub bytes: Vec<u8>,
+    pub asset_id: String,
+    pub yrs_state: Vec<u8>,
+}
+
+pub fn import_ink_pdf_note_inner(conn: &Connection, input: ImportInkPdfNote) -> AppResult<Note> {
+    if !input.asset_id.starts_with("asset_")
+        || !crate::sync::yrs_doc::ink_asset_ids(&input.yrs_state).contains(&input.asset_id)
+    {
+        return Err(AppError::InvalidArg(
+            "Invalid PDF-backed ink document".into(),
+        ));
+    }
+    let tx = conn.unchecked_transaction()?;
+    let note = notes::create(
+        &tx,
+        CreateNote {
+            title: input.title,
+            body: Some(String::new()),
+            parent_collection_id: input.parent_collection_id,
+            note_kind: Some(NoteKind::Ink),
+        },
+    )?;
+    if input.bytes.is_empty() {
+        let asset = load_summary(&tx, &input.asset_id)?;
+        let scope: Option<String> = tx.query_row(
+            "SELECT share_scope_id FROM assets WHERE id = ?1",
+            params![input.asset_id],
+            |row| row.get(0),
+        )?;
+        if !matches!(asset.mime_type.as_str(), "application/pdf" | "image/jpeg")
+            || scope != crate::sharing::note_scope(&tx, &note.summary.id)?
+        {
+            return Err(AppError::InvalidArg(
+                "PDF source must be in the same share scope".into(),
+            ));
+        }
+        add_ref(&tx, &input.asset_id, &note.summary.id)?;
+    } else {
+        store_with_id(
+            &tx,
+            &input.asset_id,
+            UploadAsset {
+                owning_note_id: note.summary.id.clone(),
+                mime_type: "application/pdf".into(),
+                bytes: input.bytes,
+            },
+        )?;
+    }
+    tx.execute(
+        "UPDATE notes SET yrs_state = ?2 WHERE id = ?1",
+        params![note.summary.id, input.yrs_state],
+    )?;
+    register_body_refs(&tx, &note.summary.id, "")?;
+    let result = notes::load(&tx, &note.summary.id)?;
+    tx.commit()?;
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn import_ink_pdf_note(
+    db: tauri::State<'_, Db>,
+    input: ImportInkPdfNote,
+) -> CommandResult<Note> {
+    db.with_conn(|c| import_ink_pdf_note_inner(c, input))
+        .map_err(Into::into)
 }
 
 fn row_to_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<AssetSummary> {
@@ -206,20 +281,24 @@ pub fn upload(conn: &Connection, input: UploadAsset) -> AppResult<Asset> {
 /// different (deduped) id would leave the body pointing at nothing. Callers
 /// that can accept any id should use [`store_deduped`] instead.
 pub fn upload_with_id(conn: &Connection, id: String, input: UploadAsset) -> AppResult<Asset> {
+    store_with_id(conn, &id, input)?;
+    load(conn, &id)
+}
+
+fn store_with_id(conn: &Connection, id: &str, input: UploadAsset) -> AppResult<()> {
     crate::sharing::ensure_note_writable(conn, &input.owning_note_id)?;
     require_note(conn, &input.owning_note_id)?;
     let share_scope_id = crate::sharing::note_scope(conn, &input.owning_note_id)?;
     let hash = content_hash(&input.bytes);
     insert_asset(
         conn,
-        &id,
+        id,
         &input.owning_note_id,
         &input.mime_type,
         &input.bytes,
         &hash,
         share_scope_id,
-    )?;
-    load(conn, &id)
+    )
 }
 
 /// Confirm the note exists before an FK write.
@@ -294,6 +373,21 @@ pub fn add_ref(conn: &Connection, asset_id: &str, note_id: &str) -> AppResult<()
 pub fn register_body_refs(conn: &Connection, note_id: &str, body: &str) -> AppResult<()> {
     let mut counts = HashMap::new();
     count_asset_refs(body, &mut counts);
+    let state: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT yrs_state FROM notes WHERE id = ?1 AND note_kind IN ('ink', 'pdf')",
+            params![note_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    if let Some(state) = &state {
+        for id in crate::sync::yrs_doc::ink_asset_ids(state) {
+            counts.entry(id).or_insert(1);
+        }
+        let signature = crate::sync::yrs_doc::ink_background_signature(state);
+        conn.execute("UPDATE notes SET pdf_text = NULL, pdf_text_signature = NULL WHERE id = ?1 AND note_kind = 'ink' AND COALESCE(pdf_text_signature, '') != ?2", params![note_id, signature])?;
+    }
     for asset_id in counts.keys() {
         let exists: bool = conn
             .query_row(
@@ -430,9 +524,9 @@ pub fn import_pdf_note_inner(conn: &Connection, input: ImportPdfNote) -> AppResu
         },
     )?;
 
-    upload_with_id(
+    store_with_id(
         conn,
-        asset_id,
+        &asset_id,
         UploadAsset {
             owning_note_id: note.summary.id.clone(),
             mime_type: "application/pdf".into(),
@@ -461,6 +555,17 @@ pub fn load(conn: &Connection, id: &str) -> AppResult<Asset> {
         Some((summary, bytes)) => Ok(Asset { summary, bytes }),
         None => Err(AppError::NotFound(format!("asset {id}"))),
     }
+}
+
+fn load_summary(conn: &Connection, id: &str) -> AppResult<AssetSummary> {
+    conn.query_row(
+        "SELECT id, owning_note_id, mime_type, size, created, modified, etebase_uid
+         FROM assets WHERE id = ?1",
+        params![id],
+        row_to_summary,
+    )
+    .optional()?
+    .ok_or_else(|| AppError::NotFound(format!("asset {id}")))
 }
 
 fn asset_url_re() -> Option<&'static Regex> {

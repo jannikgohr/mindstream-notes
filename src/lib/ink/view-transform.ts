@@ -13,6 +13,7 @@
 import { PAGE_FIT_MARGIN, PAGE_FIT_TOP_MARGIN } from '$lib/layout/page-layout';
 import {
   DEFAULT_PAGE_GAP,
+  documentHeight,
   type DocumentLayout,
   type InkPoint
 } from '$lib/ink/page';
@@ -78,10 +79,7 @@ export function fitWidthScale(view: InkView, layout: DocumentLayout): number {
 
 /** Total height of every page plus the gaps between them, unscaled. */
 function contentHeight(layout: DocumentLayout): number {
-  return (
-    layout.page.height * layout.pageCount +
-    layout.pageGap * (layout.pageCount - 1)
-  );
+  return documentHeight(layout);
 }
 
 export function screenToPage(view: InkView, x: number, y: number): InkPoint {
@@ -153,6 +151,33 @@ export function fitWidthView(
       scale,
       panX: (view.width - layout.page.width * scale) * 0.5,
       panY: PAGE_FIT_MARGIN
+    },
+    layout,
+    options
+  );
+}
+
+/** Resize without losing the document position below the top gutter. */
+export function resizeView(
+  view: InkView,
+  size: Pick<InkView, 'width' | 'height'>,
+  layout: DocumentLayout,
+  options: { mobileToolbar: boolean }
+): InkView {
+  if (size.width === view.width && size.height === view.height) return view;
+  const resized = { ...view, ...size };
+  const wasAtFitWidth =
+    Math.abs(view.scale - fitWidthScale(view, layout)) < 0.001;
+  const scale = wasAtFitWidth
+    ? fitWidthScale(resized, layout)
+    : Math.max(view.scale, minScale(resized, layout));
+  const anchor = screenToPage(view, view.width / 2, PAGE_FIT_MARGIN);
+  return clampView(
+    {
+      ...resized,
+      scale,
+      panX: size.width / 2 - anchor.x * scale,
+      panY: PAGE_FIT_MARGIN - anchor.y * scale
     },
     layout,
     options

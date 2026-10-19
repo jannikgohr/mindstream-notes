@@ -117,6 +117,7 @@ function context(overrides: Partial<MenuBuildContext> = {}): MenuBuildContext {
     startDraft: vi.fn(),
     startPluginTemplateDraft: vi.fn(),
     startPdfImport: vi.fn(),
+    convertPdfNote: vi.fn(async () => {}),
     startRename: vi.fn(),
     startEmptyTrash: vi.fn(async () => {}),
     leaveShared: vi.fn(async () => {}),
@@ -227,6 +228,17 @@ describe('root create actions', () => {
 });
 
 describe('note actions (home)', () => {
+  it('converts PDF notes through the context menu', async () => {
+    tree.notesById = { n1: note({ note_kind: 'pdf' }) };
+    const ctx = context();
+    const items = await createMenuBuilder(ctx).menuItemsForTarget({
+      kind: 'note',
+      id: 'n1'
+    });
+    find(items, 'Convert to handwritten note').onSelect!();
+    expect(ctx.convertPdfNote).toHaveBeenCalledWith('n1');
+  });
+
   it('wires open / export / rename / move / delete', async () => {
     tree.notesById = { n1: note() };
     const runExport = vi.fn();

@@ -892,6 +892,32 @@ const MIGRATIONS: &[Migration] = &[
             );
         "#,
     },
+    Migration {
+        to: 34,
+        sql: r#"
+            ALTER TABLE notes ADD COLUMN pdf_text_signature TEXT;
+            CREATE TABLE pdf_page_text (
+                asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+                page_index INTEGER NOT NULL,
+                extraction_version INTEGER NOT NULL DEFAULT 1,
+                text TEXT NOT NULL,
+                PRIMARY KEY (asset_id, page_index, extraction_version)
+            );
+            DROP TRIGGER note_search_insert;
+            DROP TRIGGER note_search_update;
+            CREATE TRIGGER note_search_insert AFTER INSERT ON notes BEGIN
+                INSERT INTO note_search(rowid, title, body, tags)
+                VALUES (new.rowid, new.title, CASE WHEN new.note_kind IN ('pdf', 'ink') THEN COALESCE(new.pdf_text, '') ELSE new.body END, '');
+            END;
+            CREATE TRIGGER note_search_update AFTER UPDATE OF title, body, pdf_text, note_kind ON notes BEGIN
+                UPDATE note_search SET title = new.title,
+                    body = CASE WHEN new.note_kind IN ('pdf', 'ink') THEN COALESCE(new.pdf_text, '') ELSE new.body END
+                WHERE rowid = new.rowid;
+            END;
+            UPDATE note_search SET body = COALESCE((SELECT notes.pdf_text FROM notes WHERE notes.rowid = note_search.rowid), '')
+                WHERE rowid IN (SELECT rowid FROM notes WHERE note_kind IN ('pdf', 'ink'));
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

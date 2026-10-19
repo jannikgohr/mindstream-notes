@@ -5,7 +5,12 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: (command: string, args?: unknown) => invoke(command, args)
 }));
 
-import { pdfNoteNeedsText, pdfNotesMissingText, setPdfText } from './pdf-text';
+import {
+  cachedPdfPageText,
+  pdfNoteNeedsText,
+  pdfNotesMissingText,
+  setPdfText
+} from './pdf-text';
 
 function setTauri(on: boolean): void {
   if (on)
@@ -15,6 +20,11 @@ function setTauri(on: boolean): void {
 }
 
 describe('pdf-text — browser fallback (mock store)', () => {
+  it('returns no cached page text and echoes newly extracted text in browser mode', async () => {
+    await expect(cachedPdfPageText('asset', 2)).resolves.toBeNull();
+    await expect(cachedPdfPageText('asset', 2, '')).resolves.toBe('');
+    await expect(cachedPdfPageText('asset', 2, 'kiwi')).resolves.toBe('kiwi');
+  });
   it('setPdfText resolves without a backend', async () => {
     await expect(setPdfText('n1', 'hello')).resolves.toBeUndefined();
   });
@@ -32,6 +42,37 @@ describe('pdf-text — Tauri (validation path)', () => {
     invoke.mockReset();
   });
   afterEach(() => setTauri(false));
+
+  it('forwards page cache reads and writes, including empty extracted text', async () => {
+    invoke
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce('')
+      .mockResolvedValueOnce('kiwi');
+    await expect(cachedPdfPageText('asset', 2)).resolves.toBeNull();
+    expect(invoke).toHaveBeenLastCalledWith('pdf_page_text', {
+      assetId: 'asset',
+      pageIndex: 2
+    });
+    await expect(cachedPdfPageText('asset', 2, '')).resolves.toBe('');
+    expect(invoke).toHaveBeenLastCalledWith('pdf_page_text', {
+      assetId: 'asset',
+      pageIndex: 2,
+      text: ''
+    });
+    await expect(cachedPdfPageText('asset', 2, 'kiwi')).resolves.toBe('kiwi');
+    invoke.mockResolvedValueOnce(123);
+    await expect(cachedPdfPageText('asset', 2)).rejects.toThrow(/string/);
+  });
+
+  it('forwards the expected background signature to reject stale index writes', async () => {
+    invoke.mockResolvedValue(undefined);
+    await setPdfText('ink', 'search words', 'signature');
+    expect(invoke).toHaveBeenCalledWith('set_pdf_text', {
+      noteId: 'ink',
+      text: 'search words',
+      expectedSignature: 'signature'
+    });
+  });
 
   it('setPdfText forwards args and accepts a void response', async () => {
     invoke.mockResolvedValue(undefined);
