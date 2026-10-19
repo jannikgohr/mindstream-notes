@@ -6,7 +6,7 @@
    *                      settings)
    *                    → one row: folder breadcrumb, sort, list/grid
    *                    → note list / grid for the active bucket
-   *                    → create button (default kind + menu of the rest)
+   *                    → create bar (default kind, pinned kinds, menu)
    *                    → bottom nav (Home / Shared / Favourites / Trash)
    *
    *   Editor screen    → MobileEditor (its own header, no FAB/nav)
@@ -186,10 +186,11 @@
     }
   }
 
-  // The create kinds follow the file-tree toolbar's order on this device
-  // (shared with desktop), so its first enabled kind is the default the
-  // create button makes. Labels go through tUi() inside $derived so a
-  // language switch refreshes them without a remount.
+  // The create bar is the file-tree toolbar's model on this device (shared
+  // with desktop): the first enabled kind is the default main button, the
+  // rest of the toolbar section are pinned quick buttons, and More is menu
+  // only. Labels go through tUi() inside $derived so a language switch
+  // refreshes them without a remount.
   let createOrder = $state(
     loadFileTreeToolbarPreferences(CORE_FILE_TREE_ACTION_IDS)
   );
@@ -266,15 +267,36 @@
     }))
   );
 
-  /** Make a kind the default: it moves to the front of the toolbar order. */
-  function setDefaultCreate(id: string) {
-    const first = createActions[0]?.id;
-    if (!first || id === first) return;
+  const pinnedCreate = $derived(
+    createOrder.toolbar.filter(
+      (id) =>
+        id !== createActions[0]?.id && createKinds[id as CoreFileTreeActionId]
+    )
+  );
+
+  function saveCreateOrder(next: typeof createOrder) {
     createOrder = normalizeFileTreeToolbarPreferences(
-      moveFileTreeToolbarAction(createOrder, id, 'toolbar', first),
+      next,
       CORE_FILE_TREE_ACTION_IDS
     );
     void saveFileTreeToolbarPreferences(createOrder);
+  }
+
+  /** Make a kind the default: it moves to the front of the toolbar. */
+  function setDefaultCreate(id: string) {
+    const first = createOrder.toolbar[0];
+    if (id === createActions[0]?.id || id === first) return;
+    saveCreateOrder(
+      moveFileTreeToolbarAction(createOrder, id, 'toolbar', first)
+    );
+  }
+
+  /** Pin or unpin a kind: it moves between the toolbar section and More. */
+  function togglePinnedCreate(id: string) {
+    const pinned = createOrder.toolbar.includes(id);
+    saveCreateOrder(
+      moveFileTreeToolbarAction(createOrder, id, pinned ? 'more' : 'toolbar')
+    );
   }
 
   // Hide create affordances when the active bucket isn't a place where
@@ -304,8 +326,10 @@
       {#if fabVisible}
         <MobileFab
           actions={createActions}
+          pinned={pinnedCreate}
           extras={templateActions}
           onSetDefault={setDefaultCreate}
+          onTogglePin={togglePinnedCreate}
         />
       {/if}
     </div>

@@ -2,8 +2,8 @@ import { expect, test } from '@playwright/test';
 
 /**
  * The mobile shell's chrome, which follows the desktop's: the vault tile
- * opens the vault sheet, the create button makes the default kind and its
- * menu changes that default, and the note details sheet reads once.
+ * opens the vault sheet, the create bar shows the default kind and pinned
+ * kinds and its menu changes both, and the note details sheet reads once.
  *
  * The mobile shell is chosen from navigator.userAgent (see lib/platform.ts).
  */
@@ -26,36 +26,52 @@ test('the vault tile opens the vault sheet', async ({ page }) => {
   await expect(sheet.getByText('Default', { exact: true })).toBeVisible();
 });
 
-test('the create menu changes the default kind the button makes', async ({
+test('the create menu pins quick buttons and picks one default', async ({
   page
 }) => {
   await page.goto('/');
-  const showMenu = page.getByRole('button', {
-    name: 'Show everything you can create'
-  });
   await expect(
     page.getByRole('button', { name: 'New note', exact: true })
   ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'New folder', exact: true })
+  ).toBeVisible();
 
-  await showMenu.click();
-  const menu = page.getByRole('menu', { name: 'Create' });
-  await menu
-    .getByRole('button', { name: 'Make New handwritten note the default' })
+  await page
+    .getByRole('button', { name: 'Show everything you can create' })
     .click();
-  // The pinned kind moves to the top of the menu and onto the button.
-  await expect(menu.getByRole('menuitem').first()).toHaveText(
-    'New handwritten note'
-  );
+  const menu = page.getByRole('dialog', { name: 'Create' });
+  // Pins can be many: unpinning one takes its quick button away.
+  const pinFolder = menu.getByRole('button', {
+    name: 'Show New folder beside the button'
+  });
+  await expect(pinFolder).toHaveAttribute('aria-pressed', 'true');
+  await pinFolder.click();
+  await expect(pinFolder).toHaveAttribute('aria-pressed', 'false');
+  // The default is a radio: picking one unpicks the other.
+  const ink = menu.getByRole('radio', {
+    name: 'Make New handwritten note the default'
+  });
+  await ink.click();
+  await expect(ink).toBeChecked();
+  await expect(menu.getByRole('radio', { checked: true })).toHaveCount(1);
   await page.getByRole('button', { name: 'Close action menu' }).first().click();
-  await expect(
-    page.getByRole('button', { name: 'New handwritten note', exact: true })
-  ).toBeVisible();
 
-  // The choice is the device's toolbar order, so it survives a reload.
-  await page.reload();
+  const main = page.getByRole('button', {
+    name: 'New handwritten note',
+    exact: true
+  });
+  await expect(main).toBeVisible();
   await expect(
-    page.getByRole('button', { name: 'New handwritten note', exact: true })
-  ).toBeVisible();
+    page.getByRole('button', { name: 'New folder', exact: true })
+  ).toHaveCount(0);
+
+  // Both choices are the device's toolbar order, so they survive a reload.
+  await page.reload();
+  await expect(main).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'New folder', exact: true })
+  ).toHaveCount(0);
 });
 
 test('note details open as one sheet with a single heading', async ({
