@@ -230,12 +230,20 @@ test('appearance updates live, setup resumes, and shortcuts work in the practice
   );
   await expect(page.locator('html')).toHaveClass(/dark/);
   await page.getByRole('button', { name: 'Continue', exact: true }).click();
-  await page
-    .getByRole('combobox', { name: 'Keyboard shortcuts' })
-    .selectOption('notion');
+  const shortcuts = page.getByRole('button', { name: 'Keyboard shortcuts' });
+  await shortcuts.click();
   await expect(
-    page.getByRole('combobox', { name: 'Keyboard shortcuts' })
-  ).toBeEnabled();
+    page.getByRole('option', { name: 'Notion-like', exact: true })
+  ).toBeVisible();
+  await page.screenshot({
+    path: test.info().outputPath('keyboard-presets-dark.png'),
+    animations: 'disabled'
+  });
+  await page.keyboard.press('Home');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(shortcuts).toContainText('Notion-like');
+  await expect(shortcuts).toBeEnabled();
   await expect(page.getByText('Ctrl+Shift+1', { exact: true })).toBeVisible();
   const editor = page
     .getByTestId('onboarding-practice')

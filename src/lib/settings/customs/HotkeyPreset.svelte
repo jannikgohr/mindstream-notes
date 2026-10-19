@@ -5,7 +5,8 @@
     HotkeyBindingConflictError
   } from '$lib/hotkeys/store.svelte';
   import { getSettingValue } from '../store.svelte';
-  import { tUi, tUiFormat, tValue } from '../i18n.svelte';
+  import { tUi, tUiFormat } from '../i18n.svelte';
+  import SettingSelect from '../SettingSelect.svelte';
   import { toErrorMessage } from '$lib/api/errors';
 
   let busy = $state(false);
@@ -26,17 +27,16 @@
   }
 </script>
 
-<select
-  aria-label={tUi('onboarding.shortcuts')}
+<SettingSelect
+  settingId="hotkeys.preset"
+  ariaLabel={tUi('onboarding.shortcuts')}
   value={hotkeyPreset(getSettingValue('hotkeys.preset'))}
+  options={[...HOTKEY_PRESETS]}
   disabled={busy}
-  onchange={(event) => select(event.currentTarget.value)}
-  class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
->
-  {#each HOTKEY_PRESETS as preset (preset)}<option value={preset}
-      >{tValue('hotkeys.preset', preset)}</option
-    >{/each}
-</select>
+  onChange={select}
+  class="h-11 w-full px-3"
+  touchFriendly
+/>
 {#if error}<p class="mt-2 text-sm text-destructive" role="alert">
     {error}
   </p>{/if}
