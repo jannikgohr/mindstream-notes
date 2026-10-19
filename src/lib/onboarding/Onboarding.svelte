@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tick, onMount } from 'svelte';
+  import SettingSelect from '$lib/settings/SettingSelect.svelte';
   import WindowControls from '$lib/components/WindowControls.svelte';
   import {
     initWindowChrome,
@@ -28,7 +29,6 @@
     SCHEMA,
     flushSettingsWrites
   } from '$lib/settings/store.svelte';
-  import SettingSelect from '$lib/settings/SettingSelect.svelte';
   import SettingControl from '$lib/settings/SettingControl.svelte';
   import SignInForm from '$lib/settings/customs/SignInForm.svelte';
   import HotkeyPreset from '$lib/settings/customs/HotkeyPreset.svelte';
@@ -184,51 +184,30 @@
 
 <main class="onboarding" aria-labelledby="onboarding-heading">
   <header class="setup-header" data-tauri-drag-region>
-    <span
-      class="setup-brand flex min-w-0 items-center gap-2 font-medium"
-      data-tauri-drag-region
+    <span class="flex items-center gap-2 font-medium" data-tauri-drag-region
+      ><img
+        src="/app-logo.png"
+        alt=""
+        class="size-6 shrink-0"
+        width="24"
+        height="24"
+        draggable="false"
+      />Mindstream</span
     >
-      <span class="size-3 shrink-0 rounded-sm bg-accent-brand"></span><span
-        class="truncate">Mindstream</span
-      >
-    </span>
-    <SettingSelect
-      settingId="language.code"
-      value={String(getSettingValue('language.code'))}
-      options={['en', 'de']}
-      ariaLabel={tUi('onboarding.language')}
-      class="setup-language h-11 w-28 text-xs max-[600px]:w-[5.5rem]"
-      disabled={busy}
-      touchFriendly
-      onChange={(value) => write('language.code', value)}
-    />
-    <button
-      type="button"
-      class="setup-skip"
-      class:setup-skip-placeholder={step !== 'account'}
-      disabled={busy || step !== 'account'}
-      aria-hidden={step !== 'account' ? true : undefined}
-      aria-describedby="setup-skip-outcome"
-      tabindex={step === 'account' ? undefined : -1}
-      onclick={() => complete(true)}>{tUi('onboarding.skipSetup')}</button
-    >
-    {#if !isMobile() && windowChrome.customDecorations}<div
-        class="setup-window-controls"
-      >
-        <WindowControls />
-      </div>{/if}
-    <p
-      id="setup-skip-outcome"
-      class="setup-skip-outcome"
-      class:setup-skip-placeholder={step !== 'account'}
-      aria-hidden={step !== 'account' ? true : undefined}
-    >
-      {tUi(
-        onboarding.progress?.freshInstall
-          ? 'onboarding.skipDefaultsHint'
-          : 'onboarding.skipCurrentHint'
-      )}
-    </p>
+    <div class="ml-auto flex items-center gap-2 text-sm text-muted-foreground">
+      <span class="hidden sm:inline">{tUi('onboarding.language')}</span>
+      <SettingSelect
+        settingId="language.code"
+        value={String(getSettingValue('language.code'))}
+        options={['en', 'de']}
+        ariaLabel={tUi('onboarding.language')}
+        class="h-11 w-28 text-xs max-[600px]:w-[5.5rem]"
+        disabled={busy}
+        touchFriendly
+        onChange={(value) => write('language.code', value)}
+      />
+    </div>
+    {#if !isMobile() && windowChrome.customDecorations}<WindowControls />{/if}
   </header>
   <div bind:this={container} class="setup-content">
     <div class="setup-body">
@@ -539,6 +518,19 @@
       >
       <div class="setup-actions">
         <Button
+          variant="secondary"
+          class={`setup-skip h-auto min-h-11 whitespace-normal text-center ${step !== 'account' ? 'setup-skip-placeholder' : ''}`}
+          disabled={busy || step !== 'account'}
+          aria-hidden={step !== 'account' ? true : undefined}
+          tabindex={step === 'account' ? undefined : -1}
+          onclick={() => complete(true)}
+          >{tUi(
+            onboarding.progress?.freshInstall
+              ? 'onboarding.skip'
+              : 'onboarding.keepCurrent'
+          )}</Button
+        >
+        <Button
           class="setup-next min-h-11"
           disabled={busy || (step === 'account' && !local && !signedIn)}
           onclick={() =>
@@ -573,50 +565,13 @@
   }
   .setup-header {
     flex-shrink: 0;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto auto;
-    align-items: center;
-    gap: 0.25rem 1rem;
-    padding: calc(0.5rem + env(safe-area-inset-top)) 2rem 0.75rem;
-    border-bottom: 1px solid var(--color-border);
-  }
-  .setup-window-controls {
     display: flex;
     align-items: center;
-  }
-  .setup-skip {
-    min-height: 2.75rem;
-    padding: 0.5rem 0.25rem;
-    border-radius: 0.375rem;
-    background: transparent;
-    color: var(--color-accent-brand);
-    font-size: 0.75rem;
-    font-weight: 500;
-    line-height: 1.4;
-    text-align: right;
-  }
-  .setup-skip:hover:not(:disabled) {
-    text-decoration: underline;
-    text-underline-offset: 0.2em;
-  }
-  .setup-skip:focus-visible {
-    outline: 2px solid var(--color-ring);
-    outline-offset: 2px;
-  }
-  .setup-skip:disabled {
-    opacity: 0.5;
-  }
-  .setup-skip-outcome {
-    grid-column: 1 / -1;
-    margin: 0;
-    color: var(--color-muted-foreground);
-    font-size: 0.75rem;
-    line-height: 1rem;
-    text-align: right;
-  }
-  .setup-skip-placeholder {
-    visibility: hidden;
-    pointer-events: none;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 1rem;
+    padding: calc(1rem + env(safe-area-inset-top)) 2rem 1rem;
+    border-bottom: 1px solid var(--color-border);
   }
   .setup-content {
     flex: 1;
@@ -760,6 +715,9 @@
   .setup-footer :global(.setup-back) {
     min-height: 2.75rem;
   }
+  .setup-footer :global(.setup-skip-placeholder) {
+    display: none;
+  }
   @media (max-width: 900px) {
     .appearance-grid,
     .editing-grid {
@@ -772,18 +730,14 @@
       width: 7rem;
     }
     .setup-header {
-      grid-template-columns: minmax(0, 1fr) auto auto;
-      gap: 0.25rem 0.5rem;
-      padding: calc(0.375rem + env(safe-area-inset-top)) 1rem 0.5rem;
-    }
-    .setup-brand {
-      font-size: 0.875rem;
-    }
-    .setup-skip {
-      max-width: 6rem;
+      gap: 0.5rem;
+      padding: calc(0.75rem + env(safe-area-inset-top)) 1rem 0.75rem;
     }
     .setup-body {
-      padding: 1.25rem 1rem;
+      padding: 1.25rem 1rem 6.5rem;
+    }
+    .setup-content {
+      scroll-padding-bottom: 6.5rem;
     }
     .setup-progress {
       margin-bottom: 1.25rem;
@@ -832,6 +786,37 @@
     }
     .setup-actions {
       display: contents;
+    }
+    .setup-footer :global(.setup-skip) {
+      position: absolute;
+      right: 1rem;
+      bottom: calc(100% + 0.75rem);
+      justify-content: flex-start;
+      width: fit-content;
+      max-width: calc(100% - 2rem);
+      min-width: 0;
+      padding-inline: 0.75rem;
+      border: 1px solid
+        color-mix(in oklab, var(--color-border) 70%, transparent);
+      border-radius: 999px;
+      background: color-mix(in oklab, var(--color-surface-1) 65%, transparent);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      box-shadow: var(--shadow-sm);
+      color: var(--color-muted-foreground);
+      font-size: 0.75rem;
+      font-weight: 400;
+      line-height: 1.4;
+      text-align: left;
+    }
+    .setup-footer :global(.setup-skip:hover:not(:disabled)) {
+      background: color-mix(in oklab, var(--color-surface-2) 80%, transparent);
+      color: var(--color-foreground);
+    }
+    .setup-footer :global(.setup-skip-placeholder) {
+      display: inline-flex;
+      visibility: hidden;
+      pointer-events: none;
     }
     .setup-footer :global(.setup-back) {
       grid-area: 1 / 1;

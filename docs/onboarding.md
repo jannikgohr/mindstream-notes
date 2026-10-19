@@ -5,16 +5,18 @@ keep opening their workspace. Setup can also be opened from Settings > General >
 Run setup again.
 
 The four steps cover account connection, appearance, editing, and initial
-content. The first step offers **Skip setup** in the header. A short explanation
-says whether skipping starts offline with defaults or keeps the vault's current
-settings. Managed hosting is unavailable until a working service is configured.
+content. The first step offers **Skip and use offline with default settings**,
+or **Skip and keep current settings** for an existing vault. Managed hosting is
+unavailable until a working service is configured.
 
 Back and Continue stay in a bottom bar while the step content scrolls above it.
 On phones, choices use compact rows and the progress indicator shows the current
-step name. The language picker uses the app's themed dropdown with touch-sized
-options. Skip stays separate from the bottom navigation. The divider sits
-immediately above Back and Continue, whose positions remain fixed across steps.
-Repeated taps on Back cannot activate Skip after returning to the first screen.
+step name. Skip floats above the footer, aligned with Continue's right edge.
+Its translucent pill background blurs the content beneath it. Extra scroll
+spacing keeps the last controls clear of the button. The divider sits immediately
+above Back and Continue, whose positions remain fixed across steps. Repeated
+taps on Back cannot activate Skip after returning to the first screen.
+The header uses the real app logo and the shared themed language dropdown.
 The header and bottom bar respect the device's safe areas.
 
 Appearance uses the app's shared Surface, SectionHeader, Input, Button, and
