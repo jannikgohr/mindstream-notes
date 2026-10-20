@@ -59,6 +59,18 @@ fn ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
 }
 
+fn process_memory() -> Value {
+    let status = std::fs::read_to_string("/proc/self/status").ok();
+    let pss = std::fs::read_to_string("/proc/self/smaps_rollup").ok();
+    json!({
+        "status": status.map(|status| status.lines()
+            .filter(|line| line.starts_with("VmRSS:") || line.starts_with("VmHWM:"))
+            .map(String::from).collect::<Vec<_>>()),
+        "pss": pss.and_then(|status| status.lines()
+            .find(|line| line.starts_with("Pss:")).map(String::from)),
+    })
+}
+
 fn sample(
     runtime: &WasmRuntime,
     component: &[u8],
@@ -75,14 +87,24 @@ fn sample(
     let case_cache = cache.join(uuid::Uuid::new_v4().to_string());
     let cache = case_cache.as_path();
     runtime.clear_memory_cache();
+    let before_compile = process_memory();
     let (expected, cold) = invoke(runtime, component, export, &input, setup.clone(), cache)?;
     assert_eq!(cold.source, cache::Source::Compiled);
+    let after_cold = process_memory();
     let mut samples = Vec::with_capacity(iterations);
-    for _ in 0..iterations {
+    let mut memory_samples = Vec::new();
+    for index in 0..iterations {
         let (value, timing) = invoke(runtime, component, export, &input, setup.clone(), cache)?;
         assert_eq!(value, expected, "output changes across fresh instances");
         assert_eq!(timing.source, cache::Source::Memory);
         samples.push(timing);
+        drop(value);
+        if [1, 10, 50, iterations].contains(&(index + 1)) {
+            memory_samples.push(json!({
+                "completedWarmCalls": index + 1,
+                "memory": process_memory(),
+            }));
+        }
     }
     runtime.clear_memory_cache();
     let (_, disk) = invoke(runtime, component, export, &input, setup, cache)?;
@@ -100,7 +122,13 @@ fn sample(
         "instantiateMs": distribution(samples.iter().map(|s| ms(s.instantiate))),
         "callMs": distribution(samples.iter().map(|s| ms(s.call))),
         "cachedTotalMs": distribution(samples.iter().map(|s| ms(s.prepare + s.instantiate + s.call))),
+        "warmSamplesMs": samples.iter().map(|s| json!({
+            "prepare": ms(s.prepare), "instantiate": ms(s.instantiate), "call": ms(s.call),
+        })).collect::<Vec<_>>(),
         "guestLinearMemoryBytes": samples.iter().map(|s| s.memory_bytes).max(),
+        "processMemoryBeforeCompile": before_compile,
+        "processMemoryAfterColdCall": after_cold,
+        "processMemoryAfterWarmCalls": memory_samples,
         "output": expected,
     }))
 }
@@ -159,7 +187,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     std::fs::create_dir_all(&scratch.0)?;
     let cache = scratch.0.join("cache");
+    let before_engine = process_memory();
     let runtime = WasmRuntime::new(execution)?;
+    let after_engine = process_memory();
     let setup = CallSetup {
         plugin_id: "com.example.probe".into(),
         ..CallSetup::default()
@@ -229,6 +259,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut reports = Vec::new();
     for (name, component) in [("rust", RUST), ("typescript", TYPESCRIPT)] {
+        eprintln!("checking {name} host contract and permission denials");
         let data = scratch.0.join(name);
         std::fs::create_dir_all(&data)?;
         let host = CallSetup {
@@ -261,6 +292,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut controls = Vec::new();
     for (name, component) in [("rust", RUST), ("typescript", TYPESCRIPT)] {
+        eprintln!("checking {name} cancellation");
         invoke(
             &runtime,
             component,
@@ -295,6 +327,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         let cancel_ms = ms(started.elapsed());
         assert!(cancel_ms < 2000.0, "{name} cancellation stalled");
+        eprintln!("checking {name} timeout");
         let started = Instant::now();
         let timed_out = runtime.invoke(WasmCall {
             component,
@@ -311,6 +344,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         let timeout_ms = ms(started.elapsed());
         assert!(timeout_ms < 2000.0, "{name} timeout stalled");
+        eprintln!("checking {name} memory refusal");
         let exhausted = runtime.invoke(WasmCall {
             component,
             export: "grow",
@@ -357,6 +391,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "execution": format!("{execution:?}"), "releaseBuild": !cfg!(debug_assertions), "iterations": iterations,
             "cases": cases, "hostReport": reports[0], "controls": controls,
             "processMemory": process_memory, "processPss": pss,
+            "processMemoryBeforeEngine": before_engine, "processMemoryAfterEngine": after_engine,
         }))?
     );
     Ok(())

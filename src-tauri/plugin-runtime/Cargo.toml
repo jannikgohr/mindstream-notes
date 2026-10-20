@@ -36,6 +36,11 @@ wasmtime = { version = "49.0.4", default-features = false, features = [
   "parallel-compilation",
 ] }
 
+[target.'cfg(target_os = "android")'.dependencies]
+# Wasmtime's signal handlers read ucontext_t. Older libc layouts omit the
+# ARM64 signal-mask padding, turning recoverable guest traps into SIGILL.
+libc = "0.2.190"
+
 [dev-dependencies]
 wat = "1"
 # `pulley` lets the tests run every component through the interpreter that

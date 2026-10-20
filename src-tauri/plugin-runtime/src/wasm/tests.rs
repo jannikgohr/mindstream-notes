@@ -66,7 +66,7 @@ fn note(id: &str, title: &str, tags: &[&str]) -> NoteMeta {
 fn true_tool() -> Option<PathBuf> {
     #[cfg(unix)]
     {
-        ["/usr/bin/true", "/bin/true"]
+        ["/usr/bin/true", "/bin/true", "/system/bin/true"]
             .iter()
             .map(PathBuf::from)
             .find(|p| p.exists())

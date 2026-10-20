@@ -40,6 +40,11 @@ use crate::limits::Limits;
 
 use bindings::{CallState, Plugin, PluginPre};
 
+// Match the Android NDK's ARM64 signal context. Wasmtime reads the faulting
+// PC through this layout when recovering from a guest panic or memory trap.
+#[cfg(all(target_os = "android", target_arch = "aarch64"))]
+const _: () = assert!(std::mem::offset_of!(libc::ucontext_t, uc_mcontext) == 0xb0);
+
 /// The interface namespace a component may import from.
 pub const IMPORT_PREFIX: &str = "mindstream:plugin/";
 /// Largest component accepted. A QuickJS component is 1 to 2 MiB.

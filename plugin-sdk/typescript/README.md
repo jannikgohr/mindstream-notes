@@ -1,6 +1,6 @@
 # TypeScript plugin SDK
 
-Build a Mindstream Notes plugin with Node.js 20 or later. Rust and WIT edits
+Build a Mindstream Notes plugin with Node.js 22.11 or later. Rust and WIT edits
 are unnecessary. The SDK bundles TypeScript with esbuild and embeds it in a
 QuickJS WebAssembly component. The same `plugin.wasm` runs on every supported
 host. Arbitrary Node APIs, browser APIs and native npm addons are unavailable.

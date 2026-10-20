@@ -359,7 +359,11 @@ mod tests {
     /// the test below skips.
     #[cfg(unix)]
     fn stdin_echo_tool() -> Option<PathBuf> {
-        let cat = PathBuf::from("/bin/cat");
+        let cat = PathBuf::from(if cfg!(target_os = "android") {
+            "/system/bin/cat"
+        } else {
+            "/bin/cat"
+        });
         cat.exists().then_some(cat)
     }
     #[cfg(windows)]

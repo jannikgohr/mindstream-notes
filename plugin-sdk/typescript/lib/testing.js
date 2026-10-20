@@ -68,7 +68,7 @@ export async function loadPlugin(component, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'mindstream-plugin-'));
   const modules = new Map();
   try {
-    // Node 20 must know these generated .js bindings are ES modules.
+    // Generated bindings are ES modules, including outside a workspace.
     await writeFile(join(dir, 'package.json'), '{"type":"module"}\n');
     for (const [name, contents] of Object.entries(files)) {
       if (name.endsWith('.wasm')) {

@@ -893,6 +893,7 @@ pub fn run() {
                 hotkeys::set_hotkey_displays,
                 #[cfg(desktop)]
                 hotkeys::sync_global_shortcuts,
+                #[cfg(desktop)]
                 hotkeys::get_global_shortcut_status,
                 #[cfg(desktop)]
                 desktop_settings::get_close_to_tray,

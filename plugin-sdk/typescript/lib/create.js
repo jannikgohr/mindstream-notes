@@ -80,7 +80,9 @@ export async function createProject(target, options = {}) {
       );
     }
     await writeFile(to, contents);
-    written.push(rel === '_gitignore' ? '.gitignore' : rel);
+    written.push(
+      rel === '_gitignore' ? '.gitignore' : rel.replaceAll('\\', '/')
+    );
   }
   return written.sort();
 }

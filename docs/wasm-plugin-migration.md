@@ -111,6 +111,10 @@ compiled components and compiler state and is separate from guest memory.
 
 From the repository root:
 
+Use Node.js 22.11 or later for SDK checks. Node 20's default Wasm engine
+rejects the extended constant expressions in the QuickJS components. The
+desktop and release workflows use Node 22.
+
 ```sh
 pnpm install --frozen-lockfile
 pnpm --filter @mindstream/plugin-sdk typecheck
@@ -164,6 +168,12 @@ gate. `ANDROID_SERIAL` selects the device for the runner.
 Install the Android NDK, platform tools and the Rust `aarch64-linux-android`
 target. On a Linux build machine, set the NDK toolchain directory for the
 installed NDK version, then build the standalone probe:
+
+Android builds require `libc >= 0.2.190`. Earlier versions omit ARM64
+signal-context padding used by Wasmtime's trap handler. Guest panic and
+allocation refusal then crash the process with `SIGILL`. The runtime checks
+the NDK's `uc_mcontext` offset at compile time. See the
+[upstream layout fix](https://github.com/rust-lang/libc/pull/5189).
 
 ```sh
 export ANDROID_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"

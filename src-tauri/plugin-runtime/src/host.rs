@@ -706,7 +706,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_tool_run_returns_text_or_base64() {
-        let cat = PathBuf::from("/bin/cat");
+        let cat = PathBuf::from(if cfg!(target_os = "android") {
+            "/system/bin/cat"
+        } else {
+            "/bin/cat"
+        });
         if !cat.exists() {
             return;
         }

@@ -30,7 +30,7 @@
     "README.md"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22.11.0"
   },
   "scripts": {
     "prepack": "node scripts/copy-wit.js",
