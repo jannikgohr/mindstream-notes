@@ -55,6 +55,21 @@ impl AppError {
     }
 }
 
+/// A plugin host refusal, mapped so the frontend keeps the error code it had
+/// when these checks lived in the app: an I/O failure stays `io`, a missing
+/// tool or directory is `notFound`, and everything a plugin did wrong is an
+/// invalid argument.
+impl From<mindstream_plugin_runtime::HostError> for AppError {
+    fn from(error: mindstream_plugin_runtime::HostError) -> Self {
+        use mindstream_plugin_runtime::HostError;
+        match error {
+            HostError::Io(io) => AppError::Io(io),
+            HostError::Unavailable(message) => AppError::NotFound(message),
+            other => AppError::InvalidArg(other.to_string()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum CommandErrorCode {
@@ -177,6 +192,32 @@ mod tests {
             code: code.to_string(),
             detail: "The storage of ada is full.".to_string(),
         }
+    }
+
+    #[test]
+    fn plugin_host_errors_keep_their_command_codes() {
+        use mindstream_plugin_runtime::HostError;
+        let code = |e: HostError| CommandError::from(AppError::from(e)).code;
+        assert_eq!(
+            code(HostError::Io(std::io::Error::other("disk"))),
+            CommandErrorCode::Io
+        );
+        assert_eq!(
+            code(HostError::Unavailable("no tool".into())),
+            CommandErrorCode::NotFound
+        );
+        assert_eq!(
+            code(HostError::Invalid("bad".into())),
+            CommandErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            code(HostError::Denied("notes.read")),
+            CommandErrorCode::InvalidArgument
+        );
+        assert_eq!(code(HostError::Budget), CommandErrorCode::InvalidArgument);
+        assert!(AppError::from(HostError::Invalid("bad path".into()))
+            .to_string()
+            .ends_with("bad path"));
     }
 
     #[test]

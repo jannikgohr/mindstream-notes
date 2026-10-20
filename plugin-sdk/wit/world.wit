@@ -1,0 +1,21 @@
+package mindstream:plugin@0.1.0;
+
+/// What a Mindstream plugin component is.
+///
+/// It may import any of the interfaces below and nothing else. No WASI: there
+/// is no filesystem, network, environment, stdio or clock except what these
+/// interfaces give. A component that imports anything else is refused before
+/// it runs.
+world plugin {
+    import runtime;
+    import clock;
+    import markdown;
+    import notes;
+    import storage;
+    import native-tools;
+
+    /// Run the export named by the manifest (`action.export`, `render.export`,
+    /// ...) with `input`, a JSON object: the call context the host built.
+    /// Returns a JSON value. An `err` is shown to the user as the failure.
+    export invoke: func(%export: string, input: string) -> result<string, string>;
+}

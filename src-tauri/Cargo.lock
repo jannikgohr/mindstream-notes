@@ -3075,6 +3075,7 @@ dependencies = [
  "keyring-core",
  "log",
  "md-5",
+ "mindstream-plugin-runtime",
  "mlua",
  "ndk-context",
  "qrcode",
@@ -3117,6 +3118,20 @@ dependencies = [
  "yrs",
  "zeroize",
  "zip 8.6.0",
+]
+
+[[package]]
+name = "mindstream-plugin-runtime"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "getrandom 0.4.2",
+ "log",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]

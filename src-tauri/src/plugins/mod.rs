@@ -19,13 +19,11 @@
 //! change (a shipped update) is accepted automatically.
 
 use std::collections::HashMap;
-use std::ffi::OsString;
 use std::fs;
-use std::io::{Read, Write};
-use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::path::{Path, PathBuf};
 
 use chrono::Utc;
+use mindstream_plugin_runtime as runtime;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -293,6 +291,7 @@ pub fn upsert(conn: &Connection, input: UpsertPlugin) -> AppResult<PluginRecord>
                 } else {
                     "manifest hash changed since it was approved; re-approval required".to_string()
                 };
+                cancel_running(&input.id);
                 conn.execute(
                     "UPDATE plugins SET
                         version = ?2, source = ?3, source_path = ?4,
@@ -396,7 +395,23 @@ pub fn reconcile(
     Ok(views)
 }
 
+/// Stop every running call of a plugin.
+///
+/// Called wherever a plugin stops being runnable: disabled, gated after a
+/// change, removed, or disabled after a crash. A call that started under the
+/// old state would otherwise finish under it, possibly many seconds later if
+/// it is waiting on a native tool, which the cancellation also kills.
+fn cancel_running(id: &str) {
+    let stopped = runtime::cancel::CALLS.cancel_plugin(id);
+    if stopped > 0 {
+        log::info!("[plugins] cancelled {stopped} running call(s) of {id}");
+    }
+}
+
 fn set_enabled(conn: &Connection, id: &str, enabled: bool) -> AppResult<PluginRecord> {
+    if !enabled {
+        cancel_running(id);
+    }
     let now = Utc::now().to_rfc3339();
     let changed = conn.execute(
         "UPDATE plugins SET enabled = ?2, updated_at = ?3 WHERE id = ?1",
@@ -459,6 +474,7 @@ pub fn set_load_error(conn: &Connection, id: &str, error: Option<&str>) -> AppRe
 /// app down *or* keep re-triggering the fault, so it stays disabled until the
 /// user re-enables it — surfaced in the plugins UI via `last_load_error`.
 pub fn disable_crashed(conn: &Connection, id: &str, reason: &str) -> AppResult<()> {
+    cancel_running(id);
     let now = Utc::now().to_rfc3339();
     conn.execute(
         "UPDATE plugins SET enabled = 0, last_load_error = ?2, updated_at = ?3 WHERE id = ?1",
@@ -515,9 +531,6 @@ fn read_plugin_file(dir: &Path, file: &str) -> AppResult<Option<String>> {
 const PERM_PLUGIN_ARTIFACTS_DOWNLOAD: &str = "pluginArtifacts.download";
 const PERM_NATIVE_TOOLS_RUN_DECLARED: &str = "nativeTools.runDeclared";
 const MAX_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
-const MAX_NATIVE_TOOL_ARGS: usize = 64;
-const MAX_NATIVE_TOOL_ARG_BYTES: usize = 4096;
-const MAX_NATIVE_TOOL_STDIN_BYTES: usize = 8 * 1024 * 1024;
 
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
@@ -604,16 +617,7 @@ fn load_runnable(
 }
 
 fn safe_segment(value: &str, label: &str) -> AppResult<()> {
-    if value.is_empty()
-        || value == "."
-        || value == ".."
-        || !value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
-    {
-        return Err(AppError::InvalidArg(format!("unsafe {label} '{value}'")));
-    }
-    Ok(())
+    Ok(runtime::paths::safe_segment(value, label)?)
 }
 
 /// A declared native tool, or a "not declared" error. The lookup is on the
@@ -628,113 +632,16 @@ fn require_native_tool<'a>(
         .ok_or_else(|| AppError::NotFound(format!("plugin native tool {tool_id}")))
 }
 
-fn validate_binary_name(binary_name: &str) -> AppResult<()> {
-    if binary_name.is_empty()
-        || binary_name.contains('/')
-        || binary_name.contains('\\')
-        || binary_name.contains("..")
-        || Path::new(binary_name)
-            .extension()
-            .is_some_and(|ext| !ext.to_string_lossy().eq_ignore_ascii_case("exe"))
-        || !binary_name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'+' | b'-'))
-    {
-        return Err(AppError::InvalidArg(format!(
-            "unsafe native tool binary name '{binary_name}'"
-        )));
-    }
-    Ok(())
-}
-
 /// Refuse a write whose target is a symlink, and containment-check the parent
-/// when the file does not exist yet. Checking only the parent is not enough: a
-/// symlink at the target path would be followed by `fs::write`.
+/// when the file does not exist yet.
 fn ensure_write_target_safe(root: &Path, target: &Path) -> AppResult<()> {
-    match fs::symlink_metadata(target) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() {
-                return Err(AppError::InvalidArg(
-                    "plugin storage path targets a symlink".into(),
-                ));
-            }
-            ensure_inside_data_root(root, target)
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            let parent = target
-                .parent()
-                .ok_or_else(|| AppError::InvalidArg("plugin storage path has no parent".into()))?;
-            ensure_inside_data_root(root, parent)
-        }
-        Err(err) => Err(err.into()),
-    }
+    Ok(runtime::paths::ensure_write_target_safe(root, target)?)
 }
 
-fn path_extensions(binary_name: &str) -> Vec<OsString> {
-    #[cfg(windows)]
-    {
-        if Path::new(binary_name).extension().is_some() {
-            return vec![OsString::new()];
-        }
-        let pathext = std::env::var_os("PATHEXT").unwrap_or_else(|| ".EXE".into());
-        let mut out = std::env::split_paths(&pathext)
-            .flat_map(|p| p.into_os_string().into_string().ok())
-            .flat_map(|s| s.split(';').map(str::to_string).collect::<Vec<_>>())
-            .filter(|s| s.eq_ignore_ascii_case(".exe"))
-            .map(OsString::from)
-            .collect::<Vec<_>>();
-        if out.is_empty() {
-            out.push(".exe".into());
-        }
-        out
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = binary_name;
-        vec![OsString::new()]
-    }
-}
-
-/// Windows `CREATE_NO_WINDOW`. A console-subsystem child (`tinymist`, `typst`,
-/// …) gets a console allocated purely because of its subsystem — redirecting
-/// stdio does *not* suppress it — so a GUI parent with no console of its own
-/// pops a terminal window beside the app. For a one-shot tool that flashes; for
-/// a long-lived preview server it sits there for the life of the note.
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-/// Keep a spawned child's console window hidden. No-op off Windows, where
-/// nothing is allocated in the first place.
-pub(super) fn hide_console_window(command: &mut Command) -> &mut Command {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    command
-}
-
+/// The first file on PATH with this exact basename, or none. Never a path or
+/// a shell string: see `runtime::process`.
 fn resolve_path_binary(binary_name: &str) -> AppResult<Option<PathBuf>> {
-    validate_binary_name(binary_name)?;
-    let Some(path_var) = std::env::var_os("PATH") else {
-        return Ok(None);
-    };
-    for dir in std::env::split_paths(&path_var) {
-        for ext in path_extensions(binary_name) {
-            let mut candidate = dir.join(binary_name);
-            if !ext.is_empty() {
-                candidate.set_extension(
-                    ext.to_string_lossy()
-                        .trim_start_matches('.')
-                        .to_ascii_lowercase(),
-                );
-            }
-            if candidate.is_file() {
-                return Ok(Some(candidate));
-            }
-        }
-    }
-    Ok(None)
+    Ok(runtime::process::resolve_path_binary(binary_name)?)
 }
 
 fn native_tool_status(
@@ -752,14 +659,9 @@ fn native_tool_status(
     })
 }
 
-/// Resolve every native tool a manifest declares to its PATH binary (`None` when
-/// not found), for exposure via the Luau `ms.nativeTools` host API. On mobile
-/// native tools are unavailable, so every declared tool maps to `None` — the
-/// script sees the tool but `available` is always false, matching the
-/// desktop-only guard on the direct `plugins_run_native_tool` command.
-/// The plugin's declared tools resolved to their PATH binary. `None` means
-/// declared but not found — which is also what mobile always reports, since
-/// native tools are desktop-only.
+/// The plugin's declared tools resolved to their PATH binary, for a script's
+/// native tool calls. `None` means declared but not found, which is also what
+/// mobile always reports, since native tools are desktop-only.
 fn resolve_native_tools(manifest: &manifest::Manifest) -> HashMap<String, Option<PathBuf>> {
     let tools = &manifest.contributes.native_tools;
     tools
@@ -773,133 +675,6 @@ fn resolve_native_tools(manifest: &manifest::Manifest) -> HashMap<String, Option
             (tool.id.clone(), resolved)
         })
         .collect()
-}
-
-fn validate_native_tool_args(args: &[String], stdin: &Option<String>) -> AppResult<()> {
-    if args.len() > MAX_NATIVE_TOOL_ARGS {
-        return Err(AppError::InvalidArg(format!(
-            "native tool received too many arguments ({})",
-            args.len()
-        )));
-    }
-    for arg in args {
-        if arg.len() > MAX_NATIVE_TOOL_ARG_BYTES || arg.contains('\0') {
-            return Err(AppError::InvalidArg(
-                "native tool argument is too large or contains NUL".into(),
-            ));
-        }
-    }
-    if let Some(stdin) = stdin {
-        if stdin.len() > MAX_NATIVE_TOOL_STDIN_BYTES || stdin.contains('\0') {
-            return Err(AppError::InvalidArg(
-                "native tool stdin is too large or contains NUL".into(),
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// Raw process result with **unlossy** stdout/stderr bytes. Kept binary so a
-/// tool that emits a PDF/PNG (not UTF-8 text) survives; text callers convert
-/// via `String::from_utf8_lossy`, the Luau binary path base64-encodes.
-pub(super) struct RawToolOutput {
-    pub status_code: Option<i32>,
-    pub stdout: Vec<u8>,
-    pub stderr: Vec<u8>,
-    pub timed_out: bool,
-}
-
-fn run_native_tool_process(
-    binary: PathBuf,
-    cwd: PathBuf,
-    args: Vec<String>,
-    stdin: Option<String>,
-    timeout_ms: Option<u64>,
-) -> AppResult<RawToolOutput> {
-    validate_native_tool_args(&args, &stdin)?;
-    fs::create_dir_all(&cwd)?;
-    let timeout = std::time::Duration::from_millis(timeout_ms.unwrap_or(10_000).clamp(100, 30_000));
-    let mut command = Command::new(binary);
-    command
-        .args(args)
-        .current_dir(cwd)
-        .stdin(if stdin.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = hide_console_window(&mut command).spawn()?;
-
-    // Feed stdin and drain stdout/stderr on their own threads so all three
-    // pipes make progress concurrently. If we instead wrote the whole of stdin
-    // up front, or deferred reading stdout until after the child exited, a child
-    // that emits more than the OS pipe buffer (~64 KiB, far less on Windows)
-    // would block in `write()` and never exit — deadlocking until we killed it
-    // at the timeout, with its output lost. Native tools routinely stream large
-    // binary stdout (e.g. `typst compile - -` → a multi-page PDF), so this is
-    // the common path, not an edge case.
-    let stdin_writer = child.stdin.take().map(|mut pipe| {
-        std::thread::spawn(move || {
-            if let Some(input) = stdin {
-                // A broken pipe (the child exited or never read stdin) isn't
-                // actionable here; the exit status tells the real story.
-                let _ = pipe.write_all(input.as_bytes());
-            }
-            // Dropping `pipe` closes the child's stdin so a tool reading to EOF
-            // can finish.
-        })
-    });
-    let stdout_reader = child.stdout.take().map(|mut pipe| {
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = pipe.read_to_end(&mut buf);
-            buf
-        })
-    });
-    let stderr_reader = child.stderr.take().map(|mut pipe| {
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = pipe.read_to_end(&mut buf);
-            buf
-        })
-    });
-
-    let start = std::time::Instant::now();
-    let mut timed_out = false;
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if start.elapsed() >= timeout {
-            let _ = child.kill();
-            timed_out = true;
-            // Reap the killed child; the reader threads unblock as its pipe
-            // write-ends close.
-            break child.wait()?;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    };
-
-    // Join the drainers now that the child has closed its pipes (on exit or
-    // kill) so we return the full output that was produced.
-    let stdout = stdout_reader
-        .and_then(|handle| handle.join().ok())
-        .unwrap_or_default();
-    let stderr = stderr_reader
-        .and_then(|handle| handle.join().ok())
-        .unwrap_or_default();
-    if let Some(handle) = stdin_writer {
-        let _ = handle.join();
-    }
-
-    Ok(RawToolOutput {
-        status_code: status.code(),
-        stdout,
-        stderr,
-        timed_out,
-    })
 }
 
 /// A declared artifact, or a "not declared" error.
@@ -1065,107 +840,40 @@ fn plugin_data_root(app: &AppHandle, plugin_id: &str) -> AppResult<PathBuf> {
         .join(plugin_id))
 }
 
-fn split_plugin_rel_path(path: &str, allow_empty: bool) -> AppResult<Vec<String>> {
-    if path.starts_with('/') || path.starts_with('\\') || path.contains('\\') {
-        return Err(AppError::InvalidArg(format!(
-            "unsafe plugin storage path '{path}'"
-        )));
-    }
-    let trimmed = path.trim_matches('/');
-    if trimmed.is_empty() {
-        if allow_empty {
-            return Ok(Vec::new());
-        }
-        return Err(AppError::InvalidArg("plugin storage path is empty".into()));
-    }
-    let rel = Path::new(trimmed);
-    let mut out = Vec::new();
-    for component in rel.components() {
-        match component {
-            Component::Normal(part) => {
-                let part = part.to_string_lossy();
-                safe_segment(&part, "plugin storage path segment")?;
-                out.push(part.into_owned());
-            }
-            _ => {
-                return Err(AppError::InvalidArg(format!(
-                    "unsafe plugin storage path '{path}'"
-                )));
-            }
-        }
-    }
-    Ok(out)
-}
-
 fn ensure_inside_data_root(root: &Path, target: &Path) -> AppResult<()> {
-    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let target = target
-        .canonicalize()
-        .map_err(|e| AppError::InvalidArg(format!("plugin storage path: {e}")))?;
-    if !target.starts_with(root) {
-        return Err(AppError::InvalidArg(
-            "plugin storage path escapes plugin data directory".into(),
-        ));
-    }
-    Ok(())
+    Ok(runtime::paths::ensure_inside_root(root, target)?)
 }
 
 // ---------- Scripted execution ----------
 
-/// A manifest-declared byte limit, clamped into the host's range. A manifest
-/// may ask; only the host decides.
-fn limit_usize(declared: Option<u64>, default: usize, min: usize, max: usize) -> usize {
-    declared
-        .and_then(|n| usize::try_from(n).ok())
-        .unwrap_or(default)
-        .clamp(min, max)
+/// The limits one call of this plugin runs under: what its manifest asked for,
+/// clamped into the range of its runtime. A manifest may ask; only the host
+/// decides.
+fn script_limits(manifest: &manifest::Manifest) -> runtime::limits::Limits {
+    runtime::limits::LUAU.resolve(manifest.limits.memory_bytes, manifest.limits.timeout_ms)
 }
 
-/// A manifest-declared timeout, clamped into the host's range.
-fn limit_duration(
-    declared: Option<u64>,
-    default: std::time::Duration,
-    min: std::time::Duration,
-    max: std::time::Duration,
-) -> std::time::Duration {
-    declared
-        .map(std::time::Duration::from_millis)
-        .unwrap_or(default)
-        .clamp(min, max)
+/// One call of a scripted plugin: what runs, and what it may reach.
+pub struct ScriptCall {
+    /// The permission set that decides the host API surface. It comes from
+    /// the database record, not from the manifest, so a plugin runs under
+    /// what the user approved.
+    pub granted: Vec<String>,
+    pub export: String,
+    pub input: serde_json::Value,
+    pub notes: Vec<runtime::host::NoteMeta>,
+    pub data_root: Option<PathBuf>,
+    pub cancel: runtime::cancel::CancelToken,
 }
 
-fn luau_limits(manifest: &manifest::Manifest) -> luau::Limits {
-    let defaults = luau::Limits::default();
-    luau::Limits {
-        memory_bytes: limit_usize(
-            manifest.limits.memory_bytes,
-            defaults.memory_bytes,
-            1024 * 1024,
-            64 * 1024 * 1024,
-        ),
-        timeout: limit_duration(
-            manifest.limits.timeout_ms,
-            defaults.timeout,
-            std::time::Duration::from_millis(50),
-            std::time::Duration::from_secs(5),
-        ),
-    }
-}
-
-/// Load a scripted plugin's entry and run its `export` function with `input`,
-/// under the runtime's sandbox and resource limits. `granted` is the permission
-/// set that decides the host API surface — it comes from the database record,
-/// not from the manifest, so a plugin runs under what the user approved.
+/// Load a scripted plugin's entry and run one export under the runtime's
+/// sandbox and resource limits.
 ///
 /// Factored out of the command so it is unit-testable without a Tauri handle.
 pub fn run_plugin_script(
     files: &discovery::PluginFiles,
     manifest: &manifest::Manifest,
-    granted: Vec<String>,
-    export: &str,
-    input: serde_json::Value,
-    notes: Vec<luau::NoteMeta>,
-    data_root: Option<PathBuf>,
+    call: ScriptCall,
 ) -> AppResult<serde_json::Value> {
     if !manifest.runtime.is_scripted() {
         return Err(AppError::InvalidArg(
@@ -1176,30 +884,36 @@ pub fn run_plugin_script(
     let entry = manifest
         .entry
         .as_deref()
-        .ok_or_else(|| AppError::InvalidArg("luau plugin has no entry".into()))?;
+        .ok_or_else(|| AppError::InvalidArg("scripted plugin has no entry".into()))?;
+    // Resolve the plugin's declared PATH binaries only when the tool permission
+    // was granted; the map decides which tools a script can see.
+    let native_tools = if call
+        .granted
+        .iter()
+        .any(|p| p == PERM_NATIVE_TOOLS_RUN_DECLARED)
+    {
+        resolve_native_tools(manifest)
+    } else {
+        HashMap::new()
+    };
     let source = files
         .read_text(entry)?
         .ok_or_else(|| AppError::InvalidArg(format!("entry '{entry}' not found")))?;
     // The plugin's other `.luau` files, resolvable via a plugin-scoped `require`.
     let modules = files.luau_modules()?;
-    // Resolve the plugin's declared PATH binaries only when the tool permission
-    // was granted; the map decides `ms.nativeTools` availability.
-    let native_tools = if granted.iter().any(|p| p == PERM_NATIVE_TOOLS_RUN_DECLARED) {
-        resolve_native_tools(manifest)
-    } else {
-        HashMap::new()
-    };
     luau::run(luau::ScriptRequest {
+        plugin_id: manifest.id.clone(),
         source,
         chunk_name: format!("{}/{entry}", manifest.id),
-        export: export.to_string(),
-        input,
-        permissions: granted,
-        notes,
+        export: call.export,
+        input: call.input,
+        permissions: call.granted,
+        notes: call.notes,
         native_tools,
-        data_root,
+        data_root: call.data_root,
         modules,
-        limits: luau_limits(manifest),
+        limits: script_limits(manifest),
+        cancel: call.cancel,
     })
 }
 
@@ -1264,7 +978,7 @@ fn merge_script_input(
 
 /// Build the read-only note snapshot exposed via `ms.notes`. One `notes::list`
 /// plus a folder-path index over `collections::list`; excludes trashed notes.
-fn note_snapshot(conn: &Connection) -> AppResult<Vec<luau::NoteMeta>> {
+fn note_snapshot(conn: &Connection) -> AppResult<Vec<runtime::host::NoteMeta>> {
     let folders = crate::collections::list(conn)?;
     let by_id: std::collections::HashMap<String, (String, Option<String>)> = folders
         .into_iter()
@@ -1290,7 +1004,7 @@ fn note_snapshot(conn: &Connection) -> AppResult<Vec<luau::NoteMeta>> {
     };
     Ok(crate::notes::list(conn, false)?
         .into_iter()
-        .map(|s| luau::NoteMeta {
+        .map(|s| runtime::host::NoteMeta {
             id: s.id,
             title: s.title,
             tags: s.tags,
@@ -1624,10 +1338,10 @@ pub async fn plugins_run_native_tool(
     let cwd = plugin_data_root(&app, &id)?;
     let blocking_job = _job.clone();
     let lease = plugin.lease;
-    let raw = tauri::async_runtime::spawn_blocking(move || {
+    let raw = tauri::async_runtime::spawn_blocking(move || -> AppResult<_> {
         let _job = blocking_job;
         let _lease = lease;
-        run_native_tool_process(binary, cwd, args, stdin, timeout_ms)
+        Ok(runtime::process::run(binary, cwd, args, stdin, timeout_ms, None)?)
     })
     .await
     .map_err(|e| AppError::InvalidArg(format!("native tool task failed: {e}")))??;
@@ -1736,10 +1450,25 @@ pub async fn plugins_run_script(
     // itself panicked — a crash — so we disable the plugin before returning.
     let export_label = export.clone();
     let blocking_job = job.clone();
+    let plugin_id = id.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         let _job = blocking_job;
         let _lease = lease;
-        run_plugin_script(&files, &manifest, granted, &export, input, notes, data_root)
+        // Registered for as long as it runs, so disabling or removing the
+        // plugin can stop it (see `cancel_running`).
+        let registration = runtime::cancel::CALLS.register(&plugin_id);
+        run_plugin_script(
+            &files,
+            &manifest,
+            ScriptCall {
+                granted,
+                export,
+                input,
+                notes,
+                data_root,
+                cancel: registration.token().clone(),
+            },
+        )
     })
     .await;
     match outcome {

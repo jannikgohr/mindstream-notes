@@ -4,13 +4,20 @@ version = "0.1.15"
 description = "Local-first modern markdown-based E2EE collaborative note-taking app"
 authors = ["Jannik Gohr"]
 edition = "2021"
-rust-version = "1.95"
+rust-version = "1.96"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jannikgohr/mindstream-notes"
 
 [lib]
 name = "mindstream_notes_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+# The plugin runtime is its own crate so it builds without Tauri (see its
+# Cargo.toml). Listing it in default-members keeps `cargo test` here, which CI
+# and the pre-push hook run, covering both.
+[workspace]
+members = [".", "plugin-runtime"]
+default-members = [".", "plugin-runtime"]
 
 [features]
 dev-environment = []
@@ -94,6 +101,9 @@ ed25519-dalek = "3.0.0"
 # (no ffi, no io, no os.execute), and it exposes an interrupt hook + memory cap
 # we use to bound CPU time and memory. Runs in the backend, never the WebView.
 mlua = { version = "0.10", features = ["luau", "vendored", "serialize"] }
+# What both plugin runtimes share: permission-checked host services, limits,
+# cancellation, and the Wasm component runner.
+mindstream-plugin-runtime = { path = "plugin-runtime" }
 include_dir = "0.7.4"
 spellbook = "0.4"
 encoding_rs = "0.8"
