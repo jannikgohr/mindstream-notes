@@ -332,7 +332,7 @@ pub struct Manifest {
     #[serde(default = "default_true")]
     pub enabled_by_default: bool,
     pub runtime: PluginRuntime,
-    /// Required for a scripted runtime: a plain `.luau` filename, no separators
+    /// Required for a scripted runtime: a plain `.wasm` or legacy `.luau` filename, no separators
     /// and no `..`. The backend joins it onto the plugin dir, so this is the
     /// traversal guard.
     pub entry: Option<String>,

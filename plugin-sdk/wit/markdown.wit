@@ -5,7 +5,8 @@ interface markdown {
     use types.{error};
 
     /// Build a `---` delimited YAML frontmatter block from a JSON object.
-    /// Strings are double-quoted and escaped. Arrays become one `- item` line
-    /// each. Deeper nesting is written as JSON.
+    /// Keys are written in sorted order. Strings are double-quoted and
+    /// escaped. Arrays become one `- item` line each. Deeper nesting is
+    /// written as JSON.
     frontmatter: func(fields-json: string) -> result<string, error>;
 }

@@ -1,0 +1,46 @@
+{
+  "name": "@mindstream/plugin-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Build Mindstream Notes plugins in TypeScript, as WebAssembly components",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./testing": {
+      "types": "./lib/testing.d.ts",
+      "default": "./lib/testing.js"
+    },
+    "./build": "./lib/build.js",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "mindstream-plugin": "./bin/mindstream-plugin.js"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "src",
+    "templates",
+    "wit",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "prepack": "node scripts/copy-wit.js",
+    "postpack": "node scripts/copy-wit.js --clean",
+    "typecheck": "tsc -p tsconfig.json",
+    "generate:types": "node scripts/generate-types.mjs"
+  },
+  "dependencies": {
+    "@bytecodealliance/jco-transpile": "^0.20.0",
+    "componentize-qjs": "^0.4.5",
+    "esbuild": "^0.25.12"
+  }
+}

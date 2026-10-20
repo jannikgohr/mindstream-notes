@@ -155,6 +155,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm check
+      - run: pnpm --filter @mindstream/plugin-sdk typecheck
+      - run: npm run test:plugin-author
       - run: pnpm test
       - run: pnpm build
         env:
@@ -231,11 +233,42 @@ jobs:
       - name: cargo clippy
         if: runner.os == 'Linux'
         working-directory: src-tauri
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: cargo test
         working-directory: src-tauri
-        run: cargo test --locked
+        run: cargo test --locked --workspace
+
+  plugin-runtime:
+    name: Portable plugin runtime (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: plugin-runtime
+      # No Tauri, WebView or Node dependencies. The probe runs the exact
+      # committed components; the Rust job also tests the whole workspace.
+      - name: Measure native component execution
+        shell: bash
+        run: cargo run --manifest-path src-tauri/Cargo.toml --locked --release -p mindstream-plugin-runtime --example plugin-bench > plugin-native.json
+      - name: Measure interpreter execution
+        shell: bash
+        run: cargo run --manifest-path src-tauri/Cargo.toml --locked --release -p mindstream-plugin-runtime --example plugin-bench -- --interpreter > plugin-interpreter.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-runtime-${{ matrix.os }}
+          path: plugin-*.json
+          retention-days: 14
 
   # The sync server: its own crate, lockfile and tests. The tests start the
   # server in-process and drive it with the client library the app ships, so
@@ -648,7 +681,18 @@ jobs:
     timeout-minutes: 5
     if: always() && (github.event.action != 'labeled' || github.event.label.name == 'ci:app-e2e')
     needs:
-      [changes, js, rust, server, coverage, e2e, format, app-e2e-build, app-e2e]
+      [
+        changes,
+        js,
+        rust,
+        plugin-runtime,
+        server,
+        coverage,
+        e2e,
+        format,
+        app-e2e-build,
+        app-e2e
+      ]
     steps:
       # Plain expressions, no jq or node: this job is the one that must never
       # be the thing that broke. `needs.*.result` is an array of every needed

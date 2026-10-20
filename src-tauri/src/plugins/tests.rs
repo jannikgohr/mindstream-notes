@@ -508,9 +508,8 @@ fn run_plugin_script_executes_luau_entry_with_input() {
 }
 
 #[test]
-fn templates_plugin_renders_macros_in_lua() {
-    // The embedded Templates plugin renders `{{…}}` itself (in Luau, via its
-    // required lib/template module) — proof the macro engine is plugin-owned.
+fn templates_plugin_renders_macros_in_wasm() {
+    // The embedded Templates component owns the macro engine.
     let plugin = super::discovery::discover_builtins()
         .into_iter()
         .find(|p| p.id == "com.mindstream.templates.core")
@@ -548,7 +547,7 @@ fn templates_plugin_renders_macros_in_lua() {
 
 #[test]
 fn templates_plugin_localizes_dates_via_locale() {
-    // The `locale` on the render input threads through to ms.date, so a German
+    // The `locale` on the render input threads through to the host clock, so a German
     // template gets German month names.
     let plugin = super::discovery::discover_builtins()
         .into_iter()
@@ -570,6 +569,100 @@ fn templates_plugin_localizes_dates_via_locale() {
     )
     .unwrap();
     assert_eq!(out["title"], serde_json::json!("Juli"));
+}
+
+#[test]
+fn bundled_template_wasm_matches_retained_luau_for_existing_templates() {
+    let plugin = discovery::discover_builtins()
+        .into_iter()
+        .find(|p| p.id == "com.mindstream.templates.core")
+        .unwrap();
+    let mut legacy = plugin.manifest.clone();
+    legacy.runtime = manifest::PluginRuntime::Luau;
+    legacy.manifest_version = 1;
+    legacy.entry = Some("main.luau".into());
+    for input in [
+        serde_json::json!({"now": "2026-07-25T10:00:00Z", "title": "Log {{date:YYYY}}", "body": "{{title|upper}} {{date-1M+2d:YYYY-MM-DD}} {{date+7d:dddd}}", "locale": "de"}),
+        serde_json::json!({"now": "2026-01-31T12:00:00Z", "body": "{{date+1M:YYYY-MM-DD}} {{date-1y+2w:YYYY-MM-DD}} {{word|trim|capitalize}}/{{word|slug}}/{{flag}}/{{number}}/{{missing}}/{{word|unknown}}", "vars": {"word": "  hÄllo WORLD  ", "flag": false, "number": 42}}),
+        serde_json::json!({"now": "2026-07-25T10:00:00Z", "title": "{{unknown}}", "body": "{{date:}} {{multi\nline}} {{literal", "vars": {"multi\nline": "yes"}}),
+    ] {
+        let invoke = |manifest| {
+            run_plugin_script(
+                &plugin.files,
+                manifest,
+                call(
+                    &["notes.read", "notes.create"],
+                    "renderTemplate",
+                    input.clone(),
+                ),
+            )
+            .unwrap()
+        };
+        assert_eq!(invoke(&plugin.manifest), invoke(&legacy), "{input}");
+    }
+    let input = serde_json::json!({
+        "settings": {"source-folder": "root", "source-tag": "template"},
+        "folders": [{"id": "root", "parentId": null}, {"id": "child", "parentId": "root"}, {"id": "cycle", "parentId": "cycle"}]
+    });
+    let invoke = |manifest| {
+        let mut request = call(
+            &["notes.read", "notes.create"],
+            "newFromTemplate",
+            input.clone(),
+        );
+        request.notes = [
+            ("z", "Zulu", "child", "kanban", false),
+            (
+                "a",
+                "Alpha",
+                "other",
+                "plugin.com.mindstream.typst.document",
+                true,
+            ),
+            ("x", "Other", "cycle", "markdown", false),
+        ]
+        .into_iter()
+        .map(
+            |(id, title, folder, kind, tagged)| runtime::host::NoteMeta {
+                id: id.into(),
+                title: title.into(),
+                folder_id: Some(folder.into()),
+                kind: kind.into(),
+                tags: if tagged {
+                    vec!["template".into()]
+                } else {
+                    vec![]
+                },
+                folder_path: String::new(),
+                created: String::new(),
+                modified: String::new(),
+            },
+        )
+        .collect();
+        run_plugin_script(&plugin.files, manifest, request).unwrap()
+    };
+    assert_eq!(invoke(&plugin.manifest), invoke(&legacy));
+}
+
+#[test]
+fn bundled_typst_without_native_permission_keeps_source_editing() {
+    let plugin = discovery::discover_builtins()
+        .into_iter()
+        .find(|p| p.id == "com.mindstream.typst")
+        .unwrap();
+    assert_eq!(plugin.manifest.runtime, manifest::PluginRuntime::Wasm);
+    for export in ["renderDocument", "exportDocument"] {
+        let out = run_plugin_script(
+            &plugin.files,
+            &plugin.manifest,
+            call(&[], export, serde_json::json!({"body": "= Hello"})),
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            serde_json::json!({"sourceOnly": true, "diagnostics": []})
+        );
+    }
 }
 
 /// The conformance component the runtime crate's tests use.

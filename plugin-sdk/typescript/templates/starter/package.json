@@ -1,0 +1,16 @@
+{
+  "name": "{{packageName}}",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "mindstream-plugin build && mindstream-plugin package",
+    "check": "mindstream-plugin check",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test"
+  },
+  "devDependencies": {
+    "@mindstream/plugin-sdk": "{{sdkSpec}}",
+    "typescript": "^5.7.2"
+  }
+}

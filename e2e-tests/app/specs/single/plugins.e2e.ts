@@ -54,6 +54,34 @@ describe('T3 plugin framework', function () {
     await revealFileTreeCreateAction('New from template');
   });
 
+  it('runs the bundled TypeScript component through Tauri IPC', async () => {
+    const result = await browser.execute(async () => {
+      const invoke = (
+        window as unknown as {
+          __TAURI_INTERNALS__: {
+            invoke(
+              command: string,
+              args: Record<string, unknown>
+            ): Promise<unknown>;
+          };
+        }
+      ).__TAURI_INTERNALS__.invoke;
+      return invoke('plugins_run_script', {
+        id: 'com.mindstream.templates.core',
+        export: 'renderTemplate',
+        input: {
+          title: 'Hello {{who|capitalize}}',
+          body: '# {{title|upper}}\n{{value|trim|slug}}',
+          vars: { who: 'template', value: '  Some Value  ' }
+        }
+      });
+    });
+    expect(result).toEqual({
+      title: 'Hello Template',
+      body: '# HELLO TEMPLATE\nsome-value'
+    });
+  });
+
   it('lists the plugin in the settings overview', async () => {
     await openPluginsCategory();
     await expect(byName('Enable in this vault')).toBeDisplayed();

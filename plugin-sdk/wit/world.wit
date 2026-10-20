@@ -19,3 +19,8 @@ world plugin {
     /// Returns a JSON value. An `err` is shown to the user as the failure.
     export invoke: func(%export: string, input: string) -> result<string, string>;
 }
+
+// Future host-owned capabilities reserve the mindstream:ai and mindstream:ocr
+// namespaces. They are not part of this world or implemented SDK functions.
+// Future contracts should use opaque model/attachment IDs, explicit grants
+// and cancellable job resources rather than loading models in guest memory.

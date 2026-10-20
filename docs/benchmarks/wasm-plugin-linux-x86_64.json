@@ -1,0 +1,568 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-10-20",
+  "machine": {
+    "os": "Linux",
+    "arch": "x86_64",
+    "kernel": "7.0.0-38-generic",
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "cpu": "AMD Ryzen 7 5700G with Radeon Graphics"
+  },
+  "conditions": "Development host with concurrent build activity. These are recorded samples, not a completed release gate. Stress measurements request 5000 ms; the app default remains 1000 ms.",
+  "reports": {
+    "native": {
+      "arch": "x86_64",
+      "cases": {
+        "rustEcho": {
+          "cachedPrepareMs": {
+            "max": 2.079634,
+            "p50": 0.27913299999999996,
+            "p95": 0.321475
+          },
+          "cachedTotalMs": {
+            "max": 2.144158,
+            "p50": 0.31440999999999997,
+            "p95": 0.38302200000000003
+          },
+          "callMs": {
+            "max": 0.056668,
+            "p50": 0.018726,
+            "p95": 0.030298
+          },
+          "coldCallMs": 0.030999,
+          "coldInstantiateMs": 0.077959,
+          "coldPrepareMs": 113.24434,
+          "coldSource": "Compiled",
+          "componentBytes": 122150,
+          "componentSha256": "5c6b4e5eb5dfdcc8b966a9b52b1741af944dceff05b574c53b4f98a041b7a614",
+          "diskPrepareMs": 0.480047,
+          "guestLinearMemoryBytes": 1179648,
+          "instantiateMs": {
+            "max": 0.210784,
+            "p50": 0.015711,
+            "p95": 0.035627000000000006
+          },
+          "measurementTimeoutMs": 5000,
+          "outputJsonSha256": "115b9359d1eb3293954dddddff2955b606a2455493a3c2762eef7bc19699f5e8",
+          "outputJsonBytes": 20
+        },
+        "templatesMenu500": {
+          "cachedPrepareMs": {
+            "max": 11.808425000000002,
+            "p50": 2.773841,
+            "p95": 4.773973
+          },
+          "cachedTotalMs": {
+            "max": 54.384133,
+            "p50": 29.897441,
+            "p95": 42.943521999999994
+          },
+          "callMs": {
+            "max": 44.963703,
+            "p50": 26.504588,
+            "p95": 37.726553
+          },
+          "coldCallMs": 26.928007,
+          "coldInstantiateMs": 0.472824,
+          "coldPrepareMs": 626.488047,
+          "coldSource": "Compiled",
+          "componentBytes": 1186888,
+          "componentSha256": "cfdbdc69f6af81cc913025fd034afde8d6111a728a6d95bf33bdfa9d6775a39b",
+          "diskPrepareMs": 3.36426,
+          "guestLinearMemoryBytes": 1835008,
+          "instantiateMs": {
+            "max": 0.334028,
+            "p50": 0.177419,
+            "p95": 0.210161
+          },
+          "measurementTimeoutMs": 5000,
+          "outputJsonSha256": "7c1ae11429c738b839bce3be76e64b1d8e422954340fddcd90600448f91647e5",
+          "outputJsonBytes": 42421
+        },
+        "templatesRender": {
+          "cachedPrepareMs": {
+            "max": 5.690513999999999,
+            "p50": 2.718244,
+            "p95": 3.602794
+          },
+          "cachedTotalMs": {
+            "max": 6.885318,
+            "p50": 3.3253850000000003,
+            "p95": 4.587466999999999
+          },
+          "callMs": {
+            "max": 3.647921,
+            "p50": 0.433097,
+            "p95": 0.504565
+          },
+          "coldCallMs": 0.488774,
+          "coldInstantiateMs": 0.422969,
+          "coldPrepareMs": 608.03328,
+          "coldSource": "Compiled",
+          "componentBytes": 1186888,
+          "componentSha256": "cfdbdc69f6af81cc913025fd034afde8d6111a728a6d95bf33bdfa9d6775a39b",
+          "diskPrepareMs": 3.388977,
+          "guestLinearMemoryBytes": 1507328,
+          "instantiateMs": {
+            "max": 0.634563,
+            "p50": 0.16242,
+            "p95": 0.236962
+          },
+          "measurementTimeoutMs": 5000,
+          "outputJsonSha256": "f89bd784cb94e659f7ce446204f1be76b8c8d0b7b48df92656ff217597570e02",
+          "outputJsonBytes": 45
+        },
+        "typescriptEcho": {
+          "cachedPrepareMs": {
+            "max": 8.780729,
+            "p50": 2.8510079999999998,
+            "p95": 5.786828
+          },
+          "cachedTotalMs": {
+            "max": 9.228795,
+            "p50": 3.2351810000000003,
+            "p95": 6.308955
+          },
+          "callMs": {
+            "max": 1.7824659999999999,
+            "p50": 0.215613,
+            "p95": 0.540763
+          },
+          "coldCallMs": 0.208448,
+          "coldInstantiateMs": 0.43679500000000004,
+          "coldPrepareMs": 819.2478560000001,
+          "coldSource": "Compiled",
+          "componentBytes": 1215629,
+          "componentSha256": "e2310d42c24a32e96e899adef8b3dfa88829d7a138272e8d333a0da5e7d97ebc",
+          "diskPrepareMs": 3.457748,
+          "guestLinearMemoryBytes": 1572864,
+          "instantiateMs": {
+            "max": 1.708526,
+            "p50": 0.159885,
+            "p95": 0.25500700000000004
+          },
+          "measurementTimeoutMs": 5000,
+          "outputJsonSha256": "115b9359d1eb3293954dddddff2955b606a2455493a3c2762eef7bc19699f5e8",
+          "outputJsonBytes": 20
+        },
+        "typstPortable": {
+          "cachedPrepareMs": {
+            "max": 10.279223,
+            "p50": 2.694809,
+            "p95": 5.6647240000000005
+          },
+          "cachedTotalMs": {
+            "max": 10.818103,
+            "p50": 3.084314,
+            "p95": 6.118702
+          },
+          "callMs": {
+            "max": 1.6320480000000002,
+            "p50": 0.226311,
+            "p95": 0.27271100000000004
+          },
+          "coldCallMs": 0.33719400000000005,
+          "coldInstantiateMs": 0.448567,
+          "coldPrepareMs": 718.3409790000001,
+          "coldSource": "Compiled",
+          "componentBytes": 1152973,
+          "componentSha256": "5e5dd9c44a1bbf1565da8e1e6de2bd498a953f15c3f339c6f97e3d8ce7a9d124",
+          "diskPrepareMs": 3.342206,
+          "guestLinearMemoryBytes": 1507328,
+          "instantiateMs": {
+            "max": 2.125021,
+            "p50": 0.164826,
+            "p95": 0.25973599999999997
+          },
+          "measurementTimeoutMs": 5000,
+          "outputJsonSha256": "f030dce103f87cc46c16f19e5c447f6e36ee8da0f931872b834421bce5a8bcbb",
+          "outputJsonBytes": 36
+        }
+      },
+      "controls": [
+        {
+          "cancelMs": 34.269888,
+          "language": "rust",
+          "memoryRefusal": "wasm (com.example.probe): ran out of memory at its 4 MiB limit",
+          "timeoutMs": 105.878495
+        },
+        {
+          "cancelMs": 32.610075,
+          "language": "typescript",
+          "memoryRefusal": "wasm (com.example.probe): ran out of memory at its 4 MiB limit (out of memory)",
+          "timeoutMs": 103.282514
+        }
+      ],
+      "execution": "Native",
+      "hostReport": {
+        "clock": {
+          "addMonth": {
+            "ok": "2026-08"
+          },
+          "badTimestamp": {
+            "err": {
+              "kind": "invalid",
+              "message": "date input must be an RFC3339 string or epoch seconds"
+            }
+          },
+          "format": {
+            "ok": "2026"
+          },
+          "monthName": {
+            "ok": "Juli"
+          },
+          "nowHasOffset": true,
+          "nowMillisIsRecent": true
+        },
+        "frontmatter": {
+          "ok": "---\ntags:\n  - \"a\"\n  - \"b\"\ntitle: \"Hi\"\n---\n"
+        },
+        "notes": {
+          "all": {
+            "ok": []
+          },
+          "get": {
+            "ok": null
+          },
+          "missing": {
+            "ok": true
+          }
+        },
+        "permissions": {
+          "nativeTools.runDeclared": true,
+          "notes.read": true,
+          "pluginStorage.read": true,
+          "pluginStorage.write": true
+        },
+        "randomLength": 16,
+        "storage": {
+          "delete": {
+            "ok": null
+          },
+          "escape": {
+            "err": {
+              "kind": "invalid",
+              "message": "unsafe plugin storage path '../escape.txt'"
+            }
+          },
+          "list": {
+            "ok": [
+              {
+                "isDir": false,
+                "name": "state.json",
+                "sizeBytes": 7
+              }
+            ]
+          },
+          "readAfter": {
+            "ok": "{\"n\":1}"
+          },
+          "readBefore": {
+            "ok": null
+          },
+          "readDeleted": {
+            "ok": null
+          },
+          "write": {
+            "ok": null
+          }
+        },
+        "tools": {
+          "available": {
+            "ok": false
+          },
+          "undeclared": {
+            "err": {
+              "kind": "invalid",
+              "message": "tool 'not-declared' is not declared in the manifest"
+            }
+          }
+        },
+        "uuidLength": 36
+      },
+      "iterations": 100,
+      "os": "linux",
+      "processMemory": ["VmHWM:\t   99484 kB", "VmRSS:\t   96932 kB"],
+      "processPss": "Pss:               94759 kB",
+      "releaseBuild": true,
+      "schemaVersion": 1
+    },
+    "interpreter": {
+      "arch": "x86_64",
+      "cases": {
+        "rustEcho": {
+          "cachedPrepareMs": {
+            "max": 0.8610059999999999,
+            "p50": 0.270236,
+            "p95": 0.358085
+          },
+          "cachedTotalMs": {
+            "max": 0.941901,
+            "p50": 0.34395600000000004,
+            "p95": 0.437869
+          },
+          "callMs": {
+            "max": 0.11982899999999999,
+            "p50": 0.053041000000000005,
+            "p95": 0.072409
+          },
+          "coldCallMs": 0.07311,
+          "coldInstantiateMs": 0.098438,
+          "coldPrepareMs": 79.914871,
+          "coldSource": "Compiled",
+          "componentBytes": 122150,
+          "componentSha256": "5c6b4e5eb5dfdcc8b966a9b52b1741af944dceff05b574c53b4f98a041b7a614",
+          "diskPrepareMs": 0.479677,
+          "guestLinearMemoryBytes": 1179648,
+          "instantiateMs": {
+            "max": 0.030858999999999998,
+            "p50": 0.016291,
+            "p95": 0.026671
+          },
+          "measurementTimeoutMs": 5000,
+          "outputJsonSha256": "115b9359d1eb3293954dddddff2955b606a2455493a3c2762eef7bc19699f5e8",
+          "outputJsonBytes": 20
+        },
+        "templatesMenu500": {
+          "cachedPrepareMs": {
+            "max": 5.927066,
+            "p50": 2.698167,
+            "p95": 2.922555
+          },
+          "cachedTotalMs": {
+            "max": 1436.373139,
+            "p50": 1076.491265,
+            "p95": 1217.529989
+          },
+          "callMs": {
+            "max": 1433.464581,
+            "p50": 1073.5785090000002,
+            "p95": 1214.4333009999998
+          },
+          "coldCallMs": 1060.673609,
+          "coldInstantiateMs": 0.592933,
+          "coldPrepareMs": 563.424757,
+          "coldSource": "Compiled",
+          "componentBytes": 1186888,
+          "componentSha256": "cfdbdc69f6af81cc913025fd034afde8d6111a728a6d95bf33bdfa9d6775a39b",
+          "diskPrepareMs": 3.235974,
+          "guestLinearMemoryBytes": 1835008,
+          "instantiateMs": {
+            "max": 0.646374,
+            "p50": 0.253274,
+            "p95": 0.30435100000000004
+          },
+          "measurementTimeoutMs": 5000,
+          "outputJsonSha256": "7c1ae11429c738b839bce3be76e64b1d8e422954340fddcd90600448f91647e5",
+          "outputJsonBytes": 42421
+        },
+        "templatesRender": {
+          "cachedPrepareMs": {
+            "max": 7.730052000000001,
+            "p50": 2.717212,
+            "p95": 5.545187
+          },
+          "cachedTotalMs": {
+            "max": 17.426147999999998,
+            "p50": 7.880788999999999,
+            "p95": 15.32825
+          },
+          "callMs": {
+            "max": 10.698644,
+            "p50": 4.9043719999999995,
+            "p95": 9.292356999999999
+          },
+          "coldCallMs": 5.250022,
+          "coldInstantiateMs": 0.738321,
+          "coldPrepareMs": 574.830925,
+          "coldSource": "Compiled",
+          "componentBytes": 1186888,
+          "componentSha256": "cfdbdc69f6af81cc913025fd034afde8d6111a728a6d95bf33bdfa9d6775a39b",
+          "diskPrepareMs": 6.304308,
+          "guestLinearMemoryBytes": 1507328,
+          "instantiateMs": {
+            "max": 0.731839,
+            "p50": 0.249968,
+            "p95": 0.295624
+          },
+          "measurementTimeoutMs": 5000,
+          "outputJsonSha256": "f89bd784cb94e659f7ce446204f1be76b8c8d0b7b48df92656ff217597570e02",
+          "outputJsonBytes": 45
+        },
+        "typescriptEcho": {
+          "cachedPrepareMs": {
+            "max": 4.107740000000001,
+            "p50": 2.7756450000000004,
+            "p95": 3.450393
+          },
+          "cachedTotalMs": {
+            "max": 5.294098,
+            "p50": 3.675643,
+            "p95": 4.4090750000000005
+          },
+          "callMs": {
+            "max": 1.0844120000000002,
+            "p50": 0.656303,
+            "p95": 0.80563
+          },
+          "coldCallMs": 0.7113889999999999,
+          "coldInstantiateMs": 0.577484,
+          "coldPrepareMs": 463.496432,
+          "coldSource": "Compiled",
+          "componentBytes": 1215629,
+          "componentSha256": "e2310d42c24a32e96e899adef8b3dfa88829d7a138272e8d333a0da5e7d97ebc",
+          "diskPrepareMs": 3.3109960000000003,
+          "guestLinearMemoryBytes": 1572864,
+          "instantiateMs": {
+            "max": 0.5107160000000001,
+            "p50": 0.235059,
+            "p95": 0.30659600000000004
+          },
+          "measurementTimeoutMs": 5000,
+          "outputJsonSha256": "115b9359d1eb3293954dddddff2955b606a2455493a3c2762eef7bc19699f5e8",
+          "outputJsonBytes": 20
+        },
+        "typstPortable": {
+          "cachedPrepareMs": {
+            "max": 6.15406,
+            "p50": 2.638241,
+            "p95": 3.1918279999999997
+          },
+          "cachedTotalMs": {
+            "max": 7.293468,
+            "p50": 3.735699,
+            "p95": 4.526782
+          },
+          "callMs": {
+            "max": 4.039509,
+            "p50": 0.8529990000000001,
+            "p95": 1.131571
+          },
+          "coldCallMs": 0.896974,
+          "coldInstantiateMs": 0.561613,
+          "coldPrepareMs": 605.419537,
+          "coldSource": "Compiled",
+          "componentBytes": 1152973,
+          "componentSha256": "5e5dd9c44a1bbf1565da8e1e6de2bd498a953f15c3f339c6f97e3d8ce7a9d124",
+          "diskPrepareMs": 3.149218,
+          "guestLinearMemoryBytes": 1507328,
+          "instantiateMs": {
+            "max": 0.9243870000000001,
+            "p50": 0.233987,
+            "p95": 0.27616799999999997
+          },
+          "measurementTimeoutMs": 5000,
+          "outputJsonSha256": "f030dce103f87cc46c16f19e5c447f6e36ee8da0f931872b834421bce5a8bcbb",
+          "outputJsonBytes": 36
+        }
+      },
+      "controls": [
+        {
+          "cancelMs": 30.323275,
+          "language": "rust",
+          "memoryRefusal": "wasm (com.example.probe): ran out of memory at its 4 MiB limit",
+          "timeoutMs": 102.009322
+        },
+        {
+          "cancelMs": 35.010803,
+          "language": "typescript",
+          "memoryRefusal": "wasm (com.example.probe): ran out of memory at its 4 MiB limit (out of memory)",
+          "timeoutMs": 106.630401
+        }
+      ],
+      "execution": "Interpreter",
+      "hostReport": {
+        "clock": {
+          "addMonth": {
+            "ok": "2026-08"
+          },
+          "badTimestamp": {
+            "err": {
+              "kind": "invalid",
+              "message": "date input must be an RFC3339 string or epoch seconds"
+            }
+          },
+          "format": {
+            "ok": "2026"
+          },
+          "monthName": {
+            "ok": "Juli"
+          },
+          "nowHasOffset": true,
+          "nowMillisIsRecent": true
+        },
+        "frontmatter": {
+          "ok": "---\ntags:\n  - \"a\"\n  - \"b\"\ntitle: \"Hi\"\n---\n"
+        },
+        "notes": {
+          "all": {
+            "ok": []
+          },
+          "get": {
+            "ok": null
+          },
+          "missing": {
+            "ok": true
+          }
+        },
+        "permissions": {
+          "nativeTools.runDeclared": true,
+          "notes.read": true,
+          "pluginStorage.read": true,
+          "pluginStorage.write": true
+        },
+        "randomLength": 16,
+        "storage": {
+          "delete": {
+            "ok": null
+          },
+          "escape": {
+            "err": {
+              "kind": "invalid",
+              "message": "unsafe plugin storage path '../escape.txt'"
+            }
+          },
+          "list": {
+            "ok": [
+              {
+                "isDir": false,
+                "name": "state.json",
+                "sizeBytes": 7
+              }
+            ]
+          },
+          "readAfter": {
+            "ok": "{\"n\":1}"
+          },
+          "readBefore": {
+            "ok": null
+          },
+          "readDeleted": {
+            "ok": null
+          },
+          "write": {
+            "ok": null
+          }
+        },
+        "tools": {
+          "available": {
+            "ok": false
+          },
+          "undeclared": {
+            "err": {
+              "kind": "invalid",
+              "message": "tool 'not-declared' is not declared in the manifest"
+            }
+          }
+        },
+        "uuidLength": 36
+      },
+      "iterations": 100,
+      "os": "linux",
+      "processMemory": ["VmHWM:\t   97600 kB", "VmRSS:\t   95028 kB"],
+      "processPss": "Pss:               92921 kB",
+      "releaseBuild": true,
+      "schemaVersion": 1
+    }
+  }
+}
