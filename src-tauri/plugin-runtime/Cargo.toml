@@ -8,11 +8,16 @@ rust-version = "1.96"
 license = "MIT OR Apache-2.0"
 publish = false
 
+[features]
+# Build-time compiler only. Resolver 2 keeps these backends out of app builds.
+aot-build = ["wasmtime/all-arch"]
+
 # The plugin runtime lives in its own crate so it builds without Tauri, and the
 # host services every runtime shares exist in one place.
 
 [dependencies]
 base64 = "0.22"
+flate2 = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 getrandom = "0.4"
 log = "0.4"

@@ -45,6 +45,13 @@ pub enum Source {
     Memory,
     Disk,
     Compiled,
+    Bundled,
+}
+
+pub fn engine_key(engine: &Engine) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    engine.precompile_compatibility_hash().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 /// A least-recently-used map from component digest to compiled value.
@@ -100,9 +107,7 @@ pub struct Disk {
 
 impl Disk {
     pub fn new(root: &Path, engine: &Engine) -> Self {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        engine.precompile_compatibility_hash().hash(&mut hasher);
-        let dir = root.join(format!("{:016x}", hasher.finish()));
+        let dir = root.join(engine_key(engine));
         Self {
             root: root.to_path_buf(),
             dir,

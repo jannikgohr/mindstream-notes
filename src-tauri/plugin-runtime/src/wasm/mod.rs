@@ -24,15 +24,17 @@
 pub mod bindings;
 pub mod cache;
 pub mod limiter;
+pub mod precompiled;
 pub mod ticker;
 
 use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use precompiled::{TrustedPrecompiled, VerifiedComponent};
 use wasmtime::component::types::ComponentItem;
 use wasmtime::component::{Component, Linker};
-use wasmtime::{Config, Engine, Store, UpdateDeadline};
+use wasmtime::{Engine, Store, UpdateDeadline};
 
 use crate::error::{HostError, HostResult};
 use crate::host::{CallSetup, HostContext};
@@ -160,23 +162,16 @@ static GLOBAL: OnceLock<Result<WasmRuntime, String>> = OnceLock::new();
 
 impl WasmRuntime {
     pub fn new(execution: Execution) -> HostResult<Self> {
-        let mut config = Config::new();
-        config.epoch_interruption(true);
-        // Function indices are enough to report a crash; parsing DWARF out of
-        // a plugin is not worth it.
-        config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Disable);
-        config.max_wasm_stack(1024 * 1024);
-        if execution == Execution::Interpreter {
-            let target = if cfg!(target_pointer_width = "64") {
+        let target = if execution == Execution::Interpreter {
+            if cfg!(target_pointer_width = "64") {
                 "pulley64"
             } else {
                 "pulley32"
-            };
-            config
-                .target(target)
-                .map_err(|e| HostError::Unavailable(format!("plugin interpreter: {e}")))?;
-        }
-        let engine = Engine::new(&config)
+            }
+        } else {
+            env!("MINDSTREAM_WASM_TARGET")
+        };
+        let engine = precompiled::engine_for_target(target)
             .map_err(|e| HostError::Unavailable(format!("plugin runtime: {e}")))?;
         let mut linker = Linker::new(&engine);
         Plugin::add_to_linker::<CallState, wasmtime::component::HasSelf<CallState>>(
@@ -233,13 +228,37 @@ impl WasmRuntime {
         bytes: &[u8],
         cache_dir: Option<&Path>,
     ) -> HostResult<(Arc<Prepared>, cache::Source)> {
+        self.prepare_verified(bytes, None, None, cache_dir)
+    }
+
+    /// Compile/link verified bytes in a worker without instantiating or executing a guest.
+    pub fn prepare_component(
+        &self,
+        component: &VerifiedComponent,
+        cache_dir: Option<&Path>,
+        bundled: Option<&TrustedPrecompiled<'_>>,
+    ) -> HostResult<cache::Source> {
+        self.prepare_verified(component, Some(component), bundled, cache_dir)
+            .map(|(_, source)| source)
+    }
+
+    fn prepare_verified(
+        &self,
+        bytes: &[u8],
+        verified: Option<&VerifiedComponent>,
+        bundled: Option<&TrustedPrecompiled<'_>>,
+        cache_dir: Option<&Path>,
+    ) -> HostResult<(Arc<Prepared>, cache::Source)> {
         if bytes.len() > MAX_COMPONENT_BYTES {
             return Err(HostError::Invalid(format!(
                 "plugin component is {} bytes, more than the {MAX_COMPONENT_BYTES} allowed",
                 bytes.len()
             )));
         }
-        let key = cache::digest(bytes);
+        // Only reuse the digest of the exact immutable buffer supplied here.
+        let key = verified
+            .filter(|v| std::ptr::eq(bytes, v.as_slice()))
+            .map_or_else(|| cache::digest(bytes), VerifiedComponent::digest);
         if let Some(found) = self.lookup(&key) {
             return Ok((found, cache::Source::Memory));
         }
@@ -250,8 +269,29 @@ impl WasmRuntime {
             return Ok((found, cache::Source::Memory));
         }
         let disk = cache_dir.map(|dir| cache::Disk::new(dir, &self.engine));
+        let from_bundle = || {
+            let bytes = bundled?.decode(key, &self.engine)?;
+            if let Some(disk) = &disk {
+                disk.store(&key, &bytes);
+                if let Some(component) = disk.load(&self.engine, &key) {
+                    return Some(component);
+                }
+            }
+            // SAFETY: TrustedPrecompiled's constructor requires code from our
+            // build pipeline. decode checked its source, engine and code hash.
+            unsafe { Component::deserialize(&self.engine, &bytes) }.ok()
+        };
         let (component, source) = match disk.as_ref().and_then(|d| d.load(&self.engine, &key)) {
             Some(component) => (component, cache::Source::Disk),
+            None if bundled.is_some() => match from_bundle() {
+                Some(component) => (component, cache::Source::Bundled),
+                None => (
+                    Component::new(&self.engine, bytes).map_err(|e| {
+                        HostError::Invalid(format!("not a valid plugin component: {e}"))
+                    })?,
+                    cache::Source::Compiled,
+                ),
+            },
             None => {
                 let component = Component::new(&self.engine, bytes).map_err(|e| {
                     HostError::Invalid(format!("not a valid plugin component: {e}"))
@@ -323,12 +363,22 @@ impl WasmRuntime {
 
     /// [`invoke`](Self::invoke), reporting where the time went.
     pub fn invoke_timed(&self, call: WasmCall<'_>) -> HostResult<(serde_json::Value, Timings)> {
+        self.invoke_verified_timed(call, None, None)
+    }
+
+    pub fn invoke_verified_timed(
+        &self,
+        call: WasmCall<'_>,
+        verified: Option<&VerifiedComponent>,
+        bundled: Option<&TrustedPrecompiled<'_>>,
+    ) -> HostResult<(serde_json::Value, Timings)> {
         let plugin_id = call.setup.plugin_id.clone();
         let fail = |detail: String| HostError::Invalid(format!("wasm ({plugin_id}): {detail}"));
 
         let started = Instant::now();
         let _slot = self.slots.acquire(self.max_concurrent, SLOT_WAIT)?;
-        let (prepared, source) = self.prepare(call.component, call.cache_dir)?;
+        let (prepared, source) =
+            self.prepare_verified(call.component, verified, bundled, call.cache_dir)?;
         let prepare = started.elapsed();
 
         let input = serde_json::to_string(call.input)

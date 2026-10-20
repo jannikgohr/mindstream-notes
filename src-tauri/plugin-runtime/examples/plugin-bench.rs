@@ -18,6 +18,11 @@ const TYPESCRIPT: &[u8] =
     include_bytes!("../../../plugin-sdk/conformance/dist/conformance-ts.wasm");
 const TEMPLATES: &[u8] = include_bytes!("../../../plugins/templates/plugin.wasm");
 const TYPST: &[u8] = include_bytes!("../../../plugins/typst/plugin.wasm");
+const TEMPLATES_RUST: &[u8] =
+    include_bytes!("../../../plugin-sdk/prototypes/templates-rust/plugin.wasm");
+type Artifact = ([u8; 32], [u8; 32], &'static str, &'static [u8]);
+const PRECOMPILED: &[Artifact] = include!(concat!(env!("OUT_DIR"), "/probe-precompiled.rs"));
+static USE_PRECOMPILED: OnceLock<bool> = OnceLock::new();
 
 static MEASUREMENT_TIMEOUT_MS: OnceLock<u64> = OnceLock::new();
 
@@ -105,7 +110,38 @@ fn sample(
     );
     let case_cache = cache.join(uuid::Uuid::new_v4().to_string());
     let cache = case_cache.as_path();
-    let call = || invoke(runtime, component, export, &input, setup.clone(), cache);
+    let verified =
+        mindstream_plugin_runtime::wasm::precompiled::VerifiedComponent::new(component.to_vec());
+    let artifact = if USE_PRECOMPILED.get() == Some(&true) {
+        let key = cache::engine_key(runtime.engine());
+        let entry = PRECOMPILED
+            .iter()
+            .find(|a| a.0 == verified.digest() && a.2 == key)
+            .ok_or("no matching trusted precompiled artifact in this probe build")?;
+        // SAFETY: this standalone probe embeds only app-build compiler output.
+        Some(unsafe {
+            mindstream_plugin_runtime::wasm::precompiled::TrustedPrecompiled::new(
+                entry.0, entry.1, entry.2, entry.3,
+            )
+        })
+    } else {
+        None
+    };
+    let call = || {
+        runtime.invoke_verified_timed(
+            WasmCall {
+                component: &verified,
+                export,
+                input: &input,
+                setup: setup.clone(),
+                limits: limits::WASM.resolve(None, MEASUREMENT_TIMEOUT_MS.get().copied()),
+                native_allowance: limits::NATIVE_ALLOWANCE,
+                cache_dir: Some(cache),
+            },
+            Some(&verified),
+            artifact.as_ref(),
+        )
+    };
     // Calls stopped by the time budget. They are reported, not retried, and
     // fail the run after the report is written.
     let mut overruns = Vec::new();
@@ -113,7 +149,14 @@ fn sample(
     let before_compile = process_memory();
     let cold = within_budget(&mut overruns, call)?;
     if let Some((_, timing)) = &cold {
-        assert_eq!(timing.source, cache::Source::Compiled);
+        assert_eq!(
+            timing.source,
+            if artifact.is_some() {
+                cache::Source::Bundled
+            } else {
+                cache::Source::Compiled
+            }
+        );
     }
     let after_cold = process_memory();
     let mut expected = cold.as_ref().map(|(value, _)| value.clone());
@@ -167,6 +210,10 @@ fn sample(
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
+    USE_PRECOMPILED
+        .set(args.iter().any(|a| a == "--precompiled"))
+        .unwrap();
+    let templates_only = args.iter().any(|a| a == "--templates-only");
     let execution = if args.iter().any(|arg| arg == "--interpreter") {
         Execution::Interpreter
     } else {
@@ -183,7 +230,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|e| e.to_string())
         })
         .transpose()?
-        .unwrap_or_else(|| TEMPLATES.to_vec());
+        .unwrap_or_else(|| {
+            if args.iter().any(|a| a == "--rust-templates") {
+                TEMPLATES_RUST.to_vec()
+            } else {
+                TEMPLATES.to_vec()
+            }
+        });
     let templates = template_bytes.as_slice();
     let iterations = args
         .iter()
@@ -228,6 +281,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut cases = serde_json::Map::new();
     for (name, component) in [("rustEcho", RUST), ("typescriptEcho", TYPESCRIPT)] {
+        if templates_only {
+            continue;
+        }
         cases.insert(
             name.into(),
             sample(
@@ -272,25 +328,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             iterations,
         )?,
     );
-    cases.insert(
-        "typstPortable".into(),
-        sample(
-            &runtime,
-            TYPST,
-            "renderDocument",
-            json!({"body": "= Hello"}),
-            CallSetup {
-                permissions: vec!["nativeTools.runDeclared".into()],
-                native_tools: HashMap::from([("typst".into(), None)]),
-                ..setup.clone()
-            },
-            &cache,
-            iterations,
-        )?,
-    );
+    if !templates_only {
+        cases.insert(
+            "typstPortable".into(),
+            sample(
+                &runtime,
+                TYPST,
+                "renderDocument",
+                json!({"body": "= Hello"}),
+                CallSetup {
+                    permissions: vec!["nativeTools.runDeclared".into()],
+                    native_tools: HashMap::from([("typst".into(), None)]),
+                    ..setup.clone()
+                },
+                &cache,
+                iterations,
+            )?,
+        );
+    }
 
     let mut reports = Vec::new();
     for (name, component) in [("rust", RUST), ("typescript", TYPESCRIPT)] {
+        if templates_only {
+            continue;
+        }
         eprintln!("checking {name} host contract and permission denials");
         let data = scratch.0.join(name);
         std::fs::create_dir_all(&data)?;
@@ -317,13 +378,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(denied["storage"]["write"]["err"]["kind"], "denied");
         assert_eq!(denied["notes"]["all"]["err"]["kind"], "denied");
     }
-    assert_eq!(
-        reports[0], reports[1],
-        "Rust and TypeScript host contracts differ"
-    );
+    if !templates_only {
+        assert_eq!(
+            reports[0], reports[1],
+            "Rust and TypeScript host contracts differ"
+        );
+    }
 
     let mut controls = Vec::new();
     for (name, component) in [("rust", RUST), ("typescript", TYPESCRIPT)] {
+        if templates_only {
+            continue;
+        }
         eprintln!("checking {name} cancellation");
         invoke(
             &runtime,
@@ -426,7 +492,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         serde_json::to_string_pretty(&json!({
             "schemaVersion": 1, "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
             "execution": format!("{execution:?}"), "releaseBuild": !cfg!(debug_assertions), "iterations": iterations,
-            "cases": cases, "hostReport": reports[0], "controls": controls,
+            "cases": cases, "hostReport": reports.first(), "controls": controls,
             "processMemory": process_memory, "processPss": pss,
             "processMemoryBeforeEngine": before_engine, "processMemoryAfterEngine": after_engine,
         }))?

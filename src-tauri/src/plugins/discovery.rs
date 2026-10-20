@@ -38,7 +38,7 @@ use super::{SOURCE_BUILTIN, SOURCE_INSTALLED};
 use crate::error::{AppError, AppResult};
 
 /// A plugin found on disk, with its trust `source` fixed by its location.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct DiscoveredPlugin {
     pub generation: Option<String>,
     pub legacy_generation: Option<String>,
@@ -71,7 +71,7 @@ pub struct DiscoveredPlugin {
     /// that `checksum` was computed over. Running these bytes rather than
     /// reading the entry again means what runs is exactly what was hashed,
     /// with no window for the file to change in between.
-    pub entry_bytes: Option<std::sync::Arc<Vec<u8>>>,
+    pub entry_bytes: Option<super::runtime::wasm::precompiled::VerifiedComponent>,
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -303,7 +303,17 @@ pub(crate) fn read_plugin(files: PluginFiles, source: &str) -> AppResult<Discove
         (manifest::PluginRuntime::Wasm, Some(entry)) => all
             .iter()
             .find(|(path, _)| path == entry)
-            .map(|(_, bytes)| std::sync::Arc::new(bytes.clone())),
+            .map(|(_, bytes)| {
+                use super::runtime::wasm::precompiled::VerifiedComponent;
+                match &files {
+                    PluginFiles::Embedded(dir) => VerifiedComponent::from_static(
+                        dir.get_file(dir.path().join(entry))
+                            .expect("collected embedded entry")
+                            .contents(),
+                    ),
+                    PluginFiles::Fs(_) => VerifiedComponent::new(bytes.clone()),
+                }
+            }),
         _ => None,
     };
     Ok(DiscoveredPlugin {
@@ -355,6 +365,11 @@ pub fn discover_dir(root: &Path, source: &str) -> Vec<DiscoveredPlugin> {
 /// construction (they ship inside the signed binary), so unlike third-party
 /// plugins they are never subject to the integrity gate.
 pub fn discover_builtins() -> Vec<DiscoveredPlugin> {
+    static BUILTINS: std::sync::OnceLock<Vec<DiscoveredPlugin>> = std::sync::OnceLock::new();
+    BUILTINS.get_or_init(read_builtins).clone()
+}
+
+fn read_builtins() -> Vec<DiscoveredPlugin> {
     let mut out = Vec::new();
     for sub in BUILTIN_PLUGINS.dirs() {
         if sub.get_file(sub.path().join("manifest.json")).is_none() {
@@ -429,15 +444,11 @@ fn declared_id(files: &PluginFiles) -> Option<String> {
 /// several times a second against the whole plugin corpus.
 pub fn find(third_party_dir: &Path, id: &str) -> Option<DiscoveredPlugin> {
     // Builtins win on a colliding id, exactly as in `discover`.
-    for sub in BUILTIN_PLUGINS.dirs() {
-        if sub.get_file(sub.path().join("manifest.json")).is_none() {
-            continue;
-        }
-        let files = PluginFiles::Embedded(sub);
-        if declared_id(&files).as_deref() != Some(id) {
-            continue;
-        }
-        return read_plugin(files, SOURCE_BUILTIN).ok();
+    if let Some(plugin) = discover_builtins()
+        .into_iter()
+        .find(|plugin| plugin.id == id)
+    {
+        return Some(plugin);
     }
     if super::packages::is_global(third_party_dir) {
         return super::packages::discover(third_party_dir, Some(id))

@@ -698,7 +698,7 @@ fn a_wasm_plugin_on_disk_carries_the_bytes_its_checksum_covers() {
         discovery::read_plugin(discovery::PluginFiles::Fs(dir.clone()), SOURCE_INSTALLED).unwrap();
     assert_eq!(plugin.manifest.runtime, manifest::PluginRuntime::Wasm);
     assert_eq!(
-        plugin.entry_bytes.as_deref().map(Vec::as_slice),
+        plugin.entry_bytes.as_ref().map(|bytes| bytes.as_slice()),
         Some(CONFORMANCE_WASM)
     );
     std::fs::remove_dir_all(&dir).ok();

@@ -138,6 +138,163 @@ fn err_kind(outcome: &Value) -> &str {
 }
 
 #[test]
+fn bundled_code_prepares_without_running_and_seeds_the_disk_cache() {
+    use super::precompiled::{TrustedPrecompiled, VerifiedComponent};
+    use std::io::Write;
+    for execution in [Execution::Native, Execution::Interpreter] {
+        let runtime = WasmRuntime::new(execution).unwrap();
+        let component = VerifiedComponent::new(CONFORMANCE.to_vec());
+        let compiled = runtime.engine().precompile_component(&component).unwrap();
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gzip.write_all(&compiled).unwrap();
+        let gzip = gzip.finish().unwrap();
+        let engine = cache::engine_key(runtime.engine());
+        // SAFETY: code compiled immediately above with this runtime's engine.
+        let artifact = unsafe {
+            TrustedPrecompiled::new(component.digest(), cache::digest(&compiled), &engine, &gzip)
+        };
+        let root = scratch();
+        assert_eq!(
+            runtime
+                .prepare_component(&component, Some(&root), Some(&artifact))
+                .unwrap(),
+            cache::Source::Bundled
+        );
+        assert_eq!(runtime.running(), 0);
+        assert_eq!(
+            runtime
+                .prepare_component(&component, Some(&root), None)
+                .unwrap(),
+            cache::Source::Memory
+        );
+        // Counter must be 1 on every call: preparation ran no guest, and
+        // cached compiled code never retains a guest instance.
+        for _ in 0..2 {
+            assert_eq!(
+                Call::new(&[])
+                    .run_on(&runtime, "counter", json!({}))
+                    .unwrap(),
+                json!(1)
+            );
+        }
+        runtime.clear_memory_cache();
+        assert_eq!(
+            runtime
+                .prepare_component(&component, Some(&root), None)
+                .unwrap(),
+            cache::Source::Disk
+        );
+        drop(runtime);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn rust_templates_prototype_matches_typescript_outputs() {
+    const RUST: &[u8] =
+        include_bytes!("../../../../plugin-sdk/prototypes/templates-rust/plugin.wasm");
+    const TYPESCRIPT: &[u8] = include_bytes!("../../../../plugins/templates/plugin.wasm");
+    // Debug builds make Pulley's host interpreter too slow for menu fixtures
+    // under the production budget. Release tests/probes cover that backend.
+    for runtime in std::iter::once(runtime()).chain((!cfg!(debug_assertions)).then(interpreter)) {
+        for input in [
+            json!({"now":"2026-07-25T10:00:00Z","locale":"de","title":"Log {{date:YYYY}}","body":"{{title|upper}} {{date-1M+2d:YYYY-MM-DD}} {{date+7d:dddd}}"}),
+            json!({"now":"2026-01-31T12:00:00Z","body":"{{date+1M:YYYY-MM-DD}} {{date-1y+2w:YYYY-MM-DD}} {{word|trim|capitalize}}/{{word|slug}}/{{flag}}/{{number}}/{{missing}}/{{word|unknown}}","vars":{"word":"  hÄllo WORLD  ","flag":false,"number":42}}),
+            json!({"now":"2026-07-25T10:00:00Z","title":"{{unknown}}","body":"{{date:}} {{multi\nline}} {{literal","vars":{"multi\nline":"yes"}}),
+            json!({"body":"{{word|capitalize}}/{{word|upper}}/{{arr}}/{{obj}}/{{float}}","vars":{"word":"😀café","arr":[1,null,true,["a","b"]],"obj":{},"float":1.0}}),
+        ] {
+            let run = |component| {
+                Call::of(component, &[])
+                    .run_on(runtime, "renderTemplate", input.clone())
+                    .unwrap()
+            };
+            assert_eq!(run(RUST), run(TYPESCRIPT), "{input}");
+        }
+        for input in [
+            json!({}),
+            json!({"settings":{"source-tag":"missing"}}),
+            json!({
+                "settings":{"source-folder":"root","source-tag":"template"},
+                "folders":[{"id":"root","parentId":null},{"id":"child","parentId":"root"},{"id":"cycle","parentId":"cycle"}]
+            }),
+        ] {
+            let run = |component| {
+                let mut call = Call::of(component, &[PERM_NOTES_READ]);
+                // Keep debug-mode interpreter parity below the unchanged
+                // one-second budget. The release probe measures 500 notes.
+                call.notes = (0..50)
+                    .map(|i| {
+                        let mut note = note(
+                            &format!("n{i}"),
+                            ["Zulu", "Alpha", "😀", "\u{e000}", "Alpha"][i % 5],
+                            if i % 3 == 0 { &["template"] } else { &[] },
+                        );
+                        note.folder_id = Some(if i % 2 == 0 { "child" } else { "cycle" }.into());
+                        note
+                    })
+                    .collect();
+                call.run_on(runtime, "newFromTemplate", input.clone())
+                    .unwrap()
+            };
+            assert_eq!(run(RUST), run(TYPESCRIPT), "{input}");
+        }
+    }
+}
+
+#[test]
+fn bundled_artifact_mismatch_falls_back_to_portable_wasm() {
+    use super::precompiled::{TrustedPrecompiled, VerifiedComponent};
+    use std::io::Write;
+    let runtime = WasmRuntime::new(Execution::Native).unwrap();
+    let component = VerifiedComponent::new(CONFORMANCE.to_vec());
+    let compiled = runtime.engine().precompile_component(&component).unwrap();
+    let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gzip.write_all(&compiled).unwrap();
+    let gzip = gzip.finish().unwrap();
+    let engine = cache::engine_key(runtime.engine());
+    for (source, hash, key, bytes) in [
+        (
+            [0; 32],
+            cache::digest(&compiled),
+            engine.as_str(),
+            gzip.as_slice(),
+        ),
+        (
+            component.digest(),
+            [0; 32],
+            engine.as_str(),
+            gzip.as_slice(),
+        ),
+        (
+            component.digest(),
+            cache::digest(&compiled),
+            "other-engine",
+            gzip.as_slice(),
+        ),
+        (
+            component.digest(),
+            cache::digest(&compiled),
+            engine.as_str(),
+            b"bad gzip".as_slice(),
+        ),
+    ] {
+        // SAFETY: native bytes, when present, came from this test's engine.
+        let artifact = unsafe { TrustedPrecompiled::new(source, hash, key, bytes) };
+        runtime.clear_memory_cache();
+        assert_eq!(
+            runtime
+                .prepare_component(&component, None, Some(&artifact))
+                .unwrap(),
+            cache::Source::Compiled
+        );
+    }
+    // A caller cannot pair verified bytes with another buffer and reuse its hash.
+    assert!(runtime
+        .prepare_verified(b"invalid wasm", Some(&component), None, None)
+        .is_err());
+}
+
+#[test]
 fn a_call_with_every_permission_reaches_every_host_interface() {
     for (lang, component) in COMPONENTS {
         let root = scratch();

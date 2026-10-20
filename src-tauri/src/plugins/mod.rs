@@ -36,6 +36,8 @@ pub mod discovery;
 pub mod luau;
 pub mod manifest;
 pub mod packages;
+mod precompiled;
+mod preparation;
 pub mod preview_service;
 pub mod settings;
 pub mod signing;
@@ -872,7 +874,7 @@ pub struct ScriptCall {
     /// (`DiscoveredPlugin::entry_bytes`). `None` reads the entry from
     /// `files`, which is only right for bytes that cannot change: builtins
     /// embedded in the binary, and tests.
-    pub verified_entry: Option<std::sync::Arc<Vec<u8>>>,
+    pub verified_entry: Option<runtime::wasm::precompiled::VerifiedComponent>,
     /// Where compiled components are kept between runs. `None` keeps them in
     /// memory only.
     pub cache_dir: Option<PathBuf>,
@@ -912,29 +914,38 @@ pub fn run_plugin_script(
     if manifest.runtime == manifest::PluginRuntime::Wasm {
         let component = match call.verified_entry {
             Some(bytes) => bytes,
-            None => std::sync::Arc::new(
+            None => runtime::wasm::precompiled::VerifiedComponent::new(
                 files
                     .read_bytes(entry)?
                     .ok_or_else(|| AppError::InvalidArg(format!("entry '{entry}' not found")))?,
             ),
         };
+        let bundled = matches!(files, discovery::PluginFiles::Embedded(_))
+            .then(|| precompiled::find(&component))
+            .flatten();
         let wasm = runtime::wasm::WasmRuntime::global()?;
-        return Ok(wasm.invoke(runtime::wasm::WasmCall {
-            component: &component,
-            export: &call.export,
-            input: &call.input,
-            setup: runtime::host::CallSetup {
-                plugin_id: manifest.id.clone(),
-                permissions: call.granted,
-                notes: call.notes,
-                native_tools,
-                data_root: call.data_root,
-                cancel: call.cancel,
-            },
-            limits,
-            native_allowance: runtime::limits::NATIVE_ALLOWANCE,
-            cache_dir: call.cache_dir.as_deref(),
-        })?);
+        return Ok(wasm
+            .invoke_verified_timed(
+                runtime::wasm::WasmCall {
+                    component: &component,
+                    export: &call.export,
+                    input: &call.input,
+                    setup: runtime::host::CallSetup {
+                        plugin_id: manifest.id.clone(),
+                        permissions: call.granted,
+                        notes: call.notes,
+                        native_tools,
+                        data_root: call.data_root,
+                        cancel: call.cancel,
+                    },
+                    limits,
+                    native_allowance: runtime::limits::NATIVE_ALLOWANCE,
+                    cache_dir: call.cache_dir.as_deref(),
+                },
+                Some(&component),
+                bundled.as_ref(),
+            )?
+            .0);
     }
     let source = files
         .read_text(entry)?
@@ -1094,8 +1105,16 @@ pub fn plugins_discover(
     discovery::ensure_third_party_dir(&third_party_dir);
     if packages::prepare(&crate::paths::app_data_root(&app)?, &crate::paths::app_data_dir(&app)?)? { settings::notify(&app); }
     let discovered = discovery::try_discover(&third_party_dir)?;
-    db.with_conn(|c| reconcile(c, discovered))
-        .map_err(Into::into)
+    let snapshots = discovered.clone();
+    let views = db.with_conn(|c| reconcile(c, discovered))?;
+    let cache = crate::paths::app_data_root(&app)?.join("plugin-cache").join("wasm");
+    for plugin in snapshots {
+        if views.iter().any(|view| view.record.id == plugin.id && view.record.enabled
+            && require_approved(&view.record, &plugin).is_ok()) {
+            preparation::schedule(plugin, cache.clone());
+        }
+    }
+    Ok(views)
 }
 
 #[tauri::command]
@@ -1136,6 +1155,7 @@ pub fn plugins_enable(app: AppHandle, db: tauri::State<'_, Db>, id: String) -> C
         require_approved(&record, &plugin)?;
         set_enabled(c, &id, true)
     })?;
+    preparation::schedule(plugin, crate::paths::app_data_root(&app)?.join("plugin-cache").join("wasm"));
     use tauri::Emitter;
     let _ = app.emit(crate::app_events::AppEvent::PluginsChanged.as_str(), ());
     Ok(record)
@@ -1174,6 +1194,7 @@ pub fn plugins_approve(
             &plugin.signature_status,
         )
     })?;
+    preparation::schedule(plugin, crate::paths::app_data_root(&app)?.join("plugin-cache").join("wasm"));
     use tauri::Emitter;
     let _ = app.emit(crate::app_events::AppEvent::PluginsChanged.as_str(), ());
     Ok(record)

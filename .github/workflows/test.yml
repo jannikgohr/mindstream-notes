@@ -267,6 +267,14 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: cargo run --manifest-path src-tauri/Cargo.toml --locked --release -p mindstream-plugin-runtime --example plugin-bench -- --interpreter > plugin-interpreter.json
+      - name: Compare Rust Templates in native mode
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: cargo run --manifest-path src-tauri/Cargo.toml --locked --release -p mindstream-plugin-runtime --example plugin-bench -- --templates-only --rust-templates > plugin-rust-templates-native.json
+      - name: Compare Rust Templates in interpreter mode
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: cargo run --manifest-path src-tauri/Cargo.toml --locked --release -p mindstream-plugin-runtime --example plugin-bench -- --templates-only --rust-templates --interpreter > plugin-rust-templates-interpreter.json
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
