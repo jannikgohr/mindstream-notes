@@ -9,7 +9,7 @@ use mindstream_plugin_runtime::{
     error::HostError,
     host::{CallSetup, NoteMeta},
     limits,
-    wasm::{cache, Execution, Timings, WasmCall, WasmRuntime},
+    wasm::{cache, precompiled::VerifiedComponent, Execution, Timings, WasmCall, WasmRuntime},
 };
 use serde_json::{json, Value};
 
@@ -21,8 +21,12 @@ const TYPST: &[u8] = include_bytes!("../../../plugins/typst/plugin.wasm");
 const TEMPLATES_RUST: &[u8] =
     include_bytes!("../../../plugin-sdk/prototypes/templates-rust/plugin.wasm");
 type Artifact = ([u8; 32], [u8; 32], &'static str, &'static [u8]);
-const PRECOMPILED: &[Artifact] = include!(concat!(env!("OUT_DIR"), "/probe-precompiled.rs"));
+#[cfg(feature = "probe-precompiled")]
+const PRECOMPILED: &[Artifact] = include!(env!("MINDSTREAM_PROBE_PRECOMPILED"));
+#[cfg(not(feature = "probe-precompiled"))]
+const PRECOMPILED: &[Artifact] = &[];
 static USE_PRECOMPILED: OnceLock<bool> = OnceLock::new();
+static REHASH: OnceLock<bool> = OnceLock::new();
 
 static MEASUREMENT_TIMEOUT_MS: OnceLock<u64> = OnceLock::new();
 
@@ -97,7 +101,7 @@ fn within_budget(
 
 fn sample(
     runtime: &WasmRuntime,
-    component: &[u8],
+    component: &VerifiedComponent,
     export: &str,
     input: Value,
     setup: CallSetup,
@@ -110,8 +114,7 @@ fn sample(
     );
     let case_cache = cache.join(uuid::Uuid::new_v4().to_string());
     let cache = case_cache.as_path();
-    let verified =
-        mindstream_plugin_runtime::wasm::precompiled::VerifiedComponent::new(component.to_vec());
+    let verified = component;
     let artifact = if USE_PRECOMPILED.get() == Some(&true) {
         let key = cache::engine_key(runtime.engine());
         let entry = PRECOMPILED
@@ -130,7 +133,7 @@ fn sample(
     let call = || {
         runtime.invoke_verified_timed(
             WasmCall {
-                component: &verified,
+                component: verified,
                 export,
                 input: &input,
                 setup: setup.clone(),
@@ -138,7 +141,11 @@ fn sample(
                 native_allowance: limits::NATIVE_ALLOWANCE,
                 cache_dir: Some(cache),
             },
-            Some(&verified),
+            if REHASH.get() == Some(&true) {
+                None
+            } else {
+                Some(verified)
+            },
             artifact.as_ref(),
         )
     };
@@ -186,6 +193,8 @@ fn sample(
     Ok(json!({
         "componentSha256": cache::hex(&cache::digest(component)),
         "componentBytes": component.len(),
+        "verifiedDigestReused": REHASH.get() != Some(&true),
+        "precompiledRequested": USE_PRECOMPILED.get() == Some(&true),
         "measurementTimeoutMs": MEASUREMENT_TIMEOUT_MS.get(),
         "coldSource": cold.map(|t| format!("{:?}", t.source)),
         "coldPrepareMs": cold.map(|t| ms(t.prepare)),
@@ -213,6 +222,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     USE_PRECOMPILED
         .set(args.iter().any(|a| a == "--precompiled"))
         .unwrap();
+    REHASH.set(args.iter().any(|a| a == "--rehash")).unwrap();
     let templates_only = args.iter().any(|a| a == "--templates-only");
     let execution = if args.iter().any(|arg| arg == "--interpreter") {
         Execution::Interpreter
@@ -230,14 +240,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|e| e.to_string())
         })
         .transpose()?
+        .map(VerifiedComponent::new)
         .unwrap_or_else(|| {
-            if args.iter().any(|a| a == "--rust-templates") {
-                TEMPLATES_RUST.to_vec()
+            VerifiedComponent::from_static(if args.iter().any(|a| a == "--rust-templates") {
+                TEMPLATES_RUST
             } else {
-                TEMPLATES.to_vec()
-            }
+                TEMPLATES
+            })
         });
-    let templates = template_bytes.as_slice();
+    let templates = &template_bytes;
     let iterations = args
         .iter()
         .position(|arg| arg == "--iterations")
@@ -288,7 +299,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             name.into(),
             sample(
                 &runtime,
-                component,
+                &VerifiedComponent::from_static(component),
                 "echo",
                 json!({"hello": "portable"}),
                 setup.clone(),
@@ -333,7 +344,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "typstPortable".into(),
             sample(
                 &runtime,
-                TYPST,
+                &VerifiedComponent::from_static(TYPST),
                 "renderDocument",
                 json!({"body": "= Hello"}),
                 CallSetup {

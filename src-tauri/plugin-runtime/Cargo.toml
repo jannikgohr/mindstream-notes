@@ -11,6 +11,8 @@ publish = false
 [features]
 # Build-time compiler only. Resolver 2 keeps these backends out of app builds.
 aot-build = ["wasmtime/all-arch"]
+# Only the standalone probe reads a trusted, generated artifact table.
+probe-precompiled = []
 
 # The plugin runtime lives in its own crate so it builds without Tauri, and the
 # host services every runtime shares exist in one place.
