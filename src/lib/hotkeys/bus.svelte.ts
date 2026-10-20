@@ -52,6 +52,16 @@ import type {
 } from './catalogue';
 import type { EditorKind } from './types';
 
+/** Setup can exercise editor commands without creating or navigating notes. */
+export const commandAvailability = $state({ onboarding: false });
+const SETUP_GLOBAL_COMMANDS = new Set([
+  'global.undo',
+  'global.redo',
+  'global.openSettings',
+  'global.showShortcutHelp',
+  'global.showApp'
+]);
+
 /**
  * Listener contract editors expose to the bus.
  *
@@ -267,6 +277,8 @@ export function insertMarkdownIntoActiveNote(
  */
 export function emitCommand(cmd: CommandDefinition): boolean {
   if (cmd.scope === 'global') {
+    if (commandAvailability.onboarding && !SETUP_GLOBAL_COMMANDS.has(cmd.id))
+      return true;
     try {
       // A global command may report `false` to mean "not handled" so the
       // keystroke falls through (e.g. "search active note" when the

@@ -175,6 +175,10 @@ export type CustomComponentLoader = () => Promise<AnyComponent>;
 
 /** Components rendered in place of a generic control. */
 export const CUSTOM_COMPONENT_LOADERS: Record<string, CustomComponentLoader> = {
+  'hotkey-preset': () =>
+    import('./customs/HotkeyPreset.svelte').then(
+      (mod) => mod.default as unknown as AnyComponent
+    ),
   'theme-presets': () =>
     import('./customs/ThemePresets.svelte').then(
       (mod) => mod.default as unknown as AnyComponent
@@ -217,6 +221,10 @@ async function runDataAction(id: DataActionId) {
 
 /** Handlers for button-type settings. */
 export const SETTING_ACTIONS: Record<string, () => void | Promise<void>> = {
+  'run-onboarding': async () => {
+    const { openOnboarding } = await import('$lib/onboarding/store.svelte');
+    await openOnboarding();
+  },
   'open-data-folder': () => runDataAction('open-data-folder'),
   'empty-trash': () => runDataAction('empty-trash'),
   'backup-now': () => runDataAction('backup-now'),

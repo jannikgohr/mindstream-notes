@@ -42,7 +42,13 @@
  *     kind is active at a time.
  */
 
-import { setSettingValue, settings } from '$lib/settings/store.svelte';
+import {
+  getSettingValue,
+  resetSettingValue,
+  setSettingValue,
+  settings
+} from '$lib/settings/store.svelte';
+import { hotkeyPreset, presetBinding, type HotkeyPreset } from './presets';
 import { canonicalize } from './parse';
 import { wellKnownConflict } from './collisions';
 import { applyMigrations, MIGRATIONS } from './migrations';
@@ -209,7 +215,40 @@ export function getBinding(commandId: string): string | null {
   if (commandId in hotkeys.bindings) {
     return hotkeys.bindings[commandId];
   }
-  return def.defaultBinding;
+  return getDefaultBinding(commandId);
+}
+
+export function getDefaultBinding(commandId: string): string | null {
+  const def = commandById(commandId);
+  return def
+    ? presetBinding(
+        hotkeyPreset(getSettingValue('hotkeys.preset')),
+        commandId,
+        def.defaultBinding
+      )
+    : null;
+}
+
+/** Validate the whole effective map before changing the preset. Custom
+ * overrides, including deliberately unassigned commands, remain in place. */
+export async function setHotkeyPreset(preset: HotkeyPreset): Promise<void> {
+  const commands = allHotkeyCommands();
+  const effective = (command: CommandDefinition) =>
+    command.id in hotkeys.bindings
+      ? hotkeys.bindings[command.id]
+      : presetBinding(preset, command.id, command.defaultBinding);
+  for (let i = 0; i < commands.length; i++) {
+    const binding = effective(commands[i]);
+    if (!binding) continue;
+    for (const other of commands.slice(i + 1)) {
+      if (
+        commandsCanCollide(commands[i], other) &&
+        effective(other) === binding
+      )
+        throw new HotkeyBindingConflictError(commands[i].id, other.id, binding);
+    }
+  }
+  await setSettingValue('hotkeys.preset', preset);
 }
 
 export function commandsCanCollide(
@@ -271,7 +310,12 @@ export async function setBinding(
 export async function resetBinding(commandId: string): Promise<void> {
   const def = commandById(commandId);
   if (!def) return;
-  await setBinding(commandId, def.defaultBinding);
+  const binding = getDefaultBinding(commandId);
+  const owner = binding ? findCommandByBinding(binding, commandId) : null;
+  if (owner)
+    throw new HotkeyBindingConflictError(commandId, owner.id, binding!);
+  await resetSettingValue(settingKey(commandId));
+  delete hotkeys.bindings[commandId];
 }
 
 /** True when the user's binding differs from the catalogue default —
@@ -281,7 +325,7 @@ export async function resetBinding(commandId: string): Promise<void> {
 export function isCustomized(commandId: string): boolean {
   const def = commandById(commandId);
   if (!def) return false;
-  return getBinding(commandId) !== def.defaultBinding;
+  return getBinding(commandId) !== getDefaultBinding(commandId);
 }
 
 /**

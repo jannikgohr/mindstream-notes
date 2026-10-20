@@ -41,8 +41,21 @@
   interface Props {
     setting: Setting;
     searchQuery?: string;
+    /** Update dependent previews during a slider drag. */
+    live?: boolean;
+    /**
+     * Local slider position, available to previews without saving the setting.
+     * Keeps the label live and the modified/reset controls stable during a
+     * drag. Cleared on change so the stored value takes over on release.
+     */
+    sliderPreview?: number | null;
   }
-  let { setting, searchQuery = '' }: Props = $props();
+  let {
+    setting,
+    searchQuery = '',
+    live = false,
+    sliderPreview = $bindable<number | null>(null)
+  }: Props = $props();
 
   const label = $derived(tLabel('settings', setting.id));
   const description = $derived(tDescription('settings', setting.id));
@@ -103,14 +116,6 @@
       void fn();
     }
   }
-
-  // Slider-only: while the user drags, mirror the live position locally so
-  // the thumb and number label follow without re-deriving `modified` on
-  // every input — otherwise the reset button would appear/disappear as the
-  // user crosses the default value, causing a layout shift mid-drag.
-  // Reset on `change` (pointerup / keyboard step commit) so the store and
-  // the visible label converge on the same value.
-  let sliderDrag = $state<number | null>(null);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let customComponent = $state<Component<any> | null>(null);
@@ -293,7 +298,7 @@
     {:else if setting.type === 'slider'}
       {@const s = setting as NumericSetting}
       {@const storeVal = (value as number | undefined) ?? s.min ?? 0}
-      {@const display = sliderDrag ?? storeVal}
+      {@const display = sliderPreview ?? storeVal}
       <div class="flex items-center gap-2">
         <!--
           min/max/step come BEFORE value so the browser doesn't clamp the
@@ -302,15 +307,18 @@
         -->
         <input
           type="range"
+          aria-label={label}
           min={s.min}
           max={s.max}
           step={s.step}
           value={display}
-          oninput={(e) =>
-            (sliderDrag = Number((e.currentTarget as HTMLInputElement).value))}
+          oninput={(e) => {
+            sliderPreview = Number((e.currentTarget as HTMLInputElement).value);
+            if (live) commit(sliderPreview);
+          }}
           onchange={(e) => {
             const v = Number((e.currentTarget as HTMLInputElement).value);
-            sliderDrag = null;
+            sliderPreview = null;
             commit(v);
           }}
           class="h-1.5 w-44 cursor-pointer appearance-none rounded-full bg-input accent-primary"
@@ -354,6 +362,7 @@
       <div class="flex items-center gap-2">
         <input
           type="color"
+          aria-label={label}
           value={(value as string | undefined) ?? '#000000'}
           oninput={(e) => commit((e.currentTarget as HTMLInputElement).value)}
           class="size-7 cursor-pointer rounded border border-border bg-background"
