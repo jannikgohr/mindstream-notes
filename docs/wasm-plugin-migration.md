@@ -1,21 +1,23 @@
 # Wasm plugin migration gates
 
 The migration has a working Wasmtime runner, TypeScript SDK and first-party
-Wasm components. M5 still needs platform measurements and physical Android
-ARM64 execution. M6 is blocked by that gate. Luau, its bindings and the old
-bundled sources remain available for regression comparisons until then.
+Wasm components. Physical Android ARM64 runtime and app tests now have evidence,
+but M5 remains open. Cached preparation and app-call overhead exceed the target,
+and a macOS interpreter run exceeded the unchanged one-second budget. Desktop
+whole-app measurements remain incomplete. M6 is blocked. Luau, its bindings and
+the old bundled sources remain available for regression comparisons.
 
 ## Milestone status
 
-| Milestone                  | Evidence                                                                                                             | Remaining work                                                                                      |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| M0, inventory and baseline | Host/API inventory below; Linux Luau measurements                                                                    | Baseline startup and whole-process memory on representative desktop and Android hardware            |
-| M1, shared host services   | Runtime-neutral crate; existing Luau host tests                                                                      | None identified                                                                                     |
-| M2, Wasmtime integration   | Verified entry bytes, compile caches, fresh stores, limits, cancellation, permission tests                           | Cross-platform release gate below                                                                   |
-| M3, TypeScript SDK         | Packed tarball creates, installs, typechecks, builds, checks and tests a project without Cargo or rustc              | Run the added desktop CI matrix                                                                     |
-| M4, bundled ports          | Templates and Typst use manifest v2/Wasm; Node tests and app-host tests; template output compared with retained Luau | No local functional gap found; platform gates remain under M5                                       |
-| M5, parity and performance | Portable native/interpreter probe and desktop CI artifacts                                                           | macOS/Windows results, physical Android ARM64, package size, app lifecycle and startup measurements |
-| M6, retire Luau            | Intentionally pending                                                                                                | All M5 gates must pass first                                                                        |
+| Milestone                  | Evidence                                                                                                                   | Remaining work                                                                                                                          |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| M0, inventory and baseline | Host/API inventory; Linux Luau measurements; matching normal Android app builds                                            | Representative desktop whole-app baseline and longer device memory runs                                                                 |
+| M1, shared host services   | Runtime-neutral crate; existing Luau host tests                                                                            | None identified                                                                                                                         |
+| M2, Wasmtime integration   | Verified entry bytes, compile caches, fresh stores, limits, cancellation, permission tests                                 | Cross-platform release gate below                                                                                                       |
+| M3, TypeScript SDK         | Packed Node-only author workflow; all three desktop Node 22 CI jobs passed after the Windows temporary-path fix            | None identified                                                                                                                         |
+| M4, bundled ports          | Templates and Typst use manifest v2/Wasm; Node tests and app-host tests; template output compared with retained Luau       | No local functional gap found; platform gates remain under M5                                                                           |
+| M5, parity and performance | Physical Android native/Pulley probes, release app lifecycle, matching APK/startup/memory measurements, desktop CI results | Cached/app-call overhead, macOS interpreter budget failure, desktop whole-app and installer measurements, broader thermal/soak coverage |
+| M6, retire Luau            | Intentionally pending                                                                                                      | All M5 gates must pass first                                                                                                            |
 
 The npm SDK stays private during migration. It can be packed and installed
 locally. This is not an SDK v1 compatibility promise. The ABI is
@@ -72,7 +74,8 @@ optimization, LTO and stripping.
 A baseline Rust app binary measured 22,311,536 bytes stripped and 9,515,023
 bytes gzipped. That build embedded a stub frontend. It is not an installer
 measurement, and must only be compared with a build using the same stub,
-features, target and toolchain. No current app-size delta has been established.
+features, target and toolchain. The later normal Android app pair is reported
+separately below.
 The scratch timing experiment is historical evidence, not a committed baseline
 benchmark that CI can reproduce. Repeat representative whole-app measurements
 before approving the gate.
@@ -205,11 +208,11 @@ CPU, toolchain, artifact hashes and thermal/power state with the results.
 
 ## Local validation
 
-The full frontend suite passed 3,579 tests in 300 files with two workers.
-After the WIT generator and Node module-scope fix, all 24 SDK/bundled tests
-passed again. The Rust workspace passed 1,040 app unit tests, its integration
-suites and 75 runtime tests. The final bundled components also passed their
-app-host regression checks.
+The Windows frontend suite passed 3,580 tests in 300 files under Node 22.
+All 24 SDK/bundled tests passed. The Windows Rust workspace passed 1,038 app
+tests with six ignored, its integration suites and 70 runtime tests. The
+physical Android runtime passed 75 tests, including interpreter cases. The
+final bundled components also passed their app-host regression checks.
 
 The production web build and Svelte type check passed. Rustfmt, clippy with
 warnings denied, ESLint, theme/i18n lint and CI-filter tests passed. The
@@ -218,9 +221,109 @@ plugin suite passed all four tests, including the Wasm export through IPC and
 enable/disable persistence across restart. Both the Node-only packed SDK
 workflow and a fresh Rust starter build succeeded.
 
-The Android library check stopped at a missing
-`aarch64-linux-android-clang`; no device run or Android package measurement
-has occurred. No macOS/Windows CI result has been observed from this session.
+The earlier Android toolchain blocker is resolved. See the M5 device and CI
+results below. The Windows packaged plugin checks passed five tests, then the
+exact signed Android fixture passed the added lifecycle test.
+
+## M5 device and cross-platform results, 2026-10-20
+
+The [evidence report](benchmarks/wasm-m5-2026-10-20/README.md) links raw logs,
+per-call samples, toolchains, hashes, source patches, screenshots and CI runs.
+The physical device was a Samsung SM-T733, Android 14/API 34, SM7325, ARM64.
+It was USB charging with battery saver off and thermal status 0. Battery rose
+from 5% to 10%; recorded battery temperatures were about 29.1 to 31.7 C. The
+operator reported normal temperatures. Ambient temperature, case and external
+cooling were not measured. These low-charge, sequential runs do not establish
+performance across power and thermal states.
+
+Both native and `--interpreter` release probes completed 100 samples per case
+with the default 1,000 ms budget through `plugin-sdk/android-runner.mjs`.
+No budget was raised. Guest call p95 and full cached preparation plus instance
+plus call p95 differ substantially:
+
+| Android ARM64 case        | Native guest p95 | Pulley guest p95 | Native cached total p95 | Pulley cached total p95 |
+| ------------------------- | ---------------: | ---------------: | ----------------------: | ----------------------: |
+| Rust echo                 |         0.043 ms |         0.064 ms |                 2.03 ms |                 0.90 ms |
+| TypeScript echo           |         0.121 ms |         0.640 ms |                 8.16 ms |                 8.81 ms |
+| Templates render          |         0.337 ms |         4.114 ms |                11.51 ms |                15.39 ms |
+| Templates menu, 500 notes |         25.27 ms |        803.85 ms |                36.43 ms |               815.13 ms |
+| Typst source-only         |         0.123 ms |         0.959 ms |                 7.68 ms |                 8.65 ms |
+
+Instantiation p95 remained below 0.7 ms. Native cold preparation ranged from
+122 to 999 ms; Pulley from 150 to 1,075 ms. Compilation is outside the guest
+execution budget. Both languages refused allocation at 4 MiB, cancelled in
+about 34 ms and recovered. Workload guest memory was at most 1.75 MiB, distinct
+from process memory. The 32 MiB default has headroom for these cases but still
+needs representative third-party workload evidence. An additional ARMv7
+interpreter run on the same tablet completed 100 samples at the default budget;
+its menu guest p95 was 900.78 ms. This is not evidence from a physical ARMv7 CPU.
+
+The normal release app created a separate Templates note with interpolated
+date/title after setting the template folder. Typst source editing worked
+without native tools. A release variant with `tauri/devtools` enabled allowed
+the same signed conformance package to be installed, approved and exercised
+through app IPC on Android and Windows. Android hides package installation in
+its UI; this verifies the backend path, not a mobile installation UI.
+
+Android disable/remove cancelled runaway calls, frames continued, another
+plugin completed, and calls recovered after re-enable. Background/resume kept
+the process alive and the runaway stopped at the default budget. It did not
+demonstrate immediate cancellation on backgrounding. Switching vaults during a
+runaway restarted the process and preserved approval isolation. Immediate
+background cancellation remains unverified if required by the release policy.
+
+Matching normal frontend ARM64 release APKs compared pre-migration `2bdba0b4`
+with migration `9115b342` plus the Android file-lock fix. Both include the same
+startup compatibility fixes and use separate disposable app IDs. The signed
+APK grew from 40,931,879 to 51,256,335 bytes, a 10,324,456-byte increase.
+The native library grew by the same amount. This pair meets the 15 MB size
+target for this ARM64 APK; AAB delivery and other ABI/desktop packages remain
+unmeasured. The historical stub-frontend build is excluded.
+
+Matching normal Windows x86_64 MSVC executables at `2bdba0b4` plus the shared
+compatibility fixes and `436f9b10` measured 31,163,392 and 42,630,656 bytes.
+Both use real normal frontends, release opt-level `s`, LTO and stripping, built
+through the same Tauri CLI without test features. The 11,467,264-byte delta
+meets the 15 MB uncompressed target for this executable pair. Installer and
+macOS bundle sizes, and desktop startup/process memory, remain unmeasured.
+
+Five cold Android activity draws measured medians of 186 ms for Luau and
+199 ms for migration. `am start -W TotalTime` is initial activity draw, not
+interactive-ready time or plugin initialization. After 60 seconds idle, PSS
+was 128,714 versus 122,894 KiB. The first Templates call reached sampled PSS
+137,755 versus 206,607 KiB; process VmHWM was 152,640 versus 270,436 KiB after
+30 calls. Calls 10 through 30 added 591 versus 646 KiB PSS. After 20 seconds
+idle, PSS was 140,213 versus 153,311 KiB. This short run does not prove absence
+of retained memory. Dumpsys RSS and per-process VmHWM use different accounting.
+
+The matching devtools release variants also measured 100 app IPC calls per
+case. Templates render p95 was 12.3 ms with Luau and 58.6 ms with Wasm.
+First calls in cleared apps took 217.2 and 1,064.5 ms; first calls after restart
+took 11.1 and 70.5 ms. The runtime already exceeds the 5 ms cached-total target
+for larger components. App discovery collects, hashes and verifies package
+bytes on each call, and clones the Wasm entry before dispatch. That code is a
+profiling lead, not an isolated attribution of the whole measured regression.
+Do not weaken checksum/approval checks to satisfy the timing target.
+
+Desktop Rust CI passed on Windows, macOS and Linux at `9115b342`. Linux/macOS
+Node 22 checks and all packaged-app suites passed. Windows JS failed because
+Vitest loaded an encoded Windows 8.3 TEMP path; canonicalizing the temp root
+fixed the locally reproduced 15-test failure. The macOS Pulley 500-note menu
+exceeded 1,000 ms in that run. An earlier macOS run passed, but does not erase
+the failure. The probe now records overrun attempts, emits JSON and exits
+unsuccessfully, and CI uploads reports even when a timed call fails. The final
+rerun at `436f9b10` passed all three Node 22 jobs and all three portable runtime
+jobs. Its macOS interpreter menu guest p95 was 621.63 ms, max 777.64 ms, with
+zero interrupted calls. That passing rerun does not explain the preceding
+budget failure. Full status and source revisions are in the evidence report.
+The complete rerun finished successfully, including all three Linux packaged-app
+suites. This CI pass does not close the remaining app performance and hardware
+measurement gates.
+
+M5 stays open for cached/app-call performance, macOS budget reliability,
+desktop startup/memory and matching installer sizes, broader device conditions
+and memory retention, and any required immediate background cancellation.
+No untested platform or missing release measurement is marked passed.
 
 ## Release decision
 
