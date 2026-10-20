@@ -12,7 +12,10 @@ for (const name of ['templates', 'typst']) {
   );
   const bytes = await buildComponent({
     source: join(import.meta.dirname, 'bundled', name, 'main.ts'),
-    out: join(dir, manifest.entry)
+    out: join(dir, manifest.entry),
+    // The faster engine keeps the 500-note Templates menu below one second
+    // under Pulley. Typst keeps the smaller engine for its short guest calls.
+    optSize: name !== 'templates'
   });
   const problems = await checkPackage(dir);
   if (problems.length) throw new Error(`${name}: ${problems.join('; ')}`);

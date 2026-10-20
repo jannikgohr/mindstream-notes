@@ -79,24 +79,29 @@ before approving the gate.
 
 The initial standalone toolchain experiment found substantially smaller
 QuickJS components than StarlingMonkey, so the SDK uses `componentize-qjs`
-with its size-optimized engine. Runtime limits apply to summed guest linear
-memory; process RSS/PSS and compiled-cache memory must be measured separately.
+with its size-optimized engine by default. The bundled Templates plugin uses
+the faster QuickJS engine to fit its 500-note menu within the default one-second
+budget under Pulley. Typst retains the smaller engine. Runtime limits apply to
+summed guest linear memory; process RSS/PSS and compiled-cache memory must be
+measured separately.
 
 ## Recorded Linux Wasm measurements
 
 The [JSON report](benchmarks/wasm-plugin-linux-x86_64.json) records the component
 hashes, toolchain, host reports, guest linear memory and timing distributions.
-These release-mode samples used a development machine with concurrent builds,
-so they do not close the representative-hardware gate.
+The current release-mode samples used an idle development machine, with
+100 calls per case and the app's one-second budget. They do not close the
+representative-hardware gate. Earlier size-optimized samples are retained
+separately, with their concurrent-build conditions recorded.
 
 | Case                       | Native call p95 | Pulley call p95 | Guest memory |
 | -------------------------- | --------------: | --------------: | -----------: |
-| TypeScript echo            |         0.54 ms |         0.81 ms |     1.50 MiB |
-| Templates render           |         0.51 ms |         9.29 ms |     1.44 MiB |
-| Templates menu, 500 notes  |        37.73 ms |      1214.43 ms |     1.75 MiB |
-| Typst source-only fallback |         0.27 ms |         1.13 ms |     1.44 MiB |
+| TypeScript echo            |         0.16 ms |         0.55 ms |     1.50 MiB |
+| Templates render           |         0.42 ms |         3.02 ms |     1.44 MiB |
+| Templates menu, 500 notes  |        14.79 ms |       439.23 ms |     1.75 MiB |
+| Typst source-only fallback |         0.17 ms |         0.77 ms |     1.44 MiB |
 
-The largest p95 instantiation time was 0.31 ms. Cancellation completed in
+The largest p95 instantiation time was 0.30 ms. Cancellation completed in
 30 to 35 ms and the requested 100 ms timeout fired in about 102 to 107 ms.
 Both guest languages stopped at a 4 MiB memory cap. Cold compilation and disk
 cache loads are reported separately in the JSON. Process memory includes
@@ -127,18 +132,23 @@ compares host reports and permission denials, checks cancellation, timeout and
 memory refusal, and measures cached invocation separately from cold compile
 and disk-cache load. It also measures Templates rendering and a 500-note menu,
 and Typst's portable source-only behavior. `--iterations N` changes the default
-100 samples. Timed workloads request the existing five-second host ceiling
-so expensive cases can finish and report their cost. This does not change
-bundled manifests or the app's one-second default. Dedicated timeout checks
-still request 100 ms. Component SHA-256 hashes identify the measured bytes.
+100 samples. Timed workloads use the app's one-second default. For engine
+comparisons, `--templates-component /path/to/plugin.wasm` selects different
+Templates bytes and `--timeout-ms 5000` allows an expensive case to report
+its cost up to the host ceiling. These flags do not change bundled manifests
+or app defaults. Dedicated timeout checks still request 100 ms. Component
+SHA-256 hashes identify the measured bytes.
 Release mode is recorded in the JSON report. Debug timings do not count.
 
-A local Pulley run of the 500-note Templates menu exceeded the app's default
-one-second budget. That is an unresolved M5 performance regression on the
-interpreter path, even though native execution succeeds. The measured stress
-case uses the five-second ceiling to quantify it. Do not mark interpreter
-parity passed or remove Luau on the strength of trivial-call timings. Resolve
-this workload or explicitly accept a changed budget before M6.
+The size-optimized Templates engine exceeded the one-second budget under
+Pulley. The bundled build now selects the faster engine. The report retains
+the original size-optimized measurements, taken with a five-second allowance,
+for comparison. Desktop Pulley measurements still do not replace the required
+physical Android run. The faster Templates component is 1,727,495 bytes,
+540,607 bytes larger than the size-optimized component. Guest linear memory
+was unchanged in these workloads. The slowest menu call in the current Pulley
+run took 477.84 ms. The earlier size-optimized run exceeded one second, but
+its concurrent-build conditions prevent a controlled speedup comparison.
 
 The desktop `plugin-runtime` CI job uploads native and interpreter reports on
 Linux, macOS and Windows. The Rust job tests the whole workspace, including

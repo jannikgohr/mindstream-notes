@@ -1,6 +1,7 @@
 //! Portable runtime probe. Run in release mode; stdout is one JSON report.
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use mindstream_plugin_runtime::{
@@ -17,6 +18,8 @@ const TYPESCRIPT: &[u8] =
     include_bytes!("../../../plugin-sdk/conformance/dist/conformance-ts.wasm");
 const TEMPLATES: &[u8] = include_bytes!("../../../plugins/templates/plugin.wasm");
 const TYPST: &[u8] = include_bytes!("../../../plugins/typst/plugin.wasm");
+
+static MEASUREMENT_TIMEOUT_MS: OnceLock<u64> = OnceLock::new();
 
 struct Scratch(PathBuf);
 impl Drop for Scratch {
@@ -38,9 +41,8 @@ fn invoke(
         export,
         input,
         setup,
-        // Measure expensive workloads up to the existing host ceiling. The
-        // report records this; it does not change any plugin's manifest limit.
-        limits: limits::WASM.resolve(None, Some(5000)),
+        // Use the app default unless the probe explicitly requests another limit.
+        limits: limits::WASM.resolve(None, MEASUREMENT_TIMEOUT_MS.get().copied()),
         native_allowance: limits::NATIVE_ALLOWANCE,
         cache_dir: Some(cache),
     })
@@ -88,7 +90,7 @@ fn sample(
     Ok(json!({
         "componentSha256": cache::hex(&cache::digest(component)),
         "componentBytes": component.len(),
-        "measurementTimeoutMs": 5000,
+        "measurementTimeoutMs": MEASUREMENT_TIMEOUT_MS.get(),
         "coldSource": format!("{:?}", cold.source),
         "coldPrepareMs": ms(cold.prepare),
         "coldInstantiateMs": ms(cold.instantiate),
@@ -137,6 +139,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !(1..=10_000).contains(&iterations) {
         return Err("iterations must be in 1..=10000".into());
     }
+    let timeout_ms = args
+        .iter()
+        .position(|arg| arg == "--timeout-ms")
+        .map(|i| {
+            args.get(i + 1)
+                .ok_or("--timeout-ms needs a value")?
+                .parse::<u64>()
+                .map_err(|_| "invalid timeout")
+        })
+        .transpose()?
+        .unwrap_or(1000);
+    if !(50..=5000).contains(&timeout_ms) {
+        return Err("timeout must be in 50..=5000 ms".into());
+    }
+    MEASUREMENT_TIMEOUT_MS.set(timeout_ms).unwrap();
     let scratch = Scratch(
         std::env::temp_dir().join(format!("mindstream-plugin-probe-{}", uuid::Uuid::new_v4())),
     );
