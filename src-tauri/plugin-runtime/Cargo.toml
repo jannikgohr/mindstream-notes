@@ -18,5 +18,30 @@ getrandom = "0.4"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 thiserror = "2.0.18"
 uuid = { version = "1", features = ["v4"] }
+
+# The Wasm component runtime. Off here, though wasmtime turns them on by
+# default: async (host calls run on a blocking worker), the on-disk `cache`
+# feature (`wasm::cache` keeps its own), the pooling allocator, GC, threads
+# and the debugging extras. Targets Cranelift has no backend for (32-bit ARM
+# and x86 Android) switch to the Pulley interpreter on their own; wasmtime's
+# build script does that.
+wasmtime = { version = "49.0.4", default-features = false, features = [
+  "runtime",
+  "cranelift",
+  "component-model",
+  "std",
+  "parallel-compilation",
+] }
+
+[dev-dependencies]
+wat = "1"
+# `pulley` lets the tests run every component through the interpreter that
+# 32-bit Android uses, on a desktop runner. `wat` writes the small hostile
+# fixtures in text.
+wasmtime = { version = "49.0.4", default-features = false, features = [
+  "pulley",
+  "wat",
+] }

@@ -45,7 +45,12 @@ use ts_rs::TS;
 /// changes meaning, a default that flips. Additive changes do not bump it,
 /// because the forward-compatibility rules cover them: an unknown contribution
 /// is dropped with a warning, an unknown permission is fatal.
-pub const CURRENT_MANIFEST_VERSION: u32 = 1;
+///
+/// Version 2 is the move from Luau to WebAssembly: `runtime: "wasm"` exists
+/// only from 2 on, and `runtime: "luau"` only in 1. A `manifest-only` plugin
+/// means the same in both, so version 1 declarative manifests keep loading
+/// without anyone rewriting them.
+pub const CURRENT_MANIFEST_VERSION: u32 = 2;
 
 /// How a plugin produces its contributions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, TS)]
@@ -54,13 +59,35 @@ pub const CURRENT_MANIFEST_VERSION: u32 = 1;
 pub enum PluginRuntime {
     /// Purely declarative: everything comes from the manifest, no code runs.
     ManifestOnly,
-    /// A sandboxed Luau `entry` script, run in this backend.
+    /// A sandboxed Luau `entry` script, run in this backend. Manifest
+    /// version 1 only; being replaced by `wasm`.
     Luau,
+    /// A WebAssembly component `entry` targeting the `mindstream:plugin`
+    /// world, run in this backend. Manifest version 2 and later.
+    Wasm,
 }
 
 impl PluginRuntime {
     pub fn is_scripted(self) -> bool {
-        matches!(self, PluginRuntime::Luau)
+        matches!(self, PluginRuntime::Luau | PluginRuntime::Wasm)
+    }
+
+    /// The manifest spelling, for error messages.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PluginRuntime::ManifestOnly => "manifest-only",
+            PluginRuntime::Luau => "luau",
+            PluginRuntime::Wasm => "wasm",
+        }
+    }
+
+    /// The file extension its entry must have.
+    fn entry_extension(self) -> Option<&'static str> {
+        match self {
+            PluginRuntime::ManifestOnly => None,
+            PluginRuntime::Luau => Some(".luau"),
+            PluginRuntime::Wasm => Some(".wasm"),
+        }
     }
 }
 
@@ -340,6 +367,10 @@ pub enum ManifestError {
     UnsafeEntry(String),
     #[error("manifest.entry is only valid for a scripted runtime")]
     UnexpectedEntry,
+    #[error("runtime \"wasm\" needs manifestVersion 2")]
+    WasmNeedsVersion2,
+    #[error("runtime \"luau\" is not part of manifestVersion 2; port the plugin to \"wasm\"")]
+    LuauRetired,
 }
 
 /// A plugin id: dotted, lowercase, at least two segments.
@@ -371,13 +402,13 @@ fn is_valid_id(id: &str) -> bool {
 }
 
 /// A safe scripted entry: one path segment with the runtime's extension.
-fn is_safe_entry(entry: &str) -> bool {
+fn is_safe_entry(entry: &str, extension: &str) -> bool {
     !entry.is_empty()
         && !entry.contains('/')
         && !entry.contains('\\')
         && !entry.contains("..")
-        && entry.ends_with(".luau")
-        && entry.len() > ".luau".len()
+        && entry.ends_with(extension)
+        && entry.len() > extension.len()
         && entry
             .chars()
             .next()
@@ -401,14 +432,30 @@ impl Manifest {
         if !is_valid_id(&manifest.id) {
             return Err(ManifestError::BadId(manifest.id));
         }
-        match (manifest.runtime.is_scripted(), manifest.entry.as_deref()) {
-            (true, None) => return Err(ManifestError::MissingEntry { runtime: "luau" }),
-            (true, Some(entry)) if !is_safe_entry(entry) => {
+        match (manifest.runtime, manifest.manifest_version) {
+            (PluginRuntime::Wasm, version) if version < 2 => {
+                return Err(ManifestError::WasmNeedsVersion2)
+            }
+            (PluginRuntime::Luau, version) if version >= 2 => {
+                return Err(ManifestError::LuauRetired)
+            }
+            _ => {}
+        }
+        match (
+            manifest.runtime.entry_extension(),
+            manifest.entry.as_deref(),
+        ) {
+            (Some(_), None) => {
+                return Err(ManifestError::MissingEntry {
+                    runtime: manifest.runtime.as_str(),
+                })
+            }
+            (Some(extension), Some(entry)) if !is_safe_entry(entry, extension) => {
                 return Err(ManifestError::UnsafeEntry(entry.to_string()))
             }
             // A declarative plugin has nothing to run; a stray entry is a
             // mistake worth surfacing rather than silently ignoring.
-            (false, Some(_)) => return Err(ManifestError::UnexpectedEntry),
+            (None, Some(_)) => return Err(ManifestError::UnexpectedEntry),
             _ => {}
         }
         Ok(manifest)
@@ -532,7 +579,7 @@ mod tests {
     #[test]
     fn refuses_a_manifest_version_from_the_future() {
         let mut v = base();
-        v["manifestVersion"] = 2.into();
+        v["manifestVersion"] = (CURRENT_MANIFEST_VERSION + 1).into();
         let err = parse(v).unwrap_err();
         assert!(err.to_string().contains("update the app"), "{err}");
     }
@@ -563,6 +610,47 @@ mod tests {
 
         v["entry"] = "main.luau".into();
         assert_eq!(parse(v).unwrap().entry.as_deref(), Some("main.luau"));
+    }
+
+    #[test]
+    fn wasm_plugins_need_version_two_and_a_safe_wasm_entry() {
+        let mut v = base();
+        v["manifestVersion"] = 2.into();
+        v["runtime"] = "wasm".into();
+        assert!(matches!(
+            parse(v.clone()),
+            Err(ManifestError::MissingEntry { runtime: "wasm" })
+        ));
+        for bad in ["../plugin.wasm", "dist/plugin.wasm", "plugin.luau", ".wasm"] {
+            let mut v = v.clone();
+            v["entry"] = bad.into();
+            assert!(
+                matches!(parse(v), Err(ManifestError::UnsafeEntry(_))),
+                "{bad} should be rejected"
+            );
+        }
+        v["entry"] = "plugin.wasm".into();
+        let m = parse(v.clone()).unwrap();
+        assert_eq!(m.runtime, PluginRuntime::Wasm);
+        assert!(m.runtime.is_scripted());
+
+        v["manifestVersion"] = 1.into();
+        assert!(matches!(parse(v), Err(ManifestError::WasmNeedsVersion2)));
+    }
+
+    #[test]
+    fn version_two_retires_luau_and_keeps_declarative_plugins() {
+        let mut v = base();
+        v["manifestVersion"] = 2.into();
+        assert_eq!(
+            parse(v.clone()).unwrap().runtime,
+            PluginRuntime::ManifestOnly
+        );
+        v["runtime"] = "luau".into();
+        v["entry"] = "main.luau".into();
+        let err = parse(v).unwrap_err();
+        assert!(matches!(err, ManifestError::LuauRetired));
+        assert!(err.to_string().contains("port the plugin"), "{err}");
     }
 
     #[test]

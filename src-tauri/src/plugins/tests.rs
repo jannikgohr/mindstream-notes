@@ -52,6 +52,8 @@ fn call(granted: &[&str], export: &str, input: serde_json::Value) -> ScriptCall 
         notes: Vec::new(),
         data_root: None,
         cancel: runtime::cancel::CancelToken::new(),
+        verified_entry: None,
+        cache_dir: None,
     }
 }
 
@@ -449,6 +451,7 @@ fn reconcile_registers_discovered_plugins_and_returns_manifests() {
             signature_status: "unsigned".into(),
             manifest: manifest_with(serde_json::json!({})),
             manifest_json: serde_json::json!({ "id": "com.a.plugin", "name": "A" }),
+            entry_bytes: None,
         }];
         let views = reconcile(c, discovered)?;
         assert_eq!(views.len(), 1);
@@ -567,6 +570,106 @@ fn templates_plugin_localizes_dates_via_locale() {
     )
     .unwrap();
     assert_eq!(out["title"], serde_json::json!("Juli"));
+}
+
+/// The conformance component the runtime crate's tests use.
+const CONFORMANCE_WASM: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../plugin-sdk/conformance/dist/conformance-rust.wasm"
+));
+
+fn write_wasm_plugin(dir: &std::path::Path, permissions: serde_json::Value) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("plugin.wasm"), CONFORMANCE_WASM).unwrap();
+    std::fs::write(
+        dir.join("manifest.json"),
+        serde_json::json!({
+            "manifestVersion": 2,
+            "id": "com.a.wasm",
+            "name": "Wasm",
+            "version": "1.0.0",
+            "runtime": "wasm",
+            "entry": "plugin.wasm",
+            "permissions": permissions,
+        })
+        .to_string(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_wasm_plugin_on_disk_carries_the_bytes_its_checksum_covers() {
+    let dir = std::env::temp_dir().join(format!("ms-wasm-plugin-{}", uuid::Uuid::new_v4()));
+    write_wasm_plugin(&dir, serde_json::json!([]));
+    let plugin =
+        discovery::read_plugin(discovery::PluginFiles::Fs(dir.clone()), SOURCE_INSTALLED).unwrap();
+    assert_eq!(plugin.manifest.runtime, manifest::PluginRuntime::Wasm);
+    assert_eq!(
+        plugin.entry_bytes.as_deref().map(Vec::as_slice),
+        Some(CONFORMANCE_WASM)
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn run_plugin_script_executes_a_wasm_component() {
+    let dir = std::env::temp_dir().join(format!("ms-wasm-plugin-{}", uuid::Uuid::new_v4()));
+    write_wasm_plugin(&dir, serde_json::json!(["notes.read"]));
+    let plugin =
+        discovery::read_plugin(discovery::PluginFiles::Fs(dir.clone()), SOURCE_INSTALLED).unwrap();
+    let mut menu = call(
+        &["notes.read"],
+        "menu",
+        serde_json::json!({ "settings": { "tag": "tpl" } }),
+    );
+    menu.notes = vec![runtime::host::NoteMeta {
+        id: "n1".into(),
+        title: "Daily".into(),
+        tags: vec!["tpl".into()],
+        kind: "markdown".into(),
+        folder_id: None,
+        folder_path: String::new(),
+        created: "2026-07-26T00:00:00Z".into(),
+        modified: "2026-07-26T00:00:00Z".into(),
+    }];
+    menu.verified_entry = plugin.entry_bytes.clone();
+    let out = run_plugin_script(&plugin.files, &plugin.manifest, menu).unwrap();
+    assert_eq!(out["effect"], "openMenu");
+    assert_eq!(out["items"][0]["run"]["sourceNoteId"], "n1");
+
+    // Without the verified bytes the entry is read from the package.
+    let echo = run_plugin_script(
+        &plugin.files,
+        &plugin.manifest,
+        call(&[], "echo", serde_json::json!({ "x": 1 })),
+    )
+    .unwrap();
+    assert_eq!(echo, serde_json::json!({ "x": 1 }));
+
+    // The granted set, not the manifest, decides: notes.read was not passed.
+    let denied = run_plugin_script(
+        &plugin.files,
+        &plugin.manifest,
+        call(&[], "menu", serde_json::json!({})),
+    )
+    .unwrap_err();
+    assert!(denied.to_string().contains("Denied"), "{denied}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn wasm_limits_come_from_the_wasm_policy() {
+    let m = manifest_with(serde_json::json!({
+        "manifestVersion": 2, "runtime": "wasm", "entry": "plugin.wasm",
+        "limits": { "memoryBytes": 1 }
+    }));
+    let limits = script_limits(&m);
+    assert_eq!(limits.memory_bytes, 4 * 1024 * 1024, "the wasm floor");
+    assert_eq!(
+        limits.timeout,
+        std::time::Duration::from_secs(1),
+        "the wasm default"
+    );
 }
 
 #[test]
@@ -965,6 +1068,7 @@ fn on_disk(id: &str, checksum: &str, source: &str) -> discovery::DiscoveredPlugi
         signature_status: "unsigned".to_string(),
         manifest: manifest_with(serde_json::json!({ "id": id })),
         manifest_json: serde_json::json!({ "id": id }),
+        entry_bytes: None,
     }
 }
 

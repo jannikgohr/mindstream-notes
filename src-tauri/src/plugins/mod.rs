@@ -850,7 +850,11 @@ fn ensure_inside_data_root(root: &Path, target: &Path) -> AppResult<()> {
 /// clamped into the range of its runtime. A manifest may ask; only the host
 /// decides.
 fn script_limits(manifest: &manifest::Manifest) -> runtime::limits::Limits {
-    runtime::limits::LUAU.resolve(manifest.limits.memory_bytes, manifest.limits.timeout_ms)
+    let policy = match manifest.runtime {
+        manifest::PluginRuntime::Wasm => &runtime::limits::WASM,
+        _ => &runtime::limits::LUAU,
+    };
+    policy.resolve(manifest.limits.memory_bytes, manifest.limits.timeout_ms)
 }
 
 /// One call of a scripted plugin: what runs, and what it may reach.
@@ -864,6 +868,14 @@ pub struct ScriptCall {
     pub notes: Vec<runtime::host::NoteMeta>,
     pub data_root: Option<PathBuf>,
     pub cancel: runtime::cancel::CancelToken,
+    /// A Wasm plugin's component as read when its checksum was verified
+    /// (`DiscoveredPlugin::entry_bytes`). `None` reads the entry from
+    /// `files`, which is only right for bytes that cannot change: builtins
+    /// embedded in the binary, and tests.
+    pub verified_entry: Option<std::sync::Arc<Vec<u8>>>,
+    /// Where compiled components are kept between runs. `None` keeps them in
+    /// memory only.
+    pub cache_dir: Option<PathBuf>,
 }
 
 /// Load a scripted plugin's entry and run one export under the runtime's
@@ -896,6 +908,34 @@ pub fn run_plugin_script(
     } else {
         HashMap::new()
     };
+    let limits = script_limits(manifest);
+    if manifest.runtime == manifest::PluginRuntime::Wasm {
+        let component = match call.verified_entry {
+            Some(bytes) => bytes,
+            None => std::sync::Arc::new(
+                files
+                    .read_bytes(entry)?
+                    .ok_or_else(|| AppError::InvalidArg(format!("entry '{entry}' not found")))?,
+            ),
+        };
+        let wasm = runtime::wasm::WasmRuntime::global()?;
+        return Ok(wasm.invoke(runtime::wasm::WasmCall {
+            component: &component,
+            export: &call.export,
+            input: &call.input,
+            setup: runtime::host::CallSetup {
+                plugin_id: manifest.id.clone(),
+                permissions: call.granted,
+                notes: call.notes,
+                native_tools,
+                data_root: call.data_root,
+                cancel: call.cancel,
+            },
+            limits,
+            native_allowance: runtime::limits::NATIVE_ALLOWANCE,
+            cache_dir: call.cache_dir.as_deref(),
+        })?);
+    }
     let source = files
         .read_text(entry)?
         .ok_or_else(|| AppError::InvalidArg(format!("entry '{entry}' not found")))?;
@@ -912,7 +952,7 @@ pub fn run_plugin_script(
         native_tools,
         data_root: call.data_root,
         modules,
-        limits: script_limits(manifest),
+        limits,
         cancel: call.cancel,
     })
 }
@@ -1439,6 +1479,11 @@ pub async fn plugins_run_script(
     let lease = plugin.lease;
     let files = plugin.files;
     let manifest = plugin.manifest;
+    let verified_entry = plugin.entry_bytes;
+    // Compiled components are device-wide, like the packages they come from.
+    let cache_dir = crate::paths::app_data_root(&app)
+        .ok()
+        .map(|root| root.join("plugin-cache").join("wasm"));
     // The plugin's isolated data directory: the cwd for any native tool the
     // script runs via `ms.nativeTools`, and the root `ms.storage` reads and
     // writes under. Resolved here (it needs the AppHandle) so the blocking
@@ -1467,6 +1512,8 @@ pub async fn plugins_run_script(
                 notes,
                 data_root,
                 cancel: registration.token().clone(),
+                verified_entry,
+                cache_dir,
             },
         )
     })

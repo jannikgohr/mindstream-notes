@@ -11,6 +11,8 @@
 //! - [`cancel`]: stopping a running call from outside it.
 //! - [`paths`] and [`process`]: containment for storage paths, and running a
 //!   declared native tool directly, never through a shell.
+//! - [`wasm`]: the WebAssembly component runtime, with compiled-component
+//!   caching, memory caps, deadlines and cancellation.
 //!
 //! None of it performs a note write. A plugin returns data and declarative
 //! effects, and the app acts on them.
@@ -23,5 +25,6 @@ pub mod limits;
 pub mod markdown;
 pub mod paths;
 pub mod process;
+pub mod wasm;
 
 pub use error::{HostError, HostResult};

@@ -19,6 +19,11 @@ node_modules
 
 # Tauri
 /src-tauri/target
+
+# Plugin SDK build output. The conformance components in
+# plugin-sdk/conformance/dist are committed: the runtime's tests load them, and
+# building them needs toolchains `cargo test` should not.
+/plugin-sdk/**/target
 /src-tauri/gen/schemas
 # Cargo.lock is intentionally committed for src-tauri: it's a binary
 # crate (the app), and reproducible builds need a pinned dependency

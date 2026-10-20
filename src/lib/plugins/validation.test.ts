@@ -147,7 +147,7 @@ describe('validateManifest', () => {
   it('rejects an unknown runtime', () => {
     expect(() =>
       validateManifest(validManifest({ runtime: 'js', entry: 'main.js' }))
-    ).toThrow(/expected "manifest-only" or "luau"/);
+    ).toThrow(/expected "manifest-only" or "wasm"/);
   });
 
   it('accepts a luau runtime with a safe entry', () => {
@@ -158,13 +158,51 @@ describe('validateManifest', () => {
     expect(m.entry).toBe('main.luau');
   });
 
-  it('refuses a wasm runtime', () => {
-    // The wasm tier is gone: its entire host API was `ms.notes_count()`, so a
-    // wasm plugin could not express any of the effects the contract expects.
-    // Refusing outright beats loading one half-supported.
+  it('accepts a wasm runtime in manifest version 2', () => {
+    const m = validateManifest(
+      validManifest({
+        manifestVersion: 2,
+        runtime: 'wasm',
+        entry: 'plugin.wasm'
+      })
+    );
+    expect(m.runtime).toBe('wasm');
+    expect(m.entry).toBe('plugin.wasm');
+  });
+
+  it('pairs each scripted runtime with its manifest version', () => {
+    // Version 2 is the move to WebAssembly: wasm needs it, and Luau is not
+    // part of it. A declarative plugin is valid in both.
     expect(() =>
-      validateManifest(validManifest({ runtime: 'wasm', entry: 'main.wasm' }))
-    ).toThrow(/is unsupported; expected "manifest-only" or "luau"/);
+      validateManifest(validManifest({ runtime: 'wasm', entry: 'plugin.wasm' }))
+    ).toThrow(/needs manifestVersion 2/);
+    expect(() =>
+      validateManifest(
+        validManifest({
+          manifestVersion: 2,
+          runtime: 'luau',
+          entry: 'main.luau'
+        })
+      )
+    ).toThrow(/port the plugin to "wasm"/);
+    expect(
+      validateManifest(validManifest({ manifestVersion: 2 })).runtime
+    ).toBe('manifest-only');
+  });
+
+  it('rejects a traversing or non-.wasm entry', () => {
+    for (const entry of [
+      '../plugin.wasm',
+      'dist/plugin.wasm',
+      'plugin.luau',
+      '.wasm'
+    ]) {
+      expect(() =>
+        validateManifest(
+          validManifest({ manifestVersion: 2, runtime: 'wasm', entry })
+        )
+      ).toThrow(/must be a plain \.wasm filename/);
+    }
   });
 
   it('requires an entry for scripted runtimes', () => {
@@ -190,7 +228,7 @@ describe('validateManifest', () => {
   it('rejects an entry on a manifest-only runtime', () => {
     expect(() =>
       validateManifest(validManifest({ entry: 'main.luau' }))
-    ).toThrow(/only valid for runtime "luau"/);
+    ).toThrow(/only valid for a scripted runtime/);
   });
 
   it('rejects invalid limits', () => {
@@ -301,7 +339,7 @@ describe('validateManifest', () => {
     const m = withContributes((c) => {
       c.toolbar = [luauButton];
     });
-    expect(() => validateManifest(m)).toThrow(/require runtime "luau"/);
+    expect(() => validateManifest(m)).toThrow(/require a scripted runtime/);
   });
 
   it('rejects a toolbar icon that is not a safe .svg path', () => {
@@ -334,7 +372,7 @@ describe('validateManifest', () => {
     const bad = withContributes((c) => {
       (c.noteTemplates as Record<string, unknown>[])[0].render = 'render';
     });
-    expect(() => validateManifest(bad)).toThrow(/requires runtime "luau"/);
+    expect(() => validateManifest(bad)).toThrow(/requires a scripted runtime/);
   });
 
   it('accepts a template render export on a luau plugin', () => {
@@ -405,7 +443,7 @@ describe('validateManifest', () => {
       }
     ];
     expect(() => validateManifest(manifestOnly)).toThrow(
-      /require runtime "luau"/
+      /require a scripted runtime/
     );
   });
 
@@ -2690,7 +2728,7 @@ describe('validateManifest — remaining entry guards', () => {
         render: { export: 'render' }
       }
     ];
-    expect(() => validateManifest(m)).toThrow(/require runtime "luau"/);
+    expect(() => validateManifest(m)).toThrow(/require a scripted runtime/);
   });
 });
 
@@ -2819,10 +2857,10 @@ describe('manifest versioning', () => {
   });
 
   it('rejects a manifest written for a newer app', () => {
-    // The point of the field: a v2 manifest fails with "update the app"
-    // rather than with whatever v2 field this version happens to read first.
+    // The point of the field: a v3 manifest fails with "update the app"
+    // rather than with whatever v3 field this version happens to read first.
     expect(() =>
-      validateManifest(validManifest({ manifestVersion: 2 }))
+      validateManifest(validManifest({ manifestVersion: 3 }))
     ).toThrow(/newer than this app understands/);
   });
 
