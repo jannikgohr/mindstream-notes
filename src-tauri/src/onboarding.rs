@@ -134,7 +134,10 @@ pub fn should_seed_demo(root: &Path, kind: Kind) -> AppResult<bool> {
     Ok(kind != Kind::Release && read(root)?.status != Status::InProgress)
 }
 
-fn active_vault(app: &AppHandle, window: &tauri::WebviewWindow) -> AppResult<String> {
+fn active_vault<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    window: &tauri::WebviewWindow<R>,
+) -> AppResult<String> {
     if window.label() != "main" {
         return Err(AppError::InvalidArg(
             "setup is available in the main window".into(),
@@ -146,7 +149,10 @@ fn active_vault(app: &AppHandle, window: &tauri::WebviewWindow) -> AppResult<Str
 }
 
 #[tauri::command]
-pub fn get_onboarding(app: AppHandle, window: tauri::WebviewWindow) -> CommandResult<Progress> {
+pub fn get_onboarding<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    window: tauri::WebviewWindow<R>,
+) -> CommandResult<Progress> {
     let vault = active_vault(&app, &window)?;
     let root = crate::paths::app_data_root(&app)?;
     let _lock = RootLock::acquire(&root)?;
@@ -159,7 +165,10 @@ pub fn get_onboarding(app: AppHandle, window: tauri::WebviewWindow) -> CommandRe
 }
 
 #[tauri::command]
-pub fn restart_onboarding(app: AppHandle, window: tauri::WebviewWindow) -> CommandResult<Progress> {
+pub fn restart_onboarding<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    window: tauri::WebviewWindow<R>,
+) -> CommandResult<Progress> {
     let vault = active_vault(&app, &window)?;
     let root = crate::paths::app_data_root(&app)?;
     let _lock = RootLock::acquire(&root)?;
@@ -181,9 +190,9 @@ pub fn restart_onboarding(app: AppHandle, window: tauri::WebviewWindow) -> Comma
 }
 
 #[tauri::command]
-pub fn save_onboarding_step(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
+pub fn save_onboarding_step<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    window: tauri::WebviewWindow<R>,
     id: Uuid,
     step: Step,
 ) -> CommandResult<Progress> {
@@ -212,9 +221,9 @@ pub struct Finished {
 }
 
 #[tauri::command]
-pub fn finish_onboarding(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
+pub fn finish_onboarding<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    window: tauri::WebviewWindow<R>,
     db: tauri::State<'_, crate::db::Db>,
     id: Uuid,
     skipped: bool,
