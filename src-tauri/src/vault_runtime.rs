@@ -42,6 +42,7 @@ impl Role {
             !matches!(
                 arg.as_str(),
                 crate::AUTOSTART_ARG
+                    | "--onboarding"
                     | "--supervised-vaults"
                     | crate::coordinator_revival::BACKGROUND_ARG
             )
@@ -98,6 +99,14 @@ mod tests {
         assert_eq!(
             Role::parse(Kind::Test, &["--supervised-vaults".into()]).unwrap(),
             Role::Host
+        );
+        assert_eq!(
+            Role::parse(Kind::Dev, &["--onboarding".into()]).unwrap(),
+            Role::Host
+        );
+        assert_eq!(
+            Role::parse(Kind::Test, &["--onboarding".into()]).unwrap(),
+            Role::Direct
         );
     }
     #[test]

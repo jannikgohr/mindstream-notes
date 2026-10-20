@@ -44,6 +44,7 @@
   import {
     findCommandByBinding,
     getBinding,
+    getDefaultBinding,
     HotkeyBindingConflictError,
     isCustomized,
     resetBinding,
@@ -559,7 +560,9 @@
             {@const current = getBinding(cmd.id)}
             {@const display = displayBinding(current)}
             {@const customized = isCustomized(cmd.id)}
-            {@const defaultBindingCanonical = canonicalize(cmd.defaultBinding)}
+            {@const defaultBindingCanonical = canonicalize(
+              getDefaultBinding(cmd.id)
+            )}
             {@const currentCanonical = canonicalize(current)}
             <div
               class="grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1 py-2.5"

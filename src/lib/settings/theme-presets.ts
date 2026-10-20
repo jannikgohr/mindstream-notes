@@ -1,6 +1,15 @@
 import builtinData from './theme-presets.json';
 import { applyUiFontSize } from './appearance';
 
+// Built-in names are translated UI copy; custom presets keep their saved names.
+export const BUILTIN_PRESET_NAMES = {
+  default: 'theme.preset.default',
+  'builtin:slate-indigo': 'theme.preset.slate',
+  'builtin:paper-teal': 'theme.preset.paper',
+  warm: 'theme.preset.warm',
+  forest: 'theme.preset.forest'
+} as const;
+
 export const THEME_TOKENS = [
   'surface-0',
   'surface-1',

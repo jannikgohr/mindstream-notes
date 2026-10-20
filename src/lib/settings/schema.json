@@ -83,6 +83,12 @@
           "id": "general.behavior",
           "settings": [
             {
+              "id": "general.runOnboarding",
+              "scope": "D",
+              "type": "button",
+              "actionId": "run-onboarding"
+            },
+            {
               "id": "general.vaultOpening",
               "scope": "D",
               "type": "select",
@@ -485,6 +491,13 @@
         {
           "id": "hotkeys.list",
           "settings": [
+            {
+              "id": "hotkeys.preset",
+              "scope": "D",
+              "type": "custom",
+              "customId": "hotkey-preset",
+              "default": "mindstream"
+            },
             {
               "id": "hotkeys.globalShortcuts",
               "scope": "V",

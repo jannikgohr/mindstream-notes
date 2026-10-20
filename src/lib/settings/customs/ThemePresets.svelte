@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { BUILTIN_PRESETS, resolvedPreset } from '../theme-presets';
+  import {
+    BUILTIN_PRESETS,
+    BUILTIN_PRESET_NAMES,
+    resolvedPreset
+  } from '../theme-presets';
   import { themeCatalog, refreshThemePresets } from '../theme.svelte';
   import { getSettingValue, setSettingValue } from '../store.svelte';
   import { saveThemePreset, deleteThemePreset } from '$lib/api/theme-presets';
@@ -17,17 +21,9 @@
   const custom = $derived(
     !BUILTIN_PRESETS.some((preset) => preset.id === selected)
   );
-  // Built-in names are UI copy; a user preset keeps the name it was saved with.
-  const BUILTIN_NAMES = {
-    default: 'theme.preset.default',
-    'builtin:slate-indigo': 'theme.preset.slate',
-    'builtin:paper-teal': 'theme.preset.paper',
-    warm: 'theme.preset.warm',
-    forest: 'theme.preset.forest'
-  } as const;
   function presetLabel(item: { id: string; name: string }): string {
-    return Object.hasOwn(BUILTIN_NAMES, item.id)
-      ? tUi(BUILTIN_NAMES[item.id as keyof typeof BUILTIN_NAMES])
+    return Object.hasOwn(BUILTIN_PRESET_NAMES, item.id)
+      ? tUi(BUILTIN_PRESET_NAMES[item.id as keyof typeof BUILTIN_PRESET_NAMES])
       : item.name;
   }
   async function select(id: string) {

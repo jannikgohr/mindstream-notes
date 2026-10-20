@@ -1138,6 +1138,13 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
     let root = crate::paths::app_data_root(app)?;
     let coordinator = match ipc::elect(&root)? {
         ipc::Election::Existing => {
+            if crate::onboarding::force_requested() {
+                crate::onboarding::initialize(
+                    &root,
+                    app.state::<crate::environment::Environment>().kind,
+                    true,
+                )?;
+            }
             let quiet = crate::was_started_by_autostart()
                 || crate::coordinator_revival::background_launch();
             let (endpoint, reply) = match ipc::request_with_endpoint(
@@ -1191,6 +1198,11 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
         }
         ipc::Election::Owner(coordinator) => coordinator,
     };
+    crate::onboarding::initialize(
+        &root,
+        app.state::<crate::environment::Environment>().kind,
+        crate::onboarding::force_requested(),
+    )?;
     crate::worker_registration::preflight(&root)?;
     let index = crate::profiles::prepare_coordinator_index(&root)?;
     if let Err(error) = crate::shortcut_routing::prepare(&root) {
@@ -3927,6 +3939,8 @@ pub fn register_worker(
                             .or_else(|| app.get_webview_window("main"));
                         if let Some(window) = target {
                             crate::tray::focus_vault_window(&app, &window);
+                            let _ = app
+                                .emit(crate::app_events::AppEvent::OnboardingChanged.as_str(), ());
                         }
                     })
                     .map_err(|_| "worker activation unavailable".to_string())?;
