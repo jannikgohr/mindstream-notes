@@ -237,7 +237,10 @@ jobs:
 
       - name: cargo test
         working-directory: src-tauri
-        run: cargo test --locked --workspace
+        # Debug Pulley calls use the production deadline. Concurrent compiler
+        # fixtures can starve them on small runners. Keep functional tests
+        # serial; release probes measure the unchanged budget independently.
+        run: cargo test --locked --workspace -- --test-threads=1
 
   plugin-runtime:
     name: Portable plugin runtime (${{ matrix.os }})
