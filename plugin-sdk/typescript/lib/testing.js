@@ -11,7 +11,14 @@
 // into JavaScript plus its core modules; each call gets a fresh instance, as
 // in the app, so state never carries from one call to the next.
 
-import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
+import {
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+  mkdir
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -65,7 +72,12 @@ export async function loadPlugin(component, options = {}) {
     name: 'plugin',
     instantiation: 'async'
   });
-  const dir = await mkdtemp(join(tmpdir(), 'mindstream-plugin-'));
+  // Windows runners report TEMP as an 8.3 alias (RUNNER~1). pathToFileURL
+  // encodes the tilde and Vitest's loader does not decode it, so import from
+  // the canonical long path instead.
+  const dir = await mkdtemp(
+    join(await realpath(tmpdir()), 'mindstream-plugin-')
+  );
   const modules = new Map();
   try {
     // Generated bindings are ES modules, including outside a workspace.

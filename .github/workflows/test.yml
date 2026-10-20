@@ -261,10 +261,14 @@ jobs:
       - name: Measure native component execution
         shell: bash
         run: cargo run --manifest-path src-tauri/Cargo.toml --locked --release -p mindstream-plugin-runtime --example plugin-bench > plugin-native.json
+      # A budget overrun fails its step after the report is written; keep
+      # measuring and upload both reports so the failure has evidence.
       - name: Measure interpreter execution
+        if: ${{ !cancelled() }}
         shell: bash
         run: cargo run --manifest-path src-tauri/Cargo.toml --locked --release -p mindstream-plugin-runtime --example plugin-bench -- --interpreter > plugin-interpreter.json
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: plugin-runtime-${{ matrix.os }}
           path: plugin-*.json

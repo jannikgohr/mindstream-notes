@@ -46,6 +46,7 @@ mod device_notifications;
 pub mod drawing;
 pub mod environment;
 pub mod error;
+mod file_lock;
 #[cfg(desktop)]
 pub mod foreground;
 pub mod history;
