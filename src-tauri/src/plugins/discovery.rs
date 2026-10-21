@@ -543,14 +543,15 @@ mod tests {
             .find(|p| p.id == "com.mindstream.templates.core")
             .expect("the embedded Templates plugin is discovered");
         assert_eq!(tpl.source, SOURCE_BUILTIN);
-        assert_eq!(tpl.checksum.len(), 64); // sha-256 hex
-                                            // Its entry script is readable straight from the binary.
+        assert_eq!(tpl.checksum.len(), 64);
+        // Only the Rust component and installable assets are embedded.
         let main = tpl
             .files
-            .read_text("main.luau")
+            .read_bytes("plugin.wasm")
             .unwrap()
-            .expect("main.luau is present");
-        assert!(main.contains("newFromTemplate"));
+            .expect("plugin.wasm is present");
+        assert!(main.starts_with(b"\0asm\x0d\0\x01\0"));
+        assert!(tpl.files.read_bytes("main.luau").unwrap().is_none());
     }
 
     #[test]

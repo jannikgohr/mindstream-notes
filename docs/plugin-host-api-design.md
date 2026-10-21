@@ -3,7 +3,8 @@
 This is the design guidance for the experimental Wasm batch interface. The
 measured comparison is in [the physical Android report](benchmarks/wasm-host-batch-2026-10-21/README.md).
 It covers all current host capabilities, not only dates. The production
-Templates component remains TypeScript, and Luau is retained.
+Templates component now uses Rust with scalar host dates. TypeScript examples
+remain outside the shipped tree, and Luau runtime support is retained.
 
 ## Decide by ownership and measured total cost
 
@@ -225,7 +226,7 @@ costs dominate; neither is established by the existing timings.
 ## Compatibility and adoption
 
 Scalar APIs remain available. Legacy built components were tested against the
-extended host, including the unchanged shipped TypeScript component. A newly
+extended host, including the TypeScript component now retained as an example. A newly
 built component importing `batch` requires a host that supplies that interface;
 it cannot run on an older app merely because the scalar APIs exist. The SDK
 and ABI are still private/pre-release. Before publishing a stable contract,

@@ -47,7 +47,8 @@
     "lint:theme": "node src-tauri/scripts/lint-theme.mjs",
     "prepare": "husky",
     "test:plugin-author": "node plugin-sdk/typescript/scripts/verify-author.mjs",
-    "plugins:build": "node plugin-sdk/build-bundled.mjs"
+    "plugins:build": "node plugin-sdk/build-bundled.mjs",
+    "plugins:examples": "node plugin-sdk/examples/build.mjs"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.0.1",

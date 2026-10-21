@@ -18,6 +18,9 @@ const TYPESCRIPT: &[u8] =
     include_bytes!("../../../plugin-sdk/conformance/dist/conformance-ts.wasm");
 const TEMPLATES: &[u8] = include_bytes!("../../../plugins/templates/plugin.wasm");
 const TYPST: &[u8] = include_bytes!("../../../plugins/typst/plugin.wasm");
+const TEMPLATES_TS: &[u8] =
+    include_bytes!("../../../plugin-sdk/examples/templates-typescript/plugin.wasm");
+const TYPST_TS: &[u8] = include_bytes!("../../../plugin-sdk/examples/typst-typescript/plugin.wasm");
 const TEMPLATES_RUST: &[u8] =
     include_bytes!("../../../plugin-sdk/prototypes/templates-rust/plugin.wasm");
 const TEMPLATES_LOCAL: &[u8] =
@@ -261,6 +264,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 TEMPLATES_LOCAL
             } else if args.iter().any(|a| a == "--rust-templates") {
                 TEMPLATES_RUST
+            } else if args.iter().any(|a| a == "--typescript-bundled") {
+                TEMPLATES_TS
             } else {
                 TEMPLATES
             })
@@ -426,7 +431,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "typstPortable".into(),
             sample(
                 &runtime,
-                &VerifiedComponent::from_static(TYPST),
+                &VerifiedComponent::from_static(
+                    if args.iter().any(|a| a == "--typescript-bundled") {
+                        TYPST_TS
+                    } else {
+                        TYPST
+                    },
+                ),
                 "renderDocument",
                 json!({"body": "= Hello"}),
                 CallSetup {

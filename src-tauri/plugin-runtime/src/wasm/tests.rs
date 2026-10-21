@@ -198,7 +198,9 @@ fn rust_templates_prototype_matches_typescript_outputs() {
     const LOCAL: &[u8] = include_bytes!(
         "../../../../plugin-sdk/prototypes/templates-rust/plugin-local-calendar.wasm"
     );
-    const TYPESCRIPT: &[u8] = include_bytes!("../../../../plugins/templates/plugin.wasm");
+    const TYPESCRIPT: &[u8] =
+        include_bytes!("../../../../plugin-sdk/examples/templates-typescript/plugin.wasm");
+    const SHIPPED: &[u8] = include_bytes!("../../../../plugins/templates/plugin.wasm");
     let zone = iana_time_zone::get_timezone().expect("host IANA timezone for candidate parity");
     // Debug builds make Pulley's host interpreter too slow for menu fixtures
     // under the production budget. Release tests/probes cover that backend.
@@ -222,6 +224,7 @@ fn rust_templates_prototype_matches_typescript_outputs() {
             };
             let expected = run(TYPESCRIPT);
             assert_eq!(run(RUST), expected, "{input}");
+            assert_eq!(run(SHIPPED), expected, "{input}");
             assert_eq!(run(LOCAL), expected, "{input}");
             assert_eq!(run(BATCH), expected, "{input}");
         }
@@ -253,8 +256,30 @@ fn rust_templates_prototype_matches_typescript_outputs() {
             };
             let expected = run(TYPESCRIPT);
             assert_eq!(run(RUST), expected, "{input}");
+            assert_eq!(run(SHIPPED), expected, "{input}");
             assert_eq!(run(LOCAL), expected, "{input}");
             assert_eq!(run(BATCH), expected, "{input}");
+        }
+    }
+}
+
+#[test]
+fn shipped_rust_typst_and_typescript_example_keep_source_editing_without_native_tools() {
+    const RUST: &[u8] = include_bytes!("../../../../plugins/typst/plugin.wasm");
+    const TS: &[u8] =
+        include_bytes!("../../../../plugin-sdk/examples/typst-typescript/plugin.wasm");
+    for runtime in [runtime(), interpreter()] {
+        for permissions in [&[][..], &[PERM_NATIVE_TOOLS][..]] {
+            for export in ["renderDocument", "exportDocument"] {
+                for component in [RUST, TS] {
+                    assert_eq!(
+                        Call::of(component, permissions)
+                            .run_on(runtime, export, json!({"body":"= Hello"}))
+                            .unwrap(),
+                        json!({"sourceOnly":true,"diagnostics":[]})
+                    );
+                }
+            }
         }
     }
 }

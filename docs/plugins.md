@@ -2,12 +2,17 @@
 
 A plugin is a folder with a `manifest.json` and any referenced assets.
 Manifest-only plugins contribute data. Executable plugins add a `.wasm`
-component, built from TypeScript or Rust, that runs in the Rust backend.
+component that runs in the Rust backend. The versioned WIT contract is
+language agnostic; Rust and TypeScript are the tested build paths.
 The host controls permissions, resource limits and effects.
 
-TypeScript is the default authoring language. Start with the
-[SDK and Node-only setup commands](../plugin-sdk/typescript/README.md).
-[Rust authors](../plugin-sdk/rust/README.md) use generated WIT bindings.
+Shipped executable plugins use Rust and generated WIT bindings. Start with the
+[Rust authoring path](../plugin-sdk/rust/README.md), or use the
+[TypeScript SDK and Node-only setup](../plugin-sdk/typescript/README.md).
+[Non-shipped examples](../plugin-sdk/examples/README.md) include installable
+TypeScript packages. A guest must implement the component world and JSON
+protocol, not merely compile to a core Wasm module. WASI, browser and Node
+imports are unavailable.
 See the [migration gate report](wasm-plugin-migration.md) for platform evidence.
 Luau remains temporarily available under manifest version 1 until the release
 gates pass; its API is documented [separately](plugins-legacy-luau.md).
@@ -54,7 +59,8 @@ reinstall unchanged bytes after removal.
 
 ## First-party plugins
 
-These ship with the app (source under repo-root `plugins/`). Each documents
+These packages ship with the app from repo-root `plugins/`; executable source
+is under `plugin-sdk/bundled/`. Each documents
 itself in-app via its manifest `descriptionKey`, shown in Settings → Plugins.
 
 ### Templates — `com.mindstream.templates.core`
@@ -68,7 +74,7 @@ templates. It contributes a **Template sources** settings section:
   the chosen tag becomes a template.
 - **Open new template notes** (`open-on-create`, a toggle).
 
-It is a TypeScript/Wasm plugin. `newFromTemplate` lists notes of any kind
+It is a compiled Rust/Wasm plugin. `newFromTemplate` lists notes of any kind
 matching the configured folder or tag and returns a menu of `createNoteFromNote`
 effects. `renderTemplate` expands the selected note's title and body. The macro
 engine belongs to the plugin; the app validates and performs the write.
@@ -77,13 +83,15 @@ The create menu and command palette use the same templates on mobile.
 
 ### Typst, `com.mindstream.typst`
 
-The TypeScript/Wasm component renders and exports PDFs through the declared
+The Rust/Wasm component renders and exports PDFs through the declared
 native `typst` tool. Existing settings, source languages, toolbar items and
 the `tinymist` preview service remain declarative. Without the desktop tool,
 including on Android, the note stays editable in source mode.
 
-Rebuild both committed components with `pnpm plugins:build`. Sources live in
-`plugin-sdk/bundled/`; installable assets and manifests live in `plugins/`.
+Rebuild both committed components with `pnpm plugins:build`, using the pinned
+Rust toolchain and Node >=22.11. Sources live in
+[`plugin-sdk/bundled/`](../plugin-sdk/bundled/README.md); installable assets and
+manifests live in `plugins/`. First-party components contain no QuickJS runtime.
 The embedded app needs no Node or Rust guest compiler at runtime.
 
 ## Manifest

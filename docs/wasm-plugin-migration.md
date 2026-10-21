@@ -1,12 +1,15 @@
 # Wasm plugin migration gates
 
-The migration has a working Wasmtime runner, TypeScript SDK and first-party
-Wasm components. Physical Android ARM64 runtime and app tests now have evidence,
-but M5 remains open. Trusted bundled precompilation and immutable builtin
-digest reuse now reduce Android preparation and app-call costs. A macOS
-interpreter run still exceeded the unchanged one-second budget. Desktop
-whole-app measurements remain incomplete. M6 is blocked. Luau, its bindings and
-the old bundled sources remain available for regression comparisons.
+The migration has a working Wasmtime runner and a language-agnostic WIT
+component contract. Shipped Templates and Typst now use compiled Rust, with
+TypeScript/QuickJS implementations retained as non-shipped examples. Physical
+Android ARM64 runtime and app tests have evidence, but M5 remains open. Trusted
+bundled precompilation and immutable builtin digest reuse reduce preparation
+and app-call costs. Earlier macOS TypeScript interpreter runs exceeded the
+unchanged one-second budget; the new Rust selection needs its own platform
+evidence. Desktop whole-app measurements remain incomplete. M6 is blocked.
+Luau runtime support and bindings remain; old bundled sources are retained
+outside the embedded plugin tree for regression comparisons.
 
 ## Milestone status
 
@@ -16,7 +19,7 @@ the old bundled sources remain available for regression comparisons.
 | M1, shared host services   | Runtime-neutral crate; existing Luau host tests                                                                                                                       | None identified                                                                                                                   |
 | M2, Wasmtime integration   | Verified entry bytes, compile caches, fresh stores, limits, cancellation, permission tests                                                                            | Cross-platform release gate below                                                                                                 |
 | M3, TypeScript SDK         | Packed Node-only author workflow; all three desktop Node 22 CI jobs passed after the Windows temporary-path fix                                                       | None identified                                                                                                                   |
-| M4, bundled ports          | Templates and Typst use manifest v2/Wasm; Node tests and app-host tests; template output compared with retained Luau                                                  | No local functional gap found; platform gates remain under M5                                                                     |
+| M4, bundled ports          | Rust Templates and Typst use manifest v2/Wasm; shared TypeScript example tests and app-host tests; template output compared with retained Luau                        | New artifact platform gates remain under M5                                                                                       |
 | M5, parity and performance | Physical Android native/Pulley probes, trusted AOT and Rust Templates comparison, release app lifecycle, matching APK/startup/memory measurements, desktop CI results | macOS interpreter budget reliability, representative app startup/memory and installer measurements, broader thermal/soak coverage |
 | M6, retire Luau            | Intentionally pending                                                                                                                                                 | All M5 gates must pass first                                                                                                      |
 
@@ -460,6 +463,38 @@ The [recovery validation](benchmarks/wasm-batch-recovery-2026-10-21/README.md)
 passed 82 Windows runtime tests, 87 physical ARM64 Android release runtime
 tests including native/Pulley guest recovery, and 3,585 frontend/SDK tests.
 Artifact hashes, raw logs and tablet power/thermal records are retained there.
+
+## Shipped Rust ports, 2026-10-21
+
+Templates and Typst now select Rust components from `plugin-sdk/bundled/`,
+with a committed lockfile and pinned Rust 1.97.1 toolchain. Templates uses
+scalar host dates, preserving local calendar/locale semantics and the measured
+interpreter advantage. Typst preserves the declared-tool protocol, PDF bytes,
+diagnostics and source-only fallback. LanguageTool remains manifest-only.
+Manifests, permission requests, contribution IDs and effect shapes are unchanged.
+
+Only installable assets and Rust components remain under the embedded
+`plugins/` tree. Installable TypeScript examples with distinct IDs are under
+`plugin-sdk/examples/`; they retain their per-component QuickJS runtime.
+Legacy Luau sources and host annotations moved there as regression fixtures.
+The Luau adapter and manifest-v1 support remain available until M5 passes.
+
+Portable Rust Templates and Typst components are 121,114 and 75,297 bytes.
+These are component sizes, not matching whole-app package measurements.
+The WIT contract is language agnostic, but guests must supply compatible
+component bindings and the JSON/effect protocol. Core Wasm, WASI commands
+and browser/Node-dependent modules cannot be installed unchanged.
+`ts-rust` still emits JavaScript; it does not replace QuickJS in this SDK.
+See the [authoring/examples guide](../plugin-sdk/examples/README.md).
+
+Windows workspace tests passed, including 1,038 app tests and 83 runtime tests;
+the frontend/SDK suite passed 3,590 tests. The same bundled behavior assertions
+cover both shipped Rust and TypeScript examples, including native PDF output
+and diagnostic grouping. CI now rebuilds the Rust guests and checks their
+committed bytes; Node-only CI also builds the TypeScript examples. Physical
+release measurements and new macOS/Windows CI evidence for the final remapped
+artifacts are still pending. Earlier measurements retain their original hashes
+and do not close those gates. M5/M6 remain open.
 
 ## Release decision
 

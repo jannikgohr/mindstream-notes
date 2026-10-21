@@ -157,6 +157,7 @@ jobs:
       - run: pnpm check
       - run: pnpm --filter @mindstream/plugin-sdk typecheck
       - run: npm run test:plugin-author
+      - run: pnpm plugins:examples
       - run: pnpm test
       - run: pnpm build
         env:
@@ -241,6 +242,40 @@ jobs:
         # fixtures can starve them on small runners. Keep functional tests
         # serial; release probes measure the unchanged budget independently.
         run: cargo test --locked --workspace -- --test-threads=1
+
+  bundled-plugins:
+    name: Shipped Rust plugins
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: plugin-sdk/bundled
+          shared-key: bundled-plugins
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: cargo fmt --all --check
+        working-directory: plugin-sdk/bundled
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+        working-directory: plugin-sdk/bundled
+      - run: cargo test --locked --workspace
+        working-directory: plugin-sdk/bundled
+      - run: pnpm plugins:build
+      - name: Verify committed Rust components match their sources
+        run: git diff --exit-code -- plugins/templates/plugin.wasm plugins/typst/plugin.wasm
 
   plugin-runtime:
     name: Portable plugin runtime (${{ matrix.os }})
@@ -700,6 +735,7 @@ jobs:
         changes,
         js,
         rust,
+        bundled-plugins,
         plugin-runtime,
         server,
         coverage,

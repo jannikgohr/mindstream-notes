@@ -1,7 +1,8 @@
 # Rust plugin starter
 
-Rust is the advanced authoring path. TypeScript authors can use the
-[Node-only SDK](../typescript/README.md).
+Rust is the authoring path used by [shipped executable plugins](../bundled/README.md).
+TypeScript authors can use the [Node-only SDK](../typescript/README.md) and
+[non-shipped examples](../examples/README.md).
 
 From the repository root:
 

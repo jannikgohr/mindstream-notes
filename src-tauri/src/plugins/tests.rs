@@ -581,14 +581,18 @@ fn bundled_template_wasm_matches_retained_luau_for_existing_templates() {
     legacy.runtime = manifest::PluginRuntime::Luau;
     legacy.manifest_version = 1;
     legacy.entry = Some("main.luau".into());
+    let legacy_files = discovery::PluginFiles::Fs(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../plugin-sdk/examples/legacy-luau/templates"),
+    );
     for input in [
         serde_json::json!({"now": "2026-07-25T10:00:00Z", "title": "Log {{date:YYYY}}", "body": "{{title|upper}} {{date-1M+2d:YYYY-MM-DD}} {{date+7d:dddd}}", "locale": "de"}),
         serde_json::json!({"now": "2026-01-31T12:00:00Z", "body": "{{date+1M:YYYY-MM-DD}} {{date-1y+2w:YYYY-MM-DD}} {{word|trim|capitalize}}/{{word|slug}}/{{flag}}/{{number}}/{{missing}}/{{word|unknown}}", "vars": {"word": "  hÄllo WORLD  ", "flag": false, "number": 42}}),
         serde_json::json!({"now": "2026-07-25T10:00:00Z", "title": "{{unknown}}", "body": "{{date:}} {{multi\nline}} {{literal", "vars": {"multi\nline": "yes"}}),
     ] {
-        let invoke = |manifest| {
+        let invoke = |files, manifest| {
             run_plugin_script(
-                &plugin.files,
+                files,
                 manifest,
                 call(
                     &["notes.read", "notes.create"],
@@ -598,13 +602,17 @@ fn bundled_template_wasm_matches_retained_luau_for_existing_templates() {
             )
             .unwrap()
         };
-        assert_eq!(invoke(&plugin.manifest), invoke(&legacy), "{input}");
+        assert_eq!(
+            invoke(&plugin.files, &plugin.manifest),
+            invoke(&legacy_files, &legacy),
+            "{input}"
+        );
     }
     let input = serde_json::json!({
         "settings": {"source-folder": "root", "source-tag": "template"},
         "folders": [{"id": "root", "parentId": null}, {"id": "child", "parentId": "root"}, {"id": "cycle", "parentId": "cycle"}]
     });
-    let invoke = |manifest| {
+    let invoke = |files, manifest| {
         let mut request = call(
             &["notes.read", "notes.create"],
             "newFromTemplate",
@@ -639,9 +647,12 @@ fn bundled_template_wasm_matches_retained_luau_for_existing_templates() {
             },
         )
         .collect();
-        run_plugin_script(&plugin.files, manifest, request).unwrap()
+        run_plugin_script(files, manifest, request).unwrap()
     };
-    assert_eq!(invoke(&plugin.manifest), invoke(&legacy));
+    assert_eq!(
+        invoke(&plugin.files, &plugin.manifest),
+        invoke(&legacy_files, &legacy)
+    );
 }
 
 #[test]

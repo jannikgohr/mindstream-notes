@@ -1,7 +1,10 @@
 # Rust Templates comparison
 
-This prototype implements the current TypeScript Templates exports against the
-same WIT and host APIs. It is not the shipped plugin. Luau and the TypeScript
+This prototype implements the Templates exports against the same WIT and host
+APIs. Shipped Templates now uses the separate
+[production Rust source](../../bundled/README.md). The TypeScript reference is
+an [unshipped example](../../examples/README.md). This prototype is retained
+for its experimental calendar/batch comparisons. Luau and the TypeScript
 package remain in place while release gates are open.
 
 Build with Rust's `wasm32-unknown-unknown` target, the repository's installed
@@ -13,8 +16,9 @@ calendar offsets, filters, Unicode menu order, stable equal-label order,
 folder ancestry/cycles and tag selection. Debug tests use the native runtime
 and 50 notes. Release tests also cover Pulley. Neither changes the one-second
 budget. The release `plugin-bench --templates-only --rust-templates` probe uses
-500 notes and defaults to 100 samples. Run a separate process without
-`--rust-templates` for the matching TypeScript comparison.
+500 notes and defaults to 100 samples. Run a separate process with
+`--typescript-bundled` instead of `--rust-templates` for the TypeScript comparison.
+The probe defaults now measure the shipped Rust components.
 
 The prototype shares the host calendar and notes API. Its size and linear
 memory differences measure guest implementation costs; they do not replace
@@ -86,7 +90,7 @@ It executes a 28-operation mixed plan covering dates, note metadata, Markdown,
 permission inspection and private storage. The batch build uses one execute;
 the scalar and local-calendar builds use individual calls over the same plan.
 The normal `$exports` result still advertises only the two Templates exports.
-No comparison component replaces the shipped TypeScript package.
+No comparison component replaces the shipped Rust package.
 
 See the [batch measurements](../../../docs/benchmarks/wasm-host-batch-2026-10-21/README.md)
 and [host API design guidance](../../../docs/plugin-host-api-design.md).
