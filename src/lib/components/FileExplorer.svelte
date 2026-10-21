@@ -63,6 +63,7 @@
     type DesktopNoteSource
   } from '$lib/stores/note-source.svelte';
   import { pushToast, dismissToast, updateToast } from './toast.svelte';
+  import { toastRefusal } from '$lib/account/refusal';
   import { flushPendingEditorSaves } from '$lib/editor/suspend-flush';
   import {
     FILE_EXPLORER_SOURCES,
@@ -810,7 +811,7 @@
       pushToast(tUi('fileTree.move.blockedShared'), { variant: 'error' });
       return;
     }
-    await moveManyTo(items, targetFolderId);
+    await moveManyTo(items, targetFolderId).catch(toastRefusal);
   }
   async function onDropOnRoot(e: DragEvent) {
     if (isFileDrag(e)) return onFileDrop(e, null);

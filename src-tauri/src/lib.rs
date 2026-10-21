@@ -39,6 +39,7 @@ mod coordinator_updater;
 pub mod data;
 pub mod db;
 pub mod deep_links;
+pub mod demo_notes;
 #[cfg(desktop)]
 pub mod desktop_settings;
 #[cfg(desktop)]

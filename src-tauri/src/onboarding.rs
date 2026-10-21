@@ -228,10 +228,11 @@ pub fn finish_onboarding<R: tauri::Runtime>(
     id: Uuid,
     skipped: bool,
     initial_note: Option<InitialNote>,
+    demo_notes: Vec<crate::demo_notes::DemoNote>,
 ) -> CommandResult<Finished> {
     let vault = active_vault(&app, &window)?;
     let root = crate::paths::app_data_root(&app)?;
-    let finished = finish(&root, &vault, &db, id, skipped, initial_note)?;
+    let finished = finish(&root, &vault, &db, id, skipped, initial_note, demo_notes)?;
     app.emit(crate::app_events::AppEvent::OnboardingChanged.as_str(), ())?;
     Ok(finished)
 }
@@ -243,6 +244,7 @@ fn finish(
     id: Uuid,
     skipped: bool,
     initial_note: Option<InitialNote>,
+    demo_notes: Vec<crate::demo_notes::DemoNote>,
 ) -> AppResult<Finished> {
     let _lock = RootLock::acquire(root)?;
     let mut progress = read(root)?;
@@ -256,6 +258,11 @@ fn finish(
         });
     }
     progress.owned_by(id, vault)?;
+    if initial_note.is_some() && !demo_notes.is_empty() {
+        return Err(AppError::InvalidArg(
+            "setup starts with a note or with demo notes, not both".into(),
+        ));
+    }
     let note_id = if let Some(note) = initial_note {
         if note.title.is_empty() || note.title.len() > 512 || note.body.len() > 32768 {
             return Err(AppError::InvalidArg("invalid initial note".into()));
@@ -281,8 +288,17 @@ fn finish(
             Ok(())
         })?;
         Some(note_id)
-    } else {
+    } else if demo_notes.is_empty() {
         None
+    } else {
+        let now = chrono::Utc::now().to_rfc3339();
+        let ids = db.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            let ids = crate::demo_notes::insert(&tx, &demo_notes, &now)?;
+            tx.commit()?;
+            Ok(ids)
+        })?;
+        ids.into_iter().next()
     };
     progress.status = if skipped {
         Status::Skipped
@@ -375,12 +391,13 @@ mod tests {
                 title: "Welcome".into(),
                 body: "# My notes".into(),
             }),
+            Vec::new(),
         )
         .unwrap();
-        let retry = finish(&root, "default", &db, progress.id, false, None).unwrap();
+        let retry = finish(&root, "default", &db, progress.id, false, None, Vec::new()).unwrap();
         assert_eq!(first.note_id, retry.note_id);
         assert_eq!(retry.progress.status, Status::Completed);
-        assert!(finish(&root, "other", &db, progress.id, false, None).is_err());
+        assert!(finish(&root, "other", &db, progress.id, false, None, Vec::new()).is_err());
         db.with_conn(|conn| {
             let count: u32 = conn.query_row("SELECT COUNT(*) FROM notes", [], |row| row.get(0))?;
             assert_eq!(count, 1);
@@ -393,6 +410,59 @@ mod tests {
     }
 
     #[test]
+    fn demo_notes_are_added_and_the_first_one_opens() {
+        let root = root();
+        initialize(&root, Kind::Release, false).unwrap();
+        let mut progress = read(&root).unwrap();
+        progress.vault_id = Some("default".into());
+        write(&root, &progress).unwrap();
+        let db = crate::db::open_memory_for_tests();
+        let demo = |slug: &str| -> crate::demo_notes::DemoNote {
+            serde_json::from_value(serde_json::json!({
+                "slug": slug,
+                "lang": "en",
+                "title": "Welcome",
+                "body": "Hello\n",
+                "yrsState": crate::sync::yrs_doc::editor_state_for_tests("Hello"),
+            }))
+            .unwrap()
+        };
+        let both = finish(
+            &root,
+            "default",
+            &db,
+            progress.id,
+            false,
+            Some(InitialNote {
+                title: "Mine".into(),
+                body: String::new(),
+            }),
+            vec![demo("welcome")],
+        );
+        assert!(both.is_err());
+        let finished = finish(
+            &root,
+            "default",
+            &db,
+            progress.id,
+            false,
+            None,
+            vec![demo("welcome"), demo("basics")],
+        )
+        .unwrap();
+        let note_id = finished.note_id.unwrap();
+        assert!(note_id.starts_with("demo_welcome_en_"));
+        assert_eq!(read(&root).unwrap().initial_note_id, Some(note_id));
+        db.with_conn(|conn| {
+            let count: u32 = conn.query_row("SELECT COUNT(*) FROM notes", [], |row| row.get(0))?;
+            assert_eq!(count, 2);
+            Ok(())
+        })
+        .unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn skipping_and_reopening_do_not_seed_or_delete_notes() {
         let root = root();
         initialize(&root, Kind::Release, false).unwrap();
@@ -400,7 +470,7 @@ mod tests {
         progress.vault_id = Some("default".into());
         write(&root, &progress).unwrap();
         let db = crate::db::open_memory_for_tests();
-        finish(&root, "default", &db, progress.id, true, None).unwrap();
+        finish(&root, "default", &db, progress.id, true, None, Vec::new()).unwrap();
         initialize(&root, Kind::Release, false).unwrap();
         assert_eq!(read(&root).unwrap().status, Status::Skipped);
         assert!(!should_seed_demo(&root, Kind::Release).unwrap());
