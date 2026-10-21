@@ -3,7 +3,9 @@
 Templates and Typst are compiled Rust components. Installable packages are in
 the repository's `plugins/` directory, which the app embeds. This workspace
 contains their source and lockfile; it does not embed a JavaScript engine.
-LanguageTool remains a manifest-only plugin.
+All three shipped plugins use manifest version 2. LanguageTool remains
+manifest-only, using host-owned text-checker/native-service contributions.
+There is no executable LanguageTool guest to port.
 
 Build from the repository root with Node >=22.11 and Rustup installed:
 

@@ -6,6 +6,12 @@ component that runs in the Rust backend. The versioned WIT contract is
 language agnostic; Rust and TypeScript are the tested build paths.
 The host controls permissions, resource limits and effects.
 
+All shipped plugins use manifest version 2. Templates and Typst execute as
+Rust/Wasm components. LanguageTool uses the v2 declarative text-checker and
+native-service contributions without an executable guest. Legacy Luau source
+files live only in the non-shipped regression examples; runtime compatibility
+remains until the migration's release gates pass.
+
 Shipped executable plugins use Rust and generated WIT bindings. Start with the
 [Rust authoring path](../plugin-sdk/rust/README.md), or use the
 [TypeScript SDK and Node-only setup](../plugin-sdk/typescript/README.md).
@@ -68,9 +74,9 @@ itself in-app via its manifest `descriptionKey`, shown in Settings → Plugins.
 Turns the user's own notes into reusable templates; there are no premade
 templates. It contributes a **Template sources** settings section:
 
-- **Template folder** (`source-folder`, a `folder` picker) — every markdown note
+- **Template folder** (`source-folder`, a `folder` picker) — every note
   inside the chosen folder (at any depth) becomes a template.
-- **Template tag** (`source-tag`, a `tag` picker) — every markdown note carrying
+- **Template tag** (`source-tag`, a `tag` picker) — every note carrying
   the chosen tag becomes a template.
 - **Open new template notes** (`open-on-create`, a toggle).
 

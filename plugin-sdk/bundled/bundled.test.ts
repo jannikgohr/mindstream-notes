@@ -245,3 +245,30 @@ it('both builtin packages pass SDK preflight with unchanged contribution IDs', a
     ).toEqual([]);
   }
 }, 60_000);
+
+it('every shipped plugin uses v2 and LanguageTool stays declarative', async () => {
+  const shippedRoot = join(root, 'plugins');
+  const directories = (await readdir(shippedRoot, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  expect(directories).toEqual(['languagetool', 'templates', 'typst']);
+  for (const name of directories) {
+    const dir = join(shippedRoot, name);
+    const manifest = JSON.parse(
+      await readFile(join(dir, 'manifest.json'), 'utf8')
+    );
+    expect(manifest.manifestVersion).toBe(2);
+    expect(manifest.runtime).toBe(
+      name === 'languagetool' ? 'manifest-only' : 'wasm'
+    );
+    if (name === 'languagetool') {
+      expect(manifest.entry).toBeUndefined();
+      expect(manifest.permissions).toEqual(['textCheckers.contribute']);
+      expect(manifest.contributes.textCheckers[0].id).toBe('grammar');
+    }
+    expect(await readdir(dir, { recursive: true })).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/\.luau$/)])
+    );
+  }
+}, 60_000);
