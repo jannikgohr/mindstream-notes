@@ -21,6 +21,7 @@ import { expect } from '@wdio/globals';
 import {
   byName,
   closeSettingsDialog,
+  clickElement,
   clickName,
   isFileTreeCreateActionDisplayed,
   openFileTreeCreateMore,
@@ -46,7 +47,7 @@ async function openPluginsCategory(): Promise<void> {
 async function setTemplateFolder(folder: string | null): Promise<void> {
   await openPluginsCategory();
   await clickName('Plugin settings');
-  await clickName('Template folder');
+  await clickElement($('button[aria-label="Template folder"]'));
   await $('[role="listbox"]').waitForDisplayed();
   await browser.execute((label) => {
     const dialog = document.querySelector('[role="dialog"]');
