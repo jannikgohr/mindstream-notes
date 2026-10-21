@@ -72,6 +72,9 @@ const args = [
 
 const result = spawnSync('cargo', args, {
   cwd: srcTauri,
+  // Instrumented Pulley calls still use the production deadline. Match the
+  // functional CI suite: concurrent compiler fixtures can starve those calls.
+  env: { ...process.env, RUST_TEST_THREADS: '1' },
   stdio: 'inherit',
   shell: false
 });
