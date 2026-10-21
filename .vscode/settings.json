@@ -1,6 +1,8 @@
 {
   "luau-lsp.platform.type": "standard",
-  "luau-lsp.types.definitionFiles": ["plugins/host.d.luau"],
+  "luau-lsp.types.definitionFiles": [
+    "plugin-sdk/examples/legacy-luau/host.d.luau"
+  ],
   "luau-lsp.require.mode": "relativeToFile",
   "luau-lsp.studioPlugin.enabled": true
 }

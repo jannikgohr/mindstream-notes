@@ -495,10 +495,29 @@ guests and runs the same behavior assertions against the rebuilt artifacts,
 retaining their hashes. Cross-host byte identity is not established: the first
 Linux rebuild differed from Windows after source-path normalization. That
 strict comparison failed and remains recorded; it is not a functional pass.
-Node-only CI also builds the TypeScript examples. Physical
-release measurements and new macOS/Windows CI evidence for the final remapped
-artifacts are still pending. Earlier measurements retain their original hashes
-and do not close those gates. M5/M6 remain open.
+Node-only CI also builds the TypeScript examples.
+
+The [shipped Rust validation](benchmarks/wasm-rust-bundled-2026-10-21/README.md)
+records 88 physical Android release runtime tests and eight native/Pulley,
+portable/AOT probe runs with 100 samples per workload, matching outputs and
+zero overruns. AOT Templates render/menu p95 totals were 0.054/2.684 ms native
+and 0.288/51.267 ms Pulley on the tablet. The completed macOS/Windows/Linux
+portable runtime CI jobs passed the new Rust selection with 500-note menu
+Pulley p95 totals 27.057/30.399/22.679 ms. First-party guest linear memory is
+lower for render/source-only calls, but the Rust menu uses 2 MiB versus the
+TypeScript example's 1.75 MiB. Do not generalize a smaller component into
+universally smaller heap usage.
+
+The first workflow failed linting of archived console snippets and cross-host
+byte comparison. Those failures and the passing platform reports are retained;
+the replacement workflow is tracked separately. Whole-app startup, matching
+APK/AAB/installer/macOS bundle sizes, longer memory retention and broader device
+conditions still need evidence for this revision. No new installed-app UI
+checks are claimed here. Earlier measurements retain their original hashes.
+The third CI run also hit `Budget` in the instrumented Linux interpreter
+conformance test. The coverage launcher now uses the same serial test policy
+as functional CI, keeping all limits and tests; that rerun remains pending.
+M5/M6 remain open; retain Luau runtime support.
 
 ## Release decision
 

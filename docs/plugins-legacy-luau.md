@@ -164,7 +164,7 @@ all pages (typst refuses multi-page SVG/PNG to stdout).
 Scripts run untyped inside the sandbox, but while you write one you can get full
 type-checking and autocomplete for the returned effects and the whole `ms.*`
 API. The app ships a single Luau definition file —
-[`plugins/host.d.luau`](../plugins/host.d.luau) — that declares the `ms` global.
+[`host.d.luau`](../plugin-sdk/examples/legacy-luau/host.d.luau) — that declares the `ms` global.
 It is the **one shared type file every plugin uses**, in this repo and in your
 own plugin projects; nothing is generated per plugin.
 
