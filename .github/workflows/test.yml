@@ -42,6 +42,11 @@ on:
   # always runs the full matrix, on whichever branch you pick. If you are
   # reaching for it, you don't want CI second-guessing which half to skip.
   workflow_dispatch:
+    inputs:
+      diagnose_interpreter:
+        description: Record the unoptimized Windows Pulley baseline before testing the fixed build
+        type: boolean
+        default: false
 
 # Cancel superseded runs on the same branch — saves minutes on rapid pushes.
 concurrency:
@@ -235,6 +240,36 @@ jobs:
         if: runner.os == 'Linux'
         working-directory: src-tauri
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      # Optional A/B evidence, not a release gate. The normal workspace test
+      # below always runs with the checked-in profile and unchanged deadlines.
+      - name: Unoptimized Windows interpreter diagnostic
+        if: runner.os == 'Windows' && inputs.diagnose_interpreter == true
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --locked -p mindstream-plugin-runtime --config 'profile.dev.package.pulley-interpreter.opt-level=0' the_interpreter_gives_the_same_answers_as_native_code -- --nocapture --test-threads=1 *> plugin-interpreter-unoptimized.log
+          $result = $LASTEXITCODE
+          Get-Content plugin-interpreter-unoptimized.log
+          Set-Content plugin-interpreter-unoptimized-exit.txt $result
+          exit $result
+      - name: Optimized Windows interpreter diagnostic
+        if: runner.os == 'Windows' && inputs.diagnose_interpreter == true
+        shell: pwsh
+        run: |
+          foreach ($attempt in 1..5) {
+            cargo test --manifest-path src-tauri/Cargo.toml --locked -p mindstream-plugin-runtime the_interpreter_gives_the_same_answers_as_native_code -- --nocapture --test-threads=1 *> "plugin-interpreter-optimized-$attempt.log"
+            $result = $LASTEXITCODE
+            Get-Content "plugin-interpreter-optimized-$attempt.log"
+            Set-Content "plugin-interpreter-optimized-$attempt-exit.txt" $result
+            if ($result -ne 0) { exit $result }
+          }
+      - name: Retain interpreter diagnostic
+        if: always() && runner.os == 'Windows' && inputs.diagnose_interpreter == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-interpreter-windows-diagnostic
+          path: plugin-interpreter-*
 
       - name: cargo test
         working-directory: src-tauri

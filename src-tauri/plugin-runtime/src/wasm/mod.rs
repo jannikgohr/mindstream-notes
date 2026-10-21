@@ -416,7 +416,19 @@ impl WasmRuntime {
         };
 
         // A stop the host asked for wins over whatever the guest made of it.
-        state.host.check()?;
+        let stopped = state.host.check();
+        #[cfg(test)]
+        if call.export == "report" || stopped.is_err() {
+            eprintln!(
+                "wasm export {}: prepare={:?}, instantiate={:?}, call={:?}, guest_memory={} bytes",
+                call.export,
+                timings.prepare,
+                timings.instantiate,
+                timings.call,
+                timings.memory_bytes
+            );
+        }
+        stopped?;
         let out_of_memory = || {
             format!(
                 "ran out of memory at its {} MiB limit",

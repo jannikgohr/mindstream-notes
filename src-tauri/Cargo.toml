@@ -137,6 +137,13 @@ tauri = { version = "2.11", features = ["test"] }
 # Paused time, for testing what the sync scheduler waits for.
 tokio = { version = "1.52.3", features = ["rt", "macros", "test-util"] }
 
+# Pulley executes every guest instruction in this dependency. An unoptimized
+# interpreter can exhaust production guest deadlines in otherwise debug builds.
+# Keep app/host debug assertions and the actual deadlines; optimize only the VM.
+# Cargo's test profile inherits this dev package override.
+[profile.dev.package.pulley-interpreter]
+opt-level = 2
+
 [profile.release]
 codegen-units = 1
 lto = true

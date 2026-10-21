@@ -764,7 +764,19 @@ fn the_interpreter_gives_the_same_answers_as_native_code() {
         let native = call.run("report", json!({})).unwrap();
         std::fs::remove_dir_all(&root).ok();
         std::fs::create_dir_all(&root).unwrap();
-        let interpreted = call.run_on(interpreter(), "report", json!({})).unwrap();
+        let started = Instant::now();
+        let interpreted = call
+            .run_on(interpreter(), "report", json!({}))
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{lang} interpreted report failed after {:?}: {error}",
+                    started.elapsed()
+                )
+            });
+        eprintln!(
+            "{lang} interpreted report completed in {:?}",
+            started.elapsed()
+        );
         assert_eq!(native, interpreted, "{lang}");
 
         call.limits.timeout = Duration::from_millis(100);
