@@ -7,9 +7,12 @@ import { loadPlugin } from '../typescript/lib/testing.js';
 import type { HostOptions } from '../typescript/lib/testing';
 
 const root = join(import.meta.dirname, '../..');
+// Also validate downloaded CI rebuilds with the same package/behavior assertions.
+const bundledRoot =
+  process.env.MINDSTREAM_TEST_BUNDLED_DIR ?? join(root, 'plugins');
 const component = (name: string, language = 'Rust') =>
   language === 'Rust'
-    ? join(root, 'plugins', name, 'plugin.wasm')
+    ? join(bundledRoot, name, 'plugin.wasm')
     : join(root, 'plugin-sdk/examples', `${name}-typescript`, 'plugin.wasm');
 const now = '2026-07-25T10:00:00Z';
 const loadTemplates = (language: string, options: HostOptions = {}) =>
@@ -215,7 +218,7 @@ describe.each(['Rust', 'TypeScript'])(
 
 it('both builtin packages pass SDK preflight with unchanged contribution IDs', async () => {
   for (const name of ['templates', 'typst']) {
-    const dir = join(root, 'plugins', name);
+    const dir = join(bundledRoot, name);
     expect(await checkPackage(dir)).toEqual([]);
     const manifest = JSON.parse(
       await readFile(join(dir, 'manifest.json'), 'utf8')

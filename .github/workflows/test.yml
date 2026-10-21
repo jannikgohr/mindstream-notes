@@ -278,7 +278,7 @@ jobs:
       # committed components; this checks freshly built guests against the same
       # behavior assertions and retains their actual hashes and bytes.
       - name: Verify rebuilt Rust component behavior
-        run: pnpm exec vitest run plugin-sdk/bundled
+        run: pnpm test plugin-sdk/bundled
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
