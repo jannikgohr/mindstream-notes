@@ -5,10 +5,18 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { componentNew } from '@bytecodealliance/jco-transpile/wasm-tools';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const local = process.argv.includes('--local-calendar');
 for (const [command, args] of [
   [
     'cargo',
-    ['build', '--locked', '--release', '--target', 'wasm32-unknown-unknown']
+    [
+      'build',
+      '--locked',
+      '--release',
+      '--target',
+      'wasm32-unknown-unknown',
+      ...(local ? ['--features', 'local-calendar'] : [])
+    ]
   ]
 ]) {
   const result = spawnSync(command, args, { cwd: here, stdio: 'inherit' });
@@ -17,7 +25,7 @@ for (const [command, args] of [
     throw new Error(`${command} exited with ${result.status}`);
 }
 await writeFile(
-  join(here, 'plugin.wasm'),
+  join(here, local ? 'plugin-local-calendar.wasm' : 'plugin.wasm'),
   await componentNew(
     await readFile(
       join(

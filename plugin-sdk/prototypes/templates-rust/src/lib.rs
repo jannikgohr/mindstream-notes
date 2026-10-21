@@ -3,7 +3,12 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 
 wit_bindgen::generate!({ path: "../../wit", world: "mindstream:plugin/plugin" });
-use mindstream::plugin::{clock, notes, runtime};
+#[cfg(not(feature = "local-calendar"))]
+use mindstream::plugin::clock;
+use mindstream::plugin::{notes, runtime};
+
+#[cfg(feature = "local-calendar")]
+mod calendar;
 
 fn trim(value: &str) -> &str {
     value.trim_matches(['\t', '\n', '\u{b}', '\u{c}', '\r', ' '])
@@ -94,21 +99,35 @@ fn resolve(inner: &str, input: &Value, vars: &Value) -> Result<String, String> {
     let mut value = if base == "uuid" {
         runtime::uuid()
     } else if let Some(default) = default {
-        let mut time = input["now"].as_str().unwrap_or_default().to_string();
-        for (count, unit) in offsets.into_iter().rev() {
-            let unit = match unit {
-                b'y' => clock::TimeUnit::Year,
-                b'M' => clock::TimeUnit::Month,
-                b'w' => clock::TimeUnit::Week,
-                b'd' => clock::TimeUnit::Day,
-                b'h' => clock::TimeUnit::Hour,
-                b'm' => clock::TimeUnit::Minute,
-                _ => clock::TimeUnit::Second,
-            };
-            time = clock::add(&time, count, unit).map_err(|e| format!("{e:?}"))?;
-        }
-        clock::format(&time, format.unwrap_or(default), input["locale"].as_str())
-            .map_err(|e| format!("{e:?}"))?
+        #[cfg(feature = "local-calendar")]
+        let rendered = calendar::render(
+            input["now"].as_str().unwrap_or_default(),
+            input["timeZone"]
+                .as_str()
+                .ok_or("local calendar requires timeZone")?,
+            offsets.into_iter().rev(),
+            format.unwrap_or(default),
+            input["locale"].as_str().unwrap_or("en"),
+        )?;
+        #[cfg(not(feature = "local-calendar"))]
+        let rendered = {
+            let mut time = input["now"].as_str().unwrap_or_default().to_string();
+            for (count, unit) in offsets.into_iter().rev() {
+                let unit = match unit {
+                    b'y' => clock::TimeUnit::Year,
+                    b'M' => clock::TimeUnit::Month,
+                    b'w' => clock::TimeUnit::Week,
+                    b'd' => clock::TimeUnit::Day,
+                    b'h' => clock::TimeUnit::Hour,
+                    b'm' => clock::TimeUnit::Minute,
+                    _ => clock::TimeUnit::Second,
+                };
+                time = clock::add(&time, count, unit).map_err(|e| format!("{e:?}"))?;
+            }
+            clock::format(&time, format.unwrap_or(default), input["locale"].as_str())
+                .map_err(|e| format!("{e:?}"))?
+        };
+        rendered
     } else {
         js_string(&vars[base])
     };
@@ -213,3 +232,17 @@ impl Guest for Templates {
     }
 }
 export!(Templates);
+
+#[cfg(all(test, feature = "local-calendar"))]
+#[test]
+fn local_calendar_requires_a_zone_only_for_date_expressions() {
+    let run = |value: Value| Templates::invoke("renderTemplate".into(), value.to_string());
+    assert!(run(json!({"body":"{{date}}","now":"2026-01-01T00:00:00Z"})).is_err());
+    assert!(
+        run(json!({"body":"{{date}}","now":"2026-01-01T00:00:00Z","timeZone":"bad/zone"})).is_err()
+    );
+    let value: Value =
+        serde_json::from_str(&run(json!({"body":"Hello {{name}}","vars":{"name":"Ada"}})).unwrap())
+            .unwrap();
+    assert_eq!(value["body"], "Hello Ada");
+}

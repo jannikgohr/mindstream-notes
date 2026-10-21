@@ -3400,6 +3400,7 @@ dependencies = [
  "chrono",
  "flate2",
  "getrandom 0.4.2",
+ "iana-time-zone",
  "libc",
  "log",
  "serde",

@@ -397,6 +397,28 @@ uncontrolled. M5 remains open for that gate, representative desktop app and
 package measurements, broader device conditions and memory retention, and any
 required immediate background cancellation. M6 remains blocked; retain Luau.
 
+## Guest-local calendar candidate, 2026-10-21
+
+The [calendar comparison](benchmarks/wasm-local-calendar-2026-10-21/README.md)
+adds a second Rust Wasm candidate with no calendar Host API calls. It embeds
+IANA timezone data and requires an explicit `timeZone` input. Both Rust
+variants and TypeScript completed all twelve physical Android native/Pulley,
+portable/AOT combinations with 100 samples per case, unchanged 1,000 ms budgets,
+matching outputs and no interrupted attempts. Seven guest tests and all 73
+Windows runtime tests passed. New candidate desktop release and whole-app
+measurements remain untested.
+
+For AOT date-heavy rendering, moving dates into the guest reduced native total
+p95 from 0.538 to 0.387 ms, but increased Pulley from 1.496 to 11.152 ms. The
+candidate adds 925,284 portable bytes and 0.8125 MiB guest linear memory; its
+menu reaches 2.8125 MiB. Ordinary native rendering differed by only about
+0.006 ms. Host imports run native code even under Pulley, so fewer imports do
+not imply less execution time. Keep the host-backed Rust prototype as the
+preferred comparison candidate for the shared native/interpreter path.
+The local variant stays experimental: it needs timezone context integration,
+a timezone-database update policy, broader parity and release measurements.
+Production TypeScript and retained Luau are unchanged; M5/M6 remain open.
+
 ## Release decision
 
 Targets remain p95 initialization below 20 ms, trivial cached call overhead

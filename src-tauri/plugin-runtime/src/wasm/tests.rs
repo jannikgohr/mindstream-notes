@@ -193,22 +193,33 @@ fn bundled_code_prepares_without_running_and_seeds_the_disk_cache() {
 fn rust_templates_prototype_matches_typescript_outputs() {
     const RUST: &[u8] =
         include_bytes!("../../../../plugin-sdk/prototypes/templates-rust/plugin.wasm");
+    const LOCAL: &[u8] = include_bytes!(
+        "../../../../plugin-sdk/prototypes/templates-rust/plugin-local-calendar.wasm"
+    );
     const TYPESCRIPT: &[u8] = include_bytes!("../../../../plugins/templates/plugin.wasm");
+    let zone = iana_time_zone::get_timezone().expect("host IANA timezone for candidate parity");
     // Debug builds make Pulley's host interpreter too slow for menu fixtures
     // under the production budget. Release tests/probes cover that backend.
     for runtime in std::iter::once(runtime()).chain((!cfg!(debug_assertions)).then(interpreter)) {
-        for input in [
+        for mut input in [
             json!({"now":"2026-07-25T10:00:00Z","locale":"de","title":"Log {{date:YYYY}}","body":"{{title|upper}} {{date-1M+2d:YYYY-MM-DD}} {{date+7d:dddd}}"}),
             json!({"now":"2026-01-31T12:00:00Z","body":"{{date+1M:YYYY-MM-DD}} {{date-1y+2w:YYYY-MM-DD}} {{word|trim|capitalize}}/{{word|slug}}/{{flag}}/{{number}}/{{missing}}/{{word|unknown}}","vars":{"word":"  hÄllo WORLD  ","flag":false,"number":42}}),
             json!({"now":"2026-07-25T10:00:00Z","title":"{{unknown}}","body":"{{date:}} {{multi\nline}} {{literal","vars":{"multi\nline":"yes"}}),
             json!({"body":"{{word|capitalize}}/{{word|upper}}/{{arr}}/{{obj}}/{{float}}","vars":{"word":"😀café","arr":[1,null,true,["a","b"]],"obj":{},"float":1.0}}),
+            json!({"now":"2028-01-31T00:30:00Z","body":"{{date+1M:YYYY-MM-DD HH:mm:ss}}/{{date-1y:dddd}}"}),
+            json!({"now":"2026-03-28T11:00:00Z","body":"{{date+1d:YYYY-MM-DD HH:mm}}/{{date+1M:YYYY-MM-DD HH:mm}}"}),
+            json!({"now":"2026-01-29T01:30:00Z","body":"{{date+2M:YYYY-MM-DD HH:mm}}"}),
+            json!({"now":"2026-08-25T00:30:00Z","body":"{{date+2M:YYYY-MM-DD HH:mm}}"}),
         ] {
+            input["timeZone"] = json!(zone);
             let run = |component| {
                 Call::of(component, &[])
                     .run_on(runtime, "renderTemplate", input.clone())
                     .unwrap()
             };
-            assert_eq!(run(RUST), run(TYPESCRIPT), "{input}");
+            let expected = run(TYPESCRIPT);
+            assert_eq!(run(RUST), expected, "{input}");
+            assert_eq!(run(LOCAL), expected, "{input}");
         }
         for input in [
             json!({}),
@@ -236,7 +247,9 @@ fn rust_templates_prototype_matches_typescript_outputs() {
                 call.run_on(runtime, "newFromTemplate", input.clone())
                     .unwrap()
             };
-            assert_eq!(run(RUST), run(TYPESCRIPT), "{input}");
+            let expected = run(TYPESCRIPT);
+            assert_eq!(run(RUST), expected, "{input}");
+            assert_eq!(run(LOCAL), expected, "{input}");
         }
     }
 }

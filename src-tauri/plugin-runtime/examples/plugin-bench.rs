@@ -20,6 +20,8 @@ const TEMPLATES: &[u8] = include_bytes!("../../../plugins/templates/plugin.wasm"
 const TYPST: &[u8] = include_bytes!("../../../plugins/typst/plugin.wasm");
 const TEMPLATES_RUST: &[u8] =
     include_bytes!("../../../plugin-sdk/prototypes/templates-rust/plugin.wasm");
+const TEMPLATES_LOCAL: &[u8] =
+    include_bytes!("../../../plugin-sdk/prototypes/templates-rust/plugin-local-calendar.wasm");
 type Artifact = ([u8; 32], [u8; 32], &'static str, &'static [u8]);
 #[cfg(feature = "probe-precompiled")]
 const PRECOMPILED: &[Artifact] = include!(env!("MINDSTREAM_PROBE_PRECOMPILED"));
@@ -224,6 +226,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap();
     REHASH.set(args.iter().any(|a| a == "--rehash")).unwrap();
     let templates_only = args.iter().any(|a| a == "--templates-only");
+    if args.iter().any(|a| a == "--rust-local-calendar")
+        && args.iter().any(|a| a == "--rust-templates")
+    {
+        return Err("select only one Rust Templates variant".into());
+    }
     let execution = if args.iter().any(|arg| arg == "--interpreter") {
         Execution::Interpreter
     } else {
@@ -242,13 +249,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .transpose()?
         .map(VerifiedComponent::new)
         .unwrap_or_else(|| {
-            VerifiedComponent::from_static(if args.iter().any(|a| a == "--rust-templates") {
+            VerifiedComponent::from_static(if args.iter().any(|a| a == "--rust-local-calendar") {
+                TEMPLATES_LOCAL
+            } else if args.iter().any(|a| a == "--rust-templates") {
                 TEMPLATES_RUST
             } else {
                 TEMPLATES
             })
         });
     let templates = &template_bytes;
+    let time_zone = args
+        .iter()
+        .position(|a| a == "--time-zone")
+        .map(|i| args.get(i + 1).ok_or("--time-zone needs an IANA name"))
+        .transpose()?;
+    if args.iter().any(|a| a == "--rust-local-calendar") && time_zone.is_none() {
+        return Err("--rust-local-calendar requires --time-zone matching the host timezone".into());
+    }
     let iterations = args
         .iter()
         .position(|arg| arg == "--iterations")
@@ -309,8 +326,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     cases.insert("templatesRender".into(), sample(&runtime, templates, "renderTemplate", json!({
-        "now": "2026-07-25T10:00:00Z", "locale": "de", "title": "Log {{date:YYYY}}", "body": "{{title|upper}} {{date+7d:MMMM}}"
+        "now": "2026-07-25T10:00:00Z", "timeZone": time_zone, "locale": "de", "title": "Log {{date:YYYY}}", "body": "{{title|upper}} {{date+7d:MMMM}}"
     }), setup.clone(), &cache, iterations)?);
+    if args.iter().any(|a| a == "--calendar-heavy") {
+        cases.insert(
+            "templatesDateHeavy".into(),
+            sample(
+                &runtime,
+                templates,
+                "renderTemplate",
+                json!({
+                    "now":"2026-07-25T10:00:00Z", "timeZone":time_zone, "locale":"de",
+                    "title":"Log {{date:YYYY}}",
+                    "body":"{{date+1M-2d:dddd, D. MMMM YYYY HH:mm:ss}}\n".repeat(20)
+                }),
+                setup.clone(),
+                &cache,
+                iterations,
+            )?,
+        );
+    }
     let notes = (0..500)
         .map(|i| NoteMeta {
             id: format!("n{i}"),
@@ -503,6 +538,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         serde_json::to_string_pretty(&json!({
             "schemaVersion": 1, "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
             "execution": format!("{execution:?}"), "releaseBuild": !cfg!(debug_assertions), "iterations": iterations,
+            "timeZoneInput": time_zone,
             "cases": cases, "hostReport": reports.first(), "controls": controls,
             "processMemory": process_memory, "processPss": pss,
             "processMemoryBeforeEngine": before_engine, "processMemoryAfterEngine": after_engine,
