@@ -11,7 +11,7 @@
  * every later word in the block.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Schema, type Node as ProseNode } from '@milkdown/kit/prose/model';
 import { EditorState } from '@milkdown/kit/prose/state';
 import { DecorationSet, EditorView } from '@milkdown/kit/prose/view';
@@ -207,6 +207,8 @@ describe('diagnosticDecorations', () => {
  * stale while the suggestion lookup was live.
  */
 describe('diagnosticsPlugin lifecycle', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
   interface Harness {
     view: EditorView;
     invalidate: () => void;
@@ -262,8 +264,8 @@ describe('diagnosticsPlugin lifecycle', () => {
     return harness;
   }
 
-  /** The plugin schedules on a timer and then awaits the check. */
-  const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+  /** Run the queued initial/debounced check and its promise without a wall-clock race. */
+  const settle = () => vi.advanceTimersByTimeAsync(0);
 
   it('checks once on open without needing an edit', async () => {
     const h = mount('hello world');
