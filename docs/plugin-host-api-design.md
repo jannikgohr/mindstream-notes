@@ -34,6 +34,73 @@ for large host-owned state, but its lifetime, ownership, permissions and
 cancellation contract must be explicit. A general batch does not eliminate
 payload copying or replace a good bulk/query API.
 
+## Next host capabilities
+
+This is a proposal, not a list of implemented imports. The current Wasm API
+has no general HTTP, note-body, attachment, credential or event API. Declared
+text-checker services, artifact downloads and native services already have
+separate host mechanisms; they do not grant a Wasm guest arbitrary networking.
+The existing `notes` interface returns metadata, while note writes use
+validated effects.
+
+Prioritize capabilities with concrete plugin uses:
+
+| Capability                                         | Useful for                                                               | Host contract to define                                                                                                                               |
+| -------------------------------------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bounded note queries and opt-in content reads      | Search, backlinks, transformations, summarizers                          | Filters, selected fields, pagination, revision IDs and separate grants for content access. Avoid returning every body by default.                     |
+| Revision-checked bulk edit effects                 | Applying transformations across notes                                    | Expected revisions, validation before writes, conflict results and explicit atomicity. Do not make generic host batching promise a vault transaction. |
+| Scoped HTTP requests                               | Service integrations, publishing, remote lookups and local model servers | Approved destinations, bounded bytes and concurrency, typed responses, cancellation and credential isolation.                                         |
+| Host-managed credentials                           | Authenticated service integrations                                       | User-selected opaque credential references scoped to a plugin and destination. No app account tokens, cookies or raw secrets in manifests/logs.       |
+| Attachment handles and user-selected import/export | OCR, image processing, PDF tools and export formats                      | Explicit selection or vault grants, byte limits and streamed access where needed. No arbitrary filesystem paths.                                      |
+| Cancellable jobs and bounded change subscriptions  | Slow I/O, AI/OCR and incremental indexing                                | Ownership, progress, result delivery, backpressure and teardown on disable/remove/vault closure. Mobile OS suspension must remain visible.            |
+| Capability and version discovery                   | Portable third-party plugins                                             | Supported interface versions and optional operations, distinct from the user's grants. A guest can choose a fallback before calling a missing import. |
+
+### HTTP proposal
+
+Provide a typed host request operation with method, URL, headers and byte
+body. Return status, bounded headers and bytes. Treat HTTP statuses such as
+404/429 as responses; distinguish permission, destination, timeout, size and
+transport errors. Guests can handle JSON, application retries and service
+protocols themselves. Avoid a host wrapper for each service or language.
+
+Require an explicit networking grant plus approved scheme/host/port
+destinations. A manifest update that widens destinations must require review,
+even if its permission names are unchanged. HTTPS should be the default.
+Loopback/LAN endpoints and plain HTTP need distinct, visible opt-in so local
+LanguageTool/model servers remain possible. A read-and-network plugin can
+send granted note data to those destinations; approval must make that clear.
+
+The host must enforce destinations during DNS resolution and connection,
+including IPv4/IPv6, redirects and DNS rebinding. Default to no automatic
+redirects; any later redirect support must validate every hop and avoid
+forwarding credentials across origins. Do not inherit app cookies, auth
+headers, filesystem schemes or ambient proxy authority. Scope credential
+handles to the approved destination and redact sensitive request details.
+This needs backend enforcement rather than relying on WebView CORS.
+
+Set explicit request/response byte caps, decompressed-body caps, concurrency
+limits and connect/total timeouts. Requests must stop on cancellation, plugin
+disable/remove and vault closure. Slow I/O needs a specified job/continuation
+contract or an explicitly bounded I/O allowance. The existing one-second
+guest budget must not silently expand, and network waits must not freeze the
+UI. Result delivery must recheck the plugin and vault lifetime. Neither
+generic batching nor an automatic retry should replay a non-idempotent POST.
+If network batches become useful, specify their sequential/parallel and
+partial-completion semantics separately from the current synchronous batch.
+
+This follows the scoped-access pattern in
+[Figma's network manifest](https://developers.figma.com/docs/plugins/making-network-requests/)
+and [Extism's explicit allowed hosts](https://extism.org/docs/install/).
+[OWASP's SSRF guidance](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html)
+explains why validating an initial URL alone is insufficient and recommends
+disabling redirects to prevent validation bypass. These are design references,
+not claims that our proposed HTTP implementation already exists or is tested.
+
+Pure text parsing, filtering, sorting, hashing and service-specific payload
+construction should stay in guests unless measurement justifies a shared
+implementation. Bounded queries and host-owned jobs reduce repeated data
+transfer more effectively than mirroring every small helper in the host.
+
 ## What other systems do
 
 These sources were checked on 2026-10-21. They illustrate different choices;
