@@ -7,6 +7,7 @@ import {
 import type { PluginManifest } from './types';
 import typstManifest from '../../../plugins/typst/manifest.json';
 import languagetoolManifest from '../../../plugins/languagetool/manifest.json';
+import templatesManifest from '../../../plugins/templates/manifest.json';
 
 /** A minimal manifest that passes validation; override to probe failures. */
 function validManifest(
@@ -284,6 +285,36 @@ describe('validateManifest', () => {
   });
 
   // --- Toolbar buttons + Luau macros ---
+  it('accepts the Templates metadata visibility condition', () => {
+    expect(
+      validateManifest(templatesManifest).contributes.toolbar?.[0].visibleWhen
+        ?.type
+    ).toBe('hasMatchingNotes');
+  });
+
+  it.each([
+    null,
+    [],
+    'always',
+    { type: 'unknown' },
+    { type: 'hasMatchingNotes' },
+    { type: 'hasMatchingNotes', folderSetting: 'missing' },
+    { type: 'hasMatchingNotes', folderSetting: 'source-tag' },
+    { type: 'hasMatchingNotes', tagSetting: 'source-folder' },
+    { type: 'hasMatchingNotes', tagSetting: '' }
+  ])('rejects an invalid toolbar visibility condition: %j', (condition) => {
+    const m = structuredClone(templatesManifest) as Record<string, unknown>;
+    const c = m.contributes as { toolbar: Record<string, unknown>[] };
+    c.toolbar[0].visibleWhen = condition;
+    expect(() => validateManifest(m)).toThrow(/visibleWhen/);
+  });
+
+  it('requires notes.read for a metadata visibility condition', () => {
+    expect(() =>
+      validateManifest({ ...templatesManifest, permissions: ['notes.create'] })
+    ).toThrow(/visibleWhen requires notes.read/);
+  });
+
   const luauButton = {
     id: 'new-from-template',
     location: 'file-tree',

@@ -197,6 +197,7 @@ asymmetric:
   to a host toolbar (currently the file-tree toolbar). Each ships its own
   bundled `.svg` icon (rendered as a themed monochrome mask) and runs a backend
   script export on click:
+
   ```jsonc
   "toolbar": [{
     "id": "new-from-template",
@@ -207,9 +208,30 @@ asymmetric:
     "action": { "type": "script", "export": "newFromTemplate" }
   }]
   ```
+
   The export returns a **declarative effect** the app performs (see below) — so
   Set `opensMenu` when the export returns `openMenu`. The host then marks the
   button as a submenu and resolves it on hover.
+
+  File-tree buttons can declare `visibleWhen` to hide an action until a note
+  matches a configured source:
+
+  ```json
+  "visibleWhen": {
+    "type": "hasMatchingNotes",
+    "folderSetting": "source-folder",
+    "tagSetting": "source-tag"
+  }
+  ```
+
+  These are plugin-local setting IDs with types `folder` and `tag`. Supply at
+  least one. The condition requires `notes.read` and matches either source,
+  including descendant folders and every note kind. It excludes trashed notes
+  and notes inside trashed folders. Unset sources, empty matches, unavailable
+  metadata and a revoked read grant hide the action. The host uses its reactive
+  metadata cache without invoking the guest or exposing note contents.
+  Backend permission and note validation still apply when the action runs.
+  Hidden actions retain their configured toolbar position.
 
 ### Placeholder syntax (declarative templates)
 

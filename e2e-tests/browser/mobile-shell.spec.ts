@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { setTemplateFolder } from './template-sources';
 
 /**
  * The mobile shell's chrome, which follows the desktop's: the vault tile
@@ -122,6 +123,7 @@ test('plugin create actions keep their IDs in a separate mobile layout', async (
     { desktopKey, desktop }
   );
   await page.goto('/');
+  await setTemplateFolder(page);
   await page
     .getByRole('button', { name: 'Show everything you can create' })
     .click();
@@ -151,6 +153,12 @@ test('plugin create actions keep their IDs in a separate mobile layout', async (
   expect(stored.desktop).toEqual(desktop);
   expect(stored.mobile.toolbar[0]).toBe(pluginId);
   await page.reload();
+  // The browser fallback resets plugin settings. The saved toolbar order must
+  // survive the temporarily hidden action while its source is configured again.
+  await expect(
+    page.getByRole('button', { name: 'New from template', exact: true })
+  ).toBeHidden();
+  await setTemplateFolder(page);
   await expect(
     page.getByRole('button', { name: 'New from template', exact: true })
   ).toBeVisible();

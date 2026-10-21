@@ -494,6 +494,14 @@ export interface PluginToolbarButton {
   /** The script returns an `openMenu` effect. Hosts show a submenu affordance
    * and may resolve it on hover. */
   opensMenu?: boolean;
+  /** Show only when a live note matches either configured source. No guest call. */
+  visibleWhen?: {
+    type: 'hasMatchingNotes';
+    /** Plugin-local folder setting; includes notes in descendant folders. */
+    folderSetting?: string;
+    /** Plugin-local tag setting; exact tag match. */
+    tagSetting?: string;
+  };
   action: PluginToolbarAction;
 }
 

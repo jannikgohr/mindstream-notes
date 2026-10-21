@@ -25,6 +25,11 @@
         "labelKey": "toolbar.newFromTemplate",
         "icon": "icons/templates.svg",
         "opensMenu": true,
+        "visibleWhen": {
+          "type": "hasMatchingNotes",
+          "folderSetting": "source-folder",
+          "tagSetting": "source-tag"
+        },
         "action": {
           "type": "script",
           "export": "newFromTemplate"

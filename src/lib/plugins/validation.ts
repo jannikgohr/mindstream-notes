@@ -1337,7 +1337,9 @@ function validateToolbarButton(
   pluginId: string,
   b: PluginToolbarButton,
   path: string,
-  pluginLocalNoteKindIds: Set<string>
+  pluginLocalNoteKindIds: Set<string>,
+  settings: readonly PluginSetting[],
+  permissions: readonly PluginPermission[]
 ): void {
   assertSlug(pluginId, b?.id, `${path}.id`);
   if (!TOOLBAR_LOCATIONS.has(b?.location)) {
@@ -1408,6 +1410,57 @@ function validateToolbarButton(
       pluginId,
       `${path}.opensMenu requires a script action`
     );
+  }
+  if (b.visibleWhen !== undefined) {
+    if (b.location !== 'file-tree') {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.visibleWhen is only supported for file-tree buttons`
+      );
+    }
+    const condition = b.visibleWhen;
+    if (
+      !condition ||
+      typeof condition !== 'object' ||
+      Array.isArray(condition) ||
+      condition.type !== 'hasMatchingNotes'
+    ) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.visibleWhen must be a hasMatchingNotes condition`
+      );
+    }
+    if (!permissions.includes('notes.read')) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.visibleWhen requires notes.read`
+      );
+    }
+    if (
+      condition.folderSetting === undefined &&
+      condition.tagSetting === undefined
+    ) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.visibleWhen requires a source setting`
+      );
+    }
+    for (const [key, type] of [
+      ['folderSetting', 'folder'],
+      ['tagSetting', 'tag']
+    ] as const) {
+      const id = condition[key];
+      if (id === undefined) continue;
+      assertSlug(pluginId, id, `${path}.visibleWhen.${key}`);
+      if (
+        !settings.some((setting) => setting.id === id && setting.type === type)
+      ) {
+        throw new PluginValidationError(
+          pluginId,
+          `${path}.visibleWhen.${key} must reference this plugin's ${type} setting`
+        );
+      }
+    }
   }
   validateToolbarAction(pluginId, b?.action, `${path}.action`, b.location);
 }
@@ -2022,7 +2075,14 @@ export function validateManifest(input: unknown): PluginManifest {
   }
   const seenToolbarIds = new Set<string>();
   for (const [i, b] of toolbar.entries()) {
-    validateToolbarButton(pluginId, b, `toolbar[${i}]`, seenNoteKindIds);
+    validateToolbarButton(
+      pluginId,
+      b,
+      `toolbar[${i}]`,
+      seenNoteKindIds,
+      (contributes.settings ?? []).flatMap((section) => section.settings),
+      m.permissions
+    );
     if (seenToolbarIds.has(b.id)) {
       throw new PluginValidationError(
         pluginId,
