@@ -2,22 +2,23 @@
 
 The migration has a working Wasmtime runner, TypeScript SDK and first-party
 Wasm components. Physical Android ARM64 runtime and app tests now have evidence,
-but M5 remains open. Cached preparation and app-call overhead exceed the target,
-and a macOS interpreter run exceeded the unchanged one-second budget. Desktop
+but M5 remains open. Trusted bundled precompilation and immutable builtin
+digest reuse now reduce Android preparation and app-call costs. A macOS
+interpreter run still exceeded the unchanged one-second budget. Desktop
 whole-app measurements remain incomplete. M6 is blocked. Luau, its bindings and
 the old bundled sources remain available for regression comparisons.
 
 ## Milestone status
 
-| Milestone                  | Evidence                                                                                                                   | Remaining work                                                                                                                          |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| M0, inventory and baseline | Host/API inventory; Linux Luau measurements; matching normal Android app builds                                            | Representative desktop whole-app baseline and longer device memory runs                                                                 |
-| M1, shared host services   | Runtime-neutral crate; existing Luau host tests                                                                            | None identified                                                                                                                         |
-| M2, Wasmtime integration   | Verified entry bytes, compile caches, fresh stores, limits, cancellation, permission tests                                 | Cross-platform release gate below                                                                                                       |
-| M3, TypeScript SDK         | Packed Node-only author workflow; all three desktop Node 22 CI jobs passed after the Windows temporary-path fix            | None identified                                                                                                                         |
-| M4, bundled ports          | Templates and Typst use manifest v2/Wasm; Node tests and app-host tests; template output compared with retained Luau       | No local functional gap found; platform gates remain under M5                                                                           |
-| M5, parity and performance | Physical Android native/Pulley probes, release app lifecycle, matching APK/startup/memory measurements, desktop CI results | Cached/app-call overhead, macOS interpreter budget failure, desktop whole-app and installer measurements, broader thermal/soak coverage |
-| M6, retire Luau            | Intentionally pending                                                                                                      | All M5 gates must pass first                                                                                                            |
+| Milestone                  | Evidence                                                                                                                                                              | Remaining work                                                                                                                    |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| M0, inventory and baseline | Host/API inventory; Linux Luau measurements; matching normal Android app builds                                                                                       | Representative desktop whole-app baseline and longer device memory runs                                                           |
+| M1, shared host services   | Runtime-neutral crate; existing Luau host tests                                                                                                                       | None identified                                                                                                                   |
+| M2, Wasmtime integration   | Verified entry bytes, compile caches, fresh stores, limits, cancellation, permission tests                                                                            | Cross-platform release gate below                                                                                                 |
+| M3, TypeScript SDK         | Packed Node-only author workflow; all three desktop Node 22 CI jobs passed after the Windows temporary-path fix                                                       | None identified                                                                                                                   |
+| M4, bundled ports          | Templates and Typst use manifest v2/Wasm; Node tests and app-host tests; template output compared with retained Luau                                                  | No local functional gap found; platform gates remain under M5                                                                     |
+| M5, parity and performance | Physical Android native/Pulley probes, trusted AOT and Rust Templates comparison, release app lifecycle, matching APK/startup/memory measurements, desktop CI results | macOS interpreter budget reliability, representative app startup/memory and installer measurements, broader thermal/soak coverage |
+| M6, retire Luau            | Intentionally pending                                                                                                                                                 | All M5 gates must pass first                                                                                                      |
 
 The npm SDK stays private during migration. It can be packed and installed
 locally. This is not an SDK v1 compatibility promise. The ABI is
@@ -26,17 +27,17 @@ versions still accept manifest-only packages.
 
 ## Execution inventory
 
-| Path                         | Entry points or responsibilities                                                                         | Verification                                                                                  |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Templates                    | `newFromTemplate`, `renderTemplate`; nested folder/tag selection; date math, variables, filters, UUIDs   | `plugin-sdk/bundled/bundled.test.ts`; app-host template regression tests                      |
-| Typst                        | `renderDocument`, `exportDocument`; stdin to declared `typst`, PDF bytes and stderr diagnostics          | Built-component tests for success/failure/timeout, source-only fallback through the app host  |
-| LanguageTool                 | Manifest-only text-checker and native-service contributions                                              | Existing manifest, diagnostics, source-editor and E2E tests                                   |
-| `plugins::run_plugin_script` | Dispatch Luau/Wasm after package approval; verified component bytes; backend context merge               | App plugin tests including checksum changes, permissions and v2 entry discovery               |
-| Luau adapter                 | Fresh VM, plugin-scoped module loading and old entry contract                                            | Retained `src-tauri/src/plugins/luau.rs` tests                                                |
-| Wasm adapter                 | Shared engine, memory/disk cache, bounded concurrency, fresh stores, JSON ABI, epoch interruption        | `src-tauri/plugin-runtime/src/wasm/tests.rs`, both Rust/TypeScript fixtures and Pulley        |
-| Host services                | Dates, frontmatter, logging, note metadata, isolated storage, native processes, limits and cancellation  | Runtime crate tests, called by both adapters                                                  |
-| Declarative effects          | `none`, `toast`, `createNote`, `createNoteFromNote`, `insertMarkdown`, `openMenu`                        | Frontend effect validation and existing menu/template tests                                   |
-| Lifecycle                    | Disable, crash, package update/reapproval and removal cancel active calls; fresh stores after completion | Cancellation registry, native-process and Wasm tests; device lifecycle testing still required |
+| Path                         | Entry points or responsibilities                                                                         | Verification                                                                                               |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Templates                    | `newFromTemplate`, `renderTemplate`; nested folder/tag selection; date math, variables, filters, UUIDs   | `plugin-sdk/bundled/bundled.test.ts`; app-host template regression tests                                   |
+| Typst                        | `renderDocument`, `exportDocument`; stdin to declared `typst`, PDF bytes and stderr diagnostics          | Built-component tests for success/failure/timeout, source-only fallback through the app host               |
+| LanguageTool                 | Manifest-only text-checker and native-service contributions                                              | Existing manifest, diagnostics, source-editor and E2E tests                                                |
+| `plugins::run_plugin_script` | Dispatch Luau/Wasm after package approval; verified component bytes; backend context merge               | App plugin tests including checksum changes, permissions and v2 entry discovery                            |
+| Luau adapter                 | Fresh VM, plugin-scoped module loading and old entry contract                                            | Retained `src-tauri/src/plugins/luau.rs` tests                                                             |
+| Wasm adapter                 | Shared engine, memory/disk cache, bounded concurrency, fresh stores, JSON ABI, epoch interruption        | `src-tauri/plugin-runtime/src/wasm/tests.rs`, both Rust/TypeScript fixtures and Pulley                     |
+| Host services                | Dates, frontmatter, logging, note metadata, isolated storage, native processes, limits and cancellation  | Runtime crate tests, called by both adapters                                                               |
+| Declarative effects          | `none`, `toast`, `createNote`, `createNoteFromNote`, `insertMarkdown`, `openMenu`                        | Frontend effect validation and existing menu/template tests                                                |
+| Lifecycle                    | Disable, crash, package update/reapproval and removal cancel active calls; fresh stores after completion | Cancellation registry, native-process and Wasm tests; physical Android lifecycle assertions recorded below |
 
 | WIT interface  | Permission boundary                                                                                          |
 | -------------- | ------------------------------------------------------------------------------------------------------------ |
@@ -320,10 +321,81 @@ The complete rerun finished successfully, including all three Linux packaged-app
 suites. This CI pass does not close the remaining app performance and hardware
 measurement gates.
 
-M5 stays open for cached/app-call performance, macOS budget reliability,
+At that checkpoint M5 stayed open for cached/app-call performance, macOS budget reliability,
 desktop startup/memory and matching installer sizes, broader device conditions
 and memory retention, and any required immediate background cancellation.
 No untested platform or missing release measurement is marked passed.
+
+## Preparation and Rust Templates follow-up, 2026-10-21
+
+The [optimization report](benchmarks/wasm-optimization-2026-10-21/README.md)
+records implementation `3b070fcf`, probe controls `9c211cad`, final CI
+`8b02e37a`, raw samples, conditions, artifact hashes and reproduction steps.
+Only the app's own build can supply trusted native artifacts. Missing or
+incompatible artifacts compile the portable component. Third-party packages
+retain integrity and approval checks and never supply deserializable native
+code. Enabled, approved plugins prepare in a bounded background queue without
+executing guests. Builtin digest reuse is tied to immutable embedded bytes.
+Every call still uses a fresh store and instance.
+
+The same physical SM-T733 passed 78 release runtime tests. Both native and
+Pulley release probes retained 100 samples and the default 1,000 ms budget.
+Two native AOT workloads also completed 1,000 calls per export. No budget was
+raised. The Rust Templates prototype stays separate from the production
+TypeScript plugin and passes the recorded parity fixtures, including release
+interpreter execution. It is not a completed replacement decision.
+
+Native TypeScript AOT cold preparation measured 58.65 ms, and Rust AOT
+16.75 ms. Warm native Templates render total p95 was 0.56 ms for TypeScript
+and 0.16 ms for Rust. The 500-note menu measured 25.68 versus 2.70 ms native,
+and 801.26 versus 51.30 ms with Pulley. These include runtime preparation,
+instantiation and guest execution but exclude app discovery and IPC. Cold
+preparation is one observation per case, not an initialization percentile.
+The report separates compiler memory, process RSS/PSS and guest linear memory.
+Rust reduced component size from 1,727,495 to 121,628 bytes, while its menu
+used 2 MiB guest memory versus TypeScript's 1.75 MiB. A smaller component does
+not guarantee less guest memory for every export.
+
+The optimized devtools release measured app render IPC p95 of 11.4 ms over
+100 calls, compared with the earlier migration's 58.6 ms and Luau's 12.3 ms.
+Those earlier blocks had different charge levels and are contextual comparisons,
+not controlled attribution of every improvement. Discovery had already prepared
+the component before the first timed export. Normal frontend portable and AOT
+release apps were paired again at 30% charge, USB charging, saver off and
+thermal status 0. Initial process VmHWM was 270,972 versus 166,976 KiB; idle
+PSS was 139,042 versus 139,725 KiB. AOT reduces the observed compilation peak,
+not steady app memory. Five activity draws had medians 211 versus 194 ms;
+interactive-ready startup remains unmeasured. App memory after 30 calls and
+1,000-call runtime checkpoints do not close the broader retention gate.
+
+The unset-source Templates toast was used only for repeated-call memory
+measurement. In the release variant, selecting a real template folder in
+Settings then using the actual New from template menu created a separate
+`Daily 2026-10-21` note with substituted title/date and left the source intact.
+A Typst template created a separate plugin-owned note. After enabling Typst in
+Settings, source editing and persistence worked without the native compiler.
+The signed fixture passed all 15 Android lifecycle assertions again, including
+storage, effects, disable/remove cancellation, responsiveness, recovery and
+vault approval isolation. Backgrounding still demonstrated deadline-based
+termination, not immediate cancellation.
+
+Matching normal AOT APK and Windows executable increases over the normal Luau
+baseline are 13,348,144 and 14,851,584 bytes. Both measured pairs stay below
+15,000,000 bytes, with only 148,416 bytes of Windows margin. The AOT additions
+over portable controls are 2,978,208 and 3,348,480 bytes. The historical stub
+frontend baseline remains excluded; installers, macOS bundles, AAB delivery
+and other ABIs remain unmeasured.
+
+Full CI run 39515421160 passed all Windows/macOS/Linux Rust, Node 22 and runtime
+jobs and all Linux packaged-app suites. Functional debug tests now run serially
+after compiler fixtures starved an existing interpreter deadline check on two
+runners. This does not explain the separate macOS release probe failure in
+39513934906, where ten TypeScript interpreter menu attempts exceeded budget.
+Its passing rerun had guest p95 605.59 ms and max 649.49 ms. Keep the failure as
+an unresolved reliability gate. Runner power, thermals and CPU allocation were
+uncontrolled. M5 remains open for that gate, representative desktop app and
+package measurements, broader device conditions and memory retention, and any
+required immediate background cancellation. M6 remains blocked; retain Luau.
 
 ## Release decision
 
