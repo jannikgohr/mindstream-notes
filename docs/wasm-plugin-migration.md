@@ -490,8 +490,12 @@ See the [authoring/examples guide](../plugin-sdk/examples/README.md).
 Windows workspace tests passed, including 1,038 app tests and 83 runtime tests;
 the frontend/SDK suite passed 3,590 tests. The same bundled behavior assertions
 cover both shipped Rust and TypeScript examples, including native PDF output
-and diagnostic grouping. CI now rebuilds the Rust guests and checks their
-committed bytes; Node-only CI also builds the TypeScript examples. Physical
+and diagnostic grouping. CI checks committed components, rebuilds the Rust
+guests and runs the same behavior assertions against the rebuilt artifacts,
+retaining their hashes. Cross-host byte identity is not established: the first
+Linux rebuild differed from Windows after source-path normalization. That
+strict comparison failed and remains recorded; it is not a functional pass.
+Node-only CI also builds the TypeScript examples. Physical
 release measurements and new macOS/Windows CI evidence for the final remapped
 artifacts are still pending. Earlier measurements retain their original hashes
 and do not close those gates. M5/M6 remain open.

@@ -274,8 +274,20 @@ jobs:
       - run: cargo test --locked --workspace
         working-directory: plugin-sdk/bundled
       - run: pnpm plugins:build
-      - name: Verify committed Rust components match their sources
-        run: git diff --exit-code -- plugins/templates/plugin.wasm plugins/typst/plugin.wasm
+      # Host toolchains can produce different bytes. The JS matrix checks the
+      # committed components; this checks freshly built guests against the same
+      # behavior assertions and retains their actual hashes and bytes.
+      - name: Verify rebuilt Rust component behavior
+        run: pnpm exec vitest run plugin-sdk/bundled
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: rebuilt-rust-plugins
+          path: |
+            plugins/templates/plugin.wasm
+            plugins/typst/plugin.wasm
+            plugin-sdk/bundled/target/components.json
+          retention-days: 14
 
   plugin-runtime:
     name: Portable plugin runtime (${{ matrix.os }})

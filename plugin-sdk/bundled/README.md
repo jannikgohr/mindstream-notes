@@ -17,7 +17,10 @@ The build uses the pinned toolchain in `rust-toolchain.toml`, compiles
 preflight. A first pass discovers surviving Rust panic source paths; a second
 pass remaps complete filenames to stable `/mindstream/` paths, including
 Windows separators. The lockfile and generated `plugins/*/plugin.wasm` are committed.
-CI rebuilds them with the same toolchain and rejects byte differences.
+CI tests committed components in the JS matrix, then rebuilds and checks the
+same behavior assertions against fresh Rust components in a separate job.
+It retains their bytes and hashes. Cross-host byte identity is not established;
+Linux and Windows builds still differ after path normalization.
 An ordinary app build uses those committed components; it does not need the
 guest compiler or Node at runtime.
 

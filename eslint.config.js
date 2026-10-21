@@ -22,6 +22,9 @@ export default ts.config(
       '**/build/**',
       '**/dist/**',
       '**/.output/**',
+      'plugin-sdk/**/target/**',
+      // Immutable browser-console snippets retained with benchmark hashes.
+      'docs/benchmarks/**/tools/**',
       'src-tauri/**',
       'static/**',
       'plugins/**'

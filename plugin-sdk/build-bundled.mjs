@@ -2,6 +2,7 @@
 import { readFile, writeFile, readdir } from 'node:fs/promises';
 import { join, dirname, relative, sep, isAbsolute } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { componentNew } from '@bytecodealliance/jco-transpile/wasm-tools';
 import { checkPackage } from './typescript/lib/check.js';
 
@@ -83,6 +84,7 @@ cargo(
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([from, to]) => `--remap-path-prefix=${from}=${to}`)
 );
+const artifacts = [];
 for (const name of ['templates', 'typst']) {
   const dir = join(root, 'plugins', name);
   const manifest = JSON.parse(
@@ -92,5 +94,14 @@ for (const name of ['templates', 'typst']) {
   await writeFile(join(dir, manifest.entry), bytes);
   const problems = await checkPackage(dir);
   if (problems.length) throw new Error(`${name}: ${problems.join('; ')}`);
+  artifacts.push({
+    name,
+    bytes: bytes.length,
+    sha256: createHash('sha256').update(bytes).digest('hex')
+  });
   console.log(`${name}: ${bytes.length} bytes, package check passed`);
 }
+await writeFile(
+  join(workspace, 'target/components.json'),
+  JSON.stringify(artifacts, null, 2) + '\n'
+);
