@@ -516,8 +516,30 @@ conditions still need evidence for this revision. No new installed-app UI
 checks are claimed here. Earlier measurements retain their original hashes.
 The third CI run also hit `Budget` in the instrumented Linux interpreter
 conformance test. The coverage launcher now uses the same serial test policy
-as functional CI, keeping all limits and tests; that rerun remains pending.
+as functional CI, keeping all limits and tests. The
+[completed follow-up](benchmarks/wasm-ci-followup-2026-10-21/README.md)
+passed Linux coverage and all three portable release runtime probes. Windows
+debug workspace testing still failed the interpreted conformance `report`
+with `Budget`, despite serial execution. That cause remains unresolved;
+the overall workflow failed and no deadline was increased.
 M5/M6 remain open; retain Luau runtime support.
+
+## Template action visibility
+
+The shipped Rust Templates manifest and the TypeScript example now declare a
+metadata-only `hasMatchingNotes` visibility condition. Desktop toolbar,
+right-click and mobile create menus hide **New from template** until a source
+folder or tag has a non-trashed matching note. The host evaluates existing
+reactive metadata without invoking Wasm; hidden actions retain their toolbar
+position. Guest binaries and execution budgets are unchanged.
+
+Local frontend validation passed 3,607 unit/SDK tests, Svelte checking with
+zero diagnostics, and 21 Chromium browser tests covering the desktop/mobile
+settings and toolbar behavior. The browser fallback cannot validate native
+Wasm execution. No new physical Android UI, startup, memory or package-size
+evidence is claimed for this UI change. Future HTTP and other host capability
+proposals are in [the host API design](plugin-host-api-design.md); they are not
+implemented imports or newly granted permissions.
 
 ## Release decision
 
