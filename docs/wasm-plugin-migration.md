@@ -448,6 +448,19 @@ this added host API. New batch-importing guests require a supporting host;
 the ABI/SDK remain private. Shipped Templates selection and Luau remain.
 M5/M6 stay open.
 
+The subsequent recovery update adds `phase`, `completed` and earlier kept
+`replies` alongside the stopping command index/cause. Whole-plan validation
+failure now clearly reports that nothing ran; execution errors and rejected
+oversized results report different progress. Side effects are not rolled back,
+and fatal traps cannot return progress. The private batch ABI changed, so batch
+guests need rebuilding with the matching host. Historical performance evidence
+above describes the earlier artifacts, not new timings for this failure record.
+See the [recovery contract and cost explanation](plugin-host-api-design.md).
+The [recovery validation](benchmarks/wasm-batch-recovery-2026-10-21/README.md)
+passed 82 Windows runtime tests, 87 physical ARM64 Android release runtime
+tests including native/Pulley guest recovery, and 3,585 frontend/SDK tests.
+Artifact hashes, raw logs and tablet power/thermal records are retained there.
+
 ## Release decision
 
 Targets remain p95 initialization below 20 ms, trivial cached call overhead

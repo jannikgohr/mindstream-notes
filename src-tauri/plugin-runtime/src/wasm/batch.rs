@@ -13,7 +13,13 @@ pub const MAX_COMMANDS: usize = 128;
 pub const MAX_INPUT_BYTES: usize = 1024 * 1024;
 pub const MAX_RESULT_BYTES: usize = 8 * 1024 * 1024;
 
-fn failure(index: usize, error: HostError) -> HostResult<Failure> {
+fn failure(
+    index: usize,
+    phase: FailurePhase,
+    completed: usize,
+    replies: Vec<Reply>,
+    error: HostError,
+) -> HostResult<Failure> {
     let cause = match error {
         HostError::Denied(p) => types::Error::Denied(p.into()),
         HostError::Invalid(m) => types::Error::Invalid(m),
@@ -23,8 +29,25 @@ fn failure(index: usize, error: HostError) -> HostResult<Failure> {
     };
     Ok(Failure {
         index: index as u32,
+        phase,
+        completed: completed as u32,
+        replies,
         cause,
     })
+}
+
+fn replies(commands: &[Command], values: Vec<Value>) -> Vec<Reply> {
+    values
+        .into_iter()
+        .zip(commands)
+        .enumerate()
+        .filter_map(|(i, (value, c))| {
+            c.keep.then_some(Reply {
+                index: i as u32,
+                value,
+            })
+        })
+        .collect()
 }
 
 fn inputs(op: &Operation) -> Vec<&TextInput> {
@@ -235,7 +258,7 @@ pub fn execute(
 ) -> HostResult<Result<Vec<Reply>, Failure>> {
     host.check()?;
     if let Err((i, e)) = validate(&commands) {
-        return Ok(Err(failure(i, e)?));
+        return Ok(Err(failure(i, FailurePhase::Validation, 0, vec![], e)?));
     }
     let mut values = Vec::with_capacity(commands.len());
     let mut size = 0usize;
@@ -243,29 +266,30 @@ pub fn execute(
         host.check()?;
         let value = match dispatch(host, &command.operation, &values) {
             Ok(v) => v,
-            Err(e) => return Ok(Err(failure(i, e)?)),
+            Err(e) => {
+                return Ok(Err(failure(
+                    i,
+                    FailurePhase::Execution,
+                    i,
+                    replies(&commands, values),
+                    e,
+                )?));
+            }
         };
         size = size.saturating_add(result_size(&value));
         if size > MAX_RESULT_BYTES {
             return Ok(Err(failure(
                 i,
+                FailurePhase::ResultLimit,
+                i + 1,
+                replies(&commands, values),
                 HostError::Invalid("batch: result data exceeds 8 MiB".into()),
             )?));
         }
         values.push(value);
         host.check()?;
     }
-    Ok(Ok(values
-        .into_iter()
-        .zip(commands)
-        .enumerate()
-        .filter_map(|(i, (value, c))| {
-            c.keep.then_some(Reply {
-                index: i as u32,
-                value,
-            })
-        })
-        .collect()))
+    Ok(Ok(replies(&commands, values)))
 }
 
 #[cfg(test)]
@@ -429,6 +453,9 @@ mod tests {
             .unwrap()
             .unwrap_err();
             assert_eq!(err.index, 1);
+            assert!(matches!(err.phase, FailurePhase::Validation));
+            assert_eq!(err.completed, 0);
+            assert!(err.replies.is_empty());
             assert!(matches!(err.cause, types::Error::Invalid(_)));
             assert!(!root.0.join("first.txt").exists());
         }
@@ -464,13 +491,19 @@ mod tests {
             &host,
             vec![
                 write("first.txt"),
+                cmd(Operation::Frontmatter(lit("{\"title\":\"Saved\"}")), true),
                 cmd(Operation::NotesAll, true),
                 write("later.txt"),
             ],
         )
         .unwrap()
         .unwrap_err();
-        assert_eq!(err.index, 1);
+        assert_eq!(err.index, 2);
+        assert!(matches!(err.phase, FailurePhase::Execution));
+        assert_eq!(err.completed, 2);
+        assert_eq!(err.replies.len(), 1);
+        assert_eq!(err.replies[0].index, 1);
+        assert!(matches!(&err.replies[0].value, Value::Text(s) if s.contains("Saved")));
         assert!(matches!(&err.cause,types::Error::Denied(p) if p==PERM_NOTES_READ));
         assert!(root.0.join("first.txt").exists());
         assert!(!root.0.join("later.txt").exists());
@@ -549,16 +582,29 @@ mod tests {
         let err = execute(&host, vec![too_many_args]).unwrap().unwrap_err();
         assert!(matches!(err.cause, types::Error::Invalid(_)));
         let commands = (0..129).map(|_| cmd(Operation::NowMillis, false)).collect();
-        assert!(execute(&host, commands).unwrap().is_err());
+        let err = execute(&host, commands).unwrap().unwrap_err();
+        assert_eq!(err.index, 0);
+        assert!(matches!(err.phase, FailurePhase::Validation));
+        assert_eq!(err.completed, 0);
+        assert!(err.replies.is_empty());
         let commands = (0..128)
-            .map(|_| cmd(Operation::RandomBytes(65536), false))
+            .map(|i| cmd(Operation::RandomBytes(65536), i == 0 || i == 127))
             .collect();
         let err = execute(&host, commands).unwrap().unwrap_err();
         assert!(matches!(err.cause, types::Error::Invalid(_)));
+        assert_eq!(err.index, 127);
+        assert!(matches!(err.phase, FailurePhase::ResultLimit));
+        assert_eq!(err.completed, 128);
+        assert_eq!(err.replies.len(), 1);
+        assert_eq!(err.replies[0].index, 0);
+        assert!(matches!(&err.replies[0].value, Value::Bytes(b) if b.len() == 65536));
         let err = execute(&host, vec![cmd(Operation::RandomBytes(65537), true)])
             .unwrap()
             .unwrap_err();
         assert!(matches!(err.cause, types::Error::Invalid(_)));
+        assert!(matches!(err.phase, FailurePhase::Execution));
+        assert_eq!(err.completed, 0);
+        assert!(err.replies.is_empty());
     }
     #[test]
     fn cancellation_and_deadline_are_fatal_not_batch_error_values() {

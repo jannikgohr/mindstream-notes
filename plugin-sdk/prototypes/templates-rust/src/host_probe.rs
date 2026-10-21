@@ -72,8 +72,22 @@ pub fn run(input: &Value) -> Result<Value, String> {
         ]);
     }
     #[cfg(feature = "batch-host")]
-    let replies =
-        batch::execute(&commands).map_err(|e| format!("batch {}: {:?}", e.index, e.cause))?;
+    let replies = match batch::execute(&commands) {
+        Ok(replies) => replies,
+        Err(e) if input["reportFailure"] == true => {
+            return Ok(json!({
+                "index": e.index,
+                "phase": match e.phase {
+                    batch::FailurePhase::Validation => "validation",
+                    batch::FailurePhase::Execution => "execution",
+                    batch::FailurePhase::ResultLimit => "result-limit",
+                },
+                "completed": e.completed,
+                "replies": reply_json(e.replies),
+            }));
+        }
+        Err(e) => return Err(format!("batch {}: {:?}", e.index, e.cause)),
+    };
     #[cfg(not(feature = "batch-host"))]
     let replies = {
         let mut values = Vec::new();
@@ -124,7 +138,11 @@ pub fn run(input: &Value) -> Result<Value, String> {
             })
             .collect::<Vec<_>>()
     };
-    Ok(Value::Array(replies.into_iter().map(|r|json!({"index":r.index,"value":match r.value {
+    Ok(reply_json(replies))
+}
+
+fn reply_json(replies: Vec<crate::mindstream::plugin::batch::Reply>) -> Value {
+    Value::Array(replies.into_iter().map(|r|json!({"index":r.index,"value":match r.value {
   HostValue::Text(s)=>json!(s),HostValue::OptionalText(s)=>json!(s),HostValue::Boolean(b)=>json!(b),HostValue::Note(n)=>json!(n.map(|n|json!({"id":n.id,"title":n.title}))),_=>Value::Null
- }})).collect()))
+ }})).collect())
 }

@@ -73,6 +73,9 @@ export function createBatchHost(imports) {
   return {
     execute(commands) {
       let index = 0;
+      let phase = 'validation';
+      let completed = 0;
+      const replies = [];
       try {
         if (commands.length > 128) invalid('batch: at most 128 commands');
         let inputBytes = 0;
@@ -188,20 +191,25 @@ export function createBatchHost(imports) {
         };
         for (let i = 0; i < commands.length; i++) {
           index = i;
+          phase = 'execution';
           const value = dispatch(commands[i].operation);
+          completed = i + 1;
+          phase = 'result-limit';
           resultBytes += size(value);
           if (resultBytes > 8388608)
             invalid('batch: result data exceeds 8 MiB');
           values.push(value);
+          if (commands[i].keep) replies.push({ index: i, value });
         }
-        return values.flatMap((value, index) =>
-          commands[index].keep ? [{ index, value }] : []
-        );
+        return replies;
       } catch (error) {
         const cause = error?.payload ?? error;
         throw {
           payload: {
             index,
+            phase,
+            completed,
+            replies,
             cause: cause?.tag ? cause : { tag: 'failed', val: String(error) }
           }
         };

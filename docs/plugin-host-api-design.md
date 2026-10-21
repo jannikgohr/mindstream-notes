@@ -89,10 +89,10 @@ batch. Note writes remain declarative effects outside this host API.
 - The whole plan's reference structure, command count and literal size are
   checked before execution. Argument semantics, permissions and paths are
   checked by the scalar handlers when each command executes.
-- The first failure stops later commands and returns its index and original
-  error kind/detail. Earlier side effects remain, with no rollback. Earlier
-  kept results are not returned on failure. Callers must recover explicitly;
-  automatic retry of a partially executed batch would be unsafe.
+- The first failure stops later commands and returns its zero-based index,
+  phase, completed-command count, earlier kept replies and original error
+  kind/detail. Earlier side effects remain, with no rollback. A failing
+  operation may itself have produced effects. Recovery is explicit.
 - Deadline and cancellation checks run before and after each operation and
   trap the guest. They are not catchable batch error values. Native processes
   use the existing cancellation and shared time-credit/absolute-ceiling logic.
@@ -146,6 +146,82 @@ are returned. Use a separate plan for any guest decision based on those values.
 The SDK test host mirrors the transport but still does not model execution
 budgets; real runtime tests/probes cover that behavior.
 
+## Recovering after a batch error
+
+TypeScript receives a `HostBatchError`; Rust receives the WIT `failure` record.
+Both expose `index`, `phase`, `completed`, `replies` and the original cause.
+`completed` counts prefix handlers that returned successfully. It does not
+promise durable writes or that the stopping handler had no effects.
+
+- `validation`: no commands ran, `completed` is zero and `replies` is empty.
+  `index` identifies the invalid command, or zero for a plan-wide error.
+  Fix the plan before retrying.
+- `execution`: command `index` returned an error. Commands before it returned
+  successfully, so `completed == index`. Their kept replies are available;
+  later commands did not run. The stopping command may have partial effects,
+  such as a native tool writing a file before an I/O error. Inspect state or
+  use an operation with known idempotent behavior before retrying it.
+- `result-limit`: the handler at `index` returned successfully, but its result
+  exceeded the cumulative cap. `completed == index + 1`; its effects remain.
+  The oversized result is omitted and earlier kept replies are returned.
+  Later commands did not run. Repeating the stopping operation just to obtain
+  its result may duplicate its effects.
+
+For example, if commands 0 and 1 complete and command 2 is denied:
+
+```ts
+import { HostBatchError } from '@mindstream/plugin-sdk';
+
+try {
+  batch.execute(commands);
+} catch (error) {
+  if (!(error instanceof HostBatchError)) throw error;
+  // error.index === 2, error.phase === 'execution', error.completed === 2
+  // error.replies contains kept outputs from commands 0 and 1, indexed 0/1.
+  // Decide recovery using error.kind/detail and the operation's semantics.
+}
+```
+
+Keep results needed for recovery explicitly. `keep: false` values are discarded
+when the call ends, including on failure. A new plan cannot reference a prior
+batch's values. Rebuild dependencies using returned values as literals, and
+renumber references within the new plan; blindly slicing the old command list
+does not preserve reference indices. Recovery uses the same invocation's
+remaining budget and permissions, without a fresh deadline.
+
+Deadline/cancellation traps and process termination cannot return this record.
+Persistent checkpoints or application-specific idempotency keys would be needed
+for recovery across those interruptions; this transport does not provide them.
+
+## Why fewer crossings can take longer
+
+The [physical Android comparison](benchmarks/wasm-host-batch-2026-10-21/README.md)
+measured complete implementations. Date-heavy native AOT p95 was
+0.533-0.545 ms scalar versus 0.564-0.570 ms batch; interpreter p95 was
+1.537-1.558 versus 2.338-2.343 ms. These measurements predate the richer failure
+record. They are not new timings for the revised ABI.
+
+The template batch candidate first scans title/body, parses date expressions
+and allocates commands, then lowers the typed plan across the component ABI.
+The host validates and dispatches it, retains intermediate values and returns
+selected results. The guest builds a JSON result map; the normal renderer
+parses expressions again and looks them up. Scalar rendering computes dates
+as it encounters them. Both paths still perform all 61 date operations;
+batching does not deduplicate expressions or combine date arithmetic.
+
+These scalar imports are in-process Wasmtime calls, not WebView IPC or network
+requests. Saving crossings has to repay the extra plan/copy/validation/result
+work. With Pulley, the additional guest code runs in the interpreter while
+the host's date helpers remain native. That explains why reducing imports
+alone is a poor predictor of speed. The implementation differences support
+these explanations, but the experiment did not separately profile their costs.
+
+The mixed workload builds the same guest plan on both paths and showed a small
+batch gain, about 4-5% native and 7% interpreter in later paired rounds. Its
+broader work and copying pattern differ from template rendering. Profiling
+and a template candidate that reuses parsed expressions would help test which
+costs dominate; neither is established by the existing timings.
+
 ## Compatibility and adoption
 
 Scalar APIs remain available. Legacy built components were tested against the
@@ -155,6 +231,12 @@ it cannot run on an older app merely because the scalar APIs exist. The SDK
 and ABI are still private/pre-release. Before publishing a stable contract,
 version the operation set and define capability/version discovery; future
 changes to variant shapes are not automatically ABI-compatible.
+
+The recovery fields extend the experimental failure record incompatibly with
+the original batch-importing component. Rebuild those guests with the matching
+WIT and host. The three Rust comparison artifacts are rebuilt together; the
+historical benchmark files and their hashes remain unchanged. Scalar-only
+components retain their original interfaces.
 
 Use explicit batches for measured patterns with enough crossing/copy cost to
 outweigh plan overhead. Keep simple calls simple. Preserve the baseline when

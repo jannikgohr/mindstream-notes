@@ -47,7 +47,61 @@ export const invoke = definePlugin({
       return 'allowed';
     } catch (e) {
       return e instanceof HostBatchError
-        ? { index: e.index, kind: e.kind, detail: e.detail }
+        ? {
+            index: e.index,
+            kind: e.kind,
+            detail: e.detail,
+            phase: e.phase,
+            completed: e.completed,
+            replies: e.replies
+          }
+        : 'wrong error';
+    }
+  },
+  recover: (input) => {
+    try {
+      batch.execute([
+        {
+          operation: {
+            tag: 'frontmatter',
+            val: batch.text('{"title":"Saved"}')
+          },
+          keep: true
+        },
+        {
+          operation: {
+            tag: 'storage-write',
+            val: {
+              path: batch.text('checkpoint.txt'),
+              contents: batch.previous(0)
+            }
+          },
+          keep: false
+        },
+        input.validation
+          ? {
+              operation: { tag: 'frontmatter', val: batch.previous(9) },
+              keep: true
+            }
+          : { operation: { tag: 'notes-all' }, keep: true },
+        {
+          operation: {
+            tag: 'storage-delete',
+            val: batch.text('checkpoint.txt')
+          },
+          keep: false
+        }
+      ]);
+      return 'allowed';
+    } catch (e) {
+      return e instanceof HostBatchError
+        ? {
+            index: e.index,
+            kind: e.kind,
+            phase: e.phase,
+            completed: e.completed,
+            replies: e.replies
+          }
         : 'wrong error';
     }
   }

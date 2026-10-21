@@ -5,13 +5,19 @@ export type BatchCommand = batchHost.Command;
 export type BatchReply = batchHost.Reply;
 export type BatchOperation = batchHost.Operation;
 export type BatchText = batchHost.TextInput;
+export type BatchFailurePhase = batchHost.FailurePhase;
 
-/** The first failed command. Completed effects are not rolled back. */
+/** Where the batch stopped. Effects are not rolled back; the stopping operation
+ * may also have effects. completed counts successful handlers, not durable writes.
+ */
 export class HostBatchError extends Error {
   constructor(
     readonly index: number,
     readonly kind: HostErrorKind,
-    readonly detail: string
+    readonly detail: string,
+    readonly phase: BatchFailurePhase,
+    readonly completed: number,
+    readonly replies: BatchReply[]
   ) {
     super(`batch command ${index}: ${detail}`);
     this.name = 'HostBatchError';
@@ -39,7 +45,10 @@ export const batch = {
         throw new HostBatchError(
           failure.index,
           failure.cause.tag,
-          failure.cause.val
+          failure.cause.val,
+          failure.phase,
+          failure.completed,
+          failure.replies
         );
       }
       throw error;

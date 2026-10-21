@@ -792,6 +792,30 @@ fn batch_guest_preserves_indexed_permission_failures_and_prior_writes() {
         assert!(std::fs::read_to_string(root.join("batch-probe.txt"))
             .unwrap()
             .contains("Batch probe"));
+        let failure = call
+            .run_on(
+                rt,
+                "$hostProbe",
+                json!({"now":"2026-07-25T10:00:00Z","reportFailure":true}),
+            )
+            .unwrap();
+        assert_eq!(failure["index"], 6);
+        assert_eq!(failure["phase"], "execution");
+        assert_eq!(failure["completed"], 6);
+        let replies = failure["replies"].as_array().unwrap();
+        assert_eq!(
+            replies
+                .iter()
+                .map(|r| r["index"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            [1, 2, 3, 4]
+        );
+        assert_eq!(replies[0]["value"], "2026-08-25");
+        assert!(replies[2]["value"]
+            .as_str()
+            .unwrap()
+            .contains("Batch probe"));
+        assert_eq!(replies[3]["value"], true);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

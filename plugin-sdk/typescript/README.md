@@ -126,9 +126,14 @@ The SDK exports `batch.execute(commands)`, `batch.text(value)`,
 `batch.previous(index)` and `HostBatchError`. Commands are typed WIT operations
 covering all current host capabilities. Ordered backward references can feed
 text results to later commands across interfaces; `keep: false` skips returning
-an intermediate to the guest. The first error stops later commands with an
-index and cause, while completed side effects remain. There is no rollback or
-automatic retry. Deadline/cancellation traps remain fatal.
+an intermediate to the guest. The first error stops later commands.
+`HostBatchError` exposes the zero-based `index`, `phase`, `completed` handler
+count, earlier kept `replies`, and original `kind`/`detail`. Validation failure
+executes nothing; execution failure can leave partial effects in the stopping
+operation; result-limit failure follows a successful handler whose result was
+rejected. There is no rollback or automatic retry. Deadline/cancellation traps
+remain fatal and cannot return progress. See the contract's recovery section
+before retrying side effects or rebuilding a plan's backward references.
 
 Use explicit plans of at most 128 commands, 1,024 text inputs, 1 MiB literal
 request bytes and 8 MiB accounted cumulative results. A guest decision based
@@ -137,6 +142,7 @@ or skip existing path, storage, native-process or log/random limits. It also
 does not guarantee lower CPU cost for in-process imports. The test host mirrors
 the transport; actual budgets/cancellation still need runtime tests.
 
-New components importing this interface need a host implementing it. Existing
-scalar APIs remain. See [the contract and example](../../docs/plugin-host-api-design.md)
+New components importing this interface need a matching host. The expanded
+experimental failure record requires rebuilding older batch guests; scalar
+APIs remain. See [the contract and example](../../docs/plugin-host-api-design.md)
 and [measured comparison](../../docs/benchmarks/wasm-host-batch-2026-10-21/README.md).

@@ -33,6 +33,7 @@ export { batch, HostBatchError } from './batch';
 export type {
   BatchCommand,
   BatchReply,
+  BatchFailurePhase,
   BatchOperation,
   BatchText
 } from './batch';

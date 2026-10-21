@@ -39,11 +39,26 @@ interface batch {
         notes(list<note-meta>), note(option<note-meta>), entries(list<entry>), tool(run-output),
     }
     record reply { index: u32, value: value }
-    record failure { index: u32, cause: error }
+    enum failure-phase { validation, execution, result-limit }
+    record failure {
+        /// Zero-based stopping command, or 0 for a plan-wide validation error.
+        index: u32,
+        phase: failure-phase,
+        /// Number of prefix operations whose handlers returned successfully.
+        /// Zero on validation failure; index on execution failure; index + 1
+        /// on result-limit failure. This is not a durability/rollback promise.
+        completed: u32,
+        /// Kept results from the accepted prefix, with original command indices.
+        /// The oversized stopping result is omitted on result-limit failure.
+        replies: list<reply>,
+        cause: error,
+    }
 
     /// At most 128 commands, 1024 text inputs, 1 MiB literal data, 8 MiB cumulative
     /// result data. Whole-plan reference/size validation precedes execution.
     /// Ordered, stop on first error, no rollback of completed side effects.
+    /// An execution error may follow partial effects in the stopping operation.
+    /// A result-limit error follows a successful handler whose result is rejected.
     /// Cancellation/deadline trap the guest, including between operations.
     /// An empty batch succeeds. Plan-wide errors also use index 0.
     execute: func(commands: list<command>) -> result<list<reply>, failure>;

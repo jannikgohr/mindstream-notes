@@ -6,6 +6,8 @@ declare module 'mindstream:plugin/batch@0.1.0' {
    * At most 128 commands, 1024 text inputs, 1 MiB literal data, 8 MiB cumulative
    * result data. Whole-plan reference/size validation precedes execution.
    * Ordered, stop on first error, no rollback of completed side effects.
+   * An execution error may follow partial effects in the stopping operation.
+   * A result-limit error follows a successful handler whose result is rejected.
    * Cancellation/deadline trap the guest, including between operations.
    * An empty batch succeeds. Plan-wide errors also use index 0.
    */
@@ -199,8 +201,33 @@ declare module 'mindstream:plugin/batch@0.1.0' {
     index: number;
     value: Value;
   }
+  /**
+   * # Variants
+   *
+   * ## `"validation"`
+   *
+   * ## `"execution"`
+   *
+   * ## `"result-limit"`
+   */
+  export type FailurePhase = 'validation' | 'execution' | 'result-limit';
   export interface Failure {
+    /**
+     * Zero-based stopping command, or 0 for a plan-wide validation error.
+     */
     index: number;
+    phase: FailurePhase;
+    /**
+     * Number of prefix operations whose handlers returned successfully.
+     * Zero on validation failure; index on execution failure; index + 1
+     * on result-limit failure. This is not a durability/rollback promise.
+     */
+    completed: number;
+    /**
+     * Kept results from the accepted prefix, with original command indices.
+     * The oversized stopping result is omitted on result-limit failure.
+     */
+    replies: Array<Reply>;
     cause: Error;
   }
 }

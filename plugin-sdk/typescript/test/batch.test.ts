@@ -40,8 +40,59 @@ describe('general host batches', { timeout: 60_000 }, () => {
     expect(await plugin.call('denied')).toEqual({
       index: 0,
       kind: 'denied',
-      detail: 'notes.read'
+      detail: 'notes.read',
+      phase: 'execution',
+      completed: 0,
+      replies: []
     });
+  });
+  it('returns recoverable prefix results through the compiled SDK, with no effects on validation failure', async () => {
+    const plugin = await loadPlugin(component, {
+      permissions: ['pluginStorage.write']
+    });
+    expect(await plugin.call('recover', { validation: true })).toEqual({
+      index: 2,
+      kind: 'invalid',
+      phase: 'validation',
+      completed: 0,
+      replies: []
+    });
+    expect(plugin.storage.size).toBe(0);
+    expect(await plugin.call('recover', { validation: false })).toEqual({
+      index: 2,
+      kind: 'denied',
+      phase: 'execution',
+      completed: 2,
+      replies: [
+        { index: 0, value: { tag: 'text', val: '---\ntitle: "Saved"\n---\n' } }
+      ]
+    });
+    expect(plugin.storage.get('checkpoint.txt')).toBe(
+      '---\ntitle: "Saved"\n---\n'
+    );
+  });
+  it('reports the successful handler whose oversized result was rejected', () => {
+    const host = createMockHost({});
+    const execute = host.imports['mindstream:plugin/batch@0.1.0'].execute;
+    expect(() =>
+      execute(
+        Array.from({ length: 128 }, (_, i) => ({
+          operation: { tag: 'random-bytes', val: 65536 },
+          keep: i === 0 || i === 127
+        }))
+      )
+    ).toThrow(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          index: 127,
+          phase: 'result-limit',
+          completed: 128,
+          replies: [
+            { index: 0, value: { tag: 'bytes', val: expect.any(Uint8Array) } }
+          ]
+        })
+      })
+    );
   });
   it('prevalidates refs and leaves prior writes on runtime failure', () => {
     const host = createMockHost({ permissions: ['pluginStorage.write'] });
@@ -62,7 +113,16 @@ describe('general host batches', { timeout: 60_000 }, () => {
           keep: true
         }
       ])
-    ).toThrow();
+    ).toThrow(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          index: 1,
+          phase: 'validation',
+          completed: 0,
+          replies: []
+        })
+      })
+    );
     expect(host.storage.size).toBe(0);
     try {
       execute([
@@ -72,7 +132,13 @@ describe('general host batches', { timeout: 60_000 }, () => {
       ]);
     } catch (e) {
       expect(e).toMatchObject({
-        payload: { index: 1, cause: { tag: 'denied', val: 'notes.read' } }
+        payload: {
+          index: 1,
+          phase: 'execution',
+          completed: 1,
+          replies: [],
+          cause: { tag: 'denied', val: 'notes.read' }
+        }
       });
     }
     expect(host.storage.get('first')).toBe('saved');
