@@ -54,8 +54,39 @@ differ from OS timezone updates; production acceptance needs a data-update
 policy and broader zone coverage.
 
 Run pure calendar tests with `cargo test --manifest-path
-plugin-sdk/prototypes/templates-rust/Cargo.toml --locked --all-features`.
-The runtime parity test compares all three components using the actual host
+plugin-sdk/prototypes/templates-rust/Cargo.toml --locked --features local-calendar`.
+The runtime parity test compares all four components using the actual host
 IANA zone. The physical Android comparison adds `--rust-local-calendar
 --time-zone Europe/Berlin --calendar-heavy` to the release probe. See the
 [measured comparison](../../../docs/benchmarks/wasm-local-calendar-2026-10-21/README.md).
+
+## General host batching candidate
+
+Build the third Rust candidate with:
+
+```text
+node plugin-sdk/prototypes/templates-rust/build.mjs --batch-host
+```
+
+This writes `plugin-batch.wasm`. Select only one of `--batch-host` and
+`--local-calendar`; the Cargo features are mutually exclusive. Default and
+batch candidates use host local-time rules and the existing input context.
+Only the guest-local candidate requires `timeZone`.
+
+The batch candidate collects date occurrences across title and body, submits
+ordered general host commands and keeps only formatted outputs. Backward text
+references carry each date-add result into the next operation. It performs
+all occurrences, with no deduplication, so the measurement separates batching
+from caching repeated expressions. Plans split at 128 commands. An individual
+expression requiring more than 128 commands uses the scalar fallback.
+UUID generation and the metadata menu keep their existing behavior.
+
+All three Rust builds contain the same internal `$hostProbe` comparison export.
+It executes a 28-operation mixed plan covering dates, note metadata, Markdown,
+permission inspection and private storage. The batch build uses one execute;
+the scalar and local-calendar builds use individual calls over the same plan.
+The normal `$exports` result still advertises only the two Templates exports.
+No comparison component replaces the shipped TypeScript package.
+
+See the [batch measurements](../../../docs/benchmarks/wasm-host-batch-2026-10-21/README.md)
+and [host API design guidance](../../../docs/plugin-host-api-design.md).

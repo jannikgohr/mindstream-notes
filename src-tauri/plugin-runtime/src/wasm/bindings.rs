@@ -20,7 +20,7 @@ wasmtime::component::bindgen!({
     },
 });
 
-use mindstream::plugin::{clock, markdown, native_tools, notes, runtime, storage, types};
+use mindstream::plugin::{batch, clock, markdown, native_tools, notes, runtime, storage, types};
 
 /// What a store holds for one call.
 pub struct CallState {
@@ -74,7 +74,7 @@ impl runtime::Host for CallState {
     }
 }
 
-fn time_unit(unit: clock::TimeUnit) -> TimeUnit {
+pub(super) fn time_unit(unit: clock::TimeUnit) -> TimeUnit {
     match unit {
         clock::TimeUnit::Second => TimeUnit::Second,
         clock::TimeUnit::Minute => TimeUnit::Minute,
@@ -127,7 +127,7 @@ impl markdown::Host for CallState {
     }
 }
 
-fn note(meta: &NoteMeta) -> types::NoteMeta {
+pub(super) fn note(meta: &NoteMeta) -> types::NoteMeta {
     types::NoteMeta {
         id: meta.id.clone(),
         title: meta.title.clone(),
@@ -203,5 +203,14 @@ impl native_tools::Host for CallState {
             stderr: output.stderr,
             timed_out: output.timed_out,
         })
+    }
+}
+
+impl batch::Host for CallState {
+    fn execute(
+        &mut self,
+        commands: Vec<batch::Command>,
+    ) -> wasmtime::Result<Result<Vec<batch::Reply>, batch::Failure>> {
+        super::batch::execute(&self.host, commands).map_err(trap)
     }
 }

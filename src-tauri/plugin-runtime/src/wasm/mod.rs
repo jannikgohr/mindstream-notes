@@ -21,6 +21,7 @@
 //! The guest returns JSON. Effects in it are requests: the app validates
 //! them and performs them, the same as for every other runtime.
 
+mod batch;
 pub mod bindings;
 pub mod cache;
 pub mod limiter;

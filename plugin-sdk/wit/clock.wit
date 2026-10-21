@@ -2,8 +2,8 @@ package mindstream:plugin@0.1.0;
 
 /// The host clock and calendar arithmetic in the user's local time zone.
 ///
-/// A guest has no clock or time zone database of its own, so local dates have
-/// to come from here.
+/// Supplies the system clock and OS local-time rules. Guests may instead
+/// bundle calendar/timezone code; these helpers avoid that duplication.
 interface clock {
     use types.{error};
 

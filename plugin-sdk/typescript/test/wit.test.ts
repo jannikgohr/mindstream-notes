@@ -38,6 +38,7 @@ describe('generated QuickJS WIT declarations', () => {
     const interfaces = witFunctions();
     expect([...interfaces.keys()].sort()).toEqual(
       [
+        'batch',
         'clock',
         'markdown',
         'native-tools',

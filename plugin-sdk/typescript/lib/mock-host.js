@@ -1,3 +1,4 @@
+import { createBatchHost } from './mock-batch.js';
 // The host interfaces, implemented in JavaScript for testing a plugin in Node.
 //
 // This mirrors what the app's Rust host does (src-tauri/plugin-runtime): the
@@ -483,6 +484,8 @@ export function createMockHost(options = {}) {
       }
     }
   };
+
+  imports['mindstream:plugin/batch@0.1.0'] = createBatchHost(imports);
 
   // Transpiled bindings look interfaces up without their version; the
   // versioned names are kept too, for readers of a WIT world.

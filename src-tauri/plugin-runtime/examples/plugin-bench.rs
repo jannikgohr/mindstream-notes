@@ -22,6 +22,9 @@ const TEMPLATES_RUST: &[u8] =
     include_bytes!("../../../plugin-sdk/prototypes/templates-rust/plugin.wasm");
 const TEMPLATES_LOCAL: &[u8] =
     include_bytes!("../../../plugin-sdk/prototypes/templates-rust/plugin-local-calendar.wasm");
+const TEMPLATES_BATCH: &[u8] =
+    include_bytes!("../../../plugin-sdk/prototypes/templates-rust/plugin-batch.wasm");
+
 type Artifact = ([u8; 32], [u8; 32], &'static str, &'static [u8]);
 #[cfg(feature = "probe-precompiled")]
 const PRECOMPILED: &[Artifact] = include!(env!("MINDSTREAM_PROBE_PRECOMPILED"));
@@ -226,8 +229,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap();
     REHASH.set(args.iter().any(|a| a == "--rehash")).unwrap();
     let templates_only = args.iter().any(|a| a == "--templates-only");
-    if args.iter().any(|a| a == "--rust-local-calendar")
-        && args.iter().any(|a| a == "--rust-templates")
+    if ["--rust-local-calendar", "--rust-templates", "--rust-batch"]
+        .iter()
+        .filter(|flag| args.iter().any(|arg| arg == **flag))
+        .count()
+        > 1
     {
         return Err("select only one Rust Templates variant".into());
     }
@@ -249,7 +255,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .transpose()?
         .map(VerifiedComponent::new)
         .unwrap_or_else(|| {
-            VerifiedComponent::from_static(if args.iter().any(|a| a == "--rust-local-calendar") {
+            VerifiedComponent::from_static(if args.iter().any(|a| a == "--rust-batch") {
+                TEMPLATES_BATCH
+            } else if args.iter().any(|a| a == "--rust-local-calendar") {
                 TEMPLATES_LOCAL
             } else if args.iter().any(|a| a == "--rust-templates") {
                 TEMPLATES_RUST
@@ -341,6 +349,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "body":"{{date+1M-2d:dddd, D. MMMM YYYY HH:mm:ss}}\n".repeat(20)
                 }),
                 setup.clone(),
+                &cache,
+                iterations,
+            )?,
+        );
+    }
+    if args.iter().any(|a| a == "--host-mixed") {
+        if !args.iter().any(|a| {
+            ["--rust-templates", "--rust-batch", "--rust-local-calendar"].contains(&a.as_str())
+        }) {
+            return Err("--host-mixed needs a Rust candidate".into());
+        }
+        let data = scratch.0.join("mixed-storage");
+        std::fs::create_dir_all(&data)?;
+        cases.insert(
+            "hostMixed".into(),
+            sample(
+                &runtime,
+                templates,
+                "$hostProbe",
+                json!({"now":"2026-07-25T10:00:00Z"}),
+                CallSetup {
+                    permissions: vec![
+                        "notes.read".into(),
+                        "pluginStorage.read".into(),
+                        "pluginStorage.write".into(),
+                    ],
+                    notes: vec![NoteMeta {
+                        id: "n0".into(),
+                        title: "Mixed note".into(),
+                        tags: vec![],
+                        kind: "markdown".into(),
+                        folder_id: None,
+                        folder_path: String::new(),
+                        created: String::new(),
+                        modified: String::new(),
+                    }],
+                    data_root: Some(data),
+                    ..setup.clone()
+                },
                 &cache,
                 iterations,
             )?,

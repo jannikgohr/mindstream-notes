@@ -29,6 +29,13 @@ import * as storageHost from 'mindstream:plugin/storage@0.1.0';
 import { installGlobals } from './globals';
 
 export type * from './types';
+export { batch, HostBatchError } from './batch';
+export type {
+  BatchCommand,
+  BatchReply,
+  BatchOperation,
+  BatchText
+} from './batch';
 
 installGlobals();
 
@@ -114,9 +121,9 @@ function rfc3339(timestamp: Timestamp): string {
 }
 
 /**
- * Dates in the user's local time zone. The plugin itself has no time zone
- * database (a JavaScript `Date` inside a plugin is always UTC), so anything
- * shown to the user should be formatted here.
+ * Dates using the host's local-time rules. The default SDK has no timezone
+ * database; a JavaScript `Date` inside a plugin is UTC. A guest may instead
+ * bundle its own calendar/timezone library when that tradeoff is appropriate.
  */
 export const clock = {
   /** Milliseconds since the Unix epoch. */

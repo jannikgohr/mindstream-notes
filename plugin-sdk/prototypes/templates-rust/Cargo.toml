@@ -8,6 +8,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [features]
+batch-host = []
 local-calendar = ["dep:chrono", "dep:chrono-tz"]
 
 [dependencies]

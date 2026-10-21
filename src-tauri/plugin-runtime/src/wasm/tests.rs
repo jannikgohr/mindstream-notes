@@ -193,6 +193,8 @@ fn bundled_code_prepares_without_running_and_seeds_the_disk_cache() {
 fn rust_templates_prototype_matches_typescript_outputs() {
     const RUST: &[u8] =
         include_bytes!("../../../../plugin-sdk/prototypes/templates-rust/plugin.wasm");
+    const BATCH: &[u8] =
+        include_bytes!("../../../../plugin-sdk/prototypes/templates-rust/plugin-batch.wasm");
     const LOCAL: &[u8] = include_bytes!(
         "../../../../plugin-sdk/prototypes/templates-rust/plugin-local-calendar.wasm"
     );
@@ -210,6 +212,7 @@ fn rust_templates_prototype_matches_typescript_outputs() {
             json!({"now":"2026-03-28T11:00:00Z","body":"{{date+1d:YYYY-MM-DD HH:mm}}/{{date+1M:YYYY-MM-DD HH:mm}}"}),
             json!({"now":"2026-01-29T01:30:00Z","body":"{{date+2M:YYYY-MM-DD HH:mm}}"}),
             json!({"now":"2026-08-25T00:30:00Z","body":"{{date+2M:YYYY-MM-DD HH:mm}}"}),
+            json!({"now":"2026-07-25T10:00:00Z","title":"{{date:YYYY}}","body":"{{date+1M-2d:YYYY-MM-DD}} ".repeat(50)}),
         ] {
             input["timeZone"] = json!(zone);
             let run = |component| {
@@ -220,6 +223,7 @@ fn rust_templates_prototype_matches_typescript_outputs() {
             let expected = run(TYPESCRIPT);
             assert_eq!(run(RUST), expected, "{input}");
             assert_eq!(run(LOCAL), expected, "{input}");
+            assert_eq!(run(BATCH), expected, "{input}");
         }
         for input in [
             json!({}),
@@ -250,6 +254,7 @@ fn rust_templates_prototype_matches_typescript_outputs() {
             let expected = run(TYPESCRIPT);
             assert_eq!(run(RUST), expected, "{input}");
             assert_eq!(run(LOCAL), expected, "{input}");
+            assert_eq!(run(BATCH), expected, "{input}");
         }
     }
 }
@@ -764,4 +769,29 @@ fn the_ticker_runs_only_while_a_call_does() {
         assert_eq!(rt.running(), 1);
     }
     assert_eq!(rt.running(), 0);
+}
+
+#[test]
+fn batch_guest_preserves_indexed_permission_failures_and_prior_writes() {
+    const BATCH: &[u8] =
+        include_bytes!("../../../../plugin-sdk/prototypes/templates-rust/plugin-batch.wasm");
+    for rt in [runtime(), interpreter()] {
+        let err = Call::of(BATCH, &[])
+            .run_on(rt, "$hostProbe", json!({"now":"2026-07-25T10:00:00Z"}))
+            .unwrap_err();
+        assert!(err.to_string().contains("batch 2:"));
+        assert!(err.to_string().contains("notes.read"));
+        let root = scratch();
+        let mut call = Call::of(BATCH, &[PERM_NOTES_READ, PERM_STORAGE_WRITE]);
+        call.data_root = Some(root.clone());
+        let err = call
+            .run_on(rt, "$hostProbe", json!({"now":"2026-07-25T10:00:00Z"}))
+            .unwrap_err();
+        assert!(err.to_string().contains("batch 6:"));
+        assert!(err.to_string().contains("pluginStorage.read"));
+        assert!(std::fs::read_to_string(root.join("batch-probe.txt"))
+            .unwrap()
+            .contains("Batch probe"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

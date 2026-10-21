@@ -419,6 +419,35 @@ The local variant stays experimental: it needs timezone context integration,
 a timezone-database update policy, broader parity and release measurements.
 Production TypeScript and retained Luau are unchanged; M5/M6 remain open.
 
+## General host batch experiment, 2026-10-21
+
+The [general batch comparison](benchmarks/wasm-host-batch-2026-10-21/README.md)
+adds a typed bounded transport over all 17 existing Wasm host operations.
+Backward text references carry results across interfaces. Scalar capability
+checks and limits still apply; the first error stops later operations, earlier
+side effects remain, and deadlines/cancellation trap the guest. The
+[design guide](plugin-host-api-design.md) documents the contract, SDK example,
+external precedents and host-versus-guest recommendations.
+
+Twenty physical ARM64 release probe processes completed 100 samples per case
+at the unchanged 1,000 ms budget, with matching outputs and zero interrupted
+attempts. Three paired AOT rounds found scalar versus batch interpreter p95
+ranges of 1.537-1.558 versus 2.338-2.343 ms for date-heavy rendering. Later
+paired mixed-workload rounds improved interpreter p95 from about 2.064 to
+1.912-1.922 ms. The first scalar mixed run had a larger p95; all runs remain
+in the evidence. Native mixed improvements were small, and ordinary native
+microsecond timings varied. Fewer boundary crossings did not predict lower
+total CPU cost. Keep batching explicit and opt-in, and retain scalar APIs.
+
+Windows workspace/app checks and the final 82-test runtime suite passed. An
+intermediate existing debug interpreter deadline failure during host builds
+is retained with the passing quiet rerun; it is not explained away. The new
+host code has not yet had new macOS/Linux release, physical app, startup,
+package or long-retention measurements. Earlier size pairs do not validate
+this added host API. New batch-importing guests require a supporting host;
+the ABI/SDK remain private. Shipped Templates selection and Luau remain.
+M5/M6 stay open.
+
 ## Release decision
 
 Targets remain p95 initialization below 20 ms, trivial cached call overhead

@@ -8,6 +8,7 @@ package mindstream:plugin@0.1.0;
 /// it runs.
 world plugin {
     import runtime;
+    import batch;
     import clock;
     import markdown;
     import notes;

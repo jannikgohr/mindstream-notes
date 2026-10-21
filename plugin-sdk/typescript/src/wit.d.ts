@@ -1,6 +1,210 @@
 // Generated from plugin-sdk/wit by scripts/generate-types.mjs.
 // QuickJS uses null for options and number for i64/u64. Do not edit by hand.
 
+declare module 'mindstream:plugin/batch@0.1.0' {
+  /**
+   * At most 128 commands, 1024 text inputs, 1 MiB literal data, 8 MiB cumulative
+   * result data. Whole-plan reference/size validation precedes execution.
+   * Ordered, stop on first error, no rollback of completed side effects.
+   * Cancellation/deadline trap the guest, including between operations.
+   * An empty batch succeeds. Plan-wide errors also use index 0.
+   */
+  export function execute(commands: Array<Command>): Array<Reply>;
+  export type Error = import('mindstream:plugin/types@0.1.0').Error;
+  export type NoteMeta = import('mindstream:plugin/types@0.1.0').NoteMeta;
+  export type LogLevel = import('mindstream:plugin/runtime@0.1.0').LogLevel;
+  export type TimeUnit = import('mindstream:plugin/clock@0.1.0').TimeUnit;
+  export type Entry = import('mindstream:plugin/storage@0.1.0').Entry;
+  export type RunOutput =
+    import('mindstream:plugin/native-tools@0.1.0').RunOutput;
+  /**
+   * A literal or an earlier text/available optional-text result.
+   * References are indices into commands, including commands not kept.
+   */
+  export type TextInput = TextInputLiteral | TextInputPrevious;
+  export interface TextInputLiteral {
+    tag: 'literal';
+    val: string;
+  }
+  export interface TextInputPrevious {
+    tag: 'previous';
+    val: number;
+  }
+  export interface LogRequest {
+    level: LogLevel;
+    message: TextInput;
+  }
+  export interface FormatRequest {
+    timestamp: TextInput;
+    pattern: TextInput;
+    locale: TextInput | null;
+  }
+  export interface AddRequest {
+    timestamp: TextInput;
+    amount: number;
+    unit: TimeUnit;
+  }
+  export interface WriteRequest {
+    path: TextInput;
+    contents: TextInput;
+  }
+  export interface ToolRequest {
+    toolId: TextInput;
+    args: Array<TextInput>;
+    stdin: TextInput | null;
+    timeoutMs: number | null;
+    outputBase64: boolean;
+  }
+  export type Operation =
+    | OperationLog
+    | OperationUuid
+    | OperationRandomBytes
+    | OperationHasPermission
+    | OperationNowMillis
+    | OperationNow
+    | OperationClockFormat
+    | OperationClockAdd
+    | OperationFrontmatter
+    | OperationNotesAll
+    | OperationNotesGet
+    | OperationStorageRead
+    | OperationStorageList
+    | OperationStorageWrite
+    | OperationStorageDelete
+    | OperationToolAvailable
+    | OperationToolRun;
+  export interface OperationLog {
+    tag: 'log';
+    val: LogRequest;
+  }
+  export interface OperationUuid {
+    tag: 'uuid';
+  }
+  export interface OperationRandomBytes {
+    tag: 'random-bytes';
+    val: number;
+  }
+  export interface OperationHasPermission {
+    tag: 'has-permission';
+    val: TextInput;
+  }
+  export interface OperationNowMillis {
+    tag: 'now-millis';
+  }
+  export interface OperationNow {
+    tag: 'now';
+  }
+  export interface OperationClockFormat {
+    tag: 'clock-format';
+    val: FormatRequest;
+  }
+  export interface OperationClockAdd {
+    tag: 'clock-add';
+    val: AddRequest;
+  }
+  export interface OperationFrontmatter {
+    tag: 'frontmatter';
+    val: TextInput;
+  }
+  export interface OperationNotesAll {
+    tag: 'notes-all';
+  }
+  export interface OperationNotesGet {
+    tag: 'notes-get';
+    val: TextInput;
+  }
+  export interface OperationStorageRead {
+    tag: 'storage-read';
+    val: TextInput;
+  }
+  export interface OperationStorageList {
+    tag: 'storage-list';
+    val: TextInput;
+  }
+  export interface OperationStorageWrite {
+    tag: 'storage-write';
+    val: WriteRequest;
+  }
+  export interface OperationStorageDelete {
+    tag: 'storage-delete';
+    val: TextInput;
+  }
+  export interface OperationToolAvailable {
+    tag: 'tool-available';
+    val: TextInput;
+  }
+  export interface OperationToolRun {
+    tag: 'tool-run';
+    val: ToolRequest;
+  }
+  /**
+   * Only kept results cross back to the guest. All results remain available
+   * to backward references until this execute call ends.
+   */
+  export interface Command {
+    operation: Operation;
+    keep: boolean;
+  }
+  export type Value =
+    | ValueNone
+    | ValueText
+    | ValueOptionalText
+    | ValueNumber
+    | ValueBoolean
+    | ValueBytes
+    | ValueNotes
+    | ValueNote
+    | ValueEntries
+    | ValueTool;
+  export interface ValueNone {
+    tag: 'none';
+  }
+  export interface ValueText {
+    tag: 'text';
+    val: string;
+  }
+  export interface ValueOptionalText {
+    tag: 'optional-text';
+    val: string | null;
+  }
+  export interface ValueNumber {
+    tag: 'number';
+    val: number;
+  }
+  export interface ValueBoolean {
+    tag: 'boolean';
+    val: boolean;
+  }
+  export interface ValueBytes {
+    tag: 'bytes';
+    val: Uint8Array;
+  }
+  export interface ValueNotes {
+    tag: 'notes';
+    val: Array<NoteMeta>;
+  }
+  export interface ValueNote {
+    tag: 'note';
+    val: NoteMeta | null;
+  }
+  export interface ValueEntries {
+    tag: 'entries';
+    val: Array<Entry>;
+  }
+  export interface ValueTool {
+    tag: 'tool';
+    val: RunOutput;
+  }
+  export interface Reply {
+    index: number;
+    value: Value;
+  }
+  export interface Failure {
+    index: number;
+    cause: Error;
+  }
+}
+
 declare module 'mindstream:plugin/clock@0.1.0' {
   /**
    * Milliseconds since the Unix epoch.

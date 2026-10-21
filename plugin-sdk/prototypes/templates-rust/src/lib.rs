@@ -7,8 +7,13 @@ wit_bindgen::generate!({ path: "../../wit", world: "mindstream:plugin/plugin" })
 use mindstream::plugin::clock;
 use mindstream::plugin::{notes, runtime};
 
+#[cfg(feature = "batch-host")]
+mod batching;
 #[cfg(feature = "local-calendar")]
 mod calendar;
+mod host_probe;
+#[cfg(all(feature = "local-calendar", feature = "batch-host"))]
+compile_error!("select only one calendar candidate");
 
 fn trim(value: &str) -> &str {
     value.trim_matches(['\t', '\n', '\u{b}', '\u{c}', '\r', ' '])
@@ -59,9 +64,9 @@ fn filter(value: String, name: &str) -> String {
     }
 }
 
-fn resolve(inner: &str, input: &Value, vars: &Value) -> Result<String, String> {
-    let mut parts = inner.split('|');
-    let expression = trim(parts.next().unwrap_or_default());
+type Expression<'a> = (&'a str, Option<&'a str>, Vec<(i64, u8)>);
+fn expression(inner: &str) -> Result<Expression<'_>, String> {
+    let expression = trim(inner.split('|').next().unwrap_or_default());
     let (mut base, format) = expression
         .split_once(':')
         .map_or((expression, None), |(a, b)| (trim(a), Some(trim(b))));
@@ -90,6 +95,13 @@ fn resolve(inner: &str, input: &Value, vars: &Value) -> Result<String, String> {
         base = &base[..start - 1];
     }
     base = trim(base);
+    Ok((base, format, offsets))
+}
+
+fn resolve(inner: &str, input: &Value, vars: &Value) -> Result<String, String> {
+    let mut parts = inner.split('|');
+    parts.next();
+    let (base, format, offsets) = expression(inner)?;
     let default = match base {
         "date" => Some("YYYY-MM-DD"),
         "time" => Some("HH:mm"),
@@ -99,6 +111,14 @@ fn resolve(inner: &str, input: &Value, vars: &Value) -> Result<String, String> {
     let mut value = if base == "uuid" {
         runtime::uuid()
     } else if let Some(default) = default {
+        #[cfg(feature = "batch-host")]
+        if let Some(value) = input["__batch_dates"][inner].as_str() {
+            let mut value = value.to_string();
+            for name in parts {
+                value = filter(value, trim(name));
+            }
+            return Ok(value);
+        }
         #[cfg(feature = "local-calendar")]
         let rendered = calendar::render(
             input["now"].as_str().unwrap_or_default(),
@@ -216,7 +236,10 @@ impl Guest for Templates {
         let output = match export.as_str() {
             "$exports" => json!(["newFromTemplate", "renderTemplate"]),
             "newFromTemplate" => menu(&input)?,
+            "$hostProbe" => host_probe::run(&input)?,
             "renderTemplate" => {
+                #[cfg(feature = "batch-host")]
+                let input = batching::prepare(input)?;
                 let mut vars = input["vars"]
                     .as_object()
                     .cloned()

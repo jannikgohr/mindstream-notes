@@ -119,3 +119,24 @@ without generating or editing them.
 
 See [the plugin contract](../../docs/plugins.md) for contributions, signing
 and effects, and [the WIT package](../wit/world.wit) for the ABI.
+
+## General host batches
+
+The SDK exports `batch.execute(commands)`, `batch.text(value)`,
+`batch.previous(index)` and `HostBatchError`. Commands are typed WIT operations
+covering all current host capabilities. Ordered backward references can feed
+text results to later commands across interfaces; `keep: false` skips returning
+an intermediate to the guest. The first error stops later commands with an
+index and cause, while completed side effects remain. There is no rollback or
+automatic retry. Deadline/cancellation traps remain fatal.
+
+Use explicit plans of at most 128 commands, 1,024 text inputs, 1 MiB literal
+request bytes and 8 MiB accounted cumulative results. A guest decision based
+on a returned value requires another plan. Batching does not grant permissions
+or skip existing path, storage, native-process or log/random limits. It also
+does not guarantee lower CPU cost for in-process imports. The test host mirrors
+the transport; actual budgets/cancellation still need runtime tests.
+
+New components importing this interface need a host implementing it. Existing
+scalar APIs remain. See [the contract and example](../../docs/plugin-host-api-design.md)
+and [measured comparison](../../docs/benchmarks/wasm-host-batch-2026-10-21/README.md).
