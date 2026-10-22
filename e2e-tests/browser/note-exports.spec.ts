@@ -1,7 +1,14 @@
 import { expect, test, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { unzipSync, strFromU8 } from 'fflate';
-import { PDFDocument } from 'pdf-lib';
+import {
+  PDFDict,
+  PDFDocument,
+  PDFName,
+  PDFRawStream,
+  decodePDFRawStream
+} from 'pdf-lib';
 import { clickFileTreeCreateAction } from './file-tree-toolbar';
 
 test.setTimeout(60000);
@@ -147,4 +154,82 @@ test('exports imported PDFs unchanged and lists annotations as Markdown', async 
     'Annotations as Markdown'
   );
   expect(markdown.bytes.toString()).toContain('No highlights or comments.');
+});
+
+test('prints a selected city from a form without default font resources', async ({
+  page
+}) => {
+  const source = await PDFDocument.create();
+  const pdfPage = source.addPage([400, 400]);
+  pdfPage.drawText('City:', { x: 40, y: 250, size: 12 });
+  const city = source.getForm().createDropdown('City');
+  city.setOptions(['New York', 'London', 'Berlin', 'Paris', 'Rome']);
+  city.enableEditing();
+  city.addToPage(pdfPage, { x: 100, y: 240, width: 150, height: 25 });
+  // Older forms may supply neither /DA nor /DR. pdf.js can display their
+  // fields with a fallback font but save an appearance without that font.
+  const unstyled = await PDFDocument.load(await source.save());
+  const field = unstyled.getForm().getDropdown('City');
+  field.acroField.dict.delete(PDFName.of('DA'));
+  const widget = field.acroField.getWidgets()[0];
+  widget.dict.delete(PDFName.of('DA'));
+  widget.setNormalAppearance(
+    unstyled.context.register(
+      unstyled.context.flateStream('/Tx BMC q Q EMC', {
+        Type: 'XObject',
+        Subtype: 'Form',
+        BBox: [0, 0, 150, 25],
+        Resources: {}
+      })
+    )
+  );
+  unstyled.catalog.getAcroForm()!.dict.delete(PDFName.of('DA'));
+  unstyled.catalog.getAcroForm()!.dict.delete(PDFName.of('DR'));
+  const bytes = await unstyled.save({ updateFieldAppearances: false });
+  await page
+    .locator('input[type="file"][accept="application/pdf,.pdf"]')
+    .setInputFiles({
+      name: 'City form.pdf',
+      mimeType: 'application/pdf',
+      buffer: Buffer.from(bytes)
+    });
+  const select = page.locator('select[name="City"]');
+  await expect(select).toBeVisible();
+  await select.selectOption({ label: 'Berlin' });
+  const printed = await exportNote(page, 'City form', 'Print-ready PDF');
+  const pdf = await PDFDocument.load(printed.bytes);
+  expect(pdf.catalog.getAcroForm()).toBeUndefined();
+  const appearances = pdf
+    .getPage(0)
+    .node.Resources()!
+    .lookup(PDFName.of('XObject'), PDFDict);
+  const cityAppearance = appearances
+    .values()
+    .map((ref) => pdf.context.lookup(ref))
+    .filter((stream): stream is PDFRawStream => stream instanceof PDFRawStream)
+    .find((stream) =>
+      Buffer.from(decodePDFRawStream(stream).decode())
+        .toString()
+        .includes('<4265726C696E>')
+    );
+  expect(cityAppearance).toBeDefined();
+  const fonts = cityAppearance!.dict
+    .lookup(PDFName.of('Resources'), PDFDict)
+    .lookup(PDFName.of('Font'), PDFDict);
+  expect(fonts.keys().length).toBeGreaterThan(0);
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const task = getDocument({
+    data: new Uint8Array(printed.bytes),
+    standardFontDataUrl: fileURLToPath(
+      new URL('../../node_modules/pdfjs-dist/standard_fonts/', import.meta.url)
+    )
+  });
+  try {
+    const text = await (await (await task.promise).getPage(1)).getTextContent();
+    expect(
+      text.items.map((item) => ('str' in item ? item.str : '')).join(' ')
+    ).toContain('Berlin');
+  } finally {
+    await task.destroy();
+  }
 });

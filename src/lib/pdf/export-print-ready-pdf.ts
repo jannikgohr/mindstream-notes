@@ -21,6 +21,7 @@
 
 import type {
   PDFFont,
+  PDFField,
   PDFObject,
   PDFPage,
   PDFRef,
@@ -172,6 +173,41 @@ function widgetRect(widget: PDFWidgetAnnotation): PdfRect {
   };
 }
 
+/** pdf.js may save filled text with /Tf but no font resources in older forms. */
+function fieldHasMissingFonts(
+  field: PDFField,
+  out: PdfDocument,
+  lib: PdfLibModule
+): boolean {
+  const filled =
+    field instanceof lib.PDFTextField
+      ? Boolean(field.getText())
+      : field instanceof lib.PDFDropdown || field instanceof lib.PDFOptionList
+        ? field.getSelected().length > 0
+        : false;
+  if (!filled) return false;
+  return field.acroField.getWidgets().some((widget) => {
+    if (!widget.hasFlag(ANNOT_FLAG_PRINT) || widget.hasFlag(ANNOT_FLAG_HIDDEN))
+      return false;
+    const normal = widget.AP()?.get(lib.PDFName.of('N'));
+    const appearance = normal && out.context.lookup(normal);
+    if (!(appearance instanceof lib.PDFStream)) return false;
+    const resources = appearance.dict.lookupMaybe(
+      lib.PDFName.of('Resources'),
+      lib.PDFDict
+    );
+    const fonts = resources?.lookupMaybe(lib.PDFName.of('Font'), lib.PDFDict);
+    if (fonts && fonts.keys().length > 0) return false;
+    // Some fields intentionally draw their value as outlines or an image.
+    // Only text drawing needs a font resource.
+    if (!(appearance instanceof lib.PDFRawStream)) return false;
+    const content = new TextDecoder().decode(
+      lib.decodePDFRawStream(appearance).decode()
+    );
+    return /\bTf\b/.test(content);
+  });
+}
+
 /**
  * Draw every printable widget into its page, then drop all widgets and
  * the AcroForm. Two differences from pdf-lib's `form.flatten()`:
@@ -191,8 +227,18 @@ function flattenWidgets(
   lib: PdfLibModule,
   regenerateAppearances: boolean
 ) {
-  // Only fields whose widgets lack an appearance get a new one.
-  if (regenerateAppearances) out.getForm().updateFieldAppearances();
+  const form = out.getForm();
+  const missingFonts = form
+    .getFields()
+    .filter((field) => fieldHasMissingFonts(field, out, lib));
+  if (regenerateAppearances) {
+    for (const field of missingFonts) form.markFieldAsDirty(field.ref);
+    form.updateFieldAppearances();
+  } else if (missingFonts.length > 0) {
+    // If repair failed, retain the interactive form and warn instead of
+    // flattening text that a PDF reader or printer cannot display.
+    throw new Error('Form widget appearance has no font resources.');
+  }
   const widgetType = lib.PDFName.of('Widget');
   for (const page of out.getPages()) {
     const annots = page.node.Annots();

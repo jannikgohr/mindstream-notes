@@ -14,7 +14,9 @@ import {
   PDFName,
   PDFNumber,
   PDFRawStream,
-  PDFString
+  PDFString,
+  StandardFonts,
+  decodePDFRawStream
 } from 'pdf-lib';
 import { inflateSync } from 'node:zlib';
 import {
@@ -102,6 +104,167 @@ function xObjectNames(doc: PDFDocument, pageIndex = 0): string[] {
 }
 
 describe('exportPrintReadyPdf', () => {
+  it.each(['dropdown', 'text', 'list'])(
+    'repairs a filled %s appearance whose font resources are missing',
+    async (kind) => {
+      const source = await PDFDocument.create();
+      const page = source.addPage();
+      const form = source.getForm();
+      const field =
+        kind === 'dropdown'
+          ? form.createDropdown('City')
+          : kind === 'list'
+            ? form.createOptionList('City')
+            : form.createTextField('City');
+      if ('setOptions' in field) {
+        field.setOptions(['London', 'Berlin']);
+        field.select('Berlin');
+      } else field.setText('Berlin');
+      field.addToPage(page, { x: 50, y: 100, width: 150, height: 30 });
+      // pdf.js can save a value and /Tf instructions without a font resource
+      // when the source form has no default appearance or default resources.
+      const appearance = source.context.flateStream(
+        '/Tx BMC q BT /Helvetica 13.33 Tf 0 g 2 5 Td (Berlin) Tj ET Q EMC',
+        {
+          Type: 'XObject',
+          Subtype: 'Form',
+          BBox: [0, 0, 150, 30],
+          Resources: {}
+        }
+      );
+      field.acroField
+        .getWidgets()[0]
+        .setNormalAppearance(source.context.register(appearance));
+      const { bytes, warnings } = await exportPrintReadyPdf(
+        await source.save({ updateFieldAppearances: false }),
+        [],
+        LABELS
+      );
+      const doc = await PDFDocument.load(bytes);
+      expect(warnings).toEqual([]);
+      expect(doc.getForm().getFields()).toHaveLength(0);
+      expect(annotCount(doc)).toBe(0);
+      const resources = doc
+        .getPage(0)
+        .node.Resources()!
+        .lookup(PDFName.of('XObject'), PDFDict);
+      const painted = doc.context.lookup(resources.values()[0]);
+      expect(painted).toBeInstanceOf(PDFRawStream);
+      if (!(painted instanceof PDFRawStream))
+        throw new Error('Missing appearance stream');
+      const fonts = painted.dict
+        .lookup(PDFName.of('Resources'), PDFDict)
+        .lookup(PDFName.of('Font'), PDFDict);
+      expect(fonts.keys().length).toBeGreaterThan(0);
+      expect(
+        Buffer.from(decodePDFRawStream(painted).decode()).toString()
+      ).toContain(shown('Berlin'));
+    }
+  );
+
+  it('preserves a complete appearance using a custom font', async () => {
+    const source = await PDFDocument.create();
+    const page = source.addPage();
+    const field = source.getForm().createDropdown('City');
+    field.setOptions(['Berlin']);
+    field.select('Berlin');
+    field.addToPage(page, {
+      x: 50,
+      y: 100,
+      width: 150,
+      height: 30,
+      font: await source.embedFont(StandardFonts.Courier)
+    });
+    const sourceBytes = await source.save();
+    const original = (await PDFDocument.load(sourceBytes))
+      .getForm()
+      .getDropdown('City')
+      .acroField.getWidgets()[0]
+      .AP()!
+      .get(PDFName.of('N'));
+    const { bytes, warnings } = await exportPrintReadyPdf(
+      sourceBytes,
+      [],
+      LABELS
+    );
+    const doc = await PDFDocument.load(bytes);
+    const resources = doc
+      .getPage(0)
+      .node.Resources()!
+      .lookup(PDFName.of('XObject'), PDFDict);
+    expect(resources.values()).toEqual([original]);
+    expect(warnings).toEqual([]);
+  });
+
+  it('preserves a field value drawn as outlines without any fonts', async () => {
+    const source = await PDFDocument.create();
+    const page = source.addPage();
+    const field = source.getForm().createTextField('Barcode');
+    field.addToPage(page, { x: 50, y: 100, width: 150, height: 30 });
+    field.setText('12345');
+    const ref = source.context.register(
+      source.context.flateStream('q 0 0 150 30 re f Q', {
+        Type: 'XObject',
+        Subtype: 'Form',
+        BBox: [0, 0, 150, 30],
+        Resources: {}
+      })
+    );
+    field.acroField.getWidgets()[0].setNormalAppearance(ref);
+    const { bytes, warnings } = await exportPrintReadyPdf(
+      await source.save({ updateFieldAppearances: false }),
+      [],
+      LABELS
+    );
+    const doc = await PDFDocument.load(bytes);
+    const appearances = doc
+      .getPage(0)
+      .node.Resources()!
+      .lookup(PDFName.of('XObject'), PDFDict);
+    expect(appearances.values()).toEqual([ref]);
+    expect(warnings).toEqual([]);
+  });
+
+  it.each([4, 0, 6])(
+    'handles an unencodable field with missing fonts and print flags %s',
+    async (flags) => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const source = await PDFDocument.create();
+      const page = source.addPage();
+      const field = source.getForm().createTextField('City');
+      field.addToPage(page, { x: 50, y: 100, width: 150, height: 30 });
+      field.setText('日本');
+      const widget = field.acroField.getWidgets()[0];
+      widget.dict.set(PDFName.of('F'), PDFNumber.of(flags));
+      widget.setNormalAppearance(
+        source.context.register(
+          source.context.flateStream(
+            '/Tx BMC q BT /Helvetica 12 Tf (missing) Tj ET Q EMC',
+            {
+              Type: 'XObject',
+              Subtype: 'Form',
+              BBox: [0, 0, 150, 30],
+              Resources: {}
+            }
+          )
+        )
+      );
+      const { bytes, warnings } = await exportPrintReadyPdf(
+        await source.save({ updateFieldAppearances: false }),
+        [],
+        LABELS
+      );
+      const doc = await PDFDocument.load(bytes);
+      if (flags === 4) {
+        expect(warnings).toEqual(['form-not-flattened']);
+        expect(doc.getForm().getTextField('City').getText()).toBe('日本');
+        expect(annotCount(doc)).toBe(1);
+      } else {
+        expect(warnings).toEqual([]);
+        expect(annotCount(doc)).toBe(0);
+      }
+    }
+  );
   it('preserves source link annotations while flattening form widgets', async () => {
     const source = await PDFDocument.create();
     const page = source.addPage();
