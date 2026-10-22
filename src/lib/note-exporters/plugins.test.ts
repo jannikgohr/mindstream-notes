@@ -83,6 +83,7 @@ beforeEach(() => {
   pluginsNativeToolStatus.mockReset();
   pluginsRunScript.mockReset();
   saveAnnotatedPdf.mockReset().mockResolvedValue(true);
+  saveFileExport.mockReset().mockResolvedValue(true);
   sanitizePdfFilename.mockReset().mockImplementation((name: string) => name);
 });
 
@@ -173,6 +174,35 @@ describe('runPluginNoteExporter', () => {
     return ref;
   }
 
+  it.each([null, undefined, [], 'not an object'])(
+    'rejects a malformed export result %s before saving',
+    async (result) => {
+      const ref = primeAvailable();
+      pluginsRunScript.mockResolvedValue(result);
+      await expect(runPluginNoteExporter(ref, 'n1')).rejects.toThrow(
+        'Plugin export result must be an object'
+      );
+      expect(saveAnnotatedPdf).not.toHaveBeenCalled();
+      expect(saveFileExport).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects a non-object file and ignores malformed diagnostics', async () => {
+    const ref = primeAvailable();
+    pluginsRunScript.mockResolvedValueOnce({ file: [] });
+    await expect(runPluginNoteExporter(ref, 'n1')).rejects.toThrow(
+      'Plugin export file must be an object'
+    );
+    pluginsRunScript.mockResolvedValueOnce({
+      mime: 'application/pdf',
+      diagnostics: [null, 1, 'error', { message: 42 }]
+    });
+    await expect(runPluginNoteExporter(ref, 'n1')).rejects.toThrow(
+      'Plugin export did not produce file bytes.'
+    );
+    expect(saveAnnotatedPdf).not.toHaveBeenCalled();
+  });
+
   it('rejects when the note kind does not match the exporter', async () => {
     const ref = registerTypstExporter();
     loadNote.mockResolvedValue({
@@ -261,10 +291,112 @@ describe('pluginExportersForNote', () => {
     expect(exporters[0].label).toBe('PDF');
     expect(exporters[0].noteKind).toBe(typstKind);
     expect(typeof exporters[0].run).toBe('function');
+    loadNote.mockResolvedValue({
+      id: 'n1',
+      title: 'Letter',
+      note_kind: typstKind,
+      body: '= Hello'
+    });
+    pluginsNativeToolStatus.mockResolvedValue({ available: true });
+    pluginsRunScript.mockResolvedValue({
+      mime: 'application/pdf',
+      dataBase64: 'JVBERg=='
+    });
+    await exporters[0].run('n1');
+    expect(saveAnnotatedPdf).toHaveBeenCalledWith(
+      expect.objectContaining({
+        suggestedName: 'Letter.pdf',
+        bytes: new Uint8Array([37, 80, 68, 70])
+      })
+    );
   });
 });
 
 describe('additional plugin formats', () => {
+  function imageExporter(format: 'png' | 'svg' = 'png') {
+    const ref = registerTypstExporter();
+    ref.exporter = { ...ref.exporter, format, requiresNativeTool: undefined };
+    loadNote.mockResolvedValue({
+      id: 'n1',
+      title: 'Pages',
+      note_kind: typstKind,
+      body: '= Test'
+    });
+    return ref;
+  }
+
+  it('rejects paged results for formats other than PNG and SVG', async () => {
+    const ref = imageExporter();
+    ref.exporter = { ...ref.exporter, format: 'typ' };
+    pluginsRunScript.mockResolvedValue({
+      pagesPdf: { mime: 'application/pdf', dataBase64: 'JVBERg==' }
+    });
+    await expect(runPluginNoteExporter(ref, 'n1')).rejects.toThrow(
+      'Paged plugin exports must produce PNG or SVG'
+    );
+    expect(saveFileExport).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { mime: 'image/png', dataBase64: 'AAAA' },
+    { mime: 'application/pdf', text: 'no binary preview' }
+  ])('requires PDF bytes for a page-count preview', async (pagesPdf) => {
+    const ref = imageExporter();
+    pluginsRunScript.mockResolvedValue({ pagesPdf });
+    await expect(runPluginNoteExporter(ref, 'n1')).rejects.toThrow(
+      'Paged export requires a PDF page-count preview'
+    );
+    expect(saveFileExport).not.toHaveBeenCalled();
+  });
+
+  it('rejects more than 1000 pages before rendering or saving any page', async () => {
+    const ref = imageExporter();
+    const pdf = await PDFDocument.create();
+    for (let page = 0; page < 1001; page++) pdf.addPage([10, 10]);
+    pluginsRunScript.mockResolvedValue({
+      pagesPdf: {
+        mime: 'application/pdf',
+        dataBase64: await pdf.saveAsBase64()
+      }
+    });
+    await expect(runPluginNoteExporter(ref, 'n1')).rejects.toThrow(
+      'up to 1000 pages'
+    );
+    expect(pluginsRunScript).toHaveBeenCalledOnce();
+    expect(saveFileExport).not.toHaveBeenCalled();
+  });
+
+  it('saves a single PNG page directly under the note title', async () => {
+    const ref = imageExporter();
+    const pdf = await PDFDocument.create();
+    pdf.addPage();
+    pluginsRunScript.mockResolvedValueOnce({
+      pagesPdf: {
+        mime: 'application/pdf',
+        dataBase64: await pdf.saveAsBase64()
+      }
+    });
+    pluginsRunScript.mockResolvedValueOnce({
+      file: {
+        mime: 'image/png',
+        dataBase64: 'iVBORw==',
+        suggestedName: 'wrong.png'
+      }
+    });
+    await runPluginNoteExporter(ref, 'n1');
+    expect(saveFileExport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        suggestedName: 'Pages.png',
+        bytes: new Uint8Array([137, 80, 78, 71]),
+        mime: 'image/png'
+      })
+    );
+    expect(pluginsRunScript.mock.calls[1][2]).toMatchObject({
+      page: 1,
+      format: 'png',
+      noteId: 'n1'
+    });
+  });
   it('saves even empty Typst source without checking for a compiler', async () => {
     const ref = registerTypstExporter();
     ref.exporter = {

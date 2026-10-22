@@ -5,7 +5,7 @@
  * form fields gone, and the appended comments pages.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   degrees,
   PDFArray,
@@ -13,7 +13,8 @@ import {
   PDFDocument,
   PDFName,
   PDFNumber,
-  PDFRawStream
+  PDFRawStream,
+  PDFString
 } from 'pdf-lib';
 import { inflateSync } from 'node:zlib';
 import {
@@ -28,6 +29,8 @@ const LABELS: PrintReadyLabels = {
   page: 'Page {page}',
   resolved: 'Resolved'
 };
+
+afterEach(() => vi.restoreAllMocks());
 
 async function makeBlankPdfBytes(pageCount = 1): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
@@ -99,6 +102,199 @@ function xObjectNames(doc: PDFDocument, pageIndex = 0): string[] {
 }
 
 describe('exportPrintReadyPdf', () => {
+  it('preserves source link annotations while flattening form widgets', async () => {
+    const source = await PDFDocument.create();
+    const page = source.addPage();
+    source
+      .getForm()
+      .createTextField('name')
+      .addToPage(page, { x: 20, y: 30, width: 100, height: 20 });
+    const link = source.context.register(
+      source.context.obj({
+        Type: 'Annot',
+        Subtype: 'Link',
+        Rect: [20, 100, 120, 120],
+        A: { S: 'URI', URI: PDFString.of('https://example.com') }
+      })
+    );
+    page.node.addAnnot(link);
+    const { bytes, warnings } = await exportPrintReadyPdf(
+      await source.save(),
+      [],
+      LABELS
+    );
+    const doc = await PDFDocument.load(bytes);
+    expect(warnings).toEqual([]);
+    expect(annotCount(doc)).toBe(1);
+    const retained = doc.context.lookup(
+      doc.getPage(0).node.Annots()!.get(0),
+      PDFDict
+    );
+    expect(retained.get(PDFName.of('Subtype'))).toBe(PDFName.of('Link'));
+    expect(
+      retained
+        .lookup(PDFName.of('A'), PDFDict)
+        .lookup(PDFName.of('URI'), PDFString)
+        .decodeText()
+    ).toBe('https://example.com');
+    expect(doc.catalog.getAcroForm()).toBeUndefined();
+  });
+
+  it.each(['value', 'reference'])(
+    'preserves forms with a malformed %s appearance and warns once',
+    async (kind) => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const source = await PDFDocument.create();
+      const page = source.addPage();
+      source.getForm();
+      const invalid = PDFNumber.of(42);
+      page.node.addAnnot(
+        source.context.register(
+          source.context.obj({
+            Type: 'Annot',
+            Subtype: 'Widget',
+            F: 4,
+            Rect: [20, 30, 120, 50],
+            AP: {
+              N: kind === 'value' ? invalid : source.context.register(invalid)
+            }
+          })
+        )
+      );
+      const { bytes, warnings } = await exportPrintReadyPdf(
+        await source.save(),
+        [annotation({})],
+        LABELS
+      );
+      const doc = await PDFDocument.load(bytes);
+      expect(warnings).toEqual(['form-not-flattened']);
+      expect(annotCount(doc)).toBe(1);
+      expect(doc.catalog.getAcroForm()).toBeDefined();
+      expect(closedPaths(pageContent(doc))).toBe(1);
+    }
+  );
+
+  it.each(['missing', 'invalid', 'empty'])(
+    'handles a widget with a %s bounding box',
+    async (bbox) => {
+      const source = await PDFDocument.create();
+      const page = source.addPage();
+      source.getForm();
+      const stream = source.context.flateStream('0 0 1 1 re f', {
+        Type: 'XObject',
+        Subtype: 'Form',
+        Resources: {},
+        ...(bbox === 'missing'
+          ? {}
+          : { BBox: bbox === 'empty' ? [0, 0, 0, 0] : [0, 0, 'invalid', 40] })
+      });
+      const ref = source.context.register(stream);
+      page.node.addAnnot(
+        source.context.register(
+          source.context.obj({
+            Type: 'Annot',
+            Subtype: 'Widget',
+            F: 4,
+            Rect: [200, 100, 50, 60],
+            AP: { N: ref }
+          })
+        )
+      );
+      const { bytes, warnings } = await exportPrintReadyPdf(
+        await source.save(),
+        [],
+        LABELS
+      );
+      const doc = await PDFDocument.load(bytes);
+      expect(warnings).toEqual([]);
+      expect(annotCount(doc)).toBe(0);
+      expect(doc.catalog.getAcroForm()).toBeUndefined();
+      if (bbox === 'empty') expect(xObjectNames(doc)).toHaveLength(0);
+      else expect(pageContent(doc)).toContain('1 0 0 1 50 60 cm');
+    }
+  );
+
+  it('skips an appearance state that is absent and drops hidden printable widgets', async () => {
+    const source = await PDFDocument.create();
+    const page = source.addPage();
+    source.getForm();
+    for (const flags of [4, 6]) {
+      page.node.addAnnot(
+        source.context.register(
+          source.context.obj({
+            Type: 'Annot',
+            Subtype: 'Widget',
+            F: flags,
+            Rect: [20, 30, 120, 50],
+            AP: { N: {} }
+          })
+        )
+      );
+    }
+    const { bytes, warnings } = await exportPrintReadyPdf(
+      await source.save(),
+      [],
+      LABELS
+    );
+    const doc = await PDFDocument.load(bytes);
+    expect(warnings).toEqual([]);
+    expect(annotCount(doc)).toBe(0);
+    expect(xObjectNames(doc)).toHaveLength(0);
+  });
+
+  it('orders comments with the same height from left to right and starts new pages between entries', async () => {
+    const annotations = Array.from({ length: 45 }, (_, index) =>
+      annotation({
+        type: 'comment',
+        body: `Comment ${index}`,
+        rects: [{ x: index * 2, y: 100, width: 1, height: 10 }]
+      })
+    ).reverse();
+    const { bytes } = await exportPrintReadyPdf(
+      await makeBlankPdfBytes(),
+      annotations,
+      LABELS
+    );
+    const doc = await PDFDocument.load(bytes);
+    expect(doc.getPageCount()).toBeGreaterThan(2);
+    const first = pageContent(doc, 1);
+    expect(first).toContain(shown('Comment 0'));
+    expect(first).toContain(shown('Comment 1'));
+    expect(first.indexOf(shown('Comment 0'))).toBeLessThan(
+      first.indexOf(shown('Comment 1'))
+    );
+    expect(
+      Array.from({ length: doc.getPageCount() - 1 }, (_, index) =>
+        pageContent(doc, index + 1)
+      ).join('\n')
+    ).toContain(shown('Comment 44'));
+  });
+
+  it('ignores empty ink and signature data instead of creating broken XObjects', async () => {
+    const { bytes, warnings } = await exportPrintReadyPdf(
+      await makeBlankPdfBytes(),
+      [
+        annotation({ type: 'ink' }),
+        annotation({ type: 'ink', strokes: [] }),
+        annotation({
+          type: 'ink',
+          strokes: [
+            { id: 'point', color: '', width: 1, points: [{ x: 10, y: 10 }] }
+          ]
+        }),
+        annotation({ type: 'signature' }),
+        annotation({
+          type: 'signature',
+          signature: { id: 'empty', width: 100, height: 50, strokes: [] }
+        })
+      ],
+      LABELS
+    );
+    const doc = await PDFDocument.load(bytes);
+    expect(warnings).toEqual([]);
+    expect(xObjectNames(doc)).toHaveLength(0);
+    expect(doc.getPageCount()).toBe(1);
+  });
   it('draws highlights into the page with a multiply blend instead of adding annotations', async () => {
     const { bytes, warnings } = await exportPrintReadyPdf(
       await makeBlankPdfBytes(),

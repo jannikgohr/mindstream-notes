@@ -36,6 +36,66 @@ const board: KanbanBoard = {
 };
 
 describe('Kanban export', () => {
+  it('orders equal-position cards by ID and keeps unknown metadata readable', () => {
+    const minimal: KanbanBoard = {
+      columns: [{ id: 'todo', label: '# To do\nnext', order: 0 }],
+      cards: [
+        { id: 'z', label: 'Later', column: 'todo', order: 2 },
+        { id: 'b', label: 'Second', column: 'todo', order: 1 },
+        {
+          id: 'a',
+          label: '*Complete*',
+          column: 'todo',
+          order: 1,
+          progress: 100,
+          deadline: new Date('invalid'),
+          tags: ['missing'],
+          users: ['alice'],
+          linkedNoteId: 'missing-note'
+        },
+        { id: 'orphan', label: 'Unassigned', column: 'gone', order: 0 }
+      ]
+    };
+    const rows = boardRows(minimal);
+    expect(rows.map((row) => row[11])).toEqual(['a', 'b', 'z', 'orphan']);
+    expect(rows[0].slice(4, 10)).toEqual([
+      100,
+      '',
+      'missing',
+      'alice',
+      'missing-note',
+      'missing-note'
+    ]);
+    expect(rows[3][0]).toBe('gone');
+    const markdown = boardMarkdown(minimal, false);
+    expect(markdown).not.toContain('kanban-plugin');
+    expect(markdown).toContain('## \\# To do next');
+    expect(markdown).toContain('- [x] \\*Complete\\*');
+    expect(markdown).toContain('Tags: missing');
+    expect(markdown).not.toContain('Due:');
+  });
+
+  it('writes empty metadata sheets when a board has no labels', async () => {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(
+      (await boardXlsx({ columns: [], cards: [] })) as unknown as Parameters<
+        typeof workbook.xlsx.load
+      >[0]
+    );
+    expect(workbook.getWorksheet('Labels')!.rowCount).toBe(1);
+    expect(workbook.getWorksheet('Cards')!.rowCount).toBe(1);
+  });
+
+  it.each(['=1', '+1', '-1', '@sum(A1)', ' \t=1'])(
+    'keeps formula-like text %s literal in CSV',
+    (label) => {
+      const csv = boardCsv({
+        columns: [],
+        cards: [{ id: 'card', column: 'missing', label, order: 0 }]
+      });
+      expect(csv).toContain(`"'${label}"`);
+    }
+  );
   it('reads persisted state without dropping dates, IDs or metadata', () => {
     const doc = new Y.Doc();
     writeBoardToYDoc(doc, board);

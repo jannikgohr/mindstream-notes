@@ -3,6 +3,11 @@ import { unzipSync, strFromU8 } from 'fflate';
 import { bundleExportFiles, exportFilename, textFile } from './files';
 
 describe('export files', () => {
+  it('rejects exports with no pages', async () => {
+    await expect(bundleExportFiles('Empty', [])).rejects.toThrow(
+      'did not produce any files'
+    );
+  });
   it('sanitizes plugin and note filenames', () => {
     expect(exportFilename('../../CON', 'csv')).not.toContain('/');
     expect(exportFilename('CON', 'csv')).toBe('CON_file.csv');
