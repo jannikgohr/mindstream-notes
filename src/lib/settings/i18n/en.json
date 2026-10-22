@@ -526,6 +526,7 @@
     "account.refusal.alreadyMember": "You already belong to this folder.",
     "account.refusal.tooManyLinks": "This folder has too many links already. Remove some first.",
     "toast.regionLabel": "Status messages",
+    "tray.noActiveVault": "No active vault",
     "tray.newNote": "New note",
     "tray.newDrawing": "New drawing canvas",
     "tray.newInk": "New handwritten note",

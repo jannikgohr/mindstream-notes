@@ -367,6 +367,7 @@
     "account.refusal.alreadyMember": "Du gehörst bereits zu diesem Ordner.",
     "account.refusal.tooManyLinks": "Dieser Ordner hat schon zu viele Links. Entferne zuerst einige.",
     "toast.regionLabel": "Statusmeldungen",
+    "tray.noActiveVault": "Kein aktiver Tresor",
     "tray.newNote": "Neue Notiz",
     "tray.newDrawing": "Neue Zeichenfläche",
     "tray.newInk": "Neue handschriftliche Notiz",

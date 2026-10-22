@@ -26,7 +26,7 @@ e2e-data-dir = []
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2.11", features = ["unstable", "tray-icon"] }
+tauri = { version = "2.11", features = ["unstable", "tray-icon", "image-png"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
@@ -176,6 +176,9 @@ windows-core = "0.61"
 windows = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# AppIndicator exports GtkImageMenuItem images and labels to the desktop tray.
+gtk = "0.18"
+muda = { version = "0.19", default-features = false, features = ["gtk"] }
 # Matches the v3 `sync-secret-service` feature we were using before.
 # crypto-rust avoids pulling in OpenSSL on Linux; vendored keeps the
 # dbus link static so the binary doesn't grow a runtime dep on the
