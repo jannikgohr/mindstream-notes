@@ -17,6 +17,14 @@ pub(super) fn sync(app: &AppHandle) -> tauri::Result<()> {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return Ok(());
     };
+    let rows = menu_rows(app, &items)?;
+    let app = app.clone();
+    tray.with_inner_tray_icon(move |tray| {
+        tray.set_menu(Some(Box::new(build_menu(&app, rows))));
+    })
+}
+
+fn menu_rows(app: &AppHandle, items: &TrayMenuItems) -> tauri::Result<Vec<Row>> {
     let vault_label = items.vault_label.lock().unwrap().clone();
     let mut rows = vec![row(
         super::VAULT_ID,
@@ -58,24 +66,25 @@ pub(super) fn sync(app: &AppHandle) -> tauri::Result<()> {
             });
         rows.push(entry);
     }
-    let app = app.clone();
-    tray.with_inner_tray_icon(move |tray| {
-        let menu = muda::Menu::new();
-        let native = menu.gtk_context_menu();
-        for entry in rows {
-            if entry.id == super::NEW_NOTE_ID || entry.id == super::QUIT_ID {
-                native.append(&gtk::SeparatorMenuItem::new());
-            }
-            let item = image_item(&entry);
-            if entry.enabled {
-                let app = app.clone();
-                item.connect_activate(move |_| handle_menu_event(&app, entry.id));
-            }
-            native.append(&item);
+    Ok(rows)
+}
+
+fn build_menu(app: &AppHandle, rows: Vec<Row>) -> muda::Menu {
+    let menu = muda::Menu::new();
+    let native = menu.gtk_context_menu();
+    for entry in rows {
+        if entry.id == super::NEW_NOTE_ID || entry.id == super::QUIT_ID {
+            native.append(&gtk::SeparatorMenuItem::new());
         }
-        native.show_all();
-        tray.set_menu(Some(Box::new(menu)));
-    })
+        let item = image_item(&entry);
+        if entry.enabled {
+            let app = app.clone();
+            item.connect_activate(move |_| handle_menu_event(&app, entry.id));
+        }
+        native.append(&item);
+    }
+    native.show_all();
+    menu
 }
 
 struct Row {
@@ -142,3 +151,6 @@ fn image_item(entry: &Row) -> gtk::MenuItem {
     }
     item
 }
+
+#[cfg(test)]
+mod tests;
