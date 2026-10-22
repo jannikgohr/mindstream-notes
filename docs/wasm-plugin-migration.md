@@ -1,27 +1,29 @@
 # Wasm plugin migration gates
 
 The migration has a working Wasmtime runner and a language-agnostic WIT
-component contract. Shipped Templates and Typst now use compiled Rust, with
-TypeScript/QuickJS implementations retained as non-shipped examples. Physical
+component contract. All shipped manifests use v2: Templates and Typst use
+compiled Rust/Wasm, and LanguageTool stays declarative. TypeScript/QuickJS
+implementations remain as non-shipped examples. Physical
 Android ARM64 runtime and app tests have evidence, but M5 remains open. Trusted
 bundled precompilation and immutable builtin digest reuse reduce preparation
 and app-call costs. Earlier macOS TypeScript interpreter runs exceeded the
-unchanged one-second budget; the new Rust selection needs its own platform
-evidence. Desktop whole-app measurements remain incomplete. M6 is blocked.
+unchanged one-second budget; the shipped Rust selection now has passing
+three-platform release probe evidence. Desktop whole-app measurements remain
+incomplete. M6 is blocked.
 Luau runtime support and bindings remain; old bundled sources are retained
 outside the embedded plugin tree for regression comparisons.
 
 ## Milestone status
 
-| Milestone                  | Evidence                                                                                                                                                              | Remaining work                                                                                                                    |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| M0, inventory and baseline | Host/API inventory; Linux Luau measurements; matching normal Android app builds                                                                                       | Representative desktop whole-app baseline and longer device memory runs                                                           |
-| M1, shared host services   | Runtime-neutral crate; existing Luau host tests                                                                                                                       | None identified                                                                                                                   |
-| M2, Wasmtime integration   | Verified entry bytes, compile caches, fresh stores, limits, cancellation, permission tests                                                                            | Cross-platform release gate below                                                                                                 |
-| M3, TypeScript SDK         | Packed Node-only author workflow; all three desktop Node 22 CI jobs passed after the Windows temporary-path fix                                                       | None identified                                                                                                                   |
-| M4, bundled ports          | Rust Templates and Typst use manifest v2/Wasm; shared TypeScript example tests and app-host tests; template output compared with retained Luau                        | New artifact platform gates remain under M5                                                                                       |
-| M5, parity and performance | Physical Android native/Pulley probes, trusted AOT and Rust Templates comparison, release app lifecycle, matching APK/startup/memory measurements, desktop CI results | macOS interpreter budget reliability, representative app startup/memory and installer measurements, broader thermal/soak coverage |
-| M6, retire Luau            | Intentionally pending                                                                                                                                                 | All M5 gates must pass first                                                                                                      |
+| Milestone                  | Evidence                                                                                                                                                              | Remaining work                                                                                                                       |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| M0, inventory and baseline | Host/API inventory; Linux Luau measurements; matching normal Android app builds                                                                                       | Representative desktop whole-app baseline and longer device memory runs                                                              |
+| M1, shared host services   | Runtime-neutral crate; existing Luau host tests                                                                                                                       | None identified                                                                                                                      |
+| M2, Wasmtime integration   | Verified entry bytes, compile caches, fresh stores, limits, cancellation, permission tests                                                                            | Cross-platform release gate below                                                                                                    |
+| M3, TypeScript SDK         | Packed Node-only author workflow; all three desktop Node 22 CI jobs passed after the Windows temporary-path fix                                                       | None identified                                                                                                                      |
+| M4, bundled ports          | All shipped manifests use v2; Rust Templates/Typst, declarative LanguageTool, shared TypeScript example tests and app-host tests; template output compared with Luau  | Remaining app/platform gates stay under M5                                                                                           |
+| M5, parity and performance | Physical Android native/Pulley probes, trusted AOT and Rust Templates comparison, release app lifecycle, matching APK/startup/memory measurements, desktop CI results | Updated physical app verification, representative whole-app startup/memory and installer measurements, broader thermal/soak coverage |
+| M6, retire Luau            | Intentionally pending                                                                                                                                                 | All M5 gates must pass first                                                                                                         |
 
 The npm SDK stays private during migration. It can be packed and installed
 locally. This is not an SDK v1 compatibility promise. The ABI is
@@ -520,9 +522,48 @@ as functional CI, keeping all limits and tests. The
 [completed follow-up](benchmarks/wasm-ci-followup-2026-10-21/README.md)
 passed Linux coverage and all three portable release runtime probes. Windows
 debug workspace testing still failed the interpreted conformance `report`
-with `Budget`, despite serial execution. That cause remains unresolved;
-the overall workflow failed and no deadline was increased.
+with `Budget`, despite serial execution. That earlier workflow failed;
+no deadline was increased. The subsequent diagnosis below addresses the
+debug interpreter cost.
 M5/M6 remain open; retain Luau runtime support.
+
+## Windows deadline follow-up and completed v2 inventory
+
+The [Windows deadline report](benchmarks/wasm-windows-deadline-2026-10-21/README.md)
+records a large cost from building the Pulley host VM without optimization.
+A dependency-only dev-profile override reduced the local TypeScript
+conformance call from 713 ms to 14 ms. The one-second deadline, debug
+assertions, memory caps, tests and release profile remain unchanged.
+
+The Windows CI control passed with approximately 954 ms of instance/call
+time, leaving little room for scheduling or other setup. Five fixed-profile
+runs passed at approximately 24–26 ms. The historical failure did not identify
+the guest/phase, and the control did not reproduce that exact timeout. Raw
+logs and both outcomes remain in the report. All three workspace jobs,
+including the Windows conformance test, passed, as did all release probe jobs,
+Linux coverage and all three JS jobs. That first workflow failed on two
+packaged single-client plugin tests that assumed the old always-visible
+toolbar action. Their fixture now configures the real folder-picker button
+and waits for SQLite persistence. A subsequent Windows editor-test timer race
+was fixed with fake timers rather than an arbitrary sleep.
+
+The [final CI run](https://github.com/jannikgohr/mindstream-notes/actions/runs/39643916426)
+passed every job at `a8dd605e`, including all three desktop Rust/JS matrices,
+portable release probes, shipped guest validation, coverage, browser tests
+and all packaged-app suites. Its release probes used 100 samples per case
+with the default one-second budget and no overruns. Four plugin checks also
+passed in the local Windows release E2E app, including conditional discovery,
+Rust IPC execution, settings and disable/restart persistence. The report
+retains failed/superseded runs, raw logs, artifact digests and measurements.
+
+LanguageTool is now the final shipped v2 manifest. It keeps its declarative
+checker/native-service contract, stable ID, permissions and settings; it needs
+no guest executable. Templates and Typst retain their already ported Rust
+components with identical Wasm bytes. An inventory test checks every shipped
+package's version/runtime and rejects shipped Luau sources. Local validation
+passed 1,038 app tests, 83 runtime tests and 3,608 frontend/SDK tests. These
+changes do not close the outstanding physical app or whole-app measurement
+gates, and Luau compatibility remains.
 
 ## Template action visibility
 
