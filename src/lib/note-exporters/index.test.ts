@@ -19,10 +19,10 @@ describe('note exporters', () => {
     ).toEqual(['ink.pdf']);
   });
 
-  it('keeps annotated PDF export for PDF notes', () => {
+  it('offers annotated and print-ready PDF export for PDF notes', () => {
     expect(
       exportersForNote(note('pdf')).map((exporter) => exporter.id)
-    ).toEqual(['pdf.annotated']);
+    ).toEqual(['pdf.annotated', 'pdf.print-ready']);
   });
 
   it('does not offer exporters for note kinds without direct exports', () => {
