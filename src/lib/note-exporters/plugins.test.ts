@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { PDFDocument } from 'pdf-lib';
+import { unzipSync } from 'fflate';
+const saveFileExport = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+vi.mock('$lib/api/file-export', () => ({ saveFileExport }));
 
 const {
   loadNote,
@@ -257,5 +261,73 @@ describe('pluginExportersForNote', () => {
     expect(exporters[0].label).toBe('PDF');
     expect(exporters[0].noteKind).toBe(typstKind);
     expect(typeof exporters[0].run).toBe('function');
+  });
+});
+
+describe('additional plugin formats', () => {
+  it('saves even empty Typst source without checking for a compiler', async () => {
+    const ref = registerTypstExporter();
+    ref.exporter = {
+      ...ref.exporter,
+      format: 'typ',
+      requiresNativeTool: undefined
+    };
+    loadNote.mockResolvedValue({
+      id: 'n1',
+      title: 'Empty',
+      note_kind: typstKind,
+      body: ''
+    });
+    pluginsRunScript.mockResolvedValue({
+      file: { mime: 'text/plain', text: '' }
+    });
+    await runPluginNoteExporter(ref, 'n1');
+    expect(pluginsNativeToolStatus).not.toHaveBeenCalled();
+    expect(saveFileExport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        suggestedName: 'Empty.typ',
+        bytes: new Uint8Array(),
+        mime: 'text/plain',
+        extensions: ['typ']
+      })
+    );
+  });
+
+  it('exports every SVG page and bundles numbered files, even when the script suggests duplicate names', async () => {
+    const ref = registerTypstExporter();
+    ref.exporter = {
+      ...ref.exporter,
+      format: 'svg',
+      requiresNativeTool: undefined
+    };
+    loadNote.mockResolvedValue({
+      id: 'n1',
+      title: 'Pages',
+      note_kind: typstKind,
+      body: '= Test'
+    });
+    const pdf = await PDFDocument.create();
+    pdf.addPage();
+    pdf.addPage();
+    const base64 = await pdf.saveAsBase64();
+    pluginsRunScript.mockImplementation(async (_id, _export, input) =>
+      input.page
+        ? {
+            file: {
+              mime: 'image/svg+xml',
+              text: `<svg>Page ${input.page}</svg>`,
+              suggestedName: 'same.svg'
+            }
+          }
+        : { pagesPdf: { mime: 'application/pdf', dataBase64: base64 } }
+    );
+    await runPluginNoteExporter(ref, 'n1');
+    const saved = saveFileExport.mock.calls.at(-1)![0];
+    expect(saved.suggestedName).toBe('Pages.zip');
+    expect(Object.keys(unzipSync(saved.bytes))).toEqual([
+      'Pages - 001.svg',
+      'Pages - 002.svg'
+    ]);
+    expect(pluginsRunScript).toHaveBeenCalledTimes(3);
   });
 });

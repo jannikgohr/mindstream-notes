@@ -60,8 +60,8 @@ describe('exportInkNotePdf', () => {
 });
 
 describe('inkExporters', () => {
-  it('registers a single ink→PDF exporter', () => {
-    expect(inkExporters).toHaveLength(1);
+  it('registers PDF and PNG exporters', () => {
+    expect(inkExporters).toHaveLength(2);
     expect(inkExporters[0]).toMatchObject({
       id: 'ink.pdf',
       noteKind: 'ink',

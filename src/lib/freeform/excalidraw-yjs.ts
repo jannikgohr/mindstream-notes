@@ -27,6 +27,7 @@
  * old shape and migrates it on sight.
  */
 
+import './asset-path';
 import * as Y from 'yjs';
 import type {
   AppState,

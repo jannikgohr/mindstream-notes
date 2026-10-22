@@ -18,6 +18,7 @@ import {
 import { pushToast } from '$lib/components/toast.svelte';
 import { tUi } from '$lib/settings/i18n.svelte';
 import type { NoteExporter } from './types';
+import { saveExportFile, textFile } from './files';
 import { sharedInkAnnotations } from '$lib/ink/pdf-annotations';
 
 function liveAnnotationsFrom(note: Note): PdfAnnotation[] {
@@ -167,5 +168,47 @@ export const pdfExporters: NoteExporter[] = [
     noteKind: 'pdf',
     label: 'Print-ready PDF',
     run: exportPrintReadyPdfNote
+  },
+  {
+    id: 'pdf.original',
+    noteKind: 'pdf',
+    label: 'Original PDF',
+    run: exportOriginalPdfNote
+  },
+  {
+    id: 'pdf.markdown',
+    noteKind: 'pdf',
+    label: 'Annotations as Markdown',
+    run: exportPdfAnnotationsMarkdown
   }
 ];
+
+export async function exportOriginalPdfNote(noteId: string): Promise<void> {
+  const note = await loadNote(noteId);
+  if (note.note_kind !== 'pdf')
+    throw new Error('This export is only available for PDF notes.');
+  const assetId = pdfAssetIdFromBody(note.body);
+  if (!assetId) throw new Error('PDF asset is missing.');
+  await saveAnnotatedPdf({
+    suggestedName: `${sanitizePdfFilename(note.title)} (original).pdf`,
+    dialogTitle: 'Save original PDF',
+    bytes: await fetchAssetBytes(assetId, 'application/pdf')
+  });
+}
+
+export async function exportPdfAnnotationsMarkdown(
+  noteId: string
+): Promise<void> {
+  const note = await loadNote(noteId);
+  if (note.note_kind !== 'pdf')
+    throw new Error('This export is only available for PDF notes.');
+  const assetId = pdfAssetIdFromBody(note.body);
+  if (!assetId) throw new Error('PDF asset is missing.');
+  const { annotationsMarkdown } = await import('./pdf-markdown');
+  const content = await annotationsMarkdown(
+    note.title,
+    await fetchAssetBytes(assetId, 'application/pdf'),
+    liveAnnotationsFrom(note)
+  );
+  await saveExportFile(textFile(`${note.title} annotations`, 'md', content));
+}

@@ -11,6 +11,8 @@ type RenderInput = {
 	noteKind: string?,
 	body: string?,
 	sourceLanguage: string?,
+	format: string?,
+	page: number?,
 }
 
 type Diagnostic = {
@@ -93,7 +95,36 @@ local function renderDocument(input: RenderInput): { [string]: any }
 end
 
 local function exportDocument(input: RenderInput): { [string]: any }
-	return renderDocument(input)
+	local format = input.format or "pdf"
+	if format == "typ" then
+		return { file = { mime = "text/plain", text = input.body or "" } }
+	end
+	if format == "pdf" then
+		return renderDocument(input)
+	end
+	if format ~= "png" and format ~= "svg" then
+		error("Unsupported export format: " .. format)
+	end
+	-- The host counts PDF pages, then requests each image separately. Typst
+	-- cannot write several PNG/SVG pages to stdout in one invocation.
+	if input.page == nil then
+		local result = renderDocument(input)
+		return { pagesPdf = result.preview, diagnostics = result.diagnostics }
+	end
+	local nativeTools = assert(ms.nativeTools)
+	local result = nativeTools.run("typst", {
+		args = { "compile", "--format", format, "--pages", tostring(input.page), "-", "-" },
+		stdin = input.body or "",
+		outputBase64 = true,
+		timeoutMs = 30000,
+	})
+	if result.timedOut then
+		error("Typst timed out while exporting page " .. tostring(input.page))
+	end
+	return {
+		file = { mime = if format == "png" then "image/png" else "image/svg+xml", dataBase64 = if result.statusCode == 0 then result.stdoutBase64 else "" },
+		diagnostics = parseTypstStderr(result.stderr),
+	}
 end
 
 return { renderDocument = renderDocument, exportDocument = exportDocument }

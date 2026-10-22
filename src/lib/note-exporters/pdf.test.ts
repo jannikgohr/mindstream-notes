@@ -22,7 +22,11 @@ vi.mock('$lib/ink/pdf-annotations', () => ({
 }));
 vi.mock('$lib/components/toast.svelte', () => ({ pushToast }));
 
-import { exportPrintReadyPdfNote, pdfExporters } from './pdf';
+import {
+  exportPrintReadyPdfNote,
+  exportOriginalPdfNote,
+  pdfExporters
+} from './pdf';
 
 const sourceBytes = new Uint8Array([37, 80, 68, 70]);
 const outputBytes = new Uint8Array([1, 2, 3]);
@@ -97,8 +101,21 @@ describe('pdfExporters', () => {
   it('lists the print-ready export after the annotated one', () => {
     expect(pdfExporters.map((exporter) => exporter.id)).toEqual([
       'pdf.annotated',
-      'pdf.print-ready'
+      'pdf.print-ready',
+      'pdf.original',
+      'pdf.markdown'
     ]);
     expect(pdfExporters[1].run).toBe(exportPrintReadyPdfNote);
   });
+});
+
+it('exports the original asset unchanged without filling forms or adding annotations', async () => {
+  await exportOriginalPdfNote('n1');
+  expect(saveAnnotatedPdf).toHaveBeenCalledWith(
+    expect.objectContaining({
+      bytes: sourceBytes,
+      suggestedName: 'Lease draft (original).pdf'
+    })
+  );
+  expect(exportPrintReadyPdf).not.toHaveBeenCalled();
 });

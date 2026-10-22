@@ -1334,7 +1334,14 @@
     "onboarding.preview.ideaBody": "Schaffe Platz für dein nächstes Projekt. Beginne mit einer kleinen Idee und sieh, wohin sie dich führt.",
     "onboarding.preview.task": "Zeit zum Schreiben nehmen",
     "onboarding.preview.saved": "Deine Notizen in einem Stil, der zu dir passt.",
-    "onboarding.practice.source": "Markdown-Quelltext zum Üben"
+    "onboarding.practice.source": "Markdown-Quelltext zum Üben",
+    "data.exportVault.chip.boards.one": "Kanban-Board",
+    "data.exportVault.chip.boards.other": "Kanban-Boards",
+    "data.exportVault.chip.boards.status": "Als Markdown und JSON gespeichert",
+    "data.exportVault.chip.typst.one": "Typst-Dokument",
+    "data.exportVault.chip.typst.other": "Typst-Dokumente",
+    "data.exportVault.chip.typst.status": "Als Typst-Quelltext gespeichert",
+    "fileTree.exporting": "{label} wird exportiert…"
   },
   "categories": {
     "account": {

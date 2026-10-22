@@ -886,6 +886,7 @@ pub fn run() {
                 notes_export::notes_export_write_file,
                 // PDF export
                 pdf_export::save_pdf_export,
+                pdf_export::save_file_export,
                 // System introspection
                 system::is_appimage_install,
                 // Hotkey display state mirrored from the JS hotkey store
