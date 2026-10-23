@@ -32,7 +32,7 @@
   import SignInForm from '$lib/settings/customs/SignInForm.svelte';
   import HotkeyPreset from '$lib/settings/customs/HotkeyPreset.svelte';
   import SpellcheckDictionaries from '$lib/settings/customs/SpellcheckDictionaries.svelte';
-  import { tUi, tUiFormat, tValue } from '$lib/settings/i18n.svelte';
+  import { i18n, tUi, tValue } from '$lib/settings/i18n.svelte';
   import { themeCatalog } from '$lib/settings/theme.svelte';
   import { BUILTIN_PRESET_NAMES } from '$lib/settings/theme-presets';
   import { authSession } from '$lib/api/auth.svelte';
@@ -122,24 +122,6 @@
       heading?.focus({ preventScroll: true });
     });
   }
-  function initialNote(kind: 'welcome' | 'blank' | 'none'): InitialNote | null {
-    if (kind === 'none') return null;
-    return {
-      title: tUi(
-        kind === 'welcome'
-          ? 'onboarding.welcome.title'
-          : 'onboarding.blank.title'
-      ),
-      body:
-        kind === 'welcome'
-          ? tUiFormat('onboarding.welcome.body', {
-              create: displayBinding(getBinding('global.newMarkdownNote')),
-              search: displayBinding(getBinding('global.openSearch')),
-              commands: displayBinding(getBinding('global.openCommandPalette'))
-            })
-          : ''
-    };
-  }
   async function complete(
     skipped = false,
     action?: 'import-notes' | 'restore-backup'
@@ -148,21 +130,30 @@
       if (skipped && onboarding.progress?.freshInstall && !signedIn)
         await setSettingValue('account.serverType', 'local-only');
       await flushSettingsWrites();
-      const note = action
-        ? null
-        : initialNote(
-            skipped
-              ? onboarding.progress?.freshInstall && !signedIn
-                ? 'welcome'
-                : 'none'
-              : chosenContent
-          );
+      const kind = action
+        ? 'none'
+        : skipped
+          ? onboarding.progress?.freshInstall && !signedIn
+            ? 'welcome'
+            : 'none'
+          : chosenContent;
+      const blank: InitialNote | null =
+        kind === 'blank'
+          ? { title: tUi('onboarding.blank.title'), body: '' }
+          : null;
+      // The welcome content is the repo's demo notes, rendered here by the
+      // editor; see ./demo-notes.
+      const demo =
+        kind === 'welcome'
+          ? await (await import('./demo-notes')).demoNotes(i18n.language)
+          : [];
       onboarding.finishing = true;
       try {
         const finished = await finishOnboarding(
           onboarding.progress!.id,
           skipped,
-          note
+          blank,
+          demo
         );
         // Set the opening intent before removing the setup view.
         onboarding.initialNoteId = finished.noteId;

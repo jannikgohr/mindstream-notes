@@ -211,6 +211,22 @@ fn encode_state(doc: &Doc) -> Vec<u8> {
     txn.encode_state_as_update_v1(&StateVector::default())
 }
 
+/// Whether `state` is a v1 update that gives the editor's `prosemirror`
+/// fragment some content. Checks a document the frontend built before it is
+/// stored as a note's state.
+pub(crate) fn has_editor_content(state: &[u8]) -> bool {
+    let Ok(update) = Update::decode_v1(state) else {
+        return false;
+    };
+    let doc = Doc::new();
+    if doc.transact_mut().apply_update(update).is_err() {
+        return false;
+    }
+    let prosemirror = doc.get_or_insert_xml_fragment("prosemirror");
+    let txn = doc.transact();
+    prosemirror.len(&txn) > 0
+}
+
 /// Replace an asset id everywhere the editors can persist it in a Yjs document.
 /// This covers the legacy `body` Y.Text, y-prosemirror XML text and attributes,
 /// and Excalidraw file metadata stored as plain `Any::Map` values.
@@ -579,3 +595,32 @@ mod tests {
 
 #[cfg(test)]
 mod asset_id_tests;
+
+/// An editor document (y-prosemirror) holding one paragraph, for tests
+/// outside this module that need a v2 state. The client id is fixed, as it
+/// is for a demo note, so the same text always gives the same bytes.
+#[cfg(test)]
+pub(crate) fn editor_state_for_tests(paragraph: &str) -> Vec<u8> {
+    use yrs::{XmlElementPrelim, XmlTextPrelim};
+    let doc = Doc::with_client_id(SEED_ORIGIN_CLIENT_ID);
+    let fragment = doc.get_or_insert_xml_fragment("prosemirror");
+    {
+        let mut txn = doc.transact_mut();
+        let element = fragment.push_back(&mut txn, XmlElementPrelim::empty("paragraph"));
+        element.push_back(&mut txn, XmlTextPrelim::new(paragraph));
+    }
+    encode_state(&doc)
+}
+
+#[cfg(test)]
+mod editor_content_tests {
+    use super::*;
+
+    #[test]
+    fn only_an_update_with_editor_content_counts() {
+        assert!(has_editor_content(&editor_state_for_tests("Hello")));
+        assert!(!has_editor_content(&init_with_markdown("# Hello")));
+        assert!(!has_editor_content(&[]));
+        assert!(!has_editor_content(b"not an update"));
+    }
+}
