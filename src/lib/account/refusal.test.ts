@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { CommandErrorCode } from '$lib/api/core';
+import { toasts } from '$lib/components/toast.svelte';
 import de from '$lib/settings/i18n/de.json';
 import en from '$lib/settings/i18n/en.json';
 import {
   describeRefusal,
   REASON_CODE_REQUIRED,
   REFUSAL_UI_KEYS,
-  refusalReason
+  refusalReason,
+  toastRefusal
 } from './refusal';
 
 function refused(reason: string, message = 'in the words of the server') {
@@ -88,6 +90,20 @@ describe('describeRefusal', () => {
     expect(
       describeRefusal({ code: CommandErrorCode.Task, message: 'task died' })
     ).toBe('task died');
+  });
+});
+
+describe('toastRefusal', () => {
+  it('shows a refusal and throws anything else on', () => {
+    const before = toasts.items.length;
+    toastRefusal(refused('demo_note_not_shareable'));
+    expect(toasts.items.at(-1)).toMatchObject({
+      variant: 'error',
+      message: expect.stringMatching(/shared folder/)
+    });
+    const failure = new Error('disk full');
+    expect(() => toastRefusal(failure)).toThrow(failure);
+    expect(toasts.items).toHaveLength(before + 1);
   });
 });
 

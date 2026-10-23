@@ -120,6 +120,25 @@ Known asymmetry: note bodies are CRDT-merged, but note/folder _metadata_
 not merged. A concurrent offline rename on two devices resolves last-writer-wins,
 not by combining.
 
+### Demo notes can duplicate across app versions and can't be shared — _by design_
+
+A demo note (the welcome content setup can add) is named after the document it
+starts from: `demo_<slug>_<lang>_<hash>`, where the hash covers its title and
+encoded Yjs state (`src-tauri/src/demo_notes.rs`). Devices holding the same id
+started from identical bytes, so sync merges their edits like any note's and
+nothing is lost. Two consequences:
+
+- **Duplicates across versions.** Two devices set up on app versions whose demo
+  text or editor renders differently get two different notes. That is the cost
+  of never rewriting an existing note: an app update only changes what new
+  setups create.
+- **No sharing.** Sync matches notes by id, so another person holding the same
+  demo note could not take in a shared copy. Moving a demo note into a shared
+  folder, or sharing a folder that holds one, is refused with a message;
+  copying the text into a new note works.
+
+An unedited demo note also stays on its device (`dirty = 0`) until it changes.
+
 ## Persistence & backend
 
 ### Single SQLite connection behind one mutex — _known limitation (pre-existing)_

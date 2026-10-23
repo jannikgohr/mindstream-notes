@@ -143,6 +143,9 @@ pub(super) fn detach_owner_share(conn: &Connection, root_folder_id: &str) -> App
 /// that syncs after the source delete lands but before the row becomes a
 /// reachable member of the target scope briefly sees the subtree empty. It
 /// self-heals once the device pulls the re-homed rows; no data is lost.
+///
+/// Refuses a shared target while a demo note is in the subtree, before
+/// changing anything (see [`crate::demo_notes`]).
 pub(crate) fn rehome_folder_subtree(
     conn: &Connection,
     root_folder_id: &str,
@@ -153,6 +156,10 @@ pub(crate) fn rehome_folder_subtree(
             UNION ALL
             SELECT c.id FROM collections c JOIN subtree s ON c.parent_collection_id = s.id
         )";
+
+    if target_scope.is_some() {
+        crate::demo_notes::ensure_folder_shareable(conn, root_folder_id)?;
+    }
 
     // 1. Queue tombstones for already-pushed rows before we stamp/detach, so
     //    each delete routes to the row's current (source) scope collection.
@@ -198,11 +205,15 @@ pub(crate) fn rehome_folder_subtree(
 /// crosses a share boundary without its folder moving (e.g. dragged out of a
 /// shared folder into the vault). Same tombstone-in-current-scope-then-restamp
 /// ordering; same caller contract (only invoke on an actual scope change).
+/// A demo note is refused a shared target, as in [`rehome_folder_subtree`].
 pub(crate) fn rehome_note_subtree(
     conn: &Connection,
     note_id: &str,
     target_scope: Option<&str>,
 ) -> AppResult<()> {
+    if target_scope.is_some() {
+        crate::demo_notes::ensure_note_shareable(note_id)?;
+    }
     if let Some(uid) = conn
         .query_row(
             "SELECT etebase_uid FROM notes WHERE id = ?1",

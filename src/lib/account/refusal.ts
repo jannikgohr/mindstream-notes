@@ -10,6 +10,7 @@
 
 import { CommandErrorCode } from '$lib/api/core';
 import { isCommandError, toErrorMessage } from '$lib/api/errors';
+import { pushToast } from '$lib/components/toast.svelte';
 import { tUi } from '$lib/settings/i18n.svelte';
 
 /** Reasons with a translated sentence. The key is the reason itself, the
@@ -49,7 +50,10 @@ const SENTENCES: Record<string, string> = {
   member_limit: 'account.refusal.memberLimit',
   storage_full: 'account.refusal.storageFull',
   item_too_large: 'account.refusal.itemTooLarge',
-  plan_lapsed: 'account.refusal.planLapsed'
+  plan_lapsed: 'account.refusal.planLapsed',
+  // Not the server: this app keeps demo notes out of shared folders, see
+  // src-tauri/src/demo_notes.rs.
+  demo_note_not_shareable: 'account.refusal.demoNoteNotShareable'
 };
 
 /** The server wants a code from the authenticator before it goes on. */
@@ -71,6 +75,12 @@ export function describeRefusal(err: unknown): string {
   const reason = refusalReason(err);
   const key = reason === null ? undefined : SENTENCES[reason];
   return key === undefined ? toErrorMessage(err) : tUi(key);
+}
+
+/** Show a refusal as an error toast. Anything else is thrown on. */
+export function toastRefusal(err: unknown): void {
+  if (refusalReason(err) === null) throw err;
+  pushToast(describeRefusal(err), { variant: 'error' });
 }
 
 /** Every `ui` key this module can ask for, so a test can check the bundles

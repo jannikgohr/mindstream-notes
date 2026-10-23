@@ -60,6 +60,27 @@ describe('browser onboarding', () => {
     expect(await notes.listNotes()).toHaveLength(before.length + 1);
   });
 
+  it('stands in ordinary notes for demo notes and opens the first', async () => {
+    const started = await restartOnboarding();
+    const before = await notes.listNotes();
+    const demo = (slug: string, title: string) => ({
+      slug,
+      lang: 'en',
+      title,
+      body: `# ${title}`,
+      yrsState: [1, 2, 3]
+    });
+    const finished = await finishOnboarding(started.id, false, null, [
+      demo('basics', 'Basics'),
+      demo('welcome', 'Welcome')
+    ]);
+    expect(await notes.loadNote(finished.noteId!)).toMatchObject({
+      title: 'Basics',
+      body: '# Basics'
+    });
+    expect(await notes.listNotes()).toHaveLength(before.length + 2);
+  });
+
   it('keeps progress resumable if initial-note creation fails', async () => {
     const started = await restartOnboarding();
     const failure = new Error('database is locked');
@@ -120,7 +141,8 @@ describe('native onboarding bridge', () => {
       expect(invoke).toHaveBeenCalledWith('finish_onboarding', {
         id: progress.id,
         skipped: false,
-        initialNote
+        initialNote,
+        demoNotes: []
       });
     }
   );

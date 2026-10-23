@@ -48,6 +48,9 @@ pub async fn invite_collection(
         }
 
         let existing_scope = db.with_conn(|conn| collection_scope(conn, &collection_id))?;
+        // Before the server makes a collection that recording would then
+        // refuse.
+        db.with_conn(|conn| crate::demo_notes::ensure_folder_shareable(conn, &collection_id))?;
 
         let invitations = account
             .invitation_manager()

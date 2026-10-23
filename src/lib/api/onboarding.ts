@@ -26,6 +26,13 @@ export interface InitialNote {
   title: string;
   body: string;
 }
+/** A demo note as the editor rendered it, see $lib/onboarding/demo-notes. */
+export interface DemoNote extends InitialNote {
+  slug: string;
+  lang: string;
+  /** The editor document the note starts from. Its hash names the note. */
+  yrsState: number[];
+}
 const STORAGE_KEY = 'mindstream:onboarding:v1';
 
 export function parseOnboarding(value: unknown): OnboardingProgress {
@@ -116,23 +123,27 @@ export function saveOnboardingStep(
 export function finishOnboarding(
   id: string,
   skipped: boolean,
-  initialNote: InitialNote | null
+  initialNote: InitialNote | null,
+  demoNotes: DemoNote[] = []
 ): Promise<{
   progress: OnboardingProgress;
   noteId: string | null;
 }> {
   return invokeOrFallback(
     TauriCommandName.FinishOnboarding,
-    { id, skipped, initialNote },
+    { id, skipped, initialNote, demoNotes },
     async () => {
       const previous = browserOwned(id);
-      const note = initialNote ? await createNote(initialNote) : null;
+      // The browser store has no demo ids; ordinary notes stand in.
+      const ids: string[] = [];
+      for (const { title, body } of initialNote ? [initialNote] : demoNotes)
+        ids.push((await createNote({ title, body })).id);
       return {
         progress: saveBrowser({
           ...previous,
           status: skipped ? 'skipped' : 'completed'
         }),
-        noteId: note?.id ?? null
+        noteId: ids[0] ?? null
       };
     },
     (value) => {

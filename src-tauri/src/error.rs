@@ -28,6 +28,14 @@ pub enum AppError {
     /// limit, and reaches the UI as it is.
     #[error("{message}")]
     OverLimit { reason: String, message: String },
+
+    /// A rule of this app refused the request. `reason` is a fixed word the
+    /// UI translates; `message` is English prose for the log.
+    #[error("{message}")]
+    Refused {
+        reason: &'static str,
+        message: String,
+    },
 }
 
 impl AppError {
@@ -116,6 +124,9 @@ impl From<AppError> for CommandError {
         let code = match &error {
             AppError::OverLimit { reason, message } => {
                 return Self::refused(reason.clone(), message.clone());
+            }
+            AppError::Refused { reason, message } => {
+                return Self::refused(*reason, message.clone());
             }
             AppError::Db(_) => CommandErrorCode::Database,
             AppError::Io(_) => CommandErrorCode::Io,

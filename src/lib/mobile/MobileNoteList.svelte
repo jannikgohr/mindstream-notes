@@ -56,6 +56,7 @@
   import MoveToSheet, { type MoveTarget } from './MoveToSheet.svelte';
   import NameInputSheet from './NameInputSheet.svelte';
   import { toErrorMessage } from '$lib/api/errors';
+  import { toastRefusal } from '$lib/account/refusal';
   import {
     clearMobileBatchSelection,
     isFavourite,
@@ -378,13 +379,17 @@
     const t = moveTarget;
     moveTarget = null;
     if (!t) return;
-    if (t.kind === 'batch') {
-      await moveManyTo(t.items, destination);
-      clearMobileBatchSelection();
-    } else if (t.kind === 'note') {
-      await moveNoteTo(t.id, destination);
-    } else {
-      await moveCollectionTo(t.id, destination);
+    try {
+      if (t.kind === 'batch') {
+        await moveManyTo(t.items, destination);
+        clearMobileBatchSelection();
+      } else if (t.kind === 'note') {
+        await moveNoteTo(t.id, destination);
+      } else {
+        await moveCollectionTo(t.id, destination);
+      }
+    } catch (err) {
+      toastRefusal(err);
     }
   }
 

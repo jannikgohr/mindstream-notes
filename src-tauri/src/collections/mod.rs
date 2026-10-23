@@ -339,7 +339,15 @@ pub fn update_collection(
     db: tauri::State<'_, Db>,
     input: UpdateCollection,
 ) -> CommandResult<Collection> {
-    db.with_conn(|c| update(c, input)).map_err(Into::into)
+    // One transaction, so a move the re-home refuses (a demo note heading
+    // into a shared folder) leaves the folder where it was.
+    db.with_conn_mut(|c| {
+        let tx = c.transaction()?;
+        let folder = update(&tx, input)?;
+        tx.commit()?;
+        Ok(folder)
+    })
+    .map_err(Into::into)
 }
 
 #[tauri::command]
