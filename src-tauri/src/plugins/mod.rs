@@ -1476,6 +1476,9 @@ pub async fn plugins_run_script(
     let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
 
+    // Register before reading the runnable state, so disabling a plugin also
+    // cancels calls still preparing their context or waiting for a worker.
+    let registration = runtime::cancel::CALLS.register(&id);
     // Enabled, unmodified since approval, and running under the permissions the
     // DB pinned — not the ones the manifest currently on disk asks for.
     let (record, plugin) = db.with_conn(|c| load_runnable(c, &third_party_dir, &id, None))?;
@@ -1516,13 +1519,9 @@ pub async fn plugins_run_script(
     // itself panicked — a crash — so we disable the plugin before returning.
     let export_label = export.clone();
     let blocking_job = job.clone();
-    let plugin_id = id.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         let _job = blocking_job;
         let _lease = lease;
-        // Registered for as long as it runs, so disabling or removing the
-        // plugin can stop it (see `cancel_running`).
-        let registration = runtime::cancel::CALLS.register(&plugin_id);
         run_plugin_script(
             &files,
             &manifest,

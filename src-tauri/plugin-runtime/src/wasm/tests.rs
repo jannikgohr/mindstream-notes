@@ -554,6 +554,22 @@ fn an_infinite_loop_ends_at_the_deadline() {
 }
 
 #[test]
+fn a_call_cancelled_before_execution_cannot_write_storage() {
+    for (lang, component) in COMPONENTS {
+        let root = scratch();
+        let data = root.join("state");
+        let mut call = Call::of(component, &[PERM_STORAGE_WRITE]);
+        call.data_root = Some(data.clone());
+        call.cancel.cancel();
+
+        let error = call.run("report", json!({})).unwrap_err();
+        assert!(matches!(error, HostError::Cancelled), "{lang}: {error}");
+        assert!(!data.exists(), "{lang}: cancelled guest wrote storage");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
 fn a_running_call_can_be_cancelled() {
     for (lang, component) in COMPONENTS {
         let mut call = Call::of(component, &[]);

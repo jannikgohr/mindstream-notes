@@ -353,7 +353,9 @@ impl HostContext {
             return Ok(());
         }
         if std::fs::symlink_metadata(&path)?.file_type().is_symlink() {
-            // The link itself is inside the root; remove it, never its target.
+            // Check the parent without following the final link. A symlinked
+            // ancestor could otherwise make us unlink a file outside the root.
+            paths::ensure_inside_root(root, path.parent().expect("storage path has a parent"))?;
             std::fs::remove_file(&path)?;
             return Ok(());
         }
@@ -619,6 +621,28 @@ mod tests {
         assert!(host.storage_read("x").is_err());
         assert!(host.storage_list("").is_err());
         assert!(host.storage_delete("x").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn storage_delete_refuses_a_symlink_beneath_an_escaping_parent() {
+        let root = scratch();
+        let outside = scratch();
+        let victim = outside.join("victim.txt");
+        let link = outside.join("link.txt");
+        std::fs::write(&victim, "original").unwrap();
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("out")).unwrap();
+        let host = ctx(&[PERM_STORAGE_WRITE], Some(root.clone()));
+
+        assert!(host.storage_delete("out/link.txt").is_err());
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "original");
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(outside).unwrap();
     }
 
     #[test]

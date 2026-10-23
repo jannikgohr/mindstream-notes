@@ -121,6 +121,7 @@ fn run_with_native_budget(
         req.limits,
         native_allowance,
     ));
+    host.check()?;
     let interrupt_host = host.clone();
     lua.set_interrupt(move |_| {
         interrupt_host.check().map_err(lua_err)?;
@@ -1023,6 +1024,23 @@ mod tests {
             let out = run(req(probe, "go", serde_json::json!(name), &[])).unwrap();
             assert_eq!(out["ok"], serde_json::json!(false), "require('{name}')");
         }
+    }
+
+    #[test]
+    fn a_call_cancelled_before_execution_cannot_write_storage() {
+        let dir = storage_tmp();
+        let mut r = req(
+            "ms.storage.write('state.txt', 'started'); return { go = function() return {} end }",
+            "go",
+            serde_json::json!({}),
+            &["pluginStorage.write"],
+        );
+        r.data_root = Some(dir.clone());
+        r.cancel.cancel();
+        let error = run(r).unwrap_err();
+        assert!(error.to_string().contains("cancelled"), "{error}");
+        assert!(!dir.join("state.txt").exists());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

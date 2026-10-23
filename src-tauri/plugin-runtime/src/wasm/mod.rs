@@ -385,6 +385,7 @@ impl WasmRuntime {
         let input = serde_json::to_string(call.input)
             .map_err(|e| fail(format!("input is not serializable: {e}")))?;
         let host = HostContext::new(call.setup, call.limits, call.native_allowance);
+        host.check()?;
         let mut store = Store::new(
             &self.engine,
             CallState {

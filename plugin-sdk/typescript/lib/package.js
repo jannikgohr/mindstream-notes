@@ -159,6 +159,9 @@ export async function packagePlugin({ root, component, out }) {
       await containedFile(root, file)
     ])
   );
+  if (sources.some(([, from]) => insideOutput(from))) {
+    throw new Error('the package output must not contain referenced assets');
+  }
   await rm(out, { recursive: true, force: true });
   await mkdir(out, { recursive: true });
   const written = ['manifest.json', manifest.entry];
