@@ -23,6 +23,8 @@
 // migration runner. The pure helpers in these files still have unit tests
 // that run (worker_shutdown's close book, for one); they're just not part of
 // the line-coverage denominator.
+// The Linux adapter in tray/linux_menu.rs stays in the measured set: its
+// native test runs under a virtual display in coverage builds.
 
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync } from 'node:fs';
@@ -70,11 +72,21 @@ const args = [
   ...reportArgs
 ];
 
-const result = spawnSync('cargo', args, {
-  cwd: srcTauri,
-  stdio: 'inherit',
-  shell: false
-});
+// Native GTK tray tests run in the coverage suite. Give headless Linux runs
+// a display while leaving existing desktop sessions and other OSes alone.
+const headlessLinux = process.platform === 'linux' && !process.env.DISPLAY;
+const result = spawnSync(
+  headlessLinux ? 'xvfb-run' : 'cargo',
+  headlessLinux ? ['-a', 'dbus-run-session', '--', 'cargo', ...args] : args,
+  {
+    cwd: srcTauri,
+    stdio: 'inherit',
+    shell: false
+  }
+);
+if (result.error) {
+  console.error(result.error.message);
+}
 
 // `--lcov` prints no summary, so a threshold failure exits 1 with nothing in
 // the log saying what the percentage was. Parse the report we just wrote and

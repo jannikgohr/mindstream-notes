@@ -705,7 +705,10 @@ pub fn switch_profile(app: tauri::AppHandle, id: String) -> CommandResult<()> {
 #[tauri::command]
 pub fn rename_profile(app: tauri::AppHandle, id: String, name: String) -> CommandResult<Profile> {
     let root = crate::paths::app_data_root(&app)?;
-    Ok(set_name(&root, &id, &name)?)
+    let profile = set_name(&root, &id, &name)?;
+    #[cfg(desktop)]
+    crate::tray::sync_vault_name(&app);
+    Ok(profile)
 }
 
 #[tauri::command]
