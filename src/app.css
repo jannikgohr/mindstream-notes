@@ -954,6 +954,12 @@ body.dv-tab-dragging
   --crepe-shadow-2: var(--elevation-overlay);
 }
 
+/* Milkdown may show the toolbar on each selection update during a drag. */
+[data-selection-dragging='true'] .milkdown-toolbar {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 /*
  * Code blocks inside Milkdown use CodeMirror with the oneDark theme by
  * default (set in Crepe's default-config). That looks great in dark mode

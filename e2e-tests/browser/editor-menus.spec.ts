@@ -200,6 +200,49 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe('selection toolbar', () => {
+  test('stays out of an upward selection drag and appears after release', async ({
+    page
+  }) => {
+    const lines = [
+      'First paragraph to include in the selection',
+      'Middle paragraph under the floating toolbar',
+      'Last paragraph where the selection begins'
+    ];
+    await createNote(page, `Upward selection ${Date.now()}`);
+    const ed = await focusEditor(page);
+    for (const [index, line] of lines.entries()) {
+      if (index > 0) await page.keyboard.press('Enter');
+      await page.keyboard.type(line);
+    }
+    const first = await textRect(ed.getByText(lines[0], { exact: true }));
+    const last = await textRect(ed.getByText(lines[2], { exact: true }));
+    const lastY = last.y + last.height / 2;
+    await page.mouse.move(last.x + last.width - 1, lastY);
+    await page.mouse.down();
+    await page.mouse.move(last.x + last.width / 2, lastY, { steps: 5 });
+    await expect.poll(() => selectedText(page)).not.toBe('');
+
+    // Wait for the provider to show the menu internally while still dragging.
+    // The app must keep it hidden and unable to intercept the next movement.
+    const toolbar = selectionToolbar(page);
+    await expect(toolbar).toHaveAttribute('data-show', 'true');
+    await expect(toolbar).toBeHidden();
+    await expect(toolbar).toHaveCSS('pointer-events', 'none');
+
+    await page.mouse.move(first.x + 1, first.y + first.height / 2);
+    await expect.poll(() => selectedText(page)).toBe(lines.join('\n\n'));
+    await expect(toolbar).toBeHidden();
+    await page.mouse.up();
+
+    await expect(toolbar).toBeVisible();
+    await toolbar
+      .locator('.toolbar-item')
+      .nth(SELECTION_TOOLBAR_ITEMS.bold)
+      .click();
+    await expect(ed.locator('strong')).toHaveText(lines);
+    await expect.poll(() => selectedText(page)).toBe(lines.join('\n\n'));
+  });
+
   test('appears on a selection and applies bold to it', async ({ page }) => {
     const text = `Selection toolbar ${Date.now()}`;
     await createNote(page, `Toolbar ${Date.now()}`);
