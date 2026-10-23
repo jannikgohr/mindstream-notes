@@ -150,10 +150,10 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
   // editors share one guard.
   installBlockHandleGuard(opts.host.ownerDocument);
 
-  // Hide the selection toolbar when the user clicks outside the editor
-  // — Crepe only re-evaluates it on transactions, so it otherwise
-  // lingers (and eats the next click under it).
-  installSelectionToolbarAutoHide(opts.host);
+  // Hide the selection toolbar during selection drags and on outside presses.
+  const destroySelectionToolbarGuard = installSelectionToolbarAutoHide(
+    opts.host
+  );
 
   const features: Partial<Record<CrepeFeature, boolean>> = {};
   if (opts.mobile) {
@@ -224,7 +224,10 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
   // element), so tie it to the editor's lifecycle here rather than making
   // every caller thread a teardown handle.
   crepe.editor.onStatusChange((status) => {
-    if (status === EditorStatus.Destroyed) slashPortal?.destroy();
+    if (status === EditorStatus.Destroyed) {
+      slashPortal?.destroy();
+      destroySelectionToolbarGuard();
+    }
   });
 
   // Note-link anchors must not carry a navigable `mindstream://` href, or
