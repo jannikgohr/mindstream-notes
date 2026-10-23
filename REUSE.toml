@@ -70,11 +70,13 @@ path = [
 SPDX-FileCopyrightText = "2015 the original author or authors of Gradle"
 SPDX-License-Identifier = "Apache-2.0"
 
-# Two plugin icons, taken from Lucide.
+# Plugin and tray icons, taken from Lucide.
 [[annotations]]
 path = [
   "plugins/languagetool/icons/spell-check.svg",
   "plugins/templates/icons/templates.svg",
+  "src-tauri/icons/tray/*.svg",
+  "src-tauri/icons/tray/*.png",
 ]
 SPDX-FileCopyrightText = "2022 Lucide Contributors"
 SPDX-License-Identifier = "ISC"

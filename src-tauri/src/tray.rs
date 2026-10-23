@@ -1,6 +1,8 @@
 use serde::Serialize;
+use std::sync::Mutex;
 use tauri::{
-    menu::{Menu, MenuItem, PredefinedMenuItem},
+    image::Image,
+    menu::{IconMenuItem, Menu, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     App, AppHandle, Emitter, Manager,
 };
@@ -14,11 +16,16 @@ use crate::{
     notes::{self, CreateNote, NoteKind},
 };
 
+#[cfg(target_os = "linux")]
+mod linux_menu;
+
+const TRAY_ID: &str = "main-tray";
 const NEW_NOTE_ID: &str = "new_note";
 const NEW_DRAWING_ID: &str = "new_drawing";
 const NEW_INK_ID: &str = "new_ink";
 const NEW_DIAGRAM_ID: &str = "new_diagram";
 const QUIT_ID: &str = "quit";
+const VAULT_ID: &str = "active_vault";
 
 // Direct-mode windows publish accelerator hints through the frontend. The
 // coordinator tray has no editor-local binding cache and leaves these unset.
@@ -34,11 +41,13 @@ struct TrayNoteCreatedPayload {
 }
 
 struct TrayMenuItems {
-    new_note: MenuItem<tauri::Wry>,
-    new_drawing: MenuItem<tauri::Wry>,
-    new_ink: MenuItem<tauri::Wry>,
-    new_diagram: MenuItem<tauri::Wry>,
-    quit: MenuItem<tauri::Wry>,
+    vault: IconMenuItem<tauri::Wry>,
+    vault_label: Mutex<String>,
+    new_note: IconMenuItem<tauri::Wry>,
+    new_drawing: IconMenuItem<tauri::Wry>,
+    new_ink: IconMenuItem<tauri::Wry>,
+    new_diagram: IconMenuItem<tauri::Wry>,
+    quit: IconMenuItem<tauri::Wry>,
 }
 
 pub fn init(app: &App) -> tauri::Result<()> {
@@ -47,17 +56,55 @@ pub fn init(app: &App) -> tauri::Result<()> {
         .map(|settings| settings.language_code())
         .unwrap_or_else(|| "en".to_string());
     let labels = TrayLabels::for_language(&language_code);
-    let new_note = MenuItem::with_id(app, NEW_NOTE_ID, &labels.new_note, true, None::<&str>)?;
-    let new_drawing =
-        MenuItem::with_id(app, NEW_DRAWING_ID, &labels.new_drawing, true, None::<&str>)?;
-    let new_ink = MenuItem::with_id(app, NEW_INK_ID, &labels.new_ink, true, None::<&str>)?;
-    let new_diagram =
-        MenuItem::with_id(app, NEW_DIAGRAM_ID, &labels.new_diagram, true, None::<&str>)?;
+    let vault = icon_item(
+        app,
+        VAULT_ID,
+        &labels.no_active_vault,
+        false,
+        include_bytes!("../icons/tray/vault.png"),
+    )?;
+    let vault_separator = PredefinedMenuItem::separator(app)?;
+    let new_note = icon_item(
+        app,
+        NEW_NOTE_ID,
+        &labels.new_note,
+        true,
+        include_bytes!("../icons/tray/file-text.png"),
+    )?;
+    let new_drawing = icon_item(
+        app,
+        NEW_DRAWING_ID,
+        &labels.new_drawing,
+        true,
+        include_bytes!("../icons/tray/pencil-ruler.png"),
+    )?;
+    let new_ink = icon_item(
+        app,
+        NEW_INK_ID,
+        &labels.new_ink,
+        true,
+        include_bytes!("../icons/tray/feather.png"),
+    )?;
+    let new_diagram = icon_item(
+        app,
+        NEW_DIAGRAM_ID,
+        &labels.new_diagram,
+        true,
+        include_bytes!("../icons/tray/workflow.png"),
+    )?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, QUIT_ID, &labels.quit, true, None::<&str>)?;
+    let quit = icon_item(
+        app,
+        QUIT_ID,
+        &labels.quit,
+        true,
+        include_bytes!("../icons/tray/log-out.png"),
+    )?;
     let menu = Menu::with_items(
         app,
         &[
+            &vault,
+            &vault_separator,
             &new_note,
             &new_drawing,
             &new_ink,
@@ -67,7 +114,7 @@ pub fn init(app: &App) -> tauri::Result<()> {
         ],
     )?;
 
-    let mut builder = TrayIconBuilder::new()
+    let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .tooltip("Mindstream Notes")
@@ -98,6 +145,8 @@ pub fn init(app: &App) -> tauri::Result<()> {
     }
 
     app.manage(TrayMenuItems {
+        vault,
+        vault_label: Mutex::new(labels.no_active_vault),
         new_note: new_note.clone(),
         new_drawing: new_drawing.clone(),
         new_ink: new_ink.clone(),
@@ -106,7 +155,74 @@ pub fn init(app: &App) -> tauri::Result<()> {
     });
 
     builder.build(app)?;
+    sync_platform_menu(app.handle());
+    sync_vault_name(app.handle());
     Ok(())
+}
+
+fn icon_item(
+    app: &App,
+    id: &str,
+    label: &str,
+    enabled: bool,
+    png: &'static [u8],
+) -> tauri::Result<IconMenuItem<tauri::Wry>> {
+    IconMenuItem::with_id(
+        app,
+        id,
+        label,
+        enabled,
+        Some(Image::from_bytes(png)?),
+        None::<&str>,
+    )
+}
+
+pub(crate) fn sync_vault_name(app: &AppHandle) {
+    let Some(items) = app.try_state::<TrayMenuItems>() else {
+        return;
+    };
+    let name = crate::paths::app_data_root(app)
+        .and_then(|root| crate::profiles::load(&root))
+        .and_then(|index| match index {
+            Some(index) => crate::vault_supervisor::tray_vault_name(app, &index),
+            None => Ok(None),
+        })
+        .unwrap_or_default();
+    let language = app
+        .try_state::<DesktopSettings>()
+        .map(|settings| settings.language_code())
+        .unwrap_or_else(|| "en".into());
+    let label = name.unwrap_or_else(|| i18n::t_ui(&language, "tray.noActiveVault"));
+    // Native menus interpret '&' as a mnemonic. Vault names are literal text.
+    let label = label.replace('&', "&&");
+    if items
+        .vault_label
+        .lock()
+        .is_ok_and(|previous| *previous == label)
+    {
+        return;
+    }
+    // Do not hold a lock while waiting for Tauri's main-thread menu dispatch.
+    let handle = app.clone();
+    if let Err(error) = app.run_on_main_thread(move || {
+        let Some(items) = handle.try_state::<TrayMenuItems>() else {
+            return;
+        };
+        let Ok(mut previous) = items.vault_label.lock() else {
+            return;
+        };
+        if *previous != label {
+            if let Err(error) = items.vault.set_text(&label) {
+                log::warn!("[tray] failed to update vault name: {error}");
+            } else {
+                *previous = label;
+                drop(previous);
+                sync_platform_menu(&handle);
+            }
+        }
+    }) {
+        log::warn!("[tray] failed to schedule vault name update: {error}");
+    }
 }
 
 pub fn set_language(app: &AppHandle, code: &str) {
@@ -129,6 +245,8 @@ pub fn set_language(app: &AppHandle, code: &str) {
     if let Err(err) = items.quit.set_text(&labels.quit) {
         log::warn!("[tray] failed to update Quit label: {err}");
     }
+    sync_vault_name(app);
+    sync_platform_menu(app);
 }
 
 pub fn sync_hotkey_displays(app: &AppHandle) {
@@ -146,6 +264,16 @@ pub fn sync_hotkey_displays(app: &AppHandle) {
             log::warn!("[tray] failed to update accelerator for {item_id}: {err}");
         }
     }
+    sync_platform_menu(app);
+}
+
+fn sync_platform_menu(app: &AppHandle) {
+    #[cfg(target_os = "linux")]
+    if let Err(error) = linux_menu::sync(app) {
+        log::warn!("[tray] failed to update AppIndicator menu: {error}");
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = app;
 }
 
 fn handle_menu_event(app: &AppHandle, item_id: &str) {
@@ -335,6 +463,7 @@ pub(crate) fn focus_vault_window(app: &AppHandle, window: &tauri::WebviewWindow)
 }
 
 struct TrayLabels {
+    no_active_vault: String,
     new_note: String,
     new_drawing: String,
     new_ink: String,
@@ -343,7 +472,7 @@ struct TrayLabels {
 }
 
 impl TrayMenuItems {
-    fn by_id(&self, item_id: &str) -> Option<&MenuItem<tauri::Wry>> {
+    fn by_id(&self, item_id: &str) -> Option<&IconMenuItem<tauri::Wry>> {
         match item_id {
             NEW_NOTE_ID => Some(&self.new_note),
             NEW_DRAWING_ID => Some(&self.new_drawing),
@@ -358,6 +487,7 @@ impl TrayMenuItems {
 impl TrayLabels {
     fn for_language(code: &str) -> Self {
         Self {
+            no_active_vault: i18n::t_ui(code, "tray.noActiveVault"),
             new_note: i18n::t_ui(code, "tray.newNote"),
             new_drawing: i18n::t_ui(code, "tray.newDrawing"),
             new_ink: i18n::t_ui(code, "tray.newInk"),

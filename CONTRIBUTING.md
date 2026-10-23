@@ -93,6 +93,10 @@ cd src-tauri && cargo test   # Rust unit
 cd backend/server && cargo test   # sync server, needs Postgres (see its README)
 ```
 
+On Linux, Rust coverage also tests the native tray menu. Install `xvfb` and
+`xauth`, plus `dbus` for `dbus-run-session`. The coverage script starts a virtual
+display and session bus when no display is available.
+
 The app's logic layer is held at 80% line coverage on both sides, frontend
 through the v8 provider and Rust through `cargo-llvm-cov`. Integration surfaces
 (IPC, network sync, native dialogs, editor and canvas code) are left out of that
