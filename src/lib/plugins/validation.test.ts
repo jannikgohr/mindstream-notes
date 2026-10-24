@@ -171,6 +171,7 @@ describe('validateManifest', () => {
       'dist/plugin.wasm',
       'plugin.js',
       'plugin.wasm.js',
+      'plugin..wasm',
       '.wasm'
     ]) {
       expect(() =>

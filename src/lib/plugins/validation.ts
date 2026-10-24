@@ -103,10 +103,11 @@ export function compareVersions(a: string, b: string): number {
 
 /**
  * Safe component entry filenames: a single path segment (letters/digits/`._-`)
- * ending in `.wasm`, no separators or `..`. The backend joins this onto the
- * plugin dir, so this is the traversal guard.
+ * ending in `.wasm`, no separators and no `..` anywhere, as the backend's
+ * `is_safe_entry` requires. The backend joins this onto the plugin dir, so this
+ * is the traversal guard.
  */
-const SAFE_ENTRY_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*)\.wasm$/;
+const SAFE_ENTRY_RE = /^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._-]*\.wasm$/;
 /**
  * A safe relative documentation path: one or more `/`-joined segments ending in
  * `.md`. Each segment must start alphanumeric, so `..` (and any dot-leading

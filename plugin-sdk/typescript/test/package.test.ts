@@ -5,6 +5,30 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { packagePlugin } from '../lib/package.js';
 
+it('rejects entries containing consecutive dots before replacing a package', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'plugin-package-'));
+  try {
+    const component = join(root, 'plugin.wasm');
+    await writeFile(component, 'component');
+    const out = join(root, 'package');
+    await mkdir(out);
+    await writeFile(join(out, 'keep.txt'), 'Previous package');
+    await writeFile(
+      join(root, 'manifest.json'),
+      JSON.stringify({ entry: 'plugin..wasm' })
+    );
+
+    await expect(packagePlugin({ root, component, out })).rejects.toThrow(
+      /plain .wasm file/
+    );
+    expect(await readFile(join(out, 'keep.txt'), 'utf8')).toBe(
+      'Previous package'
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 it('refuses output folders containing referenced assets before deleting them', async () => {
   const root = await mkdtemp(join(tmpdir(), 'plugin-package-'));
   try {

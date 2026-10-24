@@ -594,6 +594,7 @@ mod tests {
             "dist/plugin.wasm",
             "plugin.js",
             "plugin.wasm.js",
+            "plugin..wasm",
             ".wasm",
         ] {
             let mut v = v.clone();

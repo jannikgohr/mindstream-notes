@@ -37,7 +37,9 @@ export function isSafeRelativePath(path) {
 
 export function isComponentEntry(path) {
   return (
-    isSafeRelativePath(path) && /^[A-Za-z0-9][A-Za-z0-9._-]*\.wasm$/.test(path)
+    isSafeRelativePath(path) &&
+    !path.includes('..') &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]*\.wasm$/.test(path)
   );
 }
 
