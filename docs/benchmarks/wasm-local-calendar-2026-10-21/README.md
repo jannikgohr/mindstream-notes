@@ -1,5 +1,10 @@
 # Rust guest-local calendar comparison
 
+The raw logs, data and scripts this report names are not in the repository.
+They are in `mindstream-wasm-benchmark-evidence-f2f27a89.tar.gz`, under
+`mindstream-wasm-benchmark-evidence/docs/benchmarks/wasm-local-calendar-2026-10-21/`. The archive's
+SHA-256 is `f371ed5c864ee308336e167b23ac29ffd6ceb8e9bf43ecc52384e75c72cb85f5`.
+
 The parent revision is `12937886`; the commit containing this folder contains
 the candidate and comparison code. The shipped Templates plugin stays
 TypeScript. Luau remains available and no release gate is closed by this test.
@@ -32,7 +37,7 @@ Each run used 100 samples per export, fresh private case caches and the default
 The probe uses immutable static component bytes, so recurring digest work is
 controlled. The same probe executable embeds all three components and both
 trusted target artifact tables. Its hash and all component hashes are in
-[artifacts.json](artifacts.json). The two AOT manifests record artifact sizes,
+`artifacts.json`. The two AOT manifests record artifact sizes,
 hashes and matching engine keys. `run-status.json` retains all arguments,
 timestamps and exit codes. `summarize.py` checks matching outputs, sample counts,
 budgets, build mode, timezone and expected Compiled/Bundled first-use sources.

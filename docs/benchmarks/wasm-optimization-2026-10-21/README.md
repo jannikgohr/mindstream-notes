@@ -1,9 +1,14 @@
 # Wasm preparation and Rust Templates comparison
 
+The raw logs, data and scripts this report names are not in the repository.
+They are in `mindstream-wasm-benchmark-evidence-f2f27a89.tar.gz`, under
+`mindstream-wasm-benchmark-evidence/docs/benchmarks/wasm-optimization-2026-10-21/`. The archive's
+SHA-256 is `f371ed5c864ee308336e167b23ac29ffd6ceb8e9bf43ecc52384e75c72cb85f5`.
+
 Implementation: `3b070fcf`; probe controls and embedded buffers: `9c211cad`.
 Measurements use the physical Samsung SM-T733, Android 14/API 34, ARM64,
-from the M5 investigation. See [toolchain.txt](toolchain.txt) for versions,
-device fingerprint and host details. [host-cpu.txt](host-cpu.txt) records the
+from the M5 investigation. See `toolchain.txt` for versions,
+device fingerprint and host details. `host-cpu.txt` records the
 host processor. Dates in this folder use Europe/Berlin;
 the raw run timestamps use UTC.
 
@@ -58,7 +63,7 @@ sample counts, budgets, artifact sources and matching outputs before producing
 
 The final reports use static embedded bytes like the app. The first diagnostic
 pass retained two owned input buffers in the probe; its complete reports and
-conditions remain under [diagnostic-owned-buffers/](diagnostic-owned-buffers/).
+conditions remain under `diagnostic-owned-buffers/`.
 Do not combine memory numbers from these two methods. `--rehash` provides a
 same-build control that recomputes the source digest on every preparation.
 
@@ -88,7 +93,7 @@ creating notes. This is a memory test, not functional note-creation evidence.
 
 All eight Templates-only reports passed 100 samples for each export at the
 default one-second budget, with matching outputs and no interrupted attempts.
-[comparison.json](comparison.json) contains the validated summary. The two
+`comparison.json` contains the validated summary. The two
 initial TS portable runs included echo and Typst cases; they are retained as
 `full-native.json` and `full-interpreter.json` for safety coverage. They do not
 enter the memory comparison below. Templates-only portable controls were
@@ -160,7 +165,7 @@ The portable control also includes background preparation, so it moves compiler
 work before the first deliberate Templates call.
 
 The devtools release recorded 100 IPC samples per case in
-[android-app-ipc.jsonl](android-app-ipc.jsonl). Render p95 was 11.4 ms, plugins
+`android-app-ipc.jsonl`. Render p95 was 11.4 ms, plugins
 list p95 4.3 ms, and the unset-source menu p95 7.5 ms. First render was 10 ms
 in the cleared app and 18.9 ms after restart. Discovery had already prepared
 the component, so these are not cold-compilation times. The earlier M5 blocks
@@ -181,12 +186,12 @@ reported unavailable. No PDF rendering or native service availability is
 claimed. `typst-source-edited-ui.json` includes an early diagnostic query of
 `tinymist` as a tool; it is declared as a service, so that diagnostic error is
 not an availability result. The corrected asserted result is
-[typst-source-after-restart-ui.json](typst-source-after-restart-ui.json).
+`typst-source-after-restart-ui.json`.
 Screenshots retain the folder setting, created Daily note and edited Typst note.
 The UI helpers pin the measurement date and fixture names; adapt these when
 reproducing on another day. `tools/typst-input.ps1` records native input steps.
 
-[android-lifecycle.jsonl](android-lifecycle.jsonl) records all 15 passing
+`android-lifecycle.jsonl` records all 15 passing
 assertions using the exact signed fixture retained from M5. Storage containment,
 approval gating, effects and recovery passed. Disable settled a runaway after
 28 ms; removal after 85 ms. UI frame gaps during the checked calls stayed at
@@ -205,7 +210,7 @@ All controls use a normal frontend, release opt-level `s`, LTO and stripping.
 The AOT environment switch is the controlled build difference. Android uses
 the disposable `wasm_m5` ID; the normal production installation is untouched.
 The devtools APK is separate and is used for IPC/lifecycle checks only.
-[artifacts.json](artifacts.json) records sizes, SHA-256 hashes, ABI contents
+`artifacts.json` records sizes, SHA-256 hashes, ABI contents
 and native-library hashes. APK signatures verify against the same certificate.
 
 | Normal release artifact   | Portable control |          AOT | AOT increase |

@@ -1,5 +1,10 @@
 # Windows interpreter deadline diagnosis and plugin migration
 
+The raw logs, data and scripts this report names are not in the repository.
+They are in `mindstream-wasm-benchmark-evidence-f2f27a89.tar.gz`, under
+`mindstream-wasm-benchmark-evidence/docs/benchmarks/wasm-windows-deadline-2026-10-21/`. The archive's
+SHA-256 is `f371ed5c864ee308336e167b23ac29ffd6ceb8e9bf43ecc52384e75c72cb85f5`.
+
 The checked-in debug profile now optimizes only `pulley-interpreter` at level 2. App/host debug assertions, the default 1,000 ms guest deadline, memory caps,
 test selection and the release profile stay unchanged. Cargo's
 [test profile inherits dev and supports dependency overrides](https://doc.rust-lang.org/cargo/reference/profiles.html).

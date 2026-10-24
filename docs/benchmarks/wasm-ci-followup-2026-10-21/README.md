@@ -1,5 +1,10 @@
 # CI follow-up after serializing coverage
 
+The raw logs, data and scripts this report names are not in the repository.
+They are in `mindstream-wasm-benchmark-evidence-f2f27a89.tar.gz`, under
+`mindstream-wasm-benchmark-evidence/docs/benchmarks/wasm-ci-followup-2026-10-21/`. The archive's
+SHA-256 is `f371ed5c864ee308336e167b23ac29ffd6ceb8e9bf43ecc52384e75c72cb85f5`.
+
 [Workflow 39627105159](https://github.com/jannikgohr/mindstream-notes/actions/runs/39627105159)
 completed with failure at `c7e51b93adcf4da021a20bee231df93a94aaa17b`.
 `run.json` records the completed jobs and their conclusions. The compressed

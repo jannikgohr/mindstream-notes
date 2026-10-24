@@ -1,5 +1,10 @@
 # General host batching comparison
 
+The raw logs, data and scripts this report names are not in the repository.
+They are in `mindstream-wasm-benchmark-evidence-f2f27a89.tar.gz`, under
+`mindstream-wasm-benchmark-evidence/docs/benchmarks/wasm-host-batch-2026-10-21/`. The archive's
+SHA-256 is `f371ed5c864ee308336e167b23ac29ffd6ceb8e9bf43ecc52384e75c72cb85f5`.
+
 The parent revision is `14f35326`; the commit containing this report provides
 the general host batch API, SDK support and three rebuilt Rust comparison
 components. The shipped TypeScript Templates component remains unchanged.

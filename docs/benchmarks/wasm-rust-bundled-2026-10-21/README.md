@@ -1,5 +1,10 @@
 # Shipped Rust plugin validation
 
+The raw logs, data and scripts this report names are not in the repository.
+They are in `mindstream-wasm-benchmark-evidence-f2f27a89.tar.gz`, under
+`mindstream-wasm-benchmark-evidence/docs/benchmarks/wasm-rust-bundled-2026-10-21/`. The archive's
+SHA-256 is `f371ed5c864ee308336e167b23ac29ffd6ceb8e9bf43ecc52384e75c72cb85f5`.
+
 Executable first-party plugins now use Rust at `8fa0b109`. Templates and Typst
 keep their existing manifests, contribution IDs, permissions and effect shapes.
 LanguageTool remains manifest-only. TypeScript packages have distinct example
@@ -32,7 +37,7 @@ its toolchain/lockfile. `artifacts.json` hashes the components, device test
 executable, probe and trusted precompiler. The two precompiled manifests record
 the exact source/compiled hashes, target and compressed artifact sizes.
 `run-status.json` retains args, timestamps and the probe hash. Run
-[run-comparison.ps1](run-comparison.ps1) after building the release probe with
+`run-comparison.ps1` after building the release probe with
 the matching trusted native/Pulley tables, using the migration procedure.
 Raw stdout includes adb transfer output; it is retained without editing.
 

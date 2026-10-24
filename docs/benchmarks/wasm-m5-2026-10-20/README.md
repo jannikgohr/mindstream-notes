@@ -1,5 +1,10 @@
 # M5 test evidence, 2026-10-20
 
+The raw logs, data and scripts this report names are not in the repository.
+They are in `mindstream-wasm-benchmark-evidence-f2f27a89.tar.gz`, under
+`mindstream-wasm-benchmark-evidence/docs/benchmarks/wasm-m5-2026-10-20/`. The archive's
+SHA-256 is `f371ed5c864ee308336e167b23ac29ffd6ceb8e9bf43ecc52384e75c72cb85f5`.
+
 M5 is incomplete. Keep Luau. Physical Android execution and app lifecycle checks
 have results, but cached/app-call performance and the macOS interpreter budget
 gate have failures. Desktop whole-app startup, process memory and matching
@@ -9,7 +14,7 @@ installer sizes have not been measured here.
 `.gitattributes` disables line-ending conversion so signed fixture bytes and
 raw logs survive a Windows checkout unchanged. The historical and final CI
 artifact metadata files also retain GitHub's archive digests.
-[release-gates.json](release-gates.json) records the measured scope and open
+`release-gates.json` records the measured scope and open
 gates in machine-readable form. It explicitly forbids Luau removal.
 
 ## Revisions and artifacts
@@ -21,13 +26,13 @@ gates in machine-readable form. It explicitly forbids Luau removal.
 - `436f9b10` adds Android flock ownership, Windows canonical temp paths,
   packaged lifecycle coverage and reports from probes that exceed their budget.
 - Matching Luau baseline `2bdba0b4a34bd1ffd8af65db85de0065fd107fdb`, with
-  [the exact final compatibility/test-ID patch](baseline-final.patch). The
+  the exact final compatibility/test-ID patch (`baseline-final.patch`). The
   scratch directory named `main` is this revision, not a newer main branch.
-- [artifacts.json](artifacts.json) records SHA-256 and byte sizes of all four
+- `artifacts.json` records SHA-256 and byte sizes of all four
   preserved APKs, the matching normal Windows executables and Android test/probe
   executables. Binaries remain in `.output/wasm-m5/artifacts/` or their recorded
   target paths, outside Git.
-  Migration APKs also use [this disposable app-ID patch](android-test-package.patch).
+  Migration APKs also use this disposable app-ID patch (`android-test-package.patch`).
   The committed production application ID is unchanged.
 - Earlier `baseline.patch`, `main-android/*.patch` and failed-install/launch
   logs describe intermediate attempts. Use `baseline-final.patch` and the
@@ -45,7 +50,7 @@ extra feature means they are separate from the normal package/memory pair.
 
 ## Device, tools and conditions
 
-[android-device-before.txt](android-device-before.txt) records the physical
+`android-device-before.txt` records the physical
 Samsung SM-T733, serial R52W103DQPB, SM7325 SoC, ARM64, Android 14/API 34 and
 fingerprint `samsung/gts7fewifieea/gts7fewifi:14/UP1A.231005.007/T733XXS9DYF1:user/release-keys`.
 The device also supports ARMv7 processes; its additional ARMv7 probe is not
@@ -56,7 +61,7 @@ The Windows build host used Rust 1.97.1, commit `8bab26f4f`, MSVC, NDK r29
 linkers were `aarch64-linux-android26-clang.cmd` and its C++ counterpart under
 `C:/Users/janni/AppData/Local/Android/Sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin`.
 Node 22.21.1 and pnpm 10.34.4 built the plugins/frontend. See
-[windows-host.txt](windows-host.txt) and [toolchain.txt](toolchain.txt).
+`windows-host.txt` and `toolchain.txt`.
 
 Recorded snapshots show USB charging on, battery saver off, and thermal status 0.
 Charge was 5% initially, about 8% for startup/memory comparison and 10% for
@@ -64,13 +69,13 @@ the final 100-call app comparison. Recorded battery temperature rose from
 29.1 to about 31.7 C. The operator reported "normal temperatures".
 Ambient temperature, case and external cooling were not reported. Raw sensors
 are in the device log, each app measurement log and
-[android-calls-conditions.txt](android-calls-conditions.txt). App comparisons
+`android-calls-conditions.txt`. App comparisons
 ran sequentially, Luau then Wasm, with no simultaneous device build/probe.
 They were not randomized or repeated across controlled thermal/power states.
 
 ## Runtime and recovery
 
-[android-runtime.json](android-runtime.json) transcribes the final native,
+`android-runtime.json` transcribes the final native,
 Pulley and additional ARMv7 reports. The original runner consoles remain in
 `android-native-final-console.txt`, `android-interpreter-final-console.txt`
 and `android-armv7-default-console.txt`. Each case attempted 100 warm samples
@@ -111,12 +116,12 @@ separate `Daily log` note and rendered `Date: 2026-10-20 for Daily log`.
 The original template stayed in its folder. Typst was enabled and a Typst note
 remained source-editable without its native executable. Screenshots preserve
 the folder setting, rendered note, separate root note, Typst source edit and
-native-tool check in [screenshots/](screenshots/).
+native-tool check in `screenshots/`.
 
 Android hides third-party plugin installation in its UI. The devtools release
 variant staged a signed test folder via `notes_export_write_file`, then invoked
 the real install/approval/settings/storage commands through the app bridge.
-[android-lifecycle.jsonl](android-lifecycle.jsonl) records approval gating,
+`android-lifecycle.jsonl` records approval gating,
 storage write/read/list/delete and traversal refusal, cancellation, recovery,
 WebView frames, another plugin's response and vault approval isolation.
 
@@ -139,7 +144,7 @@ untested, and the tests completed successfully.
 
 Reconstruct the shared folder by copying
 `plugin-sdk/conformance/dist/conformance-rust.wasm` as `plugin.wasm` beside the
-two files in [signed-fixture/](signed-fixture/), removing their `.raw` suffixes.
+two files in `signed-fixture/`, removing their `.raw` suffixes.
 The suffix keeps formatters from changing the signed manifest bytes.
 The Wasm file's SHA-256 is
 `5c6b4e5eb5dfdcc8b966a9b52b1741af944dceff05b574c53b4f98a041b7a614`.
@@ -149,8 +154,8 @@ signature on Windows. The committed test otherwise generates an isolated key.
 
 ## Matching app measurements
 
-[android-app-main-baseline.txt](android-app-main-baseline.txt) and
-[android-app-migration.txt](android-app-migration.txt) contain initial launch,
+`android-app-main-baseline.txt` and
+`android-app-migration.txt` contain initial launch,
 five force-stop cold activity draws, idle memory and 30 menu calls with
 memory checkpoints. The menu has no template source configured in this
 measurement protocol, so these calls produce a toast, not 500-note menus or
@@ -199,8 +204,8 @@ are preserved separately from the earlier packaged test binary.
 
 The matching devtools release variants use WebView `performance.now()` around
 invoke-to-result. CDP transport is outside this interval. Raw ordered samples
-are [android-calls-main.jsonl](android-calls-main.jsonl) and
-[android-calls-migration.jsonl](android-calls-migration.jsonl).
+are `android-calls-main.jsonl` and
+`android-calls-migration.jsonl`.
 
 | App bridge timing                   |           Luau |           Wasm |
 | ----------------------------------- | -------------: | -------------: |
@@ -274,7 +279,7 @@ The runner builds no emulator and runs each executable in a unique writable
 temporary directory on the selected device. Native and interpreter commands
 use release mode, `--iterations 100` and the unchanged default 1,000 ms.
 
-The scripts in [tools/](tools/) preserve the app protocols. `measure.sh` uses
+The scripts in `tools/` preserve the app protocols. `measure.sh` uses
 tablet-specific screen coordinates and clears only the two disposable test
 app IDs. Pass its package, label and output path. `android-calls.mjs` expects
 a freshly cleared devtools test app after onboarding; pass package and JSONL

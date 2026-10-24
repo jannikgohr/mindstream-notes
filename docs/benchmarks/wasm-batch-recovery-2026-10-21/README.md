@@ -1,5 +1,10 @@
 # Batch recovery validation
 
+The raw logs, data and scripts this report names are not in the repository.
+They are in `mindstream-wasm-benchmark-evidence-f2f27a89.tar.gz`, under
+`mindstream-wasm-benchmark-evidence/docs/benchmarks/wasm-batch-recovery-2026-10-21/`. The archive's
+SHA-256 is `f371ed5c864ee308336e167b23ac29ffd6ceb8e9bf43ecc52384e75c72cb85f5`.
+
 This update follows `ba8f1e1b`. The experimental batch failure record now
 reports the stopping command index, validation/execution/result-limit phase,
 successful prefix handler count, accepted kept replies and original cause.
@@ -51,7 +56,7 @@ are in `logs/toolchain.txt.gz`. The Android run finished at
 2026-10-21T12:45:31Z with exit code zero. `android-run.json` and `artifacts.json`
 record the runtime test executable and component hashes. Raw test/build and
 device-state logs are gzip-compressed without editing. `SHA256SUMS` covers the
-files in this evidence directory. Run [run-android.ps1](run-android.ps1) from
+files in this evidence directory. Run `run-android.ps1` from
 the repository root to reproduce the device test with SDK/NDK installed.
 
 ## Remaining gates
