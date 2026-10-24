@@ -270,6 +270,18 @@ fn shipped_rust_typst_and_typescript_example_keep_source_editing_without_native_
         include_bytes!("../../../../plugin-sdk/examples/typst-typescript/plugin.wasm");
     for runtime in [runtime(), interpreter()] {
         for permissions in [&[][..], &[PERM_NATIVE_TOOLS][..]] {
+            for component in [RUST, TS] {
+                assert_eq!(
+                    Call::of(component, permissions)
+                        .run_on(
+                            runtime,
+                            "exportDocument",
+                            json!({"body":"= Grüße 😀", "format":"typ"})
+                        )
+                        .unwrap(),
+                    json!({"file":{"mime":"text/plain","text":"= Grüße 😀"}})
+                );
+            }
             for export in ["renderDocument", "exportDocument"] {
                 for component in [RUST, TS] {
                     assert_eq!(

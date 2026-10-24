@@ -3,6 +3,7 @@ import {
   hasPermission,
   nativeTools,
   type Diagnostic,
+  type ExportInput,
   type RenderInput,
   type RenderResult
 } from '../../typescript/src/index';
@@ -57,7 +58,43 @@ function renderDocument(input: RenderInput): RenderResult {
   };
 }
 
-export const invoke = definePlugin({
-  renderDocument,
-  exportDocument: renderDocument
-});
+function exportDocument(input: ExportInput) {
+  const format = input.format ?? 'pdf';
+  if (format === 'typ') {
+    return { file: { mime: 'text/plain', text: input.body ?? '' } };
+  }
+  if (format === 'pdf') return renderDocument(input);
+  if (format !== 'png' && format !== 'svg') {
+    throw new Error(`Unsupported export format: ${format}`);
+  }
+  if (input.page == null) {
+    const result = renderDocument(input);
+    return { pagesPdf: result.preview, diagnostics: result.diagnostics };
+  }
+  const result = nativeTools.run('typst', {
+    args: [
+      'compile',
+      '--format',
+      format,
+      '--pages',
+      String(input.page),
+      '-',
+      '-'
+    ],
+    stdin: input.body ?? '',
+    outputBase64: true,
+    timeoutMs: 30_000
+  });
+  if (result.timedOut) {
+    throw new Error(`Typst timed out while exporting page ${input.page}`);
+  }
+  return {
+    file: {
+      mime: format === 'png' ? 'image/png' : 'image/svg+xml',
+      dataBase64: result.statusCode === 0 ? result.stdoutBase64 : ''
+    },
+    diagnostics: parseStderr(result.stderr)
+  };
+}
+
+export const invoke = definePlugin({ renderDocument, exportDocument });

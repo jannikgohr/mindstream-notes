@@ -189,6 +189,70 @@ describe.each(['Rust', 'TypeScript'])(
       });
     });
 
+    it('exports source without a native tool or permission', async () => {
+      const plugin = await typst({ permissions: [] });
+      for (const body of ['', '= Grüße 😀']) {
+        expect(
+          await plugin.call('exportDocument', { format: 'typ', body })
+        ).toEqual({
+          file: { mime: 'text/plain', text: body }
+        });
+      }
+      await expect(
+        plugin.call('exportDocument', { format: 'unknown' })
+      ).rejects.toThrow(/Unsupported export format: unknown/);
+    });
+
+    it('bootstraps image exports with a PDF and compiles each requested page', async () => {
+      const calls: unknown[] = [];
+      const plugin = await typst({
+        tools: {
+          typst: (options) => {
+            calls.push(options);
+            return {
+              stdout: new Uint8Array([0, 255]),
+              stderr: 'warning: careful'
+            };
+          }
+        }
+      });
+      for (const format of ['png', 'svg']) {
+        expect(
+          await plugin.call('exportDocument', { format, body: '= Hello' })
+        ).toEqual({
+          pagesPdf: { mime: 'application/pdf', dataBase64: 'AP8=' },
+          diagnostics: [{ severity: 'warning', message: 'careful' }]
+        });
+        expect(
+          await plugin.call('exportDocument', {
+            format,
+            body: '= Hello',
+            page: 2
+          })
+        ).toEqual({
+          file: {
+            mime: format === 'png' ? 'image/png' : 'image/svg+xml',
+            dataBase64: 'AP8='
+          },
+          diagnostics: [{ severity: 'warning', message: 'careful' }]
+        });
+      }
+      expect(calls).toEqual(
+        ['png', 'svg'].flatMap((format) => [
+          {
+            args: ['compile', '--format', 'pdf', '-', '-'],
+            stdin: '= Hello',
+            timeoutMs: 30_000
+          },
+          {
+            args: ['compile', '--format', format, '--pages', '2', '-', '-'],
+            stdin: '= Hello',
+            timeoutMs: 30_000
+          }
+        ])
+      );
+    });
+
     it('reports failed compiles and timeouts without returning file bytes', async () => {
       const failed = await typst({
         tools: {
@@ -203,6 +267,12 @@ describe.each(['Rust', 'TypeScript'])(
         preview: { dataBase64: '' },
         diagnostics: [{ severity: 'error', message: 'broken\n at line 1' }]
       });
+      expect(
+        await failed.call('exportDocument', { format: 'png', page: 1 })
+      ).toEqual({
+        file: { mime: 'image/png', dataBase64: '' },
+        diagnostics: [{ severity: 'error', message: 'broken\n at line 1' }]
+      });
       const timed = await typst({
         tools: { typst: () => ({ timedOut: true }) }
       });
@@ -212,6 +282,9 @@ describe.each(['Rust', 'TypeScript'])(
           { severity: 'error', message: 'Typst timed out while compiling.' }
         ]
       });
+      await expect(
+        timed.call('exportDocument', { format: 'svg', page: 3 })
+      ).rejects.toThrow(/Typst timed out while exporting page 3/);
     });
   }
 );

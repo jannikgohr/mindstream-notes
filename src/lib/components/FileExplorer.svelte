@@ -63,6 +63,7 @@
     type DesktopNoteSource
   } from '$lib/stores/note-source.svelte';
   import { pushToast, dismissToast, updateToast } from './toast.svelte';
+  import { toastRefusal } from '$lib/account/refusal';
   import { flushPendingEditorSaves } from '$lib/editor/suspend-flush';
   import {
     FILE_EXPLORER_SOURCES,
@@ -392,19 +393,33 @@
     else startDraft(action, null);
   }
 
+  const runningExports = new SvelteSet<string>();
+
   async function runNoteExporter(
     id: string,
     label: string,
     run: () => Promise<void>
   ) {
+    const key = `${id}:${label}`;
+    if (runningExports.has(key)) return;
+    runningExports.add(key);
+    const toast = pushToast(tUiFormat('fileTree.exporting', { label }), {
+      variant: 'progress',
+      durationMs: 0
+    });
     try {
+      await flushPendingEditorSaves();
       await run();
     } catch (err) {
+      dismissToast(toast);
       console.error('[FileExplorer] note export failed', id, err);
       await alert({
         title: tUiFormat('fileTree.exportFailed', { label }),
         message: toErrorMessage(err)
       });
+    } finally {
+      dismissToast(toast);
+      runningExports.delete(key);
     }
   }
 
@@ -810,7 +825,7 @@
       pushToast(tUi('fileTree.move.blockedShared'), { variant: 'error' });
       return;
     }
-    await moveManyTo(items, targetFolderId);
+    await moveManyTo(items, targetFolderId).catch(toastRefusal);
   }
   async function onDropOnRoot(e: DragEvent) {
     if (isFileDrag(e)) return onFileDrop(e, null);

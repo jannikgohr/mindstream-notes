@@ -74,6 +74,14 @@ month's last day.
 Mobile hosts report tools unavailable. Keep portable features usable when a
 tool cannot run.
 
+Note exporters receive `ExportInput`, including the requested `format`.
+Return `ExportResult` with a `file` containing a MIME type and either `text`
+or `dataBase64`. For paged PNG or SVG exports, first return `pagesPdf` with
+an `application/pdf` payload. The app counts its pages, then calls the same
+export once per page with a one-based `page` number. Return that page's image
+as `file`. The app supports up to 1,000 pages and bundles multiple images
+in a ZIP file. See the Typst example for both paths.
+
 ## Test the built component
 
 ```js

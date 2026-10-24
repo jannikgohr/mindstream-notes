@@ -504,7 +504,7 @@ describe('validateManifest', () => {
     (
       (badFormat.contributes as Record<string, unknown>)
         .noteExporters as Record<string, unknown>[]
-    )[0].format = 'html';
+    )[0].format = 'unknown';
     expect(() => validateManifest(badFormat)).toThrow(/format/);
   });
 
@@ -1888,7 +1888,7 @@ describe('validateManifest — note kind field + exporter failures', () => {
   });
   it('rejects an exporter with an unsupported format', () => {
     expect(() =>
-      validateManifest(exporter({ ...goodExporter, format: 'docx' }))
+      validateManifest(exporter({ ...goodExporter, format: 'unknown' }))
     ).toThrow(/format .* is not supported/);
   });
   it('rejects an exporter for an unknown note kind', () => {

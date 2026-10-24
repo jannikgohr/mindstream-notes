@@ -316,7 +316,19 @@ export interface PluginDiagnosticsContribution {
   grammar?: DiagnosticGrammar;
 }
 
-export const PLUGIN_NOTE_EXPORT_FORMATS = ['pdf'] as const;
+export const PLUGIN_NOTE_EXPORT_FORMATS = [
+  'pdf',
+  'png',
+  'svg',
+  'typ',
+  'md',
+  'html',
+  'csv',
+  'xlsx',
+  'docx',
+  'json',
+  'zip'
+] as const;
 
 export type PluginNoteExportFormat =
   (typeof PLUGIN_NOTE_EXPORT_FORMATS)[number];
@@ -333,7 +345,7 @@ export interface PluginNoteExporterContribution {
   labelKey: string;
   noteKind: string;
   format: PluginNoteExportFormat;
-  /** Backend script export called with `{ noteId, noteKind, title, body }`. */
+  /** Backend script export called with `{ noteId, noteKind, title, body, format, page? }`. */
   export: string;
   /**
    * Optional declared native tool required by this export. The host checks it

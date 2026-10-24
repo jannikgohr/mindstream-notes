@@ -124,6 +124,24 @@ export function showExportResult(
         show: true
       },
       {
+        count: report.kanban_written,
+        oneKey: 'data.exportVault.chip.boards.one',
+        otherKey: 'data.exportVault.chip.boards.other',
+        statusKey: 'data.exportVault.chip.boards.status',
+        icon: 'fileText',
+        tone: 'neutral',
+        show: report.kanban_written > 0
+      },
+      {
+        count: report.typst_written,
+        oneKey: 'data.exportVault.chip.typst.one',
+        otherKey: 'data.exportVault.chip.typst.other',
+        statusKey: 'data.exportVault.chip.typst.status',
+        icon: 'fileText',
+        tone: 'neutral',
+        show: report.typst_written > 0
+      },
+      {
         count: report.pdf_written,
         oneKey: 'data.exportVault.chip.pdfs.one',
         otherKey: 'data.exportVault.chip.pdfs.other',

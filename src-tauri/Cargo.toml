@@ -34,7 +34,7 @@ tauri-build = { version = "2", features = [] }
 mindstream-plugin-runtime = { path = "plugin-runtime", features = ["aot-build"] }
 
 [dependencies]
-tauri = { version = "2.11", features = ["unstable", "tray-icon"] }
+tauri = { version = "2.11", features = ["unstable", "tray-icon", "image-png"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
@@ -133,6 +133,7 @@ md-5 = "0.11.0"
 # guards no-ops and turn any panic into a hard crash. The size cost of unwinding
 # tables is accepted for that safety.
 [dev-dependencies]
+tempfile = "3"
 tauri = { version = "2.11", features = ["test"] }
 # Paused time, for testing what the sync scheduler waits for.
 tokio = { version = "1.52.3", features = ["rt", "macros", "test-util"] }
@@ -194,6 +195,9 @@ windows-core = "0.61"
 windows = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# AppIndicator exports GtkImageMenuItem images and labels to the desktop tray.
+gtk = "0.18"
+muda = { version = "0.19", default-features = false, features = ["gtk"] }
 # Matches the v3 `sync-secret-service` feature we were using before.
 # crypto-rust avoids pulling in OpenSSL on Linux; vendored keeps the
 # dbus link static so the binary doesn't grow a runtime dep on the

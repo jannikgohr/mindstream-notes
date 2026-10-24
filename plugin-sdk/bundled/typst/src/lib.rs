@@ -77,13 +77,57 @@ fn render(input: &Value) -> Result<Value, String> {
     })
 }
 
+fn export_document(input: &Value) -> Result<Value, String> {
+    let format = input["format"].as_str().unwrap_or("pdf");
+    if format == "typ" {
+        return Ok(
+            json!({"file": {"mime": "text/plain", "text": input["body"].as_str().unwrap_or_default()}}),
+        );
+    }
+    if format == "pdf" {
+        return render(input);
+    }
+    if !matches!(format, "png" | "svg") {
+        return Err(format!("Unsupported export format: {format}"));
+    }
+    if input["page"].is_null() {
+        let result = render(input)?;
+        return Ok(json!({"pagesPdf": result["preview"], "diagnostics": result["diagnostics"]}));
+    }
+    let page = input["page"].to_string();
+    let result = native_tools::run(
+        "typst",
+        &native_tools::RunOptions {
+            args: ["compile", "--format", format, "--pages", &page, "-", "-"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            stdin: Some(input["body"].as_str().unwrap_or_default().into()),
+            timeout_ms: Some(30_000),
+            output_base64: true,
+        },
+    )
+    .map_err(|e| format!("{e:?}"))?;
+    if result.timed_out {
+        return Err(format!("Typst timed out while exporting page {page}"));
+    }
+    Ok(json!({
+        "file": {
+            "mime": if format == "png" { "image/png" } else { "image/svg+xml" },
+            "dataBase64": if result.status_code == Some(0) { result.stdout_base64.unwrap_or_default() } else { String::new() }
+        },
+        "diagnostics": diagnostics(&result.stderr)
+    }))
+}
+
 struct Typst;
 impl Guest for Typst {
     fn invoke(export: String, input: String) -> Result<String, String> {
         let input: Value = serde_json::from_str(&input).map_err(|e| e.to_string())?;
         let output = match export.as_str() {
             "$exports" => json!(["renderDocument", "exportDocument"]),
-            "renderDocument" | "exportDocument" => render(&input)?,
+            "renderDocument" => render(&input)?,
+            "exportDocument" => export_document(&input)?,
             _ => return Err(format!("unknown export {export}")),
         };
         Ok(output.to_string())

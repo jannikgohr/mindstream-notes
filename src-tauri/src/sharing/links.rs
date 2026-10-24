@@ -190,6 +190,9 @@ pub async fn create_share_link(
             .collection_manager()
             .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
         let existing_scope = db.with_conn(|conn| collection_scope(conn, collection_id))?;
+        // Before the server makes a collection that recording would then
+        // refuse.
+        db.with_conn(|conn| crate::demo_notes::ensure_folder_shareable(conn, collection_id))?;
         let (collection, created) = resolve_or_create_space(
             &cm,
             &folder,

@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "com.mindstream.typst",
   "name": "Typst",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Mindstream",
   "enabledByDefault": false,
   "runtime": "wasm",
@@ -41,7 +41,10 @@
         "settings.partialRendering.description": "Only render the pages currently in view. Improves live-preview scrolling on large documents. Takes effect the next time a preview opens.",
         "viewMode.livePreview": "Live Preview",
         "viewMode.source": "Source",
-        "viewMode.split": "Split"
+        "viewMode.split": "Split",
+        "export.typ.label": "Typst source",
+        "export.png.label": "PNG pages",
+        "export.svg.label": "SVG pages"
       },
       "de": {
         "plugin.description": "Typst-Dokumente als Plugin-Notizen schreiben und ansehen.",
@@ -57,7 +60,10 @@
         "settings.partialRendering.description": "Nur die aktuell sichtbaren Seiten rendern. Verbessert das Scrollen der Live-Vorschau bei großen Dokumenten. Wird beim nächsten Öffnen der Vorschau wirksam.",
         "viewMode.livePreview": "Live-Vorschau",
         "viewMode.source": "Quelltext",
-        "viewMode.split": "Geteilt"
+        "viewMode.split": "Geteilt",
+        "export.typ.label": "Typst-Quelltext",
+        "export.png.label": "PNG-Seiten",
+        "export.svg.label": "SVG-Seiten"
       }
     },
     "settings": [
@@ -179,6 +185,29 @@
         "labelKey": "export.pdf.label",
         "noteKind": "plugin.com.mindstream.typst.document",
         "format": "pdf",
+        "export": "exportDocument",
+        "requiresNativeTool": "typst"
+      },
+      {
+        "id": "typ",
+        "labelKey": "export.typ.label",
+        "noteKind": "plugin.com.mindstream.typst.document",
+        "format": "typ",
+        "export": "exportDocument"
+      },
+      {
+        "id": "png",
+        "labelKey": "export.png.label",
+        "noteKind": "plugin.com.mindstream.typst.document",
+        "format": "png",
+        "export": "exportDocument",
+        "requiresNativeTool": "typst"
+      },
+      {
+        "id": "svg",
+        "labelKey": "export.svg.label",
+        "noteKind": "plugin.com.mindstream.typst.document",
+        "format": "svg",
         "export": "exportDocument",
         "requiresNativeTool": "typst"
       }

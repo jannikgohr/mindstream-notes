@@ -49,6 +49,8 @@ export interface ExportInput extends Context {
   title: string;
   body: string;
   format: string;
+  /** One-based page requested after a paged export's PDF bootstrap. */
+  page?: number;
 }
 
 /** What a template's `render` export receives. */
@@ -99,11 +101,18 @@ export interface RenderResult {
   sourceOnly?: boolean;
 }
 
-/** What a note exporter returns: bytes for the app to save. */
-export interface ExportResult {
-  file: { mime: string; dataBase64: string; suggestedName?: string };
+/** A file to save, or a PDF the app counts before requesting image pages. */
+export type ExportResult = {
   diagnostics?: Diagnostic[];
-}
+} & (
+  | {
+      file: { mime: string; suggestedName?: string } & (
+        | { dataBase64: string; text?: never }
+        | { text: string; dataBase64?: never }
+      );
+    }
+  | { pagesPdf: { mime: 'application/pdf'; dataBase64: string } }
+);
 
 /** What a template's render export returns. */
 export interface TemplateResult {
