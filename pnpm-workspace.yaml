@@ -1,5 +1,7 @@
 packages:
   - packages/*
+  - plugin-sdk/typescript
+  - plugin-sdk/conformance/typescript
 
 allowBuilds:
   edgedriver: true

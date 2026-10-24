@@ -1,5 +1,5 @@
 {
-  "manifestVersion": 1,
+  "manifestVersion": 2,
   "id": "com.mindstream.languagetool",
   "name": "LanguageTool",
   "version": "0.1.0",

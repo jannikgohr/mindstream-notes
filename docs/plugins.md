@@ -1,9 +1,27 @@
 # Plugins
 
-Mindstream Notes has a small plugin system. A plugin is a folder with a
-`manifest.json` (and, for scripted plugins, a `.luau` entry). Plugins are
-**data-first**: most extend the app declaratively, and only opt into a sandboxed
-script when they need real logic.
+A plugin is a folder with a `manifest.json` and any referenced assets.
+Manifest-only plugins contribute data. Executable plugins add a `.wasm`
+component that runs in the Rust backend. The versioned WIT contract is
+language agnostic; Rust and TypeScript are the tested build paths.
+The host controls permissions, resource limits and effects.
+
+All shipped plugins use manifest version 2. Templates and Typst execute as
+Rust/Wasm components. LanguageTool uses the v2 declarative text-checker and
+native-service contributions without an executable guest. Legacy Luau source
+files live only in the non-shipped regression examples; runtime compatibility
+remains until the migration's release gates pass.
+
+Shipped executable plugins use Rust and generated WIT bindings. Start with the
+[Rust authoring path](../plugin-sdk/rust/README.md), or use the
+[TypeScript SDK and Node-only setup](../plugin-sdk/typescript/README.md).
+[Non-shipped examples](../plugin-sdk/examples/README.md) include installable
+TypeScript packages. A guest must implement the component world and JSON
+protocol, not merely compile to a core Wasm module. WASI, browser and Node
+imports are unavailable.
+See the [migration gate report](wasm-plugin-migration.md) for platform evidence.
+Luau remains temporarily available under manifest version 1 until the release
+gates pass; its API is documented [separately](plugins-legacy-luau.md).
 
 ## Where plugins live
 
@@ -47,7 +65,8 @@ reinstall unchanged bytes after removal.
 
 ## First-party plugins
 
-These ship with the app (source under repo-root `plugins/`). Each documents
+These packages ship with the app from repo-root `plugins/`; executable source
+is under `plugin-sdk/bundled/`. Each documents
 itself in-app via its manifest `descriptionKey`, shown in Settings → Plugins.
 
 ### Templates — `com.mindstream.templates.core`
@@ -55,38 +74,46 @@ itself in-app via its manifest `descriptionKey`, shown in Settings → Plugins.
 Turns the user's own notes into reusable templates; there are no premade
 templates. It contributes a **Template sources** settings section:
 
-- **Template folder** (`source-folder`, a `folder` picker) — every markdown note
+- **Template folder** (`source-folder`, a `folder` picker) — every note
   inside the chosen folder (at any depth) becomes a template.
-- **Template tag** (`source-tag`, a `tag` picker) — every markdown note carrying
+- **Template tag** (`source-tag`, a `tag` picker) — every note carrying
   the chosen tag becomes a template.
 - **Open new template notes** (`open-on-create`, a toggle).
 
-It is a **scripted (`luau`) plugin**: it contributes a "New from template"
-toolbar button (its own SVG icon) whose `main.luau` lists the matching notes
-(`ms.notes` + the folder/tag settings) and, when one is picked, renders the
-chosen note's title + body itself — the `{{…}}` engine lives in the plugin
-(`renderTemplate`, split into `lib/template.luau` and loaded via `require`), so
-`{{date}}`, `{{uuid}}`, filters, etc. are filled in by Luau. The app only
-performs the resulting write (the script never writes notes itself). It holds
-`notes.read` and `notes.create`. Disable the plugin to remove the button
-entirely. Rendering runs in the backend, so user templates appear only in the
-app, not the web build; the toolbar button is a desktop affordance, while the
-command palette and mobile create menu offer the same templates.
+It is a compiled Rust/Wasm plugin. `newFromTemplate` lists notes of any kind
+matching the configured folder or tag and returns a menu of `createNoteFromNote`
+effects. `renderTemplate` expands the selected note's title and body. The macro
+engine belongs to the plugin; the app validates and performs the write.
+It holds `notes.read` and `notes.create`. Disabling it removes its contributions.
+The create menu and command palette use the same templates on mobile.
+
+### Typst, `com.mindstream.typst`
+
+The Rust/Wasm component renders and exports PDFs through the declared
+native `typst` tool. Existing settings, source languages, toolbar items and
+the `tinymist` preview service remain declarative. Without the desktop tool,
+including on Android, the note stays editable in source mode.
+
+Rebuild both committed components with `pnpm plugins:build`, using the pinned
+Rust toolchain and Node >=22.11. Sources live in
+[`plugin-sdk/bundled/`](../plugin-sdk/bundled/README.md); installable assets and
+manifests live in `plugins/`. First-party components contain no QuickJS runtime.
+The embedded app needs no Node or Rust guest compiler at runtime.
 
 ## Manifest
 
 ```jsonc
 {
-  "manifestVersion": 1, // required; the manifest schema this plugin targets
+  "manifestVersion": 2, // required; the manifest schema this plugin targets
   "minAppVersion": "0.2.0", // optional; refuse to load below this app version
   "id": "com.author.my-plugin", // stable, dotted, lowercase — the namespace for everything below
   "name": "My Plugin",
   "version": "1.0.0",
-  "runtime": "manifest-only", // or "luau"
-  "entry": "main.luau", // required iff runtime is "luau"; a plain .luau filename
+  "runtime": "wasm", // or "manifest-only"
+  "entry": "plugin.wasm", // required for wasm; a plain .wasm filename
   "limits": {
-    "memoryBytes": 16777216,
-    "timeoutMs": 500
+    "memoryBytes": 33554432,
+    "timeoutMs": 1000
   },
   "descriptionKey": "plugin.description", // optional i18n key; a short one-line tagline
   "permissions": [], // see Permissions
@@ -104,8 +131,10 @@ is namespaced under the plugin `id`, so two plugins can never collide.
 `manifestVersion` is required. Without it there is no way to tell a manifest
 written for a different app version from one that is simply malformed, and the
 error a plugin author sees should say which. This app writes and accepts
-version `1`; a manifest declaring a higher version is refused with "update the
-app" rather than failing later on a field this version reads differently.
+versions `1` and `2`. Wasm requires version `2`, which rejects Luau.
+Manifest-only plugins work with either version, and can move to version `2`
+without changing their contributions. A future version is refused with an
+"update the app" error.
 
 `minAppVersion` is optional and compared numerically as `major.minor.patch`.
 
@@ -160,7 +189,7 @@ asymmetric:
   numbered filenames. The bundled Typst plugin uses this protocol.
 
 - **`noteTemplates`** — declarative templates (`titleTemplate` / `bodyTemplate`
-  with `{{…}}` placeholders, see below). Requires `templates.contribute`.
+  with `{{…}}` placeholders, see below). Requires `notes.create`.
 - **`commands`** — app-local commands (currently `createTemplateNote`), each
   bindable to a hotkey.
 - **`artifacts`** — binaries the host downloads and digest-verifies on the
@@ -182,10 +211,11 @@ asymmetric:
   Localize a section by adding a sibling with a locale suffix — `docs/getting-started.de.md`
   is used for German, falling back to `docs/getting-started.md`. Paths are
   relative to the plugin dir and must be safe (`.md`, no `..`).
-- **`toolbar`** (`runtime: "luau"` only) — buttons the plugin adds
+- **`toolbar`** (executable runtimes) — buttons the plugin adds
   to a host toolbar (currently the file-tree toolbar). Each ships its own
   bundled `.svg` icon (rendered as a themed monochrome mask) and runs a backend
   script export on click:
+
   ```jsonc
   "toolbar": [{
     "id": "new-from-template",
@@ -196,9 +226,30 @@ asymmetric:
     "action": { "type": "script", "export": "newFromTemplate" }
   }]
   ```
+
   The export returns a **declarative effect** the app performs (see below) — so
   Set `opensMenu` when the export returns `openMenu`. The host then marks the
   button as a submenu and resolves it on hover.
+
+  File-tree buttons can declare `visibleWhen` to hide an action until a note
+  matches a configured source:
+
+  ```json
+  "visibleWhen": {
+    "type": "hasMatchingNotes",
+    "folderSetting": "source-folder",
+    "tagSetting": "source-tag"
+  }
+  ```
+
+  These are plugin-local setting IDs with types `folder` and `tag`. Supply at
+  least one. The condition requires `notes.read` and matches either source,
+  including descendant folders and every note kind. It excludes trashed notes
+  and notes inside trashed folders. Unset sources, empty matches, unavailable
+  metadata and a revoked read grant hide the action. The host uses its reactive
+  metadata cache without invoking the guest or exposing note contents.
+  Backend permission and note validation still apply when the action runs.
+  Hidden actions retain their configured toolbar position.
 
 ### Placeholder syntax (declarative templates)
 
@@ -225,11 +276,11 @@ contribution rather than a resource anyone can reach. Those are gone;
 
 | Permission                 | Grants                                                                                           |
 | -------------------------- | ------------------------------------------------------------------------------------------------ |
-| `notes.read`               | read vault metadata: `ms.notes` (titles, tags, folders — never bodies) and `ctx.folders`         |
+| `notes.read`               | read vault metadata: `notes` (titles, tags, folders, never bodies) and `ctx.folders`             |
 | `notes.create`             | the app creates a note from the plugin's output. The app writes it, never the plugin             |
 | `textCheckers.contribute`  | send note text to a network endpoint. The host makes the request; the plugin declares the format |
-| `pluginStorage.read`       | read the plugin's own isolated data directory (`ms.storage.read` / `.list`)                      |
-| `pluginStorage.write`      | write it (`ms.storage.write` / `.delete`)                                                        |
+| `pluginStorage.read`       | read the plugin's own isolated data directory (`storage.read` / `.list`)                         |
+| `pluginStorage.write`      | write it (`storage.write` / `.delete`)                                                           |
 | `pluginArtifacts.download` | the host downloads declared artifacts and verifies their pinned digest                           |
 | `nativeTools.runDeclared`  | run the plugin's declared PATH binaries, directly and never through a shell. Desktop-only        |
 | `nativeServices.run`       | run a declared binary as a long-lived local preview server. Desktop-only                         |
@@ -266,102 +317,104 @@ and compares its digest to the approved one first, so editing an approved
 plugin while the app is running does not get those bytes executed under the
 old approval.
 
-## Scripted plugins
+## TypeScript plugins
 
-Scripted plugins run in the Rust backend, never in the WebView. The app creates
-a fresh runtime instance per call, bounds memory and execution time, exposes no
-ambient filesystem/network authority, and installs host functions only when the
-plugin's granted permissions allow them. Scripts return declarative data or
-effects; the app performs all writes.
+Create, build and test a plugin with the [SDK starter](../plugin-sdk/typescript/README.md).
+It packages the WIT contract and uses esbuild plus QuickJS to produce a component.
+Authors need Node.js 20 or later, without Rust or manual WIT edits.
 
-### Runtime limits
+```ts
+import {
+  definePlugin,
+  clock,
+  markdown,
+  type Context
+} from '@mindstream/plugin-sdk';
 
-Scripted manifests may include optional resource limits:
-
-```jsonc
-"limits": {
-  "memoryBytes": 134217728,
-  "timeoutMs": 5000
-}
-```
-
-The backend clamps these to host-owned minimums/maximums: memory to 1–64 MiB
-(default 16 MiB) and the timeout to 50 ms – 5 s (default 500 ms). Raise the
-timeout for a script that shells out to a slow native tool — subprocess
-wall-time does not count against the script budget, but the script's own work
-around it does.
-
-## Luau plugins (`runtime: "luau"`)
-
-A `luau` plugin ships one or more `.luau` files (an `entry` plus any modules it
-`require`s — see below). The script runs in a **sandbox in the Rust backend**
-(never the WebView): a fresh VM per call, Luau's curated stdlib (no `io`,
-`os.execute`, `package`, or `ffi`; `require` is plugin-scoped), a memory cap, and
-a wall-clock deadline. It cannot touch the filesystem, network, or other notes
-except through the gated host API.
-
-### Entry contract
-
-The script evaluates to a table of functions (or a single bare function). The
-app calls one exported function with a context table and expects a result table:
-
-```lua
--- main.luau
-return {
-  render = function(ctx)
+export const invoke = definePlugin({
+  render(ctx: Context) {
     return {
-      title = "Meeting — " .. ms.date.now("YYYY-MM-DD"),
-      body = ms.md.frontmatter({ type = "meeting", attendees = {} })
-        .. "\n## Notes\n",
-    }
-  end,
-}
+      title: `Meeting ${clock.today()}`,
+      body:
+        markdown.frontmatter({ type: 'meeting', attendees: [] }) +
+        '\n## Notes\n'
+    };
+  }
+});
 ```
 
-For templates the app performs the note creation from the returned
-`{ title, body }` — the script never writes notes itself. A `noteTemplate` opts
-into this by setting `"render": "<export>"` instead of static
-`titleTemplate`/`bodyTemplate`.
+Each key passed to `definePlugin` is an export name the manifest can reference.
+A handler takes a JSON object and returns JSON synchronously. A promise is an
+error. The ABI exports `invoke(exportName, inputJson) -> result<outputJson, string>`
+from the versioned [`mindstream:plugin` WIT world](../plugin-sdk/wit/world.wit).
 
-For note exporters, the app calls the named export with
-`{ noteId, noteKind, title, body, format }` after the user explicitly chooses
-that export for a note. The plugin returns bytes for the host to save:
+Ordinary TypeScript imports can split a plugin across files. The SDK bundles
+those modules, including compatible JavaScript dependencies, into one component.
+Node APIs, DOM APIs, generic WASI and filesystem/network imports are unavailable.
+Use the host APIs below for permitted operations.
 
-```lua
-return {
-  exportPdf = function(ctx)
-    return {
-      file = {
-        mime = "application/pdf",
-        dataBase64 = "...",
-        suggestedName = ctx.title .. ".pdf",
-      },
-    }
-  end,
-}
-```
+A template's `render` export returns `{ title, body }`. A note renderer returns
+`{ preview: { mime, dataBase64 }, diagnostics }` or `{ sourceOnly: true }`.
+An exporter receives `{ noteId, noteKind, title, body, format }` and returns
+`{ file: { mime, dataBase64, suggestedName? }, diagnostics? }`. Preview-shaped
+PDF results also work for exporters. The host owns the save dialog and write.
 
-For compatibility with preview renderers, the host also accepts
-`{ preview = { mime = "application/pdf", dataBase64 = "..." } }`. The app owns
-the save dialog and file write; the script only returns data.
+### Runtime limits and lifecycle
 
-### Splitting a script across files
+A shared Wasmtime engine caches compiled components. Every invocation uses a
+fresh store and instance; guest globals do not persist between calls.
+The runtime starts on first use, so plugin discovery does not initialize guests.
+Only verified package bytes execute. Discovery rejects a Wasm package whose
+declared entry is missing. Each execution uses the entry bytes captured during
+package verification, including for embedded plugins; it never reopens the entry
+to fill a missing snapshot. The compiled cache holds at most eight components in
+memory and 32 on disk per engine compatibility key.
 
-A plugin isn't limited to its single `entry` file. Any other `.luau` file it
-bundles can be loaded with a **plugin-scoped `require`**, so you can factor logic
-into modules:
+The default guest linear memory cap is 32 MiB, clamped to 4–256 MiB. It sums
+all guest memories and does not cap host RSS. The default execution timeout is
+one second, clamped to 50 ms–5 s. Native-tool wall time is credited back within
+a fixed extra allowance of 30 seconds per invocation. Repeated tool runs cannot
+extend that ceiling. Epoch checks interrupt loops and cancellation; native tool
+waits also observe cancellation. Disabling, removing or crashing a plugin cancels
+its running calls. At most four calls run concurrently; a busy caller waits up
+to five seconds. Components are limited to 32 MiB and returned JSON to 64 MiB.
 
-```lua
--- main.luau
-local parser = require("lib/parser") -- loads lib/parser.luau
-return { render = parser.render }
-```
+Host-call argument copying has its own fixed **9 MiB budget per imported host
+call**. Wasmtime enforces it while lifting arguments from guest memory, before
+the host handler receives owned strings and lists. The accounting includes
+container overhead as well as copied data. It prevents repeated references to
+one guest string from causing large host allocations before validation. The
+budget resets for each host call and cannot be raised through manifest limits.
+It leaves room for 8 MiB UTF-8 native-tool stdin plus 256 KiB of arguments and
+binding overhead. Transfer accounting counts strings in the component's
+canonical encoding, so UTF-16 arguments can reach this budget before reaching
+the scalar API's UTF-8 text limit.
 
-`require(name)` resolves `name.luau` relative to the plugin root (`/`-separated
-subpaths like `lib/parser` are fine); a module is evaluated once and its return
-value cached. It resolves **only** the plugin's own bundled files — `..`,
-absolute paths, the filesystem, and other plugins are all rejected — so it can't
-reach outside the (signed) plugin bundle. There is no `package`/`io`/`os`.
+Exhausting this transfer budget traps and ends the invocation. It does not
+return a catchable `HostError` or a batch failure/progress record. Earlier host
+calls may already have produced effects; the trap does not roll them back.
+The budget does not cap total host RSS, native-tool output, or host-to-guest
+results. Guest invocation results retain the separate 64 MiB UTF-8 JSON limit.
+The runtime allows up to 128 MiB of encoded result copying to accommodate
+UTF-16, then checks the decoded UTF-8 length. Guest linear memory and the
+following operation limits apply separately. MiB means 1,048,576 bytes; scalar
+and batch text sizes count UTF-8 bytes.
+
+| Operation             | Limit                                                                      |
+| --------------------- | -------------------------------------------------------------------------- |
+| Storage read or write | 4 MiB per file                                                             |
+| Native-tool stdin     | 8 MiB                                                                      |
+| Native-tool arguments | 64 arguments, at most 4,096 bytes each                                     |
+| Native-tool timeout   | 10 seconds by default, clamped to 100 ms to 30 seconds and the wall budget |
+| Batch request         | 128 commands, 1,024 text inputs, 1 MiB total literal data                  |
+| Batch results         | 8 MiB accounted cumulative data, including unkept results                  |
+
+Batch request validation runs after argument lifting, before executing any
+operation in that batch. A request above the 1 MiB literal limit can therefore
+return a normal batch validation failure if it fits the 9 MiB transfer budget.
+Batch result accounting includes conservative record overhead. See
+[the batch contract](plugin-host-api-design.md#the-general-batch-contract) for
+failure phases and recovery.
 
 ### Effects (toolbar buttons)
 
@@ -369,35 +422,35 @@ A toolbar button's export is called with the context table and returns a
 **declarative effect** — a closed set the app performs on the script's behalf
 (the "plugin computes, app acts" rule). The script never touches the DOM:
 
-| Effect                                                         | Does                                             |
-| -------------------------------------------------------------- | ------------------------------------------------ |
-| `{ effect = "none" }`                                          | nothing                                          |
-| `{ effect = "toast", message, kind? }`                         | show a toast (`kind` `"info"`\|`"error"`)        |
-| `{ effect = "createNote", title, body, parentId? }`            | create + open a note (needs `notes.create`)      |
-| `{ effect = "createNoteFromNote", sourceNoteId, parentId? }`   | copy a source note (interpolated) into a new one |
-| `{ effect = "insertMarkdown", markdown }`                      | insert markdown at the active note's cursor      |
-| `{ effect = "openMenu", items = {{ label, run = <effect> }} }` | show a menu; each item runs its nested effect    |
+| Effect                                                      | Does                                             |
+| ----------------------------------------------------------- | ------------------------------------------------ |
+| `{ effect: "none" }`                                        | nothing                                          |
+| `{ effect: "toast", message, kind? }`                       | show a toast (`kind` `"info"`\|`"error"`)        |
+| `{ effect: "createNote", title, body, parentId? }`          | create + open a note (needs `notes.create`)      |
+| `{ effect: "createNoteFromNote", sourceNoteId, parentId? }` | copy a source note (interpolated) into a new one |
+| `{ effect: "insertMarkdown", markdown }`                    | insert markdown at the active note's cursor      |
+| `{ effect: "openMenu", items: [{ label, run: <effect> }] }` | show a menu; each item runs its nested effect    |
 
 Returning a terminal effect makes the button a single action; returning
-`openMenu` makes it a sub-menu. Combined with `ms.notes` (metadata, gated by
+`openMenu` makes it a sub-menu. Combined with `notes` (metadata, gated by
 `notes.read`) a script can enumerate and filter notes itself — the Templates
 plugin lists the notes in its configured folder or tag and returns a menu of
 `createNoteFromNote`.
 
-### The context table
+### The context object
 
-Every export is called with one `ctx` table. It is assembled from two halves:
+Every export is called with one `ctx` object. It is assembled from two halves:
 
 | Field          | Built by | Notes                                                                               |
 | -------------- | -------- | ----------------------------------------------------------------------------------- |
 | `settings`     | backend  | the plugin's stored settings, read from the backend's effective root/vault settings |
 | `folders`      | backend  | the vault folder tree; empty without `notes.read`                                   |
 | `now`          | backend  | RFC3339, from the host clock                                                        |
-| `activeNoteId` | frontend | the note on screen, or `nil`                                                        |
+| `activeNoteId` | frontend | the note on screen, or `null`                                                       |
 | `locale`       | frontend | the window's current locale                                                         |
 
 Plus whatever the call itself is about — `noteId` and `body` for a note-kind
-render, `format` for an exporter, `variables` for a template.
+render, `format` for an exporter, `vars` for a template.
 
 The split is not cosmetic. Anything the backend can determine for itself, it
 does, and its values win on a collision — so a caller cannot tell a script it
@@ -406,87 +459,50 @@ backend has everything it needs to invoke a plugin **without a UI action behind
 it**, which is what a future event or watcher would require. Only the two
 genuinely window-scoped fields come from the frontend.
 
-### Host API (`ms.*`)
+### Host API
 
-Always available (pure, no permission):
+Import these from `@mindstream/plugin-sdk`. The host enforces permissions on
+every operation, even if the plugin bypasses the SDK wrappers.
 
-| API                                             | Description                                                                                          |
-| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `ms.log(msg)`                                   | write a line to the app log                                                                          |
-| `ms.uuid()`                                     | a fresh v4 UUID string                                                                               |
-| `ms.date.now(format?, offsetDays?, locale?)`    | current local time, moment-style format (default `YYYY-MM-DD`); `locale` (e.g. `de`) localizes names |
-| `ms.date.format(input, format?, locale?)`       | format an RFC3339 string or epoch seconds; `locale` localizes month/weekday names                    |
-| `ms.date.add(input, amount, unit)`              | shift a date (`second\|minute\|hour\|day\|week\|month\|year`), returns RFC3339                       |
-| `ms.json.encode(value)` / `ms.json.decode(str)` | table ⇄ JSON string                                                                                  |
-| `ms.md.frontmatter(table)`                      | build a `---`-delimited YAML frontmatter block                                                       |
+| API                                        | Permission                | Behavior                                             |
+| ------------------------------------------ | ------------------------- | ---------------------------------------------------- |
+| `log`, `console.log/info/warn/error/debug` | none                      | bounded app logging                                  |
+| `uuid`, `randomBytes`                      | none                      | host randomness, up to 65536 bytes per call          |
+| `hasPermission`                            | none                      | inspect the effective grant                          |
+| `clock.now/nowMillis/today/format/add`     | none                      | local host time and moment-style formatting          |
+| `markdown.frontmatter`                     | none                      | escaped YAML, keys sorted                            |
+| `notes.all/get`                            | `notes.read`              | metadata snapshot, never note bodies                 |
+| `storage.read/readJson/list`               | `pluginStorage.read`      | plugin-owned files; missing files return `undefined` |
+| `storage.write/writeJson/delete`           | `pluginStorage.write`     | contained relative paths; at most 4 MiB per file     |
+| `nativeTools.available/run`                | `nativeTools.runDeclared` | declared PATH binaries, launched directly            |
 
-Gated by `notes.read`:
+Host refusals throw `HostError` with `kind` equal to `denied`, `invalid`,
+`unavailable` or `failed`. A missing permission is `denied`. Timeouts and
+cancellation stop the call rather than returning a catchable host error.
 
-| API                | Description                                                                                   |
-| ------------------ | --------------------------------------------------------------------------------------------- |
-| `ms.notes.all()`   | every note's metadata: `{ id, title, tags, kind, folder_id, folder_path, created, modified }` |
-| `ms.notes.get(id)` | one note's metadata, or `nil`                                                                 |
+`NoteMeta` uses `folderId` and `folderPath`. Use `clock.format` for local dates
+and `ctx.locale` for month and weekday names. Guest JavaScript dates use UTC.
+`clock.add` shifts days and weeks by elapsed durations and clamps month/year
+shifts at the month's end. `Date.now`, `Math.random` and `crypto` ask the host
+for fresh values; calls made during module initialization are unsupported
+because the build snapshots module state before a host exists.
 
-`ms.notes` is a read-only **metadata** snapshot (no body). Namespaces only exist
-when the matching permission is granted, so `ms.notes == nil` for a plugin
-without `notes.read`.
+Native-tool options are `{ args?, stdin?, timeoutMs?, outputBase64? }`.
+The result is `{ statusCode, stdout, stdoutBase64?, stderr, timedOut }`.
+With `outputBase64: true`, raw bytes travel as `stdoutBase64` and `stdout` is
+empty. Every tool must be declared in `contributes.nativeTools`; a plugin cannot
+choose arbitrary executable paths. Mobile hosts report tools unavailable, so
+check `available` before running one.
 
-Gated by `pluginStorage.read` / `pluginStorage.write`:
+A note kind can set `render.requiresNativeTool` to let the host fall back to
+source-only mode before invoking its renderer. The Typst plugin pipes its
+source through `typst compile --format pdf - -` and returns a base64 PDF carrying
+all pages. Its preview service remains a separate host-owned capability.
 
-| API                            | Description                                                           |
-| ------------------------------ | --------------------------------------------------------------------- |
-| `ms.storage.read(path)`        | file contents, or `nil` when absent (`pluginStorage.read`)            |
-| `ms.storage.list(path?)`       | `{ { name, isDir, sizeBytes } }`, sorted (`pluginStorage.read`)       |
-| `ms.storage.write(path, text)` | write, creating parent dirs (`pluginStorage.write`)                   |
-| `ms.storage.delete(path)`      | remove a file or tree; absent is not an error (`pluginStorage.write`) |
-
-This is the plugin's **own** isolated data directory — one per plugin id,
-chosen by the host, never named by the script. Paths are relative, with no
-`..`, no absolute paths and no symlink escape, and a single file is capped at
-4 MiB. The two halves are separate grants, so a plugin that only needs to
-remember something between runs can ask for `read` and get `read`/`list` with
-no `write` in its namespace at all.
-
-Reading a file that does not exist returns `nil` rather than erroring —
-"have I stored this yet?" is the common first call and should not need a
-`pcall`.
-
-```lua
-local storage = assert(ms.storage)
-local seen = storage.read and storage.read("seen.json")
-local state = seen and ms.json.decode(seen) or { count = 0 }
-state.count += 1
-if storage.write then storage.write("seen.json", ms.json.encode(state)) end
-```
-
-Gated by `nativeTools.runDeclared`:
-
-| API                                    | Description                                                                        |
-| -------------------------------------- | ---------------------------------------------------------------------------------- |
-| `ms.nativeTools.available(toolId)`     | whether a declared tool (`contributes.nativeTools[].id`) was resolved on PATH      |
-| `ms.nativeTools.run(toolId, options?)` | run a declared, available tool; returns `{ statusCode, stdout, stderr, timedOut }` |
-
-`options` is
-`{ args = { string }?, stdin = string?, timeoutMs = number?, outputBase64 = boolean? }`.
-The host resolves the binary from PATH itself (never the script) and launches it
-**directly** — no shell, no arbitrary paths — so a script can only run the exact
-binaries its manifest declared under `contributes.nativeTools`. Native tools are
-**desktop-only**: on mobile every declared tool reports unavailable, so always
-guard with `available` before `run`. The subprocess wall-time does **not** count
-against the script's Luau budget, so a slow compile won't trip the deadline.
-
-For binary tools (PDF/PNG/…) set `outputBase64 = true`: `stdout` is then empty
-and the raw bytes come back as `stdoutBase64` (raw stdout would not be valid
-UTF-8). `stderr` is always exposed lossily for diagnostics.
-
-A note kind can declare `render.requiresNativeTool = "<toolId>"`: the host checks
-that tool up front and, when it's missing (not installed, or mobile), shows the
-editor **source-only** instead of calling the renderer. A `render.previewMime` of
-`application/pdf` makes the host render the returned `preview.dataBase64` with a
-built-in PDF page viewer. See the bundled `typst` plugin, whose
-`renderDocument` pipes the note body through the native `typst` binary
-(`typst compile --format pdf - -`) and returns the PDF as base64 — one stream for
-all pages (typst refuses multi-page SVG/PNG to stdout).
+The ABI reserves future `mindstream:ai` and `mindstream:ocr` capability namespaces.
+They are design boundaries only. SDK v0.1 exposes no inference, embeddings,
+semantic-search or handwriting functions. A future host API should use opaque
+model and attachment IDs, explicit grants and cancellable asynchronous jobs.
 
 ## Source editor language modes
 
@@ -831,91 +847,25 @@ temp file the server watches (rewritten on edit), waits for readiness, connects
 the control plane as the editor, and reaps the process when the note closes or
 the app exits.
 
-### Editor setup & type checking
+## Editor setup and local tests
 
-Scripts run untyped inside the sandbox, but while you write one you can get full
-type-checking and autocomplete for the returned effects and the whole `ms.*`
-API. The app ships a single Luau definition file —
-[`plugins/host.d.luau`](../plugins/host.d.luau) — that declares the `ms` global.
-It is the **one shared type file every plugin uses**, in this repo and in your
-own plugin projects; nothing is generated per plugin.
+The TypeScript starter includes a strict `tsconfig.json`. Run `npm run typecheck`
+for the guest and use `@mindstream/plugin-sdk/testing` in Node tests against the
+built component. The harness provides an in-memory host with explicit permissions,
+notes, folders, settings, storage and mock native tools. It creates a fresh
+instance for every call, matching the app. Resource interruption, cancellation
+and process behavior are covered by the Rust runtime suite.
 
-It works in any editor backed by
-[luau-lsp](https://github.com/JohnnyMorganz/luau-lsp) (VS Code, RustRover /
-IntelliJ, Zed, Neovim, …). Because `ms` is a global the host **injects** at
-runtime rather than something you `require`, luau-lsp can only learn it from a
-**definition file**: there is no in-source `import` for it, and the sandbox has
-no `require`, so don't add one — it would crash at runtime.
-
-1. **Copy `host.d.luau`** into your plugin project (take it from the version of
-   the app you target).
-
-2. **Add a `.luaurc`** next to your `.luau` files so the analyzer runs strict:
-
-   ```json
-   { "languageMode": "strict", "lint": { "*": true } }
-   ```
-
-3. **Point luau-lsp at the definition file** — the one editor-specific step (the
-   same line the app repo commits for its own plugins):
-   - **VS Code** (`johnnymorganz.luau-lsp`) — `.vscode/settings.json`:
-     ```json
-     {
-       "luau-lsp.platform.type": "standard",
-       "luau-lsp.types.definitionFiles": ["host.d.luau"]
-     }
-     ```
-   - **RustRover / IntelliJ** (`intellij-luau`) — in **Settings → Languages &
-     Frameworks → Luau**, add the definition file, or pass
-     `--definitions=host.d.luau` to the LSP command.
-   - **Zed / Neovim** — set the same `luau-lsp.types.definitionFiles` init option
-     in your luau-lsp config.
-
-   Your script is then checked end to end (`ctx`, effects, and `ms.*`):
-
-   ```luau
-   --!strict
-   local function render(ctx)
-     local notes = assert(ms.notes) -- present because the manifest grants notes.read
-     local source = notes.get(ctx.settings.source)
-     return { title = source and source.title or "Untitled", body = "" }
-   end
-   return { render = render }
-   ```
-
-**Zero-config fallback.** If you would rather not touch editor settings at all,
-declare `ms` in `.luaurc` `globals` instead of loading the definition file:
-
-```json
-{ "languageMode": "strict", "globals": ["ms"] }
-```
-
-luau-lsp auto-discovers `.luaurc` in every editor, so this silences the
-`Unknown global 'ms'` error with **no** per-editor setup — but it types `ms` as
-`any`, so you lose autocomplete and `ms.*` checking. Use the definition file for
-the full experience; use `globals` when you just want the error gone. (Pick one:
-listing `ms` in `globals` while also loading the definition file double-declares
-it.)
-
-### Templater-style workflow
-
-This host API covers the core of an Obsidian-Templater workflow with general
-primitives: dates (`ms.date`), file/note metadata (`ms.notes`), frontmatter
-(`ms.md`), and serialization (`ms.json`). What is intentionally **not** provided
-yet:
-
-- **Interactive prompts** (`tp.system.prompt` / `suggester`) — a mid-script UI
-  round-trip conflicts with the wall-clock deadline. Collect inputs up front and
-  pass them into the script's `ctx` instead.
-- **Web requests** — would need a dedicated `net` permission and async host.
-- **Note body / include** — the snapshot is metadata-only for now.
+Run `npm run test:plugin-author` in the repository to check the packed SDK in
+an isolated directory without Cargo or rustc. `pnpm test` includes the SDK and
+bundled-component behavior tests. `pnpm plugins:build` rebuilds bundled bytes.
 
 ## Signing (third-party plugins)
 
 Signing proves authorship and lets a plugin's own updates auto-approve instead
 of re-prompting. A signed plugin ships `signature.json` next to `manifest.json`:
 an Ed25519 signature over the plugin's **package digest** (a content hash of
-every file, so the signature covers `.luau` files, docs and icons — not just the
+every file, so the signature covers components, docs and icons — not just the
 manifest).
 
 ```bash

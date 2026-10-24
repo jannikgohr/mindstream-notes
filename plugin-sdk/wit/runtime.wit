@@ -1,0 +1,25 @@
+package mindstream:plugin@0.1.0;
+
+/// Helpers every plugin gets. None of them needs a permission.
+interface runtime {
+    enum log-level {
+        debug,
+        info,
+        warn,
+        error,
+    }
+
+    /// Write one line to the app log, tagged with the plugin id. The host
+    /// truncates long lines and drops lines past a per-call cap.
+    log: func(level: log-level, message: string);
+
+    /// A fresh random version 4 UUID.
+    uuid: func() -> string;
+
+    /// `len` bytes from the host's secure random source. At most 65536 per call.
+    random-bytes: func(len: u32) -> list<u8>;
+
+    /// Whether the user granted `permission`, spelled as in the manifest
+    /// (`notes.read`, `pluginStorage.write`, ...).
+    has-permission: func(permission: string) -> bool;
+}

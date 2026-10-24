@@ -1,6 +1,6 @@
 //! Long-lived **preview services** for plugins — a declared PATH binary the host
 //! runs as a *persistent local server* (unlike the one-shot
-//! [`super::run_native_tool_process`]) and exposes to a plugin note's preview
+//! [`mindstream_plugin_runtime::process::run`]) and exposes to a plugin note's preview
 //! iframe. The motivating case is `tinymist preview`, which serves an
 //! incremental-SVG frontend on an HTTP "data plane" port and a bidirectional
 //! "control plane" WebSocket (click-to-source / cursor-follow).
@@ -782,7 +782,8 @@ pub async fn plugins_preview_start(
             .collect();
         let mut command = Command::new(&binary);
         command.args(&args).current_dir(&cwd);
-        session.child = Some(super::hide_console_window(&mut command).spawn()?);
+        session.child =
+            Some(mindstream_plugin_runtime::process::hide_console_window(&mut command).spawn()?);
         let proxy = start_loopback_proxy(data_port, proxy_styles.clone().unwrap_or_default())?;
         let data_url = proxy.url();
         session.proxy = Some(proxy);
@@ -1081,7 +1082,7 @@ mod tests {
         let mut session = Session {
             _package_lease: None,
             child: Some(
-                super::super::hide_console_window(&mut command)
+                mindstream_plugin_runtime::process::hide_console_window(&mut command)
                     .spawn()
                     .unwrap(),
             ),

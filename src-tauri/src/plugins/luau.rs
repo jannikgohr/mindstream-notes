@@ -1,87 +1,56 @@
 //! Sandboxed Luau execution for scripted (`runtime: "luau"`) plugins.
 //!
-//! This is the trust-critical core of the scripted-plugin tier. A plugin's
-//! `.luau` script is *untrusted code*, so every invocation runs under four
-//! independent guards:
+//! A plugin's `.luau` script is untrusted code, so every invocation runs under
+//! four independent guards:
 //!
-//!   1. **Fresh, isolated state** — one brand-new [`Lua`] per call, discarded
-//!      after. Scripts can't accumulate or leak state across runs or plugins;
-//!      any globals a script sets live only in that one isolated invocation.
-//!   2. **Luau sandbox** — `sandbox(true)` runs the chunk against a read-only
-//!      view of the shared globals (with `safeenv` optimizations), and Luau's
-//!      stdlib is already curated: no `io`, no `os.execute`, no `package`, no
-//!      `ffi` — the dangerous surface simply isn't there. The one `require` a
-//!      script sees is our plugin-scoped shim, which resolves only the plugin's
-//!      own bundled `.luau` modules — never the filesystem (see
-//!      [`install_require`]).
-//!   3. **Memory cap** — `set_memory_limit` aborts a script that allocates past
+//!   1. **Fresh, isolated state**: one brand-new [`Lua`] per call, discarded
+//!      after. Scripts can't accumulate or leak state across runs or plugins.
+//!   2. **Luau sandbox**: `sandbox(true)` runs the chunk against a read-only
+//!      view of the shared globals, and Luau's stdlib is already curated: no
+//!      `io`, no `os.execute`, no `package`, no `ffi`. The one `require` a
+//!      script sees is our plugin-scoped shim, which resolves only the
+//!      plugin's own bundled `.luau` modules (see [`install_require`]).
+//!   3. **Memory cap**: `set_memory_limit` aborts a script that allocates past
 //!      the budget instead of letting it exhaust the host.
-//!   4. **Wall-clock deadline** — an `interrupt` hook fires on Luau back-edges /
-//!      calls and aborts once the deadline passes, so a runaway loop can't hang.
+//!   4. **Deadline and cancellation**: an `interrupt` hook fires on Luau
+//!      back-edges and calls and asks the shared [`HostContext`] whether the
+//!      call has to stop, so a runaway loop can't hang and a disabled plugin
+//!      stops mid-call.
 //!
-//! The host API (`ms.*`) is **permission-gated**: safe helpers are always
-//! present, but any capability namespace is installed only when the plugin's
-//! granted permissions include the matching capability (see [`install_host_api`]).
-//! This maps the manifest `permissions` array onto exactly what a script can
-//! reach — the same capability model the declarative tier uses.
+//! The `ms.*` table is a thin adapter. Every capability behind it, with its
+//! permission check, path containment and size limits, lives in
+//! [`mindstream_plugin_runtime::host`], the same code the Wasm runtime calls.
+//! A namespace is also only installed when its permission is granted, so
+//! `ms.notes == nil` for a plugin without `notes.read`; the host checks again
+//! on every call regardless.
 //!
-//! Note writes are deliberately *not* exposed to scripts: a Luau template
-//! returns `{ title, body }` and the app performs the note creation, preserving
-//! the "a plugin never writes notes itself" invariant of the declarative tier.
+//! Note writes are deliberately *not* exposed: a template returns
+//! `{ title, body }` and the app performs the note creation.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use base64::Engine as _;
+use mindstream_plugin_runtime::cancel::CancelToken;
+use mindstream_plugin_runtime::dates::{DateInput, TimeUnit};
+use mindstream_plugin_runtime::host::{
+    CallSetup, HostContext, LogLevel, ToolRunOptions, PERM_NATIVE_TOOLS, PERM_NOTES_READ,
+    PERM_STORAGE_READ, PERM_STORAGE_WRITE,
+};
+use mindstream_plugin_runtime::limits::{self, Limits};
+use mindstream_plugin_runtime::HostError;
 use mlua::{Lua, LuaSerdeExt, MultiValue, Table, Value, VmState};
-use serde::Serialize;
+
+pub use mindstream_plugin_runtime::host::NoteMeta;
 
 use crate::error::{AppError, AppResult};
 
-/// Read-only metadata for one note, exposed to scripts through `ms.notes`
-/// (gated by `notes.read`). Body is deliberately omitted — the snapshot is cheap
-/// to build and copy; a body/include seam can come later. Field names are the
-/// keys a script sees on the Lua table.
-#[derive(Debug, Clone, Serialize)]
-pub struct NoteMeta {
-    pub id: String,
-    pub title: String,
-    pub tags: Vec<String>,
-    /// Editor kind (`"markdown"`, `"kanban"`, …) so a script can filter.
-    pub kind: String,
-    pub folder_id: Option<String>,
-    /// Human path of the containing folder, e.g. `"Work / Projects"`.
-    pub folder_path: String,
-    pub created: String,
-    pub modified: String,
-}
-
-/// Resource bounds for one script invocation.
-#[derive(Debug, Clone, Copy)]
-pub struct Limits {
-    pub memory_bytes: usize,
-    pub timeout: Duration,
-}
-
-impl Default for Limits {
-    fn default() -> Self {
-        // Generous for template rendering (string building), tight enough that a
-        // buggy or hostile script can't exhaust the host or hang the UI thread
-        // it was dispatched from.
-        Self {
-            memory_bytes: 16 * 1024 * 1024,
-            timeout: Duration::from_millis(500),
-        }
-    }
-}
-
 /// One script invocation request.
 pub struct ScriptRequest {
+    /// The plugin id, used to tag log lines.
+    pub plugin_id: String,
     /// The `.luau` source to evaluate.
     pub source: String,
     /// A human name for the chunk, used in error messages (e.g. `"<id>/main.luau"`).
@@ -91,26 +60,22 @@ pub struct ScriptRequest {
     pub export: String,
     /// Passed to the exported function as its single argument (a Luau table).
     pub input: serde_json::Value,
-    /// The plugin's granted permissions — decides which `ms.*` namespaces exist.
+    /// The plugin's granted permissions: decides which `ms.*` namespaces exist.
     pub permissions: Vec<String>,
     /// Read-only note snapshot exposed via `ms.notes` when `notes.read` is
     /// granted. Built by the caller before the script runs; empty otherwise.
     pub notes: Vec<NoteMeta>,
-    /// Declared native tools resolved to their PATH binary, exposed via
-    /// `ms.nativeTools` when `nativeTools.runDeclared` is granted. `None` = the
-    /// tool is declared but not found (or the platform is mobile, where native
-    /// tools are unavailable). Empty when the permission wasn't granted.
+    /// Declared native tools resolved to their PATH binary. `None` = declared
+    /// but not found (always the case on mobile).
     pub native_tools: HashMap<String, Option<PathBuf>>,
     /// The plugin's isolated data directory: the working directory for native
-    /// tool runs, and the root `ms.storage` reads and writes under. `None`
-    /// disables both (tests / no data dir).
+    /// tool runs and the root `ms.storage` reads and writes under.
     pub data_root: Option<PathBuf>,
-    /// The plugin's other `.luau` files as `module path (no extension) → source`,
-    /// so the script can split itself across files via a plugin-scoped `require`.
-    /// Keys use `/` separators; only these modules are resolvable (no filesystem
-    /// or host access), so `require` can't reach outside the plugin bundle.
+    /// The plugin's other `.luau` files as `module path (no extension) -> source`,
+    /// for the plugin-scoped `require`.
     pub modules: HashMap<String, String>,
     pub limits: Limits,
+    pub cancel: CancelToken,
 }
 
 fn err(msg: impl Into<String>) -> AppError {
@@ -121,82 +86,53 @@ fn map_lua(chunk: &str, e: mlua::Error) -> AppError {
     err(format!("luau ({chunk}): {e}"))
 }
 
+/// A host refusal as a Luau error. Scripts can `pcall` these, but the
+/// interrupt hook raises the budget and cancellation ones again at the next
+/// back-edge, so catching them does not keep a call alive.
+fn lua_err(e: HostError) -> mlua::Error {
+    mlua::Error::runtime(e.to_string())
+}
+
 /// Run one script and return the exported function's result as JSON.
 ///
 /// Constructs and tears down the whole VM inside this call, so it is safe to
 /// dispatch onto a blocking worker (the VM never crosses a thread boundary).
 pub fn run(req: ScriptRequest) -> AppResult<serde_json::Value> {
-    run_with_native_budget(req, Duration::from_secs(30))
-}
-
-struct ExecutionBudget {
-    script_deadline: Cell<Instant>,
-    wall_deadline: Instant,
-}
-
-impl ExecutionBudget {
-    fn check(&self) -> mlua::Result<()> {
-        let now = Instant::now();
-        if now >= self.script_deadline.get() || now >= self.wall_deadline {
-            Err(mlua::Error::runtime("script exceeded its time budget"))
-        } else {
-            Ok(())
-        }
-    }
-
-    fn native_timeout_ms(&self, requested: Option<u64>) -> mlua::Result<u64> {
-        self.check()?;
-        let remaining = self
-            .wall_deadline
-            .saturating_duration_since(Instant::now())
-            .as_millis() as u64;
-        // The process runner has a 100 ms minimum. Do not launch if that would
-        // exceed the invocation's remaining allowance.
-        if remaining < 100 {
-            return Err(mlua::Error::runtime("script exceeded its time budget"));
-        }
-        Ok(requested
-            .unwrap_or(10_000)
-            .clamp(100, 30_000)
-            .min(remaining))
-    }
+    run_with_native_budget(req, limits::NATIVE_ALLOWANCE)
 }
 
 fn run_with_native_budget(
     req: ScriptRequest,
-    native_budget: Duration,
+    native_allowance: Duration,
 ) -> AppResult<serde_json::Value> {
     let lua = Lua::new();
     lua.set_memory_limit(req.limits.memory_bytes)
         .map_err(|e| map_lua(&req.chunk_name, e))?;
 
-    // Native tools may use up to 30 seconds per invocation, while script
-    // execution retains its separate budget. Repeated calls cannot extend the
-    // absolute deadline.
-    let started = Instant::now();
-    let deadline = Rc::new(ExecutionBudget {
-        script_deadline: Cell::new(started + req.limits.timeout),
-        wall_deadline: started + req.limits.timeout + native_budget,
-    });
-    let interrupt_deadline = deadline.clone();
+    let host = Rc::new(HostContext::new(
+        CallSetup {
+            plugin_id: req.plugin_id,
+            permissions: req.permissions,
+            notes: req.notes,
+            native_tools: req.native_tools,
+            data_root: req.data_root,
+            cancel: req.cancel,
+        },
+        req.limits,
+        native_allowance,
+    ));
+    host.check()?;
+    let interrupt_host = host.clone();
     lua.set_interrupt(move |_| {
-        interrupt_deadline.check()?;
+        interrupt_host.check().map_err(lua_err)?;
         Ok(VmState::Continue)
     });
 
-    install_host_api(
-        &lua,
-        &req.permissions,
-        &req.notes,
-        &req.native_tools,
-        &req.data_root,
-        deadline.clone(),
-    )
-    .map_err(|e| map_lua(&req.chunk_name, e))?;
+    install_host_api(&lua, host.clone()).map_err(|e| map_lua(&req.chunk_name, e))?;
     install_require(&lua, req.modules).map_err(|e| map_lua(&req.chunk_name, e))?;
 
     // Enter the sandbox AFTER installing the host API so `ms` is visible through
-    // the read-only global view. Combined with the fresh-VM-per-call above, a
+    // the read-only global view. Combined with the fresh VM per call, a
     // script's writes stay confined to its own throwaway invocation.
     lua.sandbox(true).map_err(|e| map_lua(&req.chunk_name, e))?;
 
@@ -221,7 +157,8 @@ fn run_with_native_budget(
         .call(MultiValue::from_iter([input]))
         .map_err(|e| map_lua(&req.chunk_name, e))?;
 
-    deadline.check().map_err(|e| map_lua(&req.chunk_name, e))?;
+    host.check()
+        .map_err(|e| map_lua(&req.chunk_name, lua_err(e)))?;
     lua.from_value(ret).map_err(|e| map_lua(&req.chunk_name, e))
 }
 
@@ -239,112 +176,60 @@ fn resolve_export(exported: &Value, export: &str) -> Option<mlua::Function> {
 
 /// Install the `ms.*` host API.
 ///
-/// The design goal is *general* primitives usable by any plugin, not
-/// template-specific ones: dates, JSON, markdown helpers, and (gated) read
-/// access to the vault. Safe, side-effect-free helpers are always present;
-/// capability namespaces are gated on the plugin's granted permissions, so a
-/// script can only reach what its manifest asked for.
-fn install_host_api(
-    lua: &Lua,
-    permissions: &[String],
-    notes: &[NoteMeta],
-    native_tools: &HashMap<String, Option<PathBuf>>,
-    data_root: &Option<PathBuf>,
-    deadline: Rc<ExecutionBudget>,
-) -> mlua::Result<()> {
+/// Safe, side-effect-free helpers are always present. A capability namespace
+/// is installed only when the plugin holds its permission, so a script can
+/// feature-detect with `ms.notes ~= nil`.
+fn install_host_api(lua: &Lua, host: Rc<HostContext>) -> mlua::Result<()> {
     let ms = lua.create_table()?;
-    let granted = |p: &str| permissions.iter().any(|g| g == p);
 
-    // --- Always available (pure / side-effect-free) -----------------------
-    // Diagnostics: a script's log line, tagged, into the app log.
+    let h = host.clone();
     ms.set(
         "log",
-        lua.create_function(|_, msg: String| {
-            log::info!("[luau plugin] {msg}");
+        lua.create_function(move |_, msg: String| {
+            h.log(LogLevel::Info, &msg);
             Ok(())
         })?,
     )?;
-    // A fresh v4 UUID.
-    ms.set(
-        "uuid",
-        lua.create_function(|_, ()| Ok(uuid::Uuid::new_v4().to_string()))?,
-    )?;
-
-    ms.set("date", date_module(lua)?)?;
+    let h = host.clone();
+    ms.set("uuid", lua.create_function(move |_, ()| Ok(h.uuid()))?)?;
+    ms.set("date", date_module(lua, host.clone())?)?;
     ms.set("json", json_module(lua)?)?;
-    ms.set("md", md_module(lua)?)?;
+    ms.set("md", md_module(lua, host.clone())?)?;
 
-    // --- Gated: notes.read → ms.notes (read-only metadata snapshot) --------
-    if granted("notes.read") {
-        ms.set("notes", notes_module(lua, notes)?)?;
+    if host.granted(PERM_NOTES_READ) {
+        ms.set("notes", notes_module(lua, host.clone())?)?;
     }
-
-    // --- Gated: nativeTools.runDeclared → ms.nativeTools -------------------
-    if granted("nativeTools.runDeclared") {
-        ms.set(
-            "nativeTools",
-            native_tools_module(lua, native_tools, data_root, deadline)?,
-        )?;
+    if host.granted(PERM_NATIVE_TOOLS) {
+        ms.set("nativeTools", native_tools_module(lua, host.clone())?)?;
     }
-
-    // --- Gated: pluginStorage.read / .write → ms.storage -------------------
-    // Present when either half is granted; the individual functions are added
-    // per grant, so a read-only plugin gets `read`/`list` and no `write`.
-    let may_read = granted("pluginStorage.read");
-    let may_write = granted("pluginStorage.write");
+    // Present when either half is granted; the functions are added per grant,
+    // so a read-only plugin gets `read`/`list` and no `write`.
+    let may_read = host.granted(PERM_STORAGE_READ);
+    let may_write = host.granted(PERM_STORAGE_WRITE);
     if may_read || may_write {
-        ms.set(
-            "storage",
-            storage_module(lua, data_root, may_read, may_write)?,
-        )?;
+        ms.set("storage", storage_module(lua, host, may_read, may_write)?)?;
     }
 
     lua.globals().set("ms", ms)?;
     Ok(())
 }
 
-/// `ms.nativeTools`: check availability of, and run, the plugin's *declared*
-/// PATH binaries. Gated on `nativeTools.runDeclared`. The tools are resolved to
-/// their absolute path by the host before the script runs (never by the script),
-/// so a script can only reach binaries its manifest declared, and only ever
-/// launches them directly — no shell, no arbitrary paths (see
-/// `super::run_native_tool_process`). On mobile every declared tool resolves to
-/// `None`, so `available` is always false there.
-fn native_tools_module(
-    lua: &Lua,
-    tools: &HashMap<String, Option<PathBuf>>,
-    cwd: &Option<PathBuf>,
-    deadline: Rc<ExecutionBudget>,
-) -> mlua::Result<Table> {
+/// `ms.nativeTools`: availability of, and runs of, the plugin's *declared*
+/// PATH binaries. The host resolved them before the script started, so a
+/// script can only reach binaries its manifest declared.
+fn native_tools_module(lua: &Lua, host: Rc<HostContext>) -> mlua::Result<Table> {
     let table = lua.create_table()?;
-    // Only the resolved (found-on-PATH) tools are runnable.
-    let resolved: Arc<HashMap<String, PathBuf>> = Arc::new(
-        tools
-            .iter()
-            .filter_map(|(id, path)| path.clone().map(|p| (id.clone(), p)))
-            .collect(),
-    );
-
-    let avail = resolved.clone();
+    let h = host.clone();
     table.set(
         "available",
-        lua.create_function(move |_, id: String| Ok(avail.contains_key(&id)))?,
+        lua.create_function(move |_, id: String| h.tool_available(&id).map_err(lua_err))?,
     )?;
-
-    let run_tools = resolved.clone();
-    let run_cwd = cwd.clone();
     table.set(
         "run",
         lua.create_function(move |lua, (id, opts): (String, Option<Table>)| {
-            let binary = run_tools.get(&id).cloned().ok_or_else(|| {
-                mlua::Error::runtime(format!("ms.nativeTools.run: tool '{id}' is not available"))
-            })?;
-            let cwd = run_cwd.clone().ok_or_else(|| {
-                mlua::Error::runtime("ms.nativeTools.run: no working directory available")
-            })?;
-            let (args, stdin, timeout_ms, output_base64) = match opts {
-                Some(t) => {
-                    let args = match t.get::<Value>("args")? {
+            let options = match opts {
+                Some(t) => ToolRunOptions {
+                    args: match t.get::<Value>("args")? {
                         Value::Table(list) => list
                             .sequence_values::<String>()
                             .collect::<mlua::Result<Vec<_>>>()?,
@@ -354,50 +239,25 @@ fn native_tools_module(
                                 "ms.nativeTools.run: args must be an array of strings",
                             ))
                         }
-                    };
-                    (
-                        args,
-                        t.get::<Option<String>>("stdin")?,
-                        t.get::<Option<u64>>("timeoutMs")?,
-                        t.get::<Option<bool>>("outputBase64")?.unwrap_or(false),
-                    )
-                }
-                None => (Vec::new(), None, None, false),
+                    },
+                    stdin: t.get::<Option<String>>("stdin")?,
+                    timeout_ms: t.get::<Option<u64>>("timeoutMs")?,
+                    output_base64: t.get::<Option<bool>>("outputBase64")?.unwrap_or(false),
+                },
+                None => ToolRunOptions::default(),
             };
-            let timeout_ms = deadline.native_timeout_ms(timeout_ms)?;
-            let started = Instant::now();
-            let output = super::run_native_tool_process(binary, cwd, args, stdin, Some(timeout_ms));
-            deadline
-                .script_deadline
-                .set(deadline.script_deadline.get() + started.elapsed());
-            deadline.check()?;
-            let output = output.map_err(|e| mlua::Error::runtime(e.to_string()))?;
+            let output = host.tool_run(&id, options).map_err(lua_err)?;
             let result = lua.create_table()?;
             result.set("statusCode", output.status_code)?;
-            // stderr is diagnostic text; always expose it lossily.
-            result.set(
-                "stderr",
-                String::from_utf8_lossy(&output.stderr).into_owned(),
-            )?;
+            result.set("stderr", output.stderr)?;
             result.set("timedOut", output.timed_out)?;
-            if output_base64 {
-                // Binary tool (PDF/PNG/…): the raw bytes aren't valid UTF-8, so
-                // carry them as base64 (JSON-safe) instead of a lossy string.
-                result.set(
-                    "stdoutBase64",
-                    base64::engine::general_purpose::STANDARD.encode(&output.stdout),
-                )?;
-                result.set("stdout", "")?;
-            } else {
-                result.set(
-                    "stdout",
-                    String::from_utf8_lossy(&output.stdout).into_owned(),
-                )?;
+            result.set("stdout", output.stdout)?;
+            if let Some(encoded) = output.stdout_base64 {
+                result.set("stdoutBase64", encoded)?;
             }
             Ok(result)
         })?,
     )?;
-
     Ok(table)
 }
 
@@ -405,8 +265,8 @@ fn native_tools_module(
 /// several `.luau` files.
 ///
 /// `modules` is the plugin's own `.luau` files (keyed by module path without the
-/// extension); `require(name)` resolves *only* these — never the filesystem,
-/// network, or another plugin — so it can't reach outside the already-signed
+/// extension); `require(name)` resolves *only* these, never the filesystem,
+/// network, or another plugin, so it can't reach outside the already-signed
 /// plugin bundle. Each module is evaluated at most once and its result cached
 /// (module semantics), and a cyclic `require` is rejected rather than looping.
 fn install_require(lua: &Lua, modules: HashMap<String, String>) -> mlua::Result<()> {
@@ -447,233 +307,122 @@ fn normalize_module(name: &str) -> Option<String> {
     Some(name.strip_suffix(".luau").unwrap_or(name).to_string())
 }
 
-/// `ms.date`: current time + formatting + arithmetic, all in local time and
-/// using the same moment-style tokens as the frontend template engine
-/// (`YYYY-MM-DD`, `HH:mm`, `dddd`, …), so a script's dates match `{{date:…}}`.
-/// Largest single file `ms.storage` will read or write. Plugin storage is for
-/// a plugin's own state — a cache index, a set of user preferences it computes —
-/// not a place to park a corpus, and an unbounded read would let a script pull
-/// an arbitrary amount into the VM's memory cap in one call.
-const MAX_STORAGE_FILE_BYTES: usize = 4 * 1024 * 1024;
-
-/// `ms.storage`: read and write files under the plugin's own isolated data
-/// directory. Gated on `pluginStorage.read` / `pluginStorage.write`.
-///
-/// Every path is resolved through the same `split_plugin_rel_path` +
-/// `ensure_inside_data_root` pair the storage commands use, so a script gets
-/// exactly the containment the frontend does: relative paths only, no `..`, no
-/// absolute paths, no symlink escape. The root itself is chosen by the host from
-/// the plugin id — a script never names it.
+/// `ms.storage`: the plugin's own data directory. Gated on
+/// `pluginStorage.read` / `pluginStorage.write`; containment and size limits
+/// are the host's.
 fn storage_module(
     lua: &Lua,
-    root: &Option<PathBuf>,
+    host: Rc<HostContext>,
     may_read: bool,
     may_write: bool,
 ) -> mlua::Result<Table> {
     let table = lua.create_table()?;
-    let Some(root) = root.clone() else {
-        // No data dir (tests, or a profile without one). The namespace still
-        // exists so a script can call it, and every call fails loudly rather
-        // than silently doing nothing.
-        let fail = |lua: &Lua, name: &'static str| {
-            lua.create_function(move |_, _: mlua::MultiValue| -> mlua::Result<()> {
-                Err(mlua::Error::runtime(format!(
-                    "ms.storage.{name}: this plugin has no data directory"
-                )))
-            })
-        };
-        for name in ["read", "write", "delete", "list"] {
-            table.set(name, fail(lua, name)?)?;
-        }
-        return Ok(table);
-    };
-
-    /// Resolve a script-supplied relative path inside `root`, creating nothing.
-    fn resolve(root: &Path, rel: &str) -> mlua::Result<PathBuf> {
-        let segments = super::split_plugin_rel_path(rel, false)
-            .map_err(|e| mlua::Error::runtime(e.to_string()))?;
-        let mut out = root.to_path_buf();
-        for segment in segments {
-            out.push(segment);
-        }
-        Ok(out)
-    }
-
     if may_read {
-        let read_root = root.clone();
+        let h = host.clone();
         table.set(
             "read",
-            lua.create_function(move |_, rel: String| {
-                let path = resolve(&read_root, &rel)?;
-                // Absent is `nil`, not an error: "have I stored this yet?" is the
-                // common first call and should not need a pcall.
-                if !path.exists() {
-                    return Ok(None);
-                }
-                // Containment first, then read. `ensure_inside_data_root`
-                // canonicalizes, so a symlink pointing out of the data root
-                // fails here rather than after its target is already in memory.
-                super::ensure_inside_data_root(&read_root, &path)
-                    .map_err(|e| mlua::Error::runtime(e.to_string()))?;
-                let Ok(bytes) = std::fs::read(&path) else {
-                    return Ok(None);
-                };
-                if bytes.len() > MAX_STORAGE_FILE_BYTES {
-                    return Err(mlua::Error::runtime(format!(
-                        "ms.storage.read: '{rel}' is larger than {MAX_STORAGE_FILE_BYTES} bytes"
-                    )));
-                }
-                Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
-            })?,
+            lua.create_function(move |_, rel: String| h.storage_read(&rel).map_err(lua_err))?,
         )?;
-
-        let list_root = root.clone();
+        let h = host.clone();
         table.set(
             "list",
             lua.create_function(move |lua, rel: Option<String>| {
-                let dir = match rel.as_deref() {
-                    None | Some("") => list_root.clone(),
-                    Some(rel) => resolve(&list_root, rel)?,
-                };
+                let entries = h
+                    .storage_list(rel.as_deref().unwrap_or(""))
+                    .map_err(lua_err)?;
                 let out = lua.create_table()?;
-                let Ok(entries) = std::fs::read_dir(&dir) else {
-                    // A directory that was never written to lists as empty.
-                    return Ok(out);
-                };
-                super::ensure_inside_data_root(&list_root, &dir)
-                    .map_err(|e| mlua::Error::runtime(e.to_string()))?;
-                let mut names: Vec<(String, bool, u64)> = Vec::new();
-                for entry in entries.flatten() {
-                    let meta = match entry.metadata() {
-                        Ok(meta) => meta,
-                        Err(_) => continue,
-                    };
-                    names.push((
-                        entry.file_name().to_string_lossy().into_owned(),
-                        meta.is_dir(),
-                        meta.len(),
-                    ));
-                }
-                // Stable order: a script that renders a list should not have it
-                // reshuffle between calls because the filesystem felt like it.
-                names.sort();
-                for (i, (name, is_dir, size)) in names.into_iter().enumerate() {
+                for (i, entry) in entries.into_iter().enumerate() {
                     let item = lua.create_table()?;
-                    item.set("name", name)?;
-                    item.set("isDir", is_dir)?;
-                    item.set("sizeBytes", size)?;
+                    item.set("name", entry.name)?;
+                    item.set("isDir", entry.is_dir)?;
+                    item.set("sizeBytes", entry.size_bytes)?;
                     out.set(i + 1, item)?;
                 }
                 Ok(out)
             })?,
         )?;
     }
-
     if may_write {
-        let write_root = root.clone();
+        let h = host.clone();
         table.set(
             "write",
             lua.create_function(move |_, (rel, contents): (String, String)| {
-                if contents.len() > MAX_STORAGE_FILE_BYTES {
-                    return Err(mlua::Error::runtime(format!(
-                        "ms.storage.write: '{rel}' exceeds {MAX_STORAGE_FILE_BYTES} bytes"
-                    )));
-                }
-                let path = resolve(&write_root, &rel)?;
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent).map_err(mlua::Error::runtime)?;
-                }
-                // Checking only the parent would not be enough: if `path` is
-                // itself an existing symlink, `fs::write` follows it and writes
-                // wherever it points. `ensure_write_target_safe` refuses a
-                // symlink target and containment-checks the parent when the file
-                // does not exist yet.
-                super::ensure_write_target_safe(&write_root, &path)
-                    .map_err(|e| mlua::Error::runtime(e.to_string()))?;
-                std::fs::write(&path, contents).map_err(mlua::Error::runtime)?;
-                Ok(())
+                h.storage_write(&rel, &contents).map_err(lua_err)
             })?,
         )?;
-
-        let delete_root = root.clone();
         table.set(
             "delete",
-            lua.create_function(move |_, rel: String| {
-                let path = resolve(&delete_root, &rel)?;
-                if !path.exists() {
-                    // Deleting what is not there is success, not an error.
-                    return Ok(());
-                }
-                super::ensure_inside_data_root(&delete_root, &path)
-                    .map_err(|e| mlua::Error::runtime(e.to_string()))?;
-                if path.is_dir() {
-                    std::fs::remove_dir_all(&path).map_err(mlua::Error::runtime)?;
-                } else {
-                    std::fs::remove_file(&path).map_err(mlua::Error::runtime)?;
-                }
-                Ok(())
-            })?,
+            lua.create_function(move |_, rel: String| host.storage_delete(&rel).map_err(lua_err))?,
         )?;
     }
-
     Ok(table)
 }
 
-fn date_module(lua: &Lua) -> mlua::Result<Table> {
+/// A Lua date argument: an RFC3339 string or epoch seconds.
+fn date_input(value: &Value) -> Option<DateInput> {
+    match value {
+        Value::String(s) => Some(DateInput::Rfc3339(s.to_str().ok()?.to_string())),
+        Value::Integer(secs) => Some(DateInput::EpochSeconds(*secs as i64)),
+        Value::Number(secs) => Some(DateInput::EpochSeconds(*secs as i64)),
+        _ => None,
+    }
+}
+
+/// `ms.date`: current time, formatting and arithmetic in local time, with the
+/// same moment-style tokens as the frontend template engine.
+fn date_module(lua: &Lua, host: Rc<HostContext>) -> mlua::Result<Table> {
     let date = lua.create_table()?;
-    // now(format?, offsetDays?) → the current local date/time, formatted.
+    let h = host.clone();
     date.set(
         "now",
         lua.create_function(
-            |_, (fmt, offset, locale): (Option<String>, Option<i64>, Option<String>)| {
-                let dt = chrono::Local::now() + chrono::Duration::days(offset.unwrap_or(0));
-                Ok(format_moment(
-                    &dt,
+            move |_, (fmt, offset, locale): (Option<String>, Option<i64>, Option<String>)| {
+                h.date_now(
                     fmt.as_deref().unwrap_or("YYYY-MM-DD"),
+                    offset.unwrap_or(0),
                     locale.as_deref().unwrap_or("en"),
-                ))
+                )
+                .map_err(lua_err)
             },
         )?,
     )?;
-    // format(input, format?) → format an RFC3339 string or epoch seconds.
+    let h = host.clone();
     date.set(
         "format",
         lua.create_function(
-            |_, (input, fmt, locale): (Value, Option<String>, Option<String>)| {
-                let dt = parse_datetime(&input).ok_or_else(|| {
+            move |_, (input, fmt, locale): (Value, Option<String>, Option<String>)| {
+                let input = date_input(&input).ok_or_else(|| {
                     mlua::Error::runtime(
                         "ms.date.format: input must be an RFC3339 string or epoch seconds",
                     )
                 })?;
-                Ok(format_moment(
-                    &dt,
+                h.date_format(
+                    &input,
                     fmt.as_deref().unwrap_or("YYYY-MM-DD"),
                     locale.as_deref().unwrap_or("en"),
-                ))
+                )
+                .map_err(lua_err)
             },
         )?,
     )?;
-    // add(input, amount, unit) → shift a date, returning RFC3339. Units:
-    // second|minute|hour|day|week|month|year (singular or plural).
     date.set(
         "add",
-        lua.create_function(|_, (input, amount, unit): (Value, i64, String)| {
-            let dt = parse_datetime(&input).ok_or_else(|| {
+        lua.create_function(move |_, (input, amount, unit): (Value, i64, String)| {
+            let input = date_input(&input).ok_or_else(|| {
                 mlua::Error::runtime(
                     "ms.date.add: input must be an RFC3339 string or epoch seconds",
                 )
             })?;
-            let shifted = add_duration(dt, amount, &unit).ok_or_else(|| {
+            let unit = TimeUnit::parse(&unit).ok_or_else(|| {
                 mlua::Error::runtime(format!("ms.date.add: unknown unit '{unit}'"))
             })?;
-            Ok(shifted.to_rfc3339())
+            host.date_add(&input, amount, unit).map_err(lua_err)
         })?,
     )?;
     Ok(date)
 }
 
-/// `ms.json`: encode a Lua value to a JSON string and back — a general
-/// serialization primitive (config, structured data, interop).
+/// `ms.json`: encode a Lua value to a JSON string and back.
 fn json_module(lua: &Lua) -> mlua::Result<Table> {
     let json = lua.create_table()?;
     json.set(
@@ -693,330 +442,48 @@ fn json_module(lua: &Lua) -> mlua::Result<Table> {
     Ok(json)
 }
 
-/// `ms.md`: markdown helpers. General enough for any plugin producing markdown.
-fn md_module(lua: &Lua) -> mlua::Result<Table> {
+/// `ms.md`: markdown helpers.
+fn md_module(lua: &Lua, host: Rc<HostContext>) -> mlua::Result<Table> {
     let md = lua.create_table()?;
-    // frontmatter(table) → a `---`-delimited YAML block from a table.
     md.set(
         "frontmatter",
-        lua.create_function(|lua, tbl: Table| {
+        lua.create_function(move |lua, tbl: Table| {
             let json: serde_json::Value = lua.from_value(Value::Table(tbl))?;
-            frontmatter(&json).map_err(mlua::Error::runtime)
+            host.frontmatter(&json).map_err(lua_err)
         })?,
     )?;
     Ok(md)
 }
 
-/// `ms.notes`: read-only access to the vault's note metadata (gated by
-/// `notes.read`). Built from a snapshot the caller captured before running, so
-/// it's cheap and can't stall the script.
-fn notes_module(lua: &Lua, notes: &[NoteMeta]) -> mlua::Result<Table> {
+/// `ms.notes`: read-only vault metadata from the snapshot the caller built.
+fn notes_module(lua: &Lua, host: Rc<HostContext>) -> mlua::Result<Table> {
     let ms_notes = lua.create_table()?;
-    let all: std::sync::Arc<Vec<NoteMeta>> = std::sync::Arc::new(notes.to_vec());
-
-    let all_get = all.clone();
+    let h = host.clone();
     ms_notes.set(
         "all",
-        lua.create_function(move |lua, ()| lua.to_value(&*all_get))?,
+        lua.create_function(move |lua, ()| lua.to_value(h.notes_all().map_err(lua_err)?))?,
     )?;
-    let all_find = all.clone();
     ms_notes.set(
         "get",
-        lua.create_function(
-            move |lua, id: String| match all_find.iter().find(|n| n.id == id) {
+        lua.create_function(move |lua, id: String| {
+            match host.notes_get(&id).map_err(lua_err)? {
                 Some(note) => lua.to_value(note),
                 None => Ok(Value::Nil),
-            },
-        )?,
+            }
+        })?,
     )?;
     Ok(ms_notes)
-}
-
-// English month/weekday names (moment's default locale), kept locale-independent
-// on the backend; the frontend engine localizes via Intl where it matters.
-const MONTHS: [&str; 12] = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-];
-const MONTHS_SHORT: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-const WEEKDAYS: [&str; 7] = [
-    "Sunday",
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
-];
-const WEEKDAYS_SHORT: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-// German equivalents — the app ships only `en` + `de`, so a locale that starts
-// with "de" selects these; anything else falls back to English above.
-const MONTHS_DE: [&str; 12] = [
-    "Januar",
-    "Februar",
-    "März",
-    "April",
-    "Mai",
-    "Juni",
-    "Juli",
-    "August",
-    "September",
-    "Oktober",
-    "November",
-    "Dezember",
-];
-const MONTHS_SHORT_DE: [&str; 12] = [
-    "Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez",
-];
-const WEEKDAYS_DE: [&str; 7] = [
-    "Sonntag",
-    "Montag",
-    "Dienstag",
-    "Mittwoch",
-    "Donnerstag",
-    "Freitag",
-    "Samstag",
-];
-const WEEKDAYS_SHORT_DE: [&str; 7] = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
-
-/// Format a local datetime with moment-style tokens (`YYYY MM DD HH mm ss`,
-/// named `MMMM/MMM/dddd/ddd`, `hh h A a`, `[escaped]` literals). Unknown
-/// characters pass through. Mirrors the frontend `formatDate` token set.
-fn format_moment(dt: &chrono::DateTime<chrono::Local>, fmt: &str, locale: &str) -> String {
-    use chrono::{Datelike, Timelike};
-    // Localize the named month/weekday tokens; numeric tokens are locale-independent.
-    let german = locale.starts_with("de");
-    let months = if german { &MONTHS_DE } else { &MONTHS };
-    let months_short = if german {
-        &MONTHS_SHORT_DE
-    } else {
-        &MONTHS_SHORT
-    };
-    let weekdays = if german { &WEEKDAYS_DE } else { &WEEKDAYS };
-    let weekdays_short = if german {
-        &WEEKDAYS_SHORT_DE
-    } else {
-        &WEEKDAYS_SHORT
-    };
-    let chars: Vec<char> = fmt.chars().collect();
-    let month0 = dt.month0() as usize;
-    let weekday0 = dt.weekday().num_days_from_sunday() as usize;
-    let h24 = dt.hour();
-    let h12 = match h24 % 12 {
-        0 => 12,
-        h => h,
-    };
-    // Tokens tried longest-first at each position.
-    const TOKENS: [&str; 21] = [
-        "YYYY", "YY", "MMMM", "MMM", "MM", "M", "DD", "D", "dddd", "ddd", "HH", "H", "hh", "h",
-        "mm", "m", "ss", "s", "A", "a", "[",
-    ];
-    let mut out = String::new();
-    let mut i = 0;
-    'outer: while i < chars.len() {
-        // `[literal]` — copy verbatim up to the next `]`.
-        if chars[i] == '[' {
-            let mut j = i + 1;
-            while j < chars.len() && chars[j] != ']' {
-                out.push(chars[j]);
-                j += 1;
-            }
-            i = if j < chars.len() { j + 1 } else { j };
-            continue;
-        }
-        for tok in TOKENS {
-            if tok == "[" {
-                continue;
-            }
-            let t: Vec<char> = tok.chars().collect();
-            if chars[i..].starts_with(&t[..]) {
-                match tok {
-                    "YYYY" => {
-                        let _ = write!(out, "{}", dt.year());
-                    }
-                    "YY" => {
-                        let _ = write!(out, "{:02}", dt.year().rem_euclid(100));
-                    }
-                    "MMMM" => out.push_str(months[month0]),
-                    "MMM" => out.push_str(months_short[month0]),
-                    "MM" => {
-                        let _ = write!(out, "{:02}", month0 + 1);
-                    }
-                    "M" => {
-                        let _ = write!(out, "{}", month0 + 1);
-                    }
-                    "DD" => {
-                        let _ = write!(out, "{:02}", dt.day());
-                    }
-                    "D" => {
-                        let _ = write!(out, "{}", dt.day());
-                    }
-                    "dddd" => out.push_str(weekdays[weekday0]),
-                    "ddd" => out.push_str(weekdays_short[weekday0]),
-                    "HH" => {
-                        let _ = write!(out, "{:02}", h24);
-                    }
-                    "H" => {
-                        let _ = write!(out, "{}", h24);
-                    }
-                    "hh" => {
-                        let _ = write!(out, "{:02}", h12);
-                    }
-                    "h" => {
-                        let _ = write!(out, "{}", h12);
-                    }
-                    "mm" => {
-                        let _ = write!(out, "{:02}", dt.minute());
-                    }
-                    "m" => {
-                        let _ = write!(out, "{}", dt.minute());
-                    }
-                    "ss" => {
-                        let _ = write!(out, "{:02}", dt.second());
-                    }
-                    "s" => {
-                        let _ = write!(out, "{}", dt.second());
-                    }
-                    "A" => out.push_str(if h24 < 12 { "AM" } else { "PM" }),
-                    "a" => out.push_str(if h24 < 12 { "am" } else { "pm" }),
-                    _ => {}
-                }
-                i += t.len();
-                continue 'outer;
-            }
-        }
-        out.push(chars[i]);
-        i += 1;
-    }
-    out
-}
-
-/// Parse a Lua value (RFC3339 string or epoch seconds) into a local datetime.
-fn parse_datetime(value: &Value) -> Option<chrono::DateTime<chrono::Local>> {
-    match value {
-        Value::String(s) => chrono::DateTime::parse_from_rfc3339(&s.to_str().ok()?)
-            .ok()
-            .map(|dt| dt.with_timezone(&chrono::Local)),
-        Value::Integer(secs) => chrono::DateTime::from_timestamp(*secs as i64, 0)
-            .map(|dt| dt.with_timezone(&chrono::Local)),
-        Value::Number(secs) => chrono::DateTime::from_timestamp(*secs as i64, 0)
-            .map(|dt| dt.with_timezone(&chrono::Local)),
-        _ => None,
-    }
-}
-
-/// Shift a datetime by `amount` of `unit`. Returns `None` for an unknown unit.
-fn add_duration(
-    dt: chrono::DateTime<chrono::Local>,
-    amount: i64,
-    unit: &str,
-) -> Option<chrono::DateTime<chrono::Local>> {
-    use chrono::Duration;
-    let by = |d: Duration| Some(dt + d);
-    match unit.trim_end_matches('s') {
-        "second" => by(Duration::seconds(amount)),
-        "minute" => by(Duration::minutes(amount)),
-        "hour" => by(Duration::hours(amount)),
-        "day" => by(Duration::days(amount)),
-        "week" => by(Duration::weeks(amount)),
-        "month" => Some(add_months(dt, amount)),
-        "year" => Some(add_months(dt, amount * 12)),
-        _ => None,
-    }
-}
-
-/// Add (or subtract) whole months, clamping the day to the target month's length.
-fn add_months(dt: chrono::DateTime<chrono::Local>, months: i64) -> chrono::DateTime<chrono::Local> {
-    use chrono::{Datelike, TimeZone, Timelike};
-    let total = dt.year() as i64 * 12 + dt.month0() as i64 + months;
-    let year = total.div_euclid(12) as i32;
-    let month0 = total.rem_euclid(12) as u32;
-    let last_day = days_in_month(year, month0 + 1);
-    let day = dt.day().min(last_day);
-    chrono::Local
-        .with_ymd_and_hms(year, month0 + 1, day, dt.hour(), dt.minute(), dt.second())
-        .single()
-        .unwrap_or(dt)
-}
-
-fn days_in_month(year: i32, month: u32) -> u32 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 => {
-            if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
-                29
-            } else {
-                28
-            }
-        }
-        _ => 30,
-    }
-}
-
-/// Serialize a JSON object to a `---`-delimited YAML frontmatter block. Supports
-/// scalar values and arrays of scalars (one level) — enough for note metadata.
-fn frontmatter(value: &serde_json::Value) -> Result<String, String> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| "ms.md.frontmatter expects a table".to_string())?;
-    let mut out = String::from("---\n");
-    for (key, val) in obj {
-        match val {
-            serde_json::Value::Array(items) => {
-                let _ = writeln!(out, "{key}:");
-                for item in items {
-                    let _ = writeln!(out, "  - {}", yaml_scalar(item));
-                }
-            }
-            other => {
-                let _ = writeln!(out, "{key}: {}", yaml_scalar(other));
-            }
-        }
-    }
-    out.push_str("---\n");
-    Ok(out)
-}
-
-/// A single YAML scalar. Strings are double-quoted + escaped (always valid);
-/// numbers/bools render bare; null renders empty.
-fn yaml_scalar(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::String(s) => {
-            let escaped = s
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"")
-                .replace('\n', "\\n");
-            format!("\"{escaped}\"")
-        }
-        serde_json::Value::Bool(b) => b.to_string(),
-        serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::Null => String::new(),
-        // Nested arrays/objects aren't supported at this level — render as JSON
-        // so nothing is silently lost.
-        other => other.to_string(),
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mindstream_plugin_runtime::host::MAX_STORAGE_FILE_BYTES;
+    use std::time::Instant;
 
     fn req(source: &str, export: &str, input: serde_json::Value, perms: &[&str]) -> ScriptRequest {
         ScriptRequest {
+            plugin_id: "com.test.luau".into(),
             source: source.to_string(),
             chunk_name: "test.luau".into(),
             export: export.into(),
@@ -1026,13 +493,14 @@ mod tests {
             native_tools: HashMap::new(),
             data_root: None,
             modules: HashMap::new(),
-            limits: Limits::default(),
+            limits: limits::LUAU.resolve(None, None),
+            cancel: CancelToken::new(),
         }
     }
 
     #[test]
     fn typst_source_export_does_not_require_native_tools() {
-        let source = include_str!("../../../plugins/typst/main.luau");
+        let source = include_str!("../../../plugin-sdk/examples/legacy-luau/typst/main.luau");
         for body in ["", "= Café\n"] {
             let out = run(req(
                 source,
@@ -1051,7 +519,7 @@ mod tests {
         let source = format!(
             r#"local ms = {{ nativeTools = {{ run = function(_, opts) return {{ statusCode = 0, stdoutBase64 = opts.args[3] .. ":" .. opts.args[5], stderr = "" }} end }} }}
 {}"#,
-            include_str!("../../../plugins/typst/main.luau")
+            include_str!("../../../plugin-sdk/examples/legacy-luau/typst/main.luau")
         );
         for (format, mime) in [("svg", "image/svg+xml"), ("png", "image/png")] {
             let out = run(req(
@@ -1315,30 +783,6 @@ mod tests {
             &[],
         ));
         assert!(e.is_err());
-    }
-
-    #[test]
-    fn native_time_credit_never_extends_the_absolute_deadline() {
-        let now = Instant::now();
-        let budget = ExecutionBudget {
-            script_deadline: Cell::new(now + Duration::from_millis(500)),
-            wall_deadline: now + Duration::from_millis(250),
-        };
-        assert!(budget.native_timeout_ms(Some(30_000)).unwrap() <= 250);
-        // Repeated native calls can return all their elapsed time to the
-        // script allowance, but cannot credit the invocation's wall deadline.
-        for _ in 0..1000 {
-            budget
-                .script_deadline
-                .set(budget.script_deadline.get() + Duration::from_secs(30));
-        }
-        assert!(budget.native_timeout_ms(None).unwrap() <= 250);
-        let expired = ExecutionBudget {
-            script_deadline: budget.script_deadline,
-            wall_deadline: now,
-        };
-        assert!(expired.check().is_err());
-        assert!(expired.native_timeout_ms(None).is_err());
     }
 
     #[test]
@@ -1619,37 +1063,79 @@ mod tests {
     }
 
     #[test]
-    fn format_moment_covers_the_token_set() {
-        use chrono::TimeZone;
-        let dt = chrono::Local
-            .with_ymd_and_hms(2026, 7, 25, 14, 5, 9)
-            .single()
-            .unwrap();
-        assert_eq!(
-            format_moment(&dt, "YYYY-MM-DD HH:mm:ss", "en"),
-            "2026-07-25 14:05:09"
+    fn a_call_cancelled_before_execution_cannot_write_storage() {
+        let dir = storage_tmp();
+        let mut r = req(
+            "ms.storage.write('state.txt', 'started'); return { go = function() return {} end }",
+            "go",
+            serde_json::json!({}),
+            &["pluginStorage.write"],
         );
-        assert_eq!(
-            format_moment(&dt, "dddd, MMMM D", "en"),
-            "Saturday, July 25"
-        );
-        assert_eq!(format_moment(&dt, "hh:mm A", "en"), "02:05 PM");
-        assert_eq!(format_moment(&dt, "[Week] YYYY", "en"), "Week 2026");
+        r.data_root = Some(dir.clone());
+        r.cancel.cancel();
+        let error = run(r).unwrap_err();
+        assert!(error.to_string().contains("cancelled"), "{error}");
+        assert!(!dir.join("state.txt").exists());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
-    fn format_moment_localizes_names_for_german() {
-        use chrono::TimeZone;
-        let dt = chrono::Local
-            .with_ymd_and_hms(2026, 7, 25, 14, 5, 9)
-            .single()
-            .unwrap();
-        // Named tokens localize; numeric tokens stay locale-independent.
-        assert_eq!(
-            format_moment(&dt, "dddd, D. MMMM", "de"),
-            "Samstag, 25. Juli"
+    fn a_cancelled_call_stops_a_running_loop() {
+        let mut r = req(
+            "return { go = function() while true do end end }",
+            "go",
+            serde_json::json!({}),
+            &[],
         );
-        assert_eq!(format_moment(&dt, "ddd MMM", "de"), "Sa Jul");
-        assert_eq!(format_moment(&dt, "YYYY-MM-DD", "de"), "2026-07-25");
+        r.limits.timeout = Duration::from_secs(5);
+        let canceller = r.cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            canceller.cancel();
+        });
+        let started = Instant::now();
+        let err = run(r).expect_err("a cancelled loop must stop");
+        assert!(err.to_string().contains("cancelled"), "{err}");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "stopped promptly"
+        );
+    }
+
+    #[test]
+    fn ms_date_reports_bad_input_and_units() {
+        for source in [
+            r#"return { go = function() return ms.date.format({}) end }"#,
+            r#"return { go = function() return ms.date.add("2026-01-01T00:00:00Z", 1, "fortnight") end }"#,
+            r#"return { go = function() return ms.date.add(true, 1, "day") end }"#,
+        ] {
+            assert!(
+                run(req(source, "go", serde_json::json!({}), &[])).is_err(),
+                "{source}"
+            );
+        }
+        let out = run(req(
+            r#"return { go = function() return { d = ms.date.format(0, "YYYY"), n = ms.date.now("YYYY", 1, "de") } end }"#,
+            "go",
+            serde_json::json!({}),
+            &[],
+        ))
+        .unwrap();
+        assert!(out["d"] == "1970" || out["d"] == "1969", "{out}");
+        assert_eq!(out["n"].as_str().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn ms_native_tools_rejects_a_malformed_args_value() {
+        let mut r = req(
+            "return { go = function() return ms.nativeTools.run('t', { args = 'oops' }) end }",
+            "go",
+            serde_json::json!({}),
+            &["nativeTools.runDeclared"],
+        );
+        r.native_tools
+            .insert("t".into(), Some(PathBuf::from("/bin/true")));
+        let err = run(r).unwrap_err();
+        assert!(err.to_string().contains("args must be an array"), "{err}");
     }
 }

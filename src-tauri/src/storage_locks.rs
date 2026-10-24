@@ -28,7 +28,7 @@ impl RootLock {
         let (_, file) = open_lock(root, ".root.lock")?;
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            match file.try_lock() {
+            match crate::file_lock::try_lock_exclusive(&file) {
                 Ok(()) => return Ok(Self { _file: file }),
                 Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(20));
@@ -62,7 +62,7 @@ impl VaultLock {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(err) => return Err(err.into()),
         };
-        match file.try_lock() {
+        match crate::file_lock::try_lock_exclusive(&file) {
             Ok(()) => Ok(false),
             Err(TryLockError::WouldBlock) => Ok(true),
             Err(TryLockError::Error(err)) => Err(err.into()),
@@ -104,7 +104,7 @@ impl VaultLock {
 
     fn acquire_inner(directory: &Path, deleting: bool) -> AppResult<Option<Self>> {
         let (directory, file) = open_lock(directory, ".vault.lock")?;
-        match file.try_lock() {
+        match crate::file_lock::try_lock_exclusive(&file) {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) => return Ok(None),
             Err(TryLockError::Error(err)) => return Err(err.into()),

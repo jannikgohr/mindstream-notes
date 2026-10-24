@@ -22,6 +22,7 @@ import pkg from '../../../package.json';
 import {
   CONTRIBUTION_POINTS,
   CURRENT_MANIFEST_VERSION,
+  isScriptedRuntime,
   KNOWN_PLUGIN_PERMISSIONS,
   PLUGIN_ARTIFACT_KINDS,
   PLUGIN_EDITOR_TOOLBAR_ITEMS,
@@ -105,7 +106,10 @@ export function compareVersions(a: string, b: string): number {
  * with a runtime-specific extension, no separators or `..`. The backend joins
  * this onto the plugin dir, so this is the traversal guard.
  */
-const SAFE_LUAU_ENTRY_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*)\.luau$/;
+const SAFE_ENTRY_RE: Record<'luau' | 'wasm', RegExp> = {
+  luau: /^[A-Za-z0-9](?:[A-Za-z0-9._-]*)\.luau$/,
+  wasm: /^[A-Za-z0-9](?:[A-Za-z0-9._-]*)\.wasm$/
+};
 /**
  * A safe relative documentation path: one or more `/`-joined segments ending in
  * `.md`. Each segment must start alphanumeric, so `..` (and any dot-leading
@@ -128,7 +132,7 @@ const SAFE_WEBVIEW_ENTRY_RE =
 /** Exact executable basename, resolved from PATH by the backend. */
 const SAFE_BINARY_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]*(?:\.exe)?$/i;
 const SHA256_HEX_RE = /^[a-f0-9]{64}$/;
-/** A Luau export name — a plain identifier looked up as `table[name]`. */
+/** An export name: a plain identifier, the way a script looks it up. */
 const EXPORT_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SOURCE_LANGUAGE_RE = /^[A-Za-z0-9][A-Za-z0-9_+-]{0,31}$/;
 const SOURCE_EXTENSION_RE = /^[A-Za-z0-9][A-Za-z0-9_+-]{0,15}$/;
@@ -159,12 +163,6 @@ const NOTE_EXPORT_FORMATS = new Set<PluginNoteExportFormat>(
   PLUGIN_NOTE_EXPORT_FORMATS
 );
 const BUILT_IN_NOTE_KINDS = new Set<string>(KNOWN_NOTE_KINDS);
-
-function isScriptedRuntime(
-  runtime: PluginManifest['runtime'] | undefined
-): boolean {
-  return runtime === 'luau';
-}
 
 /** Narrow, throwing on failure. */
 function assertNonEmptyString(
@@ -1339,7 +1337,9 @@ function validateToolbarButton(
   pluginId: string,
   b: PluginToolbarButton,
   path: string,
-  pluginLocalNoteKindIds: Set<string>
+  pluginLocalNoteKindIds: Set<string>,
+  settings: readonly PluginSetting[],
+  permissions: readonly PluginPermission[]
 ): void {
   assertSlug(pluginId, b?.id, `${path}.id`);
   if (!TOOLBAR_LOCATIONS.has(b?.location)) {
@@ -1410,6 +1410,57 @@ function validateToolbarButton(
       pluginId,
       `${path}.opensMenu requires a script action`
     );
+  }
+  if (b.visibleWhen !== undefined) {
+    if (b.location !== 'file-tree') {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.visibleWhen is only supported for file-tree buttons`
+      );
+    }
+    const condition = b.visibleWhen;
+    if (
+      !condition ||
+      typeof condition !== 'object' ||
+      Array.isArray(condition) ||
+      condition.type !== 'hasMatchingNotes'
+    ) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.visibleWhen must be a hasMatchingNotes condition`
+      );
+    }
+    if (!permissions.includes('notes.read')) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.visibleWhen requires notes.read`
+      );
+    }
+    if (
+      condition.folderSetting === undefined &&
+      condition.tagSetting === undefined
+    ) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.visibleWhen requires a source setting`
+      );
+    }
+    for (const [key, type] of [
+      ['folderSetting', 'folder'],
+      ['tagSetting', 'tag']
+    ] as const) {
+      const id = condition[key];
+      if (id === undefined) continue;
+      assertSlug(pluginId, id, `${path}.visibleWhen.${key}`);
+      if (
+        !settings.some((setting) => setting.id === id && setting.type === type)
+      ) {
+        throw new PluginValidationError(
+          pluginId,
+          `${path}.visibleWhen.${key} must reference this plugin's ${type} setting`
+        );
+      }
+    }
   }
   validateToolbarAction(pluginId, b?.action, `${path}.action`, b.location);
 }
@@ -1576,23 +1627,40 @@ export function validateManifest(input: unknown): PluginManifest {
     }
   }
 
-  // Runtimes are explicit: purely-declarative `manifest-only`, or sandboxed
-  // backend code in Luau. Anything else is refused rather than loaded
-  // half-supported.
-  if (m.runtime !== 'manifest-only' && m.runtime !== 'luau') {
+  // Runtimes are explicit: purely declarative `manifest-only`, or sandboxed
+  // backend code as a WebAssembly component (`wasm`, manifest version 2) or a
+  // Luau script (`luau`, version 1 only). Anything else is refused rather
+  // than loaded half-supported.
+  if (
+    m.runtime !== 'manifest-only' &&
+    m.runtime !== 'wasm' &&
+    m.runtime !== 'luau'
+  ) {
     throw new PluginValidationError(
       pluginId,
-      `manifest.runtime ("${String(m.runtime)}") is unsupported; expected "manifest-only" or "luau"`
+      `manifest.runtime ("${String(m.runtime)}") is unsupported; expected "manifest-only" or "wasm"`
     );
   }
-  if (isScriptedRuntime(m.runtime)) {
+  if (m.runtime === 'wasm' && m.manifestVersion < 2) {
+    throw new PluginValidationError(
+      pluginId,
+      'runtime "wasm" needs manifestVersion 2'
+    );
+  }
+  if (m.runtime === 'luau' && m.manifestVersion >= 2) {
+    throw new PluginValidationError(
+      pluginId,
+      'runtime "luau" is not part of manifestVersion 2; port the plugin to "wasm"'
+    );
+  }
+  if (m.runtime === 'wasm' || m.runtime === 'luau') {
     assertNonEmptyString(pluginId, m.entry, 'manifest.entry');
     // The backend reads `<pluginDir>/<entry>`, so entry must be a safe relative
     // filename — no separators, no traversal, and the runtime's extension.
-    if (!SAFE_LUAU_ENTRY_RE.test(m.entry)) {
+    if (!SAFE_ENTRY_RE[m.runtime].test(m.entry)) {
       throw new PluginValidationError(
         pluginId,
-        `manifest.entry ("${m.entry}") must be a plain .luau filename inside the plugin dir (no "/", "\\\\" or "..")`
+        `manifest.entry ("${m.entry}") must be a plain .${m.runtime} filename inside the plugin dir (no "/", "\\\\" or "..")`
       );
     }
   } else if (m.entry !== undefined) {
@@ -1600,7 +1668,7 @@ export function validateManifest(input: unknown): PluginManifest {
     // surfacing rather than silently ignoring.
     throw new PluginValidationError(
       pluginId,
-      'manifest.entry is only valid for runtime "luau"'
+      'manifest.entry is only valid for a scripted runtime ("wasm")'
     );
   }
 
@@ -1868,7 +1936,7 @@ export function validateManifest(input: unknown): PluginManifest {
   if (noteKinds.length > 0 && !isScriptedRuntime(m.runtime)) {
     throw new PluginValidationError(
       pluginId,
-      'contributes noteKinds, which run backend render exports and require runtime "luau"'
+      'contributes noteKinds, which run backend render exports and require a scripted runtime ("wasm")'
     );
   }
 
@@ -1901,7 +1969,7 @@ export function validateManifest(input: unknown): PluginManifest {
   if (noteExporters.length > 0 && !isScriptedRuntime(m.runtime)) {
     throw new PluginValidationError(
       pluginId,
-      'contributes noteExporters, which run backend export functions and require runtime "luau"'
+      'contributes noteExporters, which run backend export functions and require a scripted runtime ("wasm")'
     );
   }
 
@@ -1932,7 +2000,7 @@ export function validateManifest(input: unknown): PluginManifest {
   ) {
     throw new PluginValidationError(
       pluginId,
-      'a template "render" export requires runtime "luau"'
+      'a template "render" export requires a scripted runtime ("wasm")'
     );
   }
 
@@ -2007,7 +2075,14 @@ export function validateManifest(input: unknown): PluginManifest {
   }
   const seenToolbarIds = new Set<string>();
   for (const [i, b] of toolbar.entries()) {
-    validateToolbarButton(pluginId, b, `toolbar[${i}]`, seenNoteKindIds);
+    validateToolbarButton(
+      pluginId,
+      b,
+      `toolbar[${i}]`,
+      seenNoteKindIds,
+      (contributes.settings ?? []).flatMap((section) => section.settings),
+      m.permissions
+    );
     if (seenToolbarIds.has(b.id)) {
       throw new PluginValidationError(
         pluginId,
@@ -2024,7 +2099,7 @@ export function validateManifest(input: unknown): PluginManifest {
   ) {
     throw new PluginValidationError(
       pluginId,
-      'contributes toolbar buttons, which run a backend script export and require runtime "luau"'
+      'contributes toolbar buttons, which run a backend script export and require a scripted runtime ("wasm")'
     );
   }
 

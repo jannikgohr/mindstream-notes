@@ -19,8 +19,9 @@
 //! Integrity uses SHA-256 of the plugin's **package digest** (see
 //! [`signing::package_digest`]) — a document folding in a content hash of every
 //! file in the plugin dir, not just `manifest.json`. So any change to the
-//! manifest *or* a `.luau` script re-triggers approval, and the hash can't be
-//! forged to match a previously-approved package.
+//! manifest *or* its code (a `.wasm` component, a `.luau` script) re-triggers
+//! approval, and the hash can't be forged to match a previously-approved
+//! package.
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -37,7 +38,7 @@ use super::{SOURCE_BUILTIN, SOURCE_INSTALLED};
 use crate::error::{AppError, AppResult};
 
 /// A plugin found on disk, with its trust `source` fixed by its location.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct DiscoveredPlugin {
     pub generation: Option<String>,
     pub legacy_generation: Option<String>,
@@ -66,6 +67,11 @@ pub struct DiscoveredPlugin {
     /// presentational contributions the backend deliberately does not model
     /// (i18n, settings, docs, templates) survive the trip untouched.
     pub manifest_json: serde_json::Value,
+    /// A Wasm plugin's component, taken from the same read of the package
+    /// that `checksum` was computed over. Running these bytes rather than
+    /// reading the entry again means what runs is exactly what was hashed,
+    /// with no window for the file to change in between.
+    pub entry_bytes: Option<super::runtime::wasm::precompiled::VerifiedComponent>,
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -293,6 +299,24 @@ pub(crate) fn read_plugin(files: PluginFiles, source: &str) -> AppResult<Discove
         .map_err(|e| AppError::InvalidArg(e.to_string()))?;
     let manifest_json: serde_json::Value = serde_json::from_slice(manifest_bytes)
         .map_err(|e| AppError::InvalidArg(format!("manifest.json: {e}")))?;
+    let entry_bytes = match (manifest.runtime, manifest.entry.as_deref()) {
+        (manifest::PluginRuntime::Wasm, Some(entry)) => {
+            use super::runtime::wasm::precompiled::VerifiedComponent;
+            let (_, bytes) = all
+                .iter()
+                .find(|(path, _)| path == entry)
+                .ok_or_else(|| AppError::InvalidArg(format!("entry '{entry}' not found")))?;
+            Some(match &files {
+                PluginFiles::Embedded(dir) => VerifiedComponent::from_static(
+                    dir.get_file(dir.path().join(entry))
+                        .expect("collected embedded entry")
+                        .contents(),
+                ),
+                PluginFiles::Fs(_) => VerifiedComponent::new(bytes.clone()),
+            })
+        }
+        _ => None,
+    };
     Ok(DiscoveredPlugin {
         generation: None,
         legacy_generation: None,
@@ -308,6 +332,7 @@ pub(crate) fn read_plugin(files: PluginFiles, source: &str) -> AppResult<Discove
         signature_status: verification.status.as_str().to_string(),
         manifest,
         manifest_json,
+        entry_bytes,
     })
 }
 
@@ -341,6 +366,11 @@ pub fn discover_dir(root: &Path, source: &str) -> Vec<DiscoveredPlugin> {
 /// construction (they ship inside the signed binary), so unlike third-party
 /// plugins they are never subject to the integrity gate.
 pub fn discover_builtins() -> Vec<DiscoveredPlugin> {
+    static BUILTINS: std::sync::OnceLock<Vec<DiscoveredPlugin>> = std::sync::OnceLock::new();
+    BUILTINS.get_or_init(read_builtins).clone()
+}
+
+fn read_builtins() -> Vec<DiscoveredPlugin> {
     let mut out = Vec::new();
     for sub in BUILTIN_PLUGINS.dirs() {
         if sub.get_file(sub.path().join("manifest.json")).is_none() {
@@ -415,15 +445,11 @@ fn declared_id(files: &PluginFiles) -> Option<String> {
 /// several times a second against the whole plugin corpus.
 pub fn find(third_party_dir: &Path, id: &str) -> Option<DiscoveredPlugin> {
     // Builtins win on a colliding id, exactly as in `discover`.
-    for sub in BUILTIN_PLUGINS.dirs() {
-        if sub.get_file(sub.path().join("manifest.json")).is_none() {
-            continue;
-        }
-        let files = PluginFiles::Embedded(sub);
-        if declared_id(&files).as_deref() != Some(id) {
-            continue;
-        }
-        return read_plugin(files, SOURCE_BUILTIN).ok();
+    if let Some(plugin) = discover_builtins()
+        .into_iter()
+        .find(|plugin| plugin.id == id)
+    {
+        return Some(plugin);
     }
     if super::packages::is_global(third_party_dir) {
         return super::packages::discover(third_party_dir, Some(id))
@@ -518,14 +544,15 @@ mod tests {
             .find(|p| p.id == "com.mindstream.templates.core")
             .expect("the embedded Templates plugin is discovered");
         assert_eq!(tpl.source, SOURCE_BUILTIN);
-        assert_eq!(tpl.checksum.len(), 64); // sha-256 hex
-                                            // Its entry script is readable straight from the binary.
+        assert_eq!(tpl.checksum.len(), 64);
+        // Only the Rust component and installable assets are embedded.
         let main = tpl
             .files
-            .read_text("main.luau")
+            .read_bytes("plugin.wasm")
             .unwrap()
-            .expect("main.luau is present");
-        assert!(main.contains("newFromTemplate"));
+            .expect("plugin.wasm is present");
+        assert!(main.starts_with(b"\0asm\x0d\0\x01\0"));
+        assert!(tpl.files.read_bytes("main.luau").unwrap().is_none());
     }
 
     #[test]

@@ -8,8 +8,9 @@
  * itself.
  *
  * There are two places a plugin's code can run, and they are different
- * boundaries: `runtime: 'luau'` runs in the Rust backend with no ambient
- * filesystem, network or process authority, and `render.webview` runs a module
+ * boundaries: a scripted runtime (`'wasm'`, formerly `'luau'`) runs in the
+ * Rust backend with no ambient filesystem, network or process authority, and
+ * `render.webview` runs a module
  * in a sandboxed iframe on its own origin that can reach neither the app's DOM
  * nor any command. Everything else — native tools, native services, text
  * checkers — is the *host* acting on the plugin's behalf from a declaration.
@@ -34,6 +35,7 @@ import type { NativeToolDecl } from './generated/NativeToolDecl';
 import type { PreviewIframeDecl } from './generated/PreviewIframeDecl';
 import type { PreviewIframeMode } from './generated/PreviewIframeMode';
 import type { RuntimeLimits } from './generated/RuntimeLimits';
+import type { PluginRuntime } from './generated/PluginRuntime';
 
 /**
  * Declarations the **backend** acts on, defined in
@@ -170,8 +172,8 @@ export interface PluginNoteTemplateContribution {
   bodyTemplate: string;
   variables?: PluginTemplateVariable[];
   /**
-   * Optional backend script macro (`runtime: 'luau'`): the name of an
-   * exported function `render(ctx) -> { title, body }` that computes the note
+   * Optional backend script macro (a scripted runtime): the name of an
+   * export `render(ctx) -> { title, body }` that computes the note
    * instead of the declarative `titleTemplate`/`bodyTemplate`. When set, the app
    * runs the script and uses its result; the app — never the script — still
    * performs the note write.
@@ -504,6 +506,14 @@ export interface PluginToolbarButton {
   /** The script returns an `openMenu` effect. Hosts show a submenu affordance
    * and may resolve it on hover. */
   opensMenu?: boolean;
+  /** Show only when a live note matches either configured source. No guest call. */
+  visibleWhen?: {
+    type: 'hasMatchingNotes';
+    /** Plugin-local folder setting; includes notes in descendant folders. */
+    folderSetting?: string;
+    /** Plugin-local tag setting; exact tag match. */
+    tagSetting?: string;
+  };
   action: PluginToolbarAction;
 }
 
@@ -784,26 +794,46 @@ export interface PluginContributions {
 }
 
 /**
- * A plugin manifest.
- *
- * `runtime` selects how the plugin's contributions are produced:
- *   - `'manifest-only'` — purely declarative; no executable code (the original
- *     and still the default slice). Everything comes from the data above.
- *   - `'luau'` — the plugin ships a sandboxed Luau `entry` script the Rust
- *     backend runs to produce dynamic output (e.g. computed template
- *     title/body). The script gets a permission-gated host API (`ms.*`); the
- *     app, not the script, still performs any note write. `entry` is required
- *     and must be a safe relative `.luau` filename inside the plugin dir.
- */
-/**
  * The manifest schema version this app understands.
  *
  * Bumped when a change to the manifest is not backwards compatible — a field
  * that changes meaning, a default that flips. Additive changes (a new optional
  * field, a new contribution point) do not bump it, because the
  * forward-compatibility rules below already cover them.
+ *
+ * Version 2 moved scripted plugins from Luau to WebAssembly: `runtime: 'wasm'`
+ * needs 2, and `runtime: 'luau'` is only valid in 1. A `manifest-only`
+ * plugin is the same in both, so a version 1 declarative manifest keeps
+ * loading unchanged.
  */
-export const CURRENT_MANIFEST_VERSION = 1;
+export const CURRENT_MANIFEST_VERSION = 2;
+
+/**
+ * Whether a runtime runs plugin code in the backend, and so can back the
+ * contribution points that call an export.
+ */
+export function isScriptedRuntime(
+  runtime: PluginRuntime | string | undefined
+): boolean {
+  return runtime === 'wasm' || runtime === 'luau';
+}
+
+/**
+ * A plugin manifest.
+ *
+ * `runtime` selects how the plugin's contributions are produced:
+ *   - `'manifest-only'` — purely declarative; no executable code. Everything
+ *     comes from the data above.
+ *   - `'wasm'` — the plugin ships a WebAssembly component `entry` (built with
+ *     the plugin SDK) that the Rust backend runs to produce dynamic output,
+ *     such as a computed template or a toolbar menu. It reaches the host only
+ *     through the permission-gated `mindstream:plugin` interfaces; the app,
+ *     not the plugin, still performs any note write. `entry` is a safe
+ *     relative `.wasm` filename inside the plugin dir. Needs manifest
+ *     version 2.
+ *   - `'luau'` — the version 1 predecessor: a sandboxed Luau `entry` script
+ *     with the `ms.*` host table. Being retired in favour of `'wasm'`.
+ */
 
 export interface PluginManifest {
   /**
@@ -835,8 +865,11 @@ export interface PluginManifest {
    * Third-party plugins ignore this and always start gated/disabled.
    */
   enabledByDefault?: boolean;
-  runtime: 'manifest-only' | 'luau';
-  /** Required for `runtime: 'luau'`; a `.luau` file relative to the plugin dir. */
+  runtime: PluginRuntime;
+  /**
+   * Required for a scripted runtime: a `.wasm` (or, in version 1, `.luau`)
+   * file directly inside the plugin dir.
+   */
   entry?: string;
   /** Optional per-runtime resource limits. The backend applies hard maximums. */
   limits?: PluginRuntimeLimits;

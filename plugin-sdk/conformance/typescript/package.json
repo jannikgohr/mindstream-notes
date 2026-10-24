@@ -1,0 +1,11 @@
+{
+  "name": "@mindstream/plugin-conformance",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The TypeScript conformance plugin the runtime's tests run",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "devDependencies": {
+    "@mindstream/plugin-sdk": "workspace:*"
+  }
+}
