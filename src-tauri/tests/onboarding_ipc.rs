@@ -136,8 +136,7 @@ fn every_command_requires_an_active_vault_and_a_main_window() {
         .build()
         .unwrap();
     let original = root.progress();
-    let args =
-        json!({"id": original["id"], "step": "editing", "skipped": false, "initialNote": null});
+    let args = json!({"id": original["id"], "step": "editing", "skipped": false, "demoNotes": [], "initialNote": null});
     for command in [
         "get_onboarding",
         "restart_onboarding",
@@ -173,7 +172,7 @@ fn another_vault_cannot_restart_advance_or_finish_the_claimed_session() {
             .contains("another vault")
     );
     for command in ["save_onboarding_step", "finish_onboarding"] {
-        let error = call(&other, command, json!({"id": claimed["id"], "step": "editing", "skipped": false, "initialNote": {"title": "Wrong vault", "body": "must not be written"}})).unwrap_err();
+        let error = call(&other, command, json!({"id": claimed["id"], "step": "editing", "skipped": false, "demoNotes": [], "initialNote": {"title": "Wrong vault", "body": "must not be written"}})).unwrap_err();
         assert_eq!(error["code"], "invalidArgument");
         assert!(error["message"]
             .as_str()
@@ -200,11 +199,11 @@ fn completion_emits_a_change_and_retries_without_duplicating_notes() {
     app.listen("onboarding-changed", move |_| {
         received.fetch_add(1, Ordering::SeqCst);
     });
-    let first = call(&window, "finish_onboarding", json!({"id": claimed["id"], "skipped": false, "initialNote": {"title": "First note", "body": "# Welcome"}})).unwrap();
+    let first = call(&window, "finish_onboarding", json!({"id": claimed["id"], "skipped": false, "demoNotes": [], "initialNote": {"title": "First note", "body": "# Welcome"}})).unwrap();
     let retry = call(
         &window,
         "finish_onboarding",
-        json!({"id": claimed["id"], "skipped": false, "initialNote": null}),
+        json!({"id": claimed["id"], "skipped": false, "demoNotes": [], "initialNote": null}),
     )
     .unwrap();
     assert_eq!(first, retry);
@@ -221,7 +220,7 @@ fn completion_emits_a_change_and_retries_without_duplicating_notes() {
     let skipped = call(
         &window,
         "finish_onboarding",
-        json!({"id": restarted["id"], "skipped": true, "initialNote": null}),
+        json!({"id": restarted["id"], "skipped": true, "demoNotes": [], "initialNote": null}),
     )
     .unwrap();
     assert_eq!(skipped["progress"]["status"], "skipped");
@@ -230,12 +229,87 @@ fn completion_emits_a_change_and_retries_without_duplicating_notes() {
         call(
             &window,
             "finish_onboarding",
-            json!({"id": restarted["id"], "skipped": true, "initialNote": null})
+            json!({"id": restarted["id"], "skipped": true, "demoNotes": [], "initialNote": null})
         )
         .unwrap(),
         skipped
     );
     assert_eq!(note_count(&app), 1);
+}
+
+#[test]
+fn demo_notes_are_stored_through_ipc_and_retries_preserve_edits() {
+    use yrs::{Doc, ReadTxn, StateVector, Transact, XmlElementPrelim, XmlFragment, XmlTextPrelim};
+
+    let doc = Doc::with_client_id(1);
+    let fragment = doc.get_or_insert_xml_fragment("prosemirror");
+    {
+        let mut txn = doc.transact_mut();
+        let paragraph = fragment.push_back(&mut txn, XmlElementPrelim::empty("paragraph"));
+        paragraph.push_back(&mut txn, XmlTextPrelim::new("Hello"));
+    }
+    let state = doc
+        .transact()
+        .encode_state_as_update_v1(&StateVector::default());
+    let root = TestRoot::new();
+    let (app, window) = fixture(&root.0, Some("default"));
+    let claimed = call(&window, "get_onboarding", json!({})).unwrap();
+    let args = json!({
+        "id": claimed["id"],
+        "skipped": false,
+        "initialNote": null,
+        "demoNotes": [{
+            "slug": "welcome", "lang": "en", "title": "Welcome",
+            "body": "Hello\n", "yrsState": state
+        }]
+    });
+    let finished = call(&window, "finish_onboarding", args.clone()).unwrap();
+    let note_id = finished["noteId"].as_str().unwrap();
+    assert!(note_id.starts_with("demo_welcome_en_"));
+    assert_eq!(finished["progress"]["status"], "completed");
+    assert_eq!(root.progress()["initialNoteId"], note_id);
+    app.state::<Db>()
+        .with_conn(|conn| {
+            let stored: (String, String, Vec<u8>, i64, i64) = conn.query_row(
+                "SELECT title, body, yrs_state, payload_schema, dirty FROM notes WHERE id = ?1",
+                [note_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )?;
+            assert_eq!(stored, ("Welcome".into(), "Hello\n".into(), state, 2, 0));
+            conn.execute(
+                "UPDATE notes SET title = 'Mine', dirty = 1 WHERE id = ?1",
+                [note_id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    // Retry after the note committed but progress publication failed.
+    fs::write(
+        root.0.join("onboarding.json"),
+        serde_json::to_vec(&claimed).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(call(&window, "finish_onboarding", args).unwrap(), finished);
+    assert_eq!(note_count(&app), 1);
+    app.state::<Db>()
+        .with_conn(|conn| {
+            let stored: (String, i64) = conn.query_row(
+                "SELECT title, dirty FROM notes WHERE id = ?1",
+                [note_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            assert_eq!(stored, ("Mine".into(), 1));
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[test]
@@ -251,7 +325,7 @@ fn invalid_initial_content_leaves_progress_and_database_unchanged() {
         let error = call(
             &window,
             "finish_onboarding",
-            json!({"id": claimed["id"], "skipped": false, "initialNote": note}),
+            json!({"id": claimed["id"], "skipped": false, "demoNotes": [], "initialNote": note}),
         )
         .unwrap_err();
         assert_eq!(error["code"], "invalidArgument");
@@ -262,7 +336,7 @@ fn invalid_initial_content_leaves_progress_and_database_unchanged() {
         assert_eq!(root.progress(), claimed);
         assert_eq!(note_count(&app), 0);
     }
-    let allowed = call(&window, "finish_onboarding", json!({"id": claimed["id"], "skipped": false, "initialNote": {"title": "x".repeat(512), "body": "x".repeat(32768)}})).unwrap();
+    let allowed = call(&window, "finish_onboarding", json!({"id": claimed["id"], "skipped": false, "demoNotes": [], "initialNote": {"title": "x".repeat(512), "body": "x".repeat(32768)}})).unwrap();
     assert_eq!(allowed["progress"]["status"], "completed");
     assert_eq!(note_count(&app), 1);
 }
@@ -272,7 +346,7 @@ fn retry_after_note_creation_preserves_edits_to_that_note() {
     let root = TestRoot::new();
     let (app, window) = fixture(&root.0, Some("default"));
     let claimed = call(&window, "get_onboarding", json!({})).unwrap();
-    let args = json!({"id": claimed["id"], "skipped": false, "initialNote": {"title": "Original title", "body": "Original body"}});
+    let args = json!({"id": claimed["id"], "skipped": false, "demoNotes": [], "initialNote": {"title": "Original title", "body": "Original body"}});
     let finished = call(&window, "finish_onboarding", args.clone()).unwrap();
     let note_id = finished["noteId"].as_str().unwrap();
     app.state::<Db>()

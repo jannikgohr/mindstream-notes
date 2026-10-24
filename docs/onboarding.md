@@ -71,19 +71,27 @@ Shortcut lookup uses a custom binding first, then the selected preset, then the
 command default. Preset selection checks the whole effective map for conflicts;
 resetting an individual binding restores preset inheritance.
 
-Release startup does not seed demo folders. Finishing setup can create one
-welcome or blank note, or keep existing content. Initial-note creation is
+Release startup does not seed demo folders. Finishing setup can add the welcome
+content, create a blank note, or keep existing content. Initial-note creation is
 retryable and does not overwrite a note created by an earlier attempt. Import
 and restore finish setup before opening their existing dialogs. Cancelling a
 dialog leaves the workspace ready to use.
 
+The welcome content is the repo's demo notes, `demo-notes/<slug>/<lang>.md`, in
+the setup language (English where a note has no file in it). See
+`demo-notes/README.md` for how to add or change one. Setup renders each file in
+a hidden editor with fixed options and hands the document to
+`finish_onboarding`, which names the note after a hash of it and adds it only if
+no note has that id. An app update never changes an existing demo note.
+
 ## Verification
 
 ```sh
-pnpm test -- src/lib/api/onboarding.test.ts src/lib/hotkeys/presets.test.ts
+pnpm test -- src/lib/api/onboarding.test.ts src/lib/hotkeys/presets.test.ts src/lib/onboarding/demo-notes.test.ts
 pnpm test:e2e onboarding --project chromium --workers 1
 cd src-tauri
 cargo test --lib onboarding::tests
+cargo test --lib demo_notes
 cargo test --lib vault_runtime::tests
 ```
 

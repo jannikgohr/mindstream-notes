@@ -1810,6 +1810,8 @@ fn start_lifetime_monitor(app: &AppHandle) -> AppResult<()> {
             loop {
                 std::thread::sleep(Duration::from_secs(1));
                 let result = reconcile_lifetime(&app);
+                // Also catches vault renames made by workers through the shared index.
+                crate::tray::sync_vault_name(&app);
                 let error = result.err().map(|error| error.to_string());
                 if error != last_error {
                     if let Some(error) = &error {
@@ -2166,6 +2168,7 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
                         if let Err(error) = remembered {
                             log::warn!("[vaults] shortcut recency persistence failed: {error}");
                         }
+                        crate::tray::sync_vault_name(&task_app);
                         return;
                     }
                     Action::RefreshDeviceSettings => {
@@ -3238,6 +3241,13 @@ fn report_capture_failure(app: &AppHandle, message: &str) {
 }
 
 fn tray_destination(book: &Book, index: &crate::profiles::Index) -> AppResult<String> {
+    tray_destination_profile(book, index).map(|profile| profile.id.clone())
+}
+
+fn tray_destination_profile<'a>(
+    book: &Book,
+    index: &'a crate::profiles::Index,
+) -> AppResult<&'a crate::profiles::Profile> {
     if !book.exported || book.quitting.is_some() {
         return Err(invalid());
     }
@@ -3253,12 +3263,30 @@ fn tray_destination(book: &Book, index: &crate::profiles::Index) -> AppResult<St
         .as_ref()
         .or(recent_closed)
         .unwrap_or(&index.active);
-    if !index.profiles.iter().any(|vault| vault.id == *id) {
-        return Err(AppError::InvalidArg(
-            "the last-used tray vault is unavailable".into(),
-        ));
+    index
+        .profiles
+        .iter()
+        .find(|vault| vault.id == *id)
+        .ok_or_else(|| AppError::InvalidArg("the last-used tray vault is unavailable".into()))
+}
+
+pub(crate) fn tray_vault_name(
+    app: &AppHandle,
+    index: &crate::profiles::Index,
+) -> AppResult<Option<String>> {
+    if let Some(host) = app.try_state::<Host>() {
+        let book = host.book.lock().map_err(|_| invalid())?;
+        return tray_destination_profile(&book, index).map(|profile| Some(profile.name.clone()));
     }
-    Ok(id.clone())
+    // Direct-mode devices own one vault, regardless of the next-startup selection.
+    let active = app.try_state::<crate::paths::ActiveProfile>();
+    Ok(active.and_then(|active| {
+        index
+            .profiles
+            .iter()
+            .find(|profile| profile.id == active.id)
+            .map(|profile| profile.name.clone())
+    }))
 }
 
 fn dispatch_tray(
@@ -4712,13 +4740,13 @@ mod tests {
 
     #[test]
     fn tray_targets_overall_recent_vault_and_never_falls_back_on_failure() {
-        let index = crate::profiles::Index {
+        let mut index = crate::profiles::Index {
             active: "capture".into(),
             profiles: ["capture", "other"]
                 .into_iter()
                 .map(|id| crate::profiles::Profile {
                     id: id.into(),
-                    name: id.into(),
+                    name: format!("Vault {id}"),
                     created_at: String::new(),
                     color: None,
                 })
@@ -4729,13 +4757,31 @@ mod tests {
             ..Book::default()
         };
         assert_eq!(tray_destination(&book, &index).unwrap(), "capture");
+        assert_eq!(
+            tray_destination_profile(&book, &index).unwrap().name,
+            "Vault capture"
+        );
         book.last = Some("other".into());
         assert_eq!(tray_destination(&book, &index).unwrap(), "other");
+        assert_eq!(
+            tray_destination_profile(&book, &index).unwrap().name,
+            "Vault other"
+        );
+        index.profiles[1].name = "Research & notes".into();
+        assert_eq!(
+            tray_destination_profile(&book, &index).unwrap().name,
+            "Research & notes"
+        );
         book.last = Some("missing".into());
         assert!(tray_destination(&book, &index).is_err());
+        assert!(tray_destination_profile(&book, &index).is_err());
         book.last = None;
         book.shortcut_order = vec!["capture".into(), "other".into()];
         assert_eq!(tray_destination(&book, &index).unwrap(), "other");
+        assert_eq!(
+            tray_destination_profile(&book, &index).unwrap().name,
+            "Research & notes"
+        );
         book.quitting = Some(Uuid::new_v4());
         assert!(tray_destination(&book, &index).is_err());
     }
