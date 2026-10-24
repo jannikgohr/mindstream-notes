@@ -37,6 +37,7 @@ export function renderFrontmatter(f: FrontmatterFields): string {
   lines.push(`title: ${yamlScalar(f.title)}`);
   lines.push(`id: ${yamlScalar(f.id)}`);
   lines.push(`kind: ${yamlScalar(f.kind)}`);
+  if (f.kind === 'kanban') lines.push('kanban-plugin: board');
   lines.push(`created: ${yamlScalar(f.created)}`);
   lines.push(`modified: ${yamlScalar(f.modified)}`);
   if (f.favourite) lines.push('favourite: true');
@@ -63,7 +64,7 @@ function yamlScalar(raw: string): string {
   if (!needsQuoting) return raw;
   // Double-quoted YAML supports \" and \\ escapes, which is enough
   // for our string set (titles, tags, ISO timestamps).
-  return `"${raw.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  return JSON.stringify(raw);
 }
 
 /**

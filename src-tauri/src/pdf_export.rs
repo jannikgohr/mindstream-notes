@@ -1,6 +1,6 @@
-//! Native save-dialog bridge for the annotated-PDF exporter.
+//! Native save-dialog bridge for note exports, with a legacy PDF entry point.
 //!
-//! The TS side builds the PDF bytes via pdf-lib and hands them to us.
+//! The frontend builds the file bytes and supplies the filename and filter.
 //! We pop the OS file picker, write the bytes to the chosen path, and
 //! return whether the user actually saved (vs. cancelled the dialog).
 //!
@@ -30,15 +30,46 @@ pub struct SavePdfExportInput {
     pub bytes: Vec<u8>,
 }
 
-async fn save_pdf_export_inner(app: AppHandle, input: SavePdfExportInput) -> AppResult<bool> {
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveFileExportInput {
+    pub suggested_name: String,
+    pub dialog_title: Option<String>,
+    pub bytes: Vec<u8>,
+    pub filter_name: String,
+    pub extensions: Vec<String>,
+}
+
+fn validate_filter(input: &SaveFileExportInput) -> AppResult<()> {
+    if input.filter_name.trim().is_empty()
+        || input.extensions.is_empty()
+        || input.extensions.len() > 8
+        || input.extensions.iter().any(|ext| {
+            ext.is_empty() || ext.len() > 16 || !ext.bytes().all(|b| b.is_ascii_alphanumeric())
+        })
+    {
+        return Err(AppError::InvalidArg("Invalid export file filter".into()));
+    }
+    Ok(())
+}
+
+async fn save_file_export_inner(app: AppHandle, input: SaveFileExportInput) -> AppResult<bool> {
+    validate_filter(&input)?;
     // The dialog API is callback-based; bridge it to async via a one-shot
     // channel so the command's caller can `await` the user's choice.
     let (tx, rx) = oneshot::channel();
-    let title = input.dialog_title.as_deref().unwrap_or("Save PDF");
+    let title = input.dialog_title.as_deref().unwrap_or("Save export");
     app.dialog()
         .file()
         .set_title(title)
-        .add_filter("PDF", &["pdf"])
+        .add_filter(
+            &input.filter_name,
+            &input
+                .extensions
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+        )
         .set_file_name(&input.suggested_name)
         .save_file(move |path| {
             // Ignore send errors: a closed receiver means the command
@@ -66,5 +97,44 @@ async fn save_pdf_export_inner(app: AppHandle, input: SavePdfExportInput) -> App
 
 #[tauri::command]
 pub async fn save_pdf_export(app: AppHandle, input: SavePdfExportInput) -> CommandResult<bool> {
-    save_pdf_export_inner(app, input).await.map_err(Into::into)
+    save_file_export_inner(
+        app,
+        SaveFileExportInput {
+            suggested_name: input.suggested_name,
+            dialog_title: input.dialog_title,
+            bytes: input.bytes,
+            filter_name: "PDF".into(),
+            extensions: vec!["pdf".into()],
+        },
+    )
+    .await
+    .map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn save_file_export(app: AppHandle, input: SaveFileExportInput) -> CommandResult<bool> {
+    save_file_export_inner(app, input).await.map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_export_extensions() {
+        let mut input = SaveFileExportInput {
+            suggested_name: "Cards.xlsx".into(),
+            dialog_title: None,
+            bytes: vec![],
+            filter_name: "Excel".into(),
+            extensions: vec!["xlsx".into()],
+        };
+        assert!(validate_filter(&input).is_ok());
+        for invalid in ["", "*", "../pdf", ".pdf", "pdf;exe"] {
+            input.extensions = vec![invalid.into()];
+            assert!(validate_filter(&input).is_err());
+        }
+        input.extensions.clear();
+        assert!(validate_filter(&input).is_err());
+    }
 }

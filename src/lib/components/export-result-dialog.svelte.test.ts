@@ -23,6 +23,8 @@ const exportReport = (over: Partial<ExportReport> = {}): ExportReport => ({
   freeform_written: 0,
   pdf_written: 0,
   ink_written: 0,
+  kanban_written: 0,
+  typst_written: 0,
   folders_written: 0,
   assets_written: 0,
   skipped_trashed: 0,

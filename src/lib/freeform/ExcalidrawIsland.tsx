@@ -6,6 +6,7 @@
  * scene snapshot bridge into that Y.Doc.
  */
 
+import './asset-path';
 import { Excalidraw, CaptureUpdateAction } from '@excalidraw/excalidraw';
 import '@excalidraw/excalidraw/index.css';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';

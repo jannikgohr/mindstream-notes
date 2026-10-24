@@ -72,10 +72,7 @@ describe('buildExcalidrawFile', () => {
     expect(file?.type).toBe('excalidraw');
   });
 
-  it('returns null when the bytes are not a valid yjs update', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    expect(await buildExcalidrawFile([1, 2, 3, 4, 5])).toBeNull();
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
+  it('rejects corrupt state rather than exporting an empty scene', async () => {
+    await expect(buildExcalidrawFile([1, 2, 3, 4, 5])).rejects.toThrow();
   });
 });

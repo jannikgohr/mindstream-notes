@@ -480,6 +480,8 @@ describe('note menu', () => {
       'Open below',
       'Open in new window',
       '---',
+      'Export',
+      '---',
       'Rename…',
       'Move to root',
       '---',
@@ -495,7 +497,7 @@ describe('note menu', () => {
     expect(renamed).toEqual(['n1:Draft']);
   });
 
-  it('keeps read-only shared notes open-only', async () => {
+  it('allows exporting read-only shared notes without edit actions', async () => {
     tree.notesById = {
       n1: note({ parent_collection_id: 'shared-root' })
     };
@@ -515,7 +517,7 @@ describe('note menu', () => {
 
     expect(
       labels(await menuItemsForTarget({ kind: 'note', id: 'n1' }))
-    ).toEqual(['Open']);
+    ).toEqual(['Open', '---', 'Export']);
   });
 
   it('allows rename and delete for editable shared notes without moving them to root', async () => {
@@ -538,7 +540,7 @@ describe('note menu', () => {
 
     expect(
       labels(await menuItemsForTarget({ kind: 'note', id: 'n1' }))
-    ).toEqual(['Open', '---', 'Rename…', 'Delete']);
+    ).toEqual(['Open', '---', 'Export', '---', 'Rename…', 'Delete']);
   });
 });
 

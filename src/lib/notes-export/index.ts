@@ -4,7 +4,9 @@
  *
  *   markdown → `.md` with YAML frontmatter + asset bundling
  *   freeform → `.excalidraw` JSON
- *   pdf      → `.pdf` (raw bytes from the owning asset)
+ *   pdf      → annotated `.pdf`
+ *   kanban   → `.md` plus a `.kanban.json` companion
+ *   typst    → `.typ` source, without requiring the plugin or compiler
  *   ink      → `.pdf` (one page per ink page, strokes rendered as vector polylines)
  *
  * The actual disk writes go through `writeExportFile` in the Rust
@@ -26,6 +28,7 @@ import {
   rewriteAssetUrls
 } from './markdown';
 import { dedupeAgainst, sanitizeName } from './sanitize';
+import { readExportBoard, boardMarkdown } from './kanban';
 
 const ASSET_SUBDIR = '_assets';
 
@@ -38,6 +41,8 @@ export interface ExportReport {
   pdf_written: number;
   /** `.pdf` files written for ink notes (note_kind = 'ink'). */
   ink_written: number;
+  kanban_written: number;
+  typst_written: number;
   folders_written: number;
   /** Image / blob files copied into the per-folder `_assets/` subdir. */
   assets_written: number;
@@ -52,6 +57,8 @@ export async function exportVault(root: string): Promise<ExportReport> {
     freeform_written: 0,
     pdf_written: 0,
     ink_written: 0,
+    kanban_written: 0,
+    typst_written: 0,
     folders_written: 0,
     assets_written: 0,
     skipped_trashed: 0,
@@ -114,6 +121,12 @@ export async function exportVault(root: string): Promise<ExportReport> {
           break;
         case 'ink':
           report.ink_written++;
+          break;
+        case 'kanban':
+          report.kanban_written++;
+          break;
+        case 'typst':
+          report.typst_written++;
           break;
         case 'unknown':
           // Helper logged a warning and wrote nothing; surface it in
@@ -181,7 +194,14 @@ interface NoteWriteSummary {
   /** Kind that was actually handled (mirrors the loaded `note.note_kind`,
    *  which can lag the cached `summary.note_kind` if the tree is stale).
    *  The outer loop reads this to bump the right per-kind counter. */
-  kind: 'markdown' | 'freeform' | 'pdf' | 'ink' | 'unknown';
+  kind:
+    | 'markdown'
+    | 'freeform'
+    | 'pdf'
+    | 'ink'
+    | 'kanban'
+    | 'typst'
+    | 'unknown';
   assets_written: number;
 }
 
@@ -214,6 +234,39 @@ async function exportNote(
     case 'ink': {
       const written = await exportInk(root, note, parentDir, takenFor);
       return { kind: 'ink', assets_written: written.assets_written };
+    }
+    case 'kanban': {
+      const board = readExportBoard(note.yrs_state);
+      const name = sanitizeName(note.title);
+      // Bundle description assets using the Markdown export path. Keep JSON
+      // alongside it so IDs, ordering, labels and card metadata survive too.
+      const written = await exportMarkdown(
+        root,
+        { ...note, body: boardMarkdown(board, false) },
+        parentDir,
+        takenFor
+      );
+      await writeExportFile(
+        root,
+        joinRel(
+          parentDir,
+          dedupeAgainst(takenFor(parentDir), `${name}.kanban.json`)
+        ),
+        new TextEncoder().encode(JSON.stringify(board, null, 2))
+      );
+      return { kind: 'kanban', assets_written: written.assets_written };
+    }
+    case 'plugin.com.mindstream.typst.document': {
+      const basename = dedupeAgainst(
+        takenFor(parentDir),
+        `${sanitizeName(note.title)}.typ`
+      );
+      await writeExportFile(
+        root,
+        joinRel(parentDir, basename),
+        new TextEncoder().encode(note.body)
+      );
+      return { kind: 'typst', assets_written: 0 };
     }
     default:
       // Unknown kind — count it but don't fail the whole export.

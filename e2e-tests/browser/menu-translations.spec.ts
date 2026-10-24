@@ -23,7 +23,8 @@ test.beforeEach(async ({ page }) => {
 
 async function expectIconOnEveryItem(items: Locator) {
   for (const item of await items.all()) {
-    await expect(item.locator('svg')).toHaveCount(1);
+    // Check the label's icon separately from any submenu arrow.
+    await expect(item.locator(':scope > span:first-child svg')).toHaveCount(1);
   }
 }
 
@@ -46,11 +47,24 @@ test.describe('desktop file tree', () => {
       /^\s*Rechts öffnen\s*$/,
       /^\s*Unten öffnen\s*$/,
       /^\s*In neuem Fenster öffnen\s*$/,
+      /^\s*Exportieren\s*$/,
       /^\s*Umbenennen…/,
       /^\s*In den Stamm verschieben\s*$/,
       /^\s*Löschen/
     ]);
     await expectIconOnEveryItem(items);
+
+    const exportItem = page.getByRole('menuitem', {
+      name: 'Exportieren',
+      exact: true
+    });
+    await expect(exportItem).toHaveAttribute('aria-haspopup', 'menu');
+    await expect(exportItem).toHaveAttribute('aria-expanded', 'false');
+    await exportItem.click();
+    await expect(exportItem).toHaveAttribute('aria-expanded', 'true');
+    await expect(
+      page.getByRole('menu').getByRole('menu').getByRole('menuitem')
+    ).toHaveText(['Markdown', 'HTML', 'PDF', 'Word']);
   });
 
   test('translates the folder menu and keeps every icon', async ({ page }) => {

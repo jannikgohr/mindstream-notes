@@ -636,6 +636,9 @@
     "pdf.page.totalLabel": "von {total}",
     "pdf.export.label": "Annotiertes PDF herunterladen",
     "pdf.export.failed": "Export fehlgeschlagen",
+    "pdf.export.printReady.commentsHeading": "Kommentare",
+    "pdf.export.printReady.formNotFlattened": "Das Formular dieses PDFs ließ sich nicht fest in die Seiten übernehmen. Seine Felder bleiben im druckfertigen PDF ausfüllbar, und Drucker, die Formularfelder überspringen, lassen sie leer.",
+    "pdf.export.printReady.unsupportedCharacters": "Einige Zeichen in Kommentaren unterstützt die eingebaute PDF-Schrift nicht. Sie wurden ersetzt.",
     "pdf.toolbar.label": "PDF-Steuerung",
     "pdf.toolbar.navigator": "Seiten und Gliederung",
     "pdf.toolbar.previousPage": "Vorherige Seite",
@@ -1331,7 +1334,14 @@
     "onboarding.preview.ideaBody": "Schaffe Platz für dein nächstes Projekt. Beginne mit einer kleinen Idee und sieh, wohin sie dich führt.",
     "onboarding.preview.task": "Zeit zum Schreiben nehmen",
     "onboarding.preview.saved": "Deine Notizen in einem Stil, der zu dir passt.",
-    "onboarding.practice.source": "Markdown-Quelltext zum Üben"
+    "onboarding.practice.source": "Markdown-Quelltext zum Üben",
+    "data.exportVault.chip.boards.one": "Kanban-Board",
+    "data.exportVault.chip.boards.other": "Kanban-Boards",
+    "data.exportVault.chip.boards.status": "Als Markdown und JSON gespeichert",
+    "data.exportVault.chip.typst.one": "Typst-Dokument",
+    "data.exportVault.chip.typst.other": "Typst-Dokumente",
+    "data.exportVault.chip.typst.status": "Als Typst-Quelltext gespeichert",
+    "fileTree.exporting": "{label} wird exportiert…"
   },
   "categories": {
     "account": {

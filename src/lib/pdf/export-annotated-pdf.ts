@@ -17,6 +17,7 @@
  * viewport.convertToPdfPoint. We pass them through unchanged.
  */
 
+import type { PDFRef } from 'pdf-lib';
 import type {
   PdfAnnotation,
   PdfInkStroke,
@@ -28,7 +29,7 @@ import { pressureWidth } from '$lib/ink/editor-helpers';
 
 const ANNOT_FLAG_PRINT = 4;
 
-function hexToRgb(hex: string): [number, number, number] {
+export function hexToRgb(hex: string): [number, number, number] {
   const v = hex.replace('#', '');
   if (v.length !== 6) return [0, 0, 0];
   const r = parseInt(v.slice(0, 2), 16) / 255;
@@ -42,7 +43,7 @@ function rectArray(rect: PdfRect): [number, number, number, number] {
   return [rect.x, rect.y, rect.x + rect.width, rect.y + rect.height];
 }
 
-function unionRects(rects: PdfRect[]): PdfRect {
+export function unionRects(rects: PdfRect[]): PdfRect {
   if (rects.length === 0) return { x: 0, y: 0, width: 0, height: 0 };
   let minX = Number.POSITIVE_INFINITY;
   let minY = Number.POSITIVE_INFINITY;
@@ -90,6 +91,14 @@ function strokeBounds(
   };
 }
 
+/** Bounding box of a set of strokes, padded by the widest stroke. */
+export function inkBounds(strokes: PdfInkStroke[]): PdfRect {
+  return strokeBounds(
+    strokes.flatMap((s) => s.points),
+    Math.max(...strokes.map((s) => s.width))
+  );
+}
+
 function inkListFromStrokes(strokes: PdfInkStroke[]): number[][] {
   return strokes
     .filter((s) => s.points.length >= 2)
@@ -122,9 +131,11 @@ function annotationIsLive(annotation: PdfAnnotation): boolean {
   return !annotation.deletedAt;
 }
 
-type PdfLibModule = typeof import('pdf-lib');
-type PdfDocument = Awaited<ReturnType<PdfLibModule['PDFDocument']['load']>>;
-type PdfContext = PdfDocument['context'];
+export type PdfLibModule = typeof import('pdf-lib');
+export type PdfDocument = Awaited<
+  ReturnType<PdfLibModule['PDFDocument']['load']>
+>;
+export type PdfContext = PdfDocument['context'];
 
 function buildHighlight(annotation: PdfAnnotation, lib: PdfLibModule) {
   const [r, g, b] = hexToRgb(annotation.color);
@@ -172,11 +183,7 @@ function buildInk(
   if (!annotation.strokes || annotation.strokes.length === 0) return null;
   const inkList = inkListFromStrokes(annotation.strokes);
   if (inkList.length === 0) return null;
-  const allPoints = annotation.strokes.flatMap((s) => s.points);
-  const bbox = strokeBounds(
-    allPoints,
-    Math.max(...annotation.strokes.map((s) => s.width))
-  );
+  const bbox = inkBounds(annotation.strokes);
   const [r, g, b] = hexToRgb(annotation.strokes[0].color || annotation.color);
   const width = annotation.strokes[0]?.width ?? 1.5;
   const dict: Record<string, unknown> = {
@@ -195,44 +202,63 @@ function buildInk(
     dict.Contents = lib.PDFHexString.fromText(annotation.body);
   }
   if (annotation.id.startsWith('shared:')) {
-    const commands = ['q', '/GS0 gs', '1 J', '1 j'];
-    for (const stroke of annotation.strokes) {
-      const [red, green, blue] = hexToRgb(stroke.color);
-      commands.push(`${red} ${green} ${blue} RG`);
-      for (let i = 1; i < stroke.points.length; i++) {
-        const a = stroke.points[i - 1],
-          b = stroke.points[i];
-        const width =
-          stroke.width *
-          pressureWidth(((a.pressure ?? 1) + (b.pressure ?? 1)) / 2);
-        commands.push(
-          `${pdfNumber(width)} w`,
-          `${pdfNumber(a.x - bbox.x)} ${pdfNumber(a.y - bbox.y)} m`,
-          `${pdfNumber(b.x - bbox.x)} ${pdfNumber(b.y - bbox.y)} l`,
-          'S'
-        );
-      }
-    }
-    commands.push('Q');
     dict.AP = {
-      N: context.register(
-        context.flateStream(commands.join('\n'), {
-          Type: 'XObject',
-          Subtype: 'Form',
-          BBox: [0, 0, bbox.width, bbox.height],
-          Resources: {
-            ExtGState: {
-              GS0: { CA: annotation.opacity, ca: annotation.opacity }
-            }
-          }
-        })
+      N: buildSharedInkAppearanceRef(
+        annotation.strokes,
+        annotation.opacity,
+        bbox,
+        context
       )
     };
   }
   return dict;
 }
 
-function pdfNumber(value: number): string {
+/**
+ * Appearance stream for shared (handwriting-layer) ink: one segment per
+ * point pair so pressure can vary the width along the stroke. Coordinates
+ * are relative to `bbox`'s origin.
+ */
+export function buildSharedInkAppearanceRef(
+  strokes: PdfInkStroke[],
+  opacity: number,
+  bbox: PdfRect,
+  context: PdfContext
+): PDFRef {
+  const commands = ['q', '/GS0 gs', '1 J', '1 j'];
+  for (const stroke of strokes) {
+    const [red, green, blue] = hexToRgb(stroke.color);
+    commands.push(`${red} ${green} ${blue} RG`);
+    for (let i = 1; i < stroke.points.length; i++) {
+      const a = stroke.points[i - 1],
+        b = stroke.points[i];
+      const width =
+        stroke.width *
+        pressureWidth(((a.pressure ?? 1) + (b.pressure ?? 1)) / 2);
+      commands.push(
+        `${pdfNumber(width)} w`,
+        `${pdfNumber(a.x - bbox.x)} ${pdfNumber(a.y - bbox.y)} m`,
+        `${pdfNumber(b.x - bbox.x)} ${pdfNumber(b.y - bbox.y)} l`,
+        'S'
+      );
+    }
+  }
+  commands.push('Q');
+  return context.register(
+    context.flateStream(commands.join('\n'), {
+      Type: 'XObject',
+      Subtype: 'Form',
+      BBox: [0, 0, bbox.width, bbox.height],
+      Resources: {
+        ExtGState: {
+          GS0: { CA: opacity, ca: opacity }
+        }
+      }
+    })
+  );
+}
+
+export function pdfNumber(value: number): string {
   return Number.isFinite(value) ? value.toFixed(3).replace(/\.?0+$/, '') : '0';
 }
 
@@ -305,7 +331,7 @@ async function buildSignatureImageAppearanceRef(
   opacity: number,
   out: PdfDocument,
   context: PdfContext
-): Promise<unknown | null> {
+): Promise<PDFRef | null> {
   if (!image?.dataUrl || image.mimeType !== 'image/png') return null;
   try {
     const png = await out.embedPng(image.dataUrl);
@@ -345,7 +371,7 @@ function buildSignatureStrokeAppearanceRef(
   placement: PdfRect,
   opacity: number,
   context: PdfContext
-): unknown | null {
+): PDFRef | null {
   const commands: string[] = ['q', '/GS0 gs'];
   for (const stroke of signature.strokes) {
     const path = signatureStrokeAppearancePath(stroke, signature, placement);
@@ -370,6 +396,30 @@ function buildSignatureStrokeAppearanceRef(
     }
   });
   return context.register(stream);
+}
+
+/**
+ * Appearance stream for a signature placed at `placement`, with
+ * coordinates relative to the placement's origin. Prefers the captured PNG
+ * and falls back to the vector strokes.
+ */
+export async function buildSignatureAppearanceRef(
+  signature: PdfSignatureSnapshot,
+  placement: PdfRect,
+  opacity: number,
+  out: PdfDocument,
+  context: PdfContext
+): Promise<PDFRef | null> {
+  return (
+    (await buildSignatureImageAppearanceRef(
+      signature.image,
+      placement,
+      opacity,
+      out,
+      context
+    )) ??
+    buildSignatureStrokeAppearanceRef(signature, placement, opacity, context)
+  );
 }
 
 async function buildSignature(
@@ -397,20 +447,13 @@ async function buildSignature(
     T: lib.PDFHexString.fromText(annotation.authorId),
     M: lib.PDFString.of(toPdfDate(annotation.updatedAt))
   };
-  const appearanceRef =
-    (await buildSignatureImageAppearanceRef(
-      annotation.signature.image,
-      placement,
-      annotation.opacity,
-      out,
-      context
-    )) ??
-    buildSignatureStrokeAppearanceRef(
-      annotation.signature,
-      placement,
-      annotation.opacity,
-      context
-    );
+  const appearanceRef = await buildSignatureAppearanceRef(
+    annotation.signature,
+    placement,
+    annotation.opacity,
+    out,
+    context
+  );
   if (appearanceRef) dict.AP = { N: appearanceRef };
   if (annotation.body) {
     dict.Contents = lib.PDFHexString.fromText(annotation.body);

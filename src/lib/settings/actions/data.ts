@@ -145,6 +145,9 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
       // `notes-export` pulls in the Excalidraw dep through its freeform
       // branch — keep it out of the static module graph so tests for
       // unrelated modules don't trip over Excalidraw's roughjs resolution.
+      const { flushPendingEditorSaves } =
+        await import('$lib/editor/suspend-flush');
+      await flushPendingEditorSaves();
       const { exportVault } = await import('$lib/notes-export');
       const report = await exportVault(root);
       await showExportResult(report, root);

@@ -16,18 +16,33 @@ describe('note exporters', () => {
   it('offers PDF export for handwritten notes', () => {
     expect(
       exportersForNote(note('ink')).map((exporter) => exporter.id)
-    ).toEqual(['ink.pdf']);
+    ).toEqual(['ink.pdf', 'ink.png']);
   });
 
-  it('keeps annotated PDF export for PDF notes', () => {
+  it('offers annotated and print-ready PDF export for PDF notes', () => {
     expect(
       exportersForNote(note('pdf')).map((exporter) => exporter.id)
-    ).toEqual(['pdf.annotated']);
+    ).toEqual([
+      'pdf.annotated',
+      'pdf.print-ready',
+      'pdf.original',
+      'pdf.markdown'
+    ]);
   });
 
-  it('does not offer exporters for note kinds without direct exports', () => {
-    expect(exportersForNote(note('markdown'))).toEqual([]);
-    expect(exportersForNote(note('freeform'))).toEqual([]);
+  it('offers direct exports for Markdown, freeform, and Kanban', () => {
+    expect(exportersForNote(note('markdown')).map((entry) => entry.id)).toEqual(
+      ['markdown.md', 'markdown.html', 'markdown.pdf', 'markdown.docx']
+    );
+    expect(exportersForNote(note('freeform')).map((entry) => entry.id)).toEqual(
+      ['freeform.excalidraw', 'freeform.png', 'freeform.svg']
+    );
+    expect(exportersForNote(note('kanban')).map((entry) => entry.id)).toEqual([
+      'kanban.csv',
+      'kanban.xlsx',
+      'kanban.md',
+      'kanban.json'
+    ]);
   });
 
   it('adds plugin exporters for existing note types', () => {
@@ -55,7 +70,13 @@ describe('note exporters', () => {
 
     expect(
       exportersForNote(note('markdown')).map((exporter) => exporter.id)
-    ).toEqual(['plugin.com.example.markdown-export.pdf']);
+    ).toEqual([
+      'markdown.md',
+      'markdown.html',
+      'markdown.pdf',
+      'markdown.docx',
+      'plugin.com.example.markdown-export.pdf'
+    ]);
   });
 
   it('adds plugin exporters for plugin-owned note types', () => {
