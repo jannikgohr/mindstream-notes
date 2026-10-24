@@ -1,10 +1,9 @@
 # Plugin host API design and general batching
 
-This is the design guidance for the experimental Wasm batch interface. The
-measured comparison is in [the physical Android report](benchmarks/wasm-host-batch-2026-10-21/README.md).
-It covers all current host capabilities, not only dates. The production
-Templates component now uses Rust with scalar host dates. TypeScript examples
-remain outside the shipped tree, and Luau runtime support is retained.
+This is the design guidance for the experimental Wasm batch interface. It
+covers all current host capabilities, not only dates. The production Templates
+component uses Rust with scalar host dates. TypeScript examples remain outside
+the shipped tree.
 
 ## Decide by ownership and measured total cost
 
@@ -129,9 +128,8 @@ they are not evidence that the same performance tradeoff applies to our host.
   resource edits. Bulk submission and transactional behavior are separate
   promises; a batch should not imply rollback unless it implements it.
 - Neovim's current docs [deprecate nvim_call_atomic](https://neovim.io/doc/user/deprecated/)
-  in favor of [nvim_exec_lua](<https://neovim.io/doc/user/api/#nvim_exec_lua()>).
-  Executing host-side Lua can combine arbitrary work in that editor's trust
-  model. We use a closed typed operation list instead of evaluating guest
+  in favor of [running a script in the editor](<https://neovim.io/doc/user/api/#nvim_exec_lua()>).
+  A host-side script can combine arbitrary work in that editor's trust model. We use a closed typed operation list instead of evaluating guest
   scripts in the privileged host. That preserves the Wasm capability boundary.
 - [WIT](https://component-model.bytecodealliance.org/design/wit.html) defines
   typed contracts, including records, variants and resources; it does not
@@ -272,8 +270,7 @@ for recovery across those interruptions; this transport does not provide them.
 
 ## Why fewer crossings can take longer
 
-The [physical Android comparison](benchmarks/wasm-host-batch-2026-10-21/README.md)
-measured complete implementations. Date-heavy native AOT p95 was
+The physical Android comparison measured complete implementations. Date-heavy native AOT p95 was
 0.533-0.545 ms scalar versus 0.564-0.570 ms batch; interpreter p95 was
 1.537-1.558 versus 2.338-2.343 ms. These measurements predate the richer failure
 record. They are not new timings for the revised ABI.
@@ -324,6 +321,6 @@ is implemented or claimed faster by this comparison.
 
 New general-host API code can affect release binary/package sizes even if a
 plugin does not call it. Matching app startup/memory/package measurements must
-be repeated before closing release gates for this revision. The earlier
-optimization report's package pairs do not validate the new host additions.
-No budgets were raised, no untested platform is marked passed, and Luau stays.
+be repeated before this revision ships. Earlier package measurements do not
+validate the new host additions.
+No budgets were raised, and no untested platform is marked passed.

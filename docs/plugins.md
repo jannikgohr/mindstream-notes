@@ -6,11 +6,9 @@ component that runs in the Rust backend. The versioned WIT contract is
 language agnostic; Rust and TypeScript are the tested build paths.
 The host controls permissions, resource limits and effects.
 
-All shipped plugins use manifest version 2. Templates and Typst execute as
-Rust/Wasm components. LanguageTool uses the v2 declarative text-checker and
-native-service contributions without an executable guest. Legacy Luau source
-files live only in the non-shipped regression examples; runtime compatibility
-remains until the migration's release gates pass.
+Templates and Typst execute as Rust/Wasm components. LanguageTool uses the
+declarative text-checker and native-service contributions without an
+executable guest.
 
 Shipped executable plugins use Rust and generated WIT bindings. Start with the
 [Rust authoring path](../plugin-sdk/rust/README.md), or use the
@@ -19,9 +17,6 @@ Shipped executable plugins use Rust and generated WIT bindings. Start with the
 TypeScript packages. A guest must implement the component world and JSON
 protocol, not merely compile to a core Wasm module. WASI, browser and Node
 imports are unavailable.
-See the [migration gate report](wasm-plugin-migration.md) for platform evidence.
-Luau remains temporarily available under manifest version 1 until the release
-gates pass; its API is documented [separately](plugins-legacy-luau.md).
 
 ## Where plugins live
 
@@ -131,10 +126,8 @@ is namespaced under the plugin `id`, so two plugins can never collide.
 `manifestVersion` is required. Without it there is no way to tell a manifest
 written for a different app version from one that is simply malformed, and the
 error a plugin author sees should say which. This app writes and accepts
-versions `1` and `2`. Wasm requires version `2`, which rejects Luau.
-Manifest-only plugins work with either version, and can move to version `2`
-without changing their contributions. A future version is refused with an
-"update the app" error.
+version `2`. An older version is refused with an "update the plugin" error, and
+a future version with an "update the app" error.
 
 `minAppVersion` is optional and compared numerically as `major.minor.patch`.
 

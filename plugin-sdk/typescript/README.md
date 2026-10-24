@@ -7,7 +7,7 @@ host. Arbitrary Node APIs, browser APIs and native npm addons are unavailable.
 
 ## Start a project
 
-The SDK is private during the migration. From the repository root, pack it:
+The SDK is not published yet. From the repository root, pack it:
 
 ```sh
 pnpm install --frozen-lockfile
@@ -161,5 +161,4 @@ for scalar limits, including 8 MiB native-tool stdin and 4 MiB storage files.
 
 New components importing this interface need a matching host. The expanded
 experimental failure record requires rebuilding older batch guests; scalar
-APIs remain. See [the contract and example](../../docs/plugin-host-api-design.md)
-and [measured comparison](../../docs/benchmarks/wasm-host-batch-2026-10-21/README.md).
+APIs remain. See [the contract and example](../../docs/plugin-host-api-design.md).

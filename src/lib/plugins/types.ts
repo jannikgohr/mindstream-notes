@@ -8,7 +8,7 @@
  * itself.
  *
  * There are two places a plugin's code can run, and they are different
- * boundaries: a scripted runtime (`'wasm'`, formerly `'luau'`) runs in the
+ * boundaries: a scripted runtime (`'wasm'`) runs in the
  * Rust backend with no ambient filesystem, network or process authority, and
  * `render.webview` runs a module
  * in a sandboxed iframe on its own origin that can reach neither the app's DOM
@@ -801,10 +801,8 @@ export interface PluginContributions {
  * field, a new contribution point) do not bump it, because the
  * forward-compatibility rules below already cover them.
  *
- * Version 2 moved scripted plugins from Luau to WebAssembly: `runtime: 'wasm'`
- * needs 2, and `runtime: 'luau'` is only valid in 1. A `manifest-only`
- * plugin is the same in both, so a version 1 declarative manifest keeps
- * loading unchanged.
+ * Only this version loads. An older manifest describes a plugin this app can
+ * no longer run, and the error says to update the plugin.
  */
 export const CURRENT_MANIFEST_VERSION = 2;
 
@@ -815,7 +813,7 @@ export const CURRENT_MANIFEST_VERSION = 2;
 export function isScriptedRuntime(
   runtime: PluginRuntime | string | undefined
 ): boolean {
-  return runtime === 'wasm' || runtime === 'luau';
+  return runtime === 'wasm';
 }
 
 /**
@@ -829,18 +827,14 @@ export function isScriptedRuntime(
  *     such as a computed template or a toolbar menu. It reaches the host only
  *     through the permission-gated `mindstream:plugin` interfaces; the app,
  *     not the plugin, still performs any note write. `entry` is a safe
- *     relative `.wasm` filename inside the plugin dir. Needs manifest
- *     version 2.
- *   - `'luau'` — the version 1 predecessor: a sandboxed Luau `entry` script
- *     with the `ms.*` host table. Being retired in favour of `'wasm'`.
+ *     relative `.wasm` filename inside the plugin dir.
  */
 
 export interface PluginManifest {
   /**
    * Which manifest schema this plugin was written against. Required: without
-   * it there is no way to tell a manifest written for an older app from one
-   * that is simply malformed, and no way to reject a v2 manifest cleanly once
-   * v2 exists.
+   * it there is no way to tell a manifest written for another app version
+   * from one that is simply malformed.
    */
   manifestVersion: number;
   /**
@@ -867,8 +861,8 @@ export interface PluginManifest {
   enabledByDefault?: boolean;
   runtime: PluginRuntime;
   /**
-   * Required for a scripted runtime: a `.wasm` (or, in version 1, `.luau`)
-   * file directly inside the plugin dir.
+   * Required for a scripted runtime: a `.wasm` file directly inside the
+   * plugin dir.
    */
   entry?: string;
   /** Optional per-runtime resource limits. The backend applies hard maximums. */

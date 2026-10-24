@@ -315,7 +315,7 @@ it('both builtin packages pass SDK preflight with unchanged contribution IDs', a
         : ['renderDocument', 'exportDocument']
     );
     expect(await readdir(dir, { recursive: true })).not.toEqual(
-      expect.arrayContaining([expect.stringMatching(/\.(luau|ts|rs)$/)])
+      expect.arrayContaining([expect.stringMatching(/\.(ts|rs)$/)])
     );
     expect(
       await checkPackage(
@@ -347,7 +347,7 @@ it('every shipped plugin uses v2 and LanguageTool stays declarative', async () =
       expect(manifest.contributes.textCheckers[0].id).toBe('grammar');
     }
     expect(await readdir(dir, { recursive: true })).not.toEqual(
-      expect.arrayContaining([expect.stringMatching(/\.luau$/)])
+      expect.arrayContaining([expect.stringMatching(/\.(ts|rs)$/)])
     );
   }
 }, 60_000);

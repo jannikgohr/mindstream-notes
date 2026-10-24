@@ -36,8 +36,8 @@ cargo test --locked --workspace
 
 The SDK's bundled tests run the same behavior assertions against the shipped
 Rust components and the [non-shipped TypeScript examples](../examples/README.md).
-App-host tests also compare Templates with retained Luau. Runtime tests cover
-the compiled components on native Wasmtime and the Pulley interpreter.
+Runtime tests cover the compiled components on native Wasmtime and the Pulley
+interpreter.
 
 Templates keeps the measured scalar host calendar path. The guest handles
 placeholder parsing, variables, ASCII filters, folder/tag selection and menu
@@ -49,7 +49,3 @@ Typst builds arguments and groups diagnostics in the guest. The host checks
 permissions and tool declarations, runs the optional desktop binary, handles
 cancellation/time limits and returns encoded PDF output. Without that tool or
 its permission, both render/export return source-only mode on every platform.
-
-Switching first-party artifacts to Rust does not close the migration's
-[release gates](../../docs/wasm-plugin-migration.md). Luau runtime support stays
-until those gates pass.

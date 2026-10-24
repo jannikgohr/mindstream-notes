@@ -1,5 +1,5 @@
 //! Local dates for plugins: the moment-style formatter and calendar arithmetic
-//! behind `clock.format`, `clock.add` and Luau's `ms.date`.
+//! behind `clock.format` and `clock.add`.
 //!
 //! The tokens match the frontend template engine (`YYYY-MM-DD`, `HH:mm`,
 //! `dddd`, ...), so a plugin's dates read the same as `{{date:...}}`. A guest

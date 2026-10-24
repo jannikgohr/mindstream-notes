@@ -102,14 +102,11 @@ export function compareVersions(a: string, b: string): number {
 }
 
 /**
- * Safe scripted entry filenames: a single path segment (letters/digits/`._-`)
- * with a runtime-specific extension, no separators or `..`. The backend joins
- * this onto the plugin dir, so this is the traversal guard.
+ * Safe component entry filenames: a single path segment (letters/digits/`._-`)
+ * ending in `.wasm`, no separators or `..`. The backend joins this onto the
+ * plugin dir, so this is the traversal guard.
  */
-const SAFE_ENTRY_RE: Record<'luau' | 'wasm', RegExp> = {
-  luau: /^[A-Za-z0-9](?:[A-Za-z0-9._-]*)\.luau$/,
-  wasm: /^[A-Za-z0-9](?:[A-Za-z0-9._-]*)\.wasm$/
-};
+const SAFE_ENTRY_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*)\.wasm$/;
 /**
  * A safe relative documentation path: one or more `/`-joined segments ending in
  * `.md`. Each segment must start alphanumeric, so `..` (and any dot-leading
@@ -1584,6 +1581,12 @@ export function validateManifest(input: unknown): PluginManifest {
       `manifest.manifestVersion ${m.manifestVersion} is newer than this app understands (${CURRENT_MANIFEST_VERSION}); update the app`
     );
   }
+  if (m.manifestVersion < CURRENT_MANIFEST_VERSION) {
+    throw new PluginValidationError(
+      pluginId,
+      `manifest.manifestVersion ${m.manifestVersion} is no longer supported; update the plugin to version ${CURRENT_MANIFEST_VERSION}`
+    );
+  }
   if (m.minAppVersion !== undefined) {
     assertNonEmptyString(pluginId, m.minAppVersion, 'manifest.minAppVersion');
     if (!SEMVER_RE.test(m.minAppVersion)) {
@@ -1628,39 +1631,22 @@ export function validateManifest(input: unknown): PluginManifest {
   }
 
   // Runtimes are explicit: purely declarative `manifest-only`, or sandboxed
-  // backend code as a WebAssembly component (`wasm`, manifest version 2) or a
-  // Luau script (`luau`, version 1 only). Anything else is refused rather
-  // than loaded half-supported.
-  if (
-    m.runtime !== 'manifest-only' &&
-    m.runtime !== 'wasm' &&
-    m.runtime !== 'luau'
-  ) {
+  // backend code as a WebAssembly component (`wasm`). Anything else is refused
+  // rather than loaded half-supported.
+  if (m.runtime !== 'manifest-only' && m.runtime !== 'wasm') {
     throw new PluginValidationError(
       pluginId,
       `manifest.runtime ("${String(m.runtime)}") is unsupported; expected "manifest-only" or "wasm"`
     );
   }
-  if (m.runtime === 'wasm' && m.manifestVersion < 2) {
-    throw new PluginValidationError(
-      pluginId,
-      'runtime "wasm" needs manifestVersion 2'
-    );
-  }
-  if (m.runtime === 'luau' && m.manifestVersion >= 2) {
-    throw new PluginValidationError(
-      pluginId,
-      'runtime "luau" is not part of manifestVersion 2; port the plugin to "wasm"'
-    );
-  }
-  if (m.runtime === 'wasm' || m.runtime === 'luau') {
+  if (m.runtime === 'wasm') {
     assertNonEmptyString(pluginId, m.entry, 'manifest.entry');
     // The backend reads `<pluginDir>/<entry>`, so entry must be a safe relative
-    // filename — no separators, no traversal, and the runtime's extension.
-    if (!SAFE_ENTRY_RE[m.runtime].test(m.entry)) {
+    // filename — no separators, no traversal, and the `.wasm` extension.
+    if (!SAFE_ENTRY_RE.test(m.entry)) {
       throw new PluginValidationError(
         pluginId,
-        `manifest.entry ("${m.entry}") must be a plain .${m.runtime} filename inside the plugin dir (no "/", "\\\\" or "..")`
+        `manifest.entry ("${m.entry}") must be a plain .wasm filename inside the plugin dir (no "/", "\\\\" or "..")`
       );
     }
   } else if (m.entry !== undefined) {

@@ -21,7 +21,7 @@ const units: Record<string, TimeUnit> = {
   m: 'minute',
   s: 'second'
 };
-// Match Luau's byte-string case conversion for existing user templates.
+// ASCII-only case conversion, which existing user templates rely on.
 const upper = (value: string) =>
   value.replace(/[a-z]/g, (char) => char.toUpperCase());
 const lower = (value: string) =>

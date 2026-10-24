@@ -1,8 +1,7 @@
 //! Stopping a plugin call from outside it.
 //!
 //! A call checks its token wherever it already waits or polls: the Wasm epoch
-//! callback, the Luau interrupt hook, and the loop that waits for a native
-//! tool. Cancelling is therefore prompt, around 10 ms, including in the middle
+//! callback and the loop that waits for a native tool. Cancelling is therefore prompt, around 10 ms, including in the middle
 //! of a long native tool run, which the token kills.
 //!
 //! [`Registry`] is how the host finds the calls to cancel when a plugin is

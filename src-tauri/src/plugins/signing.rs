@@ -17,9 +17,9 @@
 //!
 //! The signed payload is the plugin's **package digest** (see [`package_digest`]),
 //! not just `manifest.json`: it folds in a content hash of every file in the
-//! plugin dir. So a valid signature covers the manifest AND the `.luau` code (and
-//! any assets) — tampering with a script breaks the signature exactly as editing
-//! the manifest does, which is what makes running a signed `luau` plugin safe.
+//! plugin dir. So a valid signature covers the manifest AND the `.wasm` component
+//! (and any assets) — tampering with the code breaks the signature exactly as
+//! editing the manifest does, which is what makes running a signed plugin safe.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use ed25519_dalek::{Signature, VerifyingKey};
@@ -217,10 +217,10 @@ mod tests {
         // digest format and the Ed25519 wire format in lockstep with the signer.
         let vector = files(&[
             ("manifest.json", br#"{"id":"com.vector.test"}"# as &[u8]),
-            ("main.luau", b"return {}"),
+            ("plugin.wasm", b"\0asm\x01\0\0\0"),
         ]);
         let digest = package_digest(&vector);
-        let json = r#"{"algorithm":"ed25519","publicKey":"yeBWzJ6K/6SqN7KGeco1huwxA7Ja0eYA1aviH+QWx6k=","signature":"/WWWW2hOoykmGqKuSeFDJuVL/cbfn3u5cBpvvWi7DkN4Of1DZvmd3bWTCNRN+2s+MCwXNECPreMTByVVkqTvDA=="}"#;
+        let json = r#"{"algorithm":"ed25519","publicKey":"rlV1PzKTBhckXloR52TSwoNHK8xQJVw2YqvHqRBkBGc=","signature":"3yDYA1bYoWmJ7bn6TWYGfhyN/WfHmgNlg+1ZYf5q0IjWk30VPZ+cKa0oKY4SMmkGdBDiZ/0j3EJVKjcL+PT5BA=="}"#;
         assert_eq!(
             verify(&digest, Some(json.as_bytes())).status,
             SignatureStatus::Valid
@@ -247,12 +247,12 @@ mod tests {
     fn package_digest_is_order_independent_and_skips_signature() {
         let a = package_digest(&files(&[
             ("manifest.json", b"{}"),
-            ("main.luau", b"return {}"),
+            ("plugin.wasm", b"\0asm"),
             ("signature.json", b"whatever"),
         ]));
         // Reordered input, and the signature file present or not, must not change it.
         let b = package_digest(&files(&[
-            ("main.luau", b"return {}"),
+            ("plugin.wasm", b"\0asm"),
             ("manifest.json", b"{}"),
         ]));
         assert_eq!(a, b);
@@ -262,22 +262,22 @@ mod tests {
     fn package_digest_covers_code_files() {
         let base = package_digest(&files(&[
             ("manifest.json", b"{}"),
-            ("main.luau", b"return 1"),
+            ("plugin.wasm", b"\0asm\x01"),
         ]));
         let edited = package_digest(&files(&[
             ("manifest.json", b"{}"),
-            ("main.luau", b"return 2"),
+            ("plugin.wasm", b"\0asm\x02"),
         ]));
-        assert_ne!(base, edited, "editing a .luau file must change the digest");
+        assert_ne!(base, edited, "editing the component must change the digest");
     }
 
     #[test]
     fn package_digest_has_the_documented_shape() {
         // "<relpath>\n<sha256-hex>\n" per file, sorted by path. Locks the exact
         // bytes the Node signer must reproduce.
-        let doc = package_digest(&files(&[("b.luau", b"y"), ("a.json", b"x")]));
+        let doc = package_digest(&files(&[("b.wasm", b"y"), ("a.json", b"x")]));
         let expected = format!(
-            "a.json\n{}\nb.luau\n{}\n",
+            "a.json\n{}\nb.wasm\n{}\n",
             sha256_hex(b"x"),
             sha256_hex(b"y")
         );

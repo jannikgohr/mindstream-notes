@@ -33,23 +33,12 @@ pub struct LimitPolicy {
 
 const MIB: usize = 1024 * 1024;
 
-/// Luau keeps the bounds it has always had: 1 to 64 MiB, default 16 MiB,
-/// 50 ms to 5 s, default 500 ms.
-pub const LUAU: LimitPolicy = LimitPolicy {
-    default_memory: 16 * MIB,
-    min_memory: MIB,
-    max_memory: 64 * MIB,
-    default_timeout: Duration::from_millis(500),
-    min_timeout: Duration::from_millis(50),
-    max_timeout: Duration::from_secs(5),
-};
-
 /// Wasm components carry their language runtime in their own linear memory,
-/// so the floor is higher. A QuickJS component starts in under 2 MiB, and the
+/// so the floor is 4 MiB. A QuickJS component starts in under 2 MiB, and the
 /// 32 MiB default leaves room for a few MiB of strings both ways. The memory
 /// ceiling covers a plugin that moves a large base64 document through itself.
-/// The time ceiling stays Luau's: an interpreter in a sandbox is slower, which
-/// the 1 s default absorbs, but a port should not quietly get longer runs.
+/// Calls default to 1 s, which leaves room for an interpreted guest such as
+/// QuickJS, and may ask for 50 ms to 5 s.
 pub const WASM: LimitPolicy = LimitPolicy {
     default_memory: 32 * MIB,
     min_memory: 4 * MIB,
@@ -185,11 +174,6 @@ mod tests {
 
     #[test]
     fn policies_keep_their_documented_ranges() {
-        let luau = LUAU.resolve(Some(1), Some(999_999));
-        assert_eq!(luau.memory_bytes, MIB);
-        assert_eq!(luau.timeout, Duration::from_secs(5));
-        assert_eq!(LUAU.resolve(None, None).memory_bytes, 16 * MIB);
-
         let wasm = WASM.resolve(None, None);
         assert_eq!(wasm.memory_bytes, 32 * MIB);
         assert_eq!(wasm.timeout, Duration::from_secs(1));

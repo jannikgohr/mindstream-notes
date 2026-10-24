@@ -8,9 +8,6 @@ sources for shipped plugins are in [bundled](../bundled/README.md).
   TypeScript SDK. Its settings and toolbar work like the shipped Rust plugin.
 - `typst-typescript/` demonstrates optional declared native tools, binary
   output, diagnostics and source-only fallback.
-- `legacy-luau/` retains pre-migration sources and host annotations for parity
-  tests and migration comparisons. These are regression fixtures, not current
-  installable example packages.
 
 The TypeScript examples have distinct `com.example.*.typescript` IDs so they
 can be installed without replacing trusted first-party packages. Each folder

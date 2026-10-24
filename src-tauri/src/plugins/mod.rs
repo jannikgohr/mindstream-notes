@@ -33,7 +33,6 @@ use crate::db::Db;
 use crate::error::{AppError, AppResult, CommandResult};
 
 pub mod discovery;
-pub mod luau;
 pub mod manifest;
 pub mod packages;
 mod precompiled;
@@ -852,11 +851,7 @@ fn ensure_inside_data_root(root: &Path, target: &Path) -> AppResult<()> {
 /// clamped into the range of its runtime. A manifest may ask; only the host
 /// decides.
 fn script_limits(manifest: &manifest::Manifest) -> runtime::limits::Limits {
-    let policy = match manifest.runtime {
-        manifest::PluginRuntime::Wasm => &runtime::limits::WASM,
-        _ => &runtime::limits::LUAU,
-    };
-    policy.resolve(manifest.limits.memory_bytes, manifest.limits.timeout_ms)
+    runtime::limits::WASM.resolve(manifest.limits.memory_bytes, manifest.limits.timeout_ms)
 }
 
 /// One call of a scripted plugin: what runs, and what it may reach.
@@ -870,9 +865,9 @@ pub struct ScriptCall {
     pub notes: Vec<runtime::host::NoteMeta>,
     pub data_root: Option<PathBuf>,
     pub cancel: runtime::cancel::CancelToken,
-    /// A Wasm plugin's component as read when its checksum was verified
-    /// (`DiscoveredPlugin::entry_bytes`). Required for every Wasm call,
-    /// including embedded plugins. Luau calls use `None`.
+    /// The plugin's component as read when its checksum was verified
+    /// (`DiscoveredPlugin::entry_bytes`). Required for every call, including
+    /// embedded plugins; a call without it is refused.
     pub verified_entry: Option<runtime::wasm::precompiled::VerifiedComponent>,
     /// Where compiled components are kept between runs. `None` keeps them in
     /// memory only.
@@ -910,56 +905,35 @@ pub fn run_plugin_script(
         HashMap::new()
     };
     let limits = script_limits(manifest);
-    if manifest.runtime == manifest::PluginRuntime::Wasm {
-        let component = call.verified_entry.ok_or_else(|| {
-            AppError::InvalidArg(format!("entry '{entry}' has no verified component bytes"))
-        })?;
-        let bundled = matches!(files, discovery::PluginFiles::Embedded(_))
-            .then(|| precompiled::find(&component))
-            .flatten();
-        let wasm = runtime::wasm::WasmRuntime::global()?;
-        return Ok(wasm
-            .invoke_verified_timed(
-                runtime::wasm::WasmCall {
-                    component: &component,
-                    export: &call.export,
-                    input: &call.input,
-                    setup: runtime::host::CallSetup {
-                        plugin_id: manifest.id.clone(),
-                        permissions: call.granted,
-                        notes: call.notes,
-                        native_tools,
-                        data_root: call.data_root,
-                        cancel: call.cancel,
-                    },
-                    limits,
-                    native_allowance: runtime::limits::NATIVE_ALLOWANCE,
-                    cache_dir: call.cache_dir.as_deref(),
+    let component = call.verified_entry.ok_or_else(|| {
+        AppError::InvalidArg(format!("entry '{entry}' has no verified component bytes"))
+    })?;
+    let bundled = matches!(files, discovery::PluginFiles::Embedded(_))
+        .then(|| precompiled::find(&component))
+        .flatten();
+    let wasm = runtime::wasm::WasmRuntime::global()?;
+    Ok(wasm
+        .invoke_verified_timed(
+            runtime::wasm::WasmCall {
+                component: &component,
+                export: &call.export,
+                input: &call.input,
+                setup: runtime::host::CallSetup {
+                    plugin_id: manifest.id.clone(),
+                    permissions: call.granted,
+                    notes: call.notes,
+                    native_tools,
+                    data_root: call.data_root,
+                    cancel: call.cancel,
                 },
-                Some(&component),
-                bundled.as_ref(),
-            )?
-            .0);
-    }
-    let source = files
-        .read_text(entry)?
-        .ok_or_else(|| AppError::InvalidArg(format!("entry '{entry}' not found")))?;
-    // The plugin's other `.luau` files, resolvable via a plugin-scoped `require`.
-    let modules = files.luau_modules()?;
-    luau::run(luau::ScriptRequest {
-        plugin_id: manifest.id.clone(),
-        source,
-        chunk_name: format!("{}/{entry}", manifest.id),
-        export: call.export,
-        input: call.input,
-        permissions: call.granted,
-        notes: call.notes,
-        native_tools,
-        data_root: call.data_root,
-        modules,
-        limits,
-        cancel: call.cancel,
-    })
+                limits,
+                native_allowance: runtime::limits::NATIVE_ALLOWANCE,
+                cache_dir: call.cache_dir.as_deref(),
+            },
+            Some(&component),
+            bundled.as_ref(),
+        )?
+        .0)
 }
 
 /// The half of a script's context the **backend** owns.
@@ -970,7 +944,7 @@ pub fn run_plugin_script(
 ///   - `settings` come from the database, so they are the plugin's real stored
 ///     configuration rather than a snapshot someone assembled and passed down.
 ///   - `folders` is the vault structure, gated on `notes.read` exactly like
-///     `ms.notes`. Folder names are user content; the two travel together.
+///     the notes host API. Folder names are user content; the two travel together.
 ///   - `now` is the host clock, so a script cannot be handed a false one.
 ///
 /// Everything the backend can build itself, it builds itself. What is left over
@@ -1021,7 +995,7 @@ fn merge_script_input(
     input
 }
 
-/// Build the read-only note snapshot exposed via `ms.notes`. One `notes::list`
+/// Build the read-only note snapshot the notes host API reads. One `notes::list`
 /// plus a folder-path index over `collections::list`; excludes trashed notes.
 fn note_snapshot(conn: &Connection) -> AppResult<Vec<runtime::host::NoteMeta>> {
     let folders = crate::collections::list(conn)?;
@@ -1503,8 +1477,7 @@ pub async fn plugins_run_script(
         .ok()
         .map(|root| root.join("plugin-cache").join("wasm"));
     // The plugin's isolated data directory: the cwd for any native tool the
-    // script runs via `ms.nativeTools`, and the root `ms.storage` reads and
-    // writes under. Resolved here (it needs the AppHandle) so the blocking
+    // plugin runs, and the root its storage reads and writes under. Resolved here (it needs the AppHandle) so the blocking
     // worker stays Tauri-free.
     let data_root = plugin_data_root(&app, &id).ok();
     // Run on a blocking worker: this isolates the guest so a hard crash can't

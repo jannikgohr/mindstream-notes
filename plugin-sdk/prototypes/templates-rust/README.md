@@ -4,8 +4,7 @@ This prototype implements the Templates exports against the same WIT and host
 APIs. Shipped Templates now uses the separate
 [production Rust source](../../bundled/README.md). The TypeScript reference is
 an [unshipped example](../../examples/README.md). This prototype is retained
-for its experimental calendar/batch comparisons. Luau and the TypeScript
-package remain in place while release gates are open.
+for its experimental calendar/batch comparisons.
 
 Build with Rust's `wasm32-unknown-unknown` target, the repository's installed
 Node 22 dependencies, and `node plugin-sdk/fixtures.mjs templates-rust`. The
@@ -62,8 +61,7 @@ Run pure calendar tests with `cargo test --manifest-path
 plugin-sdk/prototypes/templates-rust/Cargo.toml --locked --features local-calendar`.
 The runtime parity test compares all four components using the actual host
 IANA zone. The physical Android comparison adds `--rust-local-calendar
---time-zone Europe/Berlin --calendar-heavy` to the release probe. See the
-[measured comparison](../../../docs/benchmarks/wasm-local-calendar-2026-10-21/README.md).
+--time-zone Europe/Berlin --calendar-heavy` to the release probe.
 
 ## General host batching candidate
 
@@ -94,5 +92,4 @@ the scalar and local-calendar builds use individual calls over the same plan.
 The normal `$exports` result still advertises only the two Templates exports.
 No comparison component replaces the shipped Rust package.
 
-See the [batch measurements](../../../docs/benchmarks/wasm-host-batch-2026-10-21/README.md)
-and [host API design guidance](../../../docs/plugin-host-api-design.md).
+See the [host API design guidance](../../../docs/plugin-host-api-design.md).

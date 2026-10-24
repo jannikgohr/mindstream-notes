@@ -30,12 +30,12 @@ const PLUGIN_KIND = 'plugin.com.example.kinds.document';
 
 function kindManifest(version = '1.0.0'): Record<string, unknown> {
   return {
-    manifestVersion: 1,
+    manifestVersion: 2,
     id: 'com.example.kinds',
     name: 'Kinds',
     version,
-    runtime: 'luau',
-    entry: 'main.luau',
+    runtime: 'wasm',
+    entry: 'plugin.wasm',
     permissions: ['notes.create'],
     contributes: {
       noteKinds: [

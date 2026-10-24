@@ -1409,7 +1409,7 @@ mod tests {
     /// A manifest declaring one native service, parsed the way discovery does.
     fn service_manifest(service: serde_json::Value) -> manifest::Manifest {
         let v = serde_json::json!({
-            "manifestVersion": 1,
+            "manifestVersion": 2,
             "id": "com.a.plugin",
             "name": "A Plugin",
             "version": "1.0.0",
@@ -1439,7 +1439,7 @@ mod tests {
     #[test]
     fn a_manifest_declaring_no_services_has_none() {
         let v = serde_json::json!({
-            "manifestVersion": 1, "id": "com.a.plugin", "name": "A",
+            "manifestVersion": 2, "id": "com.a.plugin", "name": "A",
             "version": "1.0.0", "runtime": "manifest-only"
         });
         let m = manifest::Manifest::parse(v.to_string().as_bytes()).unwrap();
@@ -1452,7 +1452,7 @@ mod tests {
         // A service the backend cannot read is a reason to refuse the plugin,
         // not something to discover when someone opens a preview.
         let v = serde_json::json!({
-            "manifestVersion": 1, "id": "com.a.plugin", "name": "A",
+            "manifestVersion": 2, "id": "com.a.plugin", "name": "A",
             "version": "1.0.0", "runtime": "manifest-only",
             "permissions": ["nativeServices.run"],
             "contributes": { "nativeServices": [{ "id": 42 }] }

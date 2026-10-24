@@ -1,9 +1,8 @@
 //! The host services a plugin call can reach, shared by every runtime.
 //!
-//! A runtime adapter (Luau's `ms.*` table, the Wasm component's imports) is a
-//! thin translation onto the methods of [`HostContext`]. Permission checks,
-//! path containment, size limits and the time budget all live here, once, so
-//! a second runtime cannot enforce them differently from the first.
+//! The Wasm component's imports are a thin translation onto the methods of
+//! [`HostContext`]. Permission checks, path containment, size limits and the
+//! time budget all live here, once, apart from the component binding code.
 //!
 //! Note writes are deliberately absent. A plugin returns data and declarative
 //! effects, and the app performs every write itself.
@@ -39,7 +38,7 @@ pub const MAX_LOG_LINES: u32 = 200;
 pub const MAX_RANDOM_BYTES: u32 = 64 * 1024;
 
 /// Read-only metadata for one note. Never the body: the snapshot is cheap to
-/// build and copy. Field names are what Luau scripts see.
+/// build and copy. Field names are what plugins see in the JSON they read.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NoteMeta {
     pub id: String,

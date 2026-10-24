@@ -19,7 +19,7 @@
 //! Integrity uses SHA-256 of the plugin's **package digest** (see
 //! [`signing::package_digest`]) — a document folding in a content hash of every
 //! file in the plugin dir, not just `manifest.json`. So any change to the
-//! manifest *or* its code (a `.wasm` component, a `.luau` script) re-triggers
+//! manifest *or* its code (the `.wasm` component, any asset) re-triggers
 //! approval, and the hash can't be forged to match a previously-approved
 //! package.
 
@@ -51,8 +51,8 @@ pub struct DiscoveredPlugin {
     pub enabled_by_default: bool,
     pub source: String,
     /// Where the plugin's files are read from — a real directory (third-party)
-    /// or the binary-embedded builtin tree — used later to load its `.luau`
-    /// entry, docs and icons.
+    /// or the binary-embedded builtin tree — used later to read its docs,
+    /// icons and other assets.
     pub files: PluginFiles,
     /// SHA-256 (hex) of the raw manifest.json bytes.
     pub checksum: String,
@@ -174,21 +174,6 @@ impl PluginFiles {
                 .read_bytes(rel)?
                 .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())),
         }
-    }
-
-    /// Every `.luau` file in the plugin as a `module path (no extension) →
-    /// source` map, for the plugin-scoped `require`. Keys are `/`-separated
-    /// (e.g. `lib/parser`); non-UTF-8 files are skipped.
-    pub fn luau_modules(&self) -> AppResult<std::collections::HashMap<String, String>> {
-        let mut modules = std::collections::HashMap::new();
-        for (rel, bytes) in self.collect()? {
-            if let Some(stem) = rel.strip_suffix(".luau") {
-                if let Ok(source) = String::from_utf8(bytes) {
-                    modules.insert(stem.to_string(), source);
-                }
-            }
-        }
-        Ok(modules)
     }
 
     /// The real directory when filesystem-backed (for removal); `None` for
@@ -483,7 +468,7 @@ mod tests {
         fs::write(
             dir.join("manifest.json"),
             format!(
-                r#"{{ "manifestVersion": 1, "id": "{id}", "name": "T", "version": "1.0.0", "runtime": "manifest-only", "permissions": ["notes.create"]{extra} }}"#
+                r#"{{ "manifestVersion": 2, "id": "{id}", "name": "T", "version": "1.0.0", "runtime": "manifest-only", "permissions": ["notes.create"]{extra} }}"#
             ),
         )
         .unwrap();
@@ -552,7 +537,7 @@ mod tests {
             .unwrap()
             .expect("plugin.wasm is present");
         assert!(main.starts_with(b"\0asm\x0d\0\x01\0"));
-        assert!(tpl.files.read_bytes("main.luau").unwrap().is_none());
+        assert!(tpl.files.read_bytes("main.rs").unwrap().is_none());
     }
 
     #[test]
@@ -593,14 +578,14 @@ mod tests {
 
     #[test]
     fn checksum_covers_sibling_code_files() {
-        // A tampered .luau file must change the integrity checksum even though
-        // manifest.json is untouched — this is what the package digest buys.
+        // A tampered sibling file must change the integrity checksum even
+        // though manifest.json is untouched — this is what the package digest buys.
         let root = tmp();
         write_plugin(&root, "p", "com.a.p", "");
-        let entry = root.join("p").join("main.luau");
-        fs::write(&entry, "return { render = function() return {} end }").unwrap();
+        let asset = root.join("p").join("preview.css");
+        fs::write(&asset, "body { color: black }").unwrap();
         let before = discover_dir(&root, SOURCE_INSTALLED)[0].checksum.clone();
-        fs::write(&entry, "return { render = function() os.exit() end }").unwrap();
+        fs::write(&asset, "body { background: url(https://example.com) }").unwrap();
         let after = discover_dir(&root, SOURCE_INSTALLED)[0].checksum.clone();
         assert_ne!(before, after);
         fs::remove_dir_all(&root).ok();

@@ -10,7 +10,7 @@ fn manifest_from(value: serde_json::Value) -> manifest::Manifest {
 /// The minimum a manifest needs, with `extra` merged over it.
 fn manifest_with(extra: serde_json::Value) -> manifest::Manifest {
     let mut base = serde_json::json!({
-        "manifestVersion": 1,
+        "manifestVersion": 2,
         "id": "com.a.plugin",
         "name": "A Plugin",
         "version": "1.0.0",
@@ -487,38 +487,6 @@ fn remove_deletes_the_record() {
 }
 
 #[test]
-fn run_plugin_script_executes_luau_entry_with_input() {
-    let dir = std::env::temp_dir().join(format!("ms-luau-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("main.luau"),
-        "return { render = function(ctx) return { title = ctx.name } end }",
-    )
-    .unwrap();
-    let manifest = manifest_with(serde_json::json!({
-        "id": "com.a.luau",
-        "runtime": "luau",
-        "entry": "main.luau",
-        "permissions": ["nativeTools.runDeclared"],
-        "contributes": {
-            "nativeTools": [{ "id": "missing", "binaryName": "ms-not-a-real-binary-xyz" }]
-        }
-    }));
-    let out = run_plugin_script(
-        &super::discovery::PluginFiles::Fs(dir.clone()),
-        &manifest,
-        call(
-            &["nativeTools.runDeclared"],
-            "render",
-            serde_json::json!({ "name": "Hi" }),
-        ),
-    )
-    .unwrap();
-    assert_eq!(out["title"], serde_json::json!("Hi"));
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-#[test]
 fn templates_plugin_renders_macros_in_wasm() {
     // The embedded Templates component owns the macro engine.
     let plugin = super::discovery::discover_builtins()
@@ -582,92 +550,6 @@ fn templates_plugin_localizes_dates_via_locale() {
     )
     .unwrap();
     assert_eq!(out["title"], serde_json::json!("Juli"));
-}
-
-#[test]
-fn bundled_template_wasm_matches_retained_luau_for_existing_templates() {
-    let plugin = discovery::discover_builtins()
-        .into_iter()
-        .find(|p| p.id == "com.mindstream.templates.core")
-        .unwrap();
-    let mut legacy = plugin.manifest.clone();
-    legacy.runtime = manifest::PluginRuntime::Luau;
-    legacy.manifest_version = 1;
-    legacy.entry = Some("main.luau".into());
-    let legacy_files = discovery::PluginFiles::Fs(
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../plugin-sdk/examples/legacy-luau/templates"),
-    );
-    for input in [
-        serde_json::json!({"now": "2026-07-25T10:00:00Z", "title": "Log {{date:YYYY}}", "body": "{{title|upper}} {{date-1M+2d:YYYY-MM-DD}} {{date+7d:dddd}}", "locale": "de"}),
-        serde_json::json!({"now": "2026-01-31T12:00:00Z", "body": "{{date+1M:YYYY-MM-DD}} {{date-1y+2w:YYYY-MM-DD}} {{word|trim|capitalize}}/{{word|slug}}/{{flag}}/{{number}}/{{missing}}/{{word|unknown}}", "vars": {"word": "  hÄllo WORLD  ", "flag": false, "number": 42}}),
-        serde_json::json!({"now": "2026-07-25T10:00:00Z", "title": "{{unknown}}", "body": "{{date:}} {{multi\nline}} {{literal", "vars": {"multi\nline": "yes"}}),
-    ] {
-        let invoke = |files, manifest| {
-            run_plugin_script(
-                files,
-                manifest,
-                verified_call(
-                    &plugin,
-                    &["notes.read", "notes.create"],
-                    "renderTemplate",
-                    input.clone(),
-                ),
-            )
-            .unwrap()
-        };
-        assert_eq!(
-            invoke(&plugin.files, &plugin.manifest),
-            invoke(&legacy_files, &legacy),
-            "{input}"
-        );
-    }
-    let input = serde_json::json!({
-        "settings": {"source-folder": "root", "source-tag": "template"},
-        "folders": [{"id": "root", "parentId": null}, {"id": "child", "parentId": "root"}, {"id": "cycle", "parentId": "cycle"}]
-    });
-    let invoke = |files, manifest| {
-        let mut request = verified_call(
-            &plugin,
-            &["notes.read", "notes.create"],
-            "newFromTemplate",
-            input.clone(),
-        );
-        request.notes = [
-            ("z", "Zulu", "child", "kanban", false),
-            (
-                "a",
-                "Alpha",
-                "other",
-                "plugin.com.mindstream.typst.document",
-                true,
-            ),
-            ("x", "Other", "cycle", "markdown", false),
-        ]
-        .into_iter()
-        .map(
-            |(id, title, folder, kind, tagged)| runtime::host::NoteMeta {
-                id: id.into(),
-                title: title.into(),
-                folder_id: Some(folder.into()),
-                kind: kind.into(),
-                tags: if tagged {
-                    vec!["template".into()]
-                } else {
-                    vec![]
-                },
-                folder_path: String::new(),
-                created: String::new(),
-                modified: String::new(),
-            },
-        )
-        .collect();
-        run_plugin_script(files, manifest, request).unwrap()
-    };
-    assert_eq!(
-        invoke(&plugin.files, &plugin.manifest),
-        invoke(&legacy_files, &legacy)
-    );
 }
 
 #[test]
@@ -846,7 +728,7 @@ fn wasm_execution_uses_the_verified_snapshot_after_the_entry_changes() {
 #[test]
 fn wasm_limits_come_from_the_wasm_policy() {
     let m = manifest_with(serde_json::json!({
-        "manifestVersion": 2, "runtime": "wasm", "entry": "plugin.wasm",
+        "runtime": "wasm", "entry": "plugin.wasm",
         "limits": { "memoryBytes": 1 }
     }));
     let limits = script_limits(&m);
@@ -859,7 +741,7 @@ fn wasm_limits_come_from_the_wasm_policy() {
 }
 
 #[test]
-fn run_plugin_script_refuses_a_non_luau_runtime() {
+fn run_plugin_script_refuses_a_declarative_plugin() {
     let manifest = manifest_with(serde_json::json!({}));
     let out = run_plugin_script(
         &super::discovery::PluginFiles::Fs(std::env::temp_dir()),
@@ -978,7 +860,7 @@ fn malformed_declarations_stop_the_whole_manifest() {
         serde_json::json!({ "contributes": { "nativeTools": "not-an-array" } }),
     ] {
         let mut v = serde_json::json!({
-            "manifestVersion": 1, "id": "com.a.plugin", "name": "A",
+            "manifestVersion": 2, "id": "com.a.plugin", "name": "A",
             "version": "1.0.0", "runtime": "manifest-only"
         });
         let obj = v.as_object_mut().unwrap();
@@ -1224,11 +1106,15 @@ fn note_snapshot_builds_folder_paths_and_metadata() {
 fn a_manifests_declared_limits_are_clamped_by_its_runtime() {
     // A manifest may ask; only the host decides.
     let m = manifest_with(serde_json::json!({
-        "runtime": "luau", "entry": "main.luau",
+        "runtime": "wasm", "entry": "plugin.wasm",
         "limits": { "memoryBytes": 1, "timeoutMs": 999999 }
     }));
     let limits = script_limits(&m);
-    assert_eq!(limits.memory_bytes, 1024 * 1024, "clamped up to the floor");
+    assert_eq!(
+        limits.memory_bytes,
+        4 * 1024 * 1024,
+        "clamped up to the floor"
+    );
     assert_eq!(
         limits.timeout,
         std::time::Duration::from_millis(5000),
@@ -1339,7 +1225,7 @@ fn load_runnable_returns_the_approved_plugin_from_disk() {
     std::fs::write(
         plugin_dir.join("manifest.json"),
         serde_json::json!({
-            "manifestVersion": 1,
+            "manifestVersion": 2,
             "id": "com.a.runnable",
             "name": "Runnable",
             "version": "1.0.0",
