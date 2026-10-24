@@ -1,7 +1,8 @@
 // @vitest-environment node
+import { execFileSync } from 'node:child_process';
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { checkPackage } from '../typescript/lib/check.js';
 import { loadPlugin } from '../typescript/lib/testing.js';
 import type { HostOptions } from '../typescript/lib/testing';
@@ -15,6 +16,11 @@ const component = (name: string, language = 'Rust') =>
     ? join(bundledRoot, name, 'plugin.wasm')
     : join(root, 'plugin-sdk/examples', `${name}-typescript`, 'plugin.wasm');
 const now = '2026-07-25T10:00:00Z';
+
+// The TypeScript examples are built from source, not committed.
+beforeAll(() => {
+  execFileSync(process.execPath, [join(root, 'plugin-sdk/examples/build.mjs')]);
+}, 120_000);
 const loadTemplates = (language: string, options: HostOptions = {}) =>
   loadPlugin(component('templates', language), {
     now,

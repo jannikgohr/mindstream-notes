@@ -14,8 +14,8 @@ sources for shipped plugins are in [bundled](../bundled/README.md).
 
 The TypeScript examples have distinct `com.example.*.typescript` IDs so they
 can be installed without replacing trusted first-party packages. Each folder
-contains its manifest, assets, source and committed component. Build them with
-Node >=22.11, without a Rust compiler:
+contains its manifest, assets and source. The built `plugin.wasm` is not
+committed. Build it with Node >=22.11, without a Rust compiler:
 
 ```sh
 pnpm install --frozen-lockfile

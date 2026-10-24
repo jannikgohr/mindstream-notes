@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use mindstream_plugin_fixtures as fixtures;
 use mindstream_plugin_runtime::{
     cancel::CancelToken,
     error::HostError,
@@ -13,20 +14,15 @@ use mindstream_plugin_runtime::{
 };
 use serde_json::{json, Value};
 
-const RUST: &[u8] = include_bytes!("../../../plugin-sdk/conformance/dist/conformance-rust.wasm");
-const TYPESCRIPT: &[u8] =
-    include_bytes!("../../../plugin-sdk/conformance/dist/conformance-ts.wasm");
+const RUST: &[u8] = fixtures::CONFORMANCE_RUST;
+const TYPESCRIPT: &[u8] = fixtures::CONFORMANCE_TS;
 const TEMPLATES: &[u8] = include_bytes!("../../../plugins/templates/plugin.wasm");
 const TYPST: &[u8] = include_bytes!("../../../plugins/typst/plugin.wasm");
-const TEMPLATES_TS: &[u8] =
-    include_bytes!("../../../plugin-sdk/examples/templates-typescript/plugin.wasm");
-const TYPST_TS: &[u8] = include_bytes!("../../../plugin-sdk/examples/typst-typescript/plugin.wasm");
-const TEMPLATES_RUST: &[u8] =
-    include_bytes!("../../../plugin-sdk/prototypes/templates-rust/plugin.wasm");
-const TEMPLATES_LOCAL: &[u8] =
-    include_bytes!("../../../plugin-sdk/prototypes/templates-rust/plugin-local-calendar.wasm");
-const TEMPLATES_BATCH: &[u8] =
-    include_bytes!("../../../plugin-sdk/prototypes/templates-rust/plugin-batch.wasm");
+const TEMPLATES_TS: &[u8] = fixtures::TEMPLATES_TYPESCRIPT;
+const TYPST_TS: &[u8] = fixtures::TYPST_TYPESCRIPT;
+const TEMPLATES_RUST: &[u8] = fixtures::TEMPLATES_RUST;
+const TEMPLATES_LOCAL: &[u8] = fixtures::TEMPLATES_RUST_LOCAL_CALENDAR;
+const TEMPLATES_BATCH: &[u8] = fixtures::TEMPLATES_RUST_BATCH;
 
 type Artifact = ([u8; 32], [u8; 32], &'static str, &'static [u8]);
 #[cfg(feature = "probe-precompiled")]

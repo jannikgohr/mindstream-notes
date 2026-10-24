@@ -692,10 +692,7 @@ fn bundled_typst_without_native_permission_keeps_source_editing() {
 }
 
 /// The conformance component the runtime crate's tests use.
-const CONFORMANCE_WASM: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../plugin-sdk/conformance/dist/conformance-rust.wasm"
-));
+const CONFORMANCE_WASM: &[u8] = mindstream_plugin_fixtures::CONFORMANCE_RUST;
 
 fn write_wasm_plugin(dir: &std::path::Path, permissions: serde_json::Value) {
     std::fs::create_dir_all(dir).unwrap();

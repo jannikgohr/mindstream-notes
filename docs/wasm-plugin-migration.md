@@ -129,7 +129,6 @@ pnpm install --frozen-lockfile
 pnpm --filter @mindstream/plugin-sdk typecheck
 npm run test:plugin-author
 pnpm plugins:build
-node plugin-sdk/conformance/build.mjs --ts
 pnpm test
 cargo test --manifest-path src-tauri/Cargo.toml --locked --workspace
 cargo run --manifest-path src-tauri/Cargo.toml --locked --release -p mindstream-plugin-runtime --example plugin-bench > plugin-native.json

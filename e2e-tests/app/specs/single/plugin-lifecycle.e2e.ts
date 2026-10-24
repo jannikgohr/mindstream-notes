@@ -117,8 +117,21 @@ describe('signed Wasm plugin lifecycle in the packaged app', function () {
         copyFileSync(join(sharedFixture, file), join(folder, file));
       }
     } else {
+      // CI builds the component next to the app binary. Elsewhere it is
+      // built from source here, which needs the wasm32-unknown-unknown target.
+      const prebuilt = process.env.MINDSTREAM_E2E_PLUGIN_COMPONENT;
+      if (!prebuilt) {
+        execFileSync(process.execPath, [
+          join(repoRoot, 'plugin-sdk/fixtures.mjs'),
+          '--out',
+          work,
+          'conformance-rust'
+        ]);
+      }
       copyFileSync(
-        join(repoRoot, 'plugin-sdk/conformance/dist/conformance-rust.wasm'),
+        prebuilt
+          ? resolve(repoRoot, prebuilt)
+          : join(work, 'conformance-rust.wasm'),
         join(folder, 'plugin.wasm')
       );
       writeFileSync(

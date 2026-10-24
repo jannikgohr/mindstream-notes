@@ -3367,6 +3367,7 @@ dependencies = [
  "keyring-core",
  "log",
  "md-5",
+ "mindstream-plugin-fixtures",
  "mindstream-plugin-runtime",
  "mlua",
  "muda",
@@ -3415,6 +3416,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "mindstream-plugin-fixtures"
+version = "0.1.0"
+
+[[package]]
 name = "mindstream-plugin-runtime"
 version = "0.1.0"
 dependencies = [
@@ -3425,6 +3430,7 @@ dependencies = [
  "iana-time-zone",
  "libc",
  "log",
+ "mindstream-plugin-fixtures",
  "serde",
  "serde_json",
  "sha2 0.10.9",

@@ -8,8 +8,9 @@ for its experimental calendar/batch comparisons. Luau and the TypeScript
 package remain in place while release gates are open.
 
 Build with Rust's `wasm32-unknown-unknown` target, the repository's installed
-Node 22 dependencies, and `node plugin-sdk/prototypes/templates-rust/build.mjs`.
-The lockfile and component are committed so runtime tests need no guest compiler.
+Node 22 dependencies, and `node plugin-sdk/fixtures.mjs templates-rust`. The
+lockfile is committed; the component is not. The runtime tests build all three
+candidates through `src-tauri/plugin-fixtures` when they compile.
 
 `rust_templates_prototype_matches_typescript_outputs` compares rendering,
 calendar offsets, filters, Unicode menu order, stable equal-label order,
@@ -30,11 +31,11 @@ for every malformed input or unusual JavaScript coercion.
 Build the second candidate with:
 
 ```text
-node plugin-sdk/prototypes/templates-rust/build.mjs --local-calendar
+node plugin-sdk/fixtures.mjs templates-rust-local-calendar
 ```
 
-This writes `plugin-local-calendar.wasm`; the default build still writes the
-host-backed `plugin.wasm`. The feature is `local-calendar`. It moves date
+This writes `.output/plugin-fixtures/templates-rust-local-calendar.wasm`;
+`templates-rust` is still the host-backed default. The feature is `local-calendar`. It moves date
 arithmetic and the existing en/de moment-style formatter into the guest and
 embeds chrono-tz's complete IANA database. It makes no `clock.add` or
 `clock.format` calls. Notes metadata and UUIDs still use their existing host
@@ -69,11 +70,12 @@ IANA zone. The physical Android comparison adds `--rust-local-calendar
 Build the third Rust candidate with:
 
 ```text
-node plugin-sdk/prototypes/templates-rust/build.mjs --batch-host
+node plugin-sdk/fixtures.mjs templates-rust-batch
 ```
 
-This writes `plugin-batch.wasm`. Select only one of `--batch-host` and
-`--local-calendar`; the Cargo features are mutually exclusive. Default and
+This writes `.output/plugin-fixtures/templates-rust-batch.wasm`. The
+`batch-host` and `local-calendar` Cargo features are mutually exclusive, so
+each candidate is a separate build. Default and
 batch candidates use host local-time rules and the existing input context.
 Only the guest-local candidate requires `timeZone`.
 

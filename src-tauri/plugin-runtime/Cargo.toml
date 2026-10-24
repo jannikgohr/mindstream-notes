@@ -51,6 +51,8 @@ libc = "0.2.190"
 
 [dev-dependencies]
 iana-time-zone = "0.1"
+# Conformance, example and prototype components, built from plugin-sdk.
+mindstream-plugin-fixtures = { path = "../plugin-fixtures" }
 wat = "1"
 # `pulley` lets the tests run every component through the interpreter that
 # 32-bit Android uses, on a desktop runner. `wat` writes the small hostile

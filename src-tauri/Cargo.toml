@@ -16,7 +16,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # Cargo.toml). Listing it in default-members keeps `cargo test` here, which CI
 # and the pre-push hook run, covering both.
 [workspace]
-members = [".", "plugin-runtime"]
+members = [".", "plugin-runtime", "plugin-fixtures"]
 default-members = [".", "plugin-runtime"]
 
 [features]
@@ -133,6 +133,7 @@ md-5 = "0.11.0"
 # guards no-ops and turn any panic into a hard crash. The size cost of unwinding
 # tables is accepted for that safety.
 [dev-dependencies]
+mindstream-plugin-fixtures = { path = "plugin-fixtures" }
 tempfile = "3"
 tauri = { version = "2.11", features = ["test"] }
 # Paused time, for testing what the sync scheduler waits for.

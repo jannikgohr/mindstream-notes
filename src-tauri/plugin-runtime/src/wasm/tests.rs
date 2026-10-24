@@ -14,17 +14,11 @@ use crate::host::{
 };
 use crate::limits;
 
-const CONFORMANCE: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../plugin-sdk/conformance/dist/conformance-rust.wasm"
-));
+const CONFORMANCE: &[u8] = mindstream_plugin_fixtures::CONFORMANCE_RUST;
 /// The same plugin written in TypeScript and built with the SDK. Every
 /// shared test runs against both, so the SDK cannot drift from what a
 /// component built straight from the WIT sees.
-const CONFORMANCE_TS: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../plugin-sdk/conformance/dist/conformance-ts.wasm"
-));
+const CONFORMANCE_TS: &[u8] = mindstream_plugin_fixtures::CONFORMANCE_TS;
 const COMPONENTS: [(&str, &[u8]); 2] = [("rust", CONFORMANCE), ("ts", CONFORMANCE_TS)];
 
 const ALL: &[&str] = &[
@@ -191,15 +185,11 @@ fn bundled_code_prepares_without_running_and_seeds_the_disk_cache() {
 
 #[test]
 fn rust_templates_prototype_matches_typescript_outputs() {
-    const RUST: &[u8] =
-        include_bytes!("../../../../plugin-sdk/prototypes/templates-rust/plugin.wasm");
-    const BATCH: &[u8] =
-        include_bytes!("../../../../plugin-sdk/prototypes/templates-rust/plugin-batch.wasm");
-    const LOCAL: &[u8] = include_bytes!(
-        "../../../../plugin-sdk/prototypes/templates-rust/plugin-local-calendar.wasm"
-    );
-    const TYPESCRIPT: &[u8] =
-        include_bytes!("../../../../plugin-sdk/examples/templates-typescript/plugin.wasm");
+    use mindstream_plugin_fixtures as fixtures;
+    const RUST: &[u8] = fixtures::TEMPLATES_RUST;
+    const BATCH: &[u8] = fixtures::TEMPLATES_RUST_BATCH;
+    const LOCAL: &[u8] = fixtures::TEMPLATES_RUST_LOCAL_CALENDAR;
+    const TYPESCRIPT: &[u8] = fixtures::TEMPLATES_TYPESCRIPT;
     const SHIPPED: &[u8] = include_bytes!("../../../../plugins/templates/plugin.wasm");
     let zone = iana_time_zone::get_timezone().expect("host IANA timezone for candidate parity");
     // Debug builds make Pulley's host interpreter too slow for menu fixtures
@@ -266,8 +256,7 @@ fn rust_templates_prototype_matches_typescript_outputs() {
 #[test]
 fn shipped_rust_typst_and_typescript_example_keep_source_editing_without_native_tools() {
     const RUST: &[u8] = include_bytes!("../../../../plugins/typst/plugin.wasm");
-    const TS: &[u8] =
-        include_bytes!("../../../../plugin-sdk/examples/typst-typescript/plugin.wasm");
+    const TS: &[u8] = mindstream_plugin_fixtures::TYPST_TYPESCRIPT;
     for runtime in [runtime(), interpreter()] {
         for permissions in [&[][..], &[PERM_NATIVE_TOOLS][..]] {
             for component in [RUST, TS] {
@@ -949,8 +938,7 @@ fn the_ticker_runs_only_while_a_call_does() {
 
 #[test]
 fn batch_guest_preserves_indexed_permission_failures_and_prior_writes() {
-    const BATCH: &[u8] =
-        include_bytes!("../../../../plugin-sdk/prototypes/templates-rust/plugin-batch.wasm");
+    const BATCH: &[u8] = mindstream_plugin_fixtures::TEMPLATES_RUST_BATCH;
     for rt in [runtime(), interpreter()] {
         let err = Call::of(BATCH, &[])
             .run_on(rt, "$hostProbe", json!({"now":"2026-07-25T10:00:00Z"}))

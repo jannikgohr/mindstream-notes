@@ -181,9 +181,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # wasm32: the tests build their plugin components from source.
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+          targets: wasm32-unknown-unknown
 
       # Tauri 2's desktop bundle pulls webkit2gtk-4.1 + libsoup-3.0; the
       # secret-service keyring backend uses the `vendored` feature so we
@@ -337,12 +339,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
           shared-key: plugin-runtime
-      # No Tauri, WebView or Node dependencies. The probe runs the exact
-      # committed components; the Rust job also tests the whole workspace.
+      # No Tauri or WebView dependencies. Node and the wasm32 target build the
+      # conformance, example and prototype components from source; the shipped
+      # ones are committed. The Rust job also tests the whole workspace.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - name: Measure native component execution
         shell: bash
         run: cargo run --manifest-path src-tauri/Cargo.toml --locked --release -p mindstream-plugin-runtime --example plugin-bench > plugin-native.json
@@ -484,6 +497,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -646,7 +660,10 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      # wasm32 builds the plugin the lifecycle suite installs.
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
 
       # Build-time only: the suite jobs install the runtime half themselves.
       - name: Install desktop build dependencies
@@ -675,6 +692,7 @@ jobs:
           mkdir -p .output/app-e2e-bin
           cp src-tauri/target/release/mindstream-notes-e2e .output/app-e2e-bin/
           cp "$HOME/.cargo/bin/tauri-driver" .output/app-e2e-bin/
+          node plugin-sdk/fixtures.mjs --out .output/app-e2e-bin conformance-rust
       - uses: actions/upload-artifact@v4
         with:
           name: app-e2e-bin
@@ -695,6 +713,8 @@ jobs:
       MINDSTREAM_DOCKER_NO_SUDO: '1'
       WEBKIT_DISABLE_DMABUF_RENDERER: '1'
       NODE_OPTIONS: --max-old-space-size=4096
+      # Built by app-e2e-build; this job has no Rust toolchain to build it.
+      MINDSTREAM_E2E_PLUGIN_COMPONENT: .output/plugin-fixtures/conformance-rust.wasm
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -706,11 +726,11 @@ jobs:
           cache: pnpm
 
       # Nothing here compiles: `app-e2e-build` did that and handed over the
-      # binary and tauri-driver, so this job needs no Rust toolchain and no
-      # cargo cache. The package list still names the -dev variants, which
-      # is the proven one — the runtime-only names differ on noble
-      # (libgtk-3-0 is libgtk-3-0t64 there) and the download they would save
-      # is not worth getting that wrong.
+      # binary, tauri-driver and the lifecycle plugin, so this job needs no
+      # Rust toolchain and no cargo cache. The package list still names the
+      # -dev variants, which is the proven one — the runtime-only names
+      # differ on noble (libgtk-3-0 is libgtk-3-0t64 there) and the download
+      # they would save is not worth getting that wrong.
       - name: Install desktop test dependencies
         run: |
           sudo apt-get update
@@ -726,9 +746,10 @@ jobs:
       # The artifact does not carry the executable bit, so restore it.
       - name: Restore the built binaries
         run: |
-          mkdir -p src-tauri/target/release "$HOME/.cargo/bin"
+          mkdir -p src-tauri/target/release "$HOME/.cargo/bin" .output/plugin-fixtures
           mv .output/app-e2e-bin/mindstream-notes-e2e src-tauri/target/release/
           mv .output/app-e2e-bin/tauri-driver "$HOME/.cargo/bin/"
+          mv .output/app-e2e-bin/conformance-rust.wasm .output/plugin-fixtures/
           chmod +x src-tauri/target/release/mindstream-notes-e2e "$HOME/.cargo/bin/tauri-driver"
           rmdir .output/app-e2e-bin
 
