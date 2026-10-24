@@ -168,8 +168,17 @@ batch. Note writes remain declarative effects outside this host API.
   and 8 MiB accounted cumulative result data, including unkept results.
   Existing per-operation caps still apply. The result accounting includes
   conservative record overhead; it is not a total host RSS limit. These checks
-  occur after the canonical ABI lifts arguments, so guest/host allocation
-  limits and broader memory testing remain relevant.
+  occur after the canonical ABI lifts arguments. During lifting, Wasmtime
+  applies a separate 9 MiB argument-copy budget per host call, including
+  container overhead. It resets on each host call and cannot be raised by the
+  plugin. This bounds copies of aliased guest strings before the batch
+  validator receives its owned values. It is separate from guest linear memory
+  and total host RSS.
+- Exhausting the argument-copy budget traps the invocation before the batch
+  handler runs, with no batch failure or progress record. Earlier host calls
+  can still have effects. Requests that fit lifting but exceed a batch limit
+  return the ordinary batch failure. Host-to-guest results are outside the
+  argument-copy budget; the batch result cap and guest memory cap still apply.
 
 If the guest must inspect a result to choose its next action, it executes one
 plan and then builds another. This API batches known operations; it is not a

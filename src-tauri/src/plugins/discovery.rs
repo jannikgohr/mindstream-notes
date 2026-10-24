@@ -300,20 +300,21 @@ pub(crate) fn read_plugin(files: PluginFiles, source: &str) -> AppResult<Discove
     let manifest_json: serde_json::Value = serde_json::from_slice(manifest_bytes)
         .map_err(|e| AppError::InvalidArg(format!("manifest.json: {e}")))?;
     let entry_bytes = match (manifest.runtime, manifest.entry.as_deref()) {
-        (manifest::PluginRuntime::Wasm, Some(entry)) => all
-            .iter()
-            .find(|(path, _)| path == entry)
-            .map(|(_, bytes)| {
-                use super::runtime::wasm::precompiled::VerifiedComponent;
-                match &files {
-                    PluginFiles::Embedded(dir) => VerifiedComponent::from_static(
-                        dir.get_file(dir.path().join(entry))
-                            .expect("collected embedded entry")
-                            .contents(),
-                    ),
-                    PluginFiles::Fs(_) => VerifiedComponent::new(bytes.clone()),
-                }
-            }),
+        (manifest::PluginRuntime::Wasm, Some(entry)) => {
+            use super::runtime::wasm::precompiled::VerifiedComponent;
+            let (_, bytes) = all
+                .iter()
+                .find(|(path, _)| path == entry)
+                .ok_or_else(|| AppError::InvalidArg(format!("entry '{entry}' not found")))?;
+            Some(match &files {
+                PluginFiles::Embedded(dir) => VerifiedComponent::from_static(
+                    dir.get_file(dir.path().join(entry))
+                        .expect("collected embedded entry")
+                        .contents(),
+                ),
+                PluginFiles::Fs(_) => VerifiedComponent::new(bytes.clone()),
+            })
+        }
         _ => None,
     };
     Ok(DiscoveredPlugin {

@@ -142,6 +142,15 @@ or skip existing path, storage, native-process or log/random limits. It also
 does not guarantee lower CPU cost for in-process imports. The test host mirrors
 the transport; actual budgets/cancellation still need runtime tests.
 
+The app also enforces a 9 MiB argument-copy budget per host call while Wasmtime
+lifts guest strings and lists, before the batch validator runs. The accounting
+includes container overhead. Exhaustion ends the invocation as a trap, without
+a `HostBatchError` or progress record. A request that fits lifting but exceeds
+the 1 MiB batch literal limit still returns a normal validation failure. The
+transfer budget resets per host call and is separate from guest memory and
+host-to-guest results. See [runtime limits](../../docs/plugins.md#runtime-limits-and-lifecycle)
+for scalar limits, including 8 MiB native-tool stdin and 4 MiB storage files.
+
 New components importing this interface need a matching host. The expanded
 experimental failure record requires rebuilding older batch guests; scalar
 APIs remain. See [the contract and example](../../docs/plugin-host-api-design.md)

@@ -352,8 +352,11 @@ PDF results also work for exporters. The host owns the save dialog and write.
 A shared Wasmtime engine caches compiled components. Every invocation uses a
 fresh store and instance; guest globals do not persist between calls.
 The runtime starts on first use, so plugin discovery does not initialize guests.
-Only verified package bytes execute. The compiled cache holds at most eight
-components in memory and 32 on disk per engine compatibility key.
+Only verified package bytes execute. Discovery rejects a Wasm package whose
+declared entry is missing. Each execution uses the entry bytes captured during
+package verification, including for embedded plugins; it never reopens the entry
+to fill a missing snapshot. The compiled cache holds at most eight components in
+memory and 32 on disk per engine compatibility key.
 
 The default guest linear memory cap is 32 MiB, clamped to 4–256 MiB. It sums
 all guest memories and does not cap host RSS. The default execution timeout is
@@ -363,6 +366,43 @@ extend that ceiling. Epoch checks interrupt loops and cancellation; native tool
 waits also observe cancellation. Disabling, removing or crashing a plugin cancels
 its running calls. At most four calls run concurrently; a busy caller waits up
 to five seconds. Components are limited to 32 MiB and returned JSON to 64 MiB.
+
+Host-call argument copying has its own fixed **9 MiB budget per imported host
+call**. Wasmtime enforces it while lifting arguments from guest memory, before
+the host handler receives owned strings and lists. The accounting includes
+container overhead as well as copied data. It prevents repeated references to
+one guest string from causing large host allocations before validation. The
+budget resets for each host call and cannot be raised through manifest limits.
+It leaves room for 8 MiB UTF-8 native-tool stdin plus 256 KiB of arguments and
+binding overhead. Transfer accounting counts strings in the component's
+canonical encoding, so UTF-16 arguments can reach this budget before reaching
+the scalar API's UTF-8 text limit.
+
+Exhausting this transfer budget traps and ends the invocation. It does not
+return a catchable `HostError` or a batch failure/progress record. Earlier host
+calls may already have produced effects; the trap does not roll them back.
+The budget does not cap total host RSS, native-tool output, or host-to-guest
+results. Guest invocation results retain the separate 64 MiB UTF-8 JSON limit.
+The runtime allows up to 128 MiB of encoded result copying to accommodate
+UTF-16, then checks the decoded UTF-8 length. Guest linear memory and the
+following operation limits apply separately. MiB means 1,048,576 bytes; scalar
+and batch text sizes count UTF-8 bytes.
+
+| Operation             | Limit                                                                      |
+| --------------------- | -------------------------------------------------------------------------- |
+| Storage read or write | 4 MiB per file                                                             |
+| Native-tool stdin     | 8 MiB                                                                      |
+| Native-tool arguments | 64 arguments, at most 4,096 bytes each                                     |
+| Native-tool timeout   | 10 seconds by default, clamped to 100 ms to 30 seconds and the wall budget |
+| Batch request         | 128 commands, 1,024 text inputs, 1 MiB total literal data                  |
+| Batch results         | 8 MiB accounted cumulative data, including unkept results                  |
+
+Batch request validation runs after argument lifting, before executing any
+operation in that batch. A request above the 1 MiB literal limit can therefore
+return a normal batch validation failure if it fits the 9 MiB transfer budget.
+Batch result accounting includes conservative record overhead. See
+[the batch contract](plugin-host-api-design.md#the-general-batch-contract) for
+failure phases and recovery.
 
 ### Effects (toolbar buttons)
 

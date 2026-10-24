@@ -701,6 +701,117 @@ fn native_tools_run_and_a_tool_loop_ends_at_the_call_ceiling() {
 }
 
 #[test]
+fn aliased_batch_arguments_trap_before_large_host_copies() {
+    static COMPONENT: OnceLock<Vec<u8>> = OnceLock::new();
+    let component = COMPONENT
+        .get_or_init(|| wat::parse_str(include_str!("fixtures/aliased-batch.wat")).unwrap());
+    for runtime in [runtime(), interpreter()] {
+        let mut call = Call::of(component, &[]);
+        call.limits.memory_bytes = 4 * 1024 * 1024;
+        // All 120 commands alias a single 1 MiB string. The guest fits its
+        // 4 MiB cap, but lifting must stop at the 9 MiB host-call budget.
+        let err = call
+            .run_on(runtime, "amplify", json!({}))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("fuel allocated for hostcalls has been exhausted"),
+            "{err}"
+        );
+    }
+}
+
+#[test]
+fn maximum_batch_inputs_fit_lifting_and_keep_semantic_validation() {
+    static COMPONENT: OnceLock<Vec<u8>> = OnceLock::new();
+    let component = COMPONENT
+        .get_or_init(|| wat::parse_str(include_str!("fixtures/aliased-batch.wat")).unwrap());
+    for runtime in [runtime(), interpreter()] {
+        let mut call = Call::of(component, &[]);
+        call.limits.memory_bytes = 4 * 1024 * 1024;
+        // A 1 MiB literal and 128 commands totaling 1 MiB are both legal.
+        for export in ["literal", "maximum"] {
+            assert_eq!(
+                call.run_on(runtime, export, json!({})).unwrap(),
+                json!(true)
+            );
+        }
+        // 2 MiB lifts within the transfer budget, then returns a batch
+        // validation failure rather than trapping the entire invocation.
+        assert_eq!(
+            call.run_on(runtime, "validation", json!({})).unwrap(),
+            json!(false)
+        );
+    }
+}
+
+#[test]
+fn maximum_scalar_inputs_fit_the_hostcall_budget_and_each_call_gets_a_fresh_budget() {
+    static COMPONENT: OnceLock<Vec<u8>> = OnceLock::new();
+    let component = COMPONENT.get_or_init(|| {
+        wat::parse_str(include_str!("fixtures/maximum-scalar-inputs.wat")).unwrap()
+    });
+    for runtime in [runtime(), interpreter()] {
+        let root = scratch();
+        let mut call = Call::of(component, &[PERM_NATIVE_TOOLS, PERM_STORAGE_WRITE]);
+        call.tools.insert("missing".into(), None);
+        call.data_root = Some(root.clone());
+        // The fixture sends 8 MiB stdin plus 64 arguments of 4096 bytes
+        // twice, then writes a 4 MiB storage file. Its raw ABI assertions
+        // require the normal host results, rather than a transfer trap.
+        assert_eq!(call.run_on(runtime, "run", json!({})).unwrap(), json!(true));
+        assert_eq!(
+            std::fs::metadata(root.join("large.txt")).unwrap().len(),
+            crate::host::MAX_STORAGE_FILE_BYTES as u64
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn guest_json_results_keep_their_separate_limit_in_utf8_and_utf16() {
+    for runtime in [runtime(), interpreter()] {
+        for (length, utf16) in [
+            (10 * 1024 * 1024, false),
+            (MAX_OUTPUT_BYTES, false),
+            (6 * 1024 * 1024, true),
+            (MAX_OUTPUT_BYTES + 1, false),
+        ] {
+            let width = if utf16 { 2 } else { 1 };
+            let bytes = length * width;
+            let wat = include_str!("fixtures/large-result.wat")
+                .replace("OUTPUT_PAGES", &(bytes + 65536).div_ceil(65536).to_string())
+                .replace("OUTPUT_BYTES", &bytes.to_string())
+                .replace("OUTPUT_LENGTH", &length.to_string())
+                .replace("OUTPUT_LAST", &(65536 + bytes - width).to_string())
+                .replace("FILL", if utf16 { "32" } else { "8224" })
+                .replace("ENCODING", if utf16 { "string-encoding=utf16" } else { "" });
+            let component = wat::parse_str(wat).unwrap();
+            let out = runtime.invoke(WasmCall {
+                component: &component,
+                export: "run",
+                input: &json!({}),
+                setup: CallSetup::default(),
+                // Exercise large results under the manifest's allowed ceiling;
+                // UTF-16 decoding also consumes time in the host's debug build.
+                limits: limits::WASM.resolve(
+                    Some(limits::WASM.max_memory as u64),
+                    Some(limits::WASM.max_timeout.as_millis() as u64),
+                ),
+                native_allowance: Duration::ZERO,
+                cache_dir: None,
+            });
+            if length <= MAX_OUTPUT_BYTES {
+                assert_eq!(out.unwrap(), json!(0), "length={length}, utf16={utf16}");
+            } else {
+                let err = out.unwrap_err().to_string();
+                assert!(err.contains("returned 67108865 bytes, more than"), "{err}");
+            }
+        }
+    }
+}
+
+#[test]
 fn a_component_that_imports_wasi_is_refused_by_name() {
     let wat = r#"(component
         (import "wasi:cli/environment@0.2.0" (instance

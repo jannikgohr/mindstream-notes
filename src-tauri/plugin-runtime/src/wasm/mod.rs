@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 use precompiled::{TrustedPrecompiled, VerifiedComponent};
 use wasmtime::component::types::ComponentItem;
 use wasmtime::component::{Component, Linker};
-use wasmtime::{Engine, Store, UpdateDeadline};
+use wasmtime::{CallHook, Engine, Store, UpdateDeadline};
 
 use crate::error::{HostError, HostResult};
 use crate::host::{CallSetup, HostContext};
@@ -55,6 +55,11 @@ pub const MAX_COMPONENT_BYTES: usize = 32 * 1024 * 1024;
 /// Largest JSON a call may return. It is a copy of something already in the
 /// guest's capped memory, but the host parses it, so it is bounded on its own.
 pub const MAX_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
+/// Per-host-call budget for copying guest arguments into owned host values.
+/// Allows 8 MiB UTF-8 native-tool stdin, 256 KiB of arguments and binding overhead.
+/// Applied during canonical ABI lifting, before any host handler validates its
+/// narrower limits. This is separate from guest memory and total host RSS.
+pub const MAX_HOSTCALL_BYTES: usize = 9 * 1024 * 1024;
 /// How much of a guest's error message reaches the user.
 pub const MAX_ERROR_CHARS: usize = 2000;
 /// Calls running at once across all plugins. A call waiting on a native tool
@@ -394,6 +399,19 @@ impl WasmRuntime {
             },
         );
         store.limiter(|state| &mut state.limiter);
+        store.set_hostcall_fuel(MAX_HOSTCALL_BYTES);
+        store.call_hook(|mut store, transition| {
+            match transition {
+                CallHook::CallingHost => store.set_hostcall_fuel(MAX_HOSTCALL_BYTES),
+                // Wasmtime uses the same copying budget for guest return
+                // values. Preserve the separate 64 MiB JSON output limit,
+                // including components returning UTF-16 strings. The UTF-8
+                // JSON length is checked below after lifting the result.
+                CallHook::ReturningFromWasm => store.set_hostcall_fuel(2 * MAX_OUTPUT_BYTES),
+                _ => {}
+            }
+            Ok(())
+        });
         store.set_epoch_deadline(1);
         store.epoch_deadline_callback(|ctx| {
             ctx.data().host.check().map_err(wasmtime::Error::new)?;

@@ -39,6 +39,7 @@ wasmtime = { version = "49.0.4", default-features = false, features = [
   "runtime",
   "cranelift",
   "component-model",
+  "call-hook",
   "std",
   "parallel-compilation",
 ] }

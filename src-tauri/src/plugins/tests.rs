@@ -57,6 +57,17 @@ fn call(granted: &[&str], export: &str, input: serde_json::Value) -> ScriptCall 
     }
 }
 
+fn verified_call(
+    plugin: &discovery::DiscoveredPlugin,
+    granted: &[&str],
+    export: &str,
+    input: serde_json::Value,
+) -> ScriptCall {
+    let mut request = call(granted, export, input);
+    request.verified_entry = plugin.entry_bytes.clone();
+    request
+}
+
 fn upsert_input(id: &str, checksum: &str, source: &str) -> UpsertPlugin {
     signed_input(id, checksum, source, None, "unsigned")
 }
@@ -517,7 +528,8 @@ fn templates_plugin_renders_macros_in_wasm() {
     let out = run_plugin_script(
         &plugin.files,
         &plugin.manifest,
-        call(
+        verified_call(
+            &plugin,
             &["notes.read", "notes.create"],
             "renderTemplate",
             serde_json::json!({
@@ -556,7 +568,8 @@ fn templates_plugin_localizes_dates_via_locale() {
     let out = run_plugin_script(
         &plugin.files,
         &plugin.manifest,
-        call(
+        verified_call(
+            &plugin,
             &["notes.read", "notes.create"],
             "renderTemplate",
             serde_json::json!({
@@ -594,7 +607,8 @@ fn bundled_template_wasm_matches_retained_luau_for_existing_templates() {
             run_plugin_script(
                 files,
                 manifest,
-                call(
+                verified_call(
+                    &plugin,
                     &["notes.read", "notes.create"],
                     "renderTemplate",
                     input.clone(),
@@ -613,7 +627,8 @@ fn bundled_template_wasm_matches_retained_luau_for_existing_templates() {
         "folders": [{"id": "root", "parentId": null}, {"id": "child", "parentId": "root"}, {"id": "cycle", "parentId": "cycle"}]
     });
     let invoke = |files, manifest| {
-        let mut request = call(
+        let mut request = verified_call(
+            &plugin,
             &["notes.read", "notes.create"],
             "newFromTemplate",
             input.clone(),
@@ -666,7 +681,7 @@ fn bundled_typst_without_native_permission_keeps_source_editing() {
         let out = run_plugin_script(
             &plugin.files,
             &plugin.manifest,
-            call(&[], export, serde_json::json!({"body": "= Hello"})),
+            verified_call(&plugin, &[], export, serde_json::json!({"body": "= Hello"})),
         )
         .unwrap();
         assert_eq!(
@@ -741,11 +756,10 @@ fn run_plugin_script_executes_a_wasm_component() {
     assert_eq!(out["effect"], "openMenu");
     assert_eq!(out["items"][0]["run"]["sourceNoteId"], "n1");
 
-    // Without the verified bytes the entry is read from the package.
     let echo = run_plugin_script(
         &plugin.files,
         &plugin.manifest,
-        call(&[], "echo", serde_json::json!({ "x": 1 })),
+        verified_call(&plugin, &[], "echo", serde_json::json!({ "x": 1 })),
     )
     .unwrap();
     assert_eq!(echo, serde_json::json!({ "x": 1 }));
@@ -754,11 +768,82 @@ fn run_plugin_script_executes_a_wasm_component() {
     let denied = run_plugin_script(
         &plugin.files,
         &plugin.manifest,
-        call(&[], "menu", serde_json::json!({})),
+        verified_call(&plugin, &[], "menu", serde_json::json!({})),
     )
     .unwrap_err();
     assert!(denied.to_string().contains("Denied"), "{denied}");
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn wasm_discovery_rejects_a_missing_entry() {
+    let dir = std::env::temp_dir().join(format!("ms-wasm-plugin-{}", uuid::Uuid::new_v4()));
+    write_wasm_plugin(&dir, serde_json::json!([]));
+    std::fs::remove_file(dir.join("plugin.wasm")).unwrap();
+    let err = discovery::read_plugin(discovery::PluginFiles::Fs(dir.clone()), SOURCE_INSTALLED)
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("entry 'plugin.wasm' not found"),
+        "{err}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn wasm_execution_rejects_unverified_entries_even_if_the_file_exists() {
+    let dir = std::env::temp_dir().join(format!("ms-wasm-plugin-{}", uuid::Uuid::new_v4()));
+    write_wasm_plugin(&dir, serde_json::json!([]));
+    let plugin =
+        discovery::read_plugin(discovery::PluginFiles::Fs(dir.clone()), SOURCE_INSTALLED).unwrap();
+    std::fs::remove_file(dir.join("plugin.wasm")).unwrap();
+    let request = call(&[], "echo", serde_json::json!({}));
+    // A file appearing after context preparation cannot supply a missing snapshot.
+    std::fs::write(dir.join("plugin.wasm"), CONFORMANCE_WASM).unwrap();
+    let err = run_plugin_script(&plugin.files, &plugin.manifest, request).unwrap_err();
+    assert!(
+        err.to_string().contains("no verified component bytes"),
+        "{err}"
+    );
+
+    let builtin = discovery::discover_builtins()
+        .into_iter()
+        .find(|plugin| plugin.entry_bytes.is_some())
+        .unwrap();
+    for plugin in [&plugin, &builtin] {
+        let err = run_plugin_script(
+            &plugin.files,
+            &plugin.manifest,
+            call(&[], "echo", serde_json::json!({})),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("no verified component bytes"),
+            "{err}"
+        );
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn wasm_execution_uses_the_verified_snapshot_after_the_entry_changes() {
+    let dir = std::env::temp_dir().join(format!("ms-wasm-plugin-{}", uuid::Uuid::new_v4()));
+    write_wasm_plugin(&dir, serde_json::json!([]));
+    let plugin =
+        discovery::read_plugin(discovery::PluginFiles::Fs(dir.clone()), SOURCE_INSTALLED).unwrap();
+    for replacement in [Some(b"unapproved bytes".as_slice()), None] {
+        match replacement {
+            Some(bytes) => std::fs::write(dir.join("plugin.wasm"), bytes).unwrap(),
+            None => std::fs::remove_file(dir.join("plugin.wasm")).unwrap(),
+        }
+        let out = run_plugin_script(
+            &plugin.files,
+            &plugin.manifest,
+            verified_call(&plugin, &[], "echo", serde_json::json!({"verified": true})),
+        )
+        .unwrap();
+        assert_eq!(out, serde_json::json!({"verified": true}));
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]

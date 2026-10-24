@@ -871,9 +871,8 @@ pub struct ScriptCall {
     pub data_root: Option<PathBuf>,
     pub cancel: runtime::cancel::CancelToken,
     /// A Wasm plugin's component as read when its checksum was verified
-    /// (`DiscoveredPlugin::entry_bytes`). `None` reads the entry from
-    /// `files`, which is only right for bytes that cannot change: builtins
-    /// embedded in the binary, and tests.
+    /// (`DiscoveredPlugin::entry_bytes`). Required for every Wasm call,
+    /// including embedded plugins. Luau calls use `None`.
     pub verified_entry: Option<runtime::wasm::precompiled::VerifiedComponent>,
     /// Where compiled components are kept between runs. `None` keeps them in
     /// memory only.
@@ -912,14 +911,9 @@ pub fn run_plugin_script(
     };
     let limits = script_limits(manifest);
     if manifest.runtime == manifest::PluginRuntime::Wasm {
-        let component = match call.verified_entry {
-            Some(bytes) => bytes,
-            None => runtime::wasm::precompiled::VerifiedComponent::new(
-                files
-                    .read_bytes(entry)?
-                    .ok_or_else(|| AppError::InvalidArg(format!("entry '{entry}' not found")))?,
-            ),
-        };
+        let component = call.verified_entry.ok_or_else(|| {
+            AppError::InvalidArg(format!("entry '{entry}' has no verified component bytes"))
+        })?;
         let bundled = matches!(files, discovery::PluginFiles::Embedded(_))
             .then(|| precompiled::find(&component))
             .flatten();
