@@ -146,7 +146,19 @@ asymmetric:
 - **`noteExporters`** — export actions shown in a note's context menu. An
   exporter targets a built-in note kind such as `markdown` or a plugin-owned
   stored kind such as `plugin.<pluginId>.<kind>`, runs a backend script export,
-  and currently supports `"format": "pdf"`.
+  and supports `pdf`, `png`, `svg`, `typ`, `md`, `html`, `csv`, `xlsx`, `docx`,
+  `json`, and `zip`. Return `{ file: { mime, dataBase64, suggestedName? } }`.
+  Text formats can return `text` instead of `dataBase64`, including empty source.
+  MIME must match the declared format. `requiresNativeTool` is optional, so a
+  source export can work without a compiler.
+
+  For multi-page PNG/SVG output, the first invocation can return
+  `{ pagesPdf: { mime: "application/pdf", dataBase64 }, diagnostics? }`.
+  The host counts the PDF pages and invokes the same export once per page,
+  adding a one-based `page` to the input. Each call returns a single image file.
+  One-page exports save directly; multiple pages are saved as a ZIP with
+  numbered filenames. The bundled Typst plugin uses this protocol.
+
 - **`noteTemplates`** — declarative templates (`titleTemplate` / `bodyTemplate`
   with `{{…}}` placeholders, see below). Requires `templates.contribute`.
 - **`commands`** — app-local commands (currently `createTemplateNote`), each

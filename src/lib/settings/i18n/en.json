@@ -795,6 +795,9 @@
     "pdf.page.totalLabel": "of {total}",
     "pdf.export.label": "Download annotated PDF",
     "pdf.export.failed": "Export failed",
+    "pdf.export.printReady.commentsHeading": "Comments",
+    "pdf.export.printReady.formNotFlattened": "This PDF's form couldn't be flattened, so its fields stay fillable in the print-ready PDF. Printers that skip form fields will leave them blank.",
+    "pdf.export.printReady.unsupportedCharacters": "Some characters in comments aren't supported by the built-in PDF font and were replaced.",
     "pdf.toolbar.label": "PDF controls",
     "pdf.toolbar.navigator": "Pages and outline",
     "pdf.toolbar.previousPage": "Previous page",
@@ -1331,7 +1334,14 @@
     "onboarding.preview.ideaBody": "Make space for your next project. Start with one small idea and see where it takes you.",
     "onboarding.preview.task": "Make time to write",
     "onboarding.preview.saved": "Your notes, in a style that works for you.",
-    "onboarding.practice.source": "Practice Markdown source"
+    "onboarding.practice.source": "Practice Markdown source",
+    "data.exportVault.chip.boards.one": "Kanban board",
+    "data.exportVault.chip.boards.other": "Kanban boards",
+    "data.exportVault.chip.boards.status": "Saved as Markdown and JSON",
+    "data.exportVault.chip.typst.one": "Typst document",
+    "data.exportVault.chip.typst.other": "Typst documents",
+    "data.exportVault.chip.typst.status": "Saved as Typst source",
+    "fileTree.exporting": "Exporting {label}…"
   },
   "categories": {
     "account": {

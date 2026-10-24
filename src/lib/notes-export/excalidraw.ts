@@ -8,7 +8,6 @@
  */
 
 import * as Y from 'yjs';
-import { readSceneFromYDoc } from '$lib/freeform/excalidraw-yjs';
 import { inlineStoredFiles } from '$lib/freeform/excalidraw-files';
 
 export interface ExcalidrawFile {
@@ -25,7 +24,7 @@ export interface ExcalidrawFile {
  * wrap it in Excalidraw's standard top-level JSON shape. Returns
  * `null` if the byte array is empty (freshly-created freeform note
  * the user never drew on) — the caller can decide whether to skip
- * the file or write an empty scene.
+ * the file or write an empty scene. Corrupt state and missing assets throw.
  *
  * Async because image bytes live in the `assets` table, not in the scene:
  * a `.excalidraw` file has to carry them inline or it opens elsewhere with
@@ -41,31 +40,29 @@ export async function buildExcalidrawFile(
   const doc = new Y.Doc();
   try {
     Y.applyUpdate(doc, bytes);
-  } catch (err) {
-    // A corrupt yrs_state shouldn't take the whole export down. Let
-    // the caller log + skip; returning null is the "nothing usable"
-    // signal so it's distinct from "empty doc on purpose".
-    console.warn(
-      '[notes-export] could not decode yrs_state for freeform note',
-      err
-    );
-    return null;
-  }
 
-  const snapshot = readSceneFromYDoc(doc);
-  // Excalidraw's docs name `https://excalidraw.com` as the canonical
-  // source string. Editors that bundle Excalidraw normally substitute
-  // their own URL; using the canonical one keeps the file openable in
-  // the public web app for free.
-  return {
-    type: 'excalidraw',
-    version: 2,
-    source: 'https://excalidraw.com',
-    elements: snapshot.elements as unknown[],
-    appState: snapshot.appState as Record<string, unknown>,
-    files: (await inlineStoredFiles(snapshot.storedFiles)) as Record<
-      string,
-      unknown
-    >
-  };
+    await import('$lib/freeform/asset-path');
+    const { readSceneFromYDoc } = await import('$lib/freeform/excalidraw-yjs');
+    const snapshot = readSceneFromYDoc(doc);
+    // Excalidraw's docs name `https://excalidraw.com` as the canonical
+    // source string. Editors that bundle Excalidraw normally substitute
+    // their own URL; using the canonical one keeps the file openable in
+    // the public web app for free.
+    return {
+      type: 'excalidraw',
+      version: 2,
+      source: 'https://excalidraw.com',
+      elements: snapshot.elements as unknown[],
+      appState: snapshot.appState as Record<string, unknown>,
+      files: (await inlineStoredFiles(snapshot.storedFiles, async (id) => {
+        const { fetchDrawingAsset } = await import('$lib/api/assets');
+        const { bytesToDataUrl } =
+          await import('$lib/freeform/excalidraw-files');
+        const asset = await fetchDrawingAsset(id);
+        return bytesToDataUrl(asset.bytes, asset.mime_type);
+      })) as Record<string, unknown>
+    };
+  } finally {
+    doc.destroy();
+  }
 }

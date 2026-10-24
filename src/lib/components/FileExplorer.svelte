@@ -393,19 +393,33 @@
     else startDraft(action, null);
   }
 
+  const runningExports = new SvelteSet<string>();
+
   async function runNoteExporter(
     id: string,
     label: string,
     run: () => Promise<void>
   ) {
+    const key = `${id}:${label}`;
+    if (runningExports.has(key)) return;
+    runningExports.add(key);
+    const toast = pushToast(tUiFormat('fileTree.exporting', { label }), {
+      variant: 'progress',
+      durationMs: 0
+    });
     try {
+      await flushPendingEditorSaves();
       await run();
     } catch (err) {
+      dismissToast(toast);
       console.error('[FileExplorer] note export failed', id, err);
       await alert({
         title: tUiFormat('fileTree.exportFailed', { label }),
         message: toErrorMessage(err)
       });
+    } finally {
+      dismissToast(toast);
+      runningExports.delete(key);
     }
   }
 

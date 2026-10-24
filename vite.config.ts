@@ -3,6 +3,7 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
 import { fileURLToPath } from 'node:url';
+import { excalidrawFonts } from './src-tauri/scripts/excalidraw-fonts.mjs';
 
 function isIgnorableWarning(message: string, filePath = ''): boolean {
   return (
@@ -87,6 +88,7 @@ const workspacePackagesPath = fileURLToPath(
 export default defineConfig({
   plugins: [
     silenceUpstreamWarnings(),
+    excalidrawFonts(),
     tailwindcss(),
     sveltekit(),
     // React JSX transform — scoped to .tsx files so it doesn't touch
@@ -173,6 +175,16 @@ export default defineConfig({
       'mdast-util-gfm-task-list-item',
       'mermaid',
       'mode-watcher',
+      'docx',
+      'exceljs',
+      'fflate',
+      'pdfmake/build/pdfmake',
+      'pdfmake/build/vfs_fonts',
+      'unified',
+      'remark-parse',
+      'remark-gfm',
+      'remark-rehype',
+      'rehype-stringify',
       'pdf-lib',
       'pdfjs-dist',
       'pdfjs-dist/web/pdf_viewer.mjs',

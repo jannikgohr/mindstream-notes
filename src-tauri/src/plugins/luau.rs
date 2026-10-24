@@ -1030,6 +1030,42 @@ mod tests {
         }
     }
 
+    #[test]
+    fn typst_source_export_does_not_require_native_tools() {
+        let source = include_str!("../../../plugins/typst/main.luau");
+        for body in ["", "= Café\n"] {
+            let out = run(req(
+                source,
+                "exportDocument",
+                serde_json::json!({"format": "typ", "body": body}),
+                &[],
+            ))
+            .unwrap();
+            assert_eq!(out["file"]["text"], body);
+            assert_eq!(out["file"]["mime"], "text/plain");
+        }
+    }
+
+    #[test]
+    fn typst_image_export_requests_the_selected_page() {
+        let source = format!(
+            r#"local ms = {{ nativeTools = {{ run = function(_, opts) return {{ statusCode = 0, stdoutBase64 = opts.args[3] .. ":" .. opts.args[5], stderr = "" }} end }} }}
+{}"#,
+            include_str!("../../../plugins/typst/main.luau")
+        );
+        for (format, mime) in [("svg", "image/svg+xml"), ("png", "image/png")] {
+            let out = run(req(
+                &source,
+                "exportDocument",
+                serde_json::json!({"format": format, "page": 2, "body": "= Test"}),
+                &[],
+            ))
+            .unwrap();
+            assert_eq!(out["file"]["mime"], mime);
+            assert_eq!(out["file"]["dataBase64"], format!("{format}:2"));
+        }
+    }
+
     /// A scratch data root plus a request wired to it, for the ms.storage tests.
     fn storage_req(source: &str, perms: &[&str], root: &std::path::Path) -> ScriptRequest {
         let mut r = req(source, "go", serde_json::json!({}), perms);

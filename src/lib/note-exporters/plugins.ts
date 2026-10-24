@@ -7,12 +7,19 @@ import {
 } from '$lib/plugins/registry.svelte';
 import { resolvePluginString } from '$lib/plugins/plugin-i18n';
 import { saveAnnotatedPdf } from '$lib/api/pdf-export';
-import { sanitizePdfFilename } from '$lib/pdf/filename';
+import {
+  EXPORT_FORMATS,
+  exportFilename,
+  bundleExportFiles,
+  saveExportFile,
+  type ExportFile
+} from './files';
 import type { NoteExporter } from './types';
 
 interface PluginExportFile {
   mime: string;
-  dataBase64: string;
+  dataBase64?: string;
+  text?: string;
   suggestedName?: string;
 }
 
@@ -43,7 +50,10 @@ function parseExportFile(result: unknown): PluginExportFile {
   if (typeof file.mime !== 'string' || file.mime.trim() === '') {
     throw new Error('Plugin export file is missing a MIME type.');
   }
-  if (typeof file.dataBase64 !== 'string' || file.dataBase64.trim() === '') {
+  if (
+    typeof file.text !== 'string' &&
+    (typeof file.dataBase64 !== 'string' || file.dataBase64.trim() === '')
+  ) {
     const detail = diagnosticsMessage(resultRecord);
     throw new Error(
       detail
@@ -57,16 +67,11 @@ function parseExportFile(result: unknown): PluginExportFile {
       : undefined;
   return {
     mime: file.mime,
-    dataBase64: file.dataBase64,
+    dataBase64:
+      typeof file.dataBase64 === 'string' ? file.dataBase64 : undefined,
+    text: typeof file.text === 'string' ? file.text : undefined,
     suggestedName
   };
-}
-
-function pdfName(name: string): string {
-  const sanitized = sanitizePdfFilename(name);
-  return sanitized.toLowerCase().endsWith('.pdf')
-    ? sanitized
-    : `${sanitized}.pdf`;
 }
 
 async function ensureNativeToolAvailable(
@@ -94,26 +99,77 @@ export async function runPluginNoteExporter(
   }
 
   await ensureNativeToolAvailable(ref);
-  const result = await pluginsRunScript(ref.pluginId, ref.exporter.export, {
+  const input = {
     noteId: note.id,
     noteKind: note.note_kind,
     title: note.title,
     body: note.body,
     format: ref.exporter.format
-  });
-  const file = parseExportFile(result);
-
-  if (ref.exporter.format !== 'pdf' || file.mime !== 'application/pdf') {
-    throw new Error(
-      `Plugin exporter returned ${file.mime}; expected application/pdf.`
-    );
+  };
+  const result = await pluginsRunScript(
+    ref.pluginId,
+    ref.exporter.export,
+    input
+  );
+  const record = asRecord(result, 'Plugin export result');
+  const format = ref.exporter.format;
+  const expectedMime = EXPORT_FORMATS[format].mime;
+  function toFile(value: unknown, title: string): ExportFile {
+    const file = parseExportFile(value);
+    if (file.mime !== expectedMime)
+      throw new Error(
+        `Plugin exporter returned ${file.mime}; expected ${expectedMime}.`
+      );
+    return {
+      name: exportFilename(file.suggestedName ?? title, format),
+      format,
+      bytes:
+        file.text !== undefined
+          ? new TextEncoder().encode(file.text)
+          : base64ToBytes(file.dataBase64!)
+    };
   }
+  let file: ExportFile;
+  if (record.pagesPdf !== undefined) {
+    if (format !== 'png' && format !== 'svg')
+      throw new Error('Paged plugin exports must produce PNG or SVG.');
+    const source = parseExportFile({
+      file: record.pagesPdf,
+      diagnostics: record.diagnostics
+    });
+    if (source.mime !== 'application/pdf' || !source.dataBase64)
+      throw new Error('Paged export requires a PDF page-count preview.');
+    const { PDFDocument } = await import('pdf-lib');
+    const pageCount = (
+      await PDFDocument.load(base64ToBytes(source.dataBase64))
+    ).getPageCount();
+    if (pageCount > 1000)
+      throw new Error(
+        'Image export supports up to 1000 pages. Use PDF for larger documents.'
+      );
+    const files: ExportFile[] = [];
+    for (let page = 1; page <= pageCount; page++) {
+      const result = await pluginsRunScript(ref.pluginId, ref.exporter.export, {
+        ...input,
+        page
+      });
+      const title = `${note.title} - ${String(page).padStart(3, '0')}`;
+      files.push({
+        ...toFile(result, title),
+        name: exportFilename(title, format)
+      });
+    }
+    file = await bundleExportFiles(note.title, files);
+  } else file = toFile(result, note.title);
 
-  await saveAnnotatedPdf({
-    suggestedName: pdfName(file.suggestedName ?? note.title),
-    dialogTitle: `Save ${resolvePluginString(ref.pluginId, ref.exporter.labelKey)}`,
-    bytes: base64ToBytes(file.dataBase64)
-  });
+  // Keep the existing PDF bridge for compatibility with PDF-only callers.
+  if (file.format === 'pdf') {
+    await saveAnnotatedPdf({
+      suggestedName: file.name,
+      dialogTitle: `Save ${resolvePluginString(ref.pluginId, ref.exporter.labelKey)}`,
+      bytes: file.bytes
+    });
+  } else await saveExportFile(file);
 }
 
 export function pluginExportersForNote(

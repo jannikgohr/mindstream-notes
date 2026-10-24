@@ -1,10 +1,16 @@
 import type { NoteKind, NoteSummary } from '$lib/api';
 import { inkExporters } from './ink';
+import { kanbanExporters } from './kanban';
+import { markdownExporters } from './markdown';
+import { freeformExporters } from './freeform';
 import { pdfExporters } from './pdf';
 import { pluginExportersForNote } from './plugins';
 import type { NoteExporter } from './types';
 
 const EXPORTERS_BY_KIND: Partial<Record<NoteKind, NoteExporter[]>> = {
+  markdown: markdownExporters,
+  kanban: kanbanExporters,
+  freeform: freeformExporters,
   ink: inkExporters,
   pdf: pdfExporters
 };
