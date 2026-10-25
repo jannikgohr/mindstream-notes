@@ -864,12 +864,28 @@ an Ed25519 signature over the plugin's **package digest** (a content hash of
 every file, so the signature covers components, docs and icons — not just the
 manifest).
 
+The signing script is one file that needs nothing but Node.js, so it works
+outside this repository. Download it once:
+
 ```bash
-# generate a key OUTSIDE the plugin dir, and sign
-node src-tauri/scripts/sign-plugin.mjs <plugin-dir> --generate ../my-key.pem
-# re-sign after editing (same key ⇒ updates auto-approve)
-node src-tauri/scripts/sign-plugin.mjs <plugin-dir> --key ../my-key.pem
+curl -fLO https://raw.githubusercontent.com/jannikgohr/mindstream-notes/main/src-tauri/scripts/sign-plugin.mjs
 ```
+
+Sign the finished package folder after its last change: `dist/package` from
+the TypeScript SDK, `dist` from the Rust starter. Keep the key outside that
+folder, because the signature covers every file in it.
+
+```bash
+# the first time: make a key and sign with it
+node sign-plugin.mjs dist/package --generate ../my-key.pem
+# every later release: sign with the same key, so updates auto-approve
+node sign-plugin.mjs dist/package --key ../my-key.pem
+```
+
+The key is your identity as the plugin's author. An update signed with it
+installs without a prompt as long as it asks for no new permissions, so keep
+it secret. A lost key means every user approves your next release again by
+hand.
 
 **Integrity gate:** an installed plugin whose package hash changes is disabled
 until re-approved — unless the change is validly signed by the **same** key it

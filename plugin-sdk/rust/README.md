@@ -16,8 +16,10 @@ node build.mjs
 
 Choose an appropriate absolute project path on Windows. Install `dist` from
 Settings → Plugins. It contains the manifest, toolbar icon and component.
-Change the manifest's ID before distributing your plugin. Keep the generated
-`Cargo.lock` in your project to pin dependency versions.
+Change the manifest's ID before distributing your plugin, and sign the `dist`
+folder so later versions update without a new approval; see
+[Signing](../../docs/plugins.md#signing-third-party-plugins). Keep the
+generated `Cargo.lock` in your project to pin dependency versions.
 
 `wit-bindgen` generates Rust imports and the `Guest` trait from the copied
 `wit` directory. Implement `invoke(export, input)` with JSON strings and use

@@ -32,6 +32,10 @@ The tarball contains the SDK's WIT package and starter assets. Install
 then approve its permissions for your vault. Only that folder belongs in a
 plugin package; `node_modules` and source files are authoring inputs.
 
+Before you hand the package to anyone else, sign it, so later versions update
+without asking every user to approve them again. See
+[Signing](../../docs/plugins.md#signing-third-party-plugins).
+
 ## Write an export
 
 ```ts

@@ -101,45 +101,17 @@ teal accent. The default preset's values are also the base tokens in
 is independent of preset selection. Presets and UI font size apply to every
 vault on this device. Editor font size and line height stay in the vault.
 
-Use "Show preset JSON" to start from a complete preset. Change its ID and name,
-then save it under "Import or edit a preset". Saving an existing custom ID
-replaces that preset on this device. Built-in IDs are reserved. Removing a
-selected preset keeps its selection and displays Apollo; restoring the
-same ID restores the theme. The original data stays available during recovery.
+How a user makes, imports and removes a preset, and the full preset format
+with its validation rules, are in [Custom themes](../custom-themes.md).
+`themeContrast` in `src/lib/settings/theme-presets.ts` checks those ratios by
+converting OKLCH to clipped linear sRGB, and `src-tauri/src/theme_presets.rs`
+checks them again before a preset is stored.
 
-A preset has exactly `version`, `id`, `name`, `light` and `dark` fields.
-Version is `1`. Custom IDs start with a lowercase letter and contain only lowercase
-letters, digits and hyphens, up to 64 characters. Names allow 160 UTF-8 bytes.
-The `builtin:` namespace is reserved for bundled presets. The older bundled
-IDs `default`, `warm` and `forest` remain reserved for compatibility.
-Each palette contains these twelve required numeric OKLCH triples:
-
-| Tokens                                    | Purpose                                                           |
-| ----------------------------------------- | ----------------------------------------------------------------- |
-| `surface-0` through `surface-3`           | Increasing lightness for chrome, panels, containers and overlays. |
-| `border-subtle`, `border-strong`          | Divider and outline tiers.                                        |
-| `foreground`, `muted-foreground`          | Normal and secondary text.                                        |
-| `primary`, `primary-foreground`           | Neutral buttons and their text.                                   |
-| `accent-brand`, `accent-brand-foreground` | Preset accent and text on its fill.                               |
-
-A palette may also set the named colours (`named-red`, `named-orange`,
-`named-amber`, `named-green`, `named-teal`, `named-blue`, `named-violet`,
-`named-pink`) and `named-foreground`, the text on them. It sets all nine or none;
-without them the `app.css` values apply. See [Named colours](#named-colours).
-
-Triples use `[L, C, H]`: lightness from 0 to 1, chroma from 0 to 0.4 and hue
-from 0 to 360. Values must be finite. Surface lightness strictly increases.
-Normal/secondary text and text on primary/accent fills require computed contrast
-of at least 4.5. Accent text requires 3 against every surface. Each named colour
-requires 4.5 with `named-foreground` and 3 against every surface. Subtle/strong
-borders require 1.1/1.25 against every surface. Validation converts OKLCH to
-clipped linear sRGB for these ratios. Status, search and diff colors, shadows
-and radius continue to follow the app's mode and token rules.
-
-Unknown fields, CSS expressions, scripts and remote imports are rejected.
-An imported preset is limited to 16 KiB. Root `theme-presets.json` stores up to
-64 user presets in a versioned map. Use the settings UI to edit them so validation,
-locked publication and notifications run. Complete built-in examples live in
+Root `theme-presets.json` stores up to 64 user presets in a versioned map. Use
+the settings UI to edit them so validation, locked publication and
+notifications run. Removing a selected preset keeps its selection and displays
+Apollo; restoring the same ID restores the theme, and the original data stays
+available during recovery. Complete built-in examples live in
 [`src/lib/settings/theme-presets.json`](../../src/lib/settings/theme-presets.json).
 
 ## Named colours

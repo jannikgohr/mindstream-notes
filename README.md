@@ -55,6 +55,7 @@ the [self-hosting quick start](docs/self-hosting.md).
 The [documentation index](docs/README.md) lists every guide. Good places to
 start:
 
+- [Sync and sharing](docs/sync-and-sharing.md), once you have a server
 - [Importing notes](docs/import.md) from other apps
 - [Backup and restore](docs/backup-and-restore.md)
 - [Known limitations](docs/known-limitations.md), worth a read before filing a

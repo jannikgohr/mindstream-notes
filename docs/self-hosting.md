@@ -209,7 +209,9 @@ you continue. Then create a note and test **Sync now**. Your other devices sign
 in with the same URL, username and password.
 
 To let more people in, or to make signup by invite link possible, see
-[Signing up](server-administration.md#signing-up).
+[Signing up](server-administration.md#signing-up). What the app offers once
+it is connected, from two-factor sign-in to shared folders, is in
+[Sync and sharing](sync-and-sharing.md).
 
 ## 4. Operations and backups
 

@@ -5,10 +5,14 @@ Start with the [README](../README.md) for what the app is and where to get it.
 
 ## Using the app
 
+- [Sync and sharing](sync-and-sharing.md): connecting a vault to a server,
+  your recovery key, two-factor sign-in, shared folders and live editing
 - [Importing notes](import.md): what each import format maps to, and how links
   survive
 - [Backup and restore](backup-and-restore.md): what a backup holds, and the
   difference between restoring and merging
+- [Custom themes](custom-themes.md): making your own theme preset, and the
+  rules it has to meet
 - [Known limitations](known-limitations.md): intentional trade-offs and what is
   not built yet. Read it before filing a bug about sync or history
 
