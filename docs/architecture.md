@@ -19,6 +19,23 @@ security issues still open against the design described here see
   commands; outside Tauri (`pnpm dev`, Playwright) the same calls fall back to an
   in-memory mock store, so the whole UI runs in a plain browser.
 
+## Repository layout
+
+```text
+src/                    Svelte app: UI components, stores, editors, API bridge
+src-tauri/              Tauri app and Rust backend: persistence, sync, commands
+backend/server/         The sync server (AGPL-3.0), see server-design.md
+backend/scripts/        Driver for the disposable server the e2e suites use
+plugins/                Plugins bundled with the app, with their built .wasm
+plugin-sdk/             Plugin SDKs, the WIT contract, shipped plugin sources
+packages/svelte-kanban/ Fork of the board renderer
+protocol/               The room protocol and invite-link format, specified once
+vendor/etebase-rs/      The Etebase client library, changed here
+demo-notes/             Welcome notes seeded on first run
+e2e-tests/              Browser, backend and real-app end-to-end suites
+docs/                   This documentation
+```
+
 ## Layers
 
 ```mermaid
@@ -95,7 +112,9 @@ instead of exiting silently.
 
 Svelte 5 + SvelteKit render the UI. Editors are surface-specific: markdown uses
 Milkdown/ProseMirror with `y-prosemirror`; ink is a Svelte canvas driven by
-Pointer Events; freeform embeds an Excalidraw island; PDFs render through pdf.js.
+Pointer Events, with an Android-only Kotlin `CanvasFrontBufferedRenderer`
+overlay for live-stroke latency; freeform embeds an Excalidraw island; PDFs
+render through pdf.js.
 
 - **API bridge — [`src/lib/api/`](../src/lib/api).** One thin module per Rust
   command surface (`notes.ts`, `collections.ts`, `sharing.ts`, …). Each call goes
@@ -170,7 +189,7 @@ thread pool, holding the lock only for a single query.
   matcher: AND token semantics, score `+10` per title hit / `+1` per body hit,
   with snippet + highlight ranges. [`api/search-matcher.ts`](../src/lib/api/search-matcher.ts)
   mirrors it for the browser fallback (kept behaviourally aligned by tests).
-- **Backup — [`backup.rs`](../src-tauri/src/backup.rs).** A zip of
+- **Backup — [`backup/`](../src-tauri/src/backup).** A zip of
   `manifest.json` (version, account identity via `etebase_collection_uid`,
   counts) + `data.db` (a `VACUUM INTO` snapshot). Import supports preview,
   staged-restart restore, and in-process merge.
@@ -215,7 +234,7 @@ merge. This encoded CRDT state is the source of truth that travels in sync.
 
 ## Collection sharing
 
-Sharing a folder ([`sharing.rs`](../src-tauri/src/sharing.rs),
+Sharing a folder ([`sharing/`](../src-tauri/src/sharing),
 [`sync/scopes.rs`](../src-tauri/src/sync/scopes.rs)) creates a **scope**: one
 `mindstream.share_manifest` collection (its content is the manifest JSON) plus
 three part collections — folders / notes / assets. Sharing **re-homes** the
@@ -246,7 +265,7 @@ stay encrypted under a key derived from the note's own, which the server never
 has.
 
 The design and the reasons for it are in [server-design.md](server-design.md).
-Running one is covered in [backend/server/README.md](../backend/server/README.md).
+Running one is covered in the [self-hosting quick start](self-hosting.md).
 
 ## How this shapes testing
 

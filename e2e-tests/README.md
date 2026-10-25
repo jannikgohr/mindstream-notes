@@ -21,7 +21,7 @@ Test workflow run or the `ci:app-e2e` PR label enables all suites.
   ([docs/e2e/harness.md](../docs/e2e/harness.md#toolchain)). T3/T4 build the
   packaged binary, so the full app toolchain is required, not just Node.
 - **T4 only:** a running Docker backend stack
-  ([backend/README.md](../backend/README.md)).
+  ([docs/e2e/backend-stack.md](../docs/e2e/backend-stack.md)).
 
 ## Browser suite (T2) — the default
 

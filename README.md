@@ -2,100 +2,52 @@
 
 [![codecov](https://codecov.io/gh/jannikgohr/mindstream-notes/branch/main/graph/badge.svg)](https://codecov.io/gh/jannikgohr/mindstream-notes)
 
-Mindstream Notes is a local-first note-taking app built with Tauri, Svelte, Rust, and Yjs. It is designed around fast desktop note workflows, markdown editing, local persistence, optional encrypted sync, and native ink support for handwritten notes.
+Mindstream Notes is a local-first note-taking app built with Tauri, Svelte, Rust
+and Yjs. Your notes live in a database on your device, and the app works
+without an account. Sync is optional and end-to-end encrypted, and the server it
+talks to is in this repository for you to host yourself.
 
-The project is still under active development. Expect sharp edges, but the core shape is already in place: a desktop app shell, a markdown editor, a note tree, local storage, CRDT-backed document state, and a Yjs-backed ink canvas.
+The desktop app runs on Windows, Linux and macOS. Android is a work in progress.
+The project is under active development, so expect sharp edges.
 
 ## Features
 
-- Markdown notes with a rich editor toolbar.
-- Local-first persistence backed by SQLite and Yjs document state.
-- Folder and note tree with trash, restore, purge, move, and sort flows.
-- Optional Etebase-backed encrypted sync plumbing.
-- Drawing/ink notes with pen, eraser, undo, redo, clear, color, width, page theme, pan, and zoom controls.
-- Desktop layout with sidebars, metadata panel, custom window chrome, and popout support.
-- Mobile-oriented Svelte UI surfaces and Android native drawing integration work in progress.
+- Markdown notes with WYSIWYG, source and split views, `[[wikilinks]]` and
+  `@mentions`
+- Handwritten notes, drawing canvases, PDFs you can write on, and kanban boards
+- Typst documents with a live preview, through a bundled plugin
+- Spell checking with the app's own dictionaries, and grammar checking through a
+  LanguageTool server
+- Note history, trash, and several vaults side by side
+- Import from Markdown folders, Obsidian, Joplin and Evernote, export for every
+  note type, and vault backups
+- Encrypted sync, shared folders and live co-editing through your own server
+- Plugins as sandboxed WebAssembly components, written in Rust or TypeScript
+- English and German interface
 
-## Tech Stack
+## Install
 
-- Tauri 2 for the desktop/mobile app shell.
-- Svelte 5 and SvelteKit for the interface.
-- Rust for persistence, sync, and Tauri commands.
-- Svelte canvas + Pointer Events for the ink editor, with an Android-only Kotlin `CanvasFrontBufferedRenderer` overlay for live-stroke latency.
-- Yjs/yrs for CRDT document state.
-- Vitest (unit) and Playwright (end-to-end) for the frontend, Cargo for the Rust backend; line coverage from both sides is published to Codecov.
+Download the app from the
+[releases page](https://github.com/jannikgohr/mindstream-notes/releases). To
+run your own sync server, follow the
+[self-hosting quick start](docs/self-hosting.md).
 
-## Repository Layout
-
-```text
-src/                    Svelte app, UI components, stores, editor code
-src-tauri/              Tauri app, Rust backend, persistence, sync
-backend/yjs-collab/     Experimental Yjs collaboration server pieces
-e2e-tests/              Browser, backend, and real-app end-to-end suites
-docs/                   Architecture notes and build documentation
-```
-
-## Quick Start
-
-Install dependencies:
+## Development
 
 ```shell
-pnpm install
+pnpm install      # also installs the git hooks
+pnpm dev          # the UI in a browser, on an in-memory mock store
+pnpm tauri-dev    # the desktop app
 ```
 
-Run the browser development UI:
+- [docs/BUILDING.md](docs/BUILDING.md): per-OS prerequisites, release builds,
+  Android
+- [CONTRIBUTING.md](CONTRIBUTING.md): commit conventions (the scope is
+  required), git hooks, tests and coverage
+- [e2e-tests/README.md](e2e-tests/README.md): the end-to-end suites
+- [docs/architecture.md](docs/architecture.md): how the app fits together
 
-```shell
-pnpm dev
-```
-
-Run the Tauri desktop app:
-
-```shell
-pnpm tauri-dev
-```
-
-Run the main checks:
-
-```shell
-pnpm check
-pnpm test
-```
-
-Measure coverage. Both sides gate the **logic layer** at 80% line coverage
-(frontend with the v8 provider, backend with `cargo-llvm-cov`); integration
-surfaces — the Tauri IPC boundary, network sync, native dialogs, editor/canvas
-frameworks — are excluded from the metric and covered by e2e instead:
-
-```shell
-pnpm test:coverage        # frontend; writes .output/coverage/frontend, enforces 80%
-pnpm test:coverage:rust   # backend; enforces 80% (needs cargo-llvm-cov)
-```
-
-Run the end-to-end suite. Playwright builds the SPA and drives it in
-browser-fallback mode (the in-memory mock store backs every API call, so
-no Tauri or Rust build is required):
-
-```shell
-pnpm test:e2e             # headless
-pnpm test:e2e:ui          # interactive runner
-```
-
-The Playwright suite covers the pure-UI journeys today;
-[docs/e2e/flows.md](docs/e2e/flows.md) defines the deeper flows (critical user
-journeys, IPC-heavy operations, and cross-restart state persistence) that need
-the packaged Tauri app rather than the browser fallback. To run those deeper
-suites (T3/T4), see [e2e-tests/README.md](e2e-tests/README.md).
-
-For how the app fits together (frontend, IPC, Rust, sync, sharing), see
-[docs/architecture.md](docs/architecture.md). For per-OS setup (Windows, Ubuntu,
-Fedora), packaging commands, Android notes, and Rust quality gates, see
-[docs/BUILDING.md](docs/BUILDING.md).
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for branch/commit conventions (commits
-require a scope), the git hooks, and the local quality gates.
+The [documentation index](docs/README.md) lists everything else.
 
 ## License
 
@@ -115,10 +67,9 @@ this table, which have a licence of their own:
 | `src-tauri/gen/android/gradlew`, `gradlew.bat`, `gradle/wrapper/` | The Gradle wrapper                            | Apache-2.0                                       |
 | `plugins/*/icons/`                                                | Plugin icons from Lucide and Simple Icons     | ISC, CC0-1.0                                     |
 
-The server is a program of its own. The app does not contain it and talks to
-it over the network. The files in [`protocol/`](protocol), which both are
-tested against, are under the app's licence.
+The server is a program of its own. The app does not contain it and talks to it
+over the network. The files in [`protocol/`](protocol), which both are tested
+against, are under the app's licence.
 
-[REUSE.toml](REUSE.toml) says the same for every file, in a form tools can
-read. The licence texts are in [LICENSES/](LICENSES), and CI runs
-`reuse lint`.
+[REUSE.toml](REUSE.toml) says the same for every file, in a form tools can read.
+The licence texts are in [LICENSES/](LICENSES), and CI runs `reuse lint`.
