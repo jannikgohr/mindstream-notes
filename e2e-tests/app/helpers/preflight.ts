@@ -229,7 +229,7 @@ export function assertTauriDriver(): void {
   if (!existsSync(tauriDriverPath)) {
     fail(
       `tauri-driver not found at ${tauriDriverPath}. Install it with ` +
-        `\`cargo install tauri-driver --locked\` (see docs/e2e/harness.md#toolchain).`
+        `\`cargo install tauri-driver --locked\` (see docs/internal/e2e/harness.md#toolchain).`
     );
   }
 }

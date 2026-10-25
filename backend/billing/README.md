@@ -52,4 +52,4 @@ and nothing else.
 ## Where it will live
 
 Undecided. See the open points in
-[docs/server-design.md](../../docs/server-design.md#open-points).
+[docs/internal/server-design.md](../../docs/internal/server-design.md#open-points).

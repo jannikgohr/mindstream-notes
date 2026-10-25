@@ -10,14 +10,15 @@ Typst**, ob das Plugin es findet – jedes deklarierte Binary hat eine
 Schaltfläche **Prüfen**, die es über deinen `PATH` auflöst und den gefundenen
 Pfad anzeigt.
 
-## `typst` – erforderlich für Vorschau und Export
+## `typst` – erforderlich für die Vorschau und die meisten Exporte
 
 Installiere das [`typst`](https://github.com/typst/typst)-CLI. Das Plugin
-übergibt ihm deinen Quelltext und zeigt das kompilierte PDF als Vorschau; dasselbe
-Binary erzeugt PDF-Exporte.
+übergibt ihm deinen Quelltext und zeigt das kompilierte PDF als Vorschau.
+Dasselbe Binary erzeugt die Exporte als PDF, PNG und SVG.
 
-Ohne es lassen sich Typst-Notizen weiterhin öffnen – aber im **Nur-Quelltext**-
-Modus, ohne Vorschau und ohne Export.
+Ohne es lassen sich Typst-Notizen weiterhin im **Nur-Quelltext**-Modus öffnen.
+Es gibt dann keine Vorschau, und exportieren lässt sich nur der
+**Typst-Quelltext**, also die `.typ`-Datei selbst.
 
 ## `tinymist` – optional, für die Live-Vorschau
 

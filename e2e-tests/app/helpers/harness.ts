@@ -19,7 +19,7 @@
  *
  * NOTE: this harness is a scaffold. The profile-dir + restart seam is wired to
  * the documented env override, but two things still need a real environment to
- * finish and validate (tracked in docs/e2e/harness.md):
+ * finish and validate (tracked in docs/internal/e2e/harness.md):
  *   - per-spec profile-dir injection requires respawning tauri-driver with new
  *     env (see `freshProfileDir` / wdio.conf `beforeSession`);
  *   - native file dialogs need a Rust-side test hook — `requireDialogHook`
@@ -38,7 +38,7 @@ export interface Skippable {
 
 /**
  * Native-dialog test hook (export/import/PDF pickers). Not yet implemented on
- * the Rust side — see docs/e2e/harness.md. Flip on via env once a hook exists so
+ * the Rust side — see docs/internal/e2e/harness.md. Flip on via env once a hook exists so
  * the backup/PDF specs stop self-skipping.
  *
  * This is the app tier's one remaining flag, and unlike the removed
@@ -915,9 +915,9 @@ export async function loginClient(
     await closeSettingsDialog(client);
     return;
   }
-  if (await h.isDisplayed('Log out')) {
+  if (await h.isDisplayed('Sign out')) {
     const previousDocument = await client.execute(() => performance.timeOrigin);
-    await h.click('Log out');
+    await h.click('Sign out');
     await waitForAuthReload(client, previousDocument);
     await h.click('Open settings');
     await h.click('Account & Sync');

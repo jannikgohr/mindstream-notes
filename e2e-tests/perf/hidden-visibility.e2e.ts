@@ -72,7 +72,7 @@ describe('hidden-window page visibility', function () {
       return;
     }
     // On a full (parallel) run a second app is up and neither window can be
-    // claimed by name. The probe is a manual one anyway (docs/memory.md), so
+    // claimed by name. The probe is a manual one anyway (docs/internal/memory.md), so
     // run it on its own: pnpm test:e2e:app --spec <this file>.
     const pid = appPid();
     if (pid === undefined) {

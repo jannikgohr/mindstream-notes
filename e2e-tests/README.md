@@ -18,10 +18,10 @@ Test workflow run or the `ci:app-e2e` PR label enables all suites.
 - **Real-app suites (T3/T4):** also the app-build toolchain (Rust + your OS's
   Tauri system deps — [docs/BUILDING.md](../docs/BUILDING.md)) **and** the
   `tauri-driver` toolchain
-  ([docs/e2e/harness.md](../docs/e2e/harness.md#toolchain)). T3/T4 build the
+  ([docs/internal/e2e/harness.md](../docs/internal/e2e/harness.md#toolchain)). T3/T4 build the
   packaged binary, so the full app toolchain is required, not just Node.
 - **T4 only:** a running Docker backend stack
-  ([docs/e2e/backend-stack.md](../docs/e2e/backend-stack.md)).
+  ([docs/internal/e2e/backend-stack.md](../docs/internal/e2e/backend-stack.md)).
 
 ## Browser suite (T2) — the default
 
@@ -38,7 +38,7 @@ Dialog tests use production assets and retain traces and screenshots on
 failure. They cover configuration focus, keyboard trapping, failure/retry,
 Stop, immediate completion, and automatic return to Settings. Native IPC is
 stubbed in these browser tests; the packaged-app suite verifies real data.
-See [Bits UI maintenance](../docs/bits-ui.md) before changing the dialog library
+See [Bits UI maintenance](../docs/internal/bits-ui.md) before changing the dialog library
 or custom autofocus behavior.
 
 ## Backend health (T4 prerequisite)
@@ -55,12 +55,12 @@ pnpm backend:test:down                                  # tear down when done
 The rate-limit specs stay opt-in behind `MINDSTREAM_E2E_EDGE_LIMITS=1` — they
 drain the auth bucket for every suite sharing the stack.
 
-See [docs/e2e/backend-stack.md](../docs/e2e/backend-stack.md).
+See [docs/internal/e2e/backend-stack.md](../docs/internal/e2e/backend-stack.md).
 
 ## Real-app suite (T3, single client)
 
 Drives the **packaged Tauri binary** over WebDriver. Needs the one-time
-toolchain in [docs/e2e/harness.md](../docs/e2e/harness.md#toolchain).
+toolchain in [docs/internal/e2e/harness.md](../docs/internal/e2e/harness.md#toolchain).
 
 ```sh
 pnpm test:e2e:app
@@ -87,7 +87,7 @@ start timing out or behaving oddly, reset the stack (`pnpm backend:test:reset`)
 — accumulated data slows sync enough to mimic real bugs.
 
 See [app/README.md](app/README.md) for the two-client harness specifics and the
-full env-flag reference in [docs/e2e/harness.md](../docs/e2e/harness.md).
+full env-flag reference in [docs/internal/e2e/harness.md](../docs/internal/e2e/harness.md).
 
 ## Backend benchmark
 
@@ -110,7 +110,7 @@ flags and what the numbers do and don't cover.
 
 ## Going deeper
 
-- **Why these tiers exist / what each proves** — [docs/e2e/strategy.md](../docs/e2e/strategy.md)
-- **The flows worth covering (catalogue)** — [docs/e2e/flows.md](../docs/e2e/flows.md)
-- **Current coverage & open gaps** — [docs/e2e/status.md](../docs/e2e/status.md)
-- **By-design behaviours these tests pin down** — [docs/known-limitations.md](../docs/known-limitations.md)
+- **Why these tiers exist / what each proves** — [docs/internal/e2e/strategy.md](../docs/internal/e2e/strategy.md)
+- **The flows worth covering (catalogue)** — [docs/internal/e2e/flows.md](../docs/internal/e2e/flows.md)
+- **Current coverage & open gaps** — [docs/internal/e2e/status.md](../docs/internal/e2e/status.md)
+- **By-design behaviours these tests pin down** — [docs/internal/limitations.md](../docs/internal/limitations.md)

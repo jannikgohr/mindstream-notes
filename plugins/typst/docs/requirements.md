@@ -8,14 +8,14 @@ After installing a binary, confirm the plugin can find it under **Settings →
 Plugins → Typst** — each declared binary has a **Check** button that resolves it
 from your `PATH` and shows the path it found.
 
-## `typst` — required for preview and export
+## `typst` — required for the preview and most exports
 
 Install the [`typst`](https://github.com/typst/typst) CLI. The plugin feeds your
-source to it and shows the compiled PDF as the preview; the same binary produces
-PDF exports.
+source to it and shows the compiled PDF as the preview. The same binary
+produces the PDF, PNG and SVG exports.
 
-Without it, Typst notes still open — but in **source-only** mode, with no
-preview and no export.
+Without it, Typst notes still open in **source-only** mode. There is no
+preview, and the only export is **Typst source**, the `.typ` file itself.
 
 ## `tinymist` — optional, for live preview
 

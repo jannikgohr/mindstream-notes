@@ -1,7 +1,7 @@
 # Theming
 
 All colour, elevation and radius in the app comes from tokens defined in
-[`src/app.css`](../src/app.css). This document is the contract for that file:
+[`src/app.css`](../../src/app.css). This document is the contract for that file:
 what each token means, which one to reach for, and what is not allowed.
 
 ## Why the system exists
@@ -101,46 +101,18 @@ teal accent. The default preset's values are also the base tokens in
 is independent of preset selection. Presets and UI font size apply to every
 vault on this device. Editor font size and line height stay in the vault.
 
-Use "Show preset JSON" to start from a complete preset. Change its ID and name,
-then save it under "Import or edit a preset". Saving an existing custom ID
-replaces that preset on this device. Built-in IDs are reserved. Removing a
-selected preset keeps its selection and displays Apollo; restoring the
-same ID restores the theme. The original data stays available during recovery.
+How a user makes, imports and removes a preset, and the full preset format
+with its validation rules, are in [Custom themes](../custom-themes.md).
+`themeContrast` in `src/lib/settings/theme-presets.ts` checks those ratios by
+converting OKLCH to clipped linear sRGB, and `src-tauri/src/theme_presets.rs`
+checks them again before a preset is stored.
 
-A preset has exactly `version`, `id`, `name`, `light` and `dark` fields.
-Version is `1`. Custom IDs start with a lowercase letter and contain only lowercase
-letters, digits and hyphens, up to 64 characters. Names allow 160 UTF-8 bytes.
-The `builtin:` namespace is reserved for bundled presets. The older bundled
-IDs `default`, `warm` and `forest` remain reserved for compatibility.
-Each palette contains these twelve required numeric OKLCH triples:
-
-| Tokens                                    | Purpose                                                           |
-| ----------------------------------------- | ----------------------------------------------------------------- |
-| `surface-0` through `surface-3`           | Increasing lightness for chrome, panels, containers and overlays. |
-| `border-subtle`, `border-strong`          | Divider and outline tiers.                                        |
-| `foreground`, `muted-foreground`          | Normal and secondary text.                                        |
-| `primary`, `primary-foreground`           | Neutral buttons and their text.                                   |
-| `accent-brand`, `accent-brand-foreground` | Preset accent and text on its fill.                               |
-
-A palette may also set the named colours (`named-red`, `named-orange`,
-`named-amber`, `named-green`, `named-teal`, `named-blue`, `named-violet`,
-`named-pink`) and `named-foreground`, the text on them. It sets all nine or none;
-without them the `app.css` values apply. See [Named colours](#named-colours).
-
-Triples use `[L, C, H]`: lightness from 0 to 1, chroma from 0 to 0.4 and hue
-from 0 to 360. Values must be finite. Surface lightness strictly increases.
-Normal/secondary text and text on primary/accent fills require computed contrast
-of at least 4.5. Accent text requires 3 against every surface. Each named colour
-requires 4.5 with `named-foreground` and 3 against every surface. Subtle/strong
-borders require 1.1/1.25 against every surface. Validation converts OKLCH to
-clipped linear sRGB for these ratios. Status, search and diff colors, shadows
-and radius continue to follow the app's mode and token rules.
-
-Unknown fields, CSS expressions, scripts and remote imports are rejected.
-An imported preset is limited to 16 KiB. Root `theme-presets.json` stores up to
-64 user presets in a versioned map. Use the settings UI to edit them so validation,
-locked publication and notifications run. Complete built-in examples live in
-[`src/lib/settings/theme-presets.json`](../src/lib/settings/theme-presets.json).
+Root `theme-presets.json` stores up to 64 user presets in a versioned map. Use
+the settings UI to edit them so validation, locked publication and
+notifications run. Removing a selected preset keeps its selection and displays
+Apollo; restoring the same ID restores the theme, and the original data stays
+available during recovery. Complete built-in examples live in
+[`src/lib/settings/theme-presets.json`](../../src/lib/settings/theme-presets.json).
 
 ## Named colours
 
@@ -156,7 +128,7 @@ colour also reads as text on the matching surfaces.
 The backend gives each vault a colour when it is created, and gives one to every
 vault in an index written before colours existed, the first time it loads. It
 picks the ID's colour (FNV-1a, the same hash as `vaultTileColor` in
-[`src/lib/vaults/tile.ts`](../src/lib/vaults/tile.ts)) unless an older vault
+[`src/lib/vaults/tile.ts`](../../src/lib/vaults/tile.ts)) unless an older vault
 already has it, then steps three colours on until one is free. Stored colours
 never change, so deleting or renaming a vault leaves every colour alone.
 
@@ -188,7 +160,7 @@ pattern collapses to `bg-success-subtle border-success-border text-success`.
 ## Rules
 
 These are enforced by `pnpm lint:theme`
-([`src-tauri/scripts/lint-theme.mjs`](../src-tauri/scripts/lint-theme.mjs)),
+([`src-tauri/scripts/lint-theme.mjs`](../../src-tauri/scripts/lint-theme.mjs)),
 which runs on staged files at commit time and over all of `src/` as part of
 `pnpm verify`.
 
@@ -218,8 +190,8 @@ absence of a token:
 - `--highlight-search` / `-active` / `-selection`, shared by the editor's
   find decorations and the PDF viewer's overlay.
 - Ink pen swatches and PDF annotation colours
-  ([`src/lib/ink/editor-helpers.ts`](../src/lib/ink/editor-helpers.ts),
-  [`src/lib/pdf/viewer-helpers.ts`](../src/lib/pdf/viewer-helpers.ts)). They
+  ([`src/lib/ink/editor-helpers.ts`](../../src/lib/ink/editor-helpers.ts),
+  [`src/lib/pdf/viewer-helpers.ts`](../../src/lib/pdf/viewer-helpers.ts)). They
   are content: strokes and annotations store sRGB hex and PDF export writes it,
   so they cannot follow a preset. The pens are Apollo ink plus its named
   colours, dark enough for the white page; the PDF set is lighter highlighter
@@ -240,7 +212,7 @@ The linter also allows three things by design:
 
 ## Pre-paint bootstrap
 
-The inline `<style>` in [`src/app.html`](../src/app.html) hardcodes the
+The inline `<style>` in [`src/app.html`](../../src/app.html) hardcodes the
 default `--surface-1` and `--foreground` values to avoid a flash before `app.css`
 loads. It first applies validated numeric preset tokens from the root bootstrap
 or browser cache. Its literal fallbacks must still match the default tokens.
@@ -252,12 +224,12 @@ vault's cache and use its resolved surface color as the native background.
 
 Reach for the primitives rather than hand-rolling container chrome:
 
-- [`ui/surface`](../src/lib/components/ui/surface) — `<Surface as="aside"
+- [`ui/surface`](../../src/lib/components/ui/surface) — `<Surface as="aside"
 variant="panel">` for a pane of the shell, `variant="section"` for a grouped
   region inside it, `variant="raised"` for a discrete item on a section, and
   `variant="overlay"` for something genuinely floating. The `padding` prop
   covers the common insets.
-- [`ui/section-header`](../src/lib/components/ui/section-header) — the compact
+- [`ui/section-header`](../../src/lib/components/ui/section-header) — the compact
   heading that titles a region.
 
 The desktop navigation uses `surface-0`; the details pane uses `surface-1`.

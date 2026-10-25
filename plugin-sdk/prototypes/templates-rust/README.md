@@ -92,4 +92,4 @@ the scalar and local-calendar builds use individual calls over the same plan.
 The normal `$exports` result still advertises only the two Templates exports.
 No comparison component replaces the shipped Rust package.
 
-See the [host API design guidance](../../../docs/plugin-host-api-design.md).
+See the [host API design guidance](../../../docs/internal/plugin-host-api-design.md).

@@ -15,7 +15,7 @@
  * Presses starting on the toolbar keep their normal behavior.
  *
  * TODO(upstream): move gesture tracking into Crepe's ToolbarView and
- * refresh its TooltipProvider after release. See docs/upstream-fixes.md.
+ * refresh its TooltipProvider after release. See docs/internal/upstream-fixes.md.
  */
 
 export function installSelectionToolbarAutoHide(host: HTMLElement): () => void {

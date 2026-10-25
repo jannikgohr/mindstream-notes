@@ -6,7 +6,7 @@ import WebSocket from 'ws';
 import { backendUrl } from '../shared/backend-target.js';
 
 /**
- * Health gating for the sync server (docs/e2e/backend-stack.md). These are
+ * Health gating for the sync server (docs/internal/e2e/backend-stack.md). These are
  * the probes that must pass before the collaboration specs can run against a
  * real backend, so they double as a quick "is my stack up and is it the
  * right server?" smoke test.

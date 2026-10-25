@@ -12,6 +12,16 @@ export function defaultCustomWindowDecorations(
   return platform !== 'macos';
 }
 
+/**
+ * Whether a URL query asks for the window controls preview: `?windowControls`
+ * draws the minimize, maximize and close buttons in a plain browser, where
+ * there is no window to control, so screenshots of the browser build look
+ * like the desktop app.
+ */
+export function windowControlsPreviewRequested(search: string): boolean {
+  return new URLSearchParams(search).has('windowControls');
+}
+
 export function customWindowDecorationsFromEventPayload(
   payload: unknown
 ): boolean {
