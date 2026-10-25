@@ -151,8 +151,10 @@ the link that opens the folder never reaches the server.
 ### Checking who you share with
 
 Your account has a key, shown as digits under **Security**. People you share
-with can compare those digits with what their app shows for you. If they match,
-the folder is shared with you and nobody else.
+with can compare those digits with what their app shows for you, over a separate
+channel they trust, such as a phone call or in person. Matching digits confirms
+that the app has your key rather than a substituted one. To check who has access
+to a folder, open **Manage access…**.
 
 An account's key only changes when the account is created again. If someone's
 key is not the one you shared with before, the app warns you and sends nothing.
