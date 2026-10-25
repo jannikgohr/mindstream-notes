@@ -47,12 +47,12 @@ describe('note exporters', () => {
 
   it('adds plugin exporters for existing note types', () => {
     registerPlugin({
-      manifestVersion: 1,
+      manifestVersion: 2,
       id: 'com.example.markdown-export',
       name: 'Markdown Export',
       version: '1.0.0',
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: [],
       contributes: {
         i18n: { en: { 'export.pdf': 'PDF' } },
@@ -81,12 +81,12 @@ describe('note exporters', () => {
 
   it('adds plugin exporters for plugin-owned note types', () => {
     registerPlugin({
-      manifestVersion: 1,
+      manifestVersion: 2,
       id: 'com.example.typst',
       name: 'Typst',
       version: '1.0.0',
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: [],
       contributes: {
         i18n: { en: { 'notes.document': 'Typst', 'export.pdf': 'PDF' } },

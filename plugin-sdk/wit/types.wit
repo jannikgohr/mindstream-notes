@@ -1,0 +1,42 @@
+package mindstream:plugin@0.1.0;
+
+/// Types shared by the host interfaces.
+interface types {
+    /// Why a host call refused or failed.
+    ///
+    /// A plugin can catch any of these. Running out of time or being cancelled
+    /// is not an error value: the host stops the guest instead, so a plugin
+    /// cannot catch the deadline and keep going.
+    variant error {
+        /// The user did not grant the permission this call needs. The payload
+        /// names it, e.g. `notes.read`.
+        denied(string),
+        /// An argument was malformed or unsafe: a storage path that leaves the
+        /// plugin's directory, a tool the manifest does not declare, a value
+        /// over a size limit.
+        invalid(string),
+        /// The thing asked for does not exist on this device: no data
+        /// directory, or a native tool that is not installed (always the case
+        /// on mobile).
+        unavailable(string),
+        /// The host tried and failed, for example an I/O error.
+        failed(string),
+    }
+
+    /// Read-only metadata for one note. Never the body.
+    record note-meta {
+        id: string,
+        title: string,
+        tags: list<string>,
+        /// Editor kind: `markdown`, `kanban`, or a plugin-owned
+        /// `plugin.<plugin-id>.<kind>`.
+        kind: string,
+        folder-id: option<string>,
+        /// Folder names from the root down, joined with ` / `.
+        folder-path: string,
+        /// RFC 3339.
+        created: string,
+        /// RFC 3339.
+        modified: string,
+    }
+}

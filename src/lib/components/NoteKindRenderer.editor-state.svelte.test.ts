@@ -47,12 +47,12 @@ describe('NoteKindRenderer', () => {
       registerPlugin(templatesManifest);
       if (noteKind.startsWith('plugin.'))
         registerPlugin({
-          manifestVersion: 1,
+          manifestVersion: 2,
           id: 'com.example.stability',
           name: 'Stability fixture',
           version: '1.0.0',
-          runtime: 'luau',
-          entry: 'main.luau',
+          runtime: 'wasm',
+          entry: 'plugin.wasm',
           permissions: [],
           contributes: {
             noteKinds: [

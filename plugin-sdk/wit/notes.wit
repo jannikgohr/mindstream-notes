@@ -1,0 +1,15 @@
+package mindstream:plugin@0.1.0;
+
+/// Vault metadata. Every call needs `notes.read`.
+///
+/// The host takes a snapshot before the plugin starts, so these calls are
+/// cheap and see one consistent vault.
+interface notes {
+    use types.{error, note-meta};
+
+    /// Every note that is not in the trash.
+    all: func() -> result<list<note-meta>, error>;
+
+    /// One note, or none when there is no such note.
+    get: func(id: string) -> result<option<note-meta>, error>;
+}

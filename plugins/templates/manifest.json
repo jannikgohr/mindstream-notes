@@ -1,11 +1,11 @@
 {
-  "manifestVersion": 1,
+  "manifestVersion": 2,
   "id": "com.mindstream.templates.core",
   "name": "Templates",
   "version": "1.0.0",
   "author": "Mindstream",
-  "runtime": "luau",
-  "entry": "main.luau",
+  "runtime": "wasm",
+  "entry": "plugin.wasm",
   "descriptionKey": "plugin.description",
   "icon": "icons/templates.svg",
   "permissions": ["notes.read", "notes.create"],
@@ -25,6 +25,11 @@
         "labelKey": "toolbar.newFromTemplate",
         "icon": "icons/templates.svg",
         "opensMenu": true,
+        "visibleWhen": {
+          "type": "hasMatchingNotes",
+          "folderSetting": "source-folder",
+          "tagSetting": "source-tag"
+        },
         "action": {
           "type": "script",
           "export": "newFromTemplate"

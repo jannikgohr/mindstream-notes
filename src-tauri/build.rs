@@ -2,6 +2,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rustc-check-cfg=cfg(coverage)");
     generate_i18n_bundle_list()?;
     track_builtin_plugins()?;
+    precompile_builtin_plugins()?;
     tauri_build::build();
     // tauri-build links its Common Controls v6 manifest into binaries only.
     // The native runtime spike and IPC test harness need that manifest too,
@@ -12,6 +13,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let resource = std::path::PathBuf::from(std::env::var("OUT_DIR")?).join("resource.lib");
         println!("cargo:rustc-link-arg-examples={}", resource.display());
         println!("cargo:rustc-link-arg-tests={}", resource.display());
+    }
+    Ok(())
+}
+
+fn precompile_builtin_plugins() -> Result<(), Box<dyn std::error::Error>> {
+    use std::{env, fs, path::PathBuf};
+    println!("cargo:rerun-if-env-changed=MINDSTREAM_BUNDLED_AOT");
+    let out = PathBuf::from(env::var("OUT_DIR")?).join("plugin-precompiled");
+    fs::create_dir_all(&out)?;
+    if env::var("PROFILE").as_deref() == Ok("release")
+        && env::var("MINDSTREAM_BUNDLED_AOT").as_deref() != Ok("0")
+    {
+        let plugins = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?).join("../plugins");
+        mindstream_plugin_runtime::wasm::precompiled::build_bundled(
+            &plugins,
+            &out,
+            &env::var("TARGET")?,
+        )?;
+    } else {
+        fs::write(out.join("precompiled.rs"), "&[]")?;
     }
     Ok(())
 }

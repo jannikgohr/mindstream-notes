@@ -3,6 +3,7 @@ import {
   fileTreeCreateAction,
   openFileTreeCreateMore
 } from './file-tree-toolbar';
+import { setTemplateFolder } from './template-sources';
 
 /**
  * The plugin framework, driven through the browser-fallback SPA.
@@ -52,12 +53,18 @@ async function openPluginsCategory(page: Page): Promise<Locator> {
 }
 
 test.describe('plugin framework — bundled Templates plugin', () => {
-  test('contributes its file-tree toolbar button to the create bar', async ({
+  test('shows its toolbar action only while a template source has notes', async ({
     page
   }) => {
     await boot(page);
     await openFileTreeCreateMore(page);
+    await expect(toolbarTemplateButton(page)).toBeHidden();
+    await setTemplateFolder(page);
+    await openFileTreeCreateMore(page);
     await expect(toolbarTemplateButton(page)).toBeVisible();
+    await setTemplateFolder(page, null);
+    await openFileTreeCreateMore(page);
+    await expect(toolbarTemplateButton(page)).toBeHidden();
   });
 
   test('lists the plugin with its manifest metadata in settings', async ({
@@ -92,6 +99,7 @@ test.describe('plugin framework — bundled Templates plugin', () => {
     page
   }) => {
     await boot(page);
+    await setTemplateFolder(page);
     const templateButton = toolbarTemplateButton(page);
     await openFileTreeCreateMore(page);
     await expect(templateButton).toBeVisible();

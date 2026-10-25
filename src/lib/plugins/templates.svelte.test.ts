@@ -47,7 +47,7 @@ function meetingTemplate(): PluginNoteTemplateContribution {
 
 function registerMeeting(permissions = ['notes.create']): void {
   registerPlugin({
-    manifestVersion: 1,
+    manifestVersion: 2,
     id: PLUGIN_ID,
     name: 'Example',
     version: '1.0.0',
@@ -255,12 +255,12 @@ describe('createNoteFromPluginTemplate', () => {
   it('creates a plugin-owned note kind through the app path', async () => {
     const noteKind = `plugin.${PLUGIN_ID}.document`;
     registerPlugin({
-      manifestVersion: 1,
+      manifestVersion: 2,
       id: PLUGIN_ID,
       name: 'Example',
       version: '1.0.0',
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create'],
       contributes: {
         i18n: { en: { 'templates.document.name': 'Document' } },
@@ -306,12 +306,12 @@ describe('createNoteFromPluginTemplate — scripted render', () => {
 
   function registerScripted(): void {
     registerPlugin({
-      manifestVersion: 1,
+      manifestVersion: 2,
       id: PLUGIN,
       name: 'Scripted',
       version: '1.0.0',
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create'],
       contributes: {
         i18n: { en: { 'templates.standup.name': 'Standup' } },

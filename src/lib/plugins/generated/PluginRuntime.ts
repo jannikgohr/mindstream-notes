@@ -3,4 +3,4 @@
 /**
  * How a plugin produces its contributions.
  */
-export type PluginRuntime = 'manifest-only' | 'luau';
+export type PluginRuntime = 'manifest-only' | 'wasm';

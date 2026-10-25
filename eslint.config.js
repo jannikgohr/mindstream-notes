@@ -22,6 +22,7 @@ export default ts.config(
       '**/build/**',
       '**/dist/**',
       '**/.output/**',
+      'plugin-sdk/**/target/**',
       'src-tauri/**',
       'static/**',
       'plugins/**'
