@@ -1,0 +1,30 @@
+package mindstream:plugin@0.1.0;
+
+/// The plugin's own data directory, which the host chooses from the plugin id.
+///
+/// Paths are relative and `/` separated, with no `..`, no absolute paths and
+/// no symlinks out. A single file holds at most 4 MiB. Reading and listing
+/// need `pluginStorage.read`. Writing and deleting need `pluginStorage.write`.
+interface storage {
+    use types.{error};
+
+    record entry {
+        name: string,
+        is-dir: bool,
+        size-bytes: u64,
+    }
+
+    /// The file as text, or none when it does not exist. Invalid UTF-8 is
+    /// replaced, not refused.
+    read: func(path: string) -> result<option<string>, error>;
+
+    /// The entries of a directory, sorted by name. `""` is the root. A
+    /// directory that does not exist lists as empty.
+    %list: func(path: string) -> result<list<entry>, error>;
+
+    /// Write a file, creating parent directories.
+    write: func(path: string, contents: string) -> result<_, error>;
+
+    /// Remove a file or a whole directory. Removing what is not there succeeds.
+    delete: func(path: string) -> result<_, error>;
+}

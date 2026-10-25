@@ -1,0 +1,35 @@
+package mindstream:plugin@0.1.0;
+
+/// The host clock and calendar arithmetic in the user's local time zone.
+///
+/// Supplies the system clock and OS local-time rules. Guests may instead
+/// bundle calendar/timezone code; these helpers avoid that duplication.
+interface clock {
+    use types.{error};
+
+    enum time-unit {
+        second,
+        minute,
+        hour,
+        day,
+        week,
+        month,
+        year,
+    }
+
+    /// Milliseconds since the Unix epoch.
+    now-millis: func() -> u64;
+
+    /// The current local time as RFC 3339, with the local UTC offset.
+    now: func() -> string;
+
+    /// Format an RFC 3339 timestamp in local time with moment-style tokens:
+    /// `YYYY YY MMMM MMM MM M DD D dddd ddd HH H hh h mm m ss s A a` and
+    /// `[literal]`. `locale` picks month and weekday names. `de...` gives
+    /// German, anything else English.
+    format: func(timestamp: string, pattern: string, locale: option<string>) -> result<string, error>;
+
+    /// Shift an RFC 3339 timestamp by `amount` units in local time and return
+    /// RFC 3339. Months and years clamp the day to the target month's length.
+    add: func(timestamp: string, amount: s64, unit: time-unit) -> result<string, error>;
+}

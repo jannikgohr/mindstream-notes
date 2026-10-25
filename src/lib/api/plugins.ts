@@ -456,8 +456,8 @@ export function pluginsPreviewStop(sessionKey: string): Promise<void> {
 }
 
 /**
- * Run an enabled `luau` plugin's exported function in the sandboxed backend
- * runtime and return its JSON result. There is no browser fallback: scripted
+ * Run an enabled scripted plugin's export in the sandboxed backend runtime
+ * and return its JSON result. There is no browser fallback: scripted
  * plugins require the Rust runtime, so outside Tauri this rejects rather than
  * pretending to run code.
  */
@@ -470,7 +470,7 @@ export function pluginsRunScript(
     TauriCommandName.PluginsRunScript,
     { id, export: exportName, input },
     () => {
-      throw new Error('scripted (luau) plugins are only available in the app');
+      throw new Error('scripted plugins are only available in the app');
     },
     (value) => value
   );

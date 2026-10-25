@@ -1,12 +1,12 @@
 {
-  "manifestVersion": 1,
+  "manifestVersion": 2,
   "id": "com.mindstream.typst",
   "name": "Typst",
   "version": "0.2.0",
   "author": "Mindstream",
   "enabledByDefault": false,
-  "runtime": "luau",
-  "entry": "main.luau",
+  "runtime": "wasm",
+  "entry": "plugin.wasm",
   "descriptionKey": "plugin.description",
   "icon": "icons/typst.svg",
   "limits": {

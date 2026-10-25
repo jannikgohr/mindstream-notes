@@ -1,0 +1,65 @@
+package mindstream:plugin@0.1.0;
+
+/// Optional ordered transport over the existing host capabilities.
+/// All scalar permissions, paths, limits and native-tool policy still apply.
+interface batch {
+    use types.{error, note-meta};
+    use runtime.{log-level};
+    use clock.{time-unit};
+    use storage.{entry};
+    use native-tools.{run-output};
+
+    /// A literal or an earlier text/available optional-text result.
+    /// References are indices into commands, including commands not kept.
+    variant text-input { literal(string), previous(u32) }
+    record log-request { level: log-level, message: text-input }
+    record format-request { timestamp: text-input, pattern: text-input, locale: option<text-input> }
+    record add-request { timestamp: text-input, amount: s64, unit: time-unit }
+    record write-request { path: text-input, contents: text-input }
+    record tool-request {
+        tool-id: text-input,
+        args: list<text-input>,
+        stdin: option<text-input>,
+        timeout-ms: option<u32>,
+        output-base64: bool,
+    }
+    variant operation {
+        log(log-request), uuid, random-bytes(u32), has-permission(text-input),
+        now-millis, now,
+        clock-format(format-request), clock-add(add-request),
+        frontmatter(text-input), notes-all, notes-get(text-input),
+        storage-read(text-input), storage-list(text-input), storage-write(write-request), storage-delete(text-input),
+        tool-available(text-input), tool-run(tool-request),
+    }
+    /// Only kept results cross back to the guest. All results remain available
+    /// to backward references until this execute call ends.
+    record command { operation: operation, keep: bool }
+    variant value {
+        none, text(string), optional-text(option<string>), number(u64), boolean(bool), bytes(list<u8>),
+        notes(list<note-meta>), note(option<note-meta>), entries(list<entry>), tool(run-output),
+    }
+    record reply { index: u32, value: value }
+    enum failure-phase { validation, execution, result-limit }
+    record failure {
+        /// Zero-based stopping command, or 0 for a plan-wide validation error.
+        index: u32,
+        phase: failure-phase,
+        /// Number of prefix operations whose handlers returned successfully.
+        /// Zero on validation failure; index on execution failure; index + 1
+        /// on result-limit failure. This is not a durability/rollback promise.
+        completed: u32,
+        /// Kept results from the accepted prefix, with original command indices.
+        /// The oversized stopping result is omitted on result-limit failure.
+        replies: list<reply>,
+        cause: error,
+    }
+
+    /// At most 128 commands, 1024 text inputs, 1 MiB literal data, 8 MiB cumulative
+    /// result data. Whole-plan reference/size validation precedes execution.
+    /// Ordered, stop on first error, no rollback of completed side effects.
+    /// An execution error may follow partial effects in the stopping operation.
+    /// A result-limit error follows a successful handler whose result is rejected.
+    /// Cancellation/deadline trap the guest, including between operations.
+    /// An empty batch succeeds. Plan-wide errors also use index 0.
+    execute: func(commands: list<command>) -> result<list<reply>, failure>;
+}

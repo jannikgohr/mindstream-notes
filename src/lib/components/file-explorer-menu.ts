@@ -15,10 +15,8 @@ import {
   pluginTemplateEntries,
   pluginTemplateNoteKind
 } from '$lib/plugins/menu';
-import {
-  pluginNoteKind,
-  pluginToolbarButtons
-} from '$lib/plugins/registry.svelte';
+import { pluginNoteKind } from '$lib/plugins/registry.svelte';
+import { visiblePluginToolbarButtons } from '$lib/plugins/toolbar-visibility.svelte';
 import { resolvePluginString } from '$lib/plugins/plugin-i18n';
 import {
   menuItemFromPluginEffect,
@@ -172,7 +170,7 @@ async function pluginCreateMenuItems(
   // template"). Both the label and the behaviour come from the plugin — the app
   // adds no text: the label is the button's own i18n string and an `openMenu`
   // effect becomes a native hover submenu.
-  for (const { pluginId, button } of pluginToolbarButtons('file-tree')) {
+  for (const { pluginId, button } of visiblePluginToolbarButtons('file-tree')) {
     const effect = await pluginButtonEffect(pluginId, button);
     if (!effect) continue;
     const id = `plugin-filetree:${pluginId}:${button.id}`;

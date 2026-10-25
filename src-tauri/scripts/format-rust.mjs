@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 
-const manifests = ['src-tauri/Cargo.toml'];
+const manifests = ['src-tauri/Cargo.toml', 'plugin-sdk/bundled/Cargo.toml'];
 
 const check = process.argv.includes('--check');
 

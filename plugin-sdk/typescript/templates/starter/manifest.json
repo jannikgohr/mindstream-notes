@@ -1,0 +1,29 @@
+{
+  "manifestVersion": 2,
+  "id": "{{id}}",
+  "name": "{{name}}",
+  "version": "0.1.0",
+  "runtime": "wasm",
+  "entry": "plugin.wasm",
+  "descriptionKey": "plugin.description",
+  "icon": "icons/plugin.svg",
+  "permissions": [],
+  "contributes": {
+    "documentation": [{ "file": "docs/getting-started.md" }],
+    "toolbar": [
+      {
+        "id": "insert-today",
+        "location": "file-tree",
+        "labelKey": "toolbar.insertToday",
+        "icon": "icons/plugin.svg",
+        "action": { "type": "script", "export": "insertToday" }
+      }
+    ],
+    "i18n": {
+      "en": {
+        "plugin.description": "Inserts today's date into the open note.",
+        "toolbar.insertToday": "Insert today's date"
+      }
+    }
+  }
+}

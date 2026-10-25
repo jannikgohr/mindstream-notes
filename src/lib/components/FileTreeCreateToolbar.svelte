@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { pluginToolbarButtonIsVisible } from '$lib/plugins/toolbar-visibility.svelte';
   import { onMount, untrack } from 'svelte';
   import { Popover, Portal } from 'bits-ui';
   import {
@@ -127,7 +128,9 @@
   );
   const actions = $derived<CreateAction[]>([
     ...enabledCoreActions,
-    ...pluginActions
+    ...pluginActions.filter(({ pluginId, button }) =>
+      pluginToolbarButtonIsVisible(pluginId, button)
+    )
   ]);
   const availableIds = $derived([
     ...CORE_FILE_TREE_ACTION_IDS,

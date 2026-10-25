@@ -1,0 +1,63 @@
+[package]
+name = "mindstream-plugin-runtime"
+version = "0.1.0"
+description = "Sandboxed plugin execution for Mindstream Notes"
+authors = ["Jannik Gohr"]
+edition = "2021"
+rust-version = "1.96"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[features]
+# Build-time compiler only. Resolver 2 keeps these backends out of app builds.
+aot-build = ["wasmtime/all-arch"]
+# Only the standalone probe reads a trusted, generated artifact table.
+probe-precompiled = []
+
+# The plugin runtime lives in its own crate so it builds without Tauri, and the
+# host services every runtime shares exist in one place.
+
+[dependencies]
+base64 = "0.22"
+flate2 = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+getrandom = "0.4"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2.0.18"
+uuid = { version = "1", features = ["v4"] }
+
+# The Wasm component runtime. Off here, though wasmtime turns them on by
+# default: async (host calls run on a blocking worker), the on-disk `cache`
+# feature (`wasm::cache` keeps its own), the pooling allocator, GC, threads
+# and the debugging extras. Targets Cranelift has no backend for (32-bit ARM
+# and x86 Android) switch to the Pulley interpreter on their own; wasmtime's
+# build script does that.
+wasmtime = { version = "49.0.4", default-features = false, features = [
+  "runtime",
+  "cranelift",
+  "component-model",
+  "call-hook",
+  "std",
+  "parallel-compilation",
+] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# Wasmtime's signal handlers read ucontext_t. Older libc layouts omit the
+# ARM64 signal-mask padding, turning recoverable guest traps into SIGILL.
+libc = "0.2.190"
+
+[dev-dependencies]
+iana-time-zone = "0.1"
+# Conformance, example and prototype components, built from plugin-sdk.
+mindstream-plugin-fixtures = { path = "../plugin-fixtures" }
+wat = "1"
+# `pulley` lets the tests run every component through the interpreter that
+# 32-bit Android uses, on a desktop runner. `wat` writes the small hostile
+# fixtures in text.
+wasmtime = { version = "49.0.4", default-features = false, features = [
+  "pulley",
+  "wat",
+] }

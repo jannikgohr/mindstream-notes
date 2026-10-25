@@ -21,6 +21,10 @@ ones with the placeholders already filled in.
 
 ## Using a template
 
+**New from template** appears only when the chosen folder or tag contains at
+least one template note outside the trash. Configure sources in
+**Settings → Plugins → Templates** and add a note there to make it available.
+
 Open **New from template** (the file-tree toolbar button, or the mobile create
 menu) and pick one. A new note is created from the source note's title and body,
 and it keeps the **same kind** as the template — pick a Typst document and you

@@ -35,7 +35,7 @@ const CORE_ID = 'com.mindstream.templates.core';
 
 function validManifest(id = CORE_ID): Record<string, unknown> {
   return {
-    manifestVersion: 1,
+    manifestVersion: 2,
     id,
     name: 'Core Templates',
     version: '1.0.0',

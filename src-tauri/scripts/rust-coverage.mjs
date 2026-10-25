@@ -80,6 +80,8 @@ const result = spawnSync(
   headlessLinux ? ['-a', 'dbus-run-session', '--', 'cargo', ...args] : args,
   {
     cwd: srcTauri,
+    // Keep instrumented Pulley tests serial under the production deadlines.
+    env: { ...process.env, RUST_TEST_THREADS: '1' },
     stdio: 'inherit',
     shell: false
   }

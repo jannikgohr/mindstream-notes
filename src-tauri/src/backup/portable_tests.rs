@@ -96,9 +96,9 @@ impl Fixture {
     }
     fn package(&self, path: &Path, script: &str) {
         fs::create_dir_all(path).unwrap();
-        fs::write(path.join("manifest.json"), json!({"manifestVersion":1,"id":ID,"name":"Portable QA","version":"1.0.0","runtime":"luau","entry":"main.luau","permissions":[],"contributes":{"settings":[{"sectionId":"qa","titleKey":"qa","settings":[{"id":"device","scope":"D","type":"text","labelKey":"device","default":"default"},{"id":"vault","scope":"V","type":"text","labelKey":"vault","default":"default"}]}]}}).to_string()).unwrap();
+        fs::write(path.join("manifest.json"), json!({"manifestVersion":2,"id":ID,"name":"Portable QA","version":"1.0.0","runtime":"wasm","entry":"plugin.wasm","permissions":[],"contributes":{"settings":[{"sectionId":"qa","titleKey":"qa","settings":[{"id":"device","scope":"D","type":"text","labelKey":"device","default":"default"},{"id":"vault","scope":"V","type":"text","labelKey":"vault","default":"default"}]}]}}).to_string()).unwrap();
         fs::write(
-            path.join("main.luau"),
+            path.join("plugin.wasm"),
             format!("return {{ label = '{script}' }}"),
         )
         .unwrap();
@@ -277,7 +277,7 @@ fn device_import_keeps_conflicting_values_packages_and_uninstall_receipts() {
         } else {
             assert!(plugins[0]
                 .files
-                .read_text("main.luau")
+                .read_text("plugin.wasm")
                 .unwrap()
                 .unwrap()
                 .contains("target"));

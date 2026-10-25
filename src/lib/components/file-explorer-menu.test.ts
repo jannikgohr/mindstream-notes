@@ -172,12 +172,12 @@ describe('root menu', () => {
   it('renders plugin file-tree openMenu effects as hover submenus', async () => {
     tree.notesById = { n1: note({ note_kind: 'kanban' }) };
     registerPlugin({
-      manifestVersion: 1,
+      manifestVersion: 2,
       id: 'com.example.templates',
       name: 'Templates',
       version: '1.0.0',
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create'],
       contributes: {
         toolbar: [
@@ -228,12 +228,12 @@ describe('root menu', () => {
 
   it('uses a plugin note kind icon for plugin template entries', async () => {
     registerPlugin({
-      manifestVersion: 1,
+      manifestVersion: 2,
       id: 'com.example.documents',
       name: 'Documents',
       version: '1.0.0',
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create'],
       contributes: {
         i18n: {

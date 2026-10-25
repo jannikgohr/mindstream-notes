@@ -22,15 +22,15 @@ impl Fixture {
     fn package(&self, path: &Path, text: &str) {
         fs::create_dir_all(path).unwrap();
         let manifest = serde_json::json!({
-            "manifestVersion": 1, "id": ID, "name": "Global QA", "version": "1.0.0",
-            "runtime": "luau", "entry": "main.luau", "permissions": [],
+            "manifestVersion": 2, "id": ID, "name": "Global QA", "version": "1.0.0",
+            "runtime": "wasm", "entry": "plugin.wasm", "permissions": [],
             "contributes": { "settings": [{"sectionId":"qa", "titleKey":"qa", "settings":[
                 {"id":"device","scope":"D","type":"text","labelKey":"device","default":"default"},
                 {"id":"vault","scope":"V","type":"text","labelKey":"vault","default":"default"}
             ]}] }
         });
         fs::write(path.join("manifest.json"), manifest.to_string()).unwrap();
-        fs::write(path.join("main.luau"), text).unwrap();
+        fs::write(path.join("plugin.wasm"), text).unwrap();
     }
     fn plugin(&self) -> super::discovery::DiscoveredPlugin {
         discover(&self.0.join("plugins"), Some(ID))
@@ -151,7 +151,7 @@ fn running_version_survives_update_and_removal_until_lease_release() {
     uninstall(&fixture.0, ID).unwrap();
     assert!(old_path.exists());
     assert_eq!(
-        pinned.files.read_text("main.luau").unwrap().unwrap(),
+        pinned.files.read_text("plugin.wasm").unwrap().unwrap(),
         "return { old = true }"
     );
     drop(pinned);
@@ -177,13 +177,13 @@ fn root_wins_then_selected_vault_and_conflict_sources_are_retained() {
         fixture
             .plugin()
             .files
-            .read_text("main.luau")
+            .read_text("plugin.wasm")
             .unwrap()
             .unwrap(),
         "root"
     );
-    assert!(selected.join("main.luau").exists());
-    assert!(root.join("main.luau").exists());
+    assert!(selected.join("plugin.wasm").exists());
+    assert!(root.join("plugin.wasm").exists());
     assert!(!prepare(&fixture.0, &fixture.target()).unwrap());
 }
 
@@ -282,11 +282,11 @@ fn concurrent_publications_and_removal_leave_a_complete_catalog() {
     });
     let plugins = discover(&fixture.0.join("plugins"), None).unwrap();
     if let Some(plugin) = plugins.first() {
-        let text = plugin.files.read_text("main.luau").unwrap().unwrap();
+        let text = plugin.files.read_text("plugin.wasm").unwrap().unwrap();
         assert!(text == "first" || text == "second");
     }
-    assert!(first.join("main.luau").exists());
-    assert!(second.join("main.luau").exists());
+    assert!(first.join("plugin.wasm").exists());
+    assert!(second.join("plugin.wasm").exists());
 }
 
 #[test]
@@ -351,7 +351,7 @@ fn mutable_source_cannot_publish_a_package_under_stale_metadata() {
             .count(),
         0
     );
-    assert!(input.join("main.luau").exists());
+    assert!(input.join("plugin.wasm").exists());
 }
 
 #[test]
@@ -372,7 +372,7 @@ fn catalog_recovery_restores_an_available_previous_package() {
         fixture
             .plugin()
             .files
-            .read_text("main.luau")
+            .read_text("plugin.wasm")
             .unwrap()
             .unwrap(),
         "first"
@@ -382,14 +382,14 @@ fn catalog_recovery_restores_an_available_previous_package() {
 fn write_package(path: &Path, id: &str, extra: serde_json::Value) {
     fs::create_dir_all(path).unwrap();
     let mut manifest = serde_json::json!({
-        "manifestVersion": 1, "id": id, "name": "Package QA", "version": "1.0.0",
-        "runtime": "luau", "entry": "main.luau", "permissions": []
+        "manifestVersion": 2, "id": id, "name": "Package QA", "version": "1.0.0",
+        "runtime": "wasm", "entry": "plugin.wasm", "permissions": []
     });
     if let (Some(manifest), Some(extra)) = (manifest.as_object_mut(), extra.as_object()) {
         manifest.extend(extra.clone());
     }
     fs::write(path.join("manifest.json"), manifest.to_string()).unwrap();
-    fs::write(path.join("main.luau"), "return {}").unwrap();
+    fs::write(path.join("plugin.wasm"), "return {}").unwrap();
 }
 
 #[test]
@@ -416,7 +416,7 @@ fn installation_refuses_non_packages_and_builtins_and_restore_keeps_existing_ent
         fixture
             .plugin()
             .files
-            .read_text("main.luau")
+            .read_text("plugin.wasm")
             .unwrap()
             .unwrap(),
         "first",
@@ -431,7 +431,7 @@ fn modified_package_bytes_are_refused_by_publication_and_discovery() {
     fixture.package(&input, "return {}");
     install(&fixture.0, &input).unwrap();
     let package = fixture.plugin().files.fs_path().unwrap().to_path_buf();
-    fs::write(package.join("main.luau"), "tampered").unwrap();
+    fs::write(package.join("plugin.wasm"), "tampered").unwrap();
     assert!(discover(&fixture.0.join("plugins"), None)
         .unwrap()
         .is_empty());

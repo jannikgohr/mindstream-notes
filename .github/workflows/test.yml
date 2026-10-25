@@ -42,6 +42,11 @@ on:
   # always runs the full matrix, on whichever branch you pick. If you are
   # reaching for it, you don't want CI second-guessing which half to skip.
   workflow_dispatch:
+    inputs:
+      diagnose_interpreter:
+        description: Record the unoptimized Windows Pulley baseline before testing the fixed build
+        type: boolean
+        default: false
 
 # Cancel superseded runs on the same branch — saves minutes on rapid pushes.
 concurrency:
@@ -149,12 +154,15 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm check
+      - run: pnpm --filter @mindstream/plugin-sdk typecheck
+      - run: npm run test:plugin-author
+      - run: pnpm plugins:examples
       - run: pnpm test
       - run: pnpm build
         env:
@@ -173,9 +181,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # wasm32: the tests build their plugin components from source.
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+          targets: wasm32-unknown-unknown
 
       # Tauri 2's desktop bundle pulls webkit2gtk-4.1 + libsoup-3.0; the
       # secret-service keyring backend uses the `vendored` feature so we
@@ -210,7 +220,7 @@ jobs:
           version: 10
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
@@ -231,11 +241,144 @@ jobs:
       - name: cargo clippy
         if: runner.os == 'Linux'
         working-directory: src-tauri
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      # Optional A/B evidence, not a release gate. The normal workspace test
+      # below always runs with the checked-in profile and unchanged deadlines.
+      - name: Unoptimized Windows interpreter diagnostic
+        if: runner.os == 'Windows' && inputs.diagnose_interpreter == true
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --locked -p mindstream-plugin-runtime --config 'profile.dev.package.pulley-interpreter.opt-level=0' the_interpreter_gives_the_same_answers_as_native_code -- --nocapture --test-threads=1 *> plugin-interpreter-unoptimized.log
+          $result = $LASTEXITCODE
+          Get-Content plugin-interpreter-unoptimized.log
+          Set-Content plugin-interpreter-unoptimized-exit.txt $result
+          exit $result
+      - name: Optimized Windows interpreter diagnostic
+        if: runner.os == 'Windows' && inputs.diagnose_interpreter == true
+        shell: pwsh
+        run: |
+          foreach ($attempt in 1..5) {
+            cargo test --manifest-path src-tauri/Cargo.toml --locked -p mindstream-plugin-runtime the_interpreter_gives_the_same_answers_as_native_code -- --nocapture --test-threads=1 *> "plugin-interpreter-optimized-$attempt.log"
+            $result = $LASTEXITCODE
+            Get-Content "plugin-interpreter-optimized-$attempt.log"
+            Set-Content "plugin-interpreter-optimized-$attempt-exit.txt" $result
+            if ($result -ne 0) { exit $result }
+          }
+      - name: Retain interpreter diagnostic
+        if: always() && runner.os == 'Windows' && inputs.diagnose_interpreter == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-interpreter-windows-diagnostic
+          path: plugin-interpreter-*
 
       - name: cargo test
         working-directory: src-tauri
-        run: cargo test --locked
+        # Debug Pulley calls use the production deadline. Concurrent compiler
+        # fixtures can starve them on small runners. Keep functional tests
+        # serial; release probes measure the unchanged budget independently.
+        run: cargo test --locked --workspace -- --test-threads=1
+
+  bundled-plugins:
+    name: Shipped Rust plugins
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: plugin-sdk/bundled
+          shared-key: bundled-plugins
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: cargo fmt --all --check
+        working-directory: plugin-sdk/bundled
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+        working-directory: plugin-sdk/bundled
+      - run: cargo test --locked --workspace
+        working-directory: plugin-sdk/bundled
+      - run: pnpm plugins:build
+      # Host toolchains can produce different bytes. The JS matrix checks the
+      # committed components; this checks freshly built guests against the same
+      # behavior assertions and retains their actual hashes and bytes.
+      - name: Verify rebuilt Rust component behavior
+        run: pnpm test plugin-sdk/bundled
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: rebuilt-rust-plugins
+          path: |
+            plugins/templates/plugin.wasm
+            plugins/typst/plugin.wasm
+            plugin-sdk/bundled/target/components.json
+          retention-days: 14
+
+  plugin-runtime:
+    name: Portable plugin runtime (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: plugin-runtime
+      # No Tauri or WebView dependencies. Node and the wasm32 target build the
+      # conformance, example and prototype components from source; the shipped
+      # ones are committed. The Rust job also tests the whole workspace.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Measure native component execution
+        shell: bash
+        run: cargo run --manifest-path src-tauri/Cargo.toml --locked --release -p mindstream-plugin-runtime --example plugin-bench > plugin-native.json
+      # A budget overrun fails its step after the report is written; keep
+      # measuring and upload both reports so the failure has evidence.
+      - name: Measure interpreter execution
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: cargo run --manifest-path src-tauri/Cargo.toml --locked --release -p mindstream-plugin-runtime --example plugin-bench -- --interpreter > plugin-interpreter.json
+      - name: Compare Rust Templates in native mode
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: cargo run --manifest-path src-tauri/Cargo.toml --locked --release -p mindstream-plugin-runtime --example plugin-bench -- --templates-only --rust-templates > plugin-rust-templates-native.json
+      - name: Compare Rust Templates in interpreter mode
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: cargo run --manifest-path src-tauri/Cargo.toml --locked --release -p mindstream-plugin-runtime --example plugin-bench -- --templates-only --rust-templates --interpreter > plugin-rust-templates-interpreter.json
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: plugin-runtime-${{ matrix.os }}
+          path: plugin-*.json
+          retention-days: 14
 
   # The sync server: its own crate, lockfile and tests. The tests start the
   # server in-process and drive it with the client library the app ships, so
@@ -348,12 +491,13 @@ jobs:
           version: 10
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -418,7 +562,7 @@ jobs:
           version: 10
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
@@ -453,7 +597,7 @@ jobs:
           version: 10
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
@@ -514,9 +658,12 @@ jobs:
           version: 10
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
+      # wasm32 builds the plugin the lifecycle suite installs.
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
 
       # Build-time only: the suite jobs install the runtime half themselves.
       - name: Install desktop build dependencies
@@ -545,6 +692,7 @@ jobs:
           mkdir -p .output/app-e2e-bin
           cp src-tauri/target/release/mindstream-notes-e2e .output/app-e2e-bin/
           cp "$HOME/.cargo/bin/tauri-driver" .output/app-e2e-bin/
+          node plugin-sdk/fixtures.mjs --out .output/app-e2e-bin conformance-rust
       - uses: actions/upload-artifact@v4
         with:
           name: app-e2e-bin
@@ -565,6 +713,8 @@ jobs:
       MINDSTREAM_DOCKER_NO_SUDO: '1'
       WEBKIT_DISABLE_DMABUF_RENDERER: '1'
       NODE_OPTIONS: --max-old-space-size=4096
+      # Built by app-e2e-build; this job has no Rust toolchain to build it.
+      MINDSTREAM_E2E_PLUGIN_COMPONENT: .output/plugin-fixtures/conformance-rust.wasm
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -572,15 +722,15 @@ jobs:
           version: 10
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       # Nothing here compiles: `app-e2e-build` did that and handed over the
-      # binary and tauri-driver, so this job needs no Rust toolchain and no
-      # cargo cache. The package list still names the -dev variants, which
-      # is the proven one — the runtime-only names differ on noble
-      # (libgtk-3-0 is libgtk-3-0t64 there) and the download they would save
-      # is not worth getting that wrong.
+      # binary, tauri-driver and the lifecycle plugin, so this job needs no
+      # Rust toolchain and no cargo cache. The package list still names the
+      # -dev variants, which is the proven one — the runtime-only names
+      # differ on noble (libgtk-3-0 is libgtk-3-0t64 there) and the download
+      # they would save is not worth getting that wrong.
       - name: Install desktop test dependencies
         run: |
           sudo apt-get update
@@ -596,9 +746,10 @@ jobs:
       # The artifact does not carry the executable bit, so restore it.
       - name: Restore the built binaries
         run: |
-          mkdir -p src-tauri/target/release "$HOME/.cargo/bin"
+          mkdir -p src-tauri/target/release "$HOME/.cargo/bin" .output/plugin-fixtures
           mv .output/app-e2e-bin/mindstream-notes-e2e src-tauri/target/release/
           mv .output/app-e2e-bin/tauri-driver "$HOME/.cargo/bin/"
+          mv .output/app-e2e-bin/conformance-rust.wasm .output/plugin-fixtures/
           chmod +x src-tauri/target/release/mindstream-notes-e2e "$HOME/.cargo/bin/tauri-driver"
           rmdir .output/app-e2e-bin
 
@@ -651,7 +802,19 @@ jobs:
     timeout-minutes: 5
     if: always() && (github.event.action != 'labeled' || github.event.label.name == 'ci:app-e2e')
     needs:
-      [changes, js, rust, server, coverage, e2e, format, app-e2e-build, app-e2e]
+      [
+        changes,
+        js,
+        rust,
+        bundled-plugins,
+        plugin-runtime,
+        server,
+        coverage,
+        e2e,
+        format,
+        app-e2e-build,
+        app-e2e
+      ]
     steps:
       # Plain expressions, no jq or node: this job is the one that must never
       # be the thing that broke. `needs.*.result` is an array of every needed

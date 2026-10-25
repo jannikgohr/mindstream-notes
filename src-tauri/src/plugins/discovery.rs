@@ -19,8 +19,9 @@
 //! Integrity uses SHA-256 of the plugin's **package digest** (see
 //! [`signing::package_digest`]) — a document folding in a content hash of every
 //! file in the plugin dir, not just `manifest.json`. So any change to the
-//! manifest *or* a `.luau` script re-triggers approval, and the hash can't be
-//! forged to match a previously-approved package.
+//! manifest *or* its code (the `.wasm` component, any asset) re-triggers
+//! approval, and the hash can't be forged to match a previously-approved
+//! package.
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -37,7 +38,7 @@ use super::{SOURCE_BUILTIN, SOURCE_INSTALLED};
 use crate::error::{AppError, AppResult};
 
 /// A plugin found on disk, with its trust `source` fixed by its location.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct DiscoveredPlugin {
     pub generation: Option<String>,
     pub legacy_generation: Option<String>,
@@ -50,8 +51,8 @@ pub struct DiscoveredPlugin {
     pub enabled_by_default: bool,
     pub source: String,
     /// Where the plugin's files are read from — a real directory (third-party)
-    /// or the binary-embedded builtin tree — used later to load its `.luau`
-    /// entry, docs and icons.
+    /// or the binary-embedded builtin tree — used later to read its docs,
+    /// icons and other assets.
     pub files: PluginFiles,
     /// SHA-256 (hex) of the raw manifest.json bytes.
     pub checksum: String,
@@ -66,6 +67,11 @@ pub struct DiscoveredPlugin {
     /// presentational contributions the backend deliberately does not model
     /// (i18n, settings, docs, templates) survive the trip untouched.
     pub manifest_json: serde_json::Value,
+    /// A Wasm plugin's component, taken from the same read of the package
+    /// that `checksum` was computed over. Running these bytes rather than
+    /// reading the entry again means what runs is exactly what was hashed,
+    /// with no window for the file to change in between.
+    pub entry_bytes: Option<super::runtime::wasm::precompiled::VerifiedComponent>,
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -168,21 +174,6 @@ impl PluginFiles {
                 .read_bytes(rel)?
                 .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())),
         }
-    }
-
-    /// Every `.luau` file in the plugin as a `module path (no extension) →
-    /// source` map, for the plugin-scoped `require`. Keys are `/`-separated
-    /// (e.g. `lib/parser`); non-UTF-8 files are skipped.
-    pub fn luau_modules(&self) -> AppResult<std::collections::HashMap<String, String>> {
-        let mut modules = std::collections::HashMap::new();
-        for (rel, bytes) in self.collect()? {
-            if let Some(stem) = rel.strip_suffix(".luau") {
-                if let Ok(source) = String::from_utf8(bytes) {
-                    modules.insert(stem.to_string(), source);
-                }
-            }
-        }
-        Ok(modules)
     }
 
     /// The real directory when filesystem-backed (for removal); `None` for
@@ -293,6 +284,24 @@ pub(crate) fn read_plugin(files: PluginFiles, source: &str) -> AppResult<Discove
         .map_err(|e| AppError::InvalidArg(e.to_string()))?;
     let manifest_json: serde_json::Value = serde_json::from_slice(manifest_bytes)
         .map_err(|e| AppError::InvalidArg(format!("manifest.json: {e}")))?;
+    let entry_bytes = match (manifest.runtime, manifest.entry.as_deref()) {
+        (manifest::PluginRuntime::Wasm, Some(entry)) => {
+            use super::runtime::wasm::precompiled::VerifiedComponent;
+            let (_, bytes) = all
+                .iter()
+                .find(|(path, _)| path == entry)
+                .ok_or_else(|| AppError::InvalidArg(format!("entry '{entry}' not found")))?;
+            Some(match &files {
+                PluginFiles::Embedded(dir) => VerifiedComponent::from_static(
+                    dir.get_file(dir.path().join(entry))
+                        .expect("collected embedded entry")
+                        .contents(),
+                ),
+                PluginFiles::Fs(_) => VerifiedComponent::new(bytes.clone()),
+            })
+        }
+        _ => None,
+    };
     Ok(DiscoveredPlugin {
         generation: None,
         legacy_generation: None,
@@ -308,6 +317,7 @@ pub(crate) fn read_plugin(files: PluginFiles, source: &str) -> AppResult<Discove
         signature_status: verification.status.as_str().to_string(),
         manifest,
         manifest_json,
+        entry_bytes,
     })
 }
 
@@ -341,6 +351,11 @@ pub fn discover_dir(root: &Path, source: &str) -> Vec<DiscoveredPlugin> {
 /// construction (they ship inside the signed binary), so unlike third-party
 /// plugins they are never subject to the integrity gate.
 pub fn discover_builtins() -> Vec<DiscoveredPlugin> {
+    static BUILTINS: std::sync::OnceLock<Vec<DiscoveredPlugin>> = std::sync::OnceLock::new();
+    BUILTINS.get_or_init(read_builtins).clone()
+}
+
+fn read_builtins() -> Vec<DiscoveredPlugin> {
     let mut out = Vec::new();
     for sub in BUILTIN_PLUGINS.dirs() {
         if sub.get_file(sub.path().join("manifest.json")).is_none() {
@@ -415,15 +430,11 @@ fn declared_id(files: &PluginFiles) -> Option<String> {
 /// several times a second against the whole plugin corpus.
 pub fn find(third_party_dir: &Path, id: &str) -> Option<DiscoveredPlugin> {
     // Builtins win on a colliding id, exactly as in `discover`.
-    for sub in BUILTIN_PLUGINS.dirs() {
-        if sub.get_file(sub.path().join("manifest.json")).is_none() {
-            continue;
-        }
-        let files = PluginFiles::Embedded(sub);
-        if declared_id(&files).as_deref() != Some(id) {
-            continue;
-        }
-        return read_plugin(files, SOURCE_BUILTIN).ok();
+    if let Some(plugin) = discover_builtins()
+        .into_iter()
+        .find(|plugin| plugin.id == id)
+    {
+        return Some(plugin);
     }
     if super::packages::is_global(third_party_dir) {
         return super::packages::discover(third_party_dir, Some(id))
@@ -457,7 +468,7 @@ mod tests {
         fs::write(
             dir.join("manifest.json"),
             format!(
-                r#"{{ "manifestVersion": 1, "id": "{id}", "name": "T", "version": "1.0.0", "runtime": "manifest-only", "permissions": ["notes.create"]{extra} }}"#
+                r#"{{ "manifestVersion": 2, "id": "{id}", "name": "T", "version": "1.0.0", "runtime": "manifest-only", "permissions": ["notes.create"]{extra} }}"#
             ),
         )
         .unwrap();
@@ -518,14 +529,15 @@ mod tests {
             .find(|p| p.id == "com.mindstream.templates.core")
             .expect("the embedded Templates plugin is discovered");
         assert_eq!(tpl.source, SOURCE_BUILTIN);
-        assert_eq!(tpl.checksum.len(), 64); // sha-256 hex
-                                            // Its entry script is readable straight from the binary.
+        assert_eq!(tpl.checksum.len(), 64);
+        // Only the Rust component and installable assets are embedded.
         let main = tpl
             .files
-            .read_text("main.luau")
+            .read_bytes("plugin.wasm")
             .unwrap()
-            .expect("main.luau is present");
-        assert!(main.contains("newFromTemplate"));
+            .expect("plugin.wasm is present");
+        assert!(main.starts_with(b"\0asm\x0d\0\x01\0"));
+        assert!(tpl.files.read_bytes("main.rs").unwrap().is_none());
     }
 
     #[test]
@@ -566,14 +578,14 @@ mod tests {
 
     #[test]
     fn checksum_covers_sibling_code_files() {
-        // A tampered .luau file must change the integrity checksum even though
-        // manifest.json is untouched — this is what the package digest buys.
+        // A tampered sibling file must change the integrity checksum even
+        // though manifest.json is untouched — this is what the package digest buys.
         let root = tmp();
         write_plugin(&root, "p", "com.a.p", "");
-        let entry = root.join("p").join("main.luau");
-        fs::write(&entry, "return { render = function() return {} end }").unwrap();
+        let asset = root.join("p").join("preview.css");
+        fs::write(&asset, "body { color: black }").unwrap();
         let before = discover_dir(&root, SOURCE_INSTALLED)[0].checksum.clone();
-        fs::write(&entry, "return { render = function() os.exit() end }").unwrap();
+        fs::write(&asset, "body { background: url(https://example.com) }").unwrap();
         let after = discover_dir(&root, SOURCE_INSTALLED)[0].checksum.clone();
         assert_ne!(before, after);
         fs::remove_dir_all(&root).ok();

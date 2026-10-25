@@ -1,0 +1,23 @@
+{
+  "manifestVersion": 2,
+  "id": "com.example.hello",
+  "name": "Hello",
+  "version": "1.0.0",
+  "runtime": "wasm",
+  "entry": "plugin.wasm",
+  "icon": "icons/hello.svg",
+  "permissions": ["notes.read", "pluginStorage.read", "pluginStorage.write"],
+  "contributes": {
+    "documentation": [{ "file": "docs/guide.md" }],
+    "toolbar": [
+      {
+        "id": "greet",
+        "location": "file-tree",
+        "labelKey": "toolbar.greet",
+        "icon": "icons/hello.svg",
+        "action": { "type": "script", "export": "greet" }
+      }
+    ],
+    "i18n": { "en": { "toolbar.greet": "Greet" } }
+  }
+}

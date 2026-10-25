@@ -13,6 +13,8 @@
 use serde::Deserialize;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
+#[cfg(not(target_os = "android"))]
+use tauri_plugin_dialog::FilePath;
 use tokio::sync::oneshot;
 
 use crate::error::{AppError, AppResult, CommandResult};
@@ -84,15 +86,40 @@ async fn save_file_export_inner(app: AppHandle, input: SaveFileExportInput) -> A
         return Ok(false);
     };
 
-    // On desktop the FilePath is always a real filesystem path; on
-    // mobile it could be a content:// URI which we don't support yet
-    // (PDF notes are desktop-first in this phase).
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    // Opening a document provider can block. Keep both that request and the
+    // write off the async runtime, retaining the vault job until they finish.
+    tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
+        let _job = job;
+        #[cfg(target_os = "android")]
+        {
+            use std::io::Write;
+            use tauri_plugin_fs::FsExt;
+
+            // Preserve the picker URI. The fs plugin opens it through
+            // ContentResolver and gives Rust ownership of the descriptor.
+            // "wt" truncates existing documents, unlike provider-dependent "w".
+            let mut options = tauri_plugin_fs::OpenOptions::new();
+            options.write(true).create(true).truncate(true);
+            let mut file = app.fs().open(file_path, options)?;
+            file.write_all(&input.bytes)?;
+        }
+        #[cfg(not(target_os = "android"))]
+        write_filesystem_export(file_path, &input.bytes)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::InvalidArg(format!("export writer failed: {e}")))??;
+    Ok(true)
+}
+
+#[cfg(not(target_os = "android"))]
+fn write_filesystem_export(file_path: FilePath, bytes: &[u8]) -> AppResult<()> {
     let path = file_path
         .into_path()
         .map_err(|e| AppError::InvalidArg(format!("path conversion: {e}")))?;
-    let _job = app.state::<crate::vault_jobs::Jobs>().enter()?;
-    std::fs::write(&path, &input.bytes)?;
-    Ok(true)
+    std::fs::write(path, bytes)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -119,6 +146,31 @@ pub async fn save_file_export(app: AppHandle, input: SaveFileExportInput) -> Com
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn saves_binary_exports_and_truncates_existing_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("export with spaces.pdf");
+        let bytes = b"%PDF-1.7\n\0\xff\r\n";
+        write_filesystem_export(FilePath::Path(path.clone()), bytes).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+
+        let file_url = tauri::Url::from_file_path(&path).unwrap();
+        write_filesystem_export(FilePath::Url(file_url), b"short").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"short");
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn rejects_document_uris_on_desktop_and_propagates_write_errors() {
+        let uri = tauri::Url::parse("content://example/export.typ").unwrap();
+        assert!(write_filesystem_export(FilePath::Url(uri), b"source").is_err());
+        let directory = tempfile::tempdir().unwrap();
+        assert!(
+            write_filesystem_export(FilePath::Path(directory.path().into()), b"source").is_err()
+        );
+    }
 
     #[test]
     fn validates_export_extensions() {

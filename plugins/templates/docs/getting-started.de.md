@@ -22,6 +22,11 @@ Platzhaltern.
 
 ## Eine Vorlage verwenden
 
+**Neu aus Vorlage** erscheint erst, wenn der gewählte Ordner oder das gewählte
+Tag mindestens eine Vorlagennotiz außerhalb des Papierkorbs enthält.
+Wähle die Quellen unter **Einstellungen → Plugins → Templates** und füge dort
+eine Notiz hinzu.
+
 Öffne **Neu aus Vorlage** (die Schaltfläche in der Dateibaum-Leiste oder das
 mobile Erstellen-Menü) und wähle eine aus. Aus Titel und Inhalt der Quellnotiz
 wird eine neue Notiz **derselben Art** erstellt – wähle ein Typst-Dokument und

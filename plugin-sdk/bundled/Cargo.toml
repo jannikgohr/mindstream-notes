@@ -1,0 +1,15 @@
+[workspace]
+members = ["templates", "typst"]
+resolver = "2"
+
+[workspace.dependencies]
+serde_json = "1"
+ryu-js = "1"
+wit-bindgen = "0.63"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

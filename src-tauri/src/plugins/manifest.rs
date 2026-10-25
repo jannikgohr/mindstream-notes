@@ -45,7 +45,10 @@ use ts_rs::TS;
 /// changes meaning, a default that flips. Additive changes do not bump it,
 /// because the forward-compatibility rules cover them: an unknown contribution
 /// is dropped with a warning, an unknown permission is fatal.
-pub const CURRENT_MANIFEST_VERSION: u32 = 1;
+///
+/// Only this version loads. An older manifest describes a plugin this app can
+/// no longer run, and the error says to update the plugin.
+pub const CURRENT_MANIFEST_VERSION: u32 = 2;
 
 /// How a plugin produces its contributions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, TS)]
@@ -54,13 +57,30 @@ pub const CURRENT_MANIFEST_VERSION: u32 = 1;
 pub enum PluginRuntime {
     /// Purely declarative: everything comes from the manifest, no code runs.
     ManifestOnly,
-    /// A sandboxed Luau `entry` script, run in this backend.
-    Luau,
+    /// A WebAssembly component `entry` targeting the `mindstream:plugin`
+    /// world, run in this backend.
+    Wasm,
 }
 
 impl PluginRuntime {
     pub fn is_scripted(self) -> bool {
-        matches!(self, PluginRuntime::Luau)
+        matches!(self, PluginRuntime::Wasm)
+    }
+
+    /// The manifest spelling, for error messages.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PluginRuntime::ManifestOnly => "manifest-only",
+            PluginRuntime::Wasm => "wasm",
+        }
+    }
+
+    /// The file extension its entry must have.
+    fn entry_extension(self) -> Option<&'static str> {
+        match self {
+            PluginRuntime::ManifestOnly => None,
+            PluginRuntime::Wasm => Some(".wasm"),
+        }
     }
 }
 
@@ -90,7 +110,8 @@ pub struct RuntimeLimits {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, TS)]
 #[ts(export, export_to = "../../src/lib/plugins/generated/")]
 pub enum PluginPermission {
-    /// Read vault metadata: `ms.notes` and `ctx.folders`. Never note bodies.
+    /// Read vault metadata: the `notes` interface and `ctx.folders`. Never
+    /// note bodies.
     #[serde(rename = "notes.read")]
     NotesRead,
     /// The app creates a note from the plugin's output. The app writes it.
@@ -305,7 +326,7 @@ pub struct Manifest {
     #[serde(default = "default_true")]
     pub enabled_by_default: bool,
     pub runtime: PluginRuntime,
-    /// Required for a scripted runtime: a plain `.luau` filename, no separators
+    /// Required for a scripted runtime: a plain `.wasm` filename, no separators
     /// and no `..`. The backend joins it onto the plugin dir, so this is the
     /// traversal guard.
     pub entry: Option<String>,
@@ -332,6 +353,8 @@ pub enum ManifestError {
     Parse(#[from] serde_json::Error),
     #[error("manifest.manifestVersion {found} is newer than this app understands ({CURRENT_MANIFEST_VERSION}); update the app")]
     TooNew { found: u32 },
+    #[error("manifest.manifestVersion {found} is no longer supported; update the plugin to version {CURRENT_MANIFEST_VERSION}")]
+    TooOld { found: u32 },
     #[error("manifest.id (\"{0}\") must be a stable, dotted, lowercase id")]
     BadId(String),
     #[error("{runtime} plugin has no entry")]
@@ -371,13 +394,13 @@ fn is_valid_id(id: &str) -> bool {
 }
 
 /// A safe scripted entry: one path segment with the runtime's extension.
-fn is_safe_entry(entry: &str) -> bool {
+fn is_safe_entry(entry: &str, extension: &str) -> bool {
     !entry.is_empty()
         && !entry.contains('/')
         && !entry.contains('\\')
         && !entry.contains("..")
-        && entry.ends_with(".luau")
-        && entry.len() > ".luau".len()
+        && entry.ends_with(extension)
+        && entry.len() > extension.len()
         && entry
             .chars()
             .next()
@@ -398,17 +421,29 @@ impl Manifest {
                 found: manifest.manifest_version,
             });
         }
+        if manifest.manifest_version < CURRENT_MANIFEST_VERSION {
+            return Err(ManifestError::TooOld {
+                found: manifest.manifest_version,
+            });
+        }
         if !is_valid_id(&manifest.id) {
             return Err(ManifestError::BadId(manifest.id));
         }
-        match (manifest.runtime.is_scripted(), manifest.entry.as_deref()) {
-            (true, None) => return Err(ManifestError::MissingEntry { runtime: "luau" }),
-            (true, Some(entry)) if !is_safe_entry(entry) => {
+        match (
+            manifest.runtime.entry_extension(),
+            manifest.entry.as_deref(),
+        ) {
+            (Some(_), None) => {
+                return Err(ManifestError::MissingEntry {
+                    runtime: manifest.runtime.as_str(),
+                })
+            }
+            (Some(extension), Some(entry)) if !is_safe_entry(entry, extension) => {
                 return Err(ManifestError::UnsafeEntry(entry.to_string()))
             }
             // A declarative plugin has nothing to run; a stray entry is a
             // mistake worth surfacing rather than silently ignoring.
-            (false, Some(_)) => return Err(ManifestError::UnexpectedEntry),
+            (None, Some(_)) => return Err(ManifestError::UnexpectedEntry),
             _ => {}
         }
         Ok(manifest)
@@ -463,7 +498,7 @@ mod tests {
 
     fn base() -> serde_json::Value {
         serde_json::json!({
-            "manifestVersion": 1,
+            "manifestVersion": 2,
             "id": "com.a.plugin",
             "name": "A Plugin",
             "version": "1.0.0",
@@ -532,26 +567,35 @@ mod tests {
     #[test]
     fn refuses_a_manifest_version_from_the_future() {
         let mut v = base();
-        v["manifestVersion"] = 2.into();
+        v["manifestVersion"] = (CURRENT_MANIFEST_VERSION + 1).into();
         let err = parse(v).unwrap_err();
         assert!(err.to_string().contains("update the app"), "{err}");
     }
 
     #[test]
-    fn scripted_runtimes_need_a_safe_entry() {
+    fn refuses_a_manifest_version_from_before_this_schema() {
         let mut v = base();
-        v["runtime"] = "luau".into();
+        v["manifestVersion"] = (CURRENT_MANIFEST_VERSION - 1).into();
+        let err = parse(v).unwrap_err();
+        assert!(matches!(err, ManifestError::TooOld { found: 1 }));
+        assert!(err.to_string().contains("update the plugin"), "{err}");
+    }
+
+    #[test]
+    fn wasm_plugins_need_a_safe_wasm_entry() {
+        let mut v = base();
+        v["runtime"] = "wasm".into();
         assert!(matches!(
             parse(v.clone()),
-            Err(ManifestError::MissingEntry { .. })
+            Err(ManifestError::MissingEntry { runtime: "wasm" })
         ));
-
         for bad in [
-            "../evil.luau",
-            "sub/main.luau",
-            "main.lua",
-            "main.js",
-            ".luau",
+            "../plugin.wasm",
+            "dist/plugin.wasm",
+            "plugin.js",
+            "plugin.wasm.js",
+            "plugin..wasm",
+            ".wasm",
         ] {
             let mut v = v.clone();
             v["entry"] = bad.into();
@@ -560,15 +604,24 @@ mod tests {
                 "{bad} should be rejected"
             );
         }
+        v["entry"] = "plugin.wasm".into();
+        let m = parse(v).unwrap();
+        assert_eq!(m.runtime, PluginRuntime::Wasm);
+        assert!(m.runtime.is_scripted());
+    }
 
-        v["entry"] = "main.luau".into();
-        assert_eq!(parse(v).unwrap().entry.as_deref(), Some("main.luau"));
+    #[test]
+    fn unknown_runtimes_are_refused() {
+        let mut v = base();
+        v["runtime"] = "python".into();
+        v["entry"] = "main.py".into();
+        assert!(matches!(parse(v), Err(ManifestError::Parse(_))));
     }
 
     #[test]
     fn a_declarative_plugin_may_not_carry_an_entry() {
         let mut v = base();
-        v["entry"] = "main.luau".into();
+        v["entry"] = "plugin.wasm".into();
         assert!(matches!(parse(v), Err(ManifestError::UnexpectedEntry)));
     }
 

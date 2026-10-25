@@ -1,0 +1,13 @@
+[package]
+name = "mindstream-plugin-fixtures"
+version = "0.1.0"
+description = "Test components for the Mindstream plugin runtime, built from plugin-sdk sources"
+authors = ["Jannik Gohr"]
+edition = "2021"
+rust-version = "1.96"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Only ever a dev-dependency. Its build script runs `plugin-sdk/fixtures.mjs`,
+# which needs Node with `pnpm install` done and the wasm32-unknown-unknown
+# target, so app builds must not depend on it.

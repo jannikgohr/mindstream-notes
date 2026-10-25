@@ -19,6 +19,14 @@ node_modules
 
 # Tauri
 /src-tauri/target
+
+# Plugin SDK build output. Test components are built from source by
+# plugin-sdk/fixtures.mjs when tests need them. Only the shipped
+# plugins/*/plugin.wasm are committed.
+/plugin-sdk/**/target
+/plugin-sdk/conformance/dist
+/plugin-sdk/examples/*/plugin.wasm
+/plugin-sdk/prototypes/templates-rust/*.wasm
 /src-tauri/gen/schemas
 # Cargo.lock is intentionally committed for src-tauri: it's a binary
 # crate (the app), and reproducible builds need a pinned dependency

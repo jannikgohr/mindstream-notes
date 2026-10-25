@@ -1,0 +1,21 @@
+{
+  "manifestVersion": 2,
+  "id": "com.example.rust-hello",
+  "name": "Rust hello",
+  "version": "0.1.0",
+  "runtime": "wasm",
+  "entry": "plugin.wasm",
+  "permissions": [],
+  "contributes": {
+    "i18n": { "en": { "hello": "Hello from Rust" } },
+    "toolbar": [
+      {
+        "id": "hello",
+        "location": "file-tree",
+        "labelKey": "hello",
+        "icon": "hello.svg",
+        "action": { "type": "script", "export": "hello" }
+      }
+    ]
+  }
+}

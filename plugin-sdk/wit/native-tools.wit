@@ -1,0 +1,43 @@
+package mindstream:plugin@0.1.0;
+
+/// The binaries the manifest declares under `contributes.nativeTools`. Every
+/// call needs `nativeTools.runDeclared`.
+///
+/// The host finds the binary on PATH and starts it directly, never through a
+/// shell. Native tools exist only on desktop. On mobile `available` is always
+/// false, so check it before `run`.
+interface native-tools {
+    use types.{error};
+
+    record run-options {
+        /// Passed to the binary as they are.
+        args: list<string>,
+        /// Written to the process's stdin.
+        stdin: option<string>,
+        /// Wall-clock cap. The host clamps it to 100..30000 ms and to what is
+        /// left of the call's budget.
+        timeout-ms: option<u32>,
+        /// Set for binary output such as a PDF. `stdout` is then empty and
+        /// the bytes come back base64-encoded in `stdout-base64`.
+        output-base64: bool,
+    }
+
+    record run-output {
+        /// Exit code, or none when a signal ended the process.
+        status-code: option<s32>,
+        /// Standard output, decoded as UTF-8 with invalid bytes replaced.
+        stdout: string,
+        stdout-base64: option<string>,
+        /// Standard error, decoded as UTF-8 with invalid bytes replaced.
+        stderr: string,
+        timed-out: bool,
+    }
+
+    /// Whether the tool with this manifest id was found on this device.
+    available: func(tool-id: string) -> result<bool, error>;
+
+    /// Run the tool and wait for it. Time spent waiting does not count
+    /// against the plugin's own `timeoutMs`, but the whole call stays under a
+    /// fixed ceiling.
+    run: func(tool-id: string, options: run-options) -> result<run-output, error>;
+}

@@ -16,6 +16,7 @@ import {
   createNoteFromPluginTemplate,
   renderPluginTemplate
 } from './templates';
+import { isScriptedRuntime } from './types';
 import {
   createNoteFromUserTemplate,
   renderUserTemplateBody,
@@ -97,7 +98,7 @@ export function pluginTemplateDefaultTitle(
   const ref = pluginTemplate(pluginId, templateId);
   if (!ref) return '';
   const runtime = pluginById(pluginId)?.manifest.runtime;
-  const useScript = !!ref.template.render && runtime === 'luau';
+  const useScript = !!ref.template.render && isScriptedRuntime(runtime);
   if (!useScript) {
     try {
       return renderPluginTemplate(pluginId, ref.template).title;

@@ -24,7 +24,7 @@ vi.mock('$lib/api/notes', () => ({
   NoteKind: { Markdown: 'markdown', Kanban: 'kanban' },
   loadNote
 }));
-// User templates only exist in the app (rendering runs the plugin's Luau).
+// User templates only exist in the app (rendering runs the plugin's component).
 vi.mock('$lib/api/core', () => ({ isTauri: () => true }));
 vi.mock('$lib/api/plugins', () => ({ pluginsRunScript }));
 vi.mock('$lib/settings/i18n.svelte', () => ({ i18n: { language: 'en' } }));

@@ -26,17 +26,36 @@ def port():
         return sock.getsockname()[1]
 
 
+ROOT = Path(__file__).resolve().parents[2]
 PLUGIN = "com.test.global"
 ARTIFACT = b"global artifact bytes"
 ARTIFACT_HASH = hashlib.sha256(ARTIFACT).hexdigest()
-SCRIPT = 'return { snapshot = function(ctx) return {device=ctx.settings.device, vault=ctx.settings.vault} end }'
+COMPONENT = None
 
 
-def write_package(path, script=SCRIPT):
+def component():
+    # The conformance plugin's `echo` export returns its input, which carries
+    # the backend's merged `settings`.
+    global COMPONENT
+    if COMPONENT is None:
+        out = ROOT / ".output/plugin-fixtures"
+        subprocess.run(["node", str(ROOT / "plugin-sdk/fixtures.mjs"), "--out", str(out), "conformance-rust"], check=True)
+        COMPONENT = (out / "conformance-rust.wasm").read_bytes()
+    return COMPONENT
+
+
+def write_package(path, note="first package"):
     path.mkdir(parents=True, exist_ok=True)
-    manifest = {"manifestVersion":1,"id":PLUGIN,"name":"Global QA","version":"1.0.0","runtime":"luau","entry":"main.luau","permissions":["pluginArtifacts.download"],"contributes":{"artifacts":[{"id":"data","kind":"data","version":"1","url":"https://example.invalid/data.bin","sha256":ARTIFACT_HASH,"fileName":"data.bin","sizeBytes":len(ARTIFACT)}],"i18n":{"en":{"qa":"QA","device":"Device value","vault":"Vault value"}},"settings":[{"sectionId":"qa","titleKey":"qa","settings":[{"id":"device","scope":"D","type":"text","labelKey":"device","default":"default"},{"id":"vault","scope":"V","type":"text","labelKey":"vault","default":"default"}]}]}}
+    manifest = {"manifestVersion":2,"id":PLUGIN,"name":"Global QA","version":"1.0.0","runtime":"wasm","entry":"plugin.wasm","permissions":["pluginArtifacts.download"],"contributes":{"artifacts":[{"id":"data","kind":"data","version":"1","url":"https://example.invalid/data.bin","sha256":ARTIFACT_HASH,"fileName":"data.bin","sizeBytes":len(ARTIFACT)}],"i18n":{"en":{"qa":"QA","device":"Device value","vault":"Vault value"}},"settings":[{"sectionId":"qa","titleKey":"qa","settings":[{"id":"device","scope":"D","type":"text","labelKey":"device","default":"default"},{"id":"vault","scope":"V","type":"text","labelKey":"vault","default":"default"}]}]}}
     (path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-    (path / "main.luau").write_text(script, encoding="utf-8")
+    (path / "plugin.wasm").write_bytes(component())
+    # A changed asset gives an update new bytes under the same version.
+    (path / "notes.txt").write_text(note, encoding="utf-8")
+
+
+def snapshot():
+    settings = invoke("plugins_run_script", id=PLUGIN, export="echo", input={})["settings"]
+    return {key: settings.get(key) for key in ("device", "vault")}
 
 
 class Fixture(h.Fixture):
@@ -151,9 +170,9 @@ try:
     invoke("plugins_approve", id=PLUGIN)
     invoke("plugins_settings_set", id=PLUGIN, key="vault", value="target-only")
     select_window(source)
-    assert invoke("plugins_run_script", id=PLUGIN, export="snapshot", input={}) == {"device":"shared","vault":"source-only"}
+    assert snapshot() == {"device":"shared","vault":"source-only"}
     select_window(target)
-    assert invoke("plugins_run_script", id=PLUGIN, export="snapshot", input={}) == {"device":"shared","vault":"target-only"}
+    assert snapshot() == {"device":"shared","vault":"target-only"}
     select_window(source)
     invoke("plugins_disable", id=PLUGIN)
     assert record(target)["enabled"]
@@ -166,7 +185,7 @@ try:
     print("Root discovery, independent approvals/disable, shared D settings and vault-specific script context passed", flush=True)
 
     update = fixture.output / "update-package"
-    write_package(update, SCRIPT + "\n-- changed bytes, same declared version")
+    write_package(update, "changed bytes, same declared version")
     select_window(source)
     invoke("plugins_install", sourcePath=str(update))
     h.wait(lambda: not record(target)["enabled"])
@@ -180,7 +199,7 @@ try:
     invoke("plugins_remove", id=PLUGIN)
     managed_artifact = fixture.root / "plugin-artifacts" / PLUGIN / "data/1" / ARTIFACT_HASH / "data.bin"
     h.wait(lambda: not managed_artifact.exists())
-    assert (fixture.root / "profiles/source/plugins/qa/main.luau").exists()
+    assert (fixture.root / "profiles/source/plugins/qa/plugin.wasm").exists()
     invoke("plugins_install", sourcePath=str(update))
     h.wait(lambda: not record(source)["enabled"])
     fixture.operation("open", vault_id="target")

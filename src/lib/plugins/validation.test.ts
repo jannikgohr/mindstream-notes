@@ -7,13 +7,14 @@ import {
 import type { PluginManifest } from './types';
 import typstManifest from '../../../plugins/typst/manifest.json';
 import languagetoolManifest from '../../../plugins/languagetool/manifest.json';
+import templatesManifest from '../../../plugins/templates/manifest.json';
 
 /** A minimal manifest that passes validation; override to probe failures. */
 function validManifest(
   overrides: Record<string, unknown> = {}
 ): Record<string, unknown> {
   return {
-    manifestVersion: 1,
+    manifestVersion: 2,
     id: 'com.example.templates',
     name: 'Example Templates',
     version: '1.0.0',
@@ -147,50 +148,48 @@ describe('validateManifest', () => {
   it('rejects an unknown runtime', () => {
     expect(() =>
       validateManifest(validManifest({ runtime: 'js', entry: 'main.js' }))
-    ).toThrow(/expected "manifest-only" or "luau"/);
+    ).toThrow(/expected "manifest-only" or "wasm"/);
   });
 
-  it('accepts a luau runtime with a safe entry', () => {
+  it('accepts a wasm runtime with a safe entry', () => {
     const m = validateManifest(
-      validManifest({ runtime: 'luau', entry: 'main.luau' })
+      validManifest({ runtime: 'wasm', entry: 'plugin.wasm' })
     );
-    expect(m.runtime).toBe('luau');
-    expect(m.entry).toBe('main.luau');
+    expect(m.runtime).toBe('wasm');
+    expect(m.entry).toBe('plugin.wasm');
   });
 
-  it('refuses a wasm runtime', () => {
-    // The wasm tier is gone: its entire host API was `ms.notes_count()`, so a
-    // wasm plugin could not express any of the effects the contract expects.
-    // Refusing outright beats loading one half-supported.
+  it('refuses a manifest version from before this schema', () => {
     expect(() =>
-      validateManifest(validManifest({ runtime: 'wasm', entry: 'main.wasm' }))
-    ).toThrow(/is unsupported; expected "manifest-only" or "luau"/);
+      validateManifest(validManifest({ manifestVersion: 1 }))
+    ).toThrow(/no longer supported; update the plugin to version 2/);
+  });
+
+  it('rejects a traversing or non-.wasm entry', () => {
+    for (const entry of [
+      '../plugin.wasm',
+      'dist/plugin.wasm',
+      'plugin.js',
+      'plugin.wasm.js',
+      'plugin..wasm',
+      '.wasm'
+    ]) {
+      expect(() =>
+        validateManifest(validManifest({ runtime: 'wasm', entry }))
+      ).toThrow(/must be a plain \.wasm filename/);
+    }
   });
 
   it('requires an entry for scripted runtimes', () => {
-    expect(() => validateManifest(validManifest({ runtime: 'luau' }))).toThrow(
+    expect(() => validateManifest(validManifest({ runtime: 'wasm' }))).toThrow(
       /manifest.entry must be a non-empty string/
     );
   });
 
-  it('rejects a traversing or non-.luau entry', () => {
-    for (const entry of [
-      '../evil.luau',
-      'sub/main.luau',
-      'main.lua',
-      'main.js',
-      '.luau'
-    ]) {
-      expect(() =>
-        validateManifest(validManifest({ runtime: 'luau', entry }))
-      ).toThrow(/must be a plain \.luau filename/);
-    }
-  });
-
   it('rejects an entry on a manifest-only runtime', () => {
     expect(() =>
-      validateManifest(validManifest({ entry: 'main.luau' }))
-    ).toThrow(/only valid for runtime "luau"/);
+      validateManifest(validManifest({ entry: 'plugin.wasm' }))
+    ).toThrow(/only valid for a scripted runtime/);
   });
 
   it('rejects invalid limits', () => {
@@ -245,42 +244,72 @@ describe('validateManifest', () => {
     expect(() => validateManifest(m)).toThrow(/duplicate documentation file/);
   });
 
-  // --- Toolbar buttons + Luau macros ---
-  const luauButton = {
+  // --- Toolbar buttons + component macros ---
+  it('accepts the Templates metadata visibility condition', () => {
+    expect(
+      validateManifest(templatesManifest).contributes.toolbar?.[0].visibleWhen
+        ?.type
+    ).toBe('hasMatchingNotes');
+  });
+
+  it.each([
+    null,
+    [],
+    'always',
+    { type: 'unknown' },
+    { type: 'hasMatchingNotes' },
+    { type: 'hasMatchingNotes', folderSetting: 'missing' },
+    { type: 'hasMatchingNotes', folderSetting: 'source-tag' },
+    { type: 'hasMatchingNotes', tagSetting: 'source-folder' },
+    { type: 'hasMatchingNotes', tagSetting: '' }
+  ])('rejects an invalid toolbar visibility condition: %j', (condition) => {
+    const m = structuredClone(templatesManifest) as Record<string, unknown>;
+    const c = m.contributes as { toolbar: Record<string, unknown>[] };
+    c.toolbar[0].visibleWhen = condition;
+    expect(() => validateManifest(m)).toThrow(/visibleWhen/);
+  });
+
+  it('requires notes.read for a metadata visibility condition', () => {
+    expect(() =>
+      validateManifest({ ...templatesManifest, permissions: ['notes.create'] })
+    ).toThrow(/visibleWhen requires notes.read/);
+  });
+
+  const scriptedButton = {
     id: 'new-from-template',
     location: 'file-tree',
     labelKey: 'toolbar.newFromTemplate',
     icon: 'icons/templates.svg',
     action: { type: 'script', export: 'newFromTemplate' }
   };
-  /** A luau manifest (toolbar/render require it) with `mutate`d contributes. */
-  function luauManifest(
+  /** A wasm manifest (toolbar/render require it) with `mutate`d contributes. */
+  function scriptedManifest(
     mutate: (c: Record<string, unknown>) => void
   ): Record<string, unknown> {
-    const m = validManifest({ runtime: 'luau', entry: 'main.luau' });
+    const m = validManifest({ runtime: 'wasm', entry: 'plugin.wasm' });
     mutate(m.contributes as Record<string, unknown>);
     return m;
   }
 
-  it('accepts a toolbar button on a luau plugin', () => {
-    const m = luauManifest((c) => {
-      c.toolbar = [{ ...luauButton, opensMenu: true }];
+  it('accepts a toolbar button on a wasm plugin', () => {
+    const m = scriptedManifest((c) => {
+      c.toolbar = [{ ...scriptedButton, opensMenu: true }];
     });
     expect(validateManifest(m).contributes.toolbar?.[0]?.opensMenu).toBe(true);
   });
 
   it('rejects a non-boolean toolbar submenu declaration', () => {
-    const m = luauManifest((c) => {
-      c.toolbar = [{ ...luauButton, opensMenu: 'yes' }];
+    const m = scriptedManifest((c) => {
+      c.toolbar = [{ ...scriptedButton, opensMenu: 'yes' }];
     });
     expect(() => validateManifest(m)).toThrow(/opensMenu must be a boolean/);
   });
 
   it('requires submenu toolbar buttons to run a script', () => {
-    const m = luauManifest((c) => {
+    const m = scriptedManifest((c) => {
       c.toolbar = [
         {
-          ...luauButton,
+          ...scriptedButton,
           opensMenu: true,
           action: { type: 'insertText', text: 'hello' }
         }
@@ -291,54 +320,54 @@ describe('validateManifest', () => {
     );
   });
 
-  it('accepts a toolbar button on a luau plugin', () => {
-    const m = validManifest({ runtime: 'luau', entry: 'main.luau' });
-    (m.contributes as Record<string, unknown>).toolbar = [luauButton];
+  it('accepts a toolbar button on a wasm plugin', () => {
+    const m = validManifest({ runtime: 'wasm', entry: 'plugin.wasm' });
+    (m.contributes as Record<string, unknown>).toolbar = [scriptedButton];
     expect(validateManifest(m).contributes.toolbar).toHaveLength(1);
   });
 
   it('rejects toolbar buttons on a manifest-only runtime', () => {
     const m = withContributes((c) => {
-      c.toolbar = [luauButton];
+      c.toolbar = [scriptedButton];
     });
-    expect(() => validateManifest(m)).toThrow(/require runtime "luau"/);
+    expect(() => validateManifest(m)).toThrow(/require a scripted runtime/);
   });
 
   it('rejects a toolbar icon that is not a safe .svg path', () => {
     for (const icon of ['../evil.svg', 'icons/logo.png', '/abs/x.svg']) {
-      const m = luauManifest((c) => {
-        c.toolbar = [{ ...luauButton, icon }];
+      const m = scriptedManifest((c) => {
+        c.toolbar = [{ ...scriptedButton, icon }];
       });
       expect(() => validateManifest(m)).toThrow(/safe relative .svg path/);
     }
   });
 
   it('rejects an unknown toolbar location and action type', () => {
-    const badLoc = luauManifest((c) => {
-      c.toolbar = [{ ...luauButton, location: 'sidebar' }];
+    const badLoc = scriptedManifest((c) => {
+      c.toolbar = [{ ...scriptedButton, location: 'sidebar' }];
     });
     expect(() => validateManifest(badLoc)).toThrow(/toolbar location/);
-    const badAction = luauManifest((c) => {
-      c.toolbar = [{ ...luauButton, action: { type: 'open-url' } }];
+    const badAction = scriptedManifest((c) => {
+      c.toolbar = [{ ...scriptedButton, action: { type: 'open-url' } }];
     });
     expect(() => validateManifest(badAction)).toThrow(
       /supported toolbar action/
     );
   });
 
-  it('accepts a template render export on a luau plugin, rejects it otherwise', () => {
-    const ok = luauManifest((c) => {
+  it('accepts a template render export on a wasm plugin, rejects it otherwise', () => {
+    const ok = scriptedManifest((c) => {
       (c.noteTemplates as Record<string, unknown>[])[0].render = 'render';
     });
     expect(() => validateManifest(ok)).not.toThrow();
     const bad = withContributes((c) => {
       (c.noteTemplates as Record<string, unknown>[])[0].render = 'render';
     });
-    expect(() => validateManifest(bad)).toThrow(/requires runtime "luau"/);
+    expect(() => validateManifest(bad)).toThrow(/requires a scripted runtime/);
   });
 
-  it('accepts a template render export on a luau plugin', () => {
-    const m = validManifest({ runtime: 'luau', entry: 'main.luau' });
+  it('accepts a template render export on a wasm plugin', () => {
+    const m = validManifest({ runtime: 'wasm', entry: 'plugin.wasm' });
     (
       (m.contributes as Record<string, unknown>).noteTemplates as Record<
         string,
@@ -350,8 +379,8 @@ describe('validateManifest', () => {
 
   it('accepts note exporters for built-in and plugin-owned note kinds', () => {
     const builtIn = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create']
     });
     (builtIn.contributes as Record<string, unknown>).noteExporters = [
@@ -366,8 +395,8 @@ describe('validateManifest', () => {
     expect(validateManifest(builtIn).contributes.noteExporters).toHaveLength(1);
 
     const pluginOwned = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create']
     });
     const contributes = pluginOwned.contributes as Record<string, unknown>;
@@ -405,14 +434,14 @@ describe('validateManifest', () => {
       }
     ];
     expect(() => validateManifest(manifestOnly)).toThrow(
-      /require runtime "luau"/
+      /require a scripted runtime/
     );
   });
 
   it('rejects malformed note exporter contributions', () => {
     const base = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create']
     });
     const contributes = base.contributes as Record<string, unknown>;
@@ -441,8 +470,8 @@ describe('validateManifest', () => {
 
   it('requires declared native tools for note exporters', () => {
     const m = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create', 'nativeTools.runDeclared']
     });
     (m.contributes as Record<string, unknown>).noteExporters = [
@@ -495,8 +524,8 @@ describe('validateManifest', () => {
 
   it('accepts webScript artifacts for iframe preview runtimes', () => {
     const m = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create', 'pluginArtifacts.download']
     });
     const contributes = m.contributes as Record<string, unknown>;
@@ -535,8 +564,8 @@ describe('validateManifest', () => {
 
   it('rejects iframe preview runtimes that reference unsafe or undeclared assets', () => {
     const m = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create']
     });
     const contributes = m.contributes as Record<string, unknown>;
@@ -668,8 +697,8 @@ describe('validateManifest', () => {
 
   it('accepts a plugin-owned note kind and a template that creates it', () => {
     const m = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create']
     });
     const contributes = m.contributes as Record<string, unknown>;
@@ -690,8 +719,8 @@ describe('validateManifest', () => {
 
   it('accepts a note-kind render that requires a declared native tool', () => {
     const m = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create', 'nativeTools.runDeclared']
     });
     const contributes = m.contributes as Record<string, unknown>;
@@ -714,8 +743,8 @@ describe('validateManifest', () => {
 
   it('rejects requiresNativeTool for an undeclared tool', () => {
     const m = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create', 'nativeTools.runDeclared']
     });
     const contributes = m.contributes as Record<string, unknown>;
@@ -735,8 +764,8 @@ describe('validateManifest', () => {
 
   it('accepts a preview service and a note kind that uses it', () => {
     const m = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create', 'nativeServices.run']
     });
     const contributes = m.contributes as Record<string, unknown>;
@@ -772,8 +801,8 @@ describe('validateManifest', () => {
 
   it('rejects unsafe preview service iframe css paths', () => {
     const m = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create', 'nativeServices.run']
     });
     (m.contributes as Record<string, unknown>).nativeServices = [
@@ -791,8 +820,8 @@ describe('validateManifest', () => {
 
   it('rejects preview service iframe css on direct mode', () => {
     const m = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create', 'nativeServices.run']
     });
     (m.contributes as Record<string, unknown>).nativeServices = [
@@ -810,8 +839,8 @@ describe('validateManifest', () => {
 
   it('rejects a preview service whose iframe URL is not loopback', () => {
     const m = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create', 'nativeServices.run']
     });
     (m.contributes as Record<string, unknown>).nativeServices = [
@@ -829,8 +858,8 @@ describe('validateManifest', () => {
 
   it('rejects previewService for an undeclared service', () => {
     const m = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create', 'nativeServices.run']
     });
     (m.contributes as Record<string, unknown>).noteKinds = [
@@ -849,8 +878,8 @@ describe('validateManifest', () => {
 
   it('rejects unknown plugin note kind preview mode icons', () => {
     const m = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create']
     });
     const contributes = m.contributes as Record<string, unknown>;
@@ -867,8 +896,8 @@ describe('validateManifest', () => {
 
   it('rejects unknown plugin note kind view mode label keys', () => {
     const m = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create']
     });
     const contributes = m.contributes as Record<string, unknown>;
@@ -914,8 +943,8 @@ describe('validateManifest', () => {
 
   it('accepts note-editor toolbar source actions for plugin-owned note kinds', () => {
     const m = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create']
     });
     const contributes = m.contributes as Record<string, unknown>;
@@ -954,8 +983,8 @@ describe('validateManifest', () => {
 
   it('accepts note-editor toolbarItem actions without plugin icons or labels', () => {
     const m = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create']
     });
     const contributes = m.contributes as Record<string, unknown>;
@@ -982,8 +1011,8 @@ describe('validateManifest', () => {
 
   it('rejects unknown built-in editor toolbar items', () => {
     const m = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create']
     });
     const contributes = m.contributes as Record<string, unknown>;
@@ -1008,8 +1037,8 @@ describe('validateManifest', () => {
 
   it('rejects note-editor toolbar buttons for undeclared note kinds', () => {
     const m = validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: ['notes.create']
     });
     (m.contributes as Record<string, unknown>).toolbar = [
@@ -1026,10 +1055,10 @@ describe('validateManifest', () => {
   });
 
   it('rejects source-edit toolbar actions outside note editors', () => {
-    const m = luauManifest((c) => {
+    const m = scriptedManifest((c) => {
       c.toolbar = [
         {
-          ...luauButton,
+          ...scriptedButton,
           action: { type: 'insertText', text: '= ', cursorOffset: 2 }
         }
       ];
@@ -1133,18 +1162,18 @@ function withTemplate(
   });
 }
 
-/** A scripted (luau) manifest carrying the given extra contributions. */
+/** A scripted (wasm) manifest carrying the given extra contributions. */
 function scripted(
   contributes: Record<string, unknown>,
   permissions: string[] = []
 ): Record<string, unknown> {
   return {
-    manifestVersion: 1,
+    manifestVersion: 2,
     id: 'com.example.scripted',
     name: 'Scripted',
     version: '1.0.0',
-    runtime: 'luau',
-    entry: 'main.luau',
+    runtime: 'wasm',
+    entry: 'plugin.wasm',
     permissions,
     contributes: { i18n: { en: { 'k.label': 'K' } }, ...contributes }
   };
@@ -2311,8 +2340,8 @@ describe('validateManifest — contribution lists', () => {
   /** A scripted manifest holding every permission the fixtures below need. */
   function permissive(): Record<string, unknown> {
     return validManifest({
-      runtime: 'luau',
-      entry: 'main.luau',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
       permissions: [
         'notes.create',
         'nativeTools.runDeclared',
@@ -2506,7 +2535,7 @@ describe('validateManifest — top-level shape', () => {
   it('rejects limits that are not an object', () => {
     expect(() =>
       validateManifest(
-        validManifest({ runtime: 'luau', entry: 'main.luau', limits: [] })
+        validManifest({ runtime: 'wasm', entry: 'plugin.wasm', limits: [] })
       )
     ).toThrow(/limits must be an object/);
   });
@@ -2690,7 +2719,7 @@ describe('validateManifest — remaining entry guards', () => {
         render: { export: 'render' }
       }
     ];
-    expect(() => validateManifest(m)).toThrow(/require runtime "luau"/);
+    expect(() => validateManifest(m)).toThrow(/require a scripted runtime/);
   });
 });
 
@@ -2819,10 +2848,10 @@ describe('manifest versioning', () => {
   });
 
   it('rejects a manifest written for a newer app', () => {
-    // The point of the field: a v2 manifest fails with "update the app"
-    // rather than with whatever v2 field this version happens to read first.
+    // The point of the field: a v3 manifest fails with "update the app"
+    // rather than with whatever v3 field this version happens to read first.
     expect(() =>
-      validateManifest(validManifest({ manifestVersion: 2 }))
+      validateManifest(validManifest({ manifestVersion: 3 }))
     ).toThrow(/newer than this app understands/);
   });
 

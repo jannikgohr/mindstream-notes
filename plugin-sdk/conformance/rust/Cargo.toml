@@ -1,0 +1,24 @@
+[package]
+name = "mindstream-conformance-plugin"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Exercises every Mindstream plugin host interface; the runtime's tests run it"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde_json = "1"
+wit-bindgen = "0.63"
+
+# Not part of the app's workspace: this builds for wasm32-unknown-unknown.
+[workspace]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

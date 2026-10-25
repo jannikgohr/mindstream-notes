@@ -18,7 +18,7 @@
  * deleted (settings/pickers.svelte.ts). Creating a note from a user template
  * copies the source note's body (and title) with `{{…}}` placeholders
  * (`{{date}}`, `{{uuid}}`, `{{date+7d:YYYY-MM-DD}}`, …) interpolated by the
- * **Templates plugin's Luau** (`renderTemplate`) — the plugin owns the macro
+ * **Templates plugin's component** (`renderTemplate`) — the plugin owns the macro
  * engine; the app only performs the note write. Rendering therefore needs the
  * backend, so user templates are offered only in the app, not the web build.
  */
@@ -77,7 +77,7 @@ function isInFolder(collectionId: string | null, folderId: string): boolean {
  * re-derives when notes, tags, or the settings change.
  */
 export function userTemplateEntries(): UserTemplateEntry[] {
-  // Rendering a user template runs the Templates plugin's Luau, which only
+  // Rendering a user template runs the Templates plugin's component, which only
   // executes in the app's backend — so there are no user templates to offer in a
   // backend-less (web/preview) build.
   if (!isTauri()) return [];
@@ -114,7 +114,7 @@ export function hasUserTemplates(): boolean {
 /**
  * Render a user template note's title + body into their final form, without
  * creating anything. The `{{…}}` interpolation is done by the **Templates
- * plugin's Luau** (`renderTemplate` export) — the plugin owns the macro engine;
+ * plugin's component** (`renderTemplate` export) — the plugin owns the macro engine;
  * the app only feeds it the raw note and performs the resulting write. The title
  * is rendered first so the body can reference the final `{{title}}` (handled
  * inside the plugin). Backend-only: `pluginsRunScript` rejects without the app.

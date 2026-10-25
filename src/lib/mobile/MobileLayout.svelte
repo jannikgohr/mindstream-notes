@@ -40,6 +40,7 @@
     type CoreFileTreeActionId
   } from '$lib/components/file-tree-toolbar-preferences';
   import { templateMenuEntries, runTemplateEntry } from '$lib/plugins/menu';
+  import { visiblePluginToolbarButtons } from '$lib/plugins/toolbar-visibility.svelte';
   import { pluginToolbarButtons } from '$lib/plugins/registry.svelte';
   import { resolvePluginString } from '$lib/plugins/plugin-i18n';
   import { runPluginButton } from '$lib/plugins/effects';
@@ -199,7 +200,7 @@
   // only. Labels go through tUi() inside $derived so a language switch
   // refreshes them without a remount.
   const pluginCreateActions = $derived<FabAction[]>(
-    pluginToolbarButtons('file-tree').map(({ pluginId, button }) => ({
+    visiblePluginToolbarButtons('file-tree').map(({ pluginId, button }) => ({
       id: `plugin:${pluginId}:${button.id}`,
       label: resolvePluginString(pluginId, button.labelKey ?? button.id),
       icon: FileText as unknown as IconComponent,
@@ -219,7 +220,9 @@
   );
   const availableCreateIds = $derived([
     ...CORE_FILE_TREE_ACTION_IDS,
-    ...pluginCreateActions.map((action) => action.id)
+    ...pluginToolbarButtons('file-tree').map(
+      ({ pluginId, button }) => `plugin:${pluginId}:${button.id}`
+    )
   ]);
   let createOrder = $state(
     loadFileTreeToolbarPreferences(CORE_FILE_TREE_ACTION_IDS, 'mobile')

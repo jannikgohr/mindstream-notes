@@ -13,6 +13,7 @@ const patterns = [
   'e2e-tests/**/*.{js,ts,mjs,cjs,json,md,html,css}',
   'backend/**/*.{js,ts,mjs,cjs,json,md,html,css}',
   'plugins/**/*.{js,ts,mjs,cjs,json,md,html,css}',
+  'plugin-sdk/**/*.{js,ts,mjs,cjs,json,md}',
   'packages/**/*.{js,ts,mjs,cjs,json,md,html,css,svelte}'
 ];
 

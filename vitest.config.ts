@@ -41,7 +41,14 @@ export default defineConfig({
   },
   test: {
     environment: 'happy-dom',
-    include: ['src/**/*.{test,spec}.ts', 'packages/**/*.{test,spec}.ts'],
+    include: [
+      'src/**/*.{test,spec}.ts',
+      'packages/**/*.{test,spec}.ts',
+      'plugin-sdk/**/*.{test,spec}.ts'
+    ],
+    // The starter template's own test runs under `node --test` in a
+    // generated project, not here.
+    exclude: ['**/node_modules/**', 'plugin-sdk/typescript/templates/**'],
     globals: false,
     coverage: {
       provider: 'v8',
