@@ -14,6 +14,7 @@ test-only port (`18080`) so it never collides with a real server:
 pnpm backend:test:up      # up on http://localhost:18080
 pnpm backend:test:down    # stop
 pnpm backend:test:reset   # wipe the volumes for a clean run
+pnpm backend:test:logs server   # print the server's log
 ```
 
 The first `up` builds the server image, which compiles the server and takes a
@@ -42,7 +43,7 @@ pnpm test:e2e:backend
 
 It's the only T4-adjacent piece runnable without the packaged app. The server
 has its own, much larger test suite, which needs no stack at all: see
-[backend/server/README.md](../../backend/server/README.md#develop).
+[server-development.md](../server-development.md).
 
 ## Account provisioning
 

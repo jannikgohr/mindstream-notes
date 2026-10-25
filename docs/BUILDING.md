@@ -6,7 +6,9 @@ This document collects setup, build, and verification notes that are too detaile
 
 Every platform needs:
 
-- **Node.js 20+** and **pnpm** (`corepack enable`, or `npm i -g pnpm`).
+- **Node.js 22.11+** and **pnpm** (`corepack enable`, or `npm i -g pnpm`). CI
+  runs Node 22. On Node 20 the plugin SDK tests in `pnpm test` fail, because
+  its WebAssembly engine cannot compile the SDK's components.
 - **Rust**, stable toolchain, via [rustup](https://rustup.rs).
 - The **Tauri 2 system dependencies** for your OS — see the per-OS setup below.
 - **Java 21** — only for Android builds.

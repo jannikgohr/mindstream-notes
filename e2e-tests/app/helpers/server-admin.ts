@@ -6,7 +6,7 @@
  * that wants one has to step outside the app to get it. The disposable stack
  * of `pnpm backend:test:up` runs the server in a container with a fixed
  * name, and the server's own command line sets the limits there, see
- * backend/server/README.md.
+ * docs/server-administration.md.
  *
  * A suite pointed at a server somewhere else cannot do this. Such a flow
  * asks `serverAdminAvailable()` first and skips itself.

@@ -38,7 +38,7 @@ it with `--plans`.
 3. Send the plan's limits to
    `PUT /admin/v1/account/{username}/entitlements/`. The body and the other two
    routes are described in the server's
-   [README](../server/README.md#from-another-program).
+   [administration docs](../../docs/server-administration.md#from-another-program).
 4. When a subscription lapses, send the same limits with `readOnly: true`. The
    account can still read and delete. Nothing is removed, and paying again
    lifts it.
