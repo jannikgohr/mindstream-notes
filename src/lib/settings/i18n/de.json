@@ -1021,6 +1021,8 @@
     "plugins.textCheckers.missingLanguages": "Von diesem Server nicht angeboten:",
     "loading": "Wird geladen",
     "window.minimize": "Minimieren",
+    "window.maximize": "Maximieren",
+    "window.restore": "Wiederherstellen",
     "topBar.toggleLeftSidebar": "Linke Seitenleiste umschalten",
     "topBar.hideLeftSidebar": "Linke Seitenleiste ausblenden",
     "topBar.showLeftSidebar": "Linke Seitenleiste anzeigen",

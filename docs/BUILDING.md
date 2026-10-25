@@ -85,6 +85,13 @@ Start the browser development UI:
 pnpm dev
 ```
 
+Two query parameters change what the browser UI shows. They work on the dev
+server only, and the desktop app ignores them:
+
+- `?windowControls` draws the desktop app's minimize, maximize and close
+  buttons. They do nothing in a browser. Use it for screenshots.
+- `?mobile=1` shows the Android layout, `?mobile=ios` the iOS one.
+
 Start the Tauri desktop app:
 
 ```shell
