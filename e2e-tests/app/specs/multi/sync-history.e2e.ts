@@ -5,7 +5,7 @@
  *
  * That negative assertion is the regression guard for the documented
  * "history is per-device, not synced" limitation
- * (docs/known-limitations.md) — the timeline is local; only content converges.
+ * (docs/internal/limitations.md) — the timeline is local; only content converges.
  */
 
 import { expect } from '@wdio/globals';

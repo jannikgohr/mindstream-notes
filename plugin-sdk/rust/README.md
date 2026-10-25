@@ -1,8 +1,8 @@
 # Rust plugin starter
 
-Rust is the authoring path used by [shipped executable plugins](../bundled/README.md).
+Rust is the authoring path the [core plugins](../bundled/README.md) use.
 TypeScript authors can use the [Node-only SDK](../typescript/README.md) and
-[non-shipped examples](../examples/README.md).
+the [examples](../examples/README.md).
 
 From the repository root:
 
@@ -18,7 +18,7 @@ Choose an appropriate absolute project path on Windows. Install `dist` from
 Settings → Plugins. It contains the manifest, toolbar icon and component.
 Change the manifest's ID before distributing your plugin, and sign the `dist`
 folder so later versions update without a new approval; see
-[Signing](../../docs/plugins.md#signing-third-party-plugins). Keep the
+[Signing your plugin](../../docs/plugin-development.md#signing-your-plugin). Keep the
 generated `Cargo.lock` in your project to pin dependency versions.
 
 `wit-bindgen` generates Rust imports and the `Guest` trait from the copied

@@ -2,7 +2,7 @@
 
 How Mindstream Notes fits together, end to end. For setup and builds see
 [BUILDING.md](../BUILDING.md); for the by-design trade-offs the sync/history model
-carries see [known-limitations.md](../known-limitations.md); for the
+carries see [limitations.md](limitations.md); for the
 security issues still open against the design described here see
 [security-review.md](security-review.md).
 
@@ -108,6 +108,11 @@ whose window never becomes ready reports the failure and exits, releasing its
 vault, and a launch that finds an unresponsive coordinator tells the user
 instead of exiting silently.
 
+The coordinator also runs in `tauri dev`, and survives vault handoffs there.
+As in a release, closing the last vault window ends it, and with it the
+development session, unless close-to-tray is on. Test devices stay direct by
+default; pass `--supervised-vaults` when testing several vaults in one root.
+
 ## Frontend (`src/`)
 
 Svelte 5 + SvelteKit render the UI. Editors are surface-specific: markdown uses
@@ -199,7 +204,8 @@ thread pool, holding the lock only for a single query.
   note id first, then parse one item at a time and rewrite its links against
   the full list, so links between notes survive whatever order they are read
   in. Runs entirely in Rust because the target is a million-note vault. See
-  [import.md](../import.md).
+  [import.md](../import.md), and how it scales in
+  [import-performance.md](import-performance.md).
 - **Also here:** PDF annotate/export (`pdf_export.rs`, `pdf_text.rs`), vault
   export (`notes_export.rs`), the macOS native menu (`native_menu.rs`), tray,
   hotkeys, and desktop settings.

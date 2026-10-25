@@ -113,4 +113,4 @@ flags and what the numbers do and don't cover.
 - **Why these tiers exist / what each proves** — [docs/internal/e2e/strategy.md](../docs/internal/e2e/strategy.md)
 - **The flows worth covering (catalogue)** — [docs/internal/e2e/flows.md](../docs/internal/e2e/flows.md)
 - **Current coverage & open gaps** — [docs/internal/e2e/status.md](../docs/internal/e2e/status.md)
-- **By-design behaviours these tests pin down** — [docs/known-limitations.md](../docs/known-limitations.md)
+- **By-design behaviours these tests pin down** — [docs/internal/limitations.md](../docs/internal/limitations.md)

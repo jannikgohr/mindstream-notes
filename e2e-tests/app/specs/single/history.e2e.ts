@@ -112,6 +112,6 @@ describe('T3 note history', function () {
 
   // Per-kind coverage (freeform / ink / PDF) follows the same shape but needs
   // kind-specific note creation + a non-markdown restore assertion (the restore
-  // mechanism differs per kind — see docs/known-limitations.md). TODO once the
+  // mechanism differs per kind — see docs/internal/limitations.md). TODO once the
   // harness can seed those note kinds.
 });

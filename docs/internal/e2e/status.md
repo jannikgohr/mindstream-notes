@@ -92,7 +92,7 @@ Two things worth carrying forward:
 The collab-confirmation prompt (`peerCount` in `NoteHistorySection`) is wired
 and asserted for the awareness-based editors (markdown/PDF); ink/freeform stay
 pending because their providers don't report presence (see
-[known-limitations.md](../../known-limitations.md)).
+[limitations.md](../limitations.md)).
 
 ## Open gaps
 

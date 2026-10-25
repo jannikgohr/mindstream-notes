@@ -18,6 +18,14 @@ in the [documentation index](../README.md).
   it
 - [Upstream fixes](upstream-fixes.md): local workarounds for dependency bugs
   still to report upstream
+- [Plugin host internals](plugin-host.md): package storage, migration, the
+  runtime, the core plugins and maintaining the TypeScript SDK
+- [Core plugin sources](../../plugin-sdk/bundled/README.md): building and
+  testing the Rust source of the Templates and Typst plugins
+- [Known limitations: implementation notes](limitations.md): the code behind
+  each user-facing limitation, and the ones only developers meet
+- [Importer performance](import-performance.md): how the importer scales and
+  how to run the Wikipedia test vault
 
 ## Design
 

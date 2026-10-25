@@ -21,4 +21,5 @@ folder**, then approve it for the vault.
 - `test/` runs the built component in Node against an in-memory host, so the
   tests exercise the same file the app runs.
 
-The SDK documentation is in the Mindstream repository, `docs/plugins.md`.
+The SDK documentation is in the Mindstream repository,
+`docs/plugin-development.md`.

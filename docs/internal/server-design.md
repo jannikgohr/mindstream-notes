@@ -61,7 +61,7 @@ worked around on the client.
 - **Freeform notes** go through a third-party socket.io server that admits
   anyone who knows a room id.
 - **Presence** exists only where the awareness protocol is used. Ink and
-  freeform report no peers, as [known-limitations.md](../known-limitations.md)
+  freeform report no peers, as [limitations.md](limitations.md)
   records.
 
 ### Sync is slow, and most of the time is the server

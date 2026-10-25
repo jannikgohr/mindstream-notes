@@ -32,9 +32,3 @@ export and the JSON/effect protocol. A core Wasm module, a WASI command or a
 module expecting browser/Node imports cannot be installed unchanged. The
 current host only supplies the versioned `mindstream:plugin` interfaces;
 Rust and TypeScript are the tested authoring paths.
-
-[`ts-rust`](https://github.com/pingdotgg/ts-rust) implements the TypeScript
-compiler/checker in Rust. Its [Wasm build](https://github.com/pingdotgg/ts-rust/blob/main/npm/wasm/README.md)
-runs that compiler in Wasm and still emits JavaScript. It does not turn a
-TypeScript plugin into compiled Rust/Wasm guest logic, so it does not remove
-QuickJS from this SDK's TypeScript components.

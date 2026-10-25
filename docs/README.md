@@ -13,6 +13,8 @@ Start with the [README](../README.md) for what the app is and where to get it.
   difference between restoring and merging
 - [Custom themes](custom-themes.md): making your own theme preset, and the
   rules it has to meet
+- [Plugins](plugins.md): installing and approving plugins, updates and
+  signatures, and the plugins that come with the app
 - [Known limitations](known-limitations.md): intentional trade-offs and what is
   not built yet. Read it before filing a bug about sync or history
 
@@ -27,8 +29,8 @@ Start with the [README](../README.md) for what the app is and where to get it.
 
 ## Writing plugins
 
-- [Plugins](plugins.md): where plugins live and how they are trusted, the
-  manifest, permissions, contributions, and signing
+- [Writing plugins](plugin-development.md): the manifest, contributions,
+  permissions, the host API, runtime limits and signing
 - [Batching host calls](plugin-batch-api.md): the experimental interface for
   sending several host calls at once
 - [Rust starter](../plugin-sdk/rust/README.md): the authoring path the shipped
@@ -37,8 +39,6 @@ Start with the [README](../README.md) for what the app is and where to get it.
   Node.js alone
 - [Examples](../plugin-sdk/examples/README.md): installable plugins that do not
   ship with the app
-- [Shipped plugin sources](../plugin-sdk/bundled/README.md): the Rust source of
-  the Templates and Typst plugins
 
 ## Building and contributing
 

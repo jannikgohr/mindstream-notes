@@ -5,7 +5,7 @@ Fixed findings have been removed; `git log` on this file has the full original
 audit and the reasoning behind each fix.
 
 For the by-design trade-offs the sync/history model carries see
-[known-limitations.md](../known-limitations.md); for how the pieces fit together
+[limitations.md](limitations.md); for how the pieces fit together
 see [architecture.md](architecture.md).
 
 ## Trust boundaries

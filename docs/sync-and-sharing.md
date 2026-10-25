@@ -95,15 +95,16 @@ them once there is room.
 ## Editing together live
 
 When a note is open on more than one device, or by more than one person, each
-edit appears on the other screens as it is made, and the editor shows **Live**.
-This works for Markdown notes, drawings, handwritten notes, PDFs and Kanban
-boards, once the note has synced. Plugin documents such as Typst sync like any
+edit appears on the other screens as it is made. On the desktop, a Wi-Fi icon
+next to the note's save status shows **Live editing connected** while that
+works. It works for Markdown notes, drawing canvases, handwritten notes, PDFs
+and Kanban boards, once the note has synced. Typst documents sync like any
 other note but are not edited live.
 
 Restoring an earlier version replaces the note for everyone editing it. For
 Markdown notes and PDFs the app asks first when other people are in the note.
 For the other kinds it does not ask yet, see
-[known limitations](known-limitations.md#collab-confirmation-prompt-before-restore--partially-implemented).
+[known limitations](known-limitations.md#restoring-while-others-edit-keeps-their-unseen-changes--known-limitation).
 
 ## Sharing a folder
 

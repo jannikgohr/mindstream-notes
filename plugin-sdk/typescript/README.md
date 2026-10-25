@@ -34,7 +34,7 @@ plugin package; `node_modules` and source files are authoring inputs.
 
 Before you hand the package to anyone else, sign it, so later versions update
 without asking every user to approve them again. See
-[Signing](../../docs/plugins.md#signing-third-party-plugins).
+[Signing your plugin](../../docs/plugin-development.md#signing-your-plugin).
 
 ## Write an export
 
@@ -109,14 +109,6 @@ vault. Omitted permissions grant nothing. This checks plugin behavior;
 Wasmtime's resource controls and OS process handling are tested in the Rust
 runtime suite.
 
-## SDK maintenance
-
-Run `pnpm --filter @mindstream/plugin-sdk generate:types` after changing WIT.
-The generator uses jco's guest bindings and adapts options and 64-bit integers
-to QuickJS conventions. Tests compare the complete declarations against WIT,
-including record fields and signatures. Plugin authors use the packed declarations
-without generating or editing them.
-
 ## CLI
 
 - `create <dir> --id <id> --name <name> --sdk <spec>` writes an empty project.
@@ -129,40 +121,12 @@ without generating or editing them.
   files, component imports and SDK export names. The app performs full
   validation again during installation.
 
-See [the plugin contract](../../docs/plugins.md) for contributions, signing
-and effects, and [the WIT package](../wit/world.wit) for the ABI.
+See [Writing plugins](../../docs/plugin-development.md) for contributions,
+signing and effects, and [the WIT package](../wit/world.wit) for the ABI.
 
 ## General host batches
 
-The SDK exports `batch.execute(commands)`, `batch.text(value)`,
-`batch.previous(index)` and `HostBatchError`. Commands are typed WIT operations
-covering all current host capabilities. Ordered backward references can feed
-text results to later commands across interfaces; `keep: false` skips returning
-an intermediate to the guest. The first error stops later commands.
-`HostBatchError` exposes the zero-based `index`, `phase`, `completed` handler
-count, earlier kept `replies`, and original `kind`/`detail`. Validation failure
-executes nothing; execution failure can leave partial effects in the stopping
-operation; result-limit failure follows a successful handler whose result was
-rejected. There is no rollback or automatic retry. Deadline/cancellation traps
-remain fatal and cannot return progress. See the contract's recovery section
-before retrying side effects or rebuilding a plan's backward references.
-
-Use explicit plans of at most 128 commands, 1,024 text inputs, 1 MiB literal
-request bytes and 8 MiB accounted cumulative results. A guest decision based
-on a returned value requires another plan. Batching does not grant permissions
-or skip existing path, storage, native-process or log/random limits. It also
-does not guarantee lower CPU cost for in-process imports. The test host mirrors
-the transport; actual budgets/cancellation still need runtime tests.
-
-The app also enforces a 9 MiB argument-copy budget per host call while Wasmtime
-lifts guest strings and lists, before the batch validator runs. The accounting
-includes container overhead. Exhaustion ends the invocation as a trap, without
-a `HostBatchError` or progress record. A request that fits lifting but exceeds
-the 1 MiB batch literal limit still returns a normal validation failure. The
-transfer budget resets per host call and is separate from guest memory and
-host-to-guest results. See [runtime limits](../../docs/plugins.md#runtime-limits-and-lifecycle)
-for scalar limits, including 8 MiB native-tool stdin and 4 MiB storage files.
-
-New components importing this interface need a matching host. The expanded
-experimental failure record requires rebuilding older batch guests; scalar
-APIs remain. See [the contract and example](../../docs/plugin-batch-api.md).
+The experimental `batch.execute(commands)` sends several host calls in one
+crossing, with `batch.text`, `batch.previous` and `HostBatchError` to build
+and recover plans. See [Batching host calls](../../docs/plugin-batch-api.md)
+for the contract, its limits and an example.

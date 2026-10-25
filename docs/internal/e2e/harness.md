@@ -153,6 +153,27 @@ rediscovered:
   `clientHelpers(client)`. `loginClient` runs under `Promise.all`, so an error
   in either client surfaces as `Promise.all (index N)`.
 
+## Running a test build by hand
+
+Debug and `e2e-data-dir` builds accept `MINDSTREAM_ROOT_DIR` and
+`MINDSTREAM_PROFILE_DIR`. The real-app harness sets both and isolates browser
+storage before launching. Manual Windows test launches also require an absolute
+`WEBVIEW2_USER_DATA_FOLDER`; Linux tests require absolute isolated
+`XDG_DATA_HOME` and `XDG_CACHE_HOME`. A backend path override alone is insufficient.
+Without an explicit root, a profile override uses `<profile>/.app-root` for
+legacy harness compatibility. Test builds without any override refuse startup.
+
+For an embedded native debug fixture, build the production frontend first and
+use Tauri's production protocol feature. Clearing `devUrl` alone still leaves
+`tauri::is_dev()` enabled and deliberately disables automatic coordinator revival:
+
+```powershell
+pnpm build
+$env:TAURI_CONFIG = '{"build":{"devUrl":null}}'
+cd src-tauri
+cargo build --features tauri/custom-protocol
+```
+
 ## Concurrent vault checks
 
 Shared-root vault fixtures complement the existing isolated-device multiremote

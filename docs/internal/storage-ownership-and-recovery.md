@@ -260,7 +260,8 @@ the vault. Settings and migration sources survive removal.
 Root `plugin-settings.json` records the startup-selected canonical vault directory
 and one-time `D` key receipts. Existing root values win. Retained vault rows cannot
 resurrect a reset value. RootLock guards field edits and catalog publication;
-notifications are sent after its release. See the [plugin guide](../plugins.md).
+notifications are sent after its release. See the
+[plugin host internals](plugin-host.md).
 
 Portable backup format 2 carries vault settings and writable plugin data along
 with immutable package files and portable device values. Restore replaces the
@@ -280,7 +281,7 @@ Handoff may replace the native window while preserving its content and geometry.
 
 Global plugin packages, theme presets and settings/plugin-data backup portability
 are implemented. Credentials and downloaded caches stay device-local. Current
-contracts are in this document, [plugin usage](../plugins.md),
+contracts are in this document, [plugin host internals](plugin-host.md),
 [theming](theming.md) and [backup portability](backup-restore-portability.md).
 
 Linux compositor behavior and geometry constraints are recorded in

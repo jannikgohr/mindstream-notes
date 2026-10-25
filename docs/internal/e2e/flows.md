@@ -17,7 +17,7 @@ categories that justify an end-to-end test rather than a unit test.
 > Tauri backend and the mindstream-server stack, [status.md](status.md) for what's
 > implemented, [backlog.md](backlog.md) for flows queued but not yet written
 > (§6 account/token lifecycle, §7 Android), and
-> [known-limitations.md](../../known-limitations.md) for the by-design behaviours
+> [limitations.md](../limitations.md) for the by-design behaviours
 > several of these flows are meant to pin down.
 
 The existing `e2e-tests/browser/` Playwright suite runs the SvelteKit SPA in

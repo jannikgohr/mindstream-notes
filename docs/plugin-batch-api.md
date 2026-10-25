@@ -2,8 +2,8 @@
 
 A Wasm plugin can send a list of host calls in one crossing instead of one call
 at a time. The interface is experimental. The SDK and ABI are still
-pre-release, and the shipped plugins do not use it. Start with the scalar host
-API in [Plugins](plugins.md#host-api) and reach for a batch only when measuring
+pre-release, and the core plugins do not use it. Start with the scalar
+[host API](plugin-development.md#host-api) and reach for a batch only when measuring
 shows the crossings cost more than building the plan.
 
 ## The general batch contract

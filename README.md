@@ -60,7 +60,7 @@ start:
 - [Backup and restore](docs/backup-and-restore.md)
 - [Known limitations](docs/known-limitations.md), worth a read before filing a
   bug about sync or history
-- [Plugins](docs/plugins.md), for writing your own
+- [Plugins](docs/plugins.md), and [writing your own](docs/plugin-development.md)
 
 ## Development
 

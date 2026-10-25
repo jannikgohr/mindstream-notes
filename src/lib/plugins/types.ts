@@ -14,7 +14,8 @@
  * in a sandboxed iframe on its own origin that can reach neither the app's DOM
  * nor any command. Everything else — native tools, native services, text
  * checkers — is the *host* acting on the plugin's behalf from a declaration.
- * See docs/plugins.md for the whole picture.
+ * See docs/plugin-development.md for the whole picture, and
+ * docs/internal/plugin-host.md for how the host enforces it.
  *
  * Namespacing rule that runs through the whole system: a plugin owns a stable,
  * dotted `id` (e.g. `com.mindstream.templates.core`). Every runtime identifier
