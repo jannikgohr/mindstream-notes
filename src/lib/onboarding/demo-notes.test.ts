@@ -8,10 +8,11 @@
  *     the same note would merge two copies of it (a second trailing
  *     paragraph, say).
  *
- * These run the editor the app runs, on every file under `demo-notes/`.
+ * These run the editor the app runs, on every file under `./demo-notes/`.
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import type { DemoNote } from '$lib/api/onboarding';
 import {
   editorViewCtx,
   getDoc,
@@ -35,6 +36,7 @@ import {
   parseDemoSource,
   renderDemoNote
 } from './demo-notes';
+import { demoNoteId } from './demo-note-id';
 
 /** Every node a demo note may use: plain Markdown that every version of the
  *  app knows. An editor deletes a node it doesn't know, and the deletion
@@ -124,6 +126,11 @@ async function open(
 }
 
 describe('the demo-notes directory', () => {
+  const rendered = new Map<string, DemoNote[]>();
+  beforeAll(async () => {
+    for (const lang of AVAILABLE_LANGUAGES)
+      rendered.set(lang, await demoNotes(lang));
+  });
   it('holds notes, each with an English file to fall back to', () => {
     expect(demoSources('en').length).toBeGreaterThan(0);
     expect(demoSources('xx').map((note) => note.lang)).toEqual(
@@ -141,18 +148,15 @@ describe('the demo-notes directory', () => {
 
   it.each(AVAILABLE_LANGUAGES.flatMap((lang) => demoSources(lang)))(
     '$slug in $lang opens without a change and uses plain Markdown',
-    async ({ markdown }) => {
-      const rendered = await renderDemoNote(markdown);
-      for (const node of nodeNames(rendered.yrsState)) {
+    async ({ slug, lang }) => {
+      const note = rendered.get(lang)!.find((note) => note.slug === slug)!;
+      for (const node of nodeNames(note.yrsState)) {
         expect(PLAIN_NODES, node).toContain(node);
       }
       for (const mathEnabled of [false, true]) {
-        const opened = await open(
-          Uint8Array.from(rendered.yrsState),
-          mathEnabled
-        );
+        const opened = await open(Uint8Array.from(note.yrsState), mathEnabled);
         expect(opened.updates).toBe(0);
-        expect(opened.markdown).toBe(rendered.body);
+        expect(opened.markdown).toBe(note.body);
       }
     }
   );
@@ -215,21 +219,21 @@ describe('renderDemoNote', () => {
 
 describe('demoSources', () => {
   const files = {
-    '../../../demo-notes/welcome/en.md': '---\ntitle: Welcome\n---\n\n# Hi\n',
-    '../../../demo-notes/welcome/de.md':
+    './demo-notes/welcome/en.md': '---\ntitle: Welcome\n---\n\n# Hi\n',
+    './demo-notes/welcome/de.md':
       '---\r\ntitle: Willkommen\r\n---\r\n\r\n# Hallo\r\n',
-    '../../../demo-notes/basics/en.md': '---\ntitle: Basics\n---\nText\n'
+    './demo-notes/basics/en.md': '---\ntitle: Basics\n---\nText\n'
   };
 
-  it('picks the language, falls back to English and keeps slug order', () => {
+  it('picks the language, falls back to English and opens welcome first', () => {
     expect(demoSources('de', files)).toEqual([
-      { slug: 'basics', lang: 'en', title: 'Basics', markdown: 'Text\n' },
       {
         slug: 'welcome',
         lang: 'de',
         title: 'Willkommen',
         markdown: '\n# Hallo\n'
-      }
+      },
+      { slug: 'basics', lang: 'en', title: 'Basics', markdown: 'Text\n' }
     ]);
   });
 
@@ -253,15 +257,76 @@ describe('demoSources', () => {
 });
 
 describe('demoNotes', () => {
-  it('renders every note in the language for the backend', async () => {
-    const notes = await demoNotes('de');
-    expect(notes.map(({ slug, lang }) => ({ slug, lang }))).toEqual(
-      demoSources('de').map(({ slug, lang }) => ({ slug, lang }))
-    );
-    for (const note of notes) {
-      expect(note.title).not.toBe('');
-      expect(note.yrsState.length).toBeGreaterThan(0);
-      expect(note.body).toContain('#');
+  it.each(AVAILABLE_LANGUAGES)(
+    'renders linked notes in %s for the backend',
+    async (lang) => {
+      const notes = await demoNotes(lang);
+      expect(notes.map(({ slug, lang }) => ({ slug, lang }))).toEqual(
+        demoSources(lang).map(({ slug, lang }) => ({ slug, lang }))
+      );
+      expect(notes[0].slug).toBe('welcome');
+      const ids = new Set(await Promise.all(notes.map(demoNoteId)));
+      for (const note of notes) {
+        expect(note.title).not.toBe('');
+        expect(note.yrsState.length).toBeGreaterThan(0);
+        expect(note.body).toContain('#');
+        expect(note.body).not.toContain('](demo:');
+        for (const match of note.body.matchAll(
+          /mindstream:\/\/note\/([^\s)]+)/g
+        ))
+          expect(ids.has(match[1]), `${note.slug} links to ${match[1]}`).toBe(
+            true
+          );
+      }
+      const sync = notes.find((note) => note.slug === 'sync')!;
+      expect(notes[0].body).toContain(
+        `mindstream://note/${await demoNoteId(sync)}`
+      );
     }
+  );
+
+  const files = {
+    './demo-notes/welcome/de.md':
+      '---\ntitle: Willkommen\n---\n[Sync](demo:sync)\n\n`[Example](demo:missing)`\n',
+    './demo-notes/welcome/en.md':
+      '---\ntitle: Welcome\n---\n[Sync](demo:sync)\n',
+    './demo-notes/sync/en.md': '---\ntitle: Sync\n---\n# Offline edits\n'
+  };
+
+  it('links to the English fallback and leaves code examples untouched', async () => {
+    const notes = await demoNotes('de', files);
+    expect(notes.map((note) => note.lang)).toEqual(['de', 'en']);
+    expect(notes[0].body).toContain(
+      `mindstream://note/${await demoNoteId(notes[1])}`
+    );
+    expect(notes[0].body).toContain('`[Example](demo:missing)`');
+    expect(await demoNotes('de', files)).toEqual(notes);
+  });
+
+  it('updates links and the source ID when the target content changes', async () => {
+    const first = await demoNotes('en', files);
+    const changed = await demoNotes('en', {
+      ...files,
+      './demo-notes/sync/en.md':
+        '---\ntitle: Sync\n---\n# Updated explanation\n'
+    });
+    expect(changed[0].body).toContain(
+      `mindstream://note/${await demoNoteId(changed[1])}`
+    );
+    expect(await demoNoteId(changed[0])).not.toBe(await demoNoteId(first[0]));
+  });
+
+  it.each([
+    ['[Missing](demo:missing)', 'unknown demo note'],
+    ['[Self](demo:welcome)', 'cyclic demo link'],
+    ['[Sync](demo:sync)', 'cyclic demo link']
+  ])('rejects invalid links: %s', async (markdown, error) => {
+    await expect(
+      demoNotes('en', {
+        './demo-notes/welcome/en.md': `---\ntitle: Welcome\n---\n${markdown}\n`,
+        './demo-notes/sync/en.md':
+          '---\ntitle: Sync\n---\n[Welcome](demo:welcome)\n'
+      })
+    ).rejects.toThrow(error);
   });
 });
