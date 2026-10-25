@@ -59,11 +59,11 @@ change that syncs last wins.
 
 ### Notes added by setup can't be shared — _by design_
 
-Setup can add a welcome note. That note can't go into a shared folder: moving it
-into one, or sharing a folder that holds it, is refused. Copy its text into a
+Setup can add a few welcome notes. They can't go into a shared folder: moving
+one there, or sharing a folder that holds one, is refused. Copy the text into a
 new note to share it. Devices set up with different app versions may each have
-their own copy of the welcome note, and an unedited one does not sync until you
-change it.
+their own copies of the welcome notes, and an unedited one does not sync until
+you change it.
 
 ## Import
 
