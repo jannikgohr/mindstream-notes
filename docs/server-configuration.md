@@ -15,32 +15,38 @@ you do.
 
 [.env.example](../backend/server/.env.example) holds the settings most servers
 want to look at, with the choice of who may sign up at the top. The table below
-is the full list. Under compose a variable only reaches the server if
-[compose.yml](../backend/server/compose.yml) passes it on.
+is the full list.
 
-| Variable                                 | Default           | Meaning                                                                             |
-| ---------------------------------------- | ----------------- | ----------------------------------------------------------------------------------- |
-| `MINDSTREAM_DATABASE_URL`                | required          | Postgres connection string                                                          |
-| `MINDSTREAM_LISTEN`                      | 0.0.0.0:3735      | Address to listen on                                                                |
-| `MINDSTREAM_BLOB_DIR`                    | data/blobs        | Where large chunks are stored                                                       |
-| `MINDSTREAM_SIGNUP`                      | closed            | Who may sign up: `closed`, `invite` or `open`. See [signing up][signup]             |
-| `MINDSTREAM_PUBLIC_HOSTS`                | empty             | Hostnames clients use, when the proxy rewrites the Host header                      |
-| `MINDSTREAM_TRUSTED_PROXIES`             | loopback only     | Networks whose `X-Forwarded-For` is believed                                        |
-| `MINDSTREAM_AUTH_RATE_PER_MINUTE`        | 10                | Sign-in attempts per address per minute. 0 turns the limit off                      |
-| `MINDSTREAM_AUTH_RATE_BURST`             | 20                | Attempts an address may make at once before the rate applies                        |
-| `MINDSTREAM_MAX_CONNECTIONS_PER_ADDRESS` | 128               | Connections, and separately sockets, one address may hold open. 0 turns the cap off |
-| `MINDSTREAM_MAX_CONNECTIONS`             | 10000             | The same for the whole server. 0 leaves only the limit on open files                |
-| `MINDSTREAM_ADMIN_TOKEN`                 | unset             | Turns on the [interface for setting account limits][admin-api]                      |
-| `MINDSTREAM_SECRET_KEY`                  | unset             | Key that seals authenticator secrets. See [account security][security]              |
-| `MINDSTREAM_SECRET_KEY_FILE`             | see below         | Where that key is created when none is given                                        |
-| `MINDSTREAM_TOTP_ISSUER`                 | Mindstream Notes  | Name an authenticator app shows for accounts here                                   |
-| `MINDSTREAM_APP_URL`                     | the releases page | Where the invite page sends people without the app                                  |
-| `MINDSTREAM_MAX_PAGE_BYTES`              | 33554432          | Most content one response carries. See [response size](#response-size)              |
-| `MINDSTREAM_KEEP_REVISIONS`              | 10                | Earlier revisions kept per item besides the current one                             |
-| `MINDSTREAM_SESSION_IDLE_DAYS`           | 90                | Days a device's session may go unused before it ends. 0 never ends one for that     |
-| `MINDSTREAM_MAX_BODY_BYTES`              | 78643200          | Largest request body accepted                                                       |
-| `MINDSTREAM_INLINE_CHUNK_BYTES`          | 20480             | Chunks up to this size stay in the database                                         |
-| `MINDSTREAM_TEST_RESET`                  | false             | Serves a route that wipes accounts. Debug builds only, loopback only                |
+Under Docker, a variable in `.env` only reaches the server if
+[compose.yml](../backend/server/compose.yml) passes it on, and the **Compose**
+column says which ones it does. _Not yet_ marks a setting the server reads but
+the compose file does not pass on yet: setting it in `.env` has no effect for
+now. Passing them on is planned. Run the server binary directly and every
+variable works.
+
+| Variable                                 | Default           | Compose                  | Meaning                                                                             |
+| ---------------------------------------- | ----------------- | ------------------------ | ----------------------------------------------------------------------------------- |
+| `MINDSTREAM_DATABASE_URL`                | required          | from `POSTGRES_PASSWORD` | Postgres connection string                                                          |
+| `MINDSTREAM_DATABASE_CONNECTIONS`        | 16                | _not yet_                | Connections kept open to Postgres                                                   |
+| `MINDSTREAM_LISTEN`                      | 0.0.0.0:3735      | fixed by the image       | Address to listen on                                                                |
+| `MINDSTREAM_BLOB_DIR`                    | data/blobs        | fixed by the image       | Where large chunks are stored                                                       |
+| `MINDSTREAM_SIGNUP`                      | closed            | yes                      | Who may sign up: `closed`, `invite` or `open`. See [signing up][signup]             |
+| `MINDSTREAM_PUBLIC_HOSTS`                | empty             | yes                      | Hostnames clients use, when the proxy rewrites the Host header                      |
+| `MINDSTREAM_TRUSTED_PROXIES`             | loopback only     | yes                      | Networks whose `X-Forwarded-For` is believed                                        |
+| `MINDSTREAM_AUTH_RATE_PER_MINUTE`        | 10                | yes                      | Sign-in attempts per address per minute. 0 turns the limit off                      |
+| `MINDSTREAM_AUTH_RATE_BURST`             | 20                | _not yet_                | Attempts an address may make at once before the rate applies                        |
+| `MINDSTREAM_MAX_CONNECTIONS_PER_ADDRESS` | 128               | yes                      | Connections, and separately sockets, one address may hold open. 0 turns the cap off |
+| `MINDSTREAM_MAX_CONNECTIONS`             | 10000             | yes                      | The same for the whole server. 0 leaves only the limit on open files                |
+| `MINDSTREAM_ADMIN_TOKEN`                 | unset             | yes                      | Turns on the [interface for setting account limits][admin-api]                      |
+| `MINDSTREAM_SECRET_KEY`                  | unset             | yes                      | Key that seals authenticator secrets. See [account security][security]              |
+| `MINDSTREAM_SECRET_KEY_FILE`             | see below         | _not yet_                | Where that key is created when none is given                                        |
+| `MINDSTREAM_TOTP_ISSUER`                 | Mindstream Notes  | _not yet_                | Name an authenticator app shows for accounts here                                   |
+| `MINDSTREAM_APP_URL`                     | the releases page | yes                      | Where the invite page sends people without the app                                  |
+| `MINDSTREAM_MAX_PAGE_BYTES`              | 33554432          | _not yet_                | Most content one response carries. See [response size](#response-size)              |
+| `MINDSTREAM_KEEP_REVISIONS`              | 10                | yes                      | Earlier revisions kept per item besides the current one                             |
+| `MINDSTREAM_SESSION_IDLE_DAYS`           | 90                | yes                      | Days a device's session may go unused before it ends. 0 never ends one for that     |
+| `MINDSTREAM_MAX_BODY_BYTES`              | 78643200          | _not yet_                | Largest request body accepted                                                       |
+| `MINDSTREAM_INLINE_CHUNK_BYTES`          | 20480             | _not yet_                | Chunks up to this size stay in the database                                         |
 
 [signup]: server-administration.md#signing-up
 [admin-api]: server-administration.md#from-another-program

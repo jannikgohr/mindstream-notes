@@ -220,7 +220,7 @@ asymmetric:
   }]
   ```
 
-  The export returns a **declarative effect** the app performs (see below) — so
+  The export returns a **declarative effect** the app performs (see below).
   Set `opensMenu` when the export returns `openMenu`. The host then marks the
   button as a submenu and resolves it on hover.
 
@@ -314,7 +314,7 @@ old approval.
 
 Create, build and test a plugin with the [SDK starter](../plugin-sdk/typescript/README.md).
 It packages the WIT contract and uses esbuild plus QuickJS to produce a component.
-Authors need Node.js 20 or later, without Rust or manual WIT edits.
+Authors need Node.js 22.11 or later, without Rust or manual WIT edits.
 
 ```ts
 import {

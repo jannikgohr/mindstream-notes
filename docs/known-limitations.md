@@ -18,7 +18,8 @@ in the [test strategy](internal/e2e/strategy.md) and catalogued in the
 ### Restore is not transactional under live collaboration — _known limitation_
 
 A version restore is expressed as a **destructive "clear-all + re-add" of fresh
-CRDT ops** on the shared document, identically for every note kind:
+CRDT ops** on the shared document, the same way for every note kind that is
+co-edited live:
 
 | Kind     | Restore mechanism                                                | File                         |
 | -------- | ---------------------------------------------------------------- | ---------------------------- |
@@ -26,6 +27,11 @@ CRDT ops** on the shared document, identically for every note kind:
 | Freeform | `replaceSceneInYDoc` deletes every key then re-sets the snapshot | `freeform/excalidraw-yjs.ts` |
 | PDF      | `yDoc.transact(replace…, HISTORY_RESTORE_ORIGIN)`                | `PdfNoteViewer.svelte`       |
 | Ink      | `doc.clearAll()` + `doc.addStrokes(snapshot)`                    | `InkWebNoteEditor.svelte`    |
+| Kanban   | `writeBoardToYDoc(…, KANBAN_RESTORE_ORIGIN)` rewrites the board  | `KanbanNoteEditor.svelte`    |
+
+Plugin documents such as Typst are not co-edited live. Their restore replaces
+the source text and saves it (`PluginDocumentNoteEditor.svelte`), so this
+limitation does not apply to them.
 
 Because it mutates the shared Yjs doc, the restore propagates live to every
 connected peer — that part is intended. The limitation is the **merge
@@ -192,7 +198,7 @@ deliberately not unique for the same reason (`src-tauri/src/db/migrations.rs`).
 Bodies written before note links carried ids can contain a bare `[[Title]]`,
 which the editor resolves by title when clicked (`resolveNoteIdByTitle`, now
 deprecated). On a title collision it picks the most recently modified note, so
-the target can change as titles are edited. **Settings → Data → Maintenance →
+the target can change as titles are edited. **Settings → Data & Backup → Maintenance →
 Convert legacy links** rewrites them as id-based links; the runtime fallback can
 be removed once that has run. Links whose title matches no note are left as
 written.
@@ -210,14 +216,16 @@ content for everyone… Continue?"_), with solo editing left frictionless. It is
 wired through an optional `peerCount()` method on the `NoteHistoryApi` bridge
 (`note-history-bridge.svelte.ts`), checked in `NoteHistorySection.applyRestore`.
 
-The remaining gap is **per-editor presence**. The three editors use three
-different collab layers — `CollabProvider.awareness` (markdown/PDF),
-`InkWebCollabProvider` (ink), `ExcalidrawRoomClient` (freeform) — and only the
-awareness-based ones report a count today: markdown (`NoteEditor`) and PDF
-(`PdfNoteViewer`) register `peerCount: () => otherPeerCount(awareness)`. Ink
-(`InkWebNoteEditor`) and freeform (`FreeformNoteEditor`) do **not** register
-`peerCount`, so for those two kinds the count falls back to `0` and a restore
-still overwrites collaborators silently. Closing it means plumbing presence from
-`InkWebCollabProvider` and `ExcalidrawRoomClient` into the bridge — which is why
-the _non-transactional restore_ limitation above is still user-visible for ink
-and freeform.
+The remaining gap is **per-editor presence**. The live editors use three
+collab layers: `CollabProvider.awareness` (markdown, PDF and Kanban),
+`InkWebCollabProvider` (ink) and `ExcalidrawRoomClient` (freeform). Only
+markdown (`NoteEditor`) and PDF (`PdfNoteViewer`) register
+`peerCount: () => otherPeerCount(awareness)` today. Kanban
+(`KanbanNoteEditor`), ink (`InkWebNoteEditor`) and freeform
+(`FreeformNoteEditor`) do **not** register `peerCount`, so for those three
+kinds the count falls back to `0` and a restore still overwrites collaborators
+silently. Kanban uses the same `CollabProvider` as markdown and only has to
+register it. Ink and freeform need presence plumbed from
+`InkWebCollabProvider` and `ExcalidrawRoomClient` into the bridge. Until then
+the _non-transactional restore_ limitation above is user-visible for Kanban,
+ink and freeform.

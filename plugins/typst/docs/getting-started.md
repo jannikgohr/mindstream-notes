@@ -37,8 +37,10 @@ The editor toolbar has shortcuts for common Typst syntax:
 - **Math** wraps it in `$ … $`
 - **List** inserts `- `
 
-## Exporting to PDF
+## Exporting
 
-With the `typst` binary installed (see **Requirements**), export the note as a
-PDF from its export menu — the same compiler that draws the preview produces the
-file.
+Export the note from its export menu as **PDF**, **PNG pages** or **SVG
+pages**. These need the `typst` binary (see **Requirements**), the same
+compiler that draws the preview. A document with several pages exports its
+PNG or SVG pages as one ZIP file. **Typst source** saves the `.typ` file and
+works without the compiler.

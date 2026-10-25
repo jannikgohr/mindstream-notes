@@ -198,7 +198,8 @@ Copy the printed code immediately; it is shown only once and expires after
 seven days by default.
 
 Install the
-[Mindstream Notes app](https://github.com/jannikgohr/mindstream-notes/releases).
+[Mindstream Notes app](https://github.com/jannikgohr/mindstream-notes/releases),
+version 0.2.0 or later.
 During setup or under **Settings → Account & Sync**, select **Self-hosted**,
 enter the base URL for your chosen option, and use **Check URL**. Choose
 **Create an account**, enter a username, an email address, a password twice and

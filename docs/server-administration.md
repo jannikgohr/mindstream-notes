@@ -181,24 +181,10 @@ of `.env` too, and of the secret key if you set it there. See
 
 The steps are in the
 [quick start](self-hosting.md#4-operations-and-backups): back up, pull, then
-`docker compose up -d --build`. Read the changes below first.
+`docker compose up -d --build`.
 
-Breaking operator-facing changes, newest first:
-
-- Trusted proxies default to loopback only (`MINDSTREAM_TRUSTED_PROXIES` unset),
-  and the server refuses to listen past loopback without it set. Name the
-  networks of your proxies explicitly; the compose file keeps passing the old
-  private ranges, with a warning at startup. Refresh the pinned image digests in
-  `compose.yml` and `Dockerfile` when their tags move, and rebuild for
-  base-image security updates.
-- Backup codes issued before migration `0008` no longer work: their hashes were
-  unsalted SHA-256 and cannot be converted. Owners make new codes the next time
-  they sign in with a device that is still signed in.
-- Migration `0009` adds CHECK constraints on chunk sizes, blob offsets, stored
-  bytes, entitlements and link budgets, and fails on rows that break them. Fix
-  or remove such rows before upgrading; fresh servers are unaffected.
-- The account reset route (`MINDSTREAM_TEST_RESET`) no longer exists in release
-  builds, and debug builds refuse to serve it past loopback.
+Changes that need you to act before an upgrade will be listed here, newest
+first. There are none yet.
 
 ## Threat model notes
 

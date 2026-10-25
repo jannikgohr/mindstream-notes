@@ -4,7 +4,7 @@ The sync server for Mindstream Notes: accounts, encrypted storage, sharing and
 live rooms in one process on Postgres. It speaks the protocol of the Etebase
 client library the app ships, so everything stored here is ciphertext.
 
-Licensed AGPL-3.0, unlike the app. See [LICENSE](LICENSE).
+Licensed AGPL-3.0-only, unlike the app. See [LICENSE](LICENSE).
 
 ## Run it
 

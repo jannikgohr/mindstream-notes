@@ -64,8 +64,11 @@ MINDSTREAM_AUTH_RATE_PER_MINUTE=0 \
 node scripts/conformance.mjs 127.0.0.1:13735
 ```
 
-The suite signs in far more often than the sign-in limit allows, which is why
-the limit is off above. The script runs the `service` tests of the client in
+`MINDSTREAM_TEST_RESET=true` serves the route that wipes and recreates an
+account, which the suite needs. Release builds do not contain the route, and a
+debug build refuses to start with it on a non-loopback address. The suite
+signs in far more often than the sign-in limit allows, which is why the limit
+is off above. The script runs the `service` tests of the client in
 [vendor/etebase-rs](../../vendor/etebase-rs), the copy the app ships. One of them,
 `signup_with_key`, is marked ignored upstream because it cannot pass against any
 server.
@@ -78,6 +81,12 @@ pnpm bench:backend --url http://localhost:3735 --label new \
 ```
 
 See [e2e-tests/README.md](../../e2e-tests/README.md#backend-benchmark).
+
+## Base images
+
+`compose.yml` and the `Dockerfile` pin their base images by digest, so a
+build uses what was reviewed. Refresh the pins when the images move, and
+rebuild for their security updates.
 
 ## Releases
 
