@@ -59,8 +59,8 @@ export function filterPatterns(workflow, name) {
 export const DOCS_ONLY = [
   'README.md',
   'CLAUDE.md',
-  'docs/audit-2026-09.md',
-  'docs/e2e/harness.md'
+  'docs/internal/audit-2026-09.md',
+  'docs/internal/e2e/harness.md'
 ];
 
 /** Files that must always select the code jobs. */

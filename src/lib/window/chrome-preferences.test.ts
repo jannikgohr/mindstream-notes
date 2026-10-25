@@ -3,7 +3,8 @@ import {
   CUSTOM_WINDOW_DECORATIONS_CHANGED_EVENT,
   CUSTOM_WINDOW_DECORATIONS_SETTING_ID,
   customWindowDecorationsFromEventPayload,
-  defaultCustomWindowDecorations
+  defaultCustomWindowDecorations,
+  windowControlsPreviewRequested
 } from './chrome-preferences';
 
 describe('window chrome preferences', () => {
@@ -24,6 +25,20 @@ describe('window chrome preferences', () => {
     expect(customWindowDecorationsFromEventPayload('true')).toBe(false);
     expect(customWindowDecorationsFromEventPayload(1)).toBe(false);
   });
+
+  it.each(['?windowControls', '?windowControls=1', '?mobile=1&windowControls'])(
+    'asks for the window controls preview with %s',
+    (search) => {
+      expect(windowControlsPreviewRequested(search)).toBe(true);
+    }
+  );
+
+  it.each(['', '?mobile=1', '?windowcontrols', '?controls'])(
+    'leaves the window controls preview off with "%s"',
+    (search) => {
+      expect(windowControlsPreviewRequested(search)).toBe(false);
+    }
+  );
 
   it('keeps the Rust/frontend contract ids stable', () => {
     expect(CUSTOM_WINDOW_DECORATIONS_CHANGED_EVENT).toBe(

@@ -1,6 +1,6 @@
 # Security audit fixes
 
-This change resolves C5, H7, L2, and L7 from `docs/audit-2026-09.md`.
+This change resolves C5, H7, L2, and L7 from `docs/internal/audit-2026-09.md`.
 
 ## C5: authenticate the preview proxy
 

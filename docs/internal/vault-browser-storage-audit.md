@@ -4,7 +4,7 @@ Initial inventory: 2026-10-10; delivery reviewed on 2026-10-13. The inventory
 records legacy persistence outside the vault database. Native browser export,
 classification, credential migration and worker store isolation are implemented.
 Current behavior is documented in [storage ownership and recovery](storage-ownership-and-recovery.md);
-remaining release QA is in [platform checks](known-limitations.md#concurrent-vault-platform-checks).
+remaining release QA is in [platform checks](storage-ownership-and-recovery.md#concurrent-vault-platform-checks).
 
 The settings schema is only part of the problem. Searching `src` for
 `localStorage`, `sessionStorage`, and `indexedDB` finds 26 source files including

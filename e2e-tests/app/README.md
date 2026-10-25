@@ -6,12 +6,12 @@ This suite drives the **packaged Tauri binary** over WebDriver (`tauri-driver`)
 CI runs the packaged Linux suites according to the filters in `test.yml`.
 
 - **How to run it** → [../README.md](../README.md)
-- **Toolchain, env flags, test seams, harness gotchas** → [docs/e2e/harness.md](../../docs/e2e/harness.md)
-- **Current coverage & what's still stubbed** → [docs/e2e/status.md](../../docs/e2e/status.md)
+- **Toolchain, env flags, test seams, harness gotchas** → [docs/internal/e2e/harness.md](../../docs/internal/e2e/harness.md)
+- **Current coverage & what's still stubbed** → [docs/internal/e2e/status.md](../../docs/internal/e2e/status.md)
 
 No capability flags to set: the wdio config you invoke decides the tier, and the
 T4 specs fail fast with a clear message if the
-[backend stack](../../docs/e2e/backend-stack.md) isn't up. Only the
+[backend stack](../../docs/internal/e2e/backend-stack.md) isn't up. Only the
 dialog-driven backup specs still self-skip, pending the native-dialog Rust seam.
 
 ## What's here
@@ -38,7 +38,7 @@ Playwright T2 specs use — the identical SvelteKit UI renders inside the WebVie
 spec; the config passes it through the feature-gated native-picker test seam.
 `helpers/backend.ts` is the T4 backend-readiness gate. `helpers/accounts.ts`
 provisions the two distinct users the sharing flows need
-([backend-stack.md](../../docs/e2e/backend-stack.md#account-provisioning)).
+([backend-stack.md](../../docs/internal/e2e/backend-stack.md#account-provisioning)).
 
 ## Two-client (T4) harness
 

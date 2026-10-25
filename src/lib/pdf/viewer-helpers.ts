@@ -68,7 +68,7 @@ export const SIGNATURE_COLOR = APOLLO_INK;
 export const INK_COLOR = APOLLO_INK;
 export const INK_WIDTH = 2.25;
 /**
- * Highlighter tints of Apollo's named colours (docs/theming.md), light enough
+ * Highlighter tints of Apollo's named colours (docs/internal/theming.md), light enough
  * to read text through at highlight opacity, then Apollo ink. Annotations
  * store and export sRGB, so these are hex.
  */

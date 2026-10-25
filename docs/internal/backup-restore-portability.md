@@ -1,7 +1,8 @@
 # Backup and restore portability
 
 Implemented on 2026-10-13. Settings → Data & Backup exports one vault and the
-portable device configuration needed to use it on another device.
+portable device configuration needed to use it on another device. The user
+guide is [Backup and restore](../backup-and-restore.md).
 
 ## Archive contents
 

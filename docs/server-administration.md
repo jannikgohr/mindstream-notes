@@ -19,7 +19,8 @@ docker compose exec server mindstream-server user delete <username>
 ```
 
 Disabling an account ends its sessions and keeps its data. Deleting one removes
-every collection it owns, for the other members too. The server never holds a
+everything it owns on the server, shared folders included, for everyone they
+are shared with too. The server never holds a
 password or a key, so it cannot reset a password.
 
 ## Signing up
@@ -44,13 +45,14 @@ docker compose exec server mindstream-server signup-code revoke <id>
 The code is printed once. It is good for one signup within a week, or within
 `--days` of your choosing.
 
-With `invite`, any admin of a shared space can make a link that also lets its
+With `invite`, anyone with **Admin** access to a shared folder can make a link
+that also lets its
 holder sign up. Choose it when the people on your server should be able to
 bring in others without asking you.
 
 ## Invite links
 
-A member shares a space by link as well as by username. A link is an address on
+A shared folder can be shared by link as well as by username. A link is an address on
 this server, `/join/<id>#<secret>`. Browsers keep the part after the `#` to
 themselves, so the server never sees the secret and cannot open what the link
 carries.
@@ -111,7 +113,10 @@ docker compose exec server mindstream-server user usage <username>
 docker compose exec server mindstream-server user unlimit <username>
 ```
 
-A collection counts against its owner, whoever writes into it. Once a limit is
+On the server, each vault that syncs to an account and each folder the account
+shares is a collection, and `--max-spaces` limits how many the account may
+own. A collection counts against its owner, whoever writes into it, and
+`--max-members` counts the people in one, the owner included. Once a limit is
 reached the server refuses what would add to it with status 402 and a code that
 says which limit: `storage_full`, `item_too_large`, `space_limit`,
 `member_limit`, or `plan_lapsed` for an account set to `--read-only`. Deletions
@@ -159,7 +164,7 @@ base64-encoded); the admin interface answers unlimited guessing with nothing but
 time, so entropy is the whole of its protection. Keep a copy where the billing
 system reads it, and nowhere else.
 
-A signed-in client reads its own usage from `GET /api/v1/mindstream/usage/`.
+The app reads the signed-in account's usage from `GET /api/v1/mindstream/usage/`.
 
 ## Backups
 
@@ -181,37 +186,24 @@ of `.env` too, and of the secret key if you set it there. See
 
 The steps are in the
 [quick start](self-hosting.md#4-operations-and-backups): back up, pull, then
-`docker compose up -d --build`. Read the changes below first.
+`docker compose up -d --build`.
 
-Breaking operator-facing changes, newest first:
-
-- Trusted proxies default to loopback only (`MINDSTREAM_TRUSTED_PROXIES` unset),
-  and the server refuses to listen past loopback without it set. Name the
-  networks of your proxies explicitly; the compose file keeps passing the old
-  private ranges, with a warning at startup. Refresh the pinned image digests in
-  `compose.yml` and `Dockerfile` when their tags move, and rebuild for
-  base-image security updates.
-- Backup codes issued before migration `0008` no longer work: their hashes were
-  unsalted SHA-256 and cannot be converted. Owners make new codes the next time
-  they sign in with a device that is still signed in.
-- Migration `0009` adds CHECK constraints on chunk sizes, blob offsets, stored
-  bytes, entitlements and link budgets, and fails on rows that break them. Fix
-  or remove such rows before upgrading; fresh servers are unaffected.
-- The account reset route (`MINDSTREAM_TEST_RESET`) no longer exists in release
-  builds, and debug builds refuse to serve it past loopback.
+Changes that need you to act before an upgrade will be listed here, newest
+first. There are none yet.
 
 ## Threat model notes
 
 What the server deliberately does not defend, so nobody is surprised:
 
 - Usernames are enumerable: signing in names an account that either exists or
-  not, and any signed-in account can look up profiles to address invitations.
+  not, and any signed-in account can look up others to address invitations.
   Usernames appear in sharing dialogs anyway.
 - A removed member keeps the ciphertext they already synced. The server stops
-  serving them anything new; forward secrecy needs a collection key rotation
-  among the remaining members, which the server cannot do for you.
-- Room messages are opaque to the server. It enforces who may send which class
-  of frame, but a malicious read-only client can stuff document bytes into
+  serving them anything new; forward secrecy needs the shared folder's key
+  rotated among the remaining members, which the server cannot do for you.
+- Live editing messages are opaque to the server. It enforces who may send
+  which class of frame, but a malicious member with **Can view** access can
+  stuff document bytes into
   presence frames; receivers must act on the frame class, never on anything
   inside the payload.
 - Password guessing is held back per address (10 a minute by default) and per

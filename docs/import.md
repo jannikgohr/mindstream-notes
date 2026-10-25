@@ -1,11 +1,8 @@
 # Importing notes
 
-`Settings → Data & Backup → Import notes` brings an external note collection
-into the vault. This page covers what each format maps to, how links survive,
-and how to drive the importer for the big-vault performance test.
-
-The code lives in [`src-tauri/src/import/`](../src-tauri/src/import/mod.rs); the
-dialog is [`ImportNotesDialog.svelte`](../src/lib/components/ImportNotesDialog.svelte).
+**Settings → Data & Backup → Import notes** brings an external note collection
+into the vault. This page covers what each format maps to and how links
+survive.
 
 ## Supported formats
 
@@ -47,12 +44,8 @@ Every link between notes in the source becomes a Mindstream note link,
 `[text](mindstream://note/<id>)`, the same form the editor writes. Nothing is
 left as a literal `[[Title]]` for the editor to guess at later.
 
-The importer works in two phases. The first walks the source without reading
-any note bodies and gives every note its final id. The second reads one note at
-a time and rewrites its links against that complete list. Because every id
-exists before any body is rewritten, notes that link to each other work on the
-first pass, with no ordering constraint, and a cycle of any length is not a
-special case.
+Every note gets its place in the vault before any link is rewritten, so notes
+that link to each other all work, however the links run.
 
 A link target is matched against these, strongest first:
 
@@ -102,38 +95,16 @@ there would hand it to them.
 
 ## Running a large import
 
-The importer is built for vaults with around a million notes:
+The importer handles vaults of around a million notes. It works in the
+background and shows its progress, and you can keep using the app meanwhile.
+Stopping an import keeps every note it has already written.
 
-- Only one note body is in memory at a time. What grows with the vault is the
-  link index, a few entries per note, held for the whole run.
-- Notes are written 500 per transaction. Stopping an import keeps everything
-  already written, and the database is released between batches so the app
-  stays usable.
-- Notes are written directly rather than through the normal note-creation path,
-  which does two extra database round trips per note.
-- The run happens off the UI thread and reports progress as it goes.
-
-After the import finishes the file tree reloads, which reads every note summary
-into the frontend. At a million notes that reload, not the import, is the slow
-part.
-
-### The Wikipedia performance vault
-
-[`mediawiki-to-markdown`](https://github.com/philipashlock/mediawiki-to-markdown)
-turns a MediaWiki XML export into a folder of Markdown files with YAML
-frontmatter and relative links between pages. That is the Markdown folder
-format, so no extra tooling is needed:
-
-1. Convert the Top-1M export with `mediawiki-to-markdown`.
-2. Import the output folder, choosing **Markdown folder**. Links to pages that
-   are not in the dump stay as ordinary Markdown links; the unresolved-links
-   option only applies to `[[wikilinks]]`.
-3. Record the time to finish, peak memory, the size of `mindstream.db`
-   afterwards, and the time of the file-tree reload on its own.
+When the import finishes, the file tree reloads. At a million notes that
+reload, not the import, is the slow part.
 
 ## Known limitations
 
-See [known-limitations.md](known-limitations.md#import) for the full list. In
+See [Known limitations](known-limitations.md#import) for the full list. In
 short:
 
 - Most Evernote exports do not include note guids, so links between Evernote
@@ -141,6 +112,6 @@ short:
   title. Two notes with the same title can be confused.
 - Obsidian `![[Note]]` embeds become ordinary links. Mindstream cannot display
   one note inside another.
-- Obsidian Canvas and Excalidraw files are not imported as drawings.
+- Obsidian Canvas and Excalidraw files are not imported as drawing canvases.
 - Duplicate attachments that were already in the vault before content-based
   storage was added are not merged.

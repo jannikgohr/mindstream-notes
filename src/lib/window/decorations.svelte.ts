@@ -6,7 +6,8 @@ import {
   CUSTOM_WINDOW_DECORATIONS_CHANGED_EVENT,
   CUSTOM_WINDOW_DECORATIONS_SETTING_ID,
   customWindowDecorationsFromEventPayload,
-  defaultCustomWindowDecorations
+  defaultCustomWindowDecorations,
+  windowControlsPreviewRequested
 } from './chrome-preferences';
 
 export const windowChrome = $state({
@@ -15,13 +16,26 @@ export const windowChrome = $state({
 
 let initialized = false;
 
+/**
+ * True when the dev server was opened with `?windowControls` in a plain
+ * browser. Tauri windows and production builds ignore the query.
+ */
+export function windowControlsPreview(): boolean {
+  return (
+    import.meta.env.DEV &&
+    typeof window !== 'undefined' &&
+    !isTauri() &&
+    windowControlsPreviewRequested(window.location.search)
+  );
+}
+
 export function initWindowChrome(): void {
   if (initialized) return;
   initialized = true;
 
   if (!isTauri()) {
     windowChrome.customDecorations =
-      defaultCustomWindowDecorations(getPlatform());
+      windowControlsPreview() || defaultCustomWindowDecorations(getPlatform());
     return;
   }
 

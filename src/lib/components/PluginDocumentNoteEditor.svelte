@@ -145,7 +145,7 @@
   // service URL directly so the preview still works.
   let proxyState = $state<'off' | 'trying' | 'ok' | 'fallback'>('off');
   /* Mirrors --surface-1 in dark mode (what --background resolves to). Only
-     used if the live token read below fails; see docs/theming.md. */
+     used if the live token read below fails; see docs/internal/theming.md. */
   const PREVIEW_BG_FALLBACK = 'oklch(0.185 0.003 286.2)';
   let previewBg = $state(PREVIEW_BG_FALLBACK);
   let previewFg = $state('rgb(255,255,255)');

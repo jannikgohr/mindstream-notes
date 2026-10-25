@@ -8,12 +8,15 @@
    *
    * Renders nothing if Tauri's window API isn't reachable (e.g. `pnpm dev`
    * in a plain browser). That keeps the SPA usable outside the desktop
-   * shell without a try/catch at every callsite.
+   * shell without a try/catch at every callsite. The dev server's
+   * `?windowControls` query draws the buttons anyway, doing nothing, for
+   * screenshots that should look like the desktop app.
    */
   import { onMount } from 'svelte';
   import { ArrowLeftToLine, Copy, Minus, Square, X } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { windowControlsPreview } from '$lib/window/decorations.svelte';
 
   type WindowApi = {
     minimize: () => Promise<void>;
@@ -31,6 +34,13 @@
   let unlistenResize: (() => void) | null = null;
   let { mode = 'main' }: Props = $props();
 
+  const previewWindow: WindowApi = {
+    minimize: async () => {},
+    toggleMaximize: async () => {},
+    close: async () => {},
+    isMaximized: async () => false
+  };
+
   onMount(() => {
     void setup();
     return () => {
@@ -41,7 +51,10 @@
 
   async function setup() {
     if (typeof window === 'undefined') return;
-    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (!('__TAURI_INTERNALS__' in window)) {
+      if (windowControlsPreview()) appWindow = previewWindow;
+      return;
+    }
     try {
       const mod = await import('@tauri-apps/api/window');
       const w = mod.getCurrentWindow();
@@ -79,8 +92,8 @@
     variant="ghost"
     size="icon"
     onclick={() => appWindow?.toggleMaximize()}
-    title={isMaximized ? 'Restore' : 'Maximize'}
-    aria-label={isMaximized ? 'Restore' : 'Maximize'}
+    title={isMaximized ? tUi('window.restore') : tUi('window.maximize')}
+    aria-label={isMaximized ? tUi('window.restore') : tUi('window.maximize')}
   >
     {#if isMaximized}
       <Copy class="size-4 rotate-180" />

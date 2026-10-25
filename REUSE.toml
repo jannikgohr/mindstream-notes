@@ -1,8 +1,8 @@
 # Who holds the copyright of each file here, and under which licence it is.
 #
 # This repository holds parts under different licences side by side. The
-# texts are in LICENSES/, and README.md has the same as a table. `reuse lint`
-# checks in CI that no file is left without an answer.
+# texts are in LICENSES/, and CONTRIBUTING.md sums up which part is under
+# which. `reuse lint` checks in CI that no file is left without an answer.
 #
 # When more than one entry matches a file, the last one that does applies.
 # So the general entry comes first and the exceptions follow it.

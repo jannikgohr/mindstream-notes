@@ -12,7 +12,7 @@
  * the integration tests in tests/ as well as the unit tests. They start the
  * server inside the test process, so every line they reach is counted, and
  * they are where most of the server is tested. It also means a run needs the
- * Postgres the tests need; see docs/server-development.md.
+ * Postgres the tests need; see docs/internal/server-development.md.
  *
  * Left out: main.rs (argument parsing and process setup), test_reset.rs (a
  * debug-only route the conformance run exercises) and testing.rs (the

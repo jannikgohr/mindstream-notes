@@ -11,7 +11,7 @@ import type { HTMLAttributes } from 'svelte/elements';
  * its own container chrome (which is how the two sidebars, the Kanban board and
  * the dockview panels ended up looking like three different apps), pick the
  * variant that matches what the thing IS and let the token scale decide how it
- * looks in each theme. See docs/theming.md for the elevation rules.
+ * looks in each theme. See docs/internal/theming.md for the elevation rules.
  *
  * The variants map one-to-one onto the surface scale:
  *

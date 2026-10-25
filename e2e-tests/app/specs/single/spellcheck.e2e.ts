@@ -1,5 +1,5 @@
 /**
- * T3 — flows 5.1, 5.2, 5.3, 5.5 and 5.6 (docs/e2e/flows.md): the spellchecking
+ * T3 — flows 5.1, 5.2, 5.3, 5.5 and 5.6 (docs/internal/e2e/flows.md): the spellchecking
  * pipeline end to end.
  *
  * There is no browser-fallback slice for this one and there cannot be: outside

@@ -39,8 +39,11 @@ Die Editor-Symbolleiste bietet Kürzel für häufige Typst-Syntax:
 - **Mathematik** umschließt sie mit `$ … $`
 - **Liste** fügt `- ` ein
 
-## Als PDF exportieren
+## Exportieren
 
-Wenn das `typst`-Binary installiert ist (siehe **Voraussetzungen**), exportiere
-die Notiz über ihr Export-Menü als PDF – derselbe Compiler, der die Vorschau
-zeichnet, erzeugt die Datei.
+Exportiere die Notiz über ihr Export-Menü als **PDF**, **PNG-Seiten** oder
+**SVG-Seiten**. Dafür braucht es das `typst`-Binary (siehe
+**Voraussetzungen**), denselben Compiler, der die Vorschau zeichnet. Hat ein
+Dokument mehrere Seiten, landen die PNG- oder SVG-Seiten in einer ZIP-Datei.
+**Typst-Quelltext** speichert die `.typ`-Datei und funktioniert auch ohne
+Compiler.

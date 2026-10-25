@@ -1,7 +1,7 @@
 # Self-hosting quick start
 
 Mindstream Notes is a local-first app. This guide deploys its **sync server**
-(accounts, encrypted storage, sharing, and live rooms), **not** a browser-based
+(accounts, encrypted storage, sharing and live editing), **not** a browser-based
 copy of the app. The supplied Docker Compose stack runs the server and
 PostgreSQL together.
 
@@ -62,7 +62,7 @@ always does. It reminds you to narrow `MINDSTREAM_TRUSTED_PROXIES` once you know
 where your proxy connects from; see
 [Trusted proxies](server-configuration.md#trusted-proxies).
 
-## 2. Choose how clients connect
+## 2. Choose how devices connect
 
 **Choose one** of the following. If you change `.env`, apply the change with
 `docker compose up -d` from `backend/server`.
@@ -149,7 +149,8 @@ server container.
 
 Use this when you want HTTPS between devices on your Tailscale network, without
 a public domain or traditional reverse proxy. Install and sign in to
-[Tailscale](https://tailscale.com/download) on the server and client devices.
+[Tailscale](https://tailscale.com/download) on the server and on every device
+that will sync.
 Make sure your tailnet has MagicDNS and HTTPS certificates enabled.
 
 Keep the backend published only on loopback:
@@ -198,7 +199,8 @@ Copy the printed code immediately; it is shown only once and expires after
 seven days by default.
 
 Install the
-[Mindstream Notes app](https://github.com/jannikgohr/mindstream-notes/releases).
+[Mindstream Notes app](https://github.com/jannikgohr/mindstream-notes/releases),
+version 0.2.0 or later.
 During setup or under **Settings → Account & Sync**, select **Self-hosted**,
 enter the base URL for your chosen option, and use **Check URL**. Choose
 **Create an account**, enter a username, an email address, a password twice and
@@ -208,7 +210,9 @@ you continue. Then create a note and test **Sync now**. Your other devices sign
 in with the same URL, username and password.
 
 To let more people in, or to make signup by invite link possible, see
-[Signing up](server-administration.md#signing-up).
+[Signing up](server-administration.md#signing-up). What the app offers once
+it is connected, from two-factor sign-in to shared folders, is in
+[Sync and sharing](sync-and-sharing.md).
 
 ## 4. Operations and backups
 

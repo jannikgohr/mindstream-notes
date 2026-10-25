@@ -1642,7 +1642,7 @@
      so they're listed explicitly rather than relying on the base-var
      derivations.
 
-     Surfaces map onto the app's elevation scale (see docs/theming.md): the
+     Surfaces map onto the app's elevation scale (see docs/internal/theming.md): the
      board is a panel, a column is a container on that panel, and a card is an
      item on the column — surface-1 → 2 → 3. Previously the column was --muted
      and the card --card, which in dark mode put the column a full 0.10
