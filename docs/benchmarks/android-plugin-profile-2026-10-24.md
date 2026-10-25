@@ -1,5 +1,8 @@
 # Android signed-plugin latency breakdown
 
+Performance follow-up: [issue #116](https://github.com/jannikgohr/mindstream-notes/issues/116)
+tracks lock contention, repeated hashing and third-party editor responsiveness.
+
 Follow-up to [physical validation](android-plugin-validation-2026-10-24.md).
 Measured on the same Samsung SM-T733, Android 14/API 34, ARM64, WebView
 156.0.8078.47. Production source is `98ce1e701b217d712c445c6c5b719f71712f2a02`

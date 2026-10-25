@@ -156,6 +156,9 @@ Visible assertions have screenshots and DOM transcripts, including
 
 ## Native source-save failure
 
+The subsequent [document-URI save fix and device retest](android-export-fix-2026-10-25.md)
+resolve this failure. The results below describe the original failing build.
+
 The devtools release passed Typst's export bytes into the real
 `save_file_export` command, then used Android's document picker to save a
 uniquely named `.typ` file in Downloads. The app returned:
