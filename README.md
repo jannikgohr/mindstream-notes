@@ -22,7 +22,7 @@ The project is under active development, so expect sharp edges.
 - Import from Markdown folders, Obsidian, Joplin and Evernote, export for every
   note type, and vault backups
 - Encrypted sync, shared folders and live co-editing through your own server
-- Plugins, with sandboxed Luau scripting
+- Plugins as sandboxed WebAssembly components, written in Rust or TypeScript
 - English and German interface
 
 ## Install

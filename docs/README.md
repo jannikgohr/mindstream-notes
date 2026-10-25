@@ -20,8 +20,21 @@ Everything about Mindstream Notes that is too long or too specific for the
   holds and what a restore asks
 - [Known limitations](known-limitations.md): intentional trade-offs and what is
   not built yet. Read it before filing a bug about sync or history
-- [Plugins](plugins.md): what a plugin can do, its manifest, and the Luau
-  scripting API
+
+## Writing plugins
+
+- [Plugins](plugins.md): where plugins live and how they are trusted, the
+  manifest, permissions, contributions, and signing
+- [Rust starter](../plugin-sdk/rust/README.md): the authoring path the shipped
+  plugins use
+- [TypeScript SDK](../plugin-sdk/typescript/README.md): build a plugin with
+  Node.js alone
+- [Examples](../plugin-sdk/examples/README.md): installable plugins that do not
+  ship with the app
+- [Shipped plugin sources](../plugin-sdk/bundled/README.md): the Rust source of
+  the Templates and Typst plugins
+- [Plugin host API design](plugin-host-api-design.md): the experimental batch
+  interface for host calls
 
 ## Building and contributing
 
@@ -68,6 +81,11 @@ Everything about Mindstream Notes that is too long or too specific for the
 - [Test backend](e2e/backend-stack.md): the disposable server the collaboration
   suites run against
 - [Ubuntu VM QA](e2e/ubuntu-vm-qa.md): manual checks on a Linux VM
+- [Android plugin validation](android-plugin-validation.md): checks for the
+  plugin host on a physical Android device, with the dated records of the
+  [validation run](benchmarks/android-plugin-validation-2026-10-24.md), its
+  [latency breakdown](benchmarks/android-plugin-profile-2026-10-24.md) and the
+  [export save fix](benchmarks/android-export-fix-2026-10-25.md)
 
 ## Security and audits
 

@@ -26,7 +26,8 @@ src/                    Svelte app: UI components, stores, editors, API bridge
 src-tauri/              Tauri app and Rust backend: persistence, sync, commands
 backend/server/         The sync server (AGPL-3.0), see server-design.md
 backend/scripts/        Driver for the disposable server the e2e suites use
-plugins/                Plugins bundled with the app
+plugins/                Plugins bundled with the app, with their built .wasm
+plugin-sdk/             Plugin SDKs, the WIT contract, shipped plugin sources
 packages/svelte-kanban/ Fork of the board renderer
 protocol/               The room protocol and invite-link format, specified once
 vendor/etebase-rs/      The Etebase client library, changed here
