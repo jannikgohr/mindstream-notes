@@ -55,7 +55,7 @@ connected-peer case by warning before overwriting a note others are editing.
 
 ### History is per-device, not synced — _by design_
 
-The `note_versions` table is **local and never pushed through Etebase** (see the
+The `note_versions` table is **local and never synced** (see the
 module header in `src-tauri/src/history/mod.rs`). A restore re-expresses content
 as new ops, so the _content_ converges across devices — but the **timeline**
 (the `reverted` entries, the pre-restore checkpoints, the Undo affordance)
@@ -101,7 +101,7 @@ not `Ctrl+Z`. Documented here so it isn't "fixed" back into the undo stack.
 
 When a pull delivers a tombstone for a row that has unpushed local edits
 (`dirty = 1`), the sync does **not** delete it. Instead it _detaches_ the row —
-drops the server identity (`etebase_uid`/`etebase_etag`) but keeps the row and
+drops its link to the copy on the server but keeps the row and
 its edits — and lets the next push re-home it (`apply_remote_delete` in
 `src-tauri/src/sync/mod.rs`). Two consequences, both intentional:
 

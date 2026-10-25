@@ -1,7 +1,7 @@
 # Mindstream Notes backend
 
 One server does everything the app needs from a backend: accounts, encrypted
-storage, sharing, and the live rooms that notes of every kind are co-edited in.
+storage, sharing, and the live rooms that notes are co-edited in.
 It runs on Postgres and sits behind **one URL**, which is the only thing a user
 types into the app.
 
@@ -15,5 +15,4 @@ types into the app.
   [self-hosting quick start](../docs/self-hosting.md).
 - The end-to-end suites run against a throwaway server started with
   `pnpm backend:test:up`. See [docs/internal/e2e/backend-stack.md](../docs/internal/e2e/backend-stack.md).
-- The design, and why it replaced the earlier stack of Etebase, two relays and
-  nginx, is in [docs/internal/server-design.md](../docs/internal/server-design.md).
+- The design, and why one server replaced the earlier stack of several, is in [docs/internal/server-design.md](../docs/internal/server-design.md).
