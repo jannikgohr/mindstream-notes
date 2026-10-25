@@ -7,8 +7,8 @@ reason. Each entry notes whether it's **by design**, a **known limitation**, or
 **planned**, and points at the code that owns the behaviour.
 
 The end-to-end coverage for these surfaces (and the planned fixes) is laid out
-in [e2e/strategy.md](e2e/strategy.md) and catalogued in
-[e2e/flows.md](e2e/flows.md). To run the suites, see
+in the [test strategy](internal/e2e/strategy.md) and catalogued in the
+[test flows](internal/e2e/flows.md). To run the suites, see
 [e2e-tests/README.md](../e2e-tests/README.md).
 
 ---
@@ -221,31 +221,3 @@ still overwrites collaborators silently. Closing it means plumbing presence from
 `InkWebCollabProvider` and `ExcalidrawRoomClient` into the bridge — which is why
 the _non-transactional restore_ limitation above is still user-visible for ink
 and freeform.
-
-### Concurrent vault platform checks
-
-Ordinary desktop launches use the coordinator and isolated vault workers.
-Root/vault settings, browser isolation, live ownership, remembered opening
-choices, handoff, shortcuts, tray, autostart, Quit and update recovery are
-implemented. Isolated test devices and mobile retain their single-vault flows.
-Handoff may replace the native window while preserving its content and geometry.
-
-Global plugin packages, theme presets and settings/plugin-data backup portability
-are implemented. Credentials and downloaded caches stay device-local. Current
-contracts are in [storage ownership and recovery](storage-ownership-and-recovery.md),
-[plugin usage](plugins.md), [theming](theming.md) and
-[backup portability](backup-restore-portability.md).
-
-Linux compositor behavior and geometry constraints are recorded in
-[the harness guide](e2e/harness.md#concurrent-vault-checks). The
-[Ubuntu VM report](e2e/ubuntu-vm-qa.md) records passing Linux guest hard-reset
-checks on ext4, packaged installation and updater restart using a disposable QA
-signing key, real backup pickers and integer 200% scaling.
-
-Remaining release QA:
-
-- Windows directory-entry and physical host power-loss durability.
-- Production-key updater installation and packaged restart on Windows/macOS.
-- Real monitor, DPI and display-change behavior.
-- Packaged macOS 14+ Dock/menu/Reopen, focus, hide/show and Cmd+Q behavior.
-  The owner accepted deferral until a Mac is available for release testing.

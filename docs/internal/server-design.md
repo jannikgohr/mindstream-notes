@@ -2,7 +2,7 @@
 
 Status: agreed design, written 2026-10-12. Steps 1 to 5 of the
 [build order](#build-order) are built, on the server in
-[backend/server](../backend/server/README.md) and in the app, and the old
+[backend/server](../../backend/server/README.md) and in the app, and the old
 stack is gone from the repository.
 
 - The vault is one collection and so is each shared folder. A sync opens
@@ -46,7 +46,7 @@ worked around on the client.
   key, and the relay checks a signature against it. That proves a client can
   derive the room secret. It says nothing about which member it is or what
   they may do. The derivation is in
-  [collab_room.rs](../src-tauri/src/sync/collab_room.rs).
+  [collab_room.rs](../../src-tauri/src/sync/collab_room.rs).
 - **Write permission.** Every frame in a shared room carries an ECDSA signature
   and a JSON header. Together they add roughly 400 bytes, counted from the
   header format and not measured. Peers check the signature against writer
@@ -61,7 +61,7 @@ worked around on the client.
 - **Freeform notes** go through a third-party socket.io server that admits
   anyone who knows a room id.
 - **Presence** exists only where the awareness protocol is used. Ink and
-  freeform report no peers, as [known-limitations.md](known-limitations.md)
+  freeform report no peers, as [known-limitations.md](../known-limitations.md)
   records.
 
 ### Sync is slow, and most of the time is the server
@@ -97,7 +97,7 @@ Measured on the local test stack with `pnpm bench:backend --scale full`. See
 
 A shared folder is four collections: a manifest plus folders, notes and assets.
 The recipient accepts four invitations in sequence with no transaction, as
-[bundles.rs](../src-tauri/src/sharing/bundles.rs) notes, so partial states
+[bundles.rs](../../src-tauri/src/sharing/bundles.rs) notes, so partial states
 exist and need handling. The recipient cannot see the folder's name before accepting.
 Invitations are found by scanning, not pushed. Changing a member's access or
 removing them loops over the collections one request at a time.
@@ -630,7 +630,7 @@ As built in the app:
   The installer registers the scheme. The app never registers it at run
   time, so a build run from a checkout cannot take the scheme away from the
   installed app. What an invite link and the app's address look like is
-  written down in [protocol/links](../protocol/links), with examples that
+  written down in [protocol/links](../../protocol/links), with examples that
   the client library, the app's window, the app's start-up code and the
   server's page are each tested against.
 
@@ -655,8 +655,8 @@ equivalent to the password, so that path would have bypassed a second factor
 and undone every row of the table below. It is gone. A sync that meets a
 rejected token signs the device out, keeps its notes, and says so in a
 notification. That is `run_session` in
-[sync/mod.rs](../src-tauri/src/sync/mod.rs) and `end_session_locally` in
-[auth/mod.rs](../src-tauri/src/auth/mod.rs). The change feed asks for that
+[sync/mod.rs](../../src-tauri/src/sync/mod.rs) and `end_session_locally` in
+[auth/mod.rs](../../src-tauri/src/auth/mod.rs). The change feed asks for that
 sync the moment the server closes its socket, so the device notices within a
 second.
 
@@ -819,7 +819,7 @@ not offered in the app. It will point at a deployment of this server.
 - **Billing is a separate program.** It receives payment webhooks and writes
   entitlements. The server never sees payment data. It is not built. What it
   has to do, and a stand-in that sets plans by hand, are in
-  [backend/billing](../backend/billing/README.md).
+  [backend/billing](../../backend/billing/README.md).
 - **Both sides of a share must be on the same server.** A managed account
   cannot share with a self-hosted one.
 
@@ -834,7 +834,7 @@ point in time, and limits against abuse of open signup.
   observable behaviour. The owner stays the sole copyright holder, which keeps
   dual licensing possible and does not force the managed service to publish
   every change. Porting the reference server's source would give up both.
-- The room protocol is written down once, in [protocol/room](../protocol/room),
+- The room protocol is written down once, in [protocol/room](../../protocol/room),
   under MIT OR Apache-2.0. The plan was a small crate that the app and the
   server both link. A crate would not have covered the side that matters:
   frames are decoded in the web view, in TypeScript, and the fake server the
@@ -911,9 +911,9 @@ Accepted:
   [security-review.md](security-review.md) lists as missing: a read-only
   member cannot write, and a removed member loses access.
 - **Benchmark.** `pnpm bench:backend`, in
-  [e2e-tests/perf/backend-bench](../e2e-tests/perf/backend-bench/run.mjs). It
+  [e2e-tests/perf/backend-bench](../../e2e-tests/perf/backend-bench/run.mjs). It
   replays the app's call sequences, so
-  [vault.mjs](../e2e-tests/perf/backend-bench/vault.mjs) has to follow the
+  [vault.mjs](../../e2e-tests/perf/backend-bench/vault.mjs) has to follow the
   client as the data layout changes. Two runs against the same server differ by
   10 to 40%.
 

@@ -45,9 +45,12 @@ pnpm tauri-dev    # the desktop app
 - [CONTRIBUTING.md](CONTRIBUTING.md): commit conventions (the scope is
   required), git hooks, tests and coverage
 - [e2e-tests/README.md](e2e-tests/README.md): the end-to-end suites
-- [docs/architecture.md](docs/architecture.md): how the app fits together
+- [docs/internal/architecture.md](docs/internal/architecture.md): how the app
+  fits together
 
-The [documentation index](docs/README.md) lists everything else.
+The [documentation index](docs/README.md) lists the guides for using the app,
+self-hosting and writing plugins. Design notes, plans, test docs and audits are
+in the [internal documentation](docs/internal/README.md).
 
 ## License
 

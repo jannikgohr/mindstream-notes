@@ -83,7 +83,7 @@
     { box: string; text: string; header: string; headerIcon: string }
   > = {
     /* One row per tone, all drawn from the status ramp (see
-       docs/theming.md) — no raw palette hues, and no dark: variants, since
+       docs/internal/theming.md) — no raw palette hues, and no dark: variants, since
        the tokens already carry both themes. `neutral` is the common case:
        a category chip whose icon and label already say what it is. */
     neutral: {

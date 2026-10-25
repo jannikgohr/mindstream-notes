@@ -4,7 +4,7 @@
 @import 'dockview/dist/styles/dockview.css';
 
 /* ===========================================================================
- * Design tokens. See docs/theming.md for the rules that govern this file.
+ * Design tokens. See docs/internal/theming.md for the rules that govern this file.
  *
  * Two layers:
  *   1. The SYSTEM layer — the elevation scale, border tiers, brand accent and

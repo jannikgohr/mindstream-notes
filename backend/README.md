@@ -14,6 +14,6 @@ types into the app.
 - To run your own server, follow the
   [self-hosting quick start](../docs/self-hosting.md).
 - The end-to-end suites run against a throwaway server started with
-  `pnpm backend:test:up`. See [docs/e2e/backend-stack.md](../docs/e2e/backend-stack.md).
+  `pnpm backend:test:up`. See [docs/internal/e2e/backend-stack.md](../docs/internal/e2e/backend-stack.md).
 - The design, and why it replaced the earlier stack of Etebase, two relays and
-  nginx, is in [docs/server-design.md](../docs/server-design.md).
+  nginx, is in [docs/internal/server-design.md](../docs/internal/server-design.md).

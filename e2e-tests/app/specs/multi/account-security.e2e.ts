@@ -1,5 +1,5 @@
 /**
- * T4 — account security across two devices (docs/server-design.md, Accounts).
+ * T4 — account security across two devices (docs/internal/server-design.md, Accounts).
  *
  * Two things here cannot be shown with one device or without a server:
  *

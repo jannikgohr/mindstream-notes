@@ -1,5 +1,5 @@
 /**
- * T4 — sharing a folder, docs/e2e/flows.md §4.
+ * T4 — sharing a folder, docs/internal/e2e/flows.md §4.
  * Every flow here is network IO against the sync server with no unit
  * coverage, and the meaningful ones need **two distinct accounts** — a sender
  * (A) and a recipient (B) whose public key A resolves via `fetch_user_profile`.

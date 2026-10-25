@@ -1,7 +1,7 @@
 # Editor audit fixes
 
 This branch addresses the editor and collaboration findings from the September
-2026 codebase audit. The finding IDs below match `docs/audit-2026-09.md` in the
+2026 codebase audit. The finding IDs below match `docs/internal/audit-2026-09.md` in the
 audit worktree.
 
 | ID  | Disposition                      | Evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |

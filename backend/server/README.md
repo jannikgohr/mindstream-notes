@@ -26,6 +26,6 @@ HTTP. To reach it from other devices, follow the
   proxies, connection limits, reverse proxies, what is on disk
 - [Administration](../../docs/server-administration.md): accounts, signup codes,
   invite links, two-factor resets, storage limits, backups, upgrade notes
-- [Development](../../docs/server-development.md): tests, coverage, conformance,
+- [Development](../../docs/internal/server-development.md): tests, coverage, conformance,
   benchmark, releases
-- [Design](../../docs/server-design.md): what the server is and why
+- [Design](../../docs/internal/server-design.md): what the server is and why

@@ -1,7 +1,7 @@
 /**
  * Theme guardrail.
  *
- * The app's colour comes from the tokens in src/app.css (see docs/theming.md).
+ * The app's colour comes from the tokens in src/app.css (see docs/internal/theming.md).
  * This check keeps ad-hoc colour from creeping back in, which is how the
  * sidebars, the Kanban board and the dockview chrome each ended up with their
  * own palette in the first place.
@@ -185,7 +185,7 @@ if (problems.length) {
     const where = p.line ? `${p.file}:${p.line}` : p.file;
     console.error(`  ${where}\n    [${p.rule}] ${p.match}\n    → ${p.hint}\n`);
   }
-  console.error('See docs/theming.md for the token reference.\n');
+  console.error('See docs/internal/theming.md for the token reference.\n');
   process.exit(1);
 }
 

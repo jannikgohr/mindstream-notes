@@ -1,7 +1,7 @@
 # Theming
 
 All colour, elevation and radius in the app comes from tokens defined in
-[`src/app.css`](../src/app.css). This document is the contract for that file:
+[`src/app.css`](../../src/app.css). This document is the contract for that file:
 what each token means, which one to reach for, and what is not allowed.
 
 ## Why the system exists
@@ -140,7 +140,7 @@ Unknown fields, CSS expressions, scripts and remote imports are rejected.
 An imported preset is limited to 16 KiB. Root `theme-presets.json` stores up to
 64 user presets in a versioned map. Use the settings UI to edit them so validation,
 locked publication and notifications run. Complete built-in examples live in
-[`src/lib/settings/theme-presets.json`](../src/lib/settings/theme-presets.json).
+[`src/lib/settings/theme-presets.json`](../../src/lib/settings/theme-presets.json).
 
 ## Named colours
 
@@ -156,7 +156,7 @@ colour also reads as text on the matching surfaces.
 The backend gives each vault a colour when it is created, and gives one to every
 vault in an index written before colours existed, the first time it loads. It
 picks the ID's colour (FNV-1a, the same hash as `vaultTileColor` in
-[`src/lib/vaults/tile.ts`](../src/lib/vaults/tile.ts)) unless an older vault
+[`src/lib/vaults/tile.ts`](../../src/lib/vaults/tile.ts)) unless an older vault
 already has it, then steps three colours on until one is free. Stored colours
 never change, so deleting or renaming a vault leaves every colour alone.
 
@@ -188,7 +188,7 @@ pattern collapses to `bg-success-subtle border-success-border text-success`.
 ## Rules
 
 These are enforced by `pnpm lint:theme`
-([`src-tauri/scripts/lint-theme.mjs`](../src-tauri/scripts/lint-theme.mjs)),
+([`src-tauri/scripts/lint-theme.mjs`](../../src-tauri/scripts/lint-theme.mjs)),
 which runs on staged files at commit time and over all of `src/` as part of
 `pnpm verify`.
 
@@ -218,8 +218,8 @@ absence of a token:
 - `--highlight-search` / `-active` / `-selection`, shared by the editor's
   find decorations and the PDF viewer's overlay.
 - Ink pen swatches and PDF annotation colours
-  ([`src/lib/ink/editor-helpers.ts`](../src/lib/ink/editor-helpers.ts),
-  [`src/lib/pdf/viewer-helpers.ts`](../src/lib/pdf/viewer-helpers.ts)). They
+  ([`src/lib/ink/editor-helpers.ts`](../../src/lib/ink/editor-helpers.ts),
+  [`src/lib/pdf/viewer-helpers.ts`](../../src/lib/pdf/viewer-helpers.ts)). They
   are content: strokes and annotations store sRGB hex and PDF export writes it,
   so they cannot follow a preset. The pens are Apollo ink plus its named
   colours, dark enough for the white page; the PDF set is lighter highlighter
@@ -240,7 +240,7 @@ The linter also allows three things by design:
 
 ## Pre-paint bootstrap
 
-The inline `<style>` in [`src/app.html`](../src/app.html) hardcodes the
+The inline `<style>` in [`src/app.html`](../../src/app.html) hardcodes the
 default `--surface-1` and `--foreground` values to avoid a flash before `app.css`
 loads. It first applies validated numeric preset tokens from the root bootstrap
 or browser cache. Its literal fallbacks must still match the default tokens.
@@ -252,12 +252,12 @@ vault's cache and use its resolved surface color as the native background.
 
 Reach for the primitives rather than hand-rolling container chrome:
 
-- [`ui/surface`](../src/lib/components/ui/surface) — `<Surface as="aside"
+- [`ui/surface`](../../src/lib/components/ui/surface) — `<Surface as="aside"
 variant="panel">` for a pane of the shell, `variant="section"` for a grouped
   region inside it, `variant="raised"` for a discrete item on a section, and
   `variant="overlay"` for something genuinely floating. The `padding` prop
   covers the common insets.
-- [`ui/section-header`](../src/lib/components/ui/section-header) — the compact
+- [`ui/section-header`](../../src/lib/components/ui/section-header) — the compact
   heading that titles a region.
 
 The desktop navigation uses `surface-0`; the details pane uses `surface-1`.

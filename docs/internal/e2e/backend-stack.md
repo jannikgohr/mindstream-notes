@@ -1,7 +1,7 @@
 # The test backend (T4)
 
 The T4 collaboration and sharing specs need a real sync server: the one in
-[backend/server](../../backend/server/README.md), on Postgres. It answers on a
+[backend/server](../../../backend/server/README.md), on Postgres. It answers on a
 single URL, for storage and accounts over HTTP and for the live rooms notes
 are co-edited in over WebSocket. The app is given that URL and nothing else.
 
@@ -24,9 +24,9 @@ The T4 specs default to this stack (`http://localhost:18080`), so there is
 nothing to set. `MINDSTREAM_E2E_BACKEND_URL` overrides the target if you need
 to point at a different server.
 
-The stack is [compose.yml](../../backend/server/compose.yml) with
-[compose.test.yml](../../backend/server/compose.test.yml) on top and the
-settings in [.env.test](../../backend/server/.env.test). The sign-in limit a
+The stack is [compose.yml](../../../backend/server/compose.yml) with
+[compose.test.yml](../../../backend/server/compose.test.yml) on top and the
+settings in [.env.test](../../../backend/server/.env.test). The sign-in limit a
 real server applies per address is off there, because every suite arrives from
 one address.
 

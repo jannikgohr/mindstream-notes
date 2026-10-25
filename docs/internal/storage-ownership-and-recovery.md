@@ -85,7 +85,7 @@ readiness waits for migration, and failed writes surface to callers. Focus and
 same-worker popout notifications refresh caches from disk. A recovery can reduce
 the revision, so caches accept that refreshed snapshot. Cross-worker invalidations reload each worker's own canonical documents.
 Supervised desktop startup and browser migration are implemented. Remaining
-release QA is tracked in the [platform checks](known-limitations.md#concurrent-vault-platform-checks).
+release QA is tracked in the [platform checks](#concurrent-vault-platform-checks).
 
 Native sidebar widths use root fields `appearance.leftSidebarWidth` and
 `appearance.rightSidebarWidth`. Sorting, direction, and sidebar open/closed
@@ -260,7 +260,7 @@ the vault. Settings and migration sources survive removal.
 Root `plugin-settings.json` records the startup-selected canonical vault directory
 and one-time `D` key receipts. Existing root values win. Retained vault rows cannot
 resurrect a reset value. RootLock guards field edits and catalog publication;
-notifications are sent after its release. See the [plugin guide](plugins.md).
+notifications are sent after its release. See the [plugin guide](../plugins.md).
 
 Portable backup format 2 carries vault settings and writable plugin data along
 with immutable package files and portable device values. Restore replaces the
@@ -269,3 +269,30 @@ existing device entries win. Imported third-party execution approval is cleared.
 Version 2 restore journals validate database/resource hashes, preserve old vault
 files and resume before opening the database. The worker storage contract is 4.
 See [backup recovery and retained evidence](backup-restore-portability.md#validation-and-recovery).
+
+## Concurrent vault platform checks
+
+Ordinary desktop launches use the coordinator and isolated vault workers.
+Root/vault settings, browser isolation, live ownership, remembered opening
+choices, handoff, shortcuts, tray, autostart, Quit and update recovery are
+implemented. Isolated test devices and mobile retain their single-vault flows.
+Handoff may replace the native window while preserving its content and geometry.
+
+Global plugin packages, theme presets and settings/plugin-data backup portability
+are implemented. Credentials and downloaded caches stay device-local. Current
+contracts are in this document, [plugin usage](../plugins.md),
+[theming](theming.md) and [backup portability](backup-restore-portability.md).
+
+Linux compositor behavior and geometry constraints are recorded in
+[the harness guide](e2e/harness.md#concurrent-vault-checks). The
+[Ubuntu VM report](e2e/ubuntu-vm-qa.md) records passing Linux guest hard-reset
+checks on ext4, packaged installation and updater restart using a disposable QA
+signing key, real backup pickers and integer 200% scaling.
+
+Remaining release QA:
+
+- Windows directory-entry and physical host power-loss durability.
+- Production-key updater installation and packaged restart on Windows/macOS.
+- Real monitor, DPI and display-change behavior.
+- Packaged macOS 14+ Dock/menu/Reopen, focus, hide/show and Cmd+Q behavior.
+  The owner accepted deferral until a Mac is available for release testing.

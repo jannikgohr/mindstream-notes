@@ -161,4 +161,4 @@ for scalar limits, including 8 MiB native-tool stdin and 4 MiB storage files.
 
 New components importing this interface need a matching host. The expanded
 experimental failure record requires rebuilding older batch guests; scalar
-APIs remain. See [the contract and example](../../docs/plugin-host-api-design.md).
+APIs remain. See [the contract and example](../../docs/plugin-batch-api.md).

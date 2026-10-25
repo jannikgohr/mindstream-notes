@@ -5,7 +5,7 @@ Fixed findings have been removed; `git log` on this file has the full original
 audit and the reasoning behind each fix.
 
 For the by-design trade-offs the sync/history model carries see
-[known-limitations.md](known-limitations.md); for how the pieces fit together
+[known-limitations.md](../known-limitations.md); for how the pieces fit together
 see [architecture.md](architecture.md).
 
 ## Trust boundaries
@@ -42,7 +42,7 @@ each room socket from a ticket only a member can get, names the sender of
 every frame itself, and drops document changes from members who may only
 read. What follows describes the code as it was.
 
-**Where:** [`sync/mod.rs`](../src-tauri/src/sync/mod.rs),
+**Where:** [`sync/mod.rs`](../../src-tauri/src/sync/mod.rs),
 `list_collab_writer_keys` / `filter_writable_collab_writers`.
 
 Writer signing keys are published as ordinary items in the scope collection.
@@ -74,7 +74,7 @@ protocol change, and a breaking one.
 
 ## M5 — Share manifest provenance is not verified
 
-**Where:** [`sharing.rs`](../src-tauri/src/sharing.rs),
+**Where:** [`sharing.rs`](../../src-tauri/src/sharing.rs),
 `share_scope_collab_info` / `select_scope_manifest`.
 
 `share_scope_collab_info` lists every `mindstream.share_manifest` collection the

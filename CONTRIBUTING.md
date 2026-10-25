@@ -7,7 +7,8 @@ hooks will bounce anything that doesn't follow them.
 For everything else:
 
 - **Environment setup** (per-OS prerequisites, builds): [docs/BUILDING.md](docs/BUILDING.md)
-- **How the app fits together:** [docs/architecture.md](docs/architecture.md)
+- **How the app fits together:** [docs/internal/architecture.md](docs/internal/architecture.md)
+- **Design notes, test docs and audits:** [docs/internal/](docs/internal/README.md)
 - **Running the tests:** [e2e-tests/README.md](e2e-tests/README.md)
 
 ## Getting started
@@ -144,7 +145,7 @@ here. CI runs `reuse lint`, which fails when a file has no answer.
 
 Whether a contribution to `backend/server/` from outside needs an agreement
 first is not decided yet. See
-[the design](docs/server-design.md#licensing-and-layout).
+[the design](docs/internal/server-design.md#licensing-and-layout).
 
 ## CI
 
@@ -156,4 +157,4 @@ browser-fallback suite), and `format` (prettier in check mode). The `app-e2e`
 Linux matrix runs the single-client and both multiremote Tauri suites under
 Xvfb, with a disposable collaboration backend for T4. Coverage thresholds fail
 CI even when Codecov uploads are unavailable. See
-[docs/e2e/status.md](docs/e2e/status.md).
+[docs/internal/e2e/status.md](docs/internal/e2e/status.md).

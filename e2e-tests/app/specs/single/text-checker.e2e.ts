@@ -1,5 +1,5 @@
 /**
- * T3 — flow 5.4 (docs/e2e/flows.md): a plugin-contributed checking service.
+ * T3 — flow 5.4 (docs/internal/e2e/flows.md): a plugin-contributed checking service.
  *
  * Three things only meet at runtime here — a plugin contributing a
  * `textChecker`, the endpoint the user configures for it, and the host that

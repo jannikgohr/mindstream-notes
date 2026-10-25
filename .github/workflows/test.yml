@@ -604,7 +604,7 @@ jobs:
 
       - run: pnpm format:web:check
 
-      # Theme guardrail (docs/theming.md). It used to run only in the
+      # Theme guardrail (docs/internal/theming.md). It used to run only in the
       # husky hooks, so `--no-verify` or a fresh clone skipped it and
       # nothing on the server ever checked. Costs under a second.
       - run: pnpm lint:theme

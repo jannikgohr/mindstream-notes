@@ -1,6 +1,6 @@
 # E2E coverage & open gaps
 
-What the real-app suite ([e2e-tests/app/](../../e2e-tests/app/)) actually
+What the real-app suite ([e2e-tests/app/](../../../e2e-tests/app/)) actually
 asserts today, and what's still stubbed. The flow catalogue is [flows.md](flows.md);
 this is the state of its implementation. **Skips are environment gates, not
 hidden passing coverage** — a run's pass count reflects implemented scenarios.
@@ -92,7 +92,7 @@ Two things worth carrying forward:
 The collab-confirmation prompt (`peerCount` in `NoteHistorySection`) is wired
 and asserted for the awareness-based editors (markdown/PDF); ink/freeform stay
 pending because their providers don't report presence (see
-[known-limitations.md](../known-limitations.md)).
+[known-limitations.md](../../known-limitations.md)).
 
 ## Open gaps
 

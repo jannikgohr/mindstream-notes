@@ -1,6 +1,6 @@
 # E2E testing strategy: tiers & rationale
 
-**Just want to run the tests?** See [e2e-tests/README.md](../../e2e-tests/README.md).
+**Just want to run the tests?** See [e2e-tests/README.md](../../../e2e-tests/README.md).
 This doc is the _why_: the test tiers and how to pick one.
 
 The unit suites (`vitest`, `cargo test`) cover the logic layer, with coverage

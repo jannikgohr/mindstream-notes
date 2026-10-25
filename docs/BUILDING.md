@@ -69,7 +69,7 @@ on minimal installs so the OS keyring works.
 above. The **real-app e2e tiers (T3/T4)** need extra tooling — `tauri-driver`
 plus a platform webdriver, and for T4 a Docker backend stack. See
 [e2e-tests/README.md](../e2e-tests/README.md) for how to run them and
-[e2e/harness.md](e2e/harness.md#toolchain) for the toolchain.
+[internal/e2e/harness.md](internal/e2e/harness.md#toolchain) for the toolchain.
 
 ## Development
 

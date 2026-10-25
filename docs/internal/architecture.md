@@ -1,8 +1,8 @@
 # Architecture
 
 How Mindstream Notes fits together, end to end. For setup and builds see
-[BUILDING.md](BUILDING.md); for the by-design trade-offs the sync/history model
-carries see [known-limitations.md](known-limitations.md); for the
+[BUILDING.md](../BUILDING.md); for the by-design trade-offs the sync/history model
+carries see [known-limitations.md](../known-limitations.md); for the
 security issues still open against the design described here see
 [security-review.md](security-review.md).
 
@@ -116,21 +116,21 @@ Pointer Events, with an Android-only Kotlin `CanvasFrontBufferedRenderer`
 overlay for live-stroke latency; freeform embeds an Excalidraw island; PDFs
 render through pdf.js.
 
-- **API bridge — [`src/lib/api/`](../src/lib/api).** One thin module per Rust
+- **API bridge — [`src/lib/api/`](../../src/lib/api).** One thin module per Rust
   command surface (`notes.ts`, `collections.ts`, `sharing.ts`, …). Each call goes
   through `invokeOrFallback(command, args, fallback)` in
-  [`api/core.ts`](../src/lib/api/core.ts): `isTauri()` checks for
+  [`api/core.ts`](../../src/lib/api/core.ts): `isTauri()` checks for
   `__TAURI_INTERNALS__` on `window`; inside Tauri it `invoke()`s the Rust
   command, otherwise it runs the JS `fallback`. Outside Tauri the fallbacks read
-  and write [`api/mock-store.ts`](../src/lib/api/mock-store.ts) — an in-memory
+  and write [`api/mock-store.ts`](../../src/lib/api/mock-store.ts) — an in-memory
   store seeded with the same demo content Rust inserts on first run, so
   components can't tell the two modes apart. This dual mode is what lets the
   browser-fallback (T2) e2e tier drive the real UI without Rust or a database.
-- **Stores — [`src/lib/stores/`](../src/lib/stores).** Svelte-runes state
+- **Stores — [`src/lib/stores/`](../../src/lib/stores).** Svelte-runes state
   (`.svelte.ts`): the note tree, the active note source/status, the note-history
   bridge, profiles, signatures.
-- **Live-collab providers — [`src/lib/sync/`](../src/lib/sync).**
-  [`collab-provider.ts`](../src/lib/sync/collab-provider.ts) (markdown/PDF) and
+- **Live-collab providers — [`src/lib/sync/`](../../src/lib/sync).**
+  [`collab-provider.ts`](../../src/lib/sync/collab-provider.ts) (markdown/PDF) and
   `ink-web-collab-provider.ts` speak a small binary WebSocket protocol to the
   relays. They AES-GCM-encrypt every Yjs update with a per-note key so the relay
   is a blind broadcast hub (frame = `[type][12-byte IV][ciphertext+tag]`); the
@@ -140,31 +140,31 @@ render through pdf.js.
 
 The frontend never imports Rust directly — it `invoke()`s `#[tauri::command]`
 functions. Errors flow back through `AppError`
-([`src-tauri/src/error.rs`](../src-tauri/src/error.rs)), which maps Rust errors
+([`src-tauri/src/error.rs`](../../src-tauri/src/error.rs)), which maps Rust errors
 to IPC error strings. Note data lives in SQLite. Root/vault configuration and recovery records use
 locked filesystem documents; the frontend holds view state and pending edits.
 
 ## Rust backend (`src-tauri/src/`)
 
 One SQLite `Connection` sits behind a `Mutex` on the Tauri app state
-([`db/mod.rs`](../src-tauri/src/db/mod.rs)); Tauri runs each command on its
+([`db/mod.rs`](../../src-tauri/src/db/mod.rs)); Tauri runs each command on its
 thread pool, holding the lock only for a single query.
 
-- **Persistence.** [`notes/`](../src-tauri/src/notes/mod.rs) (a `Note` =
+- **Persistence.** [`notes/`](../../src-tauri/src/notes/mod.rs) (a `Note` =
   `NoteSummary` + body; soft-delete via `trashed_at`),
-  [`collections/`](../src-tauri/src/collections/mod.rs) (folders),
-  [`assets/`](../src-tauri/src/assets/mod.rs) (attachment blobs for drawings,
+  [`collections/`](../../src-tauri/src/collections/mod.rs) (folders),
+  [`assets/`](../../src-tauri/src/assets/mod.rs) (attachment blobs for drawings,
   markdown images and PDFs), `signatures/`. An asset is kept while any note
   references it — the `asset_refs` table, not the note that created it — and is
   stored by content hash, so identical bytes within one share scope are stored
   once.
-- **Note history — [`history/`](../src-tauri/src/history/mod.rs).** Point-in-time
+- **Note history — [`history/`](../../src-tauri/src/history/mod.rs).** Point-in-time
   DEFLATE-compressed snapshots of a note's markdown in `note_versions`.
   Deliberately **local and never synced** — each device keeps its own timeline.
   A _restore_ is applied by the editor as a normal CRDT edit, so the restored
   content converges across devices through the ordinary sync path (replaying an
   old CRDT state blob would be a no-op).
-- **Profiles / vaults — [`profiles.rs`](../src-tauri/src/profiles.rs).** Each
+- **Profiles / vaults — [`profiles.rs`](../../src-tauri/src/profiles.rs).** Each
   profile is a self-contained directory `…/profiles/<id>/` with its own
   `mindstream.db`, Etebase session, settings, and backups. A `profiles.json`
   index at the environment's app-data root records the last-used startup vault;
@@ -178,28 +178,28 @@ thread pool, holding the lock only for a single query.
   long-lived coordinator with one process and isolated WebView store per vault.
   Isolated test devices and mobile retain their single-vault flows. See
   [storage ownership and recovery](storage-ownership-and-recovery.md) and
-  [remaining platform checks](known-limitations.md#concurrent-vault-platform-checks).
-- **Auth — [`auth/mod.rs`](../src-tauri/src/auth/mod.rs).** Etebase login. The
+  [remaining platform checks](storage-ownership-and-recovery.md#concurrent-vault-platform-checks).
+- **Auth — [`auth/mod.rs`](../../src-tauri/src/auth/mod.rs).** Etebase login. The
   password is never stored: a random 32-byte key encrypts the saved account
   state; the **key** goes in the OS keystore (Credential Manager / Keychain /
   Secret Service) and the **encrypted blob** + username + server URL go in
   `etebase.session`. Both halves are required to unlock, so leaking the file
   alone yields nothing.
-- **Search — [`search/mod.rs`](../src-tauri/src/search/mod.rs).** Rust free-text
+- **Search — [`search/mod.rs`](../../src-tauri/src/search/mod.rs).** Rust free-text
   matcher: AND token semantics, score `+10` per title hit / `+1` per body hit,
-  with snippet + highlight ranges. [`api/search-matcher.ts`](../src/lib/api/search-matcher.ts)
+  with snippet + highlight ranges. [`api/search-matcher.ts`](../../src/lib/api/search-matcher.ts)
   mirrors it for the browser fallback (kept behaviourally aligned by tests).
-- **Backup — [`backup/`](../src-tauri/src/backup).** A zip of
+- **Backup — [`backup/`](../../src-tauri/src/backup).** A zip of
   `manifest.json` (version, account identity via `etebase_collection_uid`,
   counts) + `data.db` (a `VACUUM INTO` snapshot). Import supports preview,
   staged-restart restore, and in-process merge.
-- **Import — [`import/`](../src-tauri/src/import/mod.rs).** Brings in
+- **Import — [`import/`](../../src-tauri/src/import/mod.rs).** Brings in
   Markdown folders, Obsidian vaults, Joplin exports and Evernote `.enex` files.
   Each format implements a two-phase source: list every item and assign its
   note id first, then parse one item at a time and rewrite its links against
   the full list, so links between notes survive whatever order they are read
   in. Runs entirely in Rust because the target is a million-note vault. See
-  [import.md](import.md).
+  [import.md](../import.md).
 - **Also here:** PDF annotate/export (`pdf_export.rs`, `pdf_text.rs`), vault
   export (`notes_export.rs`), the macOS native menu (`native_menu.rs`), tray,
   hotkeys, and desktop settings.
@@ -207,7 +207,7 @@ thread pool, holding the lock only for a single query.
 ## The CRDT document model
 
 A note body is a `yrs::Doc` with a single named `body` text field, wrapped by
-[`sync/yrs_doc.rs`](../src-tauri/src/sync/yrs_doc.rs) so nothing else imports
+[`sync/yrs_doc.rs`](../../src-tauri/src/sync/yrs_doc.rs) so nothing else imports
 `yrs`. The wire format is the **v1** update encoding to match what the JS editor
 produces. Local edits arrive as "the editor saved a new full body"; Rust diffs
 old vs new with `similar` and replays the inserts/deletes against the Y.Text, so
@@ -216,13 +216,13 @@ merge. This encoded CRDT state is the source of truth that travels in sync.
 
 ## Sync
 
-- **Vault sync — [`sync/mod.rs`](../src-tauri/src/sync/mod.rs).** One Etebase
+- **Vault sync — [`sync/mod.rs`](../../src-tauri/src/sync/mod.rs).** One Etebase
   collection, `mindstream.vault`, backs the local store. What an item is sits in
   its metadata: a folder (placement metadata), a note (a msgpack `NotePayload`
   carrying the yrs CRDT state plus parent/position/tags/trash), an attachment or
   a signature. Each sync finds or creates the collection, pulls by its one
   `stoken` and applies what came kind by kind
-  ([`sync/pull.rs`](../src-tauri/src/sync/pull.rs)), so a note's folder is in
+  ([`sync/pull.rs`](../../src-tauri/src/sync/pull.rs)), so a note's folder is in
   place before the note. It then pushes dirty rows via
   `ItemManager::transaction`, folders first. On a `Conflict` it refetches
   the item, merges the remote CRDT state into the local one (or takes remote
@@ -234,8 +234,8 @@ merge. This encoded CRDT state is the source of truth that travels in sync.
 
 ## Collection sharing
 
-Sharing a folder ([`sharing/`](../src-tauri/src/sharing),
-[`sync/scopes.rs`](../src-tauri/src/sync/scopes.rs)) creates a **scope**: one
+Sharing a folder ([`sharing/`](../../src-tauri/src/sharing),
+[`sync/scopes.rs`](../../src-tauri/src/sync/scopes.rs)) creates a **scope**: one
 `mindstream.share_manifest` collection (its content is the manifest JSON) plus
 three part collections — folders / notes / assets. Sharing **re-homes** the
 subtree: every folder/note/asset under the root is stamped with `share_scope_id`
@@ -251,7 +251,7 @@ user's own vault sync.
 
 ## The backend stack
 
-The optional server ([`backend/`](../backend/README.md)) is one program on
+The optional server ([`backend/`](../../backend/README.md)) is one program on
 Postgres behind **one URL**. It keeps accounts and encrypted storage, speaking
 the protocol of the Etebase client library the app ships, and it hosts the
 live rooms that notes of every kind are co-edited in. The client is configured
@@ -265,7 +265,7 @@ stay encrypted under a key derived from the note's own, which the server never
 has.
 
 The design and the reasons for it are in [server-design.md](server-design.md).
-Running one is covered in the [self-hosting quick start](self-hosting.md).
+Running one is covered in the [self-hosting quick start](../self-hosting.md).
 
 ## How this shapes testing
 
@@ -273,5 +273,5 @@ The layering maps directly onto the [test tiers](e2e/strategy.md): pure logic is
 unit-tested (T1); the mock-store fallback lets Playwright exercise the whole UI
 without a backend (T2); the real IPC + SQLite + restart path needs the packaged
 binary (T3); and sync/sharing/live-collab convergence needs two real clients plus
-the backend stack (T4). See [e2e-tests/README.md](../e2e-tests/README.md) to run
+the backend stack (T4). See [e2e-tests/README.md](../../e2e-tests/README.md) to run
 them.

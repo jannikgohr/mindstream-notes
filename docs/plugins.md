@@ -406,7 +406,7 @@ Batch request validation runs after argument lifting, before executing any
 operation in that batch. A request above the 1 MiB literal limit can therefore
 return a normal batch validation failure if it fits the 9 MiB transfer budget.
 Batch result accounting includes conservative record overhead. See
-[the batch contract](plugin-host-api-design.md#the-general-batch-contract) for
+[the batch contract](plugin-batch-api.md#the-general-batch-contract) for
 failure phases and recovery.
 
 ### Effects (toolbar buttons)
@@ -472,6 +472,9 @@ every operation, even if the plugin bypasses the SDK wrappers.
 Host refusals throw `HostError` with `kind` equal to `denied`, `invalid`,
 `unavailable` or `failed`. A missing permission is `denied`. Timeouts and
 cancellation stop the call rather than returning a catchable host error.
+
+The experimental `batch.execute` sends a list of these calls in one crossing;
+see [Batching host calls](plugin-batch-api.md).
 
 `NoteMeta` uses `folderId` and `folderPath`. Use `clock.format` for local dates
 and `ctx.locale` for month and weekday names. Guest JavaScript dates use UTC.

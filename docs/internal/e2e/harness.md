@@ -6,14 +6,14 @@ Current Linux VM, real-picker, signed-package and hard-reset procedures are in
 How the `e2e-tests/app/` suite drives the **packaged Tauri binary** with
 `tauri-driver` (WebDriver) under a headless display (`xvfb` on Linux CI). The
 binary is built with `--features e2e-data-dir` so the test seams below work in a
-release build. Run commands are in [e2e-tests/README.md](../../e2e-tests/README.md);
-two-client specifics are in [e2e-tests/app/README.md](../../e2e-tests/app/README.md).
+release build. Run commands are in [e2e-tests/README.md](../../../e2e-tests/README.md);
+two-client specifics are in [e2e-tests/app/README.md](../../../e2e-tests/app/README.md).
 
 ## Toolchain
 
 These tiers build and drive the packaged binary, so you first need the base
 app-build toolchain (Rust + your OS's Tauri system deps) from
-[docs/BUILDING.md](../BUILDING.md). On top of that:
+[docs/BUILDING.md](../../BUILDING.md). On top of that:
 
 ```sh
 cargo install tauri-driver          # the WebDriver bridge
@@ -130,7 +130,7 @@ Measure a full Linux run before increasing concurrency beyond two workers.
 each launching the app against its own `MINDSTREAM_PROFILE_DIR`, driven as
 `browserA` / `browserB`. `wdio.multiremote.a2.conf.ts` adds a third instance for
 the owner-second-device sharing cases. Details in
-[e2e-tests/app/README.md](../../e2e-tests/app/README.md).
+[e2e-tests/app/README.md](../../../e2e-tests/app/README.md).
 
 ## Harness gotchas (from live T4 runs)
 
@@ -160,7 +160,7 @@ suites. They use disposable roots and real OS leases. Cleanup uses authenticated
 Quit and waits for released coordinator/vault leases; it retains uncertain
 owners for inspection rather than killing a PID discovered on disk.
 
-Build an embedded debug binary as described in [BUILDING.md](../BUILDING.md).
+Build an embedded debug binary as described in [BUILDING.md](../../BUILDING.md).
 Wait for the build to finish before launching it on Windows, where live app
 processes prevent executable replacement.
 
