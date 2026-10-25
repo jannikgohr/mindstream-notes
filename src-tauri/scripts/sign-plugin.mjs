@@ -6,8 +6,8 @@
  * *package digest* (every file in the dir except signature.json, hashed and
  * folded into one canonical document; see `package_digest` below and the Rust
  * `signing::package_digest` it must match byte-for-byte). Signing the whole
- * package, not just manifest.json, means the signature also covers the `.luau`
- * code. The signature.json format the Rust verifier expects (see
+ * package, not just manifest.json, means the signature also covers the `.wasm`
+ * component. The signature.json format the Rust verifier expects (see
  * src-tauri/src/plugins/signing.rs):
  *
  *   { "algorithm": "ed25519", "publicKey": "<base64 32B>", "signature": "<base64 64B>" }

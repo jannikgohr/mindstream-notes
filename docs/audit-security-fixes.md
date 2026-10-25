@@ -27,11 +27,11 @@ session, so an old account origin cannot remain authorized after an account
 change. Preview documents restrict connections to their own authenticated
 gateway origin.
 
-## L2: bound Luau native tool time
+## L2: bound plugin native tool time
 
-Luau scripts now have an absolute invocation deadline in addition to their
-script execution allowance. Time spent in a native tool can still be credited
-back to Luau execution, but repeated native tool calls cannot move the absolute
+Plugin calls now have an absolute invocation deadline in addition to their
+execution allowance. Time spent in a native tool can still be credited back to
+plugin execution, but repeated native tool calls cannot move the absolute
 deadline. Each process timeout is capped by the remaining invocation time.
 
 ## L7: validate WebSocket handshakes

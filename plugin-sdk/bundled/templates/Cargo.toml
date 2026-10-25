@@ -1,0 +1,13 @@
+[package]
+name = "mindstream-templates-plugin"
+version = "1.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde_json.workspace = true
+ryu-js.workspace = true
+wit-bindgen.workspace = true

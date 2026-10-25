@@ -401,8 +401,7 @@ pub fn discover(directory: &Path, id: Option<&str>) -> AppResult<Vec<DiscoveredP
             continue;
         };
         let lease = lease_file(root, &hash)?;
-        lease
-            .try_lock_shared()
+        crate::file_lock::try_lock_shared(&lease)
             .map_err(|e| AppError::InvalidArg(format!("package busy: {e}")))?;
         let mut plugin = match discovery::read_plugin(
             PluginFiles::Fs(package_path(root, &hash)),
@@ -506,7 +505,7 @@ fn collect_retired(root: &Path, catalog: &Catalog) -> AppResult<()> {
         }
         crate::atomic_file::write(&root.join("plugin-retired").join(&name), b"retired")?;
         let lease = lease_file(root, &name)?;
-        if lease.try_lock().is_ok() {
+        if crate::file_lock::try_lock_exclusive(&lease).is_ok() {
             fs::remove_dir_all(entry.path())?;
         }
     }

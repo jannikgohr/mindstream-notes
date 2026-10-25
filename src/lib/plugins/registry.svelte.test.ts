@@ -28,7 +28,7 @@ import {
 // only thing that decides whether it appears.
 function checkerManifest(id = 'com.example.checker'): Record<string, unknown> {
   return {
-    manifestVersion: 1,
+    manifestVersion: 2,
     id,
     name: 'Checker',
     version: '1.0.0',
@@ -63,7 +63,7 @@ function checkerManifest(id = 'com.example.checker'): Record<string, unknown> {
 
 function manifest(id = 'com.example.templates'): Record<string, unknown> {
   return {
-    manifestVersion: 1,
+    manifestVersion: 2,
     id,
     name: 'Example',
     version: '1.0.0',
@@ -118,12 +118,12 @@ function exporterManifest(
   id = 'com.example.exporters'
 ): Record<string, unknown> {
   return {
-    manifestVersion: 1,
+    manifestVersion: 2,
     id,
     name: 'Exporter',
     version: '1.0.0',
-    runtime: 'luau',
-    entry: 'main.luau',
+    runtime: 'wasm',
+    entry: 'plugin.wasm',
     permissions: [],
     contributes: {
       i18n: { en: { 'export.pdf': 'PDF' } },
@@ -140,16 +140,16 @@ function exporterManifest(
   };
 }
 
-/** A luau plugin that owns a note kind plus file-tree and note-editor
+/** A Wasm plugin that owns a note kind plus file-tree and note-editor
  *  toolbar buttons — the surfaces exercised by the selectors below. */
 function kindManifest(id = 'com.example.kinds'): Record<string, unknown> {
   return {
-    manifestVersion: 1,
+    manifestVersion: 2,
     id,
     name: 'Kinds',
     version: '1.0.0',
-    runtime: 'luau',
-    entry: 'main.luau',
+    runtime: 'wasm',
+    entry: 'plugin.wasm',
     permissions: ['notes.create'],
     contributes: {
       noteKinds: [

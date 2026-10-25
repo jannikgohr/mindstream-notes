@@ -1,0 +1,28 @@
+[package]
+name = "mindstream-templates-prototype"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+batch-host = []
+local-calendar = ["dep:chrono", "dep:chrono-tz"]
+
+[dependencies]
+serde_json = "1"
+ryu-js = "1"
+wit-bindgen = "0.63"
+chrono = { version = "0.4", default-features = false, features = ["std"], optional = true }
+chrono-tz = { version = "0.10", default-features = false, optional = true }
+
+[workspace]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

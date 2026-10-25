@@ -42,7 +42,11 @@ import {
   isDateBase,
   parseExpr
 } from './template-format';
-import type { PluginNoteTemplateContribution, PluginPermission } from './types';
+import {
+  isScriptedRuntime,
+  type PluginNoteTemplateContribution,
+  type PluginPermission
+} from './types';
 
 /** Values interpolated into a template, keyed by placeholder name. */
 export type TemplateVariables = Record<string, string>;
@@ -226,7 +230,7 @@ export async function createNoteFromPluginTemplate(
   }
 
   const runtime = pluginById(pluginId)?.manifest.runtime;
-  const useScript = !!ref.template.render && runtime === 'luau';
+  const useScript = !!ref.template.render && isScriptedRuntime(runtime);
   // A typed title reaches a scripted template as a `title` variable; the app
   // still forces the final note title to it below so the two paths agree.
   const scriptVariables = titleOverride?.trim()

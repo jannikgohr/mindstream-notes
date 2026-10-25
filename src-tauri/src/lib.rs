@@ -47,6 +47,7 @@ mod device_notifications;
 pub mod drawing;
 pub mod environment;
 pub mod error;
+mod file_lock;
 #[cfg(desktop)]
 pub mod foreground;
 pub mod history;
@@ -321,6 +322,9 @@ pub fn run() {
     } else {
         app_handle
     };
+
+    #[cfg(target_os = "android")]
+    let app_handle = app_handle.plugin(tauri_plugin_fs::init());
 
     let app = app_handle
         .plugin(tauri_plugin_shell::init())
@@ -895,6 +899,7 @@ pub fn run() {
                 hotkeys::set_hotkey_displays,
                 #[cfg(desktop)]
                 hotkeys::sync_global_shortcuts,
+                #[cfg(desktop)]
                 hotkeys::get_global_shortcut_status,
                 #[cfg(desktop)]
                 desktop_settings::get_close_to_tray,

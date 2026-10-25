@@ -40,12 +40,12 @@ const typstKind = 'plugin.com.example.typst.document';
 
 function registerTypstExporter() {
   registerPlugin({
-    manifestVersion: 1,
+    manifestVersion: 2,
     id: 'com.example.typst',
     name: 'Typst',
     version: '1.0.0',
-    runtime: 'luau',
-    entry: 'main.luau',
+    runtime: 'wasm',
+    entry: 'plugin.wasm',
     permissions: ['nativeTools.runDeclared'],
     contributes: {
       i18n: { en: { 'notes.document': 'Typst', 'export.pdf': 'PDF' } },

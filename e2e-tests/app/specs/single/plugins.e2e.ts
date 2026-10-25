@@ -21,6 +21,7 @@ import { expect } from '@wdio/globals';
 import {
   byName,
   closeSettingsDialog,
+  clickElement,
   clickName,
   isFileTreeCreateActionDisplayed,
   openFileTreeCreateMore,
@@ -42,16 +43,94 @@ async function openPluginsCategory(): Promise<void> {
   await expect(byName('Enable in this vault')).toBeDisplayed();
 }
 
+/** Use the real picker and wait for its vault setting to reach SQLite. */
+async function setTemplateFolder(folder: string | null): Promise<void> {
+  await openPluginsCategory();
+  await clickName('Plugin settings');
+  await clickElement($('button[aria-label="Template folder"]'));
+  await $('[role="listbox"]').waitForDisplayed();
+  await browser.execute((label) => {
+    const dialog = document.querySelector('[role="dialog"]');
+    const options = Array.from(
+      dialog?.querySelectorAll<HTMLButtonElement>('[role="option"]') ?? []
+    );
+    const option = label
+      ? options.find((candidate) => candidate.textContent?.trim() === label)
+      : options[0];
+    if (!option) throw new Error(`Template folder option missing: ${label}`);
+    option.click();
+  }, folder);
+  await browser.waitUntil(
+    () =>
+      browser.execute(async (selected) => {
+        const api = (
+          window as unknown as {
+            __TAURI_INTERNALS__: {
+              invoke(
+                command: string,
+                args: Record<string, unknown>
+              ): Promise<Record<string, unknown>>;
+            };
+          }
+        ).__TAURI_INTERNALS__;
+        const settings = await api.invoke('plugins_settings_all', {
+          id: 'com.mindstream.templates.core'
+        });
+        return selected
+          ? typeof settings['source-folder'] === 'string' &&
+              settings['source-folder'] !== ''
+          : !settings['source-folder'];
+      }, folder),
+    { timeout: 10_000, timeoutMsg: 'Template folder setting was not persisted' }
+  );
+  await closeSettingsDialog(browser);
+}
+
 describe('T3 plugin framework', function () {
   beforeEach(async () => {
     await waitForShell();
   });
 
-  it('discovers the bundled Templates plugin and renders its toolbar button', async () => {
+  it('discovers Templates and shows its action only when a source has notes', async () => {
     // The "New from template" create-bar button is the Templates plugin's
     // `file-tree` toolbar contribution — its presence means `plugins_discover`
-    // read the bundled dir and the app registered the enabled plugin.
+    // read the bundled dir and the app registered the enabled plugin. The
+    // seeded Personal folder contains Ideas; no configured source hides it.
+    await setTemplateFolder(null);
+    await openFileTreeCreateMore();
+    expect(await isFileTreeCreateActionDisplayed('New from template')).toBe(
+      false
+    );
+    await setTemplateFolder('Personal');
     await revealFileTreeCreateAction('New from template');
+  });
+
+  it('runs the bundled Rust component through Tauri IPC', async () => {
+    const result = await browser.execute(async () => {
+      const invoke = (
+        window as unknown as {
+          __TAURI_INTERNALS__: {
+            invoke(
+              command: string,
+              args: Record<string, unknown>
+            ): Promise<unknown>;
+          };
+        }
+      ).__TAURI_INTERNALS__.invoke;
+      return invoke('plugins_run_script', {
+        id: 'com.mindstream.templates.core',
+        export: 'renderTemplate',
+        input: {
+          title: 'Hello {{who|capitalize}}',
+          body: '# {{title|upper}}\n{{value|trim|slug}}',
+          vars: { who: 'template', value: '  Some Value  ' }
+        }
+      });
+    });
+    expect(result).toEqual({
+      title: 'Hello Template',
+      body: '# HELLO TEMPLATE\nsome-value'
+    });
   });
 
   it('lists the plugin in the settings overview', async () => {
@@ -62,6 +141,7 @@ describe('T3 plugin framework', function () {
   });
 
   it('a disabled plugin stays disabled across a restart (plugin-record persistence)', async () => {
+    await setTemplateFolder('Personal');
     await revealFileTreeCreateAction('New from template');
 
     await openPluginsCategory();

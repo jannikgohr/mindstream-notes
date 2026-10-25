@@ -10,7 +10,7 @@ fn manifest_from(value: serde_json::Value) -> manifest::Manifest {
 /// The minimum a manifest needs, with `extra` merged over it.
 fn manifest_with(extra: serde_json::Value) -> manifest::Manifest {
     let mut base = serde_json::json!({
-        "manifestVersion": 1,
+        "manifestVersion": 2,
         "id": "com.a.plugin",
         "name": "A Plugin",
         "version": "1.0.0",
@@ -41,6 +41,31 @@ fn signed_input(
         signer: signer.map(String::from),
         signature_status: signature_status.to_string(),
     }
+}
+
+/// A script call with nothing but permissions, an export and its input.
+fn call(granted: &[&str], export: &str, input: serde_json::Value) -> ScriptCall {
+    ScriptCall {
+        granted: granted.iter().map(|p| p.to_string()).collect(),
+        export: export.into(),
+        input,
+        notes: Vec::new(),
+        data_root: None,
+        cancel: runtime::cancel::CancelToken::new(),
+        verified_entry: None,
+        cache_dir: None,
+    }
+}
+
+fn verified_call(
+    plugin: &discovery::DiscoveredPlugin,
+    granted: &[&str],
+    export: &str,
+    input: serde_json::Value,
+) -> ScriptCall {
+    let mut request = call(granted, export, input);
+    request.verified_entry = plugin.entry_bytes.clone();
+    request
 }
 
 fn upsert_input(id: &str, checksum: &str, source: &str) -> UpsertPlugin {
@@ -327,24 +352,6 @@ fn artifact_and_native_tool_declarations_reach_the_backend() {
 }
 
 #[test]
-fn native_tool_binary_names_are_exact_basenames() {
-    assert!(validate_binary_name("typst").is_ok());
-    assert!(validate_binary_name("typst.exe").is_ok());
-    assert!(validate_binary_name("../typst").is_err());
-    assert!(validate_binary_name("tools/typst").is_err());
-    assert!(validate_binary_name("typst.cmd").is_err());
-}
-
-#[test]
-fn plugin_storage_paths_reject_traversal_and_absolute_paths() {
-    assert!(split_plugin_rel_path("cache/compiler.json", false).is_ok());
-    assert!(split_plugin_rel_path("../escape", false).is_err());
-    assert!(split_plugin_rel_path("cache/../escape", false).is_err());
-    assert!(split_plugin_rel_path("/absolute", false).is_err());
-    assert!(split_plugin_rel_path("", false).is_err());
-}
-
-#[test]
 fn signed_same_signer_update_auto_approves() {
     let db = open_memory_for_tests();
     db.with_conn(|c| {
@@ -455,6 +462,7 @@ fn reconcile_registers_discovered_plugins_and_returns_manifests() {
             signature_status: "unsigned".into(),
             manifest: manifest_with(serde_json::json!({})),
             manifest_json: serde_json::json!({ "id": "com.a.plugin", "name": "A" }),
+            entry_bytes: None,
         }];
         let views = reconcile(c, discovered)?;
         assert_eq!(views.len(), 1);
@@ -479,41 +487,8 @@ fn remove_deletes_the_record() {
 }
 
 #[test]
-fn run_plugin_script_executes_luau_entry_with_input() {
-    let dir = std::env::temp_dir().join(format!("ms-luau-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("main.luau"),
-        "return { render = function(ctx) return { title = ctx.name } end }",
-    )
-    .unwrap();
-    let manifest = manifest_with(serde_json::json!({
-        "id": "com.a.luau",
-        "runtime": "luau",
-        "entry": "main.luau",
-        "permissions": ["nativeTools.runDeclared"],
-        "contributes": {
-            "nativeTools": [{ "id": "missing", "binaryName": "ms-not-a-real-binary-xyz" }]
-        }
-    }));
-    let out = run_plugin_script(
-        &super::discovery::PluginFiles::Fs(dir.clone()),
-        &manifest,
-        vec!["nativeTools.runDeclared".into()],
-        "render",
-        serde_json::json!({ "name": "Hi" }),
-        Vec::new(),
-        None,
-    )
-    .unwrap();
-    assert_eq!(out["title"], serde_json::json!("Hi"));
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-#[test]
-fn templates_plugin_renders_macros_in_lua() {
-    // The embedded Templates plugin renders `{{…}}` itself (in Luau, via its
-    // required lib/template module) — proof the macro engine is plugin-owned.
+fn templates_plugin_renders_macros_in_wasm() {
+    // The embedded Templates component owns the macro engine.
     let plugin = super::discovery::discover_builtins()
         .into_iter()
         .find(|p| p.id == "com.mindstream.templates.core")
@@ -521,15 +496,16 @@ fn templates_plugin_renders_macros_in_lua() {
     let out = run_plugin_script(
         &plugin.files,
         &plugin.manifest,
-        vec!["notes.read".into(), "notes.create".into()],
-        "renderTemplate",
-        serde_json::json!({
-            "title": "Log {{date:YYYY}}",
-            "body": "# {{title|upper}}\nid={{uuid}}\nweek={{date+7d:YYYY-MM-DD}}",
-            "now": "2026-07-25T10:00:00Z",
-        }),
-        Vec::new(),
-        None,
+        verified_call(
+            &plugin,
+            &["notes.read", "notes.create"],
+            "renderTemplate",
+            serde_json::json!({
+                "title": "Log {{date:YYYY}}",
+                "body": "# {{title|upper}}\nid={{uuid}}\nweek={{date+7d:YYYY-MM-DD}}",
+                "now": "2026-07-25T10:00:00Z",
+            }),
+        ),
     )
     .unwrap();
     assert_eq!(out["title"], serde_json::json!("Log 2026"));
@@ -551,7 +527,7 @@ fn templates_plugin_renders_macros_in_lua() {
 
 #[test]
 fn templates_plugin_localizes_dates_via_locale() {
-    // The `locale` on the render input threads through to ms.date, so a German
+    // The `locale` on the render input threads through to the host clock, so a German
     // template gets German month names.
     let plugin = super::discovery::discover_builtins()
         .into_iter()
@@ -560,32 +536,217 @@ fn templates_plugin_localizes_dates_via_locale() {
     let out = run_plugin_script(
         &plugin.files,
         &plugin.manifest,
-        vec!["notes.read".into(), "notes.create".into()],
-        "renderTemplate",
-        serde_json::json!({
-            "title": "{{date:MMMM}}",
-            "body": "",
-            "now": "2026-07-25T10:00:00Z",
-            "locale": "de",
-        }),
-        Vec::new(),
-        None,
+        verified_call(
+            &plugin,
+            &["notes.read", "notes.create"],
+            "renderTemplate",
+            serde_json::json!({
+                "title": "{{date:MMMM}}",
+                "body": "",
+                "now": "2026-07-25T10:00:00Z",
+                "locale": "de",
+            }),
+        ),
     )
     .unwrap();
     assert_eq!(out["title"], serde_json::json!("Juli"));
 }
 
 #[test]
-fn run_plugin_script_refuses_a_non_luau_runtime() {
+fn bundled_typst_without_native_permission_keeps_source_editing() {
+    let plugin = discovery::discover_builtins()
+        .into_iter()
+        .find(|p| p.id == "com.mindstream.typst")
+        .unwrap();
+    assert_eq!(plugin.manifest.runtime, manifest::PluginRuntime::Wasm);
+    for export in ["renderDocument", "exportDocument"] {
+        let out = run_plugin_script(
+            &plugin.files,
+            &plugin.manifest,
+            verified_call(&plugin, &[], export, serde_json::json!({"body": "= Hello"})),
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            serde_json::json!({"sourceOnly": true, "diagnostics": []})
+        );
+    }
+}
+
+/// The conformance component the runtime crate's tests use.
+const CONFORMANCE_WASM: &[u8] = mindstream_plugin_fixtures::CONFORMANCE_RUST;
+
+fn write_wasm_plugin(dir: &std::path::Path, permissions: serde_json::Value) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("plugin.wasm"), CONFORMANCE_WASM).unwrap();
+    std::fs::write(
+        dir.join("manifest.json"),
+        serde_json::json!({
+            "manifestVersion": 2,
+            "id": "com.a.wasm",
+            "name": "Wasm",
+            "version": "1.0.0",
+            "runtime": "wasm",
+            "entry": "plugin.wasm",
+            "permissions": permissions,
+        })
+        .to_string(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_wasm_plugin_on_disk_carries_the_bytes_its_checksum_covers() {
+    let dir = std::env::temp_dir().join(format!("ms-wasm-plugin-{}", uuid::Uuid::new_v4()));
+    write_wasm_plugin(&dir, serde_json::json!([]));
+    let plugin =
+        discovery::read_plugin(discovery::PluginFiles::Fs(dir.clone()), SOURCE_INSTALLED).unwrap();
+    assert_eq!(plugin.manifest.runtime, manifest::PluginRuntime::Wasm);
+    assert_eq!(
+        plugin.entry_bytes.as_ref().map(|bytes| bytes.as_slice()),
+        Some(CONFORMANCE_WASM)
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn run_plugin_script_executes_a_wasm_component() {
+    let dir = std::env::temp_dir().join(format!("ms-wasm-plugin-{}", uuid::Uuid::new_v4()));
+    write_wasm_plugin(&dir, serde_json::json!(["notes.read"]));
+    let plugin =
+        discovery::read_plugin(discovery::PluginFiles::Fs(dir.clone()), SOURCE_INSTALLED).unwrap();
+    let mut menu = call(
+        &["notes.read"],
+        "menu",
+        serde_json::json!({ "settings": { "tag": "tpl" } }),
+    );
+    menu.notes = vec![runtime::host::NoteMeta {
+        id: "n1".into(),
+        title: "Daily".into(),
+        tags: vec!["tpl".into()],
+        kind: "markdown".into(),
+        folder_id: None,
+        folder_path: String::new(),
+        created: "2026-07-26T00:00:00Z".into(),
+        modified: "2026-07-26T00:00:00Z".into(),
+    }];
+    menu.verified_entry = plugin.entry_bytes.clone();
+    let out = run_plugin_script(&plugin.files, &plugin.manifest, menu).unwrap();
+    assert_eq!(out["effect"], "openMenu");
+    assert_eq!(out["items"][0]["run"]["sourceNoteId"], "n1");
+
+    let echo = run_plugin_script(
+        &plugin.files,
+        &plugin.manifest,
+        verified_call(&plugin, &[], "echo", serde_json::json!({ "x": 1 })),
+    )
+    .unwrap();
+    assert_eq!(echo, serde_json::json!({ "x": 1 }));
+
+    // The granted set, not the manifest, decides: notes.read was not passed.
+    let denied = run_plugin_script(
+        &plugin.files,
+        &plugin.manifest,
+        verified_call(&plugin, &[], "menu", serde_json::json!({})),
+    )
+    .unwrap_err();
+    assert!(denied.to_string().contains("Denied"), "{denied}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn wasm_discovery_rejects_a_missing_entry() {
+    let dir = std::env::temp_dir().join(format!("ms-wasm-plugin-{}", uuid::Uuid::new_v4()));
+    write_wasm_plugin(&dir, serde_json::json!([]));
+    std::fs::remove_file(dir.join("plugin.wasm")).unwrap();
+    let err = discovery::read_plugin(discovery::PluginFiles::Fs(dir.clone()), SOURCE_INSTALLED)
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("entry 'plugin.wasm' not found"),
+        "{err}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn wasm_execution_rejects_unverified_entries_even_if_the_file_exists() {
+    let dir = std::env::temp_dir().join(format!("ms-wasm-plugin-{}", uuid::Uuid::new_v4()));
+    write_wasm_plugin(&dir, serde_json::json!([]));
+    let plugin =
+        discovery::read_plugin(discovery::PluginFiles::Fs(dir.clone()), SOURCE_INSTALLED).unwrap();
+    std::fs::remove_file(dir.join("plugin.wasm")).unwrap();
+    let request = call(&[], "echo", serde_json::json!({}));
+    // A file appearing after context preparation cannot supply a missing snapshot.
+    std::fs::write(dir.join("plugin.wasm"), CONFORMANCE_WASM).unwrap();
+    let err = run_plugin_script(&plugin.files, &plugin.manifest, request).unwrap_err();
+    assert!(
+        err.to_string().contains("no verified component bytes"),
+        "{err}"
+    );
+
+    let builtin = discovery::discover_builtins()
+        .into_iter()
+        .find(|plugin| plugin.entry_bytes.is_some())
+        .unwrap();
+    for plugin in [&plugin, &builtin] {
+        let err = run_plugin_script(
+            &plugin.files,
+            &plugin.manifest,
+            call(&[], "echo", serde_json::json!({})),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("no verified component bytes"),
+            "{err}"
+        );
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn wasm_execution_uses_the_verified_snapshot_after_the_entry_changes() {
+    let dir = std::env::temp_dir().join(format!("ms-wasm-plugin-{}", uuid::Uuid::new_v4()));
+    write_wasm_plugin(&dir, serde_json::json!([]));
+    let plugin =
+        discovery::read_plugin(discovery::PluginFiles::Fs(dir.clone()), SOURCE_INSTALLED).unwrap();
+    for replacement in [Some(b"unapproved bytes".as_slice()), None] {
+        match replacement {
+            Some(bytes) => std::fs::write(dir.join("plugin.wasm"), bytes).unwrap(),
+            None => std::fs::remove_file(dir.join("plugin.wasm")).unwrap(),
+        }
+        let out = run_plugin_script(
+            &plugin.files,
+            &plugin.manifest,
+            verified_call(&plugin, &[], "echo", serde_json::json!({"verified": true})),
+        )
+        .unwrap();
+        assert_eq!(out, serde_json::json!({"verified": true}));
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn wasm_limits_come_from_the_wasm_policy() {
+    let m = manifest_with(serde_json::json!({
+        "runtime": "wasm", "entry": "plugin.wasm",
+        "limits": { "memoryBytes": 1 }
+    }));
+    let limits = script_limits(&m);
+    assert_eq!(limits.memory_bytes, 4 * 1024 * 1024, "the wasm floor");
+    assert_eq!(
+        limits.timeout,
+        std::time::Duration::from_secs(1),
+        "the wasm default"
+    );
+}
+
+#[test]
+fn run_plugin_script_refuses_a_declarative_plugin() {
     let manifest = manifest_with(serde_json::json!({}));
     let out = run_plugin_script(
         &super::discovery::PluginFiles::Fs(std::env::temp_dir()),
         &manifest,
-        vec![],
-        "render",
-        serde_json::json!({}),
-        Vec::new(),
-        None,
+        call(&[], "render", serde_json::json!({})),
     );
     assert!(out.is_err());
 }
@@ -690,46 +851,6 @@ fn safe_segment_accepts_plain_names_and_rejects_traversal() {
 }
 
 #[test]
-fn validate_binary_name_rejects_backslash_and_empty() {
-    assert!(validate_binary_name("").is_err());
-    assert!(validate_binary_name("tools\\typst").is_err());
-    assert!(validate_binary_name("ty..pst").is_err());
-    // A `+` is allowed (some tool basenames carry it), non-exe extensions are not.
-    assert!(validate_binary_name("clang++").is_ok());
-    assert!(validate_binary_name("typst.bat").is_err());
-}
-
-#[test]
-fn validate_native_tool_args_enforces_count_and_size_and_nul() {
-    assert!(validate_native_tool_args(&["--version".into()], &None).is_ok());
-    // Too many args.
-    let many = vec!["x".to_string(); MAX_NATIVE_TOOL_ARGS + 1];
-    assert!(validate_native_tool_args(&many, &None).is_err());
-    // An arg carrying a NUL byte.
-    assert!(validate_native_tool_args(&["a\0b".into()], &None).is_err());
-    // Oversized arg.
-    let big = "a".repeat(MAX_NATIVE_TOOL_ARG_BYTES + 1);
-    assert!(validate_native_tool_args(&[big], &None).is_err());
-    // NUL in stdin.
-    assert!(validate_native_tool_args(&[], &Some("in\0put".into())).is_err());
-}
-
-#[test]
-fn split_plugin_rel_path_normalizes_and_allows_empty_when_asked() {
-    assert_eq!(
-        split_plugin_rel_path("a/b/c", false).unwrap(),
-        vec!["a", "b", "c"]
-    );
-    // Trailing slashes are trimmed away.
-    assert_eq!(split_plugin_rel_path("a/", true).unwrap(), vec!["a"]);
-    // A leading slash is rejected outright (absolute paths aren't allowed).
-    assert!(split_plugin_rel_path("/a", true).is_err());
-    // Empty resolves to no segments only when the caller opts in.
-    assert!(split_plugin_rel_path("", true).unwrap().is_empty());
-    assert!(split_plugin_rel_path("a\\b", true).is_err());
-}
-
-#[test]
 fn malformed_declarations_stop_the_whole_manifest() {
     // A malformed declaration used to surface only when something reached for
     // it. Now the plugin fails to load, which is the honest outcome: the
@@ -739,7 +860,7 @@ fn malformed_declarations_stop_the_whole_manifest() {
         serde_json::json!({ "contributes": { "nativeTools": "not-an-array" } }),
     ] {
         let mut v = serde_json::json!({
-            "manifestVersion": 1, "id": "com.a.plugin", "name": "A",
+            "manifestVersion": 2, "id": "com.a.plugin", "name": "A",
             "version": "1.0.0", "runtime": "manifest-only"
         });
         let obj = v.as_object_mut().unwrap();
@@ -849,28 +970,6 @@ fn ensure_write_target_safe_rejects_symlinks() {
     std::os::unix::fs::symlink(tmp.join("real"), &link).unwrap();
     assert!(ensure_write_target_safe(&root, &link).is_err());
     std::fs::remove_dir_all(&tmp).ok();
-}
-
-#[test]
-fn path_extensions_offers_candidates() {
-    #[cfg(windows)]
-    {
-        // A name that already carries an extension is used verbatim.
-        assert_eq!(
-            path_extensions("typst.exe"),
-            vec![std::ffi::OsString::new()]
-        );
-        // A bare name gets `.exe` appended among its candidates.
-        let candidates = path_extensions("typst");
-        assert!(candidates
-            .iter()
-            .any(|ext| ext.to_string_lossy().eq_ignore_ascii_case(".exe")));
-    }
-    #[cfg(not(windows))]
-    {
-        // Off Windows there is no PATHEXT dance: use the name as-is.
-        assert_eq!(path_extensions("typst"), vec![std::ffi::OsString::new()]);
-    }
 }
 
 #[test]
@@ -1004,229 +1103,23 @@ fn note_snapshot_builds_folder_paths_and_metadata() {
 }
 
 #[test]
-fn limit_readers_clamp_and_fall_back_to_defaults() {
-    // A manifest may ask; only the host decides. Above the ceiling → clamped.
-    assert_eq!(limit_usize(Some(999), 10, 1, 100), 100);
-    // Absent → the default, itself clamped into range.
-    assert_eq!(limit_usize(None, 10, 1, 100), 10);
-
-    let ms = std::time::Duration::from_millis;
-    // 50ms is below the 100ms floor → clamped up.
-    assert_eq!(
-        limit_duration(Some(50), ms(1000), ms(100), ms(5000)),
-        ms(100)
-    );
-    // Absent → the supplied default, already within range.
-    assert_eq!(limit_duration(None, ms(1000), ms(100), ms(5000)), ms(1000));
-
-    // And through the real path: a manifest's declared limits reach luau::Limits.
+fn a_manifests_declared_limits_are_clamped_by_its_runtime() {
+    // A manifest may ask; only the host decides.
     let m = manifest_with(serde_json::json!({
-        "runtime": "luau", "entry": "main.luau",
+        "runtime": "wasm", "entry": "plugin.wasm",
         "limits": { "memoryBytes": 1, "timeoutMs": 999999 }
     }));
-    let limits = luau_limits(&m);
-    assert_eq!(limits.memory_bytes, 1024 * 1024, "clamped up to the floor");
-    assert_eq!(limits.timeout, ms(5000), "clamped down to the ceiling");
-}
-/// regression below needs. `None` on the rare host missing it → the test skips.
-#[cfg(unix)]
-fn stdin_echo_tool() -> Option<PathBuf> {
-    let cat = PathBuf::from("/bin/cat");
-    cat.exists().then_some(cat)
-}
-#[cfg(windows)]
-fn stdin_echo_tool() -> Option<PathBuf> {
-    resolve_path_binary("sort").ok().flatten()
-}
-
-#[test]
-fn large_native_tool_output_is_drained_without_deadlock() {
-    // Regression: `run_native_tool_process` used to write all of stdin, then
-    // poll for exit while only draining stdout/stderr *after* the child exited.
-    // A child emitting more than the OS pipe buffer (~64 KiB, less on Windows)
-    // would block in `write()`, never exit, and be killed at the timeout with
-    // its output lost — silently breaking e.g. Typst PDF export, whose PDF comes
-    // back on stdout. Concurrent draining must return the full output instead.
-    let Some(tool) = stdin_echo_tool() else {
-        eprintln!("skipping: no stdin-echo tool on this platform");
-        return;
-    };
-    // 256 KiB dwarfs any pipe buffer; identical short lines keep `sort`'s output
-    // byte-for-byte the same size as its input.
-    let payload = "abc\n".repeat(64 * 1024);
-    let out = run_native_tool_process(
-        tool,
-        std::env::temp_dir(),
-        Vec::new(),
-        Some(payload.clone()),
-        Some(10_000),
-    )
-    .expect("running the echo tool succeeds");
-
-    assert!(
-        !out.timed_out,
-        "output larger than the pipe buffer must not deadlock into a timeout"
+    let limits = script_limits(&m);
+    assert_eq!(
+        limits.memory_bytes,
+        4 * 1024 * 1024,
+        "clamped up to the floor"
     );
-    assert_eq!(out.status_code, Some(0), "the tool exited cleanly");
-    // The whole stream survived. A lower bound (not exact equality) tolerates
-    // Windows `sort` rewriting line endings; it still proves we drained far more
-    // than one pipe buffer's worth while the child was still running.
-    assert!(
-        out.stdout.len() >= 128 * 1024,
-        "expected the full stdout stream, got {} bytes",
-        out.stdout.len()
+    assert_eq!(
+        limits.timeout,
+        std::time::Duration::from_millis(5000),
+        "clamped down to the ceiling"
     );
-}
-
-/// Artifact publishing: the half of the download that is bytes and files.
-///
-/// The request itself stays untested here (it needs a host serving HTTPS the
-/// app trusts, which is why flow 2.8 in docs/e2e/flows.md is still open), but
-/// the gate the request feeds is the part that decides whether a downloaded
-/// file is safe to keep.
-mod artifacts {
-    use super::*;
-
-    fn artifact_dir(name: &str) -> PathBuf {
-        let mut dir = std::env::temp_dir();
-        dir.push(format!("mindstream-artifact-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn artifact(bytes: &[u8]) -> manifest::ArtifactDecl {
-        manifest::ArtifactDecl {
-            id: "typst-compiler".into(),
-            kind: manifest::ArtifactKind::Wasm,
-            version: "0.13.1".into(),
-            url: "https://example.test/typst.wasm".into(),
-            sha256: sha256_hex(bytes),
-            file_name: "typst.wasm".into(),
-            size_bytes: Some(bytes.len() as u64),
-        }
-    }
-
-    /// Files under the root, so a test can say "nothing was written".
-    fn files(root: &Path) -> Vec<String> {
-        let mut found = Vec::new();
-        let mut stack = vec![root.to_path_buf()];
-        while let Some(dir) = stack.pop() {
-            let Ok(entries) = std::fs::read_dir(&dir) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    stack.push(path);
-                } else {
-                    found.push(path.file_name().unwrap().to_string_lossy().into_owned());
-                }
-            }
-        }
-        found.sort();
-        found
-    }
-
-    #[test]
-    fn publishes_a_body_that_matches_the_manifest() {
-        let root = artifact_dir("ok");
-        let bytes = b"pretend compiler bytes";
-        let declared = artifact(bytes);
-
-        let path = install_artifact_bytes(&root, &declared, bytes).unwrap();
-
-        assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        assert!(
-            path.ends_with(
-                Path::new("typst-compiler/0.13.1")
-                    .join(&declared.sha256)
-                    .join("typst.wasm")
-            ),
-            "laid out by id, version and content digest: {path:?}"
-        );
-        // The staging copy is gone: it was renamed, not left behind.
-        assert_eq!(files(&root), ["typst.wasm"]);
-    }
-
-    #[test]
-    fn rejects_a_body_whose_digest_does_not_match_and_writes_nothing() {
-        // Swapped for a body of the SAME length, so the size check cannot be
-        // what catches it — this is the digest doing the work it exists for.
-        // Keeping those bytes would hand the loader something to execute that
-        // nobody vouched for.
-        let root = artifact_dir("digest");
-        let declared = artifact(b"the real compiler");
-
-        let err = install_artifact_bytes(&root, &declared, b"the fake compiler").unwrap_err();
-
-        assert!(format!("{err}").contains("digest mismatch"), "{err}");
-        assert!(files(&root).is_empty(), "left {:?} behind", files(&root));
-    }
-
-    #[test]
-    fn rejects_a_body_of_the_wrong_length_and_writes_nothing() {
-        let root = artifact_dir("size");
-        let bytes = b"exactly this";
-        let mut declared = artifact(bytes);
-        declared.size_bytes = Some(bytes.len() as u64 + 1);
-
-        let err = install_artifact_bytes(&root, &declared, bytes).unwrap_err();
-
-        assert!(format!("{err}").contains("size mismatch"), "{err}");
-        assert!(files(&root).is_empty());
-    }
-
-    #[test]
-    fn accepts_a_manifest_that_declares_no_size() {
-        // `sizeBytes` is optional; the digest alone still has to be enough.
-        let root = artifact_dir("nosize");
-        let bytes = b"no declared size";
-        let mut declared = artifact(bytes);
-        declared.size_bytes = None;
-
-        assert!(install_artifact_bytes(&root, &declared, bytes).is_ok());
-        assert_eq!(files(&root), ["typst.wasm"]);
-    }
-
-    #[test]
-    fn keeps_different_bytes_with_the_same_declared_version() {
-        let root = artifact_dir("replace");
-        let first = b"first build";
-        let first_path = install_artifact_bytes(&root, &artifact(first), first).unwrap();
-
-        let second = b"second build";
-        let path = install_artifact_bytes(&root, &artifact(second), second).unwrap();
-
-        assert_eq!(std::fs::read(&path).unwrap(), second);
-        assert_eq!(std::fs::read(first_path).unwrap(), first);
-        assert_eq!(files(&root), ["typst.wasm", "typst.wasm"]);
-    }
-
-    #[test]
-    fn refuses_a_manifest_that_would_escape_the_artifact_root() {
-        // Every path segment comes from the manifest, which is untrusted: a
-        // traversal here would be a write-anywhere primitive.
-        let root = artifact_dir("escape");
-        let bytes = b"payload";
-        for (field, value) in [
-            ("id", "../../evil"),
-            ("version", ".."),
-            ("file_name", "sub/evil.wasm"),
-        ] {
-            let mut declared = artifact(bytes);
-            match field {
-                "id" => declared.id = value.into(),
-                "version" => declared.version = value.into(),
-                _ => declared.file_name = value.into(),
-            }
-            assert!(
-                install_artifact_bytes(&root, &declared, bytes).is_err(),
-                "{field} = {value} was accepted"
-            );
-        }
-        assert!(files(&root).is_empty());
-    }
 }
 
 /// Build a `DiscoveredPlugin` standing for "what is on disk right now". Only
@@ -1247,6 +1140,7 @@ fn on_disk(id: &str, checksum: &str, source: &str) -> discovery::DiscoveredPlugi
         signature_status: "unsigned".to_string(),
         manifest: manifest_with(serde_json::json!({ "id": id })),
         manifest_json: serde_json::json!({ "id": id }),
+        entry_bytes: None,
     }
 }
 
@@ -1331,7 +1225,7 @@ fn load_runnable_returns_the_approved_plugin_from_disk() {
     std::fs::write(
         plugin_dir.join("manifest.json"),
         serde_json::json!({
-            "manifestVersion": 1,
+            "manifestVersion": 2,
             "id": "com.a.runnable",
             "name": "Runnable",
             "version": "1.0.0",

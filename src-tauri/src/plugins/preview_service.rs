@@ -1,6 +1,6 @@
 //! Long-lived **preview services** for plugins — a declared PATH binary the host
 //! runs as a *persistent local server* (unlike the one-shot
-//! [`super::run_native_tool_process`]) and exposes to a plugin note's preview
+//! [`mindstream_plugin_runtime::process::run`]) and exposes to a plugin note's preview
 //! iframe. The motivating case is `tinymist preview`, which serves an
 //! incremental-SVG frontend on an HTTP "data plane" port and a bidirectional
 //! "control plane" WebSocket (click-to-source / cursor-follow).
@@ -782,7 +782,8 @@ pub async fn plugins_preview_start(
             .collect();
         let mut command = Command::new(&binary);
         command.args(&args).current_dir(&cwd);
-        session.child = Some(super::hide_console_window(&mut command).spawn()?);
+        session.child =
+            Some(mindstream_plugin_runtime::process::hide_console_window(&mut command).spawn()?);
         let proxy = start_loopback_proxy(data_port, proxy_styles.clone().unwrap_or_default())?;
         let data_url = proxy.url();
         session.proxy = Some(proxy);
@@ -1081,7 +1082,7 @@ mod tests {
         let mut session = Session {
             _package_lease: None,
             child: Some(
-                super::super::hide_console_window(&mut command)
+                mindstream_plugin_runtime::process::hide_console_window(&mut command)
                     .spawn()
                     .unwrap(),
             ),
@@ -1408,7 +1409,7 @@ mod tests {
     /// A manifest declaring one native service, parsed the way discovery does.
     fn service_manifest(service: serde_json::Value) -> manifest::Manifest {
         let v = serde_json::json!({
-            "manifestVersion": 1,
+            "manifestVersion": 2,
             "id": "com.a.plugin",
             "name": "A Plugin",
             "version": "1.0.0",
@@ -1438,7 +1439,7 @@ mod tests {
     #[test]
     fn a_manifest_declaring_no_services_has_none() {
         let v = serde_json::json!({
-            "manifestVersion": 1, "id": "com.a.plugin", "name": "A",
+            "manifestVersion": 2, "id": "com.a.plugin", "name": "A",
             "version": "1.0.0", "runtime": "manifest-only"
         });
         let m = manifest::Manifest::parse(v.to_string().as_bytes()).unwrap();
@@ -1451,7 +1452,7 @@ mod tests {
         // A service the backend cannot read is a reason to refuse the plugin,
         // not something to discover when someone opens a preview.
         let v = serde_json::json!({
-            "manifestVersion": 1, "id": "com.a.plugin", "name": "A",
+            "manifestVersion": 2, "id": "com.a.plugin", "name": "A",
             "version": "1.0.0", "runtime": "manifest-only",
             "permissions": ["nativeServices.run"],
             "contributes": { "nativeServices": [{ "id": 42 }] }
