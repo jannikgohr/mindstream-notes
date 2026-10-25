@@ -915,9 +915,9 @@ export async function loginClient(
     await closeSettingsDialog(client);
     return;
   }
-  if (await h.isDisplayed('Log out')) {
+  if (await h.isDisplayed('Sign out')) {
     const previousDocument = await client.execute(() => performance.timeOrigin);
-    await h.click('Log out');
+    await h.click('Sign out');
     await waitForAuthReload(client, previousDocument);
     await h.click('Open settings');
     await h.click('Account & Sync');
