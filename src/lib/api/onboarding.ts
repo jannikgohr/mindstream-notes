@@ -6,6 +6,7 @@ import {
   TauriCommandName
 } from './core';
 import { createNote } from './notes';
+import { mockApi } from './mock-store';
 
 export const ONBOARDING_STEPS = [
   'account',
@@ -134,10 +135,11 @@ export function finishOnboarding(
     { id, skipped, initialNote, demoNotes },
     async () => {
       const previous = browserOwned(id);
-      // The browser store has no demo ids; ordinary notes stand in.
       const ids: string[] = [];
-      for (const { title, body } of initialNote ? [initialNote] : demoNotes)
-        ids.push((await createNote({ title, body })).id);
+      if (initialNote) ids.push((await createNote(initialNote)).id);
+      else
+        for (const note of demoNotes)
+          ids.push((await mockApi.insertDemoNote(note)).id);
       return {
         progress: saveBrowser({
           ...previous,

@@ -23,6 +23,7 @@ security issues still open against the design described here see
 
 ```text
 src/                    Svelte app: UI components, stores, editors, API bridge
+  lib/onboarding/demo-notes/  Welcome Markdown bundled with setup
 src-tauri/              Tauri app and Rust backend: persistence, sync, commands
 backend/server/         The sync server (AGPL-3.0), see server-design.md
 backend/scripts/        Driver for the disposable server the e2e suites use
@@ -31,7 +32,6 @@ plugin-sdk/             Plugin SDKs, the WIT contract, shipped plugin sources
 packages/svelte-kanban/ Fork of the board renderer
 protocol/               The room protocol and invite-link format, specified once
 vendor/etebase-rs/      The Etebase client library, changed here
-demo-notes/             Welcome notes seeded on first run
 e2e-tests/              Browser, backend and real-app end-to-end suites
 docs/                   This documentation
 ```

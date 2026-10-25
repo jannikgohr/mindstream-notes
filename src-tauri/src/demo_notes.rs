@@ -1,7 +1,7 @@
 //! Demo notes: the example notes setup can add to a vault.
 //!
-//! Their text lives in the repo under `demo-notes/<slug>/<lang>.md`. At setup
-//! the editor turns each file into the document the note starts from (see
+//! Their text lives under `src/lib/onboarding/demo-notes/<slug>/<lang>.md`.
+//! At setup the editor turns each file into the document the note starts from (see
 //! src/lib/onboarding/demo-notes.ts), and this module names the note after
 //! that document: `demo_<slug>_<lang>_<hash>`, the hash covering the title and
 //! the encoded Yjs state.
@@ -37,7 +37,7 @@ const MAX_STATE: usize = 1024 * 1024;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DemoNote {
-    /// The note's directory under `demo-notes/`.
+    /// The note's directory under `src/lib/onboarding/demo-notes/`.
     slug: String,
     /// The language of the file the note came from.
     lang: String,
