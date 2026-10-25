@@ -75,9 +75,11 @@ services:
     deploy:
       resources:
         limits:
-          # Starting points, not sizing advice: raise them with the
+          # 0.0 leaves CPU use uncapped. An explicit cap must not exceed
+          # the host's CPU count, or Docker refuses to create the container.
+          cpus: '${MINDSTREAM_CPU_LIMIT:-0.0}'
+          # Starting point, not sizing advice: raise it with the
           # connection and body limits above.
-          cpus: '4.0'
           memory: 4G
     logging: &logging
       driver: json-file

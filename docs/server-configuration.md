@@ -24,6 +24,13 @@ the compose file does not pass on yet: setting it in `.env` has no effect for
 now. Passing them on is planned. Run the server binary directly and every
 variable works.
 
+Compose leaves CPU use uncapped by default. Set `MINDSTREAM_CPU_LIMIT` in
+`.env`, or in Dokploy's environment settings, to cap it in cores. An explicit
+cap must not exceed the host's CPU count. For example, use `2.0` or less on a
+2-CPU VPS. Docker refuses to create the container if the cap is too high.
+Set `0.0` to remove the cap. This setting controls Docker, so it does not
+need to be passed into the server process. The memory limit remains 4 GiB.
+
 | Variable                                 | Default           | Compose                  | Meaning                                                                             |
 | ---------------------------------------- | ----------------- | ------------------------ | ----------------------------------------------------------------------------------- |
 | `MINDSTREAM_DATABASE_URL`                | required          | from `POSTGRES_PASSWORD` | Postgres connection string                                                          |
