@@ -160,3 +160,8 @@ raw logs, screenshots for visible assertions, and a pass/fail/unmeasured table.
 Keep bulky evidence out of Git and provide its location plus checksums. Commit
 small reports or test fixes on the separate test branch. Report failures without
 raising production budgets or removing assertions to make the run pass.
+
+## Recorded results
+
+See the [24 October 2026 physical Android report](benchmarks/android-plugin-validation-2026-10-24.md)
+for the tested revision, commands, artifacts, failures and remaining gates.

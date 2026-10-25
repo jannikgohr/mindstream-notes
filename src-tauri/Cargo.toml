@@ -201,6 +201,8 @@ muda = { version = "0.19", default-features = false, features = ["gtk"] }
 dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust", "vendored"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
+# Open save-picker content URIs through Android's ContentResolver.
+tauri-plugin-fs = "2"
 # Requires ndk-context to be initialised from Java before any Store
 # is created — see Keyring.kt + MainActivity.onCreate in
 # src-tauri/gen/android/app/...
