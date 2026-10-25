@@ -77,18 +77,24 @@ retryable and does not overwrite a note created by an earlier attempt. Import
 and restore finish setup before opening their existing dialogs. Cancelling a
 dialog leaves the workspace ready to use.
 
-The welcome content is the repo's demo notes, `demo-notes/<slug>/<lang>.md`, in
-the setup language (English where a note has no file in it). See
-`demo-notes/README.md` for how to add or change one. Setup renders each file in
-a hidden editor with fixed options and hands the document to
+The welcome content lives in `src/lib/onboarding/demo-notes/<slug>/<lang>.md`,
+in the setup language (English where a note has no file in it). See
+`src/lib/onboarding/demo-notes/README.md` for how to add or change one. Setup
+renders each file in a hidden editor with fixed options and hands the document to
 `finish_onboarding`, which names the note after a hash of it and adds it only if
 no note has that id. An app update never changes an existing demo note.
+
+The "Welcome notes" choice adds an introduction, sync and live collaboration,
+import/export and backup, and everyday tips in English or German. The welcome
+note opens first. Links between demo notes are resolved to the target note's
+content-derived ID before rendering, so they keep working after a rename. The
+browser fallback uses the same IDs and editor state as native setup.
 
 ## Verification
 
 ```sh
 pnpm test -- src/lib/api/onboarding.test.ts src/lib/hotkeys/presets.test.ts src/lib/onboarding/demo-notes.test.ts
-pnpm test:e2e onboarding --project chromium --workers 1
+pnpm test:e2e 'onboarding\.spec\.ts$' --project chromium --workers 1
 cd src-tauri
 cargo test --lib onboarding::tests
 cargo test --lib demo_notes

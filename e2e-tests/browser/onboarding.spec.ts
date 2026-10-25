@@ -265,7 +265,7 @@ test('appearance updates live, setup resumes, and shortcuts work in the practice
   await page.keyboard.press('Control+Shift+1');
   await expect(editor.locator('h1')).toHaveCount(2);
   await page.getByRole('button', { name: 'Continue', exact: true }).click();
-  await page.getByRole('button', { name: /^A short welcome note/ }).click();
+  await page.getByRole('button', { name: /^Welcome notes/ }).click();
   await page
     .getByRole('button', { name: 'Open Mindstream', exact: true })
     .click();
@@ -274,6 +274,18 @@ test('appearance updates live, setup resumes, and shortcuts work in the practice
   ).toHaveCount(0);
   await expect(
     page.locator('.dv-active-tab').filter({ hasText: 'Welcome to Mindstream' })
+  ).toBeVisible();
+  const syncLink = page
+    .locator(
+      '.ProseMirror .wikilink-note-link[data-note-id^="demo_sync_en_"]:visible'
+    )
+    .first();
+  await expect(syncLink).toBeVisible();
+  await syncLink.click({ modifiers: ['Control'] });
+  await expect(
+    page
+      .locator('.dv-active-tab')
+      .filter({ hasText: 'Sync and live collaboration' })
   ).toBeVisible();
 });
 

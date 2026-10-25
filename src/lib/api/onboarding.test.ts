@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as notes from './notes';
+import { demoNoteId } from '$lib/onboarding/demo-note-id';
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 import {
@@ -60,7 +61,7 @@ describe('browser onboarding', () => {
     expect(await notes.listNotes()).toHaveLength(before.length + 1);
   });
 
-  it('stands in ordinary notes for demo notes and opens the first', async () => {
+  it('keeps native demo IDs and editor state, opens the first, and preserves edits on retry', async () => {
     const started = await restartOnboarding();
     const before = await notes.listNotes();
     const demo = (slug: string, title: string) => ({
@@ -70,14 +71,20 @@ describe('browser onboarding', () => {
       body: `# ${title}`,
       yrsState: [1, 2, 3]
     });
-    const finished = await finishOnboarding(started.id, false, null, [
-      demo('basics', 'Basics'),
-      demo('welcome', 'Welcome')
-    ]);
+    const demos = [demo('basics', 'Basics'), demo('welcome', 'Welcome')];
+    const finished = await finishOnboarding(started.id, false, null, demos);
+    expect(finished.noteId).toBe(await demoNoteId(demos[0]));
     expect(await notes.loadNote(finished.noteId!)).toMatchObject({
       title: 'Basics',
-      body: '# Basics'
+      body: '# Basics',
+      yrs_state: [1, 2, 3],
+      payload_schema: 2
     });
+    expect(await notes.listNotes()).toHaveLength(before.length + 2);
+    await notes.saveNote({ id: finished.noteId!, title: 'Renamed' });
+    const restarted = await restartOnboarding();
+    await finishOnboarding(restarted.id, false, null, demos);
+    expect((await notes.loadNote(finished.noteId!)).title).toBe('Renamed');
     expect(await notes.listNotes()).toHaveLength(before.length + 2);
   });
 

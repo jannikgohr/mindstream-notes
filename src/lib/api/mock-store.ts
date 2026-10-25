@@ -25,6 +25,8 @@ import type { SearchHit } from './search';
 import type { SaveSignatureInput, SignatureRecord } from './signatures';
 import type { Version, VersionAction, VersionSummary } from './history';
 import { mockSearchNotes } from './search-matcher';
+import type { DemoNote } from './onboarding';
+import { demoNoteId } from '$lib/onboarding/demo-note-id';
 import {
   countWords,
   markdownToPlain,
@@ -322,6 +324,21 @@ export const mockApi = {
   },
 
   // ---- Notes ----
+  async insertDemoNote(input: DemoNote): Promise<Note> {
+    const id = await demoNoteId(input);
+    const existing = notes.get(id);
+    if (existing) return { ...existing };
+    const created = await this.createNote(input);
+    notes.delete(created.id);
+    const note = {
+      ...created,
+      id,
+      yrs_state: input.yrsState,
+      payload_schema: 2
+    };
+    notes.set(id, note);
+    return { ...note };
+  },
   async listNotes(includeTrashed: boolean): Promise<NoteSummary[]> {
     const arr = [...notes.values()].filter((n) => includeTrashed || !n.trashed);
     return arr.map(summary);
