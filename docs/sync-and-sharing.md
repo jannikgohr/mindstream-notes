@@ -14,8 +14,9 @@ the [self-hosting quick start](self-hosting.md), or one someone runs for you.
 ## Connecting a vault
 
 Open **Settings → Account & Sync**, or the first step of setup, and choose
-**Self-hosted**. Enter the server's address and use **Check URL** to see that it
-answers. Then sign in, or choose **Create an account**.
+**Self-hosted**. Enter the server's address as the **Server URL** and use
+**Check URL** to see that it answers. Then sign in, or choose **Create an
+account**.
 
 A new account needs a username, an email address and a password, entered
 twice. A server that takes new accounts by invitation also asks for a signup

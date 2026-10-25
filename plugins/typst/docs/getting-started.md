@@ -13,7 +13,7 @@ Open the create menu (the file-tree **New** button, or the mobile create menu)
 and pick **Typst document**. You start from a small placeholder document you can
 edit right away.
 
-Because Typst ships its own note kind, a template of that kind stays a Typst
+Because Typst adds its own kind of note, a template of that kind stays a Typst
 document when you create from it — pair this with the **Templates** plugin to
 stamp out pre-styled documents with `{{title}}`, `{{date}}`, … already filled
 in.

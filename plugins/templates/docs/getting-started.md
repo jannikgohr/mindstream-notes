@@ -14,8 +14,8 @@ Set either (or both) under **Template sources**:
 Both are pickers; if the folder or tag is later deleted, the setting clears
 itself.
 
-Templates work with any note kind — a markdown note, a kanban board, or a
-plugin-owned kind such as a Typst document. This pairs especially well with
+Templates work with any kind of note — a Markdown note, a Kanban board, or a
+kind a plugin adds, such as a Typst document. This pairs especially well with
 Typst: keep a fully styled `.typ` document as your template and stamp out new
 ones with the placeholders already filled in.
 

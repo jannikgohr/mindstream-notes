@@ -12,7 +12,7 @@ opens one and either replaces the vault with it or merges the missing items in.
 - The vault's settings.
 - Shared device preferences and your custom theme presets.
 - Files plugins have written for the vault, and the installed versions of
-  plugin packages. Built-in plugins come with the app, so the backup leaves
+  plugin packages. Core plugins come with the app, so the backup leaves
   them out.
 
 Some things never leave the device. That covers account sessions, the keys in

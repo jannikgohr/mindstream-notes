@@ -1,16 +1,17 @@
-# Non-shipped plugin examples
+# Plugin examples
 
-This directory is outside the app's embedded `plugins/` tree. None of these
-packages or their JavaScript runtimes are bundled into the app. The Rust
-sources for shipped plugins are in [bundled](../bundled/README.md).
+Installable plugins that do not come with the app. This directory is outside
+the app's embedded `plugins/` tree, so none of these packages or their
+JavaScript runtimes are part of the app. The Rust sources of the core plugins
+are in [bundled](../bundled/README.md).
 
 - `templates-typescript/` implements template menus and placeholders with the
-  TypeScript SDK. Its settings and toolbar work like the shipped Rust plugin.
+  TypeScript SDK. Its settings and toolbar work like the core Rust plugin.
 - `typst-typescript/` demonstrates optional declared native tools, binary
   output, diagnostics and source-only fallback.
 
 The TypeScript examples have distinct `com.example.*.typescript` IDs so they
-can be installed without replacing trusted first-party packages. Each folder
+can be installed beside the core plugins without replacing them. Each folder
 contains its manifest, assets and source. The built `plugin.wasm` is not
 committed. Build it with Node >=22.11, without a Rust compiler:
 
@@ -19,7 +20,7 @@ pnpm install --frozen-lockfile
 pnpm plugins:examples
 ```
 
-Install the example folder through Settings → Plugins and approve its grants.
+Install the example folder through Settings → Plugins and approve it.
 For Templates, set a template folder or tag in that example's settings, then
 use its toolbar contribution. These packages still use QuickJS inside their
 components. The shared Wasmtime host does not impose that runtime on Rust

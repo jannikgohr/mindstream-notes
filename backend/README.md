@@ -1,7 +1,7 @@
 # Mindstream Notes backend
 
 One server does everything the app needs from a backend: accounts, encrypted
-storage, sharing, and the live rooms that notes are co-edited in.
+storage, sharing, and editing notes together live.
 It runs on Postgres and sits behind **one URL**, which is the only thing a user
 types into the app.
 

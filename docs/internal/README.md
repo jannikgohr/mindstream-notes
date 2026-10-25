@@ -26,6 +26,8 @@ in the [documentation index](../README.md).
   each user-facing limitation, and the ones only developers meet
 - [Importer performance](import-performance.md): how the importer scales and
   how to run the Wikipedia test vault
+- [Writing documentation](writing-docs.md): the shared vocabulary and style
+  rules for the user docs
 
 ## Design
 

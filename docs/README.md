@@ -33,7 +33,7 @@ Start with the [README](../README.md) for what the app is and where to get it.
   permissions, the host API, runtime limits and signing
 - [Batching host calls](plugin-batch-api.md): the experimental interface for
   sending several host calls at once
-- [Rust starter](../plugin-sdk/rust/README.md): the authoring path the shipped
+- [Rust starter](../plugin-sdk/rust/README.md): the authoring path the core
   plugins use
 - [TypeScript SDK](../plugin-sdk/typescript/README.md): build a plugin with
   Node.js alone

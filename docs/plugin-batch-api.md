@@ -85,11 +85,12 @@ const replies = batch.execute([
 ]);
 ```
 
-This example needs storage read/write and notes read grants. The frontmatter
+This example needs the `pluginStorage.read`, `pluginStorage.write` and
+`notes.read` permissions. The frontmatter
 result feeds a storage write without a guest round trip; only replies 2 and 3
 are returned. Use a separate plan for any guest decision based on those values.
 The SDK test host mirrors the transport but still does not model execution
-budgets; real runtime tests/probes cover that behavior.
+budgets; real runtime tests/probes cover that behaviour.
 
 ## Recovering after a batch error
 
@@ -105,7 +106,7 @@ promise durable writes or that the stopping handler had no effects.
   successfully, so `completed == index`. Their kept replies are available;
   later commands did not run. The stopping command may have partial effects,
   such as a native tool writing a file before an I/O error. Inspect state or
-  use an operation with known idempotent behavior before retrying it.
+  use an operation with known idempotent behaviour before retrying it.
 - `result-limit`: the handler at `index` returned successfully, but its result
   exceeded the cumulative cap. `completed == index + 1`; its effects remain.
   The oversized result is omitted and earlier kept replies are returned.

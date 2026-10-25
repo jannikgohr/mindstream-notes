@@ -58,8 +58,8 @@ signup policy as JSON. `GET /healthz` answers when the server is up; the app's
 
 ## Host names
 
-A login names the host it was made for, and the server refuses one made for
-another host. If logins fail with `wrong_host` behind a proxy, set
+A sign-in names the host it was made for, and the server refuses one made for
+another host. If signing in fails with `wrong_host` behind a proxy, set
 `MINDSTREAM_PUBLIC_HOSTS`.
 
 ## Trusted proxies
@@ -119,15 +119,15 @@ HTTP/1.1 to the server, whatever it speaks to clients.
 A response is built in memory, so the content one response carries is held to
 `MINDSTREAM_MAX_PAGE_BYTES`. A list ends its page early when the next item would
 not fit. Anything else sends the items that fit with their content and the rest
-as the uids of their chunks, which the client then asks for again. The client
-library does that by itself.
+as the uids of their chunks, which the app then asks for again. It does that
+by itself.
 
 ## Reverse proxy
 
 The server speaks plain HTTP/1.1 on loopback; TLS, HTTP/2 and public headers are
 the reverse proxy's job. Pass the original `Host` through (or set
 `MINDSTREAM_PUBLIC_HOSTS`), forward `X-Forwarded-For`, and route `/api/`,
-`/join/` and `/healthz`. Rooms and the change feed are WebSockets under `/api/`,
+`/join/` and `/healthz`. Live editing and the change feed use WebSockets under `/api/`,
 so the proxy has to pass upgrades there. Keep `/admin/` off the public internet.
 
 A proxy that caps request bodies has to allow `MINDSTREAM_MAX_BODY_BYTES`

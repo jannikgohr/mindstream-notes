@@ -1,7 +1,7 @@
 # Mindstream server
 
 The sync server for Mindstream Notes: accounts, encrypted storage, sharing and
-live rooms in one process on Postgres. The app encrypts everything before it
+live editing in one process on Postgres. The app encrypts everything before it
 leaves the device, so everything stored here is ciphertext.
 
 Licensed AGPL-3.0-only, unlike the app. See [LICENSE](LICENSE).

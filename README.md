@@ -9,7 +9,7 @@ a server you host yourself.
 
 [![Latest release](https://img.shields.io/github/v/release/jannikgohr/mindstream-notes)](https://github.com/jannikgohr/mindstream-notes/releases/latest)
 [![codecov](https://codecov.io/gh/jannikgohr/mindstream-notes/branch/main/graph/badge.svg)](https://codecov.io/gh/jannikgohr/mindstream-notes)
-[![Licence: MIT or Apache-2.0](https://img.shields.io/badge/licence-MIT%20or%20Apache--2.0-blue)](#license)
+[![Licence: MIT or Apache-2.0](https://img.shields.io/badge/licence-MIT%20or%20Apache--2.0-blue)](#licence)
 
 </div>
 
@@ -28,14 +28,14 @@ The project is under active development, so expect sharp edges.
 ## Features
 
 - **Several kinds of note.** Markdown with WYSIWYG, source and split views,
-  handwritten notes, drawing canvases, PDFs you can write on, kanban boards, and
+  handwritten notes, drawing canvases, PDFs you can write on, Kanban boards, and
   Typst documents with a live preview.
 - **Links between notes.** `[[wikilinks]]` and `@mentions`, backlinks, tags,
   search, and an outline of every note.
 - **History and backups.** Every note keeps its earlier versions. Deleted notes
   go to the trash first, and a backup holds a whole vault.
-- **Sync on your own server.** Encrypted sync, shared folders and live
-  co-editing.
+- **Sync on your own server.** Encrypted sync, shared folders, and editing
+  together live.
 - **Import and export.** Bring notes in from Markdown folders, Obsidian, Joplin
   and Evernote, and export every note type.
 - **Spelling and grammar.** Spell checking with the app's own dictionaries, and
@@ -75,7 +75,7 @@ builds, and [CONTRIBUTING.md](CONTRIBUTING.md) the commit conventions, hooks and
 tests. Architecture, design notes and test docs are in the
 [internal documentation](docs/internal/README.md).
 
-## License
+## Licence
 
 The app is available under the [MIT](LICENSE-MIT) or the
 [Apache 2.0](LICENSE-APACHE) licence, at your option. The sync server in

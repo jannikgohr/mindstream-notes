@@ -23,7 +23,7 @@ generated `Cargo.lock` in your project to pin dependency versions.
 
 `wit-bindgen` generates Rust imports and the `Guest` trait from the copied
 `wit` directory. Implement `invoke(export, input)` with JSON strings and use
-`export!` to expose it. A successful call returns serialized JSON. A failed
+`export!` to expose it. A successful call returns serialised JSON. A failed
 call returns an error string. Effects are data for the app to validate and
 apply. This starter also implements the SDK's `$exports` probe for preflight.
 

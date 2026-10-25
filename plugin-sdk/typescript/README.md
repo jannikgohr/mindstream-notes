@@ -105,7 +105,7 @@ assert.equal((await plugin.call('countNotes')).effect, 'toast');
 The harness transpiles the built component and uses an in-memory host. It
 preserves storage across calls and creates a fresh instance for each one.
 Pass `settings`, `folders`, `tools`, `locale` and `storage` to model the
-vault. Omitted permissions grant nothing. This checks plugin behavior;
+vault. Omitted permissions grant nothing. This checks plugin behaviour;
 Wasmtime's resource controls and OS process handling are tested in the Rust
 runtime suite.
 
@@ -116,7 +116,7 @@ runtime suite.
   component. `--minify` minifies its JavaScript; `--fast` selects the larger
   QuickJS engine build.
 - `package --component dist/plugin.wasm --out dist/package` copies the
-  manifest, component and referenced assets, including localized docs.
+  manifest, component and referenced assets, including localised docs.
 - `check dist/package` checks the schema version, permissions, referenced
   files, component imports and SDK export names. The app performs full
   validation again during installation.

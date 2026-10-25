@@ -84,7 +84,7 @@ keeps its text and loses the link.
 equivalent, so the embed becomes an ordinary link to the same note. Image and
 file embeds such as `![[diagram.png]]` are imported as attachments.
 
-### Canvas and Excalidraw files are not imported as drawings — _planned_
+### Canvas and Excalidraw files are not imported as drawing canvases — _planned_
 
 Obsidian `.canvas` files and the Excalidraw plugin's drawings are skipped. They
 could become drawing canvases, but that import has not been written.
