@@ -128,15 +128,22 @@ those tests are about, and only a stub can assert what it received.
 
 ## Licences
 
-Parts of this repository are under different licences. The
-[README](README.md#license) lists them, and [REUSE.toml](REUSE.toml) says it
-file by file. A contribution is made under the licence of the part it
+Parts of this repository are under different licences.
+[REUSE.toml](REUSE.toml) says which applies to each file, and the texts are in
+[LICENSES/](LICENSES). A contribution is made under the licence of the part it
 changes:
 
 - MIT OR Apache-2.0 for the app and everything not named below
 - AGPL-3.0-only for `backend/server/`
 - BSD-3-Clause for `vendor/etebase-rs/`
 - MIT for `packages/svelte-kanban/`
+
+The Gradle wrapper in `src-tauri/gen/android/` and the plugin icons from
+Lucide and Simple Icons keep their upstream licences too.
+
+The server is a program of its own. The app does not contain it and talks to it
+over the network. The files in [`protocol/`](protocol), which both are tested
+against, are under the app's licence.
 
 A new file takes the licence of the folder it is in and needs no header. A
 file that comes from somewhere else, or a folder under another licence, needs
