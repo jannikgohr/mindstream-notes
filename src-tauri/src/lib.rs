@@ -323,6 +323,9 @@ pub fn run() {
         app_handle
     };
 
+    #[cfg(target_os = "android")]
+    let app_handle = app_handle.plugin(tauri_plugin_fs::init());
+
     let app = app_handle
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
