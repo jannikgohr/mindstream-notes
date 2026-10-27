@@ -160,3 +160,13 @@ An account's key only changes when the account is created again. If someone's
 key is not the one you shared with before, the app warns you and sends nothing.
 Compare the digits with that person, then choose **Share with the new key** if
 they match.
+
+### Web embeds in shared drawings
+
+A drawing canvas can embed web pages, such as a YouTube video or a Figma file.
+In a drawing of your own, any https page loads. In a shared folder, anyone who
+can edit a drawing chooses what its embeds show, so there they only load from
+YouTube, Vimeo, Figma, StackBlitz and a few other well-known sites. An embed
+from any other site shows its address and an **Allow** button instead. Allowing
+a site applies to every shared drawing in the vault. The sites you allowed are
+listed under **Settings → Editor → Drawing canvas**, where you can remove them.
