@@ -33,6 +33,9 @@ const REASON_NOT_SIGNED_IN: &str = "not_signed_in";
 const REASON_NOT_A_SERVER: &str = "not_a_mindstream_server";
 
 const SERVER_INFO_TIMEOUT: Duration = Duration::from_secs(8);
+/// Compatibility is determined by the protocol, independently of release versions.
+/// See PROTOCOL_LEVEL in backend/server/src/lib.rs.
+const SUPPORTED_PROTOCOL: u32 = 1;
 /// Side of the QR code in pixels, before the page scales it.
 const QR_SIZE: u32 = 220;
 
@@ -447,23 +450,40 @@ fn parse_server_info(status: u16, body: &[u8]) -> CommandResult<ServerInfo> {
     if !(200..300).contains(&status) {
         return Err(not_a_server());
     }
-    let info: ServerInfo = serde_json::from_slice(body).map_err(|_| not_a_server())?;
+    #[derive(Deserialize)]
+    struct Response {
+        server: String,
+        #[serde(flatten)]
+        info: ServerInfo,
+    }
+    let response: Response = serde_json::from_slice(body).map_err(|_| not_a_server())?;
+    if response.server != "mindstream-server" || response.info.version.trim().is_empty() {
+        return Err(not_a_server());
+    }
+    let info = response.info;
+    if info.protocol != SUPPORTED_PROTOCOL {
+        let reason = if info.protocol > SUPPORTED_PROTOCOL {
+            "server_protocol_too_new"
+        } else {
+            "server_protocol_too_old"
+        };
+        return Err(CommandError::refused(
+            reason,
+            format!(
+                "server {} uses protocol {}; this app supports protocol {}",
+                info.version, info.protocol, SUPPORTED_PROTOCOL
+            ),
+        ));
+    }
     Ok(info)
 }
 
-/// Ask a server what it is and whether it takes new accounts, so the signup
-/// form can ask for a code only where one is needed.
-#[tauri::command]
-pub async fn account_server_info(
-    server_type: String,
-    server_url: Option<String>,
+/// Read and validate the server identity and protocol for both URL checks and signup.
+pub(super) async fn fetch_server_info(
+    client: &reqwest::Client,
+    server_url: &str,
 ) -> CommandResult<ServerInfo> {
-    let server_url = resolve_server_url(&server_type, server_url.as_deref())?;
-    let url = info_url(&server_url)?;
-    let client = reqwest::Client::builder()
-        .timeout(SERVER_INFO_TIMEOUT)
-        .build()
-        .map_err(|e| format!("server info client: {e}"))?;
+    let url = info_url(server_url)?;
     let response = client
         .get(url)
         .send()
@@ -475,6 +495,21 @@ pub async fn account_server_info(
         .await
         .map_err(|e| CommandError::refused(REASON_UNREACHABLE, format!("server info: {e}")))?;
     parse_server_info(status, &body)
+}
+
+/// Ask a compatible server whether it takes new accounts, so the signup
+/// form can ask for a code only where one is needed.
+#[tauri::command]
+pub async fn account_server_info(
+    server_type: String,
+    server_url: Option<String>,
+) -> CommandResult<ServerInfo> {
+    let server_url = resolve_server_url(&server_type, server_url.as_deref())?;
+    let client = reqwest::Client::builder()
+        .timeout(SERVER_INFO_TIMEOUT)
+        .build()
+        .map_err(|e| format!("server info client: {e}"))?;
+    fetch_server_info(&client, &server_url).await
 }
 
 #[cfg(test)]
@@ -591,5 +626,35 @@ mod tests {
             not(200, b"<html>hello</html>").as_deref(),
             Some(REASON_NOT_A_SERVER)
         );
+        for body in [
+            br#"{"version":"0.1.0","protocol":1,"signup":"open"}"#.as_slice(),
+            br#"{"server":"other","version":"0.1.0","protocol":1,"signup":"open"}"#,
+            br#"{"server":"mindstream-server","version":"","protocol":1,"signup":"open"}"#,
+            br#"{"server":"mindstream-server","version":"0.1.0","signup":"open"}"#,
+            br#"{"server":"mindstream-server","version":"0.1.0","protocol":"1","signup":"open"}"#,
+        ] {
+            assert_eq!(not(200, body).as_deref(), Some(REASON_NOT_A_SERVER));
+        }
+    }
+
+    #[test]
+    fn compatibility_depends_on_protocol_not_release_version() {
+        for version in ["0.1.0", "0.2.0", "2.0.0"] {
+            let body = format!(
+                r#"{{"server":"mindstream-server","version":"{version}","protocol":1,"signup":"open"}}"#
+            );
+            assert!(parse_server_info(200, body.as_bytes()).is_ok());
+        }
+        for (protocol, reason) in [
+            (0, "server_protocol_too_old"),
+            (2, "server_protocol_too_new"),
+        ] {
+            let body = format!(
+                r#"{{"server":"mindstream-server","version":"0.1.0","protocol":{protocol},"signup":"open"}}"#
+            );
+            let err = parse_server_info(200, body.as_bytes()).unwrap_err();
+            assert_eq!(err.reason.as_deref(), Some(reason));
+            assert!(err.message.contains(&format!("protocol {protocol}")));
+        }
     }
 }

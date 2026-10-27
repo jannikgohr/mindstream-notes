@@ -596,6 +596,7 @@ pub async fn probe_server_reachable(server_url: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// A healthy endpoint only passes once its server identity and protocol are compatible.
 #[tauri::command]
 pub async fn check_etebase_server_url(server_url: String) -> CommandResult<ServerCheckResult> {
     let url = health_url(&server_url).map_err(String::from)?;
@@ -609,6 +610,9 @@ pub async fn check_etebase_server_url(server_url: String) -> CommandResult<Serve
         .await
         .map_err(|e| format!("server check failed: {e}"))?;
     let status = response.status();
+    if status.is_success() {
+        account::fetch_server_info(&client, &server_url).await?;
+    }
     Ok(ServerCheckResult {
         ok: status.is_success(),
         status: status.as_u16(),
@@ -621,6 +625,108 @@ mod tests {
     use super::*;
     use crate::db::open_memory_for_tests;
     use rusqlite::params;
+
+    /// A small HTTP fixture, including the paths requested by the actual command.
+    fn serve_url_check(
+        replies: Vec<(u16, String)>,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}/nested", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let mut paths = Vec::new();
+            for (status, body) in replies {
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(std::time::Instant::now() < deadline, "request timed out");
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(err) => panic!("accept: {err}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                paths.push(line.split_whitespace().nth(1).unwrap().to_string());
+                loop {
+                    line.clear();
+                    reader.read_line(&mut line).unwrap();
+                    if line.trim().is_empty() {
+                        break;
+                    }
+                }
+                write!(stream, "HTTP/1.1 {status} STATUS\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+            paths
+        });
+        (url, handle)
+    }
+
+    #[tokio::test]
+    async fn url_check_requires_a_healthy_compatible_mindstream_server() {
+        for (info_status, body, reason) in [
+            (
+                200,
+                r#"{"server":"mindstream-server","version":"0.2.0","protocol":1,"signup":"open"}"#,
+                None,
+            ),
+            (
+                200,
+                r#"{"server":"mindstream-server","version":"0.1.0","protocol":2,"signup":"open"}"#,
+                Some("server_protocol_too_new"),
+            ),
+            (
+                200,
+                r#"{"server":"mindstream-server","version":"0.1.0","protocol":0,"signup":"open"}"#,
+                Some("server_protocol_too_old"),
+            ),
+            (
+                200,
+                r#"{"server":"other","version":"0.1.0","protocol":1,"signup":"open"}"#,
+                Some("not_a_mindstream_server"),
+            ),
+            (
+                200,
+                "<html>Not a sync server</html>",
+                Some("not_a_mindstream_server"),
+            ),
+            (404, "Not found", Some("not_a_mindstream_server")),
+        ] {
+            let (url, server) =
+                serve_url_check(vec![(200, "ok\n".into()), (info_status, body.into())]);
+            let result = check_etebase_server_url(url.clone()).await;
+            if let Some(reason) = reason {
+                assert_eq!(result.unwrap_err().reason.as_deref(), Some(reason));
+            } else {
+                let result = result.unwrap();
+                assert!(result.ok);
+                assert_eq!(result.status, 200);
+                assert_eq!(result.url, format!("{url}/healthz"));
+            }
+            assert_eq!(
+                server.join().unwrap(),
+                ["/nested/healthz", "/nested/api/v1/mindstream/info/"]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn url_check_preserves_health_failures() {
+        let (url, server) = serve_url_check(vec![(503, "unavailable".into())]);
+        let result = check_etebase_server_url(url).await.unwrap();
+        assert!(!result.ok);
+        assert_eq!(result.status, 503);
+        assert_eq!(server.join().unwrap(), ["/nested/healthz"]);
+    }
 
     /// Seed the DB to look like a device that successfully synced
     /// against a previous server: stoken rows, tombstones, and per-row

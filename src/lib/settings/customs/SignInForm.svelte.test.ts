@@ -96,6 +96,25 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('checking the server URL', () => {
+  it.each<[string, RegExp]>([
+    ['server_protocol_too_new', /Update the app to connect/],
+    ['server_protocol_too_old', /Ask the server administrator to update/],
+    ['not_a_mindstream_server', /does not answer like a Mindstream/]
+  ])(
+    'shows the refusal for %s without a success message',
+    async (reason, message) => {
+      checkEtebaseServerUrl.mockRejectedValueOnce(refused(reason));
+      render(SignInForm);
+      await fireEvent.click(button('Check URL'));
+
+      await waitFor(() =>
+        expect(screen.getByRole('status').textContent).toMatch(message)
+      );
+      expect(screen.queryByText(/Server is healthy and compatible/)).toBeNull();
+      expect(screen.queryByTestId('account-error')).toBeNull();
+    }
+  );
+
   it('checks the normalized URL on blur and shows the result by the field', async () => {
     render(SignInForm);
     await type('Server URL', 'notes.example.test/');
@@ -109,7 +128,7 @@ describe('checking the server URL', () => {
     );
     await waitFor(() =>
       expect(screen.getByRole('status').textContent).toContain(
-        'Server replied at https://notes.example.test'
+        'Server is healthy and compatible at https://notes.example.test'
       )
     );
   });
@@ -141,7 +160,9 @@ describe('checking the server URL', () => {
 
     await waitFor(() => expect(checkEtebaseServerUrl).toHaveBeenCalledTimes(2));
     await waitFor(() =>
-      expect(screen.getByRole('status').textContent).toContain('Server replied')
+      expect(screen.getByRole('status').textContent).toContain(
+        'Server is healthy and compatible'
+      )
     );
     expect(screen.getByRole('status').textContent).not.toContain(
       'Connection failed'
@@ -199,7 +220,7 @@ describe('checking the server URL', () => {
       await fireEvent.blur(screen.getByLabelText('Server URL'));
       await waitFor(() =>
         expect(screen.getByRole('status').textContent).toContain(
-          'Server replied at https://new.example.test'
+          'Server is healthy and compatible at https://new.example.test'
         )
       );
 
@@ -214,7 +235,7 @@ describe('checking the server URL', () => {
       }
       await waitFor(() => expect(button('Check URL').disabled).toBe(false));
       expect(screen.getByRole('status').textContent).toContain(
-        'Server replied at https://new.example.test'
+        'Server is healthy and compatible at https://new.example.test'
       );
       expect(screen.getByRole('status').textContent).not.toContain(
         'Old server failed'
@@ -234,7 +255,9 @@ describe('checking the server URL', () => {
     await fireEvent.blur(screen.getByLabelText('Server URL'));
 
     await waitFor(() =>
-      expect(screen.getByRole('status').textContent).toContain('Server replied')
+      expect(screen.getByRole('status').textContent).toContain(
+        'Server is healthy and compatible'
+      )
     );
     expect(screen.getByTestId('account-error').textContent).toMatch(
       /Wrong password/
