@@ -262,6 +262,11 @@
     "fileDrop.importInMainWindow": "Drop PDFs on the main window to import them.",
     "fileDrop.failed": "Couldn't import the dropped PDF: {error}",
     "fileDrop.imageFailed": "Couldn't add the dropped image.",
+    "freeform.embed.blocked": "In shared folders, embeds only load from sites you allow.",
+    "freeform.embed.unsupported": "This site can't be shown inside the app.",
+    "freeform.embed.notHttps": "Only https pages can be embedded.",
+    "freeform.embed.allow": "Allow {host}",
+    "freeform.embed.openInBrowser": "Open in browser",
     "fileTree.newFolder": "New folder",
     "fileTree.toolbar.more": "More actions",
     "fileTree.toolbar.customize": "Reorder actions",
@@ -1007,6 +1012,8 @@
     "language.spellcheck.customWords.empty": "No words added yet. Right-click a flagged word and choose \"Add to dictionary\".",
     "language.spellcheck.customWords.emptyTouch": "No words added yet. Long-press a flagged word and choose \"Add to dictionary\".",
     "language.spellcheck.customWords.remove": "Remove",
+    "editor.freeform.embedAllowedHosts.empty": "No sites allowed yet. An embed from any other site in a shared folder has a button to allow its site.",
+    "editor.freeform.embedAllowedHosts.remove": "Remove",
     "plugins.textCheckers.title": "Text checkers",
     "plugins.textCheckers.check": "Check",
     "plugins.textCheckers.reachable": "Server reachable",
@@ -1567,6 +1574,10 @@
     "editor.freeform.penMode": {
       "label": "Stylus / pen mode",
       "description": "When on, only stylus input draws — finger touches pan and zoom. Helps prevent stray marks from your palm on tablets."
+    },
+    "editor.freeform.embedAllowedHosts": {
+      "label": "Embeds in shared folders",
+      "description": "Anyone who can edit a shared drawing decides what its embeds show. So in shared folders, embeds only load from YouTube, Vimeo, Figma, StackBlitz and a few other well-known sites, plus the sites listed here."
     },
     "editor.ink.tool": {
       "label": "Last ink tool"

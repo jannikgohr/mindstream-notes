@@ -65,6 +65,21 @@ new note to share it. Devices set up with different app versions may each have
 their own copies of the welcome notes, and an unedited one does not sync until
 you change it.
 
+## Drawing canvases
+
+### X, Reddit and GitHub Gist embeds don't show — _known limitation_
+
+Posts from X (Twitter), Reddit and GitHub Gist embed through a script from
+their site, and the app only runs its own scripts. A drawing shows the address
+of such an embed with an **Open in browser** button instead of the post.
+
+### YouTube videos don't play in drawings on Linux — _known limitation_
+
+YouTube only plays an embedded video for a page that tells it where the video
+is shown, through the browser's `Referer` header. On Linux the app's pages come
+from a `tauri://` address, which sends no `Referer`, so the player shows
+"Error 153" instead of the video. Open the link in the browser to watch it.
+
 ## Import
 
 The importer and what each format maps to are described in

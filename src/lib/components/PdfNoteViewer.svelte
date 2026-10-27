@@ -40,7 +40,6 @@
     etebaseSession,
     fetchAssetBytes,
     getRoomSocketUrl,
-    isTauri,
     loadNote,
     onSessionChange,
     pdfNoteNeedsText,
@@ -48,6 +47,7 @@
     setPdfText
   } from '$lib/api';
   import { listen, TauriEventName } from '$lib/api/events';
+  import { openExternalUrl } from '$lib/api/external-url';
   import { extractTextFromDocument } from '$lib/pdf/extract-text';
   import { otherPeerCount } from '$lib/editor/awareness-presence';
   import { pickCursorColor } from '$lib/editor/cursor-color';
@@ -990,22 +990,6 @@
   }
 
   // --- PDF links ------------------------------------------------------------
-
-  async function openExternalUrl(url: string) {
-    // Restrict to navigational schemes — never follow file: or javascript:
-    // URLs embedded in a document.
-    if (!/^(https?:|mailto:)/i.test(url)) return;
-    try {
-      if (isTauri()) {
-        const { open } = await import('@tauri-apps/plugin-shell');
-        await open(url);
-      } else if (typeof window !== 'undefined') {
-        window.open(url, '_blank', 'noopener,noreferrer');
-      }
-    } catch (err) {
-      console.warn('[PdfNoteViewer] failed to open link', url, err);
-    }
-  }
 
   async function followLinkDest(dest: string | unknown[] | null | undefined) {
     if (!pdfDoc || dest == null) return;
