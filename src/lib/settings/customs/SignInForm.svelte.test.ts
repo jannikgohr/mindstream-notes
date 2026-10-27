@@ -12,20 +12,23 @@ import {
   waitFor
 } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { SvelteMap } from 'svelte/reactivity';
 import { CommandErrorCode } from '$lib/api/core';
+import type { ServerCheckResult } from '$lib/api/auth.svelte';
 
 const etebaseLogin = vi.fn();
 const adoptSession = vi.fn();
 const accountSignup = vi.fn();
 const accountRecover = vi.fn();
 const accountServerInfo = vi.fn();
-const settings: Record<string, unknown> = {};
+const checkEtebaseServerUrl = vi.fn();
+const settings = new SvelteMap<string, unknown>();
 
 vi.mock('$lib/api/auth.svelte', () => ({
   MANAGED_SERVER_URL: 'https://managed.example.test/',
   authSession: { initialised: true, current: null },
   adoptSession: (session: unknown) => adoptSession(session),
-  checkEtebaseServerUrl: vi.fn(),
+  checkEtebaseServerUrl: (url: string) => checkEtebaseServerUrl(url),
   etebaseLogin: (input: unknown) => etebaseLogin(input),
   etebaseLogout: vi.fn(),
   refreshAuthSession: vi.fn(async () => {})
@@ -44,9 +47,9 @@ vi.mock('$lib/notifications/store.svelte', () => ({
 }));
 
 vi.mock('../store.svelte', () => ({
-  getSettingValue: (id: string) => settings[id],
+  getSettingValue: (id: string) => settings.get(id),
   setSettingValue: vi.fn(async (id: string, value: unknown) => {
-    settings[id] = value;
+    settings.set(id, value);
   }),
   settingsDialog: { open: false }
 }));
@@ -68,13 +71,20 @@ const button = (name: string) =>
   screen.getByRole('button', { name }) as HTMLButtonElement;
 
 beforeEach(() => {
-  settings['account.serverType'] = 'self-hosted';
-  settings['account.serverUrl'] = 'https://notes.example.test';
+  settings.clear();
+  settings.set('account.serverType', 'self-hosted');
+  settings.set('account.serverUrl', 'https://notes.example.test');
   etebaseLogin.mockReset();
   adoptSession.mockReset();
   accountSignup.mockReset();
   accountRecover.mockReset();
   accountServerInfo.mockReset();
+  checkEtebaseServerUrl.mockReset();
+  checkEtebaseServerUrl.mockImplementation(async (url: string) => ({
+    ok: true,
+    status: 200,
+    url
+  }));
   accountServerInfo.mockResolvedValue({
     signup: 'open',
     protocol: 1,
@@ -84,6 +94,153 @@ beforeEach(() => {
 });
 
 afterEach(cleanup);
+
+describe('checking the server URL', () => {
+  it('checks the normalized URL on blur and shows the result by the field', async () => {
+    render(SignInForm);
+    await type('Server URL', 'notes.example.test/');
+    expect(checkEtebaseServerUrl).not.toHaveBeenCalled();
+
+    await fireEvent.blur(screen.getByLabelText('Server URL'));
+
+    await waitFor(() => expect(checkEtebaseServerUrl).toHaveBeenCalledOnce());
+    expect(checkEtebaseServerUrl).toHaveBeenCalledWith(
+      'https://notes.example.test'
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toContain(
+        'Server replied at https://notes.example.test'
+      )
+    );
+  });
+
+  it.each(['', 'not a url', 'ftp://notes.example.test'])(
+    'skips automatic checks for an empty or invalid URL: %s',
+    async (url) => {
+      render(SignInForm);
+      await type('Server URL', url);
+      await fireEvent.blur(screen.getByLabelText('Server URL'));
+
+      expect(checkEtebaseServerUrl).not.toHaveBeenCalled();
+      expect(button('Check URL').disabled).toBe(true);
+    }
+  );
+
+  it('lets the icon button retry a failed automatic check', async () => {
+    checkEtebaseServerUrl.mockRejectedValueOnce(new Error('Connection failed'));
+    render(SignInForm);
+    await fireEvent.blur(screen.getByLabelText('Server URL'));
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toContain(
+        'Connection failed'
+      )
+    );
+    expect(screen.queryByTestId('account-error')).toBeNull();
+
+    await fireEvent.click(button('Check URL'));
+
+    await waitFor(() => expect(checkEtebaseServerUrl).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toContain('Server replied')
+    );
+    expect(screen.getByRole('status').textContent).not.toContain(
+      'Connection failed'
+    );
+  });
+
+  it('checks once when leaving the field to click the check button', async () => {
+    render(SignInForm);
+    const check = button('Check URL');
+    await fireEvent.blur(screen.getByLabelText('Server URL'), {
+      relatedTarget: check
+    });
+    expect(checkEtebaseServerUrl).not.toHaveBeenCalled();
+
+    await fireEvent.click(check);
+
+    await waitFor(() => expect(checkEtebaseServerUrl).toHaveBeenCalledOnce());
+  });
+
+  it('reports an unhealthy server below the URL', async () => {
+    checkEtebaseServerUrl.mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      url: 'https://notes.example.test'
+    });
+    render(SignInForm);
+    await fireEvent.blur(screen.getByLabelText('Server URL'));
+
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toContain(
+        'Health check returned HTTP 503 at https://notes.example.test'
+      )
+    );
+  });
+
+  it.each(['resolve', 'reject'] as const)(
+    'ignores a stale check that finishes with %s after the URL changes',
+    async (outcome) => {
+      let resolveOld!: (result: ServerCheckResult) => void;
+      let rejectOld!: (error: Error) => void;
+      checkEtebaseServerUrl.mockImplementationOnce(
+        () =>
+          new Promise<ServerCheckResult>((resolve, reject) => {
+            resolveOld = resolve;
+            rejectOld = reject;
+          })
+      );
+      render(SignInForm);
+      await fireEvent.blur(screen.getByLabelText('Server URL'));
+      expect(button('Checking…').disabled).toBe(true);
+      await fireEvent.blur(screen.getByLabelText('Server URL'));
+      expect(checkEtebaseServerUrl).toHaveBeenCalledOnce();
+
+      await type('Server URL', 'https://new.example.test');
+      await fireEvent.blur(screen.getByLabelText('Server URL'));
+      await waitFor(() =>
+        expect(screen.getByRole('status').textContent).toContain(
+          'Server replied at https://new.example.test'
+        )
+      );
+
+      if (outcome === 'resolve') {
+        resolveOld({
+          ok: true,
+          status: 200,
+          url: 'https://notes.example.test'
+        });
+      } else {
+        rejectOld(new Error('Old server failed'));
+      }
+      await waitFor(() => expect(button('Check URL').disabled).toBe(false));
+      expect(screen.getByRole('status').textContent).toContain(
+        'Server replied at https://new.example.test'
+      );
+      expect(screen.getByRole('status').textContent).not.toContain(
+        'Old server failed'
+      );
+      expect(screen.queryByTestId('account-error')).toBeNull();
+    }
+  );
+
+  it('keeps sign-in errors when an automatic URL check succeeds', async () => {
+    etebaseLogin.mockRejectedValueOnce(refused('login_bad_signature'));
+    render(SignInForm);
+    await type('Username', 'ann');
+    await type('Password', 'not it');
+    await fireEvent.click(button('Sign in'));
+    await screen.findByTestId('account-error');
+
+    await fireEvent.blur(screen.getByLabelText('Server URL'));
+
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toContain('Server replied')
+    );
+    expect(screen.getByTestId('account-error').textContent).toMatch(
+      /Wrong password/
+    );
+  });
+});
 
 describe('signing in', () => {
   it('signs in with a password alone and shows no code field', async () => {
@@ -165,7 +322,7 @@ describe('signing in', () => {
   });
 
   it('will not submit without a server address', async () => {
-    settings['account.serverUrl'] = '';
+    settings.set('account.serverUrl', '');
     render(SignInForm);
     await type('Username', 'ann');
     await type('Password', 'hunter22');
@@ -293,11 +450,11 @@ describe('creating an account', () => {
       await fireEvent.click(button('Use other.example.test'));
 
       await waitFor(() =>
-        expect(settings['account.serverUrl']).toBe(
+        expect(settings.get('account.serverUrl')).toBe(
           'https://other.example.test/'
         )
       );
-      expect(settings['account.serverType']).toBe('self-hosted');
+      expect(settings.get('account.serverType')).toBe('self-hosted');
     });
 
     it('takes anything else in the field for a code', async () => {
