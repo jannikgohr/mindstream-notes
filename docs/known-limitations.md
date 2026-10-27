@@ -73,12 +73,13 @@ Posts from X (Twitter), Reddit and GitHub Gist embed through a script from
 their site, and the app only runs its own scripts. A drawing shows the address
 of such an embed with an **Open in browser** button instead of the post.
 
-### YouTube videos don't play in drawings on Linux — _known limitation_
+### YouTube videos don't play inside drawings on Linux and macOS — _known limitation_
 
 YouTube only plays an embedded video for a page that tells it where the video
-is shown, through the browser's `Referer` header. On Linux the app's pages come
-from a `tauri://` address, which sends no `Referer`, so the player shows
-"Error 153" instead of the video. Open the link in the browser to watch it.
+is shown, through the browser's `Referer` header. On Linux and macOS the app's
+pages come from a `tauri://` address, which sends no `Referer`, and the player
+would only show "Error 153". So there a YouTube embed shows the video's
+thumbnail and a **Watch on YouTube** button that opens it in the browser.
 
 ## Import
 

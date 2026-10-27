@@ -6,7 +6,7 @@
 
 import { openExternalUrl } from '$lib/api/external-url';
 import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
-import { embedHost, type EmbedDecision } from './embed-policy';
+import { embedHost, youtubeEmbed, type EmbedDecision } from './embed-policy';
 
 const MESSAGE_KEYS = {
   blocked: 'freeform.embed.blocked',
@@ -20,11 +20,42 @@ export interface EmbedPlaceholderProps {
   onAllowHost: (host: string) => void;
 }
 
+/**
+ * The video's thumbnail in place of a player that can't play here, with
+ * the way out to the browser. Playlists have no single thumbnail.
+ */
+function YoutubeCard({ link }: { link: string }) {
+  const videoId = youtubeEmbed(link)?.videoId;
+  return (
+    <div className="freeform-embed-youtube">
+      {videoId && (
+        <img
+          className="freeform-embed-youtube__thumbnail"
+          src={`https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`}
+          alt=""
+          draggable={false}
+        />
+      )}
+      <div className="freeform-embed-youtube__panel">
+        <p>{tUi('freeform.embed.youtubeUnavailable')}</p>
+        <button
+          type="button"
+          className="freeform-embed-placeholder__button freeform-embed-placeholder__button--primary"
+          onClick={() => void openExternalUrl(link)}
+        >
+          {tUi('freeform.embed.watchOnYoutube')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function EmbedPlaceholder({
   link,
   decision,
   onAllowHost
 }: EmbedPlaceholderProps) {
+  if (decision === 'youtube-card') return <YoutubeCard link={link} />;
   const host = embedHost(link);
   return (
     <div className="freeform-embed-placeholder">

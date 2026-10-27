@@ -9,7 +9,10 @@
 
 export interface EmbedView {
   kind: 'iframe' | 'placeholder';
+  /** The iframe's address. */
   src: string | null;
+  /** The address of an image in the placeholder, such as a thumbnail. */
+  image: string | null;
   text: string;
 }
 
@@ -80,6 +83,7 @@ export function embeds(client: WebdriverIO.Browser): Promise<EmbedView[]> {
       return {
         kind: iframe ? ('iframe' as const) : ('placeholder' as const),
         src: iframe?.getAttribute('src') ?? null,
+        image: container.querySelector('img')?.getAttribute('src') ?? null,
         text: (container.textContent ?? '').replace(/\s+/g, ' ').trim()
       };
     })

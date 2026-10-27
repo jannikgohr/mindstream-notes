@@ -96,24 +96,40 @@ describe('T3 drawing embeds', function () {
 
     await pasteOnCanvas(browser, [
       'https://example.com/',
+      'https://vimeo.com/76979871',
       'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
       'https://x.com/someone/status/1'
     ]);
-    const shown = await waitForEmbeds(browser, 3);
+    const shown = await waitForEmbeds(browser, 4);
 
     expect(shown[0]).toMatchObject({
       kind: 'iframe',
       src: 'https://example.com/'
     });
     expect(shown[1].kind).toBe('iframe');
-    expect(shown[1].src).toMatch(/^https:\/\/www\.youtube\.com\/embed\//);
+    expect(shown[1].src).toMatch(/^https:\/\/player\.vimeo\.com\/video\//);
+    // A tauri:// app page (Linux, macOS) sends no Referer, and YouTube's
+    // player refuses to play without one, so the app shows the thumbnail.
+    // An http page (Windows) keeps the player.
+    const protocol = await browser.execute(() => location.protocol);
+    if (protocol === 'tauri:') {
+      expect(shown[2].kind).toBe('placeholder');
+      expect(shown[2].image).toBe(
+        'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg'
+      );
+      expect(shown[2].text).toContain('Watch on YouTube');
+    } else {
+      expect(shown[2].kind).toBe('iframe');
+      expect(shown[2].src).toMatch(/^https:\/\/www\.youtube\.com\/embed\//);
+    }
     // X embeds through a script the CSP refuses, so the app says so instead.
-    expect(shown[2].kind).toBe('placeholder');
-    expect(shown[2].text).toContain('x.com');
-    expect(shown[2].text).toContain('Open in browser');
+    expect(shown[3].kind).toBe('placeholder');
+    expect(shown[3].text).toContain('x.com');
+    expect(shown[3].text).toContain('Open in browser');
 
-    // Give the frames time to start loading, then make sure the CSP let
-    // both through. Only the deliberate http frame may have been refused.
+    // Give the frames and the thumbnail time to start loading, then make
+    // sure the CSP let them through. Only the deliberate http frame may have
+    // been refused.
     await browser.pause(2_000);
     const refused = (await violations()).filter(
       (violation) => !violation.blockedURI.startsWith('http://embed-check')

@@ -1052,6 +1052,38 @@ body.dv-tab-dragging .freeform-canvas-host * {
   opacity: 0.9;
 }
 
+/* A YouTube embed where the player can't run: the thumbnail, with a panel
+   across the bottom that says why and opens the video in the browser. */
+.freeform-embed-youtube {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--muted);
+  font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.freeform-embed-youtube__thumbnail {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.freeform-embed-youtube__panel {
+  position: absolute;
+  inset: auto 0 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: color-mix(in oklch, var(--background) 88%, transparent);
+  color: var(--foreground);
+}
+
 /* dockview right-header pop-out button (see PopoutHeaderAction). */
 .dv-popout-host {
   display: inline-flex;

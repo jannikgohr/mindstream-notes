@@ -717,14 +717,14 @@ describe('T4 sharing a folder', function () {
     await waitForCanvas(browserA);
     await pasteOnCanvas(browserA, [
       'https://example.com/',
-      'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+      'https://vimeo.com/76979871'
     ]);
 
     const ownerView = await waitForEmbeds(browserA, 2);
     expect(ownerView[0].kind).toBe('placeholder');
     expect(ownerView[0].text).toContain('Allow example.com');
     expect(ownerView[1].kind).toBe('iframe');
-    expect(ownerView[1].src).toMatch(/^https:\/\/www\.youtube\.com\/embed\//);
+    expect(ownerView[1].src).toMatch(/^https:\/\/player\.vimeo\.com\/video\//);
 
     // Only a saved scene can sync.
     await browserA.waitUntil(

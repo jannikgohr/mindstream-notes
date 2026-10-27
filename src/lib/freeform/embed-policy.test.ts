@@ -5,11 +5,12 @@ import {
   embedHost,
   isEmbeddableLink,
   normalizeAllowedHosts,
-  withoutGeneratedHtml
+  withoutGeneratedHtml,
+  youtubeEmbed
 } from './embed-policy';
 
-const PRIVATE = { shared: false, allowedHosts: [] };
-const SHARED = { shared: true, allowedHosts: [] };
+const PRIVATE = { shared: false, allowedHosts: [], sendsReferer: true };
+const SHARED = { shared: true, allowedHosts: [], sendsReferer: true };
 
 describe('embedHost', () => {
   it('drops www., a trailing dot and case', () => {
@@ -70,7 +71,7 @@ describe('embedDecision', () => {
   });
 
   it('loads hosts the user allowed in a shared drawing', () => {
-    const policy = { shared: true, allowedHosts: ['grafana.example.com'] };
+    const policy = { ...SHARED, allowedHosts: ['grafana.example.com'] };
     expect(embedDecision('https://grafana.example.com/d/1', policy)).toBe(
       'load'
     );
@@ -97,6 +98,56 @@ describe('embedDecision', () => {
       'not-https'
     );
     expect(embedDecision('/relative', PRIVATE)).toBe('not-https');
+  });
+});
+
+describe('youtubeEmbed', () => {
+  it('finds the video in the links Excalidraw plays', () => {
+    for (const link of [
+      'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      'https://youtu.be/dQw4w9WgXcQ?t=42',
+      'https://youtube.com/shorts/dQw4w9WgXcQ',
+      'https://www.youtube.com/embed/dQw4w9WgXcQ'
+    ]) {
+      expect(youtubeEmbed(link), link).toEqual({ videoId: 'dQw4w9WgXcQ' });
+    }
+  });
+
+  it('has no single video for a playlist', () => {
+    expect(
+      youtubeEmbed('https://www.youtube.com/playlist?list=PL123abc')
+    ).toEqual({ videoId: null });
+  });
+
+  it('ignores YouTube pages Excalidraw does not play', () => {
+    expect(youtubeEmbed('https://m.youtube.com/watch?v=abc')).toBeNull();
+    expect(youtubeEmbed('https://example.com/watch?v=abc')).toBeNull();
+  });
+});
+
+describe('YouTube without a Referer', () => {
+  const link = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
+
+  it('shows the card when the app page sends no Referer', () => {
+    expect(embedDecision(link, { ...PRIVATE, sendsReferer: false })).toBe(
+      'youtube-card'
+    );
+    expect(embedDecision(link, { ...SHARED, sendsReferer: false })).toBe(
+      'youtube-card'
+    );
+  });
+
+  it('keeps the player where the page sends one', () => {
+    expect(embedDecision(link, PRIVATE)).toBe('load');
+  });
+
+  it('leaves other sites to load', () => {
+    expect(
+      embedDecision('https://vimeo.com/76979871', {
+        ...PRIVATE,
+        sendsReferer: false
+      })
+    ).toBe('load');
   });
 });
 

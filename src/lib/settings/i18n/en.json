@@ -267,6 +267,8 @@
     "freeform.embed.notHttps": "Only https pages can be embedded.",
     "freeform.embed.allow": "Allow {host}",
     "freeform.embed.openInBrowser": "Open in browser",
+    "freeform.embed.youtubeUnavailable": "YouTube doesn't play videos inside the app on this system.",
+    "freeform.embed.watchOnYoutube": "Watch on YouTube",
     "fileTree.newFolder": "New folder",
     "fileTree.toolbar.more": "More actions",
     "fileTree.toolbar.customize": "Reorder actions",

@@ -163,10 +163,12 @@ they match.
 
 ### Web embeds in shared drawings
 
-A drawing canvas can embed web pages, such as a YouTube video or a Figma file.
+A drawing canvas can embed web pages, such as a Figma file or a Vimeo video.
 In a drawing of your own, any https page loads. In a shared folder, anyone who
 can edit a drawing chooses what its embeds show, so there they only load from
 YouTube, Vimeo, Figma, StackBlitz and a few other well-known sites. An embed
 from any other site shows its address and an **Allow** button instead. Allowing
 a site applies to every shared drawing in the vault. The sites you allowed are
 listed under **Settings → Editor → Drawing canvas**, where you can remove them.
+YouTube videos don't play inside drawings on Linux and macOS, see
+[known limitations](known-limitations.md#youtube-videos-dont-play-inside-drawings-on-linux-and-macos--known-limitation).
