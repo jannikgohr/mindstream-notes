@@ -2,7 +2,7 @@
  *  panel under it read as one thing. */
 
 export const FIELD_CLASS =
-  'h-8 w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60';
+  'h-8 min-w-0 w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60';
 
 export const FIELD_LABEL_CLASS = 'text-xs text-muted-foreground';
 
