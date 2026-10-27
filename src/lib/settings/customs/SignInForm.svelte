@@ -74,6 +74,8 @@
 
   type Mode = 'signin' | 'signup' | 'recover';
 
+  const serverUrlId = $props.id();
+
   let mode = $state<Mode>('signin');
   let username = $state('');
   let email = $state('');
@@ -91,6 +93,9 @@
   let checkingUrl = $state(false);
   let checkUrlStatus = $state<string | null>(null);
   let checkUrlOk = $state(false);
+  let checkUrlError = $state<string | null>(null);
+  let checkUrlRevision = 0;
+  let checkUrlButton = $state<HTMLButtonElement | null>(null);
   /** What the server said about itself, for the signup form. Null until
    *  asked, and again when it could not be asked. */
   let serverInfo = $state<ServerInfo | null>(null);
@@ -389,13 +394,17 @@
    *  setSettingValue and reads back through the same derived store. */
   function onServerUrlInput(event: Event): void {
     const target = event.currentTarget as HTMLInputElement;
+    checkUrlRevision += 1;
+    checkingUrl = false;
     checkUrlStatus = null;
     checkUrlOk = false;
+    checkUrlError = null;
     void setSettingValue('account.serverUrl', target.value);
   }
 
   async function checkUrl() {
     if (
+      busy ||
       checkingUrl ||
       serverType !== 'self-hosted' ||
       !serverUrlValidation.url ||
@@ -403,12 +412,19 @@
     ) {
       return;
     }
+    const revision = ++checkUrlRevision;
+    const url = serverUrlValidation.url;
+    const isCurrent = () =>
+      revision === checkUrlRevision &&
+      serverType === 'self-hosted' &&
+      url === serverUrlValidation.url;
     checkingUrl = true;
-    error = null;
+    checkUrlError = null;
     checkUrlStatus = null;
     checkUrlOk = false;
     try {
-      const result = await checkEtebaseServerUrl(serverUrlValidation.url);
+      const result = await checkEtebaseServerUrl(url);
+      if (!isCurrent()) return;
       checkUrlOk = result.ok;
       checkUrlStatus = result.ok
         ? tUiFormat('account.server.replied', { url: result.url })
@@ -417,10 +433,9 @@
             url: result.url
           });
     } catch (err) {
-      checkUrlStatus = null;
-      error = describeRefusal(err);
+      if (isCurrent()) checkUrlError = describeRefusal(err);
     } finally {
-      checkingUrl = false;
+      if (revision === checkUrlRevision) checkingUrl = false;
     }
   }
 </script>
@@ -506,24 +521,39 @@
         }}
       >
         {#if serverType === 'self-hosted'}
-          <label class="grid gap-1">
-            <span class={FIELD_LABEL_CLASS}>{tUi('account.serverUrl')}</span>
+          <div class="grid gap-1">
+            <label class={FIELD_LABEL_CLASS} for={serverUrlId}
+              >{tUi('account.serverUrl')}</label
+            >
             <div class="flex gap-2">
               <input
+                id={serverUrlId}
                 type="url"
                 inputmode="url"
                 autocomplete="url"
                 aria-label={tUi('account.serverUrl')}
                 value={serverUrlInput}
                 oninput={onServerUrlInput}
+                onblur={(event) => {
+                  if (event.relatedTarget !== checkUrlButton) void checkUrl();
+                }}
                 placeholder="https://collab.example.com"
                 disabled={busy}
                 class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
               />
               <Button
+                bind:ref={checkUrlButton}
                 type="button"
-                size="sm"
+                size="icon"
                 variant="secondary"
+                class="shrink-0"
+                aria-label={tUi(
+                  checkingUrl
+                    ? 'account.server.checking'
+                    : 'account.server.check'
+                )}
+                title={tUi('account.server.check')}
+                aria-busy={checkingUrl}
                 onclick={checkUrl}
                 disabled={busy ||
                   checkingUrl ||
@@ -531,14 +561,31 @@
                   serverUrlValidation.error !== null}
               >
                 {#if checkingUrl}
-                  <Loader2 class="mr-1.5 size-3.5 animate-spin" />
-                  {tUi('account.server.checking')}
+                  <Loader2 class="size-4 animate-spin" />
                 {:else}
-                  {tUi('account.server.check')}
+                  <RefreshCw class="size-4" />
                 {/if}
               </Button>
             </div>
-          </label>
+            <div role="status" class="text-xs">
+              {#if checkUrlError}
+                <p class="text-destructive">{checkUrlError}</p>
+              {:else if checkUrlStatus}
+                <p
+                  class="flex items-start gap-1 {checkUrlOk
+                    ? 'text-muted-foreground'
+                    : 'text-destructive'}"
+                >
+                  <CheckCircle2
+                    class="mt-0.5 size-3.5 shrink-0 {checkUrlOk
+                      ? 'text-primary'
+                      : 'text-destructive'}"
+                  />
+                  <span>{checkUrlStatus}</span>
+                </p>
+              {/if}
+            </div>
+          </div>
         {:else if serverType === 'managed'}
           <div class="grid gap-1">
             <span class={FIELD_LABEL_CLASS}>{tUi('account.server.label')}</span>
@@ -729,19 +776,6 @@
           {:else if serverType === 'self-hosted' && !serverUrlValidation.url}
             <span class="text-xs text-muted-foreground">
               {tUi('account.server.enterFirst')}
-            </span>
-          {:else if serverType === 'self-hosted' && checkUrlStatus}
-            <span
-              class="inline-flex items-center gap-1 text-xs {checkUrlOk
-                ? 'text-muted-foreground'
-                : 'text-destructive'}"
-            >
-              <CheckCircle2
-                class="size-3.5 {checkUrlOk
-                  ? 'text-primary'
-                  : 'text-destructive'}"
-              />
-              {checkUrlStatus}
             </span>
           {/if}
         </div>
