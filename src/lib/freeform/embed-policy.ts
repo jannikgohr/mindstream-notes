@@ -45,6 +45,14 @@ const SCRIPT_WIDGET_HOSTS = new Set([
   'gist.github.com'
 ]);
 
+/**
+ * The links Excalidraw turns into a YouTube player (`RE_YOUTUBE` in
+ * @excalidraw/excalidraw): group 1 says what the path names, group 2 is the
+ * video or playlist id.
+ */
+const RE_YOUTUBE =
+  /^(?:https?:\/\/)?(?:www\.)?youtu(?:be\.com|\.be)\/(embed\/|watch\?v=|shorts\/|playlist\?list=|embed\/videoseries\?list=)?([a-zA-Z0-9_-]+)(?:\?t=|&t=|\?start=|&start=)?([a-zA-Z0-9_-]+)?[^\s]*$/;
+
 export type EmbedDecision =
   /** Hand the element to Excalidraw's own iframe. */
   | 'load'
@@ -53,13 +61,21 @@ export type EmbedDecision =
   /** The site only embeds through a script the CSP refuses. */
   | 'unsupported'
   /** Not an https URL. */
-  | 'not-https';
+  | 'not-https'
+  /** A YouTube player that would only show its "Error 153" screen. */
+  | 'youtube-card';
 
 export interface EmbedPolicy {
   /** The drawing lives in a folder shared by or with the user. */
   shared: boolean;
   /** Hosts the user allowed for shared drawings, as `embedHost` returns them. */
   allowedHosts: readonly string[];
+  /**
+   * The app's own pages have an http(s) address, so frames get a `Referer`.
+   * YouTube's player refuses to play without one, and a `tauri://` page
+   * (Linux, macOS) sends none.
+   */
+  sendsReferer: boolean;
 }
 
 function parseUrl(link: string): URL | null {
@@ -101,6 +117,17 @@ export function isEmbeddableLink(link: string): boolean {
   return embedHost(link) !== null;
 }
 
+/**
+ * The video a link Excalidraw plays as YouTube shows: `{ videoId: null }`
+ * for a playlist, `null` when the link is not one Excalidraw plays.
+ */
+export function youtubeEmbed(link: string): { videoId: string | null } | null {
+  const match = link.match(RE_YOUTUBE);
+  if (!match?.[2]) return null;
+  const playlist = match[1]?.includes('list=') ?? false;
+  return { videoId: playlist ? null : match[2] };
+}
+
 export function embedDecision(
   link: string,
   policy: EmbedPolicy
@@ -109,11 +136,13 @@ export function embedDecision(
   if (!url || url.protocol !== 'https:') return 'not-https';
   const host = bareHost(url);
   if (SCRIPT_WIDGET_HOSTS.has(host)) return 'unsupported';
-  if (!policy.shared) return 'load';
-  if (isDefaultEmbedHost(host) || policy.allowedHosts.includes(host)) {
-    return 'load';
-  }
-  return 'blocked';
+  const trusted =
+    !policy.shared ||
+    isDefaultEmbedHost(host) ||
+    policy.allowedHosts.includes(host);
+  if (!trusted) return 'blocked';
+  if (!policy.sendsReferer && youtubeEmbed(link)) return 'youtube-card';
+  return 'load';
 }
 
 /**

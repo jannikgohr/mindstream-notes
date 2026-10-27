@@ -226,7 +226,8 @@ export default function ExcalidrawIsland({
       const link = element.link ?? '';
       const decision = embedDecision(link, {
         shared: embedsShared,
-        allowedHosts: allowedEmbedHosts
+        allowedHosts: allowedEmbedHosts,
+        sendsReferer: /^https?:$/.test(window.location.protocol)
       });
       if (decision === 'load') return null;
       return (
