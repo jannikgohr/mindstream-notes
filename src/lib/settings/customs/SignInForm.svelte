@@ -425,7 +425,9 @@
   }
 </script>
 
-<div class="rounded-md border border-border bg-muted/40 p-3 text-sm">
+<div
+  class="min-w-0 rounded-md border border-border bg-muted/40 p-3 text-sm [overflow-wrap:anywhere]"
+>
   {#if pendingReveal.current}
     <SecretReveal
       title={tUi('account.reveal.recoveryKey.title')}
@@ -443,7 +445,7 @@
       {tUi('account.session.checking')}
     </div>
   {:else if authSession.current}
-    <div class="grid gap-2">
+    <div class="grid grid-cols-1 gap-2">
       <div>
         <div class="text-xs uppercase tracking-wide text-muted-foreground">
           {tUi('account.session.signedIn')}
@@ -458,7 +460,7 @@
           {authSession.current.server_url}
         </div>
       </div>
-      <div class="flex items-center gap-2 pt-1">
+      <div class="flex flex-wrap items-center gap-2 pt-1">
         <Button size="sm" onclick={triggerSync} disabled={syncing || busy}>
           {#if syncing}
             <Loader2 class="mr-1.5 size-3.5 animate-spin" />
@@ -495,7 +497,7 @@
   {:else}
     <div>
       <form
-        class="grid gap-2"
+        class="grid grid-cols-1 gap-2"
         data-testid="account-form"
         data-mode={mode}
         onsubmit={(e) => {
@@ -600,7 +602,7 @@
               bind:value={recoveryKey}
               placeholder="ABCD-EFGH-…"
               disabled={busy}
-              class="w-full resize-none rounded-md border border-input bg-background px-2 py-1 font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+              class="min-w-0 w-full resize-none rounded-md border border-input bg-background px-2 py-1 font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
             ></textarea>
           </label>
         {/if}
@@ -709,7 +711,7 @@
           </label>
         {/if}
 
-        <div class="flex items-center justify-between gap-3 pt-1">
+        <div class="flex flex-wrap items-center justify-between gap-3 pt-1">
           <Button type="submit" size="sm" disabled={!canSubmit}>
             {#if busy}
               <Loader2 class="mr-1.5 size-3.5 animate-spin" />
