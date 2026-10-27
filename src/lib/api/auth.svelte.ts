@@ -207,7 +207,7 @@ export async function checkEtebaseServerUrl(
 ): Promise<ServerCheckResult> {
   assertRequiredString(serverUrl, 'serverUrl');
   if (!isTauri()) {
-    return { ok: true, status: 200, url: serverUrl };
+    throw new Error('Server checks are only available in the app.');
   }
   return parseServerCheckResult(
     await tauriInvoke<unknown>(TauriCommandName.CheckEtebaseServerUrl, {

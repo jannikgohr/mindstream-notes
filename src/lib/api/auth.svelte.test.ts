@@ -11,7 +11,8 @@ vi.mock('$lib/editor/suspend-flush', () => ({
   flushPendingEditorSaves: () => flushPendingEditorSaves()
 }));
 
-const { etebaseLogin, etebaseLogout } = await import('./auth.svelte');
+const { etebaseLogin, etebaseLogout, checkEtebaseServerUrl } =
+  await import('./auth.svelte');
 
 function setTauri(on: boolean): void {
   if (on) {
@@ -41,6 +42,16 @@ beforeEach(() => {
 afterEach(() => {
   setTauri(false);
   vi.restoreAllMocks();
+});
+
+describe('server URL checks', () => {
+  it('does not claim compatibility when running outside the app', async () => {
+    setTauri(false);
+    await expect(
+      checkEtebaseServerUrl('https://notes.example.test')
+    ).rejects.toThrow('Server checks are only available in the app.');
+    expect(invoke).not.toHaveBeenCalled();
+  });
 });
 
 describe('auth session policy reload', () => {
