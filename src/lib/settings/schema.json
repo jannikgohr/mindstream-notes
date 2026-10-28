@@ -374,6 +374,12 @@
               "type": "select",
               "default": "auto",
               "options": ["auto", "always", "off"]
+            },
+            {
+              "id": "editor.freeform.embedAllowedHosts",
+              "scope": "V",
+              "type": "custom",
+              "customId": "freeform-embed-hosts"
             }
           ]
         },

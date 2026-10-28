@@ -103,6 +103,13 @@
     "fileDrop.importInMainWindow": "PDFs zum Importieren im Hauptfenster ablegen.",
     "fileDrop.failed": "Die abgelegte PDF-Datei konnte nicht importiert werden: {error}",
     "fileDrop.imageFailed": "Das abgelegte Bild konnte nicht hinzugefügt werden.",
+    "freeform.embed.blocked": "In geteilten Ordnern laden Einbettungen nur von Websites, die du erlaubst.",
+    "freeform.embed.unsupported": "Diese Website lässt sich nicht in der App anzeigen.",
+    "freeform.embed.notHttps": "Nur https-Seiten lassen sich einbetten.",
+    "freeform.embed.allow": "{host} erlauben",
+    "freeform.embed.openInBrowser": "Im Browser öffnen",
+    "freeform.embed.youtubeUnavailable": "YouTube spielt auf diesem System keine Videos in der App ab.",
+    "freeform.embed.watchOnYoutube": "Auf YouTube ansehen",
     "fileTree.newFolder": "Neuer Ordner",
     "fileTree.toolbar.more": "Weitere Aktionen",
     "fileTree.toolbar.customize": "Aktionen neu anordnen",
@@ -1007,6 +1014,8 @@
     "language.spellcheck.customWords.empty": "Noch keine Wörter hinzugefügt. Klicke mit der rechten Maustaste auf ein markiertes Wort und wähle „Zum Wörterbuch hinzufügen“.",
     "language.spellcheck.customWords.emptyTouch": "Noch keine Wörter hinzugefügt. Tippe lange auf ein markiertes Wort und wähle „Zum Wörterbuch hinzufügen“.",
     "language.spellcheck.customWords.remove": "Entfernen",
+    "editor.freeform.embedAllowedHosts.empty": "Noch keine Websites erlaubt. Eine Einbettung von einer anderen Website in einem geteilten Ordner hat eine Schaltfläche, um ihre Website zu erlauben.",
+    "editor.freeform.embedAllowedHosts.remove": "Entfernen",
     "plugins.textCheckers.title": "Textprüfer",
     "plugins.textCheckers.check": "Prüfen",
     "plugins.textCheckers.reachable": "Server erreichbar",
@@ -1563,6 +1572,10 @@
     "editor.freeform.penMode": {
       "label": "Stift-Modus",
       "description": "Wenn aktiv, zeichnet nur der Stift — Fingertippen verschiebt und zoomt. Verhindert ungewollte Striche durch den Handballen auf Tablets."
+    },
+    "editor.freeform.embedAllowedHosts": {
+      "label": "Einbettungen in geteilten Ordnern",
+      "description": "Wer eine geteilte Zeichenfläche bearbeiten kann, bestimmt, was ihre Einbettungen zeigen. In geteilten Ordnern laden Einbettungen deshalb nur von YouTube, Vimeo, Figma, StackBlitz und einigen anderen bekannten Websites sowie von den hier aufgeführten."
     },
     "editor.ink.tool": {
       "label": "Letztes Ink-Werkzeug"
