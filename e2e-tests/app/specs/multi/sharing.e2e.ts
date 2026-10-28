@@ -56,6 +56,12 @@ import {
 } from '../../helpers/accounts.js';
 import { backendUrl } from '../../helpers/backend.js';
 import {
+  embeds,
+  pasteOnCanvas,
+  waitForCanvas,
+  waitForEmbeds
+} from '../../helpers/drawing-embeds.js';
+import {
   lapsePlan,
   liftLimits,
   serverAdminAvailable
@@ -488,6 +494,16 @@ async function moveNoteFixture(
   });
 }
 
+/** A drawing's saved scene as text, to see what it holds without a canvas. */
+async function drawingSceneText(
+  client: WebdriverIO.Browser,
+  id: string
+): Promise<string> {
+  const note = await loadNoteFixture(client, id);
+  const state = (note as NoteRow & { yrs_state?: number[] }).yrs_state ?? [];
+  return Buffer.from(state).toString('utf8');
+}
+
 async function expectNoteBodyContains(
   client: WebdriverIO.Browser,
   noteId: string,
@@ -673,6 +689,86 @@ describe('T4 sharing a folder', function () {
     // mean the "Shared" projection didn't run — shared_role/share_id unset).
     await selectTreeSource(browserB, 'Home');
     await expect(B.treeItem(SHARED_FOLDER)).not.toBeDisplayed();
+  });
+
+  // --- Embeds in a shared drawing ---
+  // Anyone who can edit a shared drawing chooses its embeds, so there they
+  // only load from Excalidraw's known sites and hosts the viewer allowed
+  // (src/lib/freeform/embed-policy.ts). The owner is held to the same rule
+  // as a guest, and allowing a host is one person's choice.
+  it('a shared drawing loads only trusted embeds, for owner and guest', async () => {
+    const sharedId = await findCollectionId(browserA, SHARED_FOLDER);
+    const title = `Embeds ${RUN_ID}`;
+    const drawing = await invokeTauri<NoteRow>(browserA, 'create_note', {
+      input: {
+        title,
+        body: '',
+        parent_collection_id: sharedId,
+        note_kind: 'freeform'
+      }
+    });
+
+    // The tree learns of a note created over IPC on its next load.
+    await browserA.reloadSession();
+    await browserA.$('aria/Welcome').waitForDisplayed({ timeout: 30_000 });
+    A = clientHelpers(browserA);
+    await A.click(SHARED_FOLDER);
+    await A.click(title);
+    await waitForCanvas(browserA);
+    await pasteOnCanvas(browserA, [
+      'https://example.com/',
+      'https://vimeo.com/76979871'
+    ]);
+
+    const ownerView = await waitForEmbeds(browserA, 2);
+    expect(ownerView[0].kind).toBe('placeholder');
+    expect(ownerView[0].text).toContain('Allow example.com');
+    expect(ownerView[1].kind).toBe('iframe');
+    expect(ownerView[1].src).toMatch(/^https:\/\/player\.vimeo\.com\/video\//);
+
+    // Only a saved scene can sync.
+    await browserA.waitUntil(
+      async () =>
+        (await drawingSceneText(browserA, drawing.id)).includes(
+          'https://example.com/'
+        ),
+      { timeout: 30_000, timeoutMsg: 'the drawing did not save its embeds' }
+    );
+    await syncClient(browserA);
+
+    await browserB.reloadSession();
+    await browserB.$('aria/Welcome').waitForDisplayed({ timeout: 30_000 });
+    B = clientHelpers(browserB);
+    await syncClient(browserB);
+    await selectTreeSource(browserB, 'Shared');
+    await B.click(SHARED_FOLDER);
+    await B.click(title);
+    await waitForCanvas(browserB);
+
+    const guestView = await waitForEmbeds(browserB, 2);
+    expect(guestView[0].kind).toBe('placeholder');
+    expect(guestView[0].text).toContain('Allow example.com');
+    expect(guestView[1].kind).toBe('iframe');
+
+    // The button sits in the embed's frame, which takes pointer input only
+    // once the embed is active; a DOM click is what reaches it here.
+    await browserB.execute(() => {
+      const allow = Array.from(
+        document.querySelectorAll<HTMLButtonElement>(
+          '.freeform-embed-placeholder button'
+        )
+      ).find((button) => button.textContent?.trim() === 'Allow example.com');
+      if (!allow) throw new Error('the Allow button was not found');
+      allow.click();
+    });
+    await browserB.waitUntil(
+      async () => (await embeds(browserB))[0]?.kind === 'iframe',
+      { timeout: 15_000, timeoutMsg: 'the allowed embed did not load' }
+    );
+    expect((await embeds(browserB))[0].src).toBe('https://example.com/');
+
+    // B's choice stays on B's side.
+    expect((await embeds(browserA))[0].kind).toBe('placeholder');
   });
 
   const SECOND_FOLDER = `Second Share ${RUN_ID}`;
