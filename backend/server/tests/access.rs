@@ -8,7 +8,7 @@ use std::iter;
 
 use common::{named, new_collection, share, signup, signup_at, COLLECTION_TYPE};
 use etebase::error::Error;
-use etebase::{CollectionAccessLevel, FetchOptions, PrefetchOption};
+use etebase::{CollectionAccessLevel, FetchOptions, LinkOptions, PrefetchOption};
 
 macro_rules! assert_refused {
     ($result:expr, $expected:pat) => {
@@ -222,6 +222,75 @@ fn deleting_a_collection_takes_everyone_else_out() {
         ),
         Error::PermissionDenied(_)
     );
+}
+
+/// An invitation made before a member joined by a link must not survive the
+/// join. Otherwise accepting it later would replace the access the link
+/// gave, and a member removed after joining could use it to come back.
+#[test]
+fn joining_by_link_withdraws_an_older_invitation() {
+    let owner = signup("owner");
+    let guest = signup("guest");
+    let collection = new_collection(&owner, "shared");
+    let invitations = owner.invitation_manager().unwrap();
+    let profile = invitations.fetch_user_profile(&guest.name).unwrap();
+    invitations
+        .invite(
+            &collection,
+            &guest.name,
+            profile.pubkey(),
+            CollectionAccessLevel::Admin,
+        )
+        .unwrap();
+    let incoming = guest
+        .invitation_manager()
+        .unwrap()
+        .list_incoming(None)
+        .unwrap();
+    let stale = incoming
+        .data()
+        .iter()
+        .find(|invitation| invitation.collection() == collection.uid())
+        .expect("the invitation was sent")
+        .clone();
+
+    let link = owner
+        .create_invite_link(
+            &collection,
+            CollectionAccessLevel::ReadOnly,
+            &LinkOptions::new(),
+        )
+        .unwrap();
+    guest.claim_invite_link(&link).unwrap();
+
+    let after = guest
+        .collection_manager()
+        .unwrap()
+        .fetch(collection.uid(), None)
+        .unwrap();
+    assert_eq!(after.access_level(), CollectionAccessLevel::ReadOnly);
+    let incoming = guest
+        .invitation_manager()
+        .unwrap()
+        .list_incoming(None)
+        .unwrap();
+    assert!(
+        incoming
+            .data()
+            .iter()
+            .all(|invitation| invitation.collection() != collection.uid()),
+        "the older invitation survived the link claim"
+    );
+    assert!(
+        guest.invitation_manager().unwrap().accept(&stale).is_err(),
+        "the stale invitation was still accepted"
+    );
+    let after = guest
+        .collection_manager()
+        .unwrap()
+        .fetch(collection.uid(), None)
+        .unwrap();
+    assert_eq!(after.access_level(), CollectionAccessLevel::ReadOnly);
 }
 
 #[test]
@@ -485,6 +554,84 @@ fn invitation_names_the_collection_before_it_is_answered() {
     // name to show. Nothing breaks for it.
     let outgoing = owner_invites.list_outgoing(None).unwrap();
     assert_eq!(outgoing.data().len(), 1);
+}
+
+/// A row left by an older build, where joining by one path did not withdraw
+/// an invitation sent by another, must not let the recipient overwrite the
+/// access they already have.
+#[tokio::test]
+async fn a_stale_invitation_cannot_change_an_existing_members_access() {
+    use common::keyed::new_uid;
+    use common::raw::{Device, ADMIN, READ_WRITE};
+    use reqwest::Method;
+    use serde::Serialize;
+    use serde_bytes::ByteBuf;
+
+    let owner = Device::signup(common::server(), "owner").await;
+    let guest = Device::signup(common::server(), "guest").await;
+    let collection = owner.create_collection().await;
+    owner.share(&collection, &guest, READ_WRITE).await;
+
+    let stale = new_uid();
+    let pool = sqlx::PgPool::connect(&common::database_url())
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO invitations
+             (uid, version, collection_id, from_account_id, to_account_id,
+              access_level, signed_encryption_key)
+         SELECT $1, 1, c.id, owner.id, guest.id, $2, $3
+         FROM collections c, accounts owner, accounts guest
+         WHERE c.uid = $4 AND owner.username = $5 AND guest.username = $6",
+    )
+    .bind(&stale)
+    .bind(ADMIN)
+    .bind(b"stale key".as_slice())
+    .bind(&collection)
+    .bind(&owner.name)
+    .bind(&guest.name)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Accept {
+        collection_type: ByteBuf,
+        encryption_key: ByteBuf,
+    }
+    let body = Accept {
+        collection_type: ByteBuf::from(b"type".to_vec()),
+        encryption_key: ByteBuf::from(b"key".to_vec()),
+    };
+    let (status, _) = guest
+        .call(
+            Method::POST,
+            &format!("/invitation/incoming/{stale}/accept/"),
+            Some(&body),
+        )
+        .await;
+    assert_eq!(status, 409, "the stale invitation is refused");
+
+    let access: i16 = sqlx::query_scalar(
+        "SELECT m.access_level FROM members m
+         JOIN collections c ON c.id = m.collection_id
+         JOIN accounts a ON a.id = m.account_id
+         WHERE c.uid = $1 AND a.username = $2",
+    )
+    .bind(&collection)
+    .bind(&guest.name)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(access, READ_WRITE, "the member keeps the access they had");
+
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM invitations WHERE uid = $1")
+        .bind(&stale)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(left, 0, "the stale invitation is gone");
 }
 
 #[test]

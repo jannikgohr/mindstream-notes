@@ -110,14 +110,36 @@ pub struct WriteLimits {
     max_item_bytes: Option<i64>,
 }
 
+/// The advisory-lock key that makes one account's writes take turns while
+/// they check a budget. The high half is a namespace of its own, and xor
+/// keeps distinct accounts on distinct keys without overflowing.
+const BUDGET_LOCK: i64 = 0x4d53_5155_4f54_4100;
+
+/// Hold the account's budget lock until the transaction ends. Checking what
+/// an account stores and then writing are two steps; without this, two
+/// writes to different collections could both find the same room and both
+/// take it. Writes to one collection already take turns on its row lock, but
+/// the storage budget is the account's, not the collection's.
+async fn lock_budget(conn: &mut PgConnection, account_id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(BUDGET_LOCK ^ account_id)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
 /// The limits on writing into a collection owned by `owner_id`, or `None`
-/// when there are none to check.
+/// when there are none to check. Call it inside the transaction that does
+/// the write: the budget lock it may take ends with that transaction.
 pub async fn for_writes(conn: &mut PgConnection, owner_id: i64) -> ApiResult<Option<WriteLimits>> {
     let Some(plan) = entitlements(conn, owner_id).await? else {
         return Ok(None);
     };
     let storage_left = match plan.storage_limit_bytes {
-        Some(limit) => Some(limit - storage_used(conn, owner_id).await?),
+        Some(limit) => {
+            lock_budget(conn, owner_id).await?;
+            Some(limit - storage_used(conn, owner_id).await?)
+        }
         None => None,
     };
     let owner: String = sqlx::query_scalar("SELECT username FROM accounts WHERE id = $1")
@@ -168,6 +190,9 @@ impl WriteLimits {
 }
 
 /// Refuse when the account already owns as many collections as it may.
+/// When there is a cap, the count and the insert that follows it take the
+/// account's budget lock, so two creates cannot both see room for the last
+/// one.
 pub async fn check_new_space(conn: &mut PgConnection, account_id: i64) -> ApiResult<()> {
     let Some(max) = entitlements(conn, account_id)
         .await?
@@ -175,6 +200,7 @@ pub async fn check_new_space(conn: &mut PgConnection, account_id: i64) -> ApiRes
     else {
         return Ok(());
     };
+    lock_budget(conn, account_id).await?;
     let owned: i64 = sqlx::query_scalar(SPACES)
         .bind(account_id)
         .fetch_one(conn)

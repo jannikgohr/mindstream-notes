@@ -266,6 +266,7 @@ pub(crate) async fn main_items(
     state: &AppState,
     conn: &mut PgConnection,
     collection_ids: &[i64],
+    budget: i64,
 ) -> ApiResult<HashMap<i64, wire::Item>> {
     #[derive(sqlx::FromRow)]
     struct Row {
@@ -280,14 +281,35 @@ pub(crate) async fn main_items(
     .bind(collection_ids)
     .fetch_all(&mut *conn)
     .await?;
-    let revisions: Vec<&[i64]> = rows
-        .iter()
-        .map(|row| row.item.chunk_ids.as_slice())
-        .collect();
-    let mut loaded = chunks::load(conn, &state.blobs, &revisions, false, 0).await?;
-    rows.into_iter()
-        .map(|row| Ok((row.collection_id, to_wire_item(row.item, &mut loaded)?)))
-        .collect()
+    // A preview is an item without content, but its chunk uids still count
+    // against the page budget. Read one item at a time and stop when the
+    // next one does not fit, so a page of invitations cannot carry more
+    // previews than a page of collections could.
+    let mut items = HashMap::new();
+    let mut left = budget;
+    for row in rows {
+        if left <= 0 {
+            break;
+        }
+        let mut loaded = chunks::load(
+            conn,
+            &state.blobs,
+            &[row.item.chunk_ids.as_slice()],
+            false,
+            left,
+        )
+        .await?;
+        if loaded.fitting() == 0 {
+            continue;
+        }
+        let weight = loaded.weight(&row.item.chunk_ids);
+        if weight > left {
+            continue;
+        }
+        left -= weight;
+        items.insert(row.collection_id, to_wire_item(row.item, &mut loaded)?);
+    }
+    Ok(items)
 }
 
 // ---------- collections ----------
@@ -301,24 +323,31 @@ const COLLECTION_QUERY: &str = "SELECT c.stoken AS col_stoken, m.access_level, \
      JOIN items i ON i.collection_id = c.id AND i.is_main \
      JOIN revisions r ON r.item_id = i.id AND r.uid = i.revision_uid";
 
-async fn to_wire_collections(
+async fn load_collection_chunks(
     state: &AppState,
     conn: &mut PgConnection,
-    rows: Vec<CollectionRow>,
+    rows: &[CollectionRow],
     with_content: bool,
-) -> ApiResult<Vec<wire::Collection>> {
+) -> ApiResult<chunks::Loaded> {
     let revisions: Vec<&[i64]> = rows
         .iter()
         .map(|row| row.item.chunk_ids.as_slice())
         .collect();
-    let mut loaded = chunks::load(
+    chunks::load(
         conn,
         &state.blobs,
         &revisions,
         with_content,
         state.config.max_page_bytes,
     )
-    .await?;
+    .await
+}
+
+fn to_wire_collections(
+    state: &AppState,
+    rows: Vec<CollectionRow>,
+    mut loaded: chunks::Loaded,
+) -> ApiResult<Vec<wire::Collection>> {
     rows.into_iter()
         .map(|row| {
             Ok(wire::Collection {
@@ -376,8 +405,14 @@ async fn list_collections(
     .bind(limit + 1)
     .fetch_all(&mut *conn)
     .await?;
-    let done = rows.len() as i64 <= limit;
+    let mut done = rows.len() as i64 <= limit;
     rows.truncate(limit as usize);
+    let loaded = load_collection_chunks(state, &mut conn, &rows, query.with_content()).await?;
+    let fits = loaded.fitting().max(1);
+    if fits < rows.len() {
+        rows.truncate(fits);
+        done = false;
+    }
     let mut cursor = rows.last().map(|row| row.col_stoken);
 
     // Lost memberships only mean something relative to a cursor: a client
@@ -404,7 +439,7 @@ async fn list_collections(
     }
 
     Ok(CollectionList {
-        data: to_wire_collections(state, &mut conn, rows, query.with_content()).await?,
+        data: to_wire_collections(state, rows, loaded)?,
         stoken: cursor
             .map(|seq| state.keys.stoken(seq))
             .or_else(|| query.stoken.clone()),
@@ -455,8 +490,14 @@ pub async fn fetch_collection(
     .fetch_optional(&mut *conn)
     .await?;
     let row = row.ok_or_else(|| ApiError::not_found("Collection"))?;
-    let mut collections =
-        to_wire_collections(&state, &mut conn, vec![row], query.with_content()).await?;
+    let loaded = load_collection_chunks(
+        &state,
+        &mut conn,
+        std::slice::from_ref(&row),
+        query.with_content(),
+    )
+    .await?;
+    let mut collections = to_wire_collections(&state, vec![row], loaded)?;
     Ok(Msgpack(collections.remove(0)))
 }
 
@@ -466,6 +507,7 @@ pub async fn create_collection(
     Msgpack(body): Msgpack<CollectionCreate>,
 ) -> ApiResult<StatusCode> {
     validate_items(std::slice::from_ref(&body.item))?;
+    sharing::validate_membership_keys(&body.collection_key, &body.collection_type)?;
     let collection_uid = body.item.uid.clone();
 
     let mut tx = state.pool.begin().await?;
@@ -490,6 +532,9 @@ pub async fn create_collection(
         deleted: false,
     };
 
+    // The owner's copy of the collection key and type is stored beside the
+    // collection, and is charged with the rest of it.
+    let membership_bytes = body.collection_key.len() as i64 + body.collection_type.len() as i64;
     let stored = store_revisions(
         &state,
         &mut tx,
@@ -497,6 +542,7 @@ pub async fn create_collection(
         user.account_id,
         vec![body.item],
         &HashMap::new(),
+        membership_bytes,
     )
     .await?;
     let stoken = stored
@@ -553,16 +599,14 @@ pub async fn list_items(
     let mut done = rows.len() as i64 <= limit;
     rows.truncate(limit as usize);
     let mut loaded = load_chunks(&state, &mut conn, &rows, query.with_content()).await?;
-    if query.with_content() {
-        // The page ends early when its content would outgrow the budget.
-        // To the client that is a short page like any other. An item too
-        // large for any page goes out alone, as the uids of its chunks, so
-        // the list cannot get stuck on it.
-        let fits = loaded.fitting().max(1);
-        if fits < rows.len() {
-            rows.truncate(fits);
-            done = false;
-        }
+    // The page ends early when its content or the uids of its chunks would
+    // outgrow the budget. Without content the uids still take room: a
+    // medium-prefetch page is not free. An item too large for any page goes
+    // out alone, as the uids of its chunks, so the list cannot get stuck.
+    let fits = loaded.fitting().max(1);
+    if fits < rows.len() {
+        rows.truncate(fits);
+        done = false;
     }
     let stoken = rows
         .last()
@@ -689,7 +733,7 @@ pub async fn list_revisions(
     .bind(limit + 1)
     .fetch_all(&mut *conn)
     .await?;
-    let done = rows.len() as i64 <= limit;
+    let mut done = rows.len() as i64 <= limit;
     rows.truncate(limit as usize);
 
     let revisions: Vec<&[i64]> = rows.iter().map(|row| row.3.as_slice()).collect();
@@ -701,6 +745,11 @@ pub async fn list_revisions(
         state.config.max_page_bytes,
     )
     .await?;
+    let fits = loaded.fitting().max(1);
+    if fits < rows.len() {
+        rows.truncate(fits);
+        done = false;
+    }
     let iterator = rows.last().map(|row| row.0.clone());
     let data = rows
         .into_iter()
@@ -733,6 +782,13 @@ fn validate_items(items: &[wire::Item]) -> ApiResult<()> {
         }
         if item.content.meta.len() > MAX_META_BYTES {
             return Err(ApiError::bad_request("Item metadata is too large."));
+        }
+        if item
+            .encryption_key
+            .as_ref()
+            .is_some_and(|key| key.len() > sharing::MAX_KEY_BYTES)
+        {
+            return Err(ApiError::bad_request("Item key is too large."));
         }
         if item.content.chunks.len() > MAX_CHUNKS_PER_REVISION {
             return Err(ApiError::bad_request("Item has too many chunks."));
@@ -814,7 +870,7 @@ async fn prune(
     item_ids: &[i64],
     keep: i64,
 ) -> ApiResult<(i64, Vec<String>)> {
-    let dropped: Vec<(Vec<i64>, i64)> = sqlx::query_as(
+    let dropped: Vec<(Vec<i64>, i64, i64)> = sqlx::query_as(
         "DELETE FROM revisions r USING (
              SELECT old.id,
                     row_number() OVER (PARTITION BY old.item_id ORDER BY old.id DESC) AS age,
@@ -825,7 +881,7 @@ async fn prune(
              WHERE old.item_id = ANY($1) AND old.uid <> i.revision_uid
          ) past
          WHERE r.id = past.id AND (past.item_deleted OR past.age > $2)
-         RETURNING r.chunk_ids, octet_length(r.meta)::bigint",
+         RETURNING r.chunk_ids, octet_length(r.meta)::bigint, octet_length(r.uid)::bigint",
     )
     .bind(item_ids)
     .bind(keep)
@@ -834,10 +890,10 @@ async fn prune(
     if dropped.is_empty() {
         return Ok((0, Vec::new()));
     }
-    let mut bytes: i64 = dropped.iter().map(|(_, meta)| *meta).sum();
+    let mut bytes: i64 = dropped.iter().map(|(_, meta, uid)| meta + uid).sum();
     let candidates: Vec<i64> = dropped
         .into_iter()
-        .flat_map(|(chunk_ids, _)| chunk_ids)
+        .flat_map(|(chunk_ids, _, _)| chunk_ids)
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
@@ -847,19 +903,19 @@ async fn prune(
 
     // Identical chunks are stored once per collection, so a chunk a dropped
     // revision used may still be in use by another item.
-    let freed: Vec<(i32, Option<String>)> = sqlx::query_as(
+    let freed: Vec<(i32, Option<String>, i64)> = sqlx::query_as(
         "DELETE FROM chunks c
          WHERE c.id = ANY($1) AND c.collection_id = $2
            AND NOT EXISTS (SELECT 1 FROM revisions r WHERE r.chunk_ids @> ARRAY[c.id])
-         RETURNING c.size, c.blob_key",
+         RETURNING c.size, c.blob_key, octet_length(c.uid)::bigint",
     )
     .bind(&candidates)
     .bind(collection_id)
     .fetch_all(&mut *conn)
     .await?;
     let mut blobs: Vec<String> = Vec::new();
-    for (size, blob) in freed {
-        bytes += i64::from(size);
+    for (size, blob, uid) in freed {
+        bytes += i64::from(size) + uid;
         blobs.extend(blob);
     }
     blobs.sort_unstable();
@@ -874,6 +930,37 @@ async fn prune(
         .fetch_all(conn)
         .await?;
     Ok((bytes, unused))
+}
+
+/// The bytes a collection is charged for, as one SQL expression over a
+/// collection aliased by `alias`.
+///
+/// Content and metadata are not the only things a row holds: a key, an item
+/// uid, a chunk uid and an invitation key are all bytes a client chooses and
+/// the server stores. Counting them keeps a small plan from being used as
+/// free storage for rows whose content is empty.
+pub(crate) fn counted_bytes(alias: &str) -> String {
+    format!(
+        "(SELECT COALESCE(sum(octet_length(i.uid)
+             + COALESCE(octet_length(i.encryption_key), 0)
+             + octet_length(i.revision_uid)), 0)
+         FROM items i WHERE i.collection_id = {alias}.id)
+         + (SELECT COALESCE(sum(octet_length(r.uid) + octet_length(r.meta)), 0)
+            FROM revisions r JOIN items i ON i.id = r.item_id
+            WHERE i.collection_id = {alias}.id)
+         + (SELECT COALESCE(sum(octet_length(k.uid) + k.size), 0)
+            FROM chunks k WHERE k.collection_id = {alias}.id)
+         + (SELECT COALESCE(sum(octet_length(m.encryption_key)
+             + octet_length(m.collection_type)), 0)
+            FROM members m WHERE m.collection_id = {alias}.id)
+         + (SELECT COALESCE(sum(octet_length(v.uid)
+             + octet_length(v.signed_encryption_key)), 0)
+            FROM invitations v WHERE v.collection_id = {alias}.id)
+         + (SELECT COALESCE(sum(octet_length(l.uid)
+             + octet_length(l.signed_encryption_key)
+             + octet_length(l.claim_pubkey)), 0)
+            FROM invite_links l WHERE l.collection_id = {alias}.id)"
+    )
 }
 
 /// Drop what a collection being deleted holds besides its own item: every
@@ -902,14 +989,10 @@ async fn drop_content(conn: &mut PgConnection, collection_id: i64) -> ApiResult<
     .bind(collection_id)
     .fetch_all(&mut *conn)
     .await?;
-    sqlx::query(
-        "UPDATE collections SET bytes_used =
-             (SELECT COALESCE(sum(octet_length(r.meta)), 0)
-              FROM revisions r JOIN items i ON i.id = r.item_id
-              WHERE i.collection_id = $1)
-           + (SELECT COALESCE(sum(size), 0) FROM chunks WHERE collection_id = $1)
-         WHERE id = $1",
-    )
+    sqlx::query(&format!(
+        "UPDATE collections c SET bytes_used = {} WHERE c.id = $1",
+        counted_bytes("c")
+    ))
     .bind(collection_id)
     .execute(&mut *conn)
     .await?;
@@ -957,6 +1040,7 @@ async fn store_revisions(
     author_id: i64,
     mut items: Vec<wire::Item>,
     existing: &HashMap<String, ExistingItem>,
+    extra_bytes: i64,
 ) -> ApiResult<Stored> {
     // Uploading the revision an item already has is a retry, not a change.
     items.retain(|item| {
@@ -974,17 +1058,39 @@ async fn store_revisions(
         });
     }
     let deletes = items.iter().any(|item| item.content.deleted);
+    // Every stored field counts, not only content and metadata. A revision
+    // uid and an item uid are names the server keeps, and an item may have
+    // no key and no meta at all; without these a row could cost nothing.
+    let mut revision_bytes = 0i64;
+    let mut item_bytes = 0i64;
+    for item in &items {
+        let revision = item.content.uid.len() as i64;
+        revision_bytes += revision + item.content.meta.len() as i64;
+        match existing.get(&item.uid) {
+            Some(current) => {
+                item_bytes += revision - current.revision_uid.len() as i64;
+            }
+            None => {
+                item_bytes += item.uid.len() as i64
+                    + revision
+                    + item
+                        .encryption_key
+                        .as_ref()
+                        .map_or(0, |key| key.len() as i64);
+            }
+        }
+    }
 
     // Only an owner with a plan has limits to look up, so a server without
     // any pays nothing here.
     if let Some(limits) = limits::for_writes(conn, collection.owner_id).await? {
         let (new_chunk_bytes, largest_item) = chunks::measure(conn, collection.id, &items).await?;
-        let meta_bytes: i64 = items
-            .iter()
-            .map(|item| item.content.meta.len() as i64)
-            .sum();
         let deletions_only = items.iter().all(|item| is_tombstone(item, existing));
-        limits.check(new_chunk_bytes + meta_bytes, largest_item, deletions_only)?;
+        limits.check(
+            new_chunk_bytes + revision_bytes + item_bytes + extra_bytes,
+            largest_item,
+            deletions_only,
+        )?;
     }
 
     let (chunk_ids, chunk_bytes) =
@@ -1061,7 +1167,6 @@ async fn store_revisions(
     let mut rev_deleted: Vec<bool> = Vec::with_capacity(items.len());
     let mut rev_chunks = Vec::with_capacity(items.len());
     let mut rev_stokens: Vec<i64> = Vec::with_capacity(items.len());
-    let mut meta_bytes = 0i64;
     for (offset, item) in items.into_iter().enumerate() {
         let item_id = *item_ids
             .get(&item.uid)
@@ -1080,7 +1185,6 @@ async fn store_revisions(
             })
             .collect::<ApiResult<Vec<_>>>()?
             .join(",");
-        meta_bytes += item.content.meta.len() as i64;
         rev_items.push(item_id);
         rev_uids.push(item.content.uid);
         rev_metas.push(item.content.meta.into_vec());
@@ -1133,7 +1237,7 @@ async fn store_revisions(
     )
     .bind(collection.id)
     .bind(stoken)
-    .bind(chunk_bytes + meta_bytes)
+    .bind(chunk_bytes + revision_bytes + item_bytes + extra_bytes)
     .bind(bytes_back)
     .execute(&mut *conn)
     .await?;
@@ -1267,6 +1371,7 @@ async fn write_items(
         user.account_id,
         body.items,
         &existing,
+        0,
     )
     .await?;
     if stored.stoken.is_some() {
