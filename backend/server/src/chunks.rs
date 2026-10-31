@@ -98,15 +98,29 @@ pub(crate) struct Loaded {
     /// chunk is only copied when it is needed again afterwards, which for
     /// most responses is never.
     uses_left: HashMap<i64, usize>,
+    /// How many of the revisions, from the first, fit the page budget. A
+    /// revision weighs its content when that is sent, and always the bytes
+    /// of its chunk uids, which are part of the response too.
+    fits: usize,
     /// How many of the revisions, from the first, go out with content.
     with_content: usize,
     taken: usize,
 }
 
 impl Loaded {
-    /// How many of the revisions, from the first, go out with content.
+    /// How many of the revisions, from the first, fit the page budget.
     pub fn fitting(&self) -> usize {
-        self.with_content
+        self.fits
+    }
+
+    /// What one revision weighs in a response that carries no content: the
+    /// bytes of the chunk uids it names. Call it only after [`load`] read
+    /// those uids, and before the revision is handed out.
+    pub fn weight(&self, chunk_ids: &[i64]) -> i64 {
+        chunk_ids
+            .iter()
+            .map(|id| self.uids.get(id).map_or(0, |uid| uid.len() as i64))
+            .fold(0, i64::saturating_add)
     }
 
     /// The chunks of the next revision. Call it for the revisions in the
@@ -151,6 +165,7 @@ pub(crate) async fn load(
         uids: HashMap::new(),
         content: HashMap::new(),
         uses_left: HashMap::new(),
+        fits: 0,
         with_content: 0,
         taken: 0,
     };
@@ -162,6 +177,7 @@ pub(crate) async fn load(
         .collect();
     if referenced.is_empty() {
         // Nothing to read, so nothing to hold back.
+        loaded.fits = revisions.len();
         loaded.with_content = if with_content { revisions.len() } else { 0 };
         return Ok(loaded);
     }
@@ -183,20 +199,29 @@ pub(crate) async fn load(
         index
     };
     let mut sizes: HashMap<i64, i64> = HashMap::with_capacity(index.len());
+    let mut uid_sizes: HashMap<i64, i64> = HashMap::with_capacity(index.len());
     for (id, uid, size) in index {
         sizes.insert(id, i64::from(size));
+        uid_sizes.insert(id, uid.len() as i64);
         loaded.uids.insert(id, uid);
     }
+    let weight_of = |ids: &&[i64]| -> i64 {
+        ids.iter()
+            .map(|id| {
+                let content = if with_content {
+                    sizes.get(id).copied().unwrap_or(0)
+                } else {
+                    0
+                };
+                content + uid_sizes.get(id).copied().unwrap_or(0)
+            })
+            .fold(0, i64::saturating_add)
+    };
+    loaded.fits = fitting(revisions.iter().map(weight_of), budget);
     if !with_content {
         return Ok(loaded);
     }
-
-    let size_of = |ids: &&[i64]| -> i64 {
-        ids.iter()
-            .map(|id| sizes.get(id).copied().unwrap_or(0))
-            .fold(0, i64::saturating_add)
-    };
-    loaded.with_content = fitting(revisions.iter().map(size_of), budget);
+    loaded.with_content = loaded.fits;
     for ids in &revisions[..loaded.with_content] {
         for id in ids.iter() {
             *loaded.uses_left.entry(*id).or_default() += 1;
@@ -278,15 +303,17 @@ pub(crate) async fn measure(
     // A new chunk is stored once, with the first content the request gives
     // it, as `store` does. An item may name it without content and leave
     // that to another, so its size is that content's wherever it appears.
-    let mut uploaded: HashMap<&str, i64> = HashMap::new();
+    // The uid is stored too, and is charged with the content: a chunk with
+    // no bytes of content is still a row and a name.
+    let mut uploaded: HashMap<&str, (i64, i64)> = HashMap::new();
     for chunk in items.iter().flat_map(|item| &item.content.chunks) {
         if let (Some(content), false) = (&chunk.1, stored.contains_key(&chunk.0)) {
             uploaded
                 .entry(chunk.0.as_str())
-                .or_insert(content.len() as i64);
+                .or_insert((content.len() as i64, chunk.0.len() as i64));
         }
     }
-    let new_bytes = uploaded.values().sum();
+    let new_bytes = uploaded.values().map(|(content, uid)| content + uid).sum();
     let largest = items
         .iter()
         .map(|item| {
@@ -295,7 +322,10 @@ pub(crate) async fn measure(
                 .iter()
                 .map(|chunk| match stored.get(&chunk.0) {
                     Some(existing) => i64::from(*existing),
-                    None => uploaded.get(chunk.0.as_str()).copied().unwrap_or(0),
+                    None => uploaded
+                        .get(chunk.0.as_str())
+                        .map(|(size, _)| *size)
+                        .unwrap_or(0),
                 })
                 .sum::<i64>()
         })
@@ -400,7 +430,7 @@ pub(crate) async fn store(
     let mut bytes_added = 0i64;
     let mut inserted_uids = HashSet::new();
     for (uid, id, size) in inserted {
-        bytes_added += i64::from(size);
+        bytes_added += i64::from(size) + uid.len() as i64;
         ids.insert(uid.clone(), id);
         inserted_uids.insert(uid);
     }
@@ -486,19 +516,12 @@ pub fn reclaim_blobs_periodically(state: AppState) {
 /// must always agree with it. A mismatch is drift — an undercount hides
 /// storage from the owner's plan — and is reported, not repaired.
 pub(crate) async fn audit_storage(pool: &PgPool) -> Result<Vec<(String, i64, i64)>, sqlx::Error> {
-    sqlx::query_as(
-        "SELECT c.uid, c.bytes_used,
-                (SELECT COALESCE(sum(octet_length(r.meta)), 0)
-                 FROM revisions r JOIN items i ON i.id = r.item_id
-                 WHERE i.collection_id = c.id)
-                + (SELECT COALESCE(sum(size), 0) FROM chunks WHERE collection_id = c.id)
+    let counted = collections::counted_bytes("c");
+    sqlx::query_as(&format!(
+        "SELECT c.uid, c.bytes_used, {counted}
          FROM collections c
-         WHERE c.bytes_used !=
-               (SELECT COALESCE(sum(octet_length(r.meta)), 0)
-                FROM revisions r JOIN items i ON i.id = r.item_id
-                WHERE i.collection_id = c.id)
-               + (SELECT COALESCE(sum(size), 0) FROM chunks WHERE collection_id = c.id)",
-    )
+         WHERE c.bytes_used != {counted}"
+    ))
     .fetch_all(pool)
     .await
 }
@@ -522,8 +545,9 @@ pub async fn upload_chunk(
     let collection = membership(&mut tx, user.account_id, &collection_uid, true).await?;
     collection.require_write()?;
     collection.require_live()?;
+    let stored_bytes = body.len() as i64 + chunk_uid.len() as i64;
     if let Some(limits) = limits::for_writes(&mut tx, collection.owner_id).await? {
-        limits.check(body.len() as i64, body.len() as i64, false)?;
+        limits.check(stored_bytes, body.len() as i64, false)?;
     }
 
     let exists: Option<i64> =
@@ -565,7 +589,7 @@ pub async fn upload_chunk(
     }
     sqlx::query("UPDATE collections SET bytes_used = bytes_used + $2 WHERE id = $1")
         .bind(collection.id)
-        .bind(i64::from(size))
+        .bind(stored_bytes)
         .execute(&mut *tx)
         .await?;
     // A deletion under way when this began has dropped what the collection

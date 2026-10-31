@@ -70,6 +70,8 @@ in the [documentation index](../README.md).
 ## Security and audits
 
 - [Security review](security-review.md): open findings
+- [Sync server pen test, October 2026](pen-test-2026-10.md): verified server
+  findings, fixes and what is still open
 - [September 2026 audit](audit-2026-09.md), with the fix records for
   [data](audit-data-fixes.md), [editors](audit-editor-fixes.md),
   [quality gates](audit-quality-fixes.md) and

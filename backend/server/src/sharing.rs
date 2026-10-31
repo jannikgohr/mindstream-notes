@@ -26,7 +26,7 @@ use crate::wire::{
 };
 use crate::AppState;
 
-const MAX_KEY_BYTES: usize = 4096;
+pub(crate) const MAX_KEY_BYTES: usize = 4096;
 
 async fn account_id_of(conn: &mut PgConnection, username: &str) -> ApiResult<i64> {
     sqlx::query_scalar("SELECT id FROM accounts WHERE username_key = $1 AND NOT disabled")
@@ -101,14 +101,25 @@ async fn remove_membership(
     collection: &Membership,
     account_id: i64,
 ) -> ApiResult<bool> {
-    let removed = sqlx::query("DELETE FROM members WHERE collection_id = $1 AND account_id = $2")
-        .bind(collection.id)
-        .bind(account_id)
-        .execute(&mut *conn)
-        .await?
-        .rows_affected();
-    if removed == 0 {
+    let removed: Option<i64> = sqlx::query_scalar(
+        "DELETE FROM members WHERE collection_id = $1 AND account_id = $2
+         RETURNING (octet_length(encryption_key) + octet_length(collection_type))::bigint",
+    )
+    .bind(collection.id)
+    .bind(account_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some(removed_bytes) = removed else {
         return Ok(false);
+    };
+    if removed_bytes > 0 {
+        sqlx::query(
+            "UPDATE collections SET bytes_used = GREATEST(bytes_used - $2, 0) WHERE id = $1",
+        )
+        .bind(collection.id)
+        .bind(removed_bytes)
+        .execute(&mut *conn)
+        .await?;
     }
     let stoken = touch_collection(conn, collection.id).await?;
     sqlx::query(
@@ -121,6 +132,8 @@ async fn remove_membership(
     .execute(&mut *conn)
     .await?;
     withdraw_invitations(conn, collection.id, account_id).await?;
+    withdraw_invitations_to(conn, collection.id, account_id).await?;
+    withdraw_links(conn, collection.id, account_id).await?;
     // Their open sockets close, and the remaining members see the roster
     // change.
     let lost = Event::Membership {
@@ -251,7 +264,11 @@ pub async fn modify_member(
     .await?;
     if body.access_level != ACCESS_ADMIN {
         withdraw_invitations(&mut tx, collection.id, target).await?;
+        withdraw_links(&mut tx, collection.id, target).await?;
     }
+    // A member has no invitation left to answer. An old one would let a
+    // later accept undo the access just set here.
+    withdraw_invitations_to(&mut tx, collection.id, target).await?;
     let access = Event::Membership {
         collection: collection.id,
         account: target,
@@ -296,16 +313,89 @@ async fn withdraw_invitations(
     collection_id: i64,
     sender: i64,
 ) -> ApiResult<()> {
-    let invited: Vec<i64> = sqlx::query_scalar(
+    let invited: Vec<(i64, i64)> = sqlx::query_as(
         "DELETE FROM invitations WHERE collection_id = $1 AND from_account_id = $2
-         RETURNING to_account_id",
+         RETURNING to_account_id,
+                   (octet_length(uid) + octet_length(signed_encryption_key))::bigint",
     )
     .bind(collection_id)
     .bind(sender)
     .fetch_all(&mut *conn)
     .await?;
-    for account in invited {
+    let bytes: i64 = invited.iter().map(|(_, bytes)| bytes).sum();
+    if bytes > 0 {
+        sqlx::query(
+            "UPDATE collections SET bytes_used = GREATEST(bytes_used - $2, 0) WHERE id = $1",
+        )
+        .bind(collection_id)
+        .bind(bytes)
+        .execute(&mut *conn)
+        .await?;
+    }
+    for (account, _) in invited {
         events::publish(conn, &Event::Invitation { account }).await?;
+    }
+    Ok(())
+}
+
+/// Delete the invitations an account still holds into a collection. Joining
+/// by another way, such as a link, makes an older invitation stale: accepting
+/// it later would change the access the collection just gave, and a removal
+/// must not leave a way back in. The caller holds the lock on the collection.
+async fn withdraw_invitations_to(
+    conn: &mut PgConnection,
+    collection_id: i64,
+    recipient: i64,
+) -> ApiResult<()> {
+    let senders: Vec<(i64, i64)> = sqlx::query_as(
+        "DELETE FROM invitations WHERE collection_id = $1 AND to_account_id = $2
+         RETURNING from_account_id,
+                   (octet_length(uid) + octet_length(signed_encryption_key))::bigint",
+    )
+    .bind(collection_id)
+    .bind(recipient)
+    .fetch_all(&mut *conn)
+    .await?;
+    let bytes: i64 = senders.iter().map(|(_, bytes)| bytes).sum();
+    if bytes > 0 {
+        sqlx::query(
+            "UPDATE collections SET bytes_used = GREATEST(bytes_used - $2, 0) WHERE id = $1",
+        )
+        .bind(collection_id)
+        .bind(bytes)
+        .execute(&mut *conn)
+        .await?;
+    }
+    for (account, _) in senders {
+        events::publish(conn, &Event::Invitation { account }).await?;
+    }
+    Ok(())
+}
+
+/// Delete the invite links an account made into a collection it is no longer
+/// an admin of. A link carries the authority of whoever made it, so once that
+/// authority is gone the link must go with it; otherwise removing or demoting
+/// the maker would only pause the link, and re-adding or promoting them would
+/// make it work again. The caller holds the lock on the collection.
+async fn withdraw_links(conn: &mut PgConnection, collection_id: i64, sender: i64) -> ApiResult<()> {
+    let bytes: Vec<i64> = sqlx::query_scalar(
+        "DELETE FROM invite_links WHERE collection_id = $1 AND from_account_id = $2
+         RETURNING (octet_length(uid) + octet_length(signed_encryption_key)
+                    + octet_length(claim_pubkey))::bigint",
+    )
+    .bind(collection_id)
+    .bind(sender)
+    .fetch_all(&mut *conn)
+    .await?;
+    let bytes: i64 = bytes.into_iter().sum();
+    if bytes > 0 {
+        sqlx::query(
+            "UPDATE collections SET bytes_used = GREATEST(bytes_used - $2, 0) WHERE id = $1",
+        )
+        .bind(collection_id)
+        .bind(bytes)
+        .execute(&mut *conn)
+        .await?;
     }
     Ok(())
 }
@@ -380,6 +470,10 @@ pub async fn invite(
     // An invitation that could never be accepted is refused now, while the
     // person sending it can still do something about it.
     limits::check_new_member(&mut tx, collection.id, collection.owner_id, true).await?;
+    let invitation_bytes = body.uid.len() as i64 + body.signed_encryption_key.len() as i64;
+    if let Some(limits) = limits::for_writes(&mut tx, collection.owner_id).await? {
+        limits.check(invitation_bytes, 0, false)?;
+    }
     let inserted = sqlx::query(
         "INSERT INTO invitations
              (uid, version, collection_id, from_account_id, to_account_id, access_level,
@@ -400,6 +494,11 @@ pub async fn invite(
     if inserted == 0 {
         return Err(exists());
     }
+    sqlx::query("UPDATE collections SET bytes_used = bytes_used + $2 WHERE id = $1")
+        .bind(collection.id)
+        .bind(invitation_bytes)
+        .execute(&mut *tx)
+        .await?;
     events::publish(&mut tx, &Event::Invitation { account: recipient }).await?;
     tx.commit().await?;
     Ok(StatusCode::CREATED)
@@ -459,7 +558,7 @@ async fn with_previews(
     let ids: Vec<i64> = rows.iter().map(|row| row.collection_id).collect();
     // One account holds at most one invitation to a collection, so each
     // item is wanted once.
-    let mut items = collections::main_items(state, conn, &ids).await?;
+    let mut items = collections::main_items(state, conn, &ids, state.config.max_page_bytes).await?;
     Ok(rows
         .into_iter()
         .map(|row| Invitation {
@@ -576,16 +675,27 @@ async fn delete_invitation(
     direction: Direction,
 ) -> ApiResult<StatusCode> {
     let mut tx = state.pool.begin().await?;
-    let deleted: Option<(i64, i64)> = sqlx::query_as(&format!(
+    let deleted: Option<(i64, i64, i64, i64)> = sqlx::query_as(&format!(
         "DELETE FROM invitations i WHERE i.uid = $1 AND {} = $2
-         RETURNING i.from_account_id, i.to_account_id",
+         RETURNING i.collection_id, i.from_account_id, i.to_account_id,
+                   (octet_length(i.uid) + octet_length(i.signed_encryption_key))::bigint",
         direction.column()
     ))
     .bind(uid)
     .bind(user.account_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (sender, recipient) = deleted.ok_or_else(|| ApiError::not_found("Invitation"))?;
+    let (collection, sender, recipient, bytes) =
+        deleted.ok_or_else(|| ApiError::not_found("Invitation"))?;
+    if bytes > 0 {
+        sqlx::query(
+            "UPDATE collections SET bytes_used = GREATEST(bytes_used - $2, 0) WHERE id = $1",
+        )
+        .bind(collection)
+        .bind(bytes)
+        .execute(&mut *tx)
+        .await?;
+    }
     // Both ends have a list this invitation just left.
     events::publish(&mut tx, &Event::Invitation { account: sender }).await?;
     events::publish(&mut tx, &Event::Invitation { account: recipient }).await?;
@@ -628,11 +738,29 @@ pub(crate) fn validate_membership_keys(
 pub(crate) async fn add_member(
     conn: &mut PgConnection,
     collection_id: i64,
+    owner_id: i64,
     user: &AuthUser,
     access_level: i16,
     encryption_key: &[u8],
     collection_type: &[u8],
 ) -> ApiResult<()> {
+    // An invitation to this account is no longer a way in once it joins.
+    // Withdraw it first, so the space it used is part of what the new
+    // membership has to fit.
+    withdraw_invitations_to(conn, collection_id, user.account_id).await?;
+    let old_bytes: Option<(i32, i32)> = sqlx::query_as(
+        "SELECT octet_length(encryption_key), octet_length(collection_type)
+         FROM members WHERE collection_id = $1 AND account_id = $2",
+    )
+    .bind(collection_id)
+    .bind(user.account_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let old_bytes = old_bytes.map_or(0i64, |(key, kind)| i64::from(key) + i64::from(kind));
+    let new_bytes = encryption_key.len() as i64 + collection_type.len() as i64;
+    if let Some(limits) = limits::for_writes(conn, owner_id).await? {
+        limits.check((new_bytes - old_bytes).max(0), 0, false)?;
+    }
     let stoken = touch_collection(conn, collection_id).await?;
     sqlx::query(
         "INSERT INTO members
@@ -652,6 +780,16 @@ pub(crate) async fn add_member(
     .bind(stoken)
     .execute(&mut *conn)
     .await?;
+    let delta = new_bytes - old_bytes;
+    if delta != 0 {
+        sqlx::query(
+            "UPDATE collections SET bytes_used = GREATEST(bytes_used + $2, 0) WHERE id = $1",
+        )
+        .bind(collection_id)
+        .bind(delta)
+        .execute(&mut *conn)
+        .await?;
+    }
     // Back in, so there is no lost membership left to report.
     sqlx::query("DELETE FROM removed_members WHERE collection_id = $1 AND account_id = $2")
         .bind(collection_id)
@@ -710,11 +848,31 @@ pub async fn accept(
     .fetch_optional(&mut *tx)
     .await?;
     let (invitation_id, access_level, sender, owner) = invitation.ok_or_else(no_invitation)?;
+    // An invitation is only a way in for someone outside. If the account is
+    // already a member, accepting it would overwrite the access that member
+    // has now, which is how a stale invitation outlives a removal or a
+    // downgrade. Withdraw it instead, so the row cannot be replayed later.
+    let already_member: Option<i16> = sqlx::query_scalar(
+        "SELECT access_level FROM members WHERE collection_id = $1 AND account_id = $2",
+    )
+    .bind(collection_id)
+    .bind(user.account_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if already_member.is_some() {
+        withdraw_invitations_to(&mut tx, collection_id, user.account_id).await?;
+        tx.commit().await?;
+        return Err(ApiError::conflict(
+            "already_member",
+            "You are already a member of this collection.",
+        ));
+    }
     limits::check_new_member(&mut tx, collection_id, owner, false).await?;
 
     add_member(
         &mut tx,
         collection_id,
+        owner,
         &user,
         access_level,
         &body.encryption_key,

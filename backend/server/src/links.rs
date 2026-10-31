@@ -245,10 +245,24 @@ pub async fn create(
     let collection = membership(&mut tx, user.account_id, &body.collection, true).await?;
     collection.require_admin()?;
     collection.require_live()?;
-    sqlx::query("DELETE FROM invite_links WHERE collection_id = $1 AND expires_at <= now()")
+    let expired: Vec<i64> = sqlx::query_scalar(
+        "DELETE FROM invite_links WHERE collection_id = $1 AND expires_at <= now()
+         RETURNING (octet_length(uid) + octet_length(signed_encryption_key)
+                    + octet_length(claim_pubkey))::bigint",
+    )
+    .bind(collection.id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let expired_bytes: i64 = expired.iter().sum();
+    if expired_bytes > 0 {
+        sqlx::query(
+            "UPDATE collections SET bytes_used = GREATEST(bytes_used - $2, 0) WHERE id = $1",
+        )
         .bind(collection.id)
+        .bind(expired_bytes)
         .execute(&mut *tx)
         .await?;
+    }
     let outstanding: i64 =
         sqlx::query_scalar("SELECT count(*) FROM invite_links WHERE collection_id = $1")
             .bind(collection.id)
@@ -264,6 +278,12 @@ pub async fn create(
     // A link nobody could use is refused now, while the person making it
     // can still do something about it.
     limits::check_new_member(&mut tx, collection.id, collection.owner_id, true).await?;
+    let link_bytes = body.uid.len() as i64
+        + body.signed_encryption_key.len() as i64
+        + body.claim_pubkey.len() as i64;
+    if let Some(limits) = limits::for_writes(&mut tx, collection.owner_id).await? {
+        limits.check(link_bytes, 0, false)?;
+    }
 
     let inserted = sqlx::query(
         "INSERT INTO invite_links
@@ -291,6 +311,11 @@ pub async fn create(
             "Link with this uid already exists",
         ));
     }
+    sqlx::query("UPDATE collections SET bytes_used = bytes_used + $2 WHERE id = $1")
+        .bind(collection.id)
+        .bind(link_bytes)
+        .execute(&mut *tx)
+        .await?;
     let info: LinkInfo = sqlx::query_as(&format!("{LINK_INFO} WHERE l.uid = $1"))
         .bind(&body.uid)
         .fetch_one(&mut *tx)
@@ -334,19 +359,32 @@ pub async fn revoke(
     Path(uid): Path<String>,
 ) -> ApiResult<StatusCode> {
     // Any admin of the collection may, not only the one who made the link.
-    let removed = sqlx::query(&format!(
+    let mut tx = state.pool.begin().await?;
+    let removed: Option<(i64, i64)> = sqlx::query_as(&format!(
         "DELETE FROM invite_links l USING members m
          WHERE l.uid = $1 AND m.collection_id = l.collection_id AND m.account_id = $2
-           AND m.access_level = {ACCESS_ADMIN}"
+           AND m.access_level = {ACCESS_ADMIN}
+         RETURNING l.collection_id,
+                   (octet_length(l.uid) + octet_length(l.signed_encryption_key)
+                    + octet_length(l.claim_pubkey))::bigint"
     ))
     .bind(&uid)
     .bind(user.account_id)
-    .execute(&state.pool)
-    .await?
-    .rows_affected();
-    if removed == 0 {
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((collection, bytes)) = removed else {
         return Err(no_link());
+    };
+    if bytes > 0 {
+        sqlx::query(
+            "UPDATE collections SET bytes_used = GREATEST(bytes_used - $2, 0) WHERE id = $1",
+        )
+        .bind(collection)
+        .bind(bytes)
+        .execute(&mut *tx)
+        .await?;
     }
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -388,10 +426,11 @@ pub async fn open(
         .filter(|link| proves(&link.claim_pubkey, &body.signature, &message))
         .ok_or_else(no_link)?;
     link.claimable()?;
-    let collection_item = collections::main_items(&state, &mut conn, &[link.collection_id])
-        .await?
-        .remove(&link.collection_id)
-        .ok_or_else(|| ApiError::internal("a collection has no main item"))?;
+    let collection_item =
+        collections::main_items(&state, &mut conn, &[link.collection_id], i64::MAX)
+            .await?
+            .remove(&link.collection_id)
+            .ok_or_else(|| ApiError::internal("a collection has no main item"))?;
     Ok(Msgpack(OpenedLink {
         signup: state.config.signup == SignupPolicy::Invite
             && link.allows_signup
@@ -457,6 +496,7 @@ pub async fn claim(
     sharing::add_member(
         &mut tx,
         link.collection_id,
+        link.owner_id,
         &user,
         link.access_level,
         &body.encryption_key,

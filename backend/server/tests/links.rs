@@ -399,11 +399,30 @@ async fn link_stands_only_while_its_maker_is_an_admin() {
     assert_eq!(claim(&guest, &link).await.status, 404);
     assert!(!is_member(&guest, &collection).await);
 
+    // Demotion withdrew the link, so restoring the helper's authority must
+    // not restore a secret that may have been shared while they had it.
+    owner
+        .device()
+        .set_access(&collection, &helper.device(), ADMIN)
+        .await;
+    assert_eq!(open(url(), &link).await.status, 404);
+    assert_eq!(claim(&guest, &link).await.status, 404);
+
     owner
         .device()
         .remove_member(&collection, &helper.device())
         .await;
     assert_eq!(open(url(), &link).await.status, 404);
+
+    // Adding the helper back is a new grant of authority. It must not bring
+    // back the link the removal withdrew.
+    owner
+        .device()
+        .share(&collection, &helper.device(), ADMIN)
+        .await;
+    assert_eq!(open(url(), &link).await.status, 404);
+    assert_eq!(claim(&guest, &link).await.status, 404);
+    assert!(!is_member(&guest, &collection).await);
 }
 
 /// A claim that arrives while the link's maker is being removed waits for
