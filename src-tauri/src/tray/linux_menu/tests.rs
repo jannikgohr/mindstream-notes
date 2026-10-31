@@ -138,4 +138,38 @@ fn native_tray_menu_exports_icons_accelerators_actions_and_renamed_vault() {
     let tray = app.remove_tray_by_id(TRAY_ID).unwrap();
     sync(app.handle()).unwrap();
     drop(tray);
+
+    // Build the dev menu with the same item handles, then check that its
+    // heading survives a language change.
+    let state = app.state::<TrayMenuItems>();
+    let dev = TrayMenuItems {
+        dev: Some(
+            super::super::icon_item(
+                &app,
+                super::super::DEV_ID,
+                super::super::DEV_NAME,
+                false,
+                include_bytes!("../../../icons/32x32.png"),
+            )
+            .unwrap(),
+        ),
+        vault: state.vault.clone(),
+        vault_label: std::sync::Mutex::new(state.vault_label.lock().unwrap().clone()),
+        new_note: state.new_note.clone(),
+        new_drawing: state.new_drawing.clone(),
+        new_ink: state.new_ink.clone(),
+        new_diagram: state.new_diagram.clone(),
+        quit: state.quit.clone(),
+    };
+    let dev_snapshot = || build_menu(app.handle(), menu_rows(app.handle(), &dev).unwrap());
+    let items = entries(&dev_snapshot());
+    assert_eq!(items.len(), 10);
+    assert_eq!(items[0].label().as_deref(), Some(super::super::DEV_NAME));
+    assert!(!items[0].is_sensitive());
+    assert!(items[1].is::<gtk::SeparatorMenuItem>());
+    assert_eq!(items[2].label().as_deref(), Some("Research & notes"));
+    crate::tray::set_language(app.handle(), "en");
+    let items = entries(&dev_snapshot());
+    assert_eq!(items[0].label().as_deref(), Some(super::super::DEV_NAME));
+    assert_eq!(items[4].label().as_deref(), Some("New note"));
 }
