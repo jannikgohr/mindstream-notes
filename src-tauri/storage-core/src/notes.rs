@@ -295,6 +295,13 @@ pub fn list(conn: &Connection, include_trashed: bool) -> AppResult<Vec<NoteSumma
     Ok(summaries)
 }
 
+/// Cheap fetch of just the `yrs_state` blob for a note id, skipping
+/// the rest of the row + the serde-derive overhead of building a
+/// `Note`. Used by ink-note open (`drawing_show`) to dodge the
+/// ~200KB/MB-class IPC cost of shipping a heavy `yrs_state` from
+/// SQLite → JS → back across Tauri's JSON-encoded IPC. Returns an
+/// empty `Vec` for a missing note or a null yrs_state column —
+/// matching the "fresh doc" treatment downstream.
 pub fn load_yrs_state(conn: &Connection, id: &str) -> AppResult<Vec<u8>> {
     let state: Option<Option<Vec<u8>>> = conn
         .query_row(
@@ -389,13 +396,6 @@ pub fn save_yrs_state(conn: &mut Connection, id: &str, bytes: &[u8]) -> AppResul
     Ok(true)
 }
 
-/// Cheap fetch of just the `yrs_state` blob for a note id, skipping
-/// the rest of the row + the serde-derive overhead of building a
-/// `Note`. Used by ink-note open (`drawing_show`) to dodge the
-/// ~200KB/MB-class IPC cost of shipping a heavy `yrs_state` from
-/// SQLite → JS → back across Tauri's JSON-encoded IPC. Returns an
-/// empty `Vec` for a missing note or a null yrs_state column —
-/// matching the "fresh doc" treatment downstream.
 pub fn create(conn: &Connection, input: CreateNote) -> AppResult<Note> {
     crate::sharing::ensure_parent_writable(conn, input.parent_collection_id.as_deref())?;
     let id = format!("note_{}", uuid::Uuid::new_v4());

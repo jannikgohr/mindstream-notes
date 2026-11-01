@@ -1,0 +1,210 @@
+import { browserStorageEnabled } from './commands';
+import { recoveryStatus } from './recovery-status.svelte';
+import type { BrowserStorageClient } from './client';
+import type { UpdateNoteInput, Note } from '../api/notes';
+
+const PREFIX = 'mindstream:browser-vault:draft:v1:';
+const ARCHIVE = 'mindstream:browser-vault:recovery:v1:';
+type Draft = Pick<UpdateNoteInput, 'id' | 'body' | 'yrs_state'>;
+type DraftRecord = { id: string; body?: string; state?: string; base: string };
+const revisions = new Map<string, string>();
+
+function enabled(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    !('__TAURI_INTERNALS__' in window) &&
+    browserStorageEnabled()
+  );
+}
+
+// A content fingerprint, independent of metadata and modification timestamps.
+// It is a concurrency check, not a cryptographic integrity or security boundary.
+function revision(note: Pick<Note, 'body' | 'yrs_state'>): string {
+  let a = 0x811c9dc5,
+    b = 0x9e3779b9;
+  const add = (value: number) => {
+    a = Math.imul(a ^ value, 0x01000193);
+    b = Math.imul(b ^ value, 0x85ebca6b);
+  };
+  for (let i = 0; i < note.body.length; i++) add(note.body.charCodeAt(i));
+  add(0x10000);
+  for (const byte of note.yrs_state) add(byte);
+  return `${a >>> 0}:${b >>> 0}`;
+}
+
+/** Remember the content actually read or committed by SQLite. */
+export function rememberBrowserNote(value: unknown): void {
+  if (!value || typeof value !== 'object') return;
+  const note = value as Note;
+  if (
+    typeof note.id === 'string' &&
+    typeof note.body === 'string' &&
+    Array.isArray(note.yrs_state)
+  )
+    revisions.set(note.id, revision(note));
+}
+
+function encode(bytes: number[]): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 8192)
+    binary += String.fromCharCode(...bytes.slice(i, i + 8192));
+  return btoa(binary);
+}
+function decode(state: string): number[] {
+  return Array.from(atob(state), (char) => char.charCodeAt(0));
+}
+function parseRecord(raw: string, key: string): DraftRecord {
+  const draft = JSON.parse(raw) as DraftRecord;
+  if (
+    !draft ||
+    typeof draft.id !== 'string' ||
+    key !== PREFIX + draft.id ||
+    typeof draft.base !== 'string' ||
+    (draft.body !== undefined && typeof draft.body !== 'string') ||
+    (draft.state !== undefined && typeof draft.state !== 'string') ||
+    (draft.body === undefined && draft.state === undefined)
+  )
+    throw new Error('Invalid browser note recovery data');
+  return {
+    id: draft.id,
+    body: draft.body,
+    state: draft.state,
+    base: draft.base
+  };
+}
+
+/** Record edits synchronously before either editor debounce can lose them. */
+export function checkpointBrowserNote(snapshot: () => Draft | null): void {
+  if (!enabled()) return;
+  const draft = snapshot();
+  if (!draft) return;
+  const base = revisions.get(draft.id);
+  if (!base)
+    throw new Error(
+      'Cannot checkpoint a note before reading its saved content'
+    );
+  const record: DraftRecord = {
+    id: draft.id,
+    body: draft.body,
+    base,
+    state: draft.yrs_state === undefined ? undefined : encode(draft.yrs_state)
+  };
+  try {
+    localStorage.setItem(PREFIX + draft.id, JSON.stringify(record));
+  } catch (error) {
+    recoveryStatus.unavailable = true;
+    throw error;
+  }
+}
+
+/** Capture before awaiting a save. An older acknowledgement leaves newer edits.
+ * Rebase those edits onto this successful save, so replay recognizes their parent. */
+export function captureBrowserAcknowledgement(id: string): () => void {
+  if (!enabled()) return () => {};
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(PREFIX + id);
+  } catch {
+    return () => {};
+  }
+  return () => {
+    if (raw === null) return;
+    const current = localStorage.getItem(PREFIX + id);
+    if (current === raw) localStorage.removeItem(PREFIX + id);
+    else if (current) {
+      const captured = parseRecord(raw, PREFIX + id);
+      const newer = parseRecord(current, PREFIX + id);
+      const base = revisions.get(id);
+      if (base && newer.base === captured.base)
+        localStorage.setItem(PREFIX + id, JSON.stringify({ ...newer, base }));
+    }
+  };
+}
+
+function retain(key: string, raw: string, reason: string): void {
+  recoveryStatus.copies.push({ key, raw, reason });
+  try {
+    // Move to quarantine when there is room. Otherwise preserve the original
+    // key and still open the vault; the downloadable copy also remains in memory.
+    localStorage.setItem(
+      ARCHIVE + key.slice(PREFIX.length) + ':' + crypto.randomUUID(),
+      raw
+    );
+    if (localStorage.getItem(key) === raw) localStorage.removeItem(key);
+  } catch {
+    /* Keep the original copy when storage is full or blocked. */
+  }
+}
+
+/** Run only after acquiring the exclusive vault lock, before its first read.
+ * Unusable/conflicting copies remain downloadable; one bad note cannot hide all
+ * other notes. A dead worker still rejects opening and can reconnect next time. */
+export async function recoverBrowserNotes(
+  connection: Pick<BrowserStorageClient, 'request'>
+): Promise<void> {
+  let keys: string[];
+  try {
+    keys = Object.keys(localStorage);
+    for (const key of keys.filter((key) => key.startsWith(ARCHIVE))) {
+      const raw = localStorage.getItem(key);
+      if (
+        raw !== null &&
+        !recoveryStatus.copies.some((copy) => copy.key === key)
+      )
+        recoveryStatus.copies.push({ key, raw, reason: 'retained' });
+    }
+  } catch {
+    recoveryStatus.unavailable = true;
+    return;
+  }
+  for (const key of keys.filter((key) => key.startsWith(PREFIX))) {
+    let raw: string | null;
+    try {
+      raw = localStorage.getItem(key);
+    } catch {
+      recoveryStatus.unavailable = true;
+      continue;
+    }
+    if (raw === null) continue;
+    try {
+      const record = parseRecord(raw, key);
+      const draft: Draft = {
+        id: record.id,
+        body: record.body,
+        yrs_state: record.state === undefined ? undefined : decode(record.state)
+      };
+      let note: Note;
+      try {
+        note = (await connection.request('invoke', {
+          command: 'load_note',
+          args: { id: draft.id }
+        })) as Note;
+      } catch (error) {
+        if ((error as { code?: string })?.code !== 'notFound') throw error;
+        retain(key, raw, 'deleted');
+        continue;
+      }
+      const alreadySaved =
+        (draft.body === undefined || draft.body === note.body) &&
+        (draft.yrs_state === undefined ||
+          JSON.stringify(draft.yrs_state) === JSON.stringify(note.yrs_state));
+      if (!alreadySaved) {
+        if (note.trashed || record.base !== revision(note)) {
+          retain(key, raw, note.trashed ? 'trashed' : 'conflict');
+          continue;
+        }
+        const saved = await connection.request('invoke', {
+          command: 'save_note',
+          args: { input: draft }
+        });
+        rememberBrowserNote(saved);
+      }
+      if (localStorage.getItem(key) === raw) localStorage.removeItem(key);
+    } catch (error) {
+      const code = (error as { code?: string })?.code;
+      if (code === 'worker' || code === 'timeout' || code === 'closed')
+        throw error;
+      retain(key, raw, code ?? 'invalid');
+    }
+  }
+}

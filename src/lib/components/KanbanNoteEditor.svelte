@@ -1,4 +1,8 @@
 <script lang="ts">
+  import {
+    checkpointBrowserNote,
+    captureBrowserAcknowledgement
+  } from '$lib/browser/recovery';
   import { ancestorIsTrash } from '$lib/editor/trash';
   import {
     createSaveScheduler,
@@ -117,6 +121,7 @@
     isLocalOnly,
     observeBoard,
     readBoardFromYDoc,
+    boardToPlainText,
     removeCardFromYDoc,
     removeColumnFromYDoc,
     removeLabelFromYDoc,
@@ -1120,6 +1125,16 @@
   const saveScheduler = createSaveScheduler({
     canSave: () => !isTrashed && saveReady && autoSaveEnabled && !!yDoc,
     canSaveOnClose: () => !isTrashed && saveReady && !!yDoc,
+    checkpoint: () =>
+      checkpointBrowserNote(() =>
+        yDoc && !isTrashed
+          ? {
+              id: noteId,
+              body: boardToPlainText(readBoardFromYDoc(yDoc)),
+              yrs_state: Array.from(Y.encodeStateAsUpdate(yDoc))
+            }
+          : null
+      ),
     capture: captureSave,
     delayMs: () => saveDebounceMs,
     onError: (error) => {
@@ -1135,12 +1150,14 @@
     if (!yDoc || isTrashed) return null;
     const capturedNoteId = noteId;
     const renderSnapshot = captureKanbanSave(yDoc);
+    const acknowledge = captureBrowserAcknowledgement(capturedNoteId);
     return async () => {
       savingState = 'saving';
       try {
         const captured = await renderSnapshot();
         if (isTrashed) return;
         await apiSaveNote({ id: capturedNoteId, ...captured });
+        acknowledge();
         const existing = tree.notesById[capturedNoteId];
         if (existing) {
           tree.notesById[capturedNoteId] = {

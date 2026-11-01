@@ -129,6 +129,10 @@ pub enum VaultRequest {
         page_index: u32,
         text: Option<String>,
     },
+    DrawingSaveInkState {
+        note_id: String,
+        yrs_state: Vec<u8>,
+    },
 }
 
 fn result<T: Serialize>(value: T) -> AppResult<Value> {
@@ -140,7 +144,13 @@ pub fn dispatch(conn: &mut Connection, request: VaultRequest) -> AppResult<Value
     use VaultRequest::*;
     match request {
         LoadTree {} => {
-            Ok(json!({"collections": collections::list(conn)?, "notes": notes::list(conn, false)?}))
+            let tx = conn.transaction()?;
+            let snapshot = json!({
+                "collections": collections::list(&tx)?,
+                "notes": notes::list(&tx, true)?
+            });
+            tx.commit()?;
+            Ok(snapshot)
         }
         ListNotes { include_trashed } => result(notes::list(conn, include_trashed)?),
         LoadNote { id } => result(notes::load(conn, &id)?),
@@ -151,7 +161,13 @@ pub fn dispatch(conn: &mut Connection, request: VaultRequest) -> AppResult<Value
         PurgeNote { id } => result(notes::purge(conn, &id)?),
         ListCollections {} => result(collections::list(conn)?),
         CreateCollection { input } => result(collections::create(conn, input)?),
-        UpdateCollection { input } => result(collections::update(conn, input)?),
+        UpdateCollection { input } => {
+            // One transaction, so a refused move also rolls back the rename in the same call.
+            let tx = conn.transaction()?;
+            let folder = collections::update(&tx, input)?;
+            tx.commit()?;
+            result(folder)
+        }
         DeleteCollection { id } => result(collections::delete(conn, &id)?),
         SearchNotes { query } => result(search::search(conn, &query)?),
         NoteWordCount { note_id } => result(content_stats::note_word_count_inner(conn, &note_id)?),
@@ -244,6 +260,15 @@ pub fn dispatch(conn: &mut Connection, request: VaultRequest) -> AppResult<Value
             }
             result(conn.query_row("SELECT text FROM pdf_page_text WHERE asset_id = ?1 AND page_index = ?2 AND extraction_version = 1", params![asset_id, page_index], |r|r.get::<_,String>(0)).optional()?)
         }
+        DrawingSaveInkState { note_id, yrs_state } => {
+            // Same write path as the native `drawing_save_ink_state` command, which maps a
+            // missing note to NotFound.
+            if notes::save_yrs_state(conn, &note_id, &yrs_state)? {
+                result(())
+            } else {
+                Err(AppError::NotFound(format!("note {note_id}")))
+            }
+        }
     }
 }
 
@@ -284,6 +309,80 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn load_tree_includes_trashed_notes_like_native_tree() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        crate::migrations::run(&mut conn).unwrap();
+        let note = call(&mut conn, "create_note", json!({"input":{"title":"Gone"}})).unwrap();
+        let id = note["id"].as_str().unwrap().to_string();
+        call(&mut conn, "trash_note", json!({"id":id})).unwrap();
+        let tree = call(&mut conn, "load_tree", json!({})).unwrap();
+        assert!(tree["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["id"] == id.as_str() && n["trashed"] == true));
+    }
+
+    #[test]
+    fn update_collection_rolls_back_rename_when_move_is_refused() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        crate::migrations::run(&mut conn).unwrap();
+        let parent = call(
+            &mut conn,
+            "create_collection",
+            json!({"input":{"name":"Parent"}}),
+        )
+        .unwrap();
+        let parent_id = parent["id"].as_str().unwrap().to_string();
+        let child = call(
+            &mut conn,
+            "create_collection",
+            json!({"input":{"name":"Child","parent_collection_id":parent_id}}),
+        )
+        .unwrap();
+        let child_id = child["id"].as_str().unwrap().to_string();
+        // Moving Parent under its own child is a cycle, so the update must fail
+        // without keeping the rename that ran first.
+        assert!(call(
+            &mut conn,
+            "update_collection",
+            json!({"input":{"id":parent_id,"name":"Renamed","parent_collection_id":child_id}}),
+        )
+        .is_err());
+        let folders = call(&mut conn, "list_collections", json!({})).unwrap();
+        let parent_after = folders
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["id"] == parent_id.as_str())
+            .unwrap();
+        assert_eq!(parent_after["name"], "Parent");
+        assert!(parent_after["parent_collection_id"].is_null());
+    }
+
+    #[test]
+    fn drawing_save_ink_state_persists_bytes_and_reports_missing_notes() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        crate::migrations::run(&mut conn).unwrap();
+        let note = call(&mut conn, "create_note", json!({"input":{"title":"Ink"}})).unwrap();
+        let id = note["id"].as_str().unwrap().to_string();
+        let state = crate::yrs_doc::editor_state_for_tests("ink");
+        call(
+            &mut conn,
+            "drawing_save_ink_state",
+            json!({"noteId":id,"yrsState":state}),
+        )
+        .unwrap();
+        assert_eq!(notes::load_yrs_state(&conn, &id).unwrap(), state);
+        let missing = call(
+            &mut conn,
+            "drawing_save_ink_state",
+            json!({"noteId":"missing","yrsState":state}),
+        );
+        assert!(matches!(missing, Err(AppError::NotFound(_))));
     }
 
     #[test]

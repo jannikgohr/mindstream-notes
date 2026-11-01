@@ -1,4 +1,8 @@
 <script lang="ts">
+  import {
+    checkpointBrowserNote,
+    captureBrowserAcknowledgement
+  } from '$lib/browser/recovery';
   import { createSaveScheduler } from '$lib/editor/save-scheduler';
   import { onDestroy, untrack } from 'svelte';
   import type { EditorView } from '@codemirror/view';
@@ -696,6 +700,15 @@
 
   const saveScheduler = createSaveScheduler({
     canSave: () => !isReadOnly,
+    checkpoint: () =>
+      checkpointBrowserNote(() =>
+        !isReadOnly
+          ? {
+              id: noteId,
+              body: source
+            }
+          : null
+      ),
     capture: captureSave,
     onError: (error) => {
       console.error('[PluginDocumentNoteEditor] save failed', error);
@@ -709,7 +722,11 @@
     if (isReadOnly) return null;
     const capturedNoteId = noteId;
     const capturedSource = source;
-    return () => setNoteBody(capturedNoteId, capturedSource);
+    const acknowledge = captureBrowserAcknowledgement(capturedNoteId);
+    return async () => {
+      await setNoteBody(capturedNoteId, capturedSource);
+      acknowledge();
+    };
   }
 
   function scheduleRender(delay: number) {
@@ -1196,6 +1213,21 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
             language={sourceLanguage}
             tabSize={sourceTabSize}
             onInput={onSourceInput}
+            onCheckpoint={(getBody) => {
+              if (!isReadOnly) {
+                try {
+                  checkpointBrowserNote(() => ({
+                    id: noteId,
+                    body: getBody()
+                  }));
+                } catch (error) {
+                  console.error(
+                    '[PluginDocumentNoteEditor] recovery checkpoint failed',
+                    error
+                  );
+                }
+              }
+            }}
             readonly={isReadOnly}
             {autoPairEnabled}
             diagnosticsCheck={checkSegments}

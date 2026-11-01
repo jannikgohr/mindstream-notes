@@ -8,6 +8,9 @@ on:
       - 'src-tauri/Cargo.*'
       - 'src/lib/browser/**'
       - 'src/lib/api/**'
+      - 'src/lib/components/**'
+      - 'src/lib/editor/**'
+      - 'src/lib/ink/**'
       - 'src/routes/+page.svelte'
       - 'src/routes/sqlite-proof/**'
       - 'src/routes/+layout.svelte'
@@ -49,7 +52,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium firefox webkit
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml -p mindstream-storage-core
-      - run: pnpm exec vitest run src/lib/browser src/lib/api
+      - run: pnpm exec vitest run src/lib/browser src/lib/api src/lib/editor/save-scheduler.test.ts src/lib/ink/save-controller.test.ts
       - run: pnpm test:sqlite
       - uses: actions/upload-artifact@v4
         if: failure()

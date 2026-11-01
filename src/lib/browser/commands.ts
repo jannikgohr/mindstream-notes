@@ -87,6 +87,10 @@ export interface BrowserCommands {
     { assetId: string; pageIndex: number; text?: string },
     string | null
   >;
+  drawing_save_ink_state: Operation<
+    { noteId: string; yrsState: number[] },
+    void
+  >;
 }
 export type BrowserCommand = keyof BrowserCommands;
 export type BrowserRequest = {
@@ -130,7 +134,8 @@ const commands = {
   pdf_notes_missing_text: true,
   pdf_note_needs_text: true,
   set_pdf_text: true,
-  pdf_page_text: true
+  pdf_page_text: true,
+  drawing_save_ink_state: true
 } satisfies Record<BrowserCommand, true>;
 export function isBrowserCommand(command: unknown): command is BrowserCommand {
   return typeof command === 'string' && Object.hasOwn(commands, command);

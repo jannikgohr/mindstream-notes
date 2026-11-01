@@ -79,6 +79,12 @@ export class BrowserStorageClient {
     return parseResult(method, result);
   }
 
+  // True once the worker has been terminated by an error, timeout, or close.
+  // A closed client rejects every request, so callers must open a new one.
+  get isClosed() {
+    return this.closed;
+  }
+
   async close() {
     try {
       await this.request('close', undefined);

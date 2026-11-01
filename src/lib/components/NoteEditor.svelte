@@ -1,4 +1,8 @@
 <script lang="ts">
+  import {
+    checkpointBrowserNote,
+    captureBrowserAcknowledgement
+  } from '$lib/browser/recovery';
   import { registerNoteOutline } from '$lib/stores/note-outline.svelte';
   import { ancestorIsTrash } from '$lib/editor/trash';
   import { createSaveScheduler } from '$lib/editor/save-scheduler';
@@ -278,6 +282,7 @@
     setText: (text: string) => void;
     setPresence: (presence: PeerPresence[]) => void;
     flush: () => void;
+    hasPendingInput: () => boolean;
     focus: () => void;
     getView: () => CmEditorView | null;
   } | null>(null);
@@ -1467,6 +1472,10 @@
     canSave: () => !isReadOnly && autoSaveEnabled,
     canSaveOnClose: () => !isReadOnly && !!getMarkdown,
     beforeFlush: () => sourceEditor?.flush(),
+    checkpoint: () => {
+      if (!sourceEditor?.hasPendingInput())
+        checkpointBrowserNote(currentNoteSaveInput);
+    },
     capture: captureCurrentNoteSave,
     delayMs: () => saveDebounceMs,
     onError: (error) => {
@@ -1479,31 +1488,30 @@
     savingState = saveScheduler.pending ? 'pending' : 'idle';
   }
 
-  function captureCurrentNoteSave(
-    opts: { updateStatus?: boolean } = {}
-  ): (() => Promise<void>) | null {
-    if (isReadOnly) return null;
-    const updateStatus = opts.updateStatus ?? true;
-    // Capture the markdown + y-doc state synchronously while the editor still
-    // exists. This also lets onDestroy flush a pending debounce before Crepe
-    // tears down the ProseMirror/Yjs state.
-    const rawMarkdown = getMarkdown ? getMarkdown() : '';
-    // Trim trailing whitespace per-line on the way to disk. We don't mutate
-    // the live editor doc — that would jump the caret and broadcast a no-op
-    // edit to peers; we only sanitise the snapshot we hand to Rust.
+  function currentNoteSaveInput() {
+    if (isReadOnly || !getMarkdown) return null;
+    const rawMarkdown = getMarkdown();
     const markdown = trimTrailingOnSave
       ? rawMarkdown.replace(/[ \t]+$/gm, '')
       : rawMarkdown;
-    // Array.from is necessary because Tauri serialises Uint8Array as an empty
-    // object via JSON.stringify.
-    const yrsState = yDoc ? Array.from(Y.encodeStateAsUpdate(yDoc)) : undefined;
-    const capturedNoteId = noteId;
+    return {
+      id: noteId,
+      body: markdown,
+      yrs_state: yDoc ? Array.from(Y.encodeStateAsUpdate(yDoc)) : undefined
+    };
+  }
+
+  function captureCurrentNoteSave(
+    opts: { updateStatus?: boolean } = {}
+  ): (() => Promise<void>) | null {
+    const input = currentNoteSaveInput();
+    if (!input) return null;
+    const updateStatus = opts.updateStatus ?? true;
+    const capturedNoteId = input.id;
+    const acknowledge = captureBrowserAcknowledgement(capturedNoteId);
     return async () => {
-      await apiSaveNote({
-        id: capturedNoteId,
-        body: markdown,
-        yrs_state: yrsState
-      });
+      await apiSaveNote(input);
+      acknowledge();
       // Mirror the new modified timestamp in the local cache so the metadata
       // panel reflects the save without a tree refetch.
       const existing = tree.notesById[capturedNoteId];
@@ -1797,6 +1805,22 @@
             readonly={isReadOnly}
             tabSize={sourceTabSize}
             onInput={handleSourceInput}
+            onCheckpoint={(getBody) => {
+              if (!isReadOnly) {
+                try {
+                  checkpointBrowserNote(() => ({
+                    id: noteId,
+                    body: getBody()
+                  }));
+                } catch (error) {
+                  savingState = 'error';
+                  console.error(
+                    '[NoteEditor] recovery checkpoint failed',
+                    error
+                  );
+                }
+              }
+            }}
             onHistoryChange={(history) => (sourceHistory = history)}
             {autoPairEnabled}
             {wikilinksEnabled}
