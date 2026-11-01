@@ -89,9 +89,10 @@ fn account_signs_up_with_a_recovery_key_and_signs_in_again() {
         reason(login(&name, "not the password", None)),
         refusal::WRONG_PASSWORD
     );
+    // The server does not say which of the two was wrong.
     assert_eq!(
         reason(login("t-nobody-at-all", PASSWORD, None)),
-        refusal::UNKNOWN_USER
+        refusal::WRONG_PASSWORD
     );
     let taken = User::new(&name, "second@test.local");
     assert_eq!(

@@ -913,3 +913,204 @@ async fn landing_page_tells_a_browser_what_to_do_with_a_link() {
         .unwrap();
     assert!(german.contains("Geteiltem Ordner beitreten…"));
 }
+
+/// Removing someone has to stick. A link they joined by may have uses left,
+/// and they hold its secret, so it must not simply let them back in. Any
+/// link: a new one is no more meant for them than the old one.
+#[tokio::test]
+async fn someone_taken_out_does_not_come_back_by_a_link() {
+    let owner = Person::signup(url(), "owner", false).await;
+    let guest = Person::signup(url(), "guest", false).await;
+    let collection = owner.device().create_collection().await;
+    let link = new_link();
+    let mut create = Create::new(&link, &collection);
+    create.max_uses = Some(5);
+    assert_eq!(owner.post("/mindstream/link/", &create).await.status, 201);
+    assert_eq!(claim(&guest, &link).await.status, 201);
+
+    owner
+        .device()
+        .remove_member(&collection, &guest.device())
+        .await;
+    assert_eq!(claim(&guest, &link).await.status, 404);
+    let later = share_by_link(&owner, &collection).await;
+    assert_eq!(claim(&guest, &later).await.status, 404);
+    assert!(!is_member(&guest, &collection).await);
+
+    // An invitation is an admin changing their mind, and links work again.
+    owner
+        .device()
+        .share(&collection, &guest.device(), READ_ONLY)
+        .await;
+    assert!(is_member(&guest, &collection).await);
+    let status = guest
+        .post(&format!("/collection/{collection}/member/leave/"), &())
+        .await
+        .status;
+    assert_eq!(status, 204);
+    assert_eq!(claim(&guest, &later).await.status, 201);
+}
+
+/// Someone who left of their own accord may come back the way they came.
+#[tokio::test]
+async fn someone_who_left_can_come_back_by_a_link() {
+    let owner = Person::signup(url(), "owner", false).await;
+    let guest = Person::signup(url(), "guest", false).await;
+    let collection = owner.device().create_collection().await;
+    let link = new_link();
+    let mut create = Create::new(&link, &collection);
+    create.max_uses = Some(5);
+    assert_eq!(owner.post("/mindstream/link/", &create).await.status, 201);
+    assert_eq!(claim(&guest, &link).await.status, 201);
+    let status = guest
+        .post(&format!("/collection/{collection}/member/leave/"), &())
+        .await
+        .status;
+    assert_eq!(status, 204);
+    assert_eq!(claim(&guest, &link).await.status, 201);
+}
+
+/// A disabled account stays a member until someone takes it out, and an
+/// admin has to be able to. Otherwise the links it made would work again the
+/// moment it is enabled.
+#[tokio::test]
+async fn a_disabled_admin_can_be_taken_out_and_its_links_stay_gone() {
+    let owner = Person::signup(url(), "owner", false).await;
+    let helper = Person::signup(url(), "helper", false).await;
+    let collection = owner.device().create_collection().await;
+    owner
+        .device()
+        .share(&collection, &helper.device(), ADMIN)
+        .await;
+    let link = share_by_link(&helper, &collection).await;
+
+    let state = common::admin_state().await;
+    assert!(admin::set_disabled(&state, &helper.name, true)
+        .await
+        .unwrap());
+    owner
+        .device()
+        .set_access(&collection, &helper.device(), READ_WRITE)
+        .await;
+    owner
+        .device()
+        .remove_member(&collection, &helper.device())
+        .await;
+
+    assert!(admin::set_disabled(&state, &helper.name, false)
+        .await
+        .unwrap());
+    assert_eq!(open(url(), &link).await.status, 404);
+}
+
+/// What a collection is charged for has to agree with what its rows hold
+/// after anything that changes them, or a plan quietly stops meaning what it
+/// says. The server only reports a difference. It never repairs one.
+#[tokio::test]
+async fn the_count_of_stored_bytes_agrees_with_the_rows_after_every_change() {
+    use reqwest::Method;
+
+    let state = common::admin_state().await;
+    let pool = sqlx::PgPool::connect(&common::database_url())
+        .await
+        .unwrap();
+    let owner = Person::signup(url(), "owner", false).await;
+    let helper = Person::signup(url(), "helper", false).await;
+    let guest = Person::signup(url(), "guest", false).await;
+    let leaver = Person::signup(url(), "leaver", false).await;
+    let doomed = Person::signup(url(), "doomed", false).await;
+    let invited = Person::signup(url(), "invited", false).await;
+    let device = owner.device();
+    let collection = device.create_collection().await;
+
+    macro_rules! agrees {
+        ($step:expr) => {
+            let drift = admin::storage_drift(&state).await.unwrap();
+            let ours: Vec<_> = drift.iter().filter(|row| row.0 == collection).collect();
+            assert!(ours.is_empty(), "after {}: {ours:?}", $step);
+        };
+    }
+    agrees!("creating");
+
+    let item = device.add_item(&collection).await;
+    agrees!("pushing");
+    device.delete_item(&collection, &item).await;
+    agrees!("deleting an item");
+
+    let invitation = device.invite(&collection, &guest.device(), READ_ONLY).await;
+    agrees!("inviting");
+    let status = guest
+        .delete(&format!("/invitation/incoming/{invitation}/"))
+        .await
+        .status;
+    assert_eq!(status, 204);
+    agrees!("rejecting");
+    let invitation = device.invite(&collection, &guest.device(), READ_ONLY).await;
+    let status = owner
+        .delete(&format!("/invitation/outgoing/{invitation}/"))
+        .await
+        .status;
+    assert_eq!(status, 204);
+    agrees!("withdrawing an invitation");
+
+    device.share(&collection, &helper.device(), ADMIN).await;
+    agrees!("accepting");
+    let link = share_by_link(&owner, &collection).await;
+    agrees!("making a link");
+    assert_eq!(claim(&guest, &link).await.status, 201);
+    agrees!("claiming a link");
+    let later = share_by_link(&owner, &collection).await;
+    let status = owner
+        .delete(&format!("/mindstream/link/{}/", later.uid))
+        .await
+        .status;
+    assert_eq!(status, 204);
+    agrees!("revoking a link");
+
+    let _kept = share_by_link(&helper, &collection).await;
+    helper
+        .device()
+        .invite(&collection, &invited.device(), READ_ONLY)
+        .await;
+    device
+        .set_access(&collection, &helper.device(), READ_WRITE)
+        .await;
+    agrees!("demoting an admin");
+
+    let expired = share_by_link(&owner, &collection).await;
+    sqlx::query("UPDATE invite_links SET expires_at = now() - interval '1 hour' WHERE uid = $1")
+        .bind(&expired.uid)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let _fresh = share_by_link(&owner, &collection).await;
+    agrees!("clearing an expired link");
+
+    device.share(&collection, &leaver.device(), READ_ONLY).await;
+    let (status, _) = leaver
+        .device()
+        .call::<()>(
+            Method::POST,
+            &format!("/collection/{collection}/member/leave/"),
+            None,
+        )
+        .await;
+    assert_eq!(status, 204);
+    agrees!("leaving");
+    device.remove_member(&collection, &helper.device()).await;
+    agrees!("removing a member");
+
+    // Deleting an account takes its rows out of collections others pay for.
+    device.share(&collection, &doomed.device(), ADMIN).await;
+    let _theirs = share_by_link(&doomed, &collection).await;
+    doomed
+        .device()
+        .invite(&collection, &invited.device(), READ_ONLY)
+        .await;
+    agrees!("sharing with an account about to go");
+    assert!(admin::delete_account(&state, &doomed.name).await.unwrap());
+    agrees!("deleting a member's account");
+
+    device.delete_item(&collection, &collection).await;
+    agrees!("deleting the collection");
+}

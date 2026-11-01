@@ -94,7 +94,7 @@ pub fn server() -> &'static str {
     URL.get_or_init(|| start_server(|_| {}))
 }
 
-fn unique() -> u64 {
+pub fn unique() -> u64 {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

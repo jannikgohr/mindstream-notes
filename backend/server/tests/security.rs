@@ -17,6 +17,98 @@ fn url() -> &'static str {
     common::server()
 }
 
+#[derive(Deserialize)]
+struct SignInStart {
+    salt: ByteBuf,
+    challenge: ByteBuf,
+    version: i16,
+}
+
+async fn start_signing_in(name: &str) -> SignInStart {
+    let asked = json!({ "username": name });
+    let reply = post(url(), "/authentication/login_challenge/", &asked).await;
+    assert_eq!(reply.status, 200, "a challenge for {name}");
+    reply.decode()
+}
+
+/// Signing in says nothing about whether a name has an account: not in what
+/// it answers, and not in how many tries the answer takes to change.
+#[tokio::test]
+async fn a_name_nobody_has_signs_in_like_a_wrong_password() {
+    let ann = Person::signup(url(), "ann", true).await;
+    let bob = Person::signup(url(), "bob", false).await;
+    let nobody = common::username("nobody");
+
+    let (known, unknown) = (
+        start_signing_in(&ann.name).await,
+        start_signing_in(&nobody).await,
+    );
+    assert_eq!(unknown.salt.len(), known.salt.len());
+    assert_eq!(unknown.challenge.len(), known.challenge.len());
+    assert_eq!(unknown.version, known.version);
+    // Asked again, a salt is what it was, as an account's is. A challenge is
+    // new each time, as an account's is, and names may differ in case.
+    let again = start_signing_in(&nobody.to_uppercase()).await;
+    assert_eq!(again.salt, unknown.salt);
+    assert_ne!(again.challenge, unknown.challenge);
+
+    let login = "/authentication/login/";
+    let recover = "/authentication/recover/";
+    let guess = new_key();
+    for _ in 0..10 {
+        for name in [&ann.name, &nobody] {
+            let reply = signed(url(), name, &guess, login, "login", &Extra::none()).await;
+            assert_eq!(
+                reply.outcome(),
+                refused(401, "login_bad_signature"),
+                "{name}"
+            );
+        }
+    }
+    for name in [&ann.name, &nobody] {
+        let reply = signed(url(), name, &guess, login, "login", &Extra::none()).await;
+        assert_eq!(
+            reply.outcome(),
+            refused(429, "password_throttled"),
+            "{name}"
+        );
+    }
+    // The same for a recovery, and for an account that has no recovery key.
+    for name in [&ann.name, &bob.name, &nobody] {
+        let reply = signed(url(), name, &guess, recover, "recover", &Extra::none()).await;
+        assert_eq!(
+            reply.outcome(),
+            refused(401, "recovery_bad_signature"),
+            "{name}"
+        );
+    }
+}
+
+/// Where a name has an account or not is the one thing that changes the work,
+/// and it must not be possible to time it. Every sign-in takes a set time
+/// from when its request is in.
+#[tokio::test]
+async fn signing_in_takes_no_less_than_a_set_time() {
+    use std::time::{Duration, Instant};
+
+    let ann = Person::signup(url(), "ann", false).await;
+    let nobody = common::username("nobody");
+    let guess = new_key();
+    for name in [&ann.name, &nobody] {
+        let started = Instant::now();
+        start_signing_in(name).await;
+        assert!(started.elapsed() >= Duration::from_millis(100), "{name}");
+
+        let started = Instant::now();
+        let login = "/authentication/login/";
+        signed(url(), name, &guess, login, "login", &Extra::none()).await;
+        assert!(
+            started.elapsed() >= Duration::from_millis(200),
+            "{name} took less than a challenge and a login"
+        );
+    }
+}
+
 #[tokio::test]
 async fn code_is_asked_for_only_once_the_password_is_right() {
     let ann = Person::signup(url(), "ann", false).await;
