@@ -48,7 +48,9 @@
     "prepare": "husky",
     "test:plugin-author": "node plugin-sdk/typescript/scripts/verify-author.mjs",
     "plugins:build": "node plugin-sdk/build-bundled.mjs",
-    "plugins:examples": "node plugin-sdk/examples/build.mjs"
+    "plugins:examples": "node plugin-sdk/examples/build.mjs",
+    "build:wasm": "node scripts/browser/build-wasm.mjs",
+    "test:sqlite": "pnpm build:wasm && node e2e-tests/browser/playwright.cjs test --config e2e-tests/sqlite/playwright.config.ts"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.0.1",

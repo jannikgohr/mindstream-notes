@@ -192,6 +192,18 @@ impl From<std::io::Error> for CommandError {
 pub type AppResult<T> = std::result::Result<T, AppError>;
 pub type CommandResult<T> = std::result::Result<T, CommandError>;
 
+impl From<mindstream_storage_core::error::AppError> for AppError {
+    fn from(error: mindstream_storage_core::error::AppError) -> Self {
+        match error {
+            mindstream_storage_core::error::AppError::Db(error) => Self::Db(error),
+            mindstream_storage_core::error::AppError::NotFound(message) => Self::NotFound(message),
+            mindstream_storage_core::error::AppError::InvalidArg(message) => {
+                Self::InvalidArg(message)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

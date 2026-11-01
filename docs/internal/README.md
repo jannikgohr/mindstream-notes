@@ -31,6 +31,9 @@ in the [documentation index](../README.md).
 
 ## Design
 
+- [Browser support](browser-support.md): the worker SQLite proof, shared Rust
+  storage, verification commands, and remaining porting work
+
 - [Sync server design](server-design.md): what the server is and why it
   replaced the earlier stack
 - [Storage ownership and recovery](storage-ownership-and-recovery.md): settings

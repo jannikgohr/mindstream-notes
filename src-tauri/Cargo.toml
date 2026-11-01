@@ -14,10 +14,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 # The plugin runtime is its own crate so it builds without Tauri (see its
 # Cargo.toml). Listing it in default-members keeps `cargo test` here, which CI
-# and the pre-push hook run, covering both.
+# and the pre-push hook run, covering both. The storage core is also a
+# default member so its migrated tests run with the native regression suite.
 [workspace]
-members = [".", "plugin-runtime", "plugin-fixtures"]
-default-members = [".", "plugin-runtime"]
+members = [".", "plugin-runtime", "plugin-fixtures", "storage-core", "browser-wasm"]
+default-members = [".", "plugin-runtime", "storage-core"]
 
 [features]
 dev-environment = []
@@ -34,6 +35,7 @@ tauri-build = { version = "2", features = [] }
 mindstream-plugin-runtime = { path = "plugin-runtime", features = ["aot-build"] }
 
 [dependencies]
+mindstream-storage-core = { path = "storage-core" }
 tauri = { version = "2.11", features = ["unstable", "tray-icon", "image-png"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
@@ -128,6 +130,7 @@ md-5 = "0.11.0"
 # guards no-ops and turn any panic into a hard crash. The size cost of unwinding
 # tables is accepted for that safety.
 [dev-dependencies]
+mindstream-storage-core = { path = "storage-core", features = ["test-support"] }
 mindstream-plugin-fixtures = { path = "plugin-fixtures" }
 tempfile = "3"
 tauri = { version = "2.11", features = ["test"] }

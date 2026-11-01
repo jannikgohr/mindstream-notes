@@ -1,0 +1,19 @@
+[package]
+name = "mindstream-browser-wasm"
+version = "0.2.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+mindstream-storage-core = { path = "../storage-core", features = ["storage-proof"] }
+rusqlite = "=0.39.0"
+serde = { version = "1", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+wasm-bindgen = "=0.2.126"
+wasm-bindgen-futures = "0.4"
+# 0.39 uses the 0.5 SQLite ABI. VFS 0.2 uses the matching rsqlite-vfs ABI.
+sqlite-wasm-rs = "=0.5.5"
+sqlite-wasm-vfs = "=0.2.0"
