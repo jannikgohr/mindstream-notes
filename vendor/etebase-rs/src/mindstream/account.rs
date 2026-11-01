@@ -37,6 +37,9 @@ pub mod refusal {
     pub const CODE_THROTTLED: &str = "totp_throttled";
     /// Too many attempts from this address.
     pub const THROTTLED: &str = "throttled";
+    /// The items named are too large to send together. Ask for fewer. One
+    /// item at a time is always answered.
+    pub const TOO_MUCH_AT_ONCE: &str = "too_much_at_once";
     /// There is no authenticator to turn off or to make backup codes for.
     pub const NO_AUTHENTICATOR: &str = "totp_not_enabled";
     /// A code was sent to finish setting up an authenticator, and no setup
