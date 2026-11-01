@@ -4,24 +4,28 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::hash::Hash;
 use std::io;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::num::NonZeroU32;
 use std::pin::{pin, Pin};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
+use std::task::{ready, Context, Poll};
 use std::time::Duration;
 
 use axum::body::{Body, Bytes};
-use axum::extract::{ConnectInfo, FromRequestParts, Request};
+use axum::extract::{ConnectInfo, FromRequestParts, Request, State};
 use axum::http::request::Parts;
 use axum::http::StatusCode;
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
 use axum::{BoxError, Router};
 use governor::clock::{Clock, DefaultClock};
 use governor::middleware::NoOpMiddleware;
 use governor::state::keyed::DashMapStateStore;
 use governor::Quota;
-use http_body::{Frame, SizeHint};
+use http_body::{Body as _, Frame, SizeHint};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -33,7 +37,7 @@ use tokio::sync::watch;
 use tokio::time::{Instant, Sleep};
 use tower::ServiceExt;
 
-use crate::error::ApiError;
+use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
 /// The address a request came from, looking through proxies we trust.
@@ -116,11 +120,12 @@ pub struct Gate {
     open: Mutex<Open>,
 }
 
-/// One place taken at a [`Gate`], given back when this is dropped.
+/// Places taken at a [`Gate`], given back when this is dropped.
 pub struct Permit {
     gate: Arc<Gate>,
-    /// Who the place is counted against, besides the total.
+    /// Who the places are counted against, besides the total.
     caller: Option<IpAddr>,
+    places: usize,
 }
 
 impl Gate {
@@ -136,24 +141,18 @@ impl Gate {
     /// Take a place for `address`, or `None` when it or the server has as
     /// many open as it may.
     pub fn enter(self: &Arc<Self>, address: IpAddr) -> Option<Permit> {
-        let caller = caller(address);
-        let mut open = self.open.lock().unwrap_or_else(|e| e.into_inner());
-        if self.total > 0 && open.total >= self.total {
-            return None;
-        }
-        let held = open.by_caller.entry(caller).or_insert(0);
-        if self.per_caller > 0 && *held >= self.per_caller {
-            if *held == 0 {
-                open.by_caller.remove(&caller);
-            }
-            return None;
-        }
-        *held += 1;
-        open.total += 1;
-        Some(Permit {
+        let mut permit = self.holding_nothing(address);
+        permit.take(1).then_some(permit)
+    }
+
+    /// A permit for `address` with no places yet, for what is counted as it
+    /// grows, see [`Permit::take`].
+    pub fn holding_nothing(self: &Arc<Self>, address: IpAddr) -> Permit {
+        Permit {
             gate: Arc::clone(self),
-            caller: Some(caller),
-        })
+            caller: Some(caller(address)),
+            places: 0,
+        }
     }
 
     /// Take a place in the total only, for a connection that stands for
@@ -167,24 +166,312 @@ impl Gate {
         Some(Permit {
             gate: Arc::clone(self),
             caller: None,
+            places: 1,
         })
     }
 }
 
-impl Drop for Permit {
-    fn drop(&mut self) {
+impl Permit {
+    /// Take `places` more, all of them or none. Says whether it did.
+    pub fn take(&mut self, places: usize) -> bool {
         let mut open = self.gate.open.lock().unwrap_or_else(|e| e.into_inner());
-        open.total = open.total.saturating_sub(1);
+        if self.gate.total > 0 && open.total + places > self.gate.total {
+            return false;
+        }
+        if let Some(caller) = self.caller {
+            let held = open.by_caller.entry(caller).or_insert(0);
+            if self.gate.per_caller > 0 && *held + places > self.gate.per_caller {
+                if *held == 0 {
+                    open.by_caller.remove(&caller);
+                }
+                return false;
+            }
+            *held += places;
+        }
+        open.total += places;
+        self.places += places;
+        true
+    }
+
+    /// Give `places` of those held back.
+    fn give_back(&mut self, places: usize) {
+        let places = places.min(self.places);
+        self.places -= places;
+        let mut open = self.gate.open.lock().unwrap_or_else(|e| e.into_inner());
+        open.total = open.total.saturating_sub(places);
         let Some(caller) = self.caller else {
             return;
         };
         if let Some(held) = open.by_caller.get_mut(&caller) {
-            *held = held.saturating_sub(1);
+            *held = held.saturating_sub(places);
             if *held == 0 {
                 open.by_caller.remove(&caller);
             }
         }
     }
+}
+
+impl Drop for Permit {
+    fn drop(&mut self) {
+        self.give_back(self.places);
+    }
+}
+
+/// What a request's body has taken of the room for bodies in memory.
+struct BodyRoom {
+    permit: Mutex<Permit>,
+    /// Whether the body ran out of room and was cut off.
+    refused: AtomicBool,
+}
+
+/// A request body that takes room for each part as it arrives.
+struct Counted {
+    body: Body,
+    room: Arc<BodyRoom>,
+}
+
+impl http_body::Body for Counted {
+    type Data = Bytes;
+    type Error = BoxError;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, BoxError>>> {
+        let this = self.get_mut();
+        let frame = match Pin::new(&mut this.body).poll_frame(cx) {
+            Poll::Ready(Some(frame)) => frame?,
+            Poll::Ready(None) => return Poll::Ready(None),
+            Poll::Pending => return Poll::Pending,
+        };
+        if let Some(data) = frame.data_ref() {
+            let mut permit = this.room.permit.lock().unwrap_or_else(|e| e.into_inner());
+            if !permit.take(data.len()) {
+                this.room.refused.store(true, Ordering::Relaxed);
+                return Poll::Ready(Some(Err("no room for this body".into())));
+            }
+        }
+        Poll::Ready(Some(Ok(frame)))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.body.is_end_stream()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        self.body.size_hint()
+    }
+}
+
+/// Hold request bodies to what the server keeps in memory at once.
+///
+/// A body is buffered whole before its handler runs, and stays in memory
+/// while the handler decodes it and waits for the database. Caps on
+/// connections do not bound that, since each may carry the largest body
+/// there is. So every part of a body takes room as it arrives, and keeps it
+/// until the handler is done. Past that the answer is 503, which a client
+/// tries again later.
+///
+/// Room is taken for what has come, not for what a request says will come,
+/// so a promise costs nothing to anyone else. A handler reads the body after
+/// it has checked who is calling, so someone without a session takes no room
+/// on the routes that want one, and on those that do not, as much as they
+/// can send there, see `SIGN_IN_BODY_BYTES`. Counting by caller keeps one of
+/// them from filling the room for everybody.
+pub async fn hold_body_room(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if request.body().is_end_stream() {
+        return next.run(request).await;
+    }
+    let (mut parts, body) = request.into_parts();
+    let address = match ClientAddress::from_request_parts(&mut parts, &state).await {
+        Ok(ClientAddress(address)) => address,
+        Err(err) => return err.into_response(),
+    };
+    let room = Arc::new(BodyRoom {
+        permit: Mutex::new(state.bodies.holding_nothing(address)),
+        refused: AtomicBool::new(false),
+    });
+    let body = Body::new(Counted {
+        body,
+        room: Arc::clone(&room),
+    });
+    let response = next.run(Request::from_parts(parts, body)).await;
+    if room.refused.load(Ordering::Relaxed) {
+        return ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "server_busy",
+            "The server is taking in too much right now. Try again in a moment.",
+        )
+        .into_response();
+    }
+    response
+}
+
+/// A response this small is in the connection's own buffers as soon as it
+/// leaves the handler, and is not worth counting. So the health check and
+/// small pages still get through when the room is full.
+const SMALL_RESPONSE_BYTES: usize = 64 * 1024;
+
+/// How much larger than it was weighed a page can go out, for the names and
+/// the framing of its rows, of which there are 1000 at most.
+pub const PAGE_FRAMING_BYTES: usize = 1024 * 1024;
+
+/// How much of a response is handed to the connection at a time.
+const RESPONSE_PIECE_BYTES: usize = 64 * 1024;
+
+fn no_room_for_response() -> ApiError {
+    ApiError::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "server_busy",
+        "The server is sending out too much right now. Try again in a moment.",
+    )
+}
+
+/// What a request's response has taken of the room for responses in memory.
+/// A handler takes room as it learns what it is about to read, before it
+/// reads it, see [`hold_response_room`].
+#[derive(Clone)]
+pub struct ResponseRoom(Arc<Mutex<Permit>>);
+
+impl ResponseRoom {
+    /// Take room for `bytes` more of this response, or refuse it with `503`.
+    pub fn take(&self, bytes: i64) -> ApiResult<()> {
+        let bytes = usize::try_from(bytes).unwrap_or(0);
+        if bytes <= SMALL_RESPONSE_BYTES {
+            return Ok(());
+        }
+        let mut permit = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if permit.take(bytes) {
+            Ok(())
+        } else {
+            Err(no_room_for_response())
+        }
+    }
+
+    /// Hold what the finished response weighs, in place of what was taken on
+    /// the way there. Says whether there was room for it.
+    fn settle(&self, bytes: usize) -> bool {
+        let mut permit = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if bytes > permit.places {
+            let more = bytes - permit.places;
+            return permit.take(more);
+        }
+        let less = permit.places - bytes;
+        permit.give_back(less);
+        true
+    }
+}
+
+impl FromRequestParts<AppState> for ResponseRoom {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, _: &AppState) -> Result<Self, ApiError> {
+        parts
+            .extensions
+            .get::<ResponseRoom>()
+            .cloned()
+            .ok_or_else(|| ApiError::internal("no room was set aside for this response"))
+    }
+}
+
+/// A response on its way out, which keeps its room until the last of it has
+/// gone to the connection.
+///
+/// A body handed over in one piece is dropped at once, with all of it still
+/// waiting in the connection's buffers, and the room would be free again
+/// long before the memory is. So it goes in pieces, each a copy, which the
+/// connection only asks for as it gets rid of the one before.
+struct Sending {
+    body: Body,
+    rest: Bytes,
+    _room: ResponseRoom,
+}
+
+impl http_body::Body for Sending {
+    type Data = Bytes;
+    type Error = BoxError;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, BoxError>>> {
+        let this = self.get_mut();
+        if this.rest.is_empty() {
+            let Some(frame) = ready!(Pin::new(&mut this.body).poll_frame(cx)) else {
+                return Poll::Ready(None);
+            };
+            match frame?.into_data() {
+                Ok(data) => this.rest = data,
+                Err(frame) => return Poll::Ready(Some(Ok(frame))),
+            }
+        }
+        let piece = this.rest.len().min(RESPONSE_PIECE_BYTES);
+        let frame = Frame::data(Bytes::copy_from_slice(&this.rest[..piece]));
+        this.rest = this.rest.slice(piece..);
+        Poll::Ready(Some(Ok(frame)))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.rest.is_empty() && self.body.is_end_stream()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        let body = self.body.size_hint();
+        let rest = self.rest.len() as u64;
+        let mut hint = SizeHint::new();
+        hint.set_lower(body.lower() + rest);
+        if let Some(upper) = body.upper() {
+            hint.set_upper(upper + rest);
+        }
+        hint
+    }
+}
+
+/// Hold responses to what the server keeps in memory at once.
+///
+/// A response is built whole in memory and stays there until the client has
+/// taken it, and a client that takes it slowly holds on to it for as long as
+/// it likes. Caps on connections do not bound that: a trusted proxy is exempt
+/// from the cap per address, and each connection may be waiting for the
+/// largest page there is. So a handler takes room for what it is about to
+/// read, before it reads it, and the response keeps room for what it weighs
+/// until it is gone. Past that the answer is 503, which a client tries again
+/// later. Counting by caller keeps one of them from filling the room for
+/// everybody, and what a client may hold on to and for how long is settled
+/// by [`PATIENCE`].
+pub async fn hold_response_room(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let (mut parts, body) = request.into_parts();
+    let address = match ClientAddress::from_request_parts(&mut parts, &state).await {
+        Ok(ClientAddress(address)) => address,
+        Err(err) => return err.into_response(),
+    };
+    let room = ResponseRoom(Arc::new(Mutex::new(
+        state.responses.holding_nothing(address),
+    )));
+    parts.extensions.insert(room.clone());
+    let response = next.run(Request::from_parts(parts, body)).await;
+    let bytes = response.body().size_hint().exact().unwrap_or(0) as usize;
+    if bytes <= SMALL_RESPONSE_BYTES {
+        return response;
+    }
+    if !room.settle(bytes) {
+        return no_room_for_response().into_response();
+    }
+    let (parts, body) = response.into_parts();
+    let body = Body::new(Sending {
+        body,
+        rest: Bytes::new(),
+        _room: room,
+    });
+    Response::from_parts(parts, body)
 }
 
 /// The address a connection came from, which [`serve`] hands every request
@@ -262,6 +549,28 @@ async fn accept_failed(err: io::Error) {
 /// connections open for nothing, and every one of them holds a file.
 const IDLE_CONNECTION: Duration = Duration::from_secs(120);
 
+/// How long what a client asked for may wait for it to be taken.
+///
+/// A connection starts with `grace`. Every byte the client takes earns it
+/// time, at `rate` bytes a second and up to `longest`, and time spent with
+/// output waiting for it to make room is paid out of that. A client that
+/// takes less than `rate` for long enough runs out and is cut off, so it
+/// cannot hold on to a response by keeping the connection barely alive.
+#[derive(Clone, Copy)]
+struct Patience {
+    grace: Duration,
+    rate: u64,
+    longest: Duration,
+}
+
+/// At this rate the largest page there is goes out in about half an hour,
+/// which is what a client can make it stay in memory for.
+const PATIENCE: Patience = Patience {
+    grace: Duration::from_secs(30),
+    rate: 16 * 1024,
+    longest: Duration::from_secs(30 * 60),
+};
+
 /// A connection that keeps its place at the gate for as long as it is open,
 /// and is closed when it goes quiet for too long.
 pub struct CappedStream {
@@ -273,14 +582,19 @@ pub struct CappedStream {
     moved: Instant,
     /// Wakes the connection to see whether it has been quiet for too long.
     check: Pin<Box<Sleep>>,
+    patience: Patience,
+    /// What the client has left of its patience.
+    earned: Duration,
+    /// Since when output has been waiting for the client, if it is.
+    waiting: Option<Instant>,
 }
 
 impl CappedStream {
     fn new(stream: TcpStream, permit: Permit) -> Self {
-        Self::quiet_for(stream, permit, IDLE_CONNECTION)
+        Self::with(stream, permit, IDLE_CONNECTION, PATIENCE)
     }
 
-    fn quiet_for(stream: TcpStream, permit: Permit, idle: Duration) -> Self {
+    fn with(stream: TcpStream, permit: Permit, idle: Duration, patience: Patience) -> Self {
         let now = Instant::now();
         Self {
             stream,
@@ -288,15 +602,31 @@ impl CappedStream {
             idle,
             moved: now,
             check: Box::pin(tokio::time::sleep_until(now + idle)),
+            patience,
+            earned: patience.grace,
+            waiting: None,
         }
     }
 
-    /// Called whenever the connection waits. Ready with an error once
-    /// nothing has moved for as long as it may be quiet; until then it
-    /// arranges to be woken when that would be.
+    /// When a connection that goes on waiting is to be closed.
+    fn due(&self) -> Instant {
+        let quiet = self.moved + self.idle;
+        match self.waiting {
+            Some(since) => quiet.min(since + self.earned),
+            None => quiet,
+        }
+    }
+
+    /// Called whenever the connection waits. Ready with an error once it
+    /// has been quiet for as long as it may be, or the client has used up
+    /// its patience; until then it arranges to be woken when that would be.
     fn poll_quiet(&mut self, cx: &mut Context<'_>) -> Poll<io::Error> {
+        if self.due() < self.check.deadline() {
+            let due = self.due();
+            self.check.as_mut().reset(due);
+        }
         while self.check.as_mut().poll(cx).is_ready() {
-            let due = self.moved + self.idle;
+            let due = self.due();
             if Instant::now() >= due {
                 return Poll::Ready(io::Error::new(
                     io::ErrorKind::TimedOut,
@@ -315,12 +645,22 @@ impl CappedStream {
     ) -> Poll<io::Result<usize>> {
         match outcome {
             Poll::Ready(Ok(written)) => {
+                let now = Instant::now();
                 if written > 0 {
-                    self.moved = Instant::now();
+                    self.moved = now;
                 }
+                if let Some(since) = self.waiting.take() {
+                    self.earned = self.earned.saturating_sub(now - since);
+                }
+                let bought = written as u64 * 1000 / self.patience.rate;
+                self.earned =
+                    (self.earned + Duration::from_millis(bought)).min(self.patience.longest);
                 Poll::Ready(Ok(written))
             }
-            Poll::Pending => self.poll_quiet(cx).map(Err),
+            Poll::Pending => {
+                self.waiting.get_or_insert_with(Instant::now);
+                self.poll_quiet(cx).map(Err)
+            }
             failed => failed,
         }
     }
@@ -395,6 +735,18 @@ struct Deadlines {
     body_grace: Duration,
     /// Bytes a second a body has to have come at since, on average.
     body_rate: u64,
+    /// The most time what has already come can buy. Without this a body
+    /// sent almost whole could sit in memory for as long as it would have
+    /// taken at `body_rate`, which for the largest there is comes to a day.
+    body_longest: Duration,
+}
+
+impl Deadlines {
+    /// When a body has to have sent more, given what it sent so far.
+    fn body_due(&self, started: Instant, received: u64) -> Instant {
+        let earned = Duration::from_millis(received.saturating_mul(1000) / self.body_rate);
+        started + self.body_grace + earned.min(self.body_longest)
+    }
 }
 
 /// Lenient to the slowest connection a phone still gets anywhere with. A
@@ -403,6 +755,7 @@ const DEADLINES: Deadlines = Deadlines {
     head: Duration::from_secs(30),
     body_grace: Duration::from_secs(30),
     body_rate: 1024,
+    body_longest: Duration::from_secs(30 * 60),
 };
 
 /// Serve `router` on `listener` until `shutdown` resolves, then let what is
@@ -517,13 +870,7 @@ where
             Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(err.into()))),
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => {
-                let Deadlines {
-                    body_grace,
-                    body_rate,
-                    ..
-                } = this.deadlines;
-                let earned = Duration::from_millis(this.received.saturating_mul(1000) / body_rate);
-                let due = started + body_grace + earned;
+                let due = this.deadlines.body_due(started, this.received);
                 let check = this
                     .check
                     .get_or_insert_with(|| Box::pin(tokio::time::sleep_until(due)));
@@ -628,21 +975,21 @@ impl FromRequestParts<AppState> for SocketPermit {
     }
 }
 
-type Buckets<C> = governor::RateLimiter<
-    IpAddr,
-    DashMapStateStore<IpAddr>,
-    C,
-    NoOpMiddleware<<C as Clock>::Instant>,
->;
+type Buckets<C, K> =
+    governor::RateLimiter<K, DashMapStateStore<K>, C, NoOpMiddleware<<C as Clock>::Instant>>;
 
 /// A token bucket per caller. The buckets are `governor`'s. Who a caller
-/// is, is decided here: see [`ClientAddress`] and [`caller`].
-pub struct RateLimiter<C: Clock = DefaultClock> {
+/// is, is decided here: see [`ClientAddress`] and [`caller`], or an account
+/// where the request is signed in, see [`AccountLimiter`].
+pub struct RateLimiter<C: Clock = DefaultClock, K: Clone + Eq + Hash = IpAddr> {
     /// Nothing when limiting is off.
-    buckets: Option<Buckets<C>>,
+    buckets: Option<Buckets<C, K>>,
 }
 
-impl RateLimiter {
+/// A [`RateLimiter`] that counts by account id.
+pub type AccountLimiter = RateLimiter<DefaultClock, i64>;
+
+impl<K: Clone + Eq + Hash> RateLimiter<DefaultClock, K> {
     /// `per_minute` of zero turns limiting off.
     pub fn new(per_minute: u32, burst: u32) -> Self {
         Self::with_clock(per_minute, burst, DefaultClock::default())
@@ -650,6 +997,12 @@ impl RateLimiter {
 }
 
 impl<C: Clock> RateLimiter<C> {
+    pub fn allow(&self, address: IpAddr) -> bool {
+        self.allow_key(&caller(address))
+    }
+}
+
+impl<C: Clock, K: Clone + Eq + Hash> RateLimiter<C, K> {
     fn with_clock(per_minute: u32, burst: u32, clock: C) -> Self {
         let buckets = NonZeroU32::new(per_minute).map(|rate| {
             let burst = NonZeroU32::new(burst).unwrap_or(NonZeroU32::MIN);
@@ -659,9 +1012,9 @@ impl<C: Clock> RateLimiter<C> {
         Self { buckets }
     }
 
-    pub fn allow(&self, address: IpAddr) -> bool {
+    pub fn allow_key(&self, key: &K) -> bool {
         match &self.buckets {
-            Some(buckets) => buckets.check_key(&caller(address)).is_ok(),
+            Some(buckets) => buckets.check_key(key).is_ok(),
             None => true,
         }
     }
@@ -683,18 +1036,19 @@ impl<C: Clock> RateLimiter<C> {
 }
 
 /// How often callers that are no longer held back are forgotten. Between
-/// two rounds the limiter remembers one entry for each caller that tried to
-/// sign in, and a caller is an address the connection caps have let in.
+/// two rounds a limiter remembers one entry for each caller that tried, and
+/// a caller is an address the connection caps have let in or an account.
 const FORGET_IDLE_EVERY: Duration = Duration::from_secs(60);
 
-/// Keep what the sign-in limiter remembers to the callers it is holding
-/// back, for as long as the process runs.
+/// Keep what the limiters remember to the callers they are holding back,
+/// for as long as the process runs.
 pub fn forget_idle_callers(state: AppState) {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(FORGET_IDLE_EVERY);
         loop {
             tick.tick().await;
             state.auth_limiter.forget_idle();
+            state.lookup_limiter.forget_idle();
         }
     });
 }
@@ -738,6 +1092,55 @@ mod gate_tests {
 
         drop(first);
         assert!(gate.enter(ip("203.0.113.5")).is_some());
+    }
+
+    #[test]
+    fn a_permit_can_grow_and_gives_everything_back_at_once() {
+        let gate = Gate::new(10, 15);
+        let mut first = gate.holding_nothing(ip("203.0.113.5"));
+        assert!(first.take(8));
+        // All of it or none, and nothing is left held by trying.
+        assert!(!first.take(3));
+        assert!(first.take(2));
+        // Someone else has what is left of the total, and no more.
+        let mut other = gate.holding_nothing(ip("203.0.113.6"));
+        assert!(!other.take(6));
+        assert!(other.take(5));
+
+        drop(first);
+        let mut again = gate.holding_nothing(ip("203.0.113.5"));
+        assert!(again.take(10));
+    }
+
+    #[test]
+    fn a_response_ends_up_holding_what_it_weighs() {
+        const LARGE: usize = SMALL_RESPONSE_BYTES + 1;
+        let gate = Gate::new(0, 3 * LARGE);
+        let room = ResponseRoom(Arc::new(Mutex::new(
+            gate.holding_nothing(ip("203.0.113.5")),
+        )));
+        let held = || gate.open.lock().unwrap().total;
+
+        room.take(2 * LARGE as i64).unwrap();
+        assert_eq!(held(), 2 * LARGE);
+        // Not all of what was taken for was in the end.
+        assert!(room.settle(LARGE));
+        assert_eq!(held(), LARGE);
+        // A response may also come out larger than what was taken for it.
+        assert!(room.settle(3 * LARGE));
+        assert_eq!(held(), 3 * LARGE);
+        assert!(!room.settle(3 * LARGE + 1));
+        assert_eq!(held(), 3 * LARGE);
+
+        // Small ones are not counted, and get through with the room full.
+        room.take(SMALL_RESPONSE_BYTES as i64).unwrap();
+        assert_eq!(held(), 3 * LARGE);
+        let refused = room.take(LARGE as i64).unwrap_err().into_response();
+        assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        drop(room);
+        assert_eq!(held(), 0);
+        assert!(gate.open.lock().unwrap().by_caller.is_empty());
     }
 
     #[test]
@@ -829,14 +1232,18 @@ mod stream_tests {
 
     const QUIET: Duration = Duration::from_millis(300);
 
-    async fn connection() -> (CappedStream, TcpStream) {
+    async fn connection_with(patience: Patience) -> (CappedStream, TcpStream) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let client = TcpStream::connect(listener.local_addr().unwrap())
             .await
             .unwrap();
         let (server, _) = listener.accept().await.unwrap();
         let permit = Gate::new(0, 0).enter_shared().unwrap();
-        (CappedStream::quiet_for(server, permit, QUIET), client)
+        (CappedStream::with(server, permit, QUIET, patience), client)
+    }
+
+    async fn connection() -> (CappedStream, TcpStream) {
+        connection_with(PATIENCE).await
     }
 
     #[tokio::test]
@@ -886,6 +1293,74 @@ mod stream_tests {
         .expect("the writes never stopped");
         assert_eq!(failed.kind(), io::ErrorKind::TimedOut);
     }
+
+    /// Talking keeps a connection from going quiet, and reading only now and
+    /// then keeps it from going quiet too. Neither gets a client out of
+    /// taking what it asked for, or a response would stay in memory for as
+    /// long as it liked.
+    #[tokio::test]
+    async fn a_client_that_keeps_talking_and_takes_nothing_is_cut_off() {
+        let (mut server, mut client) = connection_with(Patience {
+            grace: QUIET,
+            rate: 1024 * 1024 * 1024,
+            longest: QUIET,
+        })
+        .await;
+        tokio::spawn(async move {
+            while client.write_all(b"x").await.is_ok() {
+                tokio::time::sleep(QUIET / 3).await;
+            }
+        });
+        let chunk = vec![0u8; 1024 * 1024];
+        let mut heard = [0u8; 8];
+        // The way the connection's task does it, reading and writing in turn.
+        let writing = std::future::poll_fn(|cx| {
+            let mut read = ReadBuf::new(&mut heard);
+            if let Poll::Ready(Err(err)) = Pin::new(&mut server).poll_read(cx, &mut read) {
+                return Poll::Ready(err);
+            }
+            match Pin::new(&mut server).poll_write(cx, &chunk) {
+                Poll::Ready(Err(err)) => Poll::Ready(err),
+                Poll::Ready(Ok(_)) => {
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+                Poll::Pending => Poll::Pending,
+            }
+        });
+        let failed = tokio::time::timeout(Duration::from_secs(10), writing)
+            .await
+            .expect("the client was never cut off");
+        assert_eq!(failed.kind(), io::ErrorKind::TimedOut);
+    }
+
+    /// What a client takes pays for the time it takes, so a large response
+    /// to a client that keeps reading goes out however long it runs.
+    #[tokio::test]
+    async fn a_client_that_keeps_taking_is_not_cut_off() {
+        let (mut server, mut client) = connection_with(Patience {
+            grace: Duration::from_millis(100),
+            rate: 1024 * 1024,
+            longest: Duration::from_millis(500),
+        })
+        .await;
+        const SENT: usize = 8 * 1024 * 1024;
+        let reader = tokio::spawn(async move {
+            let mut taken = 0;
+            let mut buffer = vec![0u8; 256 * 1024];
+            while taken < SENT {
+                let got = client.read(&mut buffer).await.unwrap();
+                assert!(got > 0, "the connection was closed");
+                taken += got;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        });
+        server.write_all(&vec![0u8; SENT]).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(10), reader)
+            .await
+            .expect("the client never got it all")
+            .unwrap();
+    }
 }
 
 #[cfg(test)]
@@ -899,7 +1374,24 @@ mod serve_tests {
         head: Duration::from_millis(400),
         body_grace: Duration::from_millis(400),
         body_rate: 1000,
+        body_longest: Duration::from_secs(5),
     };
+
+    #[tokio::test]
+    async fn what_a_body_sent_buys_only_so_much_time() {
+        let started = Instant::now();
+        let due = |received| DEADLINES.body_due(started, received) - started;
+        assert_eq!(due(0), DEADLINES.body_grace);
+        assert_eq!(
+            due(60 * 1024),
+            DEADLINES.body_grace + Duration::from_secs(60)
+        );
+        // At the slowest it may come, this much would buy most of a day.
+        assert_eq!(
+            due(75 * 1024 * 1024),
+            DEADLINES.body_grace + DEADLINES.body_longest
+        );
+    }
 
     /// A server with `SOON` for deadlines, and what stops it.
     async fn server() -> (

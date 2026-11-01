@@ -7,9 +7,9 @@
 //! The server can only limit what it can count: bytes, collections, members
 //! and the size of one item. It cannot tell a note from an attachment.
 //!
-//! Limits are soft at the edges. Two writes arriving together can both pass a
-//! check that only one of them should have, and the account ends up a little
-//! over. Nothing is ever deleted to bring it back under.
+//! Storage limits are exact. An account's writes take turns while they check
+//! its budget, see [`for_writes`]. Nothing is ever deleted to bring an
+//! account back under a limit lowered after the fact.
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -32,7 +32,8 @@ fn refuse(code: &'static str, detail: String) -> ApiError {
 #[serde(rename_all = "camelCase", default)]
 pub struct Entitlements {
     pub plan: String,
-    /// Ciphertext bytes across every collection the account owns.
+    /// Bytes stored across every collection the account owns: ciphertext,
+    /// and the keys, names and references that come with it.
     pub storage_limit_bytes: Option<i64>,
     /// Collections the account may own.
     pub max_spaces: Option<i32>,

@@ -16,7 +16,8 @@ use serde_bytes::ByteBuf;
 use sqlx::PgConnection;
 
 use crate::auth::{username_key, AuthUser};
-use crate::collections::{self, membership, next_changes, Membership};
+use crate::collections::{self, give_back, membership, next_changes, Membership};
+use crate::edge::ResponseRoom;
 use crate::error::{ApiError, ApiResult};
 use crate::events::{self, Event};
 use crate::limits;
@@ -28,12 +29,61 @@ use crate::AppState;
 
 pub(crate) const MAX_KEY_BYTES: usize = 4096;
 
-async fn account_id_of(conn: &mut PgConnection, username: &str) -> ApiResult<i64> {
-    sqlx::query_scalar("SELECT id FROM accounts WHERE username_key = $1 AND NOT disabled")
-        .bind(username_key(username))
-        .fetch_optional(conn)
-        .await?
-        .ok_or_else(|| ApiError::not_found("User"))
+async fn account_id_of(conn: &mut PgConnection, username: &str) -> ApiResult<Option<i64>> {
+    Ok(
+        sqlx::query_scalar("SELECT id FROM accounts WHERE username_key = $1 AND NOT disabled")
+            .bind(username_key(username))
+            .fetch_optional(conn)
+            .await?,
+    )
+}
+
+/// The member of a collection with this name. Unlike [`account_id_of`] this
+/// finds a disabled account: an admin has to be able to take one out, or the
+/// links it made would come back with it. And it says nothing about a name
+/// that is not a member here, whether or not an account has it.
+async fn member_id_of(
+    conn: &mut PgConnection,
+    collection_id: i64,
+    username: &str,
+) -> ApiResult<i64> {
+    sqlx::query_scalar(
+        "SELECT a.id FROM accounts a
+         JOIN members m ON m.account_id = a.id
+         WHERE a.username_key = $1 AND m.collection_id = $2",
+    )
+    .bind(username_key(username))
+    .bind(collection_id)
+    .fetch_optional(conn)
+    .await?
+    .ok_or_else(|| ApiError::not_found("Member"))
+}
+
+/// Hold an account to a rate of naming other accounts, and to how many of
+/// the names may turn out to be nobody's. Each such request says whether a
+/// name exists, which is how a client finds who to invite and also how a list
+/// of everyone could be had. The app asks once for each person the user
+/// names, so it does not come near either. Past the second every name is
+/// refused alike, or the refusals would go on telling them apart.
+fn count_lookup(state: &AppState, user: &AuthUser) -> ApiResult<()> {
+    if !state.unknown_names.blocked(user.account_id)
+        && state.lookup_limiter.allow_key(&user.account_id)
+    {
+        return Ok(());
+    }
+    Err(ApiError::new(
+        StatusCode::TOO_MANY_REQUESTS,
+        "throttled",
+        "Too many names looked up. Try again later.",
+    ))
+}
+
+/// What looking a name up found. Finding nothing counts, see [`count_lookup`].
+fn looked_up<T>(state: &AppState, user: &AuthUser, found: Option<T>) -> ApiResult<T> {
+    found.ok_or_else(|| {
+        state.unknown_names.failed(user.account_id);
+        ApiError::not_found("User")
+    })
 }
 
 /// Record a membership change: give it a change number and move the
@@ -95,12 +145,14 @@ pub async fn list_members(
 }
 
 /// Take a membership away and leave a marker so the member's devices learn
-/// of it. Returns whether there was a membership to remove.
+/// of it. `by_admin` says someone else took them out, which keeps them from
+/// walking back in by a link, see `links::claim`.
 async fn remove_membership(
     conn: &mut PgConnection,
     collection: &Membership,
     account_id: i64,
-) -> ApiResult<bool> {
+    by_admin: bool,
+) -> ApiResult<()> {
     let removed: Option<i64> = sqlx::query_scalar(
         "DELETE FROM members WHERE collection_id = $1 AND account_id = $2
          RETURNING (octet_length(encryption_key) + octet_length(collection_type))::bigint",
@@ -110,25 +162,20 @@ async fn remove_membership(
     .fetch_optional(&mut *conn)
     .await?;
     let Some(removed_bytes) = removed else {
-        return Ok(false);
+        return Ok(());
     };
-    if removed_bytes > 0 {
-        sqlx::query(
-            "UPDATE collections SET bytes_used = GREATEST(bytes_used - $2, 0) WHERE id = $1",
-        )
-        .bind(collection.id)
-        .bind(removed_bytes)
-        .execute(&mut *conn)
-        .await?;
-    }
+    give_back(conn, collection.id, removed_bytes).await?;
     let stoken = touch_collection(conn, collection.id).await?;
     sqlx::query(
-        "INSERT INTO removed_members (collection_id, account_id, stoken) VALUES ($1, $2, $3)
-         ON CONFLICT (collection_id, account_id) DO UPDATE SET stoken = EXCLUDED.stoken",
+        "INSERT INTO removed_members (collection_id, account_id, stoken, by_admin)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (collection_id, account_id)
+             DO UPDATE SET stoken = EXCLUDED.stoken, by_admin = EXCLUDED.by_admin",
     )
     .bind(collection.id)
     .bind(account_id)
     .bind(stoken)
+    .bind(by_admin)
     .execute(&mut *conn)
     .await?;
     withdraw_invitations(conn, collection.id, account_id).await?;
@@ -147,7 +194,7 @@ async fn remove_membership(
         session: None,
     };
     events::publish(conn, &changed).await?;
-    Ok(true)
+    Ok(())
 }
 
 /// The collection was deleted, which for a shared folder is how its owner
@@ -164,7 +211,7 @@ pub(crate) async fn end_share(conn: &mut PgConnection, collection: &Membership) 
     .fetch_all(&mut *conn)
     .await?;
     for account in others {
-        remove_membership(conn, collection, account).await?;
+        remove_membership(conn, collection, account, false).await?;
     }
     let withdrawn: Vec<(i64, i64)> = sqlx::query_as(
         "DELETE FROM invitations WHERE collection_id = $1
@@ -199,13 +246,13 @@ pub async fn remove_member(
     let mut tx = state.pool.begin().await?;
     let collection = membership(&mut tx, user.account_id, &collection_uid, true).await?;
     collection.require_admin()?;
-    let target = account_id_of(&mut tx, &username).await?;
+    let target = member_id_of(&mut tx, collection.id, &username).await?;
     if target == collection.owner_id {
         return Err(owner_stays());
     }
-    if !remove_membership(&mut tx, &collection, target).await? {
-        return Err(ApiError::not_found("Member"));
-    }
+    // An admin taking themselves out is leaving like anyone else.
+    let by_admin = target != user.account_id;
+    remove_membership(&mut tx, &collection, target, by_admin).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -220,7 +267,7 @@ pub async fn leave(
     if user.account_id == collection.owner_id {
         return Err(owner_stays());
     }
-    remove_membership(&mut tx, &collection, user.account_id).await?;
+    remove_membership(&mut tx, &collection, user.account_id, false).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -237,19 +284,9 @@ pub async fn modify_member(
     let mut tx = state.pool.begin().await?;
     let collection = membership(&mut tx, user.account_id, &collection_uid, true).await?;
     collection.require_admin()?;
-    let target = account_id_of(&mut tx, &username).await?;
+    let target = member_id_of(&mut tx, collection.id, &username).await?;
     if target == collection.owner_id {
         return Err(owner_stays());
-    }
-    let is_member: Option<i16> = sqlx::query_scalar(
-        "SELECT access_level FROM members WHERE collection_id = $1 AND account_id = $2",
-    )
-    .bind(collection.id)
-    .bind(target)
-    .fetch_optional(&mut *tx)
-    .await?;
-    if is_member.is_none() {
-        return Err(ApiError::not_found("Member"));
     }
     let stoken = touch_collection(&mut tx, collection.id).await?;
     sqlx::query(
@@ -266,9 +303,6 @@ pub async fn modify_member(
         withdraw_invitations(&mut tx, collection.id, target).await?;
         withdraw_links(&mut tx, collection.id, target).await?;
     }
-    // A member has no invitation left to answer. An old one would let a
-    // later accept undo the access just set here.
-    withdraw_invitations_to(&mut tx, collection.id, target).await?;
     let access = Event::Membership {
         collection: collection.id,
         account: target,
@@ -322,26 +356,19 @@ async fn withdraw_invitations(
     .bind(sender)
     .fetch_all(&mut *conn)
     .await?;
-    let bytes: i64 = invited.iter().map(|(_, bytes)| bytes).sum();
-    if bytes > 0 {
-        sqlx::query(
-            "UPDATE collections SET bytes_used = GREATEST(bytes_used - $2, 0) WHERE id = $1",
-        )
-        .bind(collection_id)
-        .bind(bytes)
-        .execute(&mut *conn)
-        .await?;
-    }
+    let bytes = invited.iter().map(|(_, bytes)| bytes).sum();
+    give_back(conn, collection_id, bytes).await?;
     for (account, _) in invited {
         events::publish(conn, &Event::Invitation { account }).await?;
     }
     Ok(())
 }
 
-/// Delete the invitations an account still holds into a collection. Joining
-/// by another way, such as a link, makes an older invitation stale: accepting
-/// it later would change the access the collection just gave, and a removal
-/// must not leave a way back in. The caller holds the lock on the collection.
+/// Delete the invitations an account still holds into a collection, because
+/// it is joining or has just gone. An invitation is only a way in for someone
+/// outside: left standing it would outlive the membership, and be a way back
+/// after a removal. Tell whoever sent them. The caller holds the lock on the
+/// collection.
 async fn withdraw_invitations_to(
     conn: &mut PgConnection,
     collection_id: i64,
@@ -356,16 +383,8 @@ async fn withdraw_invitations_to(
     .bind(recipient)
     .fetch_all(&mut *conn)
     .await?;
-    let bytes: i64 = senders.iter().map(|(_, bytes)| bytes).sum();
-    if bytes > 0 {
-        sqlx::query(
-            "UPDATE collections SET bytes_used = GREATEST(bytes_used - $2, 0) WHERE id = $1",
-        )
-        .bind(collection_id)
-        .bind(bytes)
-        .execute(&mut *conn)
-        .await?;
-    }
+    let bytes = senders.iter().map(|(_, bytes)| bytes).sum();
+    give_back(conn, collection_id, bytes).await?;
     for (account, _) in senders {
         events::publish(conn, &Event::Invitation { account }).await?;
     }
@@ -387,17 +406,7 @@ async fn withdraw_links(conn: &mut PgConnection, collection_id: i64, sender: i64
     .bind(sender)
     .fetch_all(&mut *conn)
     .await?;
-    let bytes: i64 = bytes.into_iter().sum();
-    if bytes > 0 {
-        sqlx::query(
-            "UPDATE collections SET bytes_used = GREATEST(bytes_used - $2, 0) WHERE id = $1",
-        )
-        .bind(collection_id)
-        .bind(bytes)
-        .execute(&mut *conn)
-        .await?;
-    }
-    Ok(())
+    give_back(conn, collection_id, bytes.into_iter().sum()).await
 }
 
 #[derive(Deserialize)]
@@ -410,16 +419,17 @@ pub struct ProfileQuery {
 /// answer with a key of its own.
 pub async fn fetch_user_profile(
     State(state): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
     Query(query): Query<ProfileQuery>,
 ) -> ApiResult<Msgpack<UserProfile>> {
+    count_lookup(&state, &user)?;
     let pubkey: Option<Vec<u8>> =
         sqlx::query_scalar("SELECT pubkey FROM accounts WHERE username_key = $1 AND NOT disabled")
             .bind(username_key(&query.username))
             .fetch_optional(&state.pool)
             .await?;
     Ok(Msgpack(UserProfile {
-        pubkey: ByteBuf::from(pubkey.ok_or_else(|| ApiError::not_found("User"))?),
+        pubkey: ByteBuf::from(looked_up(&state, &user, pubkey)?),
     }))
 }
 
@@ -441,7 +451,9 @@ pub async fn invite(
     let collection = membership(&mut tx, user.account_id, &body.collection, true).await?;
     collection.require_admin()?;
     collection.require_live()?;
-    let recipient = account_id_of(&mut tx, &body.username).await?;
+    count_lookup(&state, &user)?;
+    let found = account_id_of(&mut tx, &body.username).await?;
+    let recipient = looked_up(&state, &user, found)?;
     if recipient == user.account_id {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
@@ -552,13 +564,15 @@ impl From<InvitationRow> for Invitation {
 /// collection's own item so the invited can see what they are invited to.
 async fn with_previews(
     state: &AppState,
+    room: &ResponseRoom,
     conn: &mut PgConnection,
     rows: Vec<InvitationRow>,
 ) -> ApiResult<Vec<Invitation>> {
     let ids: Vec<i64> = rows.iter().map(|row| row.collection_id).collect();
     // One account holds at most one invitation to a collection, so each
     // item is wanted once.
-    let mut items = collections::main_items(state, conn, &ids, state.config.max_page_bytes).await?;
+    let mut items =
+        collections::main_items(state, room, conn, &ids, state.config.max_page_bytes).await?;
     Ok(rows
         .into_iter()
         .map(|row| Invitation {
@@ -586,6 +600,7 @@ impl Direction {
 
 async fn list_invitations(
     state: &AppState,
+    room: &ResponseRoom,
     user: &AuthUser,
     query: &FetchQuery,
     direction: Direction,
@@ -621,7 +636,7 @@ async fn list_invitations(
     Ok(IteratorList {
         iterator: rows.last().map(|row| row.uid.clone()),
         data: match direction {
-            Direction::Incoming => with_previews(state, &mut conn, rows).await?,
+            Direction::Incoming => with_previews(state, room, &mut conn, rows).await?,
             // The sender is a member and has the collection already.
             Direction::Outgoing => rows.into_iter().map(Invitation::from).collect(),
         },
@@ -631,26 +646,29 @@ async fn list_invitations(
 
 pub async fn list_incoming(
     State(state): State<AppState>,
+    room: ResponseRoom,
     user: AuthUser,
     Query(query): Query<FetchQuery>,
 ) -> ApiResult<Msgpack<IteratorList<Invitation>>> {
     Ok(Msgpack(
-        list_invitations(&state, &user, &query, Direction::Incoming).await?,
+        list_invitations(&state, &room, &user, &query, Direction::Incoming).await?,
     ))
 }
 
 pub async fn list_outgoing(
     State(state): State<AppState>,
+    room: ResponseRoom,
     user: AuthUser,
     Query(query): Query<FetchQuery>,
 ) -> ApiResult<Msgpack<IteratorList<Invitation>>> {
     Ok(Msgpack(
-        list_invitations(&state, &user, &query, Direction::Outgoing).await?,
+        list_invitations(&state, &room, &user, &query, Direction::Outgoing).await?,
     ))
 }
 
 pub async fn fetch_incoming(
     State(state): State<AppState>,
+    room: ResponseRoom,
     user: AuthUser,
     Path(uid): Path<String>,
 ) -> ApiResult<Msgpack<Invitation>> {
@@ -664,7 +682,7 @@ pub async fn fetch_incoming(
     .fetch_optional(&mut *conn)
     .await?;
     let row = row.ok_or_else(|| ApiError::not_found("Invitation"))?;
-    let mut invitations = with_previews(&state, &mut conn, vec![row]).await?;
+    let mut invitations = with_previews(&state, &room, &mut conn, vec![row]).await?;
     Ok(Msgpack(invitations.remove(0)))
 }
 
@@ -674,28 +692,32 @@ async fn delete_invitation(
     uid: &str,
     direction: Direction,
 ) -> ApiResult<StatusCode> {
+    let column = direction.column();
+    let no_invitation = || ApiError::not_found("Invitation");
     let mut tx = state.pool.begin().await?;
-    let deleted: Option<(i64, i64, i64, i64)> = sqlx::query_as(&format!(
-        "DELETE FROM invitations i WHERE i.uid = $1 AND {} = $2
-         RETURNING i.collection_id, i.from_account_id, i.to_account_id,
-                   (octet_length(i.uid) + octet_length(i.signed_encryption_key))::bigint",
-        direction.column()
+    // The collection first, like every other writer. Taking the invitation
+    // first and the collection's row for its bytes after would be the
+    // opposite order to `accept`, and each could wait for the other.
+    let collection: i64 = sqlx::query_scalar(&format!(
+        "SELECT i.collection_id FROM invitations i WHERE i.uid = $1 AND {column} = $2"
+    ))
+    .bind(uid)
+    .bind(user.account_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(no_invitation)?;
+    collections::lock_collection(&mut tx, collection).await?;
+    let deleted: Option<(i64, i64, i64)> = sqlx::query_as(&format!(
+        "DELETE FROM invitations i WHERE i.uid = $1 AND {column} = $2
+         RETURNING i.from_account_id, i.to_account_id,
+                   (octet_length(i.uid) + octet_length(i.signed_encryption_key))::bigint"
     ))
     .bind(uid)
     .bind(user.account_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (collection, sender, recipient, bytes) =
-        deleted.ok_or_else(|| ApiError::not_found("Invitation"))?;
-    if bytes > 0 {
-        sqlx::query(
-            "UPDATE collections SET bytes_used = GREATEST(bytes_used - $2, 0) WHERE id = $1",
-        )
-        .bind(collection)
-        .bind(bytes)
-        .execute(&mut *tx)
-        .await?;
-    }
+    let (sender, recipient, bytes) = deleted.ok_or_else(no_invitation)?;
+    give_back(&mut tx, collection, bytes).await?;
     // Both ends have a list this invitation just left.
     events::publish(&mut tx, &Event::Invitation { account: sender }).await?;
     events::publish(&mut tx, &Event::Invitation { account: recipient }).await?;
@@ -848,10 +870,10 @@ pub async fn accept(
     .fetch_optional(&mut *tx)
     .await?;
     let (invitation_id, access_level, sender, owner) = invitation.ok_or_else(no_invitation)?;
-    // An invitation is only a way in for someone outside. If the account is
-    // already a member, accepting it would overwrite the access that member
-    // has now, which is how a stale invitation outlives a removal or a
-    // downgrade. Withdraw it instead, so the row cannot be replayed later.
+    // An invitation is only a way in for someone outside. Joining withdraws
+    // them, so a member should hold none, but accepting one would overwrite
+    // the access that member has now, and this is the one place that could
+    // raise it. Withdraw it instead, so the row cannot be replayed later.
     let already_member: Option<i16> = sqlx::query_scalar(
         "SELECT access_level FROM members WHERE collection_id = $1 AND account_id = $2",
     )

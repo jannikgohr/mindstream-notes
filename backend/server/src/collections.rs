@@ -18,6 +18,7 @@ use sqlx::PgConnection;
 use crate::auth::AuthUser;
 use crate::blob::Uncommitted;
 use crate::chunks;
+use crate::edge::ResponseRoom;
 use crate::error::{ApiError, ApiResult, FieldError};
 use crate::events::{self, Event};
 use crate::limits;
@@ -39,6 +40,44 @@ const MAX_TOMBSTONE_META_BYTES: usize = 16 * 1024;
 const ITEM_COLUMNS: &str = "i.uid, i.version, i.encryption_key, i.stoken, \
      r.uid AS rev_uid, r.meta, r.deleted, r.chunk_ids";
 const ITEM_TABLES: &str = "items i JOIN revisions r ON r.item_id = i.id AND r.uid = i.revision_uid";
+
+/// What a revision `r` weighs in an answer besides its content, as SQL: its
+/// metadata and the uids of its chunks, each counted as the longest a uid
+/// can be. The database works it out without sending the row, so an answer
+/// is held to its budget before it is read, not after.
+const REVISION_WEIGHT: &str = "(octet_length(r.meta)::bigint + cardinality(r.chunk_ids) * 64)";
+/// The same for an item `i` at its revision `r`, whose key goes out too.
+const ITEM_WEIGHT: &str = "(COALESCE(octet_length(i.encryption_key), 0)::bigint \
+     + octet_length(r.meta) + cardinality(r.chunk_ids) * 64)";
+
+/// How much of what a list found goes in this answer.
+struct Page {
+    /// How many rows, from the first.
+    rows: i64,
+    /// Whether that is all of them.
+    done: bool,
+    /// What those rows weigh.
+    weight: i64,
+    /// What the budget has left for content once they are weighed.
+    left: i64,
+}
+
+/// Decide the page from the weights of what a list found, at most `limit`
+/// rows and one more to tell whether there are others. A row too large for
+/// any page goes out alone, so a list cannot get stuck on it.
+fn page(weights: &[i64], limit: i64, budget: i64) -> Page {
+    let listed = &weights[..weights.len().min(limit as usize)];
+    let rows = chunks::fitting(listed.iter().copied(), budget)
+        .max(1)
+        .min(listed.len());
+    let weight = listed[..rows].iter().sum::<i64>();
+    Page {
+        rows: rows as i64,
+        done: rows == weights.len(),
+        weight,
+        left: (budget - weight).max(0),
+    }
+}
 
 /// A collection as seen by one of its members.
 pub(crate) struct Membership {
@@ -229,41 +268,40 @@ fn to_wire_item(row: ItemRow, loaded: &mut chunks::Loaded) -> ApiResult<wire::It
 }
 
 /// Read what a response needs of these items' chunks, in the order the
-/// items will go out. Content is held to the page budget, see
-/// [`chunks::Loaded`].
+/// items will go out. Content is held to `budget`, see [`chunks::Loaded`].
 async fn load_chunks(
     state: &AppState,
+    room: &ResponseRoom,
     conn: &mut PgConnection,
     rows: &[ItemRow],
     with_content: bool,
+    budget: i64,
 ) -> ApiResult<chunks::Loaded> {
     let revisions: Vec<&[i64]> = rows.iter().map(|row| row.chunk_ids.as_slice()).collect();
-    chunks::load(
-        conn,
-        &state.blobs,
-        &revisions,
-        with_content,
-        state.config.max_page_bytes,
-    )
-    .await
+    chunks::load(conn, &state.blobs, room, &revisions, with_content, budget).await
 }
 
 async fn to_wire_items(
     state: &AppState,
+    room: &ResponseRoom,
     conn: &mut PgConnection,
     rows: Vec<ItemRow>,
     with_content: bool,
+    budget: i64,
 ) -> ApiResult<Vec<wire::Item>> {
-    let mut loaded = load_chunks(state, conn, &rows, with_content).await?;
+    let mut loaded = load_chunks(state, room, conn, &rows, with_content, budget).await?;
     rows.into_iter()
         .map(|row| to_wire_item(row, &mut loaded))
         .collect()
 }
 
-/// The main item of each of these collections, without its content. It is
-/// what someone invited needs to read a collection's name before joining.
+/// The main item of each of these collections, without its content, as far
+/// as they fit `budget`. It is what someone invited needs to read a
+/// collection's name before joining, and a collection left out here is only
+/// nameless until then.
 pub(crate) async fn main_items(
     state: &AppState,
+    room: &ResponseRoom,
     conn: &mut PgConnection,
     collection_ids: &[i64],
     budget: i64,
@@ -274,73 +312,63 @@ pub(crate) async fn main_items(
         #[sqlx(flatten)]
         item: ItemRow,
     }
-    let rows: Vec<Row> = sqlx::query_as(&format!(
-        "SELECT i.collection_id, {ITEM_COLUMNS} FROM {ITEM_TABLES}
-         WHERE i.collection_id = ANY($1) AND i.is_main"
+    let weights: Vec<(i64, i64)> = sqlx::query_as(&format!(
+        "SELECT i.collection_id, {ITEM_WEIGHT} FROM {ITEM_TABLES}
+         WHERE i.is_main AND i.collection_id = ANY($1)"
     ))
     .bind(collection_ids)
     .fetch_all(&mut *conn)
     .await?;
-    // A preview is an item without content, but its chunk uids still count
-    // against the page budget. Read one item at a time and stop when the
-    // next one does not fit, so a page of invitations cannot carry more
-    // previews than a page of collections could.
-    let mut items = HashMap::new();
     let mut left = budget;
-    for row in rows {
-        if left <= 0 {
-            break;
+    let mut wanted = Vec::with_capacity(weights.len());
+    for (collection_id, weight) in weights {
+        if weight <= left {
+            left -= weight;
+            wanted.push(collection_id);
         }
-        let mut loaded = chunks::load(
-            conn,
-            &state.blobs,
-            &[row.item.chunk_ids.as_slice()],
-            false,
-            left,
-        )
-        .await?;
-        if loaded.fitting() == 0 {
-            continue;
-        }
-        let weight = loaded.weight(&row.item.chunk_ids);
-        if weight > left {
-            continue;
-        }
-        left -= weight;
-        items.insert(row.collection_id, to_wire_item(row.item, &mut loaded)?);
     }
-    Ok(items)
+    room.take(budget - left)?;
+    let rows: Vec<Row> = sqlx::query_as(&format!(
+        "SELECT i.collection_id, {ITEM_COLUMNS} FROM {ITEM_TABLES}
+         WHERE i.is_main AND i.collection_id = ANY($1)"
+    ))
+    .bind(&wanted)
+    .fetch_all(&mut *conn)
+    .await?;
+    let revisions: Vec<&[i64]> = rows
+        .iter()
+        .map(|row| row.item.chunk_ids.as_slice())
+        .collect();
+    let mut loaded = chunks::load(conn, &state.blobs, room, &revisions, false, 0).await?;
+    rows.into_iter()
+        .map(|row| Ok((row.collection_id, to_wire_item(row.item, &mut loaded)?)))
+        .collect()
 }
 
 // ---------- collections ----------
 
-const COLLECTION_QUERY: &str = "SELECT c.stoken AS col_stoken, m.access_level, \
-            m.encryption_key AS member_key, m.collection_type, \
-            i.uid, i.version, i.encryption_key, i.stoken, \
-            r.uid AS rev_uid, r.meta, r.deleted, r.chunk_ids \
-     FROM members m \
+const COLLECTION_COLUMNS: &str = "c.stoken AS col_stoken, m.access_level, \
+     m.encryption_key AS member_key, m.collection_type, \
+     i.uid, i.version, i.encryption_key, i.stoken, \
+     r.uid AS rev_uid, r.meta, r.deleted, r.chunk_ids";
+const COLLECTION_TABLES: &str = "members m \
      JOIN collections c ON c.id = m.collection_id \
      JOIN items i ON i.collection_id = c.id AND i.is_main \
      JOIN revisions r ON r.item_id = i.id AND r.uid = i.revision_uid";
 
 async fn load_collection_chunks(
     state: &AppState,
+    room: &ResponseRoom,
     conn: &mut PgConnection,
     rows: &[CollectionRow],
     with_content: bool,
+    budget: i64,
 ) -> ApiResult<chunks::Loaded> {
     let revisions: Vec<&[i64]> = rows
         .iter()
         .map(|row| row.item.chunk_ids.as_slice())
         .collect();
-    chunks::load(
-        conn,
-        &state.blobs,
-        &revisions,
-        with_content,
-        state.config.max_page_bytes,
-    )
-    .await
+    chunks::load(conn, &state.blobs, room, &revisions, with_content, budget).await
 }
 
 fn to_wire_collections(
@@ -383,6 +411,7 @@ pub(crate) async fn snapshot(
 /// optionally only those of the given types, plus the ones it lost access to.
 async fn list_collections(
     state: &AppState,
+    room: &ResponseRoom,
     user: &AuthUser,
     query: &FetchQuery,
     types: Option<Vec<Vec<u8>>>,
@@ -393,11 +422,15 @@ async fn list_collections(
     // that feed one cursor, so they read from one snapshot.
     let mut conn = snapshot(&state.pool).await?;
 
-    let mut rows: Vec<CollectionRow> = sqlx::query_as(&format!(
-        "{COLLECTION_QUERY}
+    let matching = format!(
+        "FROM {COLLECTION_TABLES}
          WHERE m.account_id = $1 AND c.stoken > $2
            AND ($3::bytea[] IS NULL OR m.collection_type = ANY($3))
          ORDER BY c.stoken LIMIT $4"
+    );
+    let weights: Vec<i64> = sqlx::query_scalar(&format!(
+        "SELECT {ITEM_WEIGHT} + octet_length(m.encryption_key) + octet_length(m.collection_type)
+         {matching}"
     ))
     .bind(user.account_id)
     .bind(since)
@@ -405,9 +438,26 @@ async fn list_collections(
     .bind(limit + 1)
     .fetch_all(&mut *conn)
     .await?;
-    let mut done = rows.len() as i64 <= limit;
-    rows.truncate(limit as usize);
-    let loaded = load_collection_chunks(state, &mut conn, &rows, query.with_content()).await?;
+    let page = page(&weights, limit, state.config.max_page_bytes);
+    room.take(page.weight)?;
+    let mut done = page.done;
+    let mut rows: Vec<CollectionRow> =
+        sqlx::query_as(&format!("SELECT {COLLECTION_COLUMNS} {matching}"))
+            .bind(user.account_id)
+            .bind(since)
+            .bind(&types)
+            .bind(page.rows)
+            .fetch_all(&mut *conn)
+            .await?;
+    let loaded = load_collection_chunks(
+        state,
+        room,
+        &mut conn,
+        &rows,
+        query.with_content(),
+        page.left,
+    )
+    .await?;
     let fits = loaded.fitting().max(1);
     if fits < rows.len() {
         rows.truncate(fits);
@@ -450,6 +500,7 @@ async fn list_collections(
 
 pub async fn list_multi(
     State(state): State<AppState>,
+    room: ResponseRoom,
     user: AuthUser,
     Query(query): Query<FetchQuery>,
     Msgpack(body): Msgpack<ListMulti>,
@@ -460,22 +511,24 @@ pub async fn list_multi(
         .map(ByteBuf::into_vec)
         .collect();
     Ok(Msgpack(
-        list_collections(&state, &user, &query, Some(types)).await?,
+        list_collections(&state, &room, &user, &query, Some(types)).await?,
     ))
 }
 
 pub async fn list_all(
     State(state): State<AppState>,
+    room: ResponseRoom,
     user: AuthUser,
     Query(query): Query<FetchQuery>,
 ) -> ApiResult<Msgpack<CollectionList>> {
     Ok(Msgpack(
-        list_collections(&state, &user, &query, None).await?,
+        list_collections(&state, &room, &user, &query, None).await?,
     ))
 }
 
 pub async fn fetch_collection(
     State(state): State<AppState>,
+    room: ResponseRoom,
     user: AuthUser,
     Path(collection_uid): Path<String>,
     Query(query): Query<FetchQuery>,
@@ -483,7 +536,8 @@ pub async fn fetch_collection(
     check_uid(&collection_uid)?;
     let mut conn = state.pool.acquire().await?;
     let row: Option<CollectionRow> = sqlx::query_as(&format!(
-        "{COLLECTION_QUERY} WHERE m.account_id = $1 AND c.uid = $2"
+        "SELECT {COLLECTION_COLUMNS} FROM {COLLECTION_TABLES}
+         WHERE m.account_id = $1 AND c.uid = $2"
     ))
     .bind(user.account_id)
     .bind(&collection_uid)
@@ -492,9 +546,11 @@ pub async fn fetch_collection(
     let row = row.ok_or_else(|| ApiError::not_found("Collection"))?;
     let loaded = load_collection_chunks(
         &state,
+        &room,
         &mut conn,
         std::slice::from_ref(&row),
         query.with_content(),
+        state.config.max_page_bytes,
     )
     .await?;
     let mut collections = to_wire_collections(&state, vec![row], loaded)?;
@@ -576,6 +632,7 @@ pub async fn create_collection(
 
 pub async fn list_items(
     State(state): State<AppState>,
+    room: ResponseRoom,
     user: AuthUser,
     Path(collection_uid): Path<String>,
     Query(query): Query<FetchQuery>,
@@ -585,24 +642,40 @@ pub async fn list_items(
     let mut conn = state.pool.acquire().await?;
     let collection = membership(&mut conn, user.account_id, &collection_uid, false).await?;
 
-    let mut rows: Vec<ItemRow> = sqlx::query_as(&format!(
-        "SELECT {ITEM_COLUMNS} FROM {ITEM_TABLES}
+    let matching = format!(
+        "FROM {ITEM_TABLES}
          WHERE i.collection_id = $1 AND i.stoken > $2 AND ($3 OR NOT i.is_main)
          ORDER BY i.stoken LIMIT $4"
-    ))
-    .bind(collection.id)
-    .bind(since)
-    .bind(query.with_collection())
-    .bind(limit + 1)
-    .fetch_all(&mut *conn)
+    );
+    let weights: Vec<i64> = sqlx::query_scalar(&format!("SELECT {ITEM_WEIGHT} {matching}"))
+        .bind(collection.id)
+        .bind(since)
+        .bind(query.with_collection())
+        .bind(limit + 1)
+        .fetch_all(&mut *conn)
+        .await?;
+    let page = page(&weights, limit, state.config.max_page_bytes);
+    room.take(page.weight)?;
+    let mut done = page.done;
+    let mut rows: Vec<ItemRow> = sqlx::query_as(&format!("SELECT {ITEM_COLUMNS} {matching}"))
+        .bind(collection.id)
+        .bind(since)
+        .bind(query.with_collection())
+        .bind(page.rows)
+        .fetch_all(&mut *conn)
+        .await?;
+    let mut loaded = load_chunks(
+        &state,
+        &room,
+        &mut conn,
+        &rows,
+        query.with_content(),
+        page.left,
+    )
     .await?;
-    let mut done = rows.len() as i64 <= limit;
-    rows.truncate(limit as usize);
-    let mut loaded = load_chunks(&state, &mut conn, &rows, query.with_content()).await?;
-    // The page ends early when its content or the uids of its chunks would
-    // outgrow the budget. Without content the uids still take room: a
-    // medium-prefetch page is not free. An item too large for any page goes
-    // out alone, as the uids of its chunks, so the list cannot get stuck.
+    // The page ends early here too when its content would outgrow what the
+    // budget has left. An item too large for any page goes out alone, as the
+    // uids of its chunks, so the list cannot get stuck.
     let fits = loaded.fitting().max(1);
     if fits < rows.len() {
         rows.truncate(fits);
@@ -625,6 +698,7 @@ pub async fn list_items(
 
 pub async fn fetch_item(
     State(state): State<AppState>,
+    room: ResponseRoom,
     user: AuthUser,
     Path((collection_uid, item_uid)): Path<(String, String)>,
     Query(query): Query<FetchQuery>,
@@ -640,16 +714,41 @@ pub async fn fetch_item(
     .fetch_optional(&mut *conn)
     .await?;
     let row = row.ok_or_else(|| ApiError::not_found("Item"))?;
-    let mut items = to_wire_items(&state, &mut conn, vec![row], query.with_content()).await?;
+    let mut items = to_wire_items(
+        &state,
+        &room,
+        &mut conn,
+        vec![row],
+        query.with_content(),
+        state.config.max_page_bytes,
+    )
+    .await?;
     Ok(Msgpack(items.remove(0)))
+}
+
+/// An answer that has to be whole and would not fit. Unlike a list, this one
+/// cannot end early: a client takes what it gets for all it asked, and would
+/// lose the rest. So it is refused, and the client asks for fewer at a time.
+fn too_much_at_once() -> ApiError {
+    ApiError::new(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "too_much_at_once",
+        "These items are too large to send together. Ask for fewer at a time.",
+    )
 }
 
 /// Of the items the client names, return the ones it does not have the
 /// latest revision of. With a cursor, that means changed after the cursor;
 /// otherwise it means the etag it sent differs, and an item sent without an
 /// etag always comes back.
+///
+/// What goes out besides content is held to the page budget before anything
+/// is read. Content is held to what is left, and the items it does not reach
+/// go out as the uids of their chunks. One item is always answered, so a
+/// client that asks for fewer in turn gets everything in the end.
 pub async fn fetch_updates(
     State(state): State<AppState>,
+    room: ResponseRoom,
     user: AuthUser,
     Path(collection_uid): Path<String>,
     Query(query): Query<FetchQuery>,
@@ -663,20 +762,41 @@ pub async fn fetch_updates(
     let collection = membership(&mut conn, user.account_id, &collection_uid, false).await?;
 
     let uids: Vec<&str> = refs.iter().map(|item| item.uid.as_str()).collect();
-    let mut rows: Vec<ItemRow> = sqlx::query_as(&format!(
-        "SELECT {ITEM_COLUMNS} FROM {ITEM_TABLES}
-         WHERE i.collection_id = $1 AND i.uid = ANY($2) AND i.stoken > $3
-         ORDER BY i.stoken"
-    ))
-    .bind(collection.id)
-    .bind(&uids)
-    .bind(since)
-    .fetch_all(&mut *conn)
-    .await?;
     let known: HashMap<&str, &str> = refs
         .iter()
         .filter_map(|item| Some((item.uid.as_str(), item.etag.as_deref()?)))
         .collect();
+    let matching = format!(
+        "FROM {ITEM_TABLES}
+         WHERE i.collection_id = $1 AND i.uid = ANY($2) AND i.stoken > $3
+         ORDER BY i.stoken"
+    );
+    let found: Vec<(String, String, i64)> =
+        sqlx::query_as(&format!("SELECT i.uid, r.uid, {ITEM_WEIGHT} {matching}"))
+            .bind(collection.id)
+            .bind(&uids)
+            .bind(since)
+            .fetch_all(&mut *conn)
+            .await?;
+    let wanted: Vec<(&str, i64)> = found
+        .iter()
+        .filter(|(uid, revision, _)| known.get(uid.as_str()) != Some(&revision.as_str()))
+        .map(|(uid, _, weight)| (uid.as_str(), *weight))
+        .collect();
+    let weight: i64 = wanted.iter().map(|(_, weight)| weight).sum();
+    let budget = state.config.max_page_bytes;
+    if wanted.len() > 1 && weight > budget {
+        return Err(too_much_at_once());
+    }
+    room.take(weight)?;
+
+    let uids: Vec<&str> = wanted.iter().map(|(uid, _)| *uid).collect();
+    let mut rows: Vec<ItemRow> = sqlx::query_as(&format!("SELECT {ITEM_COLUMNS} {matching}"))
+        .bind(collection.id)
+        .bind(&uids)
+        .bind(since)
+        .fetch_all(&mut *conn)
+        .await?;
     rows.retain(|row| known.get(row.uid.as_str()) != Some(&row.rev_uid.as_str()));
 
     let stoken = rows
@@ -684,7 +804,15 @@ pub async fn fetch_updates(
         .map(|row| state.keys.stoken(row.stoken))
         .or_else(|| query.stoken.clone());
     Ok(Msgpack(ItemList {
-        data: to_wire_items(&state, &mut conn, rows, query.with_content()).await?,
+        data: to_wire_items(
+            &state,
+            &room,
+            &mut conn,
+            rows,
+            query.with_content(),
+            (budget - weight).max(0),
+        )
+        .await?,
         stoken,
         done: true,
     }))
@@ -694,6 +822,7 @@ pub async fn fetch_updates(
 /// the page starts after it.
 pub async fn list_revisions(
     State(state): State<AppState>,
+    room: ResponseRoom,
     user: AuthUser,
     Path((collection_uid, item_uid)): Path<(String, String)>,
     Query(query): Query<FetchQuery>,
@@ -723,26 +852,35 @@ pub async fn list_revisions(
                 })?,
         ),
     };
-    let mut rows: Vec<(String, Vec<u8>, bool, Vec<i64>)> = sqlx::query_as(
-        "SELECT uid, meta, deleted, chunk_ids FROM revisions
-         WHERE item_id = $1 AND ($2::bigint IS NULL OR id < $2)
-         ORDER BY id DESC LIMIT $3",
-    )
+    let matching = "FROM revisions r
+         WHERE r.item_id = $1 AND ($2::bigint IS NULL OR r.id < $2)
+         ORDER BY r.id DESC LIMIT $3";
+    let weights: Vec<i64> = sqlx::query_scalar(&format!("SELECT {REVISION_WEIGHT} {matching}"))
+        .bind(item_id)
+        .bind(before)
+        .bind(limit + 1)
+        .fetch_all(&mut *conn)
+        .await?;
+    let page = page(&weights, limit, state.config.max_page_bytes);
+    room.take(page.weight)?;
+    let mut done = page.done;
+    let mut rows: Vec<(String, Vec<u8>, bool, Vec<i64>)> = sqlx::query_as(&format!(
+        "SELECT r.uid, r.meta, r.deleted, r.chunk_ids {matching}"
+    ))
     .bind(item_id)
     .bind(before)
-    .bind(limit + 1)
+    .bind(page.rows)
     .fetch_all(&mut *conn)
     .await?;
-    let mut done = rows.len() as i64 <= limit;
-    rows.truncate(limit as usize);
 
     let revisions: Vec<&[i64]> = rows.iter().map(|row| row.3.as_slice()).collect();
     let mut loaded = chunks::load(
         &mut conn,
         &state.blobs,
+        &room,
         &revisions,
         query.with_content(),
-        state.config.max_page_bytes,
+        page.left,
     )
     .await?;
     let fits = loaded.fitting().max(1);
@@ -890,7 +1028,10 @@ async fn prune(
     if dropped.is_empty() {
         return Ok((0, Vec::new()));
     }
-    let mut bytes: i64 = dropped.iter().map(|(_, meta, uid)| meta + uid).sum();
+    let mut bytes: i64 = dropped
+        .iter()
+        .map(|(chunk_ids, meta, uid)| meta + uid + chunks::revision_refs(chunk_ids.len()))
+        .sum();
     let candidates: Vec<i64> = dropped
         .into_iter()
         .flat_map(|(chunk_ids, _, _)| chunk_ids)
@@ -936,16 +1077,19 @@ async fn prune(
 /// collection aliased by `alias`.
 ///
 /// Content and metadata are not the only things a row holds: a key, an item
-/// uid, a chunk uid and an invitation key are all bytes a client chooses and
-/// the server stores. Counting them keeps a small plan from being used as
-/// free storage for rows whose content is empty.
+/// uid, a chunk uid, a reference to a chunk and an invitation key are all
+/// bytes a client decides on and the server stores. Counting them keeps a
+/// small plan from being used as free storage for rows whose content is
+/// empty.
 pub(crate) fn counted_bytes(alias: &str) -> String {
+    use chunks::CHUNK_REF_BYTES;
     format!(
         "(SELECT COALESCE(sum(octet_length(i.uid)
              + COALESCE(octet_length(i.encryption_key), 0)
              + octet_length(i.revision_uid)), 0)
          FROM items i WHERE i.collection_id = {alias}.id)
-         + (SELECT COALESCE(sum(octet_length(r.uid) + octet_length(r.meta)), 0)
+         + (SELECT COALESCE(sum(octet_length(r.uid) + octet_length(r.meta)
+             + cardinality(r.chunk_ids) * {CHUNK_REF_BYTES}), 0)
             FROM revisions r JOIN items i ON i.id = r.item_id
             WHERE i.collection_id = {alias}.id)
          + (SELECT COALESCE(sum(octet_length(k.uid) + k.size), 0)
@@ -961,6 +1105,25 @@ pub(crate) fn counted_bytes(alias: &str) -> String {
              + octet_length(l.claim_pubkey)), 0)
             FROM invite_links l WHERE l.collection_id = {alias}.id)"
     )
+}
+
+/// Take bytes off what a collection is charged for, once what they stood
+/// for is gone. In the same transaction, so the two cannot disagree.
+pub(crate) async fn give_back(
+    conn: &mut PgConnection,
+    collection_id: i64,
+    bytes: i64,
+) -> ApiResult<()> {
+    if bytes > 0 {
+        sqlx::query(
+            "UPDATE collections SET bytes_used = GREATEST(bytes_used - $2, 0) WHERE id = $1",
+        )
+        .bind(collection_id)
+        .bind(bytes)
+        .execute(conn)
+        .await?;
+    }
+    Ok(())
 }
 
 /// Drop what a collection being deleted holds besides its own item: every
@@ -1060,12 +1223,16 @@ async fn store_revisions(
     let deletes = items.iter().any(|item| item.content.deleted);
     // Every stored field counts, not only content and metadata. A revision
     // uid and an item uid are names the server keeps, and an item may have
-    // no key and no meta at all; without these a row could cost nothing.
+    // no key and no meta at all; without these a row could cost nothing. The
+    // references count too: naming chunks that are already stored adds no
+    // chunk, but it does add to the revision.
     let mut revision_bytes = 0i64;
     let mut item_bytes = 0i64;
     for item in &items {
         let revision = item.content.uid.len() as i64;
-        revision_bytes += revision + item.content.meta.len() as i64;
+        revision_bytes += revision
+            + item.content.meta.len() as i64
+            + chunks::revision_refs(item.content.chunks.len());
         match existing.get(&item.uid) {
             Some(current) => {
                 item_bytes += revision - current.revision_uid.len() as i64;

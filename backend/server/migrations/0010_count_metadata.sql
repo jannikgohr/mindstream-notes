@@ -1,16 +1,18 @@
 -- Count the bytes of every stored field, not only content and metadata.
 --
--- Keys, item and revision uids, chunk uids, invitation keys and link keys
--- are chosen by a client and stored by the server. A plan that counts only
--- content could be filled with rows whose content is empty, so existing
--- collections are counted again under the wider rule.
+-- Keys, item and revision uids, chunk uids, references to chunks, invitation
+-- keys and link keys are chosen by a client and stored by the server. A plan
+-- that counts only content could be filled with rows whose content is empty,
+-- so existing collections are counted again under the wider rule. This is
+-- the same sum as collections::counted_bytes.
 UPDATE collections c
 SET bytes_used =
     (SELECT COALESCE(sum(octet_length(i.uid)
          + COALESCE(octet_length(i.encryption_key), 0)
          + octet_length(i.revision_uid)), 0)
      FROM items i WHERE i.collection_id = c.id)
-    + (SELECT COALESCE(sum(octet_length(r.uid) + octet_length(r.meta)), 0)
+    + (SELECT COALESCE(sum(octet_length(r.uid) + octet_length(r.meta)
+         + cardinality(r.chunk_ids) * 8), 0)
        FROM revisions r JOIN items i ON i.id = r.item_id
        WHERE i.collection_id = c.id)
     + (SELECT COALESCE(sum(octet_length(k.uid) + k.size), 0)

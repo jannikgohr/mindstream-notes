@@ -21,6 +21,7 @@ use sqlx::{PgConnection, PgPool};
 use crate::auth::AuthUser;
 use crate::blob::{BlobStore, Range, Uncommitted};
 use crate::collections::{self, membership, Membership};
+use crate::edge::ResponseRoom;
 use crate::error::{ApiError, ApiResult};
 use crate::limits;
 use crate::wire::{self, check_uid};
@@ -33,6 +34,16 @@ pub(crate) const MAX_CHUNK_BYTES: usize = 1024 * 1024;
 /// for the framing around it. Anything larger is refused before it is
 /// buffered, instead of once the whole body is in memory.
 pub(crate) const MAX_CHUNK_UPLOAD_BYTES: usize = 2 * MAX_CHUNK_BYTES;
+
+/// What a revision is charged for each chunk it names. A reference is a row
+/// id in `revisions.chunk_ids`, and many items may name the same chunks, so
+/// charging a chunk only once would leave those arrays free.
+pub(crate) const CHUNK_REF_BYTES: i64 = 8;
+
+/// What a revision naming `count` chunks is charged for naming them.
+pub(crate) fn revision_refs(count: usize) -> i64 {
+    count as i64 * CHUNK_REF_BYTES
+}
 /// Chunk ids read from the database in one round-trip. A page may name far
 /// more chunks than that; they are read in turns so no single query carries
 /// them all.
@@ -98,9 +109,9 @@ pub(crate) struct Loaded {
     /// chunk is only copied when it is needed again afterwards, which for
     /// most responses is never.
     uses_left: HashMap<i64, usize>,
-    /// How many of the revisions, from the first, fit the page budget. A
-    /// revision weighs its content when that is sent, and always the bytes
-    /// of its chunk uids, which are part of the response too.
+    /// How many of the revisions, from the first, fit the budget. Without
+    /// content all of them do: what they weigh besides it was settled before
+    /// they were read, see `collections::page`.
     fits: usize,
     /// How many of the revisions, from the first, go out with content.
     with_content: usize,
@@ -111,16 +122,6 @@ impl Loaded {
     /// How many of the revisions, from the first, fit the page budget.
     pub fn fitting(&self) -> usize {
         self.fits
-    }
-
-    /// What one revision weighs in a response that carries no content: the
-    /// bytes of the chunk uids it names. Call it only after [`load`] read
-    /// those uids, and before the revision is handed out.
-    pub fn weight(&self, chunk_ids: &[i64]) -> i64 {
-        chunk_ids
-            .iter()
-            .map(|id| self.uids.get(id).map_or(0, |uid| uid.len() as i64))
-            .fold(0, i64::saturating_add)
     }
 
     /// The chunks of the next revision. Call it for the revisions in the
@@ -154,9 +155,11 @@ impl Loaded {
 
 /// Fetch what a response needs of these revisions' chunks. Each revision is
 /// the row ids of its chunks. Without content, only the uids are read.
+/// Content takes its room before it is read.
 pub(crate) async fn load(
     conn: &mut PgConnection,
     blobs: &BlobStore,
+    room: &ResponseRoom,
     revisions: &[&[i64]],
     with_content: bool,
     budget: i64,
@@ -199,29 +202,23 @@ pub(crate) async fn load(
         index
     };
     let mut sizes: HashMap<i64, i64> = HashMap::with_capacity(index.len());
-    let mut uid_sizes: HashMap<i64, i64> = HashMap::with_capacity(index.len());
     for (id, uid, size) in index {
         sizes.insert(id, i64::from(size));
-        uid_sizes.insert(id, uid.len() as i64);
         loaded.uids.insert(id, uid);
     }
-    let weight_of = |ids: &&[i64]| -> i64 {
-        ids.iter()
-            .map(|id| {
-                let content = if with_content {
-                    sizes.get(id).copied().unwrap_or(0)
-                } else {
-                    0
-                };
-                content + uid_sizes.get(id).copied().unwrap_or(0)
-            })
-            .fold(0, i64::saturating_add)
-    };
-    loaded.fits = fitting(revisions.iter().map(weight_of), budget);
     if !with_content {
+        loaded.fits = revisions.len();
         return Ok(loaded);
     }
-    loaded.with_content = loaded.fits;
+
+    let size_of = |ids: &&[i64]| -> i64 {
+        ids.iter()
+            .map(|id| sizes.get(id).copied().unwrap_or(0))
+            .fold(0, i64::saturating_add)
+    };
+    loaded.with_content = fitting(revisions.iter().map(size_of), budget);
+    loaded.fits = loaded.with_content;
+    room.take(revisions[..loaded.with_content].iter().map(size_of).sum())?;
     for ids in &revisions[..loaded.with_content] {
         for id in ids.iter() {
             *loaded.uses_left.entry(*id).or_default() += 1;

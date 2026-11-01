@@ -39,7 +39,18 @@ const CODE_FAILURE_WINDOW: Duration = Duration::from_secs(10 * 60);
 pub struct CodeLimiter {
     max_failures: u32,
     window: Duration,
-    failures: Mutex<HashMap<i64, (u32, Instant)>>,
+    failures: Mutex<Failures>,
+}
+
+/// Fewest entries worth sweeping for.
+const SWEEP_FROM: usize = 1024;
+
+struct Failures {
+    by_account: HashMap<i64, (u32, Instant)>,
+    /// How many entries it takes to sweep out the old ones. Doubles with what
+    /// the last sweep left, so the work stays in proportion to the failures.
+    /// A name without an account counts too, and anyone can make up names.
+    sweep_at: usize,
 }
 
 impl Default for CodeLimiter {
@@ -54,15 +65,18 @@ impl CodeLimiter {
         Self {
             max_failures,
             window,
-            failures: Mutex::new(HashMap::new()),
+            failures: Mutex::new(Failures {
+                by_account: HashMap::new(),
+                sweep_at: SWEEP_FROM,
+            }),
         }
     }
 
     fn blocked_at(&self, account_id: i64, now: Instant) -> bool {
         let mut failures = self.failures.lock().unwrap_or_else(|e| e.into_inner());
-        match failures.get(&account_id) {
+        match failures.by_account.get(&account_id) {
             Some((_, since)) if now.duration_since(*since) > self.window => {
-                failures.remove(&account_id);
+                failures.by_account.remove(&account_id);
                 false
             }
             Some((count, _)) => *count >= self.max_failures,
@@ -72,8 +86,20 @@ impl CodeLimiter {
 
     fn failed_at(&self, account_id: i64, now: Instant) {
         let mut failures = self.failures.lock().unwrap_or_else(|e| e.into_inner());
-        failures.retain(|_, (_, since)| now.duration_since(*since) <= self.window);
-        failures.entry(account_id).or_insert((0, now)).0 += 1;
+        if failures.by_account.len() >= failures.sweep_at {
+            let window = self.window;
+            failures
+                .by_account
+                .retain(|_, (_, since)| now.duration_since(*since) <= window);
+            failures.sweep_at = (failures.by_account.len() * 2).max(SWEEP_FROM);
+        }
+        match failures.by_account.get_mut(&account_id) {
+            // The entry of a wait that is over starts again.
+            Some((count, since)) if now.duration_since(*since) <= self.window => *count += 1,
+            _ => {
+                failures.by_account.insert(account_id, (1, now));
+            }
+        }
     }
 
     pub(crate) fn blocked(&self, account_id: i64) -> bool {
@@ -88,6 +114,7 @@ impl CodeLimiter {
         self.failures
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+            .by_account
             .remove(&account_id);
     }
 }
@@ -667,26 +694,29 @@ pub async fn recover(
     headers: HeaderMap,
     Msgpack(request): Msgpack<SignedRequest>,
 ) -> ApiResult<Msgpack<RecoveryOpened>> {
-    let mut tx = state.pool.begin().await?;
-    let (account, body) = auth::verify_signed(
-        &state,
-        &mut tx,
-        &headers,
-        &request,
-        "recover",
-        SignedBy::RecoveryKey,
-    )
-    .await?;
-    check_second_factor(&state, &mut tx, account.id, body.totp.as_deref()).await?;
-    let content = account
-        .recovery_encrypted_content
-        .ok_or_else(|| ApiError::internal("an account has a recovery key and no recovery copy"))?;
-    // The code is spent with the grant in hand, not before.
-    tx.commit().await?;
-    Ok(Msgpack(RecoveryOpened {
-        recovery_encrypted_content: ByteBuf::from(content),
-        grant: state.keys.recovery_grant(account.id),
-    }))
+    auth::no_sooner(async {
+        let mut tx = state.pool.begin().await?;
+        let (account, body) = auth::verify_signed(
+            &state,
+            &mut tx,
+            &headers,
+            &request,
+            "recover",
+            SignedBy::RecoveryKey,
+        )
+        .await?;
+        check_second_factor(&state, &mut tx, account.id, body.totp.as_deref()).await?;
+        let content = account.recovery_encrypted_content.ok_or_else(|| {
+            ApiError::internal("an account has a recovery key and no recovery copy")
+        })?;
+        // The code is spent with the grant in hand, not before.
+        tx.commit().await?;
+        Ok(Msgpack(RecoveryOpened {
+            recovery_encrypted_content: ByteBuf::from(content),
+            grant: state.keys.recovery_grant(account.id),
+        }))
+    })
+    .await
 }
 
 /// Second half: the account keys wrapped under the new password, and a new
@@ -697,6 +727,14 @@ pub async fn complete_recovery(
     _attempt: AuthAttempt,
     headers: HeaderMap,
     Msgpack(request): Msgpack<SignedRequest>,
+) -> ApiResult<Msgpack<LoginResponse>> {
+    auth::no_sooner(finish_recovery(state, headers, request)).await
+}
+
+async fn finish_recovery(
+    state: AppState,
+    headers: HeaderMap,
+    request: SignedRequest,
 ) -> ApiResult<Msgpack<LoginResponse>> {
     let mut tx = state.pool.begin().await?;
     let (mut account, body) = auth::verify_signed(
@@ -791,6 +829,35 @@ mod tests {
         assert!(!limiter.blocked_at(1, later));
         limiter.failed_at(1, later);
         assert!(!limiter.blocked_at(1, later));
+    }
+
+    /// Names nobody has land here too, so what a failure costs must not grow
+    /// with how many others there were, and what is over has to go.
+    #[test]
+    fn old_failures_are_swept_without_sweeping_on_every_failure() {
+        let limiter = CodeLimiter::default();
+        let start = Instant::now();
+        let many = 10 * SWEEP_FROM as i64;
+        for account in 0..many {
+            limiter.failed_at(account, start);
+        }
+        let held = || limiter.failures.lock().unwrap().by_account.len();
+        assert_eq!(held(), many as usize);
+
+        // The old ones are gone by the time new ones have taken their place.
+        let later = start + CODE_FAILURE_WINDOW + Duration::from_secs(1);
+        for account in many..2 * many {
+            limiter.failed_at(account, later);
+        }
+        assert_eq!(held(), many as usize);
+
+        // One that comes back after its wait starts from one.
+        for _ in 0..MAX_CODE_FAILURES - 1 {
+            limiter.failed_at(0, later);
+        }
+        assert!(!limiter.blocked_at(0, later));
+        limiter.failed_at(0, later);
+        assert!(limiter.blocked_at(0, later));
     }
 
     #[test]
