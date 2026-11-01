@@ -35,6 +35,9 @@
  *   - share dialog, to links:   "Invite with a link" (ui.sharing.dialog.toLinks)
  *   - links section:            "Create link"       (ui.sharing.links.create)
  *   - tree background menu:     "Join shared folder…" (ui.sharing.menu.joinByLink)
+ *   - folder's sharing menu:    "Manage access…"    (ui.sharing.menu.manageAccess)
+ *   - after a removal:          "Revoke open links?" / "Revoke links"
+ *                               (ui.sharing.access.revokeLinks.*)
  *   - join dialog:              "Invite link" / "Continue" / "Join"
  *                               (ui.sharing.join.*)
  *   - changed key, sending:     "Share with the new key"
@@ -199,6 +202,28 @@ async function clickDialogButton(
     labelledBy,
     text
   );
+}
+
+/** Click a button by its text in the confirmation that is showing, and hand
+ *  back what it said. */
+async function answerConfirmation(
+  client: WebdriverIO.Browser,
+  text: string
+): Promise<string> {
+  const dialog = client.$('[role="alertdialog"]');
+  await dialog.waitForDisplayed({ timeout: 30_000 });
+  const said = await dialog.getText();
+  await client.execute((label: string) => {
+    const button = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        '[role="alertdialog"] button'
+      )
+    ).find((candidate) => candidate.textContent?.trim() === label);
+    if (!button) throw new Error(`button not found: ${label}`);
+    button.click();
+  }, text);
+  await dialog.waitForDisplayed({ reverse: true, timeout: 30_000 });
+  return said;
 }
 
 /** Close whichever sharing dialog is open, if one is. */
@@ -1267,6 +1292,57 @@ describe('T4 sharing a folder', function () {
     );
     await syncClient(browserA);
     expect((await loadNoteFixture(browserA, after.id)).pushed).toBe(true);
+  });
+
+  // --- 4.16 Someone taken out, and the links they may have kept (P1) ---
+  it('A removes B in the dialog and is offered the links that still work', async () => {
+    const folderId = await findCollectionId(browserA, LINK_FOLDER);
+    const { link } = await invokeTauri<{ link: string }>(
+      browserA,
+      'create_share_link',
+      {
+        input: {
+          collection_id: folderId,
+          access_level: 'read_only',
+          max_uses: 5
+        }
+      }
+    );
+    const open = async () =>
+      (
+        await invokeTauri<ShareLinkRow[]>(browserA, 'list_share_links', {
+          collectionId: folderId
+        })
+      ).filter((row) => row.uses < row.max_uses);
+    expect(await open()).toHaveLength(1);
+
+    await closeSharingDialogs(browserA);
+    await A.clickElement(A.treeItem(LINK_FOLDER), { button: 'right' });
+    await A.clickMenuItem('Sharing');
+    await A.clickMenuItem('Manage access…');
+    const remove =
+      '[role="dialog"][aria-labelledby="manage-access-title"] button[aria-label="Remove"]';
+    await browserA.$(remove).waitForDisplayed({ timeout: 30_000 });
+    await browserA.execute((selector: string) => {
+      document.querySelector<HTMLButtonElement>(selector)?.click();
+    }, remove);
+    await answerConfirmation(browserA, 'Remove');
+
+    const asked = await answerConfirmation(browserA, 'Revoke links');
+    expect(asked).toContain('Revoke open links?');
+    expect(asked).toContain(accounts.recipient.username);
+
+    await browserA.waitUntil(async () => (await open()).length === 0, {
+      timeout: 60_000,
+      timeoutMsg: 'the open link was not revoked'
+    });
+    await browserA
+      .$('[data-testid="share-links"]')
+      .waitForDisplayed({ timeout: 30_000 });
+    await closeSharingDialogs(browserA);
+    expect(await refusalOf(browserB, 'open_share_link', { link })).toBe(
+      'does_not_exist'
+    );
   });
 
   // 4.8–4.9 require an owner second device (A2) and are covered by

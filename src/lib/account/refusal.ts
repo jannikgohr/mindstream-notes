@@ -56,6 +56,8 @@ const SENTENCES: Record<string, string> = {
   demo_note_not_shareable: 'account.refusal.demoNoteNotShareable'
 };
 
+const WRONG_SIGN_IN = 'account.refusal.wrongSignIn';
+
 /** The server wants a code from the authenticator before it goes on. */
 export const REASON_CODE_REQUIRED = 'totp_required';
 /** The code sent was wrong or already used. */
@@ -77,6 +79,14 @@ export function describeRefusal(err: unknown): string {
   return key === undefined ? toErrorMessage(err) : tUi(key);
 }
 
+/** The same for signing in. The server answers a wrong password and a name
+ *  without an account alike, so the sentence has to cover both. */
+export function describeSignInRefusal(err: unknown): string {
+  return refusalReason(err) === 'login_bad_signature'
+    ? tUi(WRONG_SIGN_IN)
+    : describeRefusal(err);
+}
+
 /** Show a refusal as an error toast. Anything else is thrown on. */
 export function toastRefusal(err: unknown): void {
   if (refusalReason(err) === null) throw err;
@@ -86,5 +96,5 @@ export function toastRefusal(err: unknown): void {
 /** Every `ui` key this module can ask for, so a test can check the bundles
  *  have them all. */
 export const REFUSAL_UI_KEYS: readonly string[] = [
-  ...new Set(Object.values(SENTENCES))
+  ...new Set([...Object.values(SENTENCES), WRONG_SIGN_IN])
 ];
