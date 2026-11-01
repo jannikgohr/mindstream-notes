@@ -1,10 +1,7 @@
 /**
- * In-memory fallback used when the frontend runs outside Tauri
- * (`pnpm dev` in a normal browser). Same shape as the Rust commands so
- * components can't tell the difference.
- *
- * Seeded once at module load with the same demo content Rust inserts on
- * first run so the look-and-feel matches between dev and tauri dev.
+ * In-memory fixtures for unit tests and disposable browser UI builds with
+ * VITE_BROWSER_MOCKS=1. Normal browser sessions use the Rust SQLite worker.
+ * Seeded once at module load to keep UI fixture content deterministic.
  */
 
 import type {

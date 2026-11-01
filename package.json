@@ -5,7 +5,7 @@
   "license": "MIT OR Apache-2.0",
   "type": "module",
   "scripts": {
-    "dev": "vite dev",
+    "dev": "pnpm build:wasm && vite dev",
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
@@ -50,7 +50,9 @@
     "plugins:build": "node plugin-sdk/build-bundled.mjs",
     "plugins:examples": "node plugin-sdk/examples/build.mjs",
     "build:wasm": "node scripts/browser/build-wasm.mjs",
-    "test:sqlite": "pnpm build:wasm && node e2e-tests/browser/playwright.cjs test --config e2e-tests/sqlite/playwright.config.ts"
+    "test:sqlite": "pnpm build:wasm && node e2e-tests/browser/playwright.cjs test --config e2e-tests/sqlite/playwright.config.ts",
+    "dev:native": "vite dev",
+    "build:browser": "pnpm build:wasm && vite build"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.0.1",

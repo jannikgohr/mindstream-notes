@@ -7,8 +7,8 @@ import { assertRequiredString } from '$lib/validation';
  *   - trashCounts:    how many notes/folders the trash holds (recursive)
  *   - emptyTrash:     purge every item under the trash collection
  *
- * The browser fallbacks are no-ops / empty counts so the dev preview
- * doesn't crash when these calls land outside Tauri.
+ * Browser trash operations use the persistent SQLite worker. Opening OS
+ * folders and native backup dialogs remains specific to Tauri.
  */
 
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
@@ -19,6 +19,7 @@ import {
   assertString,
   assertVoid,
   isTauri,
+  invokeOrFallback,
   optionalString,
   TauriCommandName
 } from './core';
@@ -52,16 +53,20 @@ export async function openFolder(path: string): Promise<void> {
 }
 
 export async function trashCounts(): Promise<TrashCounts> {
-  if (!isTauri()) return await mockApi.trashCounts();
-  return parseTrashCounts(
-    await tauriInvoke<unknown>(TauriCommandName.TrashCounts)
+  return invokeOrFallback(
+    TauriCommandName.TrashCounts,
+    undefined,
+    () => mockApi.trashCounts(),
+    parseTrashCounts
   );
 }
 
 export async function emptyTrash(): Promise<TrashCounts> {
-  if (!isTauri()) return await mockApi.emptyTrash();
-  return parseTrashCounts(
-    await tauriInvoke<unknown>(TauriCommandName.EmptyTrash)
+  return invokeOrFallback(
+    TauriCommandName.EmptyTrash,
+    undefined,
+    () => mockApi.emptyTrash(),
+    parseTrashCounts
   );
 }
 

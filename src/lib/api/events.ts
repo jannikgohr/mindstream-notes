@@ -4,6 +4,8 @@ import {
 } from '@tauri-apps/api/event';
 
 import type { SyncReport } from './sync';
+import { isTauri } from './core';
+const browserEvents = new EventTarget();
 
 export enum TauriEventName {
   CaptureFailed = 'capture-failed',
@@ -133,12 +135,21 @@ export function emit<K extends keyof TauriEvents>(
   event: K,
   payload: TauriEvents[K]
 ) {
-  return tauriEmit(event, payload);
+  if (isTauri()) return tauriEmit(event, payload);
+  browserEvents.dispatchEvent(new CustomEvent(event, { detail: payload }));
+  return Promise.resolve();
 }
 
 export function listen<K extends keyof TauriEvents>(
   event: K,
   handler: (payload: TauriEvents[K]) => void
 ) {
-  return tauriListen(event, (e) => handler(e.payload as TauriEvents[K]));
+  if (isTauri())
+    return tauriListen(event, (e) => handler(e.payload as TauriEvents[K]));
+  const listener = (e: Event) =>
+    handler((e as CustomEvent<TauriEvents[K]>).detail);
+  browserEvents.addEventListener(event, listener);
+  return Promise.resolve(() =>
+    browserEvents.removeEventListener(event, listener)
+  );
 }

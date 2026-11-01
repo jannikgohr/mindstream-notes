@@ -2,9 +2,9 @@
  * Search API. Mirror of src-tauri/src/search/mod.rs.
  *
  * `searchNotes(query)` returns scored hits with a body snippet and
- * char-index match ranges for highlight rendering. Browser fallback
- * (`pnpm dev` without Tauri) implements the same matcher in TS over the
- * mock note store so the dialog stays usable in dev.
+ * char-index match ranges for highlight rendering. Native and browser
+ * sessions use the shared Rust search. Disposable UI fixtures use the
+ * TypeScript matcher over the in-memory store.
  */
 
 import {

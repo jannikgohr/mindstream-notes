@@ -6,6 +6,7 @@ import {
 } from './protocol';
 
 interface WasmDatabase {
+  invoke(request: unknown): unknown;
   verify(): unknown;
   write(body: string): void;
   read(): string | undefined;
@@ -14,7 +15,10 @@ interface WasmDatabase {
 }
 interface WasmModule {
   default(): Promise<unknown>;
-  BrowserDatabase: { open(): Promise<WasmDatabase> };
+  BrowserDatabase: {
+    open(): Promise<WasmDatabase>;
+    open_vault(): Promise<WasmDatabase>;
+  };
 }
 
 const worker = self as unknown as {
@@ -24,6 +28,7 @@ const worker = self as unknown as {
   postMessage(message: StorageResponse): void;
 };
 let database: WasmDatabase | undefined;
+let scope: 'proof' | 'vault' = 'proof';
 let releaseOwnership: (() => void) | undefined;
 
 async function open() {
@@ -43,7 +48,7 @@ async function open() {
   await new Promise<void>((resolve, reject) => {
     void worker.navigator.locks
       .request(
-        'mindstream:sqlite-proof:pool',
+        `mindstream:sqlite-${scope}:pool`,
         { mode: 'exclusive', ifAvailable: true },
         async (lock) => {
           if (!lock) {
@@ -69,7 +74,9 @@ async function open() {
     ).href;
     const wasm = (await import(/* @vite-ignore */ moduleUrl)) as WasmModule;
     await wasm.default();
-    database = await wasm.BrowserDatabase.open();
+    database = await (scope === 'vault'
+      ? wasm.BrowserDatabase.open_vault()
+      : wasm.BrowserDatabase.open());
   } catch (error) {
     releaseOwnership?.();
     releaseOwnership = undefined;
@@ -78,6 +85,25 @@ async function open() {
 }
 
 async function handle(request: StorageRequest): Promise<unknown> {
+  if (request.method === 'open') {
+    const requestedScope = request.args?.scope ?? 'proof';
+    if (database && scope !== requestedScope)
+      throw {
+        code: 'invalidArgument',
+        message: 'Storage scope cannot change while open'
+      };
+    scope = requestedScope;
+  }
+  if (request.method === 'invoke' && scope !== 'vault')
+    throw {
+      code: 'invalidArgument',
+      message: 'Vault storage has not been opened'
+    };
+  if (['verify', 'read', 'write'].includes(request.method) && scope !== 'proof')
+    throw {
+      code: 'invalidArgument',
+      message: 'Proof operations require proof storage'
+    };
   if (request.method === 'close') {
     database?.close();
     database?.free();
@@ -91,6 +117,10 @@ async function handle(request: StorageRequest): Promise<unknown> {
   switch (request.method) {
     case 'open':
       return;
+    case 'invoke':
+      // Match Tauri's JSON arguments: undefined object fields are omitted,
+      // while null remains an explicit clear for partial note updates.
+      return database.invoke(JSON.parse(JSON.stringify(request.args)));
     case 'verify':
       return database.verify();
     case 'read':

@@ -1,10 +1,14 @@
 # Browser support
 
-The first increment is a SQLite compatibility proof at `/sqlite-proof/`. The
-notes UI still uses its existing browser mocks. Authentication, sync, and a
-browser release are pending.
+The browser app stores local notes in OPFS SQLite through a dedicated Wasm
+worker. Hard reloads and closing the owning tab retain committed notes,
+folders, attachments, history, and editor CRDT state. Authentication, encrypted
+sync, offline app loading, and a browser release are pending.
 
-## Run the proof
+The earlier `/sqlite-proof/` page remains a separate compatibility check. It
+uses a different database and lock from the app.
+
+## Run the browser app
 
 Install Rust's Wasm target, Clang with a WebAssembly backend, LLVM's archiver,
 and the binding generator pinned by `src-tauri/browser-wasm/Cargo.toml`.
@@ -14,13 +18,21 @@ On Ubuntu, `sudo apt-get install clang lld` supplies the C tools.
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.126 --locked
 pnpm install --frozen-lockfile
-pnpm build:wasm
 pnpm dev
 ```
 
-Open `http://localhost:1420/sqlite-proof/`. Save a marker and reload. Open the
-same address in a second tab to check ownership. Close the database in the
-first tab, then retry in the second.
+Open `http://localhost:1420/`, create and edit a note, wait for the saved
+indicator, then hard reload. `pnpm dev` builds the worker Wasm before starting
+Vite. `pnpm build:browser` builds both Wasm and the static frontend. Tauri uses
+`pnpm dev:native` and keeps its existing native toolchain requirements.
+
+The app permits one owning tab per browser profile and origin. A second tab
+reports that the database is already open. Close the owner and reload the
+second tab to take ownership. Closing a tab before the editor acknowledges a
+save can still discard an edit that has not reached storage.
+
+At `/sqlite-proof/`, save a marker and reload to exercise the separate proof
+database. Its close button releases ownership without closing the tab.
 
 ```sh
 cargo test --locked --manifest-path src-tauri/Cargo.toml -p mindstream-storage-core
@@ -55,8 +67,10 @@ and [OPFS access-handle pool design](https://sqlite.org/wasm/doc/trunk/persisten
 The pool needs a secure context and a dedicated worker. It does not require
 COOP/COEP headers. There is no in-memory fallback after an OPFS failure.
 
-The proof uses `.mindstream-sqlite-proof` in the origin's private filesystem,
-with a separate `proof.sqlite3` database. It cannot open a native vault.
+The app uses `.mindstream-browser-vault/notes.sqlite3` in the origin's private
+filesystem. The proof uses `.mindstream-sqlite-proof/proof.sqlite3`. Neither can
+open a native vault. Fresh app databases receive the shared seed once. Emptying
+an existing vault does not seed it again.
 Browser storage belongs to the origin, so changing hostname, scheme, or port
 selects different storage. Clearing site data deletes it. Browser eviction
 policy and private browsing behavior still need product-level handling.
@@ -73,7 +87,10 @@ CRDT seed merging. Upgrade checks retain note content and asset hashes.
 Playwright checks reload persistence, explicit close and reopen, second-tab
 refusal, ownership transfer, and owner-tab termination. The transport unit
 tests cover response correlation, structured errors, validation, worker
-failure, timeout, and shutdown failure.
+failure, timeout, and shutdown failure. Real-app tests create and edit a note
+through the existing Svelte editor, reload with the HTTP cache disabled, close
+the tab, and reopen the note. They also verify folders, tags, favourites,
+attachment bytes, history, Yjs state, trash and restore, and owner-tab handoff.
 
 The production tests pass in Chromium and Firefox. The WebKit project uses a
 separate persistent profile per test because its temporary contexts disable
@@ -89,38 +106,36 @@ ships.
 ## Shared code
 
 `src-tauri/storage-core` has no Tauri dependency. It owns the canonical
-migrations, asset hash backfill, note models, note read queries, search queries
-and ranking, patch deserialization, and note and tag CRDT operations. Native
+migrations, note and folder mutations, attachment bookkeeping, history, local
+share permissions and scope changes, trash operations, signatures, PDF text,
+word counts, setup notes, search, and note and tag CRDT operations. Native
 modules forward to it and preserve their existing command signatures and
 structured error codes. Migration SQL and CRDT encodings stay the same.
 
-`src-tauri/browser-wasm` installs the browser VFS and exposes the proof's
-operations. `src/lib/browser` holds the dedicated worker, request protocol,
-validators, and asynchronous client. The proof page bypasses the main app
-layout so initializing the mock app cannot affect its storage checks.
+`src-tauri/browser-wasm` installs the browser VFS and exposes shared operations.
+Rust deserializes each request into `VaultRequest` before it can execute.
+`src/lib/browser` holds the typed command map, dedicated worker, and asynchronous
+client. `invokeOrFallback` routes supported browser operations to this client
+and applies the existing response validators. Browser file-byte helpers and
+setup note inserts use the same store. Saves resolve after the shared mutation
+commits. Storage failures propagate to the UI, with no fallback to memory.
 
-The proof's marker writes are test operations. They are not a substitute for
-porting the app's note mutation pipeline.
+The in-memory store remains available to unit tests and to the existing UI
+fixture suite with `VITE_BROWSER_MOCKS=1`. That flag is for disposable test
+builds. Normal browser development and browser builds use persistent storage.
+Browser application events use an in-process event bus; native commands and
+event delivery keep using Tauri.
 
 ## Remaining increments
 
-1. Move note and folder mutations, asset bookkeeping, history, and local share
-   state into the core. Keep read-only share guards, reference counting,
-   tombstones, and CRDT normalization in the same transaction boundaries.
-2. Define platform services for database creation, files, credentials, HTTP,
-   and application events. Native services retain OS file access, keyrings,
-   and Tauri event delivery. Browser services use OPFS, file pickers and
-   downloads, explicit session storage policy, fetch, and worker events.
-3. Extend the typed worker protocol to shared operations. Route
-   `invokeOrFallback` through a platform adapter, retain mocks only in tests,
-   and gate unsupported native commands and controls by capability.
-4. Port the vendored client's blocking HTTP calls and the app's blocking auth
+1. Complete platform services for native file integrations, browser downloads,
+   backups and recovery, credentials, and networking. Gate native-only
+   features in the browser UI.
+2. Port the vendored client's blocking HTTP calls and the app's blocking auth
    and sync entry points to async transport. Keep the Etebase ciphertext,
    MessagePack payloads, signatures, room keys, and Yjs update formats
    compatible. Add native-to-browser encrypted sync conformance tests before
-   enabling browser sign-in. Do not persist a plaintext saved session as a
-   shortcut for the OS keyring.
-5. Test shared mutations on both targets, run desktop and mobile regressions,
-   then add offline app loading, update handling, static-host deployment,
-   backup/export, and storage recovery. A successful SQLite proof alone does
-   not establish encrypted sync or a releasable browser app.
+   enabling browser sign-in.
+3. Add offline app loading, update handling, static-host deployment, storage
+   recovery, and desktop/mobile release validation. Local persistence does not
+   establish encrypted sync or a releasable browser app.

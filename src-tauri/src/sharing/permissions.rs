@@ -1,83 +1,20 @@
-//! Local write checks. Sync apply deliberately bypasses these user-mutation guards.
 use super::*;
-
-pub(crate) fn ensure_collection_writable(conn: &Connection, id: &str) -> AppResult<()> {
-    let denied: bool = conn.query_row(
-        "WITH RECURSIVE ancestors(id, parent_collection_id, share_scope_id, shared_role, shared_by_me) AS (
-            SELECT id, parent_collection_id, share_scope_id, shared_role, shared_by_me FROM collections WHERE id = ?1
-            UNION
-            SELECT c.id, c.parent_collection_id, c.share_scope_id, c.shared_role, c.shared_by_me
-            FROM collections c JOIN ancestors a ON a.parent_collection_id = c.id
-        )
-        SELECT EXISTS(SELECT 1 FROM ancestors a WHERE
-            (a.shared_role = 'read_only' AND a.shared_by_me = 0)
-            OR EXISTS(SELECT 1 FROM collections owner WHERE owner.share_scope_id = a.share_scope_id
-                AND owner.shared_role = 'read_only' AND owner.shared_by_me = 0))",
-        params![id], |r| r.get(0),
-    )?;
-    if denied {
-        return Err(AppError::InvalidArg(
-            "This shared folder is read-only".into(),
-        ));
-    }
-    Ok(())
+pub fn ensure_collection_writable(conn: &Connection, id: &str) -> AppResult<()> {
+    mindstream_storage_core::sharing::ensure_collection_writable(conn, id).map_err(Into::into)
 }
 
-pub(crate) fn ensure_parent_writable(conn: &Connection, parent: Option<&str>) -> AppResult<()> {
-    if let Some(id) = parent {
-        ensure_collection_writable(conn, id)?;
-    }
-    Ok(())
+pub fn ensure_parent_writable(conn: &Connection, parent: Option<&str>) -> AppResult<()> {
+    mindstream_storage_core::sharing::ensure_parent_writable(conn, parent).map_err(Into::into)
 }
 
-pub(crate) fn ensure_note_writable(conn: &Connection, id: &str) -> AppResult<()> {
-    let row: Option<(Option<String>, Option<String>)> = conn
-        .query_row(
-            "SELECT parent_collection_id, share_scope_id FROM notes WHERE id = ?1",
-            params![id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()?;
-    let Some((parent, scope)) = row else {
-        return Ok(());
-    };
-    ensure_parent_writable(conn, parent.as_deref())?;
-    if let Some(scope) = scope {
-        let denied: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM collections WHERE share_scope_id = ?1 AND shared_role = 'read_only' AND shared_by_me = 0)",
-            params![scope], |r| r.get(0),
-        )?;
-        if denied {
-            return Err(AppError::InvalidArg("This shared note is read-only".into()));
-        }
-    }
-    Ok(())
+pub fn ensure_note_writable(conn: &Connection, id: &str) -> AppResult<()> {
+    mindstream_storage_core::sharing::ensure_note_writable(conn, id).map_err(Into::into)
 }
 
-pub(crate) fn ensure_subtree_writable(conn: &Connection, id: &str) -> AppResult<()> {
-    ensure_collection_writable(conn, id)?;
-    let denied: bool = conn.query_row(
-        "WITH RECURSIVE subtree(id) AS (
-            SELECT id FROM collections WHERE id = ?1 UNION
-            SELECT c.id FROM collections c JOIN subtree s ON c.parent_collection_id = s.id
-        ) SELECT EXISTS(SELECT 1 FROM collections c JOIN subtree s ON c.id = s.id
-            WHERE (c.shared_role = 'read_only' AND c.shared_by_me = 0)
-            OR EXISTS(SELECT 1 FROM collections owner WHERE owner.share_scope_id = c.share_scope_id
-                AND owner.shared_role = 'read_only' AND owner.shared_by_me = 0))
-            OR EXISTS(SELECT 1 FROM notes n JOIN subtree s ON n.parent_collection_id = s.id
-                JOIN collections owner ON owner.share_scope_id = n.share_scope_id
-                WHERE owner.shared_role = 'read_only' AND owner.shared_by_me = 0)",
-        params![id],
-        |r| r.get(0),
-    )?;
-    if denied {
-        return Err(AppError::InvalidArg(
-            "This folder contains a read-only share".into(),
-        ));
-    }
-    Ok(())
+#[cfg(test)]
+pub fn ensure_subtree_writable(conn: &Connection, id: &str) -> AppResult<()> {
+    mindstream_storage_core::sharing::ensure_subtree_writable(conn, id).map_err(Into::into)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

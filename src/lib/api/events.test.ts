@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { emit, listen, TauriEventName } from './events';
 
 const { tauriEmit, tauriListen } = vi.hoisted(() => ({
@@ -30,8 +30,13 @@ describe('TauriEventName', () => {
 
 describe('Tauri event wrappers', () => {
   beforeEach(() => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
     tauriEmit.mockReset();
     tauriListen.mockReset();
+  });
+
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
   });
 
   it('emits typed event payloads through the enum name', () => {
@@ -55,4 +60,15 @@ describe('Tauri event wrappers', () => {
     );
     expect(handler).toHaveBeenCalledWith({ note_id: 'note_1' });
   });
+});
+
+it('delivers browser events and unsubscribes without native IPC', async () => {
+  delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+  const handler = vi.fn();
+  const unlisten = await listen(TauriEventName.TrayNoteCreated, handler);
+  await emit(TauriEventName.TrayNoteCreated, { note_id: 'persisted' });
+  expect(handler).toHaveBeenCalledWith({ note_id: 'persisted' });
+  unlisten();
+  await emit(TauriEventName.TrayNoteCreated, { note_id: 'later' });
+  expect(handler).toHaveBeenCalledTimes(1);
 });

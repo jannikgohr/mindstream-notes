@@ -77,6 +77,7 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 240_000,
     env: {
+      VITE_BROWSER_MOCKS: '1',
       FORCE_COLOR: '0',
       NODE_OPTIONS: '--max-old-space-size=4096'
     }
