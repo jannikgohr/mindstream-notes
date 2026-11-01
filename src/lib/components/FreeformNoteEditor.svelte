@@ -603,11 +603,14 @@
     return async () => {
       savingState = 'saving';
       try {
-        await apiSaveNote({
-          id: capturedNoteId,
-          body: '',
-          yrs_state: yrsState
-        });
+        await apiSaveNote(
+          {
+            id: capturedNoteId,
+            body: '',
+            yrs_state: yrsState
+          },
+          acknowledge.token
+        );
         acknowledge();
         const existing = tree.notesById[capturedNoteId];
         if (existing) {

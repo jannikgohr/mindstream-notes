@@ -1156,7 +1156,10 @@
       try {
         const captured = await renderSnapshot();
         if (isTrashed) return;
-        await apiSaveNote({ id: capturedNoteId, ...captured });
+        await apiSaveNote(
+          { id: capturedNoteId, ...captured },
+          acknowledge.token
+        );
         acknowledge();
         const existing = tree.notesById[capturedNoteId];
         if (existing) {

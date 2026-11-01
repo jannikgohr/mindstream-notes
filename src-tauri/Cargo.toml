@@ -18,7 +18,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # default member so its migrated tests run with the native regression suite.
 [workspace]
 members = [".", "plugin-runtime", "plugin-fixtures", "storage-core", "browser-wasm"]
+exclude = ["vendor/sqlite-wasm-vfs"]
 default-members = [".", "plugin-runtime", "storage-core"]
+
+[patch.crates-io]
+# Keep the compatible 0.2 ABI and repair single-connection hot-journal recovery.
+sqlite-wasm-vfs = { path = "vendor/sqlite-wasm-vfs" }
 
 [features]
 dev-environment = []

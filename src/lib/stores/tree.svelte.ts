@@ -199,8 +199,13 @@ export async function moveManyTo(
   return result;
 }
 
-export async function setNoteBody(id: string, body: string): Promise<void> {
-  await api.saveNote({ id, body });
+export async function setNoteBody(
+  id: string,
+  body: string,
+  recoveryToken?: string
+): Promise<void> {
+  if (recoveryToken) await api.saveNote({ id, body }, recoveryToken);
+  else await api.saveNote({ id, body });
   const existing = tree.notesById[id];
   if (existing) {
     tree.notesById[id] = { ...existing, modified: new Date().toISOString() };

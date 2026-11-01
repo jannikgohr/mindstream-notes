@@ -1510,7 +1510,7 @@
     const capturedNoteId = input.id;
     const acknowledge = captureBrowserAcknowledgement(capturedNoteId);
     return async () => {
-      await apiSaveNote(input);
+      await apiSaveNote(input, acknowledge.token);
       acknowledge();
       // Mirror the new modified timestamp in the local cache so the metadata
       // panel reflects the save without a tree refetch.

@@ -6,8 +6,17 @@ import type { UpdateNoteInput, Note } from '../api/notes';
 const PREFIX = 'mindstream:browser-vault:draft:v1:';
 const ARCHIVE = 'mindstream:browser-vault:recovery:v1:';
 type Draft = Pick<UpdateNoteInput, 'id' | 'body' | 'yrs_state'>;
-type DraftRecord = { id: string; body?: string; state?: string; base: string };
+type DraftRecord = {
+  id: string;
+  body?: string;
+  state?: string;
+  base: string;
+  parents?: string[];
+};
 const revisions = new Map<string, string>();
+const inFlight = new Map<string, { base: string; token: string }>();
+const captures = new Map<string, { id: string; base: string | undefined }>();
+export type RecoveryAcknowledgement = (() => void) & { token?: string };
 
 function enabled(): boolean {
   return (
@@ -40,8 +49,9 @@ export function rememberBrowserNote(value: unknown): void {
     typeof note.id === 'string' &&
     typeof note.body === 'string' &&
     Array.isArray(note.yrs_state)
-  )
+  ) {
     revisions.set(note.id, revision(note));
+  }
 }
 
 function encode(bytes: number[]): string {
@@ -62,6 +72,10 @@ function parseRecord(raw: string, key: string): DraftRecord {
     typeof draft.base !== 'string' ||
     (draft.body !== undefined && typeof draft.body !== 'string') ||
     (draft.state !== undefined && typeof draft.state !== 'string') ||
+    (draft.parents !== undefined &&
+      (!Array.isArray(draft.parents) ||
+        draft.parents.length > 16 ||
+        !draft.parents.every((parent) => typeof parent === 'string'))) ||
     (draft.body === undefined && draft.state === undefined)
   )
     throw new Error('Invalid browser note recovery data');
@@ -69,7 +83,8 @@ function parseRecord(raw: string, key: string): DraftRecord {
     id: draft.id,
     body: draft.body,
     state: draft.state,
-    base: draft.base
+    base: draft.base,
+    parents: draft.parents
   };
 }
 
@@ -90,6 +105,13 @@ export function checkpointBrowserNote(snapshot: () => Draft | null): void {
     state: draft.yrs_state === undefined ? undefined : encode(draft.yrs_state)
   };
   try {
+    const previous = localStorage.getItem(PREFIX + draft.id);
+    const prior = previous ? parseRecord(previous, PREFIX + draft.id) : null;
+    const active = inFlight.get(draft.id);
+    const parents = prior?.base === base ? (prior.parents ?? []) : [];
+    record.parents = [
+      ...new Set([...parents, ...(active?.base === base ? [active.token] : [])])
+    ].slice(-16);
     localStorage.setItem(PREFIX + draft.id, JSON.stringify(record));
   } catch (error) {
     recoveryStatus.unavailable = true;
@@ -97,28 +119,77 @@ export function checkpointBrowserNote(snapshot: () => Draft | null): void {
   }
 }
 
+/** Issue a receipt only for a captured editor save. Other content writes must
+ * invalidate earlier receipts, even if they write identical content. */
+export function beginBrowserWrite(
+  id: string,
+  token?: string
+): { token?: string; finish: () => void } {
+  const capture = token ? captures.get(token) : undefined;
+  if (!enabled() || !token || capture?.id !== id) return { finish: () => {} };
+  const base = revisions.get(id);
+  if (!base) return { finish: () => {} };
+  capture.base = base;
+  const active = { base, token };
+  inFlight.set(id, active);
+  try {
+    const raw = localStorage.getItem(PREFIX + id);
+    if (raw) {
+      const record = parseRecord(raw, PREFIX + id);
+      if (record.base === base) {
+        record.parents = [...new Set([...(record.parents ?? []), token])].slice(
+          -16
+        );
+        localStorage.setItem(PREFIX + id, JSON.stringify(record));
+      }
+    }
+  } catch {
+    recoveryStatus.unavailable = true;
+  }
+  return {
+    token,
+    finish: () => {
+      captures.delete(token);
+      if (inFlight.get(id) === active) inFlight.delete(id);
+    }
+  };
+}
+
 /** Capture before awaiting a save. An older acknowledgement leaves newer edits.
  * Rebase those edits onto this successful save, so replay recognizes their parent. */
-export function captureBrowserAcknowledgement(id: string): () => void {
+export function captureBrowserAcknowledgement(
+  id: string
+): RecoveryAcknowledgement {
   if (!enabled()) return () => {};
+  const capture = { id, base: revisions.get(id) };
   let raw: string | null;
   try {
     raw = localStorage.getItem(PREFIX + id);
   } catch {
     return () => {};
   }
-  return () => {
-    if (raw === null) return;
+  const token = crypto.randomUUID();
+  captures.set(token, capture);
+  const acknowledge = () => {
+    captures.delete(token);
     const current = localStorage.getItem(PREFIX + id);
-    if (current === raw) localStorage.removeItem(PREFIX + id);
-    else if (current) {
-      const captured = parseRecord(raw, PREFIX + id);
-      const newer = parseRecord(current, PREFIX + id);
-      const base = revisions.get(id);
-      if (base && newer.base === captured.base)
-        localStorage.setItem(PREFIX + id, JSON.stringify({ ...newer, base }));
+    if (!current) return;
+    const captured = raw ? parseRecord(raw, PREFIX + id) : null;
+    const newer = parseRecord(current, PREFIX + id);
+    // Parent bookkeeping does not represent a newer edit. Compare content too.
+    if (
+      captured &&
+      newer.body === captured.body &&
+      newer.state === captured.state
+    ) {
+      localStorage.removeItem(PREFIX + id);
+      return;
     }
+    const base = revisions.get(id);
+    if (base && newer.base === capture.base)
+      localStorage.setItem(PREFIX + id, JSON.stringify({ ...newer, base }));
   };
+  return Object.assign(acknowledge, { token });
 }
 
 function retain(key: string, raw: string, reason: string): void {
@@ -189,15 +260,41 @@ export async function recoverBrowserNotes(
         (draft.yrs_state === undefined ||
           JSON.stringify(draft.yrs_state) === JSON.stringify(note.yrs_state));
       if (!alreadySaved) {
-        if (note.trashed || record.base !== revision(note)) {
+        const savedRevision = revision(note);
+        const receipt =
+          record.base !== savedRevision && record.parents?.length
+            ? await connection.request('receipt', { id: draft.id })
+            : null;
+        if (
+          note.trashed ||
+          (record.base !== savedRevision &&
+            (!receipt || !record.parents?.includes(receipt)))
+        ) {
           retain(key, raw, note.trashed ? 'trashed' : 'conflict');
           continue;
         }
-        const saved = await connection.request('invoke', {
-          command: 'save_note',
-          args: { input: draft }
+        // Persist this replay's token before issuing it, too. The SQL trigger
+        // commits the receipt atomically with all backend normalization.
+        const token = crypto.randomUUID();
+        raw = JSON.stringify({
+          ...record,
+          base: savedRevision,
+          parents: [...(record.parents ?? []), token].slice(-16)
         });
-        rememberBrowserNote(saved);
+        localStorage.setItem(key, raw);
+        rememberBrowserNote(note);
+        const active = { base: savedRevision, token };
+        inFlight.set(draft.id, active);
+        try {
+          const saved = await connection.request('invoke', {
+            command: 'save_note',
+            args: { input: draft },
+            recoveryToken: token
+          });
+          rememberBrowserNote(saved);
+        } finally {
+          if (inFlight.get(draft.id) === active) inFlight.delete(draft.id);
+        }
       }
       if (localStorage.getItem(key) === raw) localStorage.removeItem(key);
     } catch (error) {

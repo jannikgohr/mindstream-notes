@@ -12,7 +12,13 @@ export interface ProofReport {
 
 export interface StorageMethods {
   open: { args: undefined | { scope: 'vault' }; result: void };
-  invoke: { args: BrowserRequest; result: unknown };
+  invoke: {
+    args: BrowserRequest & { recoveryToken?: string };
+    result: unknown;
+  };
+  receipt: { args: { id: string }; result: string | null };
+  prepareInterruptedWrite: { args: undefined; result: void };
+  checkInterruptedWrite: { args: undefined; result: number };
   verify: { args: undefined; result: ProofReport };
   read: { args: undefined; result: string | null };
   write: { args: { body: string }; result: void };
@@ -94,9 +100,17 @@ export function parseRequest(value: unknown): StorageRequest {
     throw new Error('Invalid storage request ID');
   }
   if (
-    !['open', 'invoke', 'verify', 'read', 'write', 'close'].includes(
-      request.method as string
-    )
+    ![
+      'open',
+      'invoke',
+      'receipt',
+      'prepareInterruptedWrite',
+      'checkInterruptedWrite',
+      'verify',
+      'read',
+      'write',
+      'close'
+    ].includes(request.method as string)
   ) {
     throw new Error('Unknown storage method');
   }
@@ -113,6 +127,22 @@ export function parseRequest(value: unknown): StorageRequest {
     ) {
       throw new Error('Invalid vault operation');
     }
+    if (
+      'recoveryToken' in request.args &&
+      request.args.recoveryToken !== undefined &&
+      (typeof request.args.recoveryToken !== 'string' ||
+        !request.args.recoveryToken.length ||
+        request.args.recoveryToken.length > 128)
+    )
+      throw new Error('Invalid save receipt');
+  } else if (request.method === 'receipt') {
+    if (
+      !request.args ||
+      typeof request.args !== 'object' ||
+      !('id' in request.args) ||
+      typeof request.args.id !== 'string'
+    )
+      throw new Error('receipt requires a note id');
   } else if (request.method === 'open') {
     if (
       request.args !== undefined &&
@@ -156,7 +186,10 @@ export function parseResult<K extends StorageMethod>(
     ) {
       throw new Error('Invalid SQLite proof response');
     }
-  } else if (method === 'read') {
+  } else if (method === 'checkInterruptedWrite') {
+    if (!Number.isSafeInteger(value) || (value as number) < 0)
+      throw new Error('Invalid interrupted-write report');
+  } else if (method === 'read' || method === 'receipt') {
     if (value !== null && typeof value !== 'string')
       throw new Error('Invalid marker response');
   } else if (value !== undefined && value !== null) {

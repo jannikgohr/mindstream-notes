@@ -3,7 +3,8 @@ import {
   checkpointBrowserNote,
   captureBrowserAcknowledgement,
   recoverBrowserNotes,
-  rememberBrowserNote
+  rememberBrowserNote,
+  beginBrowserWrite
 } from './recovery';
 import { recoveryStatus } from './recovery-status.svelte';
 import type { BrowserStorageClient } from './client';
@@ -62,7 +63,8 @@ describe('browser pending note recovery', () => {
       command: 'save_note',
       args: {
         input: { id: 'note', body: 'Immediate reload', yrs_state: [1, 2] }
-      }
+      },
+      recoveryToken: expect.any(String)
     });
     expect(raw()).toBeNull();
   });
@@ -81,6 +83,97 @@ describe('browser pending note recovery', () => {
     expect(recoveryStatus.copies).toHaveLength(0);
   });
 
+  it('recovers newer typing when an issued save committed before its acknowledgement', async () => {
+    const first = { ...original, body: 'first' };
+    checkpointBrowserNote(() => first);
+    const acknowledge = captureBrowserAcknowledgement('note');
+    const write = beginBrowserWrite('note', acknowledge.token);
+    checkpointBrowserNote(() => ({ ...original, body: 'second' }));
+    // A reload loses the in-memory acknowledgement; only the journal and DB remain.
+    write.finish();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ ...first, yrs_state: [99] })
+      .mockResolvedValueOnce(write.token)
+      .mockResolvedValueOnce({ ...first, body: 'second' });
+    await recoverBrowserNotes(connection(request));
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request.mock.calls[1]).toEqual(['receipt', { id: 'note' }]);
+    expect(request.mock.calls[2][1].args.input.body).toBe('second');
+    expect(recoveryStatus.copies).toHaveLength(0);
+  });
+
+  it('an issued write does not authorize overwriting unrelated saved content', async () => {
+    const first = { ...original, body: 'first' };
+    checkpointBrowserNote(() => first);
+    const acknowledge = captureBrowserAcknowledgement('note');
+    const write = beginBrowserWrite('note', acknowledge.token);
+    checkpointBrowserNote(() => ({ ...original, body: 'second' }));
+    write.finish();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce(null);
+    await recoverBrowserNotes(connection(request));
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(recoveryStatus.copies[0].reason).toBe('conflict');
+  });
+
+  it('rebases edits during an explicit save even if no checkpoint existed at capture', async () => {
+    const acknowledge = captureBrowserAcknowledgement('note');
+    checkpointBrowserNote(() => ({ ...original, body: 'second' }));
+    const first = { ...original, body: 'first' };
+    rememberBrowserNote(first);
+    acknowledge();
+    const request = requestWith(first);
+    await recoverBrowserNotes(connection(request));
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(recoveryStatus.copies).toHaveLength(0);
+  });
+
+  it('keeps a second editor save token when the first save acknowledges', async () => {
+    checkpointBrowserNote(() => ({ ...original, body: 'first snapshot' }));
+    const acknowledgeA = captureBrowserAcknowledgement('note');
+    const writeA = beginBrowserWrite('note', acknowledgeA.token);
+    checkpointBrowserNote(() => ({ ...original, body: 'newer snapshot' }));
+    const acknowledgeB = captureBrowserAcknowledgement('note');
+    const writeB = beginBrowserWrite('note', acknowledgeB.token);
+    rememberBrowserNote({ ...original, body: 'saved A' });
+    writeA.finish();
+    acknowledgeA();
+    checkpointBrowserNote(() => ({ ...original, body: 'newest typing' }));
+    writeB.finish();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ ...original, body: 'saved B' })
+      .mockResolvedValueOnce(writeB.token)
+      .mockResolvedValueOnce({ ...original, body: 'newest typing' });
+    await recoverBrowserNotes(connection(request));
+    expect(request.mock.calls[2][1].args.input.body).toBe('newest typing');
+    expect(recoveryStatus.copies).toHaveLength(0);
+  });
+
+  it('does not authorize receipts for independent or unknown-token writes', () => {
+    expect(beginBrowserWrite('note').token).toBeUndefined();
+    expect(beginBrowserWrite('note', 'unissued-token').token).toBeUndefined();
+    const acknowledge = captureBrowserAcknowledgement('note');
+    expect(
+      beginBrowserWrite('different-note', acknowledge.token).token
+    ).toBeUndefined();
+    acknowledge();
+  });
+
+  it('clears an acknowledged snapshot when only its issued-write bookkeeping changed', () => {
+    const first = { ...original, body: 'first' };
+    checkpointBrowserNote(() => first);
+    const acknowledge = captureBrowserAcknowledgement('note');
+    const write = beginBrowserWrite('note', acknowledge.token);
+    rememberBrowserNote(first);
+    acknowledge();
+    write.finish();
+    expect(raw()).toBeNull();
+  });
+
   it('clears only the checkpoint acknowledged by this save', () => {
     checkpointBrowserNote(() => ({ id: 'note', body: 'first' }));
     captureBrowserAcknowledgement('note')();
@@ -95,10 +188,13 @@ describe('browser pending note recovery', () => {
       .mockResolvedValueOnce(original)
       .mockRejectedValueOnce({ code: 'refused', reason: 'readOnly' });
     await recoverBrowserNotes(connection(request));
-    expect(recoveryStatus.copies).toEqual([
-      { key: prefix + 'note', raw: savedRaw, reason: 'refused' }
-    ]);
-    expect(Object.values(localStorage)).toContain(savedRaw);
+    const retained = recoveryStatus.copies[0];
+    expect(retained).toMatchObject({ key: prefix + 'note', reason: 'refused' });
+    expect(JSON.parse(retained.raw)).toMatchObject({
+      id: 'note',
+      body: JSON.parse(savedRaw!).body
+    });
+    expect(Object.values(localStorage)).toContain(retained.raw);
     expect(raw()).toBeNull();
   });
 

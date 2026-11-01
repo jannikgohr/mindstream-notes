@@ -1,12 +1,13 @@
 import * as Y from 'yjs';
+import type { RecoveryAcknowledgement } from '$lib/browser/recovery';
 import { createSaveScheduler } from '$lib/editor/save-scheduler';
 
 export function createInkSaveController(options: {
   canSave: () => boolean;
   checkpoint?: () => void;
-  captureAcknowledgement?: () => () => void;
+  captureAcknowledgement?: () => RecoveryAcknowledgement;
   encode: () => Uint8Array | null;
-  persist: (state: number[]) => Promise<void>;
+  persist: (state: number[], recoveryToken?: string) => Promise<void>;
   onStatus: (status: 'pending' | 'saving' | 'saved' | 'error') => void;
 }) {
   let updates: Uint8Array[] = [];
@@ -27,7 +28,7 @@ export function createInkSaveController(options: {
     return async () => {
       options.onStatus('saving');
       try {
-        await options.persist(state);
+        await options.persist(state, acknowledge?.token);
         acknowledge?.();
         options.onStatus(updates.length ? 'pending' : 'saved');
       } catch (error) {

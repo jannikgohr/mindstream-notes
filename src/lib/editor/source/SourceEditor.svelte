@@ -533,12 +533,12 @@
     view?.dispatch({ effects: setSourcePresence.of(presence) });
   }
 
-  /** Immediately flush a pending debounced edit to the doc (e.g. when the user
-   *  hands off to the WYSIWYG pane) so no trailing keystrokes are lost. */
+  /** Whether raw source edits have not reached the live document yet. */
   export function hasPendingInput(): boolean {
     return inputTimer !== null;
   }
 
+  /** Immediately flush a pending debounced edit to the live document. */
   export function flush(): void {
     if (!inputTimer) return;
     clearTimeout(inputTimer);

@@ -21,8 +21,8 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-Open `http://localhost:1420/`, create and edit a note, then hard reload. `pnpm dev` builds the worker Wasm before starting
-Vite. `pnpm build:browser` builds both Wasm and the static frontend. Tauri uses
+Open `http://localhost:1420/`, create and edit a note, then hard reload.
+`pnpm dev` builds the worker Wasm before starting Vite. `pnpm build:browser` builds both Wasm and the static frontend. Tauri uses
 `pnpm dev:native` and keeps its existing native toolchain requirements.
 
 The app permits one owning tab per browser profile and origin. A second tab
@@ -31,11 +31,15 @@ second tab to take ownership. Browser editors synchronously copy pending content
 into a localStorage recovery journal before their save debounce. The next owner
 replays that content into SQLite before reading the vault. Successful saves
 remove only their own recovery copy, preserving edits made while a save waits.
+Editor saves carry a token that SQLite commits in the same transaction as the
+note. Recovery can identify an earlier committed save even if its response was
+lost or the backend normalized the content. A later independent content write
+invalidates that token, including writes that restore identical content.
 Recovery never recreates purged notes or changes note metadata. Copies that
 conflict with newer saved content, fail validation, or cannot be written are
 retained separately, with a notice and a download action. They do not block
-opening other notes. The journal stores CRDT bytes as base64 to reduce quota use. It uses the
-same browser profile and origin as OPFS; clearing site data removes both stores.
+opening other notes. The journal stores CRDT bytes as base64 to reduce quota use.
+It uses the same browser profile and origin as OPFS; clearing site data removes both stores.
 If recovery storage is unavailable or full, SQLite saves still run, but pending
 edits need a save acknowledgement before closing the tab.
 
@@ -112,6 +116,15 @@ WebKit storage remains unverified. See the
 Safari on real devices, mobile browsers, storage exhaustion, and
 interrupted-write recovery need further validation before browser support
 ships.
+
+The pinned VFS is patched locally in `src-tauri/vendor/sqlite-wasm-vfs`.
+Its upstream reserved-lock callback always reports a competing connection,
+which prevents hot-journal rollback after an interrupted write. The patch uses
+the app's one-connection-per-file rule to permit recovery and flushes pool
+filename metadata. A deterministic browser test forces cache spill, terminates
+the worker inside an uncommitted transaction, and checks that all 300 original
+rows are restored. See the [upstream report](https://sqlite.org/forum/info/ccf76ca4225ab38f)
+and the vendored `PATCHES.md` before updating this dependency.
 
 ## Shared code
 

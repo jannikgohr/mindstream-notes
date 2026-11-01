@@ -593,8 +593,8 @@
     captureAcknowledgement: () => captureBrowserAcknowledgement(noteId),
     canSave: () => !isTrashed,
     encode: () => doc?.encode() ?? null,
-    persist: async (state) => {
-      await drawingSaveInkState(noteId, state);
+    persist: async (state, recoveryToken) => {
+      await drawingSaveInkState(noteId, state, recoveryToken);
       if (allowPageEditing && !upgradingBackgrounds)
         void indexInkNote(noteId).catch((error) =>
           console.warn('[ink] indexing failed', error)

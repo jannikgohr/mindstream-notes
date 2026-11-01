@@ -238,6 +238,74 @@ test('handwritten strokes persist through normal saves and an immediate reload',
   await expect.poll(strokeCount).toBe(2);
 });
 
+test('new typing restores when reload interrupts the acknowledgement of an earlier committed save', async ({
+  page
+}) => {
+  const note = (await rpc(page, 'list_notes', {})).find(
+    (note) => note.title === 'Welcome'
+  )!;
+  await page
+    .getByRole('group', { name: 'File tree' })
+    .getByRole('button', { name: 'Welcome', exact: true })
+    .click();
+  const editor = page.locator('.ProseMirror').first();
+  await expect(editor).toBeVisible();
+  await page.evaluate(() => {
+    const state = window as unknown as {
+      vaultWorker: Worker;
+      heldSaveCommitted?: boolean;
+    };
+    const worker = state.vaultWorker;
+    const originalSend = worker.postMessage.bind(worker);
+    const originalReceive = worker.onmessage;
+    let heldId: number | undefined;
+    worker.postMessage = (message: {
+      id: number;
+      method: string;
+      args?: { command?: string };
+    }) => {
+      if (
+        !heldId &&
+        message.method === 'invoke' &&
+        message.args?.command === 'save_note'
+      )
+        heldId = message.id;
+      originalSend(message);
+    };
+    // The real worker commits normally. Only its client acknowledgement is held.
+    worker.onmessage = (event) => {
+      if (event.data.id === heldId) {
+        state.heldSaveCommitted = true;
+        return;
+      }
+      originalReceive?.call(worker, event);
+    };
+  });
+  await editor.fill('First committed save');
+  await page.waitForFunction(
+    () =>
+      (window as unknown as { heldSaveCommitted?: boolean }).heldSaveCommitted
+  );
+  expect((await rpc(page, 'load_note', { id: note.id })).body).toContain(
+    'First committed save'
+  );
+  await editor.fill('Second edit before the first acknowledgement');
+  await page.reload();
+  await page
+    .getByRole('group', { name: 'File tree' })
+    .getByRole('button', { name: 'Welcome', exact: true })
+    .click();
+  await expect(editor).toContainText(
+    'Second edit before the first acknowledgement'
+  );
+  expect((await rpc(page, 'load_note', { id: note.id })).body).toContain(
+    'Second edit before the first acknowledgement'
+  );
+  await expect(
+    page.getByRole('button', { name: 'Download recovery copy', exact: true })
+  ).toHaveCount(0);
+});
+
 test('a corrupt recovery entry keeps the vault usable and offers a retained copy', async ({
   page
 }) => {

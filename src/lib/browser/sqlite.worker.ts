@@ -6,7 +6,10 @@ import {
 } from './protocol';
 
 interface WasmDatabase {
-  invoke(request: unknown): unknown;
+  invoke(request: unknown, recoveryToken?: string): unknown;
+  receipt(noteId: string): string | undefined;
+  prepare_interrupted_write(): void;
+  check_interrupted_write(): number;
   verify(): unknown;
   write(body: string): void;
   read(): string | undefined;
@@ -94,12 +97,21 @@ async function handle(request: StorageRequest): Promise<unknown> {
       };
     scope = requestedScope;
   }
-  if (request.method === 'invoke' && scope !== 'vault')
+  if (['invoke', 'receipt'].includes(request.method) && scope !== 'vault')
     throw {
       code: 'invalidArgument',
       message: 'Vault storage has not been opened'
     };
-  if (['verify', 'read', 'write'].includes(request.method) && scope !== 'proof')
+  if (
+    [
+      'verify',
+      'read',
+      'write',
+      'prepareInterruptedWrite',
+      'checkInterruptedWrite'
+    ].includes(request.method) &&
+    scope !== 'proof'
+  )
     throw {
       code: 'invalidArgument',
       message: 'Proof operations require proof storage'
@@ -120,7 +132,21 @@ async function handle(request: StorageRequest): Promise<unknown> {
     case 'invoke':
       // Match Tauri's JSON arguments: undefined object fields are omitted,
       // while null remains an explicit clear for partial note updates.
-      return database.invoke(JSON.parse(JSON.stringify(request.args)));
+      return database.invoke(
+        JSON.parse(
+          JSON.stringify({
+            command: request.args.command,
+            args: request.args.args
+          })
+        ),
+        request.args.recoveryToken
+      );
+    case 'receipt':
+      return database.receipt(request.args.id) ?? null;
+    case 'prepareInterruptedWrite':
+      return database.prepare_interrupted_write();
+    case 'checkInterruptedWrite':
+      return database.check_interrupted_write();
     case 'verify':
       return database.verify();
     case 'read':
