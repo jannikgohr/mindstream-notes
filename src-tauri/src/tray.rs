@@ -11,6 +11,7 @@ use crate::{
     app_events::AppEvent,
     db::Db,
     desktop_settings::DesktopSettings,
+    environment::{self, Kind},
     hotkeys::GlobalShortcutCommandId,
     i18n,
     notes::{self, CreateNote, NoteKind},
@@ -26,6 +27,8 @@ const NEW_INK_ID: &str = "new_ink";
 const NEW_DIAGRAM_ID: &str = "new_diagram";
 const QUIT_ID: &str = "quit";
 const VAULT_ID: &str = "active_vault";
+const DEV_ID: &str = "dev_environment";
+const DEV_NAME: &str = "Mindstream Notes Dev";
 
 // Direct-mode windows publish accelerator hints through the frontend. The
 // coordinator tray has no editor-local binding cache and leaves these unset.
@@ -41,6 +44,8 @@ struct TrayNoteCreatedPayload {
 }
 
 struct TrayMenuItems {
+    #[cfg(target_os = "linux")]
+    dev: Option<IconMenuItem<tauri::Wry>>,
     vault: IconMenuItem<tauri::Wry>,
     vault_label: Mutex<String>,
     new_note: IconMenuItem<tauri::Wry>,
@@ -51,6 +56,23 @@ struct TrayMenuItems {
 }
 
 pub fn init(app: &App) -> tauri::Result<()> {
+    let kind = app
+        .try_state::<environment::Environment>()
+        .map(|environment| environment.kind)
+        .unwrap_or_else(environment::kind);
+    let icon = app.default_window_icon().map(|icon| tray_icon(icon, kind));
+    let dev = if kind == Kind::Dev {
+        Some(IconMenuItem::with_id(
+            app,
+            DEV_ID,
+            DEV_NAME,
+            false,
+            icon.clone(),
+            None::<&str>,
+        )?)
+    } else {
+        None
+    };
     let language_code = app
         .try_state::<DesktopSettings>()
         .map(|settings| settings.language_code())
@@ -113,11 +135,19 @@ pub fn init(app: &App) -> tauri::Result<()> {
             &quit,
         ],
     )?;
+    if let Some(dev) = &dev {
+        menu.prepend(&PredefinedMenuItem::separator(app)?)?;
+        menu.prepend(dev)?;
+    }
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .tooltip("Mindstream Notes")
+        .tooltip(if kind == Kind::Dev {
+            DEV_NAME
+        } else {
+            "Mindstream Notes"
+        })
         .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
         .on_tray_icon_event(|tray, event| {
             if matches!(
@@ -140,11 +170,13 @@ pub fn init(app: &App) -> tauri::Result<()> {
             }
         });
 
-    if let Some(icon) = app.default_window_icon() {
-        builder = builder.icon(icon.clone());
+    if let Some(icon) = icon {
+        builder = builder.icon(icon);
     }
 
     app.manage(TrayMenuItems {
+        #[cfg(target_os = "linux")]
+        dev,
         vault,
         vault_label: Mutex::new(labels.no_active_vault),
         new_note: new_note.clone(),
@@ -158,6 +190,37 @@ pub fn init(app: &App) -> tauri::Result<()> {
     sync_platform_menu(app.handle());
     sync_vault_name(app.handle());
     Ok(())
+}
+
+fn tray_icon(icon: &Image<'_>, kind: Kind) -> Image<'static> {
+    let mut rgba = icon.rgba().to_vec();
+    if kind == Kind::Dev {
+        // Draw an amber D badge in the bottom-right corner, using a 32px grid
+        // so the mark scales with the platform's default window icon.
+        let letter = [
+            0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110,
+        ];
+        for y in 0..icon.height() {
+            for x in 0..icon.width() {
+                let bx = x * 32 / icon.width();
+                let by = y * 32 / icon.height();
+                if bx < 18 || by < 18 {
+                    continue;
+                }
+                let is_letter = (22..27).contains(&bx)
+                    && (21..28).contains(&by)
+                    && letter[(by - 21) as usize] & (1 << (26 - bx)) != 0;
+                let color = if is_letter {
+                    [24, 24, 24, 255]
+                } else {
+                    [245, 158, 11, 255]
+                };
+                let offset = ((y * icon.width() + x) * 4) as usize;
+                rgba[offset..offset + 4].copy_from_slice(&color);
+            }
+        }
+    }
+    Image::new_owned(rgba, icon.width(), icon.height())
 }
 
 fn icon_item(
@@ -493,6 +556,31 @@ impl TrayLabels {
             new_ink: i18n::t_ui(code, "tray.newInk"),
             new_diagram: i18n::t_ui(code, "tray.newDiagram"),
             quit: i18n::t_ui(code, "tray.quit"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_dev_tray_icons_get_a_badge() {
+        for size in [16, 32, 128, 512] {
+            let icon = Image::new_owned(vec![255; size * size * 4], size as u32, size as u32);
+            for kind in [Kind::Release, Kind::Test] {
+                assert_eq!(tray_icon(&icon, kind).rgba(), icon.rgba());
+            }
+            let dev = tray_icon(&icon, Kind::Dev);
+            assert_eq!((dev.width(), dev.height()), (icon.width(), icon.height()));
+            let pixel = |x: usize, y: usize| {
+                let offset = (y * size / 32 * size + x * size / 32) * 4;
+                &dev.rgba()[offset..offset + 4]
+            };
+            assert_eq!(pixel(0, 0), [255; 4]);
+            assert_eq!(pixel(16, 24), [255; 4]);
+            assert_eq!(pixel(30, 30), [245, 158, 11, 255]);
+            assert_eq!(pixel(22, 24), [24, 24, 24, 255]);
         }
     }
 }
