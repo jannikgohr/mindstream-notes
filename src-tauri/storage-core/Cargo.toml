@@ -1,0 +1,26 @@
+[package]
+name = "mindstream-storage-core"
+version = "0.2.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[features]
+storage-proof = []
+test-support = []
+
+[dependencies]
+rusqlite = "=0.39.0"
+thiserror = "2"
+log = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["clock", "wasmbind"] }
+sha2 = "0.10"
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+yrs = "0.26"
+similar = "3"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rusqlite = { version = "=0.39.0", features = ["bundled"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }

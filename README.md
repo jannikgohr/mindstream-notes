@@ -70,6 +70,10 @@ pnpm dev          # the UI in a browser, on an in-memory mock store
 pnpm tauri-dev    # the desktop app
 ```
 
+The [browser SQLite proof](docs/internal/browser-support.md) runs the real Rust
+migrations in a worker with OPFS persistence. It is the first increment toward
+browser support.
+
 [docs/BUILDING.md](docs/BUILDING.md) has the per-OS prerequisites and release
 builds, and [CONTRIBUTING.md](CONTRIBUTING.md) the commit conventions, hooks and
 tests. Architecture, design notes and test docs are in the
