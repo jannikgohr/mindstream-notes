@@ -1,6 +1,11 @@
 {
   "language": "en",
   "ui": {
+    "browser.testing.label": "Browser testing",
+    "browser.testing.vault": "Test vault: {id}",
+    "browser.testing.reset": "Reset test data",
+    "browser.testing.resetting": "Resetting test data…",
+    "browser.testing.failed": "Could not reset test data. Reload and try again.",
     "browser.recovery.retained": "Some pending edits could not be restored. Download a recovery copy to keep them.",
     "browser.recovery.unavailable": "Pending edits cannot be backed up. Wait for the saved indicator before closing this tab.",
     "browser.recovery.download": "Download recovery copy",

@@ -52,7 +52,12 @@
     "build:wasm": "node scripts/browser/build-wasm.mjs",
     "test:sqlite": "pnpm build:wasm && node e2e-tests/browser/playwright.cjs test --config e2e-tests/sqlite/playwright.config.ts",
     "dev:native": "vite dev",
-    "build:browser": "pnpm build:wasm && vite build"
+    "build:browser": "pnpm build:wasm && vite build",
+    "dev:fixtures": "node scripts/browser/run.mjs fixtures dev",
+    "dev:qa": "node scripts/browser/run.mjs qa dev",
+    "build:fixtures": "node scripts/browser/run.mjs fixtures build",
+    "build:qa": "node scripts/browser/run.mjs qa build",
+    "test:qa": "node e2e-tests/browser/playwright.cjs test --config e2e-tests/qa/playwright.config.ts"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.0.1",

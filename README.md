@@ -67,6 +67,8 @@ start:
 ```shell
 pnpm install      # also installs the git hooks
 pnpm dev          # the browser app, with worker SQLite in OPFS
+pnpm dev:fixtures # disposable UI fixtures; no Wasm build
+pnpm dev:qa       # isolated SQLite test vault, with Reset test data
 pnpm tauri-dev    # the desktop app
 ```
 

@@ -1,3 +1,4 @@
+import { vaultNamespace } from './namespace';
 import {
   parseRequest,
   storageError,
@@ -21,6 +22,7 @@ interface WasmModule {
   BrowserDatabase: {
     open(): Promise<WasmDatabase>;
     open_vault(): Promise<WasmDatabase>;
+    open_test_vault(id: string): Promise<WasmDatabase>;
   };
 }
 
@@ -32,9 +34,10 @@ const worker = self as unknown as {
 };
 let database: WasmDatabase | undefined;
 let scope: 'proof' | 'vault' = 'proof';
+let testId: string | undefined;
 let releaseOwnership: (() => void) | undefined;
 
-async function open() {
+async function open(reset = false) {
   if (database) return;
   if (
     !worker.isSecureContext ||
@@ -51,7 +54,9 @@ async function open() {
   await new Promise<void>((resolve, reject) => {
     void worker.navigator.locks
       .request(
-        `mindstream:sqlite-${scope}:pool`,
+        scope === 'vault'
+          ? vaultNamespace(testId).lock
+          : 'mindstream:sqlite-proof:pool',
         { mode: 'exclusive', ifAvailable: true },
         async (lock) => {
           if (!lock) {
@@ -71,6 +76,18 @@ async function open() {
       .catch(reject);
   });
   try {
+    if (reset) {
+      if (!testId) throw new Error('Only a test vault can be reset');
+      const root = await worker.navigator.storage.getDirectory();
+      try {
+        await root.removeEntry(vaultNamespace(testId).directory, {
+          recursive: true
+        });
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === 'NotFoundError'))
+          throw error;
+      }
+    }
     const moduleUrl = new URL(
       `${import.meta.env.BASE_URL}browser-wasm/storage.js`,
       self.location.origin
@@ -78,7 +95,9 @@ async function open() {
     const wasm = (await import(/* @vite-ignore */ moduleUrl)) as WasmModule;
     await wasm.default();
     database = await (scope === 'vault'
-      ? wasm.BrowserDatabase.open_vault()
+      ? testId
+        ? wasm.BrowserDatabase.open_test_vault(testId)
+        : wasm.BrowserDatabase.open_vault()
       : wasm.BrowserDatabase.open());
   } catch (error) {
     releaseOwnership?.();
@@ -88,14 +107,31 @@ async function open() {
 }
 
 async function handle(request: StorageRequest): Promise<unknown> {
+  if (request.method === 'resetTestVault') {
+    // Reset is performed by a fresh worker, holding the test pool lock before
+    // removing any files. It never opens or deletes the normal/proof pools.
+    if (database || releaseOwnership)
+      throw {
+        code: 'invalidArgument',
+        message: 'Reset requires a fresh storage worker'
+      };
+    scope = 'vault';
+    testId = request.args.testId;
+    await open(true);
+    return;
+  }
   if (request.method === 'open') {
     const requestedScope = request.args?.scope ?? 'proof';
-    if (database && scope !== requestedScope)
+    if (
+      database &&
+      (scope !== requestedScope || testId !== request.args?.testId)
+    )
       throw {
         code: 'invalidArgument',
         message: 'Storage scope cannot change while open'
       };
     scope = requestedScope;
+    testId = request.args?.testId;
   }
   if (['invoke', 'receipt'].includes(request.method) && scope !== 'vault')
     throw {

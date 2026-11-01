@@ -1,6 +1,11 @@
 {
   "language": "de",
   "ui": {
+    "browser.testing.label": "Browsertests",
+    "browser.testing.vault": "Test-Tresor: {id}",
+    "browser.testing.reset": "Testdaten zurücksetzen",
+    "browser.testing.resetting": "Testdaten werden zurückgesetzt…",
+    "browser.testing.failed": "Testdaten konnten nicht zurückgesetzt werden. Lade die Seite neu und versuche es erneut.",
     "browser.recovery.retained": "Einige ausstehende Änderungen konnten nicht wiederhergestellt werden. Lade eine Wiederherstellungskopie herunter, um sie zu behalten.",
     "browser.recovery.unavailable": "Ausstehende Änderungen können nicht gesichert werden. Warte vor dem Schließen dieses Tabs auf die Speicherbestätigung.",
     "browser.recovery.download": "Wiederherstellungskopie herunterladen",
