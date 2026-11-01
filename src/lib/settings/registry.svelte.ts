@@ -202,6 +202,10 @@ export const CUSTOM_COMPONENT_LOADERS: Record<string, CustomComponentLoader> = {
   'spellcheck-custom-words': () =>
     import('./customs/SpellcheckCustomWords.svelte').then(
       (mod) => mod.default as unknown as AnyComponent
+    ),
+  'freeform-embed-hosts': () =>
+    import('./customs/FreeformEmbedHosts.svelte').then(
+      (mod) => mod.default as unknown as AnyComponent
     )
 };
 

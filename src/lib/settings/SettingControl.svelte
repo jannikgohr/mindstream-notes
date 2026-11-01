@@ -150,7 +150,7 @@
 </script>
 
 <div class="grid grid-cols-[1fr_auto] items-start gap-x-4 gap-y-2 py-3">
-  <div class="min-w-0">
+  <div class="min-w-0" class:col-span-2={setting.type === 'custom'}>
     <div class="flex items-center gap-2">
       <span class="text-sm font-medium">{label}</span>
       {#if modified}
@@ -245,7 +245,10 @@
   </div>
 
   <!-- Right-side compact controls -->
-  <div class="flex items-center gap-2 pt-0.5">
+  <div
+    class="flex items-center gap-2 pt-0.5"
+    class:hidden={setting.type === 'custom'}
+  >
     {#if pending}
       <Loader2
         class="size-3.5 animate-spin text-muted-foreground"
