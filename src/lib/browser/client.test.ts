@@ -103,6 +103,29 @@ describe('worker transport', () => {
 });
 
 describe('worker protocol validation', () => {
+  it('validates save receipt requests and responses', () => {
+    expect(
+      parseRequest({ id: 1, method: 'receipt', args: { id: 'note' } })
+    ).toMatchObject({ method: 'receipt' });
+    expect(() =>
+      parseRequest({ id: 1, method: 'receipt', args: { id: 7 } })
+    ).toThrow();
+    expect(() =>
+      parseRequest({
+        id: 1,
+        method: 'invoke',
+        args: {
+          command: 'save_note',
+          args: { input: { id: 'note' } },
+          recoveryToken: 7
+        }
+      })
+    ).toThrow();
+    expect(parseResult('receipt', 'write-token')).toBe('write-token');
+    expect(parseResult('receipt', null)).toBeNull();
+    expect(() => parseResult('receipt', {})).toThrow();
+  });
+
   it('rejects unrecognized methods and invalid write payloads', () => {
     expect(() =>
       parseRequest({ id: 1, method: 'execute_sql', args: 'DROP TABLE notes' })

@@ -724,7 +724,7 @@
     const capturedSource = source;
     const acknowledge = captureBrowserAcknowledgement(capturedNoteId);
     return async () => {
-      await setNoteBody(capturedNoteId, capturedSource);
+      await setNoteBody(capturedNoteId, capturedSource, acknowledge.token);
       acknowledge();
     };
   }

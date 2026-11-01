@@ -95,3 +95,46 @@ test('closing the owning tab releases the worker lock and OPFS handles', async (
   await second.getByRole('button', { name: 'Retry opening' }).click();
   await expect(second.getByRole('status')).toHaveText('Ready');
 });
+
+test('a terminated worker rolls back cache-spilled uncommitted pages from its hot journal', async ({
+  page
+}) => {
+  await page.addInitScript(() => {
+    const Original = window.Worker;
+    window.Worker = class extends Original {
+      postMessage(message: unknown, options?: StructuredSerializeOptions) {
+        const request = message as { method?: string; args?: unknown };
+        if (request.method === 'open' && request.args === undefined)
+          (window as unknown as { proofWorker: Worker }).proofWorker = this;
+        super.postMessage(message, options);
+      }
+    };
+  });
+  await ready(page);
+  const request = async (
+    method: 'prepareInterruptedWrite' | 'checkInterruptedWrite'
+  ) =>
+    page.evaluate(async (method) => {
+      const worker = (window as unknown as { proofWorker: Worker }).proofWorker;
+      const id = 100000 + Math.floor(Math.random() * 100000);
+      return new Promise<number | undefined>((resolve, reject) => {
+        const receive = (event: MessageEvent) => {
+          if (event.data.id !== id) return;
+          worker.removeEventListener('message', receive);
+          if (event.data.ok) resolve(event.data.result);
+          else reject(event.data.error);
+        };
+        worker.addEventListener('message', receive);
+        worker.postMessage({ id, method, args: undefined });
+      });
+    }, method);
+  await request('prepareInterruptedWrite');
+  // The transaction is still open and has spilled dirty database pages. Do not
+  // call close, which would roll it back normally, or wait for a commit.
+  await page.evaluate(() =>
+    (window as unknown as { proofWorker: Worker }).proofWorker.terminate()
+  );
+  await page.reload();
+  await expect(page.getByRole('status')).toHaveText('Ready');
+  expect(await request('checkInterruptedWrite')).toBe(300);
+});

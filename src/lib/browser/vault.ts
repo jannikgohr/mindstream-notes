@@ -1,5 +1,9 @@
 import { BrowserStorageClient } from './client';
-import { recoverBrowserNotes, rememberBrowserNote } from './recovery';
+import {
+  recoverBrowserNotes,
+  rememberBrowserNote,
+  beginBrowserWrite
+} from './recovery';
 import type { BrowserCommand, BrowserRequest } from './commands';
 
 // The healthy connection, if any. Set only after a successful open so a failed
@@ -41,22 +45,38 @@ export async function invokeBrowser(
   const connection = await connect();
   // The IPC adapter retains its existing validators. Rust deserializes this
   // request into VaultRequest before any query or mutation can execute.
-  const result = await connection.request('invoke', {
-    command,
-    args
-  } as BrowserRequest);
-  rememberBrowserNote(result);
-  if (command === 'drawing_save_ink_state') {
-    // The native-compatible ink command returns void. Read its merged state so
-    // a concurrent pending checkpoint can be based on the acknowledged content.
-    rememberBrowserNote(
-      await connection.request('invoke', {
-        command: 'load_note',
-        args: { id: args.noteId as string }
-      })
-    );
+  const { recoveryToken, ...operationArgs } = args;
+  const writeId =
+    command === 'save_note'
+      ? (args.input as { id?: string } | undefined)?.id
+      : command === 'drawing_save_ink_state'
+        ? (args.noteId as string)
+        : undefined;
+  const write =
+    writeId && typeof recoveryToken === 'string'
+      ? beginBrowserWrite(writeId, recoveryToken)
+      : { finish: () => {}, token: undefined };
+  try {
+    const result = await connection.request('invoke', {
+      command,
+      args: operationArgs,
+      ...(write.token ? { recoveryToken: write.token } : {})
+    } as BrowserRequest & { recoveryToken?: string });
+    rememberBrowserNote(result);
+    if (command === 'drawing_save_ink_state') {
+      // The native-compatible ink command returns void. Read its merged state so
+      // a concurrent pending checkpoint can be based on the acknowledged content.
+      rememberBrowserNote(
+        await connection.request('invoke', {
+          command: 'load_note',
+          args: { id: args.noteId as string }
+        })
+      );
+    }
+    return result;
+  } finally {
+    write.finish();
   }
-  return result;
 }
 
 if (import.meta.hot) {
