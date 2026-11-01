@@ -18,6 +18,10 @@ serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 yrs = "0.26"
 similar = "3"
+regex = "1"
+flate2 = "1"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4", "js"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rusqlite = { version = "=0.39.0", features = ["bundled"] }

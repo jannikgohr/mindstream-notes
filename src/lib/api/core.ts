@@ -1,4 +1,5 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
+import { browserStorageEnabled, isBrowserCommand } from '../browser/commands';
 
 export enum CommandErrorCode {
   Database = 'database',
@@ -230,7 +231,13 @@ export async function invokeOrFallback<T>(
   fallback: () => T | Promise<T>,
   validate: IpcValidator<T>
 ): Promise<T> {
-  if (!isTauri()) return await fallback();
+  if (!isTauri()) {
+    if (browserStorageEnabled() && isBrowserCommand(command)) {
+      const { invokeBrowser } = await import('../browser/vault');
+      return validate(await invokeBrowser(command, args));
+    }
+    return await fallback();
+  }
   return validate(await tauriInvoke<unknown>(command, args));
 }
 

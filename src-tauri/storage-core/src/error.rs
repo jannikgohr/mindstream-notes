@@ -2,6 +2,13 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum AppError {
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("{message}")]
+    Refused {
+        reason: &'static str,
+        message: String,
+    },
     #[error("not found: {0}")]
     NotFound(String),
     #[error("database error: {0}")]

@@ -1,3 +1,4 @@
+import { isBrowserCommand, type BrowserRequest } from './commands';
 export interface ProofReport {
   schemaVersion: number;
   upgrades: number;
@@ -10,7 +11,8 @@ export interface ProofReport {
 }
 
 export interface StorageMethods {
-  open: { args: undefined; result: void };
+  open: { args: undefined | { scope: 'vault' }; result: void };
+  invoke: { args: BrowserRequest; result: unknown };
   verify: { args: undefined; result: ProofReport };
   read: { args: undefined; result: string | null };
   write: { args: { body: string }; result: void };
@@ -27,6 +29,9 @@ export type StorageRequest = {
 }[StorageMethod];
 
 export type StorageErrorCode =
+  | 'io'
+  | 'notFound'
+  | 'refused'
   | 'database'
   | 'databaseBusy'
   | 'unsupported'
@@ -38,6 +43,7 @@ export type StorageErrorCode =
 export interface StorageError {
   code: StorageErrorCode;
   message: string;
+  reason?: string;
 }
 
 export type StorageResponse =
@@ -45,6 +51,9 @@ export type StorageResponse =
   | { id: number; ok: false; error: StorageError };
 
 const errorCodes = new Set<StorageErrorCode>([
+  'io',
+  'notFound',
+  'refused',
   'database',
   'databaseBusy',
   'unsupported',
@@ -63,7 +72,13 @@ export function storageError(error: unknown): StorageError {
     'message' in error &&
     typeof error.message === 'string'
   ) {
-    return { code: error.code as StorageErrorCode, message: error.message };
+    return {
+      code: error.code as StorageErrorCode,
+      message: error.message,
+      ...('reason' in error && typeof error.reason === 'string'
+        ? { reason: error.reason }
+        : {})
+    };
   }
   return {
     code: 'worker',
@@ -79,13 +94,35 @@ export function parseRequest(value: unknown): StorageRequest {
     throw new Error('Invalid storage request ID');
   }
   if (
-    !['open', 'verify', 'read', 'write', 'close'].includes(
+    !['open', 'invoke', 'verify', 'read', 'write', 'close'].includes(
       request.method as string
     )
   ) {
     throw new Error('Unknown storage method');
   }
-  if (request.method === 'write') {
+  if (request.method === 'invoke') {
+    if (
+      !request.args ||
+      typeof request.args !== 'object' ||
+      !('command' in request.args) ||
+      !isBrowserCommand(request.args.command) ||
+      !('args' in request.args) ||
+      !request.args.args ||
+      typeof request.args.args !== 'object' ||
+      Array.isArray(request.args.args)
+    ) {
+      throw new Error('Invalid vault operation');
+    }
+  } else if (request.method === 'open') {
+    if (
+      request.args !== undefined &&
+      (!request.args ||
+        typeof request.args !== 'object' ||
+        !('scope' in request.args) ||
+        request.args.scope !== 'vault')
+    )
+      throw new Error('Invalid storage scope');
+  } else if (request.method === 'write') {
     if (
       !request.args ||
       typeof request.args !== 'object' ||
@@ -104,6 +141,7 @@ export function parseResult<K extends StorageMethod>(
   method: K,
   value: unknown
 ): StorageMethods[K]['result'] {
+  if (method === 'invoke') return value as StorageMethods[K]['result'];
   if (method === 'verify') {
     const r = value as Partial<ProofReport> | null;
     if (
