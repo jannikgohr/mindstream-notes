@@ -71,6 +71,27 @@ describe('persistent browser API routing', () => {
     expect(browserInvoke).not.toHaveBeenCalled();
   });
 
+  it('routes ink saves to the persistent worker instead of mock state', async () => {
+    const fallback = vi.fn();
+    browserInvoke.mockResolvedValueOnce(null);
+    await expect(
+      invokeOrFallback(
+        TauriCommandName.DrawingSaveInkState,
+        { noteId: 'ink', yrsState: [1, 2, 3] },
+        fallback,
+        (value) => {
+          if (value !== null) throw new Error('save must not return a value');
+        }
+      )
+    ).resolves.toBeUndefined();
+    expect(browserInvoke).toHaveBeenCalledWith('drawing_save_ink_state', {
+      noteId: 'ink',
+      yrsState: [1, 2, 3]
+    });
+    expect(fallback).not.toHaveBeenCalled();
+    expect(nativeInvoke).not.toHaveBeenCalled();
+  });
+
   it('permits the disposable UI fixtures only when explicitly configured', async () => {
     vi.stubEnv('VITE_BROWSER_MOCKS', '1');
     await expect(

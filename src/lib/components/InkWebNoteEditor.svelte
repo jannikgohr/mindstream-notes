@@ -1,4 +1,8 @@
 <script lang="ts">
+  import {
+    checkpointBrowserNote,
+    captureBrowserAcknowledgement
+  } from '$lib/browser/recovery';
   import InkPageManager from '$lib/ink/InkPageManager.svelte';
   import { migratePdfInk, upgradePdfBackgrounds } from '$lib/ink/pdf-import';
   import type { PageImageProgress } from '$lib/ink/page-images';
@@ -577,6 +581,16 @@
   }
 
   const inkSave = createInkSaveController({
+    checkpoint: () =>
+      checkpointBrowserNote(() =>
+        doc && !isTrashed
+          ? {
+              id: noteId,
+              yrs_state: Array.from(doc.encode())
+            }
+          : null
+      ),
+    captureAcknowledgement: () => captureBrowserAcknowledgement(noteId),
     canSave: () => !isTrashed,
     encode: () => doc?.encode() ?? null,
     persist: async (state) => {

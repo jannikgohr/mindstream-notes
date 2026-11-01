@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import RecoveryNotice from '$lib/browser/RecoveryNotice.svelte';
   import { isMobile } from '$lib/platform';
   import { tUi } from '$lib/settings/i18n.svelte';
   import OnboardingGate from '$lib/onboarding/OnboardingGate.svelte';
@@ -157,6 +158,8 @@
       .finally(() => clearTimeout(slowTimer));
   });
 </script>
+
+<RecoveryNotice />
 
 {#if failed}
   <div class="boot-screen" role="alert">

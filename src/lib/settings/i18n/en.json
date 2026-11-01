@@ -1,6 +1,9 @@
 {
   "language": "en",
   "ui": {
+    "browser.recovery.retained": "Some pending edits could not be restored. Download a recovery copy to keep them.",
+    "browser.recovery.unavailable": "Pending edits cannot be backed up. Wait for the saved indicator before closing this tab.",
+    "browser.recovery.download": "Download recovery copy",
     "ink.pages.title": "Pages",
     "ink.pages.current": "Page",
     "ink.pages.goTo": "Go to page {page}",

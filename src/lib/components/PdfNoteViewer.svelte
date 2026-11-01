@@ -1,4 +1,8 @@
 <script lang="ts">
+  import {
+    checkpointBrowserNote,
+    captureBrowserAcknowledgement
+  } from '$lib/browser/recovery';
   import { sharedInkAnnotations } from '$lib/ink/pdf-annotations';
   import { InkDocument } from '$lib/ink/document';
   import { createPdfSearchController } from '$lib/pdf/search-controller';
@@ -1149,6 +1153,15 @@
 
   const saveScheduler = createSaveScheduler({
     canSave: () => !isTrashed && saveReady && !!yDoc,
+    checkpoint: () =>
+      checkpointBrowserNote(() =>
+        yDoc && !isTrashed
+          ? {
+              id: noteId,
+              yrs_state: Array.from(Y.encodeStateAsUpdate(yDoc))
+            }
+          : null
+      ),
     capture: captureSave,
     onError: (error) => {
       console.error('[PdfNoteViewer] save failed', error);
@@ -1166,10 +1179,12 @@
     if (!yDoc || isTrashed) return null;
     const capturedNoteId = noteId;
     const yrsState = Array.from(Y.encodeStateAsUpdate(yDoc));
+    const acknowledge = captureBrowserAcknowledgement(capturedNoteId);
     return async () => {
       savingState = 'saving';
       try {
         await apiSaveNote({ id: capturedNoteId, yrs_state: yrsState });
+        acknowledge();
         const existing = tree.notesById[capturedNoteId];
         if (existing) {
           tree.notesById[capturedNoteId] = {

@@ -21,15 +21,23 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-Open `http://localhost:1420/`, create and edit a note, wait for the saved
-indicator, then hard reload. `pnpm dev` builds the worker Wasm before starting
+Open `http://localhost:1420/`, create and edit a note, then hard reload. `pnpm dev` builds the worker Wasm before starting
 Vite. `pnpm build:browser` builds both Wasm and the static frontend. Tauri uses
 `pnpm dev:native` and keeps its existing native toolchain requirements.
 
 The app permits one owning tab per browser profile and origin. A second tab
 reports that the database is already open. Close the owner and reload the
-second tab to take ownership. Closing a tab before the editor acknowledges a
-save can still discard an edit that has not reached storage.
+second tab to take ownership. Browser editors synchronously copy pending content
+into a localStorage recovery journal before their save debounce. The next owner
+replays that content into SQLite before reading the vault. Successful saves
+remove only their own recovery copy, preserving edits made while a save waits.
+Recovery never recreates purged notes or changes note metadata. Copies that
+conflict with newer saved content, fail validation, or cannot be written are
+retained separately, with a notice and a download action. They do not block
+opening other notes. The journal stores CRDT bytes as base64 to reduce quota use. It uses the
+same browser profile and origin as OPFS; clearing site data removes both stores.
+If recovery storage is unavailable or full, SQLite saves still run, but pending
+edits need a save acknowledgement before closing the tab.
 
 At `/sqlite-proof/`, save a marker and reload to exercise the separate proof
 database. Its close button releases ownership without closing the tab.
@@ -87,9 +95,11 @@ CRDT seed merging. Upgrade checks retain note content and asset hashes.
 Playwright checks reload persistence, explicit close and reopen, second-tab
 refusal, ownership transfer, and owner-tab termination. The transport unit
 tests cover response correlation, structured errors, validation, worker
-failure, timeout, and shutdown failure. Real-app tests create and edit a note
+failure, timeout, reconnecting after failure, and shutdown failure. Real-app tests create and edit a note
 through the existing Svelte editor, reload with the HTTP cache disabled, close
-the tab, and reopen the note. They also verify folders, tags, favourites,
+the tab, and reopen the note. Immediate reload and close cases exercise the
+save debounce, including source edits before they reach the live document.
+They also verify folders, tags, favourites,
 attachment bytes, history, Yjs state, trash and restore, and owner-tab handoff.
 
 The production tests pass in Chromium and Firefox. The WebKit project uses a
@@ -108,7 +118,7 @@ ships.
 `src-tauri/storage-core` has no Tauri dependency. It owns the canonical
 migrations, note and folder mutations, attachment bookkeeping, history, local
 share permissions and scope changes, trash operations, signatures, PDF text,
-word counts, setup notes, search, and note and tag CRDT operations. Native
+word counts, setup notes, search, ink state writes, and note and tag CRDT operations. Native
 modules forward to it and preserve their existing command signatures and
 structured error codes. Migration SQL and CRDT encodings stay the same.
 

@@ -3,6 +3,8 @@ import { createSaveScheduler } from '$lib/editor/save-scheduler';
 
 export function createInkSaveController(options: {
   canSave: () => boolean;
+  checkpoint?: () => void;
+  captureAcknowledgement?: () => () => void;
   encode: () => Uint8Array | null;
   persist: (state: number[]) => Promise<void>;
   onStatus: (status: 'pending' | 'saving' | 'saved' | 'error') => void;
@@ -11,6 +13,8 @@ export function createInkSaveController(options: {
   let closed = false;
   const scheduler = createSaveScheduler({
     canSave: options.canSave,
+    checkpoint: options.checkpoint,
+    onError: () => options.onStatus('error'),
     capture: captureSave
   });
 
@@ -19,10 +23,12 @@ export function createInkSaveController(options: {
     const batch = updates;
     updates = [];
     const state = Array.from(Y.mergeUpdates(batch));
+    const acknowledge = options.captureAcknowledgement?.();
     return async () => {
       options.onStatus('saving');
       try {
         await options.persist(state);
+        acknowledge?.();
         options.onStatus(updates.length ? 'pending' : 'saved');
       } catch (error) {
         updates = [...batch, ...updates];

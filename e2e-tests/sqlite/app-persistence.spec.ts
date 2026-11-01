@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 import * as Y from 'yjs';
 import { test, expect } from './fixtures';
 import { clickFileTreeCreateAction } from '../browser/file-tree-toolbar';
@@ -120,6 +121,192 @@ test('a note created and edited in the app survives hard reload and closing its 
     .getByRole('button', { name: title, exact: true })
     .click();
   await expect(reopened.locator('.ProseMirror').first()).toContainText(body);
+});
+
+for (const action of ['reload', 'close', 'source reload'] as const) {
+  test(`edits survive immediate ${action} without waiting for autosave`, async ({
+    page,
+    context
+  }) => {
+    const title = `Immediate ${action} recovery`;
+    const body = `Last keystroke before ${action} must survive`;
+    await clickFileTreeCreateAction(page, 'New note');
+    const draft = page.getByRole('textbox', { name: 'New note', exact: true });
+    await draft.fill(title);
+    await draft.press('Enter');
+    await page
+      .getByRole('group', { name: 'File tree' })
+      .getByRole('button', { name: title, exact: true })
+      .click();
+    await expect(page.locator('.ProseMirror').first()).toBeVisible();
+    const notes = await rpc(page, 'list_notes', {});
+    const id = notes.find((note) => note.title === title)!.id;
+    // Configure reload before editing. No save polling or debounce wait here.
+    await page.route('**/*', (route) => route.continue());
+    if (action === 'source reload') {
+      const mode = page.getByRole('button', { name: /^Editor view mode:/ });
+      for (
+        let i = 0;
+        i < 3 &&
+        (await mode.getAttribute('aria-label')) !== 'Editor view mode: Source';
+        i++
+      )
+        await mode.click();
+      const source = page
+        .locator('.cm-content[contenteditable="true"]')
+        .first();
+      await expect(source).toBeVisible();
+      await source.fill(body);
+    } else {
+      await page.locator('.ProseMirror').first().fill(body);
+    }
+    let reopened = page;
+    if (action === 'close') {
+      await page.close();
+      reopened = await context.newPage();
+      await observeStorage(reopened);
+      await boot(reopened);
+    } else {
+      await page.reload();
+    }
+    await reopened
+      .getByRole('group', { name: 'File tree' })
+      .getByRole('button', { name: title, exact: true })
+      .click();
+    await expect(reopened.locator('.ProseMirror').first()).toContainText(body);
+    await expect
+      .poll(async () => (await rpc(reopened, 'load_note', { id })).body)
+      .toContain(body);
+    await expect
+      .poll(() =>
+        reopened.evaluate(() =>
+          Object.keys(localStorage).filter((key) =>
+            key.startsWith('mindstream:browser-vault:draft:v1:')
+          )
+        )
+      )
+      .toEqual([]);
+  });
+}
+
+test('handwritten strokes persist through normal saves and an immediate reload', async ({
+  page
+}) => {
+  const title = 'Persistent handwriting';
+  await clickFileTreeCreateAction(page, 'New handwritten note');
+  const draft = page.getByRole('textbox', {
+    name: 'New handwritten note',
+    exact: true
+  });
+  await draft.fill(title);
+  await draft.press('Enter');
+  const notes = await rpc(page, 'list_notes', {});
+  const id = notes.find((note) => note.title === title)!.id;
+  const canvas = page.getByLabel('Handwritten note canvas', { exact: true });
+  await expect(canvas).toBeVisible();
+  const draw = async (offset: number) => {
+    const box = (await canvas.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2 - 30, box.y + 100 + offset);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 30, box.y + 150 + offset, {
+      steps: 8
+    });
+    await page.mouse.up();
+  };
+  const strokeCount = async () => {
+    const note = await rpc(page, 'load_note', { id });
+    const doc = new Y.Doc();
+    try {
+      if (note.yrs_state.length)
+        Y.applyUpdate(doc, new Uint8Array(note.yrs_state));
+      return doc.getArray('strokes').length;
+    } finally {
+      doc.destroy();
+    }
+  };
+  await draw(0);
+  // This waits for drawing_save_ink_state, proving the real save route works.
+  await expect.poll(strokeCount).toBe(1);
+  await page.route('**/*', (route) => route.continue());
+  await draw(60);
+  await page.reload();
+  await page
+    .getByRole('group', { name: 'File tree' })
+    .getByRole('button', { name: title, exact: true })
+    .click();
+  await expect(canvas).toBeVisible();
+  await expect.poll(strokeCount).toBe(2);
+});
+
+test('a corrupt recovery entry keeps the vault usable and offers a retained copy', async ({
+  page
+}) => {
+  await page.evaluate(() =>
+    localStorage.setItem(
+      'mindstream:browser-vault:draft:v1:corrupt-note',
+      '{broken json'
+    )
+  );
+  await hardReload(page);
+  await expect(
+    page
+      .getByRole('group', { name: 'File tree' })
+      .getByRole('button', { name: 'Welcome', exact: true })
+  ).toBeVisible();
+  const copy = page.getByRole('button', {
+    name: 'Download recovery copy',
+    exact: true
+  });
+  await expect(copy).toBeVisible();
+  const downloadEvent = page.waitForEvent('download');
+  await copy.click();
+  const download = await downloadEvent;
+  const contents = await readFile((await download.path())!, 'utf8');
+  expect(contents).toContain('{broken json');
+  await hardReload(page);
+  await expect(copy).toBeVisible();
+});
+
+test('stale recovery never overwrites a newer independently saved edit', async ({
+  page
+}) => {
+  const note = (await rpc(page, 'list_notes', {})).find(
+    (note) => note.title === 'Welcome'
+  )!;
+  await page
+    .getByRole('group', { name: 'File tree' })
+    .getByRole('button', { name: 'Welcome', exact: true })
+    .click();
+  await page.locator('.ProseMirror').first().fill('Older pending text');
+  const key = `mindstream:browser-vault:draft:v1:${note.id}`;
+  const raw = await page.evaluate((key) => localStorage.getItem(key), key);
+  expect(raw).not.toBeNull();
+  await expect
+    .poll(async () => (await rpc(page, 'load_note', { id: note.id })).body)
+    .toContain('Older pending text');
+  // Reinstall the old record after a later independent write, as if its
+  // acknowledgement had been interrupted before another writer saved.
+  await hardReload(page);
+  await rpc(page, 'save_note', {
+    input: { id: note.id, body: 'Newer saved text' }
+  });
+  await page.evaluate(({ key, raw }) => localStorage.setItem(key, raw!), {
+    key,
+    raw
+  });
+  await hardReload(page);
+  await expect(
+    page.getByRole('button', { name: 'Download recovery copy', exact: true })
+  ).toBeVisible();
+  expect((await rpc(page, 'load_note', { id: note.id })).body).toBe(
+    'Newer saved text'
+  );
+  const copies = await page.evaluate(() =>
+    Object.keys(localStorage)
+      .filter((key) => key.startsWith('mindstream:browser-vault:recovery:v1:'))
+      .map((key) => localStorage.getItem(key))
+  );
+  expect(copies).toContain(raw);
 });
 
 test('folders, metadata, attachment bytes, history, and editor CRDT state persist together', async ({
