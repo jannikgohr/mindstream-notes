@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import RecoveryNotice from '$lib/browser/RecoveryNotice.svelte';
+  import TestVaultControls from '$lib/browser/TestVaultControls.svelte';
   import { isMobile } from '$lib/platform';
   import { tUi } from '$lib/settings/i18n.svelte';
   import OnboardingGate from '$lib/onboarding/OnboardingGate.svelte';
@@ -160,6 +161,7 @@
 </script>
 
 <RecoveryNotice />
+<TestVaultControls />
 
 {#if failed}
   <div class="boot-screen" role="alert">

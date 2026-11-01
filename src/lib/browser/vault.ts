@@ -2,9 +2,12 @@ import { BrowserStorageClient } from './client';
 import {
   recoverBrowserNotes,
   rememberBrowserNote,
-  beginBrowserWrite
+  beginBrowserWrite,
+  clearBrowserTestRecovery
 } from './recovery';
 import type { BrowserCommand, BrowserRequest } from './commands';
+import { browserTestVaultId } from './testing';
+import { vaultNamespace } from './namespace';
 
 // The healthy connection, if any. Set only after a successful open so a failed
 // attempt never leaves a dead client cached.
@@ -12,14 +15,26 @@ let client: BrowserStorageClient | undefined;
 // The in-flight open attempt, shared by concurrent callers so they all observe
 // one outcome. Cleared when the attempt settles, success or failure.
 let opening: Promise<BrowserStorageClient> | undefined;
+let resetting = false;
 
 async function openVault(): Promise<BrowserStorageClient> {
   // The constructor can throw (for example when CSP blocks workers), so it runs
   // inside the attempt and its failure is cleared like any other open failure.
   const connection = new BrowserStorageClient();
   try {
-    await connection.request('open', { scope: 'vault' });
-    await recoverBrowserNotes(connection);
+    const testId = browserTestVaultId();
+    const resetKey = vaultNamespace(testId).reset;
+    if (testId && resetKey && sessionStorage.getItem(resetKey) === '1') {
+      await connection.request('resetTestVault', { testId });
+      clearBrowserTestRecovery(testId);
+      sessionStorage.removeItem(resetKey);
+    } else {
+      await connection.request('open', {
+        scope: 'vault',
+        ...(testId ? { testId } : {})
+      });
+      await recoverBrowserNotes(connection);
+    }
   } catch (error) {
     connection.dispose();
     throw error;
@@ -29,6 +44,11 @@ async function openVault(): Promise<BrowserStorageClient> {
 }
 
 function connect(): Promise<BrowserStorageClient> {
+  if (resetting)
+    return Promise.reject({
+      code: 'closed',
+      message: 'The test vault is being reset'
+    });
   // A client whose worker was terminated is replaced here, on the next call,
   // rather than being retried inside the failed call.
   if (client && !client.isClosed) return Promise.resolve(client);
@@ -76,6 +96,31 @@ export async function invokeBrowser(
     return result;
   } finally {
     write.finish();
+  }
+}
+
+/** Mark a test-only reset for the next page load. Closing first prevents old
+ * editors from reopening storage while the page is navigating away. The fresh
+ * worker acquires the test lock before deletion, reseeding, and journal cleanup. */
+export async function prepareBrowserTestReset(): Promise<void> {
+  const id = browserTestVaultId();
+  if (!id)
+    throw new Error(
+      'Reset is available only for an isolated browser test vault'
+    );
+  const key = vaultNamespace(id).reset!;
+  sessionStorage.setItem(key, '1');
+  resetting = true;
+  const connection = client ?? (await opening?.catch(() => undefined));
+  try {
+    await connection?.close();
+  } catch {
+    // Reset intentionally discards this test vault. A failed close still
+    // terminates its worker, and the new owner must obtain the lock to delete.
+  } finally {
+    connection?.dispose();
+    client = undefined;
+    opening = undefined;
   }
 }
 

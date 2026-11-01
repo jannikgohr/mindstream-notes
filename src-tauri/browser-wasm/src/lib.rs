@@ -34,11 +34,26 @@ pub struct BrowserDatabase {
 impl BrowserDatabase {
     /// The worker must hold the origin's pool lock before calling this.
     pub async fn open() -> Result<BrowserDatabase, JsValue> {
-        Self::open_database(true).await
+        Self::open_database(true, None).await
     }
 
     pub async fn open_vault() -> Result<BrowserDatabase, JsValue> {
-        Self::open_database(false).await
+        Self::open_database(false, None).await
+    }
+
+    pub async fn open_test_vault(id: String) -> Result<BrowserDatabase, JsValue> {
+        if id.is_empty()
+            || id.len() > 48
+            || !id.as_bytes()[0].is_ascii_lowercase() && !id.as_bytes()[0].is_ascii_digit()
+            || !id
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        {
+            return Err(command_error(AppError::InvalidArg(
+                "Invalid browser test vault identifier".into(),
+            )));
+        }
+        Self::open_database(false, Some(&id)).await
     }
 
     pub fn invoke(
@@ -136,20 +151,25 @@ impl BrowserDatabase {
 }
 
 impl BrowserDatabase {
-    async fn open_database(is_proof: bool) -> Result<BrowserDatabase, JsValue> {
+    async fn open_database(
+        is_proof: bool,
+        test_id: Option<&str>,
+    ) -> Result<BrowserDatabase, JsValue> {
         let cfg = OpfsSAHPoolCfg {
-            directory: if is_proof {
-                ".mindstream-sqlite-proof"
+            directory: if let Some(id) = test_id {
+                format!(".mindstream-browser-test-{id}")
+            } else if is_proof {
+                ".mindstream-sqlite-proof".into()
             } else {
-                ".mindstream-browser-vault"
-            }
-            .into(),
-            vfs_name: if is_proof {
-                "mindstream-proof"
+                ".mindstream-browser-vault".into()
+            },
+            vfs_name: if let Some(id) = test_id {
+                format!("mindstream-test-{id}")
+            } else if is_proof {
+                "mindstream-proof".into()
             } else {
-                "mindstream-vault"
-            }
-            .into(),
+                "mindstream-vault".into()
+            },
             ..Default::default()
         };
         let pool = install::<sqlite_wasm_rs::WasmOsCallback>(&cfg, true)

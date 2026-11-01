@@ -71,13 +71,14 @@ export default defineConfig({
     }
   ],
   webServer: {
-    command: `pnpm build && pnpm preview --port ${PORT} --strictPort`,
+    command: `pnpm build:fixtures && pnpm preview --port ${PORT} --strictPort`,
     url: `http://localhost:${PORT}`,
     // A reused preview can serve an older build and hide a regression locally.
     reuseExistingServer: false,
     timeout: 240_000,
     env: {
       VITE_BROWSER_MOCKS: '1',
+      VITE_BROWSER_TEST_VAULT: '',
       FORCE_COLOR: '0',
       NODE_OPTIONS: '--max-old-space-size=4096'
     }

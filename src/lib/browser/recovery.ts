@@ -1,10 +1,10 @@
 import { browserStorageEnabled } from './commands';
+import { browserRecoveryNamespace, browserTestVaultId } from './testing';
+import { vaultNamespace } from './namespace';
 import { recoveryStatus } from './recovery-status.svelte';
 import type { BrowserStorageClient } from './client';
 import type { UpdateNoteInput, Note } from '../api/notes';
 
-const PREFIX = 'mindstream:browser-vault:draft:v1:';
-const ARCHIVE = 'mindstream:browser-vault:recovery:v1:';
 type Draft = Pick<UpdateNoteInput, 'id' | 'body' | 'yrs_state'>;
 type DraftRecord = {
   id: string;
@@ -64,6 +64,7 @@ function decode(state: string): number[] {
   return Array.from(atob(state), (char) => char.charCodeAt(0));
 }
 function parseRecord(raw: string, key: string): DraftRecord {
+  const { draft: PREFIX } = browserRecoveryNamespace();
   const draft = JSON.parse(raw) as DraftRecord;
   if (
     !draft ||
@@ -90,6 +91,7 @@ function parseRecord(raw: string, key: string): DraftRecord {
 
 /** Record edits synchronously before either editor debounce can lose them. */
 export function checkpointBrowserNote(snapshot: () => Draft | null): void {
+  const { draft: PREFIX } = browserRecoveryNamespace();
   if (!enabled()) return;
   const draft = snapshot();
   if (!draft) return;
@@ -125,6 +127,7 @@ export function beginBrowserWrite(
   id: string,
   token?: string
 ): { token?: string; finish: () => void } {
+  const { draft: PREFIX } = browserRecoveryNamespace();
   const capture = token ? captures.get(token) : undefined;
   if (!enabled() || !token || capture?.id !== id) return { finish: () => {} };
   const base = revisions.get(id);
@@ -161,6 +164,7 @@ export function captureBrowserAcknowledgement(
   id: string
 ): RecoveryAcknowledgement {
   if (!enabled()) return () => {};
+  const { draft: PREFIX } = browserRecoveryNamespace();
   const capture = { id, base: revisions.get(id) };
   let raw: string | null;
   try {
@@ -193,6 +197,7 @@ export function captureBrowserAcknowledgement(
 }
 
 function retain(key: string, raw: string, reason: string): void {
+  const { draft: PREFIX, archive: ARCHIVE } = browserRecoveryNamespace();
   recoveryStatus.copies.push({ key, raw, reason });
   try {
     // Move to quarantine when there is room. Otherwise preserve the original
@@ -213,6 +218,7 @@ function retain(key: string, raw: string, reason: string): void {
 export async function recoverBrowserNotes(
   connection: Pick<BrowserStorageClient, 'request'>
 ): Promise<void> {
+  const { draft: PREFIX, archive: ARCHIVE } = browserRecoveryNamespace();
   let keys: string[];
   try {
     keys = Object.keys(localStorage);
@@ -304,4 +310,20 @@ export async function recoverBrowserNotes(
       retain(key, raw, code ?? 'invalid');
     }
   }
+}
+
+/** Only an explicitly selected test vault may discard its recovery data. */
+export function clearBrowserTestRecovery(id: string): void {
+  if (browserTestVaultId() !== id)
+    throw new Error('Only the active browser test vault can be reset');
+  const names = vaultNamespace(id);
+  for (const key of Object.keys(localStorage)) {
+    if (key.startsWith(names.draft) || key.startsWith(names.archive))
+      localStorage.removeItem(key);
+  }
+  revisions.clear();
+  inFlight.clear();
+  captures.clear();
+  recoveryStatus.copies = [];
+  recoveryStatus.unavailable = false;
 }

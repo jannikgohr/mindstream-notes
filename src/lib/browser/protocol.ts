@@ -1,4 +1,5 @@
 import { isBrowserCommand, type BrowserRequest } from './commands';
+import { isTestVaultId } from './namespace';
 export interface ProofReport {
   schemaVersion: number;
   upgrades: number;
@@ -11,7 +12,8 @@ export interface ProofReport {
 }
 
 export interface StorageMethods {
-  open: { args: undefined | { scope: 'vault' }; result: void };
+  open: { args: undefined | { scope: 'vault'; testId?: string }; result: void };
+  resetTestVault: { args: { testId: string }; result: void };
   invoke: {
     args: BrowserRequest & { recoveryToken?: string };
     result: unknown;
@@ -102,6 +104,7 @@ export function parseRequest(value: unknown): StorageRequest {
   if (
     ![
       'open',
+      'resetTestVault',
       'invoke',
       'receipt',
       'prepareInterruptedWrite',
@@ -143,13 +146,24 @@ export function parseRequest(value: unknown): StorageRequest {
       typeof request.args.id !== 'string'
     )
       throw new Error('receipt requires a note id');
+  } else if (request.method === 'resetTestVault') {
+    if (
+      !request.args ||
+      typeof request.args !== 'object' ||
+      !('testId' in request.args) ||
+      !isTestVaultId(request.args.testId)
+    )
+      throw new Error('Reset requires a valid test vault identifier');
   } else if (request.method === 'open') {
     if (
       request.args !== undefined &&
       (!request.args ||
         typeof request.args !== 'object' ||
         !('scope' in request.args) ||
-        request.args.scope !== 'vault')
+        request.args.scope !== 'vault' ||
+        ('testId' in request.args &&
+          request.args.testId !== undefined &&
+          !isTestVaultId(request.args.testId)))
     )
       throw new Error('Invalid storage scope');
   } else if (request.method === 'write') {

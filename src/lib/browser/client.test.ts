@@ -103,6 +103,35 @@ describe('worker transport', () => {
 });
 
 describe('worker protocol validation', () => {
+  it('accepts only named test vaults for open and reset', () => {
+    expect(
+      parseRequest({
+        id: 1,
+        method: 'open',
+        args: { scope: 'vault', testId: 'qa' }
+      })
+    ).toMatchObject({ args: { testId: 'qa' } });
+    expect(
+      parseRequest({ id: 1, method: 'resetTestVault', args: { testId: 'qa' } })
+    ).toMatchObject({ method: 'resetTestVault' });
+    for (const testId of ['', '../vault', '/vault', 'QA', undefined]) {
+      expect(() =>
+        parseRequest({ id: 1, method: 'resetTestVault', args: { testId } })
+      ).toThrow();
+      if (testId !== undefined)
+        expect(() =>
+          parseRequest({
+            id: 1,
+            method: 'open',
+            args: { scope: 'vault', testId }
+          })
+        ).toThrow();
+    }
+    expect(() =>
+      parseRequest({ id: 1, method: 'resetTestVault', args: undefined })
+    ).toThrow();
+  });
+
   it('validates save receipt requests and responses', () => {
     expect(
       parseRequest({ id: 1, method: 'receipt', args: { id: 'note' } })

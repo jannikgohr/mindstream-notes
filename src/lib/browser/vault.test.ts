@@ -7,6 +7,7 @@ type Plan = {
   // Thrown by `new Worker(...)`, which is how a CSP block surfaces.
   construct?: Error;
   open?: Reply;
+  reset?: Reply;
   invoke?: Reply;
 };
 
@@ -36,9 +37,11 @@ class FakeWorker {
     const reply =
       message.method === 'open'
         ? (this.plan.open ?? 'ok')
-        : message.method === 'invoke'
-          ? (this.plan.invoke ?? 'ok')
-          : 'ok';
+        : message.method === 'resetTestVault'
+          ? (this.plan.reset ?? 'ok')
+          : message.method === 'invoke'
+            ? (this.plan.invoke ?? 'ok')
+            : 'ok';
     if (reply === 'hang') return;
     queueMicrotask(() =>
       this.onmessage?.({
@@ -79,11 +82,16 @@ beforeEach(() => {
   FakeWorker.instances = [];
   FakeWorker.plans = [];
   vi.stubGlobal('Worker', FakeWorker);
+  localStorage.clear();
+  sessionStorage.clear();
 });
 
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+  localStorage.clear();
+  sessionStorage.clear();
 });
 
 describe('vault connection recovery', () => {
@@ -222,5 +230,100 @@ describe('vault connection recovery', () => {
     ]);
 
     expect(FakeWorker.instances).toHaveLength(1);
+  });
+});
+
+describe('test vault reset lifecycle', () => {
+  function qa() {
+    vi.stubEnv('MODE', 'development');
+    vi.stubEnv('VITE_BROWSER_MOCKS', '0');
+    vi.stubEnv('VITE_BROWSER_TEST_VAULT', 'qa');
+  }
+  it('closes the owner and blocks new operations until the requested reload', async () => {
+    qa();
+    const { invokeBrowser, prepareBrowserTestReset } = await loadVault();
+    await invokeBrowser('list_notes', {});
+    expect(FakeWorker.instances[0].messages[0].args).toEqual({
+      scope: 'vault',
+      testId: 'qa'
+    });
+    await prepareBrowserTestReset();
+    expect(FakeWorker.instances[0].terminated).toBe(true);
+    expect(sessionStorage.getItem('mindstream:browser-test:qa:reset')).toBe(
+      '1'
+    );
+    await expect(invokeBrowser('list_notes', {})).rejects.toMatchObject({
+      code: 'closed'
+    });
+    expect(FakeWorker.instances).toHaveLength(1);
+  });
+
+  it('resets and seeds before reading, without replaying discarded drafts', async () => {
+    qa();
+    sessionStorage.setItem('mindstream:browser-test:qa:reset', '1');
+    localStorage.setItem('mindstream:browser-test:qa:draft:v1:note', 'discard');
+    localStorage.setItem(
+      'mindstream:browser-test:qa:recovery:v1:note',
+      'discard'
+    );
+    localStorage.setItem('mindstream:browser-vault:draft:v1:note', 'keep');
+    const { invokeBrowser } = await loadVault();
+    await invokeBrowser('list_notes', {});
+    expect(FakeWorker.instances[0].messages.map((m) => m.method)).toEqual([
+      'resetTestVault',
+      'invoke'
+    ]);
+    expect(
+      localStorage.getItem('mindstream:browser-test:qa:draft:v1:note')
+    ).toBeNull();
+    expect(
+      localStorage.getItem('mindstream:browser-test:qa:recovery:v1:note')
+    ).toBeNull();
+    expect(localStorage.getItem('mindstream:browser-vault:draft:v1:note')).toBe(
+      'keep'
+    );
+    expect(
+      sessionStorage.getItem('mindstream:browser-test:qa:reset')
+    ).toBeNull();
+  });
+
+  it('preserves reset intent and recovery copies if the worker cannot obtain ownership', async () => {
+    qa();
+    sessionStorage.setItem('mindstream:browser-test:qa:reset', '1');
+    localStorage.setItem(
+      'mindstream:browser-test:qa:draft:v1:note',
+      'keep until reset succeeds'
+    );
+    FakeWorker.plans = [
+      { reset: { error: { code: 'databaseBusy', message: 'Other tab' } } }
+    ];
+    const { invokeBrowser } = await loadVault();
+    await expect(invokeBrowser('list_notes', {})).rejects.toMatchObject({
+      code: 'databaseBusy'
+    });
+    expect(FakeWorker.instances[0].terminated).toBe(true);
+    expect(
+      localStorage.getItem('mindstream:browser-test:qa:draft:v1:note')
+    ).not.toBeNull();
+    expect(sessionStorage.getItem('mindstream:browser-test:qa:reset')).toBe(
+      '1'
+    );
+  });
+
+  it('does not offer reset on normal or native storage', async () => {
+    const { prepareBrowserTestReset } = await loadVault();
+    await expect(prepareBrowserTestReset()).rejects.toThrow(/only/);
+    expect(FakeWorker.instances).toHaveLength(0);
+    qa();
+    (
+      window as unknown as { __TAURI_INTERNALS__?: unknown }
+    ).__TAURI_INTERNALS__ = {};
+    try {
+      await expect(prepareBrowserTestReset()).rejects.toThrow(/only/);
+    } finally {
+      delete (window as unknown as { __TAURI_INTERNALS__?: unknown })
+        .__TAURI_INTERNALS__;
+    }
+    expect(FakeWorker.instances).toHaveLength(0);
   });
 });

@@ -16,6 +16,7 @@ export default defineConfig({
     command: 'pnpm build && pnpm preview --port 1450 --strictPort',
     url: 'http://localhost:1450/sqlite-proof/',
     reuseExistingServer: false,
-    timeout: 240_000
+    timeout: 240_000,
+    env: { VITE_BROWSER_MOCKS: '0', VITE_BROWSER_TEST_VAULT: '' }
   }
 });

@@ -25,7 +25,44 @@ Open `http://localhost:1420/`, create and edit a note, then hard reload.
 `pnpm dev` builds the worker Wasm before starting Vite. `pnpm build:browser` builds both Wasm and the static frontend. Tauri uses
 `pnpm dev:native` and keeps its existing native toolchain requirements.
 
-The app permits one owning tab per browser profile and origin. A second tab
+## Testing modes
+
+| Command             | Storage                                           | Default URL              |
+| ------------------- | ------------------------------------------------- | ------------------------ |
+| `pnpm dev`          | Normal persistent browser vault                   | `http://localhost:1420/` |
+| `pnpm dev:fixtures` | Seeded in-memory UI fixtures, discarded on reload | `http://localhost:1421/` |
+| `pnpm dev:qa`       | Persistent SQLite test vault named `qa`           | `http://localhost:1422/` |
+
+`dev:fixtures` skips the Wasm build. `dev:qa` builds Wasm and uses the same
+worker and shared Rust operations as the normal app. Override the port with
+`--port 1423`. To keep another set of QA data, set
+`VITE_BROWSER_TEST_VAULT=review pnpm dev:qa`. Names use 1 to 48 lowercase
+letters, digits, or hyphens and start with a letter or digit. Invalid names
+fail instead of falling back to the normal vault.
+
+The QA badge shows the active test vault. **Reset test data** closes the
+current worker and reloads. The fresh worker obtains that test vault's lock,
+removes its OPFS directory, and creates a seeded database. Its pending drafts
+and retained recovery copies are cleared before the app reads any notes.
+Normal vaults, other test vaults, and their recovery data remain intact, even
+when they share an origin. Close other tabs using this test vault before
+resetting. A refused reset keeps its intent for the next reload.
+
+`pnpm build:fixtures` and `pnpm build:qa` produce the corresponding static
+builds. Serve them with `pnpm preview --port 1421` or `--port 1422`.
+These modes are baked into the build; preview does not switch storage modes.
+Use `pnpm build:browser` for a normal persistent browser build.
+
+`pnpm test:e2e` builds the fixture mode for UI tests. `pnpm test:sqlite` checks
+the normal persistent backend in fresh browser contexts, retaining each
+context during reload and second-tab checks. `pnpm test:qa` verifies the
+isolated vault and reset action against real SQLite, including normal and
+other test vaults on the same origin. WebKit uses a temporary profile and
+skips storage cases when OPFS is unavailable.
+
+## Persistence and ownership
+
+The app permits one owning tab per vault, browser profile, and origin. A second tab
 reports that the database is already open. Close the owner and reload the
 second tab to take ownership. Browser editors synchronously copy pending content
 into a localStorage recovery journal before their save debounce. The next owner
