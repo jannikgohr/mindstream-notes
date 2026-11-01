@@ -30,6 +30,7 @@ import {
   type RoomConnection,
   type RoomFrame
 } from '$lib/sync/room-socket';
+import { withoutGeneratedHtml } from './embed-policy';
 
 // Match Excalidraw's outbound throttle: drawing fires onChange dozens
 // of times per second, but the wire only needs the latest state.
@@ -213,7 +214,7 @@ export class ExcalidrawRoomClient {
     // skips its broadcast.
     this.lastSceneFingerprint = mergedFingerprint;
     this.opts.api.updateScene({
-      elements: merged,
+      elements: withoutGeneratedHtml(merged),
       // NEVER: the remote update isn't an undoable local action.
       captureUpdate: CaptureUpdateAction.NEVER
     });

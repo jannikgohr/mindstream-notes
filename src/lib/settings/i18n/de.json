@@ -103,6 +103,13 @@
     "fileDrop.importInMainWindow": "PDFs zum Importieren im Hauptfenster ablegen.",
     "fileDrop.failed": "Die abgelegte PDF-Datei konnte nicht importiert werden: {error}",
     "fileDrop.imageFailed": "Das abgelegte Bild konnte nicht hinzugefügt werden.",
+    "freeform.embed.blocked": "In geteilten Ordnern laden Einbettungen nur von Websites, die du erlaubst.",
+    "freeform.embed.unsupported": "Diese Website lässt sich nicht in der App anzeigen.",
+    "freeform.embed.notHttps": "Nur https-Seiten lassen sich einbetten.",
+    "freeform.embed.allow": "{host} erlauben",
+    "freeform.embed.openInBrowser": "Im Browser öffnen",
+    "freeform.embed.youtubeUnavailable": "YouTube spielt auf diesem System keine Videos in der App ab.",
+    "freeform.embed.watchOnYoutube": "Auf YouTube ansehen",
     "fileTree.newFolder": "Neuer Ordner",
     "fileTree.toolbar.more": "Weitere Aktionen",
     "fileTree.toolbar.customize": "Aktionen neu anordnen",
@@ -1012,6 +1019,8 @@
     "language.spellcheck.customWords.empty": "Noch keine Wörter hinzugefügt. Klicke mit der rechten Maustaste auf ein markiertes Wort und wähle „Zum Wörterbuch hinzufügen“.",
     "language.spellcheck.customWords.emptyTouch": "Noch keine Wörter hinzugefügt. Tippe lange auf ein markiertes Wort und wähle „Zum Wörterbuch hinzufügen“.",
     "language.spellcheck.customWords.remove": "Entfernen",
+    "editor.freeform.embedAllowedHosts.empty": "Noch keine Websites erlaubt. Eine Einbettung von einer anderen Website in einem geteilten Ordner hat eine Schaltfläche, um ihre Website zu erlauben.",
+    "editor.freeform.embedAllowedHosts.remove": "Entfernen",
     "plugins.textCheckers.title": "Textprüfer",
     "plugins.textCheckers.check": "Prüfen",
     "plugins.textCheckers.reachable": "Server erreichbar",
@@ -1161,7 +1170,7 @@
     "account.server.managed": "Verwaltet ({url})",
     "account.server.check": "URL prüfen",
     "account.server.checking": "Prüfe…",
-    "account.server.replied": "Server hat unter {url} geantwortet",
+    "account.server.replied": "Server unter {url} ist erreichbar und kompatibel",
     "account.server.unhealthy": "Die Prüfung ergab HTTP {status} unter {url}",
     "account.server.enterFirst": "Gib zuerst oben die URL deines Servers ein.",
     "account.signin.submit": "Anmelden",
@@ -1262,6 +1271,8 @@
     "account.refusal.sessionEnded": "Dieses Gerät wurde abgemeldet. Melde dich erneut an.",
     "account.refusal.unreachable": "Der Server ist nicht erreichbar. Prüfe deine Verbindung und die Adresse.",
     "account.refusal.notAServer": "Diese Adresse antwortet nicht wie ein Mindstream-Sync-Server.",
+    "account.refusal.serverTooNew": "Dieser Server verwendet ein neueres Protokoll. Aktualisiere die App, um dich zu verbinden.",
+    "account.refusal.serverTooOld": "Dieser Server verwendet ein älteres Protokoll. Bitte den Serveradministrator, ihn zu aktualisieren.",
     "account.refusal.keyChanged": "Der Schlüssel ist nicht der, den dieses Gerät kennt.",
     "account.refusal.spaceLimit": "Dein Tarif erlaubt keine weiteren geteilten Ordner. Beende zuerst eine Freigabe oder wechsle in einen größeren Tarif.",
     "account.refusal.memberLimit": "Dieser Ordner hat so viele Mitglieder, wie der Tarif seines Besitzers erlaubt.",
@@ -1567,6 +1578,10 @@
     "editor.freeform.penMode": {
       "label": "Stift-Modus",
       "description": "Wenn aktiv, zeichnet nur der Stift — Fingertippen verschiebt und zoomt. Verhindert ungewollte Striche durch den Handballen auf Tablets."
+    },
+    "editor.freeform.embedAllowedHosts": {
+      "label": "Einbettungen in geteilten Ordnern",
+      "description": "Wer eine geteilte Zeichenfläche bearbeiten kann, bestimmt, was ihre Einbettungen zeigen. In geteilten Ordnern laden Einbettungen deshalb nur von YouTube, Vimeo, Figma, StackBlitz und einigen anderen bekannten Websites sowie von den hier aufgeführten."
     },
     "editor.ink.tool": {
       "label": "Letztes Ink-Werkzeug"

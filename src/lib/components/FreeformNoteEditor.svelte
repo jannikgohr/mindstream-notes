@@ -74,6 +74,11 @@
   } from '$lib/freeform/excalidraw-yjs';
   import { EXCALIDRAW_IMAGE_ACCEPT } from '$lib/file-drop';
   import { toErrorMessage } from '$lib/api/errors';
+  import { findShareScopeCollectionId } from '$lib/notes/share-users';
+  import {
+    allowEmbedHost,
+    allowedEmbedHosts
+  } from '$lib/freeform/embed-allowed-hosts';
 
   interface Props {
     noteId: string;
@@ -189,6 +194,30 @@
    *  once `mobile` flips. */
   const reduceMotion = $derived(prefersReducedMotion() || mobile);
 
+  /** Whether the note sits in a folder shared by or with the user, which
+   *  limits the sites its embeds load from (see $lib/freeform/embed-policy).
+   *  Counts as shared until the tree has loaded, so a shared drawing never
+   *  loads an embed it shouldn't while the folders are still unknown. */
+  const embedsShared = $derived.by(() => {
+    if (!tree.ready) return true;
+    const note = tree.notesById[noteId];
+    if (!note) return true;
+    return (
+      findShareScopeCollectionId(
+        note.parent_collection_id,
+        tree.collectionsById
+      ) !== null
+    );
+  });
+
+  const embedHosts = $derived(allowedEmbedHosts());
+
+  function handleAllowEmbedHost(host: string): void {
+    void allowEmbedHost(host).catch((err) => {
+      console.warn('[FreeformNoteEditor] failed to allow embed host', err);
+    });
+  }
+
   // ---- Mount ----
 
   let lastSeenPushed = false;
@@ -270,6 +299,9 @@
           colorScheme: untrack(() => $userPrefersMode) ?? 'system',
           penMode: untrack(() => penMode),
           reduceMotion: untrack(() => reduceMotion),
+          embedsShared: untrack(() => embedsShared),
+          allowedEmbedHosts: untrack(() => embedHosts),
+          onAllowEmbedHost: handleAllowEmbedHost,
           onApiReady: handleExcalidrawApi
         })
       );
@@ -386,9 +418,10 @@
   });
 
   // Re-render the island whenever any prop Excalidraw cares about flips —
-  // currently trashed state (toggles the canvas to read-only mid-session)
-  // and the app-wide colour scheme. The island maps each prop into the
-  // matching Excalidraw API
+  // currently trashed state (toggles the canvas to read-only mid-session),
+  // the app-wide colour scheme, and the embed policy inputs (the note
+  // moving into or out of a shared folder, a host being allowed). The
+  // island maps each prop into the matching Excalidraw API
   // inside its own useEffect; React reconciliation between renders keeps
   // Excalidraw's internal state intact.
   $effect(() => {
@@ -396,6 +429,8 @@
     const colorScheme = $userPrefersMode ?? 'system';
     const currentPenMode = penMode;
     const currentReduceMotion = reduceMotion;
+    const currentEmbedsShared = embedsShared;
+    const currentEmbedHosts = embedHosts;
     if (!reactRoot || !ExcalidrawIslandComponent || !reactCreateElement) return;
     if (!yDoc) return;
     reactRoot.render(
@@ -406,6 +441,9 @@
         colorScheme,
         penMode: currentPenMode,
         reduceMotion: currentReduceMotion,
+        embedsShared: currentEmbedsShared,
+        allowedEmbedHosts: currentEmbedHosts,
+        onAllowEmbedHost: handleAllowEmbedHost,
         onApiReady: handleExcalidrawApi
       })
     );

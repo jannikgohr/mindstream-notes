@@ -36,6 +36,8 @@ const SENTENCES: Record<string, string> = {
   not_signed_in: 'account.refusal.sessionEnded',
   unreachable: 'account.refusal.unreachable',
   not_a_mindstream_server: 'account.refusal.notAServer',
+  server_protocol_too_new: 'account.refusal.serverTooNew',
+  server_protocol_too_old: 'account.refusal.serverTooOld',
   link_invalid: 'account.refusal.linkInvalid',
   link_used: 'account.refusal.linkUsed',
   link_expired: 'account.refusal.linkExpired',

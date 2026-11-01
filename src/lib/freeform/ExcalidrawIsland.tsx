@@ -16,13 +16,23 @@ import type {
   ExcalidrawInitialDataState,
   ExcalidrawImperativeAPI
 } from '@excalidraw/excalidraw/types';
-import type { Theme } from '@excalidraw/excalidraw/element/types';
+import type {
+  ExcalidrawEmbeddableElement,
+  NonDeleted,
+  Theme
+} from '@excalidraw/excalidraw/element/types';
 import {
   bindExcalidrawToLocalYDoc,
   readSceneFromYDoc,
   type BindHandle
 } from './excalidraw-yjs';
 import { prepareDroppedImage } from './excalidraw-image-drop';
+import {
+  embedDecision,
+  isEmbeddableLink,
+  withoutGeneratedHtml
+} from './embed-policy';
+import EmbedPlaceholder from './EmbedPlaceholder';
 import {
   fileDropZoneFor,
   filesClaimedByZone,
@@ -40,6 +50,11 @@ export interface ExcalidrawIslandProps {
   colorScheme: 'light' | 'dark' | 'system';
   penMode: PenModeSetting;
   reduceMotion: boolean;
+  /** The note sits in a shared folder, so embeds follow the stricter
+   *  policy in ./embed-policy. */
+  embedsShared: boolean;
+  allowedEmbedHosts: readonly string[];
+  onAllowEmbedHost: (host: string) => void;
   /** Surfaces the Excalidraw API up to the Svelte parent, which feeds
    *  it to the excalidraw-room client. Receives null on unmount. */
   onApiReady?: (api: ExcalidrawImperativeAPI | null) => void;
@@ -101,7 +116,7 @@ function initialDataFor(
     type: 'excalidraw',
     version: 2,
     source: 'mindstream-notes',
-    elements: snapshot.elements,
+    elements: withoutGeneratedHtml(snapshot.elements),
     appState: {
       ...snapshot.appState,
       ...(seedBackground ? { viewBackgroundColor: seedBackground } : {}),
@@ -122,6 +137,9 @@ export default function ExcalidrawIsland({
   colorScheme,
   penMode,
   reduceMotion,
+  embedsShared,
+  allowedEmbedHosts,
+  onAllowEmbedHost,
   onApiReady
 }: ExcalidrawIslandProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -129,6 +147,8 @@ export default function ExcalidrawIsland({
   const bindRef = useRef<BindHandle | null>(null);
   const onApiReadyRef = useRef(onApiReady);
   onApiReadyRef.current = onApiReady;
+  const onAllowEmbedHostRef = useRef(onAllowEmbedHost);
+  onAllowEmbedHostRef.current = onAllowEmbedHost;
   const [apiReady, setApiReady] = useState(false);
   const theme = useResolvedTheme(colorScheme);
 
@@ -197,6 +217,30 @@ export default function ExcalidrawIsland({
     return () => root.removeEventListener('pointerdown', onPointerDown, true);
   }, [apiReady, penMode]);
 
+  // Excalidraw renders this result in place of the embed's iframe, falling
+  // back to its own iframe on null. Deciding here rather than in
+  // validateEmbeddable also covers a link a collaborator changes later:
+  // Excalidraw validates each element once, but calls this on every render.
+  const renderEmbeddable = useCallback(
+    (element: NonDeleted<ExcalidrawEmbeddableElement>) => {
+      const link = element.link ?? '';
+      const decision = embedDecision(link, {
+        shared: embedsShared,
+        allowedHosts: allowedEmbedHosts,
+        sendsReferer: /^https?:$/.test(window.location.protocol)
+      });
+      if (decision === 'load') return null;
+      return (
+        <EmbedPlaceholder
+          link={link}
+          decision={decision}
+          onAllowHost={(host) => onAllowEmbedHostRef.current(host)}
+        />
+      );
+    },
+    [embedsShared, allowedEmbedHosts]
+  );
+
   const handleDropCapture = useCallback(
     (event: ReactDragEvent<HTMLDivElement>) => {
       const nativeEvent = event.nativeEvent;
@@ -263,6 +307,8 @@ export default function ExcalidrawIsland({
         theme={theme}
         detectScroll={false}
         handleKeyboardGlobally={false}
+        validateEmbeddable={isEmbeddableLink}
+        renderEmbeddable={renderEmbeddable}
         UIOptions={{
           canvasActions: {
             export: false,

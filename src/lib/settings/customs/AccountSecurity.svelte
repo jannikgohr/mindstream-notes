@@ -51,7 +51,7 @@
 </script>
 
 <div
-  class="rounded-md border border-border bg-muted/40 p-3 text-sm"
+  class="min-w-0 rounded-md border border-border bg-muted/40 p-3 text-sm [overflow-wrap:anywhere]"
   data-testid="account-security"
 >
   {#if !authSession.current}
@@ -59,7 +59,7 @@
       {tUi('account.security.signedOut')}
     </p>
   {:else if overview}
-    <div class="grid gap-4">
+    <div class="grid grid-cols-1 gap-4">
       <TwoFactorSection {overview} onChanged={changed} />
       <RecoveryKeySection {overview} onChanged={changed} />
       <PasswordSection {overview} onChanged={changed} />

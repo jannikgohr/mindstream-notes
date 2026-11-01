@@ -40,6 +40,7 @@ import {
   isPersistedFileRef,
   type PersistedFileRef
 } from './excalidraw-files';
+import { withoutGeneratedHtml } from './embed-policy';
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types';
 import { CaptureUpdateAction } from '@excalidraw/excalidraw';
 
@@ -517,7 +518,7 @@ export function bindExcalidrawToLocalYDoc({
     applyingRemote = true;
     try {
       api.updateScene({
-        elements: snapshot.elements,
+        elements: withoutGeneratedHtml(snapshot.elements),
         appState: snapshot.appState as Pick<AppState, keyof PersistedAppState>,
         captureUpdate: CaptureUpdateAction.NEVER
       });
