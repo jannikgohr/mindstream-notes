@@ -26,12 +26,23 @@ pub(super) fn sync(app: &AppHandle) -> tauri::Result<()> {
 
 fn menu_rows(app: &AppHandle, items: &TrayMenuItems) -> tauri::Result<Vec<Row>> {
     let vault_label = items.vault_label.lock().unwrap().clone();
-    let mut rows = vec![row(
+    let mut rows = Vec::new();
+    if let Some(dev) = &items.dev {
+        let mut entry = row(
+            super::DEV_ID,
+            dev.text()?,
+            false,
+            include_bytes!("../../icons/32x32.png"),
+        );
+        entry.image = super::tray_icon(&entry.image, crate::environment::Kind::Dev);
+        rows.push(entry);
+    }
+    rows.push(row(
         super::VAULT_ID,
         vault_label,
         false,
         include_bytes!("../../icons/tray/vault.png"),
-    )];
+    ));
     for (id, png) in [
         (
             super::NEW_NOTE_ID,
@@ -73,7 +84,10 @@ fn build_menu(app: &AppHandle, rows: Vec<Row>) -> muda::Menu {
     let menu = muda::Menu::new();
     let native = menu.gtk_context_menu();
     for entry in rows {
-        if entry.id == super::NEW_NOTE_ID || entry.id == super::QUIT_ID {
+        if entry.id == super::NEW_NOTE_ID
+            || entry.id == super::QUIT_ID
+            || (entry.id == super::VAULT_ID && !native.children().is_empty())
+        {
             native.append(&gtk::SeparatorMenuItem::new());
         }
         let item = image_item(&entry);
