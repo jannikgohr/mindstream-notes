@@ -144,6 +144,52 @@ describe('worker transport', () => {
     client.dispose();
   });
 
+  it('lets ordinary requests wait behind a slow one', async () => {
+    vi.useFakeTimers();
+    const { client, worker } = setup(100);
+    const slow = client.request('read', undefined, 1_000);
+    const queued = client.request('read', undefined);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(worker.terminate).not.toHaveBeenCalled();
+
+    worker.reply({ id: 1, ok: true, result: 'slow' });
+    worker.reply({ id: 2, ok: true, result: 'queued' });
+    await expect(slow).resolves.toBe('slow');
+    await expect(queued).resolves.toBe('queued');
+    client.dispose();
+  });
+
+  it('catches a stalled worker again once the slow request has ended', async () => {
+    vi.useFakeTimers();
+    const { client, worker } = setup(100);
+    const slow = client.request('read', undefined, 1_000);
+    worker.reply({ id: 1, ok: true, result: 'slow' });
+    await slow;
+
+    const stalled = expect(
+      client.request('read', undefined)
+    ).rejects.toMatchObject({ code: 'timeout' });
+    await vi.advanceTimersByTimeAsync(100);
+    await stalled;
+    expect(worker.terminate).toHaveBeenCalledOnce();
+  });
+
+  it('still catches a worker that stalls with requests queued behind it', async () => {
+    vi.useFakeTimers();
+    const { client, worker } = setup(100);
+    const slow = expect(
+      client.request('read', undefined, 1_000)
+    ).rejects.toMatchObject({ code: 'timeout' });
+    const queued = expect(
+      client.request('read', undefined)
+    ).rejects.toMatchObject({ code: 'timeout' });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await Promise.all([slow, queued]);
+    expect(worker.terminate).toHaveBeenCalledOnce();
+  });
+
   it('terminates even if graceful shutdown fails', async () => {
     const { client, worker } = setup();
     const result = expect(client.close()).rejects.toMatchObject({
