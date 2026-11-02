@@ -6,11 +6,15 @@
 
 mod common;
 
+use std::time::Duration;
+
 use common::keyed::new_uid;
-use common::raw::Device;
+use common::raw::{Device, READ_ONLY};
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpSocket, TcpStream};
 
 const KIB: usize = 1024;
 
@@ -26,6 +30,12 @@ struct Revision {
 struct Item {
     uid: String,
     version: u8,
+    #[serde(
+        rename = "encryptionKey",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    encryption_key: Option<ByteBuf>,
     content: Revision,
 }
 
@@ -45,6 +55,7 @@ fn revision(item: &str, deleted: bool, chunks: Vec<(String, Option<ByteBuf>)>) -
     Item {
         uid: item.to_owned(),
         version: 1,
+        encryption_key: None,
         content: Revision {
             uid: new_uid(),
             meta: ByteBuf::from(b"meta".to_vec()),
@@ -144,6 +155,75 @@ async fn content_marked_deleted_is_held_to_the_plan_like_any_other() {
     // that may store nothing more is tidied up.
     let tombstone = revision(&existing, true, Vec::new());
     assert_eq!(push(&device, &collection, vec![tombstone]).await.0, 200);
+}
+
+/// The storage budget belongs to the account, not to one collection. Two
+/// writes to different collections that check it at the same time must not
+/// both be let through on the same room.
+#[tokio::test]
+async fn concurrent_writes_to_different_collections_share_one_budget() {
+    let device = Device::signup(common::server(), "quota-race").await;
+    let pool = pool().await;
+    sqlx::query(
+        "INSERT INTO entitlements (account_id, storage_limit_bytes)
+         SELECT id, $1 FROM accounts WHERE username = $2",
+    )
+    .bind(2 * 1024 * KIB as i64)
+    .bind(&device.name)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Each collection is a few bytes of its own; the room left is for one
+    // megabyte and a bit, so a second megabyte cannot honestly fit.
+    let mut collections = Vec::new();
+    for _ in 0..32 {
+        collections.push(device.create_collection().await);
+    }
+    // Send them all at once, each on a client of its own, the way separate
+    // devices of one account would.
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(collections.len()));
+    let mut tasks = Vec::new();
+    for collection in &collections {
+        let barrier = barrier.clone();
+        let client = reqwest::Client::new();
+        let token = device.token.clone();
+        let url = device.url.clone();
+        let collection = collection.clone();
+        tasks.push(tokio::spawn(async move {
+            let item = revision(&new_uid(), false, vec![chunk(4, 1024 * KIB)]);
+            let body = Batch { items: vec![item] };
+            barrier.wait().await;
+            let response = client
+                .post(format!("{url}/api/v1/collection/{collection}/item/batch/"))
+                .header("Authorization", format!("Token {token}"))
+                .body(rmp_serde::to_vec_named(&body).unwrap())
+                .send()
+                .await
+                .expect("push");
+            response.status().as_u16()
+        }));
+    }
+    let mut results = Vec::new();
+    for task in tasks {
+        results.push(task.await.expect("join"));
+    }
+    let stored = results.iter().filter(|status| **status == 200).count();
+    assert!(stored >= 1, "not one write went through: {results:?}");
+
+    let used: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(sum(c.bytes_used), 0)::bigint
+         FROM collections c JOIN accounts a ON a.id = c.owner_id
+         WHERE a.username = $1",
+    )
+    .bind(&device.name)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        used <= 2 * 1024 * KIB as i64,
+        "{stored} writes stored {used} bytes on a 2 MiB plan"
+    );
 }
 
 /// A chunk upload bigger than any chunk may be is refused before it is
@@ -601,4 +681,616 @@ async fn deleting_a_collection_drops_what_it_held() {
     assert_eq!(push(&device, &collection, vec![late]).await, refused);
     assert_eq!(put_chunk(&device, &collection, vec![5; KIB]).await, 403);
     assert_eq!(count(&pool, "chunks", &collection).await, 0);
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Create {
+    item: Item,
+    collection_key: ByteBuf,
+    collection_type: ByteBuf,
+}
+
+/// Make a collection with these keys and return its status and uid.
+async fn create_with(device: &Device, key: &[u8], kind: &[u8]) -> (u16, String) {
+    let collection = new_uid();
+    let body = Create {
+        item: Item {
+            uid: collection.clone(),
+            version: 1,
+            encryption_key: None,
+            content: Revision {
+                uid: new_uid(),
+                meta: ByteBuf::from(b"meta".to_vec()),
+                deleted: false,
+                chunks: Vec::new(),
+            },
+        },
+        collection_key: ByteBuf::from(key.to_vec()),
+        collection_type: ByteBuf::from(kind.to_vec()),
+    };
+    let (status, _) = device.call(Method::POST, "/collection/", Some(&body)).await;
+    (status, collection)
+}
+
+/// A collection key is a key, not somewhere to keep content. Sharing and
+/// links already hold a membership key to the size the app sends; creating
+/// a collection does too, so the bytes cannot be parked outside what a plan
+/// counts.
+#[tokio::test]
+async fn collection_keys_are_held_to_a_size_the_app_uses() {
+    let device = Device::signup(common::server(), "collection-key-cap").await;
+    let too_big = vec![7u8; 4096 + 1];
+    assert_eq!(create_with(&device, &too_big, b"type").await.0, 400);
+    assert_eq!(create_with(&device, b"key", &too_big).await.0, 400);
+    assert_eq!(create_with(&device, b"", b"type").await.0, 400);
+
+    let (status, collection) = create_with(&device, &[7u8; 4096], &[8u8; 4096]).await;
+    assert_eq!(status, 201);
+    let pool = pool().await;
+    let used = bytes_used(&pool, &collection).await;
+    assert!(
+        used >= 8192,
+        "the collection keys were stored but only {used} bytes were counted"
+    );
+}
+
+/// The same for an item's key: a revision may carry one, but not megabytes
+/// of one that no plan counts.
+#[tokio::test]
+async fn item_keys_are_held_to_a_size_the_app_uses() {
+    let device = Device::signup(common::server(), "item-key-cap").await;
+    let collection = device.create_collection().await;
+
+    let mut entry = revision(&new_uid(), false, Vec::new());
+    entry.encryption_key = Some(ByteBuf::from(vec![7u8; 4096 + 1]));
+    assert_eq!(
+        push(&device, &collection, vec![entry]).await,
+        (400, "bad_request".to_owned())
+    );
+
+    let mut entry = revision(&new_uid(), false, Vec::new());
+    entry.encryption_key = Some(ByteBuf::from(vec![7u8; 4096]));
+    assert_eq!(push(&device, &collection, vec![entry]).await.0, 200);
+}
+
+/// Put an account on a plan with a storage limit before it writes anything.
+async fn plan(pool: &sqlx::PgPool, device: &Device, bytes: i64) {
+    sqlx::query(
+        "INSERT INTO entitlements (account_id, storage_limit_bytes)
+         SELECT id, $1 FROM accounts WHERE username = $2",
+    )
+    .bind(bytes)
+    .bind(&device.name)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// A key is stored bytes. A plan that counts only content and metadata can
+/// be filled with keys, and an item may carry one with no content at all.
+#[tokio::test]
+async fn item_keys_count_against_storage() {
+    let device = Device::signup(common::server(), "item-key-plan").await;
+    let pool = pool().await;
+    // Enough for the collection's own keys and one 4 KiB item key.
+    plan(&pool, &device, 6 * KIB as i64).await;
+    let collection = device.create_collection().await;
+
+    let mut first = revision(&new_uid(), false, Vec::new());
+    first.encryption_key = Some(ByteBuf::from(vec![7u8; 4096]));
+    assert_eq!(push(&device, &collection, vec![first]).await.0, 200);
+    let counted = bytes_used(&pool, &collection).await;
+    assert!(
+        counted >= 4096,
+        "the item key was stored but only {counted} bytes were counted"
+    );
+
+    let mut second = revision(&new_uid(), false, Vec::new());
+    second.encryption_key = Some(ByteBuf::from(vec![7u8; 4096]));
+    assert_eq!(
+        push(&device, &collection, vec![second]).await,
+        (402, "storage_full".to_owned()),
+        "a second key fit a plan that counts keys"
+    );
+}
+
+/// A chunk uid is stored bytes too. Zero-byte chunks with long names could
+/// otherwise fill a collection for free.
+#[tokio::test]
+async fn chunk_uids_count_against_storage() {
+    let device = Device::signup(common::server(), "chunk-uid-plan").await;
+    let pool = pool().await;
+    plan(&pool, &device, 8 * KIB as i64).await;
+    let collection = device.create_collection().await;
+
+    let named = |start: u32| -> Vec<(String, Option<ByteBuf>)> {
+        (start..start + 100)
+            .map(|i| (format!("{i:0>64}"), Some(ByteBuf::from(Vec::new()))))
+            .collect()
+    };
+    assert_eq!(
+        push(
+            &device,
+            &collection,
+            vec![revision(&new_uid(), false, named(0))]
+        )
+        .await
+        .0,
+        200
+    );
+    let counted = bytes_used(&pool, &collection).await;
+    assert!(
+        counted >= 6400,
+        "the chunk uids were stored but only {counted} bytes were counted"
+    );
+
+    assert_eq!(
+        push(
+            &device,
+            &collection,
+            vec![revision(&new_uid(), false, named(100))]
+        )
+        .await,
+        (402, "storage_full".to_owned()),
+        "a second set of chunk names fit a plan that counts them"
+    );
+}
+
+/// A page without content still carries every chunk uid of every item. The
+/// budget has to weigh those names, or `prefetch=medium` returns as much as
+/// the collection holds.
+#[tokio::test]
+async fn medium_prefetch_page_is_held_to_the_budget() {
+    let url = common::start_server(|config| config.max_page_bytes = 512 * KIB as i64);
+    let device = Device::signup(&url, "medium-page").await;
+    let collection = device.create_collection().await;
+
+    // The same thousand names, shared by a hundred items.
+    let names: Vec<(String, Option<ByteBuf>)> = (0..1000u32)
+        .map(|i| (format!("{i:0>64}"), Some(ByteBuf::from(Vec::new()))))
+        .collect();
+    let items = (0..100)
+        .map(|_| revision(&new_uid(), false, names.clone()))
+        .collect();
+    assert_eq!(push(&device, &collection, items).await.0, 200);
+
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}/api/v1/collection/{collection}/item/?prefetch=medium&limit=1000",
+            device.url
+        ))
+        .header("Authorization", format!("Token {}", device.token))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body = response.bytes().await.unwrap();
+    assert!(
+        body.len() < 700 * KIB,
+        "a medium page ignored the budget: {} bytes",
+        body.len()
+    );
+}
+
+/// An invitation carries a preview of the collection's main item. That item
+/// may name 32,768 chunks, and a page may hold a thousand invitations; the
+/// previews have to share the same page budget as everything else.
+#[tokio::test]
+async fn invitation_previews_are_held_to_the_page_budget() {
+    let url = common::start_server(|config| config.max_page_bytes = 512 * KIB as i64);
+    let owner = Device::signup(&url, "preview-owner").await;
+    let guest = Device::signup(&url, "preview-guest").await;
+    let collection = owner.create_collection().await;
+
+    let names: Vec<(String, Option<ByteBuf>)> = (0..32_768u32)
+        .map(|i| (format!("{i:0>64}"), Some(ByteBuf::from(Vec::new()))))
+        .collect();
+    assert_eq!(
+        push(
+            &owner,
+            &collection,
+            vec![revision(&collection, false, names)]
+        )
+        .await
+        .0,
+        200
+    );
+    owner.invite(&collection, &guest, READ_ONLY).await;
+
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}/api/v1/invitation/incoming/?limit=1000",
+            guest.url
+        ))
+        .header("Authorization", format!("Token {}", guest.token))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body = response.bytes().await.unwrap();
+    assert!(
+        body.len() < 700 * KIB,
+        "an invitation preview ignored the budget: {} bytes",
+        body.len()
+    );
+}
+
+/// A reference is stored bytes too. Naming chunks that are already there adds
+/// no chunk, but each revision keeps a row id for every chunk it names, so
+/// without a charge any number of items could name the same chunks for free.
+#[tokio::test]
+async fn chunk_references_count_against_storage() {
+    let device = Device::signup(common::server(), "chunk-ref-plan").await;
+    let pool = pool().await;
+    plan(&pool, &device, 16 * KIB as i64).await;
+    let collection = device.create_collection().await;
+
+    let names: Vec<String> = (0..100u32).map(|i| format!("{i:0>64}")).collect();
+    let first = names
+        .iter()
+        .map(|name| (name.clone(), Some(ByteBuf::new())))
+        .collect();
+    assert_eq!(
+        push(
+            &device,
+            &collection,
+            vec![revision(&new_uid(), false, first)]
+        )
+        .await
+        .0,
+        200
+    );
+    let named = || names.iter().map(|name| (name.clone(), None)).collect();
+    let mut last = (200, String::new());
+    for _ in 0..100 {
+        let before = bytes_used(&pool, &collection).await;
+        last = push(
+            &device,
+            &collection,
+            vec![revision(&new_uid(), false, named())],
+        )
+        .await;
+        if last.0 != 200 {
+            break;
+        }
+        assert!(
+            bytes_used(&pool, &collection).await >= before + 800,
+            "a revision naming 100 chunks was charged nothing for them"
+        );
+    }
+    assert_eq!(last, (402, "storage_full".to_owned()));
+}
+
+/// A push of many items naming the same chunks, one batch.
+async fn items_naming(
+    device: &Device,
+    collection: &str,
+    names: &[String],
+    items: usize,
+) -> Vec<String> {
+    let first = names
+        .iter()
+        .map(|name| (name.clone(), Some(ByteBuf::new())))
+        .collect();
+    let mut batch = vec![revision(&new_uid(), false, first)];
+    for _ in 1..items {
+        let named = names.iter().map(|name| (name.clone(), None)).collect();
+        batch.push(revision(&new_uid(), false, named));
+    }
+    let uids = batch.iter().map(|item| item.uid.clone()).collect();
+    assert_eq!(push(device, collection, batch).await.0, 200);
+    uids
+}
+
+#[derive(Serialize)]
+struct ItemRef<'a> {
+    uid: &'a str,
+}
+
+async fn fetch_updates(device: &Device, collection: &str, uids: &[String]) -> (u16, Vec<u8>) {
+    let refs: Vec<ItemRef> = uids.iter().map(|uid| ItemRef { uid }).collect();
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{}/api/v1/collection/{collection}/item/fetch_updates/?prefetch=medium",
+            device.url
+        ))
+        .header("Authorization", format!("Token {}", device.token))
+        .body(rmp_serde::to_vec_named(&refs).unwrap())
+        .send()
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    (status, response.bytes().await.unwrap().to_vec())
+}
+
+/// `fetch_updates` cannot end early the way a list does: a client takes what
+/// comes back for all it asked. So an answer that would not fit is refused,
+/// with a code that tells the client to ask for fewer, and a short request
+/// cannot make the server build a long answer.
+#[tokio::test]
+async fn fetch_updates_is_held_to_the_budget() {
+    let url = common::start_server(|config| config.max_page_bytes = 512 * KIB as i64);
+    let device = Device::signup(&url, "fetch-budget").await;
+    let collection = device.create_collection().await;
+    let names: Vec<String> = (0..1000u32).map(|i| format!("{i:0>64}")).collect();
+    let uids = items_naming(&device, &collection, &names, 20).await;
+
+    let (status, body) = fetch_updates(&device, &collection, &uids).await;
+    assert_eq!(
+        status, 413,
+        "20 items of 64 KB went out on a 512 KiB budget"
+    );
+    let refusal: serde_json::Value = rmp_serde::from_slice(&body).unwrap();
+    assert_eq!(refusal["code"], "too_much_at_once");
+
+    // Fewer are answered, and every item can be had in the end.
+    for batch in uids.chunks(5) {
+        let (status, body) = fetch_updates(&device, &collection, batch).await;
+        assert_eq!(status, 200);
+        assert!(body.len() < 700 * KIB, "{} bytes", body.len());
+    }
+}
+
+/// One item is always answered, however much it weighs. Otherwise nobody
+/// could ever fetch it, and whoever made it would have stopped the sync of
+/// everyone else in the collection.
+#[tokio::test]
+async fn fetch_updates_answers_one_item_of_any_size() {
+    let url = common::start_server(|config| config.max_page_bytes = 512 * KIB as i64);
+    let device = Device::signup(&url, "fetch-one").await;
+    let collection = device.create_collection().await;
+    let names: Vec<String> = (0..32_768u32).map(|i| format!("{i:0>64}")).collect();
+    let uids = items_naming(&device, &collection, &names, 1).await;
+
+    let (status, body) = fetch_updates(&device, &collection, &uids).await;
+    assert_eq!(status, 200);
+    assert!(
+        body.len() > 2 * 1024 * KIB,
+        "the item came back without its {} chunks",
+        names.len()
+    );
+}
+
+/// Metadata goes out with every item, so it takes room in a page like
+/// anything else, and paging still reaches every item.
+#[tokio::test]
+async fn pages_weigh_metadata_and_reach_every_item() {
+    #[derive(Deserialize)]
+    struct Page {
+        data: Vec<serde::de::IgnoredAny>,
+        stoken: Option<String>,
+        done: bool,
+    }
+
+    let url = common::start_server(|config| config.max_page_bytes = 512 * KIB as i64);
+    let device = Device::signup(&url, "meta-page").await;
+    let collection = device.create_collection().await;
+    let items: Vec<Item> = (0..40)
+        .map(|_| {
+            let mut item = revision(&new_uid(), false, Vec::new());
+            item.content.meta = ByteBuf::from(vec![7u8; 64 * KIB]);
+            item
+        })
+        .collect();
+    assert_eq!(push(&device, &collection, items).await.0, 200);
+
+    let client = reqwest::Client::new();
+    let (mut seen, mut stoken, mut pages) = (0, None::<String>, 0);
+    loop {
+        let mut request = client
+            .get(format!(
+                "{}/api/v1/collection/{collection}/item/?limit=1000",
+                device.url
+            ))
+            .header("Authorization", format!("Token {}", device.token));
+        if let Some(stoken) = &stoken {
+            request = request.query(&[("stoken", stoken)]);
+        }
+        let body = request.send().await.unwrap().bytes().await.unwrap();
+        assert!(
+            body.len() < 700 * KIB,
+            "a page ignored the budget: {} bytes",
+            body.len()
+        );
+        let page: Page = rmp_serde::from_slice(&body).unwrap();
+        seen += page.data.len();
+        stoken = page.stoken;
+        pages += 1;
+        assert!(pages <= 40, "paging stopped making progress");
+        if page.done {
+            break;
+        }
+    }
+    assert_eq!(seen, 40);
+    assert!(pages > 1, "40 items of 64 KiB fit one page of 512 KiB");
+}
+
+async fn accept_status(guest: &Device, invitation: &str) -> (u16, String) {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Accept {
+        collection_type: ByteBuf,
+        encryption_key: ByteBuf,
+    }
+    let body = Accept {
+        collection_type: ByteBuf::from(b"type".to_vec()),
+        encryption_key: ByteBuf::from(b"my key".to_vec()),
+    };
+    let (status, reply) = guest
+        .call(
+            Method::POST,
+            &format!("/invitation/incoming/{invitation}/accept/"),
+            Some(&body),
+        )
+        .await;
+    let code = reply["code"].as_str().unwrap_or_default().to_owned();
+    (status, code)
+}
+
+/// A member's copy of the keys is stored bytes the owner pays for, so joining
+/// is a write like any other. The refusal goes to whoever is joining, and
+/// says whose plan it is about.
+#[tokio::test]
+async fn joining_is_held_to_the_owners_plan() {
+    let pool = pool().await;
+    let guest = Device::signup(common::server(), "joiner").await;
+
+    let owner = Device::signup(common::server(), "full-owner").await;
+    let collection = owner.create_collection().await;
+    let invitation = owner.invite(&collection, &guest, READ_ONLY).await;
+    plan(&pool, &owner, 1).await;
+    assert_eq!(
+        accept_status(&guest, &invitation).await,
+        (402, "storage_full".to_owned())
+    );
+
+    let owner = Device::signup(common::server(), "lapsed-owner").await;
+    let collection = owner.create_collection().await;
+    let invitation = owner.invite(&collection, &guest, READ_ONLY).await;
+    sqlx::query(
+        "INSERT INTO entitlements (account_id, read_only)
+         SELECT id, TRUE FROM accounts WHERE username = $1",
+    )
+    .bind(&owner.name)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        accept_status(&guest, &invitation).await,
+        (402, "plan_lapsed".to_owned())
+    );
+}
+
+/// Ask for a page and read no further than the status. With so little room
+/// to arrive in, the page stays on the server for as long as this connection
+/// does.
+async fn park_on_a_page(device: &Device, address: &str, collection: &str) -> (u16, TcpStream) {
+    let socket = TcpSocket::new_v4().unwrap();
+    socket.set_recv_buffer_size(4 * KIB as u32).unwrap();
+    let authority = device.url.trim_start_matches("http://");
+    let mut stream = socket.connect(authority.parse().unwrap()).await.unwrap();
+    let head = format!(
+        "GET /api/v1/collection/{collection}/item/?limit=1000 HTTP/1.1\r\nHost: test\r\n\
+         Authorization: Token {}\r\nX-Forwarded-For: {address}\r\n\r\n",
+        device.token
+    );
+    stream.write_all(head.as_bytes()).await.unwrap();
+    let mut status = [0u8; 12];
+    stream.read_exact(&mut status).await.unwrap();
+    let status = std::str::from_utf8(&status[9..12])
+        .unwrap()
+        .parse()
+        .unwrap();
+    (status, stream)
+}
+
+/// A page goes out larger than it was weighed. Set as low as the page, a cap
+/// would refuse a full page on a server with nothing else to do, every time
+/// the client asked for it.
+#[tokio::test]
+async fn a_cap_as_low_as_a_page_still_lets_a_full_page_out() {
+    const PAGE: usize = 512 * KIB;
+    let url = common::start_server(|config| {
+        config.max_page_bytes = PAGE as i64;
+        config.max_response_bytes_in_flight = PAGE;
+        config.max_response_bytes_in_flight_per_address = PAGE;
+    });
+    let device = Device::signup(&url, "full-page").await;
+    let collection = device.create_collection().await;
+    let items: Vec<Item> = (0..8)
+        .map(|_| {
+            let mut item = revision(&new_uid(), false, Vec::new());
+            item.content.meta = ByteBuf::from(vec![7u8; 64 * KIB]);
+            item
+        })
+        .collect();
+    assert_eq!(push(&device, &collection, items).await.0, 200);
+
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{url}/api/v1/collection/{collection}/item/?limit=1000"
+        ))
+        .header("Authorization", format!("Token {}", device.token))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+}
+
+/// A response stays in memory until the client has taken it, so a client that
+/// does not take it holds on to it. What can be held that way is capped for
+/// each client and in all, whoever is in front of the server. Small answers
+/// still go out, and the room is there again once a client is gone.
+#[tokio::test]
+async fn responses_are_held_to_the_room_the_server_has() {
+    const PAGE: usize = 8 * 1024 * KIB;
+    // A page goes out a little larger than it was weighed.
+    const MARGIN: usize = 1024 * KIB;
+    let url = common::start_server(|config| {
+        config.max_page_bytes = PAGE as i64;
+        config.max_response_bytes_in_flight = 3 * PAGE + MARGIN;
+        config.max_response_bytes_in_flight_per_address = 2 * PAGE + MARGIN;
+    });
+    let device = Device::signup(&url, "slow-reader").await;
+    let collection = device.create_collection().await;
+    for _ in 0..3 {
+        let items: Vec<Item> = (0..100)
+            .map(|_| {
+                let mut item = revision(&new_uid(), false, Vec::new());
+                item.content.meta = ByteBuf::from(vec![7u8; 64 * KIB]);
+                item
+            })
+            .collect();
+        assert_eq!(push(&device, &collection, items).await.0, 200);
+    }
+    let small = device.create_collection().await;
+    device.add_item(&small).await;
+
+    // One client gets as far as its share and no further.
+    let (status, _first) = park_on_a_page(&device, "203.0.113.1", &collection).await;
+    assert_eq!(status, 200);
+    let (status, _second) = park_on_a_page(&device, "203.0.113.1", &collection).await;
+    assert_eq!(status, 200);
+    let (status, _) = park_on_a_page(&device, "203.0.113.1", &collection).await;
+    assert_eq!(status, 503);
+
+    // Another has one left of the room, and takes it.
+    let (status, third) = park_on_a_page(&device, "203.0.113.2", &collection).await;
+    assert_eq!(status, 200);
+    let (status, _) = park_on_a_page(&device, "203.0.113.2", &collection).await;
+    assert_eq!(status, 503);
+
+    let client = reqwest::Client::new();
+    let get = |path: String| {
+        client
+            .get(format!("{url}/api/v1{path}"))
+            .header("Authorization", format!("Token {}", device.token))
+            .send()
+    };
+    let small_page = format!("/collection/{small}/item/");
+    let (status, _) = device.call::<()>(Method::GET, &small_page, None).await;
+    assert_eq!(status, 200, "a small answer was refused");
+    let health = reqwest::get(format!("{url}/healthz")).await.unwrap();
+    assert_eq!(health.status(), 200);
+
+    // A client that goes away gives its room back, and one that takes what
+    // it asked for gets all of it, in one piece and as long as it said.
+    drop(third);
+    let page = format!("/collection/{collection}/item/?limit=1000");
+    let answer = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let answer = get(page.clone()).await.unwrap();
+            if answer.status() == 200 {
+                return answer;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the room never came back");
+    let length = answer.content_length().expect("a length");
+    let body = answer.bytes().await.unwrap();
+    assert_eq!(body.len() as u64, length);
+    assert!(body.len() > PAGE / 2, "only {} bytes", body.len());
 }

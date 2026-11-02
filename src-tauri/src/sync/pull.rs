@@ -323,6 +323,22 @@ impl Arrived {
     }
 }
 
+/// What to ask for instead when the server refused to send `wanted` in one
+/// answer: the same in two turns, the one to ask for next last. The server
+/// answers one item whatever it weighs, so this always gets there. `None`
+/// for any other error, or when one item was refused and there is no less
+/// to ask for.
+pub(super) fn in_two_turns(error: &EtebaseError, wanted: &[String]) -> Option<[Vec<String>; 2]> {
+    let too_much = matches!(
+        error,
+        EtebaseError::Refused { code, .. } if code == etebase::refusal::TOO_MUCH_AT_ONCE
+    );
+    (too_much && wanted.len() > 1).then(|| {
+        let (first, rest) = wanted.split_at(wanted.len() / 2);
+        [rest.to_vec(), first.to_vec()]
+    })
+}
+
 /// Whether the server sent an item as the uids of its chunks, having no
 /// room for the content. A deleted item has none to send.
 pub(super) fn held_back(item: &Item) -> bool {
@@ -379,13 +395,21 @@ impl Applier<'_> {
         kind: ItemKind,
         uids: &[String],
     ) -> AppResult<()> {
-        let mut wanted: Vec<String> = uids.to_vec();
-        while !wanted.is_empty() {
-            let fetched = im
-                .fetch_multi(wanted.iter().map(String::as_str), None)
-                .map_err(|e| {
-                    AppError::InvalidArg(format!("fetch {} items: {e}", self.space.stoken_key))
-                })?;
+        let mut waiting = vec![uids.to_vec()];
+        while let Some(wanted) = waiting.pop() {
+            let fetched = match im.fetch_multi(wanted.iter().map(String::as_str), None) {
+                Ok(fetched) => fetched,
+                Err(e) => match in_two_turns(&e, &wanted) {
+                    Some(turns) => {
+                        waiting.extend(turns);
+                        continue;
+                    }
+                    None => {
+                        let what = self.space.stoken_key;
+                        return Err(AppError::InvalidArg(format!("fetch {what} items: {e}")));
+                    }
+                },
+            };
             let mut again = Vec::new();
             for (place, item) in fetched.data().iter().enumerate() {
                 // Changed again since the listing, into something else or
@@ -399,7 +423,9 @@ impl Applier<'_> {
                     Arrived::Later => again.push(item.uid().to_string()),
                 }
             }
-            wanted = again;
+            if !again.is_empty() {
+                waiting.push(again);
+            }
         }
         Ok(())
     }

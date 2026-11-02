@@ -18,7 +18,10 @@ docker compose exec server mindstream-server user enable <username>
 docker compose exec server mindstream-server user delete <username>
 ```
 
-Disabling an account ends its sessions and keeps its data. Deleting one removes
+Disabling an account ends its sessions and keeps its data, including its place
+in folders others share with it and any invite links it made. Those links stop
+working and start again if the account is enabled, so to end them for good, have
+an admin of the folder remove the account from it. Deleting one removes
 everything it owns on the server, shared folders included, for everyone they
 are shared with too. The server never holds a
 password or a key, so it cannot reset a password.
@@ -123,6 +126,11 @@ says which limit: `storage_full`, `item_too_large`, `space_limit`,
 are always accepted, and nothing is ever removed to bring an account back under
 a limit.
 
+Storage counts everything a collection holds, whoever wrote it: content, and the
+keys, names and references that come with it. Someone joining adds their copy of
+the keys to it, so a person accepting an invitation to a full or lapsed
+account's folder gets the same refusal.
+
 The server can only limit what it can count. It cannot tell a note from an
 attachment, so there is no limit on the number of notes.
 
@@ -188,16 +196,26 @@ The steps are in the
 [quick start](self-hosting.md#4-operations-and-backups): back up, pull, then
 `docker compose up -d --build`.
 
-Changes that need you to act before an upgrade will be listed here, newest
-first. There are none yet.
+Changes that need you to act before an upgrade are listed here, newest first.
+
+**After 0.2.0.** Storage now counts keys, names and references besides content,
+so the first start recounts every collection and accounts show a little more in
+use. An account close to its limit may end up over it. Nothing is removed, but
+only deletions go through until there is room, so raise the limit first if that
+matters. Accounts without limits are not affected.
+
+Signing in no longer says that a username does not exist, so a mistyped name
+reads as a wrong password. App versions before this one show "Wrong password."
+for it, and a login that was under way during the upgrade has to start again.
 
 ## Threat model notes
 
 What the server deliberately does not defend, so nobody is surprised:
 
-- Usernames are enumerable: signing in names an account that either exists or
-  not, and any signed-in account can look up others to address invitations.
-  Usernames appear in sharing dialogs anyway.
+- Signing in does not say whether a username exists, but on a server with open
+  signup, taking a name does. Any signed-in account can look up others to address
+  invitations, at 30 names a minute and with 20 names that turn out to be nobody's
+  a day by default. Usernames appear in sharing dialogs anyway.
 - A removed member keeps the ciphertext they already synced. The server stops
   serving them anything new; forward secrecy needs the shared folder's key
   rotated among the remaining members, which the server cannot do for you.

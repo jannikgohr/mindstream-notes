@@ -8,6 +8,7 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use ed25519_dalek::SigningKey;
 use hmac::{Hmac, Mac};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
@@ -17,6 +18,7 @@ use subtle::ConstantTimeEq;
 type HmacSha256 = Hmac<Sha256>;
 
 const STOKEN_TAG_LEN: usize = 16;
+const CHALLENGE_NAME_LEN: usize = 8;
 const CHALLENGE_NONCE_LEN: usize = 16;
 const CHALLENGE_TAG_LEN: usize = 32;
 /// How long a client has to answer a login challenge.
@@ -58,6 +60,20 @@ pub struct Keys {
     challenge: [u8; 32],
     room_ticket: [u8; 32],
     recovery_grant: [u8; 32],
+    name: [u8; 32],
+}
+
+/// What stands in for an account where a name has none, so that signing in
+/// goes the same way for it, see `auth::verify_signed`. It is worked out from
+/// the name and the server's secret, so asking again gets the same answer, as
+/// it does for an account.
+pub struct Decoy {
+    /// Never an account's: those count up from one.
+    pub id: i64,
+    /// As long as what signup stores.
+    pub salt: Vec<u8>,
+    /// A key nobody holds.
+    pub login_pubkey: [u8; 32],
 }
 
 /// Who may enter which room. Carried in a ticket, so the socket that
@@ -100,6 +116,28 @@ impl Keys {
             challenge: derive(b"mindstream-server/login-challenge/v1"),
             room_ticket: derive(b"mindstream-server/room-ticket/v1"),
             recovery_grant: derive(b"mindstream-server/recovery-grant/v1"),
+            name: derive(b"mindstream-server/name/v1"),
+        }
+    }
+
+    /// A value only this server can work out, for this name and purpose.
+    fn of_name(&self, purpose: &[u8], name: &str) -> [u8; 32] {
+        let mut mac = HmacSha256::new_from_slice(&self.name).expect("any key length works");
+        mac.update(purpose);
+        mac.update(&[0]);
+        mac.update(name.as_bytes());
+        mac.finalize().into_bytes().into()
+    }
+
+    pub fn decoy(&self, name: &str) -> Decoy {
+        let id = self.of_name(b"id", name);
+        let id = i64::from_be_bytes(id[..8].try_into().expect("8 bytes"));
+        Decoy {
+            id: id | i64::MIN,
+            salt: self.of_name(b"salt", name).to_vec(),
+            login_pubkey: SigningKey::from_bytes(&self.of_name(b"key", name))
+                .verifying_key()
+                .to_bytes(),
         }
     }
 
@@ -126,12 +164,22 @@ impl Keys {
         bool::from(expected.as_bytes().ct_eq(token.as_bytes())).then_some(seq)
     }
 
-    /// A login challenge: the account it was issued for, when, and a nonce,
-    /// authenticated so the server need not remember it.
-    pub fn challenge(&self, account_id: i64) -> Vec<u8> {
+    /// What a challenge says about the name it was issued for. A hash and
+    /// not the account's number, which would tell a name that has one.
+    fn challenge_name(&self, name: &str) -> [u8; CHALLENGE_NAME_LEN] {
+        let tag = self.of_name(b"challenge", name);
+        tag[..CHALLENGE_NAME_LEN]
+            .try_into()
+            .expect("the tag's length")
+    }
+
+    /// A login challenge: the name it was issued for, when, and a nonce,
+    /// authenticated so the server need not remember it. It looks the same
+    /// whether an account has the name or not.
+    pub fn challenge(&self, name: &str) -> Vec<u8> {
         let mut out = Vec::with_capacity(16 + CHALLENGE_NONCE_LEN + CHALLENGE_TAG_LEN);
         out.extend_from_slice(&now_secs().to_be_bytes());
-        out.extend_from_slice(&account_id.to_be_bytes());
+        out.extend_from_slice(&self.challenge_name(name));
         out.extend_from_slice(&random_bytes::<CHALLENGE_NONCE_LEN>());
         let mut mac = HmacSha256::new_from_slice(&self.challenge).expect("any key length works");
         mac.update(&out);
@@ -139,7 +187,7 @@ impl Keys {
         out
     }
 
-    pub fn verify_challenge(&self, challenge: &[u8], account_id: i64) -> ChallengeCheck {
+    pub fn verify_challenge(&self, challenge: &[u8], name: &str) -> ChallengeCheck {
         let body_len = 16 + CHALLENGE_NONCE_LEN;
         if challenge.len() != body_len + CHALLENGE_TAG_LEN {
             return ChallengeCheck::Invalid;
@@ -151,8 +199,7 @@ impl Keys {
             return ChallengeCheck::Invalid;
         }
         let issued = u64::from_be_bytes(body[..8].try_into().expect("8 bytes"));
-        let issued_for = i64::from_be_bytes(body[8..16].try_into().expect("8 bytes"));
-        if issued_for != account_id {
+        if body[8..16] != self.challenge_name(name) {
             return ChallengeCheck::Invalid;
         }
         let now = now_secs();
@@ -298,31 +345,56 @@ mod tests {
     }
 
     #[test]
-    fn challenge_is_bound_to_the_account() {
+    fn challenge_is_bound_to_the_name() {
         let keys = Keys::from_secret(b"one");
-        let challenge = keys.challenge(7);
-        let ChallengeCheck::Valid { nonce, expires } = keys.verify_challenge(&challenge, 7) else {
+        let challenge = keys.challenge("seven");
+        let ChallengeCheck::Valid { nonce, expires } = keys.verify_challenge(&challenge, "seven")
+        else {
             panic!("a fresh challenge is not valid");
         };
         assert_eq!(nonce[..], challenge[16..32]);
         assert!(expires >= now_secs() + CHALLENGE_TTL_SECS - 1);
         assert_ne!(
-            keys.verify_challenge(&keys.challenge(7), 7),
+            keys.verify_challenge(&keys.challenge("seven"), "seven"),
             ChallengeCheck::Valid { nonce, expires },
             "two challenges looked the same"
         );
         assert_eq!(
-            keys.verify_challenge(&challenge, 8),
+            keys.verify_challenge(&challenge, "eight"),
             ChallengeCheck::Invalid
         );
 
         let mut tampered = challenge.clone();
         tampered[20] ^= 1;
-        assert_eq!(keys.verify_challenge(&tampered, 7), ChallengeCheck::Invalid);
         assert_eq!(
-            Keys::from_secret(b"two").verify_challenge(&challenge, 7),
+            keys.verify_challenge(&tampered, "seven"),
             ChallengeCheck::Invalid
         );
+        assert_eq!(
+            Keys::from_secret(b"two").verify_challenge(&challenge, "seven"),
+            ChallengeCheck::Invalid
+        );
+    }
+
+    /// A decoy has to pass for an account to someone who asks twice, and be
+    /// nobody's: not an account's number, and not a key anyone could hold.
+    #[test]
+    fn a_decoy_stays_the_same_and_belongs_to_nobody() {
+        let keys = Keys::from_secret(b"one");
+        let decoy = keys.decoy("nobody");
+        let again = keys.decoy("nobody");
+        assert_eq!(decoy.salt, again.salt);
+        assert_eq!(decoy.login_pubkey, again.login_pubkey);
+        assert_eq!(decoy.salt.len(), 32);
+        assert!(decoy.id < 0 && again.id == decoy.id);
+        assert!(ed25519_dalek::VerifyingKey::from_bytes(&decoy.login_pubkey).is_ok());
+
+        let other = keys.decoy("somebody");
+        assert_ne!(decoy.salt, other.salt);
+        assert_ne!(decoy.login_pubkey, other.login_pubkey);
+        assert_ne!(decoy.id, other.id);
+        // Knowing the salt of one server says nothing about another's.
+        assert_ne!(decoy.salt, Keys::from_secret(b"two").decoy("nobody").salt);
     }
 
     #[test]
@@ -374,11 +446,14 @@ mod tests {
         let keys = Keys::from_secret(b"one");
         let mut body = Vec::new();
         body.extend_from_slice(&(now_secs() - CHALLENGE_TTL_SECS - 5).to_be_bytes());
-        body.extend_from_slice(&7i64.to_be_bytes());
+        body.extend_from_slice(&keys.challenge_name("seven"));
         body.extend_from_slice(&[0u8; CHALLENGE_NONCE_LEN]);
         let mut mac = HmacSha256::new_from_slice(&keys.challenge).unwrap();
         mac.update(&body);
         body.extend_from_slice(&mac.finalize().into_bytes());
-        assert_eq!(keys.verify_challenge(&body, 7), ChallengeCheck::Expired);
+        assert_eq!(
+            keys.verify_challenge(&body, "seven"),
+            ChallengeCheck::Expired
+        );
     }
 }

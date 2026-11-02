@@ -23,7 +23,7 @@ use sqlx::PgConnection;
 use crate::auth::{username_key, AuthUser};
 use crate::collections::{self, membership};
 use crate::config::SignupPolicy;
-use crate::edge::AuthAttempt;
+use crate::edge::{AuthAttempt, ResponseRoom};
 use crate::error::{ApiError, ApiResult};
 use crate::events::{self, Event};
 use crate::keys::{hash_session_token, random_bytes};
@@ -245,10 +245,15 @@ pub async fn create(
     let collection = membership(&mut tx, user.account_id, &body.collection, true).await?;
     collection.require_admin()?;
     collection.require_live()?;
-    sqlx::query("DELETE FROM invite_links WHERE collection_id = $1 AND expires_at <= now()")
-        .bind(collection.id)
-        .execute(&mut *tx)
-        .await?;
+    let expired: Vec<i64> = sqlx::query_scalar(
+        "DELETE FROM invite_links WHERE collection_id = $1 AND expires_at <= now()
+         RETURNING (octet_length(uid) + octet_length(signed_encryption_key)
+                    + octet_length(claim_pubkey))::bigint",
+    )
+    .bind(collection.id)
+    .fetch_all(&mut *tx)
+    .await?;
+    collections::give_back(&mut tx, collection.id, expired.iter().sum()).await?;
     let outstanding: i64 =
         sqlx::query_scalar("SELECT count(*) FROM invite_links WHERE collection_id = $1")
             .bind(collection.id)
@@ -264,6 +269,12 @@ pub async fn create(
     // A link nobody could use is refused now, while the person making it
     // can still do something about it.
     limits::check_new_member(&mut tx, collection.id, collection.owner_id, true).await?;
+    let link_bytes = body.uid.len() as i64
+        + body.signed_encryption_key.len() as i64
+        + body.claim_pubkey.len() as i64;
+    if let Some(limits) = limits::for_writes(&mut tx, collection.owner_id).await? {
+        limits.check(link_bytes, 0, false)?;
+    }
 
     let inserted = sqlx::query(
         "INSERT INTO invite_links
@@ -291,6 +302,11 @@ pub async fn create(
             "Link with this uid already exists",
         ));
     }
+    sqlx::query("UPDATE collections SET bytes_used = bytes_used + $2 WHERE id = $1")
+        .bind(collection.id)
+        .bind(link_bytes)
+        .execute(&mut *tx)
+        .await?;
     let info: LinkInfo = sqlx::query_as(&format!("{LINK_INFO} WHERE l.uid = $1"))
         .bind(&body.uid)
         .fetch_one(&mut *tx)
@@ -333,20 +349,32 @@ pub async fn revoke(
     user: AuthUser,
     Path(uid): Path<String>,
 ) -> ApiResult<StatusCode> {
+    let mut tx = state.pool.begin().await?;
+    // The collection first, like every other writer. Taking the link first
+    // and the collection's row for its bytes after would be the opposite
+    // order to `claim`, and each could wait for the other.
+    let collection: i64 =
+        sqlx::query_scalar("SELECT collection_id FROM invite_links WHERE uid = $1")
+            .bind(&uid)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or_else(no_link)?;
+    collections::lock_collection(&mut tx, collection).await?;
     // Any admin of the collection may, not only the one who made the link.
-    let removed = sqlx::query(&format!(
+    let bytes: i64 = sqlx::query_scalar(&format!(
         "DELETE FROM invite_links l USING members m
          WHERE l.uid = $1 AND m.collection_id = l.collection_id AND m.account_id = $2
-           AND m.access_level = {ACCESS_ADMIN}"
+           AND m.access_level = {ACCESS_ADMIN}
+         RETURNING (octet_length(l.uid) + octet_length(l.signed_encryption_key)
+                    + octet_length(l.claim_pubkey))::bigint"
     ))
     .bind(&uid)
     .bind(user.account_id)
-    .execute(&state.pool)
+    .fetch_optional(&mut *tx)
     .await?
-    .rows_affected();
-    if removed == 0 {
-        return Err(no_link());
-    }
+    .ok_or_else(no_link)?;
+    collections::give_back(&mut tx, collection, bytes).await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -376,6 +404,7 @@ pub struct OpenedLink {
 /// account. Takes the secret and nothing else.
 pub async fn open(
     State(state): State<AppState>,
+    room: ResponseRoom,
     _attempt: AuthAttempt,
     Path(uid): Path<String>,
     Msgpack(body): Msgpack<Proof>,
@@ -388,10 +417,11 @@ pub async fn open(
         .filter(|link| proves(&link.claim_pubkey, &body.signature, &message))
         .ok_or_else(no_link)?;
     link.claimable()?;
-    let collection_item = collections::main_items(&state, &mut conn, &[link.collection_id])
-        .await?
-        .remove(&link.collection_id)
-        .ok_or_else(|| ApiError::internal("a collection has no main item"))?;
+    let collection_item =
+        collections::main_items(&state, &room, &mut conn, &[link.collection_id], i64::MAX)
+            .await?
+            .remove(&link.collection_id)
+            .ok_or_else(|| ApiError::internal("a collection has no main item"))?;
     Ok(Msgpack(OpenedLink {
         signup: state.config.signup == SignupPolicy::Invite
             && link.allows_signup
@@ -451,12 +481,26 @@ pub async fn claim(
             "You already belong to this space.",
         ));
     }
+    // Someone an admin took out does not come back by a link that happens
+    // to still have uses left, whichever link it is. An invitation is how an
+    // admin lets them back in.
+    let removed: Option<bool> = sqlx::query_scalar(
+        "SELECT by_admin FROM removed_members WHERE collection_id = $1 AND account_id = $2",
+    )
+    .bind(link.collection_id)
+    .bind(user.account_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if removed == Some(true) {
+        return Err(no_link());
+    }
     link.claimable()?;
     limits::check_new_member(&mut tx, link.collection_id, link.owner_id, false).await?;
 
     sharing::add_member(
         &mut tx,
         link.collection_id,
+        link.owner_id,
         &user,
         link.access_level,
         &body.encryption_key,

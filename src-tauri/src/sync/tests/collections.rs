@@ -222,6 +222,41 @@ fn asking_again_for_what_the_server_held_back_reaches_every_item() {
 }
 
 #[test]
+fn asking_for_fewer_reaches_every_item_a_large_batch_was_refused_for() {
+    // The server's rule, played back: more than one item that would not fit
+    // together is refused, and one item is always answered.
+    const LIMIT: usize = 300;
+    let size = |name: &String| name.len() * 100;
+    let refused = EtebaseError::Refused {
+        status: 413,
+        code: etebase::refusal::TOO_MUCH_AT_ONCE.to_string(),
+        detail: String::new(),
+    };
+
+    let names = ["aa", "bb", "hhhhhhhhhh", "c", "ddd"];
+    let batch: Vec<String> = names.iter().map(|name| name.to_string()).collect();
+    let mut waiting = vec![batch.clone()];
+    let (mut answered, mut rounds) = (Vec::new(), 0);
+    while let Some(wanted) = waiting.pop() {
+        rounds += 1;
+        assert!(rounds <= 2 * names.len(), "asking stopped making progress");
+        if wanted.len() > 1 && wanted.iter().map(size).sum::<usize>() > LIMIT {
+            waiting.extend(in_two_turns(&refused, &wanted).expect("there is less to ask for"));
+        } else {
+            answered.extend(wanted);
+        }
+    }
+
+    // Everything came back once, in the order it was asked for.
+    assert_eq!(answered, batch);
+
+    // Nothing is left to split in one item, and only this refusal splits.
+    assert!(in_two_turns(&refused, &batch[..1]).is_none());
+    let other = EtebaseError::Http("HTTP error 500".into());
+    assert!(in_two_turns(&other, &batch).is_none());
+}
+
+#[test]
 fn rehome_detaches_then_scope_pull_reclaims_with_local_edits() {
     // The A/B offline-merge scenario: device A has an unpushed edit to a
     // note in a folder that device B just shared. B's re-home tombstones
