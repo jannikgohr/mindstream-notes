@@ -54,6 +54,7 @@
   import { recoveryKeyFile } from '$lib/account/recovery-key-file';
   import {
     describeRefusal,
+    describeSignInRefusal,
     refusalReason,
     REASON_CODE_REQUIRED
   } from '$lib/account/refusal';
@@ -341,7 +342,7 @@
       else if (mode === 'signup') await signUp();
       else await recover();
     } catch (err) {
-      if (!askForCode(err)) error = describeRefusal(err);
+      if (!askForCode(err)) error = describeSignInRefusal(err);
     } finally {
       busy = false;
     }

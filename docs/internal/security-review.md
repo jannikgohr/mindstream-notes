@@ -1,8 +1,10 @@
 # Security review — open items
 
 What a security audit of Mindstream Notes found and has **not** yet resolved.
-Fixed findings have been removed; `git log` on this file has the full original
-audit and the reasoning behind each fix.
+Nothing from that audit is open any more. `git log` on this file has the full
+original audit and the reasoning behind each fix. The October 2026 test of the
+sync server keeps its own list in
+[pen-test-2026-10.md](pen-test-2026-10.md), including what is only mitigated there.
 
 For the by-design trade-offs the sync/history model carries see
 [limitations.md](limitations.md); for how the pieces fit together
@@ -10,138 +12,35 @@ see [architecture.md](architecture.md).
 
 ## Trust boundaries
 
-The three that matter, and the ones every item below sits on:
+The three that matter:
 
 1. **Relay/server operator** — sees ciphertext and all routing metadata.
 2. **A share recipient** — holds the room key and can author content your
    client ingests.
 3. **A revoked/downgraded member** — someone who _used_ to hold the above.
 
-## Summary
+## Closed
 
-| ID                                                      | Severity | Area    | Short                                                                |
-| ------------------------------------------------------- | -------- | ------- | -------------------------------------------------------------------- |
-| [M4](#m4--writer-key-username-binding-is-self-asserted) | Medium   | Sharing | A writer can publish a signing key under another's username          |
-| [M5](#m5--share-manifest-provenance-is-not-verified)    | Medium   | Sharing | A manifest claiming a scope is trusted without checking who wrote it |
-| [L4](#l4--etebase-image-is-pinned-by-tag)               | Low      | Backend | Image contents can change under a fixed tag                          |
+- **M4, writer keys bound to a self-declared username.** The writer-key registry
+  is gone. The sync server authenticates each room socket from a ticket only a
+  member can get, names the sender of every frame itself, and drops document
+  changes from members who may only read.
+- **M5, share manifest provenance not verified.** A shared folder is one
+  collection now, so no manifest decides which room or collection a client uses.
+  The manifest that remains names the folder at the top of the share, and a
+  device believes it only for a folder that arrived through that share. See
+  [server-design.md](server-design.md#sharing).
+- **L4, Etebase image pinned by tag.** The Etebase image is no longer used. The
+  server is built from this repository.
 
-Both Mediums are the same shape: cryptographic material bound to a
-**self-declared** identity rather than an attested one. Worth designing
-together.
+## Covered by tests
 
-M4 and L4 no longer apply, as each section notes. M5 stands until shared
-folders move to one collection per space, which removes the manifest. See
-[server-design.md](server-design.md).
-
----
-
-## M4 — Writer-key username binding is self-asserted
-
-**Resolved.** The writer-key registry is gone. The sync server authenticates
-each room socket from a ticket only a member can get, names the sender of
-every frame itself, and drops document changes from members who may only
-read. What follows describes the code as it was.
-
-**Where:** [`sync/mod.rs`](../../src-tauri/src/sync/mod.rs),
-`list_collab_writer_keys` / `filter_writable_collab_writers`.
-
-Writer signing keys are published as ordinary items in the scope collection.
-`list_collab_writer_keys` reads `payload.username` **from the item content** and
-pairs it with `payload.public_key_b64`. `filter_writable_collab_writers` then
-checks only that the _claimed_ username appears in the collection's writable
-member set — never that the member who wrote the item is the member it names.
-
-So a writable member can publish a key item claiming another writable member's
-username bound to their own public key. Every peer accepts frames signed by that
-key as authored by the impersonated user.
-
-This is **not** a privilege escalation: Etebase enforces read-only at the
-server, so only an existing writer can publish the item, and a writer can
-already write. The impact is **attribution** — precisely what the signed-frame
-layer was built to establish. It also interacts badly with downgrade: keys
-published during an epoch outlive the moment of publication, so a member can
-pre-position a key under another identity before losing write access.
-
-**Why it is still open.** There is no server-attested identity to bind to.
-Etebase's `ItemMetadata` carries only type/name/mtime/description/colour with no
-author field, and items are end-to-end encrypted, so the server cannot attest
-authorship to other members either.
-
-**Suggested:** have the collection owner counter-sign each writer key, so the
-roster is owner-attested rather than member-attested. That needs a long-term
-owner signing identity and a trust bootstrap at invitation-accept time — a
-protocol change, and a breaking one.
-
-## M5 — Share manifest provenance is not verified
-
-**Where:** [`sharing.rs`](../../src-tauri/src/sharing.rs),
-`share_scope_collab_info` / `select_scope_manifest`.
-
-`share_scope_collab_info` lists every `mindstream.share_manifest` collection the
-account can see and matches on `share_scope_id`, with no check on who created
-that collection.
-
-`share_scope_id` is a UUID, so an outsider cannot guess it. But every member of
-a scope knows their own scope's id. A member (including a read-only one, who can
-create their _own_ collections and share them with you) can create a manifest
-collection claiming that same `share_scope_id`, carrying attacker-chosen
-`collab_salt`, `collab_epoch`, and part-collection UIDs, and share it with the
-victim — who would then derive room ids and keys from the attacker's salt.
-
-**Partly mitigated.** Resolution no longer takes the first match: it collects
-every manifest claiming a scope and refuses to resolve the scope at all if there
-is more than one. That kills the race — an impostor manifest can no longer be
-silently preferred — and failing closed costs live collab for that folder, where
-guessing would have cost the room key.
-
-**What is still open:** provenance itself. A manifest whose legitimate twin is
-absent is still trusted. The code treats "exactly one manifest claims this
-scope" as "the right one does".
-
-**Suggested:** verify the manifest collection's owner against the scope owner
-recorded locally at accept time.
-
-## L4 — Etebase image is pinned by tag
-
-**Resolved.** The Etebase image is no longer used. The server is built from
-this repository. What follows describes the stack as it was.
-
-**Where:** `backend/docker-compose.yml`, since removed.
-
-`victorrds/etebase` is pinned by tag (`0.14.2-alpine`) rather than by digest, so
-the image contents can change under a fixed tag without the compose file
-changing.
-
-**Suggested:** pin by digest and bump deliberately.
-
----
-
-## Unverified, which is its own risk
-
-_Re-checked 2026-09-04._
-
-**Two real clients converging over the live relay** is now covered: the T4
-`collab.e2e.ts` and `sharing.e2e.ts` specs were red when this section was
-written and were repaired on 2026-07-20 (see
-[e2e/status.md](e2e/status.md#previously-red-now-fixed--2026-07-20)). This
-paragraph previously said they were still red and linked to a heading that
-no longer exists.
-
-What has **not** changed is the gap that mattered more. Neither of these
-exists in any spec:
-
-- a **read-only member cannot write** to a shared collection
-- a **revoked member loses access** once the epoch rotates
-
-Both are T4. They are the difference between "the crypto is right" and "the
-permission model is right", and only the second class of bug hands a colleague
-data they should not have. They are no longer blocked on anything — the specs
-that would host them are green — so what remains is writing them.
-
-Worth stating plainly: T3/T4 don't run in CI at all
-([e2e/status.md, open gaps](e2e/status.md#open-gaps)). Even once these two
-tests exist, nothing will run them on a pull request. The permission model is
-currently verified only when someone runs the suite by hand.
+The two gaps this file used to list are closed. `tests/access.rs` in the server
+has `read_only_member_can_read_but_not_write` and
+`removed_member_loses_access_at_once`, and they run on every pull request that
+touches the server. `multi/sharing.e2e.ts` changes a member's access and removes
+them between two real clients. The collaboration suites run on pushes to main,
+on diffs that touch sync or sharing, and on pull requests labelled `ci:app-e2e`.
 
 ## Accepted, not fixed
 

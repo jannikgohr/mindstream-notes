@@ -123,9 +123,13 @@ accept appears under **Shared** on their devices. A note inside a shared folder
 syncs to everyone in it, attachments included.
 
 **Sharing → Manage access…** lists everyone with access. Change someone's access
-there, or remove them, which takes the folder off their devices. **Stop
-sharing…** does that for everyone at once, and you keep the folder. Someone you
-shared with can choose **Leave shared folder…**.
+there, or remove them, which takes the folder off their devices. Someone you
+removed cannot come back by a link, not even a new one, until you invite them.
+If the folder has invite links that can still be used, the app then asks whether
+to remove those too. Anyone holding one can still use it, and that includes the
+person you removed if they have another account.
+**Stop sharing…** does that for everyone at once, and you keep the folder.
+Someone you shared with can choose **Leave shared folder…**.
 
 The welcome notes setup adds cannot go into a shared folder. Copy their text
 into a new note instead.

@@ -42,6 +42,7 @@ use std::sync::Arc;
 
 use axum::extract::DefaultBodyLimit;
 use axum::http::{header, HeaderValue};
+use axum::middleware;
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde::Serialize;
@@ -60,9 +61,16 @@ pub struct Inner {
     pub(crate) keys: Keys,
     pub(crate) vault: vault::Vault,
     pub(crate) auth_limiter: edge::RateLimiter,
+    pub(crate) lookup_limiter: edge::AccountLimiter,
+    /// Names each account looked up that turned out to be nobody's.
+    pub(crate) unknown_names: security::CodeLimiter,
     /// What caps open connections, and what caps open sockets.
     pub(crate) connections: Arc<edge::Gate>,
     pub(crate) sockets: Arc<edge::Gate>,
+    /// What caps the bytes of request bodies in memory.
+    pub(crate) bodies: Arc<edge::Gate>,
+    /// What caps the bytes of responses in memory.
+    pub(crate) responses: Arc<edge::Gate>,
     pub(crate) code_limiter: security::CodeLimiter,
     /// Wrong passwords per account, same throttle shape as the codes above
     /// but looser: people mistype passwords more often than codes.
@@ -125,6 +133,8 @@ impl AppState {
             .map_err(StartError::SecretKey)?;
         let auth_limiter =
             edge::RateLimiter::new(config.auth_rate_per_minute, config.auth_rate_burst);
+        let lookup_limiter =
+            edge::RateLimiter::new(config.lookup_rate_per_minute, config.lookup_rate_burst);
         let files = edge::raise_open_file_limit();
         let total =
             edge::connection_room(config.max_connections, files, config.database_connections);
@@ -137,14 +147,37 @@ impl AppState {
             );
         }
         let gate = || edge::Gate::new(config.max_connections_per_address, total);
+        // A cap below the largest page would refuse that page for ever.
+        let largest_page =
+            usize::try_from(config.max_page_bytes).unwrap_or(0) + edge::PAGE_FRAMING_BYTES;
+        let response_room = |cap: usize| match cap {
+            0 => 0,
+            cap => cap.max(largest_page),
+        };
         let state = Self(Arc::new(Inner {
             pool,
             blobs,
             keys,
             vault,
             auth_limiter,
+            lookup_limiter,
+            unknown_names: security::CodeLimiter::new(
+                match config.unknown_names_per_day {
+                    0 => u32::MAX,
+                    names => names,
+                },
+                std::time::Duration::from_secs(24 * 60 * 60),
+            ),
             connections: gate(),
             sockets: gate(),
+            bodies: edge::Gate::new(
+                config.max_body_bytes_in_flight_per_address,
+                config.max_body_bytes_in_flight,
+            ),
+            responses: edge::Gate::new(
+                response_room(config.max_response_bytes_in_flight_per_address),
+                response_room(config.max_response_bytes_in_flight),
+            ),
             code_limiter: security::CodeLimiter::default(),
             password_limiter: security::CodeLimiter::new(10, std::time::Duration::from_secs(600)),
             hub: hub::Hub::default(),
@@ -189,7 +222,13 @@ async fn info(axum::extract::State(state): axum::extract::State<AppState>) -> Js
     })
 }
 
+/// Largest body taken from someone who has not shown who they are. What
+/// these routes carry is a few keys and names, and a body is buffered before
+/// a handler can look at it.
+const SIGN_IN_BODY_BYTES: usize = 64 * 1024;
+
 pub fn router(state: AppState) -> Router {
+    let sign_in = || DefaultBodyLimit::max(SIGN_IN_BODY_BYTES);
     // Paths are written out in full. Nesting a router would make its root
     // answer at `/collection` but not at `/collection/`, and the client
     // always sends the trailing slash.
@@ -224,22 +263,28 @@ pub fn router(state: AppState) -> Router {
             post(rooms::room_ticket),
         )
         .route("/authentication/is_etebase/", get(auth::is_etebase))
-        .route("/authentication/signup/", post(auth::signup))
+        .route(
+            "/authentication/signup/",
+            post(auth::signup).layer(sign_in()),
+        )
         .route(
             "/authentication/login_challenge/",
-            post(auth::login_challenge),
+            post(auth::login_challenge).layer(sign_in()),
         )
-        .route("/authentication/login/", post(auth::login))
+        .route("/authentication/login/", post(auth::login).layer(sign_in()))
         .route("/authentication/logout/", post(auth::logout))
         .route(
             "/authentication/change_password/",
-            post(auth::change_password),
+            post(auth::change_password).layer(sign_in()),
         )
         .route("/authentication/dashboard_url/", post(auth::dashboard_url))
-        .route("/authentication/recover/", post(security::recover))
+        .route(
+            "/authentication/recover/",
+            post(security::recover).layer(sign_in()),
+        )
         .route(
             "/authentication/recover/complete/",
-            post(security::complete_recovery),
+            post(security::complete_recovery).layer(sign_in()),
         )
         .route(
             "/collection/",
@@ -311,7 +356,10 @@ pub fn router(state: AppState) -> Router {
         .route("/invitation/outgoing/{uid}/", delete(sharing::disinvite))
         .route("/mindstream/link/", get(links::list).post(links::create))
         .route("/mindstream/link/{uid}/", delete(links::revoke))
-        .route("/mindstream/link/{uid}/open/", post(links::open))
+        .route(
+            "/mindstream/link/{uid}/open/",
+            post(links::open).layer(sign_in()),
+        )
         .route("/mindstream/link/{uid}/claim/", post(links::claim));
     // See the module gate above: release builds never serve this route.
     #[cfg(debug_assertions)]
@@ -339,6 +387,14 @@ pub fn router(state: AppState) -> Router {
         .nest("/api/v1", api)
         .nest("/admin/v1", admin)
         .layer(DefaultBodyLimit::max(state.config.max_body_bytes))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            edge::hold_body_room,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            edge::hold_response_room,
+        ))
         .layer(fixed(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
         .layer(fixed(header::X_FRAME_OPTIONS, "DENY"))
         .layer(fixed(header::REFERRER_POLICY, "no-referrer"))

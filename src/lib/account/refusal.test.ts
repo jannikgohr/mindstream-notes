@@ -5,6 +5,7 @@ import de from '$lib/settings/i18n/de.json';
 import en from '$lib/settings/i18n/en.json';
 import {
   describeRefusal,
+  describeSignInRefusal,
   REASON_CODE_REQUIRED,
   REFUSAL_UI_KEYS,
   refusalReason,
@@ -35,6 +36,20 @@ describe('refusalReason', () => {
     expect(refusalReason(new Error('boom'))).toBeNull();
     expect(refusalReason('boom')).toBeNull();
     expect(refusalReason(null)).toBeNull();
+  });
+});
+
+describe('describeSignInRefusal', () => {
+  it('does not say which of the name and the password was wrong', () => {
+    expect(describeSignInRefusal(refused('login_bad_signature'))).toBe(
+      'Wrong username or password.'
+    );
+  });
+
+  it('says anything else the way describeRefusal does', () => {
+    expect(describeSignInRefusal(refused('totp_invalid'))).toBe(
+      describeRefusal(refused('totp_invalid'))
+    );
   });
 });
 
