@@ -27,6 +27,13 @@ export interface StorageMethods {
   };
   receipt: { args: { id: string }; result: string | null };
   backup: { args: undefined; result: BrowserBackup };
+  importBegin: { args: { archive: Blob }; result: unknown };
+  importMerge: { args: { token: string }; result: unknown };
+  importRestore: {
+    args: { token: string; sameAccount: boolean };
+    result: boolean;
+  };
+  importCleanup: { args: { token: string }; result: void };
   prepareInterruptedWrite: { args: undefined; result: void };
   checkInterruptedWrite: { args: undefined; result: number };
   verify: { args: undefined; result: ProofReport };
@@ -116,6 +123,10 @@ export function parseRequest(value: unknown): StorageRequest {
       'invoke',
       'receipt',
       'backup',
+      'importBegin',
+      'importMerge',
+      'importRestore',
+      'importCleanup',
       'prepareInterruptedWrite',
       'checkInterruptedWrite',
       'verify',
@@ -155,6 +166,30 @@ export function parseRequest(value: unknown): StorageRequest {
       typeof request.args.id !== 'string'
     )
       throw new Error('receipt requires a note id');
+  } else if (request.method === 'importBegin') {
+    if (
+      !request.args ||
+      typeof request.args !== 'object' ||
+      !('archive' in request.args) ||
+      !(request.args.archive instanceof Blob)
+    )
+      throw new Error('importBegin requires a backup file');
+  } else if (
+    request.method === 'importMerge' ||
+    request.method === 'importCleanup' ||
+    request.method === 'importRestore'
+  ) {
+    if (
+      !request.args ||
+      typeof request.args !== 'object' ||
+      !('token' in request.args) ||
+      typeof request.args.token !== 'string' ||
+      !request.args.token ||
+      (request.method === 'importRestore' &&
+        (!('sameAccount' in request.args) ||
+          typeof request.args.sameAccount !== 'boolean'))
+    )
+      throw new Error('Import requires a staged backup');
   } else if (request.method === 'resetTestVault') {
     if (
       !request.args ||
@@ -194,7 +229,13 @@ export function parseResult<K extends StorageMethod>(
   method: K,
   value: unknown
 ): StorageMethods[K]['result'] {
-  if (method === 'invoke') return value as StorageMethods[K]['result'];
+  // The API layer validates these with the same parsers it uses for IPC.
+  if (
+    method === 'invoke' ||
+    method === 'importBegin' ||
+    method === 'importMerge'
+  )
+    return value as StorageMethods[K]['result'];
   if (method === 'verify') {
     const r = value as Partial<ProofReport> | null;
     if (
@@ -212,6 +253,8 @@ export function parseResult<K extends StorageMethod>(
   } else if (method === 'checkInterruptedWrite') {
     if (!Number.isSafeInteger(value) || (value as number) < 0)
       throw new Error('Invalid interrupted-write report');
+  } else if (method === 'importRestore') {
+    if (typeof value !== 'boolean') throw new Error('Invalid restore response');
   } else if (method === 'backup') {
     const backup = value as Partial<BrowserBackup> | null;
     if (

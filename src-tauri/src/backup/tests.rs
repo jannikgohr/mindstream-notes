@@ -79,7 +79,7 @@ fn a_backup_from_a_browser_opens_here_and_merges_its_notes() {
         .join(DB_ENTRY_NAME);
     let backup_conn = Connection::open(staged).unwrap();
     let report = db
-        .with_conn_mut(|live| merge_into(live, &backup_conn))
+        .with_conn_mut(|live| Ok(merge_into(live, &backup_conn)?))
         .unwrap();
     assert_eq!(report.assets_added, 1);
     let body: String = db
@@ -111,7 +111,7 @@ fn read_counts_excludes_the_trash_folder() {
 fn read_account_identity_returns_none_for_local_only_db() {
     let db = open_memory_for_tests();
     seed_notes_and_folders(&db);
-    let identity = db.with_conn(|c| read_account_identity(c, None)).unwrap();
+    let identity = db.with_conn(|c| session_identity(c, None)).unwrap();
     assert!(
         identity.is_none(),
         "fresh local DB has no sync_state rows, no identity to record"
@@ -138,7 +138,7 @@ fn read_account_identity_returns_uids_when_sync_state_is_populated() {
     .unwrap();
 
     let identity = db
-        .with_conn(|c| read_account_identity(c, None))
+        .with_conn(|c| session_identity(c, None))
         .unwrap()
         .expect("identity present when both UIDs are stored");
     assert_eq!(identity.etebase_collection_uid_notes, "uid-notes-123");
@@ -174,7 +174,7 @@ fn read_account_identity_carries_session_strings_through() {
         server_url: "https://etebase.example/".into(),
     };
     let identity = db
-        .with_conn(|c| read_account_identity(c, Some(&session)))
+        .with_conn(|c| session_identity(c, Some(&session)))
         .unwrap()
         .expect("identity");
     assert_eq!(identity.username.as_deref(), Some("alice"));
@@ -200,7 +200,7 @@ fn read_account_identity_skips_half_synced_state() {
         Ok(())
     })
     .unwrap();
-    let identity = db.with_conn(|c| read_account_identity(c, None)).unwrap();
+    let identity = db.with_conn(|c| session_identity(c, None)).unwrap();
     assert!(identity.is_none());
 }
 
@@ -737,7 +737,7 @@ fn sanitize_clears_sync_metadata_and_tombstones() {
         .unwrap();
     }
 
-    sanitize_for_foreign_account(&db_path).unwrap();
+    sanitize_staged_file(&db_path).unwrap();
 
     let conn = Connection::open(&db_path).unwrap();
     let (uid, etag, dirty): (Option<String>, Option<String>, i64) = conn
@@ -846,7 +846,7 @@ fn merge_adds_missing_rows_and_strips_sync_metadata() {
     };
 
     let report = live_db
-        .with_conn_mut(|live| merge_into(live, &backup_conn))
+        .with_conn_mut(|live| Ok(merge_into(live, &backup_conn)?))
         .unwrap();
     assert_eq!(report.folders_added, 1);
     assert_eq!(report.notes_added, 1);
@@ -904,12 +904,12 @@ fn merge_skips_rows_whose_id_already_exists_locally() {
     };
     // First merge brings the row in.
     let r1 = live_db
-        .with_conn_mut(|live| merge_into(live, &backup_conn))
+        .with_conn_mut(|live| Ok(merge_into(live, &backup_conn)?))
         .unwrap();
     assert_eq!(r1.notes_added, 1);
     // Second merge against the same backup must be a no-op.
     let r2 = live_db
-        .with_conn_mut(|live| merge_into(live, &backup_conn))
+        .with_conn_mut(|live| Ok(merge_into(live, &backup_conn)?))
         .unwrap();
     assert_eq!(r2.notes_added, 0);
     assert_eq!(r2.folders_added, 0);
@@ -943,7 +943,7 @@ fn merge_reroutes_orphan_note_parents_to_root() {
     };
 
     let report = live_db
-        .with_conn_mut(|live| merge_into(live, &backup_conn))
+        .with_conn_mut(|live| Ok(merge_into(live, &backup_conn)?))
         .unwrap();
     assert_eq!(report.notes_added, 1);
     assert_eq!(report.notes_orphaned, 1);
@@ -1053,7 +1053,7 @@ fn merge_skips_assets_whose_owner_isnt_present() {
     };
 
     let report = live_db
-        .with_conn_mut(|live| merge_into(live, &backup_conn))
+        .with_conn_mut(|live| Ok(merge_into(live, &backup_conn)?))
         .unwrap();
     assert_eq!(report.assets_added, 0, "orphan blob must not be imported");
 }
@@ -1091,7 +1091,7 @@ fn merge_does_not_overwrite_existing_local_notes() {
     };
 
     let report = live_db
-        .with_conn_mut(|live| merge_into(live, &backup_conn))
+        .with_conn_mut(|live| Ok(merge_into(live, &backup_conn)?))
         .unwrap();
     assert_eq!(report.notes_added, 0, "id collision must skip insert");
     let title: String = live_db
@@ -1133,7 +1133,9 @@ fn merge_keeps_existing_root_parent_and_preserves_tag_crdt() {
             Ok(())
         })
         .unwrap();
-    live_db.with_conn_mut(|c| merge_into(c, &backup)).unwrap();
+    live_db
+        .with_conn_mut(|c| Ok(merge_into(c, &backup)?))
+        .unwrap();
     live_db
         .with_conn(|c| {
             let parent: Option<String> = c.query_row(

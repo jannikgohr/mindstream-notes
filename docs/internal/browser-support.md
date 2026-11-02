@@ -217,6 +217,25 @@ error. **Export vault** still works for those.
 a native test imports it. Regenerate it with
 `BROWSER_BACKUP_FIXTURE=<path> pnpm test:sqlite` when the format changes.
 
+**Restore from backup** opens backups from the browser or the app, which share
+their checks through `storage-core`. A browser restores the database only. The
+plugins, plugin data, and preferences in a native backup stay behind, and the
+import dialog says so. The same 1 GiB limit applies.
+
+_Replace_ never starts without a copy the user can reach. The app keeps a
+pre-restore file in its data folder, but a file in OPFS would be out of reach, so
+a browser downloads a backup first, and a failed backup stops the restore before
+anything changes. SQLite's backup API then copies the staged database over the
+vault in one transaction and the page reloads. A tab that dies during the copy
+should roll back through the rollback journal, the recovery covered by the
+interrupted-write test. No test kills a tab during a restore itself.
+
+_Merge_ uses the same `merge_into` as the app and needs no reload.
+
+`e2e-tests/sqlite/fixtures/native-backup.zip` is a real native backup. Generate a
+new one from `run_backup_at` when the format changes, and keep it readable by
+the browser tests.
+
 ## Native-only features
 
 The browser hides what only the native app can do: the tray, start on login,

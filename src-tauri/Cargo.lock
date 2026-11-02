@@ -3492,6 +3492,7 @@ dependencies = [
  "serde_json",
  "sqlite-wasm-rs",
  "sqlite-wasm-vfs",
+ "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
 ]

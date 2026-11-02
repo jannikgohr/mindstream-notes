@@ -9,7 +9,7 @@ storage-proof = []
 test-support = []
 
 [dependencies]
-rusqlite = "=0.39.0"
+rusqlite = { version = "=0.39.0", features = ["backup"] }
 thiserror = "2"
 log = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock", "wasmbind"] }

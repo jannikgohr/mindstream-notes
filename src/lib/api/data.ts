@@ -177,8 +177,25 @@ export interface MergeReport {
  * Pop the file picker for a backup zip; extract + validate + return a
  * preview struct. `null` means the user cancelled the picker.
  */
+function pickBackupFile(): Promise<File | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/zip,.zip';
+    input.addEventListener('change', () => resolve(input.files?.[0] ?? null));
+    input.addEventListener('cancel', () => resolve(null));
+    input.click();
+  });
+}
+
 export async function importBegin(): Promise<ImportPreview | null> {
-  if (!isTauri()) return null;
+  if (!isTauri()) {
+    if (!browserStorageEnabled()) return null;
+    const archive = await pickBackupFile();
+    if (!archive) return null;
+    const { stageBrowserBackup } = await import('../browser/vault');
+    return parseImportPreview(await stageBrowserBackup(archive));
+  }
   return parseNullableImportPreview(
     await tauriInvoke<unknown>(TauriCommandName.ImportBegin)
   );
@@ -187,7 +204,13 @@ export async function importBegin(): Promise<ImportPreview | null> {
 /** Drop the staging dir created by `importBegin`. Safe on stale tokens. */
 export async function importCleanup(token: string): Promise<void> {
   assertRequiredString(token, 'token');
-  if (!isTauri()) return;
+  if (!isTauri()) {
+    if (browserStorageEnabled()) {
+      const { discardBrowserBackup } = await import('../browser/vault');
+      await discardBrowserBackup(token);
+    }
+    return;
+  }
   assertVoid(
     await tauriInvoke<unknown>(TauriCommandName.ImportCleanup, { token }),
     'import_cleanup response'
@@ -210,7 +233,19 @@ export async function importRestore(
   }
   if (typeof includeDevice !== 'boolean')
     throw new Error('includeDevice must be a boolean');
-  if (!isTauri()) return { restart_required: false, sanitized: !sameAccount };
+  if (!isTauri()) {
+    if (!browserStorageEnabled())
+      return { restart_required: false, sanitized: !sameAccount };
+    // The app keeps a pre-restore copy in its data folder. A copy in browser
+    // storage would be out of the user's reach, so they get a file instead,
+    // and a backup that fails stops the restore before it replaces anything.
+    await downloadBackup();
+    const { restoreBrowserBackup } = await import('../browser/vault');
+    return {
+      restart_required: false,
+      sanitized: await restoreBrowserBackup(token, sameAccount)
+    };
+  }
   return parseRestoreStaged(
     await tauriInvoke<unknown>(TauriCommandName.ImportRestore, {
       token,
@@ -226,13 +261,18 @@ export async function importRestore(
  */
 export async function importMerge(token: string): Promise<MergeReport> {
   assertRequiredString(token, 'token');
-  if (!isTauri())
+  if (!isTauri()) {
+    if (browserStorageEnabled()) {
+      const { mergeBrowserBackup } = await import('../browser/vault');
+      return parseMergeReport(await mergeBrowserBackup(token));
+    }
     return {
       folders_added: 0,
       notes_added: 0,
       assets_added: 0,
       notes_orphaned: 0
     };
+  }
   return parseMergeReport(
     await tauriInvoke<unknown>(TauriCommandName.ImportMerge, { token })
   );
