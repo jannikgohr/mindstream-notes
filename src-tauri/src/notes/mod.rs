@@ -9,10 +9,6 @@ pub fn list(conn: &Connection, include_trashed: bool) -> AppResult<Vec<NoteSumma
     mindstream_storage_core::notes::list(conn, include_trashed).map_err(Into::into)
 }
 
-pub fn load_tags(conn: &Connection, id: &str) -> AppResult<Vec<String>> {
-    mindstream_storage_core::notes::load_tags(conn, id).map_err(Into::into)
-}
-
 pub fn load_yrs_state(conn: &Connection, id: &str) -> AppResult<Vec<u8>> {
     mindstream_storage_core::notes::load_yrs_state(conn, id).map_err(Into::into)
 }
@@ -45,9 +41,6 @@ pub fn purge(conn: &Connection, id: &str) -> AppResult<()> {
     mindstream_storage_core::notes::purge(conn, id).map_err(Into::into)
 }
 
-pub fn next_position(conn: &Connection, parent: Option<&str>) -> AppResult<i64> {
-    mindstream_storage_core::notes::next_position(conn, parent).map_err(Into::into)
-}
 // ---------- Tauri commands ----------
 
 #[tauri::command]

@@ -3,19 +3,6 @@ use crate::db::Db;
 use crate::error::{AppResult, CommandResult};
 pub use mindstream_storage_core::collections::*;
 use rusqlite::Connection;
-pub fn stamp_trashed_at_on_parent_change(
-    conn: &rusqlite::Connection,
-    table: TrashTable,
-    id: &str,
-    new_parent: Option<&str>,
-    now: &str,
-) -> AppResult<()> {
-    mindstream_storage_core::collections::stamp_trashed_at_on_parent_change(
-        conn, table, id, new_parent, now,
-    )
-    .map_err(Into::into)
-}
-
 pub fn list(conn: &Connection) -> AppResult<Vec<Collection>> {
     mindstream_storage_core::collections::list(conn).map_err(Into::into)
 }
@@ -34,15 +21,6 @@ pub fn update(conn: &Connection, input: UpdateCollection) -> AppResult<Collectio
 
 pub fn delete(conn: &Connection, id: &str) -> AppResult<()> {
     mindstream_storage_core::collections::delete(conn, id).map_err(Into::into)
-}
-
-pub fn is_descendant(conn: &Connection, ancestor: &str, candidate: &str) -> AppResult<bool> {
-    mindstream_storage_core::collections::is_descendant(conn, ancestor, candidate)
-        .map_err(Into::into)
-}
-
-pub fn next_position(conn: &Connection, parent: Option<&str>) -> AppResult<i64> {
-    mindstream_storage_core::collections::next_position(conn, parent).map_err(Into::into)
 }
 
 #[tauri::command]

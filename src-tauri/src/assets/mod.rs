@@ -32,35 +32,6 @@ pub fn upload_with_id(conn: &Connection, id: String, input: UploadAsset) -> AppR
     mindstream_storage_core::assets::upload_with_id(conn, id, input).map_err(Into::into)
 }
 
-pub fn store_with_id(conn: &Connection, id: &str, input: UploadAsset) -> AppResult<()> {
-    mindstream_storage_core::assets::store_with_id(conn, id, input).map_err(Into::into)
-}
-
-pub fn require_note(conn: &Connection, note_id: &str) -> AppResult<()> {
-    mindstream_storage_core::assets::require_note(conn, note_id).map_err(Into::into)
-}
-
-pub fn insert_asset(
-    conn: &Connection,
-    id: &str,
-    note_id: &str,
-    mime_type: &str,
-    bytes: &[u8],
-    content_hash: &str,
-    share_scope_id: Option<String>,
-) -> AppResult<()> {
-    mindstream_storage_core::assets::insert_asset(
-        conn,
-        id,
-        note_id,
-        mime_type,
-        bytes,
-        content_hash,
-        share_scope_id,
-    )
-    .map_err(Into::into)
-}
-
 pub fn add_ref(conn: &Connection, asset_id: &str, note_id: &str) -> AppResult<()> {
     mindstream_storage_core::assets::add_ref(conn, asset_id, note_id).map_err(Into::into)
 }
@@ -81,10 +52,6 @@ pub fn normalize_asset_ids_for_note(
 
 pub fn release_note_assets(conn: &Connection, note_id: &str) -> AppResult<usize> {
     mindstream_storage_core::assets::release_note_assets(conn, note_id).map_err(Into::into)
-}
-
-pub fn delete_asset(conn: &Connection, asset_id: &str) -> AppResult<usize> {
-    mindstream_storage_core::assets::delete_asset(conn, asset_id).map_err(Into::into)
 }
 
 pub fn import_pdf_note_inner(conn: &Connection, input: ImportPdfNote) -> AppResult<Note> {
