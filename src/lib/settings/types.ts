@@ -55,6 +55,11 @@ interface SettingBase {
    */
   platforms?: PlatformFilter[];
   /**
+   * Needs the native app, so a plain browser tab hides it on every OS. Checked
+   * alongside `platforms`, which matches a browser by the OS it runs on.
+   */
+  nativeOnly?: boolean;
+  /**
    * Platform-specific defaults. Exact platform entries win over broad
    * groups, and `default` remains the fallback.
    */
@@ -151,6 +156,8 @@ export interface Section {
   id: string;
   /** Same semantics as Setting.platforms — hides the entire section. */
   platforms?: PlatformFilter[];
+  /** Same semantics as Setting.nativeOnly — hides the entire section. */
+  nativeOnly?: boolean;
   /**
    * Render the section collapsed behind a disclosure (for advanced/rarely-
    * touched tuning knobs). Auto-expands while a search query is active so
@@ -166,6 +173,8 @@ export interface Category {
   icon?: string;
   /** Same semantics as Setting.platforms — hides the entire category. */
   platforms?: PlatformFilter[];
+  /** Same semantics as Setting.nativeOnly — hides the entire category. */
+  nativeOnly?: boolean;
   sections: Section[];
 }
 

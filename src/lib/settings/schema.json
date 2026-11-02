@@ -90,6 +90,7 @@
             },
             {
               "id": "general.vaultOpening",
+              "nativeOnly": true,
               "scope": "D",
               "type": "select",
               "default": "ask",
@@ -98,6 +99,7 @@
             },
             {
               "id": "general.startOnLogin",
+              "nativeOnly": true,
               "scope": "D",
               "type": "toggle",
               "default": false,
@@ -105,6 +107,7 @@
             },
             {
               "id": "general.closeToTray",
+              "nativeOnly": true,
               "scope": "D",
               "type": "toggle",
               "default": false,
@@ -112,6 +115,7 @@
             },
             {
               "id": "general.startInTray",
+              "nativeOnly": true,
               "scope": "D",
               "type": "toggle",
               "default": false,
@@ -155,6 +159,7 @@
             },
             {
               "id": "appearance.customWindowDecorations",
+              "nativeOnly": true,
               "scope": "D",
               "type": "toggle",
               "default": true,
@@ -506,6 +511,7 @@
             },
             {
               "id": "hotkeys.globalShortcuts",
+              "nativeOnly": true,
               "scope": "V",
               "type": "toggle",
               "default": false,
@@ -527,6 +533,7 @@
       "sections": [
         {
           "id": "data.database",
+          "nativeOnly": true,
           "settings": [
             {
               "id": "data.openFolder",
@@ -724,11 +731,13 @@
             },
             {
               "id": "about.tauriVersion",
+              "nativeOnly": true,
               "scope": "D",
               "type": "info"
             },
             {
               "id": "about.scanForUpdates",
+              "nativeOnly": true,
               "scope": "D",
               "type": "toggle",
               "default": true,
@@ -736,6 +745,7 @@
             },
             {
               "id": "about.checkUpdates",
+              "nativeOnly": true,
               "scope": "D",
               "type": "button",
               "actionId": "check-updates"
