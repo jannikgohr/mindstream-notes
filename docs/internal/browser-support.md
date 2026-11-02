@@ -180,7 +180,8 @@ and the vendored `PATCHES.md` before updating this dependency.
 `src-tauri/storage-core` has no Tauri dependency. It owns the canonical
 migrations, note and folder mutations, attachment bookkeeping, history, local
 share permissions and scope changes, trash operations, signatures, PDF text,
-word counts, setup notes, search, ink state writes, and note and tag CRDT operations. Native
+word counts, setup notes, search, ink state writes, backups, the notes importer,
+and note and tag CRDT operations. Native
 modules forward to it and preserve their existing command signatures and
 structured error codes. Migration SQL and CRDT encodings stay the same.
 
