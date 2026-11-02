@@ -181,6 +181,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # A full disk does not read as one here. lld writes through a memory
+      # map, so it dies with a bus error partway through a link. The debug
+      # test binaries are 700 MB each, and after a Cargo.lock change the
+      # restored cache keeps the old copy of every crate cargo rebuilds. A
+      # failed job saves no cache, so a rerun starts from the same place.
+      # None of what goes here is used by this job.
+      - name: Free disk space
+        if: runner.os == 'Linux'
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache/CodeQL
+          df -h /
+
       # wasm32: the tests build their plugin components from source.
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -279,6 +292,10 @@ jobs:
         # fixtures can starve them on small runners. Keep functional tests
         # serial; release probes measure the unchanged budget independently.
         run: cargo test --locked --workspace -- --test-threads=1
+
+      - name: Disk left after the tests
+        if: always() && runner.os == 'Linux'
+        run: df -h /
 
   bundled-plugins:
     name: Shipped Rust plugins
