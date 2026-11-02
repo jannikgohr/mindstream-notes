@@ -43,10 +43,14 @@ pub mod mime;
 pub mod model;
 pub mod source;
 pub mod sources;
+pub mod tar_files;
 pub mod writer;
 
+#[cfg(test)]
+mod tests;
+
 pub use detect::{DetectedSource, ImportSourceKind};
-pub use files::{ImportEntry, ImportFiles};
+pub use files::{walk_paths, ImportEntry, ImportFiles};
 pub use model::{ImportReport, UnresolvedLinks};
 
 /// Where an import writes. Each batch takes the connection briefly, so that

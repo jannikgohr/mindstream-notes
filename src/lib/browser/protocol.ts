@@ -18,6 +18,20 @@ export interface BrowserBackup {
   accountPresent: boolean;
 }
 
+/** What the user picked for a notes import. Paths are relative to the pick. */
+export interface PickedSource {
+  name: string;
+  /** One export file, not a folder of notes. */
+  single: boolean;
+  files: { path: string; file: File }[];
+}
+
+export interface ImportProgressMessage {
+  phase: string;
+  done: number;
+  total: number;
+}
+
 export interface StorageMethods {
   open: { args: undefined | { scope: 'vault'; testId?: string }; result: void };
   resetTestVault: { args: { testId: string }; result: void };
@@ -34,6 +48,11 @@ export interface StorageMethods {
     result: boolean;
   };
   importCleanup: { args: { token: string }; result: void };
+  notesDetect: { args: { source: PickedSource }; result: unknown };
+  notesImport: {
+    args: { source: PickedSource; options: Record<string, unknown> };
+    result: unknown;
+  };
   prepareInterruptedWrite: { args: undefined; result: void };
   checkInterruptedWrite: { args: undefined; result: number };
   verify: { args: undefined; result: ProofReport };
@@ -71,7 +90,8 @@ export interface StorageError {
 
 export type StorageResponse =
   | { id: number; ok: true; result: unknown }
-  | { id: number; ok: false; error: StorageError };
+  | { id: number; ok: false; error: StorageError }
+  | { id?: undefined; progress: ImportProgressMessage };
 
 const errorCodes = new Set<StorageErrorCode>([
   'io',
@@ -109,6 +129,18 @@ export function storageError(error: unknown): StorageError {
   };
 }
 
+function isPickedSource(value: unknown): value is PickedSource {
+  const source = value as Partial<PickedSource> | null | undefined;
+  return (
+    typeof source?.name === 'string' &&
+    typeof source.single === 'boolean' &&
+    Array.isArray(source.files) &&
+    source.files.every(
+      (entry) => typeof entry?.path === 'string' && entry.file instanceof File
+    )
+  );
+}
+
 export function parseRequest(value: unknown): StorageRequest {
   if (!value || typeof value !== 'object')
     throw new Error('Invalid storage request');
@@ -127,6 +159,8 @@ export function parseRequest(value: unknown): StorageRequest {
       'importMerge',
       'importRestore',
       'importCleanup',
+      'notesDetect',
+      'notesImport',
       'prepareInterruptedWrite',
       'checkInterruptedWrite',
       'verify',
@@ -166,6 +200,21 @@ export function parseRequest(value: unknown): StorageRequest {
       typeof request.args.id !== 'string'
     )
       throw new Error('receipt requires a note id');
+  } else if (
+    request.method === 'notesDetect' ||
+    request.method === 'notesImport'
+  ) {
+    if (
+      !request.args ||
+      typeof request.args !== 'object' ||
+      !('source' in request.args) ||
+      !isPickedSource(request.args.source) ||
+      (request.method === 'notesImport' &&
+        (!('options' in request.args) ||
+          !request.args.options ||
+          typeof request.args.options !== 'object'))
+    )
+      throw new Error('Import requires picked files');
   } else if (request.method === 'importBegin') {
     if (
       !request.args ||
@@ -233,7 +282,9 @@ export function parseResult<K extends StorageMethod>(
   if (
     method === 'invoke' ||
     method === 'importBegin' ||
-    method === 'importMerge'
+    method === 'importMerge' ||
+    method === 'notesDetect' ||
+    method === 'notesImport'
   )
     return value as StorageMethods[K]['result'];
   if (method === 'verify') {

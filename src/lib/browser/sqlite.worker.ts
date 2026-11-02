@@ -1,8 +1,10 @@
 import { packBackup, unpackBackup, type BackupParts } from './backup-archive';
+import { PickedFiles } from './picked-files';
 import { vaultNamespace } from './namespace';
 import {
   parseRequest,
   storageError,
+  type ImportProgressMessage,
   type StorageRequest,
   type StorageResponse
 } from './protocol';
@@ -19,6 +21,13 @@ interface WasmDatabase {
   import_merge(token: string): unknown;
   import_restore(token: string, sameAccount: boolean): boolean;
   import_cleanup(token: string): void;
+  import_detect(files: PickedFiles, name: string, single: boolean): unknown;
+  import_notes(
+    files: PickedFiles,
+    name: string,
+    options: Record<string, unknown>,
+    onProgress: (progress: ImportProgressMessage) => void
+  ): unknown;
   prepare_interrupted_write(): void;
   check_interrupted_write(): number;
   verify(): unknown;
@@ -151,7 +160,9 @@ async function handle(request: StorageRequest): Promise<unknown> {
       'importBegin',
       'importMerge',
       'importRestore',
-      'importCleanup'
+      'importCleanup',
+      'notesDetect',
+      'notesImport'
     ].includes(request.method) &&
     scope !== 'vault'
   )
@@ -222,6 +233,23 @@ async function handle(request: StorageRequest): Promise<unknown> {
     }
     case 'importCleanup':
       return database.import_cleanup(request.args.token);
+    case 'notesDetect': {
+      const { source } = request.args;
+      return database.import_detect(
+        new PickedFiles(source.files),
+        source.name,
+        source.single
+      );
+    }
+    case 'notesImport': {
+      const { source, options } = request.args;
+      return database.import_notes(
+        new PickedFiles(source.files),
+        source.name,
+        options,
+        (progress) => worker.postMessage({ progress })
+      );
+    }
     case 'prepareInterruptedWrite':
       return database.prepare_interrupted_write();
     case 'checkInterruptedWrite':

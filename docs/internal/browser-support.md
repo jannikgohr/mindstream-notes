@@ -233,6 +233,19 @@ interrupted-write test. No test kills a tab during a restore itself.
 
 _Merge_ uses the same `merge_into` as the app and needs no reload.
 
+**Import notes** runs the same importer as the app, for folders of Markdown,
+Obsidian vaults, Joplin exports, and Evernote `.enex` files. The picked files stay
+in the browser's file handles, and Rust reads one range at a time through a
+`FileReaderSync` on the worker, so a large export is never held in memory whole.
+A browser has nowhere to unpack a `.jex`, so `TarFiles` reads it in place. A
+folder pick does not report empty folders, so those are not created.
+
+A worker busy in Rust cannot read a cancel message, so **Stop** terminates it.
+Committed batches stay, the batch in flight rolls back, and the report counts the
+notes up to the last progress update. A terminated worker releases the vault lock
+a moment later, so reopening after one waits briefly for that, or the next call
+would report another tab.
+
 `e2e-tests/sqlite/fixtures/native-backup.zip` is a real native backup. Generate a
 new one from `run_backup_at` when the format changes, and keep it readable by
 the browser tests.
@@ -255,9 +268,8 @@ that belongs in the browser.
 Plugins stay limited to the bundled core plugin until a later project, and
 LanguageTool checks stay out of the browser.
 
-1. Complete platform services for native file integrations, browser downloads,
-   backups and recovery, credentials, and networking.
-2. Add spellcheck in a worker and separate vaults on one origin.
+1. Add spellcheck in a worker and separate vaults on one origin.
+2. Complete credentials and networking for the steps below.
 3. Port the vendored client's blocking HTTP calls and the app's blocking auth
    and sync entry points to async transport. Keep the Etebase ciphertext,
    MessagePack payloads, signatures, room keys, and Yjs update formats
