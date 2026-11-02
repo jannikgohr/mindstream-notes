@@ -198,6 +198,13 @@ builds. Normal browser development and browser builds use persistent storage.
 Browser application events use an in-process event bus; native commands and
 event delivery keep using Tauri.
 
+## Getting data out
+
+**Export vault** downloads one zip with the same layout the app writes to a
+folder. It holds Markdown, drawings, PDFs, and attachments, and leaves out the
+trash. The zip format used here stops at 4 GB and 65,535 files. Notes past that
+limit count as export errors in the result, and the archive stays valid.
+
 ## Native-only features
 
 The browser hides what only the native app can do: the tray, start on login,

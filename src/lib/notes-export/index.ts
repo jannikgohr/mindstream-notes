@@ -9,13 +9,14 @@
  *   typst    → `.typ` source, without requiring the plugin or compiler
  *   ink      → `.pdf` (one page per ink page, strokes rendered as vector polylines)
  *
- * The actual disk writes go through `writeExportFile` in the Rust
- * shim, which enforces a path-traversal guard so user-supplied
- * titles can't escape the chosen export root.
+ * Every file goes through an `ExportWriter`. The app writes into the chosen
+ * folder through `writeExportFile`, and a browser fills a zip download. Both
+ * refuse a path that would leave the export root, so user-supplied titles
+ * can't escape it.
  */
 
 import * as api from '$lib/api';
-import { TRASH_ID, writeExportFile } from '$lib/api';
+import { TRASH_ID } from '$lib/api';
 import type { Note, NoteSummary, Collection } from '$lib/api';
 import { pdfAssetIdFromBody } from '$lib/pdf/viewer-helpers';
 import { tree } from '$lib/stores/tree.svelte';
@@ -29,8 +30,16 @@ import {
 } from './markdown';
 import { dedupeAgainst, sanitizeName } from './sanitize';
 import { readExportBoard, boardMarkdown } from './kanban';
+import { downloadBlob } from '$lib/api/file-export';
+import { createExportZip } from './zip';
 
 const ASSET_SUBDIR = '_assets';
+
+/** Stores one exported file at a path relative to the export root. */
+export type ExportWriter = (
+  relativePath: string,
+  bytes: Uint8Array
+) => Promise<void>;
 
 export interface ExportReport {
   /** `.md` files written (note_kind = 'markdown'). */
@@ -51,7 +60,16 @@ export interface ExportReport {
   errors: number;
 }
 
-export async function exportVault(root: string): Promise<ExportReport> {
+/** Export the vault into one zip download, for a browser. */
+export async function downloadVaultExport(): Promise<ExportReport> {
+  const zip = createExportZip();
+  const report = await exportVault(zip.write);
+  const date = new Date().toISOString().slice(0, 10);
+  downloadBlob(zip.finish(), `mindstream-notes-${date}.zip`);
+  return report;
+}
+
+export async function exportVault(write: ExportWriter): Promise<ExportReport> {
   const report: ExportReport = {
     markdown_written: 0,
     freeform_written: 0,
@@ -107,7 +125,7 @@ export async function exportVault(root: string): Promise<ExportReport> {
       continue;
     }
     try {
-      const written = await exportNote(root, summary, parentDir, takenFor);
+      const written = await exportNote(write, summary, parentDir, takenFor);
       report.assets_written += written.assets_written;
       switch (written.kind) {
         case 'markdown':
@@ -212,7 +230,7 @@ interface AssetWriteSummary {
 }
 
 async function exportNote(
-  root: string,
+  write: ExportWriter,
   summary: NoteSummary,
   parentDir: string,
   takenFor: (dir: string) => Set<string>
@@ -220,19 +238,19 @@ async function exportNote(
   const note = await api.loadNote(summary.id);
   switch (note.note_kind) {
     case 'markdown': {
-      const written = await exportMarkdown(root, note, parentDir, takenFor);
+      const written = await exportMarkdown(write, note, parentDir, takenFor);
       return { kind: 'markdown', assets_written: written.assets_written };
     }
     case 'freeform': {
-      const written = await exportFreeform(root, note, parentDir, takenFor);
+      const written = await exportFreeform(write, note, parentDir, takenFor);
       return { kind: 'freeform', assets_written: written.assets_written };
     }
     case 'pdf': {
-      const written = await exportPdf(root, note, parentDir, takenFor);
+      const written = await exportPdf(write, note, parentDir, takenFor);
       return { kind: 'pdf', assets_written: written.assets_written };
     }
     case 'ink': {
-      const written = await exportInk(root, note, parentDir, takenFor);
+      const written = await exportInk(write, note, parentDir, takenFor);
       return { kind: 'ink', assets_written: written.assets_written };
     }
     case 'kanban': {
@@ -241,13 +259,12 @@ async function exportNote(
       // Bundle description assets using the Markdown export path. Keep JSON
       // alongside it so IDs, ordering, labels and card metadata survive too.
       const written = await exportMarkdown(
-        root,
+        write,
         { ...note, body: boardMarkdown(board, false) },
         parentDir,
         takenFor
       );
-      await writeExportFile(
-        root,
+      await write(
         joinRel(
           parentDir,
           dedupeAgainst(takenFor(parentDir), `${name}.kanban.json`)
@@ -261,8 +278,7 @@ async function exportNote(
         takenFor(parentDir),
         `${sanitizeName(note.title)}.typ`
       );
-      await writeExportFile(
-        root,
+      await write(
         joinRel(parentDir, basename),
         new TextEncoder().encode(note.body)
       );
@@ -279,7 +295,7 @@ async function exportNote(
 }
 
 async function exportMarkdown(
-  root: string,
+  write: ExportWriter,
   note: Note,
   parentDir: string,
   takenFor: (dir: string) => Set<string>
@@ -300,8 +316,7 @@ async function exportMarkdown(
       const ext = extensionForMime(asset.mime_type);
       const assetFilename = dedupeAgainst(takenFor(assetSubdir), `${id}${ext}`);
       filenameById.set(id, assetFilename);
-      await writeExportFile(
-        root,
+      await write(
         joinRel(assetSubdir, assetFilename),
         new Uint8Array(asset.bytes)
       );
@@ -325,8 +340,7 @@ async function exportMarkdown(
     filenameById.get(id)
   );
   const content = renderMarkdownFile(note, rewritten);
-  await writeExportFile(
-    root,
+  await write(
     joinRel(parentDir, fileBasename),
     new TextEncoder().encode(content)
   );
@@ -334,7 +348,7 @@ async function exportMarkdown(
 }
 
 async function exportFreeform(
-  root: string,
+  write: ExportWriter,
   note: Note,
   parentDir: string,
   takenFor: (dir: string) => Set<string>
@@ -355,8 +369,7 @@ async function exportFreeform(
       takenFor(parentDir),
       `${sanitizeName(note.title)}.excalidraw`
     );
-    await writeExportFile(
-      root,
+    await write(
       joinRel(parentDir, basename),
       new TextEncoder().encode(JSON.stringify(empty, null, 2))
     );
@@ -366,8 +379,7 @@ async function exportFreeform(
     takenFor(parentDir),
     `${sanitizeName(note.title)}.excalidraw`
   );
-  await writeExportFile(
-    root,
+  await write(
     joinRel(parentDir, basename),
     new TextEncoder().encode(JSON.stringify(excalidraw, null, 2))
   );
@@ -375,7 +387,7 @@ async function exportFreeform(
 }
 
 async function exportPdf(
-  root: string,
+  write: ExportWriter,
   note: Note,
   parentDir: string,
   takenFor: (dir: string) => Set<string>
@@ -396,12 +408,12 @@ async function exportPdf(
     takenFor(parentDir),
     `${sanitizeName(note.title)}.pdf`
   );
-  await writeExportFile(root, joinRel(parentDir, basename), bytes);
+  await write(joinRel(parentDir, basename), bytes);
   return { assets_written: 0 };
 }
 
 async function exportInk(
-  root: string,
+  write: ExportWriter,
   note: Note,
   parentDir: string,
   takenFor: (dir: string) => Set<string>
@@ -422,7 +434,7 @@ async function exportInk(
     takenFor(parentDir),
     `${sanitizeName(note.title)}.pdf`
   );
-  await writeExportFile(root, joinRel(parentDir, basename), pdfBytes);
+  await write(joinRel(parentDir, basename), pdfBytes);
   return { assets_written: 0 };
 }
 

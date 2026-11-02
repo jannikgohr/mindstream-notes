@@ -16,9 +16,11 @@ import {
   importMerge,
   importRestore,
   legacyWikilinkCount,
+  isTauri,
   openDataFolder,
   pickExportDir,
-  trashCounts
+  trashCounts,
+  writeExportFile
 } from '$lib/api';
 import {
   emptyTrash as emptyTrashStore,
@@ -123,9 +125,9 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
     }
   },
   'export-vault': async () => {
-    let root: string | null;
+    let root: string | null = null;
     try {
-      root = await pickExportDir();
+      if (isTauri()) root = await pickExportDir();
     } catch (err) {
       console.error('[settings] export-vault picker failed', err);
       await alert({
@@ -137,7 +139,7 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
       });
       return;
     }
-    if (!root) {
+    if (isTauri() && !root) {
       // User cancelled the folder picker — stay quiet.
       return;
     }
@@ -148,9 +150,16 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
       const { flushPendingEditorSaves } =
         await import('$lib/editor/suspend-flush');
       await flushPendingEditorSaves();
-      const { exportVault } = await import('$lib/notes-export');
-      const report = await exportVault(root);
-      await showExportResult(report, root);
+      const { downloadVaultExport, exportVault } =
+        await import('$lib/notes-export');
+      const destination = root;
+      const report =
+        destination === null
+          ? await downloadVaultExport()
+          : await exportVault((path, bytes) =>
+              writeExportFile(destination, path, bytes)
+            );
+      await showExportResult(report, destination);
     } catch (err) {
       console.error('[settings] export-vault failed', err);
       await alert({

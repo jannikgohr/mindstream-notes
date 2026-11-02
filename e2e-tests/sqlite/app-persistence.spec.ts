@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test';
+import { strFromU8, unzipSync } from 'fflate';
 import { readFile } from 'node:fs/promises';
 import * as Y from 'yjs';
 import { test, expect } from './fixtures';
@@ -457,6 +458,57 @@ test('folders, metadata, attachment bytes, history, and editor CRDT state persis
   });
   await hardReload(page);
   expect((await rpc(page, 'load_note', { id: note.id })).body).toBe(body);
+});
+
+test('the vault downloads as a zip holding its notes and attachment bytes', async ({
+  page
+}) => {
+  const folder = await rpc(page, 'create_collection', {
+    input: { name: 'Grüße' }
+  });
+  const note = await rpc(page, 'create_note', {
+    input: { title: 'Reise nach Köln', parent_collection_id: folder.id }
+  });
+  const picture = [137, 80, 78, 71, 0, 255];
+  const asset = await rpc(page, 'upload_drawing_asset', {
+    input: {
+      owning_note_id: note.id,
+      mime_type: 'image/png',
+      bytes: picture
+    }
+  });
+  await rpc(page, 'save_note', {
+    input: {
+      id: note.id,
+      body: `Am Dom.\n\n![photo](asset:mindstream/${asset.id})`
+    }
+  });
+  const trashed = await rpc(page, 'create_note', {
+    input: { title: 'Thrown away' }
+  });
+  await rpc(page, 'trash_note', { id: trashed.id });
+  await hardReload(page);
+
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const settings = page.getByRole('dialog');
+  await settings.getByRole('button', { name: /^Data/ }).first().click();
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    settings.getByRole('button', { name: 'Export vault' }).click()
+  ]);
+  expect(download.suggestedFilename()).toMatch(
+    /^mindstream-notes-\d{4}-\d{2}-\d{2}\.zip$/
+  );
+  const files = unzipSync(
+    new Uint8Array(await readFile(await download.path()))
+  );
+
+  const markdown = strFromU8(files['Grüße/Reise nach Köln.md']);
+  expect(markdown).toContain('Am Dom.');
+  expect(markdown).toContain(`_assets/${asset.id}.png`);
+  expect(Array.from(files[`Grüße/_assets/${asset.id}.png`])).toEqual(picture);
+  expect(Object.keys(files).join()).not.toContain('Thrown away');
+  await expect(page.getByText('Saved to')).toHaveCount(0);
 });
 
 test('another tab reports the database owner and opens persisted data after it closes', async ({
