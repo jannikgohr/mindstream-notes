@@ -5,35 +5,8 @@ use crate::notes::NoteKind;
 pub use mindstream_storage_core::history::*;
 use rusqlite::Connection;
 use tauri::{AppHandle, Manager};
-pub fn compress(md: &str) -> AppResult<Vec<u8>> {
-    mindstream_storage_core::history::compress(md).map_err(Into::into)
-}
-
-pub fn rewrite_asset_id_in_snapshots(
-    conn: &Connection,
-    note_id: &str,
-    old_id: &str,
-    new_id: &str,
-) -> AppResult<()> {
-    mindstream_storage_core::history::rewrite_asset_id_in_snapshots(conn, note_id, old_id, new_id)
-        .map_err(Into::into)
-}
-
-pub fn rewrite_yjs_snapshot_asset_id(
-    snapshot: &str,
-    old_id: &str,
-    new_id: &str,
-) -> AppResult<String> {
-    mindstream_storage_core::history::rewrite_yjs_snapshot_asset_id(snapshot, old_id, new_id)
-        .map_err(Into::into)
-}
-
 pub fn decompress_snapshot(bytes: &[u8]) -> AppResult<String> {
     mindstream_storage_core::history::decompress_snapshot(bytes).map_err(Into::into)
-}
-
-pub fn serialize_yjs_snapshot(note_kind: NoteKind, bytes: &[u8]) -> AppResult<String> {
-    mindstream_storage_core::history::serialize_yjs_snapshot(note_kind, bytes).map_err(Into::into)
 }
 
 pub fn read_note_raw(
@@ -103,10 +76,6 @@ where
         markdown,
     )
     .map_err(Into::into)
-}
-
-pub fn enforce_cap(conn: &Connection, note_id: &str) -> AppResult<()> {
-    mindstream_storage_core::history::enforce_cap(conn, note_id).map_err(Into::into)
 }
 
 pub fn list(conn: &Connection, note_id: &str) -> AppResult<Vec<VersionSummary>> {

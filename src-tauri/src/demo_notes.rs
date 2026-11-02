@@ -8,10 +8,6 @@ pub fn insert(conn: &Connection, notes: &[DemoNote], now: &str) -> AppResult<Vec
     mindstream_storage_core::demo_notes::insert(conn, notes, now).map_err(Into::into)
 }
 
-pub fn ensure_note_shareable(note_id: &str) -> AppResult<()> {
-    mindstream_storage_core::demo_notes::ensure_note_shareable(note_id).map_err(Into::into)
-}
-
 pub fn ensure_folder_shareable(conn: &Connection, root_folder_id: &str) -> AppResult<()> {
     mindstream_storage_core::demo_notes::ensure_folder_shareable(conn, root_folder_id)
         .map_err(Into::into)
