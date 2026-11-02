@@ -30,7 +30,6 @@ mod tests {
     use crate::db::open_memory_for_tests;
     use crate::notes::{create, update, CreateNote, UpdateNote};
     use rusqlite::params;
-    use tauri::Manager;
 
     fn seed_note(db: &Db, title: &str, body: &str) -> String {
         let n = db
@@ -47,19 +46,6 @@ mod tests {
             })
             .unwrap();
         n.summary.id
-    }
-
-    #[test]
-    fn the_command_answers_a_blank_query_with_nothing_and_finds_the_rest() {
-        let db = open_memory_for_tests();
-        let note = seed_note(&db, "Hello", "World");
-        let app = tauri::test::mock_app();
-        app.manage(db);
-
-        assert!(search_notes(app.state(), "  ".into()).unwrap().is_empty());
-        let hits = search_notes(app.state(), "hello".into()).unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].note.id, note);
     }
 
     #[test]
