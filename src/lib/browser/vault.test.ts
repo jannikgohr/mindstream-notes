@@ -10,6 +10,7 @@ type Plan = {
   reset?: Reply;
   invoke?: Reply;
   backup?: Reply;
+  import?: Reply;
 };
 
 type Message = { id: number; method: string; args?: unknown };
@@ -44,7 +45,9 @@ class FakeWorker {
             ? (this.plan.invoke ?? 'ok')
             : message.method === 'backup'
               ? (this.plan.backup ?? 'ok')
-              : 'ok';
+              : message.method.startsWith('import')
+                ? (this.plan.import ?? 'ok')
+                : 'ok';
     if (reply === 'hang') return;
     queueMicrotask(() =>
       this.onmessage?.({
@@ -53,7 +56,12 @@ class FakeWorker {
             ? {
                 id: message.id,
                 ok: true,
-                result: message.method === 'invoke' ? [] : undefined
+                result:
+                  message.method === 'invoke'
+                    ? []
+                    : message.method === 'importRestore'
+                      ? true
+                      : undefined
               }
             : { id: message.id, ok: false, error: reply.error }
       })
@@ -250,6 +258,53 @@ describe('vault connection recovery', () => {
     ]);
 
     expect(FakeWorker.instances).toHaveLength(1);
+  });
+});
+
+describe('backup import', () => {
+  it('sends each step to the worker with what it needs', async () => {
+    const vault = await loadVault();
+    const archive = new Blob(['zip']);
+
+    await vault.stageBrowserBackup(archive);
+    await vault.mergeBrowserBackup('token');
+    await expect(vault.restoreBrowserBackup('token', false)).resolves.toBe(
+      true
+    );
+    await vault.discardBrowserBackup('token');
+
+    expect(
+      FakeWorker.instances[0].messages
+        .filter((message) => message.method.startsWith('import'))
+        .map(({ method, args }) => ({ method, args }))
+    ).toEqual([
+      { method: 'importBegin', args: { archive } },
+      { method: 'importMerge', args: { token: 'token' } },
+      { method: 'importRestore', args: { token: 'token', sameAccount: false } },
+      { method: 'importCleanup', args: { token: 'token' } }
+    ]);
+  });
+
+  // The 30-second default would terminate a healthy worker on a large vault.
+  it.each([
+    ['staging', 'stageBrowserBackup', [new Blob(['zip'])]],
+    ['merging', 'mergeBrowserBackup', ['token']],
+    ['restoring', 'restoreBrowserBackup', ['token', false]]
+  ] as const)('gives %s a backup minutes', async (_, name, args) => {
+    vi.useFakeTimers();
+    FakeWorker.plans = [{ import: 'hang' }];
+    const vault = await loadVault();
+    const call = vault[name] as (...args: unknown[]) => Promise<unknown>;
+
+    const stalled = outcome(call(...args));
+    await vi.advanceTimersByTimeAsync(9 * 60_000);
+    expect(FakeWorker.instances[0].terminated).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await stalled).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'timeout' })
+    });
   });
 });
 
