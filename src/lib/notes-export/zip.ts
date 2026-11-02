@@ -16,8 +16,8 @@ import { Zip, ZipDeflate, ZipPassThrough } from 'fflate';
 const MAX_ZIP_BYTES = 4_000_000_000;
 /** The entry count is a 16-bit field for the same reason. */
 const MAX_ZIP_ENTRIES = 0xffff;
-/** Text worth compressing. Images and PDFs are already compressed. */
-const COMPRESSIBLE = /\.(md|json|excalidraw|typ)$/i;
+/** Text and databases are worth compressing. Images and PDFs are already. */
+const COMPRESSIBLE = /\.(md|json|excalidraw|typ|db)$/i;
 
 export function createExportZip() {
   const parts: Uint8Array<ArrayBuffer>[] = [];

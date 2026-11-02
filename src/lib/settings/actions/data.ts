@@ -107,6 +107,9 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
   },
   'backup-now': async () => {
     try {
+      const { flushPendingEditorSaves } =
+        await import('$lib/editor/suspend-flush');
+      await flushPendingEditorSaves();
       const report = await backupNow();
       if (report === null) {
         // User cancelled the Save-As dialog — stay quiet, no toast.

@@ -8,7 +8,11 @@ import {
 import type { BrowserCommand, BrowserRequest } from './commands';
 import { browserTestVaultId } from './testing';
 import { vaultNamespace } from './namespace';
-import { storageError, type StorageError } from './protocol';
+import {
+  storageError,
+  type BrowserBackup,
+  type StorageError
+} from './protocol';
 import { tUi } from '$lib/settings/i18n.svelte';
 
 // The healthy connection, if any. Set only after a successful open so a failed
@@ -95,6 +99,15 @@ function connect(): Promise<BrowserStorageClient> {
     opening = undefined;
   });
   return opening;
+}
+
+/** A large vault takes minutes to snapshot and compress. A stalled worker is
+ * still caught, but this must not look like one. */
+const BACKUP_TIMEOUT_MS = 10 * 60_000;
+
+export async function backupBrowserVault(): Promise<BrowserBackup> {
+  const connection = await connect();
+  return connection.request('backup', undefined, BACKUP_TIMEOUT_MS);
 }
 
 export async function invokeBrowser(

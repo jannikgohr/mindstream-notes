@@ -133,6 +133,17 @@ describe('worker transport', () => {
     expect(worker.terminate).toHaveBeenCalledOnce();
   });
 
+  it('gives a slow request its own deadline', async () => {
+    vi.useFakeTimers();
+    const { client, worker } = setup(100);
+    const request = client.request('read', undefined, 1_000);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(worker.terminate).not.toHaveBeenCalled();
+    worker.reply({ id: 1, ok: true, result: 'stored' });
+    await expect(request).resolves.toBe('stored');
+    client.dispose();
+  });
+
   it('terminates even if graceful shutdown fails', async () => {
     const { client, worker } = setup();
     const result = expect(client.close()).rejects.toMatchObject({
@@ -199,6 +210,32 @@ describe('worker protocol validation', () => {
     expect(parseResult('receipt', 'write-token')).toBe('write-token');
     expect(parseResult('receipt', null)).toBeNull();
     expect(() => parseResult('receipt', {})).toThrow();
+  });
+
+  it('validates backup requests and responses', () => {
+    expect(parseRequest({ id: 1, method: 'backup' })).toMatchObject({
+      method: 'backup'
+    });
+    expect(() =>
+      parseRequest({ id: 1, method: 'backup', args: { path: '/x' } })
+    ).toThrow();
+    const backup = {
+      archive: new Blob(['zip']),
+      filename: 'mindstream-backup.zip',
+      counts: { notes: 1, folders: 0, assets_bytes: 2 },
+      accountPresent: false
+    };
+    expect(parseResult('backup', backup)).toBe(backup);
+    for (const broken of [
+      null,
+      { ...backup, archive: 'zip' },
+      { ...backup, filename: 7 },
+      { ...backup, accountPresent: 'no' },
+      { ...backup, counts: { ...backup.counts, notes: -0.5 } },
+      { ...backup, counts: undefined }
+    ]) {
+      expect(() => parseResult('backup', broken)).toThrow();
+    }
   });
 
   it('rejects unrecognized methods and invalid write payloads', () => {

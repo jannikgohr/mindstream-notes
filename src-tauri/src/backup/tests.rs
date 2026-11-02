@@ -50,11 +50,55 @@ fn seed_notes_and_folders(db: &Db) {
     .unwrap();
 }
 
+/// A backup downloaded from the browser build. `BROWSER_BACKUP_FIXTURE=<path>
+/// pnpm test:sqlite` writes a new one. A browser's zip library and snapshot
+/// differ from the app's, so only a real file proves that they are compatible.
+const BROWSER_BACKUP: &[u8] = include_bytes!("fixtures/browser-backup.zip");
+
+#[test]
+fn a_backup_from_a_browser_opens_here_and_merges_its_notes() {
+    let vault = tempfile::tempdir().unwrap();
+    let source = vault.path().join("browser-backup.zip");
+    fs::write(&source, BROWSER_BACKUP).unwrap();
+    let db = open_memory_for_tests();
+
+    let preview = db
+        .with_conn(|live| stage_import_at(vault.path(), &source, live, None))
+        .unwrap();
+    assert_eq!(preview.backup_counts.notes, 4);
+    assert_eq!(preview.backup_counts.folders, 2);
+    assert_eq!(preview.backup_counts.assets_bytes, 6);
+    assert!(!preview.same_account);
+    assert!(!preview.portable);
+    assert_eq!(preview.plugin_packages, 0);
+
+    let staged = vault
+        .path()
+        .join("imports/.staging")
+        .join(&preview.token)
+        .join(DB_ENTRY_NAME);
+    let backup_conn = Connection::open(staged).unwrap();
+    let report = db
+        .with_conn_mut(|live| merge_into(live, &backup_conn))
+        .unwrap();
+    assert_eq!(report.assets_added, 1);
+    let body: String = db
+        .with_conn(|live| {
+            Ok(live.query_row(
+                "SELECT body FROM notes WHERE title = 'Backed up note'",
+                [],
+                |row| row.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(body, "Kept safe");
+}
+
 #[test]
 fn read_counts_excludes_the_trash_folder() {
     let db = open_memory_for_tests();
     seed_notes_and_folders(&db);
-    let counts = db.with_conn(read_counts).unwrap();
+    let counts = db.with_conn(|c| Ok(read_counts(c)?)).unwrap();
     assert_eq!(counts.notes, 2);
     assert_eq!(
         counts.folders, 1,

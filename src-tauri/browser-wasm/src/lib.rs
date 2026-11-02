@@ -4,10 +4,11 @@
 mod receipts;
 
 use mindstream_storage_core::error::AppError;
-use mindstream_storage_core::{migrations, proof, vault_api};
+use mindstream_storage_core::{asset_hash, backup, migrations, proof, vault_api};
 use rusqlite::Connection;
 use serde::Serialize;
 use sqlite_wasm_vfs::sahpool::{install, OpfsSAHPoolCfg, OpfsSAHPoolUtil};
+use std::collections::{BTreeMap, BTreeSet};
 use wasm_bindgen::prelude::*;
 
 #[derive(Serialize)]
@@ -22,6 +23,23 @@ fn error(message: impl std::fmt::Display) -> JsValue {
         message: message.to_string(),
     })
     .unwrap_or_else(|_| JsValue::from_str("Could not encode storage error"))
+}
+
+/// Where a backup's snapshot lives while it is prepared. It takes a pool file
+/// of its own, separate from the vault.
+const BACKUP_SNAPSHOT: &str = "/backup-snapshot.sqlite3";
+
+/// The snapshot is read into Wasm memory whole, and a failed allocation aborts
+/// the worker, so a larger vault gets a clear refusal instead.
+const MAX_BACKUP_BYTES: i64 = 1 << 30;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserBackup {
+    manifest: String,
+    filename: String,
+    counts: backup::Counts,
+    account_present: bool,
 }
 
 #[wasm_bindgen]
@@ -139,6 +157,15 @@ impl BrowserDatabase {
         proof::read_marker(self.connection()?).map_err(error)
     }
 
+    /// A snapshot and manifest in the native backup format. A snapshot left
+    /// by an interrupted backup is replaced, and nothing stays behind.
+    pub fn backup(&mut self) -> Result<JsValue, JsValue> {
+        let _ = self.pool.delete_db(BACKUP_SNAPSHOT);
+        let result = self.write_backup();
+        let _ = self.pool.delete_db(BACKUP_SNAPSHOT);
+        result
+    }
+
     pub fn close(&mut self) -> Result<(), JsValue> {
         if let Some(conn) = self.conn.take() {
             if let Err((conn, err)) = conn.close() {
@@ -214,6 +241,55 @@ impl BrowserDatabase {
                 Err(error(err))
             }
         }
+    }
+
+    fn write_backup(&mut self) -> Result<JsValue, JsValue> {
+        let conn = self.connection()?;
+        let bytes: i64 = conn
+            .query_row(
+                "SELECT (page_count - freelist_count) * page_size
+                 FROM pragma_page_count, pragma_freelist_count, pragma_page_size",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(error)?;
+        if bytes > MAX_BACKUP_BYTES {
+            return Err(command_error(AppError::InvalidArg(
+                "This vault is too large to back up in a browser. Use Export vault instead.".into(),
+            )));
+        }
+        conn.execute(&format!("VACUUM INTO '{BACKUP_SNAPSHOT}'"), [])
+            .map_err(error)?;
+
+        let mut snapshot = Connection::open(BACKUP_SNAPSHOT).map_err(error)?;
+        snapshot
+            .execute("DROP TABLE IF EXISTS browser_write_receipts", [])
+            .map_err(error)?;
+        backup::leave_device_secrets_out(&snapshot).map_err(command_error)?;
+        // A browser ships no plugins, so none of them count as built in here.
+        backup::sanitize_snapshot(&mut snapshot, &BTreeSet::new(), &BTreeMap::new())
+            .map_err(command_error)?;
+        let mut manifest =
+            backup::Manifest::for_snapshot(&snapshot, env!("CARGO_PKG_VERSION"), None, None, None)
+                .map_err(command_error)?;
+        snapshot.close().map_err(|(_, err)| error(err))?;
+
+        let database = self.pool.export_db(BACKUP_SNAPSHOT).map_err(error)?;
+        manifest.data_db_sha256 = Some(asset_hash::content_hash(&database));
+        let report = BrowserBackup {
+            manifest: serde_json::to_string_pretty(&manifest).map_err(error)?,
+            filename: backup::suggested_filename(),
+            counts: manifest.contents.counts,
+            account_present: manifest.account_present_at_export,
+        }
+        .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+        .map_err(error)?;
+        js_sys::Reflect::set(
+            &report,
+            &JsValue::from_str("database"),
+            &js_sys::Uint8Array::from(database.as_slice()),
+        )?;
+        Ok(report)
     }
 
     fn connection(&mut self) -> Result<&mut Connection, JsValue> {

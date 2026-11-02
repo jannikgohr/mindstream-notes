@@ -23,6 +23,8 @@ import {
   optionalString,
   TauriCommandName
 } from './core';
+import { browserStorageEnabled } from '../browser/commands';
+import { downloadBlob } from './file-export';
 import { mockApi } from './mock-store';
 
 export interface TrashCounts {
@@ -108,7 +110,8 @@ export interface BackupCounts {
 }
 
 export interface BackupReport {
-  destination: string;
+  /** Null for a browser download, which leaves no path to show. */
+  destination: string | null;
   counts: BackupCounts;
   account_present: boolean;
 }
@@ -120,10 +123,21 @@ export interface BackupReport {
  * that case, not surface a "backup failed" toast.
  */
 export async function backupNow(): Promise<BackupReport | null> {
-  if (!isTauri()) return null;
+  if (!isTauri()) return browserStorageEnabled() ? downloadBackup() : null;
   return parseNullableBackupReport(
     await tauriInvoke<unknown>(TauriCommandName.BackupNow)
   );
+}
+
+async function downloadBackup(): Promise<BackupReport> {
+  const { backupBrowserVault } = await import('../browser/vault');
+  const backup = await backupBrowserVault();
+  downloadBlob(backup.archive, backup.filename);
+  return {
+    destination: null,
+    counts: backup.counts,
+    account_present: backup.accountPresent
+  };
 }
 
 // ---------- Backup import (Slices B/C/D) ----------
