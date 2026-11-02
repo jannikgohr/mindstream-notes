@@ -97,6 +97,8 @@ export default defineConfig({
         'src/lib/window/decorations.svelte.ts',
         'src/lib/window/fullscreen.ts',
         'src/lib/tauri.ts',
+        // Needs a dedicated worker, Wasm and OPFS. `pnpm test:sqlite` runs it.
+        'src/lib/browser/sqlite.worker.ts',
         'src/hooks.client.ts',
         'src/lib/mocks.ts',
 

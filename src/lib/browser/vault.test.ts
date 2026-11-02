@@ -9,6 +9,7 @@ type Plan = {
   open?: Reply;
   reset?: Reply;
   invoke?: Reply;
+  backup?: Reply;
 };
 
 type Message = { id: number; method: string; args?: unknown };
@@ -41,7 +42,9 @@ class FakeWorker {
           ? (this.plan.reset ?? 'ok')
           : message.method === 'invoke'
             ? (this.plan.invoke ?? 'ok')
-            : 'ok';
+            : message.method === 'backup'
+              ? (this.plan.backup ?? 'ok')
+              : 'ok';
     if (reply === 'hang') return;
     queueMicrotask(() =>
       this.onmessage?.({
@@ -149,6 +152,23 @@ describe('vault connection recovery', () => {
 
     await expect(invokeBrowser('list_notes', {})).resolves.toEqual([]);
     expect(FakeWorker.instances).toHaveLength(2);
+  });
+
+  it('gives a backup minutes, then still catches a stalled worker', async () => {
+    vi.useFakeTimers();
+    FakeWorker.plans = [{ backup: 'hang' }];
+    const { backupBrowserVault } = await loadVault();
+
+    const stalled = outcome(backupBrowserVault());
+    await vi.advanceTimersByTimeAsync(9 * 60_000);
+    expect(FakeWorker.instances[0].terminated).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await stalled).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'timeout' })
+    });
+    expect(FakeWorker.instances[0].terminated).toBe(true);
   });
 
   it('does not resend a timed-out write when reconnecting', async () => {

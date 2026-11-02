@@ -1,9 +1,8 @@
-import { createExportZip } from '../notes-export/zip';
+import { packBackup, type BackupParts } from './backup-archive';
 import { vaultNamespace } from './namespace';
 import {
   parseRequest,
   storageError,
-  type BrowserBackup,
   type StorageRequest,
   type StorageResponse
 } from './protocol';
@@ -11,10 +10,7 @@ import {
 interface WasmDatabase {
   invoke(request: unknown, recoveryToken?: string): unknown;
   receipt(noteId: string): string | undefined;
-  backup(): Omit<BrowserBackup, 'archive'> & {
-    manifest: string;
-    database: Uint8Array;
-  };
+  backup(): BackupParts;
   prepare_interrupted_write(): void;
   check_interrupted_write(): number;
   verify(): unknown;
@@ -188,13 +184,8 @@ async function handle(request: StorageRequest): Promise<unknown> {
       );
     case 'receipt':
       return database.receipt(request.args.id) ?? null;
-    case 'backup': {
-      const { manifest, database: snapshot, ...report } = database.backup();
-      const zip = createExportZip();
-      await zip.write('manifest.json', new TextEncoder().encode(manifest));
-      await zip.write('data.db', snapshot);
-      return { ...report, archive: zip.finish() };
-    }
+    case 'backup':
+      return packBackup(database.backup());
     case 'prepareInterruptedWrite':
       return database.prepare_interrupted_write();
     case 'checkInterruptedWrite':
