@@ -103,7 +103,10 @@ async function openAux(page: Page, target: string, testId?: string) {
         worker.onmessage = (event) => {
           worker.onmessage = null;
           if (event.data.ok) resolve();
-          else reject(event.data.error);
+          else {
+            worker.terminate();
+            reject(event.data.error);
+          }
         };
         worker.postMessage({
           id: 1,
@@ -168,12 +171,14 @@ test('QA edits survive reload, then reset seeds only the selected test vault', a
     .locator('.ProseMirror')
     .first()
     .fill('Discard this pending QA edit');
-  expect(
-    await page.evaluate(
-      (key) => localStorage.getItem(key),
-      vaultNamespace('qa').draft + initial.id
+  await expect
+    .poll(() =>
+      page.evaluate(
+        (key) => localStorage.getItem(key),
+        vaultNamespace('qa').draft + initial.id
+      )
     )
-  ).toContain('Discard this pending QA edit');
+    .toContain('Discard this pending QA edit');
   const scopes = [
     vaultNamespace(),
     vaultNamespace('other'),
@@ -285,7 +290,9 @@ test('a refused reset blocks startup until an explicit retry, even after the own
     second.getByText(/Test data reset failed.*Notes have not been loaded/)
   ).toBeVisible();
   // Startup stays blocked rather than claiming ownership and wiping later work.
-  await openAux(second, 'inspection', 'qa');
+  await expect(() => openAux(second, 'inspection', 'qa')).toPass({
+    timeout: 10_000
+  });
   expect(
     ((await rpc(second, 'inspection', 'load_note', { id: later.id })) as Note)
       .body
@@ -324,9 +331,28 @@ test('opening an unedited seeded note does not rewrite its content or modified t
     .getByRole('button', { name: 'Welcome', exact: true })
     .click();
   await expect(page.locator('.ProseMirror').first()).toBeVisible();
+  await page.locator('.ProseMirror').first().click();
   // Cross the editor's debounce so a mount-triggered save cannot evade the check.
   await page.waitForTimeout(2500);
   expect(await rpc(page, 'qa', 'load_note', { id: initial.id })).toEqual(
     before
   );
+  // Legacy bodies still upgrade to the editor's v2 state on the first edit.
+  await page.locator('.ProseMirror').first().press('ControlOrMeta+End');
+  await page.locator('.ProseMirror').first().press('Enter');
+  await page
+    .locator('.ProseMirror')
+    .first()
+    .pressSequentially('First actual edit');
+  await expect
+    .poll(async () => {
+      const saved = (await rpc(page, 'qa', 'load_note', {
+        id: initial.id
+      })) as Note;
+      return {
+        schema: saved.payload_schema,
+        edited: saved.body.includes('First actual edit')
+      };
+    })
+    .toEqual({ schema: 2, edited: true });
 });

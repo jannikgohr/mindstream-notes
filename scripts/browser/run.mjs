@@ -24,18 +24,29 @@ const env = {
 };
 let child;
 let stopping;
-const signals = { SIGINT: 130, SIGTERM: 143 };
+const signals = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 };
 for (const signal of Object.keys(signals)) {
   process.on(signal, () => {
     stopping = signal;
+    process.exitCode = signals[signal];
     if (!child?.pid) return;
-    // Build tools also spawn children. Signal the whole group so a stopped
-    // launcher cannot leave Vite or a compiler holding its port/files open.
+    // Keep children in the caller's process group so terminal and CI group
+    // kills reach them. Forward signals also sent to this launcher alone.
     try {
       if (process.platform === 'win32') {
-        spawn('taskkill', ['/pid', String(child.pid), '/T', '/F']);
+        const running = child;
+        spawn('taskkill', ['/pid', String(running.pid), '/T', '/F']).once(
+          'error',
+          (error) => {
+            console.error(
+              'Could not stop the child process tree:',
+              error.message
+            );
+            running.kill(signal);
+          }
+        );
       } else {
-        process.kill(-child.pid, signal);
+        child.kill(signal);
       }
     } catch (error) {
       if (error.code !== 'ESRCH') throw error;
@@ -48,8 +59,7 @@ async function run(args) {
     child = spawn(process.execPath, args, {
       cwd: root,
       env,
-      stdio: 'inherit',
-      detached: process.platform !== 'win32'
+      stdio: 'inherit'
     });
     child.once('error', reject);
     child.once('close', (code) => resolve(code ?? 1));
@@ -75,17 +85,15 @@ if (built && !stopping) {
       ? `Browser QA vault: ${testId}. Use Reset test data for a seeded start.`
       : mode === 'fixtures'
         ? 'Browser UI fixtures: note changes are discarded on reload.'
-        : 'Browser vault: persistent storage.'
+        : 'Storage mode: persistent.'
   );
   await run([
     vite,
     action,
-    ...(action === 'dev'
-      ? [
-          '--port',
-          mode === 'qa' ? '1422' : mode === 'fixtures' ? '1421' : '1420',
-          '--strictPort'
-        ]
+    ...(action === 'dev' &&
+    mode !== 'normal' &&
+    !extra.some((arg) => arg === '--port' || arg.startsWith('--port='))
+      ? ['--port', mode === 'qa' ? '1422' : '1421']
       : []),
     ...extra.filter((arg) => arg !== '--skip-wasm')
   ]);
