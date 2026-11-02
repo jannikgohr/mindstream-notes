@@ -259,6 +259,37 @@ fn capture_off_lock_matches_the_locked_path() {
 }
 
 #[test]
+fn the_saved_note_is_captured_with_the_snapshot_built_off_the_lock() {
+    // The steps of `capture_current_note_version`, which needs a live app.
+    let db = open_memory_for_tests();
+    let note = make_note(&db);
+
+    let (kind, body, state) = db.with_conn(|c| read_note_raw(c, &note)).unwrap();
+    let snapshot = build_snapshot(kind.clone(), body, state).unwrap();
+    assert_eq!(snapshot, "hello");
+
+    let version = capture_off_lock(
+        &db,
+        &note,
+        kind,
+        VersionAction::from("edited"),
+        None,
+        &snapshot,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(version.words_added, 1);
+}
+
+#[test]
+fn a_note_without_saved_state_snapshots_as_empty_and_leaves_its_body_out() {
+    let snapshot = build_snapshot(NoteKind::Freeform, "stale body".into(), None).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
+    assert_eq!(parsed["noteKind"], "freeform");
+    assert_eq!(parsed["data"], "");
+}
+
+#[test]
 fn capture_trims_to_the_per_note_version_cap() {
     // Every insert runs `enforce_cap`; drive past the ceiling so the trim
     // actually deletes rows (the other tests never exceed the cap).
