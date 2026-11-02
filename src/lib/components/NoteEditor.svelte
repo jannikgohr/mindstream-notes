@@ -17,6 +17,7 @@
     getDoc
   } from '@milkdown/kit/core';
   import { collabServiceCtx } from '@milkdown/plugin-collab';
+  import type { Node as ProseMirrorNode } from '@milkdown/kit/prose/model';
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
   import {
@@ -664,6 +665,8 @@
 
       // Bind y-doc + awareness AFTER create, then snapshot the serializer
       // + view so we can render markdown on demand from any save trigger.
+      let observedDocument: ProseMirrorNode;
+      let currentDocument: () => ProseMirrorNode;
       crepe.editor.action((ctx) => {
         const cs = ctx.get(collabServiceCtx);
         cs.bindDoc(yDoc!);
@@ -683,6 +686,8 @@
         const serializer = ctx.get(serializerCtx);
         const view = ctx.get(editorViewCtx);
         getMarkdown = () => serializer(view.state.doc);
+        currentDocument = () => view.state.doc;
+        observedDocument = view.state.doc;
       });
 
       // Hook yDoc updates AFTER bind/applyTemplate/connect so the initial
@@ -706,8 +711,16 @@
         // slow/lagging sync). Skip the save for that origin; the doc and DB
         // already agree. Peer edits arriving over the live relay carry a
         // different origin and still save, so they persist locally as before.
-        if (origin !== REMOTE_SYNC_ORIGIN) scheduleSave();
-        scheduleHistoryCapture();
+        // y-prosemirror can normalize its CRDT attributes on a selection-only
+        // transaction after mount. Persist actual document edits, while still
+        // retaining every live peer update even when its rendered text matches.
+        const document = currentDocument();
+        const changed = !document.eq(observedDocument);
+        observedDocument = document;
+        const peerUpdate = provider !== null && origin === provider;
+        if (origin !== REMOTE_SYNC_ORIGIN && (changed || peerUpdate))
+          scheduleSave();
+        if (changed || peerUpdate) scheduleHistoryCapture();
         // Mirror the doc into the source editor when it's visible — but
         // ORIGIN-GATED. While the user is editing the source pane, we must not
         // push our OWN edit's normalized round-trip back over their text

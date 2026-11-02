@@ -27,6 +27,7 @@ async function observe(page: Page) {
           };
           state.qaWorker = this;
           state.storageWorkerUrl = this.address;
+          sessionStorage.setItem('qa-worker-url', this.address);
         }
         super.postMessage(message, options);
       }
@@ -92,7 +93,10 @@ async function openAux(page: Page, target: string, testId?: string) {
         storageWorkerUrl: string;
         auxWorkers?: Record<string, Worker>;
       };
-      const worker = new Worker(state.storageWorkerUrl, { type: 'module' });
+      const worker = new Worker(
+        state.storageWorkerUrl || sessionStorage.getItem('qa-worker-url')!,
+        { type: 'module' }
+      );
       state.auxWorkers ??= {};
       state.auxWorkers[target] = worker;
       await new Promise<void>((resolve, reject) => {
@@ -164,6 +168,12 @@ test('QA edits survive reload, then reset seeds only the selected test vault', a
     .locator('.ProseMirror')
     .first()
     .fill('Discard this pending QA edit');
+  expect(
+    await page.evaluate(
+      (key) => localStorage.getItem(key),
+      vaultNamespace('qa').draft + initial.id
+    )
+  ).toContain('Discard this pending QA edit');
   const scopes = [
     vaultNamespace(),
     vaultNamespace('other'),
@@ -187,9 +197,6 @@ test('QA edits survive reload, then reset seeds only the selected test vault', a
   ).toBeVisible({ timeout: 20_000 });
   const after = (await rpc(page, 'qa', 'list_notes', {})) as NoteSummary[];
   expect(after.some((note) => note.id === qaOnly.id)).toBe(false);
-  expect(
-    ((await rpc(page, 'qa', 'load_note', { id: initial.id })) as Note).body
-  ).toBe(original.body);
   const copies = await page.evaluate(() =>
     Object.fromEntries(
       Object.keys(localStorage).map((key) => [key, localStorage.getItem(key)])
@@ -200,8 +207,7 @@ test('QA edits survive reload, then reset seeds only the selected test vault', a
       expect(value).not.toContain('Discard this pending QA edit');
     expect(key.startsWith(vaultNamespace('qa').archive)).toBe(false);
   }
-  // Restored editor tabs can checkpoint freshly seeded content during mount.
-  // Those new snapshots may exist briefly, but no discarded draft may return.
+  // Check after the editor has settled as well as immediately after reset.
   await expect
     .poll(() =>
       page.evaluate(
@@ -211,6 +217,9 @@ test('QA edits survive reload, then reset seeds only the selected test vault', a
       )
     )
     .toEqual([]);
+  expect(
+    ((await rpc(page, 'qa', 'load_note', { id: initial.id })) as Note).body
+  ).toBe(original.body);
   const local = Object.keys(copies);
   for (const names of scopes.slice(0, 2)) {
     expect(local).toContain(names.draft + 'sentinel');
@@ -235,11 +244,11 @@ test('QA edits survive reload, then reset seeds only the selected test vault', a
   const final = (await rpc(page, 'qa', 'load_note', {
     id: initial.id
   })) as Note;
-  expect(final.body).toContain(original.body.split('\n')[0]);
+  expect(final.body).toBe(original.body);
   expect(final.body).not.toContain('Discard this pending QA edit');
 });
 
-test('a second tab cannot reset a vault while its owner is active', async ({
+test('a refused reset blocks startup until an explicit retry, even after the owner leaves', async ({
   page,
   context
 }) => {
@@ -257,10 +266,67 @@ test('a second tab cannot reset a vault while its owner is active', async ({
     second.getByRole('button', { name: 'Reset test data', exact: true }).click()
   ]);
   await expect(
-    second.getByText(/The database is open in another tab/)
+    second.getByText(/Test data reset failed.*Notes have not been loaded/)
   ).toBeVisible({ timeout: 20_000 });
+  await expect(
+    second
+      .getByRole('group', { name: 'File tree' })
+      .getByRole('button', { name: 'Welcome', exact: true })
+  ).toHaveCount(0);
   expect(
     ((await rpc(page, 'qa', 'load_note', { id: note.id })) as Note).body
   ).toBe('keep while owned');
+  const later = (await rpc(page, 'qa', 'create_note', {
+    input: { title: 'Work after refusal', body: 'must not be silently erased' }
+  })) as Note;
+  await page.close();
+  await second.reload();
+  await expect(
+    second.getByText(/Test data reset failed.*Notes have not been loaded/)
+  ).toBeVisible();
+  // Startup stays blocked rather than claiming ownership and wiping later work.
+  await openAux(second, 'inspection', 'qa');
+  expect(
+    ((await rpc(second, 'inspection', 'load_note', { id: later.id })) as Note)
+      .body
+  ).toBe('must not be silently erased');
+  await closeAux(second, 'inspection');
+  await Promise.all([
+    second.waitForEvent('load'),
+    second.getByRole('button', { name: 'Reset test data', exact: true }).click()
+  ]);
+  await expect(
+    second
+      .getByRole('group', { name: 'File tree' })
+      .getByRole('button', { name: 'Welcome', exact: true })
+  ).toBeVisible({ timeout: 20_000 });
+  const resetNotes = (await rpc(
+    second,
+    'qa',
+    'list_notes',
+    {}
+  )) as NoteSummary[];
+  expect(resetNotes.some((n) => n.id === later.id || n.id === note.id)).toBe(
+    false
+  );
   await second.close();
+});
+
+test('opening an unedited seeded note does not rewrite its content or modified time', async ({
+  page
+}) => {
+  const initial = (
+    (await rpc(page, 'qa', 'list_notes', {})) as NoteSummary[]
+  ).find((n) => n.title === 'Welcome')!;
+  const before = await rpc(page, 'qa', 'load_note', { id: initial.id });
+  await page
+    .getByRole('group', { name: 'File tree' })
+    .getByRole('button', { name: 'Welcome', exact: true })
+    .click();
+  await expect(page.locator('.ProseMirror').first()).toBeVisible();
+  // Cross the editor's debounce so a mount-triggered save cannot evade the check.
+  await page.waitForTimeout(2500);
+  expect(await rpc(page, 'qa', 'load_note', { id: initial.id })).toEqual(
+    before
+  );
 });

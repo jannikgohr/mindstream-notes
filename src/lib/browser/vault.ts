@@ -8,6 +8,8 @@ import {
 import type { BrowserCommand, BrowserRequest } from './commands';
 import { browserTestVaultId } from './testing';
 import { vaultNamespace } from './namespace';
+import { storageError, type StorageError } from './protocol';
+import { tUi } from '$lib/settings/i18n.svelte';
 
 // The healthy connection, if any. Set only after a successful open so a failed
 // attempt never leaves a dead client cached.
@@ -16,15 +18,47 @@ let client: BrowserStorageClient | undefined;
 // one outcome. Cleared when the attempt settles, success or failure.
 let opening: Promise<BrowserStorageClient> | undefined;
 let resetting = false;
+let startupChecked = false;
+let resetFailure: StorageError | undefined;
+
+function failedReset(cause?: unknown): StorageError {
+  const error = cause ? storageError(cause) : { code: 'refused' as const };
+  return {
+    ...error,
+    message:
+      tUi('browser.testing.blocked') +
+      ('message' in error ? ` ${error.message}` : '')
+  };
+}
 
 async function openVault(): Promise<BrowserStorageClient> {
-  // The constructor can throw (for example when CSP blocks workers), so it runs
-  // inside the attempt and its failure is cleared like any other open failure.
-  const connection = new BrowserStorageClient();
+  const testId = browserTestVaultId();
+  const resetKey = vaultNamespace(testId).reset;
+  let reset = false;
+  // Read reset intent once, before the first open. Consume it before spawning
+  // the worker: a crash or refusal must never leave an automatic future wipe.
+  if (!startupChecked) {
+    startupChecked = true;
+    if (testId && resetKey) {
+      try {
+        const intent = sessionStorage.getItem(resetKey);
+        if (intent === '1') {
+          sessionStorage.setItem(resetKey, 'failed');
+          reset = true;
+        } else if (intent !== null) {
+          resetFailure = failedReset();
+        }
+      } catch (cause) {
+        resetFailure = failedReset(cause);
+      }
+    }
+  }
+  if (resetFailure) throw resetFailure;
+  let connection: BrowserStorageClient | undefined;
   try {
-    const testId = browserTestVaultId();
-    const resetKey = vaultNamespace(testId).reset;
-    if (testId && resetKey && sessionStorage.getItem(resetKey) === '1') {
+    // Constructor failures participate in the same startup reset gate.
+    connection = new BrowserStorageClient();
+    if (reset && testId && resetKey) {
       await connection.request('resetTestVault', { testId });
       clearBrowserTestRecovery(testId);
       sessionStorage.removeItem(resetKey);
@@ -36,7 +70,11 @@ async function openVault(): Promise<BrowserStorageClient> {
       await recoverBrowserNotes(connection);
     }
   } catch (error) {
-    connection.dispose();
+    connection?.dispose();
+    if (reset) {
+      resetFailure = failedReset(error);
+      throw resetFailure;
+    }
     throw error;
   }
   client = connection;
@@ -44,6 +82,7 @@ async function openVault(): Promise<BrowserStorageClient> {
 }
 
 function connect(): Promise<BrowserStorageClient> {
+  if (resetFailure) return Promise.reject(resetFailure);
   if (resetting)
     return Promise.reject({
       code: 'closed',
@@ -99,8 +138,8 @@ export async function invokeBrowser(
   }
 }
 
-/** Mark a test-only reset for the next page load. Closing first prevents old
- * editors from reopening storage while the page is navigating away. The fresh
+/** Request one test-only reset attempt before the next page opens storage.
+ * Closing first prevents old editors from reopening storage during navigation. The fresh
  * worker acquires the test lock before deletion, reseeding, and journal cleanup. */
 export async function prepareBrowserTestReset(): Promise<void> {
   const id = browserTestVaultId();

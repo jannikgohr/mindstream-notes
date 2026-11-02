@@ -1,6 +1,5 @@
 <script lang="ts">
   import { browserTestVaultId } from './testing';
-  import { prepareBrowserTestReset } from './vault';
   import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
 
   const id = browserTestVaultId();
@@ -10,6 +9,7 @@
     busy = true;
     error = false;
     try {
+      const { prepareBrowserTestReset } = await import('./vault');
       await prepareBrowserTestReset();
       window.location.reload();
     } catch (cause) {

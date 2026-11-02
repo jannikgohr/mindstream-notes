@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { fileURLToPath } from 'node:url';
 
 export default defineConfig({
   testDir: '.',
@@ -13,7 +14,9 @@ export default defineConfig({
     { name: 'webkit', use: { ...devices['Desktop Safari'] } }
   ],
   webServer: {
-    command: 'pnpm build:qa && pnpm preview --port 1452 --strictPort',
+    cwd: fileURLToPath(new URL('../../', import.meta.url)),
+    command:
+      'node scripts/browser/run.mjs qa build --skip-wasm && pnpm preview --port 1452 --strictPort',
     url: 'http://localhost:1452',
     reuseExistingServer: false,
     timeout: 240_000,

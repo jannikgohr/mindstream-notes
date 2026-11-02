@@ -22,7 +22,8 @@ pnpm dev
 ```
 
 Open `http://localhost:1420/`, create and edit a note, then hard reload.
-`pnpm dev` builds the worker Wasm before starting Vite. `pnpm build:browser` builds both Wasm and the static frontend. Tauri uses
+`pnpm dev` builds the worker Wasm before starting Vite. `pnpm build:browser`
+builds both Wasm and the static frontend. Tauri uses
 `pnpm dev:native` and keeps its existing native toolchain requirements.
 
 ## Testing modes
@@ -46,7 +47,17 @@ removes its OPFS directory, and creates a seeded database. Its pending drafts
 and retained recovery copies are cleared before the app reads any notes.
 Normal vaults, other test vaults, and their recovery data remain intact, even
 when they share an origin. Close other tabs using this test vault before
-resetting. A refused reset keeps its intent for the next reload.
+resetting. Reset runs once during startup, before any notes load. A refused or
+interrupted reset blocks notes with an error, including after a reload. It
+never retries through later storage calls. Close the other owner, then click
+**Reset test data** explicitly to retry.
+
+Reset clears note data and recovery copies for this test vault. It keeps
+settings, onboarding progress, and the saved tab layout. Vaults on the same
+origin share those preferences and layout; tabs for deleted notes are dropped.
+The normal development and build commands force normal storage even if the
+shell or `.env.local` contains testing flags. Use the dedicated fixture or QA
+commands to select those modes.
 
 `pnpm build:fixtures` and `pnpm build:qa` produce the corresponding static
 builds. Serve them with `pnpm preview --port 1421` or `--port 1422`.
@@ -57,7 +68,8 @@ Use `pnpm build:browser` for a normal persistent browser build.
 the normal persistent backend in fresh browser contexts, retaining each
 context during reload and second-tab checks. `pnpm test:qa` verifies the
 isolated vault and reset action against real SQLite, including normal and
-other test vaults on the same origin. WebKit uses a temporary profile and
+other test vaults on the same origin. Its Wasm build runs before Playwright
+starts the server timeout. WebKit uses a temporary profile and
 skips storage cases when OPFS is unavailable.
 
 ## Persistence and ownership
