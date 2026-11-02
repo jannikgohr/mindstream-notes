@@ -198,16 +198,33 @@ builds. Normal browser development and browser builds use persistent storage.
 Browser application events use an in-process event bus; native commands and
 event delivery keep using Tauri.
 
+## Native-only features
+
+The browser hides what only the native app can do: the tray, start on login,
+global shortcuts, the custom title bar, the signed updater, the data folder,
+vault window choices, and Android live ink. In-app keyboard shortcuts still
+work. Note popouts are hidden too, because a second tab cannot own the vault.
+
+Mark a setting, section, or category with `"nativeOnly": true` in
+`src/lib/settings/schema.json` to hide it in a browser. Keep `platforms` for
+OS filtering. It matches a browser by the OS it runs on, so a Linux browser
+counts as `desktop`. `editor.desktopToolbar` is an example of a desktop setting
+that belongs in the browser.
+
 ## Remaining increments
 
+Plugins stay limited to the bundled core plugin until a later project, and
+LanguageTool checks stay out of the browser.
+
 1. Complete platform services for native file integrations, browser downloads,
-   backups and recovery, credentials, and networking. Gate native-only
-   features in the browser UI.
-2. Port the vendored client's blocking HTTP calls and the app's blocking auth
+   backups and recovery, credentials, and networking.
+2. Add spellcheck in a worker and separate vaults on one origin.
+3. Port the vendored client's blocking HTTP calls and the app's blocking auth
    and sync entry points to async transport. Keep the Etebase ciphertext,
    MessagePack payloads, signatures, room keys, and Yjs update formats
    compatible. Add native-to-browser encrypted sync conformance tests before
-   enabling browser sign-in.
-3. Add offline app loading, update handling, static-host deployment, storage
-   recovery, and desktop/mobile release validation. Local persistence does not
+   enabling browser sign-in. Each server hosts the web app on its own origin,
+   so the server needs no CORS support.
+4. Add offline app loading, update handling, storage recovery, and
+   desktop/mobile release validation. Local persistence does not
    establish encrypted sync or a releasable browser app.
