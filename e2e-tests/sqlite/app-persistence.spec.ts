@@ -1,6 +1,10 @@
 import type { Page } from '@playwright/test';
 import { strFromU8, unzipSync } from 'fflate';
-import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import * as Y from 'yjs';
 import { test, expect } from './fixtures';
 import { clickFileTreeCreateAction } from '../browser/file-tree-toolbar';
@@ -29,7 +33,8 @@ async function observeStorage(page: Page) {
 async function rpc<K extends BrowserCommand>(
   page: Page,
   command: K,
-  args: BrowserCommands[K]['args']
+  args: BrowserCommands[K]['args'],
+  recoveryToken?: string
 ): Promise<BrowserCommands[K]['result']> {
   return page.evaluate(
     async (request: BrowserRequest) => {
@@ -52,7 +57,7 @@ async function rpc<K extends BrowserCommand>(
         worker.postMessage({ id, method: 'invoke', args: request });
       });
     },
-    { command, args } as BrowserRequest
+    { command, args, recoveryToken } as BrowserRequest
   ) as Promise<BrowserCommands[K]['result']>;
 }
 async function boot(page: Page) {
@@ -509,6 +514,94 @@ test('the vault downloads as a zip holding its notes and attachment bytes', asyn
   expect(Array.from(files[`Grüße/_assets/${asset.id}.png`])).toEqual(picture);
   expect(Object.keys(files).join()).not.toContain('Thrown away');
   await expect(page.getByText('Saved to')).toHaveCount(0);
+});
+
+test('a backup downloads in the native format and leaves browser state out', async ({
+  page
+}) => {
+  const note = await rpc(page, 'create_note', {
+    input: { title: 'Backed up note' }
+  });
+  await rpc(
+    page,
+    'save_note',
+    { input: { id: note.id, body: 'Kept safe' } },
+    'a-save-receipt'
+  );
+  await rpc(page, 'upload_drawing_asset', {
+    input: {
+      owning_note_id: note.id,
+      mime_type: 'image/png',
+      bytes: [137, 80, 78, 71, 0, 255]
+    }
+  });
+
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const settings = page.getByRole('dialog');
+  await settings.getByRole('button', { name: /^Data/ }).first().click();
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    settings.getByRole('button', { name: 'Back up now' }).click()
+  ]);
+  expect(download.suggestedFilename()).toMatch(
+    /^mindstream-backup-[\dT-]+\.zip$/
+  );
+  // Regenerates src-tauri/src/backup/fixtures/browser-backup.zip when set.
+  const fixture = process.env.BROWSER_BACKUP_FIXTURE;
+  if (fixture) await download.saveAs(fixture);
+
+  const files = unzipSync(
+    new Uint8Array(await readFile(await download.path()))
+  );
+  expect(Object.keys(files)).toEqual(['manifest.json', 'data.db']);
+  const manifest = JSON.parse(strFromU8(files['manifest.json']));
+  expect(manifest).toMatchObject({
+    format_version: 1,
+    account_present_at_export: false,
+    contents: { db_filename: 'data.db', counts: { assets_bytes: 6 } }
+  });
+  expect(manifest.portable).toBeUndefined();
+  expect(manifest.data_db_sha256).toBe(
+    createHash('sha256').update(files['data.db']).digest('hex')
+  );
+
+  const directory = await mkdtemp(join(tmpdir(), 'browser-backup-'));
+  try {
+    const database = join(directory, 'data.db');
+    await writeFile(database, files['data.db']);
+    const snapshot = new DatabaseSync(database, { readOnly: true });
+    const row = snapshot
+      .prepare('SELECT body FROM notes WHERE id = ?')
+      .get(note.id) as { body: string };
+    const tables = snapshot
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .all() as { name: string }[];
+    const version = snapshot.prepare('PRAGMA user_version').get() as {
+      user_version: number;
+    };
+    snapshot.close();
+    expect(row.body).toBe('Kept safe');
+    expect(tables.map(({ name }) => name)).not.toContain(
+      'browser_write_receipts'
+    );
+    expect(version.user_version).toBe(manifest.schema_version);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+
+  // The vault stays usable, and the snapshot's pool file is free to reuse.
+  expect((await rpc(page, 'load_note', { id: note.id })).body).toBe(
+    'Kept safe'
+  );
+  await page
+    .getByRole('alertdialog')
+    .getByRole('button', { name: 'Close', exact: true })
+    .click();
+  const [second] = await Promise.all([
+    page.waitForEvent('download'),
+    settings.getByRole('button', { name: 'Back up now' }).click()
+  ]);
+  expect(second.suggestedFilename()).toMatch(/^mindstream-backup-/);
 });
 
 test('another tab reports the database owner and opens persisted data after it closes', async ({

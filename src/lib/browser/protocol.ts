@@ -11,6 +11,13 @@ export interface ProofReport {
   crdt: boolean;
 }
 
+export interface BrowserBackup {
+  archive: Blob;
+  filename: string;
+  counts: { notes: number; folders: number; assets_bytes: number };
+  accountPresent: boolean;
+}
+
 export interface StorageMethods {
   open: { args: undefined | { scope: 'vault'; testId?: string }; result: void };
   resetTestVault: { args: { testId: string }; result: void };
@@ -19,6 +26,7 @@ export interface StorageMethods {
     result: unknown;
   };
   receipt: { args: { id: string }; result: string | null };
+  backup: { args: undefined; result: BrowserBackup };
   prepareInterruptedWrite: { args: undefined; result: void };
   checkInterruptedWrite: { args: undefined; result: number };
   verify: { args: undefined; result: ProofReport };
@@ -107,6 +115,7 @@ export function parseRequest(value: unknown): StorageRequest {
       'resetTestVault',
       'invoke',
       'receipt',
+      'backup',
       'prepareInterruptedWrite',
       'checkInterruptedWrite',
       'verify',
@@ -203,6 +212,19 @@ export function parseResult<K extends StorageMethod>(
   } else if (method === 'checkInterruptedWrite') {
     if (!Number.isSafeInteger(value) || (value as number) < 0)
       throw new Error('Invalid interrupted-write report');
+  } else if (method === 'backup') {
+    const backup = value as Partial<BrowserBackup> | null;
+    if (
+      !(backup?.archive instanceof Blob) ||
+      typeof backup.filename !== 'string' ||
+      typeof backup.accountPresent !== 'boolean' ||
+      [
+        backup.counts?.notes,
+        backup.counts?.folders,
+        backup.counts?.assets_bytes
+      ].some((count) => !Number.isSafeInteger(count))
+    )
+      throw new Error('Invalid backup response');
   } else if (method === 'read' || method === 'receipt') {
     if (value !== null && typeof value !== 'string')
       throw new Error('Invalid marker response');

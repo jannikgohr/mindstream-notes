@@ -1,6 +1,7 @@
 //! Storage code shared by the Tauri app and the browser SQLite proof.
 pub mod asset_hash;
 pub mod assets;
+pub mod backup;
 pub mod collections;
 pub mod content_stats;
 pub mod demo_notes;

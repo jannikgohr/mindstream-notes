@@ -205,6 +205,18 @@ folder. It holds Markdown, drawings, PDFs, and attachments, and leaves out the
 trash. The zip format used here stops at 4 GB and 65,535 files. Notes past that
 limit count as export errors in the result, and the archive stays valid.
 
+**Back up now** downloads a backup the app can open. Both platforms prepare the
+snapshot through `storage-core/src/backup.rs`, so device secrets and plugin
+state stay behind on either. The browser also drops its save receipts. It
+writes manifest format 1, because format 2 requires the portable resources the
+app adds, and a reader uses that rule to spot incomplete backups. The snapshot
+is read into Wasm memory whole, so a vault above 1 GiB is refused with a clear
+error. **Export vault** still works for those.
+
+`src-tauri/src/backup/fixtures/browser-backup.zip` is a real browser backup, and
+a native test imports it. Regenerate it with
+`BROWSER_BACKUP_FIXTURE=<path> pnpm test:sqlite` when the format changes.
+
 ## Native-only features
 
 The browser hides what only the native app can do: the tray, start on login,

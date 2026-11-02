@@ -58,7 +58,8 @@ export class BrowserStorageClient {
 
   async request<K extends StorageMethod>(
     method: K,
-    args: StorageMethods[K]['args']
+    args: StorageMethods[K]['args'],
+    timeoutMs = this.timeoutMs
   ): Promise<StorageMethods[K]['result']> {
     if (this.closed)
       throw { code: 'closed', message: 'Storage worker is closed' };
@@ -67,7 +68,7 @@ export class BrowserStorageClient {
       const timer = setTimeout(
         () =>
           this.fail({ code: 'timeout', message: 'Storage request timed out' }),
-        this.timeoutMs
+        timeoutMs
       );
       this.pending.set(id, { method, resolve, reject, timer });
       try {
