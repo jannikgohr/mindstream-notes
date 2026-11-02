@@ -73,9 +73,7 @@ impl ImportFiles for DiskFiles {
                     continue;
                 }
             };
-            let Some(path) = relative_path(&self.root, entry.path()) else {
-                continue;
-            };
+            let path = relative_path(&self.root, entry.path()).unwrap_or_default();
             let file_type = entry.file_type();
             if path.is_empty() || !(file_type.is_dir() || file_type.is_file()) {
                 continue;
