@@ -76,6 +76,52 @@ describe('worker transport', () => {
     });
   });
 
+  it('ignores messages it cannot match to a request', async () => {
+    const { client, worker } = setup();
+    const request = client.request('read', undefined);
+    worker.reply(null);
+    worker.reply('stored');
+    worker.reply({ id: 2, ok: true, result: 'stored' });
+    expect(worker.terminate).not.toHaveBeenCalled();
+    worker.reply({ id: 1, ok: true, result: 'stored' });
+    await expect(request).resolves.toBe('stored');
+    client.dispose();
+  });
+
+  it('still names a worker failure that came without a message', async () => {
+    const { client, worker } = setup();
+    const request = client.request('read', undefined);
+    worker.onerror?.({ message: '' });
+    await expect(request).rejects.toEqual({
+      code: 'worker',
+      message: 'Storage worker failed'
+    });
+  });
+
+  it('closes when a response cannot be read', async () => {
+    const { client, worker } = setup();
+    const request = client.request('read', undefined);
+    worker.onmessageerror?.();
+    await expect(request).rejects.toEqual({
+      code: 'worker',
+      message: 'Storage worker returned an unreadable message'
+    });
+    expect(worker.terminate).toHaveBeenCalledOnce();
+    expect(client.isClosed).toBe(true);
+  });
+
+  it('fails the request and closes when the worker refuses the message', async () => {
+    const { client, worker } = setup();
+    worker.postMessage.mockImplementation(() => {
+      throw new Error('could not be cloned');
+    });
+    await expect(client.request('read', undefined)).rejects.toEqual({
+      code: 'worker',
+      message: 'could not be cloned'
+    });
+    expect(worker.terminate).toHaveBeenCalledOnce();
+  });
+
   it('terminates a stalled worker so its pool lock can be released', async () => {
     vi.useFakeTimers();
     const { client, worker } = setup(100);
