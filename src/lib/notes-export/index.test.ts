@@ -25,12 +25,15 @@ vi.mock('$lib/notes-export/excalidraw', () => ({
   buildExcalidrawFile: vi.fn()
 }));
 vi.mock('$lib/note-exporters/pdf', () => ({ buildPdfNoteBytes: vi.fn() }));
-import { exportVault } from './index';
+const download = vi.hoisted(() => vi.fn());
+vi.mock('$lib/api/file-export', () => ({ downloadBlob: download }));
+import { downloadVaultExport, exportVault } from './index';
 
 beforeEach(() => {
   state.notes = {};
   state.loadNote.mockReset();
   state.writeExportFile.mockReset().mockResolvedValue(undefined);
+  download.mockReset();
 });
 
 function seed(id: string, kind: string, body = '', yrs_state: number[] = []) {
@@ -64,7 +67,7 @@ describe('vault export additions', () => {
     seed('typst', 'plugin.com.mindstream.typst.document', '= Source\n');
     seed('second-typst', 'plugin.com.mindstream.typst.document', '');
     doc.destroy();
-    const report = await exportVault('/exports');
+    const report = await exportVault(state.writeExportFile);
     expect(report).toMatchObject({
       kanban_written: 1,
       typst_written: 2,
@@ -72,7 +75,7 @@ describe('vault export additions', () => {
       skipped_unknown_kind: 0
     });
     const outputs = new Map(
-      state.writeExportFile.mock.calls.map(([, name, bytes]) => [
+      state.writeExportFile.mock.calls.map(([name, bytes]) => [
         name,
         new TextDecoder().decode(bytes)
       ])
@@ -89,12 +92,22 @@ describe('vault export additions', () => {
     seed('broken', 'kanban', '', [1, 2, 3]);
     seed('typst', 'plugin.com.mindstream.typst.document', '= Good');
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const report = await exportVault('/exports');
+    const report = await exportVault(state.writeExportFile);
     expect(report).toMatchObject({
       kanban_written: 0,
       typst_written: 1,
       errors: 1
     });
     log.mockRestore();
+  });
+
+  it('hands a browser the whole vault as one dated zip', async () => {
+    seed('typst', 'plugin.com.mindstream.typst.document', '= Good');
+    const report = await downloadVaultExport();
+    expect(report.typst_written).toBe(1);
+    expect(state.writeExportFile).not.toHaveBeenCalled();
+    const [blob, name] = download.mock.calls[0] as [Blob, string];
+    expect(blob.type).toBe('application/zip');
+    expect(name).toMatch(/^mindstream-notes-\d{4}-\d{2}-\d{2}\.zip$/);
   });
 });

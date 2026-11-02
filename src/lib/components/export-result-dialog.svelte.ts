@@ -98,17 +98,21 @@ export function showDataResult(opts: DataResultOptions): Promise<string> {
 
 export function showExportResult(
   report: ExportReport,
-  destination: string
+  destination: string | null
 ): Promise<string> {
   return showDataResult({
     titleKey: 'data.exportVault.success.title',
     headerIcon: 'partyPopper',
     tone: 'success',
-    location: {
-      labelKey: 'data.exportVault.savedTo',
-      actionLabelKey: 'data.exportVault.openLocation',
-      path: destination
-    },
+    // A browser download has no folder this app could name or open.
+    location:
+      destination === null
+        ? undefined
+        : {
+            labelKey: 'data.exportVault.savedTo',
+            actionLabelKey: 'data.exportVault.openLocation',
+            path: destination
+          },
     primaryAction: {
       labelKey: 'data.exportVault.close',
       value: 'close'
