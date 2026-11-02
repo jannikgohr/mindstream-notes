@@ -216,7 +216,8 @@ async function answerConfirmation(
   client: WebdriverIO.Browser,
   text: string
 ): Promise<string> {
-  const dialog = client.$('[role="alertdialog"]');
+  const open = '[role="alertdialog"][data-state="open"]';
+  const dialog = client.$(open);
   await dialog.waitForDisplayed({ timeout: 30_000 });
   const said = await dialog.getText();
   await client.execute((label: string) => {
@@ -228,7 +229,17 @@ async function answerConfirmation(
     if (!button) throw new Error(`button not found: ${label}`);
     button.click();
   }, text);
-  await dialog.waitForDisplayed({ reverse: true, timeout: 30_000 });
+  // The app can ask its next question in this same dialog before it has
+  // closed, so what has to go is the question, not the dialog.
+  await client.waitUntil(
+    async () => {
+      const showing = client.$(open);
+      return (
+        !(await showing.isExisting()) || (await showing.getText()) !== said
+      );
+    },
+    { timeout: 30_000, timeoutMsg: `the app kept asking: ${said}` }
+  );
   return said;
 }
 
