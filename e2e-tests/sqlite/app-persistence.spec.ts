@@ -1,10 +1,11 @@
 import type { Page } from '@playwright/test';
-import { strFromU8, unzipSync } from 'fflate';
+import { strFromU8, unzipSync, zipSync } from 'fflate';
 import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { fileURLToPath } from 'node:url';
 import * as Y from 'yjs';
 import { test, expect } from './fixtures';
 import { clickFileTreeCreateAction } from '../browser/file-tree-toolbar';
@@ -602,6 +603,155 @@ test('a backup downloads in the native format and leaves browser state out', asy
     settings.getByRole('button', { name: 'Back up now' }).click()
   ]);
   expect(second.suggestedFilename()).toMatch(/^mindstream-backup-/);
+});
+
+// A backup the native app wrote, with its plugin package, plugin data and
+// settings. A browser restores the database and leaves those behind.
+const NATIVE_BACKUP = fileURLToPath(
+  new URL('fixtures/native-backup.zip', import.meta.url)
+);
+
+async function openDataSettings(page: Page) {
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const settings = page.getByRole('dialog');
+  await settings.getByRole('button', { name: /^Data/ }).first().click();
+  return settings;
+}
+
+async function chooseBackup(
+  page: Page,
+  file: string | { name: string; mimeType: string; buffer: Buffer }
+) {
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    page
+      .getByRole('dialog')
+      .getByRole('button', { name: 'Restore from backup' })
+      .click()
+  ]);
+  await chooser.setFiles(file);
+}
+
+async function noteTitles(page: Page) {
+  const notes = await rpc(page, 'list_notes', {});
+  return notes.map((note) => note.title);
+}
+
+async function replaceVault(page: Page) {
+  const dialog = page.getByRole('alertdialog');
+  await dialog.getByRole('button', { name: 'Restore this vault' }).click();
+  await expect(dialog).toContainText('downloads first');
+  const [safety] = await Promise.all([
+    page.waitForEvent('download'),
+    dialog.getByRole('button', { name: 'Replace vault' }).click()
+  ]);
+  return safety;
+}
+
+test('a native backup replaces the vault after saving a copy of it', async ({
+  page
+}) => {
+  await rpc(page, 'create_note', { input: { title: 'Before the restore' } });
+  await openDataSettings(page);
+  await chooseBackup(page, NATIVE_BACKUP);
+  const safety = await replaceVault(page);
+
+  const tree = page.getByRole('group', { name: 'File tree' });
+  await expect(
+    tree.getByRole('button', { name: 'Portable note', exact: true })
+  ).toBeVisible({ timeout: 20_000 });
+  await page.waitForFunction(() => 'vaultWorker' in window);
+  expect(await noteTitles(page)).not.toContain('Before the restore');
+
+  // The replaced notes are in the file the user was handed.
+  const files = unzipSync(new Uint8Array(await readFile(await safety.path())));
+  const directory = await mkdtemp(join(tmpdir(), 'safety-backup-'));
+  try {
+    const database = join(directory, 'data.db');
+    await writeFile(database, files['data.db']);
+    const snapshot = new DatabaseSync(database, { readOnly: true });
+    const titles = snapshot.prepare('SELECT title FROM notes').all() as {
+      title: string;
+    }[];
+    snapshot.close();
+    expect(titles.map(({ title }) => title)).toContain('Before the restore');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+
+  await hardReload(page);
+  expect(await noteTitles(page)).toContain('Portable note');
+});
+
+test('merging a native backup adds its notes and keeps the vault', async ({
+  page
+}) => {
+  await rpc(page, 'create_note', {
+    input: { title: 'Kept through the merge' }
+  });
+  await openDataSettings(page);
+  await chooseBackup(page, NATIVE_BACKUP);
+  const dialog = page.getByRole('alertdialog');
+  await dialog.getByRole('button', { name: 'Merge missing items' }).click();
+  await expect(dialog).toContainText('Merge complete');
+  expect(await noteTitles(page)).toEqual(
+    expect.arrayContaining(['Kept through the merge', 'Portable note'])
+  );
+});
+
+test('a browser backup restores the vault it came from', async ({ page }) => {
+  const note = await rpc(page, 'create_note', {
+    input: { title: 'Original title' }
+  });
+  const settings = await openDataSettings(page);
+  const [backup] = await Promise.all([
+    page.waitForEvent('download'),
+    settings.getByRole('button', { name: 'Back up now' }).click()
+  ]);
+  const path = await backup.path();
+  await page
+    .getByRole('alertdialog')
+    .getByRole('button', { name: 'Close', exact: true })
+    .click();
+  await rpc(page, 'save_note', { input: { id: note.id, title: 'Renamed' } });
+
+  await chooseBackup(page, path);
+  await replaceVault(page);
+  await page.waitForFunction(() => 'vaultWorker' in window);
+  await expect
+    .poll(() => noteTitles(page).catch(() => []))
+    .toContain('Original title');
+  expect(await noteTitles(page)).not.toContain('Renamed');
+});
+
+test('a file that is not a sound backup leaves the vault alone', async ({
+  page
+}) => {
+  await rpc(page, 'create_note', { input: { title: 'Still here' } });
+  await openDataSettings(page);
+  const refusal = page.getByRole('alertdialog');
+
+  await chooseBackup(page, {
+    name: 'holiday-photos.zip',
+    mimeType: 'application/zip',
+    buffer: Buffer.from('this is not a zip')
+  });
+  await expect(refusal).toContainText('not a Mindstream backup');
+  await refusal.getByRole('button', { name: 'OK' }).click();
+
+  const original = unzipSync(new Uint8Array(await readFile(NATIVE_BACKUP)));
+  original['data.db'] = original['data.db'].slice();
+  original['data.db'][4096] ^= 0xff;
+  await chooseBackup(page, {
+    name: 'tampered.zip',
+    mimeType: 'application/zip',
+    buffer: Buffer.from(zipSync(original))
+  });
+  await expect(refusal).toContainText('checksum mismatch');
+  await refusal.getByRole('button', { name: 'OK' }).click();
+
+  expect(await noteTitles(page)).toContain('Still here');
+  expect(await noteTitles(page)).not.toContain('Portable note');
 });
 
 test('another tab reports the database owner and opens persisted data after it closes', async ({

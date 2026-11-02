@@ -19,7 +19,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
@@ -28,8 +28,7 @@ use zip::write::FileOptions;
 use zip::CompressionMethod;
 
 use crate::auth;
-use crate::collections::TRASH_ID;
-use crate::db::{migrations, Db};
+use crate::db::Db;
 use crate::error::{AppError, AppResult, CommandResult};
 
 /// Result of a successful `backup_now`. The destination path is what
@@ -53,6 +52,11 @@ pub use export::*;
 pub use merge::*;
 pub use restore::*;
 pub use staging::*;
+
+#[cfg(test)]
+use crate::db::migrations;
+#[cfg(test)]
+use rusqlite::params;
 
 #[cfg(test)]
 mod portable_tests;

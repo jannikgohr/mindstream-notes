@@ -238,6 +238,37 @@ describe('worker protocol validation', () => {
     }
   });
 
+  it('validates backup import requests and responses', () => {
+    const archive = new Blob(['zip']);
+    expect(
+      parseRequest({ id: 1, method: 'importBegin', args: { archive } })
+    ).toMatchObject({ method: 'importBegin' });
+    expect(
+      parseRequest({
+        id: 1,
+        method: 'importRestore',
+        args: { token: 't', sameAccount: false }
+      })
+    ).toMatchObject({ method: 'importRestore' });
+    for (const method of ['importMerge', 'importCleanup']) {
+      expect(
+        parseRequest({ id: 1, method, args: { token: 't' } })
+      ).toMatchObject({ method });
+    }
+    for (const invalid of [
+      { method: 'importBegin', args: { archive: 'zip' } },
+      { method: 'importBegin' },
+      { method: 'importMerge', args: { token: '' } },
+      { method: 'importCleanup', args: {} },
+      { method: 'importRestore', args: { token: 't' } },
+      { method: 'importRestore', args: { token: 't', sameAccount: 'no' } }
+    ]) {
+      expect(() => parseRequest({ id: 1, ...invalid })).toThrow();
+    }
+    expect(parseResult('importRestore', true)).toBe(true);
+    expect(() => parseResult('importRestore', 'done')).toThrow();
+  });
+
   it('rejects unrecognized methods and invalid write payloads', () => {
     expect(() =>
       parseRequest({ id: 1, method: 'execute_sql', args: 'DROP TABLE notes' })

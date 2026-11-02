@@ -110,6 +110,34 @@ export async function backupBrowserVault(): Promise<BrowserBackup> {
   return connection.request('backup', undefined, BACKUP_TIMEOUT_MS);
 }
 
+export async function stageBrowserBackup(archive: Blob): Promise<unknown> {
+  const connection = await connect();
+  return connection.request('importBegin', { archive }, BACKUP_TIMEOUT_MS);
+}
+
+export async function mergeBrowserBackup(token: string): Promise<unknown> {
+  const connection = await connect();
+  return connection.request('importMerge', { token }, BACKUP_TIMEOUT_MS);
+}
+
+/** Replaces the vault and closes it, so the page must reload afterwards. */
+export async function restoreBrowserBackup(
+  token: string,
+  sameAccount: boolean
+): Promise<boolean> {
+  const connection = await connect();
+  return connection.request(
+    'importRestore',
+    { token, sameAccount },
+    BACKUP_TIMEOUT_MS
+  );
+}
+
+export async function discardBrowserBackup(token: string): Promise<void> {
+  const connection = await connect();
+  await connection.request('importCleanup', { token });
+}
+
 export async function invokeBrowser(
   command: BrowserCommand,
   args: Record<string, unknown> = {}

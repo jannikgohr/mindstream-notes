@@ -10,10 +10,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
+use crate::migrations;
+
+mod merge;
+pub use merge::*;
 
 /// Bump only when the on-disk layout becomes incompatible with older
 /// readers — adding new optional manifest fields shouldn't require it.
@@ -97,6 +101,38 @@ pub struct PortableEntry {
     pub sha256: String,
     pub size: u64,
     pub mode: u32,
+}
+
+/// Preview shown in the import-choice dialog so the user knows what
+/// they're about to apply. Counts come from the staged DB *after*
+/// migrations, so they reflect the schema the import would actually
+/// land at.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportPreview {
+    /// Identifies this staged backup. Pass back into `import_restore`,
+    /// `import_merge`, or `import_cleanup` to reference this attempt.
+    pub token: String,
+    pub backup_counts: Counts,
+    pub current_counts: Counts,
+    pub backup_app_version: String,
+    pub backup_created_at: String,
+    /// True if the backup's account UIDs match the current DB's
+    /// sync_state. False means import would sanitize sync metadata on
+    /// restore (and merge always sanitizes regardless).
+    pub same_account: bool,
+    /// Friendly identifiers for the dialog copy — both optional;
+    /// `None` for the relevant side means "local-only" there.
+    pub backup_account: Option<AccountDisplay>,
+    pub current_account: Option<AccountDisplay>,
+    pub portable: bool,
+    pub plugin_packages: u32,
+    pub plugin_data_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountDisplay {
+    pub username: Option<String>,
+    pub server_url: Option<String>,
 }
 
 impl Manifest {
@@ -184,6 +220,192 @@ pub fn sanitize_snapshot(
     }
     tx.commit()?;
     Ok(())
+}
+
+/// What a reader checks before it trusts anything else in a backup. `entries`
+/// are the names of everything in the archive.
+pub fn check_manifest(manifest: &Manifest, entries: &[String]) -> AppResult<()> {
+    if manifest.format_version == 0 || manifest.format_version > MANIFEST_FORMAT_VERSION {
+        return Err(AppError::InvalidArg("unsupported backup format".into()));
+    }
+    if manifest.contents.db_filename != DB_ENTRY_NAME {
+        return Err(AppError::InvalidArg("invalid database entry name".into()));
+    }
+    let mut names = BTreeSet::new();
+    for entry in entries {
+        if !names.insert(entry.to_lowercase()) {
+            return Err(AppError::InvalidArg("duplicate backup entry".into()));
+        }
+    }
+    if manifest.format_version == 2 {
+        let index = manifest
+            .portable
+            .as_ref()
+            .ok_or_else(|| AppError::InvalidArg("backup resources missing".into()))?;
+        if entries.len() != index.files.len() + 2 || manifest.data_db_sha256.is_none() {
+            return Err(AppError::InvalidArg("incomplete backup".into()));
+        }
+    } else if manifest.portable.is_some() {
+        return Err(AppError::InvalidArg(
+            "legacy backup has unsupported resources".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Refuse future schemas and migrate older ones forward. This has to happen
+/// before anything reads the staged DB, so that its table shapes match what a
+/// restore or merge will encounter.
+pub fn prepare_staged(staged: &mut Connection, live: &Connection) -> AppResult<()> {
+    let staged_version: u32 = staged.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    let live_version: u32 = live.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if staged_version > live_version {
+        return Err(AppError::InvalidArg(format!(
+            "backup uses schema v{staged_version} but this app understands at most \
+             v{live_version} — update the app and try again"
+        )));
+    }
+    validate_looks_like_mindstream_db(staged)?;
+    migrations::run(staged)?;
+    Ok(())
+}
+
+pub fn validate_looks_like_mindstream_db(conn: &Connection) -> AppResult<()> {
+    // Cheap structural check — confirms the file is a SQLite DB and
+    // has the tables we touch downstream. Real corruption would
+    // surface during PRAGMA integrity_check, but that's O(file size)
+    // and overkill for the "is this even our format?" question.
+    for table in ["notes", "collections", "sync_state", "tombstones"] {
+        let found: Option<i64> = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                params![table],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if found.is_none() {
+            return Err(AppError::InvalidArg(format!(
+                "backup is missing the '{table}' table — file is not a Mindstream backup"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Describe a staged backup for the import-choice dialog.
+pub fn preview_import(
+    token: String,
+    manifest: Manifest,
+    staged: &Connection,
+    live: &Connection,
+    current_identity: Option<AccountIdentity>,
+) -> AppResult<ImportPreview> {
+    let backup_identity = read_account_identity(staged, None, None)?;
+    let same_account = match (&backup_identity, &current_identity) {
+        (Some(backup), Some(current)) => same_identity(backup, current),
+        _ => false,
+    };
+    // The friendly identifiers come from the *manifest* for the backup
+    // side (the staged sync_state has the UIDs but not the user-facing
+    // username / server URL — those were captured at export time).
+    let display = |identity: &AccountIdentity| AccountDisplay {
+        username: identity.username.clone(),
+        server_url: identity.server_url.clone(),
+    };
+    let portable = manifest.portable.as_ref();
+    Ok(ImportPreview {
+        token,
+        backup_counts: read_counts(staged)?,
+        current_counts: read_counts(live)?,
+        backup_app_version: manifest.app_version.clone(),
+        backup_created_at: manifest.created_at.clone(),
+        same_account,
+        backup_account: manifest.account.as_ref().map(display),
+        current_account: current_identity.as_ref().map(display),
+        portable: portable.is_some(),
+        plugin_packages: portable
+            .map(|index| {
+                index
+                    .directories
+                    .iter()
+                    .filter(|path| {
+                        path.starts_with("portable/packages/") && path.split('/').count() == 3
+                    })
+                    .count() as u32
+            })
+            .unwrap_or(0),
+        plugin_data_bytes: portable
+            .map(|index| {
+                index
+                    .files
+                    .iter()
+                    .filter(|entry| entry.path.starts_with("portable/plugin-data/"))
+                    .map(|entry| entry.size)
+                    .sum()
+            })
+            .unwrap_or(0),
+    })
+}
+
+pub fn same_identity(backup: &AccountIdentity, current: &AccountIdentity) -> bool {
+    backup.etebase_collection_uid_notes == current.etebase_collection_uid_notes
+        && backup.etebase_collection_uid_folders == current.etebase_collection_uid_folders
+}
+
+/// Detach a staged database from the account it came from, so that a future
+/// push to whatever account the user signs into next treats every row as new.
+pub fn sanitize_for_foreign_account(staged: &mut Connection) -> AppResult<()> {
+    let tx = staged.transaction()?;
+    tx.execute(
+        "UPDATE notes SET etebase_uid = NULL, etebase_etag = NULL, dirty = 1",
+        [],
+    )?;
+    tx.execute(
+        "UPDATE collections SET etebase_uid = NULL, etebase_etag = NULL, dirty = 1 WHERE id <> 'trash'",
+        [],
+    )?;
+    tx.execute(
+        "UPDATE assets SET etebase_uid = NULL, etebase_etag = NULL, dirty = 1",
+        [],
+    )?;
+    tx.execute(
+        "UPDATE signatures SET etebase_uid = NULL, etebase_etag = NULL, dirty = 1",
+        [],
+    )?;
+    // Drop the per-kind collection pointers + stoken cursors and any
+    // queued tombstones for the foreign account.
+    tx.execute("DELETE FROM sync_state", [])?;
+    tx.execute("DELETE FROM tombstones", [])?;
+    tx.commit()?;
+    Ok(())
+}
+
+pub fn read_account_identity(
+    conn: &Connection,
+    server_url: Option<String>,
+    username: Option<String>,
+) -> AppResult<Option<AccountIdentity>> {
+    // Both collection UIDs must be present for the identity block to
+    // count — a half-synced DB (one kind pushed, the other not) is a
+    // gnarly state we don't try to round-trip identity for.
+    let uid = |kind: &str| -> Option<String> {
+        conn.query_row(
+            "SELECT etebase_collection_uid FROM sync_state WHERE kind = ?1",
+            [kind],
+            |r| r.get(0),
+        )
+        .ok()
+        .flatten()
+    };
+    Ok(match (uid("notes"), uid("folders")) {
+        (Some(notes), Some(folders)) => Some(AccountIdentity {
+            etebase_collection_uid_notes: notes,
+            etebase_collection_uid_folders: folders,
+            server_url,
+            username,
+        }),
+        _ => None,
+    })
 }
 
 pub fn read_counts(conn: &Connection) -> AppResult<Counts> {
