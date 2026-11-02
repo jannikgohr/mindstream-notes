@@ -287,7 +287,7 @@ describe('test vault reset lifecycle', () => {
     ).toBeNull();
   });
 
-  it('preserves reset intent and recovery copies if the worker cannot obtain ownership', async () => {
+  it('blocks loading after a refused reset without retrying or discarding recovery copies', async () => {
     qa();
     sessionStorage.setItem('mindstream:browser-test:qa:reset', '1');
     localStorage.setItem(
@@ -302,12 +302,61 @@ describe('test vault reset lifecycle', () => {
       code: 'databaseBusy'
     });
     expect(FakeWorker.instances[0].terminated).toBe(true);
+    await expect(invokeBrowser('list_notes', {})).rejects.toMatchObject({
+      message: expect.stringContaining('Notes have not been loaded')
+    });
+    expect(FakeWorker.instances).toHaveLength(1);
+    expect(FakeWorker.instances[0].invokes()).toHaveLength(0);
     expect(
       localStorage.getItem('mindstream:browser-test:qa:draft:v1:note')
     ).not.toBeNull();
     expect(sessionStorage.getItem('mindstream:browser-test:qa:reset')).toBe(
-      '1'
+      'failed'
     );
+  });
+
+  it('keeps a failed startup blocked across reloads until an explicit reset', async () => {
+    qa();
+    sessionStorage.setItem('mindstream:browser-test:qa:reset', '1');
+    FakeWorker.plans = [
+      {
+        reset: { error: { code: 'io', message: 'Seed failed after deletion' } }
+      }
+    ];
+    let vault = await loadVault();
+    await expect(vault.invokeBrowser('list_notes')).rejects.toMatchObject({
+      message: expect.stringContaining('Notes have not been loaded')
+    });
+    await expect(vault.invokeBrowser('list_notes')).rejects.toMatchObject({
+      code: 'io'
+    });
+    expect(FakeWorker.instances).toHaveLength(1);
+    expect(FakeWorker.instances[0].invokes()).toHaveLength(0);
+    vault = await loadVault();
+    await expect(vault.invokeBrowser('list_notes')).rejects.toMatchObject({
+      message: expect.stringContaining('Reset test data')
+    });
+    expect(FakeWorker.instances).toHaveLength(1);
+    await vault.prepareBrowserTestReset();
+    vault = await loadVault();
+    await expect(vault.invokeBrowser('list_notes')).resolves.toEqual([]);
+    expect(FakeWorker.instances[1].messages.map((m) => m.method)).toEqual([
+      'resetTestVault',
+      'invoke'
+    ]);
+  });
+
+  it('never picks up a reset marker introduced after notes have loaded', async () => {
+    qa();
+    const vault = await loadVault();
+    await vault.invokeBrowser('list_notes');
+    sessionStorage.setItem('mindstream:browser-test:qa:reset', '1');
+    FakeWorker.instances[0].onerror?.({ message: 'worker crashed' });
+    await vault.invokeBrowser('list_notes');
+    expect(FakeWorker.instances[1].messages.map((m) => m.method)).toEqual([
+      'open',
+      'invoke'
+    ]);
   });
 
   it('does not offer reset on normal or native storage', async () => {
