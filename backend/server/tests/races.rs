@@ -12,6 +12,7 @@ use std::time::Duration;
 use common::keyed::{new_key, public, refused, Extra, Person};
 use common::raw::{Device, Frame, ADMIN, JOINED, READ_WRITE, UPDATE};
 use common::wait_until_blocked;
+use mindstream_server::admin;
 use reqwest::Method;
 use serde::Deserialize;
 
@@ -250,6 +251,44 @@ async fn try_accept(device: &Device, invitation: &str) -> u16 {
     };
     let path = format!("/invitation/incoming/{invitation}/accept/");
     device.call(Method::POST, &path, Some(&body)).await.0
+}
+
+/// Two accounts can each belong to what the other owns, and deleting them
+/// takes both collections. Each deletion has to take them in the same order,
+/// its own among them, or each ends up waiting for what the other holds.
+#[tokio::test]
+async fn accounts_that_share_with_each_other_can_be_deleted_at_once() {
+    let _turn = ONE_AT_A_TIME.lock().await;
+    let url = common::server();
+    let state = common::admin_state().await;
+    let first = Device::signup(url, "first").await;
+    let second = Device::signup(url, "second").await;
+    let of_first = first.create_collection().await;
+    let of_second = second.create_collection().await;
+    first.share(&of_first, &second, ADMIN).await;
+    second.share(&of_second, &first, ADMIN).await;
+
+    // Hold the first deletion at its account, where it goes on to its own
+    // collection, until the second has gone as far as it can.
+    let pool = pool().await;
+    let mut hold = pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM accounts WHERE username = $1 FOR UPDATE")
+        .bind(&first.name)
+        .execute(&mut *hold)
+        .await
+        .unwrap();
+    let delete = |name: String| {
+        let state = state.clone();
+        tokio::spawn(async move { admin::delete_account(&state, &name).await })
+    };
+    let deleting_first = delete(first.name.clone());
+    wait_until_blocked(&pool, "DELETE FROM accounts").await;
+    let deleting_second = delete(second.name.clone());
+    wait_until_blocked(&pool, "FOR UPDATE OF c").await;
+    hold.rollback().await.unwrap();
+
+    assert!(deleting_first.await.unwrap().unwrap());
+    assert!(deleting_second.await.unwrap().unwrap());
 }
 
 /// An invitation carries its sender's authority to let someone in. Once the
@@ -528,4 +567,96 @@ async fn sockets_of_a_session_that_ended_unheard_close_when_the_listener_returns
             .0,
         401
     );
+}
+
+/// Hold a collection's lock and check that `step` waits for it before it
+/// takes hold of anything else, by taking `row` from here while it waits.
+/// A writer that took the row first and went for the collection after would
+/// be in the opposite order to `accept` and `claim`, and the two could
+/// deadlock, which reaches the caller as a server error.
+async fn waits_for_the_collection_first(
+    pool: &sqlx::PgPool,
+    collection: &str,
+    row: &str,
+    uid: &str,
+    step: impl std::future::Future<Output = u16>,
+) {
+    let mut held = pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM collections WHERE uid = $1 FOR UPDATE")
+        .bind(collection)
+        .execute(&mut *held)
+        .await
+        .unwrap();
+    let check = async {
+        wait_until_blocked(pool, "SELECT 1 FROM collections WHERE id = $1 FOR UPDATE").await;
+        let take = format!("SELECT 1 FROM {row} WHERE uid = $1 FOR UPDATE");
+        let take = sqlx::query(&take).bind(uid).execute(&mut *held);
+        tokio::time::timeout(Duration::from_secs(5), take)
+            .await
+            .expect("the row was taken before the collection")
+            .unwrap();
+        held.commit().await.unwrap();
+    };
+    let (status, ()) = tokio::join!(step, check);
+    assert_eq!(status, 204);
+}
+
+#[tokio::test]
+async fn withdrawing_an_invitation_takes_the_collection_first() {
+    let _turn = ONE_AT_A_TIME.lock().await;
+    let owner = Device::signup(common::server(), "lock-owner").await;
+    let guest = Device::signup(common::server(), "lock-guest").await;
+    let collection = owner.create_collection().await;
+    let invitation = owner.invite(&collection, &guest, READ_WRITE).await;
+    let pool = pool().await;
+    let step = async {
+        owner
+            .call::<()>(
+                Method::DELETE,
+                &format!("/invitation/outgoing/{invitation}/"),
+                None,
+            )
+            .await
+            .0
+    };
+    waits_for_the_collection_first(&pool, &collection, "invitations", &invitation, step).await;
+}
+
+#[tokio::test]
+async fn revoking_a_link_takes_the_collection_first() {
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Create<'a> {
+        uid: &'a str,
+        version: u8,
+        collection: &'a str,
+        access_level: i16,
+        signed_encryption_key: serde_bytes::ByteBuf,
+        claim_pubkey: serde_bytes::ByteBuf,
+    }
+
+    let _turn = ONE_AT_A_TIME.lock().await;
+    let owner = Device::signup(common::server(), "lock-owner").await;
+    let collection = owner.create_collection().await;
+    let link = common::keyed::new_uid();
+    let body = Create {
+        uid: &link,
+        version: 1,
+        collection: &collection,
+        access_level: READ_WRITE,
+        signed_encryption_key: serde_bytes::ByteBuf::from(b"sealed".to_vec()),
+        claim_pubkey: serde_bytes::ByteBuf::from(public(&new_key())),
+    };
+    let (status, _) = owner
+        .call(Method::POST, "/mindstream/link/", Some(&body))
+        .await;
+    assert_eq!(status, 201);
+    let pool = pool().await;
+    let step = async {
+        owner
+            .call::<()>(Method::DELETE, &format!("/mindstream/link/{link}/"), None)
+            .await
+            .0
+    };
+    waits_for_the_collection_first(&pool, &collection, "invite_links", &link, step).await;
 }

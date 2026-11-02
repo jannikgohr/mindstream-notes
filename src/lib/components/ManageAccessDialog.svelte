@@ -5,7 +5,9 @@
   import {
     getCollectionShareState,
     listCollectionMembers,
+    listShareLinks,
     removeCollectionMember,
+    revokeShareLink,
     setCollectionMemberAccess,
     type CollectionMember,
     type CollectionShareAccessLevel,
@@ -14,7 +16,7 @@
   import { accountServerInfo } from '$lib/api/account';
   import { authSession, serverTypeForSession } from '$lib/api/auth.svelte';
   import { tree } from '$lib/stores/tree.svelte';
-  import { tUi } from '$lib/settings/i18n.svelte';
+  import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
   import {
     closeCollectionShareDialog,
     setShareDialogView,
@@ -31,6 +33,8 @@
   let error = $state<string | null>(null);
   /** Username currently being mutated, so its row controls disable in flight. */
   let busy = $state<string | null>(null);
+  /** Bumped to have the links section read its list again. */
+  let linksRead = $state(0);
 
   const collectionId = $derived(shareDialog.collectionId);
   const collection = $derived(
@@ -149,9 +153,48 @@
     } catch (err) {
       console.error('[ManageAccess] remove member failed', username, err);
       pushToast(tUi('sharing.access.removeFailed'), { variant: 'error' });
+      return;
     } finally {
       busy = null;
     }
+    await offerToRevokeLinks(collectionId, username);
+  }
+
+  /**
+   * The server keeps someone who was removed from coming back by a link. It
+   * cannot tell them from anyone else who holds the link, and on a server
+   * that takes new accounts they can be someone else. So the admin is asked,
+   * and decides what the links that can still be used are worth to them.
+   */
+  async function offerToRevokeLinks(collection: string, username: string) {
+    const open = await listShareLinks(collection)
+      .then((links) => links.filter((link) => link.uses < link.max_uses))
+      .catch((err: unknown) => {
+        // The removal stands. The links are in the section below.
+        console.error('[ManageAccess] list links failed', err);
+        return [];
+      });
+    if (open.length === 0) return;
+    const revoke = await confirm({
+      title: tUi('sharing.access.revokeLinks.title'),
+      message: tUiFormat(
+        open.length === 1
+          ? 'sharing.access.revokeLinks.message.one'
+          : 'sharing.access.revokeLinks.message.other',
+        { count: open.length, name: username }
+      ),
+      confirmLabel: tUi('sharing.access.revokeLinks.confirm'),
+      cancelLabel: tUi('sharing.access.revokeLinks.keep'),
+      destructive: true
+    });
+    if (!revoke) return;
+    const revoked = await Promise.allSettled(
+      open.map((link) => revokeShareLink(link.uid))
+    );
+    if (revoked.some((outcome) => outcome.status === 'rejected')) {
+      pushToast(tUi('sharing.links.removeFailed'), { variant: 'error' });
+    }
+    linksRead += 1;
   }
 
   onMount(() => {
@@ -267,7 +310,9 @@
 
       {#if canMakeLinks}
         <div class="border-t border-border p-4">
-          <ShareLinksSection {collectionId} {signupByLink} />
+          {#key linksRead}
+            <ShareLinksSection {collectionId} {signupByLink} />
+          {/key}
         </div>
       {/if}
 

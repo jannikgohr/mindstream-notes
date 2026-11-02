@@ -4,6 +4,13 @@
 //! from it and proves possession by signing a challenge, so what is stored
 //! here is a public key. A successful login creates a session for that
 //! device; the server keeps only a hash of its token.
+//!
+//! Signing in does not say whether a name has an account. A name without one
+//! gets a salt and a challenge like any other, and is refused as a wrong
+//! password would be, by the same steps and in the same time.
+
+use std::future::Future;
+use std::time::Duration;
 
 use axum::extract::{FromRequestParts, State};
 use axum::http::request::Parts;
@@ -11,6 +18,7 @@ use axum::http::{header, HeaderMap, StatusCode};
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde_bytes::ByteBuf;
 use sqlx::PgConnection;
+use tokio::time::Instant;
 
 use crate::edge::AuthAttempt;
 use crate::error::{ApiError, ApiResult};
@@ -30,6 +38,14 @@ const MAX_KEY_BLOB_LEN: usize = 4096;
 /// How stale `last_used_at` may get before a request refreshes it. Keeps
 /// ordinary requests from writing to the sessions table.
 const LAST_USED_REFRESH: &str = "5 minutes";
+/// The format every account has today, and so the one to claim for a name
+/// that has none.
+const ACCOUNT_VERSION: i16 = 1;
+/// The least a sign-in takes once its request is in. Whether a name has an
+/// account makes one difference to the work, which is the database finding a
+/// row or not. This is well above all of the work, so that difference cannot
+/// be timed.
+const SIGN_IN_TAKES: Duration = Duration::from_millis(100);
 
 /// The account behind a request, established from its session token.
 #[derive(Clone, Debug)]
@@ -249,8 +265,15 @@ async fn find_account_for_change(
     .await?)
 }
 
-fn user_not_found() -> ApiError {
-    ApiError::unauthorized("user_not_found", "User not found")
+/// Run a sign-in that has to take [`SIGN_IN_TAKES`]. The clock starts here
+/// and not when the request came in, because a caller could use up the time
+/// sending its body. `work` lets go of its database connection before the
+/// wait, so waiting costs nothing but a timer.
+pub(crate) async fn no_sooner<T>(work: impl Future<Output = ApiResult<T>>) -> ApiResult<T> {
+    let due = Instant::now() + SIGN_IN_TAKES;
+    let outcome = work.await;
+    tokio::time::sleep_until(due).await;
+    outcome
 }
 
 fn device_name(headers: &HeaderMap) -> String {
@@ -351,7 +374,7 @@ pub(crate) async fn insert_account(conn: &mut PgConnection, body: &Signup) -> Ap
         "INSERT INTO accounts
              (username, username_key, email, version, salt, login_pubkey, pubkey, encrypted_content,
               recovery_pubkey, recovery_encrypted_content)
-         VALUES ($1, $2, $3, 1, $4, $5, $6, $7, $8, $9)
+         VALUES ($1, $2, $3, $10, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (username_key) DO NOTHING
          RETURNING id",
     )
@@ -364,6 +387,7 @@ pub(crate) async fn insert_account(conn: &mut PgConnection, body: &Signup) -> Ap
     .bind(&body.encrypted_content[..])
     .bind(body.recovery_pubkey.as_ref().map(|key| &key[..]))
     .bind(body.recovery_encrypted_content.as_ref().map(|c| &c[..]))
+    .bind(ACCOUNT_VERSION)
     .fetch_optional(conn)
     .await?;
     inserted.ok_or_else(|| {
@@ -396,15 +420,23 @@ pub async fn login_challenge(
     _attempt: AuthAttempt,
     Msgpack(body): Msgpack<LoginChallengeRequest>,
 ) -> ApiResult<Msgpack<LoginChallenge>> {
-    let mut conn = state.pool.acquire().await?;
-    let account = find_account(&mut conn, &body.username)
-        .await?
-        .ok_or_else(user_not_found)?;
-    Ok(Msgpack(LoginChallenge {
-        challenge: ByteBuf::from(state.keys.challenge(account.id)),
-        salt: ByteBuf::from(account.salt),
-        version: account.version,
-    }))
+    no_sooner(async {
+        let name = username_key(&body.username);
+        // Made for every name, so a name without an account costs no more.
+        let decoy = state.keys.decoy(&name);
+        let mut conn = state.pool.acquire().await?;
+        let account = find_account(&mut conn, &body.username).await?;
+        let (salt, version) = match account {
+            Some(account) => (account.salt, account.version),
+            None => (decoy.salt, ACCOUNT_VERSION),
+        };
+        Ok(Msgpack(LoginChallenge {
+            challenge: ByteBuf::from(state.keys.challenge(&name)),
+            salt: ByteBuf::from(salt),
+            version,
+        }))
+    })
+    .await
 }
 
 fn strip_port(host: &str) -> &str {
@@ -455,10 +487,17 @@ pub(crate) enum SignedBy {
 /// Check everything a signed request claims, and return the account it is
 /// for along with the decoded body.
 ///
-/// `conn` has to be a transaction: this takes the account's turn at changing
-/// how it is secured, see [`lock_account`], and the turn lasts as long as
-/// the transaction does. What the caller goes on to do with the account
-/// belongs in the same one.
+/// `conn` has to be a transaction: once the proof has held up this takes the
+/// account's turn at changing how it is secured, see [`lock_account`], and
+/// the turn lasts as long as the transaction does. What the caller goes on
+/// to do with the account belongs in the same one.
+///
+/// A name without an account, and an account without the key asked for, go
+/// through every step against a key nobody holds, and fail where a wrong
+/// password fails. That goes for the throttle on wrong passwords too, which
+/// would otherwise tell them apart after a few tries. The account's turn
+/// comes after that, because it is work a name without an account could not
+/// do, so nothing that fails here takes it.
 pub(crate) async fn verify_signed(
     state: &AppState,
     conn: &mut PgConnection,
@@ -470,9 +509,9 @@ pub(crate) async fn verify_signed(
     let body: SignedBody = rmp_serde::from_slice(&request.response)
         .map_err(|err| ApiError::bad_request(format!("Malformed login response: {err}")))?;
 
-    let account = find_account_for_change(conn, &body.username)
-        .await?
-        .ok_or_else(user_not_found)?;
+    let name = username_key(&body.username);
+    let decoy = state.keys.decoy(&name);
+    let found = find_account(&mut *conn, &body.username).await?;
     if body.action != action {
         return Err(ApiError::bad_request(format!(
             "Expected \"{action}\" but got something else."
@@ -485,7 +524,7 @@ pub(crate) async fn verify_signed(
             format!("This login was made for \"{}\".", body.host),
         ));
     }
-    let (nonce, expires) = match state.keys.verify_challenge(&body.challenge, account.id) {
+    let (nonce, expires) = match state.keys.verify_challenge(&body.challenge, &name) {
         ChallengeCheck::Valid { nonce, expires } => (nonce, expires),
         ChallengeCheck::Expired => {
             return Err(ApiError::new(
@@ -505,28 +544,30 @@ pub(crate) async fn verify_signed(
 
     let bad_signature = || match signed_by {
         SignedBy::Password => {
-            ApiError::unauthorized("login_bad_signature", "Wrong password for user.")
+            ApiError::unauthorized("login_bad_signature", "Wrong username or password.")
         }
         SignedBy::RecoveryKey => {
-            ApiError::unauthorized("recovery_bad_signature", "Wrong recovery key for user.")
+            ApiError::unauthorized("recovery_bad_signature", "Wrong username or recovery key.")
         }
     };
-    let stored = match signed_by {
-        SignedBy::Password => Some(&account.login_pubkey),
+    let held_by = |account: &Account| match signed_by {
+        SignedBy::Password => Some(account.login_pubkey.clone()),
         // An account without a recovery key answers like one given the
         // wrong key, so asking does not reveal which accounts have one.
-        SignedBy::RecoveryKey => account.recovery_pubkey.as_ref(),
+        SignedBy::RecoveryKey => account.recovery_pubkey.clone(),
     };
+    let stored = found.as_ref().and_then(held_by);
     let key_bytes: [u8; 32] = stored
-        .ok_or_else(bad_signature)?
-        .as_slice()
+        .as_deref()
+        .unwrap_or(&decoy.login_pubkey)
         .try_into()
         .map_err(|_| ApiError::internal("a stored public key has the wrong length"))?;
+    let throttled_as = found.as_ref().map_or(decoy.id, |account| account.id);
     // A password proof is held to its account's throttle before it is
     // checked, so the check itself cannot be used to guess without bound.
     // In memory, like the second-factor throttle: no database round-trip,
     // so concurrent logins cannot wedge the pool waiting on each other.
-    if signed_by == SignedBy::Password && state.password_limiter.blocked(account.id) {
+    if signed_by == SignedBy::Password && state.password_limiter.blocked(throttled_as) {
         return Err(ApiError::new(
             StatusCode::TOO_MANY_REQUESTS,
             "password_throttled",
@@ -537,8 +578,18 @@ pub(crate) async fn verify_signed(
     let signature = Signature::from_slice(&request.signature).map_err(|_| bad_signature())?;
     if key.verify_strict(&request.response, &signature).is_err() {
         if signed_by == SignedBy::Password {
-            state.password_limiter.failed(account.id);
+            state.password_limiter.failed(throttled_as);
         }
+        return Err(bad_signature());
+    }
+
+    // The proof holds, so this is an account's real key. It is only good if
+    // it still is, which takes the account's turn to say: a password changed
+    // while the proof was checked has to count.
+    let account = find_account_for_change(conn, &body.username)
+        .await?
+        .ok_or_else(bad_signature)?;
+    if held_by(&account).as_deref() != Some(&key_bytes[..]) {
         return Err(bad_signature());
     }
     if signed_by == SignedBy::Password {
@@ -601,8 +652,15 @@ pub(crate) async fn verify_own(
     request: &SignedRequest,
     action: &str,
 ) -> ApiResult<(Account, SignedBody)> {
-    let (account, body) =
-        verify_signed(state, conn, headers, request, action, SignedBy::Password).await?;
+    // Someone signed in names any account they like here, and is refused in
+    // the same time. The wait is in the transaction, which is theirs to
+    // spend: only an account can get here.
+    let due = Instant::now() + SIGN_IN_TAKES;
+    let outcome = verify_signed(state, conn, headers, request, action, SignedBy::Password).await;
+    if outcome.is_err() {
+        tokio::time::sleep_until(due).await;
+    }
+    let (account, body) = outcome?;
     if account.id != user.account_id {
         return Err(ApiError::forbidden(
             "wrong_user",
@@ -618,26 +676,31 @@ pub async fn login(
     headers: HeaderMap,
     Msgpack(request): Msgpack<SignedRequest>,
 ) -> ApiResult<Msgpack<LoginResponse>> {
-    // Checking the password, spending the code and opening the session are
-    // one step. A password change waits for it or goes first, and in neither
-    // case does a session open on a password that no longer stands.
-    let mut tx = state.pool.begin().await?;
-    let (account, body) = verify_signed(
-        &state,
-        &mut tx,
-        &headers,
-        &request,
-        "login",
-        SignedBy::Password,
-    )
-    .await?;
-    // Asked for only once the password has been proven, so the answer does
-    // not tell a stranger which accounts have a second factor.
-    let second_factor =
-        security::check_second_factor(&state, &mut tx, account.id, body.totp.as_deref()).await?;
-    let session = open_session(&mut tx, account, &headers, second_factor).await?;
-    tx.commit().await?;
-    Ok(Msgpack(session))
+    no_sooner(async {
+        // Checking the password, spending the code and opening the session
+        // are one step. A password change waits for it or goes first, and in
+        // neither case does a session open on a password that no longer
+        // stands.
+        let mut tx = state.pool.begin().await?;
+        let (account, body) = verify_signed(
+            &state,
+            &mut tx,
+            &headers,
+            &request,
+            "login",
+            SignedBy::Password,
+        )
+        .await?;
+        // Asked for only once the password has been proven, so the answer
+        // does not tell a stranger which accounts have a second factor.
+        let second_factor =
+            security::check_second_factor(&state, &mut tx, account.id, body.totp.as_deref())
+                .await?;
+        let session = open_session(&mut tx, account, &headers, second_factor).await?;
+        tx.commit().await?;
+        Ok(Msgpack(session))
+    })
+    .await
 }
 
 pub async fn logout(State(state): State<AppState>, user: AuthUser) -> ApiResult<StatusCode> {
