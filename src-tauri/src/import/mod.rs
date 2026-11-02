@@ -22,29 +22,9 @@ mod tests;
 pub use disk::DiskFiles;
 pub use mindstream_storage_core::import::{
     build_source, links, markdown, mime, model, source, sources, writer, DetectedSource,
-    ImportOptions, ImportProgress, ImportReport, ImportSourceKind, ImportStore, UnresolvedLinks,
+    ImportOptions, ImportProgress, ImportReport, ImportSourceKind, UnresolvedLinks,
     DEFAULT_MAX_ATTACHMENT_BYTES,
 };
-
-impl ImportStore for Db {
-    fn with_conn_mut<T>(
-        &self,
-        write: impl FnOnce(&mut rusqlite::Connection) -> mindstream_storage_core::error::AppResult<T>,
-    ) -> mindstream_storage_core::error::AppResult<T> {
-        let mut outcome = None;
-        let locked = Db::with_conn_mut(self, |conn| {
-            outcome = Some(write(conn));
-            Ok(())
-        });
-        match (outcome, locked) {
-            (Some(outcome), _) => outcome,
-            (None, Err(err)) => Err(mindstream_storage_core::error::AppError::InvalidArg(
-                err.to_string(),
-            )),
-            (None, Ok(())) => unreachable!("with_conn_mut calls its closure"),
-        }
-    }
-}
 
 /// Cancellation flag, shared between the running import and `import_cancel`.
 #[derive(Default)]

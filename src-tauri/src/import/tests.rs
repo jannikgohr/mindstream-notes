@@ -1752,3 +1752,24 @@ fn conversion_marks_rewritten_notes_for_sync() {
         .unwrap();
     assert_eq!(dirty, 1);
 }
+
+/// One unreadable folder must not cost the user the rest of a vault.
+#[cfg(unix)]
+#[test]
+fn a_folder_that_cannot_be_read_does_not_stop_the_walk() {
+    use super::DiskFiles;
+    use mindstream_storage_core::import::ImportFiles;
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("kept.md"), "# Kept").unwrap();
+    let locked = root.path().join("locked");
+    fs::create_dir(&locked).unwrap();
+    fs::write(locked.join("hidden.md"), "# Hidden").unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let entries = DiskFiles::new(root.path().to_path_buf()).walk(&|_| false);
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(entries.iter().any(|entry| entry.path == "kept.md"));
+}
