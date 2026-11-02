@@ -1,7 +1,7 @@
 import type { Page } from '@playwright/test';
 import { strFromU8, unzipSync, zipSync } from 'fflate';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -752,6 +752,172 @@ test('a file that is not a sound backup leaves the vault alone', async ({
 
   expect(await noteTitles(page)).toContain('Still here');
   expect(await noteTitles(page)).not.toContain('Portable note');
+});
+
+async function importNotes(
+  page: Page,
+  choice: string,
+  files: string | { name: string; mimeType: string; buffer: Buffer }
+) {
+  const settings = await openDataSettings(page);
+  await settings
+    .getByRole('button', { name: 'Import notes', exact: true })
+    .click();
+  const dialog = page.getByRole('alertdialog');
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    dialog.getByRole('button', { name: new RegExp(choice) }).click()
+  ]);
+  await chooser.setFiles(files);
+  await dialog.getByRole('button', { name: 'Import', exact: true }).click();
+  await expect(dialog).toContainText('Import finished', { timeout: 20_000 });
+}
+
+async function loadNoteTitled(page: Page, title: string) {
+  const notes = await rpc(page, 'list_notes', {});
+  const note = notes.find((candidate) => candidate.title === title);
+  if (!note) throw new Error(`No note titled ${title}`);
+  return rpc(page, 'load_note', { id: note.id });
+}
+
+test('a folder of notes imports with its links and attachments', async ({
+  page
+}) => {
+  const vault = await mkdtemp(join(tmpdir(), 'Köln-vault-'));
+  try {
+    await mkdir(join(vault, '.obsidian'));
+    await mkdir(join(vault, 'Reise'));
+    await mkdir(join(vault, 'pics'));
+    await writeFile(join(vault, '.obsidian', 'app.json'), '{}');
+    await writeFile(
+      join(vault, 'Start.md'),
+      'Weiter zu [[Köln]] und ![[dom.png]]'
+    );
+    await writeFile(join(vault, 'Reise', 'Köln.md'), 'Zurück zu [[Start]]');
+    const picture = Buffer.from([137, 80, 78, 71, 0, 255]);
+    await writeFile(join(vault, 'pics', 'dom.png'), picture);
+
+    await importNotes(page, 'Choose a folder', vault);
+
+    const start = await loadNoteTitled(page, 'Start');
+    const city = await loadNoteTitled(page, 'Köln');
+    expect(start.body).toContain(city.id);
+    expect(city.body).toContain(start.id);
+    const asset = /asset:mindstream\/([\w-]+)/.exec(start.body)?.[1];
+    expect(asset).toBeTruthy();
+    expect(
+      (await rpc(page, 'fetch_drawing_asset', { id: asset! })).bytes
+    ).toEqual(Array.from(picture));
+  } finally {
+    await rm(vault, { recursive: true, force: true });
+  }
+});
+
+test('stopping an import keeps what it committed and the vault stays usable', async ({
+  page
+}) => {
+  const before = (await noteTitles(page)).length;
+  const total = 5_000;
+  const vault = await mkdtemp(join(tmpdir(), 'large-vault-'));
+  try {
+    await Promise.all(
+      Array.from({ length: total }, (_, index) =>
+        writeFile(join(vault, `Note ${index}.md`), `Body ${index}`)
+      )
+    );
+    const settings = await openDataSettings(page);
+    await settings
+      .getByRole('button', { name: 'Import notes', exact: true })
+      .click();
+    const dialog = page.getByRole('alertdialog');
+    const [chooser] = await Promise.all([
+      page.waitForEvent('filechooser'),
+      dialog.getByRole('button', { name: /Choose a folder/ }).click()
+    ]);
+    await chooser.setFiles(vault);
+    await dialog.getByRole('button', { name: 'Import', exact: true }).click();
+
+    await expect(dialog).toContainText(/Imported \d+ of 5000/, {
+      timeout: 30_000
+    });
+    await dialog.getByRole('button', { name: 'Stop', exact: true }).click();
+    await expect(dialog).toContainText('Import stopped', { timeout: 20_000 });
+
+    // Batches commit 500 notes at a time, and the one in flight rolls back.
+    await page.waitForFunction(() => 'vaultWorker' in window);
+    await expect
+      .poll(
+        async () =>
+          noteTitles(page).then(
+            (titles) => titles.length - before,
+            () => -1
+          ),
+        { timeout: 30_000 }
+      )
+      .toBeGreaterThanOrEqual(500);
+    const added = (await noteTitles(page)).length - before;
+    expect(added % 500).toBe(0);
+    expect(added).toBeLessThan(total);
+    expect((await loadNoteTitled(page, 'Note 0')).body).toContain('Body 0');
+  } finally {
+    await rm(vault, { recursive: true, force: true });
+  }
+});
+
+test('an Evernote export imports from one file', async ({ page }) => {
+  const enex =
+    '<?xml version="1.0" encoding="UTF-8"?><en-export><note><title>Aus Evernote</title>' +
+    '<content><![CDATA[<en-note>Am <b>Rhein</b></en-note>]]></content>' +
+    '<created>20240102T101500Z</created></note></en-export>';
+  await importNotes(page, 'Choose a file', {
+    name: 'export.enex',
+    mimeType: 'application/xml',
+    buffer: Buffer.from(enex)
+  });
+  expect((await loadNoteTitled(page, 'Aus Evernote')).body).toContain('Rhein');
+});
+
+// A tar holds each file behind a 512-byte header, padded to 512-byte blocks.
+function tarOf(files: Record<string, string>): Buffer {
+  const blocks: Buffer[] = [];
+  for (const [name, text] of Object.entries(files)) {
+    const body = Buffer.from(text);
+    const header = Buffer.alloc(512);
+    header.write(name, 0);
+    header.write('0000644\0', 100);
+    header.write('0000000\0', 108);
+    header.write('0000000\0', 116);
+    header.write(`${body.length.toString(8).padStart(11, '0')}\0`, 124);
+    header.write('00000000000\0', 136);
+    header.write('        ', 148);
+    header.write('0', 156);
+    header.write('ustar\0' + '00', 257);
+    const sum = header.reduce((total, byte) => total + byte, 0);
+    header.write(`${sum.toString(8).padStart(6, '0')}\0 `, 148);
+    blocks.push(header, body, Buffer.alloc(-body.length & 511));
+  }
+  return Buffer.concat([...blocks, Buffer.alloc(1024)]);
+}
+
+test('a Joplin archive imports from one file with its links', async ({
+  page
+}) => {
+  const first = '0a1b2c3d4e5f60718293a4b5c6d7e8f9';
+  const second = '1b2c3d4e5f60718293a4b5c6d7e8f9a0';
+  const item = (title: string, target: string, id: string) =>
+    `${title}\n\nSiehe [Link](:/${target}).\n\nid: ${id}\ntype_: 1\n`;
+  await importNotes(page, 'Choose a file', {
+    name: 'export.jex',
+    mimeType: 'application/octet-stream',
+    buffer: tarOf({
+      [`${first}.md`]: item('Erste Notiz', second, first),
+      [`${second}.md`]: item('Zweite Notiz', first, second)
+    })
+  });
+  const one = await loadNoteTitled(page, 'Erste Notiz');
+  const two = await loadNoteTitled(page, 'Zweite Notiz');
+  expect(one.body).toContain(two.id);
+  expect(two.body).toContain(one.id);
 });
 
 test('another tab reports the database owner and opens persisted data after it closes', async ({

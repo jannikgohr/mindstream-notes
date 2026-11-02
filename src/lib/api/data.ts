@@ -24,6 +24,7 @@ import {
   TauriCommandName
 } from './core';
 import { browserStorageEnabled } from '../browser/commands';
+import { pickFiles } from '../browser/pick-files';
 import { downloadBlob } from './file-export';
 import { mockApi } from './mock-store';
 
@@ -177,21 +178,13 @@ export interface MergeReport {
  * Pop the file picker for a backup zip; extract + validate + return a
  * preview struct. `null` means the user cancelled the picker.
  */
-function pickBackupFile(): Promise<File | null> {
-  return new Promise((resolve) => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'application/zip,.zip';
-    input.addEventListener('change', () => resolve(input.files?.[0] ?? null));
-    input.addEventListener('cancel', () => resolve(null));
-    input.click();
-  });
-}
-
 export async function importBegin(): Promise<ImportPreview | null> {
   if (!isTauri()) {
     if (!browserStorageEnabled()) return null;
-    const archive = await pickBackupFile();
+    const picked = await pickFiles((input) => {
+      input.accept = 'application/zip,.zip';
+    });
+    const archive = picked?.[0];
     if (!archive) return null;
     const { stageBrowserBackup } = await import('../browser/vault');
     return parseImportPreview(await stageBrowserBackup(archive));

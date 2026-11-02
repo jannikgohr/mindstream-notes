@@ -1753,6 +1753,38 @@ fn conversion_marks_rewritten_notes_for_sync() {
     assert_eq!(dirty, 1);
 }
 
+/// A browser walks a list of paths, and the order decides which of two
+/// same-named attachments wins, so it has to match a walk of the same tree.
+#[test]
+fn walking_a_list_of_paths_matches_walking_the_disk() {
+    use super::DiskFiles;
+    use mindstream_storage_core::import::{walk_paths, ImportFiles};
+
+    let vault = TempVault::new();
+    let files = [
+        "a-b/c.md",
+        "a/b.md",
+        "a/deep/er.md",
+        "a.md",
+        "Z.md",
+        "z.md",
+        "ä.md",
+        "pics/photo 1.png",
+        "pics/photo.png",
+        ".hidden/secret.md",
+        ".DS_Store",
+    ];
+    for file in files {
+        vault.write(file, "text");
+    }
+    let skip = |name: &str| name.starts_with('.');
+
+    assert_eq!(
+        walk_paths(files.into_iter(), &skip),
+        DiskFiles::new(vault.path().to_path_buf()).walk(&skip)
+    );
+}
+
 /// One unreadable folder must not cost the user the rest of a vault.
 #[cfg(unix)]
 #[test]

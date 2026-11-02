@@ -1,15 +1,20 @@
 //! Dedicated-worker binding for the SQLite compatibility proof.
 #![cfg(target_arch = "wasm32")]
 
+mod picked_files;
 mod receipts;
 
 use mindstream_storage_core::error::AppError;
+use mindstream_storage_core::import::{self, ImportFiles, ImportSourceKind, ImportStore};
 use mindstream_storage_core::{asset_hash, backup, migrations, proof, vault_api};
+use picked_files::{BrowserFiles, PickedFiles};
 use rusqlite::backup::{Backup, StepResult};
 use rusqlite::Connection;
 use serde::Serialize;
 use sqlite_wasm_vfs::sahpool::{install, OpfsSAHPoolCfg, OpfsSAHPoolUtil};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::AtomicBool;
 use wasm_bindgen::prelude::*;
 
 #[derive(Serialize)]
@@ -48,6 +53,18 @@ struct BrowserBackup {
     filename: String,
     counts: backup::Counts,
     account_present: bool,
+}
+
+/// The worker's one connection, as the importer writes to it.
+struct LiveStore<'a>(RefCell<&'a mut Connection>);
+
+impl ImportStore for LiveStore<'_> {
+    fn with_conn_mut<T>(
+        &self,
+        write: impl FnOnce(&mut Connection) -> Result<T, AppError>,
+    ) -> Result<T, AppError> {
+        write(&mut self.0.borrow_mut())
+    }
 }
 
 #[wasm_bindgen]
@@ -243,6 +260,82 @@ impl BrowserDatabase {
         if self.staged.as_deref() == Some(token) {
             self.discard_staged();
         }
+    }
+
+    /// Work out which format the user picked. `name` is the folder's or the
+    /// file's, and `single` says which of the two they chose.
+    pub fn import_detect(
+        &self,
+        picked: PickedFiles,
+        name: &str,
+        single: bool,
+    ) -> Result<JsValue, JsValue> {
+        let (kind, suggested_name) = if single {
+            let kind = import::detect::detect_file_kind(name).ok_or_else(|| {
+                command_error(AppError::InvalidArg(
+                    "pick a folder of notes, an Evernote .enex file, or a Joplin .jex export"
+                        .into(),
+                ))
+            })?;
+            let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+            (kind, stem)
+        } else {
+            let files = BrowserFiles::new(picked);
+            (import::detect::detect_directory_kind(&files), name)
+        };
+        import::DetectedSource {
+            kind,
+            path: name.to_string(),
+            suggested_name: suggested_name.to_string(),
+        }
+        .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+        .map_err(error)
+    }
+
+    /// Run an import to the end. A cancel terminates this worker, so what
+    /// earlier batches committed stays and the one in flight rolls back.
+    pub fn import_notes(
+        &mut self,
+        picked: PickedFiles,
+        name: &str,
+        options: JsValue,
+        on_progress: &js_sys::Function,
+    ) -> Result<JsValue, JsValue> {
+        let options: import::ImportOptions =
+            serde_wasm_bindgen::from_value(options).map_err(error)?;
+        let files = BrowserFiles::new(picked);
+        let kind = match options.kind {
+            Some(kind) => kind,
+            None => import::detect::detect_file_kind(name)
+                .unwrap_or_else(|| import::detect::detect_directory_kind(&files)),
+        };
+        let files: Box<dyn ImportFiles> = if kind == ImportSourceKind::JoplinJex {
+            Box::new(
+                import::tar_files::TarFiles::new(Box::new(files), name.to_string())
+                    .map_err(command_error)?,
+            )
+        } else {
+            Box::new(files)
+        };
+        let mut source = import::build_source(kind, files, name);
+        let store = LiveStore(RefCell::new(self.connection()?));
+        let report = import::run_import(
+            &store,
+            source.as_mut(),
+            &options,
+            &AtomicBool::new(false),
+            |progress| {
+                if let Ok(progress) =
+                    progress.serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+                {
+                    let _ = on_progress.call1(&JsValue::NULL, &progress);
+                }
+            },
+        )
+        .map_err(command_error)?;
+        report
+            .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+            .map_err(error)
     }
 
     pub fn close(&mut self) -> Result<(), JsValue> {
