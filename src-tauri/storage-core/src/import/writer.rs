@@ -15,11 +15,11 @@ use std::collections::HashMap;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::db::Db;
 use crate::error::AppResult;
 use crate::notes::NoteKind;
 
 use super::model::{AttachmentRef, FolderIndex, StagedNote};
+use super::ImportStore;
 
 /// A note ready to be written, with its attachment bytes already read.
 pub struct PreparedNote {
@@ -77,7 +77,7 @@ impl PositionCounters {
 /// the vault root). Folders arrive parent-before-child from the index pass, so
 /// a single ordered insert satisfies the foreign key.
 pub fn write_folders(
-    db: &Db,
+    store: &impl ImportStore,
     folders: &[FolderIndex],
     destination: Option<&str>,
     share_scope_id: Option<&str>,
@@ -85,7 +85,7 @@ pub fn write_folders(
     if folders.is_empty() {
         return Ok(0);
     }
-    db.with_conn_mut(|conn| {
+    store.with_conn_mut(|conn| {
         let tx = conn.transaction()?;
         let now = chrono::Utc::now().to_rfc3339();
         let mut positions = PositionCounters::default();
@@ -115,7 +115,7 @@ pub fn write_folders(
 
 /// Write one batch of notes, their tags, and their attachments.
 pub fn write_batch(
-    db: &Db,
+    store: &impl ImportStore,
     batch: Vec<PreparedNote>,
     destination: Option<&str>,
     share_scope_id: Option<&str>,
@@ -124,7 +124,7 @@ pub fn write_batch(
     if batch.is_empty() {
         return Ok(BatchOutcome::default());
     }
-    db.with_conn_mut(|conn| {
+    store.with_conn_mut(|conn| {
         let tx = conn.transaction()?;
         let now = chrono::Utc::now().to_rfc3339();
         let mut outcome = BatchOutcome::default();
@@ -264,7 +264,7 @@ fn replace_prose_link_target(body: &str, target: &str, replacement: &str) -> Str
 
 /// Create the empty notes minted for link targets the source never defined.
 pub fn write_placeholders(
-    db: &Db,
+    store: &impl ImportStore,
     placeholders: &[super::links::Placeholder],
     destination: Option<&str>,
     share_scope_id: Option<&str>,
@@ -273,7 +273,7 @@ pub fn write_placeholders(
     if placeholders.is_empty() {
         return Ok(0);
     }
-    db.with_conn_mut(|conn| {
+    store.with_conn_mut(|conn| {
         let tx = conn.transaction()?;
         let now = chrono::Utc::now().to_rfc3339();
         {
