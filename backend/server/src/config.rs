@@ -63,6 +63,22 @@ pub struct Config {
     #[arg(long, env = "MINDSTREAM_AUTH_RATE_BURST", default_value_t = 20)]
     pub auth_rate_burst: u32,
 
+    /// Lookups of another account by name one account may make per minute:
+    /// asking for its key, or inviting it. Zero turns the limit off.
+    #[arg(long, env = "MINDSTREAM_LOOKUP_RATE_PER_MINUTE", default_value_t = 30)]
+    pub lookup_rate_per_minute: u32,
+
+    /// How many lookups an account may make at once before the rate applies.
+    #[arg(long, env = "MINDSTREAM_LOOKUP_RATE_BURST", default_value_t = 30)]
+    pub lookup_rate_burst: u32,
+
+    /// Names an account may look up that turn out to be nobody's, per day.
+    /// Past that it can look up no names at all until the day is over, so a
+    /// list of guesses does not get far. Someone sharing with people they
+    /// know rarely mistypes one. Zero turns the limit off.
+    #[arg(long, env = "MINDSTREAM_UNKNOWN_NAMES_PER_DAY", default_value_t = 20)]
+    pub unknown_names_per_day: u32,
+
     /// Connections one address may hold open at once, and separately how
     /// many sockets, the long-lived kind that rooms and the change feed
     /// use. A connection past it is closed and a socket refused. A proxy
@@ -122,6 +138,49 @@ pub struct Config {
     /// Largest request body accepted, in bytes.
     #[arg(long, env = "MINDSTREAM_MAX_BODY_BYTES", default_value_t = 75 * 1024 * 1024)]
     pub max_body_bytes: usize,
+
+    /// Bytes of request bodies the server holds in memory at once. A body
+    /// that would go past this is cut off and answered 503. Keep it well
+    /// under the memory the process may use. Zero turns the cap off.
+    #[arg(
+        long,
+        env = "MINDSTREAM_MAX_BODY_BYTES_IN_FLIGHT",
+        default_value_t = 1024 * 1024 * 1024
+    )]
+    pub max_body_bytes_in_flight: usize,
+
+    /// The same for one address. Everyone behind a proxy that is not in
+    /// `MINDSTREAM_TRUSTED_PROXIES` shares one address. Keep it above
+    /// `MINDSTREAM_MAX_BODY_BYTES`, or the largest body is never accepted.
+    /// Zero turns the cap off.
+    #[arg(
+        long,
+        env = "MINDSTREAM_MAX_BODY_BYTES_IN_FLIGHT_PER_ADDRESS",
+        default_value_t = 256 * 1024 * 1024
+    )]
+    pub max_body_bytes_in_flight_per_address: usize,
+
+    /// Bytes of responses held in memory at once, in all. A response is built
+    /// in memory and stays there until the client has taken it, so what a
+    /// page may weigh and how many connections there are do not bound this.
+    /// Past it the answer is `503`, which a client tries again later. It is
+    /// never held below `MINDSTREAM_MAX_PAGE_BYTES` and 1 MiB more, the most
+    /// a page can add to what it weighs. Zero turns the cap off.
+    #[arg(
+        long,
+        env = "MINDSTREAM_MAX_RESPONSE_BYTES_IN_FLIGHT",
+        default_value_t = 512 * 1024 * 1024
+    )]
+    pub max_response_bytes_in_flight: usize,
+
+    /// The same for one address, which behind a trusted proxy means the one
+    /// it forwards.
+    #[arg(
+        long,
+        env = "MINDSTREAM_MAX_RESPONSE_BYTES_IN_FLIGHT_PER_ADDRESS",
+        default_value_t = 128 * 1024 * 1024
+    )]
+    pub max_response_bytes_in_flight_per_address: usize,
 
     /// How many earlier revisions of an item are kept besides its current
     /// one. Older ones are deleted when a new one arrives, and their
@@ -224,6 +283,9 @@ impl Config {
             trusted_proxies: Some(vec!["127.0.0.0/8".parse().expect("a valid network")]),
             auth_rate_per_minute: 0,
             auth_rate_burst: 1,
+            lookup_rate_per_minute: 0,
+            lookup_rate_burst: 1,
+            unknown_names_per_day: 0,
             // Every test connects from this machine.
             max_connections_per_address: 0,
             max_connections: 0,
@@ -234,6 +296,10 @@ impl Config {
             app_url: "https://example.com/app".into(),
             max_page_bytes: 32 * 1024 * 1024,
             max_body_bytes: 75 * 1024 * 1024,
+            max_body_bytes_in_flight: 0,
+            max_body_bytes_in_flight_per_address: 0,
+            max_response_bytes_in_flight: 0,
+            max_response_bytes_in_flight_per_address: 0,
             keep_revisions: 10,
             session_idle_days: 90,
             inline_chunk_bytes: 20 * 1024,

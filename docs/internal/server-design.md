@@ -792,8 +792,9 @@ not offered in the app. It will point at a deployment of this server.
 
 - **Entitlements live in the database.** Each account has a plan and limits. A
   self-hosted server treats everyone as unlimited.
-- **The owner of a space pays.** The server counts ciphertext bytes per space
-  in the same transaction as the write and attributes them to the owner.
+- **The owner of a space pays.** The server counts what each space stores,
+  ciphertext and the keys, names and references with it, in the same
+  transaction as the write and attributes it to the owner.
   Collaborators spend the owner's quota. When a space is full the server
   rejects pushes from everyone in it with a distinct error, and the app says
   whose storage is full.
@@ -907,9 +908,8 @@ Accepted:
   consulted.
 - **In process.** The server starts inside `cargo test` on a free port, so sync
   and permission tests need a Postgres and nothing else. That covers the two
-  tests
-  [security-review.md](security-review.md) lists as missing: a read-only
-  member cannot write, and a removed member loses access.
+  tests the [security review](security-review.md) once listed as missing: a
+  read-only member cannot write, and a removed member loses access.
 - **Benchmark.** `pnpm bench:backend`, in
   [e2e-tests/perf/backend-bench](../../e2e-tests/perf/backend-bench/run.mjs). It
   replays the app's call sequences, so

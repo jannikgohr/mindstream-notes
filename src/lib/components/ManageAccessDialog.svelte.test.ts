@@ -4,7 +4,13 @@
  * section's own test. What is decided here is only whether the section is
  * there at all.
  */
-import { cleanup, render, screen, waitFor } from '@testing-library/svelte';
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor
+} from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CollectionShareState } from '$lib/api/sharing';
 
@@ -12,15 +18,21 @@ const getCollectionShareState = vi.fn();
 const listCollectionMembers = vi.fn();
 const listShareLinks = vi.fn();
 const accountServerInfo = vi.fn();
+const removeCollectionMember = vi.fn();
+const revokeShareLink = vi.fn();
+const confirm = vi.fn();
 
 vi.mock('$lib/api/sharing', () => ({
   createShareLink: vi.fn(),
   getCollectionShareState: (id: string) => getCollectionShareState(id),
   listCollectionMembers: (id: string) => listCollectionMembers(id),
   listShareLinks: (id: string) => listShareLinks(id),
-  removeCollectionMember: vi.fn(),
-  revokeShareLink: vi.fn(),
+  removeCollectionMember: (input: unknown) => removeCollectionMember(input),
+  revokeShareLink: (uid: string) => revokeShareLink(uid),
   setCollectionMemberAccess: vi.fn()
+}));
+vi.mock('./confirm-dialog.svelte', () => ({
+  confirm: (options: unknown) => confirm(options)
 }));
 vi.mock('$lib/api/account', () => ({
   accountServerInfo: (target: unknown) => accountServerInfo(target)
@@ -158,5 +170,65 @@ describe('links that create an account', () => {
     await open(shareState({ share_id: 'scope_1', shared_by_me: true }));
     await screen.findByTestId('share-links');
     expect(screen.queryByRole('checkbox')).toBeNull();
+  });
+});
+
+describe('removing someone from a folder with invite links', () => {
+  const link = (uid: string, uses: number, max_uses: number) => ({
+    uid,
+    access_level: 'read_only',
+    max_uses,
+    uses,
+    allows_signup: false,
+    expires_at: 2_000_000_000,
+    created_at: 1_000_000_000,
+    sender_username: 'me'
+  });
+
+  async function removeBob(links: unknown[]) {
+    listShareLinks.mockResolvedValue(links);
+    listCollectionMembers.mockResolvedValue([
+      { username: 'bob', access_level: 'read_only' }
+    ]);
+    await open(shareState({ share_id: 'scope_1', shared_by_me: true }));
+    const remove = await screen.findByRole('button', { name: 'Remove' });
+    await fireEvent.click(remove);
+    await waitFor(() => expect(removeCollectionMember).toHaveBeenCalled());
+  }
+
+  beforeEach(() => {
+    removeCollectionMember.mockReset().mockResolvedValue(undefined);
+    revokeShareLink.mockReset().mockResolvedValue(undefined);
+    confirm.mockReset().mockResolvedValue(true);
+  });
+
+  it('offers to revoke the links that can still be used, and only those', async () => {
+    await removeBob([link('open', 1, 5), link('spent', 1, 1)]);
+
+    await waitFor(() => expect(revokeShareLink).toHaveBeenCalledWith('open'));
+    expect(revokeShareLink).toHaveBeenCalledTimes(1);
+    expect(confirm).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        title: 'Revoke open links?',
+        message: expect.stringContaining('1 open invite link. bob')
+      })
+    );
+    // The section below shows what is left.
+    await waitFor(() => expect(listShareLinks.mock.calls.length).toBe(3));
+  });
+
+  it('leaves the links alone when the admin keeps them', async () => {
+    confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    await removeBob([link('open', 0, 5)]);
+
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(2));
+    expect(revokeShareLink).not.toHaveBeenCalled();
+  });
+
+  it('asks nothing when no link can be used any more', async () => {
+    await removeBob([link('spent', 1, 1)]);
+
+    await waitFor(() => expect(listShareLinks.mock.calls.length).toBe(2));
+    expect(confirm).toHaveBeenCalledTimes(1);
   });
 });

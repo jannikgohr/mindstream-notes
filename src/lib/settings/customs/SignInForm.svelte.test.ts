@@ -260,7 +260,7 @@ describe('checking the server URL', () => {
       )
     );
     expect(screen.getByTestId('account-error').textContent).toMatch(
-      /Wrong password/
+      /Wrong username or password/
     );
   });
 });
@@ -333,7 +333,7 @@ describe('signing in', () => {
     await type('Password', 'not it');
     await fireEvent.click(button('Sign in'));
     expect((await screen.findByTestId('account-error')).textContent).toMatch(
-      /Wrong password/
+      /Wrong username or password/
     );
 
     await fireEvent.click(button('Sign in'));

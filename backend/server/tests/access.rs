@@ -8,7 +8,7 @@ use std::iter;
 
 use common::{named, new_collection, share, signup, signup_at, COLLECTION_TYPE};
 use etebase::error::Error;
-use etebase::{CollectionAccessLevel, FetchOptions, PrefetchOption};
+use etebase::{CollectionAccessLevel, FetchOptions, LinkOptions, PrefetchOption};
 
 macro_rules! assert_refused {
     ($result:expr, $expected:pat) => {
@@ -222,6 +222,75 @@ fn deleting_a_collection_takes_everyone_else_out() {
         ),
         Error::PermissionDenied(_)
     );
+}
+
+/// An invitation made before a member joined by a link must not survive the
+/// join. Otherwise accepting it later would replace the access the link
+/// gave, and a member removed after joining could use it to come back.
+#[test]
+fn joining_by_link_withdraws_an_older_invitation() {
+    let owner = signup("owner");
+    let guest = signup("guest");
+    let collection = new_collection(&owner, "shared");
+    let invitations = owner.invitation_manager().unwrap();
+    let profile = invitations.fetch_user_profile(&guest.name).unwrap();
+    invitations
+        .invite(
+            &collection,
+            &guest.name,
+            profile.pubkey(),
+            CollectionAccessLevel::Admin,
+        )
+        .unwrap();
+    let incoming = guest
+        .invitation_manager()
+        .unwrap()
+        .list_incoming(None)
+        .unwrap();
+    let stale = incoming
+        .data()
+        .iter()
+        .find(|invitation| invitation.collection() == collection.uid())
+        .expect("the invitation was sent")
+        .clone();
+
+    let link = owner
+        .create_invite_link(
+            &collection,
+            CollectionAccessLevel::ReadOnly,
+            &LinkOptions::new(),
+        )
+        .unwrap();
+    guest.claim_invite_link(&link).unwrap();
+
+    let after = guest
+        .collection_manager()
+        .unwrap()
+        .fetch(collection.uid(), None)
+        .unwrap();
+    assert_eq!(after.access_level(), CollectionAccessLevel::ReadOnly);
+    let incoming = guest
+        .invitation_manager()
+        .unwrap()
+        .list_incoming(None)
+        .unwrap();
+    assert!(
+        incoming
+            .data()
+            .iter()
+            .all(|invitation| invitation.collection() != collection.uid()),
+        "the older invitation survived the link claim"
+    );
+    assert!(
+        guest.invitation_manager().unwrap().accept(&stale).is_err(),
+        "the stale invitation was still accepted"
+    );
+    let after = guest
+        .collection_manager()
+        .unwrap()
+        .fetch(collection.uid(), None)
+        .unwrap();
+    assert_eq!(after.access_level(), CollectionAccessLevel::ReadOnly);
 }
 
 #[test]
@@ -487,6 +556,122 @@ fn invitation_names_the_collection_before_it_is_answered() {
     assert_eq!(outgoing.data().len(), 1);
 }
 
+/// An admin invitation for someone who is already a member, put in by hand
+/// because nothing the server does leaves one behind.
+async fn plant_stale_invitation(
+    pool: &sqlx::PgPool,
+    collection: &str,
+    owner: &common::raw::Device,
+    guest: &common::raw::Device,
+) -> String {
+    let stale = common::keyed::new_uid();
+    sqlx::query(
+        "INSERT INTO invitations
+             (uid, version, collection_id, from_account_id, to_account_id,
+              access_level, signed_encryption_key)
+         SELECT $1, 1, c.id, owner.id, guest.id, $2, $3
+         FROM collections c, accounts owner, accounts guest
+         WHERE c.uid = $4 AND owner.username = $5 AND guest.username = $6",
+    )
+    .bind(&stale)
+    .bind(common::raw::ADMIN)
+    .bind(b"stale key".as_slice())
+    .bind(collection)
+    .bind(&owner.name)
+    .bind(&guest.name)
+    .execute(pool)
+    .await
+    .unwrap();
+    stale
+}
+
+async fn accept_status(guest: &common::raw::Device, invitation: &str) -> u16 {
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Accept {
+        collection_type: serde_bytes::ByteBuf,
+        encryption_key: serde_bytes::ByteBuf,
+    }
+    let body = Accept {
+        collection_type: serde_bytes::ByteBuf::from(b"type".to_vec()),
+        encryption_key: serde_bytes::ByteBuf::from(b"key".to_vec()),
+    };
+    guest
+        .call(
+            reqwest::Method::POST,
+            &format!("/invitation/incoming/{invitation}/accept/"),
+            Some(&body),
+        )
+        .await
+        .0
+}
+
+/// Joining withdraws every invitation to the account, so a member should
+/// hold none. Should one exist all the same, it must not let the recipient
+/// overwrite the access they already have.
+#[tokio::test]
+async fn a_stale_invitation_cannot_change_an_existing_members_access() {
+    use common::raw::{Device, READ_WRITE};
+
+    let owner = Device::signup(common::server(), "owner").await;
+    let guest = Device::signup(common::server(), "guest").await;
+    let collection = owner.create_collection().await;
+    owner.share(&collection, &guest, READ_WRITE).await;
+
+    let pool = sqlx::PgPool::connect(&common::database_url())
+        .await
+        .unwrap();
+    let stale = plant_stale_invitation(&pool, &collection, &owner, &guest).await;
+    assert_eq!(
+        accept_status(&guest, &stale).await,
+        409,
+        "the stale invitation is refused"
+    );
+
+    let access: i16 = sqlx::query_scalar(
+        "SELECT m.access_level FROM members m
+         JOIN collections c ON c.id = m.collection_id
+         JOIN accounts a ON a.id = m.account_id
+         WHERE c.uid = $1 AND a.username = $2",
+    )
+    .bind(&collection)
+    .bind(&guest.name)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(access, READ_WRITE, "the member keeps the access they had");
+
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM invitations WHERE uid = $1")
+        .bind(&stale)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(left, 0, "the stale invitation is gone");
+}
+
+/// Nor may one outlive a removal, or the member taken out could accept it and
+/// be back, as whatever it says.
+#[tokio::test]
+async fn a_stale_invitation_goes_when_the_member_does() {
+    use common::raw::{Device, READ_ONLY};
+
+    let owner = Device::signup(common::server(), "owner").await;
+    let guest = Device::signup(common::server(), "guest").await;
+    let collection = owner.create_collection().await;
+    owner.share(&collection, &guest, READ_ONLY).await;
+
+    let pool = sqlx::PgPool::connect(&common::database_url())
+        .await
+        .unwrap();
+    let stale = plant_stale_invitation(&pool, &collection, &owner, &guest).await;
+    owner.remove_member(&collection, &guest).await;
+    assert_eq!(
+        accept_status(&guest, &stale).await,
+        404,
+        "the invitation went with the membership"
+    );
+}
+
 #[test]
 fn logout_ends_the_session() {
     let account = signup("solo");
@@ -513,4 +698,120 @@ fn closed_server_refuses_signup() {
     );
     // The same request is fine where signup is open.
     signup_at(common::server(), "early");
+}
+
+/// Asking to remove or change someone says the same for any name that is not
+/// a member, whether or not an account has it. Otherwise any admin of any
+/// collection could test names without leaving a trace.
+#[tokio::test]
+async fn member_routes_say_nothing_about_names_outside_the_collection() {
+    use common::raw::{Device, READ_ONLY};
+    use reqwest::Method;
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Patch {
+        access_level: i16,
+    }
+
+    let owner = Device::signup(common::server(), "owner").await;
+    let stranger = Device::signup(common::server(), "stranger").await;
+    let collection = owner.create_collection().await;
+    let patch = Patch {
+        access_level: READ_ONLY,
+    };
+    for path in [
+        format!("/collection/{collection}/member/{}/", stranger.name),
+        format!("/collection/{collection}/member/nobody-has-this-name/"),
+    ] {
+        let removed = owner.call::<()>(Method::DELETE, &path, None).await;
+        assert_eq!(removed.0, 404);
+        assert_eq!(removed.1["detail"], "Member matching query does not exist.");
+        let changed = owner.call(Method::PATCH, &path, Some(&patch)).await;
+        assert_eq!(changed, removed);
+    }
+}
+
+/// Each lookup says whether a name exists, so an account may only make so
+/// many. Past that the answer is the same for any name, and one account's
+/// limit is not another's.
+#[tokio::test]
+async fn looking_up_names_is_held_to_a_rate() {
+    use common::raw::Device;
+    use reqwest::Method;
+
+    let url = common::start_server(|config| {
+        config.lookup_rate_per_minute = 1;
+        config.lookup_rate_burst = 2;
+    });
+    let prober = Device::signup(&url, "prober").await;
+    let other = Device::signup(&url, "other").await;
+    let target = Device::signup(&url, "target").await;
+    let profile = |name: &str| format!("/invitation/outgoing/fetch_user_profile/?username={name}");
+
+    let lookup = async |device: &Device, name: &str| {
+        device.call::<()>(Method::GET, &profile(name), None).await.0
+    };
+    assert_eq!(lookup(&prober, &target.name).await, 200);
+    assert_eq!(lookup(&prober, "nobody-has-this-name").await, 404);
+    assert_eq!(lookup(&prober, &target.name).await, 429);
+    assert_eq!(lookup(&prober, "nobody-has-this-name").await, 429);
+    assert_eq!(lookup(&other, &target.name).await, 200);
+}
+
+/// A list of guesses is mostly names nobody has, and those run out long
+/// before the rate does. Past that every name is refused alike, or the
+/// refusals would go on telling them apart. Inviting counts the same way, and
+/// one account's guesses cost another nothing.
+#[tokio::test]
+async fn guessing_names_runs_out() {
+    use common::keyed::new_uid;
+    use common::raw::Device;
+    use reqwest::Method;
+    use serde_bytes::ByteBuf;
+
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Invite<'a> {
+        uid: String,
+        version: u8,
+        username: &'a str,
+        collection: &'a str,
+        access_level: i16,
+        signed_encryption_key: ByteBuf,
+    }
+
+    let url = common::start_server(|config| config.unknown_names_per_day = 2);
+    let prober = Device::signup(&url, "prober").await;
+    let inviter = Device::signup(&url, "inviter").await;
+    let target = Device::signup(&url, "target").await;
+    let lookup = async |device: &Device, name: &str| {
+        let path = format!("/invitation/outgoing/fetch_user_profile/?username={name}");
+        device.call::<()>(Method::GET, &path, None).await.0
+    };
+
+    assert_eq!(lookup(&prober, &target.name).await, 200);
+    assert_eq!(lookup(&prober, "nobody-has-this-name").await, 404);
+    assert_eq!(lookup(&prober, "nobody-has-that-name").await, 404);
+    assert_eq!(lookup(&prober, "nobody-has-this-one").await, 429);
+    assert_eq!(lookup(&prober, &target.name).await, 429);
+
+    let collection = inviter.create_collection().await;
+    let invite = async |name: &str| {
+        let body = Invite {
+            uid: new_uid(),
+            version: 1,
+            username: name,
+            collection: &collection,
+            access_level: 2,
+            signed_encryption_key: ByteBuf::from(b"sealed key".to_vec()),
+        };
+        let path = "/invitation/outgoing/";
+        inviter.call(Method::POST, path, Some(&body)).await.0
+    };
+    assert_eq!(lookup(&inviter, &target.name).await, 200);
+    assert_eq!(invite("nobody-has-this-name").await, 404);
+    assert_eq!(invite("nobody-has-that-name").await, 404);
+    assert_eq!(invite(&target.name).await, 429);
 }

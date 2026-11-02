@@ -45,18 +45,28 @@ fn fetch_existing(
         Existing::Content => ItemKind::Note.batch(),
     };
     for named in uids.chunks(batch) {
-        let mut wanted: Vec<String> = named.iter().map(|uid| uid.to_string()).collect();
         // With content, the server gives it to as many items as fit one
         // answer, from the first. The rest are asked for again, as a pull
         // does it, see `Arrived`.
-        while !wanted.is_empty() {
+        let mut waiting = vec![named.iter().map(|uid| uid.to_string()).collect::<Vec<_>>()];
+        while let Some(wanted) = waiting.pop() {
             let options = match need {
                 Existing::Revision => Some(FetchOptions::new().prefetch(&without_content)),
                 Existing::Content => None,
             };
-            let fetched = im
-                .fetch_multi(wanted.iter().map(String::as_str), options.as_ref())
-                .map_err(|e| AppError::InvalidArg(format!("fetch items to push: {e}")))?;
+            let fetched = match im.fetch_multi(wanted.iter().map(String::as_str), options.as_ref())
+            {
+                Ok(fetched) => fetched,
+                Err(e) => match in_two_turns(&e, &wanted) {
+                    Some(turns) => {
+                        waiting.extend(turns);
+                        continue;
+                    }
+                    None => {
+                        return Err(AppError::InvalidArg(format!("fetch items to push: {e}")));
+                    }
+                },
+            };
             let mut again = Vec::new();
             for (place, item) in fetched.data().iter().enumerate() {
                 let item = match need {
@@ -72,7 +82,9 @@ fn fetch_existing(
                 };
                 found.insert(item.uid().to_string(), item);
             }
-            wanted = again;
+            if !again.is_empty() {
+                waiting.push(again);
+            }
         }
     }
     Ok(found)

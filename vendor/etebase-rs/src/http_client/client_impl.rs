@@ -117,8 +117,10 @@ impl Response {
             // A Mindstream server answers 402 when a write would go over a
             // limit of the plan that pays for the collection. The code says
             // which limit, and a client tells its user, so it is kept as it
-            // came. An Etebase server never answers 402.
-            402 if content.code.is_some() => {
+            // came. An Etebase server never answers 402. It answers 413 with
+            // a code when an answer would not fit and the client should ask
+            // for less, and a client has to be able to tell that too.
+            402 | 413 if content.code.is_some() => {
                 let code = content.code.unwrap_or_default();
                 Error::Refused {
                     status: self.status,

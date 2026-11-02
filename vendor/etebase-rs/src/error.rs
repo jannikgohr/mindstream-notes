@@ -46,7 +46,8 @@ pub enum Error {
     /// A Mindstream server refused, and gave its reason as a code a program
     /// can act on. The Mindstream calls return this for every refusal. The
     /// Etebase ones keep the variants above, except for a write that would
-    /// go over a limit, see `mindstream::refusal::limit`.
+    /// go over a limit, see `mindstream::refusal::limit`, and an answer that
+    /// would not fit, see `mindstream::refusal::TOO_MUCH_AT_ONCE`.
     Refused {
         /// The HTTP status of the answer
         status: u16,

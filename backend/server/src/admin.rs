@@ -5,6 +5,8 @@
 //! it stores, and switching it off.
 
 use crate::auth::username_key;
+use crate::chunks;
+use crate::collections;
 use crate::events::{self, Event};
 use crate::limits::{self, Entitlements, Usage};
 use crate::links;
@@ -19,7 +21,7 @@ pub struct AccountSummary {
     /// Whether signing in takes a code from an authenticator.
     pub second_factor: bool,
     pub sessions: i64,
-    /// Ciphertext bytes in the collections this account owns.
+    /// Bytes stored in the collections this account owns.
     pub bytes_used: i64,
 }
 
@@ -115,6 +117,12 @@ impl OrphanedBlobs<'_> {
 
 /// Delete an account's rows inside the caller's transaction, telling the
 /// open sockets first. Commit through what this returns.
+///
+/// Its memberships, invitations and links go with it, and those are stored
+/// in collections other people own and pay for. Those collections are
+/// counted again after. They and its own are locked first, in an order every
+/// such deletion shares, because two accounts can each belong to what the
+/// other owns.
 pub(crate) async fn remove_account<'a>(
     state: &'a AppState,
     conn: &mut sqlx::PgConnection,
@@ -125,12 +133,42 @@ pub(crate) async fn remove_account<'a>(
             .bind(account_id)
             .fetch_all(&mut *conn)
             .await?;
+    let touched: Vec<i64> = sqlx::query_scalar(
+        "SELECT c.id FROM collections c
+         WHERE c.owner_id = $1
+             OR EXISTS (SELECT 1 FROM members m
+                        WHERE m.collection_id = c.id AND m.account_id = $1)
+             OR EXISTS (SELECT 1 FROM invitations i
+                        WHERE i.collection_id = c.id
+                          AND $1 IN (i.from_account_id, i.to_account_id))
+             OR EXISTS (SELECT 1 FROM invite_links l
+                        WHERE l.collection_id = c.id AND l.from_account_id = $1)
+         ORDER BY c.id FOR UPDATE OF c",
+    )
+    .bind(account_id)
+    .fetch_all(&mut *conn)
+    .await?;
     events::publish_account_closing(conn, account_id).await?;
     sqlx::query("DELETE FROM accounts WHERE id = $1")
         .bind(account_id)
-        .execute(conn)
+        .execute(&mut *conn)
         .await?;
+    // Its own are gone by now, and only the others are left to count.
+    sqlx::query(&format!(
+        "UPDATE collections c SET bytes_used = {} WHERE c.id = ANY($1)",
+        collections::counted_bytes("c")
+    ))
+    .bind(&touched)
+    .execute(conn)
+    .await?;
     Ok(OrphanedBlobs { state, collections })
+}
+
+/// Collections whose counted bytes differ from what their rows hold, as
+/// (uid, counted, held). The server logs these by itself now and then, see
+/// `chunks::reclaim_blobs_periodically`.
+pub async fn storage_drift(state: &AppState) -> Result<Vec<(String, i64, i64)>, sqlx::Error> {
+    chunks::audit_storage(&state.pool).await
 }
 
 /// Take the second factor off an account whose owner has lost the

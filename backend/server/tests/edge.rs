@@ -4,9 +4,13 @@
 mod common;
 
 use std::io::{Read, Write};
+use std::time::Duration;
 
+use common::raw::Device;
 use etebase::error::Error;
 use etebase::{Account, User};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 
 fn try_signup(url: &str) -> Result<Account, Error> {
     etebase::init().unwrap();
@@ -232,4 +236,154 @@ async fn test_reset_route_never_serves_past_loopback() {
     let refused = serve(listener, state, std::future::pending::<()>()).await;
     let err = refused.expect_err("serving the reset route past loopback");
     assert!(err.to_string().contains("refusing to start"), "{err}");
+}
+
+/// Post a body of `size` bytes nobody can decode, and return the status. The
+/// server may answer before it has read all of it and close the connection,
+/// so sending may fail where reading the answer does not.
+async fn post_junk(url: &str, path: &str, headers: &str, size: usize) -> u16 {
+    let mut stream = TcpStream::connect(url.trim_start_matches("http://"))
+        .await
+        .unwrap();
+    let head = format!(
+        "POST /api/v1{path} HTTP/1.1\r\nHost: test\r\nConnection: close\r\n{headers}\
+         Content-Length: {size}\r\n\r\n"
+    );
+    let _ = stream.write_all(head.as_bytes()).await;
+    let _ = stream.write_all(&vec![0xc1u8; size]).await;
+    let mut status = [0u8; 12];
+    stream.read_exact(&mut status).await.expect("an answer");
+    std::str::from_utf8(&status[9..12])
+        .unwrap()
+        .parse()
+        .expect("a status")
+}
+
+/// Nothing that takes a body from someone who has not shown who they are
+/// needs more than a few keys, and a body is buffered before a handler sees
+/// it.
+#[tokio::test]
+async fn sign_in_routes_take_no_large_body() {
+    let url = common::start_server(|_| {});
+    for path in [
+        "/authentication/signup/",
+        "/authentication/login_challenge/",
+        "/authentication/login/",
+        "/authentication/recover/",
+        "/authentication/recover/complete/",
+        "/mindstream/link/somelink/open/",
+    ] {
+        assert_eq!(post_junk(&url, path, "", 1024 * 1024).await, 413, "{path}");
+    }
+}
+
+/// The time a sign-in has to take starts once its request is in. If it
+/// started before, a caller could spend it sending the body, and time the
+/// work after all.
+#[tokio::test]
+async fn sending_slowly_does_not_use_up_the_time_a_sign_in_takes() {
+    let url = common::start_server(|_| {});
+    let mut stream = TcpStream::connect(url.trim_start_matches("http://"))
+        .await
+        .unwrap();
+    let body = rmp_serde::to_vec_named(&serde_json::json!({ "username": "nobody" })).unwrap();
+    let head = format!(
+        "POST /api/v1/authentication/login_challenge/ HTTP/1.1\r\nHost: test\r\n\
+         Connection: close\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(head.as_bytes()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    stream.write_all(&body).await.unwrap();
+    let sent = std::time::Instant::now();
+    let mut status = [0u8; 12];
+    stream.read_exact(&mut status).await.unwrap();
+    assert_eq!(&status[9..12], b"200");
+    assert!(sent.elapsed() >= Duration::from_millis(90));
+}
+
+/// Every part of a body takes room as it arrives and keeps it until the
+/// request is done, so bodies cannot add up past what the server can hold by
+/// arriving together or by arriving slowly.
+#[tokio::test]
+async fn bodies_are_held_to_the_room_the_server_has() {
+    const MIB: usize = 1024 * 1024;
+    let url = common::start_server(|config| {
+        config.max_body_bytes_in_flight = 3 * MIB;
+        config.max_body_bytes_in_flight_per_address = 2 * MIB;
+    });
+    let device = Device::signup(&url, "parked").await;
+    let from = |address: &str| {
+        format!(
+            "X-Forwarded-For: {address}\r\nAuthorization: Token {}\r\n",
+            device.token
+        )
+    };
+    let first = from("203.0.113.1");
+    let second = from("203.0.113.2");
+    let post = async |headers: &str, size| post_junk(&url, "/collection/", headers, size).await;
+
+    // Sends most of what it says it will and stops, which is one way to sit
+    // on memory for as long as the deadlines let it.
+    let mut parked = TcpStream::connect(url.trim_start_matches("http://"))
+        .await
+        .unwrap();
+    let head = format!(
+        "POST /api/v1/collection/ HTTP/1.1\r\nHost: test\r\n{first}Content-Length: {}\r\n\r\n",
+        2 * MIB
+    );
+    parked.write_all(head.as_bytes()).await.unwrap();
+    parked.write_all(&vec![0xc1u8; 3 * MIB / 2]).await.unwrap();
+
+    // Once it has arrived, the same address has no room left for this.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while post(&first, MIB).await != 503 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the parked body took no room");
+    // There is still room for something smaller, which reaches the handler.
+    assert_eq!(post(&first, MIB / 4).await, 400);
+    // Another address has its own share of what is left, and no more.
+    assert_eq!(post(&second, MIB).await, 400);
+    assert_eq!(post(&second, 2 * MIB).await, 503);
+
+    // The room comes back with the request.
+    drop(parked);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while post(&first, MIB).await != 400 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the room did not come back");
+}
+
+/// A promise of a body costs nothing: only what has arrived takes room, so
+/// nobody can fill the room by saying they are about to send a lot.
+#[tokio::test]
+async fn saying_a_body_will_be_large_takes_no_room() {
+    const MIB: usize = 1024 * 1024;
+    let url = common::start_server(|config| {
+        config.max_body_bytes_in_flight = 2 * MIB;
+    });
+    let device = Device::signup(&url, "promised").await;
+    let token = format!("Authorization: Token {}\r\n", device.token);
+
+    let mut promises = Vec::new();
+    for _ in 0..8 {
+        let mut stream = TcpStream::connect(url.trim_start_matches("http://"))
+            .await
+            .unwrap();
+        let head = format!(
+            "POST /api/v1/collection/ HTTP/1.1\r\nHost: test\r\n{token}\
+             Content-Length: {}\r\n\r\n",
+            50 * MIB
+        );
+        stream.write_all(head.as_bytes()).await.unwrap();
+        promises.push(stream);
+    }
+    assert_eq!(post_junk(&url, "/collection/", &token, MIB).await, 400);
 }
