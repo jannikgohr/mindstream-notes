@@ -297,9 +297,11 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
     // Restore path — destructive. Re-confirm before staging.
     const confirmed = await confirm({
       title: tUi('data.import.restore.confirm.title'),
-      message: preview.same_account
-        ? tUi('data.import.restore.confirm.sameAccount')
-        : tUi('data.import.restore.confirm.differentAccount'),
+      message: !isTauri()
+        ? tUi('data.import.restore.confirm.browser')
+        : preview.same_account
+          ? tUi('data.import.restore.confirm.sameAccount')
+          : tUi('data.import.restore.confirm.differentAccount'),
       confirmLabel: tUi('data.import.restore.confirm.button'),
       destructive: true
     });
@@ -310,17 +312,36 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
       return;
     }
     try {
+      // A browser's safety backup has to hold the latest edits.
+      const { flushPendingEditorSaves } =
+        await import('$lib/editor/suspend-flush');
+      await flushPendingEditorSaves();
       const staged = await importRestore(
         preview.token,
         preview.same_account,
-        options.includeDevice
+        options.includeDevice,
+        () =>
+          confirm({
+            title: tUi('data.import.restore.safety.title'),
+            message: tUi('data.import.restore.safety.message'),
+            confirmLabel: tUi('data.import.restore.safety.button'),
+            destructive: true
+          })
       );
+      if (!staged) {
+        await importCleanup(preview.token).catch((err) =>
+          console.warn('[settings] import_cleanup failed', err)
+        );
+        return;
+      }
       if (staged.restart_required) {
         const action = await showRestoreReadyResult(preview, staged);
         if (action === 'restart') {
           const { relaunch } = await import('@tauri-apps/plugin-process');
           await relaunch();
         }
+      } else if (!isTauri()) {
+        window.location.reload();
       }
     } catch (err) {
       console.error('[settings] import_restore failed', err);

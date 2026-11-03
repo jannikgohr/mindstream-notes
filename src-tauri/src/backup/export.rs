@@ -126,7 +126,7 @@ pub(super) fn run_backup_at(
     // export window could drift.
     let snapshot = Connection::open(&staging_db)?;
     leave_device_secrets_out(&snapshot)?;
-    let identity = read_account_identity(&snapshot, session)?;
+    let identity = session_identity(&snapshot, session)?;
     drop(snapshot);
 
     let resources = portable::capture(root, vault, conn, &resources_dir)?;
@@ -230,38 +230,15 @@ fn validate_destination(root: &Path, vault: &Path, destination: &Path) -> AppRes
     Ok(())
 }
 
-pub(super) fn read_account_identity(
+pub(super) fn session_identity(
     conn: &Connection,
     session: Option<&auth::SessionInfo>,
 ) -> AppResult<Option<AccountIdentity>> {
-    // Both collection UIDs must be present for the identity block to
-    // count — a half-synced DB (one kind pushed, the other not) is a
-    // gnarly state we don't try to round-trip identity for.
-    let notes_uid: Option<String> = conn
-        .query_row(
-            "SELECT etebase_collection_uid FROM sync_state WHERE kind = 'notes'",
-            [],
-            |r| r.get(0),
-        )
-        .ok()
-        .flatten();
-    let folders_uid: Option<String> = conn
-        .query_row(
-            "SELECT etebase_collection_uid FROM sync_state WHERE kind = 'folders'",
-            [],
-            |r| r.get(0),
-        )
-        .ok()
-        .flatten();
-    match (notes_uid, folders_uid) {
-        (Some(notes), Some(folders)) => Ok(Some(AccountIdentity {
-            etebase_collection_uid_notes: notes,
-            etebase_collection_uid_folders: folders,
-            server_url: session.map(|s| s.server_url.clone()),
-            username: session.map(|s| s.username.clone()),
-        })),
-        _ => Ok(None),
-    }
+    Ok(mindstream_storage_core::backup::read_account_identity(
+        conn,
+        session.map(|s| s.server_url.clone()),
+        session.map(|s| s.username.clone()),
+    )?)
 }
 
 #[cfg(test)]

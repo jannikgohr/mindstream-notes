@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { backupNow, importBegin, importRestore } from './data';
+import {
+  backupNow,
+  importBegin,
+  importCleanup,
+  importMerge,
+  importRestore
+} from './data';
 
 const invoke = vi.fn();
 vi.mock('@tauri-apps/api/core', () => ({
@@ -8,13 +14,23 @@ vi.mock('@tauri-apps/api/core', () => ({
 const browser = vi.hoisted(() => ({
   enabled: false,
   backup: vi.fn(),
-  download: vi.fn()
+  download: vi.fn(),
+  stage: vi.fn(),
+  merge: vi.fn(),
+  restore: vi.fn(),
+  discard: vi.fn()
 }));
 vi.mock('../browser/commands', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../browser/commands')>()),
   browserStorageEnabled: () => browser.enabled
 }));
-vi.mock('../browser/vault', () => ({ backupBrowserVault: browser.backup }));
+vi.mock('../browser/vault', () => ({
+  backupBrowserVault: browser.backup,
+  stageBrowserBackup: browser.stage,
+  mergeBrowserBackup: browser.merge,
+  restoreBrowserBackup: browser.restore,
+  discardBrowserBackup: browser.discard
+}));
 vi.mock('./file-export', () => ({ downloadBlob: browser.download }));
 const preview = {
   token: 'test-token',
@@ -37,11 +53,130 @@ describe('browser backup', () => {
   beforeEach(() => {
     delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
     browser.enabled = true;
-    browser.backup.mockReset();
-    browser.download.mockReset();
+    for (const mock of [
+      browser.backup,
+      browser.download,
+      browser.stage,
+      browser.merge,
+      browser.restore,
+      browser.discard
+    ])
+      mock.mockReset();
   });
   afterEach(() => {
     browser.enabled = false;
+    vi.restoreAllMocks();
+  });
+
+  const pick = (files: File[] | null) =>
+    vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(function (
+      this: HTMLInputElement
+    ) {
+      if (!files) {
+        this.dispatchEvent(new Event('cancel'));
+        return;
+      }
+      Object.defineProperty(this, 'files', { value: files });
+      this.dispatchEvent(new Event('change'));
+    });
+
+  it('stages the picked file and parses its preview', async () => {
+    const file = new File(['zip'], 'backup.zip');
+    pick([file]);
+    browser.stage.mockResolvedValue(preview);
+    expect(await importBegin()).toMatchObject({ token: 'test-token' });
+    expect(browser.stage).toHaveBeenCalledWith(file);
+  });
+
+  it('stays quiet when the picker is cancelled', async () => {
+    pick(null);
+    expect(await importBegin()).toBeNull();
+    expect(browser.stage).not.toHaveBeenCalled();
+  });
+
+  it('saves a copy for the user before replacing the vault', async () => {
+    const order: string[] = [];
+    browser.backup.mockImplementation(async () => {
+      order.push('backup');
+      return {
+        archive: new Blob(['zip']),
+        filename: 'mindstream-backup.zip',
+        counts: { notes: 1, folders: 0, assets_bytes: 0 },
+        accountPresent: false
+      };
+    });
+    browser.download.mockImplementation(() => order.push('download'));
+    browser.restore.mockImplementation(async () => {
+      order.push('restore');
+      return true;
+    });
+    const saved = vi.fn(async () => {
+      order.push('confirmed');
+      return true;
+    });
+    expect(await importRestore('test-token', false, false, saved)).toEqual({
+      restart_required: false,
+      sanitized: true
+    });
+    expect(order).toEqual(['backup', 'download', 'confirmed', 'restore']);
+    expect(browser.restore).toHaveBeenCalledWith('test-token', false);
+  });
+
+  it('replaces nothing when the safety copy fails', async () => {
+    browser.backup.mockRejectedValue(new Error('too large'));
+    await expect(
+      importRestore('test-token', false, false, async () => true)
+    ).rejects.toThrow('too large');
+    expect(browser.restore).not.toHaveBeenCalled();
+  });
+
+  it('keeps the vault when the user has not saved the safety copy', async () => {
+    browser.backup.mockResolvedValue({
+      archive: new Blob(['zip']),
+      filename: 'safety.zip',
+      counts: { notes: 1, folders: 0, assets_bytes: 0 },
+      accountPresent: false
+    });
+    expect(
+      await importRestore('test-token', false, false, async () => false)
+    ).toBeNull();
+    expect(browser.download).toHaveBeenCalledOnce();
+    expect(browser.restore).not.toHaveBeenCalled();
+  });
+
+  it('requires a safety confirmation before starting a browser replacement', async () => {
+    await expect(importRestore('test-token', false)).rejects.toThrow(
+      'A saved safety backup must be confirmed'
+    );
+    expect(browser.backup).not.toHaveBeenCalled();
+    expect(browser.restore).not.toHaveBeenCalled();
+  });
+
+  it('merges and discards through the vault', async () => {
+    const report = {
+      folders_added: 1,
+      notes_added: 2,
+      assets_added: 3,
+      notes_orphaned: 0
+    };
+    browser.merge.mockResolvedValue(report);
+    expect(await importMerge('test-token')).toEqual(report);
+    await importCleanup('test-token');
+    expect(browser.discard).toHaveBeenCalledWith('test-token');
+  });
+
+  it('leaves the vault alone in the in-memory fixture build', async () => {
+    browser.enabled = false;
+    expect(await importBegin()).toBeNull();
+    await importCleanup('test-token');
+    expect(await importMerge('test-token')).toMatchObject({ notes_added: 0 });
+    expect(await importRestore('test-token', false)).toEqual({
+      restart_required: false,
+      sanitized: true
+    });
+    expect(browser.discard).not.toHaveBeenCalled();
+    expect(browser.backup).not.toHaveBeenCalled();
+    expect(browser.restore).not.toHaveBeenCalled();
   });
 
   it('downloads the archive and reports no path', async () => {

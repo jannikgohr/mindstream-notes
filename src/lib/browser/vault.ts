@@ -11,6 +11,8 @@ import { vaultNamespace } from './namespace';
 import {
   storageError,
   type BrowserBackup,
+  type ImportProgressMessage,
+  type PickedSource,
   type StorageError
 } from './protocol';
 import { tUi } from '$lib/settings/i18n.svelte';
@@ -24,6 +26,7 @@ let opening: Promise<BrowserStorageClient> | undefined;
 let resetting = false;
 let startupChecked = false;
 let resetFailure: StorageError | undefined;
+const notesImportAttempts = new Set<{ cancelled: boolean }>();
 
 function failedReset(cause?: unknown): StorageError {
   const error = cause ? storageError(cause) : { code: 'refused' as const };
@@ -33,6 +36,24 @@ function failedReset(cause?: unknown): StorageError {
       tUi('browser.testing.blocked') +
       ('message' in error ? ` ${error.message}` : '')
   };
+}
+
+/**
+ * A terminated worker gives up the vault lock a moment after `terminate()`
+ * returns, and opening before that would report another tab. The limit keeps
+ * a real second tab from blocking this forever: the open then refuses as usual.
+ */
+async function waitForTerminatedWorker(lock: string): Promise<void> {
+  try {
+    await navigator.locks?.request(
+      lock,
+      { signal: AbortSignal.timeout(WORKER_RELEASE_TIMEOUT_MS) },
+      () => {}
+    );
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === 'TimeoutError'))
+      throw error;
+  }
 }
 
 async function openVault(): Promise<BrowserStorageClient> {
@@ -58,6 +79,8 @@ async function openVault(): Promise<BrowserStorageClient> {
     }
   }
   if (resetFailure) throw resetFailure;
+  if (client?.isClosed)
+    await waitForTerminatedWorker(vaultNamespace(testId).lock);
   let connection: BrowserStorageClient | undefined;
   try {
     // Constructor failures participate in the same startup reset gate.
@@ -105,9 +128,85 @@ function connect(): Promise<BrowserStorageClient> {
  * still caught, but this must not look like one. */
 const BACKUP_TIMEOUT_MS = 10 * 60_000;
 
+/** A worker stopped partway through a large write took 2 seconds to let go on
+ * a busy machine. This only delays the refusal when another tab really has
+ * taken the vault, and a free lock doesn't wait at all. */
+const WORKER_RELEASE_TIMEOUT_MS = 15_000;
+
+/** A notes import runs for as long as the vault needs, and the user can stop
+ * it. This only catches a worker that stopped answering altogether. */
+const NOTES_IMPORT_TIMEOUT_MS = 6 * 60 * 60_000;
+
 export async function backupBrowserVault(): Promise<BrowserBackup> {
   const connection = await connect();
   return connection.request('backup', undefined, BACKUP_TIMEOUT_MS);
+}
+
+export async function stageBrowserBackup(archive: Blob): Promise<unknown> {
+  const connection = await connect();
+  return connection.request('importBegin', { archive }, BACKUP_TIMEOUT_MS);
+}
+
+export async function mergeBrowserBackup(token: string): Promise<unknown> {
+  const connection = await connect();
+  return connection.request('importMerge', { token }, BACKUP_TIMEOUT_MS);
+}
+
+/** Replaces the vault and closes it, so the page must reload afterwards. */
+export async function restoreBrowserBackup(
+  token: string,
+  sameAccount: boolean
+): Promise<boolean> {
+  const connection = await connect();
+  return connection.request(
+    'importRestore',
+    { token, sameAccount },
+    BACKUP_TIMEOUT_MS
+  );
+}
+
+export async function discardBrowserBackup(token: string): Promise<void> {
+  const connection = await connect();
+  await connection.request('importCleanup', { token });
+}
+
+export async function detectBrowserNotes(
+  source: PickedSource
+): Promise<unknown> {
+  const connection = await connect();
+  return connection.request('notesDetect', { source });
+}
+
+export async function importBrowserNotes(
+  source: PickedSource,
+  options: Record<string, unknown>,
+  onProgress: (progress: ImportProgressMessage) => void
+): Promise<unknown> {
+  const attempt = { cancelled: false };
+  notesImportAttempts.add(attempt);
+  let connection: BrowserStorageClient | undefined;
+  try {
+    connection = await connect();
+    if (attempt.cancelled) throw { code: 'closed' };
+    connection.onProgress = onProgress;
+    return await connection.request(
+      'notesImport',
+      { source, options },
+      NOTES_IMPORT_TIMEOUT_MS
+    );
+  } finally {
+    notesImportAttempts.delete(attempt);
+    if (connection?.onProgress === onProgress)
+      connection.onProgress = undefined;
+  }
+}
+
+/** A busy worker can't read a cancel message, so stop it. What earlier batches
+ * committed stays, the one in flight rolls back, and the next call reconnects. */
+export function cancelBrowserNotesImport(): void {
+  if (notesImportAttempts.size === 0) return;
+  for (const attempt of notesImportAttempts) attempt.cancelled = true;
+  client?.dispose();
 }
 
 export async function invokeBrowser(

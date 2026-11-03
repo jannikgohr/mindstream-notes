@@ -3484,6 +3484,7 @@ checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 name = "mindstream-browser-wasm"
 version = "0.2.0"
 dependencies = [
+ "chrono",
  "js-sys",
  "mindstream-storage-core",
  "rusqlite",
@@ -3492,6 +3493,7 @@ dependencies = [
  "serde_json",
  "sqlite-wasm-rs",
  "sqlite-wasm-vfs",
+ "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
 ]
@@ -3514,7 +3516,6 @@ dependencies = [
  "futures-util",
  "gtk",
  "hkdf",
- "htmd",
  "include_dir",
  "jni 0.21.1",
  "keyring-core",
@@ -3526,7 +3527,6 @@ dependencies = [
  "muda",
  "ndk-context",
  "qrcode",
- "quick-xml 0.42.0",
  "regex",
  "reqwest 0.12.28",
  "rmp-serde",
@@ -3563,7 +3563,6 @@ dependencies = [
  "windows",
  "windows-core 0.61.2",
  "windows-native-keyring-store",
- "yaml-rust2",
  "yrs",
  "zeroize",
  "zip 8.6.0",
@@ -3602,15 +3601,20 @@ dependencies = [
  "chrono",
  "flate2",
  "getrandom 0.3.4",
+ "htmd",
  "log",
+ "md-5",
+ "quick-xml 0.42.0",
  "regex",
  "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "similar",
+ "tar",
  "thiserror 2.0.18",
  "uuid",
+ "yaml-rust2",
  "yrs",
 ]
 

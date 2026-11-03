@@ -16,6 +16,8 @@ type DraftRecord = {
 const revisions = new Map<string, string>();
 const inFlight = new Map<string, { base: string; token: string }>();
 const captures = new Map<string, { id: string; base: string | undefined }>();
+// A draft whose quarantine failed may be its only surviving copy.
+const protectedDrafts = new Set<string>();
 export type RecoveryAcknowledgement = (() => void) & { token?: string };
 
 function enabled(): boolean {
@@ -108,6 +110,11 @@ export function checkpointBrowserNote(snapshot: () => Draft | null): void {
   };
   try {
     const previous = localStorage.getItem(PREFIX + draft.id);
+    if (previous === null) protectedDrafts.delete(PREFIX + draft.id);
+    if (previous !== null && protectedDrafts.has(PREFIX + draft.id))
+      throw new Error(
+        'A retained browser note recovery copy must be preserved'
+      );
     const prior = previous ? parseRecord(previous, PREFIX + draft.id) : null;
     const active = inFlight.get(draft.id);
     const parents = prior?.base === base ? (prior.parents ?? []) : [];
@@ -176,6 +183,7 @@ export function captureBrowserAcknowledgement(
   captures.set(token, capture);
   const acknowledge = () => {
     captures.delete(token);
+    if (protectedDrafts.has(PREFIX + id)) return;
     const current = localStorage.getItem(PREFIX + id);
     if (!current) return;
     const captured = raw ? parseRecord(raw, PREFIX + id) : null;
@@ -198,17 +206,32 @@ export function captureBrowserAcknowledgement(
 
 function retain(key: string, raw: string, reason: string): void {
   const { draft: PREFIX, archive: ARCHIVE } = browserRecoveryNamespace();
-  recoveryStatus.copies.push({ key, raw, reason });
+  let archiveKey: string | undefined;
+  const addCopy = (copyKey: string) => {
+    const existing = recoveryStatus.copies.find((copy) => copy.key === copyKey);
+    if (existing) Object.assign(existing, { raw, reason });
+    else recoveryStatus.copies.push({ key: copyKey, raw, reason });
+  };
   try {
     // Move to quarantine when there is room. Otherwise preserve the original
     // key and still open the vault; the downloadable copy also remains in memory.
-    localStorage.setItem(
-      ARCHIVE + key.slice(PREFIX.length) + ':' + crypto.randomUUID(),
-      raw
+    const priorArchive = Object.keys(localStorage).find(
+      (candidate) =>
+        candidate.startsWith(ARCHIVE) && localStorage.getItem(candidate) === raw
     );
-    if (localStorage.getItem(key) === raw) localStorage.removeItem(key);
+    archiveKey =
+      priorArchive ??
+      ARCHIVE + key.slice(PREFIX.length) + ':' + crypto.randomUUID();
+    if (!priorArchive) localStorage.setItem(archiveKey, raw);
+    addCopy(archiveKey);
+    if (localStorage.getItem(key) === raw) {
+      localStorage.removeItem(key);
+      protectedDrafts.delete(key);
+    }
   } catch {
     /* Keep the original copy when storage is full or blocked. */
+    addCopy(key);
+    protectedDrafts.add(key);
   }
 }
 
@@ -244,6 +267,7 @@ export async function recoverBrowserNotes(
     }
     if (raw === null) continue;
     try {
+      const originalRaw = raw;
       const record = parseRecord(raw, key);
       const draft: Draft = {
         id: record.id,
@@ -261,6 +285,9 @@ export async function recoverBrowserNotes(
         retain(key, raw, 'deleted');
         continue;
       }
+      // The editor can checkpoint while load_note is in flight. Never act on
+      // the stale snapshot; a later recovery pass can process the new one.
+      if (localStorage.getItem(key) !== raw) continue;
       const alreadySaved =
         (draft.body === undefined || draft.body === note.body) &&
         (draft.yrs_state === undefined ||
@@ -271,6 +298,7 @@ export async function recoverBrowserNotes(
           record.base !== savedRevision && record.parents?.length
             ? await connection.request('receipt', { id: draft.id })
             : null;
+        if (localStorage.getItem(key) !== originalRaw) continue;
         if (
           note.trashed ||
           (record.base !== savedRevision &&
@@ -287,6 +315,7 @@ export async function recoverBrowserNotes(
           base: savedRevision,
           parents: [...(record.parents ?? []), token].slice(-16)
         });
+        if (localStorage.getItem(key) !== originalRaw) continue;
         localStorage.setItem(key, raw);
         rememberBrowserNote(note);
         const active = { base: savedRevision, token };
@@ -302,7 +331,10 @@ export async function recoverBrowserNotes(
           if (inFlight.get(draft.id) === active) inFlight.delete(draft.id);
         }
       }
-      if (localStorage.getItem(key) === raw) localStorage.removeItem(key);
+      if (localStorage.getItem(key) === raw) {
+        localStorage.removeItem(key);
+        protectedDrafts.delete(key);
+      }
     } catch (error) {
       const code = (error as { code?: string })?.code;
       if (code === 'worker' || code === 'timeout' || code === 'closed')

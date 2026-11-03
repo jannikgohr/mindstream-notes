@@ -7,6 +7,7 @@ pub mod content_stats;
 pub mod demo_notes;
 pub mod error;
 pub mod history;
+pub mod import;
 pub mod migrations;
 pub mod notes;
 pub mod pdf_text;

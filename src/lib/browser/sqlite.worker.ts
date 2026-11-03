@@ -1,8 +1,10 @@
-import { packBackup, type BackupParts } from './backup-archive';
+import { packBackup, unpackBackup, type BackupParts } from './backup-archive';
+import { PickedFiles } from './picked-files';
 import { vaultNamespace } from './namespace';
 import {
   parseRequest,
   storageError,
+  type ImportProgressMessage,
   type StorageRequest,
   type StorageResponse
 } from './protocol';
@@ -11,6 +13,21 @@ interface WasmDatabase {
   invoke(request: unknown, recoveryToken?: string): unknown;
   receipt(noteId: string): string | undefined;
   backup(): BackupParts;
+  import_begin(
+    manifest: string,
+    entries: string[],
+    database: Uint8Array
+  ): unknown;
+  import_merge(token: string): unknown;
+  import_restore(token: string, sameAccount: boolean): boolean;
+  import_cleanup(token: string): void;
+  import_detect(files: PickedFiles, name: string, single: boolean): unknown;
+  import_notes(
+    files: PickedFiles,
+    name: string,
+    options: Record<string, unknown>,
+    onProgress: (progress: ImportProgressMessage) => void
+  ): unknown;
   prepare_interrupted_write(): void;
   check_interrupted_write(): number;
   verify(): unknown;
@@ -136,7 +153,17 @@ async function handle(request: StorageRequest): Promise<unknown> {
     testId = request.args?.testId;
   }
   if (
-    ['invoke', 'receipt', 'backup'].includes(request.method) &&
+    [
+      'invoke',
+      'receipt',
+      'backup',
+      'importBegin',
+      'importMerge',
+      'importRestore',
+      'importCleanup',
+      'notesDetect',
+      'notesImport'
+    ].includes(request.method) &&
     scope !== 'vault'
   )
     throw {
@@ -159,10 +186,7 @@ async function handle(request: StorageRequest): Promise<unknown> {
     };
   if (request.method === 'close') {
     database?.close();
-    database?.free();
-    database = undefined;
-    releaseOwnership?.();
-    releaseOwnership = undefined;
+    release();
     return;
   }
   await open();
@@ -186,6 +210,46 @@ async function handle(request: StorageRequest): Promise<unknown> {
       return database.receipt(request.args.id) ?? null;
     case 'backup':
       return packBackup(database.backup());
+    case 'importBegin': {
+      const {
+        manifest,
+        entries,
+        database: snapshot
+      } = unpackBackup(
+        new Uint8Array(await request.args.archive.arrayBuffer())
+      );
+      return database.import_begin(manifest, entries, snapshot);
+    }
+    case 'importMerge':
+      return database.import_merge(request.args.token);
+    case 'importRestore': {
+      const sanitized = database.import_restore(
+        request.args.token,
+        request.args.sameAccount
+      );
+      // Rust closed the vault. The page reloads onto the restored data.
+      release();
+      return sanitized;
+    }
+    case 'importCleanup':
+      return database.import_cleanup(request.args.token);
+    case 'notesDetect': {
+      const { source } = request.args;
+      return database.import_detect(
+        new PickedFiles(source.files),
+        source.name,
+        source.single
+      );
+    }
+    case 'notesImport': {
+      const { source, options } = request.args;
+      return database.import_notes(
+        new PickedFiles(source.files),
+        source.name,
+        options,
+        (progress) => worker.postMessage({ progress })
+      );
+    }
     case 'prepareInterruptedWrite':
       return database.prepare_interrupted_write();
     case 'checkInterruptedWrite':
@@ -197,6 +261,13 @@ async function handle(request: StorageRequest): Promise<unknown> {
     case 'write':
       return database.write(request.args.body);
   }
+}
+
+function release() {
+  database?.free();
+  database = undefined;
+  releaseOwnership?.();
+  releaseOwnership = undefined;
 }
 
 // Initialization and every operation run in order, including concurrent callers.

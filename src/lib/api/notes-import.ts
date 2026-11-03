@@ -7,8 +7,10 @@
  * per file would dominate. This module is therefore thin — pick a source,
  * detect its format, start the run, watch progress.
  *
- * Outside Tauri the pickers return `null`, so the flow ends quietly instead of
- * throwing, exactly as `pickExportDir` does today.
+ * A browser picks files through its own dialogs and hands them to the storage
+ * worker, which runs the same importer. The in-memory fixture build has no
+ * vault to import into, so there the pickers return `null` and the flow ends
+ * quietly.
  */
 
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
@@ -20,6 +22,10 @@ import {
   isTauri,
   TauriCommandName
 } from './core';
+import { emit, TauriEventName } from './events';
+import { browserStorageEnabled } from '../browser/commands';
+import { pickFiles } from '../browser/pick-files';
+import type { PickedSource } from '../browser/protocol';
 
 /** Formats the importer recognises. Mirrors Rust's `ImportSourceKind`. */
 export type ImportSourceKind =
@@ -78,7 +84,25 @@ export interface ImportProgress {
   phase: string;
   done: number;
   total: number;
+  /**
+   * Every report counter as of the last commit. Optional so progress from
+   * older payloads, and test fixtures that only track the phase, still type.
+   */
+  committed?: ImportReport;
 }
+
+const EMPTY_REPORT: ImportReport = {
+  notes_created: 0,
+  folders_created: 0,
+  placeholders_created: 0,
+  attachments_imported: 0,
+  attachments_deduplicated: 0,
+  attachments_too_large: 0,
+  links_resolved: 0,
+  links_unresolved: 0,
+  errors: 0,
+  cancelled: false
+};
 
 /** Outcome of converting bare `[[Title]]` spans into ID-backed links. */
 export interface LegacyLinkReport {
@@ -92,15 +116,50 @@ export interface LegacyLinkReport {
 /** Default per-file attachment ceiling, matching the Rust constant. */
 export const DEFAULT_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
+/** The browser's pick, kept here because a `File` can't travel in a path. */
+let picked: PickedSource | null = null;
+let running: { cancelled: boolean; committed: ImportReport | null } | null =
+  null;
+
 export async function pickImportFolder(): Promise<string | null> {
-  if (!isTauri()) return null;
+  if (!isTauri()) {
+    if (!browserStorageEnabled()) return null;
+    const files = await pickFiles((input) => {
+      input.webkitdirectory = true;
+    });
+    if (!files?.length) return null;
+    // Each path starts with the name of the folder the user picked.
+    const name = files[0].webkitRelativePath.split('/')[0];
+    picked = {
+      name,
+      single: false,
+      files: files.map((file) => ({
+        path: file.webkitRelativePath.slice(name.length + 1),
+        file
+      }))
+    };
+    return name;
+  }
   return parseNullableString(
     await tauriInvoke<unknown>(TauriCommandName.NotesImportPickFolder)
   );
 }
 
 export async function pickImportFile(): Promise<string | null> {
-  if (!isTauri()) return null;
+  if (!isTauri()) {
+    if (!browserStorageEnabled()) return null;
+    const files = await pickFiles((input) => {
+      input.accept = '.enex,.jex';
+    });
+    const file = files?.[0];
+    if (!file) return null;
+    picked = {
+      name: file.name,
+      single: true,
+      files: [{ path: file.name, file }]
+    };
+    return file.name;
+  }
   return parseNullableString(
     await tauriInvoke<unknown>(TauriCommandName.NotesImportPickFile)
   );
@@ -109,7 +168,11 @@ export async function pickImportFile(): Promise<string | null> {
 export async function detectImportSource(
   path: string
 ): Promise<DetectedSource | null> {
-  if (!isTauri()) return null;
+  if (!isTauri()) {
+    if (!picked) return null;
+    const { detectBrowserNotes } = await import('../browser/vault');
+    return parseDetected(await detectBrowserNotes(picked));
+  }
   return parseDetected(
     await tauriInvoke<unknown>(TauriCommandName.NotesImportDetect, { path })
   );
@@ -118,10 +181,39 @@ export async function detectImportSource(
 export async function runImport(
   options: ImportOptions
 ): Promise<ImportReport | null> {
-  if (!isTauri()) return null;
+  if (!isTauri()) return picked ? runBrowserImport(picked, options) : null;
   return parseReport(
     await tauriInvoke<unknown>(TauriCommandName.NotesImportRun, { options })
   );
+}
+
+async function runBrowserImport(
+  source: PickedSource,
+  options: ImportOptions
+): Promise<ImportReport> {
+  const { importBrowserNotes } = await import('../browser/vault');
+  const run: { cancelled: boolean; committed: ImportReport | null } = {
+    cancelled: false,
+    committed: null
+  };
+  running = run;
+  try {
+    return parseReport(
+      await importBrowserNotes(source, { ...options }, (progress) => {
+        if (progress.committed) run.committed = progress.committed;
+        void emit(TauriEventName.ImportProgress, progress);
+      })
+    );
+  } catch (error) {
+    if (!run.cancelled) throw error;
+    // The stopped worker can't report. Its last progress ping carries the
+    // counters as of the last commit. `done` counts failed items, so it is
+    // not used for the report.
+    return { ...(run.committed ?? EMPTY_REPORT), cancelled: true };
+  } finally {
+    running = null;
+    picked = null;
+  }
 }
 
 /**
@@ -130,7 +222,13 @@ export async function runImport(
  * failure, so the report comes back with `cancelled: true`.
  */
 export async function cancelImport(): Promise<void> {
-  if (!isTauri()) return;
+  if (!isTauri()) {
+    if (!running) return;
+    running.cancelled = true;
+    const { cancelBrowserNotesImport } = await import('../browser/vault');
+    cancelBrowserNotesImport();
+    return;
+  }
   await tauriInvoke<unknown>(TauriCommandName.NotesImportCancel);
 }
 

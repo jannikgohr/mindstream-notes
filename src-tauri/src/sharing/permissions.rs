@@ -1,12 +1,4 @@
 use super::*;
-pub fn ensure_collection_writable(conn: &Connection, id: &str) -> AppResult<()> {
-    mindstream_storage_core::sharing::ensure_collection_writable(conn, id).map_err(Into::into)
-}
-
-pub fn ensure_parent_writable(conn: &Connection, parent: Option<&str>) -> AppResult<()> {
-    mindstream_storage_core::sharing::ensure_parent_writable(conn, parent).map_err(Into::into)
-}
-
 pub fn ensure_note_writable(conn: &Connection, id: &str) -> AppResult<()> {
     mindstream_storage_core::sharing::ensure_note_writable(conn, id).map_err(Into::into)
 }

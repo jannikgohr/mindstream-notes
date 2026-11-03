@@ -24,6 +24,7 @@ import {
   TauriCommandName
 } from './core';
 import { browserStorageEnabled } from '../browser/commands';
+import { pickFiles } from '../browser/pick-files';
 import { downloadBlob } from './file-export';
 import { mockApi } from './mock-store';
 
@@ -178,7 +179,16 @@ export interface MergeReport {
  * preview struct. `null` means the user cancelled the picker.
  */
 export async function importBegin(): Promise<ImportPreview | null> {
-  if (!isTauri()) return null;
+  if (!isTauri()) {
+    if (!browserStorageEnabled()) return null;
+    const picked = await pickFiles((input) => {
+      input.accept = 'application/zip,.zip';
+    });
+    const archive = picked?.[0];
+    if (!archive) return null;
+    const { stageBrowserBackup } = await import('../browser/vault');
+    return parseImportPreview(await stageBrowserBackup(archive));
+  }
   return parseNullableImportPreview(
     await tauriInvoke<unknown>(TauriCommandName.ImportBegin)
   );
@@ -187,7 +197,13 @@ export async function importBegin(): Promise<ImportPreview | null> {
 /** Drop the staging dir created by `importBegin`. Safe on stale tokens. */
 export async function importCleanup(token: string): Promise<void> {
   assertRequiredString(token, 'token');
-  if (!isTauri()) return;
+  if (!isTauri()) {
+    if (browserStorageEnabled()) {
+      const { discardBrowserBackup } = await import('../browser/vault');
+      await discardBrowserBackup(token);
+    }
+    return;
+  }
   assertVoid(
     await tauriInvoke<unknown>(TauriCommandName.ImportCleanup, { token }),
     'import_cleanup response'
@@ -202,15 +218,32 @@ export async function importCleanup(token: string): Promise<void> {
 export async function importRestore(
   token: string,
   sameAccount: boolean,
-  includeDevice = false
-): Promise<RestoreStaged> {
+  includeDevice = false,
+  confirmSafetyCopy?: () => Promise<boolean>
+): Promise<RestoreStaged | null> {
   assertRequiredString(token, 'token');
   if (typeof sameAccount !== 'boolean') {
     throw new Error('sameAccount must be a boolean');
   }
   if (typeof includeDevice !== 'boolean')
     throw new Error('includeDevice must be a boolean');
-  if (!isTauri()) return { restart_required: false, sanitized: !sameAccount };
+  if (!isTauri()) {
+    if (!browserStorageEnabled())
+      return { restart_required: false, sanitized: !sameAccount };
+    // Browsers cannot tell us whether a download was saved or cancelled.
+    // Require the user to check the safety copy before replacing their vault.
+    if (!confirmSafetyCopy)
+      throw new Error(
+        'A saved safety backup must be confirmed before restoring.'
+      );
+    await downloadBackup();
+    if (!(await confirmSafetyCopy())) return null;
+    const { restoreBrowserBackup } = await import('../browser/vault');
+    return {
+      restart_required: false,
+      sanitized: await restoreBrowserBackup(token, sameAccount)
+    };
+  }
   return parseRestoreStaged(
     await tauriInvoke<unknown>(TauriCommandName.ImportRestore, {
       token,
@@ -226,13 +259,18 @@ export async function importRestore(
  */
 export async function importMerge(token: string): Promise<MergeReport> {
   assertRequiredString(token, 'token');
-  if (!isTauri())
+  if (!isTauri()) {
+    if (browserStorageEnabled()) {
+      const { mergeBrowserBackup } = await import('../browser/vault');
+      return parseMergeReport(await mergeBrowserBackup(token));
+    }
     return {
       folders_added: 0,
       notes_added: 0,
       assets_added: 0,
       notes_orphaned: 0
     };
+  }
   return parseMergeReport(
     await tauriInvoke<unknown>(TauriCommandName.ImportMerge, { token })
   );
