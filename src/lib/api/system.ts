@@ -7,8 +7,13 @@
  * instead of starting a download that hangs in the install phase.
  */
 
-import { invoke as tauriInvoke } from '@tauri-apps/api/core';
-import { assertBoolean, assertVoid, isTauri, TauriCommandName } from './core';
+import {
+  assertBoolean,
+  assertVoid,
+  isTauri,
+  TauriCommandName,
+  invokeTauri
+} from './core';
 
 /**
  * True when the running binary was launched as an AppImage (i.e. the
@@ -22,7 +27,7 @@ import { assertBoolean, assertVoid, isTauri, TauriCommandName } from './core';
 export async function isAppImageInstall(): Promise<boolean> {
   if (!isTauri()) return false;
   return assertBoolean(
-    await tauriInvoke<unknown>(TauriCommandName.IsAppimageInstall),
+    await invokeTauri<unknown>(TauriCommandName.IsAppimageInstall),
     'is_appimage_install response'
   );
 }
@@ -41,7 +46,7 @@ export async function isAppImageInstall(): Promise<boolean> {
 export async function restartApp(): Promise<void> {
   if (!isTauri()) return;
   assertVoid(
-    await tauriInvoke<unknown>(TauriCommandName.RestartApp),
+    await invokeTauri<unknown>(TauriCommandName.RestartApp),
     'restart_app response'
   );
 }

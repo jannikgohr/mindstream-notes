@@ -82,6 +82,11 @@ class FakeWorker {
 
 async function loadVault() {
   vi.resetModules();
+  // The fresh module graph has its own storage gate. Open it, and let a
+  // reconnect reopen it the way the tree store's reload does in the app.
+  const access = await import('$lib/storage/vault-access.svelte');
+  access.resetVaultAccessForTests('ready');
+  access.registerVaultAccessProbe(async () => access.markVaultReady());
   return import('./vault');
 }
 
