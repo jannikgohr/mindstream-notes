@@ -1162,6 +1162,7 @@
     "theme.json": "Preset JSON",
     "theme.save": "Save preset",
     "account.serverType.locked": "Sign out to change server type.",
+    "account.browserUnavailable": "Accounts and sync are not available in the browser yet. Notes are saved locally in this browser. Use the desktop or mobile app to connect to a sync server.",
     "account.username": "Username",
     "account.email": "Email",
     "account.passwordAgain": "Repeat password",
