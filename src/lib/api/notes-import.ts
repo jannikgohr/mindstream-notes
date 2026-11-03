@@ -13,14 +13,14 @@
  * quietly.
  */
 
-import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import {
   assertBoolean,
   assertNumber,
   assertRecord,
   assertString,
   isTauri,
-  TauriCommandName
+  TauriCommandName,
+  invokeTauri
 } from './core';
 import { emit, TauriEventName } from './events';
 import { browserStorageEnabled } from '../browser/commands';
@@ -141,7 +141,7 @@ export async function pickImportFolder(): Promise<string | null> {
     return name;
   }
   return parseNullableString(
-    await tauriInvoke<unknown>(TauriCommandName.NotesImportPickFolder)
+    await invokeTauri<unknown>(TauriCommandName.NotesImportPickFolder)
   );
 }
 
@@ -161,7 +161,7 @@ export async function pickImportFile(): Promise<string | null> {
     return file.name;
   }
   return parseNullableString(
-    await tauriInvoke<unknown>(TauriCommandName.NotesImportPickFile)
+    await invokeTauri<unknown>(TauriCommandName.NotesImportPickFile)
   );
 }
 
@@ -174,7 +174,7 @@ export async function detectImportSource(
     return parseDetected(await detectBrowserNotes(picked));
   }
   return parseDetected(
-    await tauriInvoke<unknown>(TauriCommandName.NotesImportDetect, { path })
+    await invokeTauri<unknown>(TauriCommandName.NotesImportDetect, { path })
   );
 }
 
@@ -183,7 +183,7 @@ export async function runImport(
 ): Promise<ImportReport | null> {
   if (!isTauri()) return picked ? runBrowserImport(picked, options) : null;
   return parseReport(
-    await tauriInvoke<unknown>(TauriCommandName.NotesImportRun, { options })
+    await invokeTauri<unknown>(TauriCommandName.NotesImportRun, { options })
   );
 }
 
@@ -229,14 +229,14 @@ export async function cancelImport(): Promise<void> {
     cancelBrowserNotesImport();
     return;
   }
-  await tauriInvoke<unknown>(TauriCommandName.NotesImportCancel);
+  await invokeTauri<unknown>(TauriCommandName.NotesImportCancel);
 }
 
 /** How many notes still contain a `[[…]]` span. `0` outside Tauri. */
 export async function legacyWikilinkCount(): Promise<number> {
   if (!isTauri()) return 0;
   return assertNumber(
-    await tauriInvoke<unknown>(TauriCommandName.LegacyWikilinkCount),
+    await invokeTauri<unknown>(TauriCommandName.LegacyWikilinkCount),
     'legacy_wikilink_count response'
   );
 }
@@ -249,7 +249,7 @@ export async function legacyWikilinkCount(): Promise<number> {
 export async function convertLegacyWikilinks(): Promise<LegacyLinkReport | null> {
   if (!isTauri()) return null;
   const raw = assertRecord(
-    await tauriInvoke<unknown>(TauriCommandName.ConvertLegacyWikilinks),
+    await invokeTauri<unknown>(TauriCommandName.ConvertLegacyWikilinks),
     'legacy link report'
   );
   return {

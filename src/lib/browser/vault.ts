@@ -16,6 +16,11 @@ import {
   type StorageError
 } from './protocol';
 import { tUi } from '$lib/settings/i18n.svelte';
+import { commandWrites } from '$lib/storage/command-access';
+import {
+  markVaultLost,
+  requireVaultAccess
+} from '$lib/storage/vault-access.svelte';
 
 // The healthy connection, if any. Set only after a successful open so a failed
 // attempt never leaves a dead client cached.
@@ -118,6 +123,9 @@ function connect(): Promise<BrowserStorageClient> {
   // A client whose worker was terminated is replaced here, on the next call,
   // rather than being retried inside the failed call.
   if (client && !client.isClosed) return Promise.resolve(client);
+  // The worker stopped: whatever this window loaded may be stale, and the
+  // lock may now belong to another tab. Writes wait for a fresh load.
+  if (client?.isClosed) markVaultLost();
   opening ??= openVault().finally(() => {
     opening = undefined;
   });
@@ -143,11 +151,13 @@ export async function backupBrowserVault(): Promise<BrowserBackup> {
 }
 
 export async function stageBrowserBackup(archive: Blob): Promise<unknown> {
+  await requireVaultAccess('staging a backup');
   const connection = await connect();
   return connection.request('importBegin', { archive }, BACKUP_TIMEOUT_MS);
 }
 
 export async function mergeBrowserBackup(token: string): Promise<unknown> {
+  await requireVaultAccess('merging a backup');
   const connection = await connect();
   return connection.request('importMerge', { token }, BACKUP_TIMEOUT_MS);
 }
@@ -157,6 +167,7 @@ export async function restoreBrowserBackup(
   token: string,
   sameAccount: boolean
 ): Promise<boolean> {
+  await requireVaultAccess('restoring a backup');
   const connection = await connect();
   return connection.request(
     'importRestore',
@@ -166,6 +177,7 @@ export async function restoreBrowserBackup(
 }
 
 export async function discardBrowserBackup(token: string): Promise<void> {
+  await requireVaultAccess('discarding a staged backup');
   const connection = await connect();
   await connection.request('importCleanup', { token });
 }
@@ -186,6 +198,7 @@ export async function importBrowserNotes(
   notesImportAttempts.add(attempt);
   let connection: BrowserStorageClient | undefined;
   try {
+    await requireVaultAccess('importing notes');
     connection = await connect();
     if (attempt.cancelled) throw { code: 'closed' };
     connection.onProgress = onProgress;
@@ -213,6 +226,10 @@ export async function invokeBrowser(
   command: BrowserCommand,
   args: Record<string, unknown> = {}
 ): Promise<unknown> {
+  // `insert_demo_notes` is browser-only, so it has no entry in the shared
+  // command table.
+  if (command === 'insert_demo_notes' || commandWrites(command))
+    await requireVaultAccess(command);
   const connection = await connect();
   // The IPC adapter retains its existing validators. Rust deserializes this
   // request into VaultRequest before any query or mutation can execute.

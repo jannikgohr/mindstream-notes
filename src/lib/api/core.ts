@@ -1,5 +1,7 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { browserStorageEnabled, isBrowserCommand } from '../browser/commands';
+import { commandWrites } from '../storage/command-access';
+import { requireVaultAccess } from '../storage/vault-access.svelte';
 
 export enum CommandErrorCode {
   Database = 'database',
@@ -225,6 +227,19 @@ export function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
+/**
+ * Call a Tauri command. A command that writes storage waits for the vault
+ * access gate first (see `storage/command-access.ts`). Every Tauri call in the
+ * app goes through here; ESLint rejects importing `invoke` anywhere else.
+ */
+export async function invokeTauri<T>(
+  command: TauriCommandName,
+  args?: Parameters<typeof tauriInvoke>[1]
+): Promise<T> {
+  if (commandWrites(command)) await requireVaultAccess(command);
+  return tauriInvoke<T>(command, args);
+}
+
 export async function invokeOrFallback<T>(
   command: TauriCommandName,
   args: Record<string, unknown> | undefined,
@@ -233,12 +248,15 @@ export async function invokeOrFallback<T>(
 ): Promise<T> {
   if (!isTauri()) {
     if (browserStorageEnabled() && isBrowserCommand(command)) {
+      // The browser vault applies the write gate itself, for callers that
+      // reach it directly too.
       const { invokeBrowser } = await import('../browser/vault');
       return validate(await invokeBrowser(command, args));
     }
+    if (commandWrites(command)) await requireVaultAccess(command);
     return await fallback();
   }
-  return validate(await tauriInvoke<unknown>(command, args));
+  return validate(await invokeTauri<unknown>(command, args));
 }
 
 export function assertRecord(

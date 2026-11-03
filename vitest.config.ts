@@ -50,6 +50,7 @@ export default defineConfig({
     // generated project, not here.
     exclude: ['**/node_modules/**', 'plugin-sdk/typescript/templates/**'],
     globals: false,
+    setupFiles: ['./.config/vitest/vault-access-setup.ts'],
     coverage: {
       provider: 'v8',
       // text for the local terminal summary, json-summary + lcov for CI

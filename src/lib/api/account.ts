@@ -9,7 +9,6 @@
  * `$lib/account/refusal` turns the reason into a sentence.
  */
 
-import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { flushPendingEditorSaves } from '$lib/editor/suspend-flush';
 import { assertRequiredString } from '$lib/validation';
 import type { ServerType, SessionInfo } from './auth.svelte';
@@ -21,7 +20,8 @@ import {
   assertStringArray,
   assertVoid,
   TauriCommandName,
-  isTauri
+  isTauri,
+  invokeTauri
 } from './core';
 
 /** Who may create an account on a server. */
@@ -125,7 +125,7 @@ export async function accountServerInfo(
   requireApp();
   const args = targetArgs(target);
   return parseServerInfo(
-    await tauriInvoke<unknown>(TauriCommandName.AccountServerInfo, {
+    await invokeTauri<unknown>(TauriCommandName.AccountServerInfo, {
       serverType: args.server_type,
       serverUrl: args.server_url
     })
@@ -138,7 +138,7 @@ export async function accountSignup(input: SignupInput): Promise<NewAccount> {
   assertRequiredString(input.password, 'input.password');
   await flushPendingEditorSaves();
   return parseNewAccount(
-    await tauriInvoke<unknown>(TauriCommandName.AccountSignup, {
+    await invokeTauri<unknown>(TauriCommandName.AccountSignup, {
       args: {
         ...targetArgs(input),
         username: input.username,
@@ -158,7 +158,7 @@ export async function accountRecover(input: RecoverInput): Promise<NewAccount> {
   assertRequiredString(input.newPassword, 'input.newPassword');
   await flushPendingEditorSaves();
   return parseNewAccount(
-    await tauriInvoke<unknown>(TauriCommandName.AccountRecover, {
+    await invokeTauri<unknown>(TauriCommandName.AccountRecover, {
       args: {
         ...targetArgs(input),
         username: input.username,
@@ -173,7 +173,7 @@ export async function accountRecover(input: RecoverInput): Promise<NewAccount> {
 export async function accountSecurityStatus(): Promise<SecurityOverview> {
   requireApp();
   return parseSecurityOverview(
-    await tauriInvoke<unknown>(TauriCommandName.AccountSecurityStatus)
+    await invokeTauri<unknown>(TauriCommandName.AccountSecurityStatus)
   );
 }
 
@@ -184,7 +184,7 @@ export async function accountBeginAuthenticator(
   requireApp();
   assertRequiredString(password, 'password');
   return parseAuthenticatorSetup(
-    await tauriInvoke<unknown>(TauriCommandName.AccountBeginAuthenticator, {
+    await invokeTauri<unknown>(TauriCommandName.AccountBeginAuthenticator, {
       password,
       code: orNull(code)
     })
@@ -198,7 +198,7 @@ export async function accountConfirmAuthenticator(
   requireApp();
   assertRequiredString(code, 'code');
   return assertStringArray(
-    await tauriInvoke<unknown>(TauriCommandName.AccountConfirmAuthenticator, {
+    await invokeTauri<unknown>(TauriCommandName.AccountConfirmAuthenticator, {
       code
     }),
     'backup codes'
@@ -213,7 +213,7 @@ export async function accountRemoveAuthenticator(
   assertRequiredString(password, 'password');
   assertRequiredString(code, 'code');
   assertVoid(
-    await tauriInvoke<unknown>(TauriCommandName.AccountRemoveAuthenticator, {
+    await invokeTauri<unknown>(TauriCommandName.AccountRemoveAuthenticator, {
       password,
       code
     }),
@@ -229,7 +229,7 @@ export async function accountNewBackupCodes(
   assertRequiredString(password, 'password');
   assertRequiredString(code, 'code');
   return assertStringArray(
-    await tauriInvoke<unknown>(TauriCommandName.AccountNewBackupCodes, {
+    await invokeTauri<unknown>(TauriCommandName.AccountNewBackupCodes, {
       password,
       code
     }),
@@ -245,7 +245,7 @@ export async function accountNewRecoveryKey(
   requireApp();
   assertRequiredString(password, 'password');
   return assertString(
-    await tauriInvoke<unknown>(TauriCommandName.AccountNewRecoveryKey, {
+    await invokeTauri<unknown>(TauriCommandName.AccountNewRecoveryKey, {
       password,
       code: orNull(code)
     }),
@@ -260,7 +260,7 @@ export async function accountChangePassword(
   requireApp();
   assertRequiredString(newPassword, 'newPassword');
   assertVoid(
-    await tauriInvoke<unknown>(TauriCommandName.AccountChangePassword, {
+    await invokeTauri<unknown>(TauriCommandName.AccountChangePassword, {
       newPassword,
       code: orNull(code)
     }),
@@ -288,7 +288,7 @@ export async function accountSaveSecretFile(
   requireApp();
   assertRequiredString(file.contents, 'file.contents');
   return assertBoolean(
-    await tauriInvoke<unknown>(TauriCommandName.AccountSaveSecretFile, {
+    await invokeTauri<unknown>(TauriCommandName.AccountSaveSecretFile, {
       input: {
         title: file.title,
         kind: file.kind,
@@ -302,7 +302,7 @@ export async function accountSaveSecretFile(
 
 export async function accountSessions(): Promise<DeviceSession[]> {
   requireApp();
-  const value = await tauriInvoke<unknown>(TauriCommandName.AccountSessions);
+  const value = await invokeTauri<unknown>(TauriCommandName.AccountSessions);
   if (!Array.isArray(value)) throw new Error('devices must be an array');
   return value.map(parseDeviceSession);
 }
@@ -310,7 +310,7 @@ export async function accountSessions(): Promise<DeviceSession[]> {
 export async function accountEndSession(id: number): Promise<void> {
   requireApp();
   assertVoid(
-    await tauriInvoke<unknown>(TauriCommandName.AccountEndSession, { id }),
+    await invokeTauri<unknown>(TauriCommandName.AccountEndSession, { id }),
     'account_end_session response'
   );
 }
@@ -318,7 +318,7 @@ export async function accountEndSession(id: number): Promise<void> {
 export async function accountEndOtherSessions(): Promise<void> {
   requireApp();
   assertVoid(
-    await tauriInvoke<unknown>(TauriCommandName.AccountEndOtherSessions),
+    await invokeTauri<unknown>(TauriCommandName.AccountEndOtherSessions),
     'account_end_other_sessions response'
   );
 }
