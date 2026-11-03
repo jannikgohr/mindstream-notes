@@ -31,6 +31,15 @@ describe('file export save bridge', () => {
     });
   });
 
+  it('never builds the native byte array in a browser', async () => {
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:test');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const from = vi.spyOn(Array, 'from');
+    await saveFileExport(input);
+    expect(from).not.toHaveBeenCalledWith(input.bytes);
+  });
+
   it('downloads with the requested MIME type and filename in a browser', async () => {
     const create = vi
       .spyOn(URL, 'createObjectURL')

@@ -17,21 +17,7 @@ const MAX_JSON: u64 = 4 * 1024 * 1024;
 const MAX_TOTAL: u64 = 16 * 1024 * 1024 * 1024;
 type Values = BTreeMap<String, serde_json::Value>;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Index {
-    pub files: Vec<Entry>,
-    pub directories: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Entry {
-    pub path: String,
-    pub sha256: String,
-    pub size: u64,
-    pub mode: u32,
-}
+pub use mindstream_storage_core::backup::{PortableEntry as Entry, PortableIndex as Index};
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -584,40 +570,16 @@ pub(super) fn pending_index(vault: &Path, hash: &str) -> AppResult<Index> {
 /// Remove device-owned legacy rows and portable third-party execution authority.
 pub(super) fn sanitize_database(database: &Path, directory: Option<&Path>) -> AppResult<()> {
     let mut conn = Connection::open(database)?;
-    let tx = conn.transaction()?;
     let builtins: BTreeSet<_> = crate::plugins::discovery::discover_builtins()
         .into_iter()
         .map(|plugin| plugin.id)
         .collect();
-    let ids = tx
-        .prepare("SELECT id FROM plugins")?
-        .query_map([], |row| row.get::<_, String>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    tx.execute("UPDATE plugins SET source_path = NULL", [])?;
-    for id in ids {
-        if !builtins.contains(&id) {
-            tx.execute(
-                "UPDATE plugins SET enabled = 0, accepted_hash = '', signer = NULL WHERE id = ?1",
-                [&id],
-            )?;
-            tx.execute(
-                "DELETE FROM plugin_installations WHERE plugin_id = ?1",
-                [&id],
-            )?;
-        }
-    }
-    if let Some(directory) = directory {
-        let payload = read_payload(directory)?;
-        for (id, keys) in payload.device_plugin_keys {
-            for key in keys {
-                tx.execute(
-                    "DELETE FROM plugin_settings WHERE plugin_id = ?1 AND key = ?2",
-                    params![id, key],
-                )?;
-            }
-        }
-    }
-    tx.commit()?;
+    let device_keys = directory
+        .map(read_payload)
+        .transpose()?
+        .map(|payload| payload.device_plugin_keys)
+        .unwrap_or_default();
+    sanitize_snapshot(&mut conn, &builtins, &device_keys)?;
     Ok(())
 }
 

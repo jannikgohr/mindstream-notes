@@ -37,6 +37,26 @@ function toolbarTemplateButton(page: Page): Locator {
   return fileTreeCreateAction(page, NEW_FROM_TEMPLATE);
 }
 
+function treeItem(page: Page, name: string): Locator {
+  return page
+    .getByRole('group', { name: 'File tree' })
+    .getByRole('button', { name, exact: true });
+}
+
+/** Rename a tree note through its context menu. */
+async function renameNote(page: Page, from: string, to: string) {
+  await treeItem(page, from).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: /^Rename/ }).click();
+  // The inline field has no label of its own; it opens holding the title.
+  const input = page
+    .getByRole('group', { name: 'File tree' })
+    .locator('input:focus');
+  await expect(input).toHaveValue(from);
+  await input.fill(to);
+  await input.press('Enter');
+  await expect(treeItem(page, to)).toBeVisible();
+}
+
 /** Open Settings and land on the Plugins category (its overview heading). */
 async function openPluginsCategory(page: Page): Promise<Locator> {
   await page.getByRole('button', { name: 'Open settings' }).click();
@@ -120,5 +140,67 @@ test.describe('plugin framework — bundled Templates plugin', () => {
     await dialog2.getByRole('button', { name: 'Close' }).click();
     await openFileTreeCreateMore(page);
     await expect(templateButton).toBeVisible();
+  });
+
+  // The app runs the plugin's WebAssembly component in its backend; the
+  // browser runs the TypeScript port in src/lib/plugins/browser-templates.ts.
+  test('the folder menu lists template notes and creates a rendered copy', async ({
+    page
+  }) => {
+    await boot(page);
+    await treeItem(page, 'Personal').click();
+    await renameNote(page, 'Ideas', 'Log {{date:YYYY}}');
+    await setTemplateFolder(page);
+
+    await treeItem(page, 'Work').click({ button: 'right' });
+    const fromTemplate = page.getByRole('menuitem', {
+      name: NEW_FROM_TEMPLATE,
+      exact: true
+    });
+    await expect(fromTemplate).toHaveAttribute('aria-haspopup', 'menu');
+    await fromTemplate.click();
+    await page
+      .getByRole('menu')
+      .getByRole('menu')
+      .getByRole('menuitem', { name: 'Log {{date:YYYY}}', exact: true })
+      .click();
+
+    // The copy opens with its title rendered and the template's body.
+    const created = `Log ${new Date().getFullYear()}`;
+    await expect(
+      page.getByRole('tab', { name: created, exact: true })
+    ).toHaveAttribute('aria-selected', 'true');
+    await expect(
+      page.getByRole('tabpanel', { name: created }).getByText('Backlinks panel')
+    ).toBeVisible();
+  });
+
+  test('the toolbar action opens the template menu and creates a note', async ({
+    page
+  }) => {
+    await boot(page);
+    await treeItem(page, 'Personal').click();
+    await setTemplateFolder(page);
+    await openFileTreeCreateMore(page);
+    await toolbarTemplateButton(page).click();
+    await page.getByRole('menuitem', { name: 'Ideas', exact: true }).click();
+    await expect(treeItem(page, 'Ideas')).toHaveCount(2);
+  });
+
+  test('template sources survive a reload', async ({ page }) => {
+    await boot(page);
+    await setTemplateFolder(page);
+    // The settings store writes localStorage shortly after a change.
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          localStorage.getItem('notes-app:settings:v1:vault:default')
+        )
+      )
+      .toContain('source-folder');
+    await page.reload();
+    await expect(treeItem(page, 'Welcome')).toBeVisible();
+    await openFileTreeCreateMore(page);
+    await expect(toolbarTemplateButton(page)).toBeVisible();
   });
 });

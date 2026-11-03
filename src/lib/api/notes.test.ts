@@ -158,6 +158,19 @@ describe('notes api (Tauri parse path)', () => {
     await expect(listNotes()).rejects.toThrow(/must be an array/);
   });
 
+  it('saveNote sends a recovery token only when it has one', async () => {
+    invoke.mockResolvedValue(NOTE);
+    await saveNote({ id: 'n1', title: 'Note' }, 'write-token');
+    expect(invoke).toHaveBeenLastCalledWith('save_note', {
+      input: { id: 'n1', title: 'Note' },
+      recoveryToken: 'write-token'
+    });
+    await saveNote({ id: 'n1', title: 'Note' });
+    expect(invoke).toHaveBeenLastCalledWith('save_note', {
+      input: { id: 'n1', title: 'Note' }
+    });
+  });
+
   it('parseNoteSummary rejects an unsupported note kind', async () => {
     invoke.mockResolvedValue({ ...NOTE, note_kind: 'bogus' });
     await expect(loadNote('n1')).rejects.toThrow(/not a supported note kind/);

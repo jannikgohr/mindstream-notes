@@ -119,11 +119,12 @@ export function drawingSetControlBounds(bounds: number[]): Promise<void> {
  */
 export function drawingSaveInkState(
   noteId: string,
-  yrsState: number[]
+  yrsState: number[],
+  recoveryToken?: string
 ): Promise<void> {
   return invokeOrFallback<void>(
     TauriCommandName.DrawingSaveInkState,
-    { noteId, yrsState },
+    { noteId, yrsState, ...(recoveryToken ? { recoveryToken } : {}) },
     async () => {
       const Y = await import('yjs');
       const note = await mockApi.loadNote(noteId);

@@ -24,6 +24,7 @@ fn fixture() -> (tauri::App<MockRuntime>, tauri::WebviewWindow<MockRuntime>) {
             mindstream_notes_lib::pdf_text::set_pdf_text,
             mindstream_notes_lib::pdf_text::pdf_notes_missing_text,
             mindstream_notes_lib::pdf_text::pdf_note_needs_text,
+            mindstream_notes_lib::search::search_notes,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -319,6 +320,32 @@ fn text_cache_commands_persist_empty_pages_separately_and_reject_old_extraction_
     )
     .unwrap();
     assert!(!needs());
+}
+
+#[test]
+fn search_command_finds_indexed_text_and_answers_a_blank_query_with_nothing() {
+    let (_app, view) = fixture();
+    let note = imported(&view, false);
+    call(
+        &view,
+        "set_pdf_text",
+        InvokeBody::Json(json!({"noteId": note.summary.id, "text": "searchable kiwi"})),
+    )
+    .unwrap();
+    let search = |query: &str| {
+        call(
+            &view,
+            "search_notes",
+            InvokeBody::Json(json!({ "query": query })),
+        )
+        .unwrap()
+        .deserialize::<Vec<Value>>()
+        .unwrap()
+    };
+    assert!(search("  ").is_empty());
+    let hits = search("kiwi");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0]["note"]["id"], json!(note.summary.id));
 }
 
 #[test]

@@ -36,6 +36,7 @@
   import { themeCatalog } from '$lib/settings/theme.svelte';
   import { BUILTIN_PRESET_NAMES } from '$lib/settings/theme-presets';
   import { authSession } from '$lib/api/auth.svelte';
+  import { isTauri } from '$lib/api/core';
   import {
     ONBOARDING_STEPS,
     finishOnboarding,
@@ -68,7 +69,7 @@
   const stepIndex = $derived(ONBOARDING_STEPS.indexOf(step));
   const signedIn = $derived(!!authSession.current);
   const local = $derived(
-    getSettingValue('account.serverType') === 'local-only'
+    !isTauri() || getSettingValue('account.serverType') === 'local-only'
   );
   const chosenContent = $derived(
     content ??
@@ -254,9 +255,16 @@
             <button
               type="button"
               class="choice"
-              class:selected={getSettingValue('account.serverType') === target}
-              aria-pressed={getSettingValue('account.serverType') === target}
-              disabled={busy || signedIn || target === 'managed'}
+              class:selected={local
+                ? target === 'local-only'
+                : getSettingValue('account.serverType') === target}
+              aria-pressed={local
+                ? target === 'local-only'
+                : getSettingValue('account.serverType') === target}
+              disabled={busy ||
+                signedIn ||
+                target === 'managed' ||
+                (!isTauri() && target !== 'local-only')}
               onclick={() => write('account.serverType', target)}
             >
               <Icon
@@ -280,14 +288,16 @@
             </button>
           {/each}
         </div>
-        {#if !local || signedIn}
+        {#if isTauri() && (!local || signedIn)}
           <div class="mt-5"><SignInForm /></div>
         {/if}
         <p class="mt-5 text-sm text-muted-foreground">
           {tUi(
-            local
-              ? 'onboarding.account.localHint'
-              : 'onboarding.account.remoteHint'
+            !isTauri()
+              ? 'account.browserUnavailable'
+              : local
+                ? 'onboarding.account.localHint'
+                : 'onboarding.account.remoteHint'
           )}
         </p>
       {:else if step === 'appearance'}

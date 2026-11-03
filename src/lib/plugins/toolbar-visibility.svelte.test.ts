@@ -9,18 +9,20 @@ import {
   setPluginEnabled,
   unregisterPlugin
 } from './registry.svelte';
+import { resetSettingValue, setSettingValue } from '$lib/settings/store.svelte';
 import {
-  pluginSettingId,
-  resetPluginSettingsCache,
-  setPluginSettingValue
-} from './settings-store.svelte';
+  installPluginSettingsBridge,
+  uninstallPluginSettingsBridge
+} from './settings-bridge';
+import { pluginSettingId } from './settings-store.svelte';
 import { visiblePluginToolbarButtons } from './toolbar-visibility.svelte';
 import { validateManifest } from './validation';
 
 const id = manifest.id;
 const visible = () => visiblePluginToolbarButtons('file-tree').length;
+// Outside the app the core store keeps plugin settings, as in the browser.
 const set = (key: string, value: unknown) =>
-  setPluginSettingValue(pluginSettingId(id, key), value);
+  setSettingValue(pluginSettingId(id, key), value);
 function note(overrides: Partial<NoteSummary> = {}): NoteSummary {
   return {
     id: 'n',
@@ -50,16 +52,19 @@ function folder(id: string, parent: string | null = null): Collection {
 
 beforeEach(() => {
   resetPluginRegistry();
-  resetPluginSettingsCache();
+  installPluginSettingsBridge();
   registerPlugin(manifest);
   tree.notesById = {};
   tree.collectionsById = {};
   tree.ready = true;
   tree.error = null;
 });
-afterEach(() => {
+afterEach(async () => {
+  registerPlugin(manifest);
+  await resetSettingValue(pluginSettingId(id, 'source-folder'));
+  await resetSettingValue(pluginSettingId(id, 'source-tag'));
+  uninstallPluginSettingsBridge();
   resetPluginRegistry();
-  resetPluginSettingsCache();
   tree.notesById = {};
   tree.collectionsById = {};
   tree.ready = false;

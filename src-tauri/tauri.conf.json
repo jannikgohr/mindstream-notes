@@ -4,7 +4,7 @@
   "version": "0.2.0",
   "identifier": "com.jannikgohr.mindstream-notes",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm dev:native",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm build",
     "frontendDist": "../.output/build"

@@ -27,38 +27,6 @@ use super::*;
 pub(super) const SENTINEL_FILE: &str = "pending-restore.flag";
 pub(super) const PENDING_DB_FILE: &str = "pending-restore.db";
 
-/// Preview shown in the import-choice dialog so the user knows what
-/// they're about to apply. Counts come from the staged DB *after*
-/// migrations, so they reflect the schema the import would actually
-/// land at.
-#[derive(Debug, Clone, Serialize)]
-pub struct ImportPreview {
-    /// Staging directory name (a UUID). Pass back into `import_restore`,
-    /// `import_merge`, or `import_cleanup` to reference this attempt.
-    pub token: String,
-    pub backup_counts: Counts,
-    pub current_counts: Counts,
-    pub backup_app_version: String,
-    pub backup_created_at: String,
-    /// True if the backup's account UIDs match the current DB's
-    /// sync_state. False means import would sanitize sync metadata on
-    /// restore (and merge always sanitizes regardless).
-    pub same_account: bool,
-    /// Friendly identifiers for the dialog copy — both optional;
-    /// `None` for the relevant side means "local-only" there.
-    pub backup_account: Option<AccountDisplay>,
-    pub current_account: Option<AccountDisplay>,
-    pub portable: bool,
-    pub plugin_packages: u32,
-    pub plugin_data_bytes: u64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct AccountDisplay {
-    pub username: Option<String>,
-    pub server_url: Option<String>,
-}
-
 /// Pop the open dialog, extract+validate the picked zip, and return a
 /// preview. `None` means the user cancelled the dialog.
 #[tauri::command]
@@ -141,83 +109,12 @@ pub(super) fn stage_import_at(
         )));
     }
 
-    // Refuse future schemas, migrate older ones forward. This needs to
-    // happen *before* we read counts so the staged DB's table shapes
-    // match what import_restore / import_merge will encounter.
     let mut staged = Connection::open(&staged_db)?;
-    let staged_version: u32 = staged.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    let live_version: u32 = live_conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if staged_version > live_version {
-        let _ = fs::remove_dir_all(&dir);
-        return Err(AppError::InvalidArg(format!(
-            "backup uses schema v{} but this app understands at most v{} — update the app and try again",
-            staged_version, live_version,
-        )));
-    }
-    validate_looks_like_mindstream_db(&staged)?;
-    migrations::run(&mut staged)?;
-
-    let backup_counts = read_counts(&staged)?;
-    let backup_identity = read_account_identity(&staged, None)?;
-    let current_identity = read_account_identity(live_conn, session)?;
-    let current_counts = read_counts(live_conn)?;
-    let same_account = match (&backup_identity, &current_identity) {
-        (Some(b), Some(c)) => {
-            b.etebase_collection_uid_notes == c.etebase_collection_uid_notes
-                && b.etebase_collection_uid_folders == c.etebase_collection_uid_folders
-        }
-        _ => false,
-    };
-
-    // The friendly identifiers come from the *manifest* for the backup
-    // side (the staged sync_state has the UIDs but not the user-facing
-    // username / server URL — those were captured at export time).
-    let backup_account = manifest.account.as_ref().map(|a| AccountDisplay {
-        username: a.username.clone(),
-        server_url: a.server_url.clone(),
-    });
-    let current_account = current_identity.as_ref().map(|c| AccountDisplay {
-        username: c.username.clone(),
-        server_url: c.server_url.clone(),
-    });
-
-    Ok(ImportPreview {
-        token,
-        backup_counts,
-        current_counts,
-        backup_app_version: manifest.app_version,
-        backup_created_at: manifest.created_at,
-        same_account,
-        backup_account,
-        current_account,
-        portable: manifest.portable.is_some(),
-        plugin_packages: manifest
-            .portable
-            .as_ref()
-            .map(|index| {
-                index
-                    .directories
-                    .iter()
-                    .filter(|path| {
-                        path.starts_with("portable/packages/") && path.split('/').count() == 3
-                    })
-                    .count() as u32
-            })
-            .unwrap_or(0),
-        plugin_data_bytes: manifest
-            .portable
-            .as_ref()
-            .map(|index| {
-                index
-                    .files
-                    .iter()
-                    .filter(|entry| entry.path.starts_with("portable/plugin-data/"))
-                    .map(|entry| entry.size)
-                    .sum()
-            })
-            .unwrap_or(0),
-    })
-    .inspect(|_| cleanup.keep())
+    prepare_staged(&mut staged, live_conn)?;
+    let current_identity = session_identity(live_conn, session)?;
+    preview_import(token, manifest, &staged, live_conn, current_identity)
+        .map_err(AppError::from)
+        .inspect(|_| cleanup.keep())
 }
 
 pub(super) fn extract_zip_into(
@@ -242,32 +139,10 @@ pub(super) fn extract_zip_into(
             .map_err(|e| AppError::InvalidArg(format!("manifest parse: {e}")))?
     };
 
-    if manifest.format_version == 0 || manifest.format_version > MANIFEST_FORMAT_VERSION {
-        return Err(AppError::InvalidArg("unsupported backup format".into()));
-    }
-    if manifest.contents.db_filename != DB_ENTRY_NAME {
-        return Err(AppError::InvalidArg("invalid database entry name".into()));
-    }
-    let mut names = std::collections::BTreeSet::new();
-    for i in 0..archive.len() {
-        let entry = archive.by_index(i).map_err(zip_to_app)?;
-        if !names.insert(entry.name().to_lowercase()) {
-            return Err(AppError::InvalidArg("duplicate backup entry".into()));
-        }
-    }
-    if manifest.format_version == 2 {
-        let index = manifest
-            .portable
-            .as_ref()
-            .ok_or_else(|| AppError::InvalidArg("backup resources missing".into()))?;
-        if archive.len() != index.files.len() + 2 || manifest.data_db_sha256.is_none() {
-            return Err(AppError::InvalidArg("incomplete backup".into()));
-        }
-    } else if manifest.portable.is_some() {
-        return Err(AppError::InvalidArg(
-            "legacy backup has unsupported resources".into(),
-        ));
-    }
+    let entries = (0..archive.len())
+        .map(|i| Ok(archive.by_index(i).map_err(zip_to_app)?.name().to_string()))
+        .collect::<AppResult<Vec<_>>>()?;
+    check_manifest(&manifest, &entries)?;
 
     let db_name = manifest.contents.db_filename.clone();
     let mut entry = archive.by_name(&db_name).map_err(|_| {
@@ -300,28 +175,6 @@ pub(super) fn extract_zip_into(
         &serde_json::to_vec(&manifest).map_err(|e| AppError::InvalidArg(e.to_string()))?,
     )?;
     Ok(manifest)
-}
-
-pub(super) fn validate_looks_like_mindstream_db(conn: &Connection) -> AppResult<()> {
-    // Cheap structural check — confirms the file is a SQLite DB and
-    // has the tables we touch downstream. Real corruption would
-    // surface during PRAGMA integrity_check, but that's O(file size)
-    // and overkill for the "is this even our format?" question.
-    for table in ["notes", "collections", "sync_state", "tombstones"] {
-        let found: Option<i64> = conn
-            .query_row(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
-                params![table],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if found.is_none() {
-            return Err(AppError::InvalidArg(format!(
-                "backup is missing the '{table}' table — file may not be a Mindstream Notes backup"
-            )));
-        }
-    }
-    Ok(())
 }
 
 /// Drop the staging dir for the given token. Called when the user

@@ -98,17 +98,21 @@ export function showDataResult(opts: DataResultOptions): Promise<string> {
 
 export function showExportResult(
   report: ExportReport,
-  destination: string
+  destination: string | null
 ): Promise<string> {
   return showDataResult({
     titleKey: 'data.exportVault.success.title',
     headerIcon: 'partyPopper',
     tone: 'success',
-    location: {
-      labelKey: 'data.exportVault.savedTo',
-      actionLabelKey: 'data.exportVault.openLocation',
-      path: destination
-    },
+    // A browser download has no folder this app could name or open.
+    location:
+      destination === null
+        ? undefined
+        : {
+            labelKey: 'data.exportVault.savedTo',
+            actionLabelKey: 'data.exportVault.openLocation',
+            path: destination
+          },
     primaryAction: {
       labelKey: 'data.exportVault.close',
       value: 'close'
@@ -195,12 +199,15 @@ export function showBackupResult(report: BackupReport): Promise<string> {
     titleKey: 'data.backupNow.success.title',
     headerIcon: 'archive',
     tone: 'success',
-    location: {
-      labelKey: 'data.backupNow.savedTo',
-      actionLabelKey: 'data.backupNow.openLocation',
-      path: report.destination,
-      openPath: parentPath(report.destination)
-    },
+    location:
+      report.destination === null
+        ? undefined
+        : {
+            labelKey: 'data.backupNow.savedTo',
+            actionLabelKey: 'data.backupNow.openLocation',
+            path: report.destination,
+            openPath: parentPath(report.destination)
+          },
     primaryAction: {
       labelKey: 'data.backupNow.close',
       value: 'close'

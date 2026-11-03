@@ -24,9 +24,7 @@
 //! carry guids resolve exactly.
 
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{BufReader, Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::io::BufReader;
 
 use md5::{Digest, Md5};
 use quick_xml::escape::unescape;
@@ -34,6 +32,7 @@ use quick_xml::events::Event;
 use quick_xml::Reader;
 
 use crate::error::{AppError, AppResult};
+use crate::import::files::ImportFiles;
 use crate::import::links::{self, RewriteOptions};
 use crate::import::model::{AliasTier, AttachmentRef, ItemIndex, SourceIndex, StagedNote};
 use crate::import::source::{ImportSource, LoadedItem};
@@ -65,7 +64,9 @@ struct NoteIndexEntry {
 }
 
 pub struct EvernoteSource {
-    path: PathBuf,
+    files: Box<dyn ImportFiles>,
+    /// The export's name inside `files`.
+    file_name: String,
     ranges: Vec<NoteIndexEntry>,
     /// Resource bytes for the note currently being loaded, keyed by the MD5 of
     /// the bytes — which is how `<en-media hash>` addresses them.
@@ -78,9 +79,10 @@ pub struct EvernoteSource {
 }
 
 impl EvernoteSource {
-    pub fn new(path: PathBuf) -> Self {
+    pub fn new(files: Box<dyn ImportFiles>, file_name: String) -> Self {
         Self {
-            path,
+            files,
+            file_name,
             ranges: Vec::new(),
             current_resources: HashMap::new(),
         }
@@ -92,19 +94,27 @@ impl EvernoteSource {
             .ranges
             .get(index)
             .ok_or_else(|| AppError::InvalidArg(format!("no note at index {index}")))?;
-        let mut file = File::open(&self.path)
-            .map_err(|err| AppError::InvalidArg(format!("{}: {err}", self.path.display())))?;
-        file.seek(SeekFrom::Start(entry.start))?;
-        let mut buffer = vec![0u8; (entry.end - entry.start) as usize];
-        file.read_exact(&mut buffer)?;
+        let length = (entry.end - entry.start) as usize;
+        let buffer = self
+            .files
+            .read_range(&self.file_name, entry.start, length)
+            .map_err(|err| AppError::InvalidArg(format!("{}: {err}", self.file_name)))?;
+        if buffer.len() != length {
+            return Err(AppError::InvalidArg(format!(
+                "{} changed during the import",
+                self.file_name
+            )));
+        }
         Ok(String::from_utf8_lossy(&buffer).into_owned())
     }
 }
 
 impl ImportSource for EvernoteSource {
     fn index(&mut self) -> AppResult<SourceIndex> {
-        let file = File::open(&self.path)
-            .map_err(|err| AppError::InvalidArg(format!("{}: {err}", self.path.display())))?;
+        let file = self
+            .files
+            .stream(&self.file_name)
+            .map_err(|err| AppError::InvalidArg(format!("{}: {err}", self.file_name)))?;
         let mut reader = Reader::from_reader(BufReader::new(file));
         reader.config_mut().trim_text(false);
 
@@ -172,7 +182,7 @@ impl ImportSource for EvernoteSource {
                 Err(err) => {
                     return Err(AppError::InvalidArg(format!(
                         "{} is not a readable .enex file: {err}",
-                        self.path.display()
+                        self.file_name
                     )))
                 }
                 _ => {}
@@ -510,11 +520,4 @@ fn normalize_enex_time(raw: Option<&str>) -> Option<String> {
     chrono::NaiveDateTime::parse_from_str(raw, "%Y%m%dT%H%M%SZ")
         .ok()
         .map(|naive| naive.and_utc().to_rfc3339())
-}
-
-/// Does this file look like an Evernote export?
-pub fn is_enex(path: &Path) -> bool {
-    path.extension()
-        .map(|extension| extension.to_string_lossy().eq_ignore_ascii_case("enex"))
-        .unwrap_or(false)
 }

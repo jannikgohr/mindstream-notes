@@ -214,11 +214,14 @@ export function createNote(input: CreateNoteInput): Promise<Note> {
   );
 }
 
-export function saveNote(input: UpdateNoteInput): Promise<Note> {
+export function saveNote(
+  input: UpdateNoteInput,
+  recoveryToken?: string
+): Promise<Note> {
   assertUpdateNoteInput(input);
   return invokeOrFallback<Note>(
     TauriCommandName.SaveNote,
-    { input },
+    { input, ...(recoveryToken ? { recoveryToken } : {}) },
     () => mockApi.saveNote(input),
     parseNote
   );

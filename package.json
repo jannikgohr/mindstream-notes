@@ -5,8 +5,8 @@
   "license": "MIT OR Apache-2.0",
   "type": "module",
   "scripts": {
-    "dev": "vite dev",
-    "build": "vite build",
+    "dev": "node scripts/browser/run.mjs normal dev",
+    "build": "node scripts/browser/run.mjs normal build --skip-wasm",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
@@ -48,7 +48,16 @@
     "prepare": "husky",
     "test:plugin-author": "node plugin-sdk/typescript/scripts/verify-author.mjs",
     "plugins:build": "node plugin-sdk/build-bundled.mjs",
-    "plugins:examples": "node plugin-sdk/examples/build.mjs"
+    "plugins:examples": "node plugin-sdk/examples/build.mjs",
+    "build:wasm": "node scripts/browser/build-wasm.mjs",
+    "test:sqlite": "pnpm build:wasm && node e2e-tests/browser/playwright.cjs test --config e2e-tests/sqlite/playwright.config.ts",
+    "dev:native": "node scripts/browser/run.mjs normal dev --skip-wasm",
+    "build:browser": "node scripts/browser/run.mjs normal build",
+    "dev:fixtures": "node scripts/browser/run.mjs fixtures dev",
+    "dev:qa": "node scripts/browser/run.mjs qa dev",
+    "build:fixtures": "node scripts/browser/run.mjs fixtures build",
+    "build:qa": "node scripts/browser/run.mjs qa build",
+    "test:qa": "pnpm build:wasm && node e2e-tests/browser/playwright.cjs test --config e2e-tests/qa/playwright.config.ts"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.0.1",

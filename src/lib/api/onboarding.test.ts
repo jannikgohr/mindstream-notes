@@ -3,6 +3,12 @@ import * as notes from './notes';
 import { demoNoteId } from '$lib/onboarding/demo-note-id';
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
+const browserStorage = vi.hoisted(() => ({ enabled: false, invoke: vi.fn() }));
+vi.mock('../browser/commands', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../browser/commands')>()),
+  browserStorageEnabled: () => browserStorage.enabled
+}));
+vi.mock('../browser/vault', () => ({ invokeBrowser: browserStorage.invoke }));
 import {
   getOnboarding,
   parseOnboarding,
@@ -15,6 +21,8 @@ afterEach(() => {
   localStorage.removeItem('mindstream:onboarding:v1');
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
   invoke.mockReset();
+  browserStorage.enabled = false;
+  browserStorage.invoke.mockReset();
   vi.restoreAllMocks();
 });
 
@@ -86,6 +94,40 @@ describe('browser onboarding', () => {
     await finishOnboarding(restarted.id, false, null, demos);
     expect((await notes.loadNote(finished.noteId!)).title).toBe('Renamed');
     expect(await notes.listNotes()).toHaveLength(before.length + 2);
+  });
+
+  it('puts demo notes in the browser vault and opens the first', async () => {
+    const started = await restartOnboarding();
+    const demos = [
+      {
+        slug: 'basics',
+        lang: 'en',
+        title: 'Basics',
+        body: '# Basics',
+        yrsState: [1, 2, 3]
+      }
+    ];
+    browserStorage.enabled = true;
+    browserStorage.invoke.mockResolvedValue(['demo_basics', 'demo_welcome']);
+    expect(await finishOnboarding(started.id, false, null, demos)).toEqual({
+      progress: { ...started, status: 'completed' },
+      noteId: 'demo_basics'
+    });
+    expect(browserStorage.invoke).toHaveBeenCalledWith('insert_demo_notes', {
+      notes: demos
+    });
+  });
+
+  it('keeps progress resumable if the browser vault answers with something else', async () => {
+    const started = await restartOnboarding();
+    browserStorage.enabled = true;
+    for (const answer of [null, ['demo_basics', 7]]) {
+      browserStorage.invoke.mockResolvedValueOnce(answer);
+      await expect(finishOnboarding(started.id, false, null)).rejects.toThrow(
+        'Invalid demo note response'
+      );
+    }
+    expect(await getOnboarding()).toEqual(started);
   });
 
   it('keeps progress resumable if initial-note creation fails', async () => {
