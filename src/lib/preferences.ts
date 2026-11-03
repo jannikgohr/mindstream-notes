@@ -9,6 +9,7 @@ import { isTauri } from '$lib/api/core';
  */
 
 import type { SortDirection, SortStrategy } from './sort';
+import { readAppStorage, writeAppStorage } from '$lib/storage/app-storage';
 
 const STORAGE_KEY = 'notes-app:preferences:v1';
 
@@ -85,7 +86,7 @@ function optionalSortDirection(value: unknown): SortDirection {
 export function loadPreferences(): Preferences {
   if (isTauri() || !isBrowser()) return { ...DEFAULT_PREFERENCES };
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = readAppStorage(STORAGE_KEY);
     if (!raw) return { ...DEFAULT_PREFERENCES };
     const parsed = JSON.parse(raw);
     if (!isRecord(parsed)) return { ...DEFAULT_PREFERENCES };
@@ -128,7 +129,7 @@ export function normalizePreferences(
 export function savePreferences(prefs: Preferences): void {
   if (isTauri() || !isBrowser()) return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
+    writeAppStorage(STORAGE_KEY, JSON.stringify(prefs));
   } catch (err) {
     console.warn('[preferences] save failed', err);
   }

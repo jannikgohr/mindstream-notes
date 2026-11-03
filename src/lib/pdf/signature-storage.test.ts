@@ -45,6 +45,10 @@ beforeEach(async () => {
   listSignatures.mockReset().mockResolvedValue([]);
   saveSignature.mockReset().mockResolvedValue(undefined);
   deleteSignature.mockReset().mockResolvedValue(undefined);
+  // A fresh module graph has its own storage gate; open it.
+  (await import('$lib/storage/vault-access.svelte')).resetVaultAccessForTests(
+    'ready'
+  );
   mod = await import('./signature-storage');
 });
 

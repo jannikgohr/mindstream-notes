@@ -27,6 +27,7 @@ import {
   recordToSnapshot,
   snapshotToData
 } from './signature-codec';
+import { readAppStorage, removeAppStorage } from '$lib/storage/app-storage';
 
 // Pre-sync localStorage keys. v1 stored a single signature under
 // LEGACY_SINGLE_KEY; a later migration moved it into an array under
@@ -40,7 +41,7 @@ export function readLegacySnapshots(): PdfSignatureSnapshot[] {
   if (typeof localStorage === 'undefined') return [];
   const out: PdfSignatureSnapshot[] = [];
   try {
-    const raw = localStorage.getItem(LEGACY_ARRAY_KEY);
+    const raw = readAppStorage(LEGACY_ARRAY_KEY);
     if (raw) {
       const parsed: unknown = JSON.parse(raw);
       if (Array.isArray(parsed)) {
@@ -50,7 +51,7 @@ export function readLegacySnapshots(): PdfSignatureSnapshot[] {
         }
       }
     }
-    const legacy = localStorage.getItem(LEGACY_SINGLE_KEY);
+    const legacy = readAppStorage(LEGACY_SINGLE_KEY);
     if (legacy) {
       const parsed: unknown = JSON.parse(legacy);
       const snapshot = normaliseSignatureSnapshot(parsed, crypto.randomUUID());
@@ -69,15 +70,15 @@ let migrationPromise: Promise<void> | null = null;
 async function migrateLegacyOnce(): Promise<void> {
   if (typeof localStorage === 'undefined') return;
   const hasLegacy =
-    localStorage.getItem(LEGACY_ARRAY_KEY) !== null ||
-    localStorage.getItem(LEGACY_SINGLE_KEY) !== null;
+    readAppStorage(LEGACY_ARRAY_KEY) !== null ||
+    readAppStorage(LEGACY_SINGLE_KEY) !== null;
   if (!hasLegacy) return;
 
   if (isTauri()) {
     await migrateLegacyContent(
       'signatures',
-      localStorage.getItem(LEGACY_ARRAY_KEY),
-      localStorage.getItem(LEGACY_SINGLE_KEY)
+      readAppStorage(LEGACY_ARRAY_KEY),
+      readAppStorage(LEGACY_SINGLE_KEY)
     );
     return;
   }
@@ -89,8 +90,8 @@ async function migrateLegacyOnce(): Promise<void> {
     await apiSaveSignature({ id: sig.id, data: snapshotToData(sig) });
   }
   // Local writes landed — drop the old keys so we don't migrate again.
-  localStorage.removeItem(LEGACY_ARRAY_KEY);
-  localStorage.removeItem(LEGACY_SINGLE_KEY);
+  removeAppStorage(LEGACY_ARRAY_KEY);
+  removeAppStorage(LEGACY_SINGLE_KEY);
 }
 
 /** Migrate any legacy localStorage signatures (once), then return the

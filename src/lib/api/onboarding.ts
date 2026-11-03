@@ -8,6 +8,7 @@ import {
 import { createNote } from './notes';
 import { mockApi } from './mock-store';
 import { browserStorageEnabled } from '../browser/commands';
+import { readAppStorage, writeAppStorage } from '$lib/storage/app-storage';
 
 export const ONBOARDING_STEPS = [
   'account',
@@ -62,7 +63,7 @@ export function parseOnboarding(value: unknown): OnboardingProgress {
 }
 
 function browserProgress(): OnboardingProgress {
-  const saved = localStorage.getItem(STORAGE_KEY);
+  const saved = readAppStorage(STORAGE_KEY);
   return saved
     ? parseOnboarding(JSON.parse(saved))
     : {
@@ -75,7 +76,7 @@ function browserProgress(): OnboardingProgress {
       };
 }
 function saveBrowser(progress: OnboardingProgress): OnboardingProgress {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(progress));
+  writeAppStorage(STORAGE_KEY, JSON.stringify(progress));
   return progress;
 }
 function browserOwned(id: string): OnboardingProgress {

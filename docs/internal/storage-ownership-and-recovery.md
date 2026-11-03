@@ -138,6 +138,39 @@ Local filesystems are supported. Network filesystem locking/durability is outsid
 this plan. Older binaries without ownership locks remain unsafe against the same
 vault; new binaries cannot force them to cooperate.
 
+## Write gate in the frontend
+
+The locks above protect the vault files. A window can still hold stale state in
+memory: a browser tab refused the database lock runs the whole app with an
+empty tree, and localStorage is shared between tabs. So the frontend writes
+nothing until its vault is open and the notes loaded.
+
+`src/lib/storage/vault-access.svelte.ts` holds one state per window. It starts
+`pending`, becomes `ready` when the tree store's load succeeds, and becomes
+`unavailable` when a load fails. A lost browser worker connection returns it to
+`pending`. Writes wait while pending, and a write that arrives before anything
+has loaded the vault starts the load through the tree store's registered probe.
+Writes fail with `VaultNotReadyError` while unavailable.
+
+Three places enforce it:
+
+- `invokeTauri` and `invokeOrFallback` in `src/lib/api/core.ts` hold every
+  command that `src/lib/storage/command-access.ts` marks as a write. The table
+  covers every `TauriCommandName`, so a new command does not compile until it
+  is classified. A command missing at runtime counts as a write.
+- `src/lib/browser/vault.ts` applies the same check before any worker request,
+  including backup, restore and import calls that bypass `invokeOrFallback`.
+- `src/lib/storage/app-storage.ts` writes app localStorage keys. Held writes
+  keep the latest value per key and flush when the vault is ready; an
+  unavailable window drops them. A tab that recovers reloads its settings from
+  storage before saving, so its startup snapshot never replaces newer values.
+
+ESLint rejects direct `localStorage` writes and the raw Tauri `invoke` in `src/`.
+The exemptions are listed in `eslint.config.js`: draft recovery, which must keep
+typing safe exactly when the vault is gone, the vault picker window, which has
+no vault, the error reporter and the e2e mock store. Tab-local `sessionStorage`
+is not shared and stays direct.
+
 ## Startup and root documents
 
 Resolve environment identity and verify browser isolation before using a vault.

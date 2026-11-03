@@ -4,6 +4,7 @@ import {
   nativeDeviceUi,
   writeNativeDeviceUi
 } from '$lib/native-device-ui.svelte';
+import { readAppStorage, writeAppStorage } from '$lib/storage/app-storage';
 export const FILE_TREE_TOOLBAR_STORAGE_KEY =
   'notes-app:file-tree-create-toolbar:v1';
 export const MOBILE_CREATE_TOOLBAR_STORAGE_KEY =
@@ -178,8 +179,8 @@ export function loadFileTreeToolbarPreferences(
   try {
     const raw =
       (layout === 'mobile'
-        ? localStorage.getItem(MOBILE_CREATE_TOOLBAR_STORAGE_KEY)
-        : null) ?? localStorage.getItem(FILE_TREE_TOOLBAR_STORAGE_KEY);
+        ? readAppStorage(MOBILE_CREATE_TOOLBAR_STORAGE_KEY)
+        : null) ?? readAppStorage(FILE_TREE_TOOLBAR_STORAGE_KEY);
     if (raw) {
       return normalizeFileTreeToolbarPreferences(
         leadLegacyWithNote(JSON.parse(raw)),
@@ -206,7 +207,7 @@ export function saveFileTreeToolbarPreferences(
     );
   if (typeof localStorage === 'undefined') return;
   try {
-    localStorage.setItem(
+    writeAppStorage(
       layout === 'mobile'
         ? MOBILE_CREATE_TOOLBAR_STORAGE_KEY
         : FILE_TREE_TOOLBAR_STORAGE_KEY,
