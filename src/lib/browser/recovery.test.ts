@@ -189,7 +189,8 @@ describe('browser pending note recovery', () => {
       .mockRejectedValueOnce({ code: 'refused', reason: 'readOnly' });
     await recoverBrowserNotes(connection(request));
     const retained = recoveryStatus.copies[0];
-    expect(retained).toMatchObject({ key: prefix + 'note', reason: 'refused' });
+    expect(retained).toMatchObject({ reason: 'refused' });
+    expect(retained.key).not.toBe(prefix + 'note');
     expect(JSON.parse(retained.raw)).toMatchObject({
       id: 'note',
       body: JSON.parse(savedRaw!).body
@@ -292,6 +293,47 @@ describe('browser pending note recovery', () => {
     );
     expect(raw()).toBe(savedRaw);
     expect(recoveryStatus.copies[0].raw).toBe(savedRaw);
+    expect(() =>
+      checkpointBrowserNote(() => ({ id: 'note', body: 'new typing' }))
+    ).toThrow('must be preserved');
+    expect(raw()).toBe(savedRaw);
+    const acknowledge = captureBrowserAcknowledgement('note');
+    rememberBrowserNote({ ...original, body: 'new typing saved to SQLite' });
+    acknowledge();
+    expect(raw()).toBe(savedRaw);
+    await recoverBrowserNotes(
+      connection(requestWith({ ...original, body: 'newer' }))
+    );
+    expect(recoveryStatus.copies).toHaveLength(1);
+    expect(recoveryStatus.copies[0].key).toBe(prefix + 'note');
+  });
+
+  it('does not overwrite a checkpoint written while load_note is pending', async () => {
+    checkpointBrowserNote(() => ({ id: 'note', body: 'old edit' }));
+    let loaded!: (note: typeof original) => void;
+    const pendingLoad = new Promise<typeof original>(
+      (resolve) => (loaded = resolve)
+    );
+    const request = vi.fn().mockReturnValueOnce(pendingLoad);
+    const recovering = recoverBrowserNotes(connection(request));
+    checkpointBrowserNote(() => ({ id: 'note', body: 'new typing' }));
+    loaded(original);
+    await recovering;
+    expect(JSON.parse(raw()!).body).toBe('new typing');
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it('records an archived recovery copy once across repeated recovery passes', async () => {
+    checkpointBrowserNote(() => ({ id: 'note', body: 'pending' }));
+    const request = vi
+      .fn()
+      .mockResolvedValue({ ...original, body: 'other edit' });
+    await recoverBrowserNotes(connection(request));
+    const copies = recoveryStatus.copies.length;
+    await recoverBrowserNotes(connection(request));
+    expect(copies).toBe(1);
+    expect(recoveryStatus.copies).toHaveLength(1);
+    expect(recoveryStatus.copies[0].key).not.toBe(prefix + 'note');
   });
 
   it('reports checkpoint quota errors while still allowing SQLite saves', () => {

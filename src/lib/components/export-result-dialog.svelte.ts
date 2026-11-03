@@ -199,12 +199,15 @@ export function showBackupResult(report: BackupReport): Promise<string> {
     titleKey: 'data.backupNow.success.title',
     headerIcon: 'archive',
     tone: 'success',
-    location: {
-      labelKey: 'data.backupNow.savedTo',
-      actionLabelKey: 'data.backupNow.openLocation',
-      path: report.destination,
-      openPath: parentPath(report.destination)
-    },
+    location:
+      report.destination === null
+        ? undefined
+        : {
+            labelKey: 'data.backupNow.savedTo',
+            actionLabelKey: 'data.backupNow.openLocation',
+            path: report.destination,
+            openPath: parentPath(report.destination)
+          },
     primaryAction: {
       labelKey: 'data.backupNow.close',
       value: 'close'

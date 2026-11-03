@@ -13,11 +13,6 @@ pub(super) fn default_backup_dir(app: &AppHandle) -> AppResult<PathBuf> {
 
 /// Path-safe suggested filename — `T<HH-MM-SS>` (hyphens, not colons)
 /// so Windows accepts it.
-pub(super) fn suggested_filename() -> String {
-    let now = chrono::Utc::now();
-    format!("mindstream-backup-{}.zip", now.format("%Y-%m-%dT%H-%M-%S"))
-}
-
 /// Pop the Save-As dialog, then run the export. Returns `None` when
 /// the user cancels — distinct from an error — so the JS side stays
 /// quiet (no error toast for a deliberate cancel).
@@ -69,18 +64,6 @@ pub(super) async fn backup_now_inner(app: AppHandle) -> AppResult<Option<BackupR
     .await
     .map_err(|e| AppError::InvalidArg(format!("backup task: {e}")))??;
     Ok(Some(report))
-}
-
-/// Take out of a copy of the database what is of use on this device only.
-///
-/// The room keys kept here are sealed for this device's session and open
-/// nowhere else. A backup is made to leave the device, so they are not in
-/// it. `secure_delete` has the freed pages overwritten, so that they are
-/// gone from the file and not only from the table. A restored backup gets
-/// them again from the server.
-pub(super) fn leave_device_secrets_out(snapshot: &Connection) -> AppResult<()> {
-    snapshot.pragma_update(None, "secure_delete", "ON")?;
-    crate::sync::room_keys::forget_all(snapshot)
 }
 
 pub(super) fn run_backup(
@@ -143,28 +126,20 @@ pub(super) fn run_backup_at(
     // export window could drift.
     let snapshot = Connection::open(&staging_db)?;
     leave_device_secrets_out(&snapshot)?;
-    let counts = read_counts(&snapshot)?;
-    let identity = read_account_identity(&snapshot, session)?;
-    let schema_version: u32 = snapshot.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    let identity = session_identity(&snapshot, session)?;
     drop(snapshot);
 
     let resources = portable::capture(root, vault, conn, &resources_dir)?;
     portable::sanitize_database(&staging_db, Some(&resources_dir))?;
 
-    let manifest = Manifest {
-        format_version: MANIFEST_FORMAT_VERSION,
-        app_version: env!("CARGO_PKG_VERSION").to_string(),
-        schema_version,
-        created_at: chrono::Utc::now().to_rfc3339(),
-        account_present_at_export: identity.is_some(),
-        account: identity,
-        contents: Contents {
-            db_filename: DB_ENTRY_NAME.to_string(),
-            counts: counts.clone(),
-        },
-        data_db_sha256: Some(super::restore::restore_file_hash(&staging_db)?),
-        portable: Some(resources),
-    };
+    let manifest = Manifest::for_snapshot(
+        &Connection::open(&staging_db)?,
+        env!("CARGO_PKG_VERSION"),
+        identity,
+        Some(super::restore::restore_file_hash(&staging_db)?),
+        Some(resources),
+    )?;
+    let counts = manifest.contents.counts.clone();
 
     // Atomic write: zip into `<destination>.tmp`, fsync the parent
     // dir, rename to `<destination>`. A crashed export leaves the tmp
@@ -255,60 +230,15 @@ fn validate_destination(root: &Path, vault: &Path, destination: &Path) -> AppRes
     Ok(())
 }
 
-pub(super) fn read_counts(conn: &Connection) -> AppResult<Counts> {
-    let notes: u32 = conn.query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0))?;
-    // Folders: exclude the built-in 'trash' collection — it's an
-    // always-present implementation detail, not user content. The
-    // import flow knows to recreate it.
-    let folders: u32 = conn.query_row(
-        "SELECT COUNT(*) FROM collections WHERE id <> 'trash'",
-        [],
-        |r| r.get(0),
-    )?;
-    let assets_bytes: i64 = conn
-        .query_row("SELECT COALESCE(SUM(size), 0) FROM assets", [], |r| {
-            r.get(0)
-        })
-        .unwrap_or(0);
-    Ok(Counts {
-        notes,
-        folders,
-        assets_bytes: assets_bytes.max(0) as u64,
-    })
-}
-
-pub(super) fn read_account_identity(
+pub(super) fn session_identity(
     conn: &Connection,
     session: Option<&auth::SessionInfo>,
 ) -> AppResult<Option<AccountIdentity>> {
-    // Both collection UIDs must be present for the identity block to
-    // count — a half-synced DB (one kind pushed, the other not) is a
-    // gnarly state we don't try to round-trip identity for.
-    let notes_uid: Option<String> = conn
-        .query_row(
-            "SELECT etebase_collection_uid FROM sync_state WHERE kind = 'notes'",
-            [],
-            |r| r.get(0),
-        )
-        .ok()
-        .flatten();
-    let folders_uid: Option<String> = conn
-        .query_row(
-            "SELECT etebase_collection_uid FROM sync_state WHERE kind = 'folders'",
-            [],
-            |r| r.get(0),
-        )
-        .ok()
-        .flatten();
-    match (notes_uid, folders_uid) {
-        (Some(notes), Some(folders)) => Ok(Some(AccountIdentity {
-            etebase_collection_uid_notes: notes,
-            etebase_collection_uid_folders: folders,
-            server_url: session.map(|s| s.server_url.clone()),
-            username: session.map(|s| s.username.clone()),
-        })),
-        _ => Ok(None),
-    }
+    Ok(mindstream_storage_core::backup::read_account_identity(
+        conn,
+        session.map(|s| s.server_url.clone()),
+        session.map(|s| s.username.clone()),
+    )?)
 }
 
 #[cfg(test)]

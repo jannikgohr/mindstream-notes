@@ -126,6 +126,11 @@ describe('showBackupResult', () => {
     ...over
   });
 
+  it('names no location for a browser download', () => {
+    void showBackupResult(report({ destination: null }));
+    expect(exportResultQueue.items[0].location).toBeUndefined();
+  });
+
   it('derives the open location from the destination parent dir', () => {
     void showBackupResult(report());
     const loc = exportResultQueue.items[0].location;
