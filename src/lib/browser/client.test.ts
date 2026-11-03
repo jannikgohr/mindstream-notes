@@ -190,6 +190,30 @@ describe('worker transport', () => {
     expect(worker.terminate).toHaveBeenCalledOnce();
   });
 
+  it('hands import progress to its listener', async () => {
+    const { client, worker } = setup();
+    const progress = vi.fn();
+    client.onProgress = progress;
+    const request = client.request('read', undefined);
+
+    const update = { phase: 'importing', done: 500, total: 900 };
+    worker.reply({ progress: update });
+    expect(progress).toHaveBeenCalledWith(update);
+
+    worker.reply({ id: 1, ok: true, result: 'stored' });
+    await expect(request).resolves.toBe('stored');
+    client.dispose();
+  });
+
+  it('ignores import progress with no one listening', async () => {
+    const { client, worker } = setup();
+    const request = client.request('read', undefined);
+    worker.reply({ progress: { phase: 'done', done: 1, total: 1 } });
+    worker.reply({ id: 1, ok: true, result: 'stored' });
+    await expect(request).resolves.toBe('stored');
+    client.dispose();
+  });
+
   it('terminates even if graceful shutdown fails', async () => {
     const { client, worker } = setup();
     const result = expect(client.close()).rejects.toMatchObject({
@@ -282,6 +306,72 @@ describe('worker protocol validation', () => {
     ]) {
       expect(() => parseResult('backup', broken)).toThrow();
     }
+  });
+
+  it('validates backup import requests and responses', () => {
+    const archive = new Blob(['zip']);
+    expect(
+      parseRequest({ id: 1, method: 'importBegin', args: { archive } })
+    ).toMatchObject({ method: 'importBegin' });
+    expect(
+      parseRequest({
+        id: 1,
+        method: 'importRestore',
+        args: { token: 't', sameAccount: false }
+      })
+    ).toMatchObject({ method: 'importRestore' });
+    for (const method of ['importMerge', 'importCleanup']) {
+      expect(
+        parseRequest({ id: 1, method, args: { token: 't' } })
+      ).toMatchObject({ method });
+    }
+    for (const invalid of [
+      { method: 'importBegin', args: { archive: 'zip' } },
+      { method: 'importBegin' },
+      { method: 'importMerge', args: { token: '' } },
+      { method: 'importCleanup', args: {} },
+      { method: 'importRestore', args: { token: 't' } },
+      { method: 'importRestore', args: { token: 't', sameAccount: 'no' } }
+    ]) {
+      expect(() => parseRequest({ id: 1, ...invalid })).toThrow();
+    }
+    expect(parseResult('importRestore', true)).toBe(true);
+    expect(() => parseResult('importRestore', 'done')).toThrow();
+  });
+
+  it('validates notes import requests', () => {
+    const source = {
+      name: 'Vault',
+      single: false,
+      files: [{ path: 'a.md', file: new File(['a'], 'a.md') }]
+    };
+    expect(
+      parseRequest({ id: 1, method: 'notesDetect', args: { source } })
+    ).toMatchObject({ method: 'notesDetect' });
+    expect(
+      parseRequest({
+        id: 1,
+        method: 'notesImport',
+        args: { source, options: {} }
+      })
+    ).toMatchObject({ method: 'notesImport' });
+    for (const invalid of [
+      { method: 'notesDetect' },
+      { method: 'notesDetect', args: { source: { ...source, name: 7 } } },
+      { method: 'notesDetect', args: { source: { ...source, single: 'no' } } },
+      { method: 'notesDetect', args: { source: { ...source, files: 'a.md' } } },
+      {
+        method: 'notesDetect',
+        args: { source: { ...source, files: [{ path: 'a.md', file: 'a' }] } }
+      },
+      { method: 'notesImport', args: { source } },
+      { method: 'notesImport', args: { source, options: null } }
+    ]) {
+      expect(() => parseRequest({ id: 1, ...invalid })).toThrow();
+    }
+    const detected = { kind: 'gfm' };
+    expect(parseResult('notesDetect', detected)).toBe(detected);
+    expect(parseResult('notesImport', detected)).toBe(detected);
   });
 
   it('rejects unrecognized methods and invalid write payloads', () => {

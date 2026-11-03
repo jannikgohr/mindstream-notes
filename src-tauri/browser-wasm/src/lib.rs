@@ -1,14 +1,20 @@
 //! Dedicated-worker binding for the SQLite compatibility proof.
 #![cfg(target_arch = "wasm32")]
 
+mod picked_files;
 mod receipts;
 
 use mindstream_storage_core::error::AppError;
+use mindstream_storage_core::import::{self, ImportFiles, ImportSourceKind, ImportStore};
 use mindstream_storage_core::{asset_hash, backup, migrations, proof, vault_api};
+use picked_files::{BrowserFiles, PickedFiles};
+use rusqlite::backup::{Backup, StepResult};
 use rusqlite::Connection;
 use serde::Serialize;
 use sqlite_wasm_vfs::sahpool::{install, OpfsSAHPoolCfg, OpfsSAHPoolUtil};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::AtomicBool;
 use wasm_bindgen::prelude::*;
 
 #[derive(Serialize)]
@@ -29,6 +35,13 @@ fn error(message: impl std::fmt::Display) -> JsValue {
 /// of its own, separate from the vault.
 const BACKUP_SNAPSHOT: &str = "/backup-snapshot.sqlite3";
 
+/// Where a backup waits for the user's choice in the import dialog.
+const STAGED_BACKUP: &str = "/staged-backup.sqlite3";
+
+/// A restore holds the vault, a staged backup and a safety snapshot at once,
+/// and each can need a journal. The pool's default of 6 would be just enough.
+const POOL_CAPACITY: u32 = 8;
+
 /// The snapshot is read into Wasm memory whole, and a failed allocation aborts
 /// the worker, so a larger vault gets a clear refusal instead.
 const MAX_BACKUP_BYTES: i64 = 1 << 30;
@@ -42,10 +55,24 @@ struct BrowserBackup {
     account_present: bool,
 }
 
+/// The worker's one connection, as the importer writes to it.
+struct LiveStore<'a>(RefCell<&'a mut Connection>);
+
+impl ImportStore for LiveStore<'_> {
+    fn with_conn_mut<T>(
+        &self,
+        write: impl FnOnce(&mut Connection) -> Result<T, AppError>,
+    ) -> Result<T, AppError> {
+        write(&mut self.0.borrow_mut())
+    }
+}
+
 #[wasm_bindgen]
 pub struct BrowserDatabase {
     conn: Option<Connection>,
     pool: OpfsSAHPoolUtil,
+    /// The token of the backup in `STAGED_BACKUP`, if one is waiting.
+    staged: Option<String>,
 }
 
 #[wasm_bindgen]
@@ -166,6 +193,151 @@ impl BrowserDatabase {
         result
     }
 
+    /// Stage a backup and describe it. `entries` names everything in its zip.
+    pub fn import_begin(
+        &mut self,
+        manifest: &str,
+        entries: Vec<String>,
+        database: &[u8],
+    ) -> Result<JsValue, JsValue> {
+        self.discard_staged();
+        let preview = self.stage_backup(manifest, &entries, database);
+        if preview.is_err() {
+            self.discard_staged();
+        }
+        preview
+    }
+
+    /// Copy what the vault is missing out of the staged backup.
+    pub fn import_merge(&mut self, token: &str) -> Result<JsValue, JsValue> {
+        self.require_staged(token)?;
+        let staged = Connection::open(STAGED_BACKUP).map_err(error)?;
+        let report = backup::merge_into(self.connection()?, &staged).map_err(command_error)?;
+        drop(staged);
+        self.discard_staged();
+        report
+            .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+            .map_err(error)
+    }
+
+    /// Replace the vault with the staged backup and close it, so that the page
+    /// reloads onto the restored data. Returns whether sync metadata was reset.
+    pub fn import_restore(&mut self, token: &str, same_account: bool) -> Result<bool, JsValue> {
+        self.require_staged(token)?;
+        let mut staged = Connection::open(STAGED_BACKUP).map_err(error)?;
+        let backup_identity =
+            backup::read_account_identity(&staged, None, None).map_err(command_error)?;
+        let live = self.connection()?;
+        let live_identity =
+            backup::read_account_identity(live, None, None).map_err(command_error)?;
+        let keep_sync = same_account
+            && match (&backup_identity, &live_identity) {
+                (Some(backup), Some(current)) => backup::same_identity(backup, current),
+                _ => false,
+            };
+        if !keep_sync {
+            backup::sanitize_for_foreign_account(&mut staged).map_err(command_error)?;
+        }
+        backup::sanitize_snapshot(&mut staged, &BTreeSet::new(), &BTreeMap::new())
+            .map_err(command_error)?;
+
+        // One step copies every page in one transaction on the vault, so a tab
+        // that dies here rolls back through the journal to the old data. It
+        // also avoids `run_to_completion`, whose sleep panics in Wasm.
+        let copy = Backup::new(&staged, live).map_err(error)?;
+        if !matches!(copy.step(-1).map_err(error)?, StepResult::Done) {
+            return Err(error("The backup could not replace the vault"));
+        }
+        drop(copy);
+        drop(staged);
+        self.discard_staged();
+        self.close()?;
+        Ok(!keep_sync)
+    }
+
+    /// Drop the staged backup. Safe to call with a stale token.
+    pub fn import_cleanup(&mut self, token: &str) {
+        if self.staged.as_deref() == Some(token) {
+            self.discard_staged();
+        }
+    }
+
+    /// Work out which format the user picked. `name` is the folder's or the
+    /// file's, and `single` says which of the two they chose.
+    pub fn import_detect(
+        &self,
+        picked: PickedFiles,
+        name: &str,
+        single: bool,
+    ) -> Result<JsValue, JsValue> {
+        let (kind, suggested_name) = if single {
+            let kind = import::detect::detect_file_kind(name).ok_or_else(|| {
+                command_error(AppError::InvalidArg(
+                    "pick a folder of notes, an Evernote .enex file, or a Joplin .jex export"
+                        .into(),
+                ))
+            })?;
+            let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+            (kind, stem)
+        } else {
+            let files = BrowserFiles::new(picked);
+            (import::detect::detect_directory_kind(&files), name)
+        };
+        import::DetectedSource {
+            kind,
+            path: name.to_string(),
+            suggested_name: suggested_name.to_string(),
+        }
+        .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+        .map_err(error)
+    }
+
+    /// Run an import to the end. A cancel terminates this worker, so what
+    /// earlier batches committed stays and the one in flight rolls back.
+    pub fn import_notes(
+        &mut self,
+        picked: PickedFiles,
+        name: &str,
+        options: JsValue,
+        on_progress: &js_sys::Function,
+    ) -> Result<JsValue, JsValue> {
+        let options: import::ImportOptions =
+            serde_wasm_bindgen::from_value(options).map_err(error)?;
+        let files = BrowserFiles::new(picked);
+        let kind = match options.kind {
+            Some(kind) => kind,
+            None => import::detect::detect_file_kind(name)
+                .unwrap_or_else(|| import::detect::detect_directory_kind(&files)),
+        };
+        let files: Box<dyn ImportFiles> = if kind == ImportSourceKind::JoplinJex {
+            Box::new(
+                import::tar_files::TarFiles::new(Box::new(files), name.to_string())
+                    .map_err(command_error)?,
+            )
+        } else {
+            Box::new(files)
+        };
+        let mut source = import::build_source(kind, files, name);
+        let store = LiveStore(RefCell::new(self.connection()?));
+        let report = import::run_import(
+            &store,
+            source.as_mut(),
+            &options,
+            &AtomicBool::new(false),
+            |progress| {
+                if let Ok(progress) =
+                    progress.serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+                {
+                    let _ = on_progress.call1(&JsValue::NULL, &progress);
+                }
+            },
+        )
+        .map_err(command_error)?;
+        report
+            .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+            .map_err(error)
+    }
+
     pub fn close(&mut self) -> Result<(), JsValue> {
         if let Some(conn) = self.conn.take() {
             if let Err((conn, err)) = conn.close() {
@@ -202,6 +374,9 @@ impl BrowserDatabase {
         let pool = install::<sqlite_wasm_rs::WasmOsCallback>(&cfg, true)
             .await
             .map_err(error)?;
+        pool.reserve_minimum_capacity(POOL_CAPACITY)
+            .await
+            .map_err(error)?;
         let opened = (|| {
             let mut conn = Connection::open(if is_proof {
                 "proof.sqlite3"
@@ -232,15 +407,72 @@ impl BrowserDatabase {
             Ok::<_, mindstream_storage_core::error::AppError>(conn)
         })();
         match opened {
-            Ok(conn) => Ok(Self {
-                conn: Some(conn),
-                pool,
-            }),
+            Ok(conn) => {
+                // A backup or import left here by a closed tab has no owner.
+                let _ = pool.delete_db(BACKUP_SNAPSHOT);
+                let _ = pool.delete_db(STAGED_BACKUP);
+                Ok(Self {
+                    conn: Some(conn),
+                    pool,
+                    staged: None,
+                })
+            }
             Err(err) => {
                 let _ = pool.pause_vfs();
                 Err(error(err))
             }
         }
+    }
+
+    fn stage_backup(
+        &mut self,
+        manifest: &str,
+        entries: &[String],
+        database: &[u8],
+    ) -> Result<JsValue, JsValue> {
+        let invalid = |message: String| command_error(AppError::InvalidArg(message));
+        let manifest: backup::Manifest = serde_json::from_str(manifest)
+            .map_err(|err| invalid(format!("manifest parse: {err}")))?;
+        backup::check_manifest(&manifest, entries).map_err(command_error)?;
+        if let Some(hash) = &manifest.data_db_sha256 {
+            if asset_hash::content_hash(database) != *hash {
+                return Err(invalid("backup database checksum mismatch".into()));
+            }
+        }
+        self.pool
+            .import_db(STAGED_BACKUP, database)
+            .map_err(|err| invalid(format!("backup database: {err}")))?;
+
+        let mut staged = Connection::open(STAGED_BACKUP).map_err(error)?;
+        let live = self.connection()?;
+        backup::prepare_staged(&mut staged, live).map_err(command_error)?;
+        let identity = backup::read_account_identity(live, None, None).map_err(command_error)?;
+        let token = uuid::Uuid::new_v4().to_string();
+        let mut preview = backup::preview_import(token.clone(), manifest, &staged, live, identity)
+            .map_err(command_error)?;
+        // A browser restores the database only, so it offers no resource choices.
+        preview.portable = false;
+        preview.plugin_packages = 0;
+        preview.plugin_data_bytes = 0;
+        drop(staged);
+        self.staged = Some(token);
+        preview
+            .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+            .map_err(error)
+    }
+
+    fn require_staged(&self, token: &str) -> Result<(), JsValue> {
+        if self.staged.as_deref() == Some(token) {
+            return Ok(());
+        }
+        Err(command_error(AppError::InvalidArg(
+            "This backup is no longer staged. Choose it again.".into(),
+        )))
+    }
+
+    fn discard_staged(&mut self) {
+        self.staged = None;
+        let _ = self.pool.delete_db(STAGED_BACKUP);
     }
 
     fn write_backup(&mut self) -> Result<JsValue, JsValue> {
