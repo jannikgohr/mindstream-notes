@@ -1,0 +1,30 @@
+diff --git a/dist/package/main.cjs.js b/dist/package/main.cjs.js
+index 3d3f2c8a49b845c0630f1692f2f6fa3fa3d6e87f..bd096e96d4e40bfd49daf31882c1aee7724ea18e 100644
+--- a/dist/package/main.cjs.js
++++ b/dist/package/main.cjs.js
+@@ -7854,6 +7854,10 @@ var TabReorderController = class extends CompositeDisposable {
+ 		this._animState = null;
+ 		this.clearWrapDropIndicator();
+ 		this.uncollapseSourceTab(animState.sourceTabId);
++		// Mindstream patch: with _animState cleared, the resetDragAnimation()
++		// that follows skips its reset, so the drag gap's margin-left stayed on
++		// the tab after the insertion point.
++		this.resetTabTransforms();
+ 		if (adjustedIndex === sourceIndex) return;
+ 		this.host.fireDrop({
+ 			event,
+diff --git a/dist/package/main.esm.mjs b/dist/package/main.esm.mjs
+index 6e8fd8c1dd781d0f24b1aa5d911edf6e5a0aeda2..474750935a2f9e336b911e3f61bab8b154bc307b 100644
+--- a/dist/package/main.esm.mjs
++++ b/dist/package/main.esm.mjs
+@@ -7852,6 +7852,10 @@ var TabReorderController = class extends CompositeDisposable {
+ 		this._animState = null;
+ 		this.clearWrapDropIndicator();
+ 		this.uncollapseSourceTab(animState.sourceTabId);
++		// Mindstream patch: with _animState cleared, the resetDragAnimation()
++		// that follows skips its reset, so the drag gap's margin-left stayed on
++		// the tab after the insertion point.
++		this.resetTabTransforms();
+ 		if (adjustedIndex === sourceIndex) return;
+ 		this.host.fireDrop({
+ 			event,
