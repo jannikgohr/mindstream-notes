@@ -90,6 +90,15 @@ impl Db {
     }
 }
 
+impl mindstream_storage_core::import::ImportStore for Db {
+    fn with_conn_mut<T>(
+        &self,
+        write: impl FnOnce(&mut Connection) -> mindstream_storage_core::error::AppResult<T>,
+    ) -> mindstream_storage_core::error::AppResult<T> {
+        write(&mut self.lock_recovering())
+    }
+}
+
 #[cfg(test)]
 pub fn open_memory_for_tests() -> Db {
     let mut conn = rusqlite::Connection::open_in_memory().expect("in-memory db");

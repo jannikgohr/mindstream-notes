@@ -1752,3 +1752,58 @@ fn conversion_marks_rewritten_notes_for_sync() {
         .unwrap();
     assert_eq!(dirty, 1);
 }
+
+/// A browser walks a list of paths, and the order decides which of two
+/// same-named attachments wins, so it has to match a walk of the same tree.
+#[test]
+fn walking_a_list_of_paths_matches_walking_the_disk() {
+    use super::DiskFiles;
+    use mindstream_storage_core::import::{walk_paths, ImportFiles};
+
+    let vault = TempVault::new();
+    let files = [
+        "a-b/c.md",
+        "a/b.md",
+        "a/deep/er.md",
+        "a.md",
+        // Two names that differ only by case would be one file on macOS and
+        // Windows, so these only show that capitals sort first.
+        "Zebra.md",
+        "apple.md",
+        "ä.md",
+        "pics/photo 1.png",
+        "pics/photo.png",
+        ".hidden/secret.md",
+        ".DS_Store",
+    ];
+    for file in files {
+        vault.write(file, "text");
+    }
+    let skip = |name: &str| name.starts_with('.');
+
+    assert_eq!(
+        walk_paths(files.into_iter(), &skip),
+        DiskFiles::new(vault.path().to_path_buf()).walk(&skip)
+    );
+}
+
+/// One unreadable folder must not cost the user the rest of a vault.
+#[cfg(unix)]
+#[test]
+fn a_folder_that_cannot_be_read_does_not_stop_the_walk() {
+    use super::DiskFiles;
+    use mindstream_storage_core::import::ImportFiles;
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("kept.md"), "# Kept").unwrap();
+    let locked = root.path().join("locked");
+    fs::create_dir(&locked).unwrap();
+    fs::write(locked.join("hidden.md"), "# Hidden").unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let entries = DiskFiles::new(root.path().to_path_buf()).walk(&|_| false);
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(entries.iter().any(|entry| entry.path == "kept.md"));
+}
