@@ -8,7 +8,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import * as Y from 'yjs';
 import { test, expect } from './fixtures';
-import { clickFileTreeCreateAction } from '../browser/file-tree-toolbar';
+import {
+  clickFileTreeCreateAction,
+  fileTreeCreateAction,
+  openFileTreeCreateMore
+} from '../browser/file-tree-toolbar';
+import { setTemplateFolder } from '../browser/template-sources';
 import type {
   BrowserCommand,
   BrowserCommands,
@@ -954,6 +959,48 @@ test('a Joplin archive imports from one file with its links', async ({
   const two = await loadNoteTitled(page, 'Zweite Notiz');
   expect(one.body).toContain(two.id);
   expect(two.body).toContain(one.id);
+});
+
+test('a tab that cannot open the database keeps folder and tag settings', async ({
+  page,
+  context
+}) => {
+  const settingsKey = 'notes-app:settings:v1:vault:default';
+  const folderKey = 'plugins.com.mindstream.templates.core.source-folder';
+  const storedFolder = (tab: Page) =>
+    tab.evaluate(
+      ({ settingsKey, folderKey }) =>
+        JSON.parse(localStorage.getItem(settingsKey) ?? '{}')[folderKey],
+      { settingsKey, folderKey }
+    );
+  await setTemplateFolder(page);
+  await expect.poll(() => storedFolder(page)).toBeTruthy();
+  const folder = await storedFolder(page);
+
+  // The refused tab has an empty tree, where every folder looks deleted.
+  const second = await context.newPage();
+  await observeStorage(second);
+  await second.goto('/');
+  await expect(
+    second.getByText(
+      'The database is open in another tab. Close it there and retry.',
+      { exact: false }
+    )
+  ).toBeVisible();
+  // Stay on the refused tab past the settings store's 150 ms save delay, so a
+  // wrongful prune would reach localStorage. Nothing should be written.
+  await second.waitForTimeout(1_000);
+  expect(await storedFolder(second)).toBe(folder);
+  await page.close();
+  await second.reload();
+  await expect(
+    second
+      .getByRole('group', { name: 'File tree' })
+      .getByRole('button', { name: 'Welcome', exact: true })
+  ).toBeVisible();
+  expect(await storedFolder(second)).toBe(folder);
+  await openFileTreeCreateMore(second);
+  await expect(fileTreeCreateAction(second, 'New from template')).toBeVisible();
 });
 
 test('another tab reports the database owner and opens persisted data after it closes', async ({
