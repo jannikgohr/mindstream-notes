@@ -61,6 +61,13 @@ async function rpc<K extends BrowserCommand>(
     { command, args, recoveryToken } as BrowserRequest
   ) as Promise<BrowserCommands[K]['result']>;
 }
+async function loadNoteTitled(page: Page, title: string) {
+  const notes = await rpc(page, 'list_notes', {});
+  const note = notes.find((candidate) => candidate.title === title);
+  if (!note) throw new Error(`No note titled ${title}`);
+  return rpc(page, 'load_note', { id: note.id });
+}
+
 async function boot(page: Page) {
   await page.goto('/');
   if (test.info().project.name === 'webkit') {
@@ -207,10 +214,9 @@ test('handwritten strokes persist through normal saves and an immediate reload',
   });
   await draft.fill(title);
   await draft.press('Enter');
-  const notes = await rpc(page, 'list_notes', {});
-  const id = notes.find((note) => note.title === title)!.id;
   const canvas = page.getByLabel('Handwritten note canvas', { exact: true });
   await expect(canvas).toBeVisible();
+  const id = (await loadNoteTitled(page, title)).id;
   const draw = async (offset: number) => {
     const box = (await canvas.boundingBox())!;
     await page.mouse.move(box.x + box.width / 2 - 30, box.y + 100 + offset);
@@ -643,8 +649,10 @@ async function replaceVault(page: Page) {
   await expect(dialog).toContainText('downloads first');
   const [safety] = await Promise.all([
     page.waitForEvent('download'),
+    page.waitForEvent('load'),
     dialog.getByRole('button', { name: 'Replace vault' }).click()
   ]);
+  await page.waitForFunction(() => 'vaultWorker' in window);
   return safety;
 }
 
@@ -660,7 +668,6 @@ test('a native backup replaces the vault after saving a copy of it', async ({
   await expect(
     tree.getByRole('button', { name: 'Portable note', exact: true })
   ).toBeVisible({ timeout: 20_000 });
-  await page.waitForFunction(() => 'vaultWorker' in window);
   expect(await noteTitles(page)).not.toContain('Before the restore');
 
   // The replaced notes are in the file the user was handed.
@@ -717,11 +724,9 @@ test('a browser backup restores the vault it came from', async ({ page }) => {
 
   await chooseBackup(page, path);
   await replaceVault(page);
-  await page.waitForFunction(() => 'vaultWorker' in window);
-  await expect
-    .poll(() => noteTitles(page).catch(() => []))
-    .toContain('Original title');
-  expect(await noteTitles(page)).not.toContain('Renamed');
+  const titles = await noteTitles(page);
+  expect(titles).toContain('Original title');
+  expect(titles).not.toContain('Renamed');
 });
 
 test('a file that is not a sound backup leaves the vault alone', async ({
@@ -773,13 +778,6 @@ async function importNotes(
   await expect(dialog).toContainText('Import finished', { timeout: 20_000 });
 }
 
-async function loadNoteTitled(page: Page, title: string) {
-  const notes = await rpc(page, 'list_notes', {});
-  const note = notes.find((candidate) => candidate.title === title);
-  if (!note) throw new Error(`No note titled ${title}`);
-  return rpc(page, 'load_note', { id: note.id });
-}
-
 test('a folder of notes imports with its links and attachments', async ({
   page
 }) => {
@@ -817,6 +815,7 @@ test('stopping an import keeps what it committed and the vault stays usable', as
   page
 }) => {
   const before = (await noteTitles(page)).length;
+  // Large enough that Stop lands before the run ends, even in a fast browser.
   const total = 5_000;
   const vault = await mkdtemp(join(tmpdir(), 'large-vault-'));
   try {
