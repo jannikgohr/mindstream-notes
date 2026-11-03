@@ -169,7 +169,7 @@ Evernote writes note links as `evernote:///view/<user>/<shard>/<guid>/<guid>/`,
 but most `.enex` exports leave out the `<guid>` element on the notes
 themselves, so the guid in a link usually has nothing to match. The importer
 falls back to the link text, which Evernote fills with the target's title
-(`rewrite_evernote_links` in `src-tauri/src/import/links.rs`). Two notes with
+(`rewrite_evernote_links` in `src-tauri/storage-core/src/import/links.rs`). Two notes with
 the same title can be confused. Exports that do carry guids resolve exactly. A
 link that matches nothing keeps its text and loses the dead `evernote:` URL.
 

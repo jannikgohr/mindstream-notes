@@ -9,14 +9,8 @@
 //! `mediawiki-to-markdown` emits exactly this shape — one `.md` per page,
 //! YAML frontmatter, relative links between pages.
 
-use std::collections::HashMap;
-use std::fs;
-use std::io::Read;
-use std::path::{Path, PathBuf};
-
-use walkdir::WalkDir;
-
 use crate::error::{AppError, AppResult};
+use crate::import::files::ImportFiles;
 use crate::import::links::{self, RewriteOptions};
 use crate::import::markdown::{self, Frontmatter};
 use crate::import::mime;
@@ -25,6 +19,7 @@ use crate::import::model::{
 };
 use crate::import::source::{ImportSource, LoadedItem};
 use crate::notes::NoteKind;
+use std::collections::HashMap;
 
 /// Directories that are never note content. Dot-directories are skipped
 /// wholesale on top of this, which covers `.obsidian`, `.trash` and `.git`.
@@ -60,7 +55,7 @@ pub enum Flavour {
 }
 
 pub struct MarkdownVaultSource {
-    root: PathBuf,
+    files: Box<dyn ImportFiles>,
     flavour: Flavour,
     /// Root-relative directory path → minted collection id, so phase 2 can
     /// place a note without re-walking.
@@ -76,68 +71,36 @@ pub struct MarkdownVaultSource {
 }
 
 impl MarkdownVaultSource {
-    pub fn new(root: PathBuf, flavour: Flavour) -> Self {
+    pub fn new(files: Box<dyn ImportFiles>, flavour: Flavour) -> Self {
         Self {
-            root,
+            files,
             flavour,
             folder_ids: HashMap::new(),
             attachments_by_name: HashMap::new(),
         }
-    }
-
-    fn absolute(&self, relative: &str) -> PathBuf {
-        let mut path = self.root.clone();
-        for segment in relative.split('/').filter(|s| !s.is_empty()) {
-            path.push(segment);
-        }
-        path
     }
 }
 
 impl ImportSource for MarkdownVaultSource {
     fn index(&mut self) -> AppResult<SourceIndex> {
         let mut out = SourceIndex::default();
-        // Sorted so a run is reproducible and so parents are always emitted
-        // before their children, which the folder insert relies on.
-        let walker = WalkDir::new(&self.root)
-            .follow_links(false)
-            .sort_by_file_name()
-            .into_iter()
-            .filter_entry(|entry| !is_skipped_dir(entry.file_name().to_string_lossy().as_ref()));
-
-        for entry in walker {
-            let entry = match entry {
-                Ok(entry) => entry,
-                // A single unreadable path shouldn't abort a vault-sized walk.
-                Err(err) => {
-                    log::warn!("[import] skipping unreadable path: {err}");
-                    continue;
-                }
-            };
-            let Some(relative) = relative_path(&self.root, entry.path()) else {
-                continue;
-            };
-            if relative.is_empty() {
-                continue;
-            }
-
-            if entry.file_type().is_dir() {
+        for entry in self.files.walk(&is_skipped_dir) {
+            let relative = entry.path;
+            if entry.is_dir {
                 let id = format!("col_{}", uuid::Uuid::new_v4());
                 let parent = parent_dir(&relative)
                     .and_then(|p| self.folder_ids.get(p))
                     .cloned();
-                self.folder_ids.insert(relative.clone(), id.clone());
+                let name = file_name(&relative);
+                self.folder_ids.insert(relative, id.clone());
                 out.folders.push(FolderIndex {
                     id,
                     parent_id: parent,
-                    name: entry.file_name().to_string_lossy().to_string(),
+                    name,
                 });
                 continue;
             }
 
-            if !entry.file_type().is_file() {
-                continue;
-            }
             if !mime::is_markdown(&relative) {
                 // First one wins, so a deterministic sorted walk makes the
                 // choice between same-named files stable across runs.
@@ -152,8 +115,7 @@ impl ImportSource for MarkdownVaultSource {
     }
 
     fn load(&mut self, item: &ItemIndex) -> AppResult<LoadedItem> {
-        let path = self.absolute(&item.locator);
-        let raw = read_text(&path)?;
+        let raw = read_text(self.files.as_ref(), &item.locator)?;
         let (frontmatter, body) = markdown::split_frontmatter(&raw);
         let stem = file_stem(&item.locator);
 
@@ -181,10 +143,7 @@ impl ImportSource for MarkdownVaultSource {
 
         let attachments = self.collect_attachments(&item.locator, &body);
 
-        let fs_modified = fs::metadata(&path)
-            .ok()
-            .and_then(|meta| meta.modified().ok())
-            .map(|time| chrono::DateTime::<chrono::Utc>::from(time).to_rfc3339());
+        let fs_modified = self.files.modified(&item.locator);
 
         Ok(LoadedItem {
             note: StagedNote {
@@ -202,8 +161,7 @@ impl ImportSource for MarkdownVaultSource {
     }
 
     fn attachment_bytes(&mut self, reference: &AttachmentRef) -> AppResult<Option<Vec<u8>>> {
-        let path = self.absolute(&reference.locator);
-        match fs::read(&path) {
+        match self.files.read(&reference.locator) {
             Ok(bytes) => Ok(Some(bytes)),
             // Vanished between the index walk and now, or a permission
             // problem. One missing image is not a failed import.
@@ -249,7 +207,7 @@ impl ImportSource for MarkdownVaultSource {
 impl MarkdownVaultSource {
     fn index_note(&self, relative: &str) -> ItemIndex {
         let stem = file_stem(relative);
-        let frontmatter = peek_frontmatter(&self.absolute(relative));
+        let frontmatter = peek_frontmatter(self.files.as_ref(), relative);
         let title = frontmatter
             .title
             .clone()
@@ -329,7 +287,7 @@ impl MarkdownVaultSource {
         ]
         .into_iter()
         .flatten()
-        .find(|candidate| self.absolute(candidate).is_file())
+        .find(|candidate| self.files.is_file(candidate))
         .or_else(|| self.attachment_by_name(&decoded))
     }
 
@@ -368,7 +326,7 @@ impl MarkdownVaultSource {
             let resolved = candidates
                 .into_iter()
                 .flatten()
-                .find(|candidate| self.absolute(candidate).is_file())
+                .find(|candidate| self.files.is_file(candidate))
                 // Obsidian only: a bare file name resolves anywhere in the
                 // vault. GFM stays strict, where a path that doesn't exist is
                 // a broken link and guessing would be worse than leaving it.
@@ -388,19 +346,6 @@ impl MarkdownVaultSource {
 
 fn is_skipped_dir(name: &str) -> bool {
     name.starts_with('.') && name != "." || SKIPPED_DIRS.contains(&name)
-}
-
-/// Path relative to `root`, with forward slashes on every platform so index
-/// keys and link targets are directly comparable.
-fn relative_path(root: &Path, path: &Path) -> Option<String> {
-    let relative = path.strip_prefix(root).ok()?;
-    Some(
-        relative
-            .components()
-            .map(|c| c.as_os_str().to_string_lossy().to_string())
-            .collect::<Vec<_>>()
-            .join("/"),
-    )
 }
 
 fn parent_dir(relative: &str) -> Option<&str> {
@@ -440,22 +385,18 @@ fn has_scheme(target: &str) -> bool {
 ///
 /// Vaults exported from older tools carry stray Latin-1 bytes; losing one
 /// character to a replacement marker beats losing the whole note.
-fn read_text(path: &Path) -> AppResult<String> {
-    let bytes =
-        fs::read(path).map_err(|err| AppError::InvalidArg(format!("{}: {err}", path.display())))?;
+fn read_text(files: &dyn ImportFiles, path: &str) -> AppResult<String> {
+    let bytes = files
+        .read(path)
+        .map_err(|err| AppError::InvalidArg(format!("{path}: {err}")))?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Read just enough of a file to parse its frontmatter block.
-fn peek_frontmatter(path: &Path) -> Frontmatter {
-    let Ok(mut file) = fs::File::open(path) else {
+fn peek_frontmatter(files: &dyn ImportFiles, path: &str) -> Frontmatter {
+    let Ok(buffer) = files.read_range(path, 0, FRONTMATTER_PEEK_BYTES) else {
         return Frontmatter::default();
     };
-    let mut buffer = vec![0u8; FRONTMATTER_PEEK_BYTES];
-    let Ok(read) = file.read(&mut buffer) else {
-        return Frontmatter::default();
-    };
-    buffer.truncate(read);
     let text = String::from_utf8_lossy(&buffer);
     markdown::split_frontmatter(&text).0
 }

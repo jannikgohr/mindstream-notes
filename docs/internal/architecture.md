@@ -198,7 +198,7 @@ thread pool, holding the lock only for a single query.
   `manifest.json` (version, account identity via `etebase_collection_uid`,
   counts) + `data.db` (a `VACUUM INTO` snapshot). Import supports preview,
   staged-restart restore, and in-process merge.
-- **Import — [`import/`](../../src-tauri/src/import/mod.rs).** Brings in
+- **Import — [`import`](../../src-tauri/storage-core/src/import.rs).** Brings in
   Markdown folders, Obsidian vaults, Joplin exports and Evernote `.enex` files.
   Each format implements a two-phase source: list every item and assign its
   note id first, then parse one item at a time and rewrite its links against
