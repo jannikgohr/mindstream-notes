@@ -29,7 +29,7 @@ import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
 import { createNoteIn } from '$lib/stores/tree.svelte';
 import { getSettingValue } from '$lib/settings/store.svelte';
 import { i18n } from '$lib/settings/i18n.svelte';
-import { pluginsRunScript } from '$lib/api/plugins';
+import { runPluginScript } from './run-script';
 import type { NoteKind } from '$lib/api';
 import { pluginById, pluginTemplate } from './registry.svelte';
 import { buildPluginContext } from './plugin-ctx';
@@ -271,7 +271,7 @@ async function renderTemplateViaScript(
   variables: TemplateVariables
 ): Promise<RenderedTemplate> {
   const ctx = { ...buildPluginContext(), variables };
-  const raw = (await pluginsRunScript(pluginId, template.render!, ctx)) as
+  const raw = (await runPluginScript(pluginId, template.render!, ctx)) as
     | Record<string, unknown>
     | null
     | undefined;
