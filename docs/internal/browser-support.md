@@ -225,8 +225,9 @@ import dialog says so. The same 1 GiB limit applies.
 
 _Replace_ never starts without a copy the user can reach. The app keeps a
 pre-restore file in its data folder, but a file in OPFS would be out of reach, so
-a browser downloads a backup first, and a failed backup stops the restore before
-anything changes. SQLite's backup API then copies the staged database over the
+a browser downloads a backup first, and asks the user to confirm it finished
+and was saved on their device. Cancelling that confirmation or a failed backup
+stops the restore before anything changes. SQLite's backup API then copies the staged database over the
 vault in one transaction and the page reloads. A tab that dies during the copy
 should roll back through the rollback journal, the recovery covered by the
 interrupted-write test. No test kills a tab during a restore itself.
@@ -241,8 +242,9 @@ A browser has nowhere to unpack a `.jex`, so `TarFiles` reads it in place. A
 folder pick does not report empty folders, so those are not created.
 
 A worker busy in Rust cannot read a cancel message, so **Stop** terminates it.
-Committed batches stay, the batch in flight rolls back, and the report counts the
-notes up to the last progress update. A terminated worker releases the vault lock
+Committed batches stay and the batch in flight rolls back. The report uses the
+last progress update's committed counts for notes, folders, attachments, links,
+and errors. A terminated worker releases the vault lock
 a moment later, so reopening after one waits briefly for that, or the next call
 would report another tab.
 
@@ -256,6 +258,8 @@ The browser hides what only the native app can do: the tray, start on login,
 global shortcuts, the custom title bar, the signed updater, the data folder,
 vault window choices, and Android live ink. In-app keyboard shortcuts still
 work. Note popouts are hidden too, because a second tab cannot own the vault.
+The browser shows its vault name without create, rename, delete, or switch
+actions, because it currently supports one vault per origin.
 
 Mark a setting, section, or category with `"nativeOnly": true` in
 `src/lib/settings/schema.json` to hide it in a browser. Keep `platforms` for

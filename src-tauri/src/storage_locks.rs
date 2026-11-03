@@ -168,6 +168,9 @@ mod tests {
         assert!(VaultLock::acquire(&root.join(".")).is_err());
         drop(first);
         assert!(root.join(".vault.lock").exists());
+        // A child spawned by another test can briefly inherit the descriptor
+        // between fork and exec, even though it is close-on-exec.
+        VaultLock::wait_until_released(&root, Duration::from_secs(5)).unwrap();
         drop(VaultLock::acquire(&root).unwrap());
         fs::remove_dir_all(root).unwrap();
     }

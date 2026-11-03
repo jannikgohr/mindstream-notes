@@ -1,5 +1,6 @@
 import { isBrowserCommand, type BrowserRequest } from './commands';
 import { isTestVaultId } from './namespace';
+import type { ImportReport } from '../api/notes-import';
 export interface ProofReport {
   schemaVersion: number;
   upgrades: number;
@@ -28,8 +29,14 @@ export interface PickedSource {
 
 export interface ImportProgressMessage {
   phase: string;
+  /** Items processed, failures included. Not a count of notes written. */
   done: number;
   total: number;
+  /**
+   * Every report counter as of the last commit. A stopped run reports this
+   * snapshot. Optional so a payload without it still parses.
+   */
+  committed?: ImportReport;
 }
 
 export interface StorageMethods {

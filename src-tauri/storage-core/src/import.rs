@@ -106,8 +106,25 @@ fn default_max_attachment_bytes() -> u64 {
 #[derive(Debug, Clone, Serialize)]
 pub struct ImportProgress {
     pub phase: &'static str,
+    /// Items processed so far, including ones that failed. Drives the progress
+    /// bar, so it is not a count of notes written.
     pub done: usize,
     pub total: usize,
+    /// Every report counter as of the last commit: folders after their write,
+    /// notes and attachments after each batch, placeholders and the final
+    /// tally at the end. A stopped run reports this snapshot, so nothing that
+    /// rolled back is counted. `errors` covers items processed up to the last
+    /// commit, because an item after that point is lost with its batch.
+    pub committed: ImportReport,
+}
+
+/// Counters for prepared work. They reach the report only when their batch
+/// commits, so a failed item or a batch that never lands adds nothing.
+#[derive(Debug, Default)]
+struct PreparedCounts {
+    links_resolved: usize,
+    links_unresolved: usize,
+    attachments_too_large: usize,
 }
 
 /// The format's reader for `files`. `file_name` names the source inside them
@@ -148,6 +165,7 @@ pub fn run_import(
         phase: "scanning",
         done: 0,
         total: 0,
+        committed: ImportReport::default(),
     });
     let index = source.index()?;
     let total = index.items.len();
@@ -164,6 +182,12 @@ pub fn run_import(
         destination.as_deref(),
         share_scope_id.as_deref(),
     )?;
+    on_progress(ImportProgress {
+        phase: "folders",
+        done: 0,
+        total,
+        committed: report.clone(),
+    });
 
     // ---- Link index ----------------------------------------------------
     // Every note id is registered before a single body is parsed. That is the
@@ -176,6 +200,7 @@ pub fn run_import(
     // ---- Phase 2: convert + write --------------------------------------
     let mut positions = writer::PositionCounters::default();
     let mut batch: Vec<writer::PreparedNote> = Vec::with_capacity(BATCH_SIZE);
+    let mut batch_counts = PreparedCounts::default();
     let rewrite_options = source.rewrite_options();
 
     for (processed, item) in index.items.iter().enumerate() {
@@ -183,15 +208,13 @@ pub fn run_import(
             report.cancelled = true;
             break;
         }
-        match prepare_item(
-            source,
-            item,
-            &mut link_index,
-            rewrite_options,
-            options,
-            &mut report,
-        ) {
-            Ok(prepared) => batch.push(prepared),
+        match prepare_item(source, item, &mut link_index, rewrite_options, options) {
+            Ok((prepared, counts)) => {
+                batch.push(prepared);
+                batch_counts.links_resolved += counts.links_resolved;
+                batch_counts.links_unresolved += counts.links_unresolved;
+                batch_counts.attachments_too_large += counts.attachments_too_large;
+            }
             Err(err) => {
                 // One unparseable file must not cost the user the other
                 // 999,999. Count it and carry on.
@@ -204,6 +227,7 @@ pub fn run_import(
             flush(
                 store,
                 &mut batch,
+                &mut batch_counts,
                 destination.as_deref(),
                 share_scope_id.as_deref(),
                 &mut positions,
@@ -213,12 +237,14 @@ pub fn run_import(
                 phase: "importing",
                 done: processed + 1,
                 total,
+                committed: report.clone(),
             });
         }
     }
     flush(
         store,
         &mut batch,
+        &mut batch_counts,
         destination.as_deref(),
         share_scope_id.as_deref(),
         &mut positions,
@@ -238,13 +264,18 @@ pub fn run_import(
         phase: "done",
         done: report.notes_created,
         total,
+        committed: report.clone(),
     });
     Ok(report)
 }
 
+/// Commit the prepared batch, then fold its counters into the report. The
+/// counters move only after `write_batch` returns, so a rolled-back batch
+/// contributes nothing.
 fn flush(
     store: &impl ImportStore,
     batch: &mut Vec<writer::PreparedNote>,
+    counts: &mut PreparedCounts,
     destination: Option<&str>,
     share_scope_id: Option<&str>,
     positions: &mut writer::PositionCounters,
@@ -260,20 +291,26 @@ fn flush(
         share_scope_id,
         positions,
     )?;
+    let counts = std::mem::take(counts);
     report.notes_created += outcome.notes;
     report.attachments_imported += outcome.attachments;
     report.attachments_deduplicated += outcome.attachments_deduplicated;
+    report.links_resolved += counts.links_resolved;
+    report.links_unresolved += counts.links_unresolved;
+    report.attachments_too_large += counts.attachments_too_large;
     Ok(())
 }
 
+/// Parse and rewrite one item and read its attachments, without touching the
+/// database. The counters come back with the note, so the caller adds them
+/// only if this item ends up in a batch.
 fn prepare_item(
     source: &mut dyn source::ImportSource,
     item: &model::ItemIndex,
     link_index: &mut links::LinkIndex,
     rewrite_options: links::RewriteOptions,
     options: &ImportOptions,
-    report: &mut ImportReport,
-) -> AppResult<writer::PreparedNote> {
+) -> AppResult<(writer::PreparedNote, PreparedCounts)> {
     let loaded = source.load(item)?;
     let mut note = loaded.note;
 
@@ -292,8 +329,11 @@ fn prepare_item(
         },
         &mut stats,
     );
-    report.links_resolved += stats.resolved;
-    report.links_unresolved += stats.unresolved;
+    let mut counts = PreparedCounts {
+        links_resolved: stats.resolved,
+        links_unresolved: stats.unresolved,
+        attachments_too_large: 0,
+    };
 
     let mut attachments = Vec::new();
     if options.import_attachments {
@@ -302,14 +342,14 @@ fn prepare_item(
                 continue;
             };
             if bytes.len() as u64 > options.max_attachment_bytes {
-                report.attachments_too_large += 1;
+                counts.attachments_too_large += 1;
                 continue;
             }
             attachments.push((reference, bytes));
         }
     }
 
-    Ok(writer::PreparedNote { note, attachments })
+    Ok((writer::PreparedNote { note, attachments }, counts))
 }
 
 /// Work out the collection everything lands under, creating the default

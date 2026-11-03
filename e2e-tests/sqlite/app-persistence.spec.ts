@@ -649,12 +649,38 @@ async function replaceVault(page: Page) {
   await expect(dialog).toContainText('downloads first');
   const [safety] = await Promise.all([
     page.waitForEvent('download'),
-    page.waitForEvent('load'),
     dialog.getByRole('button', { name: 'Replace vault' }).click()
+  ]);
+  expect(await safety.failure()).toBeNull();
+  await expect(dialog).toContainText('Check your safety backup');
+  await Promise.all([
+    page.waitForEvent('load'),
+    dialog.getByRole('button', { name: 'Backup saved, replace vault' }).click()
   ]);
   await page.waitForFunction(() => 'vaultWorker' in window);
   return safety;
 }
+
+test('cancelling the safety-backup confirmation keeps the current vault', async ({
+  page
+}) => {
+  await rpc(page, 'create_note', { input: { title: 'Keep this vault' } });
+  await openDataSettings(page);
+  await chooseBackup(page, NATIVE_BACKUP);
+  const dialog = page.getByRole('alertdialog');
+  await dialog.getByRole('button', { name: 'Restore this vault' }).click();
+  await Promise.all([
+    page.waitForEvent('download'),
+    dialog.getByRole('button', { name: 'Replace vault' }).click()
+  ]);
+  await expect(dialog).toContainText('Check your safety backup');
+  expect(await noteTitles(page)).toContain('Keep this vault');
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  expect(await noteTitles(page)).toContain('Keep this vault');
+  expect(await noteTitles(page)).not.toContain('Portable note');
+  await hardReload(page);
+  expect(await noteTitles(page)).toContain('Keep this vault');
+});
 
 test('a native backup replaces the vault after saving a copy of it', async ({
   page
@@ -814,6 +840,9 @@ test('a folder of notes imports with its links and attachments', async ({
 test('stopping an import keeps what it committed and the vault stays usable', async ({
   page
 }) => {
+  // File selection, the first committed batch, and reopening after worker
+  // termination each need their own wait budget on a loaded runner.
+  test.setTimeout(90_000);
   const before = (await noteTitles(page)).length;
   // Large enough that Stop lands before the run ends, even in a fast browser.
   const total = 5_000;
@@ -839,11 +868,19 @@ test('stopping an import keeps what it committed and the vault stays usable', as
     await expect(dialog).toContainText(/Imported \d+ of 5000/, {
       timeout: 30_000
     });
+    const stoppedWorker = await page.evaluateHandle(
+      () => (window as unknown as { vaultWorker: Worker }).vaultWorker
+    );
     await dialog.getByRole('button', { name: 'Stop', exact: true }).click();
     await expect(dialog).toContainText('Import stopped', { timeout: 20_000 });
 
     // Batches commit 500 notes at a time, and the one in flight rolls back.
-    await page.waitForFunction(() => 'vaultWorker' in window);
+    await page.waitForFunction(
+      (previous) =>
+        (window as unknown as { vaultWorker: Worker }).vaultWorker !== previous,
+      stoppedWorker
+    );
+    await stoppedWorker.dispose();
     await expect
       .poll(
         async () =>

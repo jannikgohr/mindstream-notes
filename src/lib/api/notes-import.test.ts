@@ -201,7 +201,12 @@ describe('notes-import — browser storage', () => {
     const off = await listen(TauriEventName.ImportProgress, (progress) =>
       heard.push(progress)
     );
-    const update = { phase: 'importing', done: 500, total: 900 };
+    const update = {
+      phase: 'importing',
+      done: 500,
+      total: 900,
+      committed: REPORT
+    };
     browser.run.mock.calls[0][2](update);
     off();
 
@@ -213,14 +218,52 @@ describe('notes-import — browser storage', () => {
 
   it('reports what committed when the user stops the run', async () => {
     const { run, reject } = await pickAndHoldRun();
-    browser.run.mock.calls[0][2]({ phase: 'importing', done: 500, total: 900 });
+    // 520 items were processed, but 20 of them failed, so only 500 notes landed.
+    // The snapshot also carries the folder and placeholder counts.
+    browser.run.mock.calls[0][2]({
+      phase: 'importing',
+      done: 520,
+      total: 900,
+      committed: {
+        ...REPORT,
+        notes_created: 500,
+        folders_created: 1,
+        placeholders_created: 2,
+        errors: 3,
+        cancelled: false
+      }
+    });
 
     await cancelImport();
     expect(browser.cancel).toHaveBeenCalledOnce();
     reject({ code: 'closed', message: 'Storage worker is closed' });
 
-    await expect(run).resolves.toMatchObject({
+    await expect(run).resolves.toEqual({
+      ...REPORT,
       notes_created: 500,
+      folders_created: 1,
+      placeholders_created: 2,
+      errors: 3,
+      cancelled: true
+    });
+  });
+
+  it('reports nothing committed when the user stops before any batch', async () => {
+    const { run, reject } = await pickAndHoldRun();
+    browser.run.mock.calls[0][2]({ phase: 'scanning', done: 0, total: 900 });
+
+    await cancelImport();
+    reject({ code: 'closed', message: 'Storage worker is closed' });
+
+    await expect(run).resolves.toEqual({
+      notes_created: 0,
+      folders_created: 0,
+      placeholders_created: 0,
+      attachments_imported: 0,
+      attachments_deduplicated: 0,
+      attachments_too_large: 0,
+      links_resolved: 0,
+      links_unresolved: 0,
       errors: 0,
       cancelled: true
     });

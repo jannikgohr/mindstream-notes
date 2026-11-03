@@ -414,6 +414,36 @@ describe('notes import', () => {
     ]);
   });
 
+  it('cancels while the shared open is pending without sending an import', async () => {
+    FakeWorker.plans = [{ open: 'hang' }];
+    const vault = await loadVault();
+    const progress = vi.fn();
+    const run = outcome(vault.importBrowserNotes(source, {}, progress));
+
+    await vi.waitFor(() =>
+      expect(FakeWorker.instances[0]?.messages[0]?.method).toBe('open')
+    );
+    vault.cancelBrowserNotesImport();
+
+    const worker = FakeWorker.instances[0];
+    const open = worker.messages[0];
+    worker.onmessage?.({
+      data: { id: open.id, ok: true, result: undefined }
+    });
+
+    expect(await run).toEqual({ ok: false, error: { code: 'closed' } });
+    expect(worker.messages.map(({ method }) => method)).toEqual(['open']);
+
+    await expect(vault.importBrowserNotes(source, {}, () => {})).resolves.toBe(
+      undefined
+    );
+    expect(worker.messages.map(({ method }) => method)).toEqual([
+      'open',
+      'notesImport'
+    ]);
+    expect(progress).not.toHaveBeenCalled();
+  });
+
   it('passes progress on while the import runs, and only then', async () => {
     FakeWorker.plans = [{ notes: 'hang' }];
     const vault = await loadVault();
