@@ -6,7 +6,7 @@ import type {
 } from 'dockview';
 import { mount, unmount } from 'svelte';
 import { tree } from '$lib/stores/tree.svelte';
-import { openNoteWindow } from '$lib/api';
+import { isTauri, openNoteWindow } from '$lib/api';
 import { tUi } from '$lib/settings/i18n.svelte';
 import { tooltip } from '$lib/actions/tooltip';
 import NoteStatusIcons from './NoteStatusIcons.svelte';
@@ -73,7 +73,9 @@ export class PopoutHeaderAction implements IHeaderActionsRenderer {
     `;
     this.btn.addEventListener('click', this.onClick);
     this.btnTooltip = tooltip(this.btn, popoutLabel);
-    this.el.appendChild(this.btn);
+    // A browser tab opened for a popout cannot own the vault, which allows
+    // one owner per tab. The status icons above still belong in the header.
+    if (isTauri()) this.el.appendChild(this.btn);
   }
 
   get element(): HTMLElement {

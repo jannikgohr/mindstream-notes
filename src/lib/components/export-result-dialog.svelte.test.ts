@@ -74,6 +74,11 @@ describe('showDataResult queue', () => {
 });
 
 describe('showExportResult', () => {
+  it('names no location for a browser download', () => {
+    void showExportResult(exportReport({ markdown_written: 3 }), null);
+    expect(exportResultQueue.items[0].location).toBeUndefined();
+  });
+
   it('records the destination as the dialog location', () => {
     void showExportResult(exportReport({ markdown_written: 3 }), '/tmp/vault');
     const opts = exportResultQueue.items[0];
@@ -119,6 +124,11 @@ describe('showBackupResult', () => {
     counts: { notes: 10, folders: 3, assets_bytes: 2048 },
     account_present: true,
     ...over
+  });
+
+  it('names no location for a browser download', () => {
+    void showBackupResult(report({ destination: null }));
+    expect(exportResultQueue.items[0].location).toBeUndefined();
   });
 
   it('derives the open location from the destination parent dir', () => {

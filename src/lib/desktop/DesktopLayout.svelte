@@ -34,6 +34,7 @@
     focusExistingNoteWindow,
     focusMainWindow,
     isKnownNoteKind,
+    isTauri,
     openNoteWindow
   } from '$lib/api';
   import { clearSavedLayout, loadSavedLayout, saveLayout } from '$lib/api';
@@ -896,11 +897,15 @@
     void openNote(id, { splitDirection: 'right' });
   const onOpenNoteBelow = (id: string) =>
     void openNote(id, { splitDirection: 'below' });
-  const onOpenInNewWindow = (id: string) => {
-    const note = tree.notesById[id];
-    if (!note) return;
-    void openNoteWindow(note.id, note.title, null, null);
-  };
+  // Left undefined in a browser, which drops the menu item: a second tab
+  // cannot own the vault, so it could not load the note.
+  const onOpenInNewWindow = isTauri()
+    ? (id: string) => {
+        const note = tree.notesById[id];
+        if (!note) return;
+        void openNoteWindow(note.id, note.title, null, null);
+      }
+    : undefined;
 </script>
 
 <div data-app-shell class="desktop-shell flex h-full w-full flex-col">

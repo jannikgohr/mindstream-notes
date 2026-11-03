@@ -4,7 +4,7 @@ How the importer scales to large vaults, and how to run the big-vault test.
 What users see, from the formats to the link matching, is in
 [Importing notes](../import.md).
 
-The code lives in [`src-tauri/src/import/`](../../src-tauri/src/import/mod.rs);
+The code lives in [`src-tauri/storage-core/src/import/`](../../src-tauri/storage-core/src/import.rs);
 the dialog is
 [`ImportNotesDialog.svelte`](../../src/lib/components/ImportNotesDialog.svelte).
 
