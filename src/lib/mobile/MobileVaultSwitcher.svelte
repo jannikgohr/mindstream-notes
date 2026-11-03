@@ -13,6 +13,9 @@
    * The unified options menu (MobileOptionsMenu) owns the trigger and
    * the nav-stack entry; this component is the controlled sheet. `open`
    * shows it and any dismissal reports back through `onClose`.
+   *
+   * In a browser tab the sheet lists the one vault without any rows that
+   * switch, rename or delete, and without the create footer.
    */
   import { Dialog } from 'bits-ui';
   import { Check, Pencil, Plus, Trash2, X } from '@lucide/svelte';
@@ -35,6 +38,10 @@
 
   let { open = false, onClose }: { open?: boolean; onClose: () => void } =
     $props();
+
+  // The browser fallback cannot create, rename, delete or switch vaults, so
+  // those controls would report success without changing anything.
+  const manageable = isTauri();
 
   let busy = $state(false);
   let creating = $state(false);
@@ -284,6 +291,24 @@
                   {tUi('vault.rename.save')}
                 </Button>
               </div>
+            {:else if !manageable}
+              <div
+                class="flex items-center gap-3 rounded-lg px-3 py-3 text-base {profile.id ===
+                profilesState.active
+                  ? 'bg-accent-brand/10'
+                  : ''}"
+              >
+                <VaultTile
+                  id={profile.id}
+                  name={profile.name}
+                  color={profile.color}
+                  class="size-6 rounded-md text-xs"
+                />
+                <span class="truncate">{profile.name}</span>
+                {#if profile.id === profilesState.active}
+                  <Check class="size-4 shrink-0 text-accent-brand" />
+                {/if}
+              </div>
             {:else}
               <div
                 class="flex items-center rounded-lg {profile.id ===
@@ -338,38 +363,40 @@
         </div>
       </section>
 
-      <footer class="shrink-0 border-t border-border p-2">
-        {#if creating}
-          <div class="flex items-center gap-2">
-            <Input
-              bind:ref={createInput}
-              bind:value={newName}
-              placeholder={tUi('vault.create.placeholder')}
-              class="h-11 flex-1 text-base"
+      {#if manageable}
+        <footer class="shrink-0 border-t border-border p-2">
+          {#if creating}
+            <div class="flex items-center gap-2">
+              <Input
+                bind:ref={createInput}
+                bind:value={newName}
+                placeholder={tUi('vault.create.placeholder')}
+                class="h-11 flex-1 text-base"
+                disabled={busy}
+                onkeydown={onCreateKeydown}
+              />
+              <Button
+                variant="default"
+                class="h-11"
+                disabled={busy || newName.trim() === ''}
+                onclick={submitCreate}
+              >
+                {tUi('vault.create.button')}
+              </Button>
+            </div>
+          {:else}
+            <button
+              type="button"
+              class="flex w-full items-center gap-3 rounded-md px-3 py-3 text-left text-base hover:bg-accent hover:text-accent-foreground"
               disabled={busy}
-              onkeydown={onCreateKeydown}
-            />
-            <Button
-              variant="default"
-              class="h-11"
-              disabled={busy || newName.trim() === ''}
-              onclick={submitCreate}
+              onclick={startCreate}
             >
-              {tUi('vault.create.button')}
-            </Button>
-          </div>
-        {:else}
-          <button
-            type="button"
-            class="flex w-full items-center gap-3 rounded-md px-3 py-3 text-left text-base hover:bg-accent hover:text-accent-foreground"
-            disabled={busy}
-            onclick={startCreate}
-          >
-            <Plus class="size-5 shrink-0" />
-            <span>{tUi('vault.create')}</span>
-          </button>
-        {/if}
-      </footer>
+              <Plus class="size-5 shrink-0" />
+              <span>{tUi('vault.create')}</span>
+            </button>
+          {/if}
+        </footer>
+      {/if}
     </Dialog.Content>
   </Dialog.Portal>
 </Dialog.Root>

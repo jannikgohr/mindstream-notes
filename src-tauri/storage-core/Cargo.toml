@@ -19,6 +19,11 @@ serde = { version = "1", features = ["derive"] }
 yrs = "0.26"
 similar = "3"
 regex = "1"
+yaml-rust2 = "0.12"
+quick-xml = "0.42.0"
+md-5 = "0.11.0"
+htmd = "0.5.5"
+tar = { version = "0.4", default-features = false }
 flate2 = "1"
 base64 = "0.22"
 uuid = { version = "1", features = ["v4", "js"] }
