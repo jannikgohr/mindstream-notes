@@ -8,3 +8,5 @@ allowBuilds:
   esbuild: true
   geckodriver: true
   skia-canvas: true
+patchedDependencies:
+  dockview-core@8.2.0: patches/dockview-core@8.2.0.patch
