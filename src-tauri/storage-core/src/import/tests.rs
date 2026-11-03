@@ -12,6 +12,7 @@ use rusqlite::Connection;
 
 use super::tar_files::TarFiles;
 use super::*;
+use crate::error::AppError;
 use crate::migrations;
 
 #[derive(Clone, Default)]
@@ -331,4 +332,188 @@ fn the_walk_sorts_each_directory_and_prunes_what_it_skips() {
             ("a.md", false),
         ]
     );
+}
+
+/// Items held in memory, so a test can choose which ones fail.
+struct ScriptedSource {
+    count: usize,
+    folders: usize,
+    failing_loads: Vec<usize>,
+    failing_attachments: Vec<usize>,
+    body: &'static str,
+    attachments: bool,
+}
+
+impl ScriptedSource {
+    fn new(count: usize) -> Self {
+        Self {
+            count,
+            folders: 0,
+            failing_loads: Vec::new(),
+            failing_attachments: Vec::new(),
+            body: "body",
+            attachments: false,
+        }
+    }
+}
+
+impl source::ImportSource for ScriptedSource {
+    fn index(&mut self) -> AppResult<model::SourceIndex> {
+        let items = (0..self.count)
+            .map(|i| model::ItemIndex {
+                note_id: format!("{i:032x}"),
+                title: format!("Note {i}"),
+                folder_id: None,
+                locator: i.to_string(),
+                aliases: Vec::new(),
+            })
+            .collect();
+        let folders = (0..self.folders)
+            .map(|i| model::FolderIndex {
+                id: format!("f{i:031x}"),
+                parent_id: None,
+                name: format!("Folder {i}"),
+            })
+            .collect();
+        Ok(model::SourceIndex { folders, items })
+    }
+
+    fn load(&mut self, item: &model::ItemIndex) -> AppResult<source::LoadedItem> {
+        let index: usize = item.locator.parse().unwrap();
+        if self.failing_loads.contains(&index) {
+            return Err(AppError::InvalidArg(format!("item {index} is unreadable")));
+        }
+        let attachments = if self.attachments {
+            vec![model::AttachmentRef {
+                locator: format!("{index}.png"),
+                placeholder: format!("{index}.png"),
+                mime_type: "image/png".into(),
+            }]
+        } else {
+            Vec::new()
+        };
+        Ok(source::LoadedItem {
+            note: model::StagedNote {
+                note_id: item.note_id.clone(),
+                title: item.title.clone(),
+                folder_id: None,
+                body: self.body.to_string(),
+                tags: Vec::new(),
+                created: None,
+                modified: None,
+                note_kind: crate::notes::NoteKind::Markdown,
+            },
+            attachments,
+        })
+    }
+
+    fn attachment_bytes(&mut self, reference: &model::AttachmentRef) -> AppResult<Option<Vec<u8>>> {
+        let index: usize = reference.locator.trim_end_matches(".png").parse().unwrap();
+        if self.failing_attachments.contains(&index) {
+            return Err(AppError::InvalidArg(format!("attachment {index} is gone")));
+        }
+        Ok(Some(vec![137, 80, 78, 71]))
+    }
+
+    fn rewrite_options(&self) -> links::RewriteOptions {
+        links::RewriteOptions {
+            wikilinks: true,
+            markdown_links: false,
+            id_links: false,
+            evernote_links: false,
+            keep_unresolved_wikilinks: false,
+        }
+    }
+}
+
+#[test]
+fn progress_reports_committed_notes_apart_from_items_processed() {
+    // Items 3 and 700 fail to load. Batches flush every 500 notes, so the
+    // first ping lands after item 500 and the second after item 1001.
+    let mut source = ScriptedSource::new(1200);
+    source.folders = 2;
+    source.failing_loads = vec![3, 700];
+    let store = MemoryStore::new();
+    let mut progress = Vec::new();
+
+    let report = run_import(
+        &store,
+        &mut source,
+        &options(ImportSourceKind::Obsidian),
+        &AtomicBool::new(false),
+        |p| progress.push(p),
+    )
+    .unwrap();
+
+    assert_eq!(report.notes_created, 1198);
+    assert_eq!(report.errors, 2);
+    // `done` counts failed items. The snapshot counts only what committed.
+    let pings: Vec<(usize, usize, usize)> = progress
+        .iter()
+        .filter(|p| p.phase == "importing")
+        .map(|p| (p.done, p.committed.notes_created, p.committed.errors))
+        .collect();
+    assert_eq!(pings, [(501, 500, 1), (1002, 1000, 2)]);
+    let folders = progress.iter().find(|p| p.phase == "folders").unwrap();
+    assert_eq!(folders.committed.folders_created, 2);
+    assert_eq!(folders.committed.notes_created, 0);
+    let last = progress.last().unwrap();
+    assert_eq!(last.phase, "done");
+    assert_eq!(last.committed, report);
+}
+
+#[test]
+fn a_cancelled_run_reports_the_last_committed_count() {
+    let mut source = ScriptedSource::new(1200);
+    source.folders = 2;
+    let store = MemoryStore::new();
+    let cancelled = AtomicBool::new(false);
+    let mut last_committed: Option<ImportReport> = None;
+
+    let report = run_import(
+        &store,
+        &mut source,
+        &options(ImportSourceKind::Obsidian),
+        &cancelled,
+        |p| {
+            if p.phase == "importing" {
+                // Stop as soon as the first batch lands, the way a user would.
+                cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            last_committed = Some(p.committed);
+        },
+    )
+    .unwrap();
+
+    assert!(report.cancelled);
+    assert_eq!(report.notes_created, 500);
+    let last = last_committed.unwrap();
+    assert_eq!(last.notes_created, 500);
+    assert_eq!(last.folders_created, 2);
+    assert_eq!(last.errors, 0);
+}
+
+#[test]
+fn a_failed_item_adds_no_link_or_attachment_counts() {
+    // Item 0 reads its attachment after parsing its link, then fails. Its
+    // unresolved link must not reach the report, since its note never lands.
+    let mut source = ScriptedSource::new(2);
+    source.body = "[[Missing]]";
+    source.attachments = true;
+    source.failing_attachments = vec![0];
+    let store = MemoryStore::new();
+
+    let report = run_import(
+        &store,
+        &mut source,
+        &options(ImportSourceKind::Obsidian),
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+
+    assert_eq!(report.notes_created, 1);
+    assert_eq!(report.errors, 1);
+    assert_eq!(report.links_unresolved, 1);
+    assert_eq!(report.attachments_imported, 1);
 }

@@ -84,7 +84,25 @@ export interface ImportProgress {
   phase: string;
   done: number;
   total: number;
+  /**
+   * Every report counter as of the last commit. Optional so progress from
+   * older payloads, and test fixtures that only track the phase, still type.
+   */
+  committed?: ImportReport;
 }
+
+const EMPTY_REPORT: ImportReport = {
+  notes_created: 0,
+  folders_created: 0,
+  placeholders_created: 0,
+  attachments_imported: 0,
+  attachments_deduplicated: 0,
+  attachments_too_large: 0,
+  links_resolved: 0,
+  links_unresolved: 0,
+  errors: 0,
+  cancelled: false
+};
 
 /** Outcome of converting bare `[[Title]]` spans into ID-backed links. */
 export interface LegacyLinkReport {
@@ -100,7 +118,8 @@ export const DEFAULT_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 /** The browser's pick, kept here because a `File` can't travel in a path. */
 let picked: PickedSource | null = null;
-let running: { cancelled: boolean; notes: number } | null = null;
+let running: { cancelled: boolean; committed: ImportReport | null } | null =
+  null;
 
 export async function pickImportFolder(): Promise<string | null> {
   if (!isTauri()) {
@@ -173,31 +192,24 @@ async function runBrowserImport(
   options: ImportOptions
 ): Promise<ImportReport> {
   const { importBrowserNotes } = await import('../browser/vault');
-  const run = { cancelled: false, notes: 0 };
+  const run: { cancelled: boolean; committed: ImportReport | null } = {
+    cancelled: false,
+    committed: null
+  };
   running = run;
   try {
     return parseReport(
       await importBrowserNotes(source, { ...options }, (progress) => {
-        if (progress.phase === 'importing') run.notes = progress.done;
+        if (progress.committed) run.committed = progress.committed;
         void emit(TauriEventName.ImportProgress, progress);
       })
     );
   } catch (error) {
     if (!run.cancelled) throw error;
-    // The stopped worker can't report. Every batch up to the last progress
-    // ping committed, and progress is all that is known about the rest.
-    return {
-      notes_created: run.notes,
-      folders_created: 0,
-      placeholders_created: 0,
-      attachments_imported: 0,
-      attachments_deduplicated: 0,
-      attachments_too_large: 0,
-      links_resolved: 0,
-      links_unresolved: 0,
-      errors: 0,
-      cancelled: true
-    };
+    // The stopped worker can't report. Its last progress ping carries the
+    // counters as of the last commit. `done` counts failed items, so it is
+    // not used for the report.
+    return { ...(run.committed ?? EMPTY_REPORT), cancelled: true };
   } finally {
     running = null;
     picked = null;

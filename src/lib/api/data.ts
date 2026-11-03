@@ -218,8 +218,9 @@ export async function importCleanup(token: string): Promise<void> {
 export async function importRestore(
   token: string,
   sameAccount: boolean,
-  includeDevice = false
-): Promise<RestoreStaged> {
+  includeDevice = false,
+  confirmSafetyCopy?: () => Promise<boolean>
+): Promise<RestoreStaged | null> {
   assertRequiredString(token, 'token');
   if (typeof sameAccount !== 'boolean') {
     throw new Error('sameAccount must be a boolean');
@@ -229,10 +230,14 @@ export async function importRestore(
   if (!isTauri()) {
     if (!browserStorageEnabled())
       return { restart_required: false, sanitized: !sameAccount };
-    // The app keeps a pre-restore copy in its data folder. A copy in browser
-    // storage would be out of the user's reach, so they get a file instead,
-    // and a backup that fails stops the restore before it replaces anything.
+    // Browsers cannot tell us whether a download was saved or cancelled.
+    // Require the user to check the safety copy before replacing their vault.
+    if (!confirmSafetyCopy)
+      throw new Error(
+        'A saved safety backup must be confirmed before restoring.'
+      );
     await downloadBackup();
+    if (!(await confirmSafetyCopy())) return null;
     const { restoreBrowserBackup } = await import('../browser/vault');
     return {
       restart_required: false,

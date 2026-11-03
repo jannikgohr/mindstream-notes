@@ -127,6 +127,7 @@ export async function exportVault(write: ExportWriter): Promise<ExportReport> {
     try {
       const written = await exportNote(write, summary, parentDir, takenFor);
       report.assets_written += written.assets_written;
+      report.errors += written.errors ?? 0;
       switch (written.kind) {
         case 'markdown':
           report.markdown_written++;
@@ -221,12 +222,14 @@ interface NoteWriteSummary {
     | 'typst'
     | 'unknown';
   assets_written: number;
+  errors?: number;
 }
 
 /** Per-helper return: the helpers don't carry the kind themselves —
  *  exportNote adds it from the switch arm above. */
 interface AssetWriteSummary {
   assets_written: number;
+  errors?: number;
 }
 
 async function exportNote(
@@ -239,7 +242,7 @@ async function exportNote(
   switch (note.note_kind) {
     case 'markdown': {
       const written = await exportMarkdown(write, note, parentDir, takenFor);
-      return { kind: 'markdown', assets_written: written.assets_written };
+      return { kind: 'markdown', ...written };
     }
     case 'freeform': {
       const written = await exportFreeform(write, note, parentDir, takenFor);
@@ -271,7 +274,7 @@ async function exportNote(
         ),
         new TextEncoder().encode(JSON.stringify(board, null, 2))
       );
-      return { kind: 'kanban', assets_written: written.assets_written };
+      return { kind: 'kanban', ...written };
     }
     case 'plugin.com.mindstream.typst.document': {
       const basename = dedupeAgainst(
@@ -310,21 +313,22 @@ async function exportMarkdown(
   const assetSubdir = parentDir ? `${parentDir}/${ASSET_SUBDIR}` : ASSET_SUBDIR;
   const filenameById = new Map<string, string>();
   let assetsWritten = 0;
+  let errors = 0;
   for (const id of ids) {
     try {
       const asset = await api.fetchDrawingAsset(id);
       const ext = extensionForMime(asset.mime_type);
       const assetFilename = dedupeAgainst(takenFor(assetSubdir), `${id}${ext}`);
-      filenameById.set(id, assetFilename);
       await write(
         joinRel(assetSubdir, assetFilename),
         new Uint8Array(asset.bytes)
       );
+      filenameById.set(id, assetFilename);
       assetsWritten++;
     } catch (err) {
-      // Missing assets shouldn't take the note down — the URL is
-      // left intact and the user sees a broken image link rather
-      // than losing the note entirely.
+      // Keep the note text and original URL when an attachment cannot be
+      // read or written, and surface the incomplete export in the report.
+      errors++;
       console.warn(
         '[notes-export] could not export asset',
         id,
@@ -344,7 +348,7 @@ async function exportMarkdown(
     joinRel(parentDir, fileBasename),
     new TextEncoder().encode(content)
   );
-  return { assets_written: assetsWritten };
+  return { assets_written: assetsWritten, errors };
 }
 
 async function exportFreeform(

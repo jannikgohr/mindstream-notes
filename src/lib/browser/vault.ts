@@ -26,6 +26,7 @@ let opening: Promise<BrowserStorageClient> | undefined;
 let resetting = false;
 let startupChecked = false;
 let resetFailure: StorageError | undefined;
+const notesImportAttempts = new Set<{ cancelled: boolean }>();
 
 function failedReset(cause?: unknown): StorageError {
   const error = cause ? storageError(cause) : { code: 'refused' as const };
@@ -181,22 +182,30 @@ export async function importBrowserNotes(
   options: Record<string, unknown>,
   onProgress: (progress: ImportProgressMessage) => void
 ): Promise<unknown> {
-  const connection = await connect();
-  connection.onProgress = onProgress;
+  const attempt = { cancelled: false };
+  notesImportAttempts.add(attempt);
+  let connection: BrowserStorageClient | undefined;
   try {
+    connection = await connect();
+    if (attempt.cancelled) throw { code: 'closed' };
+    connection.onProgress = onProgress;
     return await connection.request(
       'notesImport',
       { source, options },
       NOTES_IMPORT_TIMEOUT_MS
     );
   } finally {
-    connection.onProgress = undefined;
+    notesImportAttempts.delete(attempt);
+    if (connection?.onProgress === onProgress)
+      connection.onProgress = undefined;
   }
 }
 
 /** A busy worker can't read a cancel message, so stop it. What earlier batches
  * committed stays, the one in flight rolls back, and the next call reconnects. */
 export function cancelBrowserNotesImport(): void {
+  if (notesImportAttempts.size === 0) return;
+  for (const attempt of notesImportAttempts) attempt.cancelled = true;
   client?.dispose();
 }
 
