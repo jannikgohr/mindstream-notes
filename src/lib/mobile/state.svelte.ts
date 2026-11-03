@@ -20,6 +20,11 @@ import { setActiveNote } from '$lib/state.svelte';
 import { isTauri } from '$lib/api/core';
 import { writeNativeDeviceUi } from '$lib/native-device-ui.svelte';
 import { migrateLegacyContent } from '$lib/api/legacy-content';
+import {
+  readAppStorage,
+  writeAppStorage,
+  removeAppStorage
+} from '$lib/storage/app-storage';
 
 const DISPLAY_MODE_KEY = 'notes-app:mobile:displayMode';
 const LEGACY_FAVOURITES_KEY = 'notes-app:mobile:favourites';
@@ -60,7 +65,7 @@ interface MobileState {
 function loadDisplayMode(): DisplayMode {
   if (isTauri()) return 'list';
   if (typeof localStorage === 'undefined') return 'list';
-  const raw = localStorage.getItem(DISPLAY_MODE_KEY);
+  const raw = readAppStorage(DISPLAY_MODE_KEY);
   return raw === 'grid' ? 'grid' : 'list';
 }
 
@@ -143,7 +148,7 @@ export function toggleFavourite(noteId: string) {
  */
 export async function migrateLegacyFavourites(): Promise<void> {
   if (typeof localStorage === 'undefined') return;
-  const raw = localStorage.getItem(LEGACY_FAVOURITES_KEY);
+  const raw = readAppStorage(LEGACY_FAVOURITES_KEY);
   if (!raw) return;
   if (isTauri()) {
     try {
@@ -164,12 +169,12 @@ export async function migrateLegacyFavourites(): Promise<void> {
   try {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) {
-      localStorage.removeItem(LEGACY_FAVOURITES_KEY);
+      removeAppStorage(LEGACY_FAVOURITES_KEY);
       return;
     }
     ids = parsed.filter((x): x is string => typeof x === 'string');
   } catch {
-    localStorage.removeItem(LEGACY_FAVOURITES_KEY);
+    removeAppStorage(LEGACY_FAVOURITES_KEY);
     return;
   }
   for (const id of ids) {
@@ -181,7 +186,7 @@ export async function migrateLegacyFavourites(): Promise<void> {
       console.warn('[mobile] failed to migrate favourite for', id, err);
     }
   }
-  localStorage.removeItem(LEGACY_FAVOURITES_KEY);
+  removeAppStorage(LEGACY_FAVOURITES_KEY);
 }
 
 export function setMobileScreen(screen: MobileScreen) {
@@ -457,7 +462,7 @@ export function setDisplayMode(mode: DisplayMode) {
   mobileState.displayMode = mode;
   if (isTauri()) return writeNativeDeviceUi('ui.mobileDisplayMode', mode);
   if (typeof localStorage !== 'undefined') {
-    localStorage.setItem(DISPLAY_MODE_KEY, mode);
+    writeAppStorage(DISPLAY_MODE_KEY, mode);
   }
 }
 
