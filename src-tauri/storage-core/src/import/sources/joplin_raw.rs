@@ -22,17 +22,15 @@
 //! makes link preservation exact rather than a title match.
 
 use std::collections::HashMap;
-use std::fs;
-use std::path::{Path, PathBuf};
 
 use crate::error::{AppError, AppResult};
+use crate::import::files::ImportFiles;
 use crate::import::links::{self, RewriteOptions};
 use crate::import::mime;
 use crate::import::model::{
     AliasTier, AttachmentRef, FolderIndex, ItemIndex, SourceIndex, StagedNote,
 };
 use crate::import::source::{ImportSource, LoadedItem};
-use crate::import::stage::StagedArchive;
 use crate::notes::NoteKind;
 
 /// Joplin's `type_` discriminator. Only the ones that carry content matter
@@ -69,39 +67,23 @@ struct Resource {
 }
 
 pub struct JoplinRawSource {
-    root: PathBuf,
-    /// Kept alive for the whole run when the source was a `.jex`: the
-    /// extracted files are read lazily in phase 2, so dropping this earlier
-    /// would delete the vault mid-import.
-    _staged: Option<StagedArchive>,
+    files: Box<dyn ImportFiles>,
     resources: HashMap<String, Resource>,
     /// Joplin note id → tag names, assembled from the `note_tag` join items.
     tags_by_note: HashMap<String, Vec<String>>,
 }
 
 impl JoplinRawSource {
-    pub fn new(root: PathBuf) -> Self {
+    pub fn new(files: Box<dyn ImportFiles>) -> Self {
         Self {
-            root,
-            _staged: None,
+            files,
             resources: HashMap::new(),
             tags_by_note: HashMap::new(),
         }
     }
 
-    /// Unpack a `.jex` and read the RAW layout inside it.
-    pub fn from_archive(archive: &Path) -> AppResult<Self> {
-        let staged = crate::import::stage::extract_tar(archive)?;
-        Ok(Self {
-            root: staged.path().to_path_buf(),
-            _staged: Some(staged),
-            resources: HashMap::new(),
-            tags_by_note: HashMap::new(),
-        })
-    }
-
-    fn read_item(&self, path: &Path) -> Option<RawItem> {
-        let bytes = fs::read(path).ok()?;
+    fn read_item(&self, path: &str) -> Option<RawItem> {
+        let bytes = self.files.read(path).ok()?;
         parse_item(&String::from_utf8_lossy(&bytes))
     }
 }
@@ -109,11 +91,12 @@ impl JoplinRawSource {
 impl ImportSource for JoplinRawSource {
     fn index(&mut self) -> AppResult<SourceIndex> {
         // The RAW layout is flat, so one directory read finds every item.
-        let mut paths: Vec<PathBuf> = fs::read_dir(&self.root)
-            .map_err(|err| AppError::InvalidArg(format!("{}: {err}", self.root.display())))?
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.is_file() && mime::is_markdown(&path.to_string_lossy()))
+        let mut paths: Vec<String> = self
+            .files
+            .root_files()
+            .map_err(|err| AppError::InvalidArg(format!("cannot read the export: {err}")))?
+            .into_iter()
+            .filter(|path| mime::is_markdown(path))
             .collect();
         paths.sort();
 
@@ -205,9 +188,8 @@ impl ImportSource for JoplinRawSource {
     }
 
     fn load(&mut self, item: &ItemIndex) -> AppResult<LoadedItem> {
-        let path = self.root.join(&item.locator);
         let raw = self
-            .read_item(&path)
+            .read_item(&item.locator)
             .ok_or_else(|| AppError::InvalidArg(format!("unreadable item {}", item.locator)))?;
         let joplin_id = raw.field("id").unwrap_or_default().to_string();
 
@@ -265,7 +247,7 @@ impl ImportSource for JoplinRawSource {
         } else {
             format!("{}.{}", reference.locator, resource.file_extension)
         };
-        match fs::read(self.root.join("resources").join(&name)) {
+        match self.files.read(&format!("resources/{name}")) {
             Ok(bytes) => Ok(Some(bytes)),
             Err(err) => {
                 log::warn!("[import] joplin resource {name} unreadable: {err}");
@@ -418,17 +400,17 @@ fn normalize_joplin_time(raw: Option<&str>) -> Option<String> {
 }
 
 /// Does this directory look like a Joplin RAW export? Used by detection.
-pub fn looks_like_raw_export(path: &Path) -> bool {
-    let Ok(entries) = fs::read_dir(path) else {
+pub fn looks_like_raw_export(files: &dyn ImportFiles) -> bool {
+    let Ok(names) = files.root_files() else {
         return false;
     };
-    entries
-        .filter_map(Result::ok)
-        .filter(|entry| entry.path().is_file())
-        .filter(|entry| mime::is_markdown(&entry.file_name().to_string_lossy()))
+    names
+        .iter()
+        .filter(|name| mime::is_markdown(name))
         .take(20)
-        .any(|entry| {
-            fs::read(entry.path())
+        .any(|name| {
+            files
+                .read(name)
                 .ok()
                 .and_then(|bytes| parse_item(&String::from_utf8_lossy(&bytes)))
                 .is_some()

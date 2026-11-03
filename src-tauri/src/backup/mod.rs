@@ -19,7 +19,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
@@ -28,73 +28,8 @@ use zip::write::FileOptions;
 use zip::CompressionMethod;
 
 use crate::auth;
-use crate::collections::TRASH_ID;
-use crate::db::{migrations, Db};
+use crate::db::Db;
 use crate::error::{AppError, AppResult, CommandResult};
-
-/// Bump only when the on-disk layout becomes incompatible with older
-/// readers — adding new optional manifest fields shouldn't require it.
-pub const MANIFEST_FORMAT_VERSION: u32 = 2;
-
-/// Name of the SQLite snapshot inside the zip. Hardcoded so import
-/// always knows where to look; `manifest.contents.db_filename` echoes
-/// the value so a future schema change has a forward-compatible path.
-pub const DB_ENTRY_NAME: &str = "data.db";
-
-/// Name of the manifest file inside the zip.
-pub const MANIFEST_ENTRY_NAME: &str = "manifest.json";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Manifest {
-    pub format_version: u32,
-    pub app_version: String,
-    pub schema_version: u32,
-    pub created_at: String,
-    /// True if the source DB's `sync_state` table had rows at export
-    /// time. False ⇒ `account` is `None` and import treats this as a
-    /// local-only backup regardless of who's signed in.
-    pub account_present_at_export: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub account: Option<AccountIdentity>,
-    pub contents: Contents,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data_db_sha256: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub portable: Option<PortableIndex>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AccountIdentity {
-    /// Etebase collection UID for the user's notes collection on the
-    /// remote — the actual identity check on import compares this
-    /// against the importing DB's `sync_state`.
-    pub etebase_collection_uid_notes: String,
-    pub etebase_collection_uid_folders: String,
-    /// Friendly display, optional — surfaces in mismatch dialogs but
-    /// isn't part of the equality check. Both fields are filled from
-    /// the on-disk session file when available; absent if the user
-    /// signed out after their data synced.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub server_url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub username: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Contents {
-    pub db_filename: String,
-    pub counts: Counts,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Counts {
-    pub notes: u32,
-    pub folders: u32,
-    /// Total `size` column across the assets table. Lets the import
-    /// preview show a "this backup carries X MB of attachments" line
-    /// without extracting the zip first.
-    pub assets_bytes: u64,
-}
 
 /// Result of a successful `backup_now`. The destination path is what
 /// the user picked; the counts mirror the manifest so the JS side can
@@ -111,12 +46,17 @@ mod merge;
 mod portable;
 mod restore;
 mod staging;
-pub use portable::Index as PortableIndex;
+pub use mindstream_storage_core::backup::*;
 
 pub use export::*;
 pub use merge::*;
 pub use restore::*;
 pub use staging::*;
+
+#[cfg(test)]
+use crate::db::migrations;
+#[cfg(test)]
+use rusqlite::params;
 
 #[cfg(test)]
 mod portable_tests;

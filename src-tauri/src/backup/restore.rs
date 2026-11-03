@@ -58,15 +58,11 @@ pub(super) fn stage_restore_at(
     if let Some(index) = &manifest.portable {
         portable::validate_bundle(dir, index)?;
     }
-    let identity = read_account_identity(&Connection::open(&staged)?, None)?;
+    let identity = session_identity(&Connection::open(&staged)?, None)?;
     let matches = {
-        let current = read_account_identity(live, None)?;
+        let current = session_identity(live, None)?;
         match (&identity, current) {
-            (Some(backup), Some(current)) => {
-                backup.etebase_collection_uid_notes == current.etebase_collection_uid_notes
-                    && backup.etebase_collection_uid_folders
-                        == current.etebase_collection_uid_folders
-            }
+            (Some(backup), Some(current)) => same_identity(backup, &current),
             _ => false,
         }
     };
@@ -75,7 +71,7 @@ pub(super) fn stage_restore_at(
     // Sanitize on the staged file, not on the pending file, so a
     // failure here leaves no half-prepared pending in place.
     if !same_account {
-        sanitize_for_foreign_account(&staged)?;
+        sanitize_staged_file(&staged)?;
     }
     portable::sanitize_database(&staged, manifest.portable.as_ref().map(|_| dir))?;
     checkpoint_for_move(&staged)?;
@@ -133,33 +129,9 @@ pub struct RestoreStaged {
     pub sanitized: bool,
 }
 
-pub(super) fn sanitize_for_foreign_account(staged_db: &Path) -> AppResult<()> {
+pub(super) fn sanitize_staged_file(staged_db: &Path) -> AppResult<()> {
     let mut conn = Connection::open(staged_db)?;
-    let tx = conn.transaction()?;
-    // Sync-identity columns: NULL out + mark dirty so a future push to
-    // whatever account the user signs into next treats every row as
-    // new.
-    tx.execute(
-        "UPDATE notes SET etebase_uid = NULL, etebase_etag = NULL, dirty = 1",
-        [],
-    )?;
-    tx.execute(
-        "UPDATE collections SET etebase_uid = NULL, etebase_etag = NULL, dirty = 1 WHERE id <> 'trash'",
-        [],
-    )?;
-    tx.execute(
-        "UPDATE assets SET etebase_uid = NULL, etebase_etag = NULL, dirty = 1",
-        [],
-    )?;
-    tx.execute(
-        "UPDATE signatures SET etebase_uid = NULL, etebase_etag = NULL, dirty = 1",
-        [],
-    )?;
-    // Drop the per-kind collection pointers + stoken cursors and any
-    // queued tombstones for the foreign account.
-    tx.execute("DELETE FROM sync_state", [])?;
-    tx.execute("DELETE FROM tombstones", [])?;
-    tx.commit()?;
+    mindstream_storage_core::backup::sanitize_for_foreign_account(&mut conn)?;
     Ok(())
 }
 

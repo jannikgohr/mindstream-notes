@@ -1,0 +1,380 @@
+//! Vault import — bringing an external note collection into Mindstream.
+//!
+//! # Why this lives in Rust
+//!
+//! The notes-as-files *export* drives from TypeScript because each note kind
+//! needs serialisation logic whose types exist on the JS side. Import has the
+//! opposite shape: the input is bytes, the output is SQLite rows, and the
+//! target is a vault with a million notes in it. One IPC round trip per file
+//! would dominate the run.
+//!
+//! # Two phases
+//!
+//! [`source::ImportSource`] splits the work in two, and that split is what
+//! makes link preservation exact:
+//!
+//! 1. **Index** — enumerate every item without reading a body, minting each
+//!    one's final note id.
+//! 2. **Convert** — parse one item at a time, rewrite its links against the
+//!    now-complete index, hand it to the writer.
+//!
+//! Because every id exists before any body is rewritten, notes that reference
+//! each other resolve on the first pass. There is no second fixup pass, no
+//! ordering requirement, and a cycle of any length is not a special case.
+//!
+//! # Memory
+//!
+//! Only one body is resident at a time. The structure that does scale with
+//! vault size is the alias index in [`links::LinkIndex`] — several entries per
+//! note, held for the whole run.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
+
+use crate::error::AppResult;
+
+pub mod detect;
+pub mod files;
+pub mod links;
+pub mod markdown;
+pub mod mime;
+pub mod model;
+pub mod source;
+pub mod sources;
+pub mod tar_files;
+pub mod writer;
+
+#[cfg(test)]
+mod tests;
+
+pub use detect::{DetectedSource, ImportSourceKind};
+pub use files::{walk_paths, ImportEntry, ImportFiles};
+pub use model::{ImportReport, UnresolvedLinks};
+
+/// Where an import writes. Each batch takes the connection briefly, so that
+/// the app's global lock is handed back often enough to keep its UI responsive.
+pub trait ImportStore {
+    fn with_conn_mut<T>(&self, write: impl FnOnce(&mut Connection) -> AppResult<T>)
+        -> AppResult<T>;
+}
+
+/// Notes written per transaction.
+///
+/// Small enough that a cancel loses almost nothing and the global connection
+/// lock is handed back often enough to keep the UI responsive; large enough
+/// that per-transaction overhead disappears against the row writes.
+const BATCH_SIZE: usize = 500;
+
+/// Default per-file attachment ceiling. Generous for a note vault, low enough
+/// that one stray disk image doesn't quietly add gigabytes to the SQLite file.
+pub const DEFAULT_MAX_ATTACHMENT_BYTES: u64 = 25 * 1024 * 1024;
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImportOptions {
+    pub source_path: String,
+    /// Override for the detected format. `None` accepts the detection.
+    #[serde(default)]
+    pub kind: Option<ImportSourceKind>,
+    /// Existing collection to import into. `None` means the vault root.
+    #[serde(default)]
+    pub destination_collection_id: Option<String>,
+    /// When set, a new folder with this name is created under the destination
+    /// and everything lands inside it. This is the default the dialog
+    /// pre-selects: non-destructive, and undone by trashing one folder.
+    #[serde(default)]
+    pub create_folder_named: Option<String>,
+    #[serde(default = "default_true")]
+    pub import_attachments: bool,
+    #[serde(default = "default_max_attachment_bytes")]
+    pub max_attachment_bytes: u64,
+    #[serde(default)]
+    pub unresolved_links: UnresolvedLinks,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_max_attachment_bytes() -> u64 {
+    DEFAULT_MAX_ATTACHMENT_BYTES
+}
+
+/// Progress ping. Throttled by note count rather than by time so a fast import
+/// can't flood the IPC channel with thousands of events a second.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportProgress {
+    pub phase: &'static str,
+    /// Items processed so far, including ones that failed. Drives the progress
+    /// bar, so it is not a count of notes written.
+    pub done: usize,
+    pub total: usize,
+    /// Every report counter as of the last commit: folders after their write,
+    /// notes and attachments after each batch, placeholders and the final
+    /// tally at the end. A stopped run reports this snapshot, so nothing that
+    /// rolled back is counted. `errors` covers items processed up to the last
+    /// commit, because an item after that point is lost with its batch.
+    pub committed: ImportReport,
+}
+
+/// Counters for prepared work. They reach the report only when their batch
+/// commits, so a failed item or a batch that never lands adds nothing.
+#[derive(Debug, Default)]
+struct PreparedCounts {
+    links_resolved: usize,
+    links_unresolved: usize,
+    attachments_too_large: usize,
+}
+
+/// The format's reader for `files`. `file_name` names the source inside them
+/// when it is a single file, as an Evernote export is.
+pub fn build_source(
+    kind: ImportSourceKind,
+    files: Box<dyn ImportFiles>,
+    file_name: &str,
+) -> Box<dyn source::ImportSource> {
+    use sources::evernote::EvernoteSource;
+    use sources::joplin_raw::JoplinRawSource;
+    use sources::markdown_vault::{Flavour, MarkdownVaultSource};
+    match kind {
+        ImportSourceKind::Gfm => Box::new(MarkdownVaultSource::new(files, Flavour::Gfm)),
+        ImportSourceKind::Obsidian => Box::new(MarkdownVaultSource::new(files, Flavour::Obsidian)),
+        ImportSourceKind::JoplinMarkdown => {
+            Box::new(MarkdownVaultSource::new(files, Flavour::JoplinMarkdown))
+        }
+        ImportSourceKind::JoplinRaw | ImportSourceKind::JoplinJex => {
+            Box::new(JoplinRawSource::new(files))
+        }
+        ImportSourceKind::Evernote => Box::new(EvernoteSource::new(files, file_name.to_string())),
+    }
+}
+
+/// Run an import to completion (or to cancellation) and report what landed.
+pub fn run_import(
+    store: &impl ImportStore,
+    source: &mut dyn source::ImportSource,
+    options: &ImportOptions,
+    cancelled: &AtomicBool,
+    mut on_progress: impl FnMut(ImportProgress),
+) -> AppResult<ImportReport> {
+    let mut report = ImportReport::default();
+
+    // ---- Phase 1: index ------------------------------------------------
+    on_progress(ImportProgress {
+        phase: "scanning",
+        done: 0,
+        total: 0,
+        committed: ImportReport::default(),
+    });
+    let index = source.index()?;
+    let total = index.items.len();
+
+    // ---- Destination ---------------------------------------------------
+    let destination = resolve_destination(store, options)?;
+    let share_scope_id = match destination.as_deref() {
+        Some(id) => store.with_conn_mut(|c| crate::sharing::collection_scope(c, id))?,
+        None => None,
+    };
+    report.folders_created = writer::write_folders(
+        store,
+        &index.folders,
+        destination.as_deref(),
+        share_scope_id.as_deref(),
+    )?;
+    on_progress(ImportProgress {
+        phase: "folders",
+        done: 0,
+        total,
+        committed: report.clone(),
+    });
+
+    // ---- Link index ----------------------------------------------------
+    // Every note id is registered before a single body is parsed. That is the
+    // entire trick behind mutual links working on one pass.
+    let mut link_index = links::LinkIndex::new(options.unresolved_links);
+    for item in &index.items {
+        link_index.register_item(item);
+    }
+
+    // ---- Phase 2: convert + write --------------------------------------
+    let mut positions = writer::PositionCounters::default();
+    let mut batch: Vec<writer::PreparedNote> = Vec::with_capacity(BATCH_SIZE);
+    let mut batch_counts = PreparedCounts::default();
+    let rewrite_options = source.rewrite_options();
+
+    for (processed, item) in index.items.iter().enumerate() {
+        if cancelled.load(Ordering::SeqCst) {
+            report.cancelled = true;
+            break;
+        }
+        match prepare_item(source, item, &mut link_index, rewrite_options, options) {
+            Ok((prepared, counts)) => {
+                batch.push(prepared);
+                batch_counts.links_resolved += counts.links_resolved;
+                batch_counts.links_unresolved += counts.links_unresolved;
+                batch_counts.attachments_too_large += counts.attachments_too_large;
+            }
+            Err(err) => {
+                // One unparseable file must not cost the user the other
+                // 999,999. Count it and carry on.
+                log::warn!("[import] item {} failed: {err}", item.locator);
+                report.errors += 1;
+            }
+        }
+
+        if batch.len() >= BATCH_SIZE {
+            flush(
+                store,
+                &mut batch,
+                &mut batch_counts,
+                destination.as_deref(),
+                share_scope_id.as_deref(),
+                &mut positions,
+                &mut report,
+            )?;
+            on_progress(ImportProgress {
+                phase: "importing",
+                done: processed + 1,
+                total,
+                committed: report.clone(),
+            });
+        }
+    }
+    flush(
+        store,
+        &mut batch,
+        &mut batch_counts,
+        destination.as_deref(),
+        share_scope_id.as_deref(),
+        &mut positions,
+        &mut report,
+    )?;
+
+    // ---- Placeholders --------------------------------------------------
+    report.placeholders_created = writer::write_placeholders(
+        store,
+        link_index.placeholders(),
+        destination.as_deref(),
+        share_scope_id.as_deref(),
+        &mut positions,
+    )?;
+
+    on_progress(ImportProgress {
+        phase: "done",
+        done: report.notes_created,
+        total,
+        committed: report.clone(),
+    });
+    Ok(report)
+}
+
+/// Commit the prepared batch, then fold its counters into the report. The
+/// counters move only after `write_batch` returns, so a rolled-back batch
+/// contributes nothing.
+fn flush(
+    store: &impl ImportStore,
+    batch: &mut Vec<writer::PreparedNote>,
+    counts: &mut PreparedCounts,
+    destination: Option<&str>,
+    share_scope_id: Option<&str>,
+    positions: &mut writer::PositionCounters,
+    report: &mut ImportReport,
+) -> AppResult<()> {
+    if batch.is_empty() {
+        return Ok(());
+    }
+    let outcome = writer::write_batch(
+        store,
+        std::mem::take(batch),
+        destination,
+        share_scope_id,
+        positions,
+    )?;
+    let counts = std::mem::take(counts);
+    report.notes_created += outcome.notes;
+    report.attachments_imported += outcome.attachments;
+    report.attachments_deduplicated += outcome.attachments_deduplicated;
+    report.links_resolved += counts.links_resolved;
+    report.links_unresolved += counts.links_unresolved;
+    report.attachments_too_large += counts.attachments_too_large;
+    Ok(())
+}
+
+/// Parse and rewrite one item and read its attachments, without touching the
+/// database. The counters come back with the note, so the caller adds them
+/// only if this item ends up in a batch.
+fn prepare_item(
+    source: &mut dyn source::ImportSource,
+    item: &model::ItemIndex,
+    link_index: &mut links::LinkIndex,
+    rewrite_options: links::RewriteOptions,
+    options: &ImportOptions,
+) -> AppResult<(writer::PreparedNote, PreparedCounts)> {
+    let loaded = source.load(item)?;
+    let mut note = loaded.note;
+
+    let base_dir = item
+        .locator
+        .rfind('/')
+        .map(|idx| item.locator[..idx].to_string())
+        .unwrap_or_default();
+    let mut stats = links::RewriteStats::default();
+    note.body = links::rewrite_links(
+        &note.body,
+        link_index,
+        &links::RewriteContext {
+            options: rewrite_options,
+            base_dir,
+        },
+        &mut stats,
+    );
+    let mut counts = PreparedCounts {
+        links_resolved: stats.resolved,
+        links_unresolved: stats.unresolved,
+        attachments_too_large: 0,
+    };
+
+    let mut attachments = Vec::new();
+    if options.import_attachments {
+        for reference in loaded.attachments {
+            let Some(bytes) = source.attachment_bytes(&reference)? else {
+                continue;
+            };
+            if bytes.len() as u64 > options.max_attachment_bytes {
+                counts.attachments_too_large += 1;
+                continue;
+            }
+            attachments.push((reference, bytes));
+        }
+    }
+
+    Ok((writer::PreparedNote { note, attachments }, counts))
+}
+
+/// Work out the collection everything lands under, creating the default
+/// "one new folder named after the source" when asked.
+fn resolve_destination(
+    store: &impl ImportStore,
+    options: &ImportOptions,
+) -> AppResult<Option<String>> {
+    // Check before the source folder tree is written. The raw import writer is
+    // intentionally fast and assumes its destination was already authorised;
+    // delaying this check can leave a partial import in a read-only share.
+    store.with_conn_mut(|conn| {
+        crate::sharing::ensure_parent_writable(conn, options.destination_collection_id.as_deref())
+    })?;
+    let Some(name) = options.create_folder_named.as_deref() else {
+        return Ok(options.destination_collection_id.clone());
+    };
+    let collection = store.with_conn_mut(|conn| {
+        crate::collections::create(
+            conn,
+            crate::collections::CreateCollection {
+                name: name.to_string(),
+                parent_collection_id: options.destination_collection_id.clone(),
+            },
+        )
+    })?;
+    Ok(Some(collection.id))
+}
