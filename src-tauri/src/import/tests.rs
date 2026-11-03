@@ -1766,8 +1766,10 @@ fn walking_a_list_of_paths_matches_walking_the_disk() {
         "a/b.md",
         "a/deep/er.md",
         "a.md",
-        "Z.md",
-        "z.md",
+        // Two names that differ only by case would be one file on macOS and
+        // Windows, so these only show that capitals sort first.
+        "Zebra.md",
+        "apple.md",
         "ä.md",
         "pics/photo 1.png",
         "pics/photo.png",
