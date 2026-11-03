@@ -9,6 +9,8 @@ export function createSaveScheduler(options: {
   /** Explicit close can save manual edits while automatic saving is disabled. */
   canSaveOnClose?: () => boolean;
   beforeFlush?: () => void;
+  /** Synchronous browser recovery snapshot before the save debounce starts. */
+  checkpoint?: () => void;
   capture: () => (() => Promise<void>) | null;
   delayMs?: () => number;
   onError?: (error: unknown) => void;
@@ -67,6 +69,11 @@ export function createSaveScheduler(options: {
     cancel();
     if (disposed || !(options.canSave() || options.canSaveOnClose?.())) return;
     pending = true;
+    try {
+      options.checkpoint?.();
+    } catch (error) {
+      options.onError?.(error);
+    }
     if (!options.canSave()) return;
     timer = setTimeout(() => {
       void flush().catch(() => {});

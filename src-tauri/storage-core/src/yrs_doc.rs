@@ -1,0 +1,626 @@
+//! Tiny wrapper around a `yrs::Doc` with a single named text field
+//! (`body`). The CRDT lives behind this façade so the rest of the codebase
+//! never imports `yrs` directly — that keeps the version pin in one place
+//! and the surface small enough to reason about.
+//!
+//! The wire format is the v1 update encoding (`encode_state_as_update_v1`).
+//! v1 is what the JS editor produces (`Y.encodeStateAsUpdate` is v1 by
+//! default; the v2 variant is `Y.encodeStateAsUpdateV2`), so Rust has to
+//! match — otherwise `merge_remote` would silently fail to decode bytes
+//! coming from the editor and produce empty docs, which previously
+//! corrupted CRDT state on every sync conflict.
+//!
+//! Local edits arrive as "the editor saved a new full body" (the existing
+//! `save_note` IPC). To turn that into CRDT operations we diff the old
+//! body against the new one with `similar` and replay the inserts and
+//! deletes against the Y.Text. This keeps concurrent offline edits
+//! mergeable: if device A inserts and device B deletes in the same span,
+//! both ops survive the merge instead of one steamrolling the other.
+
+use similar::{ChangeTag, TextDiff};
+use yrs::types::Attrs;
+use yrs::updates::decoder::Decode;
+use yrs::{
+    Any, Doc, GetString, Map, Out, ReadTxn, StateVector, Text, Transact, Update, Xml, XmlFragment,
+    XmlOut,
+};
+
+const TEXT_KEY: &str = "body";
+
+/// All page assets, including tombstoned pages retained for undo/history.
+pub fn ink_asset_ids(state: &[u8]) -> Vec<String> {
+    let doc = load(state);
+    let pages = doc.get_or_insert_map("ink:pages");
+    let txn = doc.transact();
+    let mut ids = Vec::new();
+    for (_, value) in pages.iter(&txn) {
+        if let Out::Any(Any::Map(page)) = value {
+            if let Some(Any::Map(background)) = page.get("background") {
+                for key in ["assetId", "textAssetId", "thumbnailAssetId"] {
+                    if let Some(Any::String(id)) = background.get(key) {
+                        ids.push(id.to_string());
+                    }
+                }
+            }
+        }
+    }
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+pub fn ink_background_signature(state: &[u8]) -> String {
+    let doc = load(state);
+    let pages = doc.get_or_insert_map("ink:pages");
+    let order = doc.get_or_insert_map("ink:pageOrder");
+    let deleted = doc.get_or_insert_map("ink:deletedPages");
+    let txn = doc.transact();
+    let mut rows = Vec::new();
+    for (id, value) in pages.iter(&txn) {
+        if matches!(deleted.get(&txn, id), Some(Out::Any(Any::Bool(true)))) {
+            continue;
+        }
+        if let Out::Any(Any::Map(page)) = value {
+            if let Some(Any::Map(background)) = page.get("background") {
+                let asset = background
+                    .get("textAssetId")
+                    .or_else(|| background.get("assetId"));
+                if let (Some(Any::String(asset)), Some(Any::Number(index))) =
+                    (asset, background.get("pageIndex"))
+                {
+                    let rank = match order.get(&txn, id) {
+                        Some(Out::Any(Any::Number(n))) => n,
+                        _ => 0.0,
+                    };
+                    rows.push((rank, id.to_string(), asset.to_string(), *index as u32));
+                }
+            }
+        }
+    }
+    rows.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    serde_json::to_string(
+        &rows
+            .into_iter()
+            .map(|(_, id, asset, index)| (id, asset, index))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap_or_else(|_| "[]".into())
+}
+
+/// First-time state for a brand-new note. The yrs Doc is initialised by
+/// inserting the entire current markdown into the `body` Y.Text in one
+/// op, then encoding the resulting state.
+pub fn init_with_markdown(md: &str) -> Vec<u8> {
+    let doc = Doc::new();
+    let text = doc.get_or_insert_text(TEXT_KEY);
+    {
+        let mut txn = doc.transact_mut();
+        text.insert(&mut txn, 0, md);
+    }
+    encode_state(&doc)
+}
+
+/// Client id every seeded note's origin op is stamped with. `Doc::new()`
+/// mints a *random* client id per call, so two fresh devices that seed the
+/// same demo note would each tag their "insert seed text" op with a
+/// different client — and a CRDT merge keeps both, duplicating the content
+/// (see `independent_inits_of_same_seed_duplicate_on_merge`). Pinning the
+/// origin to a fixed client id makes every device produce the *identical*
+/// base operation, so the merge collapses them into one. Regular edits keep
+/// their own random client (a loaded Doc mints a fresh one), so this only
+/// affects the shared demo baseline, never later divergent edits.
+const SEED_ORIGIN_CLIENT_ID: u64 = 1;
+
+/// Deterministic origin state for a seeded/demo note: the same input
+/// markdown always yields byte-identical bytes, because both the client id
+/// (`SEED_ORIGIN_CLIENT_ID`) and the single insert op are fixed. Two devices
+/// that seed the same note therefore share one origin operation, so merging
+/// their copies keeps the seed text exactly once while still preserving each
+/// device's own later edits.
+pub fn init_seed_state(md: &str) -> Vec<u8> {
+    let doc = Doc::with_client_id(SEED_ORIGIN_CLIENT_ID);
+    let text = doc.get_or_insert_text(TEXT_KEY);
+    {
+        let mut txn = doc.transact_mut();
+        text.insert(&mut txn, 0, md);
+    }
+    encode_state(&doc)
+}
+
+/// Apply a "full body changed" local edit. We diff the doc's **current** body
+/// text → `new_md` at character granularity and replay each insert/delete
+/// against the Y.Text, which is what the editor would have produced if it had
+/// been CRDT-aware. Returns the new encoded state.
+///
+/// `_prev_md` is the caller's SQLite `body` mirror. It is intentionally **not**
+/// used to compute the diff: that column can drift from the CRDT (a remote
+/// merge or a v2 editor state updates `yrs_state` without rewriting `body`), and
+/// diffing a stale mirror against a shorter live Y.Text asks yrs to delete past
+/// the end — a hard panic (`text.rs`: "Couldn't remove … elements"). Diffing the
+/// live text keeps every replayed offset in range by construction.
+///
+/// The whole mutation is additionally wrapped in `catch_unwind`: a note edit
+/// must never be able to crash the app (a panic here would unwind across the
+/// WebView IPC FFI boundary and abort the process). On the unreachable-in-theory
+/// panic path we rebuild the body doc from `new_md` so the user's content is
+/// still preserved.
+pub fn apply_local_edit(state: &[u8], _prev_md: &str, new_md: &str) -> Vec<u8> {
+    let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let doc = load(state);
+        let text = doc.get_or_insert_text(TEXT_KEY);
+        let current = {
+            let txn = doc.transact();
+            text.get_string(&txn)
+        };
+        if current == new_md {
+            return state.to_vec();
+        }
+        {
+            let mut txn = doc.transact_mut();
+            replay_diff(&text, &mut txn, &current, new_md);
+        }
+        encode_state(&doc)
+    }));
+    match attempt {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            log::error!("yrs apply_local_edit panicked; rebuilding body doc from the new text");
+            init_with_markdown(new_md)
+        }
+    }
+}
+
+/// Merge a remote v1 update into a local state. Y.js / yrs guarantees
+/// this converges regardless of the order updates are applied in, which
+/// is what makes offline edits across N devices safe.
+pub fn merge_remote(local_state: &[u8], remote_state: &[u8]) -> Vec<u8> {
+    let doc = load(local_state);
+    {
+        let mut txn = doc.transact_mut();
+        if let Ok(update) = Update::decode_v1(remote_state) {
+            let _ = txn.apply_update(update);
+        }
+    }
+    encode_state(&doc)
+}
+
+/// Re-render the markdown body from the encoded state. Called after every
+/// remote merge so the SQLite `body` column stays in sync with the Doc.
+pub fn to_markdown(state: &[u8]) -> String {
+    let doc = load(state);
+    let text = doc.get_or_insert_text(TEXT_KEY);
+    let txn = doc.transact();
+    text.get_string(&txn)
+}
+
+fn load(state: &[u8]) -> Doc {
+    let doc = Doc::new();
+    if state.is_empty() {
+        return doc;
+    }
+    let mut txn = doc.transact_mut();
+    if let Ok(update) = Update::decode_v1(state) {
+        let _ = txn.apply_update(update);
+    }
+    drop(txn);
+    doc
+}
+
+fn encode_state(doc: &Doc) -> Vec<u8> {
+    let txn = doc.transact();
+    txn.encode_state_as_update_v1(&StateVector::default())
+}
+
+/// Whether `state` is a v1 update that gives the editor's `prosemirror`
+/// fragment some content. Checks a document the frontend built before it is
+/// stored as a note's state.
+pub fn has_editor_content(state: &[u8]) -> bool {
+    let Ok(update) = Update::decode_v1(state) else {
+        return false;
+    };
+    let doc = Doc::new();
+    if doc.transact_mut().apply_update(update).is_err() {
+        return false;
+    }
+    let prosemirror = doc.get_or_insert_xml_fragment("prosemirror");
+    let txn = doc.transact();
+    prosemirror.len(&txn) > 0
+}
+
+/// Replace an asset id everywhere the editors can persist it in a Yjs document.
+/// This covers the legacy `body` Y.Text, y-prosemirror XML text and attributes,
+/// and Excalidraw file metadata stored as plain `Any::Map` values.
+pub fn replace_asset_id(state: &[u8], old_id: &str, new_id: &str) -> Vec<u8> {
+    if state.is_empty() || old_id.is_empty() || old_id == new_id {
+        return state.to_vec();
+    }
+    let doc = load(state);
+    // Applying an update into an empty Doc leaves root types unresolved until
+    // they are opened under the type expected by the writer. Open the three
+    // editor-owned roots explicitly before reading them.
+    let body = doc.get_or_insert_text(TEXT_KEY);
+    let prosemirror = doc.get_or_insert_xml_fragment("prosemirror");
+    let files = doc.get_or_insert_map("excalidraw:files");
+    let ink_pages = doc.get_or_insert_map("ink:pages");
+
+    let mut text_changes = Vec::new();
+    let mut xml_text_changes = Vec::new();
+    let mut xml_attr_changes = Vec::new();
+    let mut map_changes = Vec::new();
+    {
+        let txn = doc.transact();
+        let current = body.get_string(&txn);
+        let replacement = current.replace(old_id, new_id);
+        if replacement != current {
+            text_changes.push((body, current, replacement));
+        }
+        for node in prosemirror.successors(&txn) {
+            match node {
+                XmlOut::Text(text) => {
+                    let changes = collect_xml_text_changes(&text, &txn, old_id, new_id);
+                    if !changes.text.is_empty() || !changes.formats.is_empty() {
+                        xml_text_changes.push((text, changes));
+                    }
+                }
+                XmlOut::Element(element) => {
+                    for (key, value) in element.attributes(&txn) {
+                        let current = value.to_string(&txn);
+                        let replacement = current.replace(old_id, new_id);
+                        if replacement != current {
+                            xml_attr_changes.push((element.clone(), key.to_string(), replacement));
+                        }
+                    }
+                }
+                XmlOut::Fragment(_) => {}
+            }
+        }
+        for (map, key, value) in files
+            .iter(&txn)
+            .map(|(k, v)| (files.clone(), k, v))
+            .chain(ink_pages.iter(&txn).map(|(k, v)| (ink_pages.clone(), k, v)))
+        {
+            if let yrs::Out::Any(any) = value {
+                let replacement = replace_in_any(&any, old_id, new_id);
+                if replacement != any {
+                    map_changes.push((map, key.to_string(), replacement));
+                }
+            }
+        }
+    }
+
+    if text_changes.is_empty()
+        && xml_text_changes.is_empty()
+        && xml_attr_changes.is_empty()
+        && map_changes.is_empty()
+    {
+        return state.to_vec();
+    }
+    {
+        let mut txn = doc.transact_mut();
+        for (text, current, replacement) in text_changes {
+            replay_diff(&text, &mut txn, &current, &replacement);
+        }
+        for (text, changes) in xml_text_changes {
+            for change in changes.formats {
+                text.format(&mut txn, change.index, change.len, change.attributes);
+            }
+            for change in changes.text.into_iter().rev() {
+                text.remove_range(&mut txn, change.index, change.old_len);
+                text.insert_with_attributes(
+                    &mut txn,
+                    change.index,
+                    &change.replacement,
+                    change.attributes,
+                );
+            }
+        }
+        for (element, key, replacement) in xml_attr_changes {
+            element.insert_attribute(&mut txn, key, replacement);
+        }
+        for (map, key, replacement) in map_changes {
+            map.insert(&mut txn, key, replacement);
+        }
+    }
+    encode_state(&doc)
+}
+
+#[derive(Default)]
+struct XmlTextChanges {
+    text: Vec<XmlTextChange>,
+    formats: Vec<XmlFormatChange>,
+}
+
+struct XmlTextChange {
+    index: u32,
+    old_len: u32,
+    replacement: String,
+    attributes: Attrs,
+}
+
+struct XmlFormatChange {
+    index: u32,
+    len: u32,
+    attributes: Attrs,
+}
+
+fn collect_xml_text_changes<T: ReadTxn>(
+    text: &yrs::XmlTextRef,
+    txn: &T,
+    old_id: &str,
+    new_id: &str,
+) -> XmlTextChanges {
+    let mut changes = XmlTextChanges::default();
+    let mut offset = 0;
+    for segment in text.diff(txn, |_| ()) {
+        let attributes = segment.attributes.as_deref().cloned().unwrap_or_default();
+        let (updated_attributes, changed_attributes) =
+            replace_in_attrs(&attributes, old_id, new_id);
+        let segment_len = match &segment.insert {
+            Out::Any(Any::String(value)) => value.len() as u32,
+            _ => 1,
+        };
+
+        if !changed_attributes.is_empty() && segment_len > 0 {
+            changes.formats.push(XmlFormatChange {
+                index: offset,
+                len: segment_len,
+                attributes: changed_attributes,
+            });
+        }
+        if let Out::Any(Any::String(value)) = &segment.insert {
+            changes
+                .text
+                .extend(value.match_indices(old_id).map(|(index, _)| XmlTextChange {
+                    index: offset + index as u32,
+                    old_len: old_id.len() as u32,
+                    replacement: new_id.to_string(),
+                    attributes: updated_attributes.clone(),
+                }));
+        }
+        offset += segment_len;
+    }
+    changes
+}
+
+fn replace_in_attrs(attrs: &Attrs, old_id: &str, new_id: &str) -> (Attrs, Attrs) {
+    let mut updated = attrs.clone();
+    let mut changed = Attrs::new();
+    for (key, value) in attrs {
+        let replacement = replace_in_any(value, old_id, new_id);
+        if replacement != *value {
+            updated.insert(key.clone(), replacement.clone());
+            changed.insert(key.clone(), replacement);
+        }
+    }
+    (updated, changed)
+}
+
+fn replace_in_any(value: &Any, old_id: &str, new_id: &str) -> Any {
+    match value {
+        Any::String(value) => Any::from(value.replace(old_id, new_id)),
+        Any::Array(values) => Any::Array(
+            values
+                .iter()
+                .map(|value| replace_in_any(value, old_id, new_id))
+                .collect::<Vec<_>>()
+                .into(),
+        ),
+        Any::Map(values) => Any::Map(
+            values
+                .iter()
+                .map(|(key, value)| (key.clone(), replace_in_any(value, old_id, new_id)))
+                .collect::<std::collections::HashMap<_, _>>()
+                .into(),
+        ),
+        _ => value.clone(),
+    }
+}
+
+/// Walk a `similar` diff and emit Y.Text inserts/deletes against the live
+/// transaction. yrs 0.26 defaults to **UTF-8 byte offsets** (OffsetKind::Bytes),
+/// so `pos` and lengths are in bytes — landing mid-codepoint would panic
+/// inside yrs, which is what an earlier draft of this code did with UTF-16
+/// units. Keep this in sync if the doc is ever switched to a different
+/// OffsetKind.
+///
+/// `old` must be the doc's **current** text (see `apply_local_edit`), which makes
+/// every offset exact; the length clamps below are defense-in-depth so a stale
+/// `old` degrades to a best-effort edit instead of a panic.
+fn replay_diff(text: &yrs::TextRef, txn: &mut yrs::TransactionMut, old: &str, new: &str) {
+    let diff = TextDiff::from_chars(old, new);
+    let mut pos: u32 = 0;
+    for change in diff.iter_all_changes() {
+        let len = change.value().len() as u32;
+        match change.tag() {
+            ChangeTag::Equal => {
+                pos += len;
+            }
+            ChangeTag::Delete => {
+                if len > 0 {
+                    // Clamp to the live text length. With `old` == the doc's
+                    // current text this is always exact; the guard just makes a
+                    // stale `old` degrade instead of panicking inside yrs.
+                    let available = text.len(txn);
+                    if pos < available {
+                        text.remove_range(txn, pos, len.min(available - pos));
+                    }
+                }
+            }
+            ChangeTag::Insert => {
+                if len > 0 {
+                    let at = pos.min(text.len(txn));
+                    text.insert(txn, at, change.value());
+                    pos += len;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn round_trip_markdown() {
+        let md = "# Hello\n\nworld 🌍\n";
+        let state = init_with_markdown(md);
+        assert_eq!(to_markdown(&state), md);
+    }
+
+    #[test]
+    fn local_edit_appends_text() {
+        let state = init_with_markdown("Hello");
+        let next = apply_local_edit(&state, "Hello", "Hello, world");
+        assert_eq!(to_markdown(&next), "Hello, world");
+    }
+
+    #[test]
+    fn local_edit_with_unicode() {
+        // Off-by-one regression check: 🌍 is 4 UTF-8 bytes; the diff/insert path
+        // works in byte offsets (OffsetKind::Bytes) or we'd land mid-codepoint.
+        let state = init_with_markdown("hi 🌍");
+        let next = apply_local_edit(&state, "hi 🌍", "hi 🌍!");
+        assert_eq!(to_markdown(&next), "hi 🌍!");
+    }
+
+    #[test]
+    fn no_op_when_unchanged() {
+        let state = init_with_markdown("same");
+        let next = apply_local_edit(&state, "same", "same");
+        // We don't require byte-equality (encoding can differ), only that
+        // the rendered text is identical.
+        assert_eq!(to_markdown(&next), "same");
+    }
+
+    #[test]
+    fn independent_inits_of_same_seed_duplicate_on_merge() {
+        // Reproduces the seeded-note bug: two devices each build their OWN Doc
+        // from the same seed markdown. `init_with_markdown` uses `Doc::new()`,
+        // which mints a *random* client id, so each "insert seed text" op is a
+        // distinct operation. Merging keeps both → the content repeats.
+        let device_a = init_with_markdown("Welcome");
+        let device_b = init_with_markdown("Welcome");
+        let merged = merge_remote(&device_a, &device_b);
+        assert_eq!(
+            to_markdown(&merged),
+            "WelcomeWelcome",
+            "independent inits duplicate the seed text on merge"
+        );
+    }
+
+    #[test]
+    fn seed_state_is_deterministic_across_calls() {
+        // The whole point of the seed origin: same input → byte-identical
+        // output, so two devices seeding the same demo note share one op.
+        assert_eq!(init_seed_state("Welcome"), init_seed_state("Welcome"));
+        assert_eq!(to_markdown(&init_seed_state("Welcome")), "Welcome");
+        // Different content still differs.
+        assert_ne!(init_seed_state("Welcome"), init_seed_state("Ideas"));
+    }
+
+    #[test]
+    fn shared_seed_origin_dedups_but_keeps_both_edits() {
+        // Two devices start from the SAME deterministic seed origin, then edit
+        // independently. Merging must keep the seed text ONCE (shared base op)
+        // while preserving each device's own edit — the fix for the seeded-note
+        // duplication.
+        let seed = init_seed_state("Welcome");
+        let device_a = apply_local_edit(&seed, "Welcome", "Welcome, from A");
+        let device_b = apply_local_edit(&seed, "Welcome", "B says Welcome");
+
+        let merged_ab = merge_remote(&device_a, &device_b);
+        let merged_ba = merge_remote(&device_b, &device_a);
+        assert_eq!(to_markdown(&merged_ab), to_markdown(&merged_ba));
+
+        let md = to_markdown(&merged_ab);
+        // Seed word appears exactly once (no "WelcomeWelcome" doubling)...
+        assert_eq!(
+            md.matches("Welcome").count(),
+            1,
+            "seed text duplicated: {md}"
+        );
+        // ...and both devices' edits survive the merge.
+        assert!(md.contains("from A"), "device A edit lost: {md}");
+        assert!(md.contains("B says"), "device B edit lost: {md}");
+    }
+
+    #[test]
+    fn diverged_body_mirror_does_not_panic() {
+        // Regression: the SQLite `body` mirror (`prev_md`) drifted longer than
+        // the actual Y.Text (e.g. after a remote merge). Diffing the stale
+        // mirror used to delete past the end of the live text and panic inside
+        // yrs. The edit must apply against the *live* text and land `new`.
+        let state = init_with_markdown("SHORT");
+        let stale_prev = "A MUCH longer stale body than the CRDT actually holds";
+        let next = apply_local_edit(&state, stale_prev, "SHORT plus more");
+        assert_eq!(to_markdown(&next), "SHORT plus more");
+    }
+
+    #[test]
+    fn edit_on_state_without_body_text_field_inserts_cleanly() {
+        // A v2 (y-prosemirror) doc has no `body` Text field, so
+        // `get_or_insert_text("body")` starts empty. A legacy body-diff edit
+        // must not try to delete from the empty text; it just inserts `new`.
+        let doc = Doc::new();
+        // Populate a *different* field so the state is non-empty but has no body.
+        let other = doc.get_or_insert_text("prosemirror");
+        {
+            let mut txn = doc.transact_mut();
+            other.insert(&mut txn, 0, "unrelated xml content");
+        }
+        let state = encode_state(&doc);
+        let next = apply_local_edit(&state, "some stale body", "the new body");
+        assert_eq!(to_markdown(&next), "the new body");
+    }
+
+    #[test]
+    fn concurrent_offline_edits_converge() {
+        // Two devices fork from the same base, edit independently, then
+        // merge in either order — both should reach the same final text.
+        let base = init_with_markdown("Hello world");
+        let device_a = apply_local_edit(&base, "Hello world", "Hello brave world");
+        let device_b = apply_local_edit(&base, "Hello world", "Hello world!");
+
+        let merged_ab = merge_remote(&device_a, &device_b);
+        let merged_ba = merge_remote(&device_b, &device_a);
+
+        assert_eq!(to_markdown(&merged_ab), to_markdown(&merged_ba));
+        // Both edits survive — neither is overwritten.
+        let final_md = to_markdown(&merged_ab);
+        assert!(final_md.contains("brave"));
+        assert!(final_md.ends_with('!'));
+    }
+}
+
+#[cfg(test)]
+mod asset_id_tests;
+
+/// An editor document (y-prosemirror) holding one paragraph, for tests
+/// outside this module that need a v2 state. The client id is fixed, as it
+/// is for a demo note, so the same text always gives the same bytes.
+#[cfg(any(test, feature = "test-support"))]
+pub fn editor_state_for_tests(paragraph: &str) -> Vec<u8> {
+    use yrs::{XmlElementPrelim, XmlTextPrelim};
+    let doc = Doc::with_client_id(SEED_ORIGIN_CLIENT_ID);
+    let fragment = doc.get_or_insert_xml_fragment("prosemirror");
+    {
+        let mut txn = doc.transact_mut();
+        let element = fragment.push_back(&mut txn, XmlElementPrelim::empty("paragraph"));
+        element.push_back(&mut txn, XmlTextPrelim::new(paragraph));
+    }
+    encode_state(&doc)
+}
+
+#[cfg(test)]
+mod editor_content_tests {
+    use super::*;
+
+    #[test]
+    fn only_an_update_with_editor_content_counts() {
+        assert!(has_editor_content(&editor_state_for_tests("Hello")));
+        assert!(!has_editor_content(&init_with_markdown("# Hello")));
+        assert!(!has_editor_content(&[]));
+        assert!(!has_editor_content(b"not an update"));
+    }
+}

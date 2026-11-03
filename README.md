@@ -66,9 +66,15 @@ start:
 
 ```shell
 pnpm install      # also installs the git hooks
-pnpm dev          # the UI in a browser, on an in-memory mock store
+pnpm dev          # the browser app, with worker SQLite in OPFS
+pnpm dev:fixtures # disposable UI fixtures; no Wasm build
+pnpm dev:qa       # isolated SQLite test vault, with Reset test data
 pnpm tauri-dev    # the desktop app
 ```
+
+The [browser app](docs/internal/browser-support.md) persists local notes through
+the shared Rust core and worker SQLite in OPFS. Browser authentication and sync
+are pending. Use `pnpm build:browser` for a static browser build.
 
 [docs/BUILDING.md](docs/BUILDING.md) has the per-OS prerequisites and release
 builds, and [CONTRIBUTING.md](CONTRIBUTING.md) the commit conventions, hooks and

@@ -108,12 +108,15 @@ function pickerSettings(): PickerSetting[] {
  * Start the app-lifetime watcher that clears any picker setting whose target no
  * longer exists — the folder was deleted, or the tag is no longer on any note.
  * Runs only once the tree has loaded, so it never clears a valid value before
- * the vault is known. Returns a stop handle (unused for the app-wide instance).
+ * the vault is known. A failed load also marks the tree ready, with an empty
+ * or stale tree: another browser tab holding the vault, or a storage error.
+ * Pruning then would erase every folder and tag setting, so it waits for a
+ * load that succeeds. Returns a stop handle (unused for the app-wide instance).
  */
 export function startPickerSettingPruning(): () => void {
   return $effect.root(() => {
     $effect(() => {
-      if (!tree.ready) return;
+      if (!tree.ready || tree.error) return;
       const folders = liveFolderIds();
       const tags = new Set(allTagsInUse());
       for (const { id, kind } of pickerSettings()) {

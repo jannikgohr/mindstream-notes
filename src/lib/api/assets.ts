@@ -89,7 +89,7 @@ export async function uploadDrawingAssetBytes(
 ): Promise<AssetSummary> {
   const { bytes, ...metadata } = input;
   if (!isTauri())
-    return mockApi.uploadDrawingAsset({
+    return uploadDrawingAsset({
       ...metadata,
       bytes: Array.from(bytes)
     });
@@ -103,7 +103,7 @@ export async function fetchAssetBytes(
   mimeType?: string
 ): Promise<Uint8Array> {
   if (!isTauri()) {
-    const asset = await mockApi.fetchDrawingAsset(id);
+    const asset = await fetchDrawingAsset(id);
     if (mimeType && asset.mime_type !== mimeType)
       throw new Error('Stored file has an unexpected type.');
     return new Uint8Array(asset.bytes);
@@ -122,7 +122,7 @@ export async function importPdfNoteBytes(
 ): Promise<Note> {
   const { bytes, ...metadata } = input;
   if (!isTauri())
-    return mockApi.importPdfNote({ ...metadata, bytes: Array.from(bytes) });
+    return importPdfNote({ ...metadata, bytes: Array.from(bytes) });
   return parseNote(
     await invokeFile(TauriCommandName.ImportPdfNoteBytes, metadata, bytes)
   );

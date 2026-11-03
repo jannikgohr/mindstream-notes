@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Dialog } from 'bits-ui';
+  import { isTauri } from '$lib/api/core';
   import { X, Search, ChevronRight } from '@lucide/svelte';
   import { Settings as SettingsIcon } from '@jis3r/icons';
   import CuedIcon from '$lib/components/icons/CuedIcon.svelte';
@@ -401,7 +402,13 @@
                 {paneDescription}
               </p>
             {/if}
-            {#if showingPluginOverview}
+            {#if activeCategory.id === 'account' && !isTauri()}
+              <p
+                class="mt-5 rounded-md border border-border bg-muted/40 p-3 text-sm"
+              >
+                {tUi('account.browserUnavailable')}
+              </p>
+            {:else if showingPluginOverview}
               <PluginsOverview
                 onOpenSettings={selectPlugin}
                 onOpenHotkeys={() => selectCategory('hotkeys')}

@@ -21,7 +21,8 @@ import {
   settings,
   settingsDialog
 } from './store.svelte';
-import type { Setting } from './types';
+import schema from './schema.json';
+import type { Setting, SettingsSchema } from './types';
 
 const setting = (over: Partial<Setting> = {}): Setting =>
   ({
@@ -395,6 +396,74 @@ describe('section / category visibility', () => {
     expect(
       isSectionVisible({ id: 's', platforms: ['mobile'], settings: [] })
     ).toBe(false);
+  });
+});
+
+describe('native-only entries', () => {
+  const sections = (schema as unknown as SettingsSchema).categories.flatMap(
+    (category) => category.sections
+  );
+  const schemaSetting = (id: string) =>
+    sections
+      .flatMap((section) => section.settings)
+      .find((candidate) => candidate.id === id);
+  const inApp = (check: () => void) => {
+    const host = window as unknown as Record<string, unknown>;
+    host.__TAURI_INTERNALS__ = {};
+    try {
+      check();
+    } finally {
+      delete host.__TAURI_INTERNALS__;
+    }
+  };
+
+  it('hides them in a browser and shows them in the app', () => {
+    const native = { id: 'n', nativeOnly: true };
+    const entries = [
+      () => isVisible(setting({ nativeOnly: true })),
+      () => isSectionVisible({ ...native, settings: [] }),
+      () => isCategoryVisible({ ...native, sections: [] })
+    ];
+    for (const visible of entries) expect(visible()).toBe(false);
+    inApp(() => {
+      for (const visible of entries) expect(visible()).toBe(true);
+    });
+  });
+
+  it('still applies the platform filter in the app', () => {
+    inApp(() => {
+      expect(
+        isVisible(setting({ nativeOnly: true, platforms: ['mobile'] }))
+      ).toBe(false);
+    });
+  });
+
+  // The agreed list. Dropping a flag here puts a control back in the browser
+  // that can do nothing there.
+  it.each([
+    'general.vaultOpening',
+    'general.startOnLogin',
+    'general.closeToTray',
+    'general.startInTray',
+    'appearance.customWindowDecorations',
+    'hotkeys.globalShortcuts',
+    'about.tauriVersion',
+    'about.scanForUpdates',
+    'about.checkUpdates'
+  ])('keeps %s out of a browser', (id) => {
+    const found = schemaSetting(id);
+    expect(found).toBeDefined();
+    expect(isVisible(found!)).toBe(false);
+  });
+
+  it('keeps the data folder section out of a browser', () => {
+    const found = sections.find((section) => section.id === 'data.database');
+    expect(found).toBeDefined();
+    expect(isSectionVisible(found!)).toBe(false);
+  });
+
+  it('leaves desktop preferences that work in a browser alone', () => {
+    expect(schemaSetting('editor.desktopToolbar')?.nativeOnly).toBeUndefined();
   });
 });
 

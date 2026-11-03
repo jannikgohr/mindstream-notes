@@ -77,6 +77,8 @@
     language?: string;
     /** Fired (debounced) on genuine user edits with the full document text. */
     onInput: (text: string) => void;
+    /** Synchronous recovery copy before the source-to-document debounce. */
+    onCheckpoint?: (text: () => string) => void;
     /** Fired when the source editor gains focus — NoteEditor uses it to mark
      *  the source pane as the active surface for toolbar/hotkey routing. */
     onFocusSurface?: () => void;
@@ -119,6 +121,7 @@
     tabSize = 2,
     placeholderText = '',
     onInput,
+    onCheckpoint,
     onFocusSurface,
     onHistoryChange = undefined,
     language = 'markdown',
@@ -167,6 +170,7 @@
   }
 
   function scheduleInput() {
+    if (view) onCheckpoint?.(() => view?.state.doc.toString() ?? '');
     if (inputTimer) clearTimeout(inputTimer);
     inputTimer = setTimeout(() => {
       inputTimer = null;
@@ -529,8 +533,12 @@
     view?.dispatch({ effects: setSourcePresence.of(presence) });
   }
 
-  /** Immediately flush a pending debounced edit to the doc (e.g. when the user
-   *  hands off to the WYSIWYG pane) so no trailing keystrokes are lost. */
+  /** Whether raw source edits have not reached the live document yet. */
+  export function hasPendingInput(): boolean {
+    return inputTimer !== null;
+  }
+
+  /** Immediately flush a pending debounced edit to the live document. */
   export function flush(): void {
     if (!inputTimer) return;
     clearTimeout(inputTimer);

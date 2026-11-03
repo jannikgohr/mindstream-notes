@@ -11,6 +11,7 @@ const {
 } = vi.hoisted(() => ({
   tree: {
     ready: true,
+    error: null as string | null,
     collectionsById: {} as Record<
       string,
       { name: string; parent_collection_id: string | null }
@@ -40,6 +41,7 @@ import {
 
 beforeEach(() => {
   tree.ready = true;
+  tree.error = null;
   tree.collectionsById = {
     root: { name: 'Root', parent_collection_id: null },
     child: { name: 'Child', parent_collection_id: 'root' },
@@ -111,6 +113,25 @@ describe('startPickerSettingPruning', () => {
       'plugins.com.x.live-tag',
       ''
     );
+    stop();
+  });
+
+  it('keeps every value when the tree failed to load', () => {
+    // A second browser tab cannot open the vault: its tree is ready but empty.
+    tree.error = 'The vault is open in another tab';
+    tree.collectionsById = {};
+    allTagsInUse.mockReturnValue([]);
+    ALL_SETTINGS.push({ id: 'default-folder', type: 'folder' });
+    pluginSettingsSections.mockReturnValue([
+      {
+        pluginId: 'com.x',
+        contribution: { settings: [{ id: 'source-tag', type: 'tag' }] }
+      }
+    ]);
+    getSettingValue.mockReturnValue('root');
+    const stop = startPickerSettingPruning();
+    flushSync();
+    expect(setSettingValue).not.toHaveBeenCalled();
     stop();
   });
 

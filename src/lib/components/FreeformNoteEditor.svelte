@@ -1,4 +1,8 @@
 <script lang="ts">
+  import {
+    checkpointBrowserNote,
+    captureBrowserAcknowledgement
+  } from '$lib/browser/recovery';
   import { ancestorIsTrash } from '$lib/editor/trash';
 
   import { createSaveScheduler } from '$lib/editor/save-scheduler';
@@ -595,14 +599,19 @@
     if (!yDoc || isTrashed) return null;
     const capturedNoteId = noteId;
     const yrsState = Array.from(Y.encodeStateAsUpdate(yDoc));
+    const acknowledge = captureBrowserAcknowledgement(capturedNoteId);
     return async () => {
       savingState = 'saving';
       try {
-        await apiSaveNote({
-          id: capturedNoteId,
-          body: '',
-          yrs_state: yrsState
-        });
+        await apiSaveNote(
+          {
+            id: capturedNoteId,
+            body: '',
+            yrs_state: yrsState
+          },
+          acknowledge.token
+        );
+        acknowledge();
         const existing = tree.notesById[capturedNoteId];
         if (existing) {
           tree.notesById[capturedNoteId] = {
@@ -622,6 +631,16 @@
 
   const saveScheduler = createSaveScheduler({
     canSave: () => !isTrashed && !!yDoc,
+    checkpoint: () =>
+      checkpointBrowserNote(() =>
+        yDoc && !isTrashed
+          ? {
+              id: noteId,
+              body: '',
+              yrs_state: Array.from(Y.encodeStateAsUpdate(yDoc))
+            }
+          : null
+      ),
     capture: captureSave,
     onError: (error) => {
       console.error('[FreeformNoteEditor] save failed', error);

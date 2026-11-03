@@ -64,7 +64,7 @@ async function rerunFromSettings(page: Page) {
   ).toBeVisible();
 }
 
-test('fresh installs open setup without a flag and require authentication for a remote account', async ({
+test('fresh browser installs explain local storage and disable remote accounts', async ({
   page
 }) => {
   await openFreshSetup(page);
@@ -81,19 +81,14 @@ test('fresh installs open setup without a flag and require authentication for a 
       exact: true
     })
   ).toBeVisible();
-  await page.getByRole('button', { name: /^Your own server/ }).click();
-  await expect(next).toBeDisabled();
-  await page
-    .getByRole('textbox', { name: 'Username', exact: true })
-    .fill('onboarding-user');
-  await page
-    .getByLabel('Password', { exact: true })
-    .fill('private-onboarding-password');
-  await expect(next).toBeDisabled();
-  expect(JSON.stringify(await progress(page))).not.toContain(
-    'private-onboarding-password'
-  );
-  await page.getByRole('button', { name: /^On this device/ }).click();
+  await expect(
+    page.getByRole('button', { name: /^Your own server/ })
+  ).toBeDisabled();
+  await expect(
+    page.getByText('Accounts and sync are not available in the browser yet.', {
+      exact: false
+    })
+  ).toBeVisible();
   await expect(
     page.getByRole('textbox', { name: 'Username', exact: true })
   ).toHaveCount(0);

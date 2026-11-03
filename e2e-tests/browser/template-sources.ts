@@ -1,6 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 
-/** Configure the real picker in either shell. Browser fallback settings reset on reload. */
+/** Configure the real picker in either shell. */
 export async function setTemplateFolder(
   page: Page,
   folder: string | null = 'Personal'

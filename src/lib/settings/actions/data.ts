@@ -16,9 +16,11 @@ import {
   importMerge,
   importRestore,
   legacyWikilinkCount,
+  isTauri,
   openDataFolder,
   pickExportDir,
-  trashCounts
+  trashCounts,
+  writeExportFile
 } from '$lib/api';
 import {
   emptyTrash as emptyTrashStore,
@@ -105,6 +107,9 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
   },
   'backup-now': async () => {
     try {
+      const { flushPendingEditorSaves } =
+        await import('$lib/editor/suspend-flush');
+      await flushPendingEditorSaves();
       const report = await backupNow();
       if (report === null) {
         // User cancelled the Save-As dialog — stay quiet, no toast.
@@ -123,9 +128,9 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
     }
   },
   'export-vault': async () => {
-    let root: string | null;
+    let root: string | null = null;
     try {
-      root = await pickExportDir();
+      if (isTauri()) root = await pickExportDir();
     } catch (err) {
       console.error('[settings] export-vault picker failed', err);
       await alert({
@@ -137,7 +142,7 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
       });
       return;
     }
-    if (!root) {
+    if (isTauri() && !root) {
       // User cancelled the folder picker — stay quiet.
       return;
     }
@@ -148,9 +153,16 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
       const { flushPendingEditorSaves } =
         await import('$lib/editor/suspend-flush');
       await flushPendingEditorSaves();
-      const { exportVault } = await import('$lib/notes-export');
-      const report = await exportVault(root);
-      await showExportResult(report, root);
+      const { downloadVaultExport, exportVault } =
+        await import('$lib/notes-export');
+      const destination = root;
+      const report =
+        destination === null
+          ? await downloadVaultExport()
+          : await exportVault((path, bytes) =>
+              writeExportFile(destination, path, bytes)
+            );
+      await showExportResult(report, destination);
     } catch (err) {
       console.error('[settings] export-vault failed', err);
       await alert({
@@ -285,9 +297,11 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
     // Restore path — destructive. Re-confirm before staging.
     const confirmed = await confirm({
       title: tUi('data.import.restore.confirm.title'),
-      message: preview.same_account
-        ? tUi('data.import.restore.confirm.sameAccount')
-        : tUi('data.import.restore.confirm.differentAccount'),
+      message: !isTauri()
+        ? tUi('data.import.restore.confirm.browser')
+        : preview.same_account
+          ? tUi('data.import.restore.confirm.sameAccount')
+          : tUi('data.import.restore.confirm.differentAccount'),
       confirmLabel: tUi('data.import.restore.confirm.button'),
       destructive: true
     });
@@ -298,17 +312,36 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
       return;
     }
     try {
+      // A browser's safety backup has to hold the latest edits.
+      const { flushPendingEditorSaves } =
+        await import('$lib/editor/suspend-flush');
+      await flushPendingEditorSaves();
       const staged = await importRestore(
         preview.token,
         preview.same_account,
-        options.includeDevice
+        options.includeDevice,
+        () =>
+          confirm({
+            title: tUi('data.import.restore.safety.title'),
+            message: tUi('data.import.restore.safety.message'),
+            confirmLabel: tUi('data.import.restore.safety.button'),
+            destructive: true
+          })
       );
+      if (!staged) {
+        await importCleanup(preview.token).catch((err) =>
+          console.warn('[settings] import_cleanup failed', err)
+        );
+        return;
+      }
       if (staged.restart_required) {
         const action = await showRestoreReadyResult(preview, staged);
         if (action === 'restart') {
           const { relaunch } = await import('@tauri-apps/plugin-process');
           await relaunch();
         }
+      } else if (!isTauri()) {
+        window.location.reload();
       }
     } catch (err) {
       console.error('[settings] import_restore failed', err);

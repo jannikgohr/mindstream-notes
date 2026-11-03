@@ -1,16 +1,21 @@
 import * as Y from 'yjs';
+import type { RecoveryAcknowledgement } from '$lib/browser/recovery';
 import { createSaveScheduler } from '$lib/editor/save-scheduler';
 
 export function createInkSaveController(options: {
   canSave: () => boolean;
+  checkpoint?: () => void;
+  captureAcknowledgement?: () => RecoveryAcknowledgement;
   encode: () => Uint8Array | null;
-  persist: (state: number[]) => Promise<void>;
+  persist: (state: number[], recoveryToken?: string) => Promise<void>;
   onStatus: (status: 'pending' | 'saving' | 'saved' | 'error') => void;
 }) {
   let updates: Uint8Array[] = [];
   let closed = false;
   const scheduler = createSaveScheduler({
     canSave: options.canSave,
+    checkpoint: options.checkpoint,
+    onError: () => options.onStatus('error'),
     capture: captureSave
   });
 
@@ -19,10 +24,12 @@ export function createInkSaveController(options: {
     const batch = updates;
     updates = [];
     const state = Array.from(Y.mergeUpdates(batch));
+    const acknowledge = options.captureAcknowledgement?.();
     return async () => {
       options.onStatus('saving');
       try {
-        await options.persist(state);
+        await options.persist(state, acknowledge?.token);
+        acknowledge?.();
         options.onStatus(updates.length ? 'pending' : 'saved');
       } catch (error) {
         updates = [...batch, ...updates];

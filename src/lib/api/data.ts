@@ -7,8 +7,8 @@ import { assertRequiredString } from '$lib/validation';
  *   - trashCounts:    how many notes/folders the trash holds (recursive)
  *   - emptyTrash:     purge every item under the trash collection
  *
- * The browser fallbacks are no-ops / empty counts so the dev preview
- * doesn't crash when these calls land outside Tauri.
+ * Browser trash operations use the persistent SQLite worker. Opening OS
+ * folders and native backup dialogs remains specific to Tauri.
  */
 
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
@@ -19,9 +19,13 @@ import {
   assertString,
   assertVoid,
   isTauri,
+  invokeOrFallback,
   optionalString,
   TauriCommandName
 } from './core';
+import { browserStorageEnabled } from '../browser/commands';
+import { pickFiles } from '../browser/pick-files';
+import { downloadBlob } from './file-export';
 import { mockApi } from './mock-store';
 
 export interface TrashCounts {
@@ -52,16 +56,20 @@ export async function openFolder(path: string): Promise<void> {
 }
 
 export async function trashCounts(): Promise<TrashCounts> {
-  if (!isTauri()) return await mockApi.trashCounts();
-  return parseTrashCounts(
-    await tauriInvoke<unknown>(TauriCommandName.TrashCounts)
+  return invokeOrFallback(
+    TauriCommandName.TrashCounts,
+    undefined,
+    () => mockApi.trashCounts(),
+    parseTrashCounts
   );
 }
 
 export async function emptyTrash(): Promise<TrashCounts> {
-  if (!isTauri()) return await mockApi.emptyTrash();
-  return parseTrashCounts(
-    await tauriInvoke<unknown>(TauriCommandName.EmptyTrash)
+  return invokeOrFallback(
+    TauriCommandName.EmptyTrash,
+    undefined,
+    () => mockApi.emptyTrash(),
+    parseTrashCounts
   );
 }
 
@@ -103,7 +111,8 @@ export interface BackupCounts {
 }
 
 export interface BackupReport {
-  destination: string;
+  /** Null for a browser download, which leaves no path to show. */
+  destination: string | null;
   counts: BackupCounts;
   account_present: boolean;
 }
@@ -115,10 +124,21 @@ export interface BackupReport {
  * that case, not surface a "backup failed" toast.
  */
 export async function backupNow(): Promise<BackupReport | null> {
-  if (!isTauri()) return null;
+  if (!isTauri()) return browserStorageEnabled() ? downloadBackup() : null;
   return parseNullableBackupReport(
     await tauriInvoke<unknown>(TauriCommandName.BackupNow)
   );
+}
+
+async function downloadBackup(): Promise<BackupReport> {
+  const { backupBrowserVault } = await import('../browser/vault');
+  const backup = await backupBrowserVault();
+  downloadBlob(backup.archive, backup.filename);
+  return {
+    destination: null,
+    counts: backup.counts,
+    account_present: backup.accountPresent
+  };
 }
 
 // ---------- Backup import (Slices B/C/D) ----------
@@ -159,7 +179,16 @@ export interface MergeReport {
  * preview struct. `null` means the user cancelled the picker.
  */
 export async function importBegin(): Promise<ImportPreview | null> {
-  if (!isTauri()) return null;
+  if (!isTauri()) {
+    if (!browserStorageEnabled()) return null;
+    const picked = await pickFiles((input) => {
+      input.accept = 'application/zip,.zip';
+    });
+    const archive = picked?.[0];
+    if (!archive) return null;
+    const { stageBrowserBackup } = await import('../browser/vault');
+    return parseImportPreview(await stageBrowserBackup(archive));
+  }
   return parseNullableImportPreview(
     await tauriInvoke<unknown>(TauriCommandName.ImportBegin)
   );
@@ -168,7 +197,13 @@ export async function importBegin(): Promise<ImportPreview | null> {
 /** Drop the staging dir created by `importBegin`. Safe on stale tokens. */
 export async function importCleanup(token: string): Promise<void> {
   assertRequiredString(token, 'token');
-  if (!isTauri()) return;
+  if (!isTauri()) {
+    if (browserStorageEnabled()) {
+      const { discardBrowserBackup } = await import('../browser/vault');
+      await discardBrowserBackup(token);
+    }
+    return;
+  }
   assertVoid(
     await tauriInvoke<unknown>(TauriCommandName.ImportCleanup, { token }),
     'import_cleanup response'
@@ -183,15 +218,32 @@ export async function importCleanup(token: string): Promise<void> {
 export async function importRestore(
   token: string,
   sameAccount: boolean,
-  includeDevice = false
-): Promise<RestoreStaged> {
+  includeDevice = false,
+  confirmSafetyCopy?: () => Promise<boolean>
+): Promise<RestoreStaged | null> {
   assertRequiredString(token, 'token');
   if (typeof sameAccount !== 'boolean') {
     throw new Error('sameAccount must be a boolean');
   }
   if (typeof includeDevice !== 'boolean')
     throw new Error('includeDevice must be a boolean');
-  if (!isTauri()) return { restart_required: false, sanitized: !sameAccount };
+  if (!isTauri()) {
+    if (!browserStorageEnabled())
+      return { restart_required: false, sanitized: !sameAccount };
+    // Browsers cannot tell us whether a download was saved or cancelled.
+    // Require the user to check the safety copy before replacing their vault.
+    if (!confirmSafetyCopy)
+      throw new Error(
+        'A saved safety backup must be confirmed before restoring.'
+      );
+    await downloadBackup();
+    if (!(await confirmSafetyCopy())) return null;
+    const { restoreBrowserBackup } = await import('../browser/vault');
+    return {
+      restart_required: false,
+      sanitized: await restoreBrowserBackup(token, sameAccount)
+    };
+  }
   return parseRestoreStaged(
     await tauriInvoke<unknown>(TauriCommandName.ImportRestore, {
       token,
@@ -207,13 +259,18 @@ export async function importRestore(
  */
 export async function importMerge(token: string): Promise<MergeReport> {
   assertRequiredString(token, 'token');
-  if (!isTauri())
+  if (!isTauri()) {
+    if (browserStorageEnabled()) {
+      const { mergeBrowserBackup } = await import('../browser/vault');
+      return parseMergeReport(await mergeBrowserBackup(token));
+    }
     return {
       folders_added: 0,
       notes_added: 0,
       assets_added: 0,
       notes_orphaned: 0
     };
+  }
   return parseMergeReport(
     await tauriInvoke<unknown>(TauriCommandName.ImportMerge, { token })
   );

@@ -46,7 +46,6 @@ test.describe('desktop file tree', () => {
       /^\s*Öffnen\s*$/,
       /^\s*Rechts öffnen\s*$/,
       /^\s*Unten öffnen\s*$/,
-      /^\s*In neuem Fenster öffnen\s*$/,
       /^\s*Exportieren\s*$/,
       /^\s*Umbenennen…/,
       /^\s*In den Stamm verschieben\s*$/,

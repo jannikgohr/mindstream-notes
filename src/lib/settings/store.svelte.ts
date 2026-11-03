@@ -713,9 +713,15 @@ export function isPending(id: string): boolean {
   return settings.pending.has(id);
 }
 
+/** False for a native-only entry in a plain browser tab. */
+function matchesApp(entry: { nativeOnly?: boolean }): boolean {
+  return !entry.nativeOnly || isTauri();
+}
+
 /** Resolve showIf against the live store. Recursive showIf isn't supported. */
 export function isVisible(setting: Setting): boolean {
   if (!matchesPlatformFilter(setting.platforms)) return false;
+  if (!matchesApp(setting)) return false;
   const cond = setting.showIf;
   if (!cond) return true;
   const v = getSettingValue(cond.id);
@@ -726,14 +732,14 @@ export function isVisible(setting: Setting): boolean {
   return true;
 }
 
-/** True if the section's `platforms` filter (if any) matches the current OS. */
+/** True if the section's `platforms` and `nativeOnly` both allow it here. */
 export function isSectionVisible(section: Section): boolean {
-  return matchesPlatformFilter(section.platforms);
+  return matchesPlatformFilter(section.platforms) && matchesApp(section);
 }
 
-/** True if the category's `platforms` filter (if any) matches the current OS. */
+/** True if the category's `platforms` and `nativeOnly` both allow it here. */
 export function isCategoryVisible(category: Category): boolean {
-  return matchesPlatformFilter(category.platforms);
+  return matchesPlatformFilter(category.platforms) && matchesApp(category);
 }
 
 /** Open/close state for the dialog itself. */

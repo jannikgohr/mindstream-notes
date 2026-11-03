@@ -3,6 +3,44 @@ import { createSaveScheduler, SAVE_DEBOUNCE_MS } from './save-scheduler';
 import { flushBeforeAppClose, flushPendingEditorSaves } from './suspend-flush';
 
 describe('save scheduler', () => {
+  it('checkpoints every accepted edit synchronously before debounced persistence', async () => {
+    const persist = vi.fn(async () => {});
+    const checkpoint = vi.fn();
+    let writable = true;
+    const scheduler = createSaveScheduler({
+      canSave: () => writable,
+      checkpoint,
+      capture: () => persist
+    });
+    scheduler.schedule();
+    scheduler.schedule();
+    expect(checkpoint).toHaveBeenCalledTimes(2);
+    expect(persist).not.toHaveBeenCalled();
+    writable = false;
+    scheduler.schedule();
+    expect(checkpoint).toHaveBeenCalledTimes(2);
+    await scheduler.destroy();
+  });
+
+  it('still persists to SQLite when recovery storage is full', async () => {
+    const error = new Error('quota');
+    const persist = vi.fn(async () => {});
+    const onError = vi.fn();
+    const scheduler = createSaveScheduler({
+      canSave: () => true,
+      checkpoint: () => {
+        throw error;
+      },
+      capture: () => persist,
+      onError
+    });
+    scheduler.schedule();
+    expect(onError).toHaveBeenCalledWith(error);
+    await scheduler.flush();
+    expect(persist).toHaveBeenCalledOnce();
+    await scheduler.destroy();
+  });
+
   it('saves manual edits on explicit close without enabling autosave', async () => {
     const save = vi.fn(async () => {});
     const scheduler = createSaveScheduler({

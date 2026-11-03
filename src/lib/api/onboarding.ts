@@ -7,6 +7,7 @@ import {
 } from './core';
 import { createNote } from './notes';
 import { mockApi } from './mock-store';
+import { browserStorageEnabled } from '../browser/commands';
 
 export const ONBOARDING_STEPS = [
   'account',
@@ -137,7 +138,15 @@ export function finishOnboarding(
       const previous = browserOwned(id);
       const ids: string[] = [];
       if (initialNote) ids.push((await createNote(initialNote)).id);
-      else
+      else if (browserStorageEnabled()) {
+        const { invokeBrowser } = await import('../browser/vault');
+        const saved = await invokeBrowser('insert_demo_notes', {
+          notes: demoNotes
+        });
+        if (!Array.isArray(saved) || saved.some((id) => typeof id !== 'string'))
+          throw new Error('Invalid demo note response');
+        ids.push(...(saved as string[]));
+      } else
         for (const note of demoNotes)
           ids.push((await mockApi.insertDemoNote(note)).id);
       return {

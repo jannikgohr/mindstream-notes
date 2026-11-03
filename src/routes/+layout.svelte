@@ -6,7 +6,9 @@
   let AppLayout = $state<Component<{ children: Snippet }> | null>(null);
   let failed = $state(false);
   onMount(() => {
-    picker = /^\/vault-picker\/?$/.test(window.location.pathname);
+    picker = /^\/(vault-picker|sqlite-proof)\/?$/.test(
+      window.location.pathname
+    );
     if (!picker)
       void import('$lib/components/AppLayout.svelte')
         .then((module) => {
