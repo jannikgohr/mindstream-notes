@@ -1,4 +1,9 @@
-import { assertBoolean, invokeOrFallback, TauriCommandName } from './core';
+import {
+  assertBoolean,
+  invokeOrFallback,
+  isTauri,
+  TauriCommandName
+} from './core';
 
 export interface SaveFileExportArgs {
   suggestedName: string;
@@ -9,36 +14,46 @@ export interface SaveFileExportArgs {
   extensions: string[];
 }
 
+/** Hand a blob to the browser as a download. */
+export function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.rel = 'noopener';
+  document.body.append(anchor);
+  try {
+    anchor.click();
+  } finally {
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+}
+
 /** Save through the native picker, or download in a browser. */
 export async function saveFileExport(
   args: SaveFileExportArgs
 ): Promise<boolean> {
   return invokeOrFallback(
     TauriCommandName.SaveFileExport,
-    {
-      input: {
-        suggestedName: args.suggestedName,
-        dialogTitle: args.dialogTitle,
-        bytes: Array.from(args.bytes),
-        filterName: args.filterName,
-        extensions: args.extensions
-      }
-    },
+    // Tauri needs a number array, one element per byte. A browser never sends
+    // it, and for a large file building it could cost the tab its memory.
+    isTauri()
+      ? {
+          input: {
+            suggestedName: args.suggestedName,
+            dialogTitle: args.dialogTitle,
+            bytes: Array.from(args.bytes),
+            filterName: args.filterName,
+            extensions: args.extensions
+          }
+        }
+      : undefined,
     () => {
-      const url = URL.createObjectURL(
-        new Blob([args.bytes.slice().buffer], { type: args.mime })
+      downloadBlob(
+        new Blob([args.bytes.slice().buffer], { type: args.mime }),
+        args.suggestedName
       );
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = args.suggestedName;
-      anchor.rel = 'noopener';
-      document.body.append(anchor);
-      try {
-        anchor.click();
-      } finally {
-        anchor.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1500);
-      }
       return true;
     },
     (value) => assertBoolean(value, 'save_file_export response')

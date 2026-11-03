@@ -180,7 +180,8 @@ and the vendored `PATCHES.md` before updating this dependency.
 `src-tauri/storage-core` has no Tauri dependency. It owns the canonical
 migrations, note and folder mutations, attachment bookkeeping, history, local
 share permissions and scope changes, trash operations, signatures, PDF text,
-word counts, setup notes, search, ink state writes, and note and tag CRDT operations. Native
+word counts, setup notes, search, ink state writes, backups, the notes importer,
+and note and tag CRDT operations. Native
 modules forward to it and preserve their existing command signatures and
 structured error codes. Migration SQL and CRDT encodings stay the same.
 
@@ -198,12 +199,67 @@ builds. Normal browser development and browser builds use persistent storage.
 Browser application events use an in-process event bus; native commands and
 event delivery keep using Tauri.
 
+## Getting data out
+
+**Export vault** downloads one zip with the same layout the app writes to a
+folder. It holds Markdown, drawings, PDFs, and attachments, and leaves out the
+trash. The zip format used here stops at 4 GB and 65,535 files. Notes past that
+limit count as export errors in the result, and the archive stays valid.
+
+**Back up now** downloads a backup the app can open. Both platforms prepare the
+snapshot through `storage-core/src/backup.rs`, so device secrets and plugin
+state stay behind on either. The browser also drops its save receipts. It
+writes manifest format 1, because format 2 requires the portable resources the
+app adds, and a reader uses that rule to spot incomplete backups. The snapshot
+is read into Wasm memory whole, so a vault above 1 GiB is refused with a clear
+error. **Export vault** still works for those.
+
+`src-tauri/src/backup/fixtures/browser-backup.zip` is a real browser backup, and
+a native test imports it. Regenerate it with
+`BROWSER_BACKUP_FIXTURE=<path> pnpm test:sqlite` when the format changes.
+
+**Restore from backup** opens backups from the browser or the app, which share
+their checks through `storage-core`. A browser restores the database only. The
+plugins, plugin data, and preferences in a native backup stay behind, and the
+import dialog says so. The same 1 GiB limit applies.
+
+_Replace_ never starts without a copy the user can reach. The app keeps a
+pre-restore file in its data folder, but a file in OPFS would be out of reach, so
+a browser downloads a backup first, and asks the user to confirm it finished
+and was saved on their device. Cancelling that confirmation or a failed backup
+stops the restore before anything changes. SQLite's backup API then copies the staged database over the
+vault in one transaction and the page reloads. A tab that dies during the copy
+should roll back through the rollback journal, the recovery covered by the
+interrupted-write test. No test kills a tab during a restore itself.
+
+_Merge_ uses the same `merge_into` as the app and needs no reload.
+
+**Import notes** runs the same importer as the app, for folders of Markdown,
+Obsidian vaults, Joplin exports, and Evernote `.enex` files. The picked files stay
+in the browser's file handles, and Rust reads one range at a time through a
+`FileReaderSync` on the worker, so a large export is never held in memory whole.
+A browser has nowhere to unpack a `.jex`, so `TarFiles` reads it in place. A
+folder pick does not report empty folders, so those are not created.
+
+A worker busy in Rust cannot read a cancel message, so **Stop** terminates it.
+Committed batches stay and the batch in flight rolls back. The report uses the
+last progress update's committed counts for notes, folders, attachments, links,
+and errors. A terminated worker releases the vault lock
+a moment later, so reopening after one waits briefly for that, or the next call
+would report another tab.
+
+`e2e-tests/sqlite/fixtures/native-backup.zip` is a real native backup. Generate a
+new one from `run_backup_at` when the format changes, and keep it readable by
+the browser tests.
+
 ## Native-only features
 
 The browser hides what only the native app can do: the tray, start on login,
 global shortcuts, the custom title bar, the signed updater, the data folder,
 vault window choices, and Android live ink. In-app keyboard shortcuts still
 work. Note popouts are hidden too, because a second tab cannot own the vault.
+The browser shows its vault name without create, rename, delete, or switch
+actions, because it currently supports one vault per origin.
 
 Mark a setting, section, or category with `"nativeOnly": true` in
 `src/lib/settings/schema.json` to hide it in a browser. Keep `platforms` for
@@ -216,9 +272,8 @@ that belongs in the browser.
 Plugins stay limited to the bundled core plugin until a later project, and
 LanguageTool checks stay out of the browser.
 
-1. Complete platform services for native file integrations, browser downloads,
-   backups and recovery, credentials, and networking.
-2. Add spellcheck in a worker and separate vaults on one origin.
+1. Add spellcheck in a worker and separate vaults on one origin.
+2. Complete credentials and networking for the steps below.
 3. Port the vendored client's blocking HTTP calls and the app's blocking auth
    and sync entry points to async transport. Keep the Etebase ciphertext,
    MessagePack payloads, signatures, room keys, and Yjs update formats

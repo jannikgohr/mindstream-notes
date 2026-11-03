@@ -133,6 +133,87 @@ describe('worker transport', () => {
     expect(worker.terminate).toHaveBeenCalledOnce();
   });
 
+  it('gives a slow request its own deadline', async () => {
+    vi.useFakeTimers();
+    const { client, worker } = setup(100);
+    const request = client.request('read', undefined, 1_000);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(worker.terminate).not.toHaveBeenCalled();
+    worker.reply({ id: 1, ok: true, result: 'stored' });
+    await expect(request).resolves.toBe('stored');
+    client.dispose();
+  });
+
+  it('lets ordinary requests wait behind a slow one', async () => {
+    vi.useFakeTimers();
+    const { client, worker } = setup(100);
+    const slow = client.request('read', undefined, 1_000);
+    const queued = client.request('read', undefined);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(worker.terminate).not.toHaveBeenCalled();
+
+    worker.reply({ id: 1, ok: true, result: 'slow' });
+    worker.reply({ id: 2, ok: true, result: 'queued' });
+    await expect(slow).resolves.toBe('slow');
+    await expect(queued).resolves.toBe('queued');
+    client.dispose();
+  });
+
+  it('catches a stalled worker again once the slow request has ended', async () => {
+    vi.useFakeTimers();
+    const { client, worker } = setup(100);
+    const slow = client.request('read', undefined, 1_000);
+    worker.reply({ id: 1, ok: true, result: 'slow' });
+    await slow;
+
+    const stalled = expect(
+      client.request('read', undefined)
+    ).rejects.toMatchObject({ code: 'timeout' });
+    await vi.advanceTimersByTimeAsync(100);
+    await stalled;
+    expect(worker.terminate).toHaveBeenCalledOnce();
+  });
+
+  it('still catches a worker that stalls with requests queued behind it', async () => {
+    vi.useFakeTimers();
+    const { client, worker } = setup(100);
+    const slow = expect(
+      client.request('read', undefined, 1_000)
+    ).rejects.toMatchObject({ code: 'timeout' });
+    const queued = expect(
+      client.request('read', undefined)
+    ).rejects.toMatchObject({ code: 'timeout' });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await Promise.all([slow, queued]);
+    expect(worker.terminate).toHaveBeenCalledOnce();
+  });
+
+  it('hands import progress to its listener', async () => {
+    const { client, worker } = setup();
+    const progress = vi.fn();
+    client.onProgress = progress;
+    const request = client.request('read', undefined);
+
+    const update = { phase: 'importing', done: 500, total: 900 };
+    worker.reply({ progress: update });
+    expect(progress).toHaveBeenCalledWith(update);
+
+    worker.reply({ id: 1, ok: true, result: 'stored' });
+    await expect(request).resolves.toBe('stored');
+    client.dispose();
+  });
+
+  it('ignores import progress with no one listening', async () => {
+    const { client, worker } = setup();
+    const request = client.request('read', undefined);
+    worker.reply({ progress: { phase: 'done', done: 1, total: 1 } });
+    worker.reply({ id: 1, ok: true, result: 'stored' });
+    await expect(request).resolves.toBe('stored');
+    client.dispose();
+  });
+
   it('terminates even if graceful shutdown fails', async () => {
     const { client, worker } = setup();
     const result = expect(client.close()).rejects.toMatchObject({
@@ -199,6 +280,98 @@ describe('worker protocol validation', () => {
     expect(parseResult('receipt', 'write-token')).toBe('write-token');
     expect(parseResult('receipt', null)).toBeNull();
     expect(() => parseResult('receipt', {})).toThrow();
+  });
+
+  it('validates backup requests and responses', () => {
+    expect(parseRequest({ id: 1, method: 'backup' })).toMatchObject({
+      method: 'backup'
+    });
+    expect(() =>
+      parseRequest({ id: 1, method: 'backup', args: { path: '/x' } })
+    ).toThrow();
+    const backup = {
+      archive: new Blob(['zip']),
+      filename: 'mindstream-backup.zip',
+      counts: { notes: 1, folders: 0, assets_bytes: 2 },
+      accountPresent: false
+    };
+    expect(parseResult('backup', backup)).toBe(backup);
+    for (const broken of [
+      null,
+      { ...backup, archive: 'zip' },
+      { ...backup, filename: 7 },
+      { ...backup, accountPresent: 'no' },
+      { ...backup, counts: { ...backup.counts, notes: -0.5 } },
+      { ...backup, counts: undefined }
+    ]) {
+      expect(() => parseResult('backup', broken)).toThrow();
+    }
+  });
+
+  it('validates backup import requests and responses', () => {
+    const archive = new Blob(['zip']);
+    expect(
+      parseRequest({ id: 1, method: 'importBegin', args: { archive } })
+    ).toMatchObject({ method: 'importBegin' });
+    expect(
+      parseRequest({
+        id: 1,
+        method: 'importRestore',
+        args: { token: 't', sameAccount: false }
+      })
+    ).toMatchObject({ method: 'importRestore' });
+    for (const method of ['importMerge', 'importCleanup']) {
+      expect(
+        parseRequest({ id: 1, method, args: { token: 't' } })
+      ).toMatchObject({ method });
+    }
+    for (const invalid of [
+      { method: 'importBegin', args: { archive: 'zip' } },
+      { method: 'importBegin' },
+      { method: 'importMerge', args: { token: '' } },
+      { method: 'importCleanup', args: {} },
+      { method: 'importRestore', args: { token: 't' } },
+      { method: 'importRestore', args: { token: 't', sameAccount: 'no' } }
+    ]) {
+      expect(() => parseRequest({ id: 1, ...invalid })).toThrow();
+    }
+    expect(parseResult('importRestore', true)).toBe(true);
+    expect(() => parseResult('importRestore', 'done')).toThrow();
+  });
+
+  it('validates notes import requests', () => {
+    const source = {
+      name: 'Vault',
+      single: false,
+      files: [{ path: 'a.md', file: new File(['a'], 'a.md') }]
+    };
+    expect(
+      parseRequest({ id: 1, method: 'notesDetect', args: { source } })
+    ).toMatchObject({ method: 'notesDetect' });
+    expect(
+      parseRequest({
+        id: 1,
+        method: 'notesImport',
+        args: { source, options: {} }
+      })
+    ).toMatchObject({ method: 'notesImport' });
+    for (const invalid of [
+      { method: 'notesDetect' },
+      { method: 'notesDetect', args: { source: { ...source, name: 7 } } },
+      { method: 'notesDetect', args: { source: { ...source, single: 'no' } } },
+      { method: 'notesDetect', args: { source: { ...source, files: 'a.md' } } },
+      {
+        method: 'notesDetect',
+        args: { source: { ...source, files: [{ path: 'a.md', file: 'a' }] } }
+      },
+      { method: 'notesImport', args: { source } },
+      { method: 'notesImport', args: { source, options: null } }
+    ]) {
+      expect(() => parseRequest({ id: 1, ...invalid })).toThrow();
+    }
+    const detected = { kind: 'gfm' };
+    expect(parseResult('notesDetect', detected)).toBe(detected);
+    expect(parseResult('notesImport', detected)).toBe(detected);
   });
 
   it('rejects unrecognized methods and invalid write payloads', () => {

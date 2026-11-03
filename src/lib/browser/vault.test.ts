@@ -9,6 +9,9 @@ type Plan = {
   open?: Reply;
   reset?: Reply;
   invoke?: Reply;
+  backup?: Reply;
+  import?: Reply;
+  notes?: Reply;
 };
 
 type Message = { id: number; method: string; args?: unknown };
@@ -41,7 +44,13 @@ class FakeWorker {
           ? (this.plan.reset ?? 'ok')
           : message.method === 'invoke'
             ? (this.plan.invoke ?? 'ok')
-            : 'ok';
+            : message.method === 'backup'
+              ? (this.plan.backup ?? 'ok')
+              : message.method.startsWith('import')
+                ? (this.plan.import ?? 'ok')
+                : message.method.startsWith('notes')
+                  ? (this.plan.notes ?? 'ok')
+                  : 'ok';
     if (reply === 'hang') return;
     queueMicrotask(() =>
       this.onmessage?.({
@@ -50,7 +59,12 @@ class FakeWorker {
             ? {
                 id: message.id,
                 ok: true,
-                result: message.method === 'invoke' ? [] : undefined
+                result:
+                  message.method === 'invoke'
+                    ? []
+                    : message.method === 'importRestore'
+                      ? true
+                      : undefined
               }
             : { id: message.id, ok: false, error: reply.error }
       })
@@ -151,6 +165,23 @@ describe('vault connection recovery', () => {
     expect(FakeWorker.instances).toHaveLength(2);
   });
 
+  it('gives a backup minutes, then still catches a stalled worker', async () => {
+    vi.useFakeTimers();
+    FakeWorker.plans = [{ backup: 'hang' }];
+    const { backupBrowserVault } = await loadVault();
+
+    const stalled = outcome(backupBrowserVault());
+    await vi.advanceTimersByTimeAsync(9 * 60_000);
+    expect(FakeWorker.instances[0].terminated).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await stalled).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'timeout' })
+    });
+    expect(FakeWorker.instances[0].terminated).toBe(true);
+  });
+
   it('does not resend a timed-out write when reconnecting', async () => {
     vi.useFakeTimers();
     FakeWorker.plans = [{ invoke: 'hang' }, {}];
@@ -230,6 +261,247 @@ describe('vault connection recovery', () => {
     ]);
 
     expect(FakeWorker.instances).toHaveLength(1);
+  });
+});
+
+describe('backup import', () => {
+  it('sends each step to the worker with what it needs', async () => {
+    const vault = await loadVault();
+    const archive = new Blob(['zip']);
+
+    await vault.stageBrowserBackup(archive);
+    await vault.mergeBrowserBackup('token');
+    await expect(vault.restoreBrowserBackup('token', false)).resolves.toBe(
+      true
+    );
+    await vault.discardBrowserBackup('token');
+
+    expect(
+      FakeWorker.instances[0].messages
+        .filter((message) => message.method.startsWith('import'))
+        .map(({ method, args }) => ({ method, args }))
+    ).toEqual([
+      { method: 'importBegin', args: { archive } },
+      { method: 'importMerge', args: { token: 'token' } },
+      { method: 'importRestore', args: { token: 'token', sameAccount: false } },
+      { method: 'importCleanup', args: { token: 'token' } }
+    ]);
+  });
+
+  // The 30-second default would terminate a healthy worker on a large vault.
+  it.each([
+    ['staging', 'stageBrowserBackup', [new Blob(['zip'])]],
+    ['merging', 'mergeBrowserBackup', ['token']],
+    ['restoring', 'restoreBrowserBackup', ['token', false]]
+  ] as const)('gives %s a backup minutes', async (_, name, args) => {
+    vi.useFakeTimers();
+    FakeWorker.plans = [{ import: 'hang' }];
+    const vault = await loadVault();
+    const call = vault[name] as (...args: unknown[]) => Promise<unknown>;
+
+    const stalled = outcome(call(...args));
+    await vi.advanceTimersByTimeAsync(9 * 60_000);
+    expect(FakeWorker.instances[0].terminated).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await stalled).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'timeout' })
+    });
+  });
+});
+
+describe('reconnecting after a terminated worker', () => {
+  function stubLocks(request: LockManager['request']) {
+    vi.stubGlobal('navigator', { ...navigator, locks: { request } });
+  }
+
+  it('waits for the old worker to give up the vault lock', async () => {
+    let release!: () => void;
+    const request = vi.fn(
+      () =>
+        new Promise<void>((done) => {
+          release = done;
+        })
+    );
+    stubLocks(request as unknown as LockManager['request']);
+    FakeWorker.plans = [{ notes: 'hang' }, {}];
+    const vault = await loadVault();
+    const run = outcome(
+      vault.importBrowserNotes(
+        { name: 'Vault', single: false, files: [] },
+        {},
+        () => {}
+      )
+    );
+    await vi.waitFor(() =>
+      expect(FakeWorker.instances[0]?.messages.at(-1)?.method).toBe(
+        'notesImport'
+      )
+    );
+    vault.cancelBrowserNotesImport();
+    await run;
+
+    const next = vault.invokeBrowser('list_notes', {});
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(request.mock.calls[0]).toEqual([
+      'mindstream:sqlite-vault:pool',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      expect.any(Function)
+    ]);
+    expect(FakeWorker.instances).toHaveLength(1);
+
+    release();
+    await expect(next).resolves.toEqual([]);
+    expect(FakeWorker.instances).toHaveLength(2);
+  });
+
+  it('opens anyway when another tab holds the lock, so it can say so', async () => {
+    stubLocks((async () => {
+      throw new DOMException('Too long', 'TimeoutError');
+    }) as unknown as LockManager['request']);
+    FakeWorker.plans = [{ invoke: 'hang' }, {}];
+    const vault = await loadVault();
+    const stalled = outcome(vault.invokeBrowser('list_notes', {}));
+    await vi.waitFor(() =>
+      expect(FakeWorker.instances[0]?.invokes()).toHaveLength(1)
+    );
+    FakeWorker.instances[0].onerror?.({ message: 'Worker failed' });
+    await stalled;
+
+    await expect(vault.invokeBrowser('list_notes', {})).resolves.toEqual([]);
+    expect(FakeWorker.instances).toHaveLength(2);
+  });
+
+  it('does not hide other lock failures', async () => {
+    stubLocks((async () => {
+      throw new DOMException('Denied', 'SecurityError');
+    }) as unknown as LockManager['request']);
+    FakeWorker.plans = [{ invoke: 'hang' }, {}];
+    const vault = await loadVault();
+    const stalled = outcome(vault.invokeBrowser('list_notes', {}));
+    await vi.waitFor(() =>
+      expect(FakeWorker.instances[0]?.invokes()).toHaveLength(1)
+    );
+    FakeWorker.instances[0].onerror?.({ message: 'Worker failed' });
+    await stalled;
+
+    await expect(vault.invokeBrowser('list_notes', {})).rejects.toMatchObject({
+      name: 'SecurityError'
+    });
+    expect(FakeWorker.instances).toHaveLength(1);
+  });
+});
+
+describe('notes import', () => {
+  const source = {
+    name: 'Vault',
+    single: false,
+    files: [{ path: 'a.md', file: new File(['a'], 'a.md') }]
+  };
+
+  it('asks the worker to detect and import the picked files', async () => {
+    const vault = await loadVault();
+    await vault.detectBrowserNotes(source);
+    await vault.importBrowserNotes(source, { kind: 'gfm' }, () => {});
+    expect(
+      FakeWorker.instances[0].messages
+        .filter((message) => message.method.startsWith('notes'))
+        .map(({ method, args }) => ({ method, args }))
+    ).toEqual([
+      { method: 'notesDetect', args: { source } },
+      { method: 'notesImport', args: { source, options: { kind: 'gfm' } } }
+    ]);
+  });
+
+  it('cancels while the shared open is pending without sending an import', async () => {
+    FakeWorker.plans = [{ open: 'hang' }];
+    const vault = await loadVault();
+    const progress = vi.fn();
+    const run = outcome(vault.importBrowserNotes(source, {}, progress));
+
+    await vi.waitFor(() =>
+      expect(FakeWorker.instances[0]?.messages[0]?.method).toBe('open')
+    );
+    vault.cancelBrowserNotesImport();
+
+    const worker = FakeWorker.instances[0];
+    const open = worker.messages[0];
+    worker.onmessage?.({
+      data: { id: open.id, ok: true, result: undefined }
+    });
+
+    expect(await run).toEqual({ ok: false, error: { code: 'closed' } });
+    expect(worker.messages.map(({ method }) => method)).toEqual(['open']);
+
+    await expect(vault.importBrowserNotes(source, {}, () => {})).resolves.toBe(
+      undefined
+    );
+    expect(worker.messages.map(({ method }) => method)).toEqual([
+      'open',
+      'notesImport'
+    ]);
+    expect(progress).not.toHaveBeenCalled();
+  });
+
+  it('passes progress on while the import runs, and only then', async () => {
+    FakeWorker.plans = [{ notes: 'hang' }];
+    const vault = await loadVault();
+    const progress = vi.fn();
+    const run = outcome(vault.importBrowserNotes(source, {}, progress));
+    await vi.waitFor(() =>
+      expect(
+        FakeWorker.instances[0]?.messages.some(
+          (message) => message.method === 'notesImport'
+        )
+      ).toBe(true)
+    );
+
+    const worker = FakeWorker.instances[0];
+    const update = { phase: 'importing', done: 500, total: 900 };
+    worker.onmessage?.({ data: { progress: update } });
+    expect(progress).toHaveBeenCalledWith(update);
+
+    const message = worker.messages.at(-1)!;
+    worker.onmessage?.({ data: { id: message.id, ok: true, result: {} } });
+    await run;
+    worker.onmessage?.({ data: { progress: update } });
+    expect(progress).toHaveBeenCalledOnce();
+  });
+
+  it('gives an import hours, then still catches a stalled worker', async () => {
+    vi.useFakeTimers();
+    FakeWorker.plans = [{ notes: 'hang' }];
+    const vault = await loadVault();
+    const stalled = outcome(vault.importBrowserNotes(source, {}, () => {}));
+    await vi.advanceTimersByTimeAsync(5 * 60 * 60_000);
+    expect(FakeWorker.instances[0].terminated).toBe(false);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(await stalled).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'timeout' })
+    });
+  });
+
+  it('stops a running import by terminating its worker, then reconnects', async () => {
+    FakeWorker.plans = [{ notes: 'hang' }, {}];
+    const vault = await loadVault();
+    const run = outcome(vault.importBrowserNotes(source, {}, () => {}));
+    await vi.waitFor(() =>
+      expect(FakeWorker.instances[0]?.messages.at(-1)?.method).toBe(
+        'notesImport'
+      )
+    );
+
+    vault.cancelBrowserNotesImport();
+
+    expect(await run).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: 'closed' })
+    });
+    expect(FakeWorker.instances[0].terminated).toBe(true);
+    await expect(vault.invokeBrowser('list_notes', {})).resolves.toEqual([]);
+    expect(FakeWorker.instances).toHaveLength(2);
   });
 });
 
