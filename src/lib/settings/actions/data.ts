@@ -319,8 +319,21 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
       const staged = await importRestore(
         preview.token,
         preview.same_account,
-        options.includeDevice
+        options.includeDevice,
+        () =>
+          confirm({
+            title: tUi('data.import.restore.safety.title'),
+            message: tUi('data.import.restore.safety.message'),
+            confirmLabel: tUi('data.import.restore.safety.button'),
+            destructive: true
+          })
       );
+      if (!staged) {
+        await importCleanup(preview.token).catch((err) =>
+          console.warn('[settings] import_cleanup failed', err)
+        );
+        return;
+      }
       if (staged.restart_required) {
         const action = await showRestoreReadyResult(preview, staged);
         if (action === 'restart') {

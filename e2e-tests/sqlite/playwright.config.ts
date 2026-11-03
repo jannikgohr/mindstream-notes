@@ -6,7 +6,13 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  use: { baseURL: 'http://localhost:1450', trace: 'retain-on-failure' },
+  use: {
+    baseURL: 'http://localhost:1450',
+    trace: 'retain-on-failure',
+    // Chromium reads non-ASCII file paths through the locale, and a shell may
+    // not have one. Picked files with such names then read as empty.
+    launchOptions: { env: { ...process.env, LC_ALL: 'C.UTF-8' } }
+  },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
     { name: 'firefox', use: { ...devices['Desktop Firefox'] } },

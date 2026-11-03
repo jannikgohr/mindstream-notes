@@ -24,6 +24,7 @@ import {
   TauriCommandName
 } from './core';
 import { browserStorageEnabled } from '../browser/commands';
+import { pickFiles } from '../browser/pick-files';
 import { downloadBlob } from './file-export';
 import { mockApi } from './mock-store';
 
@@ -177,21 +178,13 @@ export interface MergeReport {
  * Pop the file picker for a backup zip; extract + validate + return a
  * preview struct. `null` means the user cancelled the picker.
  */
-function pickBackupFile(): Promise<File | null> {
-  return new Promise((resolve) => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'application/zip,.zip';
-    input.addEventListener('change', () => resolve(input.files?.[0] ?? null));
-    input.addEventListener('cancel', () => resolve(null));
-    input.click();
-  });
-}
-
 export async function importBegin(): Promise<ImportPreview | null> {
   if (!isTauri()) {
     if (!browserStorageEnabled()) return null;
-    const archive = await pickBackupFile();
+    const picked = await pickFiles((input) => {
+      input.accept = 'application/zip,.zip';
+    });
+    const archive = picked?.[0];
     if (!archive) return null;
     const { stageBrowserBackup } = await import('../browser/vault');
     return parseImportPreview(await stageBrowserBackup(archive));
@@ -225,8 +218,9 @@ export async function importCleanup(token: string): Promise<void> {
 export async function importRestore(
   token: string,
   sameAccount: boolean,
-  includeDevice = false
-): Promise<RestoreStaged> {
+  includeDevice = false,
+  confirmSafetyCopy?: () => Promise<boolean>
+): Promise<RestoreStaged | null> {
   assertRequiredString(token, 'token');
   if (typeof sameAccount !== 'boolean') {
     throw new Error('sameAccount must be a boolean');
@@ -236,10 +230,14 @@ export async function importRestore(
   if (!isTauri()) {
     if (!browserStorageEnabled())
       return { restart_required: false, sanitized: !sameAccount };
-    // The app keeps a pre-restore copy in its data folder. A copy in browser
-    // storage would be out of the user's reach, so they get a file instead,
-    // and a backup that fails stops the restore before it replaces anything.
+    // Browsers cannot tell us whether a download was saved or cancelled.
+    // Require the user to check the safety copy before replacing their vault.
+    if (!confirmSafetyCopy)
+      throw new Error(
+        'A saved safety backup must be confirmed before restoring.'
+      );
     await downloadBackup();
+    if (!(await confirmSafetyCopy())) return null;
     const { restoreBrowserBackup } = await import('../browser/vault');
     return {
       restart_required: false,
