@@ -4,7 +4,8 @@ import {
   noteIsUnderTrash
 } from '$lib/stores/note-source.svelte';
 import { pluginById, pluginToolbarButtons } from './registry.svelte';
-import { pluginSettingId, pluginSettingValue } from './settings-store.svelte';
+import { getSettingValue } from '$lib/settings/store.svelte';
+import { pluginSettingId } from './settings-store.svelte';
 import type { PluginToolbarButton, PluginToolbarLocation } from './types';
 
 /** UI hint only. Backend permissions and current note state still govern execution. */
@@ -17,17 +18,10 @@ export function pluginToolbarButtonIsVisible(
   const plugin = pluginById(pluginId);
   if (!plugin?.granted.includes('notes.read') || !tree.ready || tree.error)
     return false;
-  const settings =
-    plugin.manifest.contributes.settings?.flatMap(
-      (section) => section.settings
-    ) ?? [];
   function source(id: string | undefined): string | undefined {
     if (!id) return undefined;
-    const stored = pluginSettingValue(pluginSettingId(pluginId, id));
-    const value =
-      stored === undefined
-        ? settings.find((s) => s.id === id)?.default
-        : stored;
+    // The core store falls back to the manifest default for an unset value.
+    const value = getSettingValue(pluginSettingId(pluginId, id));
     return typeof value === 'string' && value.length > 0 ? value : undefined;
   }
   const folder = source(condition.folderSetting);

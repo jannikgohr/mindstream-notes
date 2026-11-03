@@ -1,6 +1,8 @@
 /** Synchronous cache of backend plugin settings. Device values live at the root;
  * vault values live in the vault database. Windows refresh on plugin invalidation.
- * Browser fallback is in memory. Runtime contexts are assembled by the backend.
+ * Only the app uses this cache; in the browser the core settings store keeps
+ * plugin settings itself (see `installPluginSettingsBridge`). Runtime contexts
+ * are assembled by the backend.
  */
 
 /* eslint-disable svelte/prefer-svelte-reactivity -- Request bookkeeping must not trigger rendering or subscribe effects. */

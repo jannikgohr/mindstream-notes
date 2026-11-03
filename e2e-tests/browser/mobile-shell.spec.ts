@@ -69,7 +69,11 @@ test('the create menu pins quick buttons and sorts the default to the top', asyn
   await expect(menu.locator('[data-create-row]').first()).toContainText(
     'New handwritten note'
   );
-  await page.getByRole('button', { name: 'Close action menu' }).first().click();
+  // The sheet covers the scrim's centre once user templates are listed.
+  await page
+    .getByRole('button', { name: 'Close action menu' })
+    .first()
+    .click({ position: { x: 8, y: 8 } });
 
   const main = page.getByRole('button', {
     name: 'New handwritten note',
@@ -142,7 +146,11 @@ test('plugin create actions keep their IDs in a separate mobile layout', async (
     'data-create-row',
     pluginId
   );
-  await page.getByRole('button', { name: 'Close action menu' }).first().click();
+  // The sheet covers the scrim's centre once user templates are listed.
+  await page
+    .getByRole('button', { name: 'Close action menu' })
+    .first()
+    .click({ position: { x: 8, y: 8 } });
   const stored = await page.evaluate(
     ({ desktopKey, mobileKey }) => ({
       desktop: JSON.parse(localStorage.getItem(desktopKey)!),
@@ -153,13 +161,13 @@ test('plugin create actions keep their IDs in a separate mobile layout', async (
   expect(stored.desktop).toEqual(desktop);
   expect(stored.mobile.toolbar[0]).toBe(pluginId);
   await page.reload();
-  // The browser fallback resets plugin settings. The saved toolbar order must
-  // survive the temporarily hidden action while its source is configured again.
-  await expect(
-    page.getByRole('button', { name: 'New from template', exact: true })
-  ).toBeHidden();
-  await setTemplateFolder(page);
+  // The template source and the saved toolbar order both survive a reload.
   await expect(
     page.getByRole('button', { name: 'New from template', exact: true })
   ).toBeVisible();
+  const reloaded = await page.evaluate(
+    (mobileKey) => JSON.parse(localStorage.getItem(mobileKey)!),
+    mobileKey
+  );
+  expect(reloaded.toolbar[0]).toBe(pluginId);
 });

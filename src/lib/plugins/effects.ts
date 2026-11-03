@@ -14,7 +14,7 @@
  * picker enumerates its notes in the runtime and returns a menu of `createNoteFromNote`).
  */
 
-import { pluginsRunScript } from '$lib/api/plugins';
+import { runPluginScript } from './run-script';
 import type { NoteKind } from '$lib/api';
 import { createNoteIn, tree } from '$lib/stores/tree.svelte';
 import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
@@ -255,7 +255,7 @@ export async function pluginButtonEffect(
   }
   try {
     const ctx = buildPluginContext();
-    const raw = await pluginsRunScript(pluginId, button.action.export, ctx);
+    const raw = await runPluginScript(pluginId, button.action.export, ctx);
     const effect = parsePluginEffect(raw);
     if (!effect) {
       console.error(

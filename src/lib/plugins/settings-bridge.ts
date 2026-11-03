@@ -18,6 +18,7 @@
  * the reverse indexes here map those full ids back to the owning plugin.
  */
 
+import { isTauri } from '$lib/api/core';
 import { registerSettingsLabelResolver } from '$lib/settings/i18n.svelte';
 import {
   registerDynamicSettingResolver,
@@ -138,16 +139,19 @@ export function pluginSettingDef(id: string): Setting | undefined {
  * clearing is available for teardown in tests.
  */
 export function installPluginSettingsBridge(): void {
-  // Plugin settings are persisted by the backend, not in localStorage, because
-  // the backend passes them to scripts as `ctx.settings` and has to be able to
-  // read them. The core store delegates any `plugins.*` id here.
-  registerExternalSettingStore({
-    owns: (id) => parsePluginSettingId(id) !== null,
-    read: pluginSettingValue,
-    has: hasPluginSettingValue,
-    write: setPluginSettingValue,
-    clear: resetPluginSettingValue
-  });
+  // In the app, plugin settings are persisted by the backend, not in
+  // localStorage, because the backend passes them to scripts as `ctx.settings`
+  // and has to be able to read them. The core store delegates any `plugins.*`
+  // id here. The browser has no backend store, so the core store keeps those
+  // ids in its scoped localStorage buckets instead.
+  if (isTauri())
+    registerExternalSettingStore({
+      owns: (id) => parsePluginSettingId(id) !== null,
+      read: pluginSettingValue,
+      has: hasPluginSettingValue,
+      write: setPluginSettingValue,
+      clear: resetPluginSettingValue
+    });
 
   registerDynamicSettingResolver(pluginSettingDef);
   registerSettingsLabelResolver({

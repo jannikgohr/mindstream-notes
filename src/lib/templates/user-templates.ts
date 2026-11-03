@@ -19,14 +19,13 @@
  * copies the source note's body (and title) with `{{…}}` placeholders
  * (`{{date}}`, `{{uuid}}`, `{{date+7d:YYYY-MM-DD}}`, …) interpolated by the
  * **Templates plugin's component** (`renderTemplate`) — the plugin owns the macro
- * engine; the app only performs the note write. Rendering therefore needs the
- * backend, so user templates are offered only in the app, not the web build.
+ * engine; the app only performs the note write. The web build runs the same
+ * component logic through its TypeScript port (`plugins/browser-templates.ts`).
  */
 
 import { loadNote } from '$lib/api/notes';
 import type { NoteKind } from '$lib/api';
-import { isTauri } from '$lib/api/core';
-import { pluginsRunScript } from '$lib/api/plugins';
+import { runPluginScript } from '$lib/plugins/run-script';
 import { createNoteIn, tree } from '$lib/stores/tree.svelte';
 import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
 import { getSettingValue } from '$lib/settings/store.svelte';
@@ -77,11 +76,6 @@ function isInFolder(collectionId: string | null, folderId: string): boolean {
  * re-derives when notes, tags, or the settings change.
  */
 export function userTemplateEntries(): UserTemplateEntry[] {
-  // Rendering a user template runs the Templates plugin's component, which only
-  // executes in the app's backend — so there are no user templates to offer in a
-  // backend-less (web/preview) build.
-  if (!isTauri()) return [];
-
   const folderId = trimmedSetting(SOURCE_FOLDER_KEY);
   const tag = trimmedSetting(SOURCE_TAG_KEY);
   if (!folderId && !tag) return [];
@@ -117,7 +111,7 @@ export function hasUserTemplates(): boolean {
  * plugin's component** (`renderTemplate` export) — the plugin owns the macro engine;
  * the app only feeds it the raw note and performs the resulting write. The title
  * is rendered first so the body can reference the final `{{title}}` (handled
- * inside the plugin). Backend-only: `pluginsRunScript` rejects without the app.
+ * inside the plugin).
  */
 async function renderUserTemplate(
   templateNoteId: string,
@@ -127,7 +121,7 @@ async function renderUserTemplate(
   const rawTitle = summary?.title ?? 'Untitled';
   const full = await loadNote(templateNoteId);
 
-  const rendered = (await pluginsRunScript(
+  const rendered = (await runPluginScript(
     TEMPLATES_PLUGIN_ID,
     'renderTemplate',
     {
