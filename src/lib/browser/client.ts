@@ -1,6 +1,7 @@
 import {
   parseResult,
   storageError,
+  type ImportProgressMessage,
   type StorageError,
   type StorageMethod,
   type StorageMethods,
@@ -24,6 +25,8 @@ export class BrowserStorageClient {
   // an ordinary read would time out and terminate a healthy backup.
   private slowUntil = 0;
   private slowRequests = 0;
+  /** Hears a running notes import, which reports between its batches. */
+  onProgress?: (progress: ImportProgressMessage) => void;
 
   constructor(
     createWorker = () =>
@@ -36,6 +39,10 @@ export class BrowserStorageClient {
     this.worker.onmessage = (event: MessageEvent<StorageResponse>) => {
       const response = event.data;
       if (!response || typeof response !== 'object') return;
+      if ('progress' in response) {
+        this.onProgress?.(response.progress);
+        return;
+      }
       const pending = this.pending.get(response.id);
       if (!pending) return;
       this.pending.delete(response.id);

@@ -7,6 +7,7 @@
 //!
 //! Paths are relative to the source's root, with forward slashes everywhere.
 
+use std::collections::BTreeMap;
 use std::io::{self, Read};
 
 /// A file or directory found by [`ImportFiles::walk`].
@@ -21,9 +22,10 @@ pub trait ImportFiles {
     /// directory before its contents and siblings sorted by name. The order
     /// keeps a run reproducible, and parents must come before their children.
     ///
-    /// A directory `skip_dir` names is left out with everything inside it, and
-    /// an unreadable path is skipped: one must not abort a vault-sized walk.
-    fn walk(&self, skip_dir: &dyn Fn(&str) -> bool) -> Vec<ImportEntry>;
+    /// An entry whose name `skip` matches is left out, a directory with
+    /// everything inside it, and an unreadable path is skipped: one must not
+    /// abort a vault-sized walk.
+    fn walk(&self, skip: &dyn Fn(&str) -> bool) -> Vec<ImportEntry>;
 
     /// The names of the files directly in the root.
     fn root_files(&self) -> io::Result<Vec<String>>;
@@ -42,4 +44,48 @@ pub trait ImportFiles {
 
     /// When the file last changed, as RFC 3339.
     fn modified(&self, path: &str) -> Option<String>;
+}
+
+#[derive(Default)]
+struct PathTree {
+    children: BTreeMap<String, PathTree>,
+}
+
+impl PathTree {
+    fn emit(&self, prefix: &str, skip: &dyn Fn(&str) -> bool, out: &mut Vec<ImportEntry>) {
+        for (name, child) in &self.children {
+            if skip(name) {
+                continue;
+            }
+            let path = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            out.push(ImportEntry {
+                path: path.clone(),
+                is_dir: !child.children.is_empty(),
+            });
+            child.emit(&path, skip, out);
+        }
+    }
+}
+
+/// [`ImportFiles::walk`] for a source that is a list of file paths. Sorting
+/// happens per directory, not on the whole path, because the order decides
+/// which of two same-named attachments wins and must match a walk on disk.
+pub fn walk_paths<'a>(
+    paths: impl Iterator<Item = &'a str>,
+    skip: &dyn Fn(&str) -> bool,
+) -> Vec<ImportEntry> {
+    let mut root = PathTree::default();
+    for path in paths {
+        let mut node = &mut root;
+        for segment in path.split('/') {
+            node = node.children.entry(segment.to_string()).or_default();
+        }
+    }
+    let mut entries = Vec::new();
+    root.emit("", skip, &mut entries);
+    entries
 }

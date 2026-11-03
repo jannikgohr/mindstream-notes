@@ -3484,6 +3484,7 @@ checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 name = "mindstream-browser-wasm"
 version = "0.2.0"
 dependencies = [
+ "chrono",
  "js-sys",
  "mindstream-storage-core",
  "rusqlite",
@@ -3610,6 +3611,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "similar",
+ "tar",
  "thiserror 2.0.18",
  "uuid",
  "yaml-rust2",

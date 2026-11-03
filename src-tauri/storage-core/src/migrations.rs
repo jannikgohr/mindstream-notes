@@ -1644,7 +1644,7 @@ mod asset_refcount_upgrade_tests {
         assert_eq!(refs, 0, "no reference to a note that does not exist");
         // And the next sweep collects it, since nothing points at it.
         assert_eq!(
-            conn.query_row("SELECT COUNT(*) FROM assets WHERE owning_note_id IS NULL AND NOT EXISTS (SELECT 1 FROM asset_refs WHERE asset_refs.asset_id = assets.id)", [], |r| r.get::<_, i64>(0)).unwrap(),
+            crate::assets::sweep_unreferenced_markdown_assets_inner(&conn).unwrap(),
             1
         );
     }

@@ -110,19 +110,45 @@ describe('browser backup', () => {
       order.push('restore');
       return true;
     });
-    expect(await importRestore('test-token', false)).toEqual({
+    const saved = vi.fn(async () => {
+      order.push('confirmed');
+      return true;
+    });
+    expect(await importRestore('test-token', false, false, saved)).toEqual({
       restart_required: false,
       sanitized: true
     });
-    expect(order).toEqual(['backup', 'download', 'restore']);
+    expect(order).toEqual(['backup', 'download', 'confirmed', 'restore']);
     expect(browser.restore).toHaveBeenCalledWith('test-token', false);
   });
 
   it('replaces nothing when the safety copy fails', async () => {
     browser.backup.mockRejectedValue(new Error('too large'));
+    await expect(
+      importRestore('test-token', false, false, async () => true)
+    ).rejects.toThrow('too large');
+    expect(browser.restore).not.toHaveBeenCalled();
+  });
+
+  it('keeps the vault when the user has not saved the safety copy', async () => {
+    browser.backup.mockResolvedValue({
+      archive: new Blob(['zip']),
+      filename: 'safety.zip',
+      counts: { notes: 1, folders: 0, assets_bytes: 0 },
+      accountPresent: false
+    });
+    expect(
+      await importRestore('test-token', false, false, async () => false)
+    ).toBeNull();
+    expect(browser.download).toHaveBeenCalledOnce();
+    expect(browser.restore).not.toHaveBeenCalled();
+  });
+
+  it('requires a safety confirmation before starting a browser replacement', async () => {
     await expect(importRestore('test-token', false)).rejects.toThrow(
-      'too large'
+      'A saved safety backup must be confirmed'
     );
+    expect(browser.backup).not.toHaveBeenCalled();
     expect(browser.restore).not.toHaveBeenCalled();
   });
 

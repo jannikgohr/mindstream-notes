@@ -6,12 +6,14 @@ const state = vi.hoisted(() => ({
   notes: {} as Record<string, Record<string, unknown>>,
   collections: {},
   loadNote: vi.fn(),
-  writeExportFile: vi.fn()
+  writeExportFile: vi.fn(),
+  fetchDrawingAsset: vi.fn()
 }));
 vi.mock('$lib/api', () => ({
   TRASH_ID: 'trash',
   loadNote: state.loadNote,
-  writeExportFile: state.writeExportFile
+  writeExportFile: state.writeExportFile,
+  fetchDrawingAsset: state.fetchDrawingAsset
 }));
 vi.mock('$lib/stores/tree.svelte', () => ({
   tree: {
@@ -33,6 +35,7 @@ beforeEach(() => {
   state.notes = {};
   state.loadNote.mockReset();
   state.writeExportFile.mockReset().mockResolvedValue(undefined);
+  state.fetchDrawingAsset.mockReset();
   download.mockReset();
 });
 
@@ -55,12 +58,72 @@ function seed(id: string, kind: string, body = '', yrs_state: number[] = []) {
 }
 
 describe('vault export additions', () => {
+  it('reports an attachment write failure and continues exporting other notes', async () => {
+    seed('image', 'markdown', '![image](asset:mindstream/asset_one)');
+    seed('source', 'plugin.com.mindstream.typst.document', '= Kept');
+    state.fetchDrawingAsset.mockResolvedValue({
+      mime_type: 'image/png',
+      bytes: [1, 2, 3]
+    });
+    state.writeExportFile.mockImplementation(async (path: string) => {
+      if (path.startsWith('_assets/'))
+        throw new Error('The export is too large for a zip file');
+    });
+    const log = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const report = await exportVault(state.writeExportFile);
+      expect(report).toMatchObject({
+        markdown_written: 1,
+        typst_written: 1,
+        assets_written: 0,
+        errors: 1
+      });
+      expect(state.writeExportFile.mock.calls.map(([path]) => path)).toEqual([
+        '_assets/asset_one.png',
+        'Same title.md',
+        'Same title.typ'
+      ]);
+      expect(
+        new TextDecoder().decode(state.writeExportFile.mock.calls[1][1])
+      ).toContain('![image](asset:mindstream/asset_one)');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('preserves the original URL when an attachment cannot be read', async () => {
+    seed('image', 'markdown', '![image](asset:mindstream/asset_missing)');
+    state.fetchDrawingAsset.mockRejectedValue(new Error('Asset not found'));
+    const log = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const report = await exportVault(state.writeExportFile);
+      expect(report).toMatchObject({
+        markdown_written: 1,
+        assets_written: 0,
+        errors: 1
+      });
+      const [[path, bytes]] = state.writeExportFile.mock.calls;
+      expect(path).toBe('Same title.md');
+      expect(new TextDecoder().decode(bytes)).toContain(
+        '![image](asset:mindstream/asset_missing)'
+      );
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('writes readable Kanban plus a complete JSON companion, and Typst source without a compiler', async () => {
     const doc = new Y.Doc();
     writeBoardToYDoc(doc, {
       columns: [{ id: 'todo', label: 'To Do', order: 0 }],
       cards: [
-        { id: 'one', label: 'Task', column: 'todo', order: 0, users: ['alice'] }
+        {
+          id: 'one',
+          label: 'Task',
+          column: 'todo',
+          order: 0,
+          users: ['alice']
+        }
       ]
     });
     seed('board', 'kanban', '', Array.from(Y.encodeStateAsUpdate(doc)));

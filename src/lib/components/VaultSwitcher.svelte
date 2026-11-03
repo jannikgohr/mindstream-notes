@@ -10,6 +10,9 @@
    * Supervised workers open/focus vault windows through the coordinator.
    * Direct devices retain their restart flow. Menu observations never grant
    * ownership; the native action rechecks the target.
+   *
+   * In a browser tab there is one vault and no way to change it, so the
+   * switcher only shows its name.
    */
   import { onMount } from 'svelte';
   import {
@@ -60,6 +63,9 @@
 
   const current = $derived(currentProfile());
   const currentName = $derived(current?.name ?? tUi('vault.unknown'));
+  // The browser fallback cannot create, rename, delete or switch vaults, so
+  // those controls would report success without changing anything.
+  const manageable = isTauri();
 
   // Tinted like the app's other status chips. Plain muted text next to the
   // row's icon buttons read as one more action ("Open") rather than a state.
@@ -394,30 +400,44 @@
 </script>
 
 <div bind:this={root} class="vault-switcher relative min-w-0">
-  <Button
-    variant="ghost"
-    size="sm"
-    class="h-8 w-full justify-start gap-2 pl-2 pr-0 text-xs"
-    onclick={toggle}
-    title={currentName}
-    aria-label={tUi('vault.switch')}
-    aria-expanded={open}
-    disabled={busy}
-  >
-    <VaultTile
-      id={current?.id ?? ''}
-      name={current?.name ?? ''}
-      color={current?.color}
-    />
-    <span class="min-w-0 flex-1 truncate text-left">{currentName}</span>
-    <!-- The same 28px box as the file-tree toolbar's menu button below, so
-         both chevrons sit in one column. -->
-    <span class="flex w-7 shrink-0 justify-center text-muted-foreground">
-      <ChevronDown class="size-3.5" />
-    </span>
-  </Button>
+  {#if manageable}
+    <Button
+      variant="ghost"
+      size="sm"
+      class="h-8 w-full justify-start gap-2 pl-2 pr-0 text-xs"
+      onclick={toggle}
+      title={currentName}
+      aria-label={tUi('vault.switch')}
+      aria-expanded={open}
+      disabled={busy}
+    >
+      <VaultTile
+        id={current?.id ?? ''}
+        name={current?.name ?? ''}
+        color={current?.color}
+      />
+      <span class="min-w-0 flex-1 truncate text-left">{currentName}</span>
+      <!-- The same 28px box as the file-tree toolbar's menu button below, so
+           both chevrons sit in one column. -->
+      <span class="flex w-7 shrink-0 justify-center text-muted-foreground">
+        <ChevronDown class="size-3.5" />
+      </span>
+    </Button>
+  {:else}
+    <div
+      class="flex h-8 w-full items-center gap-2 pl-2 text-xs"
+      title={currentName}
+    >
+      <VaultTile
+        id={current?.id ?? ''}
+        name={current?.name ?? ''}
+        color={current?.color}
+      />
+      <span class="min-w-0 flex-1 truncate">{currentName}</span>
+    </div>
+  {/if}
 
-  {#if open}
+  {#if open && manageable}
     <div
       class="absolute left-0 top-[calc(100%+0.375rem)] z-300 w-64 overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-lg"
     >
