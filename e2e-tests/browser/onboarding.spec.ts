@@ -138,7 +138,21 @@ test('normal launches skip setup, and quick start persists the skip decision', a
       exact: true
     })
   ).toBeVisible();
-  await page.getByRole('button', { name: /^Your own server/ }).click();
+  // A previously saved remote preference must survive rerunning setup, but
+  // cannot offer a browser sign-in or prevent continuing with local notes.
+  await page.evaluate(() =>
+    localStorage.setItem(
+      'notes-app:settings:v1:vault:default',
+      JSON.stringify({ 'account.serverType': 'self-hosted' })
+    )
+  );
+  await page.reload();
+  await expect(
+    page.getByRole('button', { name: /^Your own server/ })
+  ).toBeDisabled();
+  await expect(
+    footer.getByRole('button', { name: 'Continue', exact: true })
+  ).toBeEnabled();
   await footer
     .getByRole('button', {
       name: 'Skip and keep current settings',

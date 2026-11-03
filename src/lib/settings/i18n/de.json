@@ -1162,6 +1162,7 @@
     "theme.json": "Vorlagen-JSON",
     "theme.save": "Vorlage speichern",
     "account.serverType.locked": "Melde dich ab, um den Servertyp zu ändern.",
+    "account.browserUnavailable": "Konten und Synchronisierung sind im Browser noch nicht verfügbar. Notizen werden lokal in diesem Browser gespeichert. Nutze die Desktop- oder Mobil-App, um dich mit einem Sync-Server zu verbinden.",
     "account.username": "Benutzername",
     "account.email": "E-Mail",
     "account.passwordAgain": "Passwort wiederholen",
