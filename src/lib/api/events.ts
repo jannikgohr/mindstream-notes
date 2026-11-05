@@ -1,5 +1,6 @@
 import {
   emit as tauriEmit,
+  emitTo as tauriEmitTo,
   listen as tauriListen
 } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
@@ -19,6 +20,7 @@ export enum TauriEventName {
   InviteLinkOpened = 'invite-link-opened',
   NativeMenuCommand = 'native-menu-command',
   NoteSummaryChanged = 'note-summary-changed',
+  NoteWindowRequested = 'note-window-requested',
   OnboardingChanged = 'onboarding-changed',
   PluginsChanged = 'plugins-changed',
   SessionEnded = 'session-ended',
@@ -128,6 +130,12 @@ export type TauriEvents = {
    * note's title and `modified` stamp from this. See stores/tree.svelte.
    */
   'note-summary-changed': { id: string; title?: string; modified: string };
+  /**
+   * Sent by a note window to the main window when something in it asks for
+   * another note. Only the main window knows every tab and window a note is
+   * open in, so it decides where the note opens. See `requestNoteWindow`.
+   */
+  'note-window-requested': { noteId: string };
   'plugins-changed': null;
   'ui-settings-changed': null;
   'desktop-settings-changed': null;
@@ -144,6 +152,17 @@ export function emit<K extends keyof TauriEvents>(
   payload: TauriEvents[K]
 ) {
   if (isTauri()) return tauriEmit(event, payload);
+  browserEvents.dispatchEvent(new CustomEvent(event, { detail: payload }));
+  return Promise.resolve();
+}
+
+/** Send an event to one window, by its label. */
+export function emitTo<K extends keyof TauriEvents>(
+  target: string,
+  event: K,
+  payload: TauriEvents[K]
+) {
+  if (isTauri()) return tauriEmitTo(target, event, payload);
   browserEvents.dispatchEvent(new CustomEvent(event, { detail: payload }));
   return Promise.resolve();
 }

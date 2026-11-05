@@ -737,6 +737,12 @@
     const showAppUnlisten = listen(TauriEventName.ShowApp, () => {
       void focusMainWindow();
     });
+    // Note windows ask here instead of opening a window themselves.
+    const noteWindowUnlisten = listen(
+      TauriEventName.NoteWindowRequested,
+      ({ noteId }) => void openInNewWindow(noteId),
+      { thisWindow: true }
+    );
 
     // Cleanup the dv-tab-dragging body class on every drag termination:
     //   - `dragend` fires on the source element after a successful drop
@@ -822,6 +828,7 @@
       unsub();
       void trayUnlisten.then((unlisten) => unlisten());
       void showAppUnlisten.then((unlisten) => unlisten());
+      void noteWindowUnlisten.then((unlisten) => unlisten());
     };
   });
 
@@ -920,21 +927,30 @@
   // Left undefined in a browser, which drops the menu item: a second tab
   // cannot own the vault, so it could not load the note.
   const onOpenInNewWindow = isTauri()
-    ? (id: string) => {
-        const note = tree.notesById[id];
-        if (!note) return;
-        // An open tab moves into the new window, as its own pop-out button
-        // does. Left behind, it would be a second editor on the note that
-        // never sees the window's edits and saves over them.
-        const panel = openPanels.get(id);
-        if (panel && dock) {
-          panel.api.setActive();
-          void openNoteWindow(note.id, note.title, panel.group, dock);
-          return;
-        }
-        void openNoteWindow(note.id, note.title, null, null);
-      }
+    ? (id: string) => void openInNewWindow(id)
     : undefined;
+
+  /**
+   * Open a note in a window of its own. Every window's request ends up
+   * here (see `requestNoteWindow`), because only this window can see the
+   * note's tab: it moves into the new window, as its own pop-out button
+   * does. Left behind, it would be a second editor on the note that never
+   * sees the window's edits and saves over them. `openNoteWindow` focuses
+   * the note's window instead when it already has one.
+   */
+  async function openInNewWindow(id: string) {
+    // Another window may have just created it, before this tree knew.
+    if (!tree.notesById[id]) await loadTree();
+    const note = tree.notesById[id];
+    if (!note) return;
+    const panel = openPanels.get(id);
+    if (panel && dock) {
+      panel.api.setActive();
+      await openNoteWindow(note.id, note.title, panel.group, dock);
+      return;
+    }
+    await openNoteWindow(note.id, note.title, null, null);
+  }
 </script>
 
 <div data-app-shell class="desktop-shell flex h-full w-full flex-col">
