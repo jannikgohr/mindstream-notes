@@ -1,11 +1,10 @@
 /**
  * Flush-on-suspend hook for note editors.
  *
- * Editors debounce saves through createSaveScheduler. That window is safe against a
- * normal close because `onDestroy` flushes, but `onDestroy` never runs when
- * the OS takes the process down: Android kills backgrounded apps outright,
- * and a webview teardown doesn't unmount Svelte components first. Without
- * this the last edit inside the debounce window is simply lost.
+ * Editors debounce saves through createSaveScheduler. Controlled desktop closes
+ * await onAppClose callbacks before destroying any webview. These suspend hooks
+ * also cover Android backgrounding and browser navigation, where component
+ * teardown cannot reliably run or await saves.
  *
  * Two events, because no single one covers both platforms:
  *
