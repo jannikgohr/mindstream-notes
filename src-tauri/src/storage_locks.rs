@@ -44,6 +44,9 @@ impl RootLock {
     }
 }
 
+/// What [`VaultLock::acquire`] says when another process holds the vault.
+const BUSY: &str = "vault is already open";
+
 pub struct VaultLock {
     pub directory: PathBuf,
     file: Arc<File>,
@@ -99,7 +102,14 @@ impl VaultLock {
     }
 
     fn busy(directory: &Path) -> AppError {
-        AppError::InvalidArg(format!("vault is already open: {}", directory.display()))
+        AppError::InvalidArg(format!("{BUSY}: {}", directory.display()))
+    }
+
+    /// Whether `error` is the refusal [`Self::acquire`] gives when another
+    /// process holds the vault. It stays an invalid argument at the IPC
+    /// boundary; only startup tells it apart.
+    pub(crate) fn is_busy_error(error: &AppError) -> bool {
+        matches!(error, AppError::InvalidArg(message) if message.starts_with(BUSY))
     }
 
     fn acquire_inner(directory: &Path, deleting: bool) -> AppResult<Option<Self>> {
@@ -122,6 +132,22 @@ impl VaultLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_vault_held_elsewhere_is_told_apart_from_other_failures() {
+        let root = std::env::temp_dir().join(format!("ms-busy-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let owner = VaultLock::acquire(&root).unwrap();
+        let refused = VaultLock::acquire(&root).err().unwrap();
+        assert!(VaultLock::is_busy_error(&refused));
+        drop(owner);
+        assert!(!VaultLock::is_busy_error(&AppError::InvalidArg(
+            "vault deletion is pending".into()
+        )));
+        assert!(!VaultLock::is_busy_error(&AppError::NotFound(
+            "vault is already open".into()
+        )));
+        let _ = fs::remove_dir_all(&root);
+    }
     #[test]
     fn preflight_probe_observes_os_ownership_without_creating_or_reconciling_files() {
         let root = std::env::temp_dir().join(format!("ms-probe-{}", uuid::Uuid::new_v4()));

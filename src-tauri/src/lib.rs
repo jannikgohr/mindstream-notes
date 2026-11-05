@@ -431,8 +431,8 @@ pub fn run() {
                 let ownership = profiles::resolve_worker(&app_data_root, &id)?;
                 (id, ownership)
             } else {
-                match profiles::dir_override() {
-                    Some((id, dir)) => {
+                let direct = match profiles::dir_override() {
+                    Some((id, dir)) => (|| {
                         // Only dev and e2e builds honour the override. Their
                         // harness restarts the app straight after killing it,
                         // so the old process can still hold the vault here.
@@ -442,9 +442,32 @@ pub fn run() {
                         )?;
                         let _root_lock = storage_locks::RootLock::acquire(&app_data_root)?;
                         profiles::reconcile_root_locked(&app_data_root)?;
-                        (id, storage_locks::VaultLock::acquire(&dir)?)
+                        Ok((id, storage_locks::VaultLock::acquire(&dir)?))
+                    })(),
+                    None => profiles::resolve_startup(&app_data_root),
+                };
+                match direct {
+                    Ok(resolved) => resolved,
+                    // Another process has this vault open. Only a direct
+                    // process gets here, which only dev and test builds on
+                    // data of their own run: a supervised launch hands over
+                    // to the running app instead. Say so and stop, rather
+                    // than fail the setup hook, which panics.
+                    Err(error) if storage_locks::VaultLock::is_busy_error(&error) => {
+                        let message = format!(
+                            "{error}. This build runs without handing over to the \
+                             process that has it open; close that one first, or \
+                             start both with --supervised-vaults."
+                        );
+                        log::error!("[boot] {message}");
+                        eprintln!("Mindstream Notes: {message}");
+                        // Nothing is open yet. An exit requested from setup
+                        // loses its code, so leave directly, as Tauri does
+                        // when a request fails.
+                        app.handle().cleanup_before_exit();
+                        std::process::exit(1);
                     }
-                    None => profiles::resolve_startup(&app_data_root)?,
+                    Err(error) => return Err(error.into()),
                 }
             };
             log::info!("[boot] active profile = {active_id}");
