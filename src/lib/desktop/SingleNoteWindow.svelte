@@ -118,6 +118,19 @@
     })
   );
 
+  // The OS title bar and the task switcher show the window's own title,
+  // set when the window opened. Keep it on the note's current name.
+  $effect(() => {
+    const current = title;
+    // Until the note has loaded, `title` is a placeholder.
+    if (exists !== true) return;
+    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window))
+      return;
+    void import('@tauri-apps/api/window')
+      .then((mod) => mod.getCurrentWindow().setTitle(current))
+      .catch((err) => console.warn('[popout] set title failed', err));
+  });
+
   async function closeCurrentWindow() {
     if (typeof window === 'undefined') return;
     if (!('__TAURI_INTERNALS__' in window)) {
