@@ -67,7 +67,7 @@ it('retains the source through native creation followed by a WebView failure', a
   await openNoteWindow('note_one', 'Disposable note', group, api);
   await fixture.handlers.get('tauri://webview-created')?.();
   await fixture.handlers.get('tauri://error')?.();
-  await fixture.handlers.get('tauri://close-requested')?.();
+  await fixture.handlers.get('tauri://destroyed')?.();
   expect(dock.removePanel).not.toHaveBeenCalled();
   expect(dock.addPanel).not.toHaveBeenCalled();
   log.mockRestore();
@@ -87,14 +87,17 @@ it('detaches after successful creation and restores once even if the group disap
   await fixture.handlers.get('tauri://created')?.();
   expect(dock.removePanel).toHaveBeenCalledWith(panel);
   dock.getPanel.mockReturnValue(undefined as unknown as IDockviewPanel);
-  await fixture.handlers.get('tauri://close-requested')?.();
+  // A cancelled close must leave the panel detached until native destruction.
+  expect(fixture.handlers.has('tauri://close-requested')).toBe(false);
+  expect(dock.addPanel).not.toHaveBeenCalled();
+  await fixture.handlers.get('tauri://destroyed')?.();
   expect(dock.addPanel).toHaveBeenCalledWith({
     id: panel.id,
     component: 'editor',
     params: panel.params,
     title: panel.title
   });
-  expect(fixture.close).toHaveBeenCalledOnce();
+  expect(fixture.close).not.toHaveBeenCalled();
 });
 
 it('does not remove a replacement panel if the source changed during creation', async () => {
