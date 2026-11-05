@@ -251,6 +251,11 @@ pub fn run() {
                     api.prevent_close();
                     return;
                 }
+                if window.label().starts_with("note_") {
+                    api.prevent_close();
+                    worker_shutdown::request_window_close(window);
+                    return;
+                }
             }
             if matches!(event, tauri::WindowEvent::Focused(true)) {
                 vault_supervisor::window_focused(window.app_handle(), window.label());
@@ -274,12 +279,8 @@ pub fn run() {
                             webview_memory::sync_to_visibility(app_handle);
                             return;
                         }
-                        if app_handle.try_state::<vault_supervisor::Worker>().is_some() {
-                            api.prevent_close();
-                            worker_shutdown::request_close(app_handle);
-                        } else {
-                            app_handle.exit(0);
-                        }
+                        api.prevent_close();
+                        worker_shutdown::request_close(app_handle);
                     }
                     tauri::WindowEvent::Destroyed => {
                         let app_handle = window.app_handle();
@@ -415,6 +416,9 @@ pub fn run() {
                 app.manage(role.clone());
                 if role == vault_runtime::Role::Host {
                     return vault_supervisor::start_host(app).map_err(Into::into);
+                }
+                if role == vault_runtime::Role::Direct {
+                    app.manage(worker_shutdown::Shutdown::default());
                 }
                 if matches!(role, vault_runtime::Role::Worker { .. }) {
                     vault_supervisor::authorize_worker(app.handle(), &role)?;
@@ -948,6 +952,16 @@ pub fn run() {
     };
 
     app.run(|app, event| {
+        #[cfg(desktop)]
+        if let tauri::RunEvent::ExitRequested {
+            api, code: None, ..
+        } = &event
+        {
+            if app.try_state::<worker_shutdown::Shutdown>().is_some() {
+                api.prevent_exit();
+                vault_supervisor::request_quit(app);
+            }
+        }
         #[cfg(desktop)]
         if app
             .try_state::<vault_runtime::Role>()

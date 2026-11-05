@@ -199,6 +199,14 @@ Vault settings and plugin data have a
 [portable backup contract](backup-restore-portability.md). Credentials remain
 bound to the destination device/vault.
 
+Desktop close requests keep the webview alive until its editors and settings
+finish saving. The direct test runtime uses the same whole-vault close protocol
+as supervised workers. A popout close freezes and flushes that window alone,
+then destroys it after a successful acknowledgement. Failed or timed-out saves
+leave the popout open for retry. Its source tab returns only after destruction,
+so it cannot load stale content while the popout is still saving. Whole-vault
+close refuses to start while an independent popout close is pending.
+
 Private worker close commands retain request IDs and expose queued, pending,
 committing or failed status. Repeated IDs never start another save attempt.
 Queued aliases attach before native dispatch, so cancellation cannot turn a

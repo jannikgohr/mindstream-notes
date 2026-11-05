@@ -1,4 +1,4 @@
-//! A supervised worker exits only after every content window acknowledges saves.
+//! Desktop windows close only after their editors acknowledge saves.
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -18,10 +18,16 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 struct Book {
     ready: BTreeSet<String>,
     pending: Option<Batch>,
+    window_closes: BTreeMap<String, WindowClose>,
     committed: bool,
     requests: BTreeMap<Uuid, CloseRequest>,
     #[cfg(any(debug_assertions, feature = "e2e-data-dir"))]
     fail_next_close: bool,
+}
+
+struct WindowClose {
+    id: Uuid,
+    saved: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -50,6 +56,7 @@ struct Batch {
 impl Book {
     fn permits_coordinator_revival(&self) -> bool {
         self.pending.is_none()
+            && self.window_closes.is_empty()
             && !self.committed
             && !self
                 .requests
@@ -137,7 +144,10 @@ impl Book {
         if self.pending.is_some() || self.committed {
             return Ok(None);
         }
-        if !windows.contains("main") || !windows.is_subset(&self.ready) {
+        if !self.window_closes.is_empty()
+            || !windows.contains("main")
+            || !windows.is_subset(&self.ready)
+        {
             return Err(unavailable());
         }
         let id = Uuid::new_v4();
@@ -166,6 +176,13 @@ impl Book {
     }
 
     fn ack(&mut self, id: Uuid, window: &str, saved: bool) -> AppResult<()> {
+        if let Some(close) = self.window_closes.get_mut(window) {
+            if close.id != id {
+                return Err(unavailable());
+            }
+            close.saved = Some(close.saved.unwrap_or(true) && saved);
+            return Ok(());
+        }
         let batch = self.pending.as_mut().ok_or_else(unavailable)?;
         if batch.id != id || !batch.windows.contains(window) || self.committed {
             return Err(unavailable());
@@ -247,6 +264,42 @@ impl Book {
             },
         );
         Ok(batch)
+    }
+
+    fn begin_window_close(&mut self, label: &str) -> AppResult<Option<Uuid>> {
+        if self.pending.is_some()
+            || self.committed
+            || !self.ready.contains(label)
+            || !label.starts_with("note_")
+        {
+            return Err(unavailable());
+        }
+        if self.window_closes.contains_key(label) {
+            return Ok(None);
+        }
+        let id = Uuid::new_v4();
+        self.window_closes
+            .insert(label.into(), WindowClose { id, saved: None });
+        Ok(Some(id))
+    }
+
+    fn window_close_waiting(&self, label: &str, id: Uuid) -> bool {
+        self.window_closes
+            .get(label)
+            .is_some_and(|close| close.id == id && close.saved.is_none())
+    }
+
+    fn finish_window_close(&mut self, label: &str, id: Uuid) -> bool {
+        if !self
+            .window_closes
+            .get(label)
+            .is_some_and(|close| close.id == id)
+        {
+            return false;
+        }
+        self.window_closes
+            .remove(label)
+            .is_some_and(|close| close.saved == Some(true))
     }
 }
 
@@ -348,6 +401,7 @@ pub fn window_destroyed(app: &AppHandle, label: &str) {
     if let Some(state) = app.try_state::<Shutdown>() {
         if let Ok(mut book) = state.book.lock() {
             book.ready.remove(label);
+            book.window_closes.remove(label);
             if let Some(batch) = &mut book.pending {
                 batch.failed |= batch.windows.contains(label);
             }
@@ -392,6 +446,110 @@ fn notify(app: &AppHandle, participants: &BTreeSet<String>, id: Uuid, phase: &'s
             .is_ok()
         })
     })
+}
+
+/// A popout can close independently without stopping services in other windows.
+/// Its editor remains mounted until the final save has completed or failed.
+pub fn request_window_close(window: &tauri::Window) {
+    let app = window.app_handle();
+    let Some(state) = app.try_state::<Shutdown>() else {
+        return;
+    };
+    let label = window.label().to_owned();
+    let started = state
+        .book
+        .lock()
+        .map_err(|_| unavailable())
+        .and_then(|mut book| book.begin_window_close(&label));
+    let id = match started {
+        Ok(Some(id)) => id,
+        Ok(None) => return,
+        Err(_) => {
+            let _ = app.emit_to(
+                label,
+                CLOSE_EVENT,
+                Notice {
+                    id: Uuid::nil(),
+                    phase: "cancel",
+                    reason: None,
+                },
+            );
+            return;
+        }
+    };
+    let handle = app.clone();
+    let closing_label = label.clone();
+    let spawned = std::thread::Builder::new()
+        .name("note-close".into())
+        .spawn(move || {
+            let participants = BTreeSet::from([closing_label.clone()]);
+            if notify(&handle, &participants, id, "prepare") {
+                if let Some(state) = handle.try_state::<Shutdown>() {
+                    if let Ok(book) = state.book.lock() {
+                        // Drop the lock before scheduling native destruction.
+                        drop(
+                            state
+                                .changed
+                                .wait_timeout_while(book, CLOSE_TIMEOUT, |book| {
+                                    book.window_close_waiting(&closing_label, id)
+                                }),
+                        );
+                    }
+                }
+            }
+            let final_handle = handle.clone();
+            let final_label = closing_label.clone();
+            if handle
+                .run_on_main_thread(move || finish_window_close(&final_handle, &final_label, id))
+                .is_err()
+            {
+                cancel_window_close(&handle, &closing_label, id);
+            }
+        });
+    if spawned.is_err() {
+        cancel_window_close(app, &label, id);
+    }
+}
+
+fn cancel_window_close(app: &AppHandle, label: &str, id: Uuid) {
+    if let Some(state) = app.try_state::<Shutdown>() {
+        if let Ok(mut book) = state.book.lock() {
+            if book
+                .window_closes
+                .get(label)
+                .is_some_and(|close| close.id == id)
+            {
+                book.window_closes.remove(label);
+            }
+        }
+        state.changed.notify_all();
+    }
+    let _ = app.emit_to(
+        label,
+        CLOSE_EVENT,
+        Notice {
+            id,
+            phase: "cancel",
+            reason: None,
+        },
+    );
+}
+
+fn finish_window_close(app: &AppHandle, label: &str, id: Uuid) {
+    let saved = app.try_state::<Shutdown>().is_some_and(|state| {
+        state
+            .book
+            .lock()
+            .is_ok_and(|mut book| book.finish_window_close(label, id))
+    });
+    if saved {
+        if let Some(window) = app.get_webview_window(label) {
+            if window.destroy().is_ok() {
+                return;
+            }
+        }
+    }
+    cancel_window_close(app, label, id);
 }
 
 /// Called from the native close event; all waits happen off the event-loop thread.
@@ -613,6 +771,58 @@ fn request_close_inner(app: &AppHandle, request_id: Option<Uuid>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn popout_close_waits_for_its_save_and_cannot_close_another_window() {
+        let (mut book, windows) = ready();
+        let label = "note_seed_welcome";
+        let id = book.begin_window_close(label).unwrap().unwrap();
+        assert!(book.window_close_waiting(label, id));
+        assert_eq!(book.begin_window_close(label).unwrap(), None);
+        assert!(book.begin(windows.clone()).is_err());
+        assert!(book.ack(id, "main", true).is_err());
+        assert!(book.ack(Uuid::new_v4(), label, true).is_err());
+        assert!(!book.finish_window_close(label, Uuid::new_v4()));
+        assert!(book.window_close_waiting(label, id));
+        book.ack(id, label, true).unwrap();
+        assert!(!book.window_close_waiting(label, id));
+        assert!(book.finish_window_close(label, id));
+        assert!(!book.committed);
+        assert!(book.permits_coordinator_revival());
+        assert!(book.begin(windows).unwrap().is_some());
+    }
+
+    #[test]
+    fn unsaved_timed_out_or_destroyed_popouts_stay_open_and_can_retry() {
+        let (mut book, _) = ready();
+        let label = "note_seed_welcome";
+        assert!(book.begin_window_close("main").is_err());
+        assert!(book.begin_window_close("note_loading").is_err());
+        let id = book.begin_window_close(label).unwrap().unwrap();
+        assert!(!book.finish_window_close(label, id)); // no acknowledgement
+        assert!(book.ack(id, label, true).is_err());
+        let retry = book.begin_window_close(label).unwrap().unwrap();
+        book.ack(retry, label, false).unwrap();
+        book.ack(retry, label, true).unwrap();
+        assert!(!book.finish_window_close(label, retry));
+        let destroyed = book.begin_window_close(label).unwrap().unwrap();
+        book.window_closes.remove(label);
+        let replacement = book.begin_window_close(label).unwrap().unwrap();
+        assert!(!book.finish_window_close(label, destroyed));
+        assert!(book.window_close_waiting(label, replacement));
+    }
+
+    #[test]
+    fn popout_close_cannot_interrupt_a_whole_vault_close() {
+        let (mut book, windows) = ready();
+        let id = book.begin(windows.clone()).unwrap().unwrap();
+        assert!(book.begin_window_close("note_seed_welcome").is_err());
+        for window in &windows {
+            book.ack(id, window, true).unwrap();
+        }
+        assert!(book.commit(id, &windows));
+        assert!(book.begin_window_close("note_seed_welcome").is_err());
+    }
 
     #[test]
     fn recovery_cancellation_tombstones_unreceived_close_and_cannot_cancel_commit() {
