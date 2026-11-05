@@ -18,7 +18,7 @@
   import NoteKindRenderer from '$lib/components/NoteKindRenderer.svelte';
   import ResizeHandle from '$lib/components/ResizeHandle.svelte';
   import WindowControls from '$lib/components/WindowControls.svelte';
-  import { loadNote, openNoteWindow, type NoteKind } from '$lib/api';
+  import { loadNote, requestNoteWindow, type NoteKind } from '$lib/api';
   import { pushToast } from '$lib/components/toast.svelte';
   import { installFileDropRouter } from '$lib/file-drop';
   import { loadTree, tree } from '$lib/stores/tree.svelte';
@@ -97,13 +97,13 @@
   // A wikilink click inside this popout dispatches through the
   // open-note bus. This window only renders one note, so we can't
   // "switch" — same-note requests are a no-op, other-note requests
-  // spawn another popout window. Subscribers in different windows
-  // don't see each other (each Tauri window is its own JS context).
+  // go to the main window, which decides where the note opens: it is
+  // the only window that can see the note's tab, if it has one.
   onMount(() => {
     return subscribeOpenNoteRequest((id) => {
       if (id === noteId) return;
       const target = tree.notesById[id];
-      void openNoteWindow(id, target?.title ?? 'Note', null, null);
+      void requestNoteWindow(id, target?.title ?? 'Note');
     });
   });
 

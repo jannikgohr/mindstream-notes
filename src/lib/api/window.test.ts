@@ -4,16 +4,21 @@ import type {
   IDockviewGroupPanel,
   IDockviewPanel
 } from 'dockview';
-import { openNoteWindow } from './window';
+import { openNoteWindow, requestNoteWindow } from './window';
 
 const fixture = vi.hoisted(() => ({
   handlers: new Map<string, () => void | Promise<void>>(),
   options: vi.fn(),
   close: vi.fn(),
   decorations: vi.fn(),
-  existing: vi.fn()
+  existing: vi.fn(),
+  emitTo: vi.fn()
 }));
 vi.mock('./core', () => ({ isTauri: () => true }));
+vi.mock('./events', () => ({
+  emitTo: fixture.emitTo,
+  TauriEventName: { NoteWindowRequested: 'note-window-requested' }
+}));
 vi.mock('./desktop-settings', () => ({
   getCustomWindowDecorations: fixture.decorations
 }));
@@ -117,4 +122,14 @@ it('gives seeded/imported note IDs the popout capability namespace and explicit 
       url: '?window=editor&id=seed_welcome'
     })
   );
+});
+
+it('asks the main window where to open a note instead of opening one', async () => {
+  fixture.emitTo.mockResolvedValue(undefined);
+  await requestNoteWindow('note_two', 'Linked note');
+  expect(fixture.emitTo).toHaveBeenCalledWith('main', 'note-window-requested', {
+    noteId: 'note_two'
+  });
+  expect(fixture.existing).not.toHaveBeenCalled();
+  expect(fixture.options).not.toHaveBeenCalled();
 });

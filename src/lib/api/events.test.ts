@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { emit, listen, TauriEventName } from './events';
+import { emit, emitTo, listen, TauriEventName } from './events';
 
-const { tauriEmit, tauriListen } = vi.hoisted(() => ({
+const { tauriEmit, tauriEmitTo, tauriListen } = vi.hoisted(() => ({
   tauriEmit: vi.fn(),
+  tauriEmitTo: vi.fn(),
   tauriListen: vi.fn()
 }));
 
 vi.mock('@tauri-apps/api/event', () => ({
   emit: tauriEmit,
+  emitTo: tauriEmitTo,
   listen: tauriListen
 }));
 vi.mock('@tauri-apps/api/webviewWindow', () => ({
@@ -62,6 +64,16 @@ describe('Tauri event wrappers', () => {
       expect.any(Function)
     );
     expect(handler).toHaveBeenCalledWith({ note_id: 'note_1' });
+  });
+
+  it('sends an event to one window by its label', async () => {
+    await emitTo('main', TauriEventName.NoteWindowRequested, {
+      noteId: 'note_1'
+    });
+
+    expect(tauriEmitTo).toHaveBeenCalledWith('main', 'note-window-requested', {
+      noteId: 'note_1'
+    });
   });
 
   it('limits a listener to events sent to this window when asked', async () => {
