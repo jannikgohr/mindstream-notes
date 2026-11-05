@@ -546,3 +546,26 @@ describe('bounded mutation refreshes', () => {
     expect(tree.tree.find((node) => node.id === 'f1')?.name).toBe('New name');
   });
 });
+
+describe('vault access', () => {
+  it('opens writes after a load and closes them after a failed one', async () => {
+    const access = await import('$lib/storage/vault-access.svelte');
+    access.resetVaultAccessForTests('pending');
+    await loadTree();
+    expect(access.vaultAccess.status).toBe('ready');
+    loadTreeMock.mockRejectedValueOnce(
+      new Error('The database is open in another tab.')
+    );
+    await loadTree();
+    expect(access.vaultAccess.status).toBe('unavailable');
+    expect(tree.error).toContain('another tab');
+  });
+
+  it('loads the tree for a write that arrives before anything else has', async () => {
+    const access = await import('$lib/storage/vault-access.svelte');
+    access.resetVaultAccessForTests('pending');
+    await access.requireVaultAccess('saving a setting');
+    expect(loadTreeMock).toHaveBeenCalledTimes(1);
+    expect(tree.ready).toBe(true);
+  });
+});

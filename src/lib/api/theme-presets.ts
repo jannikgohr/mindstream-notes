@@ -6,6 +6,7 @@ import {
   type ThemePreset
 } from '$lib/settings/theme-presets';
 import { isDesktopThemeMode, DesktopThemeMode } from './desktop-settings';
+import { readAppStorage, writeAppStorage } from '$lib/storage/app-storage';
 const STORAGE_KEY = 'mindstream:user-theme-presets:v1';
 export interface ThemeAppearance {
   preset: ThemePreset;
@@ -32,8 +33,7 @@ export function getThemeAppearance(): Promise<ThemeAppearance> {
         !Number.isFinite(raw.uiFontSize)
       )
         throw new Error('Invalid UI font size');
-      const mode =
-        raw.mode ?? localStorage.getItem('mode-watcher-mode') ?? 'system';
+      const mode = raw.mode ?? readAppStorage('mode-watcher-mode') ?? 'system';
       if (!isDesktopThemeMode(mode)) throw new Error('Invalid theme mode');
       return {
         preset: parseThemePreset(raw.preset),
@@ -44,7 +44,7 @@ export function getThemeAppearance(): Promise<ThemeAppearance> {
   );
 }
 function browserPresets(): ThemePreset[] {
-  const raw = localStorage.getItem(STORAGE_KEY);
+  const raw = readAppStorage(STORAGE_KEY);
   if (!raw) return [];
   const values: unknown = JSON.parse(raw);
   if (!Array.isArray(values) || values.length > 64)
@@ -94,7 +94,7 @@ export function saveThemePreset(raw: string): Promise<void> {
       );
       presets.push(preset);
       if (presets.length > 64) throw new Error('Too many theme presets');
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(presets));
+      writeAppStorage(STORAGE_KEY, JSON.stringify(presets));
       window.dispatchEvent(new Event('theme-presets-changed'));
     },
     (value) => assertVoid(value, 'save_theme_preset')
@@ -107,7 +107,7 @@ export function deleteThemePreset(id: string): Promise<void> {
     TauriCommandName.DeleteThemePreset,
     { id },
     () => {
-      localStorage.setItem(
+      writeAppStorage(
         STORAGE_KEY,
         JSON.stringify(browserPresets().filter((preset) => preset.id !== id))
       );

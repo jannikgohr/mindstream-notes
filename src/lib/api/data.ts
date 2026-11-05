@@ -11,7 +11,6 @@ import { assertRequiredString } from '$lib/validation';
  * folders and native backup dialogs remains specific to Tauri.
  */
 
-import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import {
   assertBoolean,
   assertNumber,
@@ -21,7 +20,8 @@ import {
   isTauri,
   invokeOrFallback,
   optionalString,
-  TauriCommandName
+  TauriCommandName,
+  invokeTauri
 } from './core';
 import { browserStorageEnabled } from '../browser/commands';
 import { pickFiles } from '../browser/pick-files';
@@ -36,7 +36,7 @@ export interface TrashCounts {
 export async function openDataFolder(): Promise<void> {
   if (!isTauri()) return;
   assertVoid(
-    await tauriInvoke<unknown>(TauriCommandName.OpenDataFolder),
+    await invokeTauri<unknown>(TauriCommandName.OpenDataFolder),
     'open_data_folder response'
   );
 }
@@ -50,7 +50,7 @@ export async function openFolder(path: string): Promise<void> {
   assertRequiredString(path, 'path');
   if (!isTauri()) return;
   assertVoid(
-    await tauriInvoke<unknown>(TauriCommandName.OpenFolder, { path }),
+    await invokeTauri<unknown>(TauriCommandName.OpenFolder, { path }),
     'open_folder response'
   );
 }
@@ -82,7 +82,7 @@ export async function setTrashRetention(days: number): Promise<void> {
   assertNonNegativeInteger(days, 'days');
   if (!isTauri()) return;
   assertVoid(
-    await tauriInvoke<unknown>(TauriCommandName.SetTrashRetention, { days }),
+    await invokeTauri<unknown>(TauriCommandName.SetTrashRetention, { days }),
     'set_trash_retention response'
   );
 }
@@ -97,7 +97,7 @@ export async function sweepTrashRetention(days: number): Promise<number> {
   assertNonNegativeInteger(days, 'days');
   if (!isTauri()) return 0;
   return assertNumber(
-    await tauriInvoke<unknown>(TauriCommandName.SweepTrashRetention, { days }),
+    await invokeTauri<unknown>(TauriCommandName.SweepTrashRetention, { days }),
     'sweep_trash_retention response'
   );
 }
@@ -126,7 +126,7 @@ export interface BackupReport {
 export async function backupNow(): Promise<BackupReport | null> {
   if (!isTauri()) return browserStorageEnabled() ? downloadBackup() : null;
   return parseNullableBackupReport(
-    await tauriInvoke<unknown>(TauriCommandName.BackupNow)
+    await invokeTauri<unknown>(TauriCommandName.BackupNow)
   );
 }
 
@@ -190,7 +190,7 @@ export async function importBegin(): Promise<ImportPreview | null> {
     return parseImportPreview(await stageBrowserBackup(archive));
   }
   return parseNullableImportPreview(
-    await tauriInvoke<unknown>(TauriCommandName.ImportBegin)
+    await invokeTauri<unknown>(TauriCommandName.ImportBegin)
   );
 }
 
@@ -205,7 +205,7 @@ export async function importCleanup(token: string): Promise<void> {
     return;
   }
   assertVoid(
-    await tauriInvoke<unknown>(TauriCommandName.ImportCleanup, { token }),
+    await invokeTauri<unknown>(TauriCommandName.ImportCleanup, { token }),
     'import_cleanup response'
   );
 }
@@ -245,7 +245,7 @@ export async function importRestore(
     };
   }
   return parseRestoreStaged(
-    await tauriInvoke<unknown>(TauriCommandName.ImportRestore, {
+    await invokeTauri<unknown>(TauriCommandName.ImportRestore, {
       token,
       sameAccount,
       includeDevice
@@ -272,7 +272,7 @@ export async function importMerge(token: string): Promise<MergeReport> {
     };
   }
   return parseMergeReport(
-    await tauriInvoke<unknown>(TauriCommandName.ImportMerge, { token })
+    await invokeTauri<unknown>(TauriCommandName.ImportMerge, { token })
   );
 }
 

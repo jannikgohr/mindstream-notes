@@ -28,6 +28,11 @@
 
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { isTauri } from '$lib/api/core';
+import { readAppStorage, writeAppStorage } from '$lib/storage/app-storage';
+import {
+  assertVaultNotUnavailable,
+  onVaultAccessChange
+} from '$lib/storage/vault-access.svelte';
 import { createPersistenceDrain } from '$lib/persistence/drain';
 import { UI_PREFERENCE_IDS } from '$lib/preferences';
 import {
@@ -177,7 +182,7 @@ export function parseStoredSettings(
 function readStorage(key: string): Record<string, unknown> | null {
   if (typeof localStorage === 'undefined') return {};
   try {
-    const raw = localStorage.getItem(key);
+    const raw = readAppStorage(key);
     return raw ? parseStoredSettings(raw) : null;
   } catch {
     return null;
@@ -207,7 +212,7 @@ function loadRaw(vaultId = activeSettingsVaultId): Record<string, unknown> {
   const legacyVaultRaw =
     vaultRaw === null && vaultId === DEFAULT_VAULT_ID ? deviceRaw : null;
   const content = { ...(vaultRaw ?? legacyVaultRaw ?? {}) };
-  if (localStorage.getItem('mindstream:appearance-migration:v1'))
+  if (readAppStorage('mindstream:appearance-migration:v1'))
     delete content['appearance.uiFontSize'];
   const values = {
     // Device bucket: only its device-scoped ids. This key historically also
@@ -228,9 +233,9 @@ function loadRaw(vaultId = activeSettingsVaultId): Record<string, unknown> {
 }
 
 function migrateBrowserAppearance(vaultId: string): boolean {
-  if (localStorage.getItem('mindstream:appearance-migration:v1')) return false;
+  if (readAppStorage('mindstream:appearance-migration:v1')) return false;
   const read = (key: string) => {
-    const raw = localStorage.getItem(key);
+    const raw = readAppStorage(key);
     const value = raw === null ? {} : parseStoredSettings(raw);
     if (value === null)
       throw new Error(
@@ -240,7 +245,7 @@ function migrateBrowserAppearance(vaultId: string): boolean {
   };
   const device = read(DEVICE_STORAGE_KEY);
   const source =
-    localStorage.getItem(vaultStorageKey(vaultId)) === null &&
+    readAppStorage(vaultStorageKey(vaultId)) === null &&
     vaultId === DEFAULT_VAULT_ID
       ? device
       : read(vaultStorageKey(vaultId));
@@ -248,18 +253,18 @@ function migrateBrowserAppearance(vaultId: string): boolean {
   if (!Object.hasOwn(device, id) && Object.hasOwn(source, id))
     device[id] = source[id];
   archiveBrowserAppearance(vaultId);
-  localStorage.setItem(DEVICE_STORAGE_KEY, JSON.stringify(device));
-  localStorage.setItem('mindstream:appearance-migration:v1', vaultId);
+  writeAppStorage(DEVICE_STORAGE_KEY, JSON.stringify(device));
+  writeAppStorage('mindstream:appearance-migration:v1', vaultId);
   return true;
 }
 
 function archiveBrowserAppearance(vaultId: string): void {
-  const raw = localStorage.getItem(vaultStorageKey(vaultId));
+  const raw = readAppStorage(vaultStorageKey(vaultId));
   const key = `mindstream:appearance-source:v1:${vaultId}`;
-  if (raw !== null && !localStorage.getItem(key)) {
+  if (raw !== null && !readAppStorage(key)) {
     const values = parseStoredSettings(raw);
     if (values && Object.hasOwn(values, 'appearance.uiFontSize'))
-      localStorage.setItem(key, raw);
+      writeAppStorage(key, raw);
   }
 }
 
@@ -272,6 +277,18 @@ interface SettingsState {
 export const settings = $state<SettingsState>({
   values: isTauri() ? {} : loadRaw(activeSettingsVaultId),
   pending: new SvelteSet<string>()
+});
+
+// A tab that could not open its vault kept the settings it read at startup,
+// and another tab may have saved newer ones since. When this tab gets its
+// vault after all, read them again before anything here is saved over them.
+onVaultAccessChange((status, previous) => {
+  if (isTauri() || status !== 'ready' || previous !== 'unavailable') return;
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  settings.values = loadRaw(activeSettingsVaultId);
 });
 
 let nativeReady: Promise<void> | null = null;
@@ -371,14 +388,14 @@ export async function setSettingsVaultId(id: string): Promise<void> {
       // rather than being interpreted as an empty map by readStorage.
       const snapshot = await initializeUiSettings(
         next,
-        localStorage.getItem(DEVICE_STORAGE_KEY),
-        localStorage.getItem(vaultStorageKey(next)),
-        localStorage.getItem('notes-app:preferences:v1'),
+        readAppStorage(DEVICE_STORAGE_KEY),
+        readAppStorage(vaultStorageKey(next)),
+        readAppStorage('notes-app:preferences:v1'),
         legacyLayoutRaw(next),
         {
-          toolbarRaw: localStorage.getItem(FILE_TREE_TOOLBAR_STORAGE_KEY),
+          toolbarRaw: readAppStorage(FILE_TREE_TOOLBAR_STORAGE_KEY),
           hadExistingData: hasExistingAppData(),
-          displayModeRaw: localStorage.getItem('notes-app:mobile:displayMode')
+          displayModeRaw: readAppStorage('notes-app:mobile:displayMode')
         }
       );
       applyNativeSnapshot(snapshot);
@@ -573,6 +590,9 @@ export function setSettingValue(id: string, value: unknown): Promise<void> {
 }
 
 async function persistSettingValue(id: string, value: unknown): Promise<void> {
+  // A browser tab without its vault cannot save, so it must not show a change
+  // as made either. Native writes wait in the command gate instead.
+  if (!isTauri()) assertVaultNotUnavailable(`setting ${id}`);
   if (externalStore?.owns(id)) {
     await externalStore.write(id, value);
     return;
@@ -645,6 +665,7 @@ export function resetSettingValue(id: string): Promise<void> {
 }
 
 async function persistResetSettingValue(id: string): Promise<void> {
+  if (!isTauri()) assertVaultNotUnavailable(`resetting ${id}`);
   const def = settingDef(id);
   if (!def && !id.startsWith('hotkey.')) return;
   if (externalStore?.owns(id)) {
@@ -691,8 +712,8 @@ function persistNow() {
       else device[id] = value;
     }
     archiveBrowserAppearance(activeSettingsVaultId);
-    localStorage.setItem(DEVICE_STORAGE_KEY, JSON.stringify(device));
-    localStorage.setItem(
+    writeAppStorage(DEVICE_STORAGE_KEY, JSON.stringify(device));
+    writeAppStorage(
       vaultStorageKey(activeSettingsVaultId),
       JSON.stringify(vault)
     );

@@ -477,3 +477,33 @@ describe('dialog open/close', () => {
     expect(settingsDialog.open).toBe(false);
   });
 });
+
+describe('vault access', () => {
+  const id = 'appearance.theme';
+  const vaultKey = 'notes-app:settings:v1:vault:default';
+  const deviceKey = 'notes-app:settings:v1';
+
+  it('refuses a change in a tab that could not open its vault, and keeps the old value', async () => {
+    const access = await import('$lib/storage/vault-access.svelte');
+    access.markVaultUnavailable('The database is open in another tab.');
+    const before = getSettingValue(id);
+    await expect(setSettingValue(id, 'dark')).rejects.toMatchObject({
+      code: 'vaultNotReady'
+    });
+    await expect(resetSettingValue(id)).rejects.toMatchObject({
+      code: 'vaultNotReady'
+    });
+    expect(getSettingValue(id)).toBe(before);
+  });
+
+  it('reads settings again when the tab gets its vault after all', async () => {
+    const access = await import('$lib/storage/vault-access.svelte');
+    settings.values[id] = 'stale';
+    access.markVaultUnavailable('busy');
+    // The tab that owned the vault saved a newer value meanwhile.
+    const scope = BY_ID[id]?.scope === 'V' ? vaultKey : deviceKey;
+    localStorage.setItem(scope, JSON.stringify({ [id]: 'owner' }));
+    access.markVaultReady();
+    expect(getSettingValue(id)).toBe('owner');
+  });
+});

@@ -7,14 +7,14 @@ import { assertRequiredString } from '$lib/validation';
  * with an "not signed in" error from the Rust side.
  */
 
-import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import {
   assertNumber,
   assertRecord,
   assertString,
   assertVoid,
   isTauri,
-  TauriCommandName
+  TauriCommandName,
+  invokeTauri
 } from './core';
 
 export interface SyncReport {
@@ -34,7 +34,7 @@ export async function syncNow(): Promise<SyncReport> {
   if (!isTauri()) {
     throw new Error('Sync is only available in the desktop app.');
   }
-  return parseSyncReport(await tauriInvoke<unknown>(TauriCommandName.SyncNow));
+  return parseSyncReport(await invokeTauri<unknown>(TauriCommandName.SyncNow));
 }
 
 export interface SyncScheduleInput {
@@ -50,7 +50,7 @@ export async function setSyncSchedule(input: SyncScheduleInput): Promise<void> {
     intervalSecs: input.intervalSecs
   };
   assertVoid(
-    await tauriInvoke<unknown>(TauriCommandName.SetSyncSchedule, args),
+    await invokeTauri<unknown>(TauriCommandName.SetSyncSchedule, args),
     'set_sync_schedule response'
   );
 }
@@ -78,7 +78,7 @@ export async function noteRoomInfo(id: string): Promise<RoomInfo | null> {
   assertRequiredString(id, 'id');
   if (!isTauri()) return null;
   return parseNullableRoomInfo(
-    await tauriInvoke<unknown>(TauriCommandName.NoteRoomInfo, { id })
+    await invokeTauri<unknown>(TauriCommandName.NoteRoomInfo, { id })
   );
 }
 
@@ -94,7 +94,7 @@ export async function noteRoomTicket(
   assertRequiredString(collection, 'collection');
   assertRequiredString(item, 'item');
   if (!isTauri()) return null;
-  const ticket = await tauriInvoke<unknown>(TauriCommandName.NoteRoomTicket, {
+  const ticket = await invokeTauri<unknown>(TauriCommandName.NoteRoomTicket, {
     collection,
     item
   });

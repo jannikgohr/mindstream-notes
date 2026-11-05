@@ -8,7 +8,6 @@ import { assertRequiredString } from '$lib/validation';
  * to back the saved session.
  */
 
-import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { flushPendingEditorSaves } from '$lib/editor/suspend-flush';
 import {
   assertBoolean,
@@ -17,7 +16,8 @@ import {
   assertString,
   assertVoid,
   TauriCommandName,
-  isTauri
+  isTauri,
+  invokeTauri
 } from './core';
 
 export type ServerType = 'managed' | 'self-hosted';
@@ -141,7 +141,7 @@ export async function etebaseLogin(input: LoginInput): Promise<SessionInfo> {
   }
   await flushPendingEditorSaves();
   const session = parseSessionInfo(
-    await tauriInvoke<unknown>(TauriCommandName.EtebaseLogin, {
+    await invokeTauri<unknown>(TauriCommandName.EtebaseLogin, {
       args: {
         server_type: input.serverType,
         server_url: input.serverUrl ?? null,
@@ -170,7 +170,7 @@ export async function etebaseLogout(): Promise<void> {
   if (!isTauri()) return;
   await flushPendingEditorSaves();
   assertVoid(
-    await tauriInvoke<unknown>(TauriCommandName.EtebaseLogout),
+    await invokeTauri<unknown>(TauriCommandName.EtebaseLogout),
     'etebase_logout response'
   );
   authSession.current = null;
@@ -181,7 +181,7 @@ export async function etebaseLogout(): Promise<void> {
 export async function etebaseSession(): Promise<SessionInfo | null> {
   if (!isTauri()) return null;
   return parseNullableSessionInfo(
-    await tauriInvoke<unknown>(TauriCommandName.EtebaseSession)
+    await invokeTauri<unknown>(TauriCommandName.EtebaseSession)
   );
 }
 
@@ -210,7 +210,7 @@ export async function checkEtebaseServerUrl(
     throw new Error('Server checks are only available in the app.');
   }
   return parseServerCheckResult(
-    await tauriInvoke<unknown>(TauriCommandName.CheckEtebaseServerUrl, {
+    await invokeTauri<unknown>(TauriCommandName.CheckEtebaseServerUrl, {
       serverUrl
     })
   );

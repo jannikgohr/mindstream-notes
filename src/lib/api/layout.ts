@@ -2,6 +2,11 @@ import { isRecord } from '$lib/validation';
 import { isTauri } from './core';
 import { pushToast } from '$lib/components/toast.svelte';
 import { tUi } from '$lib/settings/i18n.svelte';
+import {
+  readAppStorage,
+  writeAppStorage,
+  removeAppStorage
+} from '$lib/storage/app-storage';
 /**
  * Last-session dock layout. Native builds use the vault settings document;
  * browser previews use per-vault localStorage buckets.
@@ -33,12 +38,10 @@ export function applyNativeSavedLayout(vaultId: string, value: unknown): void {
 }
 
 export function legacyLayoutRaw(vaultId: string): string | null {
-  const scoped = localStorage.getItem(storageKey(vaultId));
+  const scoped = readAppStorage(storageKey(vaultId));
   return (
     scoped ??
-    (vaultId === DEFAULT_VAULT_ID
-      ? localStorage.getItem(LEGACY_STORAGE_KEY)
-      : null)
+    (vaultId === DEFAULT_VAULT_ID ? readAppStorage(LEGACY_STORAGE_KEY) : null)
   );
 }
 
@@ -100,7 +103,7 @@ export function validateSavedLayout(value: unknown): SavedLayout | null {
 function readSavedLayout(key: string): SavedLayout | null {
   if (typeof localStorage === 'undefined') return null;
   try {
-    const raw = localStorage.getItem(key);
+    const raw = readAppStorage(key);
     if (!raw) return null;
     return validateSavedLayout(JSON.parse(raw));
   } catch (err) {
@@ -146,7 +149,7 @@ export function saveLayout(
       activeNoteId,
       savedAt: new Date().toISOString()
     };
-    localStorage.setItem(storageKey(vaultId), JSON.stringify(blob));
+    writeAppStorage(storageKey(vaultId), JSON.stringify(blob));
   } catch (err) {
     console.warn('[layout] save failed', err);
   }
@@ -157,6 +160,6 @@ export function clearSavedLayout(
 ): void | Promise<void> {
   if (isTauri()) return writeNativeLayout(vaultId, null);
   if (typeof localStorage === 'undefined') return;
-  localStorage.removeItem(storageKey(vaultId));
-  if (vaultId === DEFAULT_VAULT_ID) localStorage.removeItem(LEGACY_STORAGE_KEY);
+  removeAppStorage(storageKey(vaultId));
+  if (vaultId === DEFAULT_VAULT_ID) removeAppStorage(LEGACY_STORAGE_KEY);
 }
