@@ -1114,6 +1114,10 @@
       class:bg-accent={isOver || isSelected}
       class:opacity-60={drag?.kind === 'folder' && drag.id === node.id}
       onclick={(e) => {
+        // The rename input sits inside this button. WebKit activates the
+        // button on a space typed into it, and a click there places the
+        // caret; neither is a click on the row.
+        if (renaming) return;
         const modified = selectNodeFromClick(e, node);
         if (!modified) toggleFolder(node.id);
       }}
@@ -1190,6 +1194,10 @@
         aria-current={ui.activeNoteId === node.id ? 'page' : undefined}
         class="flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1 text-left focus-visible:outline-none"
         onclick={(e) => {
+          // See the folder row: activation from the rename input is not a
+          // click on the row. Opening the note here would move focus away,
+          // to its own window when it is popped out, and end the rename.
+          if (renaming) return;
           const modified = selectNodeFromClick(e, node);
           if (!modified) onOpenNote(node.id);
         }}
