@@ -27,7 +27,7 @@ test('real migrations, FTS5, rollback, foreign keys, and CRDT run in the worker'
   await ready(page);
   const report = JSON.parse(await page.getByTestId('proof-report').innerText());
   expect(report).toMatchObject({
-    schemaVersion: 34,
+    schemaVersion: 35,
     journalMode: 'delete',
     upgrades: 11,
     fts5: true,
