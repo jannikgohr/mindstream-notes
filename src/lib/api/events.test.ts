@@ -10,6 +10,9 @@ vi.mock('@tauri-apps/api/event', () => ({
   emit: tauriEmit,
   listen: tauriListen
 }));
+vi.mock('@tauri-apps/api/webviewWindow', () => ({
+  getCurrentWebviewWindow: () => ({ label: 'note_one' })
+}));
 
 describe('TauriEventName', () => {
   it('matches Rust AppEvent wire names', () => {
@@ -59,6 +62,20 @@ describe('Tauri event wrappers', () => {
       expect.any(Function)
     );
     expect(handler).toHaveBeenCalledWith({ note_id: 'note_1' });
+  });
+
+  it('limits a listener to events sent to this window when asked', async () => {
+    tauriListen.mockResolvedValue(() => undefined);
+
+    await listen(TauriEventName.VaultWorkerClose, vi.fn(), {
+      thisWindow: true
+    });
+
+    expect(tauriListen).toHaveBeenCalledWith(
+      'vault-worker-close',
+      expect.any(Function),
+      { target: 'note_one' }
+    );
   });
 });
 

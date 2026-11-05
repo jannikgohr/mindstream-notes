@@ -2,6 +2,7 @@ import {
   emit as tauriEmit,
   listen as tauriListen
 } from '@tauri-apps/api/event';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 
 import type { SyncReport } from './sync';
 import { isTauri } from './core';
@@ -149,10 +150,24 @@ export function emit<K extends keyof TauriEvents>(
 
 export function listen<K extends keyof TauriEvents>(
   event: K,
-  handler: (payload: TauriEvents[K]) => void
+  handler: (payload: TauriEvents[K]) => void,
+  options: {
+    /**
+     * Only events sent to this window or to every window. Tauri hands a
+     * plain listener the events sent to other windows as well.
+     */
+    thisWindow?: boolean;
+  } = {}
 ) {
-  if (isTauri())
-    return tauriListen(event, (e) => handler(e.payload as TauriEvents[K]));
+  if (isTauri()) {
+    const callback = (e: { payload: unknown }) =>
+      handler(e.payload as TauriEvents[K]);
+    return options.thisWindow
+      ? tauriListen(event, callback, {
+          target: getCurrentWebviewWindow().label
+        })
+      : tauriListen(event, callback);
+  }
   const listener = (e: Event) =>
     handler((e as CustomEvent<TauriEvents[K]>).detail);
   browserEvents.addEventListener(event, listener);
