@@ -41,6 +41,7 @@ import type { SortStrategy } from '$lib/sort';
 // so the version values below get inlined into the bundle. No runtime cost,
 // no risk of drift between the About panel and what's actually installed.
 import pkg from '../../../package.json';
+import { readAppStorage, writeAppStorage } from '$lib/storage/app-storage';
 
 export interface Binding {
   get: () => Promise<unknown>;
@@ -53,14 +54,14 @@ export interface Binding {
 
 function applyMode(value: unknown): void {
   if (!isDesktopThemeMode(value)) return;
-  localStorage.setItem('mode-watcher-mode', value);
+  writeAppStorage('mode-watcher-mode', value);
   setMode(value);
 }
 
 function applyLanguage(value: unknown): void {
   const code = String(value ?? 'en');
   if (typeof localStorage !== 'undefined') {
-    localStorage.setItem('notes-app:language', code);
+    writeAppStorage('notes-app:language', code);
   }
   setLanguage(code);
 }
@@ -122,7 +123,7 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
       // mode-watcher writes/reads from localStorage; mirror its key here so
       // the radio reflects whatever the user's last choice was.
       if (typeof localStorage === 'undefined') return 'system';
-      return localStorage.getItem('mode-watcher-mode') ?? 'system';
+      return readAppStorage('mode-watcher-mode') ?? 'system';
     },
     set: async (v) => {
       if (!isDesktopThemeMode(v)) {
@@ -154,7 +155,7 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
       let code =
         typeof localStorage === 'undefined'
           ? 'en'
-          : localStorage.getItem('notes-app:language');
+          : readAppStorage('notes-app:language');
       if (isTauri() && !isMobile()) {
         code = await getDesktopLanguage();
       }

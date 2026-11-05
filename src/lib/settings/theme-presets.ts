@@ -1,5 +1,6 @@
 import builtinData from './theme-presets.json';
 import { applyUiFontSize } from './appearance';
+import { readAppStorage, writeAppStorage } from '$lib/storage/app-storage';
 
 // Built-in names are translated UI copy; custom presets keep their saved names.
 export const BUILTIN_PRESET_NAMES = {
@@ -238,10 +239,7 @@ export function applyThemeAppearance(
   applyUiFontSize(uiFontSize);
   document.documentElement.dataset.themePreset = preset.id;
   try {
-    localStorage.setItem(
-      THEME_CACHE_KEY,
-      JSON.stringify({ preset, uiFontSize })
-    );
+    writeAppStorage(THEME_CACHE_KEY, JSON.stringify({ preset, uiFontSize }));
   } catch {
     /* storage can be unavailable */
   }
@@ -258,7 +256,7 @@ export function currentThemeWindowBackground(): {
     document.documentElement.classList.contains('dark');
   let preset = BUILTIN_PRESETS[0];
   try {
-    const cache = JSON.parse(localStorage.getItem(THEME_CACHE_KEY) ?? 'null');
+    const cache = JSON.parse(readAppStorage(THEME_CACHE_KEY) ?? 'null');
     if (cache?.preset) preset = parseThemePreset(cache.preset);
   } catch {
     /* validated default */

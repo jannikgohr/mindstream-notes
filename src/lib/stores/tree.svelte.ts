@@ -23,6 +23,11 @@ import { composeTree } from '$lib/api/tree';
 import { runSync } from '$lib/sync/runner';
 import { extractPdfText } from '$lib/pdf/extract-text';
 import { toErrorMessage } from '$lib/api/errors';
+import {
+  markVaultReady,
+  markVaultUnavailable,
+  registerVaultAccessProbe
+} from '$lib/storage/vault-access.svelte';
 
 interface TreeState {
   tree: TreeNode[];
@@ -79,11 +84,19 @@ async function doLoadTree(): Promise<void> {
     tree.tree = result.tree;
     tree.notesById = result.notesById;
     tree.collectionsById = result.collectionsById;
+    // The vault answered with its notes: this window owns it and may write.
+    markVaultReady();
   } catch (err) {
     tree.error = toErrorMessage(err);
+    // Includes a browser tab refused the database lock. Writes stay closed
+    // until a load succeeds.
+    markVaultUnavailable(tree.error);
     console.error('[tree] loadTree failed', err);
   }
 }
+
+// A write that arrives before anything has loaded the vault loads it here.
+registerVaultAccessProbe(loadTree);
 
 // ---------- Notes ----------
 

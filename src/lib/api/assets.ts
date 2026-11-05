@@ -19,12 +19,12 @@ import {
   assertString,
   TauriCommandName,
   invokeOrFallback,
-  optionalString
+  optionalString,
+  invokeTauri,
+  isTauri
 } from './core';
 import { mockApi } from './mock-store';
 import { parseNote, type Note } from './notes';
-import { invoke } from '@tauri-apps/api/core';
-import { isTauri } from './core';
 
 export interface AssetSummary {
   id: string;
@@ -81,7 +81,7 @@ async function invokeFile<T>(
   new DataView(payload.buffer).setUint32(0, metadata.length, true);
   payload.set(metadata, 4);
   payload.set(bytes, 4 + metadata.length);
-  return invoke<T>(command, payload);
+  return invokeTauri<T>(command, payload);
 }
 
 export async function uploadDrawingAssetBytes(
@@ -110,10 +110,13 @@ export async function fetchAssetBytes(
   }
   // Mobile Tauri bridges may return a number array instead of an ArrayBuffer.
   return new Uint8Array(
-    await invoke<ArrayBuffer | number[]>(TauriCommandName.FetchAssetBytes, {
-      id,
-      mimeType
-    })
+    await invokeTauri<ArrayBuffer | number[]>(
+      TauriCommandName.FetchAssetBytes,
+      {
+        id,
+        mimeType
+      }
+    )
   );
 }
 

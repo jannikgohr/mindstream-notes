@@ -14,6 +14,26 @@ import svelteParser from 'svelte-eslint-parser';
  *
  * Type-aware async rules cover TypeScript, rune modules and Svelte components.
  */
+// Fixes to library internals belong in a versioned dependency patch.
+const BITS_UI_INTERNALS = {
+  group: ['bits-ui/*'],
+  message:
+    'Use the public bits-ui entry point; keep internal fixes in patches/.'
+};
+
+// Storage writes go through the vault access gate (src/lib/storage). A tab
+// that does not own its vault must not write state other windows read.
+const STORAGE_WRITE = 'Write app state through $lib/storage/app-storage.';
+const DIRECT_STORAGE_WRITES = ['setItem', 'removeItem', 'clear'].map(
+  (property) => ({ object: 'localStorage', property, message: STORAGE_WRITE })
+);
+const RAW_TAURI_INVOKE = {
+  name: '@tauri-apps/api/core',
+  importNames: ['invoke'],
+  message:
+    'Call invokeTauri or invokeOrFallback from $lib/api/core, which wait for the vault access gate.'
+};
+
 export default ts.config(
   {
     ignores: [
@@ -53,19 +73,7 @@ export default ts.config(
       // React/Excalidraw, so the rule matches intent that was already there.
       '@typescript-eslint/no-explicit-any': 'warn',
 
-      // Fixes to library internals belong in a versioned dependency patch.
-      'no-restricted-imports': [
-        'error',
-        {
-          patterns: [
-            {
-              group: ['bits-ui/*'],
-              message:
-                'Use the public bits-ui entry point; keep internal fixes in patches/.'
-            }
-          ]
-        }
-      ],
+      'no-restricted-imports': ['error', { patterns: [BITS_UI_INTERNALS] }],
 
       // TypeScript resolves identifiers, including DOM lib types like
       // `ScrollBehavior` and `MutationObserverInit` that ESLint's browser
@@ -157,6 +165,37 @@ export default ts.config(
     languageOptions: {
       parser: svelteParser,
       parserOptions: { parser: ts.parser }
+    }
+  },
+
+  {
+    files: ['src/**/*.ts', 'src/**/*.svelte'],
+    ignores: ['**/*.test.ts'],
+    rules: {
+      'no-restricted-properties': ['error', ...DIRECT_STORAGE_WRITES],
+      'no-restricted-imports': [
+        'error',
+        { paths: [RAW_TAURI_INVOKE], patterns: [BITS_UI_INTERNALS] }
+      ]
+    }
+  },
+
+  {
+    // The gate's own modules, and the writers that must work without a vault:
+    // draft recovery keeps typing safe when the vault connection is lost, the
+    // vault picker window has no vault, the error reporter only reports, and
+    // the e2e mock store stands in for the backend.
+    files: [
+      'src/lib/storage/app-storage.ts',
+      'src/lib/api/core.ts',
+      'src/lib/browser/recovery.ts',
+      'src/routes/vault-picker/+page.svelte',
+      'src/lib/runtime-errors.ts',
+      'src/lib/api/mock-store.ts'
+    ],
+    rules: {
+      'no-restricted-properties': 'off',
+      'no-restricted-imports': ['error', { patterns: [BITS_UI_INTERNALS] }]
     }
   },
 
