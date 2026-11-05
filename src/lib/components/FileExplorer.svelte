@@ -1113,6 +1113,7 @@
       class="flex min-h-8 w-full items-center gap-1.5 rounded-md px-2 py-1 text-left ring-offset-background hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       class:bg-accent={isOver || isSelected}
       class:opacity-60={drag?.kind === 'folder' && drag.id === node.id}
+      aria-expanded={expanded[node.id] === true}
       onclick={(e) => {
         // The rename input sits inside this button. WebKit activates the
         // button on a space typed into it, and a click there places the
