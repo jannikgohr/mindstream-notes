@@ -62,17 +62,24 @@ test('filters notes through the favourites source', async ({ page }) => {
 
 test('moves a note to trash and restores it', async ({ page }) => {
   const title = `Trash restore ${Date.now()}`;
+  const tab = page.locator('.dv-tabs-container > .dv-tab', { hasText: title });
   await createRootNote(page, title);
+  await expect(tab).toHaveCount(1);
 
   await treeItem(page, title).click({ button: 'right' });
   await chooseContextItem(page, 'Delete');
   await expect(treeItem(page, title)).toHaveCount(0);
+  // Deleting a note closes its tab.
+  await expect(tab).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Trash', exact: true }).click();
   await expect(treeItem(page, title)).toBeVisible();
+  // Opened from the trash, it shows read-only, and its tab stays.
+  await treeItem(page, title).click();
   await expect(
     page.getByText('This note is in the trash and is read-only.')
   ).toBeVisible();
+  await expect(tab).toHaveCount(1);
 
   await treeItem(page, title).click({ button: 'right' });
   await chooseContextItem(page, 'Restore');
