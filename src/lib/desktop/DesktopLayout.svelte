@@ -923,6 +923,15 @@
     ? (id: string) => {
         const note = tree.notesById[id];
         if (!note) return;
+        // An open tab moves into the new window, as its own pop-out button
+        // does. Left behind, it would be a second editor on the note that
+        // never sees the window's edits and saves over them.
+        const panel = openPanels.get(id);
+        if (panel && dock) {
+          panel.api.setActive();
+          void openNoteWindow(note.id, note.title, panel.group, dock);
+          return;
+        }
         void openNoteWindow(note.id, note.title, null, null);
       }
     : undefined;
