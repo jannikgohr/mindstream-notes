@@ -46,6 +46,12 @@ export interface RunEffectOptions {
    * on the effect still wins, so a plugin can target a specific folder itself.
    */
   defaultParentId?: string | null;
+  /**
+   * Called when an item is picked from a menu the effect opened. A host
+   * that shows the plugin menu as a submenu of its own popup closes that
+   * popup here; the plugin menu closes itself.
+   */
+  onPick?: () => void;
 }
 
 function pluginHasPermission(
@@ -160,7 +166,10 @@ function pluginEffectMenuItems(
             file: pluginKind.contribution.icon
           }
         : undefined,
-      onSelect: () => void runPluginEffect(pluginId, it.run, anchor, opts)
+      onSelect: () => {
+        opts?.onPick?.();
+        void runPluginEffect(pluginId, it.run, anchor, opts);
+      }
     };
   });
 }

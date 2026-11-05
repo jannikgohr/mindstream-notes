@@ -43,7 +43,9 @@
   }
   let { noteId }: Props = $props();
 
-  let title = $state('Note');
+  let loadedTitle = $state('Note');
+  // The tree follows renames, here and in the other windows.
+  const title = $derived(tree.notesById[noteId]?.title ?? loadedTitle);
   let exists = $state<boolean | null>(null);
   // Captured at load time so we don't re-derive on every paint and so
   // a later sync-pulled mutation can't swap the editor out from under
@@ -77,7 +79,7 @@
       try {
         const note = await loadNote(noteId);
         if (cancelled) return;
-        title = note.title;
+        loadedTitle = note.title;
         noteKind = note.note_kind;
         exists = true;
       } catch (err) {
@@ -145,7 +147,11 @@
   </Button>
 {/snippet}
 
-<div class="flex h-full w-full flex-col bg-background text-foreground">
+<!-- `desktop-shell` gives the editor the same document styling as a docked
+     tab, the heading font among it. -->
+<div
+  class="desktop-shell flex h-full w-full flex-col bg-background text-foreground"
+>
   {#if windowChrome.customDecorations}
     <!-- Frameless title bar. data-tauri-drag-region on the wrapping header
          lets the user drag the window from any non-button area. -->

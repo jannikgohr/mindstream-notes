@@ -78,7 +78,7 @@
     horizontalInsertionIndex,
     moveItemToIndex
   } from '$lib/actions/horizontal-reorder';
-  import { tree } from '$lib/stores/tree.svelte';
+  import { markNoteSaved, tree } from '$lib/stores/tree.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { confirm } from '$lib/components/confirm-dialog.svelte';
@@ -1161,13 +1161,7 @@
           acknowledge.token
         );
         acknowledge();
-        const existing = tree.notesById[capturedNoteId];
-        if (existing) {
-          tree.notesById[capturedNoteId] = {
-            ...existing,
-            modified: new Date().toISOString()
-          };
-        }
+        markNoteSaved(capturedNoteId);
         savingState = 'saved';
       } catch (err) {
         savingState = 'error';

@@ -17,7 +17,11 @@
   } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import PluginIcon from '$lib/plugins/PluginIcon.svelte';
-  import { pluginButtonEffect, runPluginEffect } from '$lib/plugins/effects';
+  import {
+    pluginButtonEffect,
+    runPluginEffect,
+    type RunEffectOptions
+  } from '$lib/plugins/effects';
   import { closePluginMenu } from '$lib/plugins/plugin-menu.svelte';
   import { resolvePluginString } from '$lib/plugins/plugin-i18n';
   import type { PluginToolbarButtonRef } from '$lib/plugins/registry.svelte';
@@ -248,6 +252,9 @@
     return effect;
   }
 
+  // A pick in a plugin submenu is a pick in this menu, so it closes too.
+  const submenuOptions: RunEffectOptions = { onPick: () => closeMenu() };
+
   async function runPluginAction(
     action: PluginAction,
     anchor: HTMLElement,
@@ -257,13 +264,19 @@
     if (!effect) return false;
     const rect = anchor.getBoundingClientRect();
     const isSubmenu = placement === 'submenu' && effect.effect === 'openMenu';
-    await runPluginEffect(
-      action.pluginId,
-      effect,
-      isSubmenu
-        ? { x: rect.right + 4, y: rect.top - 4 }
-        : { x: rect.left, y: rect.bottom + 4 }
-    );
+    if (isSubmenu) {
+      await runPluginEffect(
+        action.pluginId,
+        effect,
+        { x: rect.right + 4, y: rect.top - 4 },
+        submenuOptions
+      );
+    } else {
+      await runPluginEffect(action.pluginId, effect, {
+        x: rect.left,
+        y: rect.bottom + 4
+      });
+    }
     return isSubmenu;
   }
 
@@ -283,10 +296,12 @@
       return;
     }
     const rect = anchor.getBoundingClientRect();
-    await runPluginEffect(action.pluginId, effect, {
-      x: rect.right + 4,
-      y: rect.top - 4
-    });
+    await runPluginEffect(
+      action.pluginId,
+      effect,
+      { x: rect.right + 4, y: rect.top - 4 },
+      submenuOptions
+    );
   }
 
   async function runAction(

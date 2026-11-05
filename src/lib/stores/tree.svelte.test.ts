@@ -62,6 +62,7 @@ vi.mock('$lib/state.svelte', () => ({
 import {
   addNoteTag,
   allTagsInUse,
+  applyNoteChange,
   createCollectionIn,
   createNoteIn,
   emptyTrash,
@@ -91,7 +92,8 @@ import {
   trashNote
 } from './tree.svelte';
 
-import type { NoteSummary } from '$lib/api';
+import type { NoteSummary, TreeNode } from '$lib/api';
+import { listen, TauriEventName } from '$lib/api/events';
 
 const seedNote = (over: Partial<NoteSummary> = {}): NoteSummary => ({
   id: 'n1',
@@ -240,12 +242,12 @@ describe('trashNote', () => {
 });
 
 describe('trash actions', () => {
-  it('restoreNote moves the note to root', async () => {
+  it('restoreNote restores the note where it was deleted from', async () => {
     await restoreNote('note_1');
-    expect(saveNoteMock).toHaveBeenCalledWith({
-      id: 'note_1',
-      parent_collection_id: null
-    });
+    expect(restoreManyMock).toHaveBeenCalledWith([
+      { kind: 'note', id: 'note_1' }
+    ]);
+    expect(saveNoteMock).not.toHaveBeenCalled();
   });
 
   it('purgeNote calls the api', async () => {
@@ -326,6 +328,39 @@ describe('optimistic note patches', () => {
   it('setNoteBody bumps the modified timestamp', async () => {
     await setNoteBody('n1', 'body');
     expect(saveNoteMock).toHaveBeenCalledWith({ id: 'n1', body: 'body' });
+    expect(tree.notesById.n1.modified).not.toBe('2024-01-01');
+  });
+
+  it('tells the other windows about a rename and a save', async () => {
+    const changes: unknown[] = [];
+    const off = await listen(TauriEventName.NoteSummaryChanged, (change) =>
+      changes.push(change)
+    );
+    try {
+      await renameNote('n1', 'renamed');
+      await setNoteBody('n1', 'body');
+    } finally {
+      off();
+    }
+    expect(changes).toEqual([
+      { id: 'n1', title: 'renamed', modified: expect.any(String) },
+      { id: 'n1', modified: expect.any(String) }
+    ]);
+  });
+
+  it('applies a change another window made', () => {
+    tree.tree = [{ kind: 'note', id: 'n1', name: 'seed' } as TreeNode];
+    applyNoteChange({
+      id: 'n1',
+      title: 'elsewhere',
+      modified: '2026-11-05T10:00:00.000Z'
+    });
+    expect(tree.notesById.n1.title).toBe('elsewhere');
+    expect(tree.notesById.n1.modified).toBe('2026-11-05T10:00:00.000Z');
+    expect(tree.tree[0]).toMatchObject({ name: 'elsewhere' });
+    // A note this window does not know stays unknown.
+    applyNoteChange({ id: 'other', modified: '2026-11-05T10:00:00.000Z' });
+    expect(tree.notesById.other).toBeUndefined();
   });
 
   it('setNoteFavourite patches the flag', async () => {
@@ -392,12 +427,12 @@ describe('collection mutations', () => {
     expect(loadTreeMock).toHaveBeenCalled();
   });
 
-  it('restoreCollection moves it to root', async () => {
+  it('restoreCollection restores it where it was deleted from', async () => {
     await restoreCollection('coll_1');
-    expect(updateCollectionMock).toHaveBeenCalledWith({
-      id: 'coll_1',
-      parent_collection_id: null
-    });
+    expect(restoreManyMock).toHaveBeenCalledWith([
+      { kind: 'folder', id: 'coll_1' }
+    ]);
+    expect(updateCollectionMock).not.toHaveBeenCalled();
   });
 
   it('purgeCollection deletes via the api', async () => {

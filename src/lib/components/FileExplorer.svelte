@@ -33,6 +33,12 @@
   import VaultSwitcher from './VaultSwitcher.svelte';
   import FileTreeCreateToolbar from './FileTreeCreateToolbar.svelte';
   import type { CoreFileTreeActionId } from './file-tree-toolbar-preferences';
+  import {
+    expandedFoldersToSave,
+    loadExpandedFolders,
+    saveExpandedFolders
+  } from './file-tree-expansion';
+  import { profilesState } from '$lib/stores/profiles.svelte';
   import { sortTree } from '$lib/sort';
   import {
     tree,
@@ -109,6 +115,33 @@
   }: Props = $props();
 
   let expanded = $state<Record<string, boolean>>({});
+
+  // Open folders survive a restart. The saved list is read once the vault's
+  // settings have loaded, and merged so that a folder opened before then
+  // stays open. Saving waits for that read, or it would write over the list.
+  let expansionRestored = $state(false);
+  let lastSavedExpansion: string | null = null;
+  $effect(() => {
+    if (expansionRestored || !profilesState.loaded) return;
+    const saved = loadExpandedFolders();
+    for (const id of saved) expanded[id] = true;
+    lastSavedExpansion = JSON.stringify(saved);
+    expansionRestored = true;
+  });
+  $effect(() => {
+    if (!expansionRestored || !tree.ready) return;
+    const folders = new Set(Object.keys(tree.collectionsById));
+    const ids = expandedFoldersToSave(expanded, (id) => folders.has(id));
+    const value = JSON.stringify(ids);
+    if (value === lastSavedExpansion) return;
+    const timer = setTimeout(() => {
+      lastSavedExpansion = value;
+      saveExpandedFolders(ids).catch((err) =>
+        console.warn('[file-tree] saving open folders failed', err)
+      );
+    }, 300);
+    return () => clearTimeout(timer);
+  });
 
   const sortedTree = $derived(
     sortTree(

@@ -48,7 +48,7 @@
     noteRoomInfo,
     onSessionChange
   } from '$lib/api';
-  import { tree } from '$lib/stores/tree.svelte';
+  import { markNoteSaved, tree } from '$lib/stores/tree.svelte';
   import {
     setNoteStatus,
     clearNoteStatus
@@ -612,13 +612,7 @@
           acknowledge.token
         );
         acknowledge();
-        const existing = tree.notesById[capturedNoteId];
-        if (existing) {
-          tree.notesById[capturedNoteId] = {
-            ...existing,
-            modified: new Date().toISOString()
-          };
-        }
+        markNoteSaved(capturedNoteId);
         savingState = 'saved';
       } catch (err) {
         savingState = 'error';
