@@ -253,6 +253,30 @@ describe('runPluginEffect', () => {
     expect(h.createNoteFromNote).toHaveBeenCalledWith('n1', null);
   });
 
+  it('tells the host when an item of the menu is picked', async () => {
+    h.perms.p1 = ['notes.create'];
+    const onPick = vi.fn();
+    await runPluginEffect(
+      'p1',
+      {
+        effect: 'openMenu',
+        items: [
+          {
+            label: 'Daily',
+            run: { effect: 'createNoteFromNote', sourceNoteId: 'n1' }
+          }
+        ]
+      },
+      { x: 10, y: 20 },
+      { onPick }
+    );
+    expect(onPick).not.toHaveBeenCalled();
+    const [, , items] = h.openPluginMenu.mock.calls[0];
+    await items[0].onSelect();
+    expect(onPick).toHaveBeenCalledTimes(1);
+    expect(h.createNoteFromNote).toHaveBeenCalledWith('n1', null);
+  });
+
   it('converts openMenu effects into submenu items with inherited defaults', async () => {
     h.perms.p1 = ['notes.create'];
     h.noteKinds.kanban = {

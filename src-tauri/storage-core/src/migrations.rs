@@ -918,6 +918,32 @@ const MIGRATIONS: &[Migration] = &[
                 WHERE rowid IN (SELECT rowid FROM notes WHERE note_kind IN ('pdf', 'ink'));
         "#,
     },
+    Migration {
+        to: 35,
+        // The folder a note or folder was in when it went to the trash, so
+        // that restoring it puts it back there. NULL for the vault root.
+        //
+        // Triggers fill it, so that every way into the trash records it: a
+        // single move, a batch, the trash command, and a pull that carries
+        // another device's delete. It stays on this device. Rows already in
+        // the trash have none and are restored to the root, as before.
+        sql: r#"
+            ALTER TABLE notes ADD COLUMN trashed_from TEXT;
+            ALTER TABLE collections ADD COLUMN trashed_from TEXT;
+            CREATE TRIGGER note_trashed_from AFTER UPDATE OF parent_collection_id ON notes
+                WHEN new.parent_collection_id = 'trash'
+                 AND old.parent_collection_id IS NOT 'trash'
+            BEGIN
+                UPDATE notes SET trashed_from = old.parent_collection_id WHERE id = new.id;
+            END;
+            CREATE TRIGGER collection_trashed_from AFTER UPDATE OF parent_collection_id ON collections
+                WHEN new.parent_collection_id = 'trash'
+                 AND old.parent_collection_id IS NOT 'trash'
+            BEGIN
+                UPDATE collections SET trashed_from = old.parent_collection_id WHERE id = new.id;
+            END;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

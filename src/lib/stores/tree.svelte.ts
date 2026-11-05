@@ -23,6 +23,7 @@ import { composeTree } from '$lib/api/tree';
 import { runSync } from '$lib/sync/runner';
 import { extractPdfText } from '$lib/pdf/extract-text';
 import { toErrorMessage } from '$lib/api/errors';
+import { emit, TauriEventName } from '$lib/api/events';
 import {
   markVaultReady,
   markVaultUnavailable,
@@ -175,15 +176,9 @@ export async function importPdfIn(
 
 export async function renameNote(id: string, title: string): Promise<void> {
   await api.saveNote({ id, title });
-  const existing = tree.notesById[id];
-  if (existing) {
-    tree.notesById[id] = {
-      ...existing,
-      title,
-      modified: new Date().toISOString()
-    };
-  }
-  patchNodeName(tree.tree, id, title);
+  const modified = new Date().toISOString();
+  applyNoteChange({ id, title, modified });
+  broadcastNoteChange({ id, title, modified });
   if (inFlight) await loadTree();
 }
 
@@ -219,10 +214,7 @@ export async function setNoteBody(
 ): Promise<void> {
   if (recoveryToken) await api.saveNote({ id, body }, recoveryToken);
   else await api.saveNote({ id, body });
-  const existing = tree.notesById[id];
-  if (existing) {
-    tree.notesById[id] = { ...existing, modified: new Date().toISOString() };
-  }
+  markNoteSaved(id);
   if (inFlight) await loadTree();
 }
 
@@ -404,9 +396,9 @@ export async function trashMany(
 
 // ---------- Trash actions (operate on items already inside trash) ----------
 
-/** Move a trashed note back to root. */
+/** Move a trashed note back to the folder it was deleted from. */
 export async function restoreNote(id: string): Promise<void> {
-  await moveNoteTo(id, null);
+  await restoreMany([{ kind: 'note', id }]);
 }
 
 /** Permanently delete a note from the database. */
@@ -415,9 +407,9 @@ export async function purgeNote(id: string): Promise<void> {
   await loadTree();
 }
 
-/** Move a trashed folder back to root. */
+/** Move a trashed folder back to the folder it was deleted from. */
 export async function restoreCollection(id: string): Promise<void> {
-  await moveCollectionTo(id, null);
+  await restoreMany([{ kind: 'folder', id }]);
 }
 
 /** Permanently delete a folder (cascades to its notes via FK). */
@@ -452,6 +444,46 @@ export async function emptyTrash(): Promise<api.TrashCounts> {
   const result = await api.emptyTrashCmd();
   await loadTree();
   return result;
+}
+
+// ---------- Changes made in another window ----------
+
+export interface NoteChange {
+  id: string;
+  title?: string;
+  modified: string;
+}
+
+/**
+ * Patch a note's title and `modified` stamp in place. Used for this
+ * window's own saves and for those another window announces: a note
+ * window keeps its own copy of the tree, so without this the main window
+ * shows the old title and timestamp until it reloads.
+ */
+export function applyNoteChange(change: NoteChange): void {
+  const existing = tree.notesById[change.id];
+  if (!existing) return;
+  tree.notesById[change.id] = {
+    ...existing,
+    ...(change.title === undefined ? {} : { title: change.title }),
+    modified: change.modified
+  };
+  if (change.title !== undefined)
+    patchNodeName(tree.tree, change.id, change.title);
+}
+
+/** Stamp `modified` after an editor saved a note, in every window. */
+export function markNoteSaved(id: string): void {
+  const change = { id, modified: new Date().toISOString() };
+  applyNoteChange(change);
+  broadcastNoteChange(change);
+}
+
+function broadcastNoteChange(change: NoteChange): void {
+  // Best-effort. This window receives it too and applies the same values.
+  void emit(TauriEventName.NoteSummaryChanged, change).catch((err) =>
+    console.debug('[tree] note change broadcast failed', err)
+  );
 }
 
 // ---------- Internal: in-place tree patches for optimistic updates ----------

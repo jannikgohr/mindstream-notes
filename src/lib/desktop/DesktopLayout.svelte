@@ -58,6 +58,7 @@
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
     desktopNoteSource,
+    noteIsUnderTrash,
     setDesktopNoteSource
   } from '$lib/stores/note-source.svelte';
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
@@ -847,21 +848,27 @@
   // Keep open editor tab titles in sync with the file tree. This catches
   // remote renames pulled by `sync_now` (where the title in tree.notesById
   // changes under the still-open tab) as well as local renames triggered
-  // from the file tree's context menu. Iterating over Object.keys(notesById)
-  // makes the effect track both the key set and each visited title; new
-  // panels opened *after* this runs already see the current title at open
-  // time (see openNote() below) so we don't need to track openPanels.
+  // from the file tree's context menu. The effect only reads the titles of
+  // notes that have a tab, so it re-runs when a tab opens or closes:
+  // otherwise a run before the first tab opened would track no title at all.
   $effect(() => {
+    void openPanelCount;
     for (const noteId of Object.keys(tree.notesById)) {
       const panel = openPanels.get(noteId);
       if (panel) panel.api.setTitle(tree.notesById[noteId].title);
     }
   });
 
+  // Notes whose tab was open while they were outside the trash. A note
+  // opened from the trash view is never in here, so its tab stays.
+  const openedOutsideTrash = new Set<string>();
+
   // Close dock panels whose backing note has been removed from the tree.
   // Covers the local permanent-delete paths (purgeNote / purgeCollection /
   // emptyTrash all reload the tree) and remote pulls (`runSync` reloads
   // the tree after sync, so a peer's hard-delete propagates the same way).
+  // A note that moves into the trash, by itself or with its folder, closes
+  // its tab as well.
   // We snapshot the live key set into a Set so the dependency is the
   // explicit Object.keys read — mirrors the title-sync effect above and
   // avoids relying on the `in` operator being tracked by $state's proxy.
@@ -874,10 +881,23 @@
     // dependency, so the effect would never re-run.
     const known = new Set(Object.keys(tree.notesById));
     const ready = tree.ready;
+    void openPanelCount;
     if (!dock || !ready) return;
     const stale: { noteId: string; panel: IDockviewPanel }[] = [];
+    for (const noteId of openedOutsideTrash) {
+      if (!openPanels.has(noteId)) openedOutsideTrash.delete(noteId);
+    }
     for (const [noteId, panel] of openPanels) {
-      if (!known.has(noteId)) stale.push({ noteId, panel });
+      if (!known.has(noteId)) {
+        stale.push({ noteId, panel });
+        continue;
+      }
+      if (!noteIsUnderTrash(tree.notesById[noteId], tree.collectionsById)) {
+        openedOutsideTrash.add(noteId);
+      } else if (openedOutsideTrash.has(noteId)) {
+        openedOutsideTrash.delete(noteId);
+        stale.push({ noteId, panel });
+      }
     }
     for (const { noteId, panel } of stale) {
       try {

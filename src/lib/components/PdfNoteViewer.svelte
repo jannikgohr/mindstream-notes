@@ -99,7 +99,7 @@
     type PdfSignatureSnapshot
   } from '$lib/pdf/types';
   import { CollabProvider } from '$lib/sync/collab-provider';
-  import { tree } from '$lib/stores/tree.svelte';
+  import { markNoteSaved, tree } from '$lib/stores/tree.svelte';
   import { registerNoteHistory } from '$lib/stores/note-history-bridge.svelte';
   import {
     parseHistorySnapshot,
@@ -1188,13 +1188,7 @@
           acknowledge.token
         );
         acknowledge();
-        const existing = tree.notesById[capturedNoteId];
-        if (existing) {
-          tree.notesById[capturedNoteId] = {
-            ...existing,
-            modified: new Date().toISOString()
-          };
-        }
+        markNoteSaved(capturedNoteId);
         savingState = 'saved';
       } catch (err) {
         savingState = 'error';

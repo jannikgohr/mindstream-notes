@@ -17,6 +17,7 @@ export enum TauriEventName {
   InvitationsChanged = 'invitations-changed',
   InviteLinkOpened = 'invite-link-opened',
   NativeMenuCommand = 'native-menu-command',
+  NoteSummaryChanged = 'note-summary-changed',
   OnboardingChanged = 'onboarding-changed',
   PluginsChanged = 'plugins-changed',
   SessionEnded = 'session-ended',
@@ -120,6 +121,12 @@ export type TauriEvents = {
    * (already-persisted) library when this fires. See stores/signatures.svelte.
    */
   'signatures-changed': null;
+  /**
+   * Fired by a window after it renamed a note or saved its body. Note
+   * windows keep their own copy of the tree, so the others patch the
+   * note's title and `modified` stamp from this. See stores/tree.svelte.
+   */
+  'note-summary-changed': { id: string; title?: string; modified: string };
   'plugins-changed': null;
   'ui-settings-changed': null;
   'desktop-settings-changed': null;

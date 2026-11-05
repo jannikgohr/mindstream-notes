@@ -1,17 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { listen, handlers, isTauri, loadTree } = vi.hoisted(() => ({
-  handlers: {} as Record<string, (p: unknown) => void>,
-  listen: vi.fn(
-    (event: string, handler: (p: unknown) => void) =>
-      new Promise<() => void>((resolve) => {
-        (handlers as Record<string, (p: unknown) => void>)[event] = handler;
-        resolve(() => delete handlers[event]);
-      })
-  ),
-  isTauri: vi.fn(() => false),
-  loadTree: vi.fn().mockResolvedValue(undefined)
-}));
+const { listen, handlers, isTauri, loadTree, applyNoteChange } = vi.hoisted(
+  () => ({
+    handlers: {} as Record<string, (p: unknown) => void>,
+    listen: vi.fn(
+      (event: string, handler: (p: unknown) => void) =>
+        new Promise<() => void>((resolve) => {
+          (handlers as Record<string, (p: unknown) => void>)[event] = handler;
+          resolve(() => delete handlers[event]);
+        })
+    ),
+    isTauri: vi.fn(() => false),
+    loadTree: vi.fn().mockResolvedValue(undefined),
+    applyNoteChange: vi.fn()
+  })
+);
 
 vi.mock('$lib/api/core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('$lib/api/core')>();
@@ -20,10 +23,11 @@ vi.mock('$lib/api/core', async (importOriginal) => {
 vi.mock('$lib/api/events', () => ({
   listen,
   TauriEventName: {
+    NoteSummaryChanged: 'note-summary-changed',
     SyncCompleted: 'sync-completed'
   }
 }));
-vi.mock('$lib/stores/tree.svelte', () => ({ loadTree }));
+vi.mock('$lib/stores/tree.svelte', () => ({ applyNoteChange, loadTree }));
 
 import { installSyncTreeRefreshBridge } from './tree-refresh-bridge';
 
@@ -31,6 +35,7 @@ beforeEach(() => {
   for (const key of Object.keys(handlers)) delete handlers[key];
   listen.mockClear();
   loadTree.mockClear();
+  applyNoteChange.mockClear();
   isTauri.mockReturnValue(true);
 });
 
@@ -65,10 +70,19 @@ describe('installSyncTreeRefreshBridge', () => {
     teardown();
   });
 
+  it('applies a rename or save another window announced', () => {
+    installSyncTreeRefreshBridge();
+    const change = { id: 'note_1', title: 'New', modified: '2026-11-05' };
+    handlers['note-summary-changed']?.(change);
+    expect(applyNoteChange).toHaveBeenCalledWith(change);
+    expect(loadTree).not.toHaveBeenCalled();
+  });
+
   it('stops refreshing after teardown', async () => {
     const teardown = installSyncTreeRefreshBridge();
     teardown();
     await Promise.resolve();
     expect(handlers['sync-completed']).toBeUndefined();
+    expect(handlers['note-summary-changed']).toBeUndefined();
   });
 });
