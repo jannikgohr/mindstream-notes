@@ -32,7 +32,7 @@
     type VersionAction,
     type VersionSummary
   } from '$lib/api';
-  import { tree } from '$lib/stores/tree.svelte';
+  import { markNoteSaved, tree } from '$lib/stores/tree.svelte';
   import { collectionScopeIsReadOnly } from '$lib/stores/note-source.svelte';
   import { resolveShareScopeUsers } from '$lib/notes/share-users';
   import {
@@ -1525,15 +1525,9 @@
     return async () => {
       await apiSaveNote(input, acknowledge.token);
       acknowledge();
-      // Mirror the new modified timestamp in the local cache so the metadata
-      // panel reflects the save without a tree refetch.
-      const existing = tree.notesById[capturedNoteId];
-      if (existing) {
-        tree.notesById[capturedNoteId] = {
-          ...existing,
-          modified: new Date().toISOString()
-        };
-      }
+      // Mirror the new modified timestamp in every window's cache so the
+      // metadata panel reflects the save without a tree refetch.
+      markNoteSaved(capturedNoteId);
       if (updateStatus) savingState = 'saved';
     };
   }

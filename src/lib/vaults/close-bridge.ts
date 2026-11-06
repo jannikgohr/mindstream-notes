@@ -56,9 +56,16 @@ export function installWorkerCloseBridge(): () => void {
     onError: (error) => console.warn('[vaults] close persistence failed', error)
   });
   let stopped = false;
-  const subscription = listen(TauriEventName.VaultWorkerClose, (notice) => {
-    void participant.receive(notice);
-  });
+  // A popout's close is announced to that window alone. Taking it here as
+  // well would freeze this window for a close that is not its own, until a
+  // cancel that never comes.
+  const subscription = listen(
+    TauriEventName.VaultWorkerClose,
+    (notice) => {
+      void participant.receive(notice);
+    },
+    { thisWindow: true }
+  );
   const captureFailure = listen(TauriEventName.CaptureFailed, (notice) => {
     pushToast(notice.message, { variant: 'error', durationMs: 0 });
   });

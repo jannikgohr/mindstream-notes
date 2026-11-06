@@ -397,7 +397,7 @@ describe('T4 collection sharing across the owner’s two devices', function () {
     expect(converged).toBe(true);
 
     await A2.treeItem(SHARED_FOLDER).waitForDisplayed({ timeout: 30_000 });
-    await A2.click(SHARED_FOLDER);
+    await A2.openFolder(SHARED_FOLDER);
     await A2.treeItem(NOTE_TITLE).waitForDisplayed({ timeout: 30_000 });
   });
 
@@ -468,7 +468,7 @@ describe('T4 collection sharing across the owner’s two devices', function () {
     expect(hasEdit).toBe(true);
 
     await A2.treeItem(SHARED_FOLDER).waitForDisplayed({ timeout: 30_000 });
-    await A2.click(SHARED_FOLDER);
+    await A2.openFolder(SHARED_FOLDER);
     await A2.treeItem(NOTE_TITLE).waitForDisplayed({ timeout: 30_000 });
     await expectNoteBodyContains(browserA2, sharedNoteId, INITIAL_BODY);
   });
@@ -518,7 +518,7 @@ describe('T4 collection sharing across the owner’s two devices', function () {
 
     await selectTreeSource(browserB, 'Shared');
     await B.treeItem(SHARED_FOLDER).waitForDisplayed({ timeout: 30_000 });
-    await B.click(SHARED_FOLDER);
+    await B.openFolder(SHARED_FOLDER);
     await B.treeItem(NOTE_TITLE).waitForDisplayed({ timeout: 30_000 });
     await expectNoteBodyContains(browserB, sharedNoteId, INITIAL_BODY);
     await expectNoteBodyContains(browserB, sharedNoteId, PRE_SHARE_EDIT);

@@ -13,6 +13,13 @@ pub fn move_many_items(
         .map_err(Into::into)
 }
 
+pub fn restore_many_items(
+    conn: &mut Connection,
+    items: Vec<TreeItemRef>,
+) -> AppResult<BatchCounts> {
+    mindstream_storage_core::tree_batch::restore_many_items(conn, items).map_err(Into::into)
+}
+
 pub fn purge_many_items(conn: &mut Connection, items: Vec<TreeItemRef>) -> AppResult<BatchCounts> {
     mindstream_storage_core::tree_batch::purge_many_items(conn, items).map_err(Into::into)
 }
@@ -38,7 +45,7 @@ pub fn restore_many(
     db: tauri::State<'_, Db>,
     items: Vec<TreeItemRef>,
 ) -> CommandResult<BatchCounts> {
-    db.with_conn_mut(|c| move_many_items(c, items, None))
+    db.with_conn_mut(|c| restore_many_items(c, items))
         .map_err(Into::into)
 }
 

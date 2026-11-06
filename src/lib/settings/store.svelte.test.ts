@@ -261,6 +261,17 @@ describe('setSettingValue / resetSettingValue', () => {
     expect(getSettingValue('account.serverUrl')).toBeUndefined();
   });
 
+  it("keeps each vault's open folders to itself", async () => {
+    await setSettingValue('ui.expandedFolders', ['coll_default']);
+
+    setSettingsVaultId('work');
+    expect(getSettingValue('ui.expandedFolders')).toBeUndefined();
+    await setSettingValue('ui.expandedFolders', ['coll_work']);
+
+    setSettingsVaultId('default');
+    expect(getSettingValue('ui.expandedFolders')).toEqual(['coll_default']);
+  });
+
   it('keeps device-scoped settings shared across vaults', async () => {
     await setSettingValue('appearance.reduceMotion', 'on');
 

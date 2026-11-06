@@ -32,6 +32,10 @@ pub fn verify(conn: &mut Connection) -> AppResult<ProofReport> {
     migrations::run(conn)?;
     let after: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     require(before == after, "Migrations must be idempotent")?;
+    require(
+        after == migrations::latest_version(),
+        "Migrations must reach the latest schema",
+    )?;
     let foreign_keys: bool = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0))?;
     require(foreign_keys, "Foreign keys must be enabled")?;
 
@@ -112,6 +116,12 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         let report = verify(&mut conn).unwrap();
         assert!(report.fts5 && report.transactions && report.foreign_keys && report.crdt);
+        assert_eq!(report.schema_version, migrations::latest_version());
+        // Version 1 plus every version from 24 below the latest.
+        assert_eq!(
+            report.upgrades,
+            1 + (24..migrations::latest_version()).count()
+        );
         assert!(read_marker(&conn).unwrap().is_none());
         write_marker(&mut conn, "first").unwrap();
         write_marker(&mut conn, "second").unwrap();

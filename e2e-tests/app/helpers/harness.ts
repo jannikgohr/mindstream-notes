@@ -1173,6 +1173,7 @@ export interface ClientHelpers {
   newRootInk(name: string): Promise<void>;
   newRootFolder(name: string): Promise<void>;
   newNoteInFolder(folder: string, note: string): Promise<void>;
+  openFolder(name: string): Promise<void>;
 }
 
 export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
@@ -1486,11 +1487,26 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
     await commitDraft('New note', note);
   };
 
+  // Open folders are saved per vault and stay open across a reload or
+  // restart, so a plain click on one could close it instead.
+  const openFolder = async (name: string): Promise<void> => {
+    const folder = await treeItem(name);
+    await folder.waitForDisplayed({ timeout: 30_000 });
+    const open = await client.execute(
+      (element: HTMLElement) =>
+        element.closest('[aria-expanded]')?.getAttribute('aria-expanded') ===
+        'true',
+      folder as unknown as HTMLElement
+    );
+    if (!open) await clickElement(treeItem(name));
+  };
+
   return {
     byName,
     allByName,
     isDisplayed,
     treeItem,
+    openFolder,
     click,
     clickElement,
     setValue,

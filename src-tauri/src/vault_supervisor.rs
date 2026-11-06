@@ -979,8 +979,11 @@ pub struct Worker {
 }
 
 pub(crate) fn ready_for_close(app: &AppHandle) -> bool {
-    app.try_state::<Worker>()
-        .is_some_and(|worker| worker.ready.load(Ordering::Acquire))
+    app.try_state::<crate::vault_runtime::Role>()
+        .is_some_and(|role| *role == crate::vault_runtime::Role::Direct)
+        || app
+            .try_state::<Worker>()
+            .is_some_and(|worker| worker.ready.load(Ordering::Acquire))
 }
 
 fn invalid() -> AppError {
@@ -2261,7 +2264,7 @@ fn handle_host(app: &AppHandle, request: Request) -> AppResult<Value> {
 /// Native callbacks only schedule IPC; they never wait for saves or OS work.
 pub(crate) fn request_quit(app: &AppHandle) {
     if app.try_state::<Host>().is_none() && app.try_state::<Worker>().is_none() {
-        app.exit(0);
+        crate::worker_shutdown::request_close(app);
         return;
     }
     let app = app.clone();

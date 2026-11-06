@@ -24,12 +24,13 @@ async function ready(page: Page) {
 test('real migrations, FTS5, rollback, foreign keys, and CRDT run in the worker', async ({
   page
 }) => {
+  // The proof in the worker fails, and `ready` with it, unless the database
+  // reaches the latest schema and every older version upgrades to it. So no
+  // version numbers here to keep in step with the migrations.
   await ready(page);
   const report = JSON.parse(await page.getByTestId('proof-report').innerText());
   expect(report).toMatchObject({
-    schemaVersion: 34,
     journalMode: 'delete',
-    upgrades: 11,
     fts5: true,
     transactions: true,
     foreignKeys: true,

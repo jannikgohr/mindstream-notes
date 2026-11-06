@@ -65,6 +65,76 @@ pub fn move_many_items(
     Ok(counts)
 }
 
+/// Take items out of the trash, each back into the folder it was in when it
+/// went there. An item goes to the root instead when that folder is gone,
+/// is in the trash itself, or can no longer be written to, and when it went
+/// to the trash before the folder was recorded.
+pub fn restore_many_items(
+    conn: &mut Connection,
+    items: Vec<TreeItemRef>,
+) -> AppResult<BatchCounts> {
+    let tx = conn.transaction()?;
+    let items = normalize_items(&tx, items)?;
+    for item in &items {
+        match item {
+            TreeItemRef::Note { id } => crate::sharing::ensure_note_writable(&tx, id)?,
+            TreeItemRef::Folder { id } => {
+                crate::sharing::ensure_subtree_writable(&tx, id)?;
+                validate_folder_move(&tx, id, None)?;
+            }
+        }
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let mut counts = BatchCounts {
+        notes: 0,
+        folders: 0,
+    };
+    for item in items {
+        match item {
+            TreeItemRef::Note { id } => {
+                let target = restore_target(&tx, trashed_from(&tx, "notes", &id)?, None)?;
+                move_note(&tx, &id, target.as_deref(), &now)?;
+                counts.notes += 1;
+            }
+            TreeItemRef::Folder { id } => {
+                let target =
+                    restore_target(&tx, trashed_from(&tx, "collections", &id)?, Some(&id))?;
+                move_folder(&tx, &id, target.as_deref(), &now)?;
+                counts.folders += 1;
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(counts)
+}
+
+/// Where an item was when it went to the trash. `None` for the root.
+pub fn trashed_from(conn: &Connection, table: &str, id: &str) -> AppResult<Option<String>> {
+    let sql = format!("SELECT trashed_from FROM {table} WHERE id = ?1");
+    Ok(conn
+        .query_row(&sql, params![id], |row| row.get::<_, Option<String>>(0))
+        .optional()?
+        .flatten())
+}
+
+/// The folder to restore into: `origin` when an item can still go there,
+/// otherwise the root. `folder` is the folder being restored, if it is one.
+pub fn restore_target(
+    conn: &Connection,
+    origin: Option<String>,
+    folder: Option<&str>,
+) -> AppResult<Option<String>> {
+    let Some(origin) = origin else {
+        return Ok(None);
+    };
+    let usable = validate_target(conn, Some(&origin)).is_ok()
+        && !collection_is_under(conn, &origin, TRASH_ID)?
+        && crate::sharing::ensure_parent_writable(conn, Some(&origin)).is_ok()
+        && folder.is_none_or(|folder| validate_folder_move(conn, folder, Some(&origin)).is_ok());
+    Ok(usable.then_some(origin))
+}
+
 pub fn purge_many_items(conn: &mut Connection, items: Vec<TreeItemRef>) -> AppResult<BatchCounts> {
     let tx = conn.transaction()?;
     let items = normalize_items(&tx, items)?;

@@ -231,6 +231,136 @@ fn move_many_restores_items_to_root() {
     assert!(note_parent.is_none());
 }
 
+fn note_parent_of(db: &Db, id: &str) -> Option<String> {
+    db.with_conn(|conn| notes::load(conn, id))
+        .unwrap()
+        .summary
+        .parent_collection_id
+}
+
+fn folder_parent_of(db: &Db, id: &str) -> Option<String> {
+    db.with_conn(|conn| collections::get(conn, id))
+        .unwrap()
+        .parent_collection_id
+}
+
+fn trash(db: &Db, items: Vec<TreeItemRef>) {
+    db.with_conn_mut(|conn| move_many_items(conn, items, Some(TRASH_ID.to_string())))
+        .unwrap();
+}
+
+fn restore(db: &Db, items: Vec<TreeItemRef>) -> BatchCounts {
+    db.with_conn_mut(|conn| restore_many_items(conn, items))
+        .unwrap()
+}
+
+#[test]
+fn restore_puts_items_back_where_they_were_deleted_from() {
+    let db = open_memory_for_tests();
+    let home = collection(&db, "Home", None);
+    let folder = collection(&db, "Folder", Some(home.id.clone()));
+    let note = note(&db, Some(home.id.clone()));
+    let at_root = self::note(&db, None);
+    let items = vec![
+        TreeItemRef::Folder {
+            id: folder.id.clone(),
+        },
+        TreeItemRef::Note {
+            id: note.summary.id.clone(),
+        },
+        TreeItemRef::Note {
+            id: at_root.summary.id.clone(),
+        },
+    ];
+    trash(&db, items.clone());
+    assert_eq!(folder_parent_of(&db, &folder.id).as_deref(), Some(TRASH_ID));
+
+    assert_eq!(
+        restore(&db, items),
+        BatchCounts {
+            notes: 2,
+            folders: 1
+        }
+    );
+    assert_eq!(folder_parent_of(&db, &folder.id), Some(home.id.clone()));
+    assert_eq!(note_parent_of(&db, &note.summary.id), Some(home.id));
+    assert_eq!(note_parent_of(&db, &at_root.summary.id), None);
+    let trashed = db
+        .with_conn(|conn| notes::load(conn, &note.summary.id))
+        .unwrap()
+        .summary
+        .trashed;
+    assert!(!trashed);
+}
+
+#[test]
+fn restore_falls_back_to_the_root_when_the_folder_is_gone_or_trashed() {
+    let db = open_memory_for_tests();
+    let gone = collection(&db, "Gone", None);
+    let trashed = collection(&db, "Trashed", None);
+    let from_gone = note(&db, Some(gone.id.clone()));
+    let from_trashed = note(&db, Some(trashed.id.clone()));
+    trash(
+        &db,
+        vec![
+            TreeItemRef::Note {
+                id: from_gone.summary.id.clone(),
+            },
+            TreeItemRef::Note {
+                id: from_trashed.summary.id.clone(),
+            },
+        ],
+    );
+    db.with_conn(|conn| collections::delete(conn, &gone.id))
+        .unwrap();
+    trash(
+        &db,
+        vec![TreeItemRef::Folder {
+            id: trashed.id.clone(),
+        }],
+    );
+
+    restore(
+        &db,
+        vec![
+            TreeItemRef::Note {
+                id: from_gone.summary.id.clone(),
+            },
+            TreeItemRef::Note {
+                id: from_trashed.summary.id.clone(),
+            },
+        ],
+    );
+    assert_eq!(note_parent_of(&db, &from_gone.summary.id), None);
+    assert_eq!(note_parent_of(&db, &from_trashed.summary.id), None);
+}
+
+#[test]
+fn single_restore_and_a_pull_style_move_record_the_folder_too() {
+    let db = open_memory_for_tests();
+    let home = collection(&db, "Home", None);
+    let note = note(&db, Some(home.id.clone()));
+    // A pulled delete writes the parent directly, without the batch path.
+    db.with_conn(|conn| {
+        conn.execute(
+            "UPDATE notes SET parent_collection_id = 'trash' WHERE id = ?1",
+            params![note.summary.id],
+        )
+        .map_err(Into::into)
+    })
+    .unwrap();
+    db.with_conn(|conn| notes::restore(conn, &note.summary.id))
+        .unwrap();
+    assert_eq!(note_parent_of(&db, &note.summary.id), Some(home.id.clone()));
+
+    // The trash command records it as well.
+    db.with_conn(|conn| notes::trash(conn, &note.summary.id))
+        .unwrap();
+    db.with_conn(|conn| notes::restore(conn, &note.summary.id))
+        .unwrap();
+    assert_eq!(note_parent_of(&db, &note.summary.id), Some(home.id));
+}
+
 #[test]
 fn purge_many_removes_mixed_items() {
     let db = open_memory_for_tests();

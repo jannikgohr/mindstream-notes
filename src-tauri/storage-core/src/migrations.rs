@@ -918,6 +918,32 @@ const MIGRATIONS: &[Migration] = &[
                 WHERE rowid IN (SELECT rowid FROM notes WHERE note_kind IN ('pdf', 'ink'));
         "#,
     },
+    Migration {
+        to: 35,
+        // The folder a note or folder was in when it went to the trash, so
+        // that restoring it puts it back there. NULL for the vault root.
+        //
+        // Triggers fill it, so that every way into the trash records it: a
+        // single move, a batch, the trash command, and a pull that carries
+        // another device's delete. It stays on this device. Rows already in
+        // the trash have none and are restored to the root, as before.
+        sql: r#"
+            ALTER TABLE notes ADD COLUMN trashed_from TEXT;
+            ALTER TABLE collections ADD COLUMN trashed_from TEXT;
+            CREATE TRIGGER note_trashed_from AFTER UPDATE OF parent_collection_id ON notes
+                WHEN new.parent_collection_id = 'trash'
+                 AND old.parent_collection_id IS NOT 'trash'
+            BEGIN
+                UPDATE notes SET trashed_from = old.parent_collection_id WHERE id = new.id;
+            END;
+            CREATE TRIGGER collection_trashed_from AFTER UPDATE OF parent_collection_id ON collections
+                WHEN new.parent_collection_id = 'trash'
+                 AND old.parent_collection_id IS NOT 'trash'
+            BEGIN
+                UPDATE collections SET trashed_from = old.parent_collection_id WHERE id = new.id;
+            END;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {
@@ -1650,11 +1676,27 @@ mod asset_refcount_upgrade_tests {
     }
 }
 
+/// The schema version of a fully migrated database.
+pub fn latest_version() -> u32 {
+    MIGRATIONS.last().map_or(0, |migration| migration.to)
+}
+
 /// Exercise historical schemas using the same migration list as a real vault.
 #[cfg(any(test, feature = "storage-proof"))]
 pub(crate) fn verify_upgrades() -> AppResult<usize> {
-    let versions = [1, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33];
-    for version in versions {
+    // Version 1 and every version from 24 on, each upgraded to the latest.
+    // Built from MIGRATIONS, so a new migration is covered without an edit
+    // here; a hand-kept list once stopped at 33 and skipped 34 onwards.
+    let latest = latest_version();
+    let versions: Vec<u32> = std::iter::once(1)
+        .chain(
+            MIGRATIONS
+                .iter()
+                .map(|migration| migration.to)
+                .filter(|version| (24..latest).contains(version)),
+        )
+        .collect();
+    for &version in &versions {
         let mut conn = Connection::open_in_memory()?;
         conn.pragma_update(None, "foreign_keys", "OFF")?;
         for migration in MIGRATIONS
@@ -1671,6 +1713,12 @@ pub(crate) fn verify_upgrades() -> AppResult<usize> {
             conn.execute("INSERT INTO assets(id, owning_note_id, mime_type, bytes, size, created, modified) VALUES ('upgrade_asset', 'upgrade_proof', 'image/png', X'01020304', 4, 'old', 'old')", [])?;
         }
         run(&mut conn)?;
+        let reached: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if reached != latest {
+            return Err(AppError::InvalidArg(format!(
+                "Schema {version} upgrade stopped at {reached}, not {latest}"
+            )));
+        }
         let note = crate::notes::load(&conn, "upgrade_proof")?;
         if note.body != "preserved upgrade content"
             || crate::search::search(&conn, "upgrade")?.len() != 1
