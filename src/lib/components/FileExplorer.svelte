@@ -1112,12 +1112,12 @@
       <ChevronRight
         class={`size-3.5 shrink-0 transition-transform ${expanded[node.id] ? 'rotate-90' : ''}`}
       />
-      <!-- Folders carry a soft brand tint so the tree's structure reads at a
-           glance; notes stay neutral apart from their kind colour. -->
+      <!-- Folders are amber so the tree's structure reads at a glance without
+           competing with the brand colour that marks the open note. -->
       {#if expanded[node.id]}
-        <FolderOpen class="size-3.5 shrink-0 text-accent-brand/80" />
+        <FolderOpen class="size-3.5 shrink-0 text-[var(--named-amber)]" />
       {:else}
-        <Folder class="size-3.5 shrink-0 text-accent-brand/80" />
+        <Folder class="size-3.5 shrink-0 text-[var(--named-amber)]" />
       {/if}
       {#if renaming}
         {@render renderRenameInput()}
