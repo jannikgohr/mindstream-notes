@@ -961,7 +961,7 @@
       <button
         type="button"
         class="inline-flex h-8 min-w-0 shrink-0 items-center gap-2.5 rounded-md px-2.5 text-left text-xs transition-colors {active
-          ? 'bg-accent-brand/10 font-medium text-accent-brand'
+          ? 'bg-accent font-medium text-foreground'
           : 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
         use:tooltip={active ? undefined : label}
         aria-current={active ? 'page' : undefined}
