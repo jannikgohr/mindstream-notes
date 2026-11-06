@@ -243,6 +243,16 @@ impl Endpoint {
         self.call_until(request, Instant::now() + SOCKET_TIMEOUT)
     }
 
+    /// One attempt that gives up after `timeout`, for a poll whose caller
+    /// retries on its own and checks other evidence between attempts.
+    pub fn call_within(
+        &self,
+        request: &Request,
+        timeout: Duration,
+    ) -> AppResult<Result<Value, String>> {
+        self.call_until(request, Instant::now() + timeout.min(SOCKET_TIMEOUT))
+    }
+
     /// Retry transient transport failure against the same authenticated
     /// instance. Preserve the operation ID; an explicit rejection is final.
     pub fn retry_call(&self, request: &Request) -> AppResult<Result<Value, String>> {

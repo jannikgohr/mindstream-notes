@@ -8,6 +8,10 @@ use crate::coordinator_ipc::{Endpoint, Request};
 use crate::error::{AppError, AppResult};
 use crate::worker_shutdown::CloseProgress;
 
+/// How long one close-status poll may take. A missed reply costs one turn of
+/// the loop; a reply that never comes cannot delay the ownership check more.
+const STATUS_TIMEOUT: Duration = Duration::from_millis(500);
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Owner {
     Present,
@@ -53,7 +57,11 @@ pub(crate) fn close(
                 id: Uuid::new_v4(),
                 payload: json!({"command":"closeStatus","launch_id":launch_id,"operation_id":operation_id}),
             };
-            match endpoint.retry_call(&poll) {
+            // One short attempt per turn. A worker that has saved and exited
+            // no longer answers, and retrying its socket would hold off the
+            // ownership check above, which is what proves it is gone, for
+            // the whole retry budget. Quit waited five seconds on it.
+            match endpoint.call_within(&poll, STATUS_TIMEOUT) {
                 Ok(Ok(value)) => {
                     let progress: CloseProgress = serde_json::from_value(value).map_err(|_| {
                         AppError::InvalidArg(
@@ -141,6 +149,61 @@ mod tests {
         })
         .unwrap();
         drop(owner);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_worker_that_exits_is_seen_as_soon_as_it_releases_the_vault() {
+        let root = std::env::temp_dir().join(format!("ms-quit-exit-{}", Uuid::new_v4()));
+        let owner = Arc::new(Mutex::new(Some(VaultLock::acquire(&root).unwrap())));
+        let listener = Coordinator::for_worker(owner.lock().unwrap().as_ref().unwrap()).unwrap();
+        let endpoint = listener.endpoint().clone();
+        let polled = Arc::new(AtomicBool::new(false));
+        let observed = polled.clone();
+        let server = listener
+            .serve(move |request| {
+                Ok(if request.payload["command"] == "close" {
+                    json!({"accepted":true})
+                } else {
+                    observed.store(true, Ordering::Release);
+                    json!({"state":"committing"})
+                })
+            })
+            .unwrap();
+        // The worker commits and stops answering, and the OS frees its vault
+        // a moment later, when the process has gone, as after a Quit.
+        let released = Arc::new(Mutex::new(None));
+        let exit = {
+            let released = released.clone();
+            std::thread::spawn(move || {
+                while !polled.load(Ordering::Acquire) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                server.stop();
+                std::thread::sleep(Duration::from_millis(300));
+                owner.lock().unwrap().take();
+                *released.lock().unwrap() = Some(Instant::now());
+            })
+        };
+        close(
+            &endpoint,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Instant::now() + Duration::from_secs(30),
+            || {
+                Ok(if VaultLock::try_acquire(&root)?.is_some() {
+                    Owner::Released
+                } else {
+                    Owner::Present
+                })
+            },
+        )
+        .unwrap();
+        exit.join().unwrap();
+        let waited = released.lock().unwrap().unwrap().elapsed();
+        // Retrying the dead socket took five seconds before ownership was
+        // checked again. Allow a slow runner well under that.
+        assert!(waited < Duration::from_secs(3), "noticed after {waited:?}");
         std::fs::remove_dir_all(root).unwrap();
     }
 
