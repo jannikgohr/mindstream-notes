@@ -336,6 +336,7 @@
     "sidebar.outline.goTo": "Go to {heading}",
     "sidebar.details": "Note details",
     "sidebar.outline": "Outline",
+    "fileTree.notes": "Notes",
     "sidebar.metadata": "Metadata",
     "sidebar.show": "Show right sidebar",
     "sidebar.hide": "Hide right sidebar",
