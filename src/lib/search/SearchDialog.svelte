@@ -242,7 +242,7 @@
                       {#each titleParts as part}
                         {#if part.highlight}
                           <mark
-                            class="bg-accent-brand/20 text-foreground rounded-sm"
+                            class="rounded-sm bg-accent-brand/30 font-medium text-foreground"
                             >{part.text}</mark
                           >
                         {:else}{part.text}{/if}
@@ -256,7 +256,7 @@
                       {#each snippetParts as part}
                         {#if part.highlight}
                           <mark
-                            class="bg-accent-brand/20 text-foreground rounded-sm"
+                            class="rounded-sm bg-accent-brand/30 font-medium text-foreground"
                             >{part.text}</mark
                           >
                         {:else}{part.text}{/if}
@@ -279,7 +279,7 @@
       </div>
 
       <footer
-        class="hidden shrink-0 items-center justify-end border-t border-border px-3 py-1.5 text-[11px] text-muted-foreground sm:flex"
+        class="hidden shrink-0 items-center justify-end border-t border-border px-3 py-2 text-xs text-muted-foreground sm:flex"
       >
         {tUi('search.hint')}
       </footer>
