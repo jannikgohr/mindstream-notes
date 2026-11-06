@@ -46,14 +46,14 @@
   --surface-3: oklch(1 0 0);
   --editor-surface: var(--surface-3);
 
-  /* The wash behind a modal, sheet or palette. Always black — a scrim's job
+  /* The wash behind a modal, sheet or palette. Always dark — a scrim's job
    * is to darken whatever is behind it, so it does not follow the surface
    * scale — but the strength differs by theme, and it was previously spelled
    * five different ways across ten files (bg-black/50, /35, rgb(0 0 0 / 0.4),
-   * rgb(0 0 0 / 0.52), …). In light mode it stays near 30%: dialogs here
-   * also blur what is behind them, and a heavier wash turns the page a flat
-   * dirty grey. */
-  --scrim: oklch(0 0 0 / 0.3);
+   * rgb(0 0 0 / 0.52), …). In light mode it stays near 30% and leans to the
+   * slate of the surfaces: dialogs here also blur what is behind them, and a
+   * heavier or pure black wash turns the page a flat dirty grey. */
+  --scrim: oklch(0.25 0.03 265 / 0.3);
 
   /* Light-mode steps compress as they approach white, so shadow carries
    * the rest of the elevation cue. Dark mode overrides these deeper. */
@@ -2004,7 +2004,7 @@ body.dv-tab-dragging .freeform-canvas-host * {
   padding: 0 0 4rem;
 }
 .desktop-shell .milkdown .ProseMirror {
-  padding: 2.5rem clamp(3rem, 4vw, 4rem);
+  padding: 2rem clamp(3rem, 4vw, 4rem);
   line-height: var(--editor-line-height, 1.75);
 }
 .desktop-shell .milkdown .milkdown-list-item-block li .label-wrapper,

@@ -1745,7 +1745,7 @@
 <div class="note-editor flex h-full w-full flex-col" data-note-editor={noteId}>
   {#if showEditorHeader}
     <div
-      class="desktop-editor-header flex min-h-[42px] items-center gap-1 border-b border-border bg-background px-2"
+      class="desktop-editor-header flex min-h-9 items-center gap-1 border-b border-border bg-background px-2"
     >
       <div class="min-w-0 flex-1">
         {#if showDesktopToolbar}
