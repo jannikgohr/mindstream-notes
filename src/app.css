@@ -882,6 +882,35 @@ body.dv-tab-dragging
   color: var(--muted-foreground);
 }
 
+/* List and table rhythm. Crepe pads every paragraph by 4px and pins list
+ * markers to a 32px box, so list items sat further apart than lines of
+ * prose, and table rows stacked cell padding on paragraph padding. Items
+ * now follow the body line box, cells keep a compact 6px/12px padding, and
+ * the grid uses the regular border tone instead of a near-invisible tint,
+ * with a quiet header row. */
+.milkdown .milkdown-list-item-block li .children p {
+  padding-block: 1px;
+}
+.milkdown .milkdown-list-item-block li .label-wrapper,
+.milkdown .milkdown-list-item-block li .label-wrapper .label {
+  height: calc(1em * var(--editor-line-height, 1.5) + 2px);
+  padding-block: 0;
+}
+.milkdown .milkdown-table-block :is(th, td) {
+  border-color: var(--border);
+  padding: 6px 12px;
+}
+/* Beats the desktop shell's paragraph line height (`.desktop-shell
+ * .milkdown .ProseMirror p`), which would otherwise set table rows too. */
+.milkdown .ProseMirror .milkdown-table-block :is(th, td) p {
+  padding-block: 0;
+  line-height: 1.5;
+}
+.milkdown .milkdown-table-block th {
+  background: var(--surface-2);
+  font-weight: 600;
+}
+
 /*
  * Only show the drop indicator for editor-initiated block drags. The upstream
  * prosemirror-drop-indicator binds its `dragover` handler to the whole editor
@@ -1953,6 +1982,10 @@ body.dv-tab-dragging .freeform-canvas-host * {
 .desktop-shell .milkdown .ProseMirror {
   padding: 2.5rem clamp(3rem, 4vw, 4rem);
   line-height: var(--editor-line-height, 1.75);
+}
+.desktop-shell .milkdown .milkdown-list-item-block li .label-wrapper,
+.desktop-shell .milkdown .milkdown-list-item-block li .label-wrapper .label {
+  height: calc(1em * var(--editor-line-height, 1.75) + 2px);
 }
 .desktop-shell .milkdown .ProseMirror p {
   line-height: var(--editor-line-height, 1.75);
