@@ -11,6 +11,7 @@ import type { BrowserStorageClient } from './client';
 
 beforeEach(() => {
   vi.stubEnv('MODE', 'development');
+  vi.stubEnv('VITE_BROWSER_DEMO', '0');
   vi.stubEnv('VITE_BROWSER_MOCKS', '0');
   vi.stubEnv('VITE_BROWSER_TEST_VAULT', 'qa');
   localStorage.clear();
@@ -57,6 +58,22 @@ describe('isolated browser test vaults', () => {
   ])('rejects invalid identifiers: %s', (id) => {
     expect(isTestVaultId(id)).toBe(false);
     if (id !== undefined) expect(() => vaultNamespace(id as string)).toThrow();
+  });
+
+  it('isolates the demo from normal storage and QA, regardless of the QA identifier', () => {
+    vi.stubEnv('VITE_BROWSER_DEMO', '1');
+    expect(browserTestVaultId()).toBe('pages-demo');
+    expect(vaultNamespace(browserTestVaultId())).not.toEqual(
+      vaultNamespace('qa')
+    );
+    expect(vaultNamespace(browserTestVaultId())).not.toEqual(vaultNamespace());
+    vi.stubEnv('VITE_BROWSER_MOCKS', '1');
+    expect(browserTestVaultId()).toBeUndefined();
+    vi.stubEnv('VITE_BROWSER_MOCKS', '0');
+    (
+      window as unknown as { __TAURI_INTERNALS__?: unknown }
+    ).__TAURI_INTERNALS__ = {};
+    expect(browserTestVaultId()).toBeUndefined();
   });
 
   it('fails closed on an invalid configured test vault', () => {

@@ -1,3 +1,4 @@
+import { isBrowserDemo } from './demo';
 import { browserStorageEnabled } from './commands';
 import { isTestVaultId, vaultNamespace } from './namespace';
 
@@ -8,6 +9,7 @@ export function browserTestVaultId(): string | undefined {
     !browserStorageEnabled()
   )
     return undefined;
+  if (isBrowserDemo()) return 'pages-demo';
   const id = import.meta.env.VITE_BROWSER_TEST_VAULT;
   if (id === undefined || id === '') return undefined;
   if (!isTestVaultId(id))

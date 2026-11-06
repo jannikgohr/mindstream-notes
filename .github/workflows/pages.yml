@@ -1,0 +1,65 @@
+name: Web demo
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: browser-sqlite
+      - run: sudo apt-get update && sudo apt-get install -y clang lld
+      - run: cargo install wasm-bindgen-cli --version 0.2.126 --locked
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:demo
+      - run: pnpm exec playwright install --with-deps chromium firefox webkit
+      - run: pnpm test:demo
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: .output/build
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: demo-test-results
+          path: .output/test-results/demo
+          retention-days: 7
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
+      - name: Deploy demo
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -3,7 +3,8 @@
 The browser app stores local notes in OPFS SQLite through a dedicated Wasm
 worker. Hard reloads and closing the owning tab retain committed notes,
 folders, attachments, history, and editor CRDT state. Authentication, encrypted
-sync, offline app loading, and a browser release are pending.
+sync and offline app loading are pending. A public
+[web demo](https://jannikgohr.github.io/mindstream-notes/) runs without an account.
 
 The earlier `/sqlite-proof/` page remains a separate compatibility check. It
 uses a different database and lock from the app.
@@ -25,6 +26,26 @@ Open `http://localhost:1420/`, create and edit a note, then hard reload.
 `pnpm dev` builds the worker Wasm before starting Vite. `pnpm build:browser`
 builds both Wasm and the static frontend. Tauri uses
 `pnpm dev:native` and keeps its existing native toolchain requirements.
+
+## GitHub Pages demo
+
+`pnpm dev:demo` opens an isolated demo vault at
+`http://localhost:1421/mindstream-notes/`. `pnpm build:demo` builds the static
+site and Wasm module. The demo has editable samples, a storage notice, a download
+link, and a reset action that asks before deleting the demo's notes and attachments.
+Reset keeps preferences and saved layout, as in QA mode.
+
+The demo uses the reserved isolated vault identifier `pages-demo`. Its notes and
+recovery data are separate from the normal browser vault and the default QA vault.
+Use `pnpm test:demo` after building to test the production files under the Pages
+subpath. To preview manually, run
+`BROWSER_BASE_PATH=/mindstream-notes pnpm preview`.
+
+`.github/workflows/pages.yml` runs only when a release is published. It checks
+out that release tag, builds and tests the demo, then publishes the tested
+artifact to GitHub Pages. Set the repository's Pages source
+to GitHub Actions once. The default build path is `/mindstream-notes`; override
+`BROWSER_BASE_PATH` for another repository name or an empty path on a custom domain.
 
 ## Testing modes
 

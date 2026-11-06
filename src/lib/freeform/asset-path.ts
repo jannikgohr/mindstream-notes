@@ -4,7 +4,7 @@ if (typeof window !== 'undefined') {
     EXCALIDRAW_ASSET_PATH?: string | string[];
   };
   assetsWindow.EXCALIDRAW_ASSET_PATH ??= new URL(
-    `${import.meta.env.BASE_URL}excalidraw/`,
+    `${import.meta.env.BASE_URL.replace(/\/$/, '')}/excalidraw/`,
     window.location.href
   ).href;
 }
