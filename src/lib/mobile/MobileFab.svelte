@@ -42,8 +42,10 @@
   }
   let { actions, barCount, extras, onMove, onTogglePin }: Props = $props();
 
-  /** A quick button (`size-11`) plus the row's `gap-2`, in px. */
-  const QUICK_PX = 44 + 8;
+  /** A quick button (`size-11`) plus the dock's `gap-0.5`, in px. */
+  const QUICK_PX = 44 + 2;
+  /** The dock's padding plus the row's `gap-2`, in px. */
+  const DOCK_PX = 4 + 8;
 
   let rowWidth = $state(0);
   let mainWidth = $state(0);
@@ -51,11 +53,20 @@
   const primary = $derived(actions[0]);
   const bar = $derived(actions.slice(0, Math.max(1, barCount)));
   const more = $derived(actions.slice(Math.max(1, barCount)));
-  // Pinned kinds that do not fit beside the main button stay in the menu.
+  /** Shortcuts shown beside the main button; more read as a second toolbar. */
+  const MAX_QUICK = 2;
+  // Pinned kinds past the first two, or that do not fit beside the main
+  // button, stay in the menu.
   const quickActions = $derived(
     bar
       .slice(1)
-      .slice(0, Math.max(0, Math.floor((rowWidth - mainWidth) / QUICK_PX)))
+      .slice(
+        0,
+        Math.min(
+          MAX_QUICK,
+          Math.max(0, Math.floor((rowWidth - mainWidth - DOCK_PX) / QUICK_PX))
+        )
+      )
   );
 
   function run(action: FabAction, anchor: HTMLElement) {
@@ -340,34 +351,44 @@
         class="flex w-full items-center justify-end gap-2"
         bind:clientWidth={rowWidth}
       >
-        {#each quickActions as action (action.id)}
-          <button
-            type="button"
-            class="pointer-events-auto grid size-11 shrink-0 place-items-center rounded-full border border-border bg-surface-3 text-foreground shadow-raised hover:bg-accent"
-            aria-label={action.label}
-            title={action.label}
-            onclick={(event) => run(action, event.currentTarget)}
+        <!-- Pinned kinds share one quiet dock, so they read as shortcuts
+             beside the main button instead of a row of competing buttons. -->
+        {#if quickActions.length > 0}
+          <div
+            class="pointer-events-auto flex h-12 shrink-0 items-center gap-0.5 rounded-full bg-surface-2/85 px-0.5 backdrop-blur"
           >
-            {@render actionIcon(action, 'size-5')}
-          </button>
-        {/each}
+            {#each quickActions as action (action.id)}
+              <button
+                type="button"
+                class="grid size-11 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
+                aria-label={action.label}
+                title={action.label}
+                onclick={(event) => run(action, event.currentTarget)}
+              >
+                {@render actionIcon(action, 'size-[18px]')}
+              </button>
+            {/each}
+          </div>
+        {/if}
         <div
           bind:offsetWidth={mainWidth}
-          class="pointer-events-auto flex h-11 min-w-0 shrink-0 items-stretch overflow-hidden rounded-full bg-primary text-primary-foreground shadow-overlay"
+          class="pointer-events-auto flex h-12 min-w-0 shrink-0 items-stretch overflow-hidden rounded-full bg-accent-brand text-accent-brand-foreground shadow-overlay"
         >
           <button
             type="button"
-            class="flex min-w-0 items-center gap-2 pl-4 pr-3 text-[13px] font-medium hover:bg-primary-foreground/10"
+            class="flex min-w-0 items-center gap-2 pl-5 pr-3.5 text-sm font-medium hover:bg-accent-brand-foreground/10"
             onclick={(event) => run(primary, event.currentTarget)}
           >
             {@render actionIcon(primary, 'size-4 shrink-0')}
             <span class="max-w-44 truncate">{primary.label}</span>
           </button>
-          <span class="my-3 w-px bg-primary-foreground/25" aria-hidden="true"
+          <span
+            class="my-3 w-px bg-accent-brand-foreground/25"
+            aria-hidden="true"
           ></span>
           <button
             type="button"
-            class="flex w-10 shrink-0 items-center justify-center hover:bg-primary-foreground/10"
+            class="flex w-12 shrink-0 items-center justify-center hover:bg-accent-brand-foreground/10"
             onclick={toggleFabExpanded}
             aria-haspopup="dialog"
             aria-expanded={mobileState.fabExpanded}

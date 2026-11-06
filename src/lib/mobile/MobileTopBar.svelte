@@ -80,7 +80,7 @@
     onclick={() => show('vaults')}
     aria-label={tUi('vault.switch')}
     title={vault?.name ?? tUi('vault.switch')}
-    class="mr-0.5 grid size-10 shrink-0 place-items-center rounded-lg hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    class="mr-0.5 grid size-11 shrink-0 place-items-center rounded-lg hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
   >
     <VaultTile
       id={vault?.id ?? ''}
@@ -94,7 +94,7 @@
     type="button"
     onclick={openSearch}
     aria-label={tUi('search.notes.label')}
-    class="flex h-10 min-w-0 flex-1 items-center gap-2.5 rounded-full border border-border bg-surface-1 px-3.5 text-left text-sm text-muted-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    class="flex h-11 min-w-0 flex-1 items-center gap-2.5 rounded-full border border-border bg-surface-1 px-3.5 text-left text-sm text-muted-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
   >
     <Search class="size-4 shrink-0" />
     <span class="truncate">{tUi('search.notes.placeholder')}</span>
@@ -106,7 +106,7 @@
     onclick={() => show('notifications')}
     title={tUi('options.notifications')}
     aria-label={tUi('options.notifications')}
-    class="relative size-10 shrink-0 text-muted-foreground [&_svg]:size-5"
+    class="relative size-11 shrink-0 text-muted-foreground [&_svg]:size-5"
   >
     <Bell />
     {#if notificationCount > 0}
@@ -123,7 +123,7 @@
     onclick={showSettings}
     title={tUi('options.settings')}
     aria-label={tUi('options.settings')}
-    class="size-10 shrink-0 text-muted-foreground [&_svg]:size-5"
+    class="size-11 shrink-0 text-muted-foreground [&_svg]:size-5"
   >
     <Settings />
   </Button>
