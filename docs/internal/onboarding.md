@@ -27,7 +27,7 @@ choices in its own single card.
 The header and bottom bar respect the device's safe areas.
 
 Appearance uses the app's shared Surface, SectionHeader, Input, Button, and
-Toolbar components. Apollo, Slate & Indigo, Paper & Teal, Warm, Forest, and custom
+Toolbar components. Slate & Indigo, Apollo, Paper & Teal, Warm, Forest, and custom
 presets provide their own light and dark accents. Preset, mode, UI size, editor
 size, and line spacing update the sample workspace immediately. The preview uses
 the same editor surface as the workspace. While dragging UI font size, only the

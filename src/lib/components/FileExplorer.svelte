@@ -12,6 +12,9 @@
     Share2,
     Trash2
   } from '@lucide/svelte';
+  import { authSession } from '$lib/api/auth.svelte';
+  import FileTreeSharedActions from './FileTreeSharedActions.svelte';
+  import { shareNewFolder } from './new-shared-folder';
   import FavouriteStar from './FavouriteStar.svelte';
   import NoteKindIcon from './NoteKindIcon.svelte';
   import { pluginToolbarButtons } from '$lib/plugins/registry.svelte';
@@ -32,7 +35,10 @@
   import SortControl from './SortControl.svelte';
   import VaultSwitcher from './VaultSwitcher.svelte';
   import FileTreeCreateToolbar from './FileTreeCreateToolbar.svelte';
-  import type { CoreFileTreeActionId } from './file-tree-toolbar-preferences';
+  import {
+    FILE_TREE_MAIN_ACTION_CLASS,
+    type CoreFileTreeActionId
+  } from './file-tree-toolbar-preferences';
   import {
     expandedFoldersToSave,
     loadExpandedFolders,
@@ -51,9 +57,9 @@
     renameCollection,
     renameNote,
     setNoteFavourite,
-    stopSharingCollection,
-    trashNote
+    stopSharingCollection
   } from '$lib/stores/tree.svelte';
+  import { trashWithUndo } from './trash-with-undo';
   import { setSortDirection, setSortStrategy, ui } from '$lib/state.svelte';
   import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
   import type { TreeNode } from '$lib/api';
@@ -165,6 +171,10 @@
   // create a new shared root, and a root drop = pulling an item out of its share
   // into your vault, which is out of scope here).
   const canCreate = $derived(source === 'home');
+  // Favourites can create notes too, at the vault root, favourited on
+  // creation so they land in the list being looked at. Folders can't be
+  // favourited, so that view offers note types only.
+  const canCreateNotes = $derived(source === 'home' || source === 'favourites');
   const canReorganize = $derived(source === 'home');
   // Dropped PDFs import into the folder under the pointer, in Home only: the
   // other views fall through to the window-level import at the vault root.
@@ -203,7 +213,10 @@
   /** Can a new note/folder be created inside `parentId`? */
   function canStartDraft(parentId: string | null): boolean {
     if (source === 'home') return true;
+    if (source === 'favourites') return parentId === null;
     if (source !== 'shared') return false;
+    // The root of Shared takes one thing: a new folder to share.
+    if (parentId === null) return !!authSession.current;
     return (
       parentId !== null &&
       sharedFolderIsEditable(parentId, tree.collectionsById)
@@ -223,7 +236,6 @@
   let emptyTrashPending = $state(false);
   let emptyTrashAnimation = $state(0);
   let emptyTrashParticleCount = $state(0);
-  let deleteConfirmId = $state<string | null>(null);
   let explorerRoot = $state<HTMLElement | null>(null);
   let selectedKeys = $state<SelectionKey[]>([]);
   let selectionAnchor = $state<SelectionKey | null>(null);
@@ -266,7 +278,14 @@
     if (!canStartDraft(parentId)) return;
     if (parentId) expanded[parentId] = true;
     const text = defaultDraftText(kind);
-    draft = { kind, parentId, text, initialText: text };
+    draft = {
+      kind,
+      parentId,
+      text,
+      initialText: text,
+      favourite: source === 'favourites' || undefined,
+      share: (source === 'shared' && parentId === null) || undefined
+    };
   }
   // Name-first creation of a plugin-template note (e.g. a Typst document): seed
   // the inline draft with the template's default title, then render + create on
@@ -291,9 +310,11 @@
       }
     };
   }
+  let pdfImportFavourite = false;
   function startPdfImport(parentId: string | null) {
     if (!canStartDraft(parentId)) return;
     pdfImportParentId = parentId;
+    pdfImportFavourite = source === 'favourites';
     if (pdfInput) pdfInput.value = '';
     pdfInput?.click();
   }
@@ -304,6 +325,7 @@
     if (!file) return;
     const id = await importPdfIn(pdfImportParentId, file);
     pdfImportParentId = null;
+    if (pdfImportFavourite) await setNoteFavourite(id, true);
     onOpenNote(id);
   }
   function cancelDraft() {
@@ -316,7 +338,7 @@
       draft = null;
       return;
     }
-    const { kind, parentId, template } = draft;
+    const { kind, parentId, template, favourite, share } = draft;
     draft = null;
     if (template) {
       // The template renderer creates the note (of its plugin note kind) with
@@ -332,9 +354,11 @@
     const noteKind = draftKindToNoteKind(kind);
     if (noteKind) {
       const id = await createNoteIn(parentId, text, noteKind);
+      if (favourite) await setNoteFavourite(id, true);
       onOpenNote(id);
     } else {
-      await createCollectionIn(parentId, text);
+      const id = await createCollectionIn(parentId, text);
+      if (share) shareNewFolder(id, text);
     }
   }
   function onDraftKey(e: KeyboardEvent) {
@@ -507,19 +531,6 @@
         emptyTrashPending = false;
       }
     }
-  }
-
-  function startDelete(id: string) {
-    deleteConfirmId = id;
-  }
-
-  function cancelDelete() {
-    deleteConfirmId = null;
-  }
-
-  async function commitDelete(id: string) {
-    deleteConfirmId = null;
-    await trashNote(id);
   }
 
   async function leaveShared(id: string) {
@@ -924,11 +935,14 @@
   oncontextmenu={(e) => openMenu(e, { kind: 'root' })}
 >
   <div class="px-3 pb-1 pt-2"><VaultSwitcher /></div>
-  <div class="flex shrink-0 items-center gap-1 px-3 pb-3 pt-1">
-    {#if canCreate}
+  <!-- Fixed height: each view puts a different action here, or none, and
+       the navigation below must not move when the view changes. -->
+  <div class="flex h-12 shrink-0 items-center gap-1 px-3 pb-3 pt-1">
+    {#if canCreateNotes}
       <FileTreeCreateToolbar
         pluginButtons={pluginToolbarButtons('file-tree')}
         onCreate={runCreateToolbarAction}
+        notesOnly={source === 'favourites'}
       />
     {:else if source === 'trash'}
       <Button
@@ -937,8 +951,7 @@
         onclick={() => void startEmptyTrash()}
         disabled={trashItemCount === 0 || emptyTrashPending}
         title={tUi('fileTree.emptyTrash')}
-        aria-label={tUi('fileTree.emptyTrash')}
-        class="relative h-7 shrink-0 overflow-hidden px-2 text-xs text-destructive hover:text-destructive"
+        class="{FILE_TREE_MAIN_ACTION_CLASS} relative overflow-hidden text-destructive hover:text-destructive"
       >
         {#if emptyTrashAnimation > 0}
           {#key emptyTrashAnimation}
@@ -955,8 +968,12 @@
           {/key}
         {/if}
         <Trash2 class="size-3.5" />
-        Empty
+        <span class="min-w-0 truncate">{tUi('fileTree.emptyTrash')}</span>
       </Button>
+    {:else if source === 'shared'}
+      <FileTreeSharedActions
+        onNewSharedFolder={() => startDraft('folder', null)}
+      />
     {/if}
   </div>
 
@@ -1038,7 +1055,7 @@
       {@render renderNode(node)}
     {/each}
 
-    {#if canCreate && draft && draft.parentId === null}
+    {#if (canCreateNotes || source === 'shared') && draft && draft.parentId === null}
       {@render renderDraft()}
     {/if}
   </div>
@@ -1054,8 +1071,9 @@
 
 {#snippet renderDraft()}
   {@const kind = draft?.kind ?? 'note'}
-  {@const placeholder =
-    kind === 'folder'
+  {@const placeholder = draft?.share
+    ? tUi('sharing.newFolder.action')
+    : kind === 'folder'
       ? tUi('fileTree.newFolder')
       : kind === 'drawing'
         ? tUi('fileTree.newDrawing')
@@ -1226,39 +1244,15 @@
         </button>
       {/if}
       {#if canDelete}
-        {#if deleteConfirmId === node.id}
-          <div class="flex shrink-0 items-center gap-1 pl-1">
-            <Button
-              variant="destructive"
-              size="sm"
-              class="h-7 px-2 text-xs"
-              onclick={() => void commitDelete(node.id)}
-            >
-              {tUi('fileTree.deleteTrash.confirm')}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              class="h-7 px-2 text-xs"
-              onclick={cancelDelete}
-            >
-              {tUi('fileTree.delete.cancel')}
-            </Button>
-          </div>
-        {:else}
-          <button
-            type="button"
-            class="shrink-0 rounded p-1 text-muted-foreground transition-opacity hover:text-destructive {deleteConfirmId ===
-            node.id
-              ? 'opacity-100'
-              : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'}"
-            onclick={() => startDelete(node.id)}
-            use:tooltip={tUi('fileTree.delete')}
-            aria-label={tUi('fileTree.delete')}
-          >
-            <Trash2 size={14} />
-          </button>
-        {/if}
+        <button
+          type="button"
+          class="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+          onclick={() => void trashWithUndo([{ kind: 'note', id: node.id }])}
+          use:tooltip={tUi('fileTree.delete')}
+          aria-label={tUi('fileTree.delete')}
+        >
+          <Trash2 size={14} />
+        </button>
       {/if}
     </div>
   {/if}

@@ -42,11 +42,9 @@
     restoreMany as restoreManyItems,
     restoreCollection,
     restoreNote,
-    trashMany as trashManyItems,
-    trashCollection,
-    trashNote,
     tree
   } from '$lib/stores/tree.svelte';
+  import { trashWithUndo } from '$lib/components/trash-with-undo';
   import { ui } from '$lib/state.svelte';
   import { sortTree } from '$lib/sort';
   import { nodesForDesktopSource } from '$lib/stores/note-source.svelte';
@@ -393,24 +391,8 @@
     }
   }
 
-  async function startTrash(t: NodeRef) {
-    const label = nameFor(t);
-    if (
-      !(await confirm({
-        title: tUi(
-          t.kind === 'note'
-            ? 'mobile.confirm.trashNoteTitle'
-            : 'mobile.confirm.trashFolderTitle'
-        ),
-        message: tUiFormat('mobile.confirm.trashItem', { name: label }),
-        confirmLabel: tUi('fileTree.deleteTrash.confirm'),
-        destructive: true
-      }))
-    ) {
-      return;
-    }
-    if (t.kind === 'note') void trashNote(t.id);
-    else void trashCollection(t.id);
+  function startTrash(t: NodeRef) {
+    void trashWithUndo([t]);
   }
 
   async function startPurge(t: NodeRef) {
@@ -438,28 +420,22 @@
     const items = [...mobileBatchSelection.items];
     const count = items.length;
     if (count === 0) return;
-    const inTrash = mobileState.view === 'trash';
+    if (mobileState.view !== 'trash') {
+      clearMobileBatchSelection();
+      await trashWithUndo(items);
+      return;
+    }
     if (
       !(await confirm({
-        title: tUi(
-          inTrash
-            ? 'fileTree.confirm.purge.title'
-            : 'fileTree.deleteTrash.confirm'
-        ),
-        message: tUiFormat(
-          inTrash ? 'mobile.confirm.purgeBatch' : 'mobile.confirm.trashBatch',
-          { count }
-        ),
-        confirmLabel: tUi(
-          inTrash ? 'fileTree.menu.delete' : 'fileTree.deleteTrash.confirm'
-        ),
+        title: tUi('fileTree.confirm.purge.title'),
+        message: tUiFormat('mobile.confirm.purgeBatch', { count }),
+        confirmLabel: tUi('fileTree.menu.delete'),
         destructive: true
       }))
     ) {
       return;
     }
-    if (inTrash) await purgeManyItems(items);
-    else await trashManyItems(items);
+    await purgeManyItems(items);
     clearMobileBatchSelection();
   }
 
@@ -549,7 +525,7 @@
         label: tUi('mobile.menu.delete'),
         icon: Trash2,
         destructive: true,
-        onSelect: () => void startTrash(t)
+        onSelect: () => startTrash(t)
       }
     ];
   }

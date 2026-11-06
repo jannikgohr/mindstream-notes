@@ -91,13 +91,17 @@ custom preset.
 
 ## Theme presets
 
-Appearance settings offer Apollo (the default, ID `default`), Slate & Indigo,
-Paper & Teal, Warm and Forest. The two new presets use the reserved IDs
-`builtin:slate-indigo` and `builtin:paper-teal`, leaving existing custom IDs
-such as `slate` and `paper` available. Apollo pairs blue-slate neutrals with an ochre
-accent; Slate & Indigo is cool and neutral; Paper & Teal is warm paper with a
-teal accent. The default preset's values are also the base tokens in
-`app.css`, so the two must change together. Light/dark/system mode
+Appearance settings offer Slate & Indigo (the default, ID
+`builtin:slate-indigo`), Apollo (ID `default`, the default before Slate &
+Indigo), Paper & Teal, Warm and Forest. Slate & Indigo and Paper & Teal use the
+reserved IDs `builtin:slate-indigo` and `builtin:paper-teal`, leaving existing
+custom IDs such as `slate` and `paper` available. Slate & Indigo is cool and
+neutral with an indigo accent; Apollo pairs blue-slate neutrals with an ochre
+accent; Paper & Teal is warm paper with a teal accent. The default preset is
+the first entry in `theme-presets.json`, and it is also what `appearance.preset`
+defaults to in `schema.json` and in `src-tauri/src/theme_presets.rs`. Its values
+are the base tokens in `app.css` and the pre-paint colours in `app.html`, so all
+of these must change together. Light/dark/system mode
 is independent of preset selection. Presets and UI font size apply to every
 vault on this device. Editor font size and line height stay in the vault.
 
@@ -110,7 +114,7 @@ checks them again before a preset is stored.
 Root `theme-presets.json` stores up to 64 user presets in a versioned map. Use
 the settings UI to edit them so validation, locked publication and
 notifications run. Removing a selected preset keeps its selection and displays
-Apollo; restoring the same ID restores the theme, and the original data stays
+the default preset; restoring the same ID restores the theme, and the original data stays
 available during recovery. Complete built-in examples live in
 [`src/lib/settings/theme-presets.json`](../../src/lib/settings/theme-presets.json).
 
@@ -121,7 +125,7 @@ of their own, starting with vault tiles. Code stores the name, never the value:
 a vault's entry in `profiles.json` says `"color": "teal"`, and the active
 preset decides what teal looks like in each mode. Apollo, Slate & Indigo and
 Paper & Teal set their own; Warm and Forest use the `app.css` values, which
-mirror Apollo. Light values sit around L 0.55 with near-white
+mirror the default preset. Light values sit around L 0.55 with near-white
 `--named-foreground`; dark values sit around L 0.75 with dark text, so the same
 colour also reads as text on the matching surfaces.
 

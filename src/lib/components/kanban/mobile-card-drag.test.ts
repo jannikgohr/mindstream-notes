@@ -4,7 +4,11 @@ import {
   CARD_DRAG_EDGE_ZONE_PX,
   cardDragEdgeDirection,
   cardDragEdgeSwitchDirection,
-  scrollMomentumStep
+  CARD_SCROLL_MAX_VELOCITY_PX_PER_MS,
+  CARD_SCROLL_MOMENTUM_TIME_CONSTANT_MS,
+  CARD_SCROLL_RELEASE_IDLE_MS,
+  scrollMomentumStep,
+  scrollReleaseVelocity
 } from '../../../../packages/svelte-kanban/src/directives/drag.js';
 
 describe('cardDragEdgeDirection', () => {
@@ -82,17 +86,88 @@ describe('scrollMomentumStep', () => {
   it('continues in the release direction while slowing down', () => {
     const step = scrollMomentumStep(1, 100);
     expect(step.delta).toBeGreaterThan(0);
-    expect(step.velocity).toBeCloseTo(0.6);
+    expect(step.velocity).toBeGreaterThan(0);
+    expect(step.velocity).toBeLessThan(1);
 
     const reverse = scrollMomentumStep(-1, 100);
-    expect(reverse.delta).toBeLessThan(0);
-    expect(reverse.velocity).toBeCloseTo(-0.6);
+    expect(reverse.delta).toBeCloseTo(-step.delta);
+    expect(reverse.velocity).toBeCloseTo(-step.velocity);
   });
 
-  it('stops at zero instead of reversing direction', () => {
-    expect(scrollMomentumStep(0.2, 100)).toEqual({
-      delta: 10,
-      velocity: 0
-    });
+  it('coasts velocity times the time constant in total', () => {
+    let velocity = 2;
+    let travelled = 0;
+    for (let frame = 0; frame < 600; frame += 1) {
+      const step = scrollMomentumStep(velocity, 16);
+      travelled += step.delta;
+      velocity = step.velocity;
+    }
+    expect(travelled).toBeCloseTo(2 * CARD_SCROLL_MOMENTUM_TIME_CONSTANT_MS);
+  });
+
+  it('gives the same result for one long step as for many short ones', () => {
+    const once = scrollMomentumStep(1.5, 64);
+    let velocity = 1.5;
+    let delta = 0;
+    for (let i = 0; i < 4; i += 1) {
+      const step = scrollMomentumStep(velocity, 16);
+      delta += step.delta;
+      velocity = step.velocity;
+    }
+    expect(delta).toBeCloseTo(once.delta);
+    expect(velocity).toBeCloseTo(once.velocity);
+  });
+});
+
+describe('scrollReleaseVelocity', () => {
+  const flick = [
+    { time: 0, top: 0 },
+    { time: 16, top: 40 },
+    { time: 32, top: 80 },
+    { time: 48, top: 110 },
+    // The finger slows down just before it lifts.
+    { time: 64, top: 118 }
+  ];
+
+  it('averages the trailing window instead of trusting the last move', () => {
+    const velocity = scrollReleaseVelocity(flick, 70);
+    expect(velocity).toBeCloseTo(118 / 64);
+    expect(velocity).toBeGreaterThan((118 - 110) / 16);
+  });
+
+  it('keeps the flick direction', () => {
+    const upward = flick.map((sample) => ({ ...sample, top: -sample.top }));
+    expect(scrollReleaseVelocity(upward, 70)).toBeCloseTo(-118 / 64);
+  });
+
+  it('ignores samples older than the window', () => {
+    const samples = [
+      { time: 0, top: 0 },
+      { time: 400, top: 0 },
+      { time: 450, top: 50 },
+      { time: 500, top: 100 }
+    ];
+    expect(scrollReleaseVelocity(samples, 505)).toBeCloseTo(1);
+  });
+
+  it('does not fling when the finger rested before lifting', () => {
+    expect(
+      scrollReleaseVelocity(flick, 64 + CARD_SCROLL_RELEASE_IDLE_MS + 1)
+    ).toBe(0);
+  });
+
+  it('caps runaway velocities', () => {
+    const samples = [
+      { time: 0, top: 0 },
+      { time: 1, top: 500 }
+    ];
+    expect(scrollReleaseVelocity(samples, 2)).toBe(
+      CARD_SCROLL_MAX_VELOCITY_PX_PER_MS
+    );
+  });
+
+  it('returns zero without movement', () => {
+    expect(scrollReleaseVelocity([], 0)).toBe(0);
+    expect(scrollReleaseVelocity([{ time: 0, top: 0 }], 0)).toBe(0);
   });
 });

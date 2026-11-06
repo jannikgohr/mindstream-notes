@@ -7,7 +7,11 @@
  */
 
 import './asset-path';
-import { Excalidraw, CaptureUpdateAction } from '@excalidraw/excalidraw';
+import {
+  Excalidraw,
+  CaptureUpdateAction,
+  MainMenu
+} from '@excalidraw/excalidraw';
 import '@excalidraw/excalidraw/index.css';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent } from 'react';
@@ -321,7 +325,18 @@ export default function ExcalidrawIsland({
             image: true
           }
         }}
-      />
+      >
+        {/* Excalidraw's stock menu, minus its "Excalidraw links" group
+            (GitHub, X, Discord), which has no place in a notes app. */}
+        <MainMenu>
+          <MainMenu.DefaultItems.SaveAsImage />
+          <MainMenu.DefaultItems.SearchMenu />
+          <MainMenu.DefaultItems.Help />
+          <MainMenu.DefaultItems.ClearCanvas />
+          <MainMenu.Separator />
+          <MainMenu.DefaultItems.ChangeCanvasBackground />
+        </MainMenu>
+      </Excalidraw>
     </div>
   );
 }

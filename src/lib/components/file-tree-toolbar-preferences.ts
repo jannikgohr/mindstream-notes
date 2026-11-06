@@ -43,6 +43,14 @@ export const FILE_TREE_TOOLBAR_MIN_PX =
   FILE_TREE_ACTION_BUTTON_PX * 2 + FILE_TREE_ACTION_GAP_PX;
 
 /**
+ * The wide, labelled button that leads the action row above the sidebar
+ * navigation ("New note", "Empty trash"). Every view's row uses it, so the
+ * primary action has one size and look whichever view is open.
+ */
+export const FILE_TREE_MAIN_ACTION_CLASS =
+  'h-8 w-full justify-start gap-2 border border-border bg-surface-3 px-2 text-xs shadow-raised hover:bg-accent';
+
+/**
  * How many actions fit inline, given the width of the whole toolbar row.
  *
  * Returns 0 when not even one action fits — every action then lives in the ⋯

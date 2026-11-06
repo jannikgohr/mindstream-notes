@@ -13,12 +13,17 @@ export const shareDialog = $state<ShareDialogState>({
   view: 'invite'
 });
 
+// Runs once when the dialog that was opened with it closes.
+let onClose: (() => void) | null = null;
+
 export function openCollectionShareDialog(
   collectionId: string,
-  view: ShareDialogView = 'invite'
+  view: ShareDialogView = 'invite',
+  options: { onClose?: () => void } = {}
 ): void {
   shareDialog.collectionId = collectionId;
   shareDialog.view = view;
+  onClose = options.onClose ?? null;
 }
 
 export function setShareDialogView(view: ShareDialogView): void {
@@ -27,4 +32,7 @@ export function setShareDialogView(view: ShareDialogView): void {
 
 export function closeCollectionShareDialog(): void {
   shareDialog.collectionId = null;
+  const closed = onClose;
+  onClose = null;
+  closed?.();
 }

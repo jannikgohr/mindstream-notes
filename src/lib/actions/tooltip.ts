@@ -9,6 +9,9 @@
  *   - shows on hover after a short delay, and immediately on *keyboard*
  *     focus (`:focus-visible`) — never on a mouse click's focus, so
  *     clicking a button doesn't leave a tooltip stuck open;
+ *   - once one tooltip has shown, sweeping on to a neighbour shows its
+ *     tooltip at once: the first wait already told us the user is reading
+ *     labels, so a toolbar can be scanned without waiting at every button;
  *   - positions with `@floating-ui/dom` (the same lib the wikilink menu
  *     uses), so it survives CSS-transformed ancestors like dockview panels;
  *   - hides on pointer-leave, blur, Escape, or pointer-down.
@@ -36,7 +39,17 @@ export interface TooltipOptions {
 export type TooltipParam = string | TooltipOptions | null | undefined;
 
 const SHOW_DELAY_MS = 350;
+/** How long after a tooltip hides that the next hover skips the delay. */
+const WARM_WINDOW_MS = 400;
 let nextTooltipId = 1;
+let visibleTooltips = 0;
+let lastHiddenAt = Number.NEGATIVE_INFINITY;
+
+function tooltipsWarm(): boolean {
+  return (
+    visibleTooltips > 0 || performance.now() - lastHiddenAt < WARM_WINDOW_MS
+  );
+}
 
 function normalize(param: TooltipParam): TooltipOptions {
   if (!param) return { label: '' };
@@ -61,12 +74,16 @@ export function tooltip(node: HTMLElement, param: TooltipParam) {
     clearTimer();
     if (tipEl || !options.label || node.matches(':disabled')) return;
     const el = document.createElement('div');
-    el.className = 'ms-tooltip';
+    // A warm hand-off swaps labels in place; fading would read as lag.
+    el.className = tooltipsWarm()
+      ? 'ms-tooltip ms-tooltip-instant'
+      : 'ms-tooltip';
     el.id = tooltipId;
     el.setAttribute('role', 'tooltip');
     el.textContent = options.label;
     document.body.appendChild(el);
     tipEl = el;
+    visibleTooltips += 1;
     node.setAttribute(
       'aria-describedby',
       [node.getAttribute('aria-describedby'), tooltipId]
@@ -91,12 +108,18 @@ export function tooltip(node: HTMLElement, param: TooltipParam) {
     requestAnimationFrame(() => el?.classList.add('ms-tooltip-visible'));
   }
 
-  function hide() {
+  /** `cooldown: false` ends the warm window, so a click doesn't leave the
+   *  next hover skipping its delay. */
+  function hide({ cooldown = true } = {}) {
     clearTimer();
     stopAutoUpdate?.();
     stopAutoUpdate = null;
-    tipEl?.remove();
-    tipEl = null;
+    if (tipEl) {
+      tipEl.remove();
+      tipEl = null;
+      visibleTooltips -= 1;
+      lastHiddenAt = cooldown ? performance.now() : Number.NEGATIVE_INFINITY;
+    }
     const describedBy = node
       .getAttribute('aria-describedby')
       ?.split(/\s+/)
@@ -108,10 +131,13 @@ export function tooltip(node: HTMLElement, param: TooltipParam) {
 
   function scheduleShow() {
     if (tipEl || showTimer || !options.label) return;
-    showTimer = setTimeout(show, SHOW_DELAY_MS);
+    if (tooltipsWarm()) show();
+    else showTimer = setTimeout(show, SHOW_DELAY_MS);
   }
 
-  function onPointerEnter() {
+  function onPointerEnter(event: PointerEvent) {
+    // Touch has no hover; a tap's pointerenter would only flash a label.
+    if (event.pointerType === 'touch') return;
     scheduleShow();
   }
   function onPointerLeave() {
@@ -120,7 +146,7 @@ export function tooltip(node: HTMLElement, param: TooltipParam) {
   function onPointerDown() {
     // A click should dismiss any open/pending tooltip and not re-open it
     // via the focus that follows (see onFocus's focus-visible guard).
-    hide();
+    hide({ cooldown: false });
   }
   function onFocus() {
     // Only keyboard focus shows the tooltip; mouse-click focus is not

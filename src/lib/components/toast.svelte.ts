@@ -13,11 +13,19 @@
 
 export type ToastVariant = 'success' | 'error' | 'info' | 'progress';
 
+/** A single follow-up the toast offers, such as Undo. Running it dismisses
+ *  the toast. */
+export interface ToastAction {
+  label: string;
+  run: () => void;
+}
+
 export interface Toast {
   id: number;
   message: string;
   variant: ToastVariant;
   dismissible: boolean;
+  action?: ToastAction;
 }
 
 /** How long a toast stays up before auto-dismissing. */
@@ -38,6 +46,7 @@ export function pushToast(
     variant?: ToastVariant;
     durationMs?: number;
     dismissible?: boolean;
+    action?: ToastAction;
   } = {}
 ): number {
   const id = ++nextId;
@@ -45,7 +54,8 @@ export function pushToast(
     id,
     message,
     variant: opts.variant ?? 'info',
-    dismissible: opts.dismissible ?? true
+    dismissible: opts.dismissible ?? true,
+    action: opts.action
   });
 
   const duration = opts.durationMs ?? TOAST_DURATION_MS;
