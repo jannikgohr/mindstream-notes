@@ -279,7 +279,7 @@ fn appearance_at(root: &Path, mode: impl Serialize) -> AppResult<serde_json::Val
     let id = values
         .get("appearance.preset")
         .and_then(|id| id.as_str())
-        .unwrap_or("default");
+        .unwrap_or("builtin:slate-indigo");
     let mut presets = builtins();
     match load(root) {
         Ok(document) => presets.extend(document.presets.into_values()),

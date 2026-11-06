@@ -1,7 +1,7 @@
 # Custom themes
 
 The colours of the app come from a theme preset. **Settings → Appearance →
-Theme** offers five: Apollo (the default), Slate & Indigo, Paper & Teal, Warm
+Theme** offers five: Slate & Indigo (the default), Apollo, Paper & Teal, Warm
 and Forest. Each has a light and a dark version, and **Mode** picks which one
 you see: Light, Dark or Match system.
 
@@ -17,7 +17,7 @@ font size and line height belong to each vault.
 
 The new preset appears in the list. Saving again with the same `id` replaces it
 on this device. **Remove preset** deletes a custom preset. If it was the one in
-use, the app shows Apollo but remembers your choice, so saving a preset with
+use, the app shows Slate & Indigo but remembers your choice, so saving a preset with
 that `id` again brings it back.
 
 Custom presets stay on the device, up to 64 of them. A backup carries them to

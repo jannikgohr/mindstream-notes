@@ -87,10 +87,10 @@ describe('theme preset contract', () => {
     // Focus rings follow the preset accent through app.css, not an inline value.
     expect(document.documentElement.style.getPropertyValue('--ring')).toBe('');
   });
-  it('makes Apollo the default and keeps the earlier presets', () => {
+  it('makes Slate & Indigo the default and keeps the earlier presets', () => {
     expect(BUILTIN_PRESETS.map((preset) => [preset.id, preset.name])).toEqual([
-      ['default', 'Apollo'],
       ['builtin:slate-indigo', 'Slate & Indigo'],
+      ['default', 'Apollo'],
       ['builtin:paper-teal', 'Paper & Teal'],
       ['warm', 'Warm'],
       ['forest', 'Forest']
@@ -158,14 +158,14 @@ describe('theme preset contract', () => {
       }
   });
   it('accepts named colours only as a complete, readable set', () => {
-    const [apollo] = BUILTIN_PRESETS;
-    const partial = structuredClone(apollo);
+    const [base] = BUILTIN_PRESETS;
+    const partial = structuredClone(base);
     delete partial.dark['named-pink'];
     expect(() => parseThemePreset(partial)).toThrow();
-    const unreadable = structuredClone(apollo);
+    const unreadable = structuredClone(base);
     unreadable.light['named-red'] = unreadable.light['named-foreground']!;
     expect(() => parseThemePreset(unreadable)).toThrow();
-    const without = structuredClone(apollo);
+    const without = structuredClone(base);
     for (const name of NAMED_TOKENS) {
       delete without.light[name];
       delete without.dark[name];
@@ -173,12 +173,12 @@ describe('theme preset contract', () => {
     expect(parseThemePreset(without)).toEqual(without);
   });
   it("applies a preset's named colours and clears them for one without", () => {
-    const [apollo] = BUILTIN_PRESETS;
+    const [base] = BUILTIN_PRESETS;
     const warm = BUILTIN_PRESETS.find((preset) => preset.id === 'warm')!;
     expect(warm.light['named-red']).toBeUndefined();
-    applyThemeAppearance(apollo, false, 16);
+    applyThemeAppearance(base, false, 16);
     expect(document.documentElement.style.getPropertyValue('--named-red')).toBe(
-      `oklch(${apollo.light['named-red']!.join(' ')})`
+      `oklch(${base.light['named-red']!.join(' ')})`
     );
     applyThemeAppearance(warm, false, 16);
     expect(document.documentElement.style.getPropertyValue('--named-red')).toBe(
@@ -187,7 +187,9 @@ describe('theme preset contract', () => {
   });
   it('falls back without mutating a missing user selection', () => {
     const selection = { id: 'missing-user-theme' };
-    expect(resolvedPreset(BUILTIN_PRESETS, selection.id).id).toBe('default');
+    expect(resolvedPreset(BUILTIN_PRESETS, selection.id).id).toBe(
+      'builtin:slate-indigo'
+    );
     expect(selection.id).toBe('missing-user-theme');
   });
   it('applies a cached preset before app CSS and rejects unrestricted cached CSS', () => {
