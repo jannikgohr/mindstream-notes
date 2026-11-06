@@ -106,11 +106,12 @@
       >
         <VaultSwitcher />
       </div>{/if}
-    <!-- Search is centred in the free space, like a command centre, rather
-         than parked beside the icons. -->
+    <!-- Search starts where the main column starts, in line with the tab
+         strip below, so it belongs to the layout grid instead of floating in
+         whatever space the sidebar leaves. -->
     <div
       data-tauri-drag-region={customDecorations ? 'deep' : undefined}
-      class="flex min-w-0 flex-1 justify-center"
+      class="flex min-w-0 flex-1 justify-start"
     >
       <Button
         variant="outline"
