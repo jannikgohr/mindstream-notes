@@ -50,7 +50,8 @@
     setLeftSidebarWidth,
     setRightSidebarWidth,
     ui,
-    toggleRightSidebar
+    toggleRightSidebar,
+    rightSidebarShown
   } from '$lib/state.svelte';
   import { loadTree, tree } from '$lib/stores/tree.svelte';
   import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
@@ -839,7 +840,7 @@
 
   $effect(() => {
     void ui.leftSidebarOpen;
-    void ui.rightSidebarOpen;
+    void rightSidebarShown();
     void ui.leftSidebarWidth;
     void ui.rightSidebarWidth;
     if (!dockHost) return;
@@ -1005,7 +1006,7 @@
       </div>
     </main>
 
-    {#if ui.rightSidebarOpen}
+    {#if rightSidebarShown()}
       <ResizeHandle
         side="right"
         value={ui.rightSidebarWidth}
