@@ -1090,7 +1090,7 @@
       data-file-tree-node
       type="button"
       draggable={canDragItem({ kind: 'folder', id: node.id })}
-      class="flex min-h-8 w-full items-center gap-1.5 rounded-md px-2 py-1 text-left ring-offset-background hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      class="flex min-h-7 w-full items-center gap-1.5 rounded-md px-2 py-0.5 text-left ring-offset-background hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       class:bg-accent={isOver || isSelected}
       class:opacity-60={drag?.kind === 'folder' && drag.id === node.id}
       aria-expanded={expanded[node.id] === true}
@@ -1173,7 +1173,7 @@
       <button
         type="button"
         aria-current={ui.activeNoteId === node.id ? 'page' : undefined}
-        class="flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1 text-left focus-visible:outline-none"
+        class="flex min-h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-0.5 text-left focus-visible:outline-none"
         onclick={(e) => {
           // See the folder row: activation from the rename input is not a
           // click on the row. Opening the note here would move focus away,
