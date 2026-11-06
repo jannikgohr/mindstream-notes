@@ -46,6 +46,7 @@
   const FLOAT_GAP_PX = 12;
 
   let bottomOffset = $state(0);
+  let toolbarHeight = $state(0);
   let host: HTMLDivElement | null = $state(null);
 
   function syncOffset() {
@@ -54,6 +55,7 @@
 
   function publishHeight() {
     if (!host) return;
+    toolbarHeight = host.offsetHeight;
     // Include the gap so editor padding accounts for the floating offset,
     // not just the pill itself.
     document.documentElement.style.setProperty(
@@ -92,12 +94,22 @@
   for the editor underneath; the pill itself opts back in via the chrome
   class on EditorToolbar.
 -->
+<!-- Text scrolling under the pill fades out behind it, so the pill reads as
+     floating over the page instead of covering a line. -->
+<div
+  aria-hidden="true"
+  class="pointer-events-none fixed inset-x-0 bottom-0 z-20 bg-gradient-to-t from-editor-surface from-70% to-transparent"
+  style="height: calc({bottomOffset +
+    toolbarHeight +
+    FLOAT_GAP_PX * 2 +
+    12}px + env(safe-area-inset-bottom, 0px));"
+></div>
 <div
   class="pointer-events-none fixed inset-x-0 z-30 flex justify-center px-3"
   style="bottom: calc({bottomOffset +
     FLOAT_GAP_PX}px + env(safe-area-inset-bottom, 0px));"
 >
-  <div bind:this={host} class="max-w-full">
+  <div bind:this={host} class="touch-targets max-w-full">
     <EditorToolbar
       {crepe}
       {activeSurface}

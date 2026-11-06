@@ -174,9 +174,11 @@ for (const width of [1280, 375]) {
             page.locator('.dv-active-tab').filter({ hasText: 'My first note' })
           ).toBeVisible();
         else
+          // On phones the note's name is the big title above the body; the
+          // editor bar holds only actions.
           await expect(
-            page.locator('header').filter({ hasText: 'My first note' })
-          ).toBeVisible();
+            page.getByRole('textbox', { name: 'Note title', exact: true })
+          ).toHaveValue('My first note');
         await expect(page.locator('.ProseMirror')).toBeVisible();
         await expect(page.locator('.ProseMirror')).toHaveText('');
         if (width === 375)

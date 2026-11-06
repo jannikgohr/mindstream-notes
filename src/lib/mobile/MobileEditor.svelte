@@ -43,7 +43,7 @@
 
 <div class="flex h-full w-full flex-col">
   <header
-    class="flex h-12 shrink-0 select-none items-center gap-1 border-b border-border bg-surface-0 px-2"
+    class="touch-targets flex h-14 shrink-0 select-none items-center gap-1 border-b border-border bg-surface-0 px-1.5"
   >
     <Button
       variant="ghost"
@@ -54,9 +54,9 @@
     >
       <ArrowLeft class="size-5" />
     </Button>
-    <span class="min-w-0 flex-1 truncate text-sm font-medium">
-      {note?.title ?? tUi('mobile.editor.fallbackTitle')}
-    </span>
+    <!-- The note's title is the big heading at the top of the body, so the
+         bar holds only actions, each a full touch target. -->
+    <span class="min-w-0 flex-1" aria-hidden="true"></span>
     {#if noteId}
       <!-- Snapshot the (non-null inside this block) noteId so the click
            closure captures a plain `string` instead of the reactive

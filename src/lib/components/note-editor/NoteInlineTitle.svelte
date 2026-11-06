@@ -14,9 +14,11 @@
   interface Props {
     noteId: string;
     readonly?: boolean;
+    /** Phone sizing; the field measures itself again when it changes. */
+    compact?: boolean;
     onEnter?: () => void;
   }
-  let { noteId, readonly = false, onEnter }: Props = $props();
+  let { noteId, readonly = false, compact = false, onEnter }: Props = $props();
 
   const saved = $derived(tree.notesById[noteId]?.title ?? '');
   let draft = $state<string | null>(null);
@@ -31,7 +33,12 @@
   $effect(() => {
     void saved;
     void draft;
+    void compact;
     fit();
+  });
+  // The first measure can run before the web font has loaded.
+  $effect(() => {
+    void document.fonts?.ready.then(fit);
   });
 
   async function commit() {
