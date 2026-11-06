@@ -50,8 +50,10 @@
    * is to darken whatever is behind it, so it does not follow the surface
    * scale — but the strength differs by theme, and it was previously spelled
    * five different ways across ten files (bg-black/50, /35, rgb(0 0 0 / 0.4),
-   * rgb(0 0 0 / 0.52), …). */
-  --scrim: oklch(0 0 0 / 0.45);
+   * rgb(0 0 0 / 0.52), …). In light mode it stays near 30%: dialogs here
+   * also blur what is behind them, and a heavier wash turns the page a flat
+   * dirty grey. */
+  --scrim: oklch(0 0 0 / 0.3);
 
   /* Light-mode steps compress as they approach white, so shadow carries
    * the rest of the elevation cue. Dark mode overrides these deeper. */
@@ -228,7 +230,7 @@ html {
   --surface-3: oklch(0.28 0.015 270);
   --editor-surface: var(--surface-1);
 
-  /* Stronger than light mode: over already-dark content a 45% wash barely
+  /* Stronger than light mode: over already-dark content a light wash barely
    * separates the overlay from the page behind it. */
   --scrim: oklch(0 0 0 / 0.6);
 

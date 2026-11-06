@@ -947,7 +947,7 @@
   </div>
 
   <nav
-    class="flex shrink-0 flex-col gap-0.5 px-3 pb-3"
+    class="flex shrink-0 flex-col gap-0.5 px-3 pb-2"
     aria-label={tUi('nav.primary')}
     oncontextmenu={(e) => {
       e.preventDefault();
@@ -960,7 +960,7 @@
       {@const label = tUi(item.labelKey)}
       <button
         type="button"
-        class="inline-flex h-8 min-w-0 shrink-0 items-center gap-2.5 rounded-md px-2.5 text-left text-xs transition-colors {active
+        class="inline-flex h-7 min-w-0 shrink-0 items-center gap-2.5 rounded-md px-2.5 text-left text-xs transition-colors {active
           ? 'bg-accent font-medium text-foreground'
           : 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
         use:tooltip={active ? undefined : label}
@@ -975,7 +975,7 @@
   </nav>
 
   <Separator />
-  <div class="flex h-11 shrink-0 items-center justify-between gap-2 px-4">
+  <div class="flex h-9 shrink-0 items-center justify-between gap-2 px-4">
     <span
       class="min-w-0 truncate text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
       >{source === 'home'

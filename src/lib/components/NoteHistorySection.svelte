@@ -441,7 +441,7 @@
               <span class="block truncate text-xs font-medium">
                 {actionLabel(v)}
               </span>
-              <span class="block truncate text-[11px] text-muted-foreground">
+              <span class="block text-[11px] text-muted-foreground">
                 {formatNoteDateTime(v.created)}{magnitude(v)
                   ? ` · ${magnitude(v)}`
                   : ''}
