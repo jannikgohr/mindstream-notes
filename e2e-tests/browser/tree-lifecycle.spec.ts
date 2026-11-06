@@ -60,6 +60,61 @@ test('filters notes through the favourites source', async ({ page }) => {
   ).toBeVisible();
 });
 
+test('creates a favourited note from the favourites source', async ({
+  page
+}) => {
+  const title = `Favourite draft ${Date.now()}`;
+  await page.getByRole('button', { name: 'Favourites', exact: true }).click();
+  // Folders can't be favourited, so this view offers note types only.
+  await expect(
+    page.getByRole('button', { name: 'New folder', exact: true })
+  ).toHaveCount(0);
+  await createRootNote(page, title);
+  await expect(
+    page.getByRole('button', { name: 'Remove from favourites' })
+  ).not.toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Home', exact: true }).click();
+  await expect(treeItem(page, title)).toBeVisible();
+});
+
+test('switching sources keeps the view switcher and main action in place', async ({
+  page
+}) => {
+  const nav = page.getByRole('navigation', { name: 'Primary' });
+  const sources = ['Home', 'Favourites', 'Shared', 'Trash'];
+  const navTops = async () =>
+    Promise.all(
+      sources.map(
+        async (name) =>
+          (await nav.getByRole('button', { name, exact: true }).boundingBox())!
+            .y
+      )
+    );
+  const atHome = await navTops();
+  const newNote = (await page
+    .getByRole('button', { name: 'New note', exact: true })
+    .boundingBox())!;
+  for (const source of sources) {
+    await nav.getByRole('button', { name: source, exact: true }).click();
+    expect(await navTops(), source).toEqual(atHome);
+    if (source === 'Shared') {
+      // Signed out, the row leads to an account instead of standing empty.
+      const signIn = (await page
+        .getByRole('button', { name: 'Sign in to share', exact: true })
+        .boundingBox())!;
+      expect(signIn.height).toBe(newNote.height);
+      expect(signIn.y).toBe(newNote.y);
+    }
+  }
+  // Trash is selected last: its one action matches the New note button.
+  const emptyTrash = (await page
+    .getByRole('button', { name: 'Empty trash', exact: true })
+    .boundingBox())!;
+  expect(emptyTrash.height).toBe(newNote.height);
+  expect(emptyTrash.y).toBe(newNote.y);
+});
+
 test('moves a note to trash and restores it', async ({ page }) => {
   const title = `Trash restore ${Date.now()}`;
   const tab = page.locator('.dv-tabs-container > .dv-tab', { hasText: title });

@@ -5,11 +5,11 @@ import { fileURLToPath } from 'node:url';
 
 const [mode, action = 'dev', ...extra] = process.argv.slice(2);
 if (
-  !['normal', 'fixtures', 'qa'].includes(mode) ||
+  !['normal', 'fixtures', 'qa', 'demo'].includes(mode) ||
   !['dev', 'build'].includes(action)
 )
   throw new Error(
-    'Usage: node scripts/browser/run.mjs normal|fixtures|qa dev|build [--skip-wasm] [Vite arguments]'
+    'Usage: node scripts/browser/run.mjs normal|fixtures|qa|demo dev|build [--skip-wasm] [Vite arguments]'
   );
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const testId = mode === 'qa' ? process.env.VITE_BROWSER_TEST_VAULT || 'qa' : '';
@@ -20,7 +20,12 @@ if (testId && !/^[a-z0-9][a-z0-9-]{0,47}$/.test(testId))
 const env = {
   ...process.env,
   VITE_BROWSER_MOCKS: mode === 'fixtures' ? '1' : '0',
-  VITE_BROWSER_TEST_VAULT: testId
+  VITE_BROWSER_TEST_VAULT: testId,
+  VITE_BROWSER_DEMO: mode === 'demo' ? '1' : '0',
+  BROWSER_BASE_PATH:
+    mode === 'demo'
+      ? (process.env.BROWSER_BASE_PATH ?? '/mindstream-notes')
+      : ''
 };
 let child;
 let stopping;
@@ -81,11 +86,13 @@ if (built && !stopping) {
     'bin/vite.js'
   );
   console.log(
-    mode === 'qa'
-      ? `Browser QA vault: ${testId}. Use Reset test data for a seeded start.`
-      : mode === 'fixtures'
-        ? 'Browser UI fixtures: note changes are discarded on reload.'
-        : 'Storage mode: persistent.'
+    mode === 'demo'
+      ? 'Web demo: edits stay in this browser. Reset demo restores the sample notes.'
+      : mode === 'qa'
+        ? `Browser QA vault: ${testId}. Use Reset test data for a seeded start.`
+        : mode === 'fixtures'
+          ? 'Browser UI fixtures: note changes are discarded on reload.'
+          : 'Storage mode: persistent.'
   );
   await run([
     vite,

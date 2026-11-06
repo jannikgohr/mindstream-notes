@@ -12,6 +12,9 @@
     Share2,
     Trash2
   } from '@lucide/svelte';
+  import { authSession } from '$lib/api/auth.svelte';
+  import FileTreeSharedActions from './FileTreeSharedActions.svelte';
+  import { shareNewFolder } from './new-shared-folder';
   import FavouriteStar from './FavouriteStar.svelte';
   import NoteKindIcon from './NoteKindIcon.svelte';
   import { pluginToolbarButtons } from '$lib/plugins/registry.svelte';
@@ -32,7 +35,10 @@
   import SortControl from './SortControl.svelte';
   import VaultSwitcher from './VaultSwitcher.svelte';
   import FileTreeCreateToolbar from './FileTreeCreateToolbar.svelte';
-  import type { CoreFileTreeActionId } from './file-tree-toolbar-preferences';
+  import {
+    FILE_TREE_MAIN_ACTION_CLASS,
+    type CoreFileTreeActionId
+  } from './file-tree-toolbar-preferences';
   import {
     expandedFoldersToSave,
     loadExpandedFolders,
@@ -165,6 +171,10 @@
   // create a new shared root, and a root drop = pulling an item out of its share
   // into your vault, which is out of scope here).
   const canCreate = $derived(source === 'home');
+  // Favourites can create notes too, at the vault root, favourited on
+  // creation so they land in the list being looked at. Folders can't be
+  // favourited, so that view offers note types only.
+  const canCreateNotes = $derived(source === 'home' || source === 'favourites');
   const canReorganize = $derived(source === 'home');
   // Dropped PDFs import into the folder under the pointer, in Home only: the
   // other views fall through to the window-level import at the vault root.
@@ -203,7 +213,10 @@
   /** Can a new note/folder be created inside `parentId`? */
   function canStartDraft(parentId: string | null): boolean {
     if (source === 'home') return true;
+    if (source === 'favourites') return parentId === null;
     if (source !== 'shared') return false;
+    // The root of Shared takes one thing: a new folder to share.
+    if (parentId === null) return !!authSession.current;
     return (
       parentId !== null &&
       sharedFolderIsEditable(parentId, tree.collectionsById)
@@ -265,7 +278,14 @@
     if (!canStartDraft(parentId)) return;
     if (parentId) expanded[parentId] = true;
     const text = defaultDraftText(kind);
-    draft = { kind, parentId, text, initialText: text };
+    draft = {
+      kind,
+      parentId,
+      text,
+      initialText: text,
+      favourite: source === 'favourites' || undefined,
+      share: (source === 'shared' && parentId === null) || undefined
+    };
   }
   // Name-first creation of a plugin-template note (e.g. a Typst document): seed
   // the inline draft with the template's default title, then render + create on
@@ -290,9 +310,11 @@
       }
     };
   }
+  let pdfImportFavourite = false;
   function startPdfImport(parentId: string | null) {
     if (!canStartDraft(parentId)) return;
     pdfImportParentId = parentId;
+    pdfImportFavourite = source === 'favourites';
     if (pdfInput) pdfInput.value = '';
     pdfInput?.click();
   }
@@ -303,6 +325,7 @@
     if (!file) return;
     const id = await importPdfIn(pdfImportParentId, file);
     pdfImportParentId = null;
+    if (pdfImportFavourite) await setNoteFavourite(id, true);
     onOpenNote(id);
   }
   function cancelDraft() {
@@ -315,7 +338,7 @@
       draft = null;
       return;
     }
-    const { kind, parentId, template } = draft;
+    const { kind, parentId, template, favourite, share } = draft;
     draft = null;
     if (template) {
       // The template renderer creates the note (of its plugin note kind) with
@@ -331,9 +354,11 @@
     const noteKind = draftKindToNoteKind(kind);
     if (noteKind) {
       const id = await createNoteIn(parentId, text, noteKind);
+      if (favourite) await setNoteFavourite(id, true);
       onOpenNote(id);
     } else {
-      await createCollectionIn(parentId, text);
+      const id = await createCollectionIn(parentId, text);
+      if (share) shareNewFolder(id, text);
     }
   }
   function onDraftKey(e: KeyboardEvent) {
@@ -910,11 +935,14 @@
   oncontextmenu={(e) => openMenu(e, { kind: 'root' })}
 >
   <div class="px-3 pb-1 pt-2"><VaultSwitcher /></div>
-  <div class="flex shrink-0 items-center gap-1 px-3 pb-3 pt-1">
-    {#if canCreate}
+  <!-- Fixed height: each view puts a different action here, or none, and
+       the navigation below must not move when the view changes. -->
+  <div class="flex h-12 shrink-0 items-center gap-1 px-3 pb-3 pt-1">
+    {#if canCreateNotes}
       <FileTreeCreateToolbar
         pluginButtons={pluginToolbarButtons('file-tree')}
         onCreate={runCreateToolbarAction}
+        notesOnly={source === 'favourites'}
       />
     {:else if source === 'trash'}
       <Button
@@ -923,8 +951,7 @@
         onclick={() => void startEmptyTrash()}
         disabled={trashItemCount === 0 || emptyTrashPending}
         title={tUi('fileTree.emptyTrash')}
-        aria-label={tUi('fileTree.emptyTrash')}
-        class="relative h-7 shrink-0 overflow-hidden px-2 text-xs text-destructive hover:text-destructive"
+        class="{FILE_TREE_MAIN_ACTION_CLASS} relative overflow-hidden text-destructive hover:text-destructive"
       >
         {#if emptyTrashAnimation > 0}
           {#key emptyTrashAnimation}
@@ -941,8 +968,12 @@
           {/key}
         {/if}
         <Trash2 class="size-3.5" />
-        Empty
+        <span class="min-w-0 truncate">{tUi('fileTree.emptyTrash')}</span>
       </Button>
+    {:else if source === 'shared'}
+      <FileTreeSharedActions
+        onNewSharedFolder={() => startDraft('folder', null)}
+      />
     {/if}
   </div>
 
@@ -1024,7 +1055,7 @@
       {@render renderNode(node)}
     {/each}
 
-    {#if canCreate && draft && draft.parentId === null}
+    {#if (canCreateNotes || source === 'shared') && draft && draft.parentId === null}
       {@render renderDraft()}
     {/if}
   </div>
@@ -1040,8 +1071,9 @@
 
 {#snippet renderDraft()}
   {@const kind = draft?.kind ?? 'note'}
-  {@const placeholder =
-    kind === 'folder'
+  {@const placeholder = draft?.share
+    ? tUi('sharing.newFolder.action')
+    : kind === 'folder'
       ? tUi('fileTree.newFolder')
       : kind === 'drawing'
         ? tUi('fileTree.newDrawing')

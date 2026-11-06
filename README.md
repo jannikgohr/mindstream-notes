@@ -25,6 +25,26 @@ this repository, so you run it yourself.
 The desktop app runs on Windows, Linux and macOS. Android is a work in progress.
 The project is under active development, so expect sharp edges.
 
+## Web demo
+
+[Try the web demo](https://jannikgohr.github.io/mindstream-notes/) without installing
+anything. Edit the sample notes or create your own. Notes stay in your browser;
+clearing browser data removes them. Reset demo deletes the demo vault and restores
+the samples. Sync and desktop features require the installed app.
+
+To run the demo locally, use `pnpm dev:demo` and open
+`http://localhost:1421/mindstream-notes/`. `pnpm build:demo` builds the Rust/WASM
+storage module and writes the static site to `.output/build`. See [browser build prerequisites](docs/internal/browser-support.md#run-the-browser-app)
+for the required Rust/WASM tools. `pnpm test:demo` tests that build under the
+Pages subpath, including editing, reloading, and resetting.
+
+The Web demo workflow builds and tests the published release tag, then deploys
+it to GitHub Pages. It runs only when a release is published.
+In the repository's **Settings > Pages**, set **Source** to **GitHub Actions**.
+The default base path is `/mindstream-notes`; set `BROWSER_BASE_PATH` when building
+for a different repository path or use an empty value for a custom domain.
+Demo storage is isolated from the normal browser vault and browser QA vaults.
+
 ## Features
 
 - **Several kinds of note.** Markdown with WYSIWYG, source and split views,
