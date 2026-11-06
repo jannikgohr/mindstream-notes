@@ -124,6 +124,7 @@
   import FindBar from './FindBar.svelte';
   import EditorToolbar from './editor-toolbar/EditorToolbar.svelte';
   import MobileEditorToolbar from './editor-toolbar/MobileEditorToolbar.svelte';
+  import NoteInlineTitle from './note-editor/NoteInlineTitle.svelte';
   import TrashBanner from './note-editor/TrashBanner.svelte';
   import ViewOnlyBanner from './note-editor/ViewOnlyBanner.svelte';
   import WikilinkMenu from './note-editor/WikilinkMenu.svelte';
@@ -250,6 +251,19 @@
   // a plain `let` would make the child see a stale `null` after mount.
   let crepe: Crepe | null = $state(null);
   let crepeReady = $state(false);
+
+  /** Enter in the inline title continues typing at the start of the body. */
+  function focusBodyStart() {
+    crepe?.editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      view.dispatch(
+        view.state.tr
+          .setSelection(ProseSelection.atStart(view.state.doc))
+          .scrollIntoView()
+      );
+      view.focus();
+    });
+  }
   // Drives both the Crepe feature config (drop the block-handle + slash
   // menu) and a wrapper class app.css uses to zero out the editor's
   // horizontal padding on small screens. Resolved in onMount because
@@ -1857,10 +1871,20 @@
           ? 'hidden'
           : ''} {viewMode === 'split' ? 'w-1/2' : 'w-full'}"
       >
+        {#if !mobile}
+          <div class="mx-auto max-w-3xl">
+            <NoteInlineTitle
+              {noteId}
+              readonly={isReadOnly}
+              onEnter={focusBodyStart}
+            />
+          </div>
+        {/if}
         <div
           bind:this={host}
           class="mx-auto min-h-full max-w-3xl"
           class:mobile-editor={mobile}
+          class:has-inline-title={!mobile}
           class:wikilink-open-on-click={wikilinkOpenOnClick}
         ></div>
       </div>
