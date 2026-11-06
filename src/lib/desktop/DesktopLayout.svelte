@@ -20,6 +20,8 @@
   import { FilePlus, FileText, Search } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { openSearch } from '$lib/search/store.svelte';
+  import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
+  import NoteKindIcon from '$lib/components/NoteKindIcon.svelte';
   import TopBar from './DesktopTopBar.svelte';
   import LazyFileExplorer from '$lib/components/LazyFileExplorer.svelte';
   import LazyNoteSidebar from '$lib/components/LazyNoteSidebar.svelte';
@@ -835,6 +837,14 @@
     };
   });
 
+  /** The last edited notes, offered on the empty workspace. */
+  const recentNotes = $derived(
+    Object.values(tree.notesById)
+      .filter((note) => !note.trashed)
+      .sort((a, b) => b.modified.localeCompare(a.modified))
+      .slice(0, 6)
+  );
+
   // Same path as the New Markdown note hotkey: a note at the vault root.
   function createNote() {
     void import('$lib/hotkeys/create-root-note')
@@ -1001,7 +1011,9 @@
           <div
             class="pointer-events-none absolute inset-0 flex items-center justify-center p-6"
           >
-            <section class="pointer-events-auto max-w-md px-6 py-7 text-center">
+            <section
+              class="pointer-events-auto flex max-w-md flex-col items-center px-6 py-7 text-center"
+            >
               <FileText class="mx-auto size-8 text-muted-foreground" />
               <h2 class="mt-4 text-lg font-semibold">
                 {tUi('desktop.emptyState.title')}
@@ -1024,6 +1036,41 @@
                   {tUi('search.open')}
                 </Button>
               </div>
+              {#if recentNotes.length > 0}
+                <div class="mt-8 w-80 text-left">
+                  <h3
+                    class="px-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
+                  >
+                    {tUi('desktop.emptyState.recent')}
+                  </h3>
+                  <ul class="mt-2 flex flex-col">
+                    {#each recentNotes as note (note.id)}
+                      {@const folder = note.parent_collection_id
+                        ? tree.collectionsById[note.parent_collection_id]?.name
+                        : undefined}
+                      <li>
+                        <button
+                          type="button"
+                          class="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm transition-colors hover:bg-accent"
+                          onclick={() => requestOpenNote(note.id)}
+                        >
+                          <NoteKindIcon
+                            kind={note.note_kind}
+                            class="size-4 shrink-0 text-muted-foreground"
+                          />
+                          <span class="min-w-0 flex-1 truncate"
+                            >{note.title}</span
+                          >
+                          {#if folder}<span
+                              class="max-w-28 shrink-0 truncate text-xs text-muted-foreground"
+                              >{folder}</span
+                            >{/if}
+                        </button>
+                      </li>
+                    {/each}
+                  </ul>
+                </div>
+              {/if}
             </section>
           </div>
         {/if}
