@@ -266,12 +266,6 @@
         ? first.textContent
         : '';
   }
-  const sameTitle = (a: string, b: string) =>
-    a.trim().toLocaleLowerCase() === b.trim().toLocaleLowerCase();
-  const showInlineTitle = $derived(
-    !mobile && !sameTitle(leadingHeading, tree.notesById[noteId]?.title ?? '')
-  );
-
   /** Enter in the inline title continues typing at the start of the body. */
   function focusBodyStart() {
     crepe?.editor.action((ctx) => {
@@ -289,6 +283,11 @@
   // horizontal padding on small screens. Resolved in onMount because
   // isMobile() reads navigator.userAgent — unavailable during SSR.
   let mobile = $state(false);
+  const sameTitle = (a: string, b: string) =>
+    a.trim().toLocaleLowerCase() === b.trim().toLocaleLowerCase();
+  const showInlineTitle = $derived(
+    !mobile && !sameTitle(leadingHeading, tree.notesById[noteId]?.title ?? '')
+  );
   // --- View mode (WYSIWYG / Source / Split) ---------------------------------
   // Seeded from the editor.defaultMode setting in onMount. All three modes are
   // available on every platform; only Split carries a constraint, and it's a
