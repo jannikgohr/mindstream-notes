@@ -98,7 +98,7 @@
      floating over the page instead of covering a line. -->
 <div
   aria-hidden="true"
-  class="pointer-events-none fixed inset-x-0 bottom-0 z-20 bg-gradient-to-t from-editor-surface from-70% to-transparent"
+  class="pointer-events-none fixed inset-x-0 bottom-0 z-20 bg-gradient-to-t from-editor-surface from-50% to-transparent"
   style="height: calc({bottomOffset +
     toolbarHeight +
     FLOAT_GAP_PX * 2 +
