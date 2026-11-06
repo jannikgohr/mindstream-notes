@@ -10,7 +10,6 @@
   } from '@jis3r/icons';
   import CuedIcon from '$lib/components/icons/CuedIcon.svelte';
   import { Button } from '$lib/components/ui/button';
-  import { Separator } from '$lib/components/ui/separator';
   import ThemeToggle from '$lib/components/ThemeToggle.svelte';
   import VaultSwitcher from '$lib/components/VaultSwitcher.svelte';
   import WindowControls from '$lib/components/WindowControls.svelte';
@@ -149,8 +148,7 @@
     </Button>
 
     {#if customDecorations}
-      <Separator orientation="vertical" class="mx-1 h-5" />
-      <WindowControls />
+      <WindowControls separated />
     {/if}
   </div>
 {/snippet}
