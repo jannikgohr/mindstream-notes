@@ -93,9 +93,11 @@ describe('worker close bridge', () => {
         protocol: 2
       })
     );
+    // Only this window's notices: a popout's close must not freeze the rest.
     expect(mocks.listen).toHaveBeenCalledWith(
       'vault-worker-close',
-      expect.any(Function)
+      expect.any(Function),
+      { thisWindow: true }
     );
     stop();
     await vi.waitFor(() =>

@@ -184,7 +184,7 @@ pub fn dispatch(conn: &mut Connection, request: VaultRequest) -> AppResult<Value
             items,
             Some(collections::TRASH_ID.into()),
         )?),
-        RestoreMany { items } => result(tree_batch::move_many_items(conn, items, None)?),
+        RestoreMany { items } => result(tree_batch::restore_many_items(conn, items)?),
         PurgeMany { items } => result(tree_batch::purge_many_items(conn, items)?),
         UploadDrawingAsset { input } => result(assets::upload(conn, input)?),
         FetchDrawingAsset { id } => result(assets::load(conn, &id)?),

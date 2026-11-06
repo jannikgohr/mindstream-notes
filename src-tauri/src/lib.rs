@@ -251,6 +251,11 @@ pub fn run() {
                     api.prevent_close();
                     return;
                 }
+                if window.label().starts_with("note_") {
+                    api.prevent_close();
+                    worker_shutdown::request_window_close(window);
+                    return;
+                }
             }
             if matches!(event, tauri::WindowEvent::Focused(true)) {
                 vault_supervisor::window_focused(window.app_handle(), window.label());
@@ -274,12 +279,8 @@ pub fn run() {
                             webview_memory::sync_to_visibility(app_handle);
                             return;
                         }
-                        if app_handle.try_state::<vault_supervisor::Worker>().is_some() {
-                            api.prevent_close();
-                            worker_shutdown::request_close(app_handle);
-                        } else {
-                            app_handle.exit(0);
-                        }
+                        api.prevent_close();
+                        worker_shutdown::request_close(app_handle);
                     }
                     tauri::WindowEvent::Destroyed => {
                         let app_handle = window.app_handle();
@@ -416,6 +417,9 @@ pub fn run() {
                 if role == vault_runtime::Role::Host {
                     return vault_supervisor::start_host(app).map_err(Into::into);
                 }
+                if role == vault_runtime::Role::Direct {
+                    app.manage(worker_shutdown::Shutdown::default());
+                }
                 if matches!(role, vault_runtime::Role::Worker { .. }) {
                     vault_supervisor::authorize_worker(app.handle(), &role)?;
                 }
@@ -431,8 +435,8 @@ pub fn run() {
                 let ownership = profiles::resolve_worker(&app_data_root, &id)?;
                 (id, ownership)
             } else {
-                match profiles::dir_override() {
-                    Some((id, dir)) => {
+                let direct = match profiles::dir_override() {
+                    Some((id, dir)) => (|| {
                         // Only dev and e2e builds honour the override. Their
                         // harness restarts the app straight after killing it,
                         // so the old process can still hold the vault here.
@@ -442,9 +446,32 @@ pub fn run() {
                         )?;
                         let _root_lock = storage_locks::RootLock::acquire(&app_data_root)?;
                         profiles::reconcile_root_locked(&app_data_root)?;
-                        (id, storage_locks::VaultLock::acquire(&dir)?)
+                        Ok((id, storage_locks::VaultLock::acquire(&dir)?))
+                    })(),
+                    None => profiles::resolve_startup(&app_data_root),
+                };
+                match direct {
+                    Ok(resolved) => resolved,
+                    // Another process has this vault open. Only a direct
+                    // process gets here, which only dev and test builds on
+                    // data of their own run: a supervised launch hands over
+                    // to the running app instead. Say so and stop, rather
+                    // than fail the setup hook, which panics.
+                    Err(error) if storage_locks::VaultLock::is_busy_error(&error) => {
+                        let message = format!(
+                            "{error}. This build runs without handing over to the \
+                             process that has it open; close that one first, or \
+                             start both with --supervised-vaults."
+                        );
+                        log::error!("[boot] {message}");
+                        eprintln!("Mindstream Notes: {message}");
+                        // Nothing is open yet. An exit requested from setup
+                        // loses its code, so leave directly, as Tauri does
+                        // when a request fails.
+                        app.handle().cleanup_before_exit();
+                        std::process::exit(1);
                     }
-                    None => profiles::resolve_startup(&app_data_root)?,
+                    Err(error) => return Err(error.into()),
                 }
             };
             log::info!("[boot] active profile = {active_id}");
@@ -948,6 +975,16 @@ pub fn run() {
     };
 
     app.run(|app, event| {
+        #[cfg(desktop)]
+        if let tauri::RunEvent::ExitRequested {
+            api, code: None, ..
+        } = &event
+        {
+            if app.try_state::<worker_shutdown::Shutdown>().is_some() {
+                api.prevent_exit();
+                vault_supervisor::request_quit(app);
+            }
+        }
         #[cfg(desktop)]
         if app
             .try_state::<vault_runtime::Role>()
