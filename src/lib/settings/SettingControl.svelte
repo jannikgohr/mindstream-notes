@@ -177,8 +177,8 @@
     {#if setting.type === 'radio'}
       {@const s = setting as SelectSetting}
       <!-- One segmented track: the options share a border and the chosen one
-           is raised out of it in the brand accent, so the choice reads as
-           state in both themes. -->
+           is filled with a brand tint, so the choice reads as state in both
+           themes rather than as a focus ring. -->
       <div
         class="mt-2 inline-flex flex-wrap gap-0.5 rounded-md border border-border bg-muted p-0.5"
       >
@@ -195,7 +195,7 @@
             aria-pressed={value === opt}
             class="rounded-[calc(var(--radius)-4px)] px-3 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 {value ===
             opt
-              ? 'bg-background font-medium text-accent-brand shadow-sm ring-1 ring-accent-brand/40'
+              ? 'bg-accent-brand/15 font-medium text-accent-brand shadow-sm'
               : 'text-muted-foreground hover:text-foreground'}"
             onclick={() => commit(opt)}
           >
