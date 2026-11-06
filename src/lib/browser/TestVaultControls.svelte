@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { isBrowserDemo } from './demo';
   import { browserTestVaultId } from './testing';
   import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
 
@@ -20,7 +21,7 @@
   }
 </script>
 
-{#if id}
+{#if id && !isBrowserDemo()}
   <aside
     aria-label={tUi('browser.testing.label')}
     class="fixed bottom-4 left-1/2 z-500 flex max-w-[95vw] -translate-x-1/2 flex-wrap items-center gap-2 rounded-lg border border-border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-lg"

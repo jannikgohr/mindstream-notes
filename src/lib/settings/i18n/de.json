@@ -1,6 +1,13 @@
 {
   "language": "de",
   "ui": {
+    "browser.demo.label": "Web-Demo",
+    "browser.demo.notice": "Notizen bleiben in diesem Browser. Beim Löschen der Browserdaten gehen sie verloren. Synchronisation und Desktop-Funktionen erfordern die installierte App.",
+    "browser.demo.download": "App herunterladen",
+    "browser.demo.reset": "Demo zurücksetzen",
+    "browser.demo.resetting": "Demo wird zurückgesetzt…",
+    "browser.demo.confirm": "Demo zurücksetzen? Alle Notizen und Anhänge dieses Demo-Tresors werden gelöscht und die Beispielnotizen wiederhergestellt.",
+    "browser.demo.failed": "Die Demo konnte nicht zurückgesetzt werden. Schließe andere Demo-Tabs und versuche es erneut.",
     "browser.testing.label": "Browsertests",
     "browser.testing.vault": "Test-Tresor: {id}",
     "browser.testing.reset": "Testdaten zurücksetzen",

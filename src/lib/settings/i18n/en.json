@@ -1,6 +1,13 @@
 {
   "language": "en",
   "ui": {
+    "browser.demo.label": "Web demo",
+    "browser.demo.notice": "Notes stay in this browser. Clearing browser data removes them. Sync and desktop features require the installed app.",
+    "browser.demo.download": "Download the app",
+    "browser.demo.reset": "Reset demo",
+    "browser.demo.resetting": "Resetting demo…",
+    "browser.demo.confirm": "Reset the demo? This deletes all notes and attachments in this demo vault and restores the sample notes.",
+    "browser.demo.failed": "Could not reset the demo. Close other demo tabs and try again.",
     "browser.testing.label": "Browser testing",
     "browser.testing.vault": "Test vault: {id}",
     "browser.testing.reset": "Reset test data",
