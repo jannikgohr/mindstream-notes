@@ -76,6 +76,19 @@
         <p class="min-w-0 flex-1 whitespace-pre-line text-sm">
           {toast.message}
         </p>
+        {#if toast.action}
+          {@const action = toast.action}
+          <button
+            type="button"
+            class="-my-0.5 shrink-0 rounded-md px-1.5 py-0.5 text-sm font-medium text-primary hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onclick={() => {
+              dismissToast(toast.id);
+              action.run();
+            }}
+          >
+            {action.label}
+          </button>
+        {/if}
         {#if toast.dismissible}
           <button
             type="button"

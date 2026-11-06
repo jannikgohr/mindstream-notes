@@ -422,6 +422,10 @@ body {
   transform: translateY(0) scale(1);
 }
 
+.ms-tooltip-instant {
+  transition: none;
+}
+
 /* `html.reduce-motion` carries the *resolved* motion preference (app
  * setting folded with the OS `prefers-reduced-motion` query — see
  * src/lib/reduce-motion.svelte.ts), so it is the only gate CSS needs:
@@ -981,6 +985,15 @@ body.dv-tab-dragging
 body.dv-tab-dragging .freeform-canvas-host,
 body.dv-tab-dragging .freeform-canvas-host * {
   pointer-events: none !important;
+}
+
+/* Excalidraw paints laser and eraser trails on a viewport-sized
+   `position: fixed` layer, which escapes every `overflow` ancestor.
+   clip-path also clips fixed descendants, so trails stop at the canvas edge
+   instead of crossing the app chrome. Its modals and tooltips portal to
+   <body> and are unaffected. */
+.freeform-canvas-host {
+  clip-path: inset(0);
 }
 
 .freeform-excalidraw-host.reduce-motion *,

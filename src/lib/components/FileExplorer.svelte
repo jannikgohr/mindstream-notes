@@ -45,9 +45,9 @@
     renameCollection,
     renameNote,
     setNoteFavourite,
-    stopSharingCollection,
-    trashNote
+    stopSharingCollection
   } from '$lib/stores/tree.svelte';
+  import { trashWithUndo } from './trash-with-undo';
   import { setSortDirection, setSortStrategy, ui } from '$lib/state.svelte';
   import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
   import type { TreeNode } from '$lib/api';
@@ -190,7 +190,6 @@
   let emptyTrashPending = $state(false);
   let emptyTrashAnimation = $state(0);
   let emptyTrashParticleCount = $state(0);
-  let deleteConfirmId = $state<string | null>(null);
   let explorerRoot = $state<HTMLElement | null>(null);
   let selectedKeys = $state<SelectionKey[]>([]);
   let selectionAnchor = $state<SelectionKey | null>(null);
@@ -474,19 +473,6 @@
         emptyTrashPending = false;
       }
     }
-  }
-
-  function startDelete(id: string) {
-    deleteConfirmId = id;
-  }
-
-  function cancelDelete() {
-    deleteConfirmId = null;
-  }
-
-  async function commitDelete(id: string) {
-    deleteConfirmId = null;
-    await trashNote(id);
   }
 
   async function leaveShared(id: string) {
@@ -1184,39 +1170,15 @@
         </button>
       {/if}
       {#if canDelete}
-        {#if deleteConfirmId === node.id}
-          <div class="flex shrink-0 items-center gap-1 pl-1">
-            <Button
-              variant="destructive"
-              size="sm"
-              class="h-7 px-2 text-xs"
-              onclick={() => void commitDelete(node.id)}
-            >
-              {tUi('fileTree.deleteTrash.confirm')}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              class="h-7 px-2 text-xs"
-              onclick={cancelDelete}
-            >
-              {tUi('fileTree.delete.cancel')}
-            </Button>
-          </div>
-        {:else}
-          <button
-            type="button"
-            class="shrink-0 rounded p-1 text-muted-foreground transition-opacity hover:text-destructive {deleteConfirmId ===
-            node.id
-              ? 'opacity-100'
-              : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'}"
-            onclick={() => startDelete(node.id)}
-            use:tooltip={tUi('fileTree.delete')}
-            aria-label={tUi('fileTree.delete')}
-          >
-            <Trash2 size={14} />
-          </button>
-        {/if}
+        <button
+          type="button"
+          class="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+          onclick={() => void trashWithUndo([{ kind: 'note', id: node.id }])}
+          use:tooltip={tUi('fileTree.delete')}
+          aria-label={tUi('fileTree.delete')}
+        >
+          <Trash2 size={14} />
+        </button>
       {/if}
     </div>
   {/if}

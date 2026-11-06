@@ -21,6 +21,10 @@
   import { onDestroy, onMount } from 'svelte';
   import { parsePageRange } from './pdf-import';
   import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
+  import {
+    createEdgeAutoScroll,
+    type EdgeAutoScroll
+  } from '$lib/edge-auto-scroll';
   import type { PageImageProgress } from './page-images';
   let {
     pages,
@@ -92,19 +96,25 @@
   let dragging = $state<string | null>(null);
   let dropIndex = $state<number | null>(null);
   let dragPointer: number | null = null;
+  let dragClient = { x: 0, y: 0 };
+  let dragAutoScroll: EdgeAutoScroll | null = null;
   function startDrag(event: PointerEvent, id: string) {
     if (disabled || busy || event.button !== 0) return;
     event.preventDefault();
     dragging = id;
     dragPointer = event.pointerId;
     dropIndex = pages.findIndex((p) => p.id === id);
+    dragAutoScroll = createEdgeAutoScroll(list, 'y', updateDropIndex);
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
   }
   function dragMove(event: PointerEvent) {
     if (event.pointerId !== dragPointer || !dragging || !list) return;
-    const bounds = list.getBoundingClientRect();
-    if (event.clientY < bounds.top + 40) list.scrollTop -= 18;
-    else if (event.clientY > bounds.bottom - 40) list.scrollTop += 18;
+    dragClient = { x: event.clientX, y: event.clientY };
+    dragAutoScroll?.update(event.clientX, event.clientY);
+    updateDropIndex();
+  }
+  function updateDropIndex() {
+    if (!dragging || !list) return;
     const cards = Array.from(
       list.querySelectorAll<HTMLElement>('[data-page-card]')
     );
@@ -113,8 +123,8 @@
     cards.forEach((card, i) => {
       const rect = card.getBoundingClientRect();
       const d =
-        (event.clientX - rect.left - rect.width / 2) ** 2 +
-        (event.clientY - rect.top - rect.height / 2) ** 2;
+        (dragClient.x - rect.left - rect.width / 2) ** 2 +
+        (dragClient.y - rect.top - rect.height / 2) ** 2;
       if (d < distance) {
         distance = d;
         nearest = i;
@@ -124,6 +134,8 @@
   }
   function endDrag(event: PointerEvent, cancelled = false) {
     if (event.pointerId !== dragPointer) return;
+    dragAutoScroll?.stop();
+    dragAutoScroll = null;
     if (!cancelled && dragging && dropIndex !== null && !disabled && !busy)
       move(dragging, dropIndex);
     dragging = null;
@@ -193,6 +205,7 @@
   });
   onDestroy(() => {
     disposed = true;
+    dragAutoScroll?.stop();
     thumbnails.destroy();
     void source?.destroy().catch(console.warn);
   });
