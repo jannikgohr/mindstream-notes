@@ -1112,10 +1112,12 @@
       <ChevronRight
         class={`size-3.5 shrink-0 transition-transform ${expanded[node.id] ? 'rotate-90' : ''}`}
       />
+      <!-- Folders carry a soft brand tint so the tree's structure reads at a
+           glance; notes stay neutral apart from their kind colour. -->
       {#if expanded[node.id]}
-        <FolderOpen class="size-3.5 shrink-0 text-muted-foreground" />
+        <FolderOpen class="size-3.5 shrink-0 text-accent-brand/80" />
       {:else}
-        <Folder class="size-3.5 shrink-0 text-muted-foreground" />
+        <Folder class="size-3.5 shrink-0 text-accent-brand/80" />
       {/if}
       {#if renaming}
         {@render renderRenameInput()}

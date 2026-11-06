@@ -330,7 +330,11 @@
                     ? 'bg-accent text-accent-foreground'
                     : 'text-foreground hover:bg-accent/60'}"
                 >
-                  <Icon class="size-3.5 shrink-0 text-muted-foreground" />
+                  <Icon
+                    class="size-3.5 shrink-0 {showingPluginOverview
+                      ? 'text-accent-brand'
+                      : 'text-muted-foreground'}"
+                  />
                   <span class="truncate">{tLabel('categories', cat.id)}</span>
                 </button>
                 {#if children.length > 0}
@@ -384,7 +388,13 @@
                   ? 'bg-accent text-accent-foreground'
                   : 'text-foreground hover:bg-accent/60'}"
               >
-                <Icon class="size-3.5 shrink-0 text-muted-foreground" />
+                <!-- The chosen category's icon carries the brand accent; the
+                     row wash stays neutral. -->
+                <Icon
+                  class="size-3.5 shrink-0 {isActive
+                    ? 'text-accent-brand'
+                    : 'text-muted-foreground'}"
+                />
                 <span class="truncate">{tLabel('categories', cat.id)}</span>
               </button>
             {/if}

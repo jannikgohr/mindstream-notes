@@ -33,6 +33,7 @@ import {
 } from '@lucide/svelte';
 import { isKnownNoteKind } from '$lib/api/notes';
 import type { IconComponent } from '$lib/settings/icons';
+import type { NamedColor } from '$lib/settings/theme-presets';
 
 // Lucide's exported components are widened to `Component<any>` for the
 // same reason `SETTINGS_ICONS` does it — see the comment there. We only
@@ -66,6 +67,28 @@ export function noteKindIcon(kind: string | null | undefined): IconComponent {
       return SQUARE_KANBAN;
     default:
       return FILE_QUESTION;
+  }
+}
+
+/**
+ * The named colour a kind's glyph is drawn in, so a drawing or a PDF stands
+ * out in a list of notes. Markdown, the common case, stays neutral, and so
+ * does a kind this version doesn't know.
+ */
+export function noteKindColor(
+  kind: string | null | undefined
+): NamedColor | null {
+  switch (kind) {
+    case 'freeform':
+      return 'orange';
+    case 'ink':
+      return 'teal';
+    case 'pdf':
+      return 'red';
+    case 'kanban':
+      return 'green';
+    default:
+      return null;
   }
 }
 
