@@ -748,7 +748,7 @@ describe('T4 sharing a folder', function () {
     await browserA.reloadSession();
     await browserA.$('aria/Welcome').waitForDisplayed({ timeout: 30_000 });
     A = clientHelpers(browserA);
-    await A.click(SHARED_FOLDER);
+    await A.openFolder(SHARED_FOLDER);
     await A.click(title);
     await waitForCanvas(browserA);
     await pasteOnCanvas(browserA, [
@@ -777,7 +777,7 @@ describe('T4 sharing a folder', function () {
     B = clientHelpers(browserB);
     await syncClient(browserB);
     await selectTreeSource(browserB, 'Shared');
-    await B.click(SHARED_FOLDER);
+    await B.openFolder(SHARED_FOLDER);
     await B.click(title);
     await waitForCanvas(browserB);
 
@@ -951,7 +951,7 @@ describe('T4 sharing a folder', function () {
     await syncClient(browserB);
     await selectTreeSource(browserB, 'Shared');
 
-    await B.click(SHARED_FOLDER);
+    await B.openFolder(SHARED_FOLDER);
     await expect(B.treeItem(sharedNoteTitle)).toBeDisplayed();
     await expect(B.treeItem(nestedFolderName)).toBeDisplayed();
     await B.click(nestedFolderName);
@@ -992,7 +992,7 @@ describe('T4 sharing a folder', function () {
     B = clientHelpers(browserB);
     await syncClient(browserB);
     await selectTreeSource(browserB, 'Shared');
-    await B.click(SHARED_FOLDER);
+    await B.openFolder(SHARED_FOLDER);
 
     await expect(B.treeItem(noteToMoveOut.title)).not.toBeDisplayed();
   });

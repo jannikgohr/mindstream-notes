@@ -33,6 +33,12 @@
   import VaultSwitcher from './VaultSwitcher.svelte';
   import FileTreeCreateToolbar from './FileTreeCreateToolbar.svelte';
   import type { CoreFileTreeActionId } from './file-tree-toolbar-preferences';
+  import {
+    expandedFoldersToSave,
+    loadExpandedFolders,
+    saveExpandedFolders
+  } from './file-tree-expansion';
+  import { profilesState } from '$lib/stores/profiles.svelte';
   import { sortTree } from '$lib/sort';
   import {
     tree,
@@ -109,6 +115,33 @@
   }: Props = $props();
 
   let expanded = $state<Record<string, boolean>>({});
+
+  // Open folders survive a restart. The saved list is read once the vault's
+  // settings have loaded, and merged so that a folder opened before then
+  // stays open. Saving waits for that read, or it would write over the list.
+  let expansionRestored = $state(false);
+  let lastSavedExpansion: string | null = null;
+  $effect(() => {
+    if (expansionRestored || !profilesState.loaded) return;
+    const saved = loadExpandedFolders();
+    for (const id of saved) expanded[id] = true;
+    lastSavedExpansion = JSON.stringify(saved);
+    expansionRestored = true;
+  });
+  $effect(() => {
+    if (!expansionRestored || !tree.ready) return;
+    const folders = new Set(Object.keys(tree.collectionsById));
+    const ids = expandedFoldersToSave(expanded, (id) => folders.has(id));
+    const value = JSON.stringify(ids);
+    if (value === lastSavedExpansion) return;
+    const timer = setTimeout(() => {
+      lastSavedExpansion = value;
+      saveExpandedFolders(ids).catch((err) =>
+        console.warn('[file-tree] saving open folders failed', err)
+      );
+    }, 300);
+    return () => clearTimeout(timer);
+  });
 
   const sortedTree = $derived(
     sortTree(
@@ -1080,7 +1113,12 @@
       class="flex min-h-8 w-full items-center gap-1.5 rounded-md px-2 py-1 text-left ring-offset-background hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       class:bg-accent={isOver || isSelected}
       class:opacity-60={drag?.kind === 'folder' && drag.id === node.id}
+      aria-expanded={expanded[node.id] === true}
       onclick={(e) => {
+        // The rename input sits inside this button. WebKit activates the
+        // button on a space typed into it, and a click there places the
+        // caret; neither is a click on the row.
+        if (renaming) return;
         const modified = selectNodeFromClick(e, node);
         if (!modified) toggleFolder(node.id);
       }}
@@ -1157,6 +1195,10 @@
         aria-current={ui.activeNoteId === node.id ? 'page' : undefined}
         class="flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1 text-left focus-visible:outline-none"
         onclick={(e) => {
+          // See the folder row: activation from the rename input is not a
+          // click on the row. Opening the note here would move focus away,
+          // to its own window when it is popped out, and end the rename.
+          if (renaming) return;
           const modified = selectNodeFromClick(e, node);
           if (!modified) onOpenNote(node.id);
         }}

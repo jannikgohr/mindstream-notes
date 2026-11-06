@@ -17,14 +17,21 @@
 
 import { isTauri } from '$lib/api/core';
 import { listen, TauriEventName } from '$lib/api/events';
-import { loadTree } from '$lib/stores/tree.svelte';
+import { applyNoteChange, loadTree } from '$lib/stores/tree.svelte';
 
 export function installSyncTreeRefreshBridge(): () => void {
   if (!isTauri()) return () => {};
   const unlisten = listen(TauriEventName.SyncCompleted, () => {
     void loadTree();
   });
+  // A rename or edit in a note window, or in the main window while a note
+  // window is open. Each window holds its own tree, so the others would
+  // keep the old title and `modified` stamp until a reload.
+  const unlistenNotes = listen(TauriEventName.NoteSummaryChanged, (change) => {
+    applyNoteChange(change);
+  });
   return () => {
     void unlisten.then((off) => off());
+    void unlistenNotes.then((off) => off());
   };
 }

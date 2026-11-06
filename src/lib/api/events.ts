@@ -1,7 +1,9 @@
 import {
   emit as tauriEmit,
+  emitTo as tauriEmitTo,
   listen as tauriListen
 } from '@tauri-apps/api/event';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 
 import type { SyncReport } from './sync';
 import { isTauri } from './core';
@@ -17,6 +19,8 @@ export enum TauriEventName {
   InvitationsChanged = 'invitations-changed',
   InviteLinkOpened = 'invite-link-opened',
   NativeMenuCommand = 'native-menu-command',
+  NoteSummaryChanged = 'note-summary-changed',
+  NoteWindowRequested = 'note-window-requested',
   OnboardingChanged = 'onboarding-changed',
   PluginsChanged = 'plugins-changed',
   SessionEnded = 'session-ended',
@@ -120,6 +124,18 @@ export type TauriEvents = {
    * (already-persisted) library when this fires. See stores/signatures.svelte.
    */
   'signatures-changed': null;
+  /**
+   * Fired by a window after it renamed a note or saved its body. Note
+   * windows keep their own copy of the tree, so the others patch the
+   * note's title and `modified` stamp from this. See stores/tree.svelte.
+   */
+  'note-summary-changed': { id: string; title?: string; modified: string };
+  /**
+   * Sent by a note window to the main window when something in it asks for
+   * another note. Only the main window knows every tab and window a note is
+   * open in, so it decides where the note opens. See `requestNoteWindow`.
+   */
+  'note-window-requested': { noteId: string };
   'plugins-changed': null;
   'ui-settings-changed': null;
   'desktop-settings-changed': null;
@@ -140,12 +156,37 @@ export function emit<K extends keyof TauriEvents>(
   return Promise.resolve();
 }
 
+/** Send an event to one window, by its label. */
+export function emitTo<K extends keyof TauriEvents>(
+  target: string,
+  event: K,
+  payload: TauriEvents[K]
+) {
+  if (isTauri()) return tauriEmitTo(target, event, payload);
+  browserEvents.dispatchEvent(new CustomEvent(event, { detail: payload }));
+  return Promise.resolve();
+}
+
 export function listen<K extends keyof TauriEvents>(
   event: K,
-  handler: (payload: TauriEvents[K]) => void
+  handler: (payload: TauriEvents[K]) => void,
+  options: {
+    /**
+     * Only events sent to this window or to every window. Tauri hands a
+     * plain listener the events sent to other windows as well.
+     */
+    thisWindow?: boolean;
+  } = {}
 ) {
-  if (isTauri())
-    return tauriListen(event, (e) => handler(e.payload as TauriEvents[K]));
+  if (isTauri()) {
+    const callback = (e: { payload: unknown }) =>
+      handler(e.payload as TauriEvents[K]);
+    return options.thisWindow
+      ? tauriListen(event, callback, {
+          target: getCurrentWebviewWindow().label
+        })
+      : tauriListen(event, callback);
+  }
   const listener = (e: Event) =>
     handler((e as CustomEvent<TauriEvents[K]>).detail);
   browserEvents.addEventListener(event, listener);

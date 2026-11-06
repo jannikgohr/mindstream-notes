@@ -58,6 +58,7 @@
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
     desktopNoteSource,
+    noteIsUnderTrash,
     setDesktopNoteSource
   } from '$lib/stores/note-source.svelte';
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
@@ -736,6 +737,12 @@
     const showAppUnlisten = listen(TauriEventName.ShowApp, () => {
       void focusMainWindow();
     });
+    // Note windows ask here instead of opening a window themselves.
+    const noteWindowUnlisten = listen(
+      TauriEventName.NoteWindowRequested,
+      ({ noteId }) => void openInNewWindow(noteId),
+      { thisWindow: true }
+    );
 
     // Cleanup the dv-tab-dragging body class on every drag termination:
     //   - `dragend` fires on the source element after a successful drop
@@ -821,6 +828,7 @@
       unsub();
       void trayUnlisten.then((unlisten) => unlisten());
       void showAppUnlisten.then((unlisten) => unlisten());
+      void noteWindowUnlisten.then((unlisten) => unlisten());
     };
   });
 
@@ -847,21 +855,27 @@
   // Keep open editor tab titles in sync with the file tree. This catches
   // remote renames pulled by `sync_now` (where the title in tree.notesById
   // changes under the still-open tab) as well as local renames triggered
-  // from the file tree's context menu. Iterating over Object.keys(notesById)
-  // makes the effect track both the key set and each visited title; new
-  // panels opened *after* this runs already see the current title at open
-  // time (see openNote() below) so we don't need to track openPanels.
+  // from the file tree's context menu. The effect only reads the titles of
+  // notes that have a tab, so it re-runs when a tab opens or closes:
+  // otherwise a run before the first tab opened would track no title at all.
   $effect(() => {
+    void openPanelCount;
     for (const noteId of Object.keys(tree.notesById)) {
       const panel = openPanels.get(noteId);
       if (panel) panel.api.setTitle(tree.notesById[noteId].title);
     }
   });
 
+  // Notes whose tab was open while they were outside the trash. A note
+  // opened from the trash view is never in here, so its tab stays.
+  const openedOutsideTrash = new Set<string>();
+
   // Close dock panels whose backing note has been removed from the tree.
   // Covers the local permanent-delete paths (purgeNote / purgeCollection /
   // emptyTrash all reload the tree) and remote pulls (`runSync` reloads
   // the tree after sync, so a peer's hard-delete propagates the same way).
+  // A note that moves into the trash, by itself or with its folder, closes
+  // its tab as well.
   // We snapshot the live key set into a Set so the dependency is the
   // explicit Object.keys read — mirrors the title-sync effect above and
   // avoids relying on the `in` operator being tracked by $state's proxy.
@@ -874,10 +888,23 @@
     // dependency, so the effect would never re-run.
     const known = new Set(Object.keys(tree.notesById));
     const ready = tree.ready;
+    void openPanelCount;
     if (!dock || !ready) return;
     const stale: { noteId: string; panel: IDockviewPanel }[] = [];
+    for (const noteId of openedOutsideTrash) {
+      if (!openPanels.has(noteId)) openedOutsideTrash.delete(noteId);
+    }
     for (const [noteId, panel] of openPanels) {
-      if (!known.has(noteId)) stale.push({ noteId, panel });
+      if (!known.has(noteId)) {
+        stale.push({ noteId, panel });
+        continue;
+      }
+      if (!noteIsUnderTrash(tree.notesById[noteId], tree.collectionsById)) {
+        openedOutsideTrash.add(noteId);
+      } else if (openedOutsideTrash.has(noteId)) {
+        openedOutsideTrash.delete(noteId);
+        stale.push({ noteId, panel });
+      }
     }
     for (const { noteId, panel } of stale) {
       try {
@@ -900,12 +927,30 @@
   // Left undefined in a browser, which drops the menu item: a second tab
   // cannot own the vault, so it could not load the note.
   const onOpenInNewWindow = isTauri()
-    ? (id: string) => {
-        const note = tree.notesById[id];
-        if (!note) return;
-        void openNoteWindow(note.id, note.title, null, null);
-      }
+    ? (id: string) => void openInNewWindow(id)
     : undefined;
+
+  /**
+   * Open a note in a window of its own. Every window's request ends up
+   * here (see `requestNoteWindow`), because only this window can see the
+   * note's tab: it moves into the new window, as its own pop-out button
+   * does. Left behind, it would be a second editor on the note that never
+   * sees the window's edits and saves over them. `openNoteWindow` focuses
+   * the note's window instead when it already has one.
+   */
+  async function openInNewWindow(id: string) {
+    // Another window may have just created it, before this tree knew.
+    if (!tree.notesById[id]) await loadTree();
+    const note = tree.notesById[id];
+    if (!note) return;
+    const panel = openPanels.get(id);
+    if (panel && dock) {
+      panel.api.setActive();
+      await openNoteWindow(note.id, note.title, panel.group, dock);
+      return;
+    }
+    await openNoteWindow(note.id, note.title, null, null);
+  }
 </script>
 
 <div data-app-shell class="desktop-shell flex h-full w-full flex-col">

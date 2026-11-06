@@ -163,6 +163,8 @@ function scopeForId(id: string): 'V' | 'D' {
   if (def) return def.scope;
   // The sign-in form owns account.serverUrl dynamically, outside schema.json.
   if (id.startsWith('account.')) return 'V';
+  // The file tree's open folders name folders of one vault.
+  if (id === 'ui.expandedFolders') return 'V';
   return 'D';
 }
 

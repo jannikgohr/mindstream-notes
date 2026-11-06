@@ -18,7 +18,7 @@
   import NoteKindRenderer from '$lib/components/NoteKindRenderer.svelte';
   import ResizeHandle from '$lib/components/ResizeHandle.svelte';
   import WindowControls from '$lib/components/WindowControls.svelte';
-  import { loadNote, openNoteWindow, type NoteKind } from '$lib/api';
+  import { loadNote, requestNoteWindow, type NoteKind } from '$lib/api';
   import { pushToast } from '$lib/components/toast.svelte';
   import { installFileDropRouter } from '$lib/file-drop';
   import { loadTree, tree } from '$lib/stores/tree.svelte';
@@ -43,7 +43,9 @@
   }
   let { noteId }: Props = $props();
 
-  let title = $state('Note');
+  let loadedTitle = $state('Note');
+  // The tree follows renames, here and in the other windows.
+  const title = $derived(tree.notesById[noteId]?.title ?? loadedTitle);
   let exists = $state<boolean | null>(null);
   // Captured at load time so we don't re-derive on every paint and so
   // a later sync-pulled mutation can't swap the editor out from under
@@ -77,7 +79,7 @@
       try {
         const note = await loadNote(noteId);
         if (cancelled) return;
-        title = note.title;
+        loadedTitle = note.title;
         noteKind = note.note_kind;
         exists = true;
       } catch (err) {
@@ -95,13 +97,13 @@
   // A wikilink click inside this popout dispatches through the
   // open-note bus. This window only renders one note, so we can't
   // "switch" — same-note requests are a no-op, other-note requests
-  // spawn another popout window. Subscribers in different windows
-  // don't see each other (each Tauri window is its own JS context).
+  // go to the main window, which decides where the note opens: it is
+  // the only window that can see the note's tab, if it has one.
   onMount(() => {
     return subscribeOpenNoteRequest((id) => {
       if (id === noteId) return;
       const target = tree.notesById[id];
-      void openNoteWindow(id, target?.title ?? 'Note', null, null);
+      void requestNoteWindow(id, target?.title ?? 'Note');
     });
   });
 
@@ -115,6 +117,19 @@
         pushToast(tUi('fileDrop.unsupported'), { variant: 'error' })
     })
   );
+
+  // The OS title bar and the task switcher show the window's own title,
+  // set when the window opened. Keep it on the note's current name.
+  $effect(() => {
+    const current = title;
+    // Until the note has loaded, `title` is a placeholder.
+    if (exists !== true) return;
+    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window))
+      return;
+    void import('@tauri-apps/api/window')
+      .then((mod) => mod.getCurrentWindow().setTitle(current))
+      .catch((err) => console.warn('[popout] set title failed', err));
+  });
 
   async function closeCurrentWindow() {
     if (typeof window === 'undefined') return;
@@ -145,7 +160,11 @@
   </Button>
 {/snippet}
 
-<div class="flex h-full w-full flex-col bg-background text-foreground">
+<!-- `desktop-shell` gives the editor the same document styling as a docked
+     tab, the heading font among it. -->
+<div
+  class="desktop-shell flex h-full w-full flex-col bg-background text-foreground"
+>
   {#if windowChrome.customDecorations}
     <!-- Frameless title bar. data-tauri-drag-region on the wrapping header
          lets the user drag the window from any non-button area. -->

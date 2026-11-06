@@ -7,6 +7,7 @@
 
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { isTauri } from './core';
+import { emitTo, TauriEventName } from './events';
 import { getCustomWindowDecorations } from './desktop-settings';
 import { getWorkerBrowserOptions } from './browser-identity';
 import { currentThemeWindowBackground } from '$lib/settings/theme-presets';
@@ -51,6 +52,24 @@ export async function focusExistingNoteWindow(id: string): Promise<boolean> {
     console.warn('[focusExistingNoteWindow] failed', id, err);
     return false;
   }
+}
+
+/**
+ * Open a note in a window of its own, from a window other than the main one.
+ *
+ * Only the main window knows every tab and window a note is open in. It
+ * focuses the note's window if there is one, moves the note's tab into a
+ * new window if there is one of those, and opens a window otherwise. A note
+ * window that opened one itself could not see the main window's tabs, and
+ * two editors on one note save over each other.
+ */
+export async function requestNoteWindow(
+  id: string,
+  title: string
+): Promise<void> {
+  // Browser preview: no main window to ask, and no dock to move a tab from.
+  if (!isTauri()) return openNoteWindow(id, title, null, null);
+  await emitTo('main', TauriEventName.NoteWindowRequested, { noteId: id });
 }
 
 function noteWindowLabel(id: string): string {
@@ -165,8 +184,9 @@ export async function openNoteWindow(
       }
     });
 
-    // 3. Re-open the panel when the popout window is closed
-    await win.once('tauri://close-requested', async () => {
+    // Reopen only after the popout has saved and actually closed. A close
+    // request may be cancelled if saving fails.
+    await win.once('tauri://destroyed', () => {
       // Check if the group still exists, otherwise it defaults to a sensible location
       const targetGroup = dock.getGroup(originalGroupId);
 
@@ -180,9 +200,6 @@ export async function openNoteWindow(
             ? { position: { referenceGroup: originalGroupId } }
             : {})
         });
-
-      // Close the Tauri window
-      await win.close();
     });
   }
 }
