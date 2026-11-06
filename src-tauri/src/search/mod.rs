@@ -140,8 +140,8 @@ mod tests {
         let hits = db.with_conn(|c| search(c, "trip")).unwrap();
         assert_eq!(
             hits[0].snippet,
-            "Intro. Itinerary Thursday: arrive 14:20 Pack light snake_case_name Quote with a link \
-             and alias Item Cost Hotel 390 € x = 1"
+            "Intro. · Itinerary · Thursday: arrive 14:20 · Pack light snake_case_name · \
+             Quote with a link and alias · Item Cost · Hotel 390 € · x = 1"
         );
     }
 

@@ -87,7 +87,8 @@ function collapseWhitespace(s: string): string {
 
 /**
  * The text a reader sees in `body`, for snippets: block markers and inline
- * emphasis go, link, image and wikilink labels stay. Mirrors `snippet_text`
+ * emphasis go, link, image and wikilink labels stay, and former lines are
+ * joined with " · ". Mirrors `snippet_text`
  * in src-tauri/storage-core/src/search.rs.
  */
 export function snippetText(body: string): string {
@@ -110,7 +111,11 @@ export function snippetText(body: string): string {
     )
     .replace(/\*\*|__|~~|`/g, '')
     .replace(/(^|[^\w*])[*_]([^*_\s](?:[^*_]*[^*_\s])?)[*_]/g, '$1$2')
-    .replace(/[ \t]*\|[ \t]*/g, ' ');
+    .replace(/[ \t]*\|[ \t]*/g, ' ')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(' · ');
 }
 
 function buildSnippet(
