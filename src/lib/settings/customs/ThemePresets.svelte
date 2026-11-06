@@ -9,6 +9,8 @@
   import { saveThemePreset, deleteThemePreset } from '$lib/api/theme-presets';
   import { tUi, tUiFormat } from '../i18n.svelte';
   import { toErrorMessage } from '$lib/api/errors';
+  import { ChevronRight } from '@lucide/svelte';
+  import SettingSelect from '../SettingSelect.svelte';
   let raw = $state('');
   let editorOpen = $state(false);
   let busy = $state(false);
@@ -66,20 +68,24 @@
 </script>
 
 <div class="flex flex-col gap-3">
-  <select
-    aria-label={tUi('theme.select')}
+  <SettingSelect
+    settingId="appearance.preset"
+    ariaLabel={tUi('theme.select')}
     value={selected}
     disabled={busy}
-    onchange={(event) => select(event.currentTarget.value)}
-    class="rounded-md border border-input bg-background px-3 py-2 text-sm"
-  >
-    {#if missing}<option value={selected}
-        >{tUiFormat('theme.missingOption', { id: selected })}</option
-      >{/if}
-    {#each themeCatalog.presets as item (item.id)}<option value={item.id}
-        >{presetLabel(item)}</option
-      >{/each}
-  </select>
+    options={[
+      ...(missing ? [selected] : []),
+      ...themeCatalog.presets.map((item) => item.id)
+    ]}
+    labelFor={(id) => {
+      const item = themeCatalog.presets.find((entry) => entry.id === id);
+      return item
+        ? presetLabel(item)
+        : tUiFormat('theme.missingOption', { id });
+    }}
+    onChange={(id) => void select(id)}
+    class="h-9 w-full"
+  />
   {#if missing}<p role="status" class="text-sm text-muted-foreground">
       {tUi('theme.missing')}
     </p>{/if}
@@ -107,7 +113,17 @@
       >{/if}
   </div>
   <details bind:open={editorOpen}>
-    <summary class="cursor-pointer text-sm">{tUi('theme.import')}</summary>
+    <!-- The app's chevron instead of the browser's disclosure triangle. -->
+    <summary
+      class="flex w-fit cursor-pointer list-none items-center gap-1 text-sm [&::-webkit-details-marker]:hidden"
+    >
+      <ChevronRight
+        class="size-3.5 text-muted-foreground transition-transform {editorOpen
+          ? 'rotate-90'
+          : ''}"
+        aria-hidden="true"
+      />{tUi('theme.import')}
+    </summary>
     <p class="mt-2 text-sm text-muted-foreground">{tUi('theme.importHelp')}</p>
     <textarea
       aria-label={tUi('theme.json')}
