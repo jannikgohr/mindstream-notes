@@ -392,7 +392,12 @@
         </nav>
 
         <!-- Right pane: sections + settings -->
-        <section class="themed-scrollbar overflow-y-auto px-6 py-5">
+        <!-- The bottom 2rem fades out, a cue that the pane scrolls rather than a
+             hard crop through the last row; the extra end padding lets that
+             row scroll clear of the fade. -->
+        <section
+          class="themed-scrollbar overflow-y-auto px-6 pb-12 pt-5 [mask-image:linear-gradient(to_bottom,black_calc(100%-2rem),transparent)]"
+        >
           {#if activeCategory}
             <h2 class="text-base font-semibold">
               {paneHeading}
