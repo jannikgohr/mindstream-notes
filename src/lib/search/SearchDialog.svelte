@@ -230,7 +230,7 @@
                   onmouseenter={() => (selectedIndex = i)}
                   onclick={() => activate(i)}
                   class="flex w-full flex-col items-start gap-1 border-l-2 px-3 py-2 text-left text-sm transition-colors {isActive
-                    ? 'border-primary bg-accent text-accent-foreground'
+                    ? 'border-accent-brand bg-accent-brand/10 text-foreground'
                     : 'border-transparent text-foreground hover:bg-accent/60'}"
                 >
                   <span class="flex w-full items-center gap-2">
