@@ -156,7 +156,7 @@
             {tUi('title')}
           </Dialog.Title>
           <Dialog.Close
-            class="flex size-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            class="flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             aria-label={tUi('close')}
           >
             <X class="size-5" />
@@ -186,7 +186,7 @@
         >
           <button
             type="button"
-            class="flex size-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            class="flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             onclick={() => (activeCategoryId = null)}
             aria-label={tUi('back')}
             title={tUi('back')}
@@ -197,14 +197,14 @@
             {tLabel('categories', activeCategory.id)}
           </Dialog.Title>
           <Dialog.Close
-            class="flex size-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            class="flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             aria-label={tUi('close')}
           >
             <X class="size-5" />
           </Dialog.Close>
         </header>
 
-        <section class="flex-1 overflow-y-auto px-4 py-4">
+        <section class="flex-1 overflow-y-auto px-4 pb-4 pt-6">
           {#if activeCategory.id === PLUGINS_CATEGORY_ID}
             <!-- Management overview first, then each enabled plugin's sections. -->
             <PluginsOverview onOpenSettings={scrollToPluginSettings} />
@@ -218,13 +218,17 @@
               ? sec.settings.filter((s) => isVisible(s))
               : []}
             {#if sectionSettings.length > 0}
-              <div class="mb-6" id="plugins-section-{sec.id}">
+              <div class="mb-4" id="plugins-section-{sec.id}">
+                <!-- One grouped block per section, labelled above it, so
+                     related settings read together at a glance. -->
                 <h3
-                  class="mb-2 border-b border-border pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                  class="mb-2 px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
                 >
                   {tLabel('sections', sec.id)}
                 </h3>
-                <div class="divide-y divide-border">
+                <div
+                  class="divide-y divide-border rounded-lg border border-border bg-surface-1 px-4"
+                >
                   {#each sectionSettings as s (s.id)}
                     <SettingControl setting={s} />
                   {/each}
