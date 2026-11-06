@@ -912,6 +912,16 @@ body.dv-tab-dragging
   background: var(--surface-2);
   font-weight: 600;
 }
+/* Tables size to their content instead of stretching a three-column budget
+ * across the whole reading column; wide tables still fill it and scroll. */
+.milkdown .milkdown-table-block table {
+  width: auto;
+  min-width: min(100%, 24rem);
+  table-layout: auto;
+}
+.milkdown .milkdown-table-block :is(th, td) {
+  min-width: 6rem;
+}
 
 /*
  * Only show the drop indicator for editor-initiated block drags. The upstream
@@ -1278,6 +1288,12 @@ body.dv-tab-dragging .freeform-canvas-host * {
   --modal-shadow: var(--elevation-overlay);
   --border-radius-md: calc(var(--radius) - 2px);
   --border-radius-lg: var(--radius);
+}
+
+/* The canvas hint under the toolbar used Excalidraw's own pale grey, which
+ * read as disabled on the light canvas; use our muted text tone. */
+.excalidraw .HintViewer {
+  color: var(--muted-foreground);
 }
 
 /* Its dialogs (Help, image export) dim the page with a hard-coded 20% grey

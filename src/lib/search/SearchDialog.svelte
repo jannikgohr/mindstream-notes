@@ -251,7 +251,7 @@
                   </span>
                   {#if hit.snippet}
                     <span
-                      class="line-clamp-2 pl-6 text-xs text-muted-foreground"
+                      class="line-clamp-2 pl-6 text-[13px] leading-snug text-muted-foreground"
                     >
                       {#each snippetParts as part}
                         {#if part.highlight}

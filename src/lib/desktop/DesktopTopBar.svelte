@@ -62,7 +62,14 @@
       : ''}"
     style:width={ui.leftSidebarOpen ? `${ui.leftSidebarWidth}px` : undefined}
   >
-    <img src={appIcon} alt="" draggable="false" class="size-6 shrink-0" />
+    <!-- The icon is a light tile: a hairline ring keeps it a tile on the light
+         chrome too, instead of a bare glyph there and a white block in dark. -->
+    <img
+      src={appIcon}
+      alt=""
+      draggable="false"
+      class="size-6 shrink-0 rounded-md ring-1 ring-border"
+    />
     <span class="truncate text-base font-semibold tracking-tight"
       >mindstream<span class="text-accent-brand">.</span></span
     >
