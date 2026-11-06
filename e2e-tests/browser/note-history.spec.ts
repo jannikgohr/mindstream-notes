@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { openDetailsPanel } from './details-panel';
 
 /**
  * Browser-fallback (T2) coverage for the note-history sidebar section.
@@ -31,6 +32,7 @@ async function openIdeas(page: Page) {
   await fileTree(page)
     .getByRole('button', { name: 'Ideas', exact: true })
     .click();
+  await openDetailsPanel(page);
   // The editor mounted and the metadata panel reflects the markdown note.
   await expect(page.getByText('Markdown note')).toBeVisible();
 }

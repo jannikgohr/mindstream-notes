@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { clickFileTreeCreateAction } from './file-tree-toolbar';
+import { openDetailsPanel } from './details-panel';
 
 // A wide desktop keeps every drawing toolbar available while both sidebars move.
 test.use({ viewport: { width: 1600, height: 1000 }, reducedMotion: 'reduce' });
@@ -79,6 +80,8 @@ async function openEditor(
   const panel = page.getByRole('tabpanel');
   // Start above the handle's 245px floor; the seeded sidebar is only 240px.
   await dragSidebar(page, 'left', 40);
+  // The details panel starts closed; the right-sidebar steps resize it.
+  await openDetailsPanel(page);
 
   if (kind.startsWith('markdown-')) {
     const mode = kind.replace('markdown-', '');

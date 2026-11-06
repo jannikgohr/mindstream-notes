@@ -196,6 +196,7 @@ async function prepareRestorableLiveMarkdownNote(
 
   await A.newRootNote(title);
   await A.click(title);
+  await A.openDetailsPanel();
   const noteId = await findNoteId(browserA, title);
   await A.insertText(browserA.$('.ProseMirror'), baseText);
   await A.click('Refresh history');
