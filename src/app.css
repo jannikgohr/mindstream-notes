@@ -1291,9 +1291,15 @@ body.dv-tab-dragging .freeform-canvas-host * {
 }
 
 /* The canvas hint under the toolbar used Excalidraw's own pale grey, which
- * read as disabled on the light canvas; use our muted text tone. */
-.excalidraw .HintViewer {
+ * read as disabled on the light canvas; use our muted text tone. `:root`
+ * outranks Excalidraw's later-loaded `.theme--dark` rule. The shortcut digit
+ * on every tool is clutter there; the tooltips still name the key. */
+:root .excalidraw .HintViewer,
+:root .excalidraw.theme--dark .HintViewer {
   color: var(--muted-foreground);
+}
+:root .excalidraw .App-toolbar .ToolIcon__keybinding {
+  display: none;
 }
 
 /* Its dialogs (Help, image export) dim the page with a hard-coded 20% grey
