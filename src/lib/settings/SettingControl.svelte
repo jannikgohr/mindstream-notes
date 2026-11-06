@@ -283,7 +283,7 @@
         <!-- On, the switch takes the accent like the sliders and segments. -->
         <span
           class="pointer-events-none block size-6 rounded-full shadow-sm ring-0 transition-transform sm:size-4 {value
-            ? 'translate-x-5.5 bg-accent-brand-foreground sm:translate-x-4.5'
+            ? 'translate-x-5.5 bg-white sm:translate-x-4.5'
             : 'translate-x-0.5 bg-background'}"
         ></span>
       </button>
