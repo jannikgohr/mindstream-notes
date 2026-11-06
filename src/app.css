@@ -965,6 +965,131 @@ body.dv-tab-dragging
 }
 
 /*
+ * Crepe's floating chrome, reshaped to match our own menus (ContextMenu and
+ * friends). The colour mapping above already gets the palette right, but
+ * Crepe draws these Material-style: no border, 12px corners, bold 52px rows
+ * and 24px icons. Here they get a 1px border on the overlay surface, the
+ * overlay shadow, radius-md corners, 14px regular rows and icons sized to
+ * our 16px Lucide set (Crepe's Material glyphs carry more padding, hence
+ * 18px).
+ *
+ * Icons need their own colour. Crepe paints them in its outline colour,
+ * which we map to --border-strong for the borders that share it, and at that
+ * tone the selection toolbar's icons all but vanish in dark mode.
+ */
+.milkdown
+  :is(
+    .milkdown-slash-menu,
+    .milkdown-toolbar,
+    .milkdown-link-preview > .link-preview,
+    .milkdown-link-edit > .link-edit,
+    .milkdown-latex-inline-edit
+  ) {
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: var(--elevation-overlay);
+  font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
+}
+.milkdown
+  :is(
+    .milkdown-slash-menu .menu-groups .menu-group li,
+    .milkdown-toolbar .toolbar-item,
+    .milkdown-link-preview .link-icon,
+    .milkdown-link-preview .button,
+    .milkdown-link-edit .button
+  )
+  svg {
+  width: 1.125rem;
+  height: 1.125rem;
+  color: var(--muted-foreground);
+  fill: var(--muted-foreground);
+}
+
+.milkdown .milkdown-slash-menu .tab-group {
+  padding: 0.25rem 0.25rem 0;
+  border-bottom-color: var(--border);
+}
+.milkdown .milkdown-slash-menu .tab-group ul {
+  gap: 0.125rem;
+  padding: 0 0 0.25rem;
+}
+.milkdown .milkdown-slash-menu .tab-group ul li {
+  padding: 0.25rem 0.625rem;
+  border-radius: calc(var(--radius) - 4px);
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.25rem;
+}
+.milkdown .milkdown-slash-menu .menu-groups {
+  max-height: 22rem;
+  padding: 0.25rem 0;
+}
+.milkdown .milkdown-slash-menu .menu-groups .menu-group h6 {
+  padding: 0.5rem 0.75rem 0.25rem;
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1rem;
+  letter-spacing: 0.04em;
+}
+.milkdown .milkdown-slash-menu .menu-groups .menu-group li {
+  min-width: 12.5rem;
+  gap: 0.5rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: 0;
+}
+.milkdown .milkdown-slash-menu .menu-groups .menu-group li > span {
+  font-size: 0.875rem;
+  font-weight: 400;
+  line-height: 1.25rem;
+}
+.milkdown .milkdown-slash-menu .menu-groups .menu-group + .menu-group::before {
+  margin: 0.25rem 0;
+  background: var(--border);
+}
+
+.milkdown .milkdown-toolbar {
+  align-items: center;
+  gap: 0.125rem;
+  padding: 0.25rem;
+}
+.milkdown .milkdown-toolbar .toolbar-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  margin: 0;
+  padding: 0;
+  border-radius: calc(var(--radius) - 4px);
+}
+.milkdown .milkdown-toolbar .toolbar-item:hover svg {
+  color: var(--foreground);
+  fill: var(--foreground);
+}
+.milkdown .milkdown-toolbar .toolbar-item.active svg {
+  color: var(--accent-brand);
+  fill: var(--accent-brand);
+}
+.milkdown .milkdown-toolbar .divider {
+  height: 1.25rem;
+  margin: 0 0.25rem;
+  background: var(--border);
+}
+
+.milkdown .milkdown-link-preview > .link-preview,
+.milkdown .milkdown-link-edit > .link-edit {
+  align-items: center;
+  height: 2.25rem;
+}
+.milkdown .milkdown-link-preview > .link-preview > :is(.link-icon, .button),
+.milkdown .milkdown-link-edit > .link-edit > .button {
+  border-radius: calc(var(--radius) - 4px);
+}
+
+/*
  * Code blocks inside Milkdown use CodeMirror with the oneDark theme by
  * default (set in Crepe's default-config). That looks great in dark mode
  * but is jarring in light mode — fix the wrapper colours so the code-block
@@ -994,6 +1119,127 @@ body.dv-tab-dragging .freeform-canvas-host * {
    <body> and are unaffected. */
 .freeform-canvas-host {
   clip-path: inset(0);
+}
+
+/*
+ * Excalidraw theme bridge, the same idea as the Crepe one above: point its
+ * variables at our tokens so its toolbars, panels, menus and dialogs share
+ * the app's surfaces, borders, brand colour and font instead of its own
+ * violet-on-neutral-grey palette. The tokens carry both themes, so one block
+ * covers light and dark.
+ *
+ * Global rather than scoped to the canvas host: dialogs, the colour picker
+ * and other popovers portal to <body> in a container that carries the
+ * `excalidraw` and `theme--dark` classes itself. `:root` lifts these rules
+ * over Excalidraw's own `.excalidraw.theme--dark` block, which loads after
+ * app.css.
+ */
+:root .excalidraw,
+:root .excalidraw.theme--dark {
+  --ui-font: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
+
+  /* Surfaces. Islands and popovers take the overlay step. Excalidraw's
+   * "surface-low" fills unselected option buttons and the zoom and undo bars,
+   * so it gets the recessed step below the panel; "surface-high" is its hover
+   * and divider tone. */
+  --island-bg-color: var(--popover);
+  --default-bg-color: var(--surface-1);
+  --popup-bg-color: var(--popover);
+  --popup-secondary-bg-color: var(--surface-2);
+  --sidebar-bg-color: var(--popover);
+  --color-surface-lowest: var(--popover);
+  --color-surface-low: var(--surface-2);
+  --color-surface-mid: var(--surface-1);
+  --color-surface-high: color-mix(
+    in oklab,
+    var(--foreground) 9%,
+    var(--popover)
+  );
+
+  /* Text. */
+  --color-on-surface: var(--foreground);
+  --text-primary-color: var(--foreground);
+  --popup-text-color: var(--popover-foreground);
+  --input-label-color: var(--muted-foreground);
+  --keybinding-color: var(--muted-foreground);
+
+  /* Borders and inputs. */
+  --default-border-color: var(--border);
+  --dialog-border-color: var(--border);
+  --sidebar-border-color: var(--border);
+  --input-bg-color: var(--surface-1);
+  --input-border-color: var(--input);
+  --input-hover-bg-color: var(--accent);
+  --scrollbar-thumb: var(--border-strong);
+  --scrollbar-thumb-hover: var(--muted-foreground);
+
+  /* Identity. Selected tools and options get the same brand wash and brand
+   * text as the active item in the sidebar. The opaque mixes use oklab: in
+   * oklch, amber mixed into a blue-grey surface swings its hue through
+   * green. */
+  --color-primary: var(--accent-brand);
+  --color-primary-darker: color-mix(
+    in oklab,
+    var(--accent-brand) 85%,
+    var(--foreground)
+  );
+  --color-primary-darkest: color-mix(
+    in oklab,
+    var(--accent-brand) 70%,
+    var(--foreground)
+  );
+  --color-primary-hover: var(--color-primary-darker);
+  --color-primary-light: color-mix(
+    in oklab,
+    var(--accent-brand) 18%,
+    var(--popover)
+  );
+  --color-primary-light-darker: color-mix(
+    in oklab,
+    var(--accent-brand) 26%,
+    var(--popover)
+  );
+  --color-surface-primary-container: var(--color-primary-light);
+  --color-on-primary-container: var(--accent-brand);
+  --color-brand-hover: var(--color-primary-darker);
+  --color-brand-active: var(--color-primary-darkest);
+  --button-active-border: var(--accent-brand);
+  --color-promo: var(--accent-brand);
+  --color-logo-icon: var(--accent-brand);
+  --color-slider-track: var(--color-primary-light-darker);
+  --color-slider-thumb: var(--foreground);
+  --focus-highlight-color: var(--ring);
+  --select-highlight-color: var(--ring);
+
+  /* Elevation. A hairline ring stands in for the border our own toolbars
+   * and popovers draw, without changing the islands' box size. */
+  --shadow-island: 0 0 0 1px var(--border), var(--elevation-raised);
+  --modal-shadow: var(--elevation-overlay);
+  --border-radius-md: calc(var(--radius) - 2px);
+  --border-radius-lg: var(--radius);
+}
+
+/* Its dialogs (Help, image export) dim the page with a hard-coded 20% grey
+ * that barely registers in dark mode; use the scrim our own dialogs use. */
+:root .excalidraw .Modal__background {
+  background-color: var(--scrim);
+}
+
+/* Excalidraw's tooltip is a lone <div> on <body>, outside every
+ * `.excalidraw` container, with hard-coded black and white. Match the
+ * app's own tooltip (.ms-tooltip above). */
+.excalidraw-tooltip {
+  --ui-font: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
+  padding: 0.3125rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: var(--elevation-overlay);
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.25;
+  text-align: start;
 }
 
 .freeform-excalidraw-host.reduce-motion *,
