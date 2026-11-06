@@ -106,18 +106,24 @@
       >
         <VaultSwitcher />
       </div>{/if}
-    <div class="flex-1"></div>
-    <Button
-      variant="outline"
-      size="sm"
-      onclick={openSearch}
-      title={tUi('search.open')}
-      aria-label={tUi('search.open')}
-      class="desktop-search h-8 shrink-0 justify-start gap-2 border-border bg-surface-1 text-xs font-normal text-muted-foreground shadow-none"
+    <!-- Search is centred in the free space, like a command centre, rather
+         than parked beside the icons. -->
+    <div
+      data-tauri-drag-region={customDecorations ? 'deep' : undefined}
+      class="flex min-w-0 flex-1 justify-center"
     >
-      <CuedIcon icon={SearchIcon} size={14} />
-      <span class="hidden sm:inline">{tUi('search.open')}</span>
-    </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        onclick={openSearch}
+        title={tUi('search.open')}
+        aria-label={tUi('search.open')}
+        class="desktop-search h-8 shrink-0 justify-start gap-2 border-border bg-surface-1 text-xs font-normal text-muted-foreground shadow-none"
+      >
+        <CuedIcon icon={SearchIcon} size={14} />
+        <span class="hidden sm:inline">{tUi('search.open')}</span>
+      </Button>
+    </div>
     <Button
       variant="ghost"
       size="icon"

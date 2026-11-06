@@ -2069,7 +2069,7 @@ body.dv-tab-dragging .freeform-canvas-host * {
   padding: 0;
 }
 .desktop-search {
-  width: clamp(8rem, 18vw, 15rem);
+  width: clamp(8rem, 26vw, 22rem);
 }
 @media (max-width: 900px) {
   .desktop-search {
