@@ -94,7 +94,7 @@
     type="button"
     onclick={openSearch}
     aria-label={tUi('search.notes.label')}
-    class="flex h-11 min-w-0 flex-1 items-center gap-2.5 rounded-full border border-border bg-surface-1 px-3.5 text-left text-sm text-muted-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    class="flex h-10 min-w-0 flex-1 items-center gap-2.5 rounded-full border border-border bg-surface-1 px-3.5 text-left text-sm text-muted-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
   >
     <Search class="size-4 shrink-0" />
     <span class="truncate">{tUi('search.notes.placeholder')}</span>
