@@ -15,7 +15,12 @@
   import VaultSwitcher from '$lib/components/VaultSwitcher.svelte';
   import WindowControls from '$lib/components/WindowControls.svelte';
   import NotificationCenter from '$lib/notifications/NotificationCenter.svelte';
-  import { ui, toggleLeftSidebar, toggleRightSidebar } from '$lib/state.svelte';
+  import {
+    ui,
+    toggleLeftSidebar,
+    toggleRightSidebar,
+    rightSidebarShown
+  } from '$lib/state.svelte';
   import { openSettings } from '$lib/settings/store.svelte';
   import { openSearch } from '$lib/search/store.svelte';
   import { openCommandPalette } from '$lib/command-palette/store.svelte';
@@ -133,13 +138,14 @@
       variant="ghost"
       size="icon"
       onclick={toggleRightSidebar}
+      disabled={!ui.activeNoteId}
       title={ui.rightSidebarOpen ? tUi('sidebar.hide') : tUi('sidebar.show')}
       aria-label={ui.rightSidebarOpen
         ? tUi('sidebar.hide')
         : tUi('sidebar.show')}
-      aria-expanded={ui.rightSidebarOpen}
+      aria-expanded={rightSidebarShown()}
     >
-      <CuedIcon icon={PanelRight} cue={ui.rightSidebarOpen} duration={300} />
+      <CuedIcon icon={PanelRight} cue={rightSidebarShown()} duration={300} />
     </Button>
 
     {#if customDecorations}
