@@ -11,6 +11,7 @@ import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 const config = {
   preprocess: vitePreprocess(),
   kit: {
+    paths: { base: process.env.BROWSER_BASE_PATH ?? '', relative: false },
     adapter: adapter({
       pages: '.output/build',
       assets: '.output/build',

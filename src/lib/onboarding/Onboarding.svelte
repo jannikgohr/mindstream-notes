@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { base } from '$app/paths';
   import { tick, onMount } from 'svelte';
   import SettingSelect from '$lib/settings/SettingSelect.svelte';
   import WindowControls from '$lib/components/WindowControls.svelte';
@@ -177,7 +178,7 @@
   <header class="setup-header" data-tauri-drag-region>
     <span class="flex items-center gap-2 font-medium" data-tauri-drag-region
       ><img
-        src="/app-logo.png"
+        src={`${base}/app-logo.png`}
         alt=""
         class="size-6 shrink-0"
         width="24"

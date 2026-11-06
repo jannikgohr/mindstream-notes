@@ -1,6 +1,7 @@
 //! Dedicated-worker binding for the SQLite compatibility proof.
 #![cfg(target_arch = "wasm32")]
 
+mod demo;
 mod picked_files;
 mod receipts;
 
@@ -392,7 +393,11 @@ impl BrowserDatabase {
             migrations::run(&mut conn)?;
             if fresh && !is_proof {
                 let tx = conn.transaction()?;
-                migrations::seed(&tx)?;
+                if test_id == Some("pages-demo") {
+                    demo::seed(&tx)?;
+                } else {
+                    migrations::seed(&tx)?;
+                }
                 tx.commit()?;
             }
             if !is_proof {
