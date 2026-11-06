@@ -984,6 +984,49 @@ body.dv-tab-dragging
   padding-right: max(20px, env(safe-area-inset-right)) !important;
 }
 
+/* Touch targets: inside a phone bar, every button is at least 44px square,
+ * however compact the shared control is on desktop. */
+.touch-targets :is(button, [role='button']) {
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+}
+
+/* The desktop's type tuning, scaled for a phone: headings in the body font
+ * at sizes that stay below the note title, and no tall band above the text. */
+.mobile-editor .milkdown {
+  --crepe-font-title: var(--crepe-font-default);
+}
+.mobile-editor .milkdown .ProseMirror {
+  padding-top: 1.25rem;
+}
+.mobile-editor.has-inline-title .milkdown {
+  padding-top: 0;
+}
+.mobile-editor.has-inline-title .milkdown .ProseMirror {
+  padding-top: 0.5rem;
+}
+.mobile-editor .milkdown .ProseMirror h1 {
+  font-size: 1.75em;
+  letter-spacing: -0.03em;
+}
+.mobile-editor .milkdown .ProseMirror h2 {
+  font-size: 1.375em;
+  letter-spacing: -0.015em;
+}
+.mobile-editor .milkdown .ProseMirror h3 {
+  font-size: 1.175em;
+}
+/* A heading belongs to what follows it: more room above than below. */
+.mobile-editor .milkdown .ProseMirror :is(h2, h3, h4) {
+  margin-top: 1.5rem;
+  margin-bottom: 0.375rem;
+}
+.mobile-inline-title .note-inline-title {
+  font-size: calc(var(--editor-font-size) * 1.875);
+  padding: 1.25rem max(20px, env(safe-area-inset-right)) 0
+    max(20px, env(safe-area-inset-left));
+}
+
 /*
  * Crepe theme bridge.
  *

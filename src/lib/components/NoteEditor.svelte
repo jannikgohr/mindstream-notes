@@ -286,7 +286,7 @@
   const sameTitle = (a: string, b: string) =>
     a.trim().toLocaleLowerCase() === b.trim().toLocaleLowerCase();
   const showInlineTitle = $derived(
-    !mobile && !sameTitle(leadingHeading, tree.notesById[noteId]?.title ?? '')
+    !sameTitle(leadingHeading, tree.notesById[noteId]?.title ?? '')
   );
   // --- View mode (WYSIWYG / Source / Split) ---------------------------------
   // Seeded from the editor.defaultMode setting in onMount. All three modes are
@@ -1893,10 +1893,11 @@
           : ''} {viewMode === 'split' ? 'w-1/2' : 'w-full'}"
       >
         {#if showInlineTitle}
-          <div class="mx-auto max-w-3xl">
+          <div class="mx-auto max-w-3xl" class:mobile-inline-title={mobile}>
             <NoteInlineTitle
               {noteId}
               readonly={isReadOnly}
+              compact={mobile}
               onEnter={focusBodyStart}
             />
           </div>
