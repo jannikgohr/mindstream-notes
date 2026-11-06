@@ -267,9 +267,7 @@
                     <span
                       class="flex items-center gap-1 pl-6 text-xs text-muted-foreground"
                     >
-                      <Folder
-                        class="size-3 shrink-0 text-[var(--named-amber)]"
-                      />
+                      <Folder class="size-3 shrink-0 text-folder-icon" />
                       <span class="truncate">{path}</span>
                     </span>
                   {/if}
