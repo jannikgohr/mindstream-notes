@@ -262,7 +262,8 @@ fn merge_ranges(mut raw: Vec<(usize, usize)>) -> Vec<MatchRange> {
 /// quotes, bullets, task boxes, code fences, table rules and pipes) and
 /// inline emphasis go, link, image and wikilink labels stay. Ranking still
 /// runs on the raw body, so a term found only in a URL keeps its hit and the
-/// snippet falls back to the opening text. Mirrors the TS `snippetText`.
+/// snippet falls back to the opening text. Former lines are joined with
+/// " · ". Mirrors the TS `snippetText`.
 fn snippet_text(body: &str) -> String {
     static FENCE: OnceLock<Option<Regex>> = OnceLock::new();
     static TABLE_RULE: OnceLock<Option<Regex>> = OnceLock::new();
@@ -337,11 +338,18 @@ fn snippet_text(body: &str) -> String {
         ),
         "${1}${2}",
     );
-    replace_all_owned(
+    let s = replace_all_owned(
         s,
         cached_regex("snippet pipe", r"[ \t]*\|[ \t]*", &PIPE),
         " ",
-    )
+    );
+    // Separate what were lines so a heading or list item doesn't run into
+    // the next one ("open. Itinerary Thursday:").
+    s.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 /// Take a short excerpt of `body` centred on the first match of any

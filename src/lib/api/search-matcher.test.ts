@@ -36,9 +36,9 @@ describe('snippetText', () => {
       'Intro.\n\n## Itinerary\n\n1. **Thursday:** arrive 14:20\n- [x] Pack *light* ' +
       'snake_case_name\n> Quote with [a link](https://x.test) and [[Note|alias]]\n\n' +
       '| Item | Cost |\n| --- | ---: |\n| Hotel | 390 € |\n\n```python\nx = 1\n```';
-    expect(snippetText(body).replace(/\s+/g, ' ').trim()).toBe(
-      'Intro. Itinerary Thursday: arrive 14:20 Pack light snake_case_name Quote with a link ' +
-        'and alias Item Cost Hotel 390 € x = 1'
+    expect(snippetText(body)).toBe(
+      'Intro. · Itinerary · Thursday: arrive 14:20 · Pack light snake_case_name · ' +
+        'Quote with a link and alias · Item Cost · Hotel 390 € · x = 1'
     );
   });
 });
