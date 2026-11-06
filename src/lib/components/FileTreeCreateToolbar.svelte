@@ -40,6 +40,7 @@
     moveFileTreeToolbarAction,
     normalizeFileTreeToolbarPreferences,
     saveFileTreeToolbarPreferences,
+    FILE_TREE_MAIN_ACTION_CLASS,
     type CoreFileTreeActionId,
     type FileTreeToolbarPreferences
   } from './file-tree-toolbar-preferences';
@@ -47,6 +48,14 @@
   interface Props {
     pluginButtons?: PluginToolbarButtonRef[];
     onCreate: (action: CoreFileTreeActionId) => void;
+    /**
+     * Offer only the built-in note types: no folder and no plugin buttons.
+     * The Favourites view lists notes alone, and favourites what it creates,
+     * which neither a folder nor a plugin's own action can be. The saved
+     * order is untouched; a hidden main action hands the wide button to the
+     * next one.
+     */
+    notesOnly?: boolean;
   }
 
   type CoreAction = {
@@ -81,7 +90,7 @@
     moved: boolean;
   }
 
-  let { pluginButtons = [], onCreate }: Props = $props();
+  let { pluginButtons = [], onCreate, notesOnly = false }: Props = $props();
 
   const coreActions: CoreAction[] = [
     { id: 'note', type: 'core', labelKey: 'fileTree.newNote' },
@@ -125,16 +134,19 @@
 
   const enabledCoreActions = $derived(
     coreActions.filter((action) => {
-      if (action.id === 'folder' || action.id === 'note') return true;
+      if (action.id === 'folder') return !notesOnly;
+      if (action.id === 'note') return true;
       const noteType = action.id === 'drawing' ? 'freeform' : action.id;
       return noteTypeEnabled(noteType);
     })
   );
   const actions = $derived<CreateAction[]>([
     ...enabledCoreActions,
-    ...pluginActions.filter(({ pluginId, button }) =>
-      pluginToolbarButtonIsVisible(pluginId, button)
-    )
+    ...(notesOnly
+      ? []
+      : pluginActions.filter(({ pluginId, button }) =>
+          pluginToolbarButtonIsVisible(pluginId, button)
+        ))
   ]);
   const availableIds = $derived([
     ...CORE_FILE_TREE_ACTION_IDS,
@@ -589,7 +601,7 @@
           title={labelFor(action)}
           aria-label={labelFor(action)}
           class={main
-            ? 'h-8 w-full justify-start gap-2 border border-border bg-surface-3 px-2 text-xs shadow-raised hover:bg-accent'
+            ? FILE_TREE_MAIN_ACTION_CLASS
             : 'size-7 cursor-grab text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0 active:cursor-grabbing'}
         >
           {@render actionIcon(action)}

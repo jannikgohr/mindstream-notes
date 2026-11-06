@@ -18,6 +18,11 @@ export type Draft = {
    * carried only to show the right glyph while typing.
    */
   template?: { pluginId: string; templateId: string; noteKind: string };
+  /** Started in the Favourites view: the note is favourited once created. */
+  favourite?: boolean;
+  /** Started from the Shared view's "New shared folder": the Share dialog
+   *  opens on the folder once it exists. */
+  share?: boolean;
 };
 
 export type Rename = {
