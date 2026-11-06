@@ -991,7 +991,7 @@
   <div
     role="group"
     aria-label={tUi('fileTree.tree')}
-    class="min-h-0 flex-1 overflow-y-auto px-2 pb-3 pt-2"
+    class="min-h-0 flex-1 overflow-y-auto px-2 pb-3 pt-2 text-[13px]"
     class:ring-1={dragOver === 'root'}
     class:ring-ring={dragOver === 'root'}
     data-file-drop-accept={fileDropAccept}
@@ -1191,12 +1191,14 @@
           <span class="truncate">{node.name}</span>
         {/if}
       </button>
+      <!-- Row actions leave the layout until the row is hovered or focused,
+           so idle titles use the full row width instead of truncating early. -->
       {#if !inTrash}
         <button
           type="button"
-          class="shrink-0 rounded p-1 text-muted-foreground transition-opacity hover:text-foreground {fav
-            ? 'opacity-100'
-            : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'}"
+          class="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground {fav
+            ? ''
+            : 'hidden group-focus-within:inline-flex group-hover:inline-flex'}"
           onclick={() => void setNoteFavourite(node.id, !fav)}
           use:tooltip={fav ? tUi('favourite.remove') : tUi('favourite.add')}
           aria-pressed={fav}
@@ -1208,7 +1210,7 @@
       {#if canDelete}
         <button
           type="button"
-          class="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+          class="hidden shrink-0 rounded p-1 text-muted-foreground hover:text-destructive group-focus-within:inline-flex group-hover:inline-flex"
           onclick={() => void trashWithUndo([{ kind: 'note', id: node.id }])}
           use:tooltip={tUi('fileTree.delete')}
           aria-label={tUi('fileTree.delete')}
