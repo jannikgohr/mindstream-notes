@@ -7,16 +7,21 @@
 //! are then ordered by score desc, modified desc.
 //!
 //! The hit returned to the frontend carries a short body snippet around the
-//! first body match (or the leading body chars for title-only hits), plus
+//! first body match (or the leading body chars for title-only hits), cut
+//! from the body's reading text rather than its Markdown source, plus
 //! char-index ranges for the title + snippet matches so the UI can highlight
 //! them without reimplementing the matcher in JS. Char indices line up with
 //! JavaScript `String#slice` semantics (which counts UTF-16 code units, not
 //! bytes); on the dominant Basic Multilingual Plane characters the two
 //! agree, so the UI can slice directly.
 
+use std::sync::OnceLock;
+
+use regex::{Captures, Regex};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
+use crate::content_stats::{cached_regex, html_re, replace_all_owned};
 use crate::error::AppResult;
 use crate::notes::{NoteKind, NoteSummary};
 
@@ -151,7 +156,7 @@ pub fn rank_candidates(pool: Vec<Candidate>, terms: &[Vec<char>]) -> Vec<SearchH
 
         let score: i64 = (title_matches.len() as i64) * 10 + (body_match_count as i64);
 
-        let (snippet, snippet_matches) = build_snippet(&body, terms);
+        let (snippet, snippet_matches) = build_snippet(&snippet_text(&body), terms);
 
         scored.push((
             score,
@@ -251,6 +256,92 @@ fn merge_ranges(mut raw: Vec<(usize, usize)>) -> Vec<MatchRange> {
     }
     out.push(MatchRange { start: cs, end: ce });
     out
+}
+
+/// The text a reader sees in `body`, for snippets: block markers (headings,
+/// quotes, bullets, task boxes, code fences, table rules and pipes) and
+/// inline emphasis go, link, image and wikilink labels stay. Ranking still
+/// runs on the raw body, so a term found only in a URL keeps its hit and the
+/// snippet falls back to the opening text. Mirrors the TS `snippetText`.
+fn snippet_text(body: &str) -> String {
+    static FENCE: OnceLock<Option<Regex>> = OnceLock::new();
+    static TABLE_RULE: OnceLock<Option<Regex>> = OnceLock::new();
+    static BLOCK_PREFIX: OnceLock<Option<Regex>> = OnceLock::new();
+    static IMAGE: OnceLock<Option<Regex>> = OnceLock::new();
+    static LINK: OnceLock<Option<Regex>> = OnceLock::new();
+    static WIKILINK: OnceLock<Option<Regex>> = OnceLock::new();
+    static STRONG: OnceLock<Option<Regex>> = OnceLock::new();
+    static EMPHASIS: OnceLock<Option<Regex>> = OnceLock::new();
+    static PIPE: OnceLock<Option<Regex>> = OnceLock::new();
+
+    let s = replace_all_owned(
+        body.to_string(),
+        cached_regex("snippet fence", r"(?m)^[ \t]*(?:```|~~~).*$", &FENCE),
+        " ",
+    );
+    let s = replace_all_owned(
+        s,
+        cached_regex(
+            "snippet table rule",
+            r"(?m)^[ \t]*\|?(?:[ \t]*:?-{3,}:?[ \t]*\|)+[ \t]*(?::?-{3,}:?[ \t]*)?$",
+            &TABLE_RULE,
+        ),
+        " ",
+    );
+    let s = replace_all_owned(
+        s,
+        cached_regex(
+            "snippet block prefix",
+            r"(?m)^[ \t]*(?:>[ \t]?)*(?:#{1,6}[ \t]+|(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)?",
+            &BLOCK_PREFIX,
+        ),
+        "",
+    );
+    let s = replace_all_owned(s, html_re(), " ");
+    let s = replace_all_owned(
+        s,
+        cached_regex("snippet image", r"!\[([^\]]*)\]\([^)]*\)", &IMAGE),
+        "${1}",
+    );
+    let s = replace_all_owned(
+        s,
+        cached_regex("snippet link", r"\[([^\]]*)\]\([^)]*\)", &LINK),
+        "${1}",
+    );
+    let s = match cached_regex(
+        "snippet wikilink",
+        r"\[\[([^\]|]*)(?:\|([^\]]*))?\]\]",
+        &WIKILINK,
+    ) {
+        Some(re) => re
+            .replace_all(&s, |c: &Captures| {
+                c.get(2)
+                    .or_else(|| c.get(1))
+                    .map_or("", |m| m.as_str())
+                    .to_string()
+            })
+            .into_owned(),
+        None => s,
+    };
+    let s = replace_all_owned(
+        s,
+        cached_regex("snippet strong", r"\*\*|__|~~|`", &STRONG),
+        "",
+    );
+    let s = replace_all_owned(
+        s,
+        cached_regex(
+            "snippet emphasis",
+            r"(^|[^\w*])[*_]([^*_\s](?:[^*_]*[^*_\s])?)[*_]",
+            &EMPHASIS,
+        ),
+        "${1}${2}",
+    );
+    replace_all_owned(
+        s,
+        cached_regex("snippet pipe", r"[ \t]*\|[ \t]*", &PIPE),
+        " ",
+    )
 }
 
 /// Take a short excerpt of `body` centred on the first match of any

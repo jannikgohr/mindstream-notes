@@ -168,7 +168,7 @@
     <Dialog.Content
       onkeydown={onKeydown}
       onOpenAutoFocus={handleOpenAutoFocus}
-      class="fixed left-1/2 top-[8vh] z-350 flex h-[min(72vh,640px)] w-[min(720px,94vw)] -translate-x-1/2 flex-col overflow-hidden rounded-lg border border-border bg-background text-foreground shadow-xl focus:outline-none"
+      class="fixed left-1/2 top-[8vh] z-350 flex max-h-[min(72vh,640px)] w-[min(720px,94vw)] -translate-x-1/2 flex-col overflow-hidden rounded-lg border border-border bg-background text-foreground shadow-xl focus:outline-none"
     >
       <Dialog.Title class="sr-only">{tUi('search.open')}</Dialog.Title>
 
@@ -241,7 +241,8 @@
                     <span class="truncate font-medium">
                       {#each titleParts as part}
                         {#if part.highlight}
-                          <mark class="bg-primary/30 text-foreground rounded-sm"
+                          <mark
+                            class="bg-accent-brand/20 text-foreground rounded-sm"
                             >{part.text}</mark
                           >
                         {:else}{part.text}{/if}
@@ -254,7 +255,8 @@
                     >
                       {#each snippetParts as part}
                         {#if part.highlight}
-                          <mark class="bg-primary/30 text-foreground rounded-sm"
+                          <mark
+                            class="bg-accent-brand/20 text-foreground rounded-sm"
                             >{part.text}</mark
                           >
                         {:else}{part.text}{/if}
