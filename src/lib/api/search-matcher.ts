@@ -11,7 +11,7 @@
  * The Rust side (src-tauri/src/search/mod.rs) is the source of truth.
  * Keep this file's behaviour aligned: AND semantics on whitespace-split
  * terms, case-insensitive match, +10/title-hit +1/body-hit scoring,
- * 200-char snippet around the first body match.
+ * 200-char snippet of the reading text around the first body match.
  */
 
 import type { MatchRange, SearchHit } from './search';
@@ -83,6 +83,34 @@ function countMatches(lower: string, term: string): number {
 
 function collapseWhitespace(s: string): string {
   return s.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * The text a reader sees in `body`, for snippets: block markers and inline
+ * emphasis go, link, image and wikilink labels stay. Mirrors `snippet_text`
+ * in src-tauri/storage-core/src/search.rs.
+ */
+export function snippetText(body: string): string {
+  return body
+    .replace(/^[ \t]*(?:```|~~~).*$/gm, ' ')
+    .replace(
+      /^[ \t]*\|?(?:[ \t]*:?-{3,}:?[ \t]*\|)+[ \t]*(?::?-{3,}:?[ \t]*)?$/gm,
+      ' '
+    )
+    .replace(
+      /^[ \t]*(?:>[ \t]?)*(?:#{1,6}[ \t]+|(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)?/gm,
+      ''
+    )
+    .replace(/<!--[\s\S]*?-->|<\/?[a-zA-Z][^>]*>/g, ' ')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(
+      /\[\[([^\]|]*)(?:\|([^\]]*))?\]\]/g,
+      (_, target: string, alias?: string) => alias ?? target
+    )
+    .replace(/\*\*|__|~~|`/g, '')
+    .replace(/(^|[^\w*])[*_]([^*_\s](?:[^*_]*[^*_\s])?)[*_]/g, '$1$2')
+    .replace(/[ \t]*\|[ \t]*/g, ' ');
 }
 
 function buildSnippet(
@@ -157,7 +185,7 @@ export function scoreNotes<T extends MatchableNote>(
       0
     );
     const score = titleMatches.length * 10 + bodyMatchCount;
-    const { snippet, matches } = buildSnippet(n.body, terms);
+    const { snippet, matches } = buildSnippet(snippetText(n.body), terms);
     out.push({
       note: n,
       score,
