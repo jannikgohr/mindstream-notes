@@ -118,6 +118,10 @@
   --named-pink: oklch(0.56 0.15 350);
   --named-foreground: oklch(0.99 0.003 265);
 
+  /* Folder glyphs in the tree and search: a quiet amber that marks structure
+   * without competing with the brand colour of the open note. */
+  --folder-icon: var(--named-amber);
+
   /* Find-and-replace and PDF search highlights. Another fixed-hue set — a
    * highlighter is yellow and the focused hit is orange, in either theme —
    * but shared by the editor decorations here and the PDF viewer's overlay,
@@ -271,6 +275,14 @@ html {
   --named-pink: oklch(0.77 0.13 350);
   --named-foreground: oklch(0.21 0.012 270);
 
+  /* The lifted amber glows on the dark surfaces, so folders take it mixed
+   * well toward the muted text colour. */
+  --folder-icon: color-mix(
+    in oklab,
+    var(--named-amber) 55%,
+    var(--muted-foreground)
+  );
+
   --foreground: oklch(0.95 0.006 270);
   --primary: oklch(0.95 0.006 270);
   --primary-foreground: oklch(0.23 0.013 270);
@@ -307,6 +319,8 @@ html {
    * still resolves, and equals the subtle tier. */
   --color-border-subtle: var(--border-subtle);
   --color-border-strong: var(--border-strong);
+
+  --color-folder-icon: var(--folder-icon);
 
   /* Brand accent — `text-accent-brand`, `bg-accent-brand`. */
   --color-accent-brand: var(--accent-brand);

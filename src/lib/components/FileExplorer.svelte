@@ -1115,9 +1115,9 @@
       <!-- Folders are amber so the tree's structure reads at a glance without
            competing with the brand colour that marks the open note. -->
       {#if expanded[node.id]}
-        <FolderOpen class="size-3.5 shrink-0 text-[var(--named-amber)]" />
+        <FolderOpen class="size-3.5 shrink-0 text-folder-icon" />
       {:else}
-        <Folder class="size-3.5 shrink-0 text-[var(--named-amber)]" />
+        <Folder class="size-3.5 shrink-0 text-folder-icon" />
       {/if}
       {#if renaming}
         {@render renderRenameInput()}
