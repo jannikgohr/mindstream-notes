@@ -181,13 +181,13 @@ test('appearance updates live, setup resumes, and shortcuts work in the practice
   await page.getByRole('button', { name: 'Continue', exact: true }).click();
   await expect(page.getByTestId('appearance-preview')).toBeVisible();
   await expect(
-    page.getByRole('button', { name: 'Apollo', exact: true })
+    page.getByRole('button', { name: 'Slate & Indigo', exact: true })
   ).toHaveAttribute('aria-pressed', 'true');
   // Preset changes must complete without touching the retired accent setting.
   // Exercise the new built-ins in both modes before resuming the flow.
   for (const mode of ['Light', 'Dark']) {
     await page.getByRole('button', { name: mode, exact: true }).click();
-    for (const name of ['Slate & Indigo', 'Paper & Teal', 'Apollo']) {
+    for (const name of ['Apollo', 'Paper & Teal', 'Slate & Indigo']) {
       const preset = page.getByRole('button', { name, exact: true });
       await preset.click();
       await expect(preset).toHaveAttribute('aria-pressed', 'true');

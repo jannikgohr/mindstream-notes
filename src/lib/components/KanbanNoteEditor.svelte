@@ -78,6 +78,10 @@
     horizontalInsertionIndex,
     moveItemToIndex
   } from '$lib/actions/horizontal-reorder';
+  import {
+    createEdgeAutoScroll,
+    type EdgeAutoScroll
+  } from '$lib/edge-auto-scroll';
   import { markNoteSaved, tree } from '$lib/stores/tree.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
@@ -522,6 +526,8 @@
   let creatingList = $state(false);
   let listDrag = $state<ListPointerDrag | null>(null);
   let listDragGhost: HTMLElement | null = null;
+  let listDragAutoScroll: EdgeAutoScroll | null = null;
+  let listDragClientX = 0;
   let listDropIndex = $state<number | null>(null);
   let listDragMoved = $state(false);
   const displayedColumns = $derived.by(() => {
@@ -989,6 +995,10 @@
     };
     listDropIndex = sourceIndex;
     listDragMoved = false;
+    const boardScroll = host?.querySelector<HTMLElement>('.wx-scroll');
+    listDragAutoScroll = boardScroll
+      ? createEdgeAutoScroll(boardScroll, 'x', updateListDropIndex)
+      : null;
     window.addEventListener('pointermove', moveListPointerDrag, true);
     window.addEventListener('pointerup', finishListPointerDrag, true);
     window.addEventListener('pointercancel', cancelListPointerDrag, true);
@@ -1003,23 +1013,24 @@
   function moveListPointerDrag(event: PointerEvent): void {
     if (!listDrag || event.pointerId !== listDrag.pointerId) return;
     event.preventDefault();
-    const boardScroll = host?.querySelector<HTMLElement>('.wx-scroll');
-    if (boardScroll) {
-      const rect = boardScroll.getBoundingClientRect();
-      if (event.clientX < rect.left + 32) boardScroll.scrollLeft -= 12;
-      else if (event.clientX > rect.right - 32) boardScroll.scrollLeft += 12;
-    }
+    listDragClientX = event.clientX;
+    listDragAutoScroll?.update(event.clientX, event.clientY);
 
     if (listDragGhost) {
       listDragGhost.style.left = `${event.clientX - listDrag.grabX}px`;
       listDragGhost.style.visibility = 'visible';
     }
     listDragMoved = true;
+    updateListDropIndex();
+  }
+
+  function updateListDropIndex(): void {
+    if (!listDrag) return;
     listDropIndex = horizontalInsertionIndex(
       board.columns,
       listDrag.id,
       listReorderElements(),
-      event.clientX
+      listDragClientX
     );
   }
 
@@ -1043,6 +1054,8 @@
     window.removeEventListener('pointermove', moveListPointerDrag, true);
     window.removeEventListener('pointerup', finishListPointerDrag, true);
     window.removeEventListener('pointercancel', cancelListPointerDrag, true);
+    listDragAutoScroll?.stop();
+    listDragAutoScroll = null;
     listDragGhost?.remove();
     listDragGhost = null;
     listDrag = null;

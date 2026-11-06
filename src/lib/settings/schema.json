@@ -147,7 +147,7 @@
               "id": "appearance.preset",
               "scope": "D",
               "type": "custom",
-              "default": "default",
+              "default": "builtin:slate-indigo",
               "customId": "theme-presets"
             },
             {

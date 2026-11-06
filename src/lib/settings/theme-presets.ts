@@ -27,7 +27,7 @@ export const THEME_TOKENS = [
 ] as const;
 export type ThemeToken = (typeof THEME_TOKENS)[number];
 /**
- * Apollo's eight named colours, for things with a colour of their own (vault
+ * Eight named colours, for things with a colour of their own (vault
  * tiles). Code stores the name; `--named-<name>` renders it.
  */
 export const NAMED_COLORS = [

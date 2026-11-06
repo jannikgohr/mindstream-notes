@@ -4,6 +4,10 @@
   import { tUi } from '$lib/settings/i18n.svelte';
   import { moveItemToIndex } from '$lib/actions/horizontal-reorder';
   import {
+    createEdgeAutoScroll,
+    type EdgeAutoScroll
+  } from '$lib/edge-auto-scroll';
+  import {
     resolveInlineListEdit,
     type InlineListEditTrigger
   } from './inline-list-edit';
@@ -40,6 +44,8 @@
   let draggedId = $state<string | null>(null);
   let dragVisual = $state<DragVisual | null>(null);
   let dragPointerId: number | null = null;
+  let dragClientY = 0;
+  let dragAutoScroll: EdgeAutoScroll | null = null;
   let persistedOrder = initialColumns.map((column) => column.id).join('\u0000');
   const draggedColumn = $derived(
     ordered.find((column) => column.id === draggedId) ?? null
@@ -100,6 +106,10 @@
       width: rect.width,
       grabY: event.clientY - rect.top
     };
+    dragClientY = event.clientY;
+    dragAutoScroll = listContainer
+      ? createEdgeAutoScroll(listContainer, 'y', updateDragOrder)
+      : null;
     window.addEventListener('pointermove', moveDrag, { capture: true });
     window.addEventListener('pointerup', finishDrag, { capture: true });
     window.addEventListener('pointercancel', cancelDrag, { capture: true });
@@ -115,18 +125,19 @@
       return;
     event.preventDefault();
     dragVisual.top = event.clientY - dragVisual.grabY;
+    dragClientY = event.clientY;
+    dragAutoScroll?.update(event.clientX, event.clientY);
+    updateDragOrder();
+  }
 
-    const containerRect = listContainer.getBoundingClientRect();
-    if (event.clientY < containerRect.top + 48) listContainer.scrollTop -= 12;
-    else if (event.clientY > containerRect.bottom - 48)
-      listContainer.scrollTop += 12;
-
+  function updateDragOrder(): void {
+    if (!draggedId || !listContainer) return;
     const otherRows = Array.from(
       listContainer.querySelectorAll<HTMLElement>('[data-manage-list-id]')
     ).filter((row) => row.dataset.manageListId !== draggedId);
     const insertIndex = otherRows.filter((row) => {
       const rect = row.getBoundingClientRect();
-      return event.clientY > rect.top + rect.height / 2;
+      return dragClientY > rect.top + rect.height / 2;
     }).length;
     ordered = moveItemToIndex(ordered, draggedId, insertIndex);
   }
@@ -151,6 +162,8 @@
     window.removeEventListener('pointermove', moveDrag, true);
     window.removeEventListener('pointerup', finishDrag, true);
     window.removeEventListener('pointercancel', cancelDrag, true);
+    dragAutoScroll?.stop();
+    dragAutoScroll = null;
     draggedId = null;
     dragVisual = null;
     dragPointerId = null;

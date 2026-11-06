@@ -3,7 +3,8 @@ import { clickFileTreeCreateAction } from './file-tree-toolbar';
 
 /**
  * Tree context-menu operations in browser-fallback mode (T2): rename a note,
- * and permanently purge a single note from Trash. These complete the trash
+ * undo a move to Trash from its toast, and permanently purge a single note
+ * from Trash. These complete the trash
  * lifecycle that tree-lifecycle.spec.ts starts (trash → restore → empty) by
  * adding the single-item "Delete permanently" path, plus inline rename — all
  * against the live tree store and the in-memory API.
@@ -54,6 +55,24 @@ test('renames a note from the context menu', async ({ page }) => {
 
   await expect(treeItem(page, renamed)).toBeVisible();
   await expect(treeItem(page, original)).toHaveCount(0);
+});
+
+test('undoes moving a note to trash from the toast', async ({ page }) => {
+  const title = `Undo trash ${Date.now()}`;
+  await createRootNote(page, title);
+
+  await treeItem(page, title).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: /^Delete\b/ }).click();
+  await expect(treeItem(page, title)).toHaveCount(0);
+
+  const toast = page
+    .getByRole('status')
+    .filter({ hasText: `"${title}" moved to the trash` });
+  await expect(toast).toBeVisible();
+  await toast.getByRole('button', { name: 'Undo', exact: true }).click();
+
+  await expect(treeItem(page, title)).toBeVisible();
+  await expect(toast).toHaveCount(0);
 });
 
 test('permanently deletes a single note from trash', async ({ page }) => {
