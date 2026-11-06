@@ -176,7 +176,11 @@
     -->
     {#if setting.type === 'radio'}
       {@const s = setting as SelectSetting}
-      <div class="mt-2 flex flex-wrap gap-1.5">
+      <!-- One segmented track: the options share a border and the chosen one
+           is raised out of it, so the choice reads as state, not focus. -->
+      <div
+        class="mt-2 inline-flex flex-wrap gap-0.5 rounded-md border border-border bg-muted p-0.5"
+      >
         {#each visibleOptions as opt (opt)}
           <!--
             No tooltip here: a tooltip would only ever be wanted while the
@@ -187,10 +191,11 @@
           <button
             type="button"
             disabled={lockedBySession}
-            class="rounded-md border border-border px-3 py-1 text-xs transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent {value ===
+            aria-pressed={value === opt}
+            class="rounded-[calc(var(--radius)-4px)] px-3 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 {value ===
             opt
-              ? 'border-ring bg-accent text-accent-foreground'
-              : 'bg-background text-foreground'}"
+              ? 'bg-background font-medium text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'}"
             onclick={() => commit(opt)}
           >
             {tValue(s.id, opt)}

@@ -9,7 +9,8 @@
    * `value` is bound — parent `commit()` runs on every change. The
    * trigger renders the active option's translated label, falling back
    * to the raw value when an i18n entry is missing. An optional `icon`
-   * leads the trigger label.
+   * leads the trigger label, and `labelFor` names options that have no
+   * i18n entry, such as user theme presets.
    */
   import type { Component } from 'svelte';
   import { Select } from 'bits-ui';
@@ -27,6 +28,7 @@
     disabled?: boolean;
     touchFriendly?: boolean;
     icon?: Component;
+    labelFor?: (value: string) => string;
   }
   let {
     settingId,
@@ -37,10 +39,11 @@
     class: className,
     disabled = false,
     touchFriendly = false,
-    icon: Icon
+    icon: Icon,
+    labelFor = (option: string) => tValue(settingId, option)
   }: Props = $props();
 
-  const currentLabel = $derived(value ? tValue(settingId, value) : '');
+  const currentLabel = $derived(value ? labelFor(value) : '');
 </script>
 
 <Select.Root
@@ -48,7 +51,7 @@
   {disabled}
   value={value ?? ''}
   onValueChange={(v) => onChange(v)}
-  items={options.map((o) => ({ value: o, label: tValue(settingId, o) }))}
+  items={options.map((o) => ({ value: o, label: labelFor(o) }))}
 >
   <Select.Trigger
     aria-label={ariaLabel}
@@ -76,7 +79,7 @@
         {#each options as opt (opt)}
           <Select.Item
             value={opt}
-            label={tValue(settingId, opt)}
+            label={labelFor(opt)}
             class={cn(
               touchFriendly && 'min-h-11',
               'flex cursor-pointer select-none items-center justify-between gap-2 rounded-sm px-2 py-1.5 outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50'
@@ -84,7 +87,7 @@
           >
             {#snippet child({ props, selected })}
               <div {...props}>
-                <span class="truncate">{tValue(settingId, opt)}</span>
+                <span class="truncate">{labelFor(opt)}</span>
                 {#if selected}
                   <Check class="size-3.5 text-muted-foreground" />
                 {/if}
