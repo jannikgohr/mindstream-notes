@@ -1014,7 +1014,11 @@
             <section
               class="pointer-events-auto flex max-w-md flex-col items-center px-6 py-7 text-center"
             >
-              <FileText class="mx-auto size-8 text-muted-foreground" />
+              <div
+                class="flex size-14 items-center justify-center rounded-2xl bg-accent-brand/15 text-accent-brand"
+              >
+                <FileText class="size-7" />
+              </div>
               <h2 class="mt-4 text-lg font-semibold">
                 {tUi('desktop.emptyState.title')}
               </h2>
@@ -1023,7 +1027,11 @@
               </p>
               <!-- The two ways out of an empty workspace, so it isn't a dead end. -->
               <div class="mt-5 flex justify-center gap-2">
-                <Button size="sm" onclick={createNote}>
+                <Button
+                  size="sm"
+                  onclick={createNote}
+                  class="bg-accent-brand text-accent-brand-foreground hover:bg-accent-brand/90"
+                >
                   <FilePlus class="size-4" />
                   {tUi('fileTree.newNote')}
                 </Button>
