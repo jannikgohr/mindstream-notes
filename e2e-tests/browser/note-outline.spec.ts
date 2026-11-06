@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { clickFileTreeCreateAction } from './file-tree-toolbar';
+import { openDetailsPanel } from './details-panel';
 
 test('outline follows the open note and scrolls to its live headings', async ({
   page
@@ -30,6 +31,7 @@ test('outline follows the open note and scrolls to its live headings', async ({
   await page.keyboard.press('Enter');
   await page.keyboard.insertText('Keep the navigation and details consistent.');
 
+  await openDetailsPanel(page);
   const outline = page.getByRole('navigation', {
     name: 'Outline',
     exact: true
