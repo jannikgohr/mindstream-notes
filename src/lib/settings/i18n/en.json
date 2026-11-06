@@ -350,6 +350,7 @@
     "sidebar.sections.empty": "Choose sidebar sections in Appearance settings.",
     "desktop.emptyState.title": "No note open",
     "desktop.emptyState.message": "Open a note from the explorer to start editing.",
+    "desktop.emptyState.recent": "Recent notes",
     "history.title": "History",
     "history.refresh": "Refresh history",
     "history.back": "Back",

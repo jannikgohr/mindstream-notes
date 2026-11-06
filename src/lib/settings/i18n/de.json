@@ -187,6 +187,7 @@
     "sidebar.sections.empty": "Wähle die Seitenleistenbereiche in den Darstellungseinstellungen aus.",
     "desktop.emptyState.title": "Keine Notiz geöffnet",
     "desktop.emptyState.message": "Öffne links im Explorer eine Notiz, um mit dem Bearbeiten zu beginnen.",
+    "desktop.emptyState.recent": "Zuletzt bearbeitet",
     "history.title": "Verlauf",
     "history.refresh": "Verlauf aktualisieren",
     "history.back": "Zurück",
