@@ -6,6 +6,7 @@ import {
   clearBrowserTestRecovery
 } from './recovery';
 import type { BrowserCommand, BrowserRequest } from './commands';
+import { isBrowserDemo } from './demo';
 import { browserTestVaultId } from './testing';
 import { vaultNamespace } from './namespace';
 import {
@@ -38,7 +39,7 @@ function failedReset(cause?: unknown): StorageError {
   return {
     ...error,
     message:
-      tUi('browser.testing.blocked') +
+      tUi(isBrowserDemo() ? 'browser.demo.failed' : 'browser.testing.blocked') +
       ('message' in error ? ` ${error.message}` : '')
   };
 }

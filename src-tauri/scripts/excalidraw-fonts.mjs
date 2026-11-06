@@ -32,9 +32,10 @@ export function excalidrawFonts() {
       ssr = Boolean(config.build.ssr);
     },
     configureServer(server) {
+      const base = server.config.base.replace(/\/$/, '');
       const files = new Map(
         fontFiles().map((path) => [
-          `/excalidraw/fonts/${relative(directory, path).split(sep).join('/')}`,
+          `${base}/excalidraw/fonts/${relative(directory, path).split(sep).join('/')}`,
           path
         ])
       );

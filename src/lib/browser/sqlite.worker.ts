@@ -108,7 +108,7 @@ async function open(reset = false) {
       }
     }
     const moduleUrl = new URL(
-      `${import.meta.env.BASE_URL}browser-wasm/storage.js`,
+      `${import.meta.env.BASE_URL.replace(/\/$/, '')}/browser-wasm/storage.js`,
       self.location.origin
     ).href;
     const wasm = (await import(/* @vite-ignore */ moduleUrl)) as WasmModule;

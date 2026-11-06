@@ -1,5 +1,6 @@
 <script lang="ts">
   import '../app.css';
+  import { base } from '$app/paths';
   import { onMount, type Component, type Snippet } from 'svelte';
   let { children } = $props();
   let picker = $state(false);
@@ -7,7 +8,7 @@
   let failed = $state(false);
   onMount(() => {
     picker = /^\/(vault-picker|sqlite-proof)\/?$/.test(
-      window.location.pathname
+      window.location.pathname.slice(base.length)
     );
     if (!picker)
       void import('$lib/components/AppLayout.svelte')

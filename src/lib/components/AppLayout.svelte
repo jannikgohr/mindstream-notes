@@ -1,4 +1,5 @@
 <script lang="ts">
+  import DemoBanner from '$lib/browser/DemoBanner.svelte';
   import { onMount, untrack } from 'svelte';
   import { ModeWatcher, mode } from 'mode-watcher';
   import { isTauri } from '$lib/api/core';
@@ -362,7 +363,8 @@
 <div
   class="flex h-full w-full flex-col overflow-hidden bg-background text-foreground"
 >
-  {@render children()}
+  <DemoBanner />
+  <div class="min-h-0 flex-1 overflow-hidden">{@render children()}</div>
 </div>
 
 <!-- Lazy singleton host: imports each dialog/search component only when

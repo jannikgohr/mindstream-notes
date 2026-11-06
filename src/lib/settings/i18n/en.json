@@ -1,6 +1,13 @@
 {
   "language": "en",
   "ui": {
+    "browser.demo.label": "Web demo",
+    "browser.demo.notice": "Notes stay in this browser. Clearing browser data removes them. Sync and desktop features require the installed app.",
+    "browser.demo.download": "Download the app",
+    "browser.demo.reset": "Reset demo",
+    "browser.demo.resetting": "Resetting demo…",
+    "browser.demo.confirm": "Reset the demo? This deletes all notes and attachments in this demo vault and restores the sample notes.",
+    "browser.demo.failed": "Could not reset the demo. Close other demo tabs and try again.",
     "browser.testing.label": "Browser testing",
     "browser.testing.vault": "Test vault: {id}",
     "browser.testing.reset": "Reset test data",
@@ -521,6 +528,9 @@
     "sharing.links.loadFailed": "Couldn't load the links.",
     "sharing.dialog.toLinks": "Invite with a link",
     "sharing.menu.joinByLink": "Join shared folder…",
+    "sharing.newFolder.action": "New shared folder",
+    "sharing.newFolder.keptInHome": "“{name}” wasn't shared, so it stays in Home. Share it from its menu when you're ready.",
+    "sharing.signInToShare": "Sign in to share",
     "sharing.join.title": "Join a shared folder",
     "sharing.join.linkLabel": "Invite link",
     "sharing.join.linkPlaceholder": "Paste the link you were sent",
