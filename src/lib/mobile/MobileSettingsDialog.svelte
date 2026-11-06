@@ -124,6 +124,8 @@
     });
   }
 
+  let contentEl = $state<HTMLElement | null>(null);
+
   function visibleSettings(cat: Category): Setting[] {
     const out: Setting[] = [];
     for (const sec of cat.sections) {
@@ -143,16 +145,24 @@
   }}
 >
   <Dialog.Portal>
+    <!-- Opening focuses the page itself rather than the close button, so a
+         tap does not leave a focus ring on it. -->
     <Dialog.Content
+      bind:ref={contentEl}
+      tabindex={-1}
+      onOpenAutoFocus={(event: Event) => {
+        event.preventDefault();
+        contentEl?.focus();
+      }}
       class="safe-top safe-bottom safe-x fixed inset-0 z-50 flex flex-col bg-background text-foreground focus:outline-none"
     >
       {#if activeCategory === null}
         <!-- ====================== Category list ====================== -->
         <header
-          class="flex h-12 shrink-0 items-center justify-between border-b border-border bg-card px-2"
+          class="grid h-14 shrink-0 grid-cols-[2.75rem_1fr_2.75rem] items-center border-b border-border bg-card px-1.5"
         >
-          <div class="w-9 shrink-0"></div>
-          <Dialog.Title class="truncate text-sm font-semibold">
+          <span aria-hidden="true"></span>
+          <Dialog.Title class="truncate text-center text-base font-semibold">
             {tUi('title')}
           </Dialog.Title>
           <Dialog.Close
@@ -168,7 +178,7 @@
             {@const Icon = categoryIcon(cat.icon)}
             <button
               type="button"
-              class="flex w-full items-center gap-3 border-b border-border px-4 py-3.5 text-left text-sm transition-colors hover:bg-accent"
+              class="flex min-h-13 w-full items-center gap-3 border-b border-border px-4 py-3 text-left text-sm transition-colors hover:bg-accent"
               onclick={() => (activeCategoryId = cat.id)}
             >
               <Icon class="size-5 shrink-0 text-muted-foreground" />
@@ -182,7 +192,7 @@
       {:else}
         <!-- ====================== Category detail ====================== -->
         <header
-          class="flex h-12 shrink-0 items-center gap-1 border-b border-border bg-card px-2"
+          class="grid h-14 shrink-0 grid-cols-[2.75rem_1fr_2.75rem] items-center border-b border-border bg-card px-1.5"
         >
           <button
             type="button"
@@ -193,7 +203,7 @@
           >
             <ArrowLeft class="size-5" />
           </button>
-          <Dialog.Title class="min-w-0 flex-1 truncate text-sm font-semibold">
+          <Dialog.Title class="truncate text-center text-base font-semibold">
             {tLabel('categories', activeCategory.id)}
           </Dialog.Title>
           <Dialog.Close
@@ -204,12 +214,14 @@
           </Dialog.Close>
         </header>
 
-        <section class="flex-1 overflow-y-auto px-4 pb-4 pt-6">
+        <section class="flex-1 overflow-y-auto pb-6">
           {#if activeCategory.id === PLUGINS_CATEGORY_ID}
             <!-- Management overview first, then each enabled plugin's sections. -->
-            <PluginsOverview onOpenSettings={scrollToPluginSettings} />
+            <div class="px-4 pt-6">
+              <PluginsOverview onOpenSettings={scrollToPluginSettings} />
+            </div>
           {:else if visibleSettings(activeCategory).length === 0}
-            <p class="px-1 py-6 text-center text-sm text-muted-foreground">
+            <p class="px-4 py-6 text-center text-sm text-muted-foreground">
               {tUi('empty')}
             </p>
           {/if}
@@ -218,17 +230,15 @@
               ? sec.settings.filter((s) => isVisible(s))
               : []}
             {#if sectionSettings.length > 0}
-              <div class="mb-4" id="plugins-section-{sec.id}">
-                <!-- One grouped block per section, labelled above it, so
-                     related settings read together at a glance. -->
+              <!-- Rows run full width with a divider between them, like the
+                   category list, under a small section label. -->
+              <div id="plugins-section-{sec.id}">
                 <h3
-                  class="mb-2 px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                  class="px-4 pb-1 pt-6 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
                 >
                   {tLabel('sections', sec.id)}
                 </h3>
-                <div
-                  class="divide-y divide-border rounded-lg border border-border bg-surface-1 px-4"
-                >
+                <div class="divide-y divide-border border-b border-border px-4">
                   {#each sectionSettings as s (s.id)}
                     <SettingControl setting={s} />
                   {/each}
@@ -239,7 +249,10 @@
           {#if activeCategory.id === PLUGINS_CATEGORY_ID}
             {#each allPlugins() as plugin (plugin.manifest.id)}
               {#if plugin.enabled && (plugin.manifest.contributes.nativeTools ?? []).length > 0}
-                <div class="mb-6" id="plugins-nativetools-{plugin.manifest.id}">
+                <div
+                  class="mb-6 px-4 pt-6"
+                  id="plugins-nativetools-{plugin.manifest.id}"
+                >
                   <PluginNativeToolsSection pluginId={plugin.manifest.id} />
                   <PluginTextCheckersSection pluginId={plugin.manifest.id} />
                 </div>

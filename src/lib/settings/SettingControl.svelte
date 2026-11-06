@@ -255,9 +255,12 @@
     {/if}
   </div>
 
-  <!-- Right-side compact controls -->
+  <!-- Right-side compact controls. On phones a slider takes its own line
+       under the label, so the label never wraps beside it. -->
   <div
-    class="flex items-center gap-2 pt-0.5"
+    class="flex items-center gap-2 pt-0.5 {setting.type === 'slider'
+      ? 'max-sm:col-span-2'
+      : ''}"
     class:hidden={setting.type === 'custom' ||
       (setting.type === 'radio' && !pending)}
   >
@@ -315,7 +318,7 @@
       {@const s = setting as NumericSetting}
       {@const storeVal = (value as number | undefined) ?? s.min ?? 0}
       {@const display = sliderPreview ?? storeVal}
-      <div class="flex items-center gap-2">
+      <div class="flex w-full items-center gap-2 sm:w-auto">
         <!--
           min/max/step come BEFORE value so the browser doesn't clamp the
           initial value against the default 0..100 range (which would pin
@@ -337,7 +340,7 @@
             sliderPreview = null;
             commit(v);
           }}
-          class="-my-3 h-11 w-32 cursor-pointer appearance-none rounded-full bg-input bg-clip-content py-[19px] accent-accent-brand sm:my-0 sm:h-1.5 sm:w-44 sm:py-0"
+          class="-my-3 h-11 min-w-0 flex-1 cursor-pointer appearance-none rounded-full bg-input bg-clip-content py-[19px] accent-accent-brand sm:my-0 sm:h-1.5 sm:w-44 sm:flex-none sm:py-0"
         />
         <span
           class="w-12 text-right text-xs tabular-nums text-muted-foreground"
