@@ -87,11 +87,11 @@
           : tUiFormat('theme.missingOption', { id });
       }}
       onChange={(id) => void select(id)}
-      class="h-9 w-64"
+      class="h-11 w-full sm:h-9 sm:w-64"
     />
     {#if custom && !missing}<button
         type="button"
-        class="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
+        class="rounded-md border border-border px-3 py-3 text-sm hover:bg-accent sm:py-1.5"
         disabled={busy}
         onclick={remove}>{tUi('theme.remove')}</button
       >{/if}
@@ -108,7 +108,7 @@
   <details bind:open={editorOpen}>
     <!-- The app's chevron instead of the browser's disclosure triangle. -->
     <summary
-      class="flex w-fit cursor-pointer list-none items-center gap-1 text-sm [&::-webkit-details-marker]:hidden"
+      class="flex w-fit cursor-pointer list-none items-center gap-1 py-3 text-sm sm:py-0 [&::-webkit-details-marker]:hidden"
     >
       <ChevronRight
         class="size-3.5 text-muted-foreground transition-transform {editorOpen
@@ -120,7 +120,7 @@
     <p class="mt-2 text-sm text-muted-foreground">{tUi('theme.importHelp')}</p>
     <button
       type="button"
-      class="mt-2 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
+      class="mt-2 rounded-md border border-border px-3 py-3 text-sm hover:bg-accent sm:py-1.5"
       disabled={busy}
       onclick={() => (raw = JSON.stringify(preset, null, 2))}
       >{tUi('theme.editJson')}</button
@@ -134,7 +134,7 @@
     ></textarea>
     <button
       type="button"
-      class="mt-2 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
+      class="mt-2 rounded-md border border-border px-3 py-3 text-sm hover:bg-accent sm:py-1.5"
       disabled={busy || !raw.trim()}
       onclick={save}>{tUi('theme.save')}</button
     >

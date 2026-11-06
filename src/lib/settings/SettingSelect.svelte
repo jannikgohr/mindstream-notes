@@ -56,7 +56,7 @@
   <Select.Trigger
     aria-label={ariaLabel}
     class={cn(
-      'inline-flex h-8 w-44 items-center justify-between gap-2 rounded-md border border-input bg-background px-2 text-sm transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50',
+      'inline-flex h-11 w-44 items-center justify-between gap-2 rounded-md border border-input bg-background px-2 text-sm sm:h-8 transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50',
       className
     )}
   >

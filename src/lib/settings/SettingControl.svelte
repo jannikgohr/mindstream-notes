@@ -150,7 +150,12 @@
 </script>
 
 <div class="grid grid-cols-[1fr_auto] items-start gap-x-4 gap-y-2 py-3">
-  <div class="min-w-0" class:col-span-2={setting.type === 'custom'}>
+  <!-- Custom and segmented settings take the full row, so their control
+       ends on the same right edge as the switches and pickers. -->
+  <div
+    class="min-w-0"
+    class:col-span-2={setting.type === 'custom' || setting.type === 'radio'}
+  >
     <div class="flex items-center gap-2">
       <span class="text-sm font-medium">{label}</span>
       {#if modified}
@@ -180,7 +185,7 @@
            is filled with a brand tint, so the choice reads as state in both
            themes rather than as a focus ring. -->
       <div
-        class="mt-2 inline-flex flex-wrap gap-0.5 rounded-md border border-border bg-muted p-0.5"
+        class="mt-2 flex w-full gap-0.5 rounded-md border border-border bg-muted p-0.5 sm:inline-flex sm:w-auto sm:flex-wrap"
       >
         {#each visibleOptions as opt (opt)}
           <!--
@@ -193,7 +198,7 @@
             type="button"
             disabled={lockedBySession}
             aria-pressed={value === opt}
-            class="rounded-[calc(var(--radius)-4px)] px-3 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 {value ===
+            class="min-h-11 flex-auto rounded-[calc(var(--radius)-4px)] px-2.5 py-1.5 text-[13px] leading-tight transition-colors sm:min-h-0 sm:flex-none sm:whitespace-nowrap sm:px-3 sm:py-1 sm:text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 {value ===
             opt
               ? 'bg-accent-brand/15 font-medium text-accent-brand shadow-sm'
               : 'text-muted-foreground hover:text-foreground'}"
@@ -253,7 +258,8 @@
   <!-- Right-side compact controls -->
   <div
     class="flex items-center gap-2 pt-0.5"
-    class:hidden={setting.type === 'custom'}
+    class:hidden={setting.type === 'custom' ||
+      (setting.type === 'radio' && !pending)}
   >
     {#if pending}
       <Loader2
@@ -270,14 +276,15 @@
         aria-label={label}
         disabled={pending}
         onclick={() => commit(!value)}
-        class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60 {value
-          ? 'bg-primary'
+        class="relative inline-flex h-7 w-12 shrink-0 cursor-pointer items-center rounded-full before:absolute before:-inset-2 before:content-[''] sm:h-5 sm:w-9 sm:before:hidden border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60 {value
+          ? 'bg-accent-brand'
           : 'bg-input'}"
       >
+        <!-- On, the switch takes the accent like the sliders and segments. -->
         <span
-          class="pointer-events-none block size-4 rounded-full bg-background shadow-sm ring-0 transition-transform {value
-            ? 'translate-x-4.5'
-            : 'translate-x-0.5'}"
+          class="pointer-events-none block size-6 rounded-full shadow-sm ring-0 transition-transform sm:size-4 {value
+            ? 'translate-x-5.5 bg-accent-brand-foreground sm:translate-x-4.5'
+            : 'translate-x-0.5 bg-background'}"
         ></span>
       </button>
     {:else if setting.type === 'text'}
@@ -330,7 +337,7 @@
             sliderPreview = null;
             commit(v);
           }}
-          class="h-1.5 w-44 cursor-pointer appearance-none rounded-full bg-input accent-accent-brand"
+          class="-my-3 h-11 w-32 cursor-pointer appearance-none rounded-full bg-input bg-clip-content py-[19px] accent-accent-brand sm:my-0 sm:h-1.5 sm:w-44 sm:py-0"
         />
         <span
           class="w-12 text-right text-xs tabular-nums text-muted-foreground"
