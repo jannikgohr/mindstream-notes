@@ -68,24 +68,34 @@
 </script>
 
 <div class="flex flex-col gap-3">
-  <SettingSelect
-    settingId="appearance.preset"
-    ariaLabel={tUi('theme.select')}
-    value={selected}
-    disabled={busy}
-    options={[
-      ...(missing ? [selected] : []),
-      ...themeCatalog.presets.map((item) => item.id)
-    ]}
-    labelFor={(id) => {
-      const item = themeCatalog.presets.find((entry) => entry.id === id);
-      return item
-        ? presetLabel(item)
-        : tUiFormat('theme.missingOption', { id });
-    }}
-    onChange={(id) => void select(id)}
-    class="h-9 w-full"
-  />
+  <!-- The picker sits at a width that fits preset names. Inspecting or
+       editing a preset's JSON is advanced, so it lives in the disclosure. -->
+  <div class="flex flex-wrap items-center gap-2">
+    <SettingSelect
+      settingId="appearance.preset"
+      ariaLabel={tUi('theme.select')}
+      value={selected}
+      disabled={busy}
+      options={[
+        ...(missing ? [selected] : []),
+        ...themeCatalog.presets.map((item) => item.id)
+      ]}
+      labelFor={(id) => {
+        const item = themeCatalog.presets.find((entry) => entry.id === id);
+        return item
+          ? presetLabel(item)
+          : tUiFormat('theme.missingOption', { id });
+      }}
+      onChange={(id) => void select(id)}
+      class="h-9 w-64"
+    />
+    {#if custom && !missing}<button
+        type="button"
+        class="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
+        disabled={busy}
+        onclick={remove}>{tUi('theme.remove')}</button
+      >{/if}
+  </div>
   {#if missing}<p role="status" class="text-sm text-muted-foreground">
       {tUi('theme.missing')}
     </p>{/if}
@@ -95,23 +105,6 @@
     >
       {error || themeCatalog.error}
     </p>{/if}
-  <div class="flex flex-wrap gap-2">
-    <button
-      type="button"
-      class="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
-      disabled={busy}
-      onclick={() => {
-        raw = JSON.stringify(preset, null, 2);
-        editorOpen = true;
-      }}>{tUi('theme.editJson')}</button
-    >
-    {#if custom && !missing}<button
-        type="button"
-        class="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
-        disabled={busy}
-        onclick={remove}>{tUi('theme.remove')}</button
-      >{/if}
-  </div>
   <details bind:open={editorOpen}>
     <!-- The app's chevron instead of the browser's disclosure triangle. -->
     <summary
@@ -125,6 +118,13 @@
       />{tUi('theme.import')}
     </summary>
     <p class="mt-2 text-sm text-muted-foreground">{tUi('theme.importHelp')}</p>
+    <button
+      type="button"
+      class="mt-2 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
+      disabled={busy}
+      onclick={() => (raw = JSON.stringify(preset, null, 2))}
+      >{tUi('theme.editJson')}</button
+    >
     <textarea
       aria-label={tUi('theme.json')}
       bind:value={raw}
