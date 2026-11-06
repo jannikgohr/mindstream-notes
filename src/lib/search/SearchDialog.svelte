@@ -251,7 +251,7 @@
                   </span>
                   {#if hit.snippet}
                     <span
-                      class="line-clamp-2 pl-6 text-[13px] leading-snug text-muted-foreground"
+                      class="line-clamp-2 pl-6 text-sm leading-5 text-muted-foreground"
                     >
                       {#each snippetParts as part}
                         {#if part.highlight}
@@ -265,9 +265,11 @@
                   {/if}
                   {#if path}
                     <span
-                      class="flex items-center gap-1 pl-6 text-[11px] text-muted-foreground"
+                      class="flex items-center gap-1 pl-6 text-xs text-muted-foreground"
                     >
-                      <Folder class="size-3 shrink-0" />
+                      <Folder
+                        class="size-3 shrink-0 text-[var(--named-amber)]"
+                      />
                       <span class="truncate">{path}</span>
                     </span>
                   {/if}
