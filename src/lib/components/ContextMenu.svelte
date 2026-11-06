@@ -13,6 +13,11 @@
   import PluginIcon from '$lib/plugins/PluginIcon.svelte';
   import { noteKindIcon } from './note-kind-icon';
   import { menuItemForShortcut } from './context-menu-shortcuts';
+  import {
+    isAimingAtSubmenu,
+    SUBMENU_AIM_DELAY_MS,
+    type AimPoint
+  } from './submenu-aim';
   import type { MenuItem } from './context-menu-types';
 
   interface Props {
@@ -36,6 +41,13 @@
   let { x, y, items, ignoreEl, layer = 'app', onClose }: Props = $props();
   let menuEl: HTMLDivElement | null = $state(null);
   let activeSubmenu = $state<number | null>(null);
+  let submenuEl: HTMLDivElement | null = $state(null);
+  // Recent pointer positions; the oldest is the safe triangle's apex.
+  let pointerTrail: AimPoint[] = [];
+  // A sibling the pointer crossed while aiming at the open submenu. It takes
+  // over once the pointer leaves the triangle or rests.
+  let pendingSubmenu: { index: number | null } | null = null;
+  let aimTimer: ReturnType<typeof setTimeout> | null = null;
   const layerClass = $derived(
     layer === 'editor' ? 'z-[250]' : layer === 'overlay' ? 'z-[450]' : 'z-350'
   );
@@ -68,13 +80,84 @@
       onClose();
     };
     window.addEventListener('keydown', onKey);
+    window.addEventListener('pointermove', onPointerMove);
     // Defer one tick so the click that opened us doesn't immediately close us.
     queueMicrotask(() => window.addEventListener('pointerdown', onClickAway));
     return () => {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('pointerdown', onClickAway);
+      window.removeEventListener('pointermove', onPointerMove);
+      clearAim();
     };
   });
+
+  function clearAim() {
+    if (aimTimer) clearTimeout(aimTimer);
+    aimTimer = null;
+    pendingSubmenu = null;
+  }
+
+  function aimingAtSubmenu(): boolean {
+    if (!submenuEl || pointerTrail.length < 2) return false;
+    return isAimingAtSubmenu(
+      pointerTrail[0],
+      pointerTrail[pointerTrail.length - 1],
+      submenuEl.getBoundingClientRect(),
+      submenuOpensLeft
+    );
+  }
+
+  function armAim(index: number | null) {
+    pendingSubmenu = { index };
+    if (aimTimer) clearTimeout(aimTimer);
+    aimTimer = setTimeout(commitPendingSubmenu, SUBMENU_AIM_DELAY_MS);
+  }
+
+  function commitPendingSubmenu() {
+    const pending = pendingSubmenu;
+    clearAim();
+    if (pending) activeSubmenu = pending.index;
+  }
+
+  function recordPointer(event: PointerEvent) {
+    const point = { x: event.clientX, y: event.clientY };
+    pointerTrail = [...pointerTrail.slice(-3), point];
+  }
+
+  function onPointerMove(event: PointerEvent) {
+    recordPointer(event);
+    if (!pendingSubmenu) return;
+    // Made it into the submenu: it stays.
+    if (submenuEl?.contains(event.target as Node)) {
+      clearAim();
+      return;
+    }
+    // Still reaching for the submenu: keep it open a little longer.
+    if (aimingAtSubmenu()) armAim(pendingSubmenu.index);
+    else commitPendingSubmenu();
+  }
+
+  function hoverItem(event: PointerEvent, index: number, item: MenuItem) {
+    // Boundary events fire before the pointermove that caused them.
+    recordPointer(event);
+    const next = item.children?.length ? index : null;
+    if (next === activeSubmenu) {
+      clearAim();
+      return;
+    }
+    // A tap jumps straight to its target; only mouse and pen travel across
+    // siblings on the way to a submenu.
+    if (
+      event.pointerType !== 'touch' &&
+      activeSubmenu !== null &&
+      aimingAtSubmenu()
+    ) {
+      armAim(next);
+      return;
+    }
+    clearAim();
+    activeSubmenu = next;
+  }
 
   // Keep the menu inside the viewport.
   const viewportInset = 8;
@@ -121,8 +204,7 @@
       <div
         role="none"
         class="relative"
-        onpointerenter={() =>
-          (activeSubmenu = item.children?.length ? i : null)}
+        onpointerenter={(event) => hoverItem(event, i, item)}
       >
         <button
           type="button"
@@ -149,7 +231,10 @@
             if (item.children?.length) activeSubmenu = i;
             else invoke(item);
           }}
-          onfocus={() => (activeSubmenu = item.children?.length ? i : null)}
+          onfocus={() => {
+            clearAim();
+            activeSubmenu = item.children?.length ? i : null;
+          }}
         >
           <span class="flex min-w-0 items-center gap-2">
             {#if showIcons && item.pluginIcon}
@@ -173,6 +258,7 @@
         </button>
         {#if item.children?.length && activeSubmenu === i}
           <div
+            bind:this={submenuEl}
             role="menu"
             class="absolute -top-1 {layerClass} min-w-[200px] rounded-md border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg {submenuOpensLeft
               ? 'right-full mr-1'

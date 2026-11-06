@@ -33,11 +33,9 @@ import {
   purgeNote,
   restoreMany as restoreManyItems,
   restoreCollection,
-  restoreNote,
-  trashMany as trashManyItems,
-  trashCollection,
-  trashNote
+  restoreNote
 } from '$lib/stores/tree.svelte';
+import { trashWithUndo } from './trash-with-undo';
 import { authSession } from '$lib/api/auth.svelte';
 import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
 import {
@@ -264,18 +262,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
       icon: Trash2,
       shortcut: 'Del',
       destructive: true,
-      onSelect: async () => {
-        if (
-          await confirm({
-            title: deleteBatchLabel,
-            message: tUiFormat('fileTree.confirm.trash.batch', count),
-            confirmLabel: tUi('fileTree.menu.delete'),
-            destructive: true
-          })
-        ) {
-          void trashManyItems(items);
-        }
-      }
+      onSelect: () => void trashWithUndo(items)
     };
 
     // Shared view: only offer a batch action when every selected item lives in
@@ -508,7 +495,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
               icon: Trash2,
               shortcut: 'Del',
               destructive: true,
-              onSelect: () => void trashNote(id)
+              onSelect: () => void trashWithUndo([{ kind: 'note', id }])
             }
           );
         }
@@ -538,7 +525,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
           icon: Trash2,
           shortcut: 'Del',
           destructive: true,
-          onSelect: () => void trashNote(id)
+          onSelect: () => void trashWithUndo([{ kind: 'note', id }])
         }
       );
       return items;
@@ -643,7 +630,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
             icon: Trash2,
             shortcut: 'Del',
             destructive: true,
-            onSelect: () => void trashCollection(id)
+            onSelect: () => void trashWithUndo([{ kind: 'folder', id }])
           }
         ];
       }
@@ -676,7 +663,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
           icon: Trash2,
           shortcut: 'Del',
           destructive: true,
-          onSelect: () => void trashCollection(id)
+          onSelect: () => void trashWithUndo([{ kind: 'folder', id }])
         }
       ];
     }

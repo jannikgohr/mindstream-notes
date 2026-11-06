@@ -31,30 +31,87 @@ const CARD_HOLD_MOVE_TOLERANCE_PX = 8;
 export const CARD_DRAG_EDGE_ZONE_PX = 32;
 export const CARD_DRAG_EDGE_MIN_TRAVEL_PX = 20;
 const CARD_DRAG_EDGE_DWELL_MS = 650;
-export const CARD_SCROLL_DECELERATION_PX_PER_MS2 = 0.004;
+export const CARD_SCROLL_MOMENTUM_TIME_CONSTANT_MS = 325;
 const CARD_SCROLL_MIN_VELOCITY_PX_PER_MS = 0.02;
-const CARD_SCROLL_MAX_VELOCITY_PX_PER_MS = 3;
-const CARD_SCROLL_RELEASE_SAMPLE_MAX_MS = 100;
+export const CARD_SCROLL_MAX_VELOCITY_PX_PER_MS = 8;
+export const CARD_SCROLL_VELOCITY_WINDOW_MS = 100;
+export const CARD_SCROLL_RELEASE_IDLE_MS = 60;
+export const CARD_DRAG_SCROLL_ZONE_PX = 48;
+export const CARD_DRAG_SCROLL_MAX_SPEED_PX_PER_MS = 1.2;
 
 export interface ScrollMomentumStep {
   delta: number;
   velocity: number;
 }
 
-/** Advance a constant-deceleration scroll animation without overshooting zero. */
+export interface ScrollSample {
+  time: number;
+  top: number;
+}
+
+/**
+ * Advance an exponentially decaying scroll animation, the curve native
+ * flings follow: a flick at velocity v coasts v * timeConstant px in total.
+ */
 export function scrollMomentumStep(
   velocity: number,
   elapsedMs: number,
-  deceleration = CARD_SCROLL_DECELERATION_PX_PER_MS2
+  timeConstant = CARD_SCROLL_MOMENTUM_TIME_CONSTANT_MS
 ): ScrollMomentumStep {
   const elapsed = Math.max(0, elapsedMs);
-  const speed = Math.abs(velocity);
-  const nextSpeed = Math.max(0, speed - Math.max(0, deceleration) * elapsed);
-  const direction = Math.sign(velocity);
+  const decay = Math.exp(-elapsed / timeConstant);
   return {
-    delta: direction * ((speed + nextSpeed) / 2) * elapsed,
-    velocity: direction * nextSpeed
+    delta: velocity * timeConstant * (1 - decay),
+    velocity: velocity * decay
   };
+}
+
+/**
+ * Release velocity of a flick, averaged over the trailing sample window.
+ * Fingers slow down right before lifting, so the last move event alone
+ * undersells the flick. A finger held still before lifting gets no fling.
+ */
+export function scrollReleaseVelocity(
+  samples: readonly ScrollSample[],
+  releaseTime: number,
+  windowMs = CARD_SCROLL_VELOCITY_WINDOW_MS,
+  idleMs = CARD_SCROLL_RELEASE_IDLE_MS
+): number {
+  const last = samples[samples.length - 1];
+  if (!last || releaseTime - last.time > idleMs) return 0;
+  const first =
+    samples.find((sample) => last.time - sample.time <= windowMs) ?? last;
+  const elapsed = last.time - first.time;
+  if (elapsed <= 0) return 0;
+  const velocity = (last.top - first.top) / elapsed;
+  return Math.max(
+    -CARD_SCROLL_MAX_VELOCITY_PX_PER_MS,
+    Math.min(CARD_SCROLL_MAX_VELOCITY_PX_PER_MS, velocity)
+  );
+}
+
+/**
+ * Signed auto-scroll speed in px/ms while a dragged card sits near a scroll
+ * container's edge: it ramps up the closer the pointer gets, so hovering near
+ * the edge nudges and pushing into it races. Mirrors `edgeScrollSpeed` in the
+ * app's src/lib/edge-auto-scroll.ts, which this package can't import.
+ */
+export function cardDragScrollSpeed(
+  position: number,
+  start: number,
+  end: number,
+  zone = CARD_DRAG_SCROLL_ZONE_PX,
+  maxSpeed = CARD_DRAG_SCROLL_MAX_SPEED_PX_PER_MS
+): number {
+  const band = Math.min(zone, (end - start) / 3);
+  if (band <= 0) return 0;
+  const ramp = (distance: number) => {
+    const depth = 1 - Math.max(0, distance) / band;
+    return maxSpeed * depth * depth;
+  };
+  if (position - start < band) return -ramp(position - start);
+  if (end - position < band) return ramp(end - position);
+  return 0;
 }
 
 export function cardDragEdgeDirection(
@@ -94,10 +151,12 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
   let scrollEl: HTMLElement | null = null;
   let scrollStartTop = 0;
   let manualScrolling = false;
-  let scrollSampleTop = 0;
-  let scrollSampleTime = 0;
-  let scrollVelocity = 0;
+  let scrollSamples: ScrollSample[] = [];
   let scrollMomentumFrame = 0;
+  let dragScrollColumn: HTMLElement | null = null;
+  let dragScrollFrame = 0;
+  let dragScrollTime = 0;
+  let dragScrollRemainder = { x: 0, y: 0 };
   let edgeTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingEdge: CardDragEdgeDirection | null = null;
   let edgeLatched = false;
@@ -161,9 +220,7 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     scrollEl = fullCardDrag ? columnEl : null;
     scrollStartTop = columnEl.scrollTop;
     manualScrolling = false;
-    scrollSampleTop = scrollStartTop;
-    scrollSampleTime = e.timeStamp;
-    scrollVelocity = 0;
+    scrollSamples = [{ time: e.timeStamp, top: scrollStartTop }];
     if (fullCardDrag && !startedOnHandle) {
       cardHoldTimer = setTimeout(() => {
         cardHoldTimer = null;
@@ -215,18 +272,86 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     }
     e.preventDefault();
     active.dnd.pointer = { x: e.clientX, y: e.clientY };
-    updateTarget(e.clientX, e.clientY, active);
+    const column = updateTarget(e.clientX, e.clientY, active);
+    if (column) dragScrollColumn = column;
     updateEdgeSwitch(e.clientX, active);
+    scheduleDragScroll();
+  }
+
+  function scheduleDragScroll() {
+    if (dragScrollFrame) return;
+    dragScrollTime = performance.now();
+    dragScrollRemainder = { x: 0, y: 0 };
+    dragScrollFrame = requestAnimationFrame(dragScrollTick);
+  }
+
+  /** Scroll the column under a dragged card, and on desktop the board, while
+   *  the pointer rests near their edges. */
+  function dragScrollTick(now: number) {
+    dragScrollFrame = 0;
+    if (!started || !active) return;
+    const { x, y } = active.dnd.pointer;
+    const elapsed = Math.min(32, Math.max(0, now - dragScrollTime));
+    dragScrollTime = now;
+
+    let moving = false;
+    let scrolled = false;
+    if (dragScrollColumn?.isConnected) {
+      const rect = dragScrollColumn.getBoundingClientRect();
+      const speed =
+        x >= rect.left && x <= rect.right
+          ? cardDragScrollSpeed(y, rect.top, rect.bottom)
+          : 0;
+      moving ||= speed !== 0;
+      scrolled = scrollByRemainder(dragScrollColumn, 'y', speed * elapsed);
+    }
+    // On mobile, horizontal edges switch lists instead (updateEdgeSwitch).
+    const board = params.onEdgeSwitch
+      ? null
+      : node.querySelector<HTMLElement>('.wx-scroll');
+    if (board) {
+      const rect = board.getBoundingClientRect();
+      const speed = cardDragScrollSpeed(x, rect.left, rect.right);
+      moving ||= speed !== 0;
+      scrolled = scrollByRemainder(board, 'x', speed * elapsed) || scrolled;
+    }
+    if (scrolled) {
+      const column = updateTarget(x, y, active);
+      if (column) dragScrollColumn = column;
+      updateEdgeSwitch(x, active);
+    }
+    if (moving) dragScrollFrame = requestAnimationFrame(dragScrollTick);
+  }
+
+  /** scrollTop/scrollLeft snap to device pixels, so slow speeds accumulate
+   *  until they add up to a whole pixel. Returns whether anything moved. */
+  function scrollByRemainder(
+    element: HTMLElement,
+    axis: 'x' | 'y',
+    delta: number
+  ): boolean {
+    dragScrollRemainder[axis] += delta;
+    const step = Math.trunc(dragScrollRemainder[axis]);
+    if (step === 0) return false;
+    dragScrollRemainder[axis] -= step;
+    const before = axis === 'y' ? element.scrollTop : element.scrollLeft;
+    if (axis === 'y') element.scrollTop += step;
+    else element.scrollLeft += step;
+    return (axis === 'y' ? element.scrollTop : element.scrollLeft) !== before;
+  }
+
+  function cancelDragScroll() {
+    if (dragScrollFrame) cancelAnimationFrame(dragScrollFrame);
+    dragScrollFrame = 0;
+    dragScrollColumn = null;
   }
 
   function onPointerUp(e: PointerEvent) {
     const wasManualScrolling = manualScrolling;
     const momentumElement = wasManualScrolling ? scrollEl : null;
-    const sampleAge = Math.max(0, e.timeStamp - scrollSampleTime);
-    const releaseVelocity =
-      sampleAge <= CARD_SCROLL_RELEASE_SAMPLE_MAX_MS
-        ? scrollMomentumStep(scrollVelocity, sampleAge).velocity
-        : 0;
+    const releaseVelocity = wasManualScrolling
+      ? scrollReleaseVelocity(scrollSamples, e.timeStamp)
+      : 0;
     teardownListeners();
     if (started && active) {
       commitDrop(active);
@@ -272,19 +397,15 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
 
   function updateManualScroll(event: PointerEvent, dy: number) {
     if (!scrollEl) return;
-    scrollEl.scrollTop = scrollStartTop - dy;
-    const elapsed = event.timeStamp - scrollSampleTime;
-    if (elapsed > 0) {
-      const measured = (scrollEl.scrollTop - scrollSampleTop) / elapsed;
-      const bounded = Math.max(
-        -CARD_SCROLL_MAX_VELOCITY_PX_PER_MS,
-        Math.min(CARD_SCROLL_MAX_VELOCITY_PX_PER_MS, measured)
-      );
-      scrollVelocity =
-        scrollVelocity === 0 ? bounded : scrollVelocity * 0.25 + bounded * 0.75;
+    // Sample the finger, not the clamped scrollTop, so a flick that starts
+    // against an edge still measures its real speed.
+    const top = scrollStartTop - dy;
+    scrollEl.scrollTop = top;
+    scrollSamples.push({ time: event.timeStamp, top });
+    const cutoff = event.timeStamp - CARD_SCROLL_VELOCITY_WINDOW_MS;
+    while (scrollSamples.length > 2 && scrollSamples[1].time <= cutoff) {
+      scrollSamples.shift();
     }
-    scrollSampleTop = scrollEl.scrollTop;
-    scrollSampleTime = event.timeStamp;
   }
 
   function startScrollMomentum(element: HTMLElement, initialVelocity: number) {
@@ -292,18 +413,19 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     if (Math.abs(initialVelocity) < CARD_SCROLL_MIN_VELOCITY_PX_PER_MS) return;
 
     let velocity = initialVelocity;
+    // Track the position as a float: scrollTop snaps to device pixels, so
+    // adding sub-pixel deltas to it would stall the slow tail of the fling.
+    let position = element.scrollTop;
     let lastTime = performance.now();
     const animate = (now: number) => {
       const elapsed = Math.min(32, Math.max(0, now - lastTime));
       lastTime = now;
       const step = scrollMomentumStep(velocity, elapsed);
-      const before = element.scrollTop;
-      element.scrollTop += step.delta;
+      position += step.delta;
       velocity = step.velocity;
-      if (
-        Math.abs(velocity) < CARD_SCROLL_MIN_VELOCITY_PX_PER_MS ||
-        element.scrollTop === before
-      ) {
+      element.scrollTop = position;
+      const hitEdge = Math.abs(element.scrollTop - position) > 1;
+      if (Math.abs(velocity) < CARD_SCROLL_MIN_VELOCITY_PX_PER_MS || hitEdge) {
         scrollMomentumFrame = 0;
         return;
       }
@@ -330,6 +452,7 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     activePointerId = null;
     scrollEl = null;
     manualScrolling = false;
+    cancelDragScroll();
     clearEdgeTimer();
     edgeLatched = false;
     latchedEdgeColumn = null;
@@ -408,7 +531,9 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
   };
 }
 
-function updateTarget(x: number, y: number, a: Resolved) {
+/** Point the drop target at the card slot under the pointer. Returns the
+ *  column's card list when the pointer is over one. */
+function updateTarget(x: number, y: number, a: Resolved): HTMLElement | null {
   const el = document.elementFromPoint(x, y);
   const columnEl = el
     ? (el.closest('[data-kanban-column-cards]') as HTMLElement | null)
@@ -417,18 +542,18 @@ function updateTarget(x: number, y: number, a: Resolved) {
   if (!columnEl) {
     // keep the last known target so the placeholder stays visible when the
     // pointer briefly leaves a column
-    return;
+    return null;
   }
 
   const columnId = getID(
     columnEl,
     'data-kanban-column-cards'
   ) as ColumnID | null;
-  if (columnId == null) return;
+  if (columnId == null) return null;
 
   const viewData = a.store.getState().viewData;
   const column = viewData.columns.find((c: ColumnView) => c.id === columnId);
-  if (!column) return;
+  if (!column) return null;
 
   const cardEls = Array.from(
     columnEl.querySelectorAll<HTMLElement>('[data-kanban-card-id]')
@@ -458,6 +583,7 @@ function updateTarget(x: number, y: number, a: Resolved) {
   if (!prev || prev.column !== next.column || prev.beforeId !== next.beforeId) {
     a.dnd.target = next;
   }
+  return columnEl;
 }
 
 function resolveRenderedCardId(
