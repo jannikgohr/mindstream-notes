@@ -630,16 +630,21 @@ pub fn trash(conn: &Connection, id: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// Take a note out of the trash, back into the folder it was in when it
+/// went there if it can still go there. See `tree_batch::restore_target`.
 pub fn restore(conn: &Connection, id: &str) -> AppResult<()> {
     crate::sharing::ensure_note_writable(conn, id)?;
     let now = Utc::now().to_rfc3339();
+    let origin = crate::tree_batch::trashed_from(conn, "notes", id)?;
+    let target = crate::tree_batch::restore_target(conn, origin, None)?;
     let n = conn.execute(
-        "UPDATE notes SET parent_collection_id = NULL, trashed_at = NULL, modified = ?1, dirty = 1 WHERE id = ?2",
-        params![now, id],
+        "UPDATE notes SET parent_collection_id = ?1, trashed_at = NULL, modified = ?2, dirty = 1 WHERE id = ?3",
+        params![target, now, id],
     )?;
     if n == 0 {
         return Err(AppError::NotFound(format!("note {id}")));
     }
+    crate::tree_batch::rehome_note_if_scope_changed(conn, id, target.as_deref())?;
     Ok(())
 }
 

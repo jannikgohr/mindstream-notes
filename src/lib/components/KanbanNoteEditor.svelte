@@ -82,7 +82,7 @@
     createEdgeAutoScroll,
     type EdgeAutoScroll
   } from '$lib/edge-auto-scroll';
-  import { tree } from '$lib/stores/tree.svelte';
+  import { markNoteSaved, tree } from '$lib/stores/tree.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { confirm } from '$lib/components/confirm-dialog.svelte';
@@ -1174,13 +1174,7 @@
           acknowledge.token
         );
         acknowledge();
-        const existing = tree.notesById[capturedNoteId];
-        if (existing) {
-          tree.notesById[capturedNoteId] = {
-            ...existing,
-            modified: new Date().toISOString()
-          };
-        }
+        markNoteSaved(capturedNoteId);
         savingState = 'saved';
       } catch (err) {
         savingState = 'error';
@@ -1986,7 +1980,16 @@
     :global(.kanban-scope .wx-content) {
       width: max-content;
       min-width: 100%;
-      justify-content: center;
+    }
+    /* Centre a board narrower than the pane with auto margins, not
+       justify-content: a centred row wider than its box overflows on the
+       left too, where it cannot be scrolled to, and the first list loses
+       its title and cards there. Auto margins shrink to nothing instead. */
+    :global(.kanban-scope .wx-content > :first-child) {
+      margin-inline-start: auto;
+    }
+    :global(.kanban-scope .wx-content > :last-child) {
+      margin-inline-end: auto;
     }
   }
   :global(.kanban-list-drag-ghost) {

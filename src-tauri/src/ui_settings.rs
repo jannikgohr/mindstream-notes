@@ -762,6 +762,14 @@ fn validate_preference(id: &str, value: &Value) -> AppResult<()> {
             Some("alphabetical" | "modified" | "created")
         ),
         "ui.sortDirection" => matches!(value.as_str(), Some("asc" | "desc")),
+        // The file tree's open folders. Vault-scoped like the dock layout.
+        "ui.expandedFolders" => value.as_array().is_some_and(|ids| {
+            ids.len() <= 5000
+                && ids.iter().all(|id| {
+                    id.as_str()
+                        .is_some_and(|id| !id.is_empty() && id.len() <= 512)
+                })
+        }),
         "ui.dockLayout" => {
             value.is_null()
                 || (value.is_object()
@@ -1941,6 +1949,38 @@ mod tests {
             assert!(!dirs.root.join("ui-settings.json").exists());
             assert!(!dirs.a.join("content-settings.json").exists());
             assert!(!dirs.a.join(".dock-layout-migrated").exists());
+        }
+    }
+
+    #[test]
+    fn open_folders_stay_with_their_vault_and_must_be_folder_ids() {
+        let dirs = TestDirs::new();
+        initialize(&dirs.root, &dirs.a, "default", None, None).unwrap();
+        initialize(&dirs.root, &dirs.b, "other", None, None).unwrap();
+        let ids = serde_json::json!(["coll_a", "coll_b"]);
+        let saved = access(
+            &dirs.root,
+            &dirs.a,
+            Some(("ui.expandedFolders".into(), Some(ids.clone()))),
+        )
+        .unwrap();
+        assert_eq!(saved.values["ui.expandedFolders"], ids);
+        assert!(!access(&dirs.root, &dirs.b, None)
+            .unwrap()
+            .values
+            .contains_key("ui.expandedFolders"));
+        for bad in [
+            serde_json::json!("coll_a"),
+            serde_json::json!([""]),
+            serde_json::json!([1]),
+            serde_json::json!(vec!["coll"; 5001]),
+        ] {
+            assert!(access(
+                &dirs.root,
+                &dirs.a,
+                Some(("ui.expandedFolders".into(), Some(bad)))
+            )
+            .is_err());
         }
     }
 
