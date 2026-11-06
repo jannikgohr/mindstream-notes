@@ -23,7 +23,6 @@
   import { tooltip } from '$lib/actions/tooltip';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
-  import { Separator } from '$lib/components/ui/separator';
   import { Surface } from '$lib/components/ui/surface';
   import ContextMenu from './ContextMenu.svelte';
   import type { MenuItem } from './context-menu-types';
@@ -910,7 +909,7 @@
   oncontextmenu={(e) => openMenu(e, { kind: 'root' })}
 >
   <div class="px-3 pb-1 pt-2"><VaultSwitcher /></div>
-  <div class="flex shrink-0 items-center gap-1 px-3 pb-3 pt-1">
+  <div class="flex shrink-0 items-center gap-1 px-3 pb-2 pt-1">
     {#if canCreate}
       <FileTreeCreateToolbar
         pluginButtons={pluginToolbarButtons('file-tree')}
@@ -946,44 +945,39 @@
     {/if}
   </div>
 
-  <nav
-    class="flex shrink-0 flex-col gap-0.5 px-3 pb-2"
-    aria-label={tUi('nav.primary')}
-    oncontextmenu={(e) => {
-      e.preventDefault();
-      e.stopPropagation();
-    }}
+  <!-- Sources and sorting share one row: the active source shows its label,
+       the others are icons with tooltips. This replaces a four-row list, a
+       divider and a section header, so the tree starts about 110px higher. -->
+  <div
+    class="flex shrink-0 items-center gap-1 border-b border-border px-3 pb-2"
   >
-    {#each FILE_EXPLORER_SOURCES as item (item.id)}
-      {@const active = source === item.id}
-      {@const Icon = item.icon}
-      {@const label = tUi(item.labelKey)}
-      <button
-        type="button"
-        class="inline-flex h-7 min-w-0 shrink-0 items-center gap-2.5 rounded-md px-2.5 text-left text-xs transition-colors {active
-          ? 'bg-accent font-medium text-foreground'
-          : 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
-        use:tooltip={active ? undefined : label}
-        aria-current={active ? 'page' : undefined}
-        aria-label={label}
-        onclick={() => onSourceChange?.(item.id)}
-      >
-        <Icon class="size-3.5 shrink-0" />
-        <span class="truncate">{label}</span>
-      </button>
-    {/each}
-  </nav>
-
-  <Separator />
-  <div class="flex h-9 shrink-0 items-center justify-between gap-2 px-4">
-    <span
-      class="min-w-0 truncate text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
-      >{source === 'home'
-        ? tUi('fileTree.notes')
-        : tUi(
-            FILE_EXPLORER_SOURCES.find((item) => item.id === source)!.labelKey
-          )}</span
+    <nav
+      class="flex min-w-0 flex-1 items-center gap-0.5"
+      aria-label={tUi('nav.primary')}
+      oncontextmenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
     >
+      {#each FILE_EXPLORER_SOURCES as item (item.id)}
+        {@const active = source === item.id}
+        {@const Icon = item.icon}
+        {@const label = tUi(item.labelKey)}
+        <button
+          type="button"
+          class="inline-flex h-7 items-center justify-center gap-1.5 rounded-md px-2 text-xs transition-colors {active
+            ? 'min-w-0 bg-accent font-medium text-foreground'
+            : 'w-7 shrink-0 text-muted-foreground hover:bg-accent hover:text-foreground'}"
+          use:tooltip={active ? undefined : label}
+          aria-current={active ? 'page' : undefined}
+          aria-label={label}
+          onclick={() => onSourceChange?.(item.id)}
+        >
+          <Icon class="size-3.5 shrink-0" />
+          {#if active}<span class="truncate">{label}</span>{/if}
+        </button>
+      {/each}
+    </nav>
     <SortControl
       strategy={ui.sortStrategy}
       direction={ui.sortDirection}
@@ -997,7 +991,7 @@
   <div
     role="group"
     aria-label={tUi('fileTree.tree')}
-    class="min-h-0 flex-1 overflow-y-auto px-2 pb-3"
+    class="min-h-0 flex-1 overflow-y-auto px-2 pb-3 pt-2"
     class:ring-1={dragOver === 'root'}
     class:ring-ring={dragOver === 'root'}
     data-file-drop-accept={fileDropAccept}
