@@ -252,6 +252,26 @@
   let crepe: Crepe | null = $state(null);
   let crepeReady = $state(false);
 
+  /**
+   * Text of the body's opening H1, or '' when it opens with anything else.
+   * A body that already starts with the note's title as an H1 (the seeded
+   * Welcome note, Markdown imported with its own title) keeps that heading
+   * and skips the inline title rather than showing the title twice.
+   */
+  let leadingHeading = $state('');
+  function readLeadingHeading(doc: ProseMirrorNode) {
+    const first = doc.firstChild;
+    leadingHeading =
+      first?.type.name === 'heading' && first.attrs.level === 1
+        ? first.textContent
+        : '';
+  }
+  const sameTitle = (a: string, b: string) =>
+    a.trim().toLocaleLowerCase() === b.trim().toLocaleLowerCase();
+  const showInlineTitle = $derived(
+    !mobile && !sameTitle(leadingHeading, tree.notesById[noteId]?.title ?? '')
+  );
+
   /** Enter in the inline title continues typing at the start of the body. */
   function focusBodyStart() {
     crepe?.editor.action((ctx) => {
@@ -702,6 +722,7 @@
         getMarkdown = () => serializer(view.state.doc);
         currentDocument = () => view.state.doc;
         observedDocument = view.state.doc;
+        readLeadingHeading(view.state.doc);
       });
 
       // Hook yDoc updates AFTER bind/applyTemplate/connect so the initial
@@ -731,6 +752,7 @@
         const document = currentDocument();
         const changed = !document.eq(observedDocument);
         observedDocument = document;
+        if (changed) readLeadingHeading(document);
         const peerUpdate = provider !== null && origin === provider;
         if (origin !== REMOTE_SYNC_ORIGIN && (changed || peerUpdate))
           scheduleSave();
@@ -1871,7 +1893,7 @@
           ? 'hidden'
           : ''} {viewMode === 'split' ? 'w-1/2' : 'w-full'}"
       >
-        {#if !mobile}
+        {#if showInlineTitle}
           <div class="mx-auto max-w-3xl">
             <NoteInlineTitle
               {noteId}
@@ -1884,7 +1906,7 @@
           bind:this={host}
           class="mx-auto min-h-full max-w-3xl"
           class:mobile-editor={mobile}
-          class:has-inline-title={!mobile}
+          class:has-inline-title={showInlineTitle}
           class:wikilink-open-on-click={wikilinkOpenOnClick}
         ></div>
       </div>
