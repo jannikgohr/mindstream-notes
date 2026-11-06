@@ -1192,13 +1192,14 @@
         {/if}
       </button>
       <!-- Row actions leave the layout until the row is hovered or focused,
-           so idle titles use the full row width instead of truncating early. -->
+           (keyboard focus counts, a mouse click does not), so idle titles use
+           the full row width instead of truncating early. -->
       {#if !inTrash}
         <button
           type="button"
           class="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground {fav
             ? ''
-            : 'hidden group-focus-within:inline-flex group-hover:inline-flex'}"
+            : 'hidden group-hover:inline-flex group-has-[:focus-visible]:inline-flex'}"
           onclick={() => void setNoteFavourite(node.id, !fav)}
           use:tooltip={fav ? tUi('favourite.remove') : tUi('favourite.add')}
           aria-pressed={fav}
@@ -1210,7 +1211,7 @@
       {#if canDelete}
         <button
           type="button"
-          class="hidden shrink-0 rounded p-1 text-muted-foreground hover:text-destructive group-focus-within:inline-flex group-hover:inline-flex"
+          class="hidden shrink-0 rounded p-1 text-muted-foreground hover:text-destructive group-hover:inline-flex group-has-[:focus-visible]:inline-flex"
           onclick={() => void trashWithUndo([{ kind: 'note', id: node.id }])}
           use:tooltip={tUi('fileTree.delete')}
           aria-label={tUi('fileTree.delete')}
