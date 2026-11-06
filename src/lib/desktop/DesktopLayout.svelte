@@ -17,7 +17,9 @@
     DockviewGroupPanel,
     DockviewTheme
   } from 'dockview';
-  import { FileText } from '@lucide/svelte';
+  import { FilePlus, FileText, Search } from '@lucide/svelte';
+  import { Button } from '$lib/components/ui/button';
+  import { openSearch } from '$lib/search/store.svelte';
   import TopBar from './DesktopTopBar.svelte';
   import LazyFileExplorer from '$lib/components/LazyFileExplorer.svelte';
   import LazyNoteSidebar from '$lib/components/LazyNoteSidebar.svelte';
@@ -833,6 +835,13 @@
     };
   });
 
+  // Same path as the New Markdown note hotkey: a note at the vault root.
+  function createNote() {
+    void import('$lib/hotkeys/create-root-note')
+      .then(({ createRootNote }) => createRootNote('markdown'))
+      .catch((err) => console.error('[desktop] failed to create note', err));
+  }
+
   onDestroy(() => {
     if (saveLayoutTimer) clearTimeout(saveLayoutTimer);
     dock?.clear();
@@ -1000,6 +1009,21 @@
               <p class="mt-2 text-sm text-muted-foreground">
                 {tUi('desktop.emptyState.message')}
               </p>
+              <!-- The two ways out of an empty workspace, so it isn't a dead end. -->
+              <div class="mt-5 flex justify-center gap-2">
+                <Button size="sm" onclick={createNote}>
+                  <FilePlus class="size-4" />
+                  {tUi('fileTree.newNote')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onclick={() => openSearch()}
+                >
+                  <Search class="size-4" />
+                  {tUi('search.open')}
+                </Button>
+              </div>
             </section>
           </div>
         {/if}
