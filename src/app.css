@@ -853,6 +853,34 @@ body.dv-tab-dragging
   font-size: 1.125em;
   line-height: 1.556;
 }
+/* Crepe sets h1–h5 in regular weight, which lets bold run-in text in the
+ * body outweigh the section headings. */
+.milkdown .ProseMirror :is(h1, h2, h3, h4, h5) {
+  font-weight: 600;
+  /* The heavier weight widens long single words (German compounds, URLs)
+   * past a narrow pane, so let them break instead of overflowing. */
+  overflow-wrap: anywhere;
+}
+
+/* List markers and checkboxes. Crepe paints them in its outline colour,
+ * which we map to --border-strong and which all but disappears next to body
+ * text. Markers take the muted text tone, a ticked box takes the brand
+ * accent, and a ticked item's text steps back so open tasks stand out. */
+.milkdown .milkdown-list-item-block li .label-wrapper {
+  color: var(--muted-foreground);
+}
+.milkdown .milkdown-list-item-block li .label-wrapper svg {
+  fill: var(--muted-foreground);
+}
+.milkdown .milkdown-list-item-block li .label-wrapper .label.checked svg {
+  fill: var(--accent-brand);
+}
+.milkdown
+  .milkdown-list-item-block
+  li:has(> .label-wrapper .label.checked)
+  > .children {
+  color: var(--muted-foreground);
+}
 
 /*
  * Only show the drop indicator for editor-initiated block drags. The upstream
@@ -1945,6 +1973,40 @@ body.dv-tab-dragging .freeform-canvas-host * {
 }
 .desktop-shell .milkdown .ProseMirror :is(h4, h5, h6) {
   font-size: 1.125em;
+}
+
+/* Inline note title (NoteInlineTitle.svelte). It sits outside `.milkdown`,
+ * so it repeats Crepe's font stack and the body's inline padding to line up
+ * with the text below, and it outranks the body's own H1. The body's top
+ * padding shrinks under it so the title reads as the document's heading,
+ * not a separate band. */
+.note-inline-title {
+  display: block;
+  width: 100%;
+  resize: none;
+  overflow: hidden;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--foreground);
+  font-family: var(
+    --crepe-font-default,
+    'Noto Sans',
+    Arial,
+    Helvetica,
+    sans-serif
+  );
+  font-size: calc(var(--editor-font-size) * 2.25);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.2;
+  padding: 2.5rem clamp(3rem, 4vw, 4rem) 0;
+}
+.note-inline-title::placeholder {
+  color: var(--muted-foreground);
+}
+.desktop-shell .has-inline-title .milkdown .ProseMirror {
+  padding-top: 1rem;
 }
 .desktop-shell .milkdown-floating-portal {
   padding: 0;

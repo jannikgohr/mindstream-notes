@@ -545,6 +545,7 @@
     "hotkeys.command.editor.pdf.zoomIn": "Vergrößern",
     "editor.toolbar.label": "Formatierung",
     "editor.mode.label": "Editor-Ansichtsmodus",
+    "editor.inlineTitle.label": "Notiztitel",
     "editor.toolbar.undo": "Rückgängig",
     "editor.toolbar.redo": "Wiederholen",
     "editor.toolbar.bold": "Fett",
