@@ -30,7 +30,7 @@ import {
 } from './markdown';
 import { dedupeAgainst, sanitizeName } from './sanitize';
 import { readExportBoard, boardMarkdown } from './kanban';
-import { downloadBlob } from '$lib/api/file-export';
+import { downloadBlob, saveFileExport } from '$lib/api/file-export';
 import { createExportZip } from './zip';
 
 const ASSET_SUBDIR = '_assets';
@@ -67,6 +67,21 @@ export async function downloadVaultExport(): Promise<ExportReport> {
   const date = new Date().toISOString().slice(0, 10);
   downloadBlob(zip.finish(), `mindstream-notes-${date}.zip`);
   return report;
+}
+
+/** Save a ZIP through the native document picker, including on Android. */
+export async function saveVaultExport(): Promise<ExportReport | null> {
+  const zip = createExportZip();
+  const report = await exportVault(zip.write);
+  const saved = await saveFileExport({
+    suggestedName: `mindstream-notes-${new Date().toISOString().slice(0, 10)}.zip`,
+    dialogTitle: 'Export notes',
+    bytes: new Uint8Array(await zip.finish().arrayBuffer()),
+    mime: 'application/zip',
+    filterName: 'ZIP archive',
+    extensions: ['zip']
+  });
+  return saved ? report : null;
 }
 
 export async function exportVault(write: ExportWriter): Promise<ExportReport> {

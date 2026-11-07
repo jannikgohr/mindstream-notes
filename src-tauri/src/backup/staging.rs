@@ -46,6 +46,7 @@ pub(super) async fn import_begin_inner(app: AppHandle) -> AppResult<Option<Impor
     let Some(file_path) = rx.await.map_err(|e| AppError::InvalidArg(e.to_string()))? else {
         return Ok(None);
     };
+    #[cfg(not(target_os = "android"))]
     let source = file_path
         .into_path()
         .map_err(|e| AppError::InvalidArg(format!("path conversion: {e}")))?;
@@ -55,6 +56,24 @@ pub(super) async fn import_begin_inner(app: AppHandle) -> AppResult<Option<Impor
     let app_for_blocking = app.clone();
     let preview = tauri::async_runtime::spawn_blocking(move || {
         let _job = job;
+        // Stage provider documents as local files for the seekable ZIP reader.
+        #[cfg(target_os = "android")]
+        let directory = crate::paths::app_data_dir(&app_for_blocking)?
+            .join("imports/.staging")
+            .join(uuid::Uuid::new_v4().to_string());
+        #[cfg(target_os = "android")]
+        let _cleanup = DirectoryCleanup(directory.clone());
+        #[cfg(target_os = "android")]
+        let source = {
+            use tauri_plugin_fs::FsExt;
+            fs::create_dir_all(&directory)?;
+            let source = directory.join("backup.zip");
+            let mut options = tauri_plugin_fs::OpenOptions::new();
+            options.read(true);
+            let mut input = app_for_blocking.fs().open(file_path, options)?;
+            std::io::copy(&mut input, &mut fs::File::create(&source)?)?;
+            source
+        };
         let db = app_for_blocking.state::<Db>();
         db.with_conn(|live_conn| {
             stage_import(&app_for_blocking, &source, live_conn, session.as_ref())
