@@ -15,6 +15,7 @@
   import { DEFAULT_PAGE, type InkPage } from '$lib/ink/page';
   import { ancestorIsTrash } from '$lib/editor/trash';
   import { createCanvasResizeLifecycle } from '$lib/ink/canvas-resize-lifecycle';
+  import { liveInkStyle } from '$lib/ink/live-ink';
   import {
     NO_SMOOTHING,
     smoothStroke,
@@ -43,7 +44,7 @@
     zoomToScale
   } from '$lib/ink/view-transform';
   import { createHistoryCapture } from '$lib/history/capture-scheduler';
-  import { onDestroy, onMount, tick } from 'svelte';
+  import { onDestroy, onMount, tick, untrack } from 'svelte';
   import {
     AlignJustify,
     ArrowLeft,
@@ -457,17 +458,39 @@
     scheduleDraw();
   });
 
+  // The page theme and the page list change the overlay's colour too.
+  $effect(() => {
+    void pageDark;
+    void documentPages;
+    untrack(updateLiveInkOverlayStyle);
+  });
+
   function updateLiveInkOverlayStyle() {
     if (!isAndroid()) return;
     if (tool !== 'pen') {
       void drawingCancelLiveInk();
     }
-    const maxWidthPx = Math.max(0.5, width * view.scale);
-    const minWidthPx = Math.max(0.5, maxWidthPx * 0.25);
-    const liveColorArgb = tool === 'pen' ? colorArgb : 0x00000000;
+    // The overlay cannot tell pages apart, so it takes the colour of the
+    // page in the middle of the view.
+    const centre = screenToPage(view.width / 2, view.height / 2);
+    const centrePage = pageIndexAt(layout, centre.x, centre.y);
+    const style = liveInkStyle({
+      colorArgb,
+      width,
+      scale: view.scale,
+      devicePixelRatio: window.devicePixelRatio || 1,
+      pageDark,
+      onBackgroundPage:
+        centrePage !== null && !!documentPages[centrePage]?.background
+    });
+    const liveColorArgb = tool === 'pen' ? style.colorArgb : 0x00000000;
     const liveFingerDrawingAllowed =
       pointerMode === 'touchGesture' ? false : fingerDrawingAllowed;
-    void drawingSetLiveInkStyle(liveColorArgb, minWidthPx, maxWidthPx);
+    void drawingSetLiveInkStyle(
+      liveColorArgb,
+      style.minWidthPx,
+      style.maxWidthPx
+    );
     void drawingSetLiveInkFingerDrawing(liveFingerDrawingAllowed);
   }
 
