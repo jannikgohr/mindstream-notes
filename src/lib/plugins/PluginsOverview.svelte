@@ -177,9 +177,10 @@
     };
   }
 
-  // Shared classes for the round ghost icon buttons in the action row.
+  // Shared classes for the round ghost icon buttons in the action row; a
+  // full touch target on phones.
   const iconButton =
-    'flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+    'flex size-11 shrink-0 items-center sm:size-8 justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 </script>
 
 <div class="mt-4">
@@ -213,7 +214,12 @@
         {@const showHotkeys =
           entry.enabled && entry.hasCommands && !!onOpenHotkeys}
         {@const showTrash = entry.source === SOURCE_INSTALLED}
-        <div class="flex items-start justify-between gap-4 py-3">
+        <!-- On phones the details sit on top and the actions run below them
+             as one row, the switch at its end; wider screens keep them side
+             by side. -->
+        <div
+          class="flex flex-col gap-1 py-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4"
+        >
           <div class="min-w-0">
             <div class="flex flex-wrap items-center gap-2">
               <span class="text-sm font-medium" use:tooltip={entry.id}>
@@ -256,7 +262,7 @@
             {/if}
           </div>
 
-          <div class="flex shrink-0 items-center gap-0.5">
+          <div class="-ml-2.5 flex shrink-0 items-center gap-0.5 sm:ml-0">
             {#if entry.documentation.length > 0}
               <button
                 type="button"
@@ -356,14 +362,14 @@
             {/if}
 
             {#if entry.missing}
-              <span class="text-xs text-muted-foreground"
+              <span class="ml-auto text-xs text-muted-foreground sm:ml-0"
                 >{tUi('plugins.manage.missing')}</span
               >
             {:else if gated}
               <button
                 type="button"
                 onclick={() => void action(() => approvePluginAdmin(entry.id))}
-                class="ml-1 rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                class="ml-auto rounded-md bg-primary px-2.5 py-1 text-xs font-medium sm:ml-1 text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {tUi('plugins.manage.approve')}
               </button>
@@ -377,14 +383,14 @@
                   void action(() =>
                     setPluginEnabledAdmin(entry.id, !entry.enabled)
                   )}
-                class="relative ml-1 inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 {entry.enabled
-                  ? 'bg-primary'
+                class="relative ml-auto inline-flex h-7 w-12 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors before:absolute before:-inset-2 before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 sm:ml-1 sm:h-5 sm:w-9 sm:before:hidden {entry.enabled
+                  ? 'bg-accent-brand'
                   : 'bg-input'}"
               >
                 <span
-                  class="pointer-events-none block size-4 rounded-full bg-background shadow-sm ring-0 transition-transform {entry.enabled
-                    ? 'translate-x-4.5'
-                    : 'translate-x-0.5'}"
+                  class="pointer-events-none block size-6 rounded-full shadow-sm ring-0 transition-transform sm:size-4 {entry.enabled
+                    ? 'translate-x-5.5 bg-white sm:translate-x-4.5'
+                    : 'translate-x-0.5 bg-background'}"
                 ></span>
               </button>
             {/if}
