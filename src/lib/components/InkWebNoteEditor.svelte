@@ -15,6 +15,12 @@
   import { DEFAULT_PAGE, type InkPage } from '$lib/ink/page';
   import { ancestorIsTrash } from '$lib/editor/trash';
   import { createCanvasResizeLifecycle } from '$lib/ink/canvas-resize-lifecycle';
+  import {
+    NO_SMOOTHING,
+    smoothStroke,
+    strokeSmoothing,
+    type StrokeSmoothing
+  } from '$lib/ink/stroke-smoothing';
   import { createInkSaveController } from '$lib/ink/save-controller';
   import { createCollabSession } from '$lib/editor/collab-session';
   import {
@@ -296,6 +302,8 @@
   let selectionClipboard = $state<InkClipboardStroke[]>([]);
   let selectionFrame = $state<SelectionFrame | null>(null);
   let inFlight = $state<InkPoint[]>([]);
+  let inFlightSmoothing: StrokeSmoothing = NO_SMOOTHING;
+  let inFlightMinSpacing = 1.5;
   let lassoPoints = $state<InkPoint[]>([]);
   let selectionDragStart: InkPoint | null = null;
   let selectionDragOffset = $state({ x: 0, y: 0 });
@@ -840,7 +848,14 @@
         );
       }
     }
-    drawStroke(ctx, inFlight, strokeCssColor(colorArgb, inFlight), width);
+    // Smoothed exactly as endStroke will store it, so committing the
+    // stroke does not move it.
+    drawStroke(
+      ctx,
+      smoothStroke(inFlight, inFlightSmoothing),
+      strokeCssColor(colorArgb, inFlight),
+      width
+    );
     drawSelectionOverlay(ctx);
     drawLassoOverlay(ctx);
     drawToolPreview(ctx);
@@ -1581,8 +1596,7 @@
         continue;
       }
       if (!drawingStrokeActive) {
-        doc.beginStroke(colorArgb, width);
-        drawingStrokeActive = true;
+        beginInkStroke(event);
       }
       const previous = next[next.length - 1];
       if (
@@ -1593,17 +1607,39 @@
         inFlight = next;
         finishActiveStroke();
         next.length = 0;
-        doc.beginStroke(colorArgb, width);
-        drawingStrokeActive = true;
+        beginInkStroke(event);
       }
       const last = next[next.length - 1];
-      if (last && Math.hypot(point.x - last.x, point.y - last.y) < 1.5) {
+      if (
+        last &&
+        Math.hypot(point.x - last.x, point.y - last.y) < inFlightMinSpacing
+      ) {
         continue;
       }
       doc.pushPoint(point.x, point.y, point.pressure);
       next.push(point);
     }
     inFlight = next;
+  }
+
+  /**
+   * Start a document stroke, fixing its smoothing and sample spacing to
+   * the input type and the zoom it begins at. Input error is a matter of
+   * screen pixels, so a stroke drawn zoomed out needs more correction in
+   * page units than one drawn zoomed in.
+   */
+  function beginInkStroke(event: PointerEvent) {
+    if (!doc) return;
+    const devicePixelRatio = window.devicePixelRatio || 1;
+    inFlightSmoothing = strokeSmoothing(
+      event.pointerType,
+      view.scale,
+      devicePixelRatio
+    );
+    // One CSS pixel apart, as drawn: finer samples carry no detail.
+    inFlightMinSpacing = 1 / view.scale;
+    doc.beginStroke(colorArgb, width, inFlightSmoothing);
+    drawingStrokeActive = true;
   }
 
   function beginLasso(event: PointerEvent) {
