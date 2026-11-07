@@ -17,7 +17,11 @@
     DockviewGroupPanel,
     DockviewTheme
   } from 'dockview';
-  import { FileText } from '@lucide/svelte';
+  import { FilePlus, FileText, Search } from '@lucide/svelte';
+  import { Button } from '$lib/components/ui/button';
+  import { openSearch } from '$lib/search/store.svelte';
+  import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
+  import NoteKindIcon from '$lib/components/NoteKindIcon.svelte';
   import TopBar from './DesktopTopBar.svelte';
   import LazyFileExplorer from '$lib/components/LazyFileExplorer.svelte';
   import LazyNoteSidebar from '$lib/components/LazyNoteSidebar.svelte';
@@ -50,7 +54,8 @@
     setLeftSidebarWidth,
     setRightSidebarWidth,
     ui,
-    toggleRightSidebar
+    toggleRightSidebar,
+    rightSidebarShown
   } from '$lib/state.svelte';
   import { loadTree, tree } from '$lib/stores/tree.svelte';
   import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
@@ -832,6 +837,21 @@
     };
   });
 
+  /** The last edited notes, offered on the empty workspace. */
+  const recentNotes = $derived(
+    Object.values(tree.notesById)
+      .filter((note) => !note.trashed)
+      .sort((a, b) => b.modified.localeCompare(a.modified))
+      .slice(0, 6)
+  );
+
+  // Same path as the New Markdown note hotkey: a note at the vault root.
+  function createNote() {
+    void import('$lib/hotkeys/create-root-note')
+      .then(({ createRootNote }) => createRootNote('markdown'))
+      .catch((err) => console.error('[desktop] failed to create note', err));
+  }
+
   onDestroy(() => {
     if (saveLayoutTimer) clearTimeout(saveLayoutTimer);
     dock?.clear();
@@ -839,7 +859,7 @@
 
   $effect(() => {
     void ui.leftSidebarOpen;
-    void ui.rightSidebarOpen;
+    void rightSidebarShown();
     void ui.leftSidebarWidth;
     void ui.rightSidebarWidth;
     if (!dockHost) return;
@@ -991,21 +1011,81 @@
           <div
             class="pointer-events-none absolute inset-0 flex items-center justify-center p-6"
           >
-            <section class="pointer-events-auto max-w-md px-6 py-7 text-center">
-              <FileText class="mx-auto size-8 text-muted-foreground" />
+            <section
+              class="pointer-events-auto flex max-w-md flex-col items-center px-6 py-7 text-center"
+            >
+              <div
+                class="flex size-14 items-center justify-center rounded-2xl bg-accent-brand/15 text-accent-brand"
+              >
+                <FileText class="size-7" />
+              </div>
               <h2 class="mt-4 text-lg font-semibold">
                 {tUi('desktop.emptyState.title')}
               </h2>
               <p class="mt-2 text-sm text-muted-foreground">
                 {tUi('desktop.emptyState.message')}
               </p>
+              <!-- The two ways out of an empty workspace, so it isn't a dead end. -->
+              <div class="mt-5 flex justify-center gap-2">
+                <Button
+                  size="sm"
+                  onclick={createNote}
+                  class="bg-accent-brand text-accent-brand-foreground hover:bg-accent-brand/90"
+                >
+                  <FilePlus class="size-4" />
+                  {tUi('fileTree.newNote')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onclick={() => openSearch()}
+                >
+                  <Search class="size-4" />
+                  {tUi('search.open')}
+                </Button>
+              </div>
+              {#if recentNotes.length > 0}
+                <div class="mt-8 w-80 text-left">
+                  <h3
+                    class="px-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
+                  >
+                    {tUi('desktop.emptyState.recent')}
+                  </h3>
+                  <ul class="mt-2 flex flex-col">
+                    {#each recentNotes as note (note.id)}
+                      {@const folder = note.parent_collection_id
+                        ? tree.collectionsById[note.parent_collection_id]?.name
+                        : undefined}
+                      <li>
+                        <button
+                          type="button"
+                          class="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm transition-colors hover:bg-accent"
+                          onclick={() => requestOpenNote(note.id)}
+                        >
+                          <NoteKindIcon
+                            kind={note.note_kind}
+                            class="size-4 shrink-0 text-muted-foreground"
+                          />
+                          <span class="min-w-0 flex-1 truncate"
+                            >{note.title}</span
+                          >
+                          {#if folder}<span
+                              class="max-w-28 shrink-0 truncate text-xs text-muted-foreground"
+                              >{folder}</span
+                            >{/if}
+                        </button>
+                      </li>
+                    {/each}
+                  </ul>
+                </div>
+              {/if}
             </section>
           </div>
         {/if}
       </div>
     </main>
 
-    {#if ui.rightSidebarOpen}
+    {#if rightSidebarShown()}
       <ResizeHandle
         side="right"
         value={ui.rightSidebarWidth}

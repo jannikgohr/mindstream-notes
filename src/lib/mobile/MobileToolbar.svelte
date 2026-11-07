@@ -11,7 +11,7 @@
   import { mobileState, setDisplayMode } from './state.svelte';
 </script>
 
-<div class="flex shrink-0 items-center gap-1">
+<div class="touch-targets flex shrink-0 items-center gap-1">
   <SortControl
     strategy={ui.sortStrategy}
     direction={ui.sortDirection}
@@ -28,7 +28,7 @@
   >
     <button
       type="button"
-      class="flex size-8 items-center justify-center rounded-md transition-colors {mobileState.displayMode ===
+      class="flex size-11 items-center justify-center rounded-md transition-colors {mobileState.displayMode ===
       'list'
         ? 'bg-accent-brand/10 text-accent-brand'
         : 'text-muted-foreground hover:bg-accent'}"
@@ -41,7 +41,7 @@
     </button>
     <button
       type="button"
-      class="flex size-8 items-center justify-center rounded-md transition-colors {mobileState.displayMode ===
+      class="flex size-11 items-center justify-center rounded-md transition-colors {mobileState.displayMode ===
       'grid'
         ? 'bg-accent-brand/10 text-accent-brand'
         : 'text-muted-foreground hover:bg-accent'}"

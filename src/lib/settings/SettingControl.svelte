@@ -149,8 +149,21 @@
   });
 </script>
 
-<div class="grid grid-cols-[1fr_auto] items-start gap-x-4 gap-y-2 py-3">
-  <div class="min-w-0" class:col-span-2={setting.type === 'custom'}>
+<!-- On phones only a switch stays beside its label; every other control
+     goes under it at full width, so long names and descriptions keep the
+     row instead of wrapping word by word. -->
+<div
+  class="grid grid-cols-[1fr_auto] items-start gap-x-4 gap-y-2 py-3 {setting.type !==
+  'toggle'
+    ? 'max-sm:grid-cols-1'
+    : ''}"
+>
+  <!-- Custom and segmented settings take the full row, so their control
+       ends on the same right edge as the switches and pickers. -->
+  <div
+    class="min-w-0"
+    class:col-span-full={setting.type === 'custom' || setting.type === 'radio'}
+  >
     <div class="flex items-center gap-2">
       <span class="text-sm font-medium">{label}</span>
       {#if modified}
@@ -176,7 +189,12 @@
     -->
     {#if setting.type === 'radio'}
       {@const s = setting as SelectSetting}
-      <div class="mt-2 flex flex-wrap gap-1.5">
+      <!-- One segmented track: the options share a border and the chosen one
+           is filled with a brand tint, so the choice reads as state in both
+           themes rather than as a focus ring. -->
+      <div
+        class="mt-2 flex w-full gap-0.5 rounded-md border border-border bg-muted p-0.5 sm:inline-flex sm:w-auto sm:flex-wrap"
+      >
         {#each visibleOptions as opt (opt)}
           <!--
             No tooltip here: a tooltip would only ever be wanted while the
@@ -187,10 +205,11 @@
           <button
             type="button"
             disabled={lockedBySession}
-            class="rounded-md border border-border px-3 py-1 text-xs transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent {value ===
+            aria-pressed={value === opt}
+            class="min-h-11 flex-auto rounded-[calc(var(--radius)-4px)] px-2.5 py-1.5 text-[13px] leading-tight transition-colors sm:min-h-0 sm:flex-none sm:whitespace-nowrap sm:px-3 sm:py-1 sm:text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 {value ===
             opt
-              ? 'border-ring bg-accent text-accent-foreground'
-              : 'bg-background text-foreground'}"
+              ? 'bg-accent-brand/15 font-medium text-accent-brand shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'}"
             onclick={() => commit(opt)}
           >
             {tValue(s.id, opt)}
@@ -244,10 +263,11 @@
     {/if}
   </div>
 
-  <!-- Right-side compact controls -->
+  <!-- Right-side compact controls. -->
   <div
     class="flex items-center gap-2 pt-0.5"
-    class:hidden={setting.type === 'custom'}
+    class:hidden={setting.type === 'custom' ||
+      (setting.type === 'radio' && !pending)}
   >
     {#if pending}
       <Loader2
@@ -264,14 +284,15 @@
         aria-label={label}
         disabled={pending}
         onclick={() => commit(!value)}
-        class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60 {value
-          ? 'bg-primary'
+        class="relative inline-flex h-7 w-12 shrink-0 cursor-pointer items-center rounded-full before:absolute before:-inset-2 before:content-[''] sm:h-5 sm:w-9 sm:before:hidden border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60 {value
+          ? 'bg-accent-brand'
           : 'bg-input'}"
       >
+        <!-- On, the switch takes the accent like the sliders and segments. -->
         <span
-          class="pointer-events-none block size-4 rounded-full bg-background shadow-sm ring-0 transition-transform {value
-            ? 'translate-x-4.5'
-            : 'translate-x-0.5'}"
+          class="pointer-events-none block size-6 rounded-full shadow-sm ring-0 transition-transform sm:size-4 {value
+            ? 'translate-x-5.5 bg-white sm:translate-x-4.5'
+            : 'translate-x-0.5 bg-background'}"
         ></span>
       </button>
     {:else if setting.type === 'text'}
@@ -284,7 +305,7 @@
         minlength={s.minLength}
         maxlength={s.maxLength}
         pattern={s.pattern}
-        class="h-8 w-56 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        class="h-11 w-full rounded-md border border-input bg-background px-2 text-sm sm:h-8 sm:w-56 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
     {:else if setting.type === 'number'}
       {@const s = setting as NumericSetting}
@@ -296,13 +317,13 @@
         min={s.min}
         max={s.max}
         step={s.step}
-        class="h-8 w-24 rounded-md border border-input bg-background px-2 text-sm tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        class="h-11 w-24 rounded-md border border-input bg-background px-2 text-sm tabular-nums sm:h-8 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
     {:else if setting.type === 'slider'}
       {@const s = setting as NumericSetting}
       {@const storeVal = (value as number | undefined) ?? s.min ?? 0}
       {@const display = sliderPreview ?? storeVal}
-      <div class="flex items-center gap-2">
+      <div class="flex w-full items-center gap-2 sm:w-auto">
         <!--
           min/max/step come BEFORE value so the browser doesn't clamp the
           initial value against the default 0..100 range (which would pin
@@ -324,7 +345,7 @@
             sliderPreview = null;
             commit(v);
           }}
-          class="h-1.5 w-44 cursor-pointer appearance-none rounded-full bg-input accent-primary"
+          class="-my-3 h-11 min-w-0 flex-1 cursor-pointer appearance-none rounded-full bg-input bg-clip-content py-[19px] accent-accent-brand sm:my-0 sm:h-1.5 sm:w-44 sm:flex-none sm:py-0"
         />
         <span
           class="w-12 text-right text-xs tabular-nums text-muted-foreground"
@@ -340,6 +361,7 @@
         options={visibleOptions}
         onChange={commit}
         ariaLabel={label}
+        class="max-sm:h-11 max-sm:w-full"
       />
     {:else if setting.type === 'folder'}
       <PickerSelect
@@ -383,7 +405,7 @@
         placeholder={s.mode === 'directory'
           ? '/path/to/folder'
           : '/path/to/file'}
-        class="h-8 w-56 rounded-md border border-input bg-background px-2 font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        class="h-11 w-full rounded-md border border-input bg-background px-2 font-mono text-xs sm:h-8 sm:w-56 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
     {:else if setting.type === 'keybinding'}
       <input

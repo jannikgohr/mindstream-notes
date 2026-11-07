@@ -617,7 +617,7 @@
           >
             <button
               type="button"
-              class="flex h-full w-full flex-col items-start gap-1.5 rounded-lg p-3 pr-9 text-left hover:bg-accent/50"
+              class="flex h-full w-full flex-col items-start gap-1.5 rounded-lg p-3 pr-11 text-left hover:bg-accent/50"
               onclick={() => handleNodePress(node)}
               onpointerdown={(e) => beginLongPress(e, node)}
               onpointerup={cancelLongPress}
@@ -630,7 +630,7 @@
                   {@render selectionToggle(node, selected)}
                 {/if}
                 {#if node.kind === 'folder'}
-                  <Folder class="size-5 text-muted-foreground" />
+                  <Folder class="size-5 text-folder-icon" />
                 {:else}
                   <NoteKindIcon
                     kind={noteKind}
@@ -640,7 +640,7 @@
               </span>
               <span class="line-clamp-2 text-sm font-medium">{node.name}</span>
               {#if node.kind === 'note'}
-                <span class="mt-auto text-[10px] text-muted-foreground">
+                <span class="mt-auto text-xs text-muted-foreground">
                   {previewFor(node.id)}
                 </span>
               {/if}
@@ -652,7 +652,7 @@
                 {#if node.kind === 'note'}
                   <button
                     type="button"
-                    class="rounded p-1 text-muted-foreground hover:text-foreground"
+                    class="grid size-10 place-items-center rounded-full text-muted-foreground hover:text-foreground"
                     onclick={() => toggleFavourite(node.id)}
                     aria-pressed={fav}
                     aria-label={tUi(fav ? 'favourite.remove' : 'favourite.add')}
@@ -663,7 +663,7 @@
                 {/if}
                 <button
                   type="button"
-                  class="rounded p-1 text-muted-foreground hover:text-foreground"
+                  class="grid size-10 place-items-center rounded-full text-muted-foreground hover:text-foreground"
                   onclick={(e) =>
                     openContextMenu(e, { kind: node.kind, id: node.id })}
                   aria-label={tUi('fileTree.toolbar.more')}
@@ -692,7 +692,7 @@
             {/if}
             <button
               type="button"
-              class="flex min-w-0 flex-1 items-center gap-3 rounded-md px-2 py-2.5 text-left hover:bg-accent"
+              class="flex min-h-13 min-w-0 flex-1 items-center gap-3 rounded-md px-2 py-2 text-left hover:bg-accent"
               onclick={() => handleNodePress(node)}
               onpointerdown={(e) => beginLongPress(e, node)}
               onpointerup={cancelLongPress}
@@ -701,7 +701,7 @@
               oncontextmenu={(e) => e.preventDefault()}
             >
               {#if node.kind === 'folder'}
-                <Folder class="size-5 shrink-0 text-muted-foreground" />
+                <Folder class="size-5 shrink-0 text-folder-icon" />
               {:else}
                 <NoteKindIcon
                   kind={noteKind}
@@ -720,7 +720,7 @@
             {#if !batchMode && node.kind === 'note'}
               <button
                 type="button"
-                class="shrink-0 rounded p-2 text-muted-foreground hover:text-foreground"
+                class="grid size-11 shrink-0 place-items-center rounded-full text-muted-foreground hover:text-foreground"
                 onclick={() => toggleFavourite(node.id)}
                 aria-pressed={fav}
                 aria-label={tUi(fav ? 'favourite.remove' : 'favourite.add')}
@@ -732,7 +732,7 @@
             {#if !batchMode}
               <button
                 type="button"
-                class="shrink-0 rounded p-2 text-muted-foreground hover:text-foreground"
+                class="grid size-11 shrink-0 place-items-center rounded-full text-muted-foreground hover:text-foreground"
                 onclick={(e) =>
                   openContextMenu(e, { kind: node.kind, id: node.id })}
                 aria-label={tUi('fileTree.toolbar.more')}

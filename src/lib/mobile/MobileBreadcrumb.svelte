@@ -69,7 +69,7 @@
      chip scrolls sideways when the path is long. -->
 <nav class="flex min-w-0 flex-1" aria-label={tUi('breadcrumb.label')}>
   <div
-    class="scrollbar-none inline-flex h-8 min-w-0 max-w-full items-center gap-0.5 overflow-x-auto rounded-full border border-border bg-surface-3 pl-2.5 pr-3 text-xs text-muted-foreground shadow-raised"
+    class="scrollbar-none inline-flex h-11 min-w-0 max-w-full items-center gap-0.5 overflow-x-auto rounded-full border border-border bg-surface-3 pl-3 pr-3.5 text-sm text-muted-foreground shadow-raised"
   >
     {#each segments as seg, i (i)}
       {@const isLast = i === segments.length - 1}
@@ -84,7 +84,7 @@
            is never clipped. -->
       {#if isLast}
         <span
-          class="flex min-w-0 shrink-0 items-center gap-1.5 rounded-full py-0.5 font-medium text-foreground {isRoot
+          class="flex min-w-0 shrink-0 items-center gap-1.5 h-11 rounded-full font-medium text-foreground {isRoot
             ? 'pr-0.5'
             : 'px-1'}"
           aria-current="page"
@@ -97,7 +97,7 @@
       {:else}
         <button
           type="button"
-          class="flex min-w-0 shrink-0 items-center gap-1.5 rounded-full py-0.5 hover:text-foreground {isRoot
+          class="flex min-w-0 shrink-0 items-center gap-1.5 h-11 rounded-full hover:text-foreground {isRoot
             ? 'pr-0.5'
             : 'px-1'}"
           onclick={() => setCurrentFolder(seg.id)}

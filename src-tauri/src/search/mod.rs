@@ -131,6 +131,21 @@ mod tests {
     }
 
     #[test]
+    fn snippet_shows_reading_text_not_markdown() {
+        let db = open_memory_for_tests();
+        let body = "Intro.\n\n## Itinerary\n\n1. **Thursday:** arrive 14:20\n- [x] Pack *light* \
+                    snake_case_name\n> Quote with [a link](https://x.test) and [[Note|alias]]\n\n\
+                    | Item | Cost |\n| --- | ---: |\n| Hotel | 390 € |\n\n```python\nx = 1\n```";
+        seed_note(&db, "Trip", body);
+        let hits = db.with_conn(|c| search(c, "trip")).unwrap();
+        assert_eq!(
+            hits[0].snippet,
+            "Intro. · Itinerary · Thursday: arrive 14:20 · Pack light snake_case_name · \
+             Quote with a link and alias · Item Cost · Hotel 390 € · x = 1"
+        );
+    }
+
+    #[test]
     fn title_match_ranges_returned() {
         let db = open_memory_for_tests();
         seed_note(&db, "the FooBar lives", "");

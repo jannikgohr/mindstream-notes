@@ -105,6 +105,11 @@
     <p class="py-1 text-xs text-muted-foreground">
       {tUi('sidebar.links.failed')}
     </p>
+  {:else if notesFor(relations.backlinks).length === 0 && notesFor(relations.outgoing).length === 0}
+    <!-- One line instead of two headings that each say "none". -->
+    <p class="py-1 text-xs text-muted-foreground">
+      {tUi('sidebar.links.none')}
+    </p>
   {:else}
     <div>
       <h4

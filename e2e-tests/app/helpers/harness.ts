@@ -596,6 +596,16 @@ export async function clickName(
   await clickElement(byName(name), opts);
 }
 
+/**
+ * The details panel starts closed and stays as the user leaves it, so open it
+ * only when the toggle still offers to show it. Needs an open note.
+ */
+export async function openDetailsPanel(): Promise<void> {
+  if (await $('aria/Show right sidebar').isExisting()) {
+    await clickName('Show right sidebar');
+  }
+}
+
 export async function openFileTreeCreateMore(): Promise<void> {
   const more = $('button[aria-label="More actions"]');
   if ((await more.getAttribute('aria-expanded')) !== 'true') {
@@ -1174,6 +1184,7 @@ export interface ClientHelpers {
   newRootFolder(name: string): Promise<void>;
   newNoteInFolder(folder: string, note: string): Promise<void>;
   openFolder(name: string): Promise<void>;
+  openDetailsPanel(): Promise<void>;
 }
 
 export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
@@ -1501,12 +1512,19 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
     if (!open) await clickElement(treeItem(name));
   };
 
+  const openDetailsPanel = async (): Promise<void> => {
+    if (await byName('Show right sidebar').isExisting()) {
+      await click('Show right sidebar');
+    }
+  };
+
   return {
     byName,
     allByName,
     isDisplayed,
     treeItem,
     openFolder,
+    openDetailsPanel,
     click,
     clickElement,
     setValue,

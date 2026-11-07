@@ -11,7 +11,7 @@
    * component means callers render `<NoteKindIcon kind=… class=… />` without
    * caring whether the kind is built-in or plugin-owned.
    */
-  import { noteKindIcon } from './note-kind-icon';
+  import { noteKindColor, noteKindIcon } from './note-kind-icon';
   import { pluginNoteKind } from '$lib/plugins/registry.svelte';
   import PluginIcon from '$lib/plugins/PluginIcon.svelte';
 
@@ -23,11 +23,20 @@
 
   const pluginRef = $derived(kind ? pluginNoteKind(kind) : undefined);
   const pluginIcon = $derived(pluginRef?.contribution.icon ?? null);
+  // Inline, so the kind colour wins over a caller's muted text class.
+  const color = $derived.by(() => {
+    const name = noteKindColor(kind);
+    return name ? `var(--named-${name})` : undefined;
+  });
 </script>
 
 {#if pluginRef && pluginIcon}
   <PluginIcon pluginId={pluginRef.pluginId} file={pluginIcon} class={klass} />
 {:else}
   {@const Icon = noteKindIcon(kind)}
-  <Icon class={klass} aria-hidden="true" />
+  <Icon
+    class={klass}
+    style={color ? `color: ${color}` : undefined}
+    aria-hidden="true"
+  />
 {/if}

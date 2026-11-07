@@ -124,6 +124,7 @@
   import FindBar from './FindBar.svelte';
   import EditorToolbar from './editor-toolbar/EditorToolbar.svelte';
   import MobileEditorToolbar from './editor-toolbar/MobileEditorToolbar.svelte';
+  import NoteInlineTitle from './note-editor/NoteInlineTitle.svelte';
   import TrashBanner from './note-editor/TrashBanner.svelte';
   import ViewOnlyBanner from './note-editor/ViewOnlyBanner.svelte';
   import WikilinkMenu from './note-editor/WikilinkMenu.svelte';
@@ -250,11 +251,43 @@
   // a plain `let` would make the child see a stale `null` after mount.
   let crepe: Crepe | null = $state(null);
   let crepeReady = $state(false);
+
+  /**
+   * Text of the body's opening H1, or '' when it opens with anything else.
+   * A body that already starts with the note's title as an H1 (the seeded
+   * Welcome note, Markdown imported with its own title) keeps that heading
+   * and skips the inline title rather than showing the title twice.
+   */
+  let leadingHeading = $state('');
+  function readLeadingHeading(doc: ProseMirrorNode) {
+    const first = doc.firstChild;
+    leadingHeading =
+      first?.type.name === 'heading' && first.attrs.level === 1
+        ? first.textContent
+        : '';
+  }
+  /** Enter in the inline title continues typing at the start of the body. */
+  function focusBodyStart() {
+    crepe?.editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      view.dispatch(
+        view.state.tr
+          .setSelection(ProseSelection.atStart(view.state.doc))
+          .scrollIntoView()
+      );
+      view.focus();
+    });
+  }
   // Drives both the Crepe feature config (drop the block-handle + slash
   // menu) and a wrapper class app.css uses to zero out the editor's
   // horizontal padding on small screens. Resolved in onMount because
   // isMobile() reads navigator.userAgent — unavailable during SSR.
   let mobile = $state(false);
+  const sameTitle = (a: string, b: string) =>
+    a.trim().toLocaleLowerCase() === b.trim().toLocaleLowerCase();
+  const showInlineTitle = $derived(
+    !sameTitle(leadingHeading, tree.notesById[noteId]?.title ?? '')
+  );
   // --- View mode (WYSIWYG / Source / Split) ---------------------------------
   // Seeded from the editor.defaultMode setting in onMount. All three modes are
   // available on every platform; only Split carries a constraint, and it's a
@@ -688,6 +721,7 @@
         getMarkdown = () => serializer(view.state.doc);
         currentDocument = () => view.state.doc;
         observedDocument = view.state.doc;
+        readLeadingHeading(view.state.doc);
       });
 
       // Hook yDoc updates AFTER bind/applyTemplate/connect so the initial
@@ -717,6 +751,7 @@
         const document = currentDocument();
         const changed = !document.eq(observedDocument);
         observedDocument = document;
+        if (changed) readLeadingHeading(document);
         const peerUpdate = provider !== null && origin === provider;
         if (origin !== REMOTE_SYNC_ORIGIN && (changed || peerUpdate))
           scheduleSave();
@@ -1710,7 +1745,7 @@
 <div class="note-editor flex h-full w-full flex-col" data-note-editor={noteId}>
   {#if showEditorHeader}
     <div
-      class="desktop-editor-header flex min-h-[42px] items-center gap-1 border-b border-border bg-background px-2"
+      class="desktop-editor-header flex min-h-9 items-center gap-1 border-b border-border bg-background px-2"
     >
       <div class="min-w-0 flex-1">
         {#if showDesktopToolbar}
@@ -1857,10 +1892,21 @@
           ? 'hidden'
           : ''} {viewMode === 'split' ? 'w-1/2' : 'w-full'}"
       >
+        {#if showInlineTitle}
+          <div class="mx-auto max-w-3xl" class:mobile-inline-title={mobile}>
+            <NoteInlineTitle
+              {noteId}
+              readonly={isReadOnly}
+              compact={mobile}
+              onEnter={focusBodyStart}
+            />
+          </div>
+        {/if}
         <div
           bind:this={host}
           class="mx-auto min-h-full max-w-3xl"
           class:mobile-editor={mobile}
+          class:has-inline-title={showInlineTitle}
           class:wikilink-open-on-click={wikilinkOpenOnClick}
         ></div>
       </div>
