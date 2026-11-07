@@ -109,6 +109,81 @@ test('a click leaves a dot and the open page list shows new ink right away', asy
   await expect.poll(() => thumbnail.evaluate(inked)).toBe(true);
 });
 
+test('a stroke drawn zoomed out with a mouse stays put when the pointer lifts', async ({
+  page
+}) => {
+  await page.goto('/');
+  await expect(
+    page.getByRole('button', { name: 'Welcome', exact: true })
+  ).toBeVisible();
+  await clickFileTreeCreateAction(page, 'New handwritten note');
+  await page
+    .getByRole('textbox', { name: 'New handwritten note', exact: true })
+    .press('Enter');
+  const canvas = page.getByLabel('Handwritten note canvas', { exact: true });
+  const box = (await canvas.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.keyboard.down('Control');
+  await page.mouse.wheel(0, 4000);
+  await page.keyboard.up('Control');
+
+  // A mouse reports whole pixels, which is what makes zoomed-out ink
+  // jagged; the live stroke is smoothed the same way it is stored.
+  const start = {
+    x: Math.round(box.x + box.width / 2 - 80),
+    y: Math.round(box.y + 160)
+  };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  for (let i = 1; i <= 80; i += 1)
+    await page.mouse.move(
+      start.x + i * 2,
+      start.y + Math.round(30 * Math.sin(i / 12))
+    );
+  // Compares the canvas after the next painted frame with the snapshot
+  // taken before the pointer lifted, inside the page to avoid shipping
+  // megabytes of pixels out.
+  const snapshot = (compare: boolean) =>
+    canvas.evaluate(
+      (el: HTMLCanvasElement, compare) =>
+        new Promise<number>((resolve) =>
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => {
+              const data = el
+                .getContext('2d')!
+                .getImageData(0, 0, el.width, el.height).data;
+              const store = window as unknown as {
+                inkLive?: Uint8ClampedArray;
+              };
+              if (!compare) {
+                store.inkLive = data;
+                resolve(0);
+                return;
+              }
+              const live = store.inkLive!;
+              let changed = 0;
+              for (let i = 0; i < data.length; i += 4)
+                if (
+                  Math.abs(live[i] - data[i]) > 24 ||
+                  Math.abs(live[i + 1] - data[i + 1]) > 24 ||
+                  Math.abs(live[i + 2] - data[i + 2]) > 24
+                )
+                  changed += 1;
+              resolve(changed);
+            })
+          )
+        ),
+      compare
+    );
+  await snapshot(false);
+  await page.mouse.up();
+  await expect(
+    page.getByRole('button', { name: 'Undo', exact: true })
+  ).toBeEnabled();
+  const changed = await snapshot(true);
+  expect(changed).toBe(0);
+});
+
 test('imports a large local PDF as compressed image pages', async ({
   page
 }) => {

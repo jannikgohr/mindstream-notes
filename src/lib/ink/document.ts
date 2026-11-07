@@ -50,6 +50,11 @@ import {
 } from './stroke-transform';
 import { applyRedoOp, applyUndoOp } from './document-undo';
 import {
+  NO_SMOOTHING,
+  smoothStroke,
+  type StrokeSmoothing
+} from './stroke-smoothing';
+import {
   defaultLayout,
   DEFAULT_PAGE,
   layoutForPages,
@@ -97,6 +102,7 @@ export class InkDocument {
   readonly doc: Y.Doc;
   private readonly strokes: Y.Array<Y.Map<unknown>>;
   private inProgress: InProgressStroke | null = null;
+  private inProgressSmoothing: StrokeSmoothing = NO_SMOOTHING;
   private visibleStrokeCache: StrokeMeta[] | null = null;
   private strokeMapCache: Map<string, Y.Map<unknown>> | null = null;
   private spatialIndexCache: StrokeSpatialIndex | null = null;
@@ -477,12 +483,23 @@ export class InkDocument {
     return out;
   }
 
-  beginStroke(color = DEFAULT_COLOR, width = DEFAULT_WIDTH): void {
+  /**
+   * Start a stroke. `smoothing` is chosen by the caller for the input
+   * type and the zoom the stroke is drawn at (see stroke-smoothing.ts);
+   * `endStroke` applies it, so it must be the same smoothing the caller
+   * used to draw the stroke live.
+   */
+  beginStroke(
+    color = DEFAULT_COLOR,
+    width = DEFAULT_WIDTH,
+    smoothing: StrokeSmoothing = NO_SMOOTHING
+  ): void {
     this.inProgress = {
       color: color >>> 0,
       width: sanitizeWidth(width),
       points: []
     };
+    this.inProgressSmoothing = smoothing;
   }
 
   pushPoint(x: number, y: number, pressure = 1): void {
@@ -504,6 +521,7 @@ export class InkDocument {
       const stroke = this.inProgress;
       this.inProgress = null;
       if (!stroke || stroke.points.length === 0) return null;
+      stroke.points = smoothStroke(stroke.points, this.inProgressSmoothing);
 
       const id = `stroke_${randomId()}`;
       const map = new Y.Map<unknown>();
