@@ -58,19 +58,23 @@
   <div
     data-tauri-drag-region={customDecorations ? 'deep' : undefined}
     class="flex h-full shrink-0 items-center gap-2.5 overflow-hidden pl-5 {ui.leftSidebarOpen
-      ? 'pr-5'
+      ? 'pr-4'
       : ''}"
     style:width={ui.leftSidebarOpen ? `${ui.leftSidebarWidth}px` : undefined}
   >
-    <!-- The icon is a light tile: a hairline ring keeps it a tile on the light
-         chrome too, instead of a bare glyph there and a white block in dark. -->
+    <!-- A compact brand: the app reads as named without outweighing the
+         sidebar labels. The icon is a light tile: a hairline ring keeps it a
+         tile on the light chrome, and it is dimmed a little in dark mode so it
+         is not the brightest spot there. With the sidebar open the wordmark
+         takes the free width, which puts the toggle in the column of the
+         sidebar's sort button below. -->
     <img
       src={appIcon}
       alt=""
       draggable="false"
-      class="size-6 shrink-0 rounded-md ring-1 ring-border"
+      class="brand-tile size-[22px] shrink-0 rounded-md ring-1 ring-border"
     />
-    <span class="truncate text-base font-semibold tracking-tight"
+    <span class="min-w-0 flex-1 truncate text-sm font-semibold tracking-tight"
       >mindstream<span class="text-accent-brand">.</span></span
     >
     <Button
