@@ -406,6 +406,17 @@ body {
   height: var(--app-h);
 }
 
+/* Menus, dialogs and headings that only script focuses (tabindex="-1")
+ * never draw Chromium's default ring. A pen or touch tap that calls
+ * preventDefault() drops the compatibility mouse events, so Chromium
+ * takes the next script focus for keyboard focus and rings the whole
+ * container. The base layer lets a component's own focus utilities win. */
+@layer base {
+  [tabindex='-1']:focus {
+    outline: none;
+  }
+}
+
 /* Native-feel selection */
 ::selection {
   background-color: oklch(from var(--accent-brand) l c h / 0.25);

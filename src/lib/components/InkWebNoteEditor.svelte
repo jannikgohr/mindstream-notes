@@ -246,6 +246,11 @@
   let hostEl = $state<HTMLDivElement | null>(null);
   let canvasHostEl = $state<HTMLDivElement | null>(null);
   let canvasEl = $state<HTMLCanvasElement | null>(null);
+  // Pen and touch focus the canvas from script after preventDefault() has
+  // dropped the compatibility mouse events, so Chromium treats it as
+  // keyboard focus and rings the whole page. Only Tab focus shows a ring.
+  let canvasKeyboardFocus = $state(false);
+  let focusingCanvasFromPointer = false;
   let resizeSnapshotCanvasEl = $state<HTMLCanvasElement | null>(null);
   let toolbarEl = $state<HTMLDivElement | null>(null);
   let boundsFrame: number | null = null;
@@ -1355,10 +1360,20 @@
     updateLiveInkOverlayStyle();
   }
 
+  function focusCanvasFromPointer(canvas: HTMLCanvasElement) {
+    canvasKeyboardFocus = false;
+    focusingCanvasFromPointer = true;
+    try {
+      canvas.focus({ preventScroll: true });
+    } finally {
+      focusingCanvasFromPointer = false;
+    }
+  }
+
   function handleTouchPointerDown(event: PointerEvent) {
     if (!doc || !canvasEl) return;
     event.preventDefault();
-    canvasEl.focus({ preventScroll: true });
+    focusCanvasFromPointer(canvasEl);
     canvasEl.setPointerCapture(event.pointerId);
     touchPointers.set(event.pointerId, touchPointer(event));
     if (touchPointers.size >= 2) {
@@ -1447,7 +1462,7 @@
       return;
     }
     event.preventDefault();
-    canvasEl.focus({ preventScroll: true });
+    focusCanvasFromPointer(canvasEl);
     canvasEl.setPointerCapture(event.pointerId);
     activePointerId = event.pointerId;
     const isFinger = event.pointerType === 'touch';
@@ -3246,13 +3261,17 @@
     ></canvas>
     <canvas
       bind:this={canvasEl}
-      class="relative z-10 block h-full w-full touch-none {tool === 'eraser'
+      class="relative z-10 block h-full w-full touch-none {canvasKeyboardFocus
+        ? 'outline-2 -outline-offset-2 outline-ring'
+        : 'outline-none'} {tool === 'eraser'
         ? 'cursor-none'
         : tool === 'pen'
           ? 'cursor-crosshair'
           : 'cursor-default'}"
       tabindex="0"
       aria-label={ariaLabel}
+      onfocus={() => (canvasKeyboardFocus = !focusingCanvasFromPointer)}
+      onblur={() => (canvasKeyboardFocus = false)}
       onpointerenter={handlePointerEnter}
       onpointerleave={handlePointerLeave}
       onpointerdown={handlePointerDown}
