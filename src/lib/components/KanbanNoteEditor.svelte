@@ -94,6 +94,8 @@
   import { folderPathLabel } from '$lib/notes/folder-path';
   import { resolveShareScopeUsers } from '$lib/notes/share-users';
   import {
+    APP_REDO_COMMAND,
+    APP_UNDO_COMMAND,
     registerEditor,
     SEARCH_ACTIVE_NOTE_COMMAND,
     unregisterEditor,
@@ -1327,6 +1329,14 @@
         onCommand: (id: string) => {
           if (id === SEARCH_ACTIVE_NOTE_COMMAND) {
             openKanbanSearch();
+            return true;
+          }
+          if (id === APP_UNDO_COMMAND) {
+            undoKanbanAction();
+            return true;
+          }
+          if (id === APP_REDO_COMMAND) {
+            redoKanbanAction();
             return true;
           }
           return false;
