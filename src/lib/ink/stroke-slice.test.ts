@@ -25,6 +25,16 @@ describe('sliceStrokeByCircles', () => {
     expect(result.fragments).toEqual([[p(0, 0)]]);
   });
 
+  it('erases a single-point stroke whole when the eraser covers it', () => {
+    const result = sliceStrokeByCircles([p(5, 5)], [{ x: 6, y: 5, r: 2 }]);
+    expect(result).toEqual({ changed: true, fragments: [] });
+  });
+
+  it('keeps a single-point stroke the eraser misses', () => {
+    const result = sliceStrokeByCircles([p(5, 5)], [{ x: 20, y: 5, r: 2 }]);
+    expect(result).toEqual({ changed: false, fragments: [[p(5, 5)]] });
+  });
+
   it('splits a line into two fragments when erased in the middle', () => {
     const circles: EraserCircle[] = [{ x: 50, y: 0, r: 10 }];
     const result = sliceStrokeByCircles(line(), circles);

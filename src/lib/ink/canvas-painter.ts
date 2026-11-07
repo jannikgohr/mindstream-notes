@@ -162,7 +162,8 @@ export function drawPageBackground(
  * Paint one stroke as a run of line segments whose width follows pen
  * pressure. The width is quantised to quarter-pixels and the path is
  * only restarted when it actually changes, which keeps a long stroke to
- * a handful of `stroke()` calls instead of one per segment.
+ * a handful of `stroke()` calls instead of one per segment. A single
+ * point (a tap or click) is painted as a round dot of the same width.
  */
 export function drawStroke(
   ctx: CanvasRenderingContext2D,
@@ -171,13 +172,31 @@ export function drawStroke(
   baseWidth: number,
   view: InkView
 ) {
-  if (points.length < 2) return;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.strokeStyle = color;
+  if (points.length === 0) return;
   const scale = view.scale;
   const panX = view.panX;
   const panY = view.panY;
+  if (points.length === 1) {
+    const [point] = points;
+    const diameter = Math.max(
+      1,
+      baseWidth * scale * pressureWidth(point.pressure)
+    );
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(
+      point.x * scale + panX,
+      point.y * scale + panY,
+      diameter / 2,
+      0,
+      Math.PI * 2
+    );
+    ctx.fill();
+    return;
+  }
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = color;
   let previous = points[0];
   let previousX = previous.x * scale + panX;
   let previousY = previous.y * scale + panY;
