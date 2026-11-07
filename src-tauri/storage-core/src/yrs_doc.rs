@@ -227,6 +227,106 @@ pub fn has_editor_content(state: &[u8]) -> bool {
     prosemirror.len(&txn) > 0
 }
 
+/// Whether `container` already holds everything in `other`, so merging
+/// `other` into it would change nothing: no insert `container` lacks, no
+/// deletion it has not seen.
+///
+/// A pull uses this to tell a dirty row whose content has nothing to add
+/// from one that carries unpushed edits. Only the second may keep its own
+/// rendered body over the remote one (see `apply_note_payload`).
+///
+/// Errs towards `false`: bytes that do not decode, or an update that cannot
+/// integrate yet because it depends on operations `container` lacks, are not
+/// proof of containment.
+pub fn contains_state(container: &[u8], other: &[u8]) -> bool {
+    if other.is_empty() {
+        return true;
+    }
+    let Ok(update) = Update::decode_v1(other) else {
+        return false;
+    };
+    let doc = load(container);
+    let (before, pending_before) = {
+        let txn = doc.transact();
+        (txn.snapshot(), has_pending(&txn))
+    };
+    if doc.transact_mut().apply_update(update).is_err() {
+        return false;
+    }
+    let txn = doc.transact();
+    if has_pending(&txn) && !pending_before {
+        return false;
+    }
+    txn.snapshot() == before
+}
+
+fn has_pending<T: ReadTxn>(txn: &T) -> bool {
+    let store = txn.store();
+    store.pending_update().is_some() || store.pending_ds().is_some()
+}
+
+/// Every string in a note's *live* content, one per line: the legacy `body`
+/// text, the editor's prosemirror text and element attributes, and the
+/// drawing maps (`excalidraw:files`, `ink:pages`). Deleted content is not
+/// visited, so this is what the note references now, not what it once did.
+///
+/// Callers scan the result for asset links. The rendered `notes.body` can lag
+/// the CRDT: a pull keeps whichever device's rendering it trusts while the
+/// Yjs state merges, so anything deciding whether an asset is still in use
+/// must look here too, or it frees an image the editor is still showing.
+pub fn live_strings(state: &[u8]) -> String {
+    let mut out = String::new();
+    if state.is_empty() {
+        return out;
+    }
+    let doc = load(state);
+    // Same as replace_asset_id: roots stay unresolved until opened under the
+    // type their writer used.
+    let body = doc.get_or_insert_text(TEXT_KEY);
+    let prosemirror = doc.get_or_insert_xml_fragment("prosemirror");
+    let files = doc.get_or_insert_map("excalidraw:files");
+    let ink_pages = doc.get_or_insert_map("ink:pages");
+    let txn = doc.transact();
+    push_line(&mut out, &body.get_string(&txn));
+    for node in prosemirror.successors(&txn) {
+        match node {
+            XmlOut::Text(text) => push_line(&mut out, &text.get_string(&txn)),
+            XmlOut::Element(element) => {
+                for (_, value) in element.attributes(&txn) {
+                    push_line(&mut out, &value.to_string(&txn));
+                }
+            }
+            XmlOut::Fragment(_) => {}
+        }
+    }
+    for map in [&files, &ink_pages] {
+        for (_, value) in map.iter(&txn) {
+            if let Out::Any(any) = value {
+                push_any_strings(&mut out, &any);
+            }
+        }
+    }
+    out
+}
+
+fn push_line(out: &mut String, value: &str) {
+    if !value.is_empty() {
+        out.push_str(value);
+        out.push('\n');
+    }
+}
+
+fn push_any_strings(out: &mut String, value: &Any) {
+    match value {
+        Any::String(value) => push_line(out, value),
+        Any::Array(values) => values.iter().for_each(|value| push_any_strings(out, value)),
+        Any::Map(values) => values
+            .values()
+            .for_each(|value| push_any_strings(out, value)),
+        _ => {}
+    }
+}
+
 /// Replace an asset id everywhere the editors can persist it in a Yjs document.
 /// This covers the legacy `body` Y.Text, y-prosemirror XML text and attributes,
 /// and Excalidraw file metadata stored as plain `Any::Map` values.
@@ -610,6 +710,124 @@ pub fn editor_state_for_tests(paragraph: &str) -> Vec<u8> {
         element.push_back(&mut txn, XmlTextPrelim::new(paragraph));
     }
     encode_state(&doc)
+}
+
+/// `state` plus one more block appended by the editor of device `client_id`:
+/// a paragraph holding `paragraph`, or with `image_src` an `image-block` the
+/// way Crepe stores one (the link lives in its `src` attribute). Lets tests
+/// build divergent device histories over a shared base.
+#[cfg(any(test, feature = "test-support"))]
+pub fn append_editor_block_for_tests(
+    state: &[u8],
+    client_id: u64,
+    paragraph: &str,
+    image_src: Option<&str>,
+) -> Vec<u8> {
+    use yrs::{XmlElementPrelim, XmlTextPrelim};
+    let doc = Doc::with_client_id(client_id);
+    {
+        let mut txn = doc.transact_mut();
+        if let Ok(update) = Update::decode_v1(state) {
+            let _ = txn.apply_update(update);
+        }
+    }
+    let fragment = doc.get_or_insert_xml_fragment("prosemirror");
+    {
+        let mut txn = doc.transact_mut();
+        let paragraph_element = fragment.push_back(&mut txn, XmlElementPrelim::empty("paragraph"));
+        paragraph_element.push_back(&mut txn, XmlTextPrelim::new(paragraph));
+        if let Some(src) = image_src {
+            let image = fragment.push_back(&mut txn, XmlElementPrelim::empty("image-block"));
+            image.insert_attribute(&mut txn, "src", src);
+        }
+    }
+    encode_state(&doc)
+}
+
+/// `state` with every top-level block whose text or attributes mention
+/// `needle` removed by device `client_id`.
+#[cfg(any(test, feature = "test-support"))]
+pub fn remove_editor_blocks_for_tests(state: &[u8], client_id: u64, needle: &str) -> Vec<u8> {
+    let doc = Doc::with_client_id(client_id);
+    {
+        let mut txn = doc.transact_mut();
+        if let Ok(update) = Update::decode_v1(state) {
+            let _ = txn.apply_update(update);
+        }
+    }
+    let fragment = doc.get_or_insert_xml_fragment("prosemirror");
+    let doomed: Vec<u32> = {
+        let txn = doc.transact();
+        (0..fragment.len(&txn))
+            .filter(|index| {
+                fragment.get(&txn, *index).is_some_and(|node| match node {
+                    XmlOut::Element(element) => {
+                        element.get_string(&txn).contains(needle)
+                            || element
+                                .attributes(&txn)
+                                .any(|(_, value)| value.to_string(&txn).contains(needle))
+                    }
+                    XmlOut::Text(text) => text.get_string(&txn).contains(needle),
+                    XmlOut::Fragment(_) => false,
+                })
+            })
+            .collect()
+    };
+    {
+        let mut txn = doc.transact_mut();
+        for index in doomed.into_iter().rev() {
+            fragment.remove_range(&mut txn, index, 1);
+        }
+    }
+    encode_state(&doc)
+}
+
+#[cfg(test)]
+mod divergence_tests {
+    use super::*;
+
+    const ASSET: &str = "asset:mindstream/asset_0f0f0f0f-0000-4000-8000-000000000001";
+
+    #[test]
+    fn a_state_contains_itself_and_its_ancestors() {
+        let base = editor_state_for_tests("base");
+        let newer = append_editor_block_for_tests(&base, 7, "more", None);
+        assert!(contains_state(&base, &base));
+        assert!(contains_state(&newer, &base));
+        assert!(!contains_state(&base, &newer));
+        assert!(contains_state(&base, &[]));
+    }
+
+    #[test]
+    fn a_deletion_the_container_has_not_seen_is_not_contained() {
+        let base = append_editor_block_for_tests(&editor_state_for_tests("base"), 7, "gone", None);
+        let trimmed = remove_editor_blocks_for_tests(&base, 8, "gone");
+        assert!(!contains_state(&base, &trimmed));
+        assert!(contains_state(&trimmed, &base));
+    }
+
+    #[test]
+    fn concurrent_edits_are_not_contained_either_way() {
+        let base = editor_state_for_tests("base");
+        let desktop = append_editor_block_for_tests(&base, 7, "desktop", None);
+        let phone = append_editor_block_for_tests(&base, 8, "phone", None);
+        assert!(!contains_state(&desktop, &phone));
+        assert!(!contains_state(&phone, &desktop));
+        assert!(!contains_state(&desktop, b"not an update"));
+    }
+
+    #[test]
+    fn live_strings_see_image_sources_and_text_but_not_deleted_blocks() {
+        let base = editor_state_for_tests("hello");
+        let with_image = append_editor_block_for_tests(&base, 7, "caption", Some(ASSET));
+        let strings = live_strings(&with_image);
+        assert!(strings.contains("hello"));
+        assert!(strings.contains(ASSET));
+
+        let without = remove_editor_blocks_for_tests(&with_image, 8, ASSET);
+        assert!(!live_strings(&without).contains(ASSET));
+        assert!(live_strings(&[]).is_empty());
+    }
 }
 
 #[cfg(test)]
