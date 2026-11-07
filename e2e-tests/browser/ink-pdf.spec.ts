@@ -90,6 +90,19 @@ test('a click leaves a dot and the open page list shows new ink right away', asy
   }, tap);
   expect(dot).toBeLessThan(100);
 
+  // Keyboard undo and both redo chords reach the ink editor.
+  const undo = page.getByRole('button', { name: 'Undo', exact: true });
+  const redo = page.getByRole('button', { name: 'Redo', exact: true });
+  await page.keyboard.press('Control+z');
+  await expect(undo).toBeDisabled();
+  await expect(redo).toBeEnabled();
+  await page.keyboard.press('Control+y');
+  await expect(undo).toBeEnabled();
+  await page.keyboard.press('Control+z');
+  await expect(undo).toBeDisabled();
+  await page.keyboard.press('Control+Shift+z');
+  await expect(undo).toBeEnabled();
+
   // A stroke drawn while the page list is open reaches its thumbnail
   // without any page operation in between.
   await draw(page, 'Handwritten note canvas');

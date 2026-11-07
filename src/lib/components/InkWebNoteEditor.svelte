@@ -2463,6 +2463,7 @@
       editorListener = {
         kind: 'ink',
         host: hostEl,
+        noteId,
         onCommand: handleInkCommand
       };
       registerEditor(editorListener);
