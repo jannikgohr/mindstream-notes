@@ -36,6 +36,7 @@
     onClose,
     onSelect,
     initialPageId,
+    contentRevision,
     strokesForPage
   }: {
     pages: InkPage[];
@@ -52,6 +53,7 @@
     onClose: () => void;
     onSelect: (id: string) => void;
     initialPageId: string | null;
+    contentRevision: number;
     strokesForPage: (id: string) => InkStroke[];
   } = $props();
   let selectedId = $state<string | null>(null);
@@ -316,6 +318,7 @@
             <InkPageThumbnail
               {page}
               revision={thumbnailRevision}
+              {contentRevision}
               getBackground={thumbnails.get}
               {strokesForPage}
               onVisibility={updateVisible}

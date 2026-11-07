@@ -46,6 +46,56 @@ test('normal ink notes keep appending blank pages after using page management', 
   await expect(manager.getByRole('listitem')).toHaveCount(4);
 });
 
+test('a click leaves a dot and the open page list shows new ink right away', async ({
+  page
+}) => {
+  await page.goto('/');
+  await expect(
+    page.getByRole('button', { name: 'Welcome', exact: true })
+  ).toBeVisible();
+  await clickFileTreeCreateAction(page, 'New handwritten note');
+  await page
+    .getByRole('textbox', { name: 'New handwritten note', exact: true })
+    .press('Enter');
+  await page.getByRole('button', { name: 'Pages', exact: true }).click();
+  const manager = page.getByRole('region', { name: 'Pages', exact: true });
+  const thumbnail = manager.getByRole('listitem').nth(0).locator('canvas');
+  const inked = (canvas: HTMLCanvasElement) =>
+    Boolean(
+      canvas
+        .getContext('2d')
+        ?.getImageData(0, 0, canvas.width, canvas.height)
+        .data.some((value, i) => i % 4 !== 3 && value < 100)
+    );
+  await expect.poll(() => thumbnail.evaluate(inked)).toBe(false);
+
+  const canvas = page.getByLabel('Handwritten note canvas', { exact: true });
+  const box = (await canvas.boundingBox())!;
+  const tap = { x: box.width / 2 - 100, y: 120 };
+  await page.mouse.click(box.x + tap.x, box.y + tap.y);
+  await expect(
+    page.getByRole('button', { name: 'Undo', exact: true })
+  ).toBeEnabled();
+  const dot = await canvas.evaluate((el: HTMLCanvasElement, at) => {
+    const scale = el.width / el.getBoundingClientRect().width;
+    const [r, g, b] = el
+      .getContext('2d')!
+      .getImageData(
+        Math.round(at.x * scale),
+        Math.round(at.y * scale),
+        1,
+        1
+      ).data;
+    return Math.max(r, g, b);
+  }, tap);
+  expect(dot).toBeLessThan(100);
+
+  // A stroke drawn while the page list is open reaches its thumbnail
+  // without any page operation in between.
+  await draw(page, 'Handwritten note canvas');
+  await expect.poll(() => thumbnail.evaluate(inked)).toBe(true);
+});
+
 test('imports a large local PDF as compressed image pages', async ({
   page
 }) => {

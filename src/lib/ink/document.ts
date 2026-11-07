@@ -413,10 +413,23 @@ export class InkDocument {
   }
 
   pageStrokes(pageId: string): InkStroke[] {
-    const offset = pageOffset(this.pages(), pageId);
+    const pages = this.pages();
+    const offset = pageOffset(pages, pageId);
     if (!offset) return [];
+    const [minX, minY, maxX, maxY] = pageRect(
+      this.layout(),
+      pages.findIndex((p) => p.id === pageId)
+    )!;
+    const rect = { minX, minY, maxX, maxY };
     return this.visibleStrokes()
-      .filter((s) => this.findStrokeMap(s.id)?.get('pageId') === pageId)
+      .filter((s) => {
+        const owner = this.findStrokeMap(s.id)?.get('pageId');
+        // Until a page operation stores the page list, strokes carry no
+        // page id; they show on every page their bounds reach.
+        return typeof owner === 'string'
+          ? owner === pageId
+          : boundsIntersect(s.bounds ?? boundsOfPoints(s.points), rect, 0);
+      })
       .map((s) => ({
         ...s,
         points: s.points.map((p) => ({
