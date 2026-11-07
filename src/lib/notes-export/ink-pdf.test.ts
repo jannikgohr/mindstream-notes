@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PDFDocument, degrees } from 'pdf-lib';
+import {
+  PDFArray,
+  PDFDocument,
+  PDFRawStream,
+  decodePDFRawStream,
+  degrees
+} from 'pdf-lib';
 import { InkDocument } from '$lib/ink/document';
 import { buildInkPdf } from './ink-pdf';
 
@@ -120,5 +126,66 @@ describe('PDF-backed ink export', () => {
     ]);
     ink.doc.destroy();
     reopened.doc.destroy();
+  });
+
+  it('exports a single tap as a round-capped zero-length segment, which PDF paints as a dot', async () => {
+    const ink = new InkDocument();
+    ink.addStrokes([
+      {
+        color: 0xff112233,
+        width: 4,
+        points: [{ x: 300, y: 40, pressure: 1 }]
+      }
+    ]);
+    const pdf = await PDFDocument.load((await buildInkPdf(ink.encode()))!);
+    const contents = pdf.getPages()[0].node.Contents();
+    const streams =
+      contents instanceof PDFArray
+        ? contents.asArray().map((ref) => pdf.context.lookup(ref))
+        : [contents];
+    const operators = streams
+      .map((stream) =>
+        new TextDecoder().decode(
+          decodePDFRawStream(stream as PDFRawStream).decode()
+        )
+      )
+      .join('\n');
+    expect(operators).toContain('1 J');
+    expect(operators).toContain('4 w\n300 1644 m\n300 1644 l\nS');
+    ink.doc.destroy();
+  });
+
+  it('exports the curve the canvas draws, as cubic Béziers', async () => {
+    const ink = new InkDocument();
+    ink.addStrokes([
+      {
+        color: 0xff112233,
+        width: 4,
+        points: [
+          { x: 300, y: 40, pressure: 0.5 },
+          { x: 330, y: 40, pressure: 0.5 },
+          { x: 330, y: 70, pressure: 0.5 }
+        ]
+      }
+    ]);
+    const pdf = await PDFDocument.load((await buildInkPdf(ink.encode()))!);
+    const contents = pdf.getPages()[0].node.Contents();
+    const streams =
+      contents instanceof PDFArray
+        ? contents.asArray().map((ref) => pdf.context.lookup(ref))
+        : [contents];
+    const operators = streams
+      .map((stream) =>
+        new TextDecoder().decode(
+          decodePDFRawStream(stream as PDFRawStream).decode()
+        )
+      )
+      .join('\n');
+    // Page y runs up from the bottom: page height 1684, so y 40 → 1644.
+    // The quadratic (315,1644) → (330,1644) → (330,1629) raised to a cubic.
+    expect(operators).toContain(
+      '300 1644 m\n315 1644 l\n325 1644 330 1639 330 1629 c\n330 1614 l\nS'
+    );
+    ink.doc.destroy();
   });
 });

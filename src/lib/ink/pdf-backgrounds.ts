@@ -2,7 +2,7 @@ import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { fetchAssetBytes } from '$lib/api/assets';
 import { loadNote } from '$lib/api/notes';
-import type { InkPage } from './page';
+import { DEFAULT_PAGE, type InkPage } from './page';
 import { cachedPdfPageText, pdfNoteNeedsText } from '$lib/api/pdf-text';
 import { savePdfPageImages, type PageImageProgress } from './page-images';
 
@@ -66,7 +66,16 @@ export async function preparePdfImport(file: File) {
         noteId: string,
         progress?: PageImageProgress,
         signal?: AbortSignal
-      ) => savePdfPageImages(doc, indices, noteId, progress, signal),
+      ) =>
+        // Imported pages share the width of blank pages; only height varies.
+        savePdfPageImages(
+          doc,
+          indices,
+          noteId,
+          progress,
+          signal,
+          DEFAULT_PAGE.width
+        ),
       destroy() {
         return (closing ??= task
           .destroy()

@@ -5,6 +5,7 @@ import {
   boundsOfPoints,
   pointInPolygon,
   segmentsIntersect,
+  strokeHitAt,
   strokeIntersectsLasso,
   tileCoord,
   tileKey
@@ -28,6 +29,14 @@ const square = [
   { x: 10, y: 10 },
   { x: 0, y: 10 }
 ];
+
+describe('strokeHitAt', () => {
+  it('hits a single-point stroke within the radius', () => {
+    const dot = stroke([[10, 10]]);
+    expect(strokeHitAt(dot, { x: 12, y: 10 }, 3)).toBe(true);
+    expect(strokeHitAt(dot, { x: 14, y: 10 }, 3)).toBe(false);
+  });
+});
 
 describe('boundsOfPoints', () => {
   it('returns a zero box for an empty stroke rather than infinities', () => {

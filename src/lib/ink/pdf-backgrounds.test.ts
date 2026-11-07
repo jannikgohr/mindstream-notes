@@ -148,7 +148,15 @@ describe('PDF document lifetime', () => {
     await expect(
       prepared.images([1], 'note', progress, signal)
     ).resolves.toEqual([]);
-    expect(h.images).toHaveBeenCalledWith(pdf, [1], 'note', progress, signal);
+    // Imported pages are scaled to the width of a blank page.
+    expect(h.images).toHaveBeenCalledWith(
+      pdf,
+      [1],
+      'note',
+      progress,
+      signal,
+      1190
+    );
     const closing = prepared.destroy();
     expect(prepared.destroy()).toBe(closing);
     await closing;

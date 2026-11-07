@@ -673,6 +673,7 @@
     "hotkeys.command.global.searchActiveNote": "Search active note",
     "hotkeys.command.global.undo": "Undo",
     "hotkeys.command.global.redo": "Redo",
+    "hotkeys.command.global.redoAlternate": "Redo (alternative shortcut)",
     "hotkeys.command.global.toggleNoteOverview": "Toggle note overview",
     "hotkeys.command.global.toggleNoteMetadata": "Toggle right sidebar",
     "hotkeys.command.global.addTag": "Add tag",

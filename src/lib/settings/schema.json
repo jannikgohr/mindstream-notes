@@ -13,6 +13,7 @@
               "scope": "V",
               "type": "radio",
               "default": "local-only",
+              "resettable": false,
               "options": ["managed", "self-hosted", "local-only"]
             },
             {

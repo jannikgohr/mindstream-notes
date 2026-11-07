@@ -26,19 +26,28 @@ function jpeg(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
   );
 }
 
-/** Rendering and text extraction happen once, before this page enters an ink note. */
+/**
+ * Rendering and text extraction happen once, before this page enters an ink
+ * note. With `inkWidth` the page is scaled to that width, keeping its aspect
+ * ratio; without it the page keeps its PDF size (ink units are twice points).
+ */
 export async function savePageImage(
   source: PDFPageProxy,
   pageIndex: number,
   noteId: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  inkWidth?: number
 ): Promise<InkPage> {
   signal?.throwIfAborted();
   const base = source.getViewport({ scale: 1 });
+  const inkScale = inkWidth ? inkWidth / base.width : 2;
+  // Rasterize for the size the page is shown at, so an enlarged small page
+  // stays as sharp as a page imported at its own size.
+  const shown = inkScale / 2;
   const viewport = source.getViewport({
-    scale: pageImageScale(base.width, base.height)
+    scale: shown * pageImageScale(base.width * shown, base.height * shown)
   });
-  const ink = source.getViewport({ scale: 2 });
+  const ink = source.getViewport({ scale: inkScale });
   const canvas = document.createElement('canvas');
   const thumbnail = document.createElement('canvas');
   canvas.width = Math.ceil(viewport.width);
@@ -107,14 +116,21 @@ export async function savePdfPageImages(
   indices: number[],
   noteId: string,
   progress?: PageImageProgress,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  inkWidth?: number
 ): Promise<InkPage[]> {
   const result: InkPage[] = [];
   progress?.(0, indices.length);
   for (const index of indices) {
     signal?.throwIfAborted();
     result.push(
-      await savePageImage(await doc.getPage(index + 1), index, noteId, signal)
+      await savePageImage(
+        await doc.getPage(index + 1),
+        index,
+        noteId,
+        signal,
+        inkWidth
+      )
     );
     progress?.(result.length, indices.length);
     await new Promise((resolve) => setTimeout(resolve, 0));

@@ -46,6 +46,144 @@ test('normal ink notes keep appending blank pages after using page management', 
   await expect(manager.getByRole('listitem')).toHaveCount(4);
 });
 
+test('a click leaves a dot and the open page list shows new ink right away', async ({
+  page
+}) => {
+  await page.goto('/');
+  await expect(
+    page.getByRole('button', { name: 'Welcome', exact: true })
+  ).toBeVisible();
+  await clickFileTreeCreateAction(page, 'New handwritten note');
+  await page
+    .getByRole('textbox', { name: 'New handwritten note', exact: true })
+    .press('Enter');
+  await page.getByRole('button', { name: 'Pages', exact: true }).click();
+  const manager = page.getByRole('region', { name: 'Pages', exact: true });
+  const thumbnail = manager.getByRole('listitem').nth(0).locator('canvas');
+  const inked = (canvas: HTMLCanvasElement) =>
+    Boolean(
+      canvas
+        .getContext('2d')
+        ?.getImageData(0, 0, canvas.width, canvas.height)
+        .data.some((value, i) => i % 4 !== 3 && value < 100)
+    );
+  await expect.poll(() => thumbnail.evaluate(inked)).toBe(false);
+
+  const canvas = page.getByLabel('Handwritten note canvas', { exact: true });
+  const box = (await canvas.boundingBox())!;
+  const tap = { x: box.width / 2 - 100, y: 120 };
+  await page.mouse.click(box.x + tap.x, box.y + tap.y);
+  await expect(
+    page.getByRole('button', { name: 'Undo', exact: true })
+  ).toBeEnabled();
+  const dot = await canvas.evaluate((el: HTMLCanvasElement, at) => {
+    const scale = el.width / el.getBoundingClientRect().width;
+    const [r, g, b] = el
+      .getContext('2d')!
+      .getImageData(
+        Math.round(at.x * scale),
+        Math.round(at.y * scale),
+        1,
+        1
+      ).data;
+    return Math.max(r, g, b);
+  }, tap);
+  expect(dot).toBeLessThan(100);
+
+  // Keyboard undo and both redo chords reach the ink editor.
+  const undo = page.getByRole('button', { name: 'Undo', exact: true });
+  const redo = page.getByRole('button', { name: 'Redo', exact: true });
+  await page.keyboard.press('Control+z');
+  await expect(undo).toBeDisabled();
+  await expect(redo).toBeEnabled();
+  await page.keyboard.press('Control+y');
+  await expect(undo).toBeEnabled();
+  await page.keyboard.press('Control+z');
+  await expect(undo).toBeDisabled();
+  await page.keyboard.press('Control+Shift+z');
+  await expect(undo).toBeEnabled();
+
+  // A stroke drawn while the page list is open reaches its thumbnail
+  // without any page operation in between.
+  await draw(page, 'Handwritten note canvas');
+  await expect.poll(() => thumbnail.evaluate(inked)).toBe(true);
+});
+
+test('a stroke drawn zoomed out with a mouse stays put when the pointer lifts', async ({
+  page
+}) => {
+  await page.goto('/');
+  await expect(
+    page.getByRole('button', { name: 'Welcome', exact: true })
+  ).toBeVisible();
+  await clickFileTreeCreateAction(page, 'New handwritten note');
+  await page
+    .getByRole('textbox', { name: 'New handwritten note', exact: true })
+    .press('Enter');
+  const canvas = page.getByLabel('Handwritten note canvas', { exact: true });
+  const box = (await canvas.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.keyboard.down('Control');
+  await page.mouse.wheel(0, 4000);
+  await page.keyboard.up('Control');
+
+  // A mouse reports whole pixels, which is what makes zoomed-out ink
+  // jagged; the live stroke is smoothed the same way it is stored.
+  const start = {
+    x: Math.round(box.x + box.width / 2 - 80),
+    y: Math.round(box.y + 160)
+  };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  for (let i = 1; i <= 80; i += 1)
+    await page.mouse.move(
+      start.x + i * 2,
+      start.y + Math.round(30 * Math.sin(i / 12))
+    );
+  // Compares the canvas after the next painted frame with the snapshot
+  // taken before the pointer lifted, inside the page to avoid shipping
+  // megabytes of pixels out.
+  const snapshot = (compare: boolean) =>
+    canvas.evaluate(
+      (el: HTMLCanvasElement, compare) =>
+        new Promise<number>((resolve) =>
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => {
+              const data = el
+                .getContext('2d')!
+                .getImageData(0, 0, el.width, el.height).data;
+              const store = window as unknown as {
+                inkLive?: Uint8ClampedArray;
+              };
+              if (!compare) {
+                store.inkLive = data;
+                resolve(0);
+                return;
+              }
+              const live = store.inkLive!;
+              let changed = 0;
+              for (let i = 0; i < data.length; i += 4)
+                if (
+                  Math.abs(live[i] - data[i]) > 24 ||
+                  Math.abs(live[i + 1] - data[i + 1]) > 24 ||
+                  Math.abs(live[i + 2] - data[i + 2]) > 24
+                )
+                  changed += 1;
+              resolve(changed);
+            })
+          )
+        ),
+      compare
+    );
+  await snapshot(false);
+  await page.mouse.up();
+  await expect(
+    page.getByRole('button', { name: 'Undo', exact: true })
+  ).toBeEnabled();
+  const changed = await snapshot(true);
+  expect(changed).toBe(0);
+});
+
 test('imports a large local PDF as compressed image pages', async ({
   page
 }) => {
@@ -186,7 +324,7 @@ async function draw(page: Page, label: string) {
   ).toBeEnabled();
 }
 
-test('converts a PDF independently, preserves page dimensions, and imports selected pages', async ({
+test('converts a PDF independently, fits pages to one width, and imports selected pages', async ({
   page
 }) => {
   const bytes = await fixture();
@@ -219,7 +357,7 @@ test('converts a PDF independently, preserves page dimensions, and imports selec
   const cards = manager.getByRole('listitem');
   await expect(cards).toHaveCount(2);
   await expect(cards.nth(0)).toContainText('595 × 842');
-  await expect(cards.nth(1)).toContainText('842 × 595');
+  await expect(cards.nth(1)).toContainText('595 × 420');
   const handle = manager.getByRole('button', {
     name: 'Reorder page 2',
     exact: true
@@ -232,7 +370,7 @@ test('converts a PDF independently, preserves page dimensions, and imports selec
     steps: 8
   });
   await page.mouse.up();
-  await expect(cards.nth(0)).toContainText('842 × 595');
+  await expect(cards.nth(0)).toContainText('595 × 420');
   await expect(cards.nth(1)).toContainText('595 × 842');
   // The same handle supports keyboard and real touch input.
   await manager
@@ -265,7 +403,7 @@ test('converts a PDF independently, preserves page dimensions, and imports selec
     touchPoints: []
   });
   await cdp.detach();
-  await expect(cards.nth(0)).toContainText('842 × 595');
+  await expect(cards.nth(0)).toContainText('595 × 420');
   await expect
     .poll(() =>
       cards
@@ -297,7 +435,7 @@ test('converts a PDF independently, preserves page dimensions, and imports selec
     .getByRole('button', { name: 'Insert selected pages', exact: true })
     .click();
   await expect(cards).toHaveCount(4);
-  await expect(cards.nth(1)).toContainText('842 × 595');
+  await expect(cards.nth(1)).toContainText('595 × 420');
   await manager
     .getByRole('button', { name: 'Page 1 options', exact: true })
     .click();

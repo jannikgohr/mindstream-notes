@@ -3,6 +3,7 @@ import * as Y from 'yjs';
 import { InkDocument } from './document';
 import {
   DEFAULT_PAGE,
+  DEFAULT_PAGE_GAP,
   layoutForPages,
   pageRect,
   documentHeight,
@@ -184,6 +185,21 @@ describe('explicit ink pages', () => {
     expect(reopened.pageStrokes('a')[0].points).toEqual(
       ink.pageStrokes('a')[0].points
     );
+  });
+  it('lists strokes per page before any page operation stores the page list', () => {
+    const ink = new InkDocument();
+    const second = DEFAULT_PAGE.height + DEFAULT_PAGE_GAP;
+    ink.addStrokes([
+      stroke,
+      {
+        ...stroke,
+        points: stroke.points.map((p) => ({ ...p, y: p.y + second }))
+      }
+    ]);
+    expect(ink.hasPages()).toBe(false);
+    const [first, next] = ink.pages();
+    expect(ink.pageStrokes(first.id).map((s) => s.points[0].y)).toEqual([20]);
+    expect(ink.pageStrokes(next.id).map((s) => s.points[0].y)).toEqual([20]);
   });
   it('migrates legacy geometry and retains its appearance when importing pages', () => {
     const ink = new InkDocument();

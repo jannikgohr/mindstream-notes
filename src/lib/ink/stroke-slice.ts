@@ -103,8 +103,18 @@ export function sliceStrokeByCircles(
   points: InkPoint[],
   circles: EraserCircle[]
 ): SliceResult {
-  if (points.length < 2 || circles.length === 0) {
+  if (points.length === 0 || circles.length === 0) {
     return { changed: false, fragments: [points] };
+  }
+  if (points.length === 1) {
+    // A dot has no length to split: it is either erased whole or kept.
+    const [dot] = points;
+    const erased = circles.some(
+      (c) => (dot.x - c.x) ** 2 + (dot.y - c.y) ** 2 <= c.r * c.r
+    );
+    return erased
+      ? { changed: true, fragments: [] }
+      : { changed: false, fragments: [points] };
   }
 
   let changed = false;

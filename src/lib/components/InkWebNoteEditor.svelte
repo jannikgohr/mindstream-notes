@@ -15,6 +15,13 @@
   import { DEFAULT_PAGE, type InkPage } from '$lib/ink/page';
   import { ancestorIsTrash } from '$lib/editor/trash';
   import { createCanvasResizeLifecycle } from '$lib/ink/canvas-resize-lifecycle';
+  import { liveInkStyle } from '$lib/ink/live-ink';
+  import {
+    NO_SMOOTHING,
+    smoothStroke,
+    strokeSmoothing,
+    type StrokeSmoothing
+  } from '$lib/ink/stroke-smoothing';
   import { createInkSaveController } from '$lib/ink/save-controller';
   import { createCollabSession } from '$lib/editor/collab-session';
   import {
@@ -37,7 +44,7 @@
     zoomToScale
   } from '$lib/ink/view-transform';
   import { createHistoryCapture } from '$lib/history/capture-scheduler';
-  import { onDestroy, onMount, tick } from 'svelte';
+  import { onDestroy, onMount, tick, untrack } from 'svelte';
   import {
     AlignJustify,
     ArrowLeft,
@@ -239,6 +246,11 @@
   let hostEl = $state<HTMLDivElement | null>(null);
   let canvasHostEl = $state<HTMLDivElement | null>(null);
   let canvasEl = $state<HTMLCanvasElement | null>(null);
+  // Pen and touch focus the canvas from script after preventDefault() has
+  // dropped the compatibility mouse events, so Chromium treats it as
+  // keyboard focus and rings the whole page. Only Tab focus shows a ring.
+  let canvasKeyboardFocus = $state(false);
+  let focusingCanvasFromPointer = false;
   let resizeSnapshotCanvasEl = $state<HTMLCanvasElement | null>(null);
   let toolbarEl = $state<HTMLDivElement | null>(null);
   let boundsFrame: number | null = null;
@@ -288,10 +300,16 @@
   let pageBackgroundColorRgb = $state(0x334155);
   let pageBackgroundOpacity = $state(1);
   let strokeCount = $state(0);
+  // Bumped on every document change so page thumbnails repaint. Counted
+  // outside $state so writing it never reads (and subscribes to) it.
+  let contentChanges = 0;
+  let contentRevision = $state(0);
   let selectedStrokeIds = $state<string[]>([]);
   let selectionClipboard = $state<InkClipboardStroke[]>([]);
   let selectionFrame = $state<SelectionFrame | null>(null);
   let inFlight = $state<InkPoint[]>([]);
+  let inFlightSmoothing: StrokeSmoothing = NO_SMOOTHING;
+  let inFlightMinSpacing = 1.5;
   let lassoPoints = $state<InkPoint[]>([]);
   let selectionDragStart: InkPoint | null = null;
   let selectionDragOffset = $state({ x: 0, y: 0 });
@@ -445,17 +463,39 @@
     scheduleDraw();
   });
 
+  // The page theme and the page list change the overlay's colour too.
+  $effect(() => {
+    void pageDark;
+    void documentPages;
+    untrack(updateLiveInkOverlayStyle);
+  });
+
   function updateLiveInkOverlayStyle() {
     if (!isAndroid()) return;
     if (tool !== 'pen') {
       void drawingCancelLiveInk();
     }
-    const maxWidthPx = Math.max(0.5, width * view.scale);
-    const minWidthPx = Math.max(0.5, maxWidthPx * 0.25);
-    const liveColorArgb = tool === 'pen' ? colorArgb : 0x00000000;
+    // The overlay cannot tell pages apart, so it takes the colour of the
+    // page in the middle of the view.
+    const centre = screenToPage(view.width / 2, view.height / 2);
+    const centrePage = pageIndexAt(layout, centre.x, centre.y);
+    const style = liveInkStyle({
+      colorArgb,
+      width,
+      scale: view.scale,
+      devicePixelRatio: window.devicePixelRatio || 1,
+      pageDark,
+      onBackgroundPage:
+        centrePage !== null && !!documentPages[centrePage]?.background
+    });
+    const liveColorArgb = tool === 'pen' ? style.colorArgb : 0x00000000;
     const liveFingerDrawingAllowed =
       pointerMode === 'touchGesture' ? false : fingerDrawingAllowed;
-    void drawingSetLiveInkStyle(liveColorArgb, minWidthPx, maxWidthPx);
+    void drawingSetLiveInkStyle(
+      liveColorArgb,
+      style.minWidthPx,
+      style.maxWidthPx
+    );
     void drawingSetLiveInkFingerDrawing(liveFingerDrawingAllowed);
   }
 
@@ -657,6 +697,7 @@
   function refreshFromDoc() {
     if (!doc) return;
     strokeCount = doc.visibleStrokeCount();
+    contentRevision = ++contentChanges;
     pruneSelection();
     syncHistoryState();
     layout = doc.layout();
@@ -835,7 +876,14 @@
         );
       }
     }
-    drawStroke(ctx, inFlight, strokeCssColor(colorArgb, inFlight), width);
+    // Smoothed exactly as endStroke will store it, so committing the
+    // stroke does not move it.
+    drawStroke(
+      ctx,
+      smoothStroke(inFlight, inFlightSmoothing),
+      strokeCssColor(colorArgb, inFlight),
+      width
+    );
     drawSelectionOverlay(ctx);
     drawLassoOverlay(ctx);
     drawToolPreview(ctx);
@@ -1312,10 +1360,20 @@
     updateLiveInkOverlayStyle();
   }
 
+  function focusCanvasFromPointer(canvas: HTMLCanvasElement) {
+    canvasKeyboardFocus = false;
+    focusingCanvasFromPointer = true;
+    try {
+      canvas.focus({ preventScroll: true });
+    } finally {
+      focusingCanvasFromPointer = false;
+    }
+  }
+
   function handleTouchPointerDown(event: PointerEvent) {
     if (!doc || !canvasEl) return;
     event.preventDefault();
-    canvasEl.focus({ preventScroll: true });
+    focusCanvasFromPointer(canvasEl);
     canvasEl.setPointerCapture(event.pointerId);
     touchPointers.set(event.pointerId, touchPointer(event));
     if (touchPointers.size >= 2) {
@@ -1404,7 +1462,7 @@
       return;
     }
     event.preventDefault();
-    canvasEl.focus({ preventScroll: true });
+    focusCanvasFromPointer(canvasEl);
     canvasEl.setPointerCapture(event.pointerId);
     activePointerId = event.pointerId;
     const isFinger = event.pointerType === 'touch';
@@ -1576,8 +1634,7 @@
         continue;
       }
       if (!drawingStrokeActive) {
-        doc.beginStroke(colorArgb, width);
-        drawingStrokeActive = true;
+        beginInkStroke(event);
       }
       const previous = next[next.length - 1];
       if (
@@ -1588,17 +1645,39 @@
         inFlight = next;
         finishActiveStroke();
         next.length = 0;
-        doc.beginStroke(colorArgb, width);
-        drawingStrokeActive = true;
+        beginInkStroke(event);
       }
       const last = next[next.length - 1];
-      if (last && Math.hypot(point.x - last.x, point.y - last.y) < 1.5) {
+      if (
+        last &&
+        Math.hypot(point.x - last.x, point.y - last.y) < inFlightMinSpacing
+      ) {
         continue;
       }
       doc.pushPoint(point.x, point.y, point.pressure);
       next.push(point);
     }
     inFlight = next;
+  }
+
+  /**
+   * Start a document stroke, fixing its smoothing and sample spacing to
+   * the input type and the zoom it begins at. Input error is a matter of
+   * screen pixels, so a stroke drawn zoomed out needs more correction in
+   * page units than one drawn zoomed in.
+   */
+  function beginInkStroke(event: PointerEvent) {
+    if (!doc) return;
+    const devicePixelRatio = window.devicePixelRatio || 1;
+    inFlightSmoothing = strokeSmoothing(
+      event.pointerType,
+      view.scale,
+      devicePixelRatio
+    );
+    // One CSS pixel apart, as drawn: finer samples carry no detail.
+    inFlightMinSpacing = 1 / view.scale;
+    doc.beginStroke(colorArgb, width, inFlightSmoothing);
+    drawingStrokeActive = true;
   }
 
   function beginLasso(event: PointerEvent) {
@@ -2458,6 +2537,7 @@
       editorListener = {
         kind: 'ink',
         host: hostEl,
+        noteId,
         onCommand: handleInkCommand
       };
       registerEditor(editorListener);
@@ -3156,6 +3236,7 @@
         pages={documentPages}
         disabled={isTrashed || !doc}
         initialPageId={sorterPageId}
+        {contentRevision}
         strokesForPage={(id) => doc?.pageStrokes(id) ?? []}
         onSelect={goToPage}
         onBlank={insertBlankPage}
@@ -3180,13 +3261,17 @@
     ></canvas>
     <canvas
       bind:this={canvasEl}
-      class="relative z-10 block h-full w-full touch-none {tool === 'eraser'
+      class="relative z-10 block h-full w-full touch-none {canvasKeyboardFocus
+        ? 'outline-2 -outline-offset-2 outline-ring'
+        : 'outline-none'} {tool === 'eraser'
         ? 'cursor-none'
         : tool === 'pen'
           ? 'cursor-crosshair'
           : 'cursor-default'}"
       tabindex="0"
       aria-label={ariaLabel}
+      onfocus={() => (canvasKeyboardFocus = !focusingCanvasFromPointer)}
+      onblur={() => (canvasKeyboardFocus = false)}
       onpointerenter={handlePointerEnter}
       onpointerleave={handlePointerLeave}
       onpointerdown={handlePointerDown}

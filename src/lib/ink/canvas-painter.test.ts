@@ -32,7 +32,8 @@ function recordingContext() {
     'stroke',
     'arc',
     'moveTo',
-    'lineTo'
+    'lineTo',
+    'quadraticCurveTo'
   ]) {
     target[op] = (...args: unknown[]) => calls.push({ op, args });
   }
@@ -205,17 +206,51 @@ describe('drawPageBackground', () => {
 });
 
 describe('drawStroke', () => {
-  it('ignores a stroke with fewer than two points', () => {
+  it('ignores a stroke with no points', () => {
     const rec = recordingContext();
-    drawStroke(rec.ctx, points([0, 0]), '#000', 4, view);
+    drawStroke(rec.ctx, [], '#000', 4, view);
     expect(rec.calls).toHaveLength(0);
   });
 
-  it('draws a segment per point pair', () => {
+  it('paints a single point as a filled dot as wide as the pen', () => {
     const rec = recordingContext();
-    drawStroke(rec.ctx, points([0, 0], [10, 10], [20, 20]), '#000', 4, view);
-    expect(rec.count('lineTo')).toBe(2);
-    expect(rec.count('stroke')).toBeGreaterThanOrEqual(1);
+    const panned = { ...view, scale: 2, panX: 100, panY: 50 };
+    drawStroke(rec.ctx, points([10, 10, 1]), '#123', 4, panned);
+
+    expect(rec.calls.find((c) => c.op === 'arc')?.args.slice(0, 3)).toEqual([
+      120, 70, 4
+    ]);
+    expect(rec.count('fill')).toBe(1);
+    expect(rec.count('stroke')).toBe(0);
+    expect(rec.set.fillStyle).toBe('#123');
+  });
+
+  it('draws a straight line between two points', () => {
+    const rec = recordingContext();
+    drawStroke(rec.ctx, points([0, 0], [10, 10]), '#000', 4, view);
+    expect(rec.count('lineTo')).toBe(1);
+    expect(rec.count('quadraticCurveTo')).toBe(0);
+  });
+
+  it('curves through inner points so zooming in shows no corners', () => {
+    const rec = recordingContext();
+    drawStroke(
+      rec.ctx,
+      points([0, 0], [10, 0], [10, 10], [20, 10]),
+      '#000',
+      4,
+      view
+    );
+    expect(rec.calls.filter((c) => c.op === 'quadraticCurveTo')).toEqual([
+      { op: 'quadraticCurveTo', args: [10, 0, 10, 5] },
+      { op: 'quadraticCurveTo', args: [10, 10, 15, 10] }
+    ]);
+    // Straight in from the first point and out to the last one.
+    expect(rec.calls.filter((c) => c.op === 'lineTo')).toEqual([
+      { op: 'lineTo', args: [5, 0] },
+      { op: 'lineTo', args: [20, 10] }
+    ]);
+    expect(rec.count('stroke')).toBe(1);
   });
 
   it('applies pan and scale to the painted coordinates', () => {
