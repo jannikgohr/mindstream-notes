@@ -1028,7 +1028,7 @@
   <div
     role="group"
     aria-label={tUi('fileTree.tree')}
-    class="min-h-0 flex-1 overflow-y-auto px-2 pb-3"
+    class="min-h-0 flex-1 overflow-y-auto px-2 pb-3 text-[13px]"
     class:ring-1={dragOver === 'root'}
     class:ring-ring={dragOver === 'root'}
     data-file-drop-accept={fileDropAccept}
@@ -1128,7 +1128,7 @@
       data-file-tree-node
       type="button"
       draggable={canDragItem({ kind: 'folder', id: node.id })}
-      class="flex min-h-8 w-full items-center gap-1.5 rounded-md px-2 py-1 text-left ring-offset-background hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      class="flex min-h-7 w-full items-center gap-1.5 rounded-md px-2 py-0.5 text-left ring-offset-background hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       class:bg-accent={isOver || isSelected}
       class:opacity-60={drag?.kind === 'folder' && drag.id === node.id}
       aria-expanded={expanded[node.id] === true}
@@ -1150,10 +1150,12 @@
       <ChevronRight
         class={`size-3.5 shrink-0 transition-transform ${expanded[node.id] ? 'rotate-90' : ''}`}
       />
+      <!-- Folders are amber so the tree's structure reads at a glance without
+           competing with the brand colour that marks the open note. -->
       {#if expanded[node.id]}
-        <FolderOpen class="size-3.5 shrink-0 text-muted-foreground" />
+        <FolderOpen class="size-3.5 shrink-0 text-folder-icon" />
       {:else}
-        <Folder class="size-3.5 shrink-0 text-muted-foreground" />
+        <Folder class="size-3.5 shrink-0 text-folder-icon" />
       {/if}
       {#if renaming}
         {@render renderRenameInput()}
@@ -1211,7 +1213,7 @@
       <button
         type="button"
         aria-current={ui.activeNoteId === node.id ? 'page' : undefined}
-        class="flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1 text-left focus-visible:outline-none"
+        class="flex min-h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-0.5 text-left focus-visible:outline-none"
         onclick={(e) => {
           // See the folder row: activation from the rename input is not a
           // click on the row. Opening the note here would move focus away,
@@ -1229,12 +1231,15 @@
           <span class="truncate">{node.name}</span>
         {/if}
       </button>
+      <!-- Row actions leave the layout until the row is hovered or focused,
+           (keyboard focus counts, a mouse click does not), so idle titles use
+           the full row width instead of truncating early. -->
       {#if !inTrash}
         <button
           type="button"
-          class="shrink-0 rounded p-1 text-muted-foreground transition-opacity hover:text-foreground {fav
-            ? 'opacity-100'
-            : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'}"
+          class="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground {fav
+            ? ''
+            : 'hidden group-hover:inline-flex group-has-[:focus-visible]:inline-flex'}"
           onclick={() => void setNoteFavourite(node.id, !fav)}
           use:tooltip={fav ? tUi('favourite.remove') : tUi('favourite.add')}
           aria-pressed={fav}
@@ -1246,7 +1251,7 @@
       {#if canDelete}
         <button
           type="button"
-          class="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+          class="hidden shrink-0 rounded p-1 text-muted-foreground hover:text-destructive group-hover:inline-flex group-has-[:focus-visible]:inline-flex"
           onclick={() => void trashWithUndo([{ kind: 'note', id: node.id }])}
           use:tooltip={tUi('fileTree.delete')}
           aria-label={tUi('fileTree.delete')}

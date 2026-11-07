@@ -7,7 +7,7 @@ import {
   PencilRuler,
   SquareKanban
 } from '@lucide/svelte';
-import { noteKindIcon } from './note-kind-icon';
+import { noteKindColor, noteKindIcon } from './note-kind-icon';
 
 describe('noteKindIcon', () => {
   it('falls back to FileText for null/undefined (legacy rows)', () => {
@@ -26,5 +26,21 @@ describe('noteKindIcon', () => {
   it('uses FileQuestion for an unknown future kind', () => {
     expect(noteKindIcon('hologram')).toBe(FileQuestion);
     expect(noteKindIcon('')).toBe(FileQuestion);
+  });
+});
+
+describe('noteKindColor', () => {
+  it('colours each non-markdown kind', () => {
+    expect(noteKindColor('freeform')).toBe('orange');
+    expect(noteKindColor('ink')).toBe('teal');
+    expect(noteKindColor('pdf')).toBe('red');
+    expect(noteKindColor('kanban')).toBe('green');
+  });
+
+  it('leaves markdown, legacy rows and unknown kinds neutral', () => {
+    expect(noteKindColor('markdown')).toBeNull();
+    expect(noteKindColor(null)).toBeNull();
+    expect(noteKindColor(undefined)).toBeNull();
+    expect(noteKindColor('hologram')).toBeNull();
   });
 });

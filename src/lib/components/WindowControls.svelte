@@ -15,6 +15,7 @@
   import { onMount } from 'svelte';
   import { ArrowLeftToLine, Copy, Minus, Square, X } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
+  import { Separator } from '$lib/components/ui/separator';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { windowControlsPreview } from '$lib/window/decorations.svelte';
 
@@ -27,12 +28,14 @@
 
   interface Props {
     mode?: 'main' | 'popout';
+    /** Draw a divider before the buttons; it goes away with them. */
+    separated?: boolean;
   }
 
   let appWindow = $state<WindowApi | null>(null);
   let isMaximized = $state(false);
   let unlistenResize: (() => void) | null = null;
-  let { mode = 'main' }: Props = $props();
+  let { mode = 'main', separated = false }: Props = $props();
 
   const previewWindow: WindowApi = {
     minimize: async () => {},
@@ -79,6 +82,9 @@
 </script>
 
 {#if appWindow}
+  {#if separated}
+    <Separator orientation="vertical" class="mx-1 h-5" />
+  {/if}
   <Button
     variant="ghost"
     size="icon"

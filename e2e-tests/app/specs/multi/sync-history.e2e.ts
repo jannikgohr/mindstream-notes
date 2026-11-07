@@ -199,6 +199,7 @@ describe('T4 per-device history (sync negative assertion)', function () {
 
     await A.newRootNote(title);
     await A.click(title);
+    await A.openDetailsPanel();
     // Opening captures the initial version asynchronously. Typing before that
     // capture can make "Note created" contain the edit we intend to undo.
     // Query this note specifically so a previous note's sidebar cannot satisfy

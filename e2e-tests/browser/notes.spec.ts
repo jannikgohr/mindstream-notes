@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { clickFileTreeCreateAction } from './file-tree-toolbar';
+import { openDetailsPanel } from './details-panel';
 
 /**
  * Create + select flows against the live tree store. Each test names its
@@ -46,6 +47,7 @@ test('creates a new folder from the toolbar', async ({ page }) => {
 test('selects a seeded note and shows its metadata', async ({ page }) => {
   await page.getByRole('button', { name: 'Personal', exact: true }).click();
   await page.getByRole('button', { name: 'Ideas', exact: true }).click();
+  await openDetailsPanel(page);
 
   // The right-hand metadata panel reflects the selected note.
   await expect(page.getByText('Markdown note')).toBeVisible();

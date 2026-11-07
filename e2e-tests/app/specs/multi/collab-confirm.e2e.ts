@@ -151,6 +151,7 @@ describe('T4 collab confirmation prompt', function () {
 
     await A.newRootNote(title);
     await A.click(title);
+    await A.openDetailsPanel();
     await A.insertText(browserA.$('.ProseMirror'), changedText);
     await A.click('Refresh history');
 
@@ -195,6 +196,7 @@ describe('T4 collab confirmation prompt', function () {
 
     await A.newRootNote(title);
     await A.click(title);
+    await A.openDetailsPanel();
     await A.insertText(browserA.$('.ProseMirror'), changedText);
     await A.click('Refresh history');
     await A.click('Note created');
@@ -221,6 +223,7 @@ describe('T4 collab confirmation prompt', function () {
 
       await B.treeItem(title).waitForDisplayed({ timeout: 30_000 });
       await Promise.all([A.click(title), B.click(title)]);
+      await A.openDetailsPanel();
 
       await A.click('Refresh history');
       await A.click('Note created');

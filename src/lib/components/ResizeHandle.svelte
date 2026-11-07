@@ -81,13 +81,26 @@
   role="separator"
   aria-orientation="vertical"
   aria-label={side === 'left' ? 'Resize left sidebar' : 'Resize right sidebar'}
-  class="group relative w-1 shrink-0 cursor-ew-resize select-none bg-border/40 transition-colors hover:bg-ring data-[dragging=true]:bg-ring"
+  class="group relative z-10 w-1 shrink-0 cursor-ew-resize select-none {side ===
+  'left'
+    ? '-ml-1'
+    : '-mr-1'}"
   data-dragging={dragging}
   onpointerdown={onPointerDown}
   onpointermove={onPointerMove}
   onpointerup={endDrag}
   onpointercancel={endDrag}
 >
-  <!-- Wider invisible hit-target so the 1px handle is easy to grab. -->
+  <!-- A negative margin pulls its 4px over the sidebar's own edge, so it
+       takes no layout space, the sidebar border is the only rule between
+       panes, and it never sits over the editor's overlays. A wider invisible hit-target keeps it easy to grab, and
+       the accent line appears on hover and while dragging. -->
   <span aria-hidden="true" class="absolute inset-y-0 -left-1 -right-1"></span>
+  <span
+    aria-hidden="true"
+    class="pointer-events-none absolute inset-y-0 w-0.5 transition-colors group-hover:bg-ring group-data-[dragging=true]:bg-ring {side ===
+    'left'
+      ? 'right-0'
+      : 'left-0'}"
+  ></span>
 </div>

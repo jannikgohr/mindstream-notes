@@ -14,7 +14,7 @@
 {#if headings.length > 0}
   <details open class="group/outline mt-5 border-t border-border pt-5">
     <summary
-      class="flex cursor-pointer list-none items-center gap-2 text-xs font-semibold [&::-webkit-details-marker]:hidden"
+      class="flex cursor-pointer list-none items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground [&::-webkit-details-marker]:hidden"
     >
       {tUi('sidebar.outline')}
       <span class="ml-auto text-[10px] font-normal text-muted-foreground">

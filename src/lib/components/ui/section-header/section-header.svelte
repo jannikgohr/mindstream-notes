@@ -15,7 +15,9 @@
    *
    * `as` sets the heading level so the document outline stays correct — the
    * visual treatment is identical at every level and must not be used to imply
-   * hierarchy.
+   * hierarchy. It is a quiet uppercase label rather than bold text, so the
+   * note title stays the one strong line in a panel and the sections read as
+   * supporting detail.
    */
   interface Props extends HTMLAttributes<HTMLHeadingElement> {
     as?: 'h2' | 'h3' | 'h4' | 'h5';
@@ -29,7 +31,7 @@
 <svelte:element
   this={as}
   class={cn(
-    'flex items-center gap-2 text-xs font-semibold text-foreground',
+    'flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground',
     className
   )}
   {...rest}
