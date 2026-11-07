@@ -9,8 +9,11 @@ editor for handwriting and retain their existing reader for PDF interactions.
 
 - Converting an existing PDF note creates a new ink note. The PDF note stays.
 - Importing a PDF into an ink note inserts full-page backgrounds among its pages.
-- Imported pages keep their original dimensions and orientation, including
-  mixed portrait and landscape pages within one ink note.
+- Imported pages keep their aspect ratio and orientation, including mixed
+  portrait and landscape pages within one ink note. They are scaled to the
+  width of a blank page, so only their heights differ. Pages imported before
+  this rule keep their original dimensions, and PDF notes keep the source
+  page sizes their handwriting is anchored to.
 - The first version supports choosing source PDF pages, inserting blank pages,
   reordering pages, and deleting pages in ink notes.
 - Ordinary PDF notes receive the same pen, eraser, lasso, and stroke editing

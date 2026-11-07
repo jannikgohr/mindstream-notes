@@ -236,7 +236,7 @@ async function draw(page: Page, label: string) {
   ).toBeEnabled();
 }
 
-test('converts a PDF independently, preserves page dimensions, and imports selected pages', async ({
+test('converts a PDF independently, fits pages to one width, and imports selected pages', async ({
   page
 }) => {
   const bytes = await fixture();
@@ -269,7 +269,7 @@ test('converts a PDF independently, preserves page dimensions, and imports selec
   const cards = manager.getByRole('listitem');
   await expect(cards).toHaveCount(2);
   await expect(cards.nth(0)).toContainText('595 × 842');
-  await expect(cards.nth(1)).toContainText('842 × 595');
+  await expect(cards.nth(1)).toContainText('595 × 420');
   const handle = manager.getByRole('button', {
     name: 'Reorder page 2',
     exact: true
@@ -282,7 +282,7 @@ test('converts a PDF independently, preserves page dimensions, and imports selec
     steps: 8
   });
   await page.mouse.up();
-  await expect(cards.nth(0)).toContainText('842 × 595');
+  await expect(cards.nth(0)).toContainText('595 × 420');
   await expect(cards.nth(1)).toContainText('595 × 842');
   // The same handle supports keyboard and real touch input.
   await manager
@@ -315,7 +315,7 @@ test('converts a PDF independently, preserves page dimensions, and imports selec
     touchPoints: []
   });
   await cdp.detach();
-  await expect(cards.nth(0)).toContainText('842 × 595');
+  await expect(cards.nth(0)).toContainText('595 × 420');
   await expect
     .poll(() =>
       cards
@@ -347,7 +347,7 @@ test('converts a PDF independently, preserves page dimensions, and imports selec
     .getByRole('button', { name: 'Insert selected pages', exact: true })
     .click();
   await expect(cards).toHaveCount(4);
-  await expect(cards.nth(1)).toContainText('842 × 595');
+  await expect(cards.nth(1)).toContainText('595 × 420');
   await manager
     .getByRole('button', { name: 'Page 1 options', exact: true })
     .click();

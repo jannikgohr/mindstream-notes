@@ -356,7 +356,9 @@
               ><MoreVertical class="size-4" aria-hidden="true" /></button
             >
           </div>
-          <span class="sr-only">{page.width / 2} × {page.height / 2}</span>
+          <span class="sr-only"
+            >{Math.round(page.width / 2)} × {Math.round(page.height / 2)}</span
+          >
         </div>
       {/each}
     </div>

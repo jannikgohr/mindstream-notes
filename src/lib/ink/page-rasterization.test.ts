@@ -108,6 +108,35 @@ describe('PDF page rasterization', () => {
     expect(page.cleanup).toHaveBeenCalledOnce();
   });
 
+  it('scales a page to a requested width and rasterizes it at that size', async () => {
+    // A landscape A5 sheet fitted to the A4 page width keeps its aspect ratio.
+    const result = await savePageImage(
+      asPage(source(595, 420)),
+      0,
+      'note',
+      undefined,
+      1190
+    );
+    expect(result).toMatchObject({
+      width: 1190,
+      height: 840,
+      pdfTransform: [2, 0, 0, -2, 0, 840]
+    });
+    const small = await savePageImage(
+      asPage(source(150, 100)),
+      0,
+      'note',
+      undefined,
+      1190
+    );
+    expect(small).toMatchObject({
+      width: 1190,
+      height: expect.closeTo(793.33)
+    });
+    // The enlarged page gets as many pixels as a page that size would.
+    expect(encoded[2]).toMatchObject({ width: 1785, height: 1190 });
+  });
+
   it('never enlarges tiny pages just to make a thumbnail', async () => {
     await savePageImage(asPage(source(20, 10)), 0, 'note');
     expect(encoded.map(({ width, height }) => [width, height])).toEqual([
