@@ -28,8 +28,12 @@ vi.mock('$lib/notes-export/excalidraw', () => ({
 }));
 vi.mock('$lib/note-exporters/pdf', () => ({ buildPdfNoteBytes: vi.fn() }));
 const download = vi.hoisted(() => vi.fn());
-vi.mock('$lib/api/file-export', () => ({ downloadBlob: download }));
-import { downloadVaultExport, exportVault } from './index';
+const save = vi.hoisted(() => vi.fn());
+vi.mock('$lib/api/file-export', () => ({
+  downloadBlob: download,
+  saveFileExport: save
+}));
+import { downloadVaultExport, saveVaultExport, exportVault } from './index';
 
 beforeEach(() => {
   state.notes = {};
@@ -37,6 +41,7 @@ beforeEach(() => {
   state.writeExportFile.mockReset().mockResolvedValue(undefined);
   state.fetchDrawingAsset.mockReset();
   download.mockReset();
+  save.mockReset().mockResolvedValue(true);
 });
 
 function seed(id: string, kind: string, body = '', yrs_state: number[] = []) {
@@ -172,5 +177,29 @@ describe('vault export additions', () => {
     const [blob, name] = download.mock.calls[0] as [Blob, string];
     expect(blob.type).toBe('application/zip');
     expect(name).toMatch(/^mindstream-notes-\d{4}-\d{2}-\d{2}\.zip$/);
+  });
+  it('saves a portable ZIP through the native document picker', async () => {
+    seed('typst', 'plugin.com.mindstream.typst.document', '= Good');
+    const report = await saveVaultExport();
+    expect(report?.typst_written).toBe(1);
+    const input = save.mock.calls[0][0];
+    expect(input).toMatchObject({
+      mime: 'application/zip',
+      extensions: ['zip']
+    });
+    const { unzipSync } = await import('fflate');
+    const entries = unzipSync(input.bytes);
+    expect(new TextDecoder().decode(entries['Same title.typ'])).toBe('= Good');
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it('returns null when the native ZIP picker is cancelled', async () => {
+    save.mockResolvedValue(false);
+    expect(await saveVaultExport()).toBeNull();
+  });
+
+  it('propagates native ZIP save errors', async () => {
+    save.mockRejectedValue(new Error('provider write failed'));
+    await expect(saveVaultExport()).rejects.toThrow('provider write failed');
   });
 });

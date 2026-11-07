@@ -8,6 +8,7 @@
  */
 
 import { tick } from 'svelte';
+import { isMobile } from '$lib/platform';
 import {
   backupNow,
   convertLegacyWikilinks,
@@ -128,9 +129,10 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
     }
   },
   'export-vault': async () => {
+    const folderExport = isTauri() && !isMobile();
     let root: string | null = null;
     try {
-      if (isTauri()) root = await pickExportDir();
+      if (folderExport) root = await pickExportDir();
     } catch (err) {
       console.error('[settings] export-vault picker failed', err);
       await alert({
@@ -142,7 +144,7 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
       });
       return;
     }
-    if (isTauri() && !root) {
+    if (folderExport && !root) {
       // User cancelled the folder picker — stay quiet.
       return;
     }
@@ -153,15 +155,18 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
       const { flushPendingEditorSaves } =
         await import('$lib/editor/suspend-flush');
       await flushPendingEditorSaves();
-      const { downloadVaultExport, exportVault } =
+      const { downloadVaultExport, saveVaultExport, exportVault } =
         await import('$lib/notes-export');
       const destination = root;
       const report =
         destination === null
-          ? await downloadVaultExport()
+          ? isTauri()
+            ? await saveVaultExport()
+            : await downloadVaultExport()
           : await exportVault((path, bytes) =>
               writeExportFile(destination, path, bytes)
             );
+      if (report === null) return;
       await showExportResult(report, destination);
     } catch (err) {
       console.error('[settings] export-vault failed', err);
