@@ -138,7 +138,7 @@ function drawPageStrokes(
 
   let activeColor: number | null = null;
   for (const stroke of strokes) {
-    if (stroke.points.length < 2) continue;
+    if (stroke.points.length === 0) continue;
     // Vertical-band cull. The page covers the full document width, so
     // there's no value culling horizontally.
     if (
@@ -180,6 +180,17 @@ function appendStrokeOps(
   // segments at the same width batch into a single moveTo/lineTo run.
   const points = stroke.points;
   let previous = points[0];
+  if (points.length === 1) {
+    // A zero-length subpath with round caps paints a filled dot.
+    const raw = stroke.width * pressureWidth(previous.pressure);
+    ops.push(
+      lib.setLineWidth(Math.max(WIDTH_QUANTUM, raw)),
+      lib.moveTo(previous.x, toPdfY(previous.y)),
+      lib.lineTo(previous.x, toPdfY(previous.y)),
+      lib.stroke()
+    );
+    return;
+  }
   let currentWidth = -1;
   let pathOpen = false;
 
