@@ -1,7 +1,5 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  // A copy of src-tauri/icons/64x64.png: the dev server cannot serve src-tauri.
-  import appIcon from './app-icon.png';
   import {
     PanelRight,
     Search as SearchIcon,
@@ -50,33 +48,14 @@
 {/if}
 
 {#snippet TopBarContent(customDecorations = false)}
-  <!-- "deep" makes every empty pixel of both halves move the window; buttons
-       still block the drag. Sized to the sidebar, with the toggle beside the
-       title so collapsing the sidebar does not move it out from under the
-       pointer. Collapsed, the vault switcher follows the toggle at about the
-       spacing between the title and the toggle. -->
+  <!-- No brand: the bar opens with the sidebar toggle, in the column of the
+       sidebar's own icons, and search follows it directly. Collapsed, the
+       vault switcher joins after search. "deep" makes every empty pixel of the
+       bar move the window; buttons still block the drag. -->
   <div
     data-tauri-drag-region={customDecorations ? 'deep' : undefined}
-    class="flex h-full shrink-0 items-center gap-2.5 overflow-hidden pl-5 {ui.leftSidebarOpen
-      ? 'pr-4'
-      : ''}"
-    style:width={ui.leftSidebarOpen ? `${ui.leftSidebarWidth}px` : undefined}
+    class="flex h-full min-w-0 flex-1 items-center gap-2 pl-3 pr-3"
   >
-    <!-- A compact brand: the app reads as named without outweighing the
-         sidebar labels. The icon is a light tile: a hairline ring keeps it a
-         tile on the light chrome, and it is dimmed a little in dark mode so it
-         is not the brightest spot there. With the sidebar open the wordmark
-         takes the free width, which puts the toggle in the column of the
-         sidebar's sort button below. -->
-    <img
-      src={appIcon}
-      alt=""
-      draggable="false"
-      class="brand-tile size-[22px] shrink-0 rounded-md ring-1 ring-border"
-    />
-    <span class="min-w-0 flex-1 truncate text-sm font-semibold tracking-tight"
-      >mindstream<span class="text-accent-brand">.</span></span
-    >
     <Button
       variant="ghost"
       size="icon"
@@ -95,22 +74,6 @@
         class="-scale-x-100"
       />
     </Button>
-  </div>
-  <div
-    data-tauri-drag-region={customDecorations ? 'deep' : undefined}
-    class="flex min-w-0 flex-1 items-center gap-2 pr-3 {ui.leftSidebarOpen
-      ? 'pl-3'
-      : 'pl-1'}"
-  >
-    <!-- Popovers open inside the bar; a press on their padding must not
-         start a window drag. -->
-    {#if !ui.leftSidebarOpen}<div
-        data-tauri-drag-region="false"
-        class="min-w-0 max-w-60 shrink-0"
-      >
-        <VaultSwitcher />
-      </div>{/if}
-    <div class="flex-1"></div>
     <Button
       variant="outline"
       size="sm"
@@ -122,6 +85,15 @@
       <CuedIcon icon={SearchIcon} size={14} />
       <span class="hidden sm:inline">{tUi('search.open')}</span>
     </Button>
+    <!-- Popovers open inside the bar; a press on their padding must not
+         start a window drag. -->
+    {#if !ui.leftSidebarOpen}<div
+        data-tauri-drag-region="false"
+        class="min-w-0 max-w-60 shrink-0"
+      >
+        <VaultSwitcher />
+      </div>{/if}
+    <div class="flex-1"></div>
     <Button
       variant="ghost"
       size="icon"
