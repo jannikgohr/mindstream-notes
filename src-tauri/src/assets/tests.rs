@@ -956,3 +956,108 @@ fn stale_save_after_scope_move_uses_remap_after_original_blob_is_purged() {
     assert!(!saved_markdown.contains(&old_id));
     assert!(db.with_conn(|c| load(c, &new_id)).is_ok());
 }
+
+// ---------- stale rendered body ----------
+
+/// A markdown note whose rendered `body` predates its CRDT: the body is the
+/// text from before an image went in, the Yjs state holds the image. A pull
+/// that keeps another device's rendering leaves a row like this (the
+/// "Happy Burpday" note, which lost its GIF this way).
+fn note_with_stale_body(db: &Db, state: &[u8]) -> String {
+    let note_id = make_markdown_note(db);
+    db.with_conn(|c| {
+        c.execute(
+            "UPDATE notes SET body = 'old text, no image yet', yrs_state = ?2,
+                              payload_schema = 2
+             WHERE id = ?1",
+            params![note_id, state],
+        )?;
+        Ok::<(), AppError>(())
+    })
+    .unwrap();
+    note_id
+}
+
+fn pushed_asset(db: &Db, note_id: &str) -> String {
+    let asset_id = db
+        .with_conn(|c| store_deduped(c, note_id, "image/gif", &[0x47, 0x49, 0x46]))
+        .unwrap()
+        .id;
+    db.with_conn(|c| {
+        c.execute(
+            "UPDATE assets SET etebase_uid = 'uid_gif', dirty = 0 WHERE id = ?1",
+            params![asset_id],
+        )?;
+        Ok::<(), AppError>(())
+    })
+    .unwrap();
+    asset_id
+}
+
+#[test]
+fn the_sweep_keeps_an_image_only_the_crdt_still_shows() {
+    let db = open_memory_for_tests();
+    let probe = make_markdown_note(&db);
+    let asset_id = pushed_asset(&db, &probe);
+    let state = crate::sync::yrs_doc::append_editor_block_for_tests(
+        &crate::sync::yrs_doc::editor_state_for_tests("old text"),
+        7,
+        "Happy birthday",
+        Some(&format!("asset:mindstream/{asset_id}")),
+    );
+    let note_id = note_with_stale_body(&db, &state);
+    db.with_conn(|c| {
+        c.execute(
+            "UPDATE assets SET owning_note_id = ?1 WHERE id = ?2",
+            params![note_id, asset_id],
+        )?;
+        Ok::<(), AppError>(())
+    })
+    .unwrap();
+
+    let removed = db
+        .with_conn(sweep_unreferenced_markdown_assets_inner)
+        .unwrap();
+
+    assert_eq!(removed, 0, "the editor still draws this image");
+    assert!(db.with_conn(|c| load(c, &asset_id)).is_ok());
+    let tombstones: i64 = db
+        .with_conn(|c| Ok(c.query_row("SELECT COUNT(*) FROM tombstones", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(tombstones, 0, "no delete may reach the other devices");
+    let refs = db
+        .with_conn(|c| asset_reference_counts(c, &note_id))
+        .unwrap();
+    assert!(refs.contains_key(&asset_id));
+}
+
+#[test]
+fn the_sweep_frees_an_image_the_crdt_deleted() {
+    let db = open_memory_for_tests();
+    let probe = make_markdown_note(&db);
+    let asset_id = pushed_asset(&db, &probe);
+    let link = format!("asset:mindstream/{asset_id}");
+    let with_image = crate::sync::yrs_doc::append_editor_block_for_tests(
+        &crate::sync::yrs_doc::editor_state_for_tests("old text"),
+        7,
+        "caption",
+        Some(&link),
+    );
+    let removed_image = crate::sync::yrs_doc::remove_editor_blocks_for_tests(&with_image, 8, &link);
+    let note_id = note_with_stale_body(&db, &removed_image);
+    db.with_conn(|c| {
+        c.execute(
+            "UPDATE assets SET owning_note_id = ?1 WHERE id = ?2",
+            params![note_id, asset_id],
+        )?;
+        Ok::<(), AppError>(())
+    })
+    .unwrap();
+
+    let removed = db
+        .with_conn(sweep_unreferenced_markdown_assets_inner)
+        .unwrap();
+
+    assert_eq!(removed, 1, "a deleted image block is not a live reference");
+    assert!(db.with_conn(|c| load(c, &asset_id)).is_err());
+}
