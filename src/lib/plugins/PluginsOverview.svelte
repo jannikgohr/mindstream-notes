@@ -48,6 +48,9 @@
   import { SOURCE_BUILTIN, SOURCE_INSTALLED } from './source';
   import type { PluginDocSection } from './types';
   import PluginDocsDialog from './PluginDocsDialog.svelte';
+  import PluginPermissionsSheet, {
+    type PermissionItem
+  } from './PluginPermissionsSheet.svelte';
 
   interface Props {
     /** Jump to a plugin's own settings pane. Omit to hide the settings icon. */
@@ -74,6 +77,21 @@
     docsPluginId = entry.id;
     docsSections = entry.documentation;
     docsOpen = true;
+  }
+
+  // Phones show permissions in a bottom sheet instead of the popover.
+  const mobile = isMobile();
+  let permsOpen = $state(false);
+  let permsName = $state('');
+  let permsItems = $state<PermissionItem[]>([]);
+  function openPermissions(entry: PluginOverviewEntry) {
+    permsName = entry.name;
+    permsItems = entry.permissions.map((perm) => ({
+      id: perm,
+      label: permissionLabel(perm),
+      binaries: permissionBinaries(entry, perm)
+    }));
+    permsOpen = true;
   }
 
   /** Confirm, then uninstall a third-party plugin. */
@@ -275,55 +293,66 @@
               </button>
             {/if}
 
-            <Popover.Root>
-              <Popover.Trigger>
-                {#snippet child({ props })}
-                  <button
-                    {...props}
-                    class={iconButton}
-                    aria-label={tUi('plugins.permissions.title')}
-                    use:tooltip={tUi('plugins.permissions.title')}
-                  >
-                    <Shield class="size-4" />
-                  </button>
-                {/snippet}
-              </Popover.Trigger>
-              <Popover.Portal>
-                <Popover.Content
-                  sideOffset={6}
-                  class="z-[400] w-64 rounded-md border border-border bg-popover p-3 text-popover-foreground shadow-md focus:outline-none"
-                >
-                  <p class="text-xs font-semibold">
-                    {tUi('plugins.permissions.title')}
-                  </p>
-                  {#if entry.permissions.length > 0}
-                    <ul
-                      class="mt-1.5 list-disc space-y-1 pl-4 text-xs text-muted-foreground"
+            {#if mobile}
+              <button
+                type="button"
+                class={iconButton}
+                aria-label={tUi('plugins.permissions.title')}
+                onclick={() => openPermissions(entry)}
+              >
+                <Shield class="size-4" />
+              </button>
+            {:else}
+              <Popover.Root>
+                <Popover.Trigger>
+                  {#snippet child({ props })}
+                    <button
+                      {...props}
+                      class={iconButton}
+                      aria-label={tUi('plugins.permissions.title')}
+                      use:tooltip={tUi('plugins.permissions.title')}
                     >
-                      {#each entry.permissions as perm (perm)}
-                        {@const binaries = permissionBinaries(entry, perm)}
-                        <li>
-                          {permissionLabel(perm)}
-                          {#if binaries.length > 0}
-                            <ul class="mt-0.5 list-disc space-y-0.5 pl-4">
-                              {#each binaries as binary (binary)}
-                                <li>
-                                  <code class="font-mono">{binary}</code>
-                                </li>
-                              {/each}
-                            </ul>
-                          {/if}
-                        </li>
-                      {/each}
-                    </ul>
-                  {:else}
-                    <p class="mt-1.5 text-xs text-muted-foreground">
-                      {tUi('plugins.permissions.none')}
+                      <Shield class="size-4" />
+                    </button>
+                  {/snippet}
+                </Popover.Trigger>
+                <Popover.Portal>
+                  <Popover.Content
+                    sideOffset={6}
+                    class="z-[400] w-64 rounded-md border border-border bg-popover p-3 text-popover-foreground shadow-md focus:outline-none"
+                  >
+                    <p class="text-xs font-semibold">
+                      {tUi('plugins.permissions.title')}
                     </p>
-                  {/if}
-                </Popover.Content>
-              </Popover.Portal>
-            </Popover.Root>
+                    {#if entry.permissions.length > 0}
+                      <ul
+                        class="mt-1.5 list-disc space-y-1 pl-4 text-xs text-muted-foreground"
+                      >
+                        {#each entry.permissions as perm (perm)}
+                          {@const binaries = permissionBinaries(entry, perm)}
+                          <li>
+                            {permissionLabel(perm)}
+                            {#if binaries.length > 0}
+                              <ul class="mt-0.5 list-disc space-y-0.5 pl-4">
+                                {#each binaries as binary (binary)}
+                                  <li>
+                                    <code class="font-mono">{binary}</code>
+                                  </li>
+                                {/each}
+                              </ul>
+                            {/if}
+                          </li>
+                        {/each}
+                      </ul>
+                    {:else}
+                      <p class="mt-1.5 text-xs text-muted-foreground">
+                        {tUi('plugins.permissions.none')}
+                      </p>
+                    {/if}
+                  </Popover.Content>
+                </Popover.Portal>
+              </Popover.Root>
+            {/if}
 
             {#if showSettings}
               <button
@@ -407,3 +436,11 @@
   pluginId={docsPluginId}
   sections={docsSections}
 />
+
+{#if mobile}
+  <PluginPermissionsSheet
+    bind:open={permsOpen}
+    pluginName={permsName}
+    permissions={permsItems}
+  />
+{/if}
