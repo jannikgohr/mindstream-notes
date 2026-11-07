@@ -44,8 +44,8 @@
 
   /** A quick button (`size-11`) plus the dock's `gap-0.5`, in px. */
   const QUICK_PX = 44 + 2;
-  /** The dock's padding plus the row's `gap-2`, in px. */
-  const DOCK_PX = 4 + 8;
+  /** The dock's padding and border plus the row's `gap-2`, in px. */
+  const DOCK_PX = 4 + 2 + 8;
 
   let rowWidth = $state(0);
   let mainWidth = $state(0);
@@ -53,19 +53,13 @@
   const primary = $derived(actions[0]);
   const bar = $derived(actions.slice(0, Math.max(1, barCount)));
   const more = $derived(actions.slice(Math.max(1, barCount)));
-  /** Shortcuts shown beside the main button; more read as a second toolbar. */
-  const MAX_QUICK = 2;
-  // Pinned kinds past the first two, or that do not fit beside the main
-  // button, stay in the menu.
+  // Pinned kinds that do not fit beside the main button stay in the menu.
   const quickActions = $derived(
     bar
       .slice(1)
       .slice(
         0,
-        Math.min(
-          MAX_QUICK,
-          Math.max(0, Math.floor((rowWidth - mainWidth - DOCK_PX) / QUICK_PX))
-        )
+        Math.max(0, Math.floor((rowWidth - mainWidth - DOCK_PX) / QUICK_PX))
       )
   );
 
@@ -351,11 +345,11 @@
         class="flex w-full items-center justify-end gap-2"
         bind:clientWidth={rowWidth}
       >
-        <!-- Pinned kinds share one quiet dock, so they read as shortcuts
+        <!-- Pinned kinds share one framed dock, so they read as shortcuts
              beside the main button instead of a row of competing buttons. -->
         {#if quickActions.length > 0}
           <div
-            class="pointer-events-auto flex h-12 shrink-0 items-center gap-0.5 rounded-full bg-surface-2/85 px-0.5 backdrop-blur"
+            class="pointer-events-auto flex h-12 shrink-0 items-center gap-0.5 rounded-full border border-border bg-surface-2 px-0.5 shadow-raised"
           >
             {#each quickActions as action (action.id)}
               <button
