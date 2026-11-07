@@ -8,19 +8,22 @@
   let {
     page,
     revision,
+    contentRevision,
     getBackground,
     strokesForPage,
     onVisibility
   }: {
     page: InkPage;
     revision: number;
+    contentRevision: number;
     getBackground: (page: InkPage, scale: number) => HTMLCanvasElement | null;
     strokesForPage: (id: string) => InkStroke[];
     onVisibility: (page: InkPage, visible: boolean) => void;
   } = $props();
   let canvas: HTMLCanvasElement;
   let visible = $state(false);
-  let paintedPage: InkPage | null = null;
+  // What the canvas currently shows; background loads alone don't repaint it.
+  let painted: { page: InkPage; content: number } | null = null;
   const scale = $derived(Math.min(108 / page.width, 144 / page.height));
 
   onMount(() => {
@@ -38,7 +41,12 @@
 
   $effect(() => {
     void revision;
-    if (!visible || !canvas || paintedPage === page) return;
+    if (
+      !visible ||
+      !canvas ||
+      (painted?.page === page && painted.content === contentRevision)
+    )
+      return;
     const background = page.background ? getBackground(page, scale * 2) : null;
     if (page.background && !background) return;
     canvas.width = Math.max(1, Math.round(page.width * scale * 2));
@@ -64,7 +72,7 @@
         stroke.width,
         view
       );
-    paintedPage = page;
+    painted = { page, content: contentRevision };
   });
 </script>
 

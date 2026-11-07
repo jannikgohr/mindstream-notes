@@ -288,6 +288,10 @@
   let pageBackgroundColorRgb = $state(0x334155);
   let pageBackgroundOpacity = $state(1);
   let strokeCount = $state(0);
+  // Bumped on every document change so page thumbnails repaint. Counted
+  // outside $state so writing it never reads (and subscribes to) it.
+  let contentChanges = 0;
+  let contentRevision = $state(0);
   let selectedStrokeIds = $state<string[]>([]);
   let selectionClipboard = $state<InkClipboardStroke[]>([]);
   let selectionFrame = $state<SelectionFrame | null>(null);
@@ -657,6 +661,7 @@
   function refreshFromDoc() {
     if (!doc) return;
     strokeCount = doc.visibleStrokeCount();
+    contentRevision = ++contentChanges;
     pruneSelection();
     syncHistoryState();
     layout = doc.layout();
@@ -3156,6 +3161,7 @@
         pages={documentPages}
         disabled={isTrashed || !doc}
         initialPageId={sorterPageId}
+        {contentRevision}
         strokesForPage={(id) => doc?.pageStrokes(id) ?? []}
         onSelect={goToPage}
         onBlank={insertBlankPage}
