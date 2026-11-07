@@ -9,6 +9,8 @@ in the [documentation index](../README.md).
 
 - [Architecture](architecture.md): how the frontend, IPC, Rust backend, sync
   and sharing fit together
+- [Markdown note editor](markdown-editor.md): the two copies of a Markdown
+  note, and everything outside the editor that depends on them
 - [Theming](theming.md): the colour, elevation and radius tokens and how to use
   them
 - [Bits UI](bits-ui.md): maintaining dialogs and their tests
