@@ -3,6 +3,7 @@ import {
   openRightSidebar,
   previewLeftSidebarWidth,
   previewRightSidebarWidth,
+  rightSidebarShown,
   setActiveNote,
   setLeftSidebarWidth,
   setRightSidebarWidth,
@@ -44,6 +45,14 @@ describe('sidebars', () => {
     expect(ui.rightSidebarOpen).toBe(true);
     openRightSidebar();
     expect(ui.rightSidebarOpen).toBe(true);
+  });
+
+  it('shows the details panel only while it is open and a note is', () => {
+    expect(rightSidebarShown()).toBe(false);
+    setActiveNote('n1');
+    expect(rightSidebarShown()).toBe(true);
+    ui.rightSidebarOpen = false;
+    expect(rightSidebarShown()).toBe(false);
   });
 
   it('sets sidebar widths', () => {

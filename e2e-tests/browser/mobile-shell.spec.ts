@@ -171,3 +171,43 @@ test('plugin create actions keep their IDs in a separate mobile layout', async (
   );
   expect(reloaded.toolbar[0]).toBe(pluginId);
 });
+
+test('plugin docs and permissions take the full phone screen', async ({
+  page
+}) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Settings' }).first().click();
+  await page.getByRole('button', { name: /^Plugins/ }).click();
+
+  // Permissions slide up as a sheet with full-width rows.
+  await page.getByRole('button', { name: 'Permissions' }).first().click();
+  const sheet = page.getByRole('dialog', { name: 'Permissions' });
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByRole('listitem').first()).toBeVisible();
+  // Measured once it has finished sliding up.
+  await expect
+    .poll(async () => {
+      const box = (await sheet.boundingBox())!;
+      return [box.width, Math.round(box.y + box.height)];
+    })
+    .toEqual([412, 915]);
+  await sheet.getByRole('button', { name: 'Close' }).click();
+  await expect(sheet).toBeHidden();
+
+  // Docs open on their section list; a section is a page with a back arrow,
+  // and its text gets the whole width instead of a column beside the list.
+  await page
+    .getByRole('button', { name: /documentation/i })
+    .first()
+    .click();
+  const docs = page.getByRole('dialog', { name: 'Templates' });
+  const sections = docs.getByRole('navigation').getByRole('button');
+  await expect(sections).toHaveCount(2);
+  await sections.nth(1).click();
+  await expect(sections).toHaveCount(0);
+  const heading = docs.getByRole('heading', { name: 'Placeholders' });
+  await expect(heading).toBeVisible();
+  expect((await heading.boundingBox())!.width).toBeGreaterThan(300);
+  await docs.getByRole('button', { name: 'Back' }).click();
+  await expect(sections).toHaveCount(2);
+});
