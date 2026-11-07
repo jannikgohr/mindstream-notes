@@ -41,6 +41,10 @@ describe('snippetText', () => {
         'Quote with a link and alias · Item Cost · Hotel 390 € · x = 1'
     );
   });
+
+  it('reads a wikilink without an alias as its target', () => {
+    expect(snippetText('See [[Trip plan]] first')).toBe('See Trip plan first');
+  });
 });
 
 describe('findMatches', () => {
