@@ -118,13 +118,42 @@ its edits — and lets the next push re-home it (`apply_remote_delete` in
   editing offline. There is no way to distinguish "I meant to delete" from a
   re-home at the receiving end.
 
-A **clean** (non-dirty) row is still a real delete. **Signatures** are excluded —
-they hard-delete on a tombstone regardless of dirty state.
+A **clean** (non-dirty) row is still a real delete, with one exception: a clean
+**asset** that a note on this device still shows, from its body or the live part
+of its Yjs state, is kept and re-uploaded the same way (`asset_still_drawn` in
+`src-tauri/src/sync/claim.rs`). The device that sent the delete judged from its
+own copy of the note, which can lag. History doesn't count as a reference here:
+it is per-device, and counting it would bring back images that were removed on
+purpose. A device on an older version that keeps deleting such an asset gets it
+re-uploaded after each of its deletes until it updates. **Signatures** are
+excluded — they hard-delete on a tombstone regardless of dirty state.
 
 Known asymmetry: note bodies are CRDT-merged, but note/folder _metadata_
 (title, parent, trash, rename) is last-write-wins — preserved when dirty, but
 not merged. A concurrent offline rename on two devices resolves last-writer-wins,
 not by combining.
+
+### A note's rendered body can lag its content after concurrent edits — _known limitation_
+
+Markdown notes keep two copies of their text: the Yjs state the editor works
+on, and the rendered markdown in `notes.body` that search, previews and the
+attachment sweep read. Rust can't render the editor's ProseMirror fragment, so
+a pull merges the Yjs state but has to pick one device's rendering
+(`apply_note_payload` in `src-tauri/src/sync/apply/notes.rs`):
+
+- If this device has no content the incoming copy lacks, the incoming rendering
+  wins. This covers a server switch, which marks every row dirty on every
+  device without any of them holding new content.
+- If this device has unpushed content, its own rendering wins, so the push that
+  follows doesn't upload a body missing that edit.
+
+When **both** devices edited the note offline, neither rendering matches the
+merged state, and the kept one lacks the other device's edit until an editor
+saves the note again. The editor itself shows the merged content. Anything that
+decides whether an attachment is in use reads the live Yjs state as well as
+`body` (`live_strings` in `src-tauri/storage-core/src/yrs_doc.rs`), so a lagging
+body doesn't cost an attachment. Closing the gap needs a markdown renderer that
+runs without an open editor and matches the editor's output.
 
 ### Demo notes can duplicate across app versions and can't be shared — _by design_
 

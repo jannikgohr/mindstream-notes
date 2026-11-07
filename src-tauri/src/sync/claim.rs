@@ -81,6 +81,15 @@ pub(super) enum Pulled<T> {
 /// Only a row of the space the deletion came from is touched. An item's uid
 /// means nothing outside its own collection.
 ///
+/// An asset gets one more exception: a clean asset that a note here still
+/// references from its body or live CRDT is kept and re-uploaded, the same
+/// way an edited row is. The device that deleted it judged from its own copy
+/// of the note, which can lag this one (its rendered body predating the
+/// image, say), and bytes deleted on that judgement are gone for everyone.
+/// An image someone really removed is gone from the note's live content by
+/// the time its delete arrives, because a pull applies notes before assets,
+/// so it is still deleted here.
+///
 /// `table` is always a crate-internal literal ("notes"/"collections"/
 /// "assets"), never user input, so the format! is injection-safe.
 pub(super) fn apply_remote_delete(
@@ -96,11 +105,39 @@ pub(super) fn apply_remote_delete(
         ),
         params![etebase_uid, scope],
     )?;
-    if detached == 0 {
+    if detached > 0 {
+        return Ok(());
+    }
+    if table == "assets" && asset_still_drawn(conn, etebase_uid, scope)? {
         conn.execute(
-            &format!("DELETE FROM {table} WHERE etebase_uid = ?1 AND share_scope_id IS ?2"),
+            "UPDATE assets SET etebase_uid = NULL, etebase_etag = NULL, released = 1, dirty = 1
+             WHERE etebase_uid = ?1 AND share_scope_id IS ?2",
             params![etebase_uid, scope],
         )?;
+        log::warn!(
+            "[sync] kept asset item {etebase_uid}: deleted remotely but a note here still shows it; re-uploading"
+        );
+        return Ok(());
     }
+    conn.execute(
+        &format!("DELETE FROM {table} WHERE etebase_uid = ?1 AND share_scope_id IS ?2"),
+        params![etebase_uid, scope],
+    )?;
     Ok(())
+}
+
+/// Whether the asset row behind item `etebase_uid` is still referenced by a
+/// note's current content, see [`crate::assets::live_note_references_asset`].
+fn asset_still_drawn(conn: &Connection, etebase_uid: &str, scope: Option<&str>) -> AppResult<bool> {
+    let asset_id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM assets WHERE etebase_uid = ?1 AND share_scope_id IS ?2",
+            params![etebase_uid, scope],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match asset_id {
+        Some(id) => Ok(crate::assets::live_note_references_asset(conn, &id, scope)?),
+        None => Ok(false),
+    }
 }
