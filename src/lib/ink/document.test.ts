@@ -7,6 +7,7 @@ import {
   strokesHitAt
 } from './document';
 import { pageCountForContentMaxY, pointToSegmentDistanceSq } from './page';
+import { smoothStroke, strokeSmoothing } from './stroke-smoothing';
 
 function pointPairs(doc: InkDocument): number[][] {
   return doc
@@ -39,6 +40,28 @@ describe('InkDocument', () => {
       { x: 1, y: 2, pressure: 0.25 },
       { x: 3, y: 4, pressure: 0.5 }
     ]);
+  });
+
+  it('stores a stroke smoothed exactly as it was drawn live', () => {
+    const doc = new InkDocument();
+    const smoothing = strokeSmoothing('mouse', 0.4, 1);
+    const raw = Array.from({ length: 40 }, (_, i) => ({
+      x: 100 + Math.round(i * 2.5) * 2.5,
+      y: 100 + Math.round(i * 0.4) * 2.5,
+      pressure: 0.5
+    }));
+    doc.beginStroke(0xff000000, 4, smoothing);
+    for (const p of raw) doc.pushPoint(p.x, p.y, p.pressure);
+    doc.endStroke();
+
+    const stored = doc.visibleStrokes()[0].points;
+    const live = smoothStroke(raw, smoothing);
+    expect(stored).toHaveLength(live.length);
+    stored.forEach((p, i) => {
+      expect(p.x).toBeCloseTo(live[i].x, 3);
+      expect(p.y).toBeCloseTo(live[i].y, 3);
+    });
+    expect(stored.some((p, i) => p.y !== raw[i].y)).toBe(true);
   });
 
   it('keeps concurrent stroke additions convergent', () => {

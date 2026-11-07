@@ -31,6 +31,10 @@ export function strokeHitAt(
 ): boolean {
   if (!boundsContainPoint(stroke.bounds, point, radius)) return false;
   const radiusSq = radius * radius;
+  if (stroke.points.length === 1) {
+    const [dot] = stroke.points;
+    return (dot.x - point.x) ** 2 + (dot.y - point.y) ** 2 <= radiusSq;
+  }
   for (let i = 1; i < stroke.points.length; i += 1) {
     if (
       pointToSegmentDistanceSq(point, stroke.points[i - 1], stroke.points[i]) <=

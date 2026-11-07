@@ -20,6 +20,7 @@ import {
 } from '$lib/ink/editor-helpers';
 import { canvasPageSurface } from '$lib/layout/page-layout';
 import { pageRect, type DocumentLayout, type InkPoint } from '$lib/ink/page';
+import { traceStrokeCurve } from '$lib/ink/stroke-curve';
 import type { StrokeBounds } from '$lib/ink/stroke-types';
 import { pageToScreen, type InkView } from '$lib/ink/view-transform';
 
@@ -159,10 +160,12 @@ export function drawPageBackground(
 }
 
 /**
- * Paint one stroke as a run of line segments whose width follows pen
- * pressure. The width is quantised to quarter-pixels and the path is
- * only restarted when it actually changes, which keeps a long stroke to
- * a handful of `stroke()` calls instead of one per segment.
+ * Paint one stroke along its curve (see stroke-curve.ts) with a width
+ * that follows pen pressure. The width is quantised to quarter-pixels and
+ * the path is only restarted when it actually changes, which keeps a long
+ * stroke to a handful of `stroke()` calls instead of one per piece. A
+ * single point (a tap or click) is painted as a round dot of the same
+ * width.
  */
 export function drawStroke(
   ctx: CanvasRenderingContext2D,
@@ -171,41 +174,63 @@ export function drawStroke(
   baseWidth: number,
   view: InkView
 ) {
-  if (points.length < 2) return;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.strokeStyle = color;
+  if (points.length === 0) return;
   const scale = view.scale;
   const panX = view.panX;
   const panY = view.panY;
-  let previous = points[0];
-  let previousX = previous.x * scale + panX;
-  let previousY = previous.y * scale + panY;
+  if (points.length === 1) {
+    const [point] = points;
+    const diameter = Math.max(
+      1,
+      baseWidth * scale * pressureWidth(point.pressure)
+    );
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(
+      point.x * scale + panX,
+      point.y * scale + panY,
+      diameter / 2,
+      0,
+      Math.PI * 2
+    );
+    ctx.fill();
+    return;
+  }
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = color;
+  let penX = points[0].x * scale + panX;
+  let penY = points[0].y * scale + panY;
   let currentWidth = 0;
   let pathOpen = false;
-
-  for (let i = 1; i < points.length; i += 1) {
-    const point = points[i];
-    const x = point.x * scale + panX;
-    const y = point.y * scale + panY;
-    const pressure = (previous.pressure + point.pressure) * 0.5;
+  const useWidth = (pressure: number) => {
     const lineWidth = Math.max(1, baseWidth * scale * pressureWidth(pressure));
     const quantizedWidth = Math.round(lineWidth * 4) / 4;
-    if (!pathOpen || quantizedWidth !== currentWidth) {
-      if (pathOpen) {
-        ctx.stroke();
-      }
-      ctx.lineWidth = quantizedWidth;
-      ctx.beginPath();
-      ctx.moveTo(previousX, previousY);
-      currentWidth = quantizedWidth;
-      pathOpen = true;
+    if (pathOpen && quantizedWidth === currentWidth) return;
+    if (pathOpen) {
+      ctx.stroke();
     }
-    ctx.lineTo(x, y);
-    previous = point;
-    previousX = x;
-    previousY = y;
-  }
+    ctx.lineWidth = quantizedWidth;
+    ctx.beginPath();
+    ctx.moveTo(penX, penY);
+    currentWidth = quantizedWidth;
+    pathOpen = true;
+  };
+
+  traceStrokeCurve(points, {
+    line(x, y, pressure) {
+      useWidth(pressure);
+      penX = x * scale + panX;
+      penY = y * scale + panY;
+      ctx.lineTo(penX, penY);
+    },
+    quad(cx, cy, x, y, pressure) {
+      useWidth(pressure);
+      penX = x * scale + panX;
+      penY = y * scale + panY;
+      ctx.quadraticCurveTo(cx * scale + panX, cy * scale + panY, penX, penY);
+    }
+  });
   if (pathOpen) {
     ctx.stroke();
   }

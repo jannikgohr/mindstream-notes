@@ -35,3 +35,30 @@ test('opens Kanban search from the active-note search hotkey', async ({
   await expect(filters.getByText('List', { exact: true })).toBeVisible();
   await expect(filters.getByText('Priority', { exact: true })).toBeVisible();
 });
+
+test('undoes and redoes board changes from the keyboard', async ({ page }) => {
+  await clickFileTreeCreateAction(page, 'New Kanban board');
+  const draft = page.getByRole('textbox', { name: 'New note' });
+  await draft.fill(`Board ${Date.now()}`);
+  await draft.press('Enter');
+  const toolbar = page.getByRole('toolbar', { name: 'Kanban board toolbar' });
+  const undo = toolbar.getByRole('button', { name: 'Undo', exact: true });
+  const redo = toolbar.getByRole('button', { name: 'Redo', exact: true });
+  await expect(undo).toBeDisabled();
+
+  await page
+    .getByRole('button', { name: 'Add card', exact: true })
+    .first()
+    .click();
+  await expect(undo).toBeEnabled();
+  // Leave the card editor so the keys reach the board, not a text field.
+  await page.keyboard.press('Escape');
+  await page.locator('body').click({ position: { x: 5, y: 5 } });
+
+  await page.keyboard.press('Control+z');
+  await expect(undo).toBeDisabled();
+  await expect(redo).toBeEnabled();
+  await page.keyboard.press('Control+y');
+  await expect(undo).toBeEnabled();
+  await expect(redo).toBeDisabled();
+});

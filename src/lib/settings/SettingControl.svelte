@@ -60,7 +60,10 @@
   const label = $derived(tLabel('settings', setting.id));
   const description = $derived(tDescription('settings', setting.id));
   const value = $derived(getSettingValue(setting.id));
-  const modified = $derived(isModified(setting.id));
+  /** Changed from the default and worth offering to undo. */
+  const modified = $derived(
+    setting.resettable !== false && isModified(setting.id)
+  );
   const pending = $derived(isPending(setting.id));
 
   /**

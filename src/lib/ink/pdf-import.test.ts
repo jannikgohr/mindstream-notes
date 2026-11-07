@@ -107,7 +107,14 @@ describe('convert PDF to an independent ink note', () => {
     expect(await convertPdfToInk('original', progress)).toBe('converted');
     expect(h.fetch).toHaveBeenCalledWith('source', 'application/pdf');
     expect(h.build).not.toHaveBeenCalled();
-    expect(h.images).toHaveBeenCalledWith(pdf, [0, 1], 'original', progress);
+    expect(h.images).toHaveBeenCalledWith(
+      pdf,
+      [0, 1],
+      'original',
+      progress,
+      undefined,
+      1190
+    );
     const input = h.importNote.mock.calls[0][0];
     expect(input).toMatchObject({
       title: 'Paper',

@@ -64,6 +64,12 @@ interface SettingBase {
    * groups, and `default` remains the fallback.
    */
   defaultByPlatform?: Partial<Record<PlatformFilter, unknown>>;
+  /**
+   * `false` for a choice that has no sensible default to return to, such as
+   * which server the notes live on. Hides the modified marker and the reset
+   * button. Omitted ⇒ resettable.
+   */
+  resettable?: boolean;
   /** Lookup key into the custom-component registry (only when type='custom'). */
   customId?: string;
   /** Lookup key into the action registry (only when type='button'). */

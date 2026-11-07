@@ -139,6 +139,7 @@ describe('global command run() wiring', () => {
   it('undo / redo dispatch the app-level editor commands', () => {
     run('global.undo');
     run('global.redo');
+    run('global.redoAlternate');
     expect(runActiveEditorCommand).toHaveBeenNthCalledWith(
       1,
       'app.undo',
@@ -146,6 +147,11 @@ describe('global command run() wiring', () => {
     );
     expect(runActiveEditorCommand).toHaveBeenNthCalledWith(
       2,
+      'app.redo',
+      'note-1'
+    );
+    expect(runActiveEditorCommand).toHaveBeenNthCalledWith(
+      3,
       'app.redo',
       'note-1'
     );

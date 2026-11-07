@@ -17,6 +17,7 @@ import { defaultLayout, strideY } from '$lib/ink/page';
 import type { DocumentLayout } from '$lib/ink/page';
 import { fetchAssetBytes } from '$lib/api/assets';
 import { pressureWidth } from '$lib/ink/editor-helpers';
+import { traceStrokeCurve } from '$lib/ink/stroke-curve';
 
 const WIDTH_QUANTUM = 0.25;
 
@@ -138,7 +139,7 @@ function drawPageStrokes(
 
   let activeColor: number | null = null;
   for (const stroke of strokes) {
-    if (stroke.points.length < 2) continue;
+    if (stroke.points.length === 0) continue;
     // Vertical-band cull. The page covers the full document width, so
     // there's no value culling horizontally.
     if (
@@ -175,33 +176,65 @@ function appendStrokeOps(
   const pageHeight = layout.page.height;
   const toPdfY = (y: number) => pageHeight - (y - pageTop);
 
-  // Mirrors InkWebNoteEditor.drawStroke: pressure-modulated width is
-  // averaged across each segment and quantized to 0.25 so consecutive
-  // segments at the same width batch into a single moveTo/lineTo run.
+  // Mirrors canvas-painter's drawStroke: the same curve, with the
+  // pressure-modulated width quantized to 0.25 so consecutive pieces at
+  // the same width batch into a single path.
   const points = stroke.points;
-  let previous = points[0];
+  const first = points[0];
+  if (points.length === 1) {
+    // A zero-length subpath with round caps paints a filled dot.
+    const raw = stroke.width * pressureWidth(first.pressure);
+    ops.push(
+      lib.setLineWidth(Math.max(WIDTH_QUANTUM, raw)),
+      lib.moveTo(first.x, toPdfY(first.y)),
+      lib.lineTo(first.x, toPdfY(first.y)),
+      lib.stroke()
+    );
+    return;
+  }
+  let penX = first.x;
+  let penY = first.y;
   let currentWidth = -1;
   let pathOpen = false;
-
-  for (let i = 1; i < points.length; i++) {
-    const curr = points[i];
-    const pressure = (previous.pressure + curr.pressure) * 0.5;
+  const useWidth = (pressure: number) => {
     const raw = stroke.width * pressureWidth(pressure);
     const q = Math.max(
       WIDTH_QUANTUM,
       Math.round(raw / WIDTH_QUANTUM) * WIDTH_QUANTUM
     );
+    if (pathOpen && q === currentWidth) return;
+    if (pathOpen) ops.push(lib.stroke());
+    ops.push(lib.setLineWidth(q));
+    ops.push(lib.moveTo(penX, toPdfY(penY)));
+    currentWidth = q;
+    pathOpen = true;
+  };
 
-    if (!pathOpen || q !== currentWidth) {
-      if (pathOpen) ops.push(lib.stroke());
-      ops.push(lib.setLineWidth(q));
-      ops.push(lib.moveTo(previous.x, toPdfY(previous.y)));
-      currentWidth = q;
-      pathOpen = true;
+  traceStrokeCurve(points, {
+    line(x, y, pressure) {
+      useWidth(pressure);
+      ops.push(lib.lineTo(x, toPdfY(y)));
+      penX = x;
+      penY = y;
+    },
+    quad(cx, cy, x, y, pressure) {
+      useWidth(pressure);
+      // PDF has no quadratic operator (pdf-lib's appendQuadraticCurve
+      // emits `v`, a different cubic), so raise it to the exact cubic.
+      ops.push(
+        lib.appendBezierCurve(
+          penX + ((cx - penX) * 2) / 3,
+          toPdfY(penY + ((cy - penY) * 2) / 3),
+          x + ((cx - x) * 2) / 3,
+          toPdfY(y + ((cy - y) * 2) / 3),
+          x,
+          toPdfY(y)
+        )
+      );
+      penX = x;
+      penY = y;
     }
-    ops.push(lib.lineTo(curr.x, toPdfY(curr.y)));
-    previous = curr;
-  }
+  });
 
   if (pathOpen) ops.push(lib.stroke());
 }

@@ -12,7 +12,7 @@ import {
   type PageImageProgress
 } from './page-images';
 import { INK_PAGES, INK_META, INK_SCHEMA } from './page-document';
-import type { InkPage } from './page';
+import { DEFAULT_PAGE, type InkPage } from './page';
 import type { PdfAnnotation } from '$lib/pdf/types';
 import { pageOffset } from './page-document';
 
@@ -70,7 +70,9 @@ export async function convertPdfToInk(
       pdf,
       Array.from({ length: pdf.numPages }, (_, i) => i),
       noteId,
-      progress
+      progress,
+      undefined,
+      DEFAULT_PAGE.width
     );
     ink.restorePages(pages);
     const note = await importInkPdfNote({
