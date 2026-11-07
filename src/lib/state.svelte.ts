@@ -96,6 +96,14 @@ export function toggleRightSidebar() {
   return setPreference('rightSidebarOpen', !ui.rightSidebarOpen);
 }
 
+/**
+ * The details panel only describes the active note, so it stays hidden while
+ * no note is open instead of filling a column with "No note selected".
+ */
+export function rightSidebarShown(): boolean {
+  return ui.rightSidebarOpen && ui.activeNoteId !== null;
+}
+
 export function openRightSidebar() {
   if (ui.rightSidebarOpen) return;
   return setPreference('rightSidebarOpen', true);

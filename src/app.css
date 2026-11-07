@@ -46,12 +46,14 @@
   --surface-3: oklch(1 0 0);
   --editor-surface: var(--surface-3);
 
-  /* The wash behind a modal, sheet or palette. Always black — a scrim's job
+  /* The wash behind a modal, sheet or palette. Always dark — a scrim's job
    * is to darken whatever is behind it, so it does not follow the surface
    * scale — but the strength differs by theme, and it was previously spelled
    * five different ways across ten files (bg-black/50, /35, rgb(0 0 0 / 0.4),
-   * rgb(0 0 0 / 0.52), …). */
-  --scrim: oklch(0 0 0 / 0.45);
+   * rgb(0 0 0 / 0.52), …). In light mode it stays near 30% and leans to the
+   * slate of the surfaces: dialogs here also blur what is behind them, and a
+   * heavier or pure black wash turns the page a flat dirty grey. */
+  --scrim: oklch(0.25 0.03 265 / 0.3);
 
   /* Light-mode steps compress as they approach white, so shadow carries
    * the rest of the elevation cue. Dark mode overrides these deeper. */
@@ -115,6 +117,10 @@
   --named-violet: oklch(0.56 0.15 295);
   --named-pink: oklch(0.56 0.15 350);
   --named-foreground: oklch(0.99 0.003 265);
+
+  /* Folder glyphs in the tree and search: a quiet amber that marks structure
+   * without competing with the brand colour of the open note. */
+  --folder-icon: var(--named-amber);
 
   /* Find-and-replace and PDF search highlights. Another fixed-hue set — a
    * highlighter is yellow and the focused hit is orange, in either theme —
@@ -228,7 +234,7 @@ html {
   --surface-3: oklch(0.28 0.015 270);
   --editor-surface: var(--surface-1);
 
-  /* Stronger than light mode: over already-dark content a 45% wash barely
+  /* Stronger than light mode: over already-dark content a light wash barely
    * separates the overlay from the page behind it. */
   --scrim: oklch(0 0 0 / 0.6);
 
@@ -269,6 +275,14 @@ html {
   --named-pink: oklch(0.77 0.13 350);
   --named-foreground: oklch(0.21 0.012 270);
 
+  /* The lifted amber glows on the dark surfaces, so folders take it mixed
+   * well toward the muted text colour. */
+  --folder-icon: color-mix(
+    in oklab,
+    var(--named-amber) 55%,
+    var(--muted-foreground)
+  );
+
   --foreground: oklch(0.95 0.006 270);
   --primary: oklch(0.95 0.006 270);
   --primary-foreground: oklch(0.23 0.013 270);
@@ -305,6 +319,8 @@ html {
    * still resolves, and equals the subtle tier. */
   --color-border-subtle: var(--border-subtle);
   --color-border-strong: var(--border-strong);
+
+  --color-folder-icon: var(--folder-icon);
 
   /* Brand accent — `text-accent-brand`, `bg-accent-brand`. */
   --color-accent-brand: var(--accent-brand);
@@ -853,6 +869,73 @@ body.dv-tab-dragging
   font-size: 1.125em;
   line-height: 1.556;
 }
+/* Crepe sets h1–h5 in regular weight, which lets bold run-in text in the
+ * body outweigh the section headings. */
+.milkdown .ProseMirror :is(h1, h2, h3, h4, h5) {
+  font-weight: 600;
+  /* The heavier weight widens long single words (German compounds, URLs)
+   * past a narrow pane, so let them break instead of overflowing. */
+  overflow-wrap: anywhere;
+}
+
+/* List markers and checkboxes. Crepe paints them in its outline colour,
+ * which we map to --border-strong and which all but disappears next to body
+ * text. Markers take the muted text tone, a ticked box takes the brand
+ * accent, and a ticked item's text steps back so open tasks stand out. */
+.milkdown .milkdown-list-item-block li .label-wrapper {
+  color: var(--muted-foreground);
+}
+.milkdown .milkdown-list-item-block li .label-wrapper svg {
+  fill: var(--muted-foreground);
+}
+.milkdown .milkdown-list-item-block li .label-wrapper .label.checked svg {
+  fill: var(--accent-brand);
+}
+.milkdown
+  .milkdown-list-item-block
+  li:has(> .label-wrapper .label.checked)
+  > .children {
+  color: var(--muted-foreground);
+}
+
+/* List and table rhythm. Crepe pads every paragraph by 4px and pins list
+ * markers to a 32px box, so list items sat further apart than lines of
+ * prose, and table rows stacked cell padding on paragraph padding. Items
+ * now follow the body line box, cells keep a compact 6px/12px padding, and
+ * the grid uses the regular border tone instead of a near-invisible tint,
+ * with a quiet header row. */
+.milkdown .milkdown-list-item-block li .children p {
+  padding-block: 1px;
+}
+.milkdown .milkdown-list-item-block li .label-wrapper,
+.milkdown .milkdown-list-item-block li .label-wrapper .label {
+  height: calc(1em * var(--editor-line-height, 1.5) + 2px);
+  padding-block: 0;
+}
+.milkdown .milkdown-table-block :is(th, td) {
+  border-color: var(--border);
+  padding: 6px 12px;
+}
+/* Beats the desktop shell's paragraph line height (`.desktop-shell
+ * .milkdown .ProseMirror p`), which would otherwise set table rows too. */
+.milkdown .ProseMirror .milkdown-table-block :is(th, td) p {
+  padding-block: 0;
+  line-height: 1.5;
+}
+.milkdown .milkdown-table-block th {
+  background: var(--surface-2);
+  font-weight: 600;
+}
+/* Tables size to their content instead of stretching a three-column budget
+ * across the whole reading column; wide tables still fill it and scroll. */
+.milkdown .milkdown-table-block table {
+  width: auto;
+  min-width: min(100%, 24rem);
+  table-layout: auto;
+}
+.milkdown .milkdown-table-block :is(th, td) {
+  min-width: 6rem;
+}
 
 /*
  * Only show the drop indicator for editor-initiated block drags. The upstream
@@ -899,6 +982,49 @@ body.dv-tab-dragging
 .mobile-editor .ProseMirror {
   padding-left: max(20px, env(safe-area-inset-left)) !important;
   padding-right: max(20px, env(safe-area-inset-right)) !important;
+}
+
+/* Touch targets: inside a phone bar, every button is at least 44px square,
+ * however compact the shared control is on desktop. */
+.touch-targets :is(button, [role='button']) {
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+}
+
+/* The desktop's type tuning, scaled for a phone: headings in the body font
+ * at sizes that stay below the note title, and no tall band above the text. */
+.mobile-editor .milkdown {
+  --crepe-font-title: var(--crepe-font-default);
+}
+.mobile-editor .milkdown .ProseMirror {
+  padding-top: 1.25rem;
+}
+.mobile-editor.has-inline-title .milkdown {
+  padding-top: 0;
+}
+.mobile-editor.has-inline-title .milkdown .ProseMirror {
+  padding-top: 0.5rem;
+}
+.mobile-editor .milkdown .ProseMirror h1 {
+  font-size: 1.75em;
+  letter-spacing: -0.03em;
+}
+.mobile-editor .milkdown .ProseMirror h2 {
+  font-size: 1.375em;
+  letter-spacing: -0.015em;
+}
+.mobile-editor .milkdown .ProseMirror h3 {
+  font-size: 1.175em;
+}
+/* A heading belongs to what follows it: more room above than below. */
+.mobile-editor .milkdown .ProseMirror :is(h2, h3, h4) {
+  margin-top: 1.75rem;
+  margin-bottom: 0.625rem;
+}
+.mobile-inline-title .note-inline-title {
+  font-size: calc(var(--editor-font-size) * 1.875);
+  padding: 1.25rem max(20px, env(safe-area-inset-right)) 0
+    max(20px, env(safe-area-inset-left));
 }
 
 /*
@@ -1221,8 +1347,71 @@ body.dv-tab-dragging .freeform-canvas-host * {
   --border-radius-lg: var(--radius);
 }
 
+/* The canvas hint under the toolbar used Excalidraw's own pale grey, which
+ * read as disabled on the light canvas; use our muted text tone. `:root`
+ * outranks Excalidraw's later-loaded `.theme--dark` rule. The shortcut digit
+ * on every tool is clutter there; the tooltips still name the key. */
+:root .excalidraw .HintViewer,
+:root .excalidraw.theme--dark .HintViewer {
+  color: var(--muted-foreground);
+}
+:root .excalidraw .App-toolbar .ToolIcon__keybinding {
+  display: none;
+}
+
 /* Its dialogs (Help, image export) dim the page with a hard-coded 20% grey
  * that barely registers in dark mode; use the scrim our own dialogs use. */
+/* Excalidraw's right-click menu, drawn like the app's own context menu
+ * (ContextMenu.svelte): the popover surface and border, a rounded panel with
+ * 4px of vertical padding, 14px rows with a hover wash, muted shortcuts, a
+ * hairline separator and destructive rows in the destructive colour. */
+:root .excalidraw .context-menu {
+  min-width: 200px;
+  margin: 0;
+  padding: 0.25rem 0;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background-color: var(--popover);
+  box-shadow: var(--elevation-overlay);
+}
+:root .excalidraw .context-menu-item {
+  padding: 0.375rem 0.75rem;
+  gap: 1rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  color: var(--popover-foreground);
+  transition: background-color 120ms;
+}
+:root .excalidraw .context-menu-item.checkmark {
+  padding-inline-start: 1.75rem;
+}
+:root .excalidraw .context-menu-item.checkmark::before {
+  left: 0.75rem;
+  color: var(--accent-brand);
+}
+:root .excalidraw .context-menu-item .context-menu-item__label {
+  margin-inline-end: 0;
+}
+:root .excalidraw .context-menu-item .context-menu-item__shortcut {
+  font-size: 0.75rem;
+  opacity: 1;
+  color: var(--muted-foreground);
+}
+:root .excalidraw .context-menu-item:hover {
+  color: var(--accent-foreground);
+  background-color: var(--accent);
+}
+:root .excalidraw .context-menu-item.dangerous .context-menu-item__label,
+:root .excalidraw .context-menu-item:hover.dangerous .context-menu-item__label {
+  color: var(--destructive);
+}
+:root .excalidraw .context-menu-item:hover.dangerous {
+  background-color: var(--destructive-subtle);
+}
+:root .excalidraw .context-menu-item-separator {
+  margin: 0.25rem 0;
+  border-top: 1px solid var(--border);
+}
 :root .excalidraw .Modal__background {
   background-color: var(--scrim);
 }
@@ -1923,8 +2112,12 @@ body.dv-tab-dragging .freeform-canvas-host * {
   padding: 0 0 4rem;
 }
 .desktop-shell .milkdown .ProseMirror {
-  padding: 2.5rem clamp(3rem, 4vw, 4rem);
+  padding: 2rem clamp(3rem, 4vw, 4rem);
   line-height: var(--editor-line-height, 1.75);
+}
+.desktop-shell .milkdown .milkdown-list-item-block li .label-wrapper,
+.desktop-shell .milkdown .milkdown-list-item-block li .label-wrapper .label {
+  height: calc(1em * var(--editor-line-height, 1.75) + 2px);
 }
 .desktop-shell .milkdown .ProseMirror p {
   line-height: var(--editor-line-height, 1.75);
@@ -1946,11 +2139,45 @@ body.dv-tab-dragging .freeform-canvas-host * {
 .desktop-shell .milkdown .ProseMirror :is(h4, h5, h6) {
   font-size: 1.125em;
 }
+
+/* Inline note title (NoteInlineTitle.svelte). It sits outside `.milkdown`,
+ * so it repeats Crepe's font stack and the body's inline padding to line up
+ * with the text below, and it outranks the body's own H1. The body's top
+ * padding shrinks under it so the title reads as the document's heading,
+ * not a separate band. */
+.note-inline-title {
+  display: block;
+  width: 100%;
+  resize: none;
+  overflow: hidden;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--foreground);
+  font-family: var(
+    --crepe-font-default,
+    'Noto Sans',
+    Arial,
+    Helvetica,
+    sans-serif
+  );
+  font-size: calc(var(--editor-font-size) * 2.25);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.2;
+  padding: 2.5rem clamp(3rem, 4vw, 4rem) 0;
+}
+.note-inline-title::placeholder {
+  color: var(--muted-foreground);
+}
+.desktop-shell .has-inline-title .milkdown .ProseMirror {
+  padding-top: 1rem;
+}
 .desktop-shell .milkdown-floating-portal {
   padding: 0;
 }
 .desktop-search {
-  width: clamp(8rem, 18vw, 15rem);
+  width: clamp(8rem, 26vw, 22rem);
 }
 @media (max-width: 900px) {
   .desktop-search {

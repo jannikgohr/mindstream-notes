@@ -12,6 +12,7 @@ import {
   byName,
   clickName,
   insertText,
+  openDetailsPanel,
   pressElementKey,
   restartApp,
   setElementValue,
@@ -27,6 +28,7 @@ async function createHistoryNote(): Promise<string> {
   await pressElementKey(draft, 'Enter');
   await expect(byName(title)).toBeDisplayed();
   await clickName(title);
+  await openDetailsPanel();
   return title;
 }
 
@@ -103,6 +105,7 @@ describe('T3 note history', function () {
     await restartApp();
     await waitForShell();
     await clickName(title);
+    await openDetailsPanel();
 
     // The denormalised history (created + edited + reverted) survived the
     // quit/relaunch against the same profile dir.

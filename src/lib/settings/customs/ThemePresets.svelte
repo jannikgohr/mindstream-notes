@@ -9,6 +9,8 @@
   import { saveThemePreset, deleteThemePreset } from '$lib/api/theme-presets';
   import { tUi, tUiFormat } from '../i18n.svelte';
   import { toErrorMessage } from '$lib/api/errors';
+  import { ChevronRight } from '@lucide/svelte';
+  import SettingSelect from '../SettingSelect.svelte';
   let raw = $state('');
   let editorOpen = $state(false);
   let busy = $state(false);
@@ -66,20 +68,34 @@
 </script>
 
 <div class="flex flex-col gap-3">
-  <select
-    aria-label={tUi('theme.select')}
-    value={selected}
-    disabled={busy}
-    onchange={(event) => select(event.currentTarget.value)}
-    class="rounded-md border border-input bg-background px-3 py-2 text-sm"
-  >
-    {#if missing}<option value={selected}
-        >{tUiFormat('theme.missingOption', { id: selected })}</option
+  <!-- The picker sits at a width that fits preset names. Inspecting or
+       editing a preset's JSON is advanced, so it lives in the disclosure. -->
+  <div class="flex flex-wrap items-center gap-2">
+    <SettingSelect
+      settingId="appearance.preset"
+      ariaLabel={tUi('theme.select')}
+      value={selected}
+      disabled={busy}
+      options={[
+        ...(missing ? [selected] : []),
+        ...themeCatalog.presets.map((item) => item.id)
+      ]}
+      labelFor={(id) => {
+        const item = themeCatalog.presets.find((entry) => entry.id === id);
+        return item
+          ? presetLabel(item)
+          : tUiFormat('theme.missingOption', { id });
+      }}
+      onChange={(id) => void select(id)}
+      class="h-11 w-full sm:h-9 sm:w-64"
+    />
+    {#if custom && !missing}<button
+        type="button"
+        class="rounded-md border border-border px-3 py-3 text-sm hover:bg-accent sm:py-1.5"
+        disabled={busy}
+        onclick={remove}>{tUi('theme.remove')}</button
       >{/if}
-    {#each themeCatalog.presets as item (item.id)}<option value={item.id}
-        >{presetLabel(item)}</option
-      >{/each}
-  </select>
+  </div>
   {#if missing}<p role="status" class="text-sm text-muted-foreground">
       {tUi('theme.missing')}
     </p>{/if}
@@ -89,26 +105,26 @@
     >
       {error || themeCatalog.error}
     </p>{/if}
-  <div class="flex flex-wrap gap-2">
+  <details bind:open={editorOpen}>
+    <!-- The app's chevron instead of the browser's disclosure triangle. -->
+    <summary
+      class="flex w-fit cursor-pointer list-none items-center gap-1 py-3 text-sm sm:py-0 [&::-webkit-details-marker]:hidden"
+    >
+      <ChevronRight
+        class="size-3.5 text-muted-foreground transition-transform {editorOpen
+          ? 'rotate-90'
+          : ''}"
+        aria-hidden="true"
+      />{tUi('theme.import')}
+    </summary>
+    <p class="mt-2 text-sm text-muted-foreground">{tUi('theme.importHelp')}</p>
     <button
       type="button"
-      class="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
+      class="mt-2 rounded-md border border-border px-3 py-3 text-sm hover:bg-accent sm:py-1.5"
       disabled={busy}
-      onclick={() => {
-        raw = JSON.stringify(preset, null, 2);
-        editorOpen = true;
-      }}>{tUi('theme.editJson')}</button
+      onclick={() => (raw = JSON.stringify(preset, null, 2))}
+      >{tUi('theme.editJson')}</button
     >
-    {#if custom && !missing}<button
-        type="button"
-        class="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
-        disabled={busy}
-        onclick={remove}>{tUi('theme.remove')}</button
-      >{/if}
-  </div>
-  <details bind:open={editorOpen}>
-    <summary class="cursor-pointer text-sm">{tUi('theme.import')}</summary>
-    <p class="mt-2 text-sm text-muted-foreground">{tUi('theme.importHelp')}</p>
     <textarea
       aria-label={tUi('theme.json')}
       bind:value={raw}
@@ -118,7 +134,7 @@
     ></textarea>
     <button
       type="button"
-      class="mt-2 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
+      class="mt-2 rounded-md border border-border px-3 py-3 text-sm hover:bg-accent sm:py-1.5"
       disabled={busy || !raw.trim()}
       onclick={save}>{tUi('theme.save')}</button
     >

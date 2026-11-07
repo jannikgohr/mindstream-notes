@@ -35,7 +35,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   leftSidebarWidth: 240,
   rightSidebarWidth: 260,
   leftSidebarOpen: true,
-  rightSidebarOpen: true,
+  rightSidebarOpen: false,
   sortStrategy: 'alphabetical',
   // 'asc' matches the natural reading order for alphabetical (the
   // default strategy). Users who switch to recently-modified can flip

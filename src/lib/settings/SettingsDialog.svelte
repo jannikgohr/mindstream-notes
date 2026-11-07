@@ -330,7 +330,11 @@
                     ? 'bg-accent text-accent-foreground'
                     : 'text-foreground hover:bg-accent/60'}"
                 >
-                  <Icon class="size-3.5 shrink-0 text-muted-foreground" />
+                  <Icon
+                    class="size-3.5 shrink-0 {showingPluginOverview
+                      ? 'text-accent-brand'
+                      : 'text-muted-foreground'}"
+                  />
                   <span class="truncate">{tLabel('categories', cat.id)}</span>
                 </button>
                 {#if children.length > 0}
@@ -384,7 +388,13 @@
                   ? 'bg-accent text-accent-foreground'
                   : 'text-foreground hover:bg-accent/60'}"
               >
-                <Icon class="size-3.5 shrink-0 text-muted-foreground" />
+                <!-- The chosen category's icon carries the brand accent; the
+                     row wash stays neutral. -->
+                <Icon
+                  class="size-3.5 shrink-0 {isActive
+                    ? 'text-accent-brand'
+                    : 'text-muted-foreground'}"
+                />
                 <span class="truncate">{tLabel('categories', cat.id)}</span>
               </button>
             {/if}
@@ -392,7 +402,12 @@
         </nav>
 
         <!-- Right pane: sections + settings -->
-        <section class="themed-scrollbar overflow-y-auto px-6 py-5">
+        <!-- The bottom 1rem fades out, a cue that the pane scrolls rather than a
+             hard crop through the last row; the extra end padding lets that
+             row scroll clear of the fade. -->
+        <section
+          class="themed-scrollbar overflow-y-auto px-6 pb-12 pt-5 [mask-image:linear-gradient(to_bottom,black_calc(100%-1rem),transparent)]"
+        >
           {#if activeCategory}
             <h2 class="text-base font-semibold">
               {paneHeading}

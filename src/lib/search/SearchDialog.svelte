@@ -168,7 +168,7 @@
     <Dialog.Content
       onkeydown={onKeydown}
       onOpenAutoFocus={handleOpenAutoFocus}
-      class="fixed left-1/2 top-[8vh] z-350 flex h-[min(72vh,640px)] w-[min(720px,94vw)] -translate-x-1/2 flex-col overflow-hidden rounded-lg border border-border bg-background text-foreground shadow-xl focus:outline-none"
+      class="fixed left-1/2 top-[8vh] z-350 flex max-h-[min(72vh,640px)] w-[min(720px,94vw)] -translate-x-1/2 flex-col overflow-hidden rounded-lg border border-border bg-background text-foreground shadow-xl focus:outline-none"
     >
       <Dialog.Title class="sr-only">{tUi('search.open')}</Dialog.Title>
 
@@ -189,10 +189,10 @@
           type="text"
           placeholder={tUi('search.notes.placeholder')}
           aria-label={tUi('search.notes.label')}
-          class="h-9 w-full bg-transparent text-sm placeholder:text-muted-foreground focus:outline-none"
+          class="h-11 w-full bg-transparent text-base placeholder:text-muted-foreground focus:outline-none sm:h-9 sm:text-sm"
         />
         <Dialog.Close
-          class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          class="grid size-11 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:size-8"
           aria-label={tUi('search.close')}
         >
           <X class="size-4" />
@@ -230,7 +230,7 @@
                   onmouseenter={() => (selectedIndex = i)}
                   onclick={() => activate(i)}
                   class="flex w-full flex-col items-start gap-1 border-l-2 px-3 py-2 text-left text-sm transition-colors {isActive
-                    ? 'border-primary bg-accent text-accent-foreground'
+                    ? 'border-accent-brand bg-accent-brand/10 text-foreground'
                     : 'border-transparent text-foreground hover:bg-accent/60'}"
                 >
                   <span class="flex w-full items-center gap-2">
@@ -238,11 +238,13 @@
                       kind={hit.note.note_kind}
                       class="size-4 shrink-0 text-muted-foreground"
                     />
-                    <span class="truncate font-medium">
+                    <span class="truncate font-semibold">
                       {#each titleParts as part}
                         {#if part.highlight}
-                          <mark class="bg-primary/30 text-foreground rounded-sm"
-                            >{part.text}</mark
+                          <mark
+                            class="rounded-sm text-foreground {isActive
+                              ? 'bg-accent-brand/40'
+                              : 'bg-accent-brand/30'}">{part.text}</mark
                           >
                         {:else}{part.text}{/if}
                       {/each}
@@ -250,12 +252,14 @@
                   </span>
                   {#if hit.snippet}
                     <span
-                      class="line-clamp-2 pl-6 text-xs text-muted-foreground"
+                      class="line-clamp-2 pl-6 text-[13px] leading-[18px] text-muted-foreground sm:text-sm sm:leading-5"
                     >
                       {#each snippetParts as part}
                         {#if part.highlight}
-                          <mark class="bg-primary/30 text-foreground rounded-sm"
-                            >{part.text}</mark
+                          <mark
+                            class="rounded-sm font-medium text-foreground {isActive
+                              ? 'bg-accent-brand/40'
+                              : 'bg-accent-brand/30'}">{part.text}</mark
                           >
                         {:else}{part.text}{/if}
                       {/each}
@@ -263,9 +267,9 @@
                   {/if}
                   {#if path}
                     <span
-                      class="flex items-center gap-1 pl-6 text-[11px] text-muted-foreground"
+                      class="flex items-center gap-1 pl-6 text-xs text-muted-foreground"
                     >
-                      <Folder class="size-3 shrink-0" />
+                      <Folder class="size-3 shrink-0 text-folder-icon" />
                       <span class="truncate">{path}</span>
                     </span>
                   {/if}
@@ -277,7 +281,7 @@
       </div>
 
       <footer
-        class="hidden shrink-0 items-center justify-end border-t border-border px-3 py-1.5 text-[11px] text-muted-foreground sm:flex"
+        class="hidden shrink-0 items-center justify-end border-t border-border px-3 py-2 text-xs text-muted-foreground sm:flex"
       >
         {tUi('search.hint')}
       </footer>

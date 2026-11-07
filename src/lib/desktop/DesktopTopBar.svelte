@@ -10,12 +10,16 @@
   } from '@jis3r/icons';
   import CuedIcon from '$lib/components/icons/CuedIcon.svelte';
   import { Button } from '$lib/components/ui/button';
-  import { Separator } from '$lib/components/ui/separator';
   import ThemeToggle from '$lib/components/ThemeToggle.svelte';
   import VaultSwitcher from '$lib/components/VaultSwitcher.svelte';
   import WindowControls from '$lib/components/WindowControls.svelte';
   import NotificationCenter from '$lib/notifications/NotificationCenter.svelte';
-  import { ui, toggleLeftSidebar, toggleRightSidebar } from '$lib/state.svelte';
+  import {
+    ui,
+    toggleLeftSidebar,
+    toggleRightSidebar,
+    rightSidebarShown
+  } from '$lib/state.svelte';
   import { openSettings } from '$lib/settings/store.svelte';
   import { openSearch } from '$lib/search/store.svelte';
   import { openCommandPalette } from '$lib/command-palette/store.svelte';
@@ -58,7 +62,14 @@
       : ''}"
     style:width={ui.leftSidebarOpen ? `${ui.leftSidebarWidth}px` : undefined}
   >
-    <img src={appIcon} alt="" draggable="false" class="size-6 shrink-0" />
+    <!-- The icon is a light tile: a hairline ring keeps it a tile on the light
+         chrome too, instead of a bare glyph there and a white block in dark. -->
+    <img
+      src={appIcon}
+      alt=""
+      draggable="false"
+      class="size-6 shrink-0 rounded-md ring-1 ring-border"
+    />
     <span class="truncate text-base font-semibold tracking-tight"
       >mindstream<span class="text-accent-brand">.</span></span
     >
@@ -133,18 +144,18 @@
       variant="ghost"
       size="icon"
       onclick={toggleRightSidebar}
+      disabled={!ui.activeNoteId}
       title={ui.rightSidebarOpen ? tUi('sidebar.hide') : tUi('sidebar.show')}
       aria-label={ui.rightSidebarOpen
         ? tUi('sidebar.hide')
         : tUi('sidebar.show')}
-      aria-expanded={ui.rightSidebarOpen}
+      aria-expanded={rightSidebarShown()}
     >
-      <CuedIcon icon={PanelRight} cue={ui.rightSidebarOpen} duration={300} />
+      <CuedIcon icon={PanelRight} cue={rightSidebarShown()} duration={300} />
     </Button>
 
     {#if customDecorations}
-      <Separator orientation="vertical" class="mx-1 h-5" />
-      <WindowControls />
+      <WindowControls separated />
     {/if}
   </div>
 {/snippet}

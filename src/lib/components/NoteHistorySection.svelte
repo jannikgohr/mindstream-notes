@@ -441,11 +441,18 @@
               <span class="block truncate text-xs font-medium">
                 {actionLabel(v)}
               </span>
-              <span class="block truncate text-[11px] text-muted-foreground">
-                {formatNoteDateTime(v.created)}{magnitude(v)
-                  ? ` · ${magnitude(v)}`
-                  : ''}
+              <!-- Date and change size get a line each, so the size never
+                   breaks mid-phrase in a narrow panel. -->
+              <span class="block truncate text-xs text-muted-foreground">
+                {formatNoteDateTime(v.created)}
               </span>
+              {#if magnitude(v)}
+                <span
+                  class="block truncate text-xs tabular-nums text-muted-foreground"
+                >
+                  {magnitude(v)}
+                </span>
+              {/if}
             </span>
           </button>
         </li>
