@@ -160,15 +160,35 @@ pub(in crate::sync) fn apply_note_payload(
         // server. The body above is still CRDT-merged regardless.
         let keep_local_meta =
             preserve_dirty_local_edits && existing.as_ref().is_some_and(|l| l.dirty != 0);
+        // Whether this device's CRDT holds edits the remote copy lacks. A
+        // dirty row is not proof of that: a server switch dirties every row
+        // (`auth::reset_sync_cursors`), and a row dirtied by a rename or a
+        // save that changed nothing has no content of its own either. Across
+        // schemas, or without a local state, there is nothing to compare, so
+        // the local side is assumed to carry edits, as it always was.
+        let local_adds_content = match &existing {
+            Some(local) if !local.yrs_state.is_empty() && local.schema == incoming_schema => {
+                !yrs_doc::contains_state(&payload.yrs_state, &local.yrs_state)
+            }
+            _ => true,
+        };
         // For v2 payloads the remote ships the rendered markdown alongside
         // the prosemirror state — Rust can't render markdown from XmlFragment.
-        // If this row has unpushed local edits, keep the local rendered body
-        // through the pull-before-push cycle; otherwise the next push would
-        // upload the stale remote body even though the merged Yjs state still
-        // contains the local edit. For v1 we still have the Rust-side Y.Text →
-        // markdown helper.
+        // If this row has unpushed local *content*, keep the local rendered
+        // body through the pull-before-push cycle; otherwise the next push
+        // would upload the stale remote body even though the merged Yjs state
+        // still contains the local edit. A dirty row with nothing to add takes
+        // the remote rendering: it is the rendering of the merged state, and
+        // keeping the local one would push an older text over every device's
+        // newer one (how a second device logging into a new server rolled a
+        // note's body back by weeks). For v1 we still have the Rust-side
+        // Y.Text → markdown helper.
+        //
+        // Still open: when BOTH sides carry edits, neither rendering matches
+        // the merged state, and the local one is kept until an editor saves
+        // the note again.
         let body = if payload.schema >= 2 {
-            if keep_local_meta {
+            if keep_local_meta && local_adds_content {
                 existing
                     .as_ref()
                     .map(|local| local.body.clone())

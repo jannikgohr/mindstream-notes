@@ -465,6 +465,44 @@ pub fn release_note_assets(conn: &Connection, note_id: &str) -> AppResult<usize>
     Ok(removed)
 }
 
+/// Whether a note of space `scope` (trashed ones included) references
+/// `asset_id` from what it holds *now*: its rendered body or the live part of
+/// its CRDT. History does not count. It is local to each device, so letting it
+/// veto a delete would bring a deliberately removed image back from whichever
+/// device still had an old version of the note.
+///
+/// A pull asks this before applying a remote asset delete. The device that
+/// sent the delete decided from its own copy of the note, which may have been
+/// stale; an asset this device still draws must outlive that decision.
+pub fn live_note_references_asset(
+    conn: &Connection,
+    asset_id: &str,
+    scope: Option<&str>,
+) -> AppResult<bool> {
+    // instr() narrows the scan to rows whose bytes mention the id at all;
+    // only those get their CRDT decoded to tell live from deleted content.
+    let mut stmt = conn.prepare(
+        "SELECT body, yrs_state FROM notes
+         WHERE share_scope_id IS ?2
+           AND (instr(body, ?1) > 0 OR instr(yrs_state, CAST(?1 AS BLOB)) > 0)",
+    )?;
+    let rows = stmt.query_map(params![asset_id, scope], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, Option<Vec<u8>>>(1)?))
+    })?;
+    for row in rows {
+        let (body, state) = row?;
+        if body.contains(asset_id) {
+            return Ok(true);
+        }
+        if let Some(state) = state {
+            if crate::yrs_doc::live_strings(&state).contains(asset_id) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// Delete one asset row, queueing a server-side delete first if it had been
 /// pushed. Returns 1 if a row went away.
 pub fn delete_asset(conn: &Connection, asset_id: &str) -> AppResult<usize> {
@@ -570,25 +608,44 @@ pub fn count_asset_refs(body: &str, counts: &mut HashMap<String, usize>) {
     }
 }
 
+/// Cheap byte check before decoding a Yjs state, so a sweep over every note
+/// only decodes the ones that can hold an asset. Yjs stores strings as raw
+/// UTF-8, and the editor keeps an asset link in one atomic value (an image
+/// node's `src`, a link mark's `href`), never split across typed characters,
+/// so a state without this needle in its bytes has no live link.
+fn mentions_asset_url(state: &[u8]) -> bool {
+    const NEEDLE: &[u8] = b"asset:mindstream/";
+    state.windows(NEEDLE.len()).any(|window| window == NEEDLE)
+}
+
 pub fn asset_reference_counts(
     conn: &Connection,
     note_id: &str,
 ) -> AppResult<HashMap<String, usize>> {
     let mut counts = HashMap::new();
-    let current: Option<(NoteKind, String)> = conn
+    let current: Option<(NoteKind, String, Option<Vec<u8>>)> = conn
         .query_row(
-            "SELECT note_kind, body FROM notes WHERE id = ?1",
+            "SELECT note_kind, body, yrs_state FROM notes WHERE id = ?1",
             params![note_id],
-            |r| Ok((r.get::<_, NoteKind>(0)?, r.get::<_, String>(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()?;
-    let Some((note_kind, body)) = current else {
+    let Some((note_kind, body, state)) = current else {
         return Ok(counts);
     };
     count_asset_refs(&body, &mut counts);
 
     if !note_kind.is_markdown() {
         return Ok(counts);
+    }
+
+    // The rendered body can lag the CRDT: a pull keeps whichever device's
+    // rendering it trusts while the Yjs state merges. The editor draws from
+    // the CRDT, so an image only the CRDT still holds is in use. Freeing it
+    // on the strength of a stale body is how a device sends a delete for an
+    // image every other device is still showing.
+    if let Some(state) = state.as_deref().filter(|s| mentions_asset_url(s)) {
+        count_asset_refs(&crate::yrs_doc::live_strings(state), &mut counts);
     }
 
     let mut stmt = conn.prepare(
@@ -603,8 +660,8 @@ pub fn asset_reference_counts(
     Ok(counts)
 }
 
-/// Rebuild one markdown note's reference rows from its body and history, then
-/// delete any asset that ends up referenced by nothing at all.
+/// Rebuild one markdown note's reference rows from its body, live CRDT and
+/// history, then delete any asset that ends up referenced by nothing at all.
 ///
 /// This is the authoritative half of the bookkeeping — [`register_body_refs`]
 /// only ever adds rows, so a note whose image the user deleted keeps a stale
@@ -615,6 +672,14 @@ pub fn asset_reference_counts(
 /// `body`, so reconciling it from text would drop every ref and free blobs the
 /// canvas is still drawing.
 pub fn purge_unreferenced_markdown_assets(conn: &Connection, note_id: &str) -> AppResult<usize> {
+    let candidates = rebuild_markdown_refs(conn, note_id)?;
+    delete_if_unreferenced(conn, candidates)
+}
+
+/// Rebuild one markdown note's `asset_refs` rows and return the assets that
+/// lost their claim from it: rows it referenced before but not now, and rows
+/// it created that it does not reference. A no-op for other kinds.
+fn rebuild_markdown_refs(conn: &Connection, note_id: &str) -> AppResult<Vec<String>> {
     let note_kind: Option<NoteKind> = conn
         .query_row(
             "SELECT note_kind FROM notes WHERE id = ?1",
@@ -623,7 +688,7 @@ pub fn purge_unreferenced_markdown_assets(conn: &Connection, note_id: &str) -> A
         )
         .optional()?;
     if note_kind != Some(NoteKind::Markdown) {
-        return Ok(0);
+        return Ok(Vec::new());
     }
 
     // Assets this note referenced before the rebuild. Anything that drops off
@@ -673,7 +738,11 @@ pub fn purge_unreferenced_markdown_assets(conn: &Connection, note_id: &str) -> A
             }
         }
     }
+    Ok(candidates)
+}
 
+/// Delete each candidate that no `asset_refs` row claims any more.
+fn delete_if_unreferenced(conn: &Connection, candidates: Vec<String>) -> AppResult<usize> {
     let mut removed = 0usize;
     for asset_id in candidates {
         let still_referenced: bool = conn
@@ -704,10 +773,17 @@ pub fn sweep_unreferenced_markdown_assets_inner(conn: &Connection) -> AppResult<
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
 
-    let mut removed = 0usize;
+    // Two phases: every note's refs first, deletions after. Deleting per note
+    // would let an early note free an asset a later note still claims, before
+    // that later note's rows were rebuilt (a reference only its CRDT holds has
+    // no row until then).
+    let mut candidates = Vec::new();
     for note_id in note_ids {
-        removed += purge_unreferenced_markdown_assets(conn, &note_id)?;
+        candidates.extend(rebuild_markdown_refs(conn, &note_id)?);
     }
+    candidates.sort();
+    candidates.dedup();
+    let mut removed = delete_if_unreferenced(conn, candidates)?;
 
     // Assets orphaned by a path that never ran release_note_assets — notably
     // a folder delete, where SQLite cascades the notes away and the FK just
