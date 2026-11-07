@@ -2176,11 +2176,6 @@ body.dv-tab-dragging .freeform-canvas-host * {
 .desktop-shell .milkdown-floating-portal {
   padding: 0;
 }
-/* The top bar's brand tile is a light square; dimmed a little in dark mode so
- * it is not the brightest spot in the chrome. */
-.dark .brand-tile {
-  opacity: 0.88;
-}
 .desktop-search {
   width: clamp(8rem, 26vw, 22rem);
 }
