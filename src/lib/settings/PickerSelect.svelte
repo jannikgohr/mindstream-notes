@@ -103,13 +103,13 @@
   }
 </script>
 
-<div class="relative" bind:this={root}>
+<div class="relative w-full sm:w-auto" bind:this={root}>
   <button
     type="button"
     aria-label={ariaLabel}
     aria-haspopup="listbox"
     aria-expanded={open}
-    class="inline-flex h-8 w-56 items-center justify-between gap-2 rounded-md border border-input bg-background px-2 text-sm transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    class="inline-flex h-11 w-full items-center justify-between sm:h-8 sm:w-56 gap-2 rounded-md border border-input bg-background px-2 text-sm transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     onclick={() => (open ? close() : show())}
   >
     <span class:italic={value === ''} class="truncate">{currentLabel}</span>

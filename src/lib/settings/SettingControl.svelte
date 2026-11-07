@@ -149,12 +149,20 @@
   });
 </script>
 
-<div class="grid grid-cols-[1fr_auto] items-start gap-x-4 gap-y-2 py-3">
+<!-- On phones only a switch stays beside its label; every other control
+     goes under it at full width, so long names and descriptions keep the
+     row instead of wrapping word by word. -->
+<div
+  class="grid grid-cols-[1fr_auto] items-start gap-x-4 gap-y-2 py-3 {setting.type !==
+  'toggle'
+    ? 'max-sm:grid-cols-1'
+    : ''}"
+>
   <!-- Custom and segmented settings take the full row, so their control
        ends on the same right edge as the switches and pickers. -->
   <div
     class="min-w-0"
-    class:col-span-2={setting.type === 'custom' || setting.type === 'radio'}
+    class:col-span-full={setting.type === 'custom' || setting.type === 'radio'}
   >
     <div class="flex items-center gap-2">
       <span class="text-sm font-medium">{label}</span>
@@ -255,12 +263,9 @@
     {/if}
   </div>
 
-  <!-- Right-side compact controls. On phones a slider takes its own line
-       under the label, so the label never wraps beside it. -->
+  <!-- Right-side compact controls. -->
   <div
-    class="flex items-center gap-2 pt-0.5 {setting.type === 'slider'
-      ? 'max-sm:col-span-2'
-      : ''}"
+    class="flex items-center gap-2 pt-0.5"
     class:hidden={setting.type === 'custom' ||
       (setting.type === 'radio' && !pending)}
   >
@@ -300,7 +305,7 @@
         minlength={s.minLength}
         maxlength={s.maxLength}
         pattern={s.pattern}
-        class="h-8 w-56 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        class="h-11 w-full rounded-md border border-input bg-background px-2 text-sm sm:h-8 sm:w-56 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
     {:else if setting.type === 'number'}
       {@const s = setting as NumericSetting}
@@ -312,7 +317,7 @@
         min={s.min}
         max={s.max}
         step={s.step}
-        class="h-8 w-24 rounded-md border border-input bg-background px-2 text-sm tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        class="h-11 w-24 rounded-md border border-input bg-background px-2 text-sm tabular-nums sm:h-8 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
     {:else if setting.type === 'slider'}
       {@const s = setting as NumericSetting}
@@ -356,6 +361,7 @@
         options={visibleOptions}
         onChange={commit}
         ariaLabel={label}
+        class="max-sm:h-11 max-sm:w-full"
       />
     {:else if setting.type === 'folder'}
       <PickerSelect
@@ -399,7 +405,7 @@
         placeholder={s.mode === 'directory'
           ? '/path/to/folder'
           : '/path/to/file'}
-        class="h-8 w-56 rounded-md border border-input bg-background px-2 font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        class="h-11 w-full rounded-md border border-input bg-background px-2 font-mono text-xs sm:h-8 sm:w-56 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
     {:else if setting.type === 'keybinding'}
       <input

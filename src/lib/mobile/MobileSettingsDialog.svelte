@@ -7,6 +7,10 @@
    *   <category>   — that category's sections + settings, with a back
    *                  arrow in the header that returns to the list.
    *
+   * Plugins adds a third level, like the desktop dialog: the category shows
+   * the plugin list, and a plugin's gear opens a page with only that
+   * plugin's settings (`activePluginId`).
+   *
    * Bound to the shared `settingsDialog.open` flag so the FAB / settings
    * icon opens this on mobile and the desktop SettingsDialog on desktop.
    *
@@ -37,10 +41,12 @@
     pluginSettingsCategory,
     pluginSettingsSectionsFor
   } from '$lib/plugins/settings-bridge';
-  import { allPlugins } from '$lib/plugins/registry.svelte';
+  import { allPlugins, pluginById } from '$lib/plugins/registry.svelte';
+  import { resolvePluginStringOptional } from '$lib/plugins/plugin-i18n';
   import { closeNavOverlay, openNavOverlay } from './state.svelte';
 
   let activeCategoryId = $state<string | null>(null);
+  let activePluginId = $state<string | null>(null);
 
   // Include the synthetic "Plugins" category whenever any plugin is installed
   // (it hosts the management overview even for plugins with no settings).
@@ -70,6 +76,42 @@
   $effect(() => {
     if (!settingsDialog.open) activeCategoryId = null;
   });
+  // A plugin page only lives inside the Plugins category.
+  $effect(() => {
+    if (activeCategoryId !== PLUGINS_CATEGORY_ID) activePluginId = null;
+  });
+
+  const isPluginsCategory = $derived(
+    activeCategory?.id === PLUGINS_CATEGORY_ID
+  );
+  /** Sections of the current page: one plugin's, or the category's own. */
+  const pageSections = $derived.by(() => {
+    if (!activeCategory) return [];
+    if (isPluginsCategory) {
+      return activePluginId ? pluginSettingsSectionsFor(activePluginId) : [];
+    }
+    return activeCategory.sections;
+  });
+  const pageTitle = $derived.by(() => {
+    if (!activeCategory) return '';
+    if (isPluginsCategory && activePluginId) {
+      return pluginById(activePluginId)?.manifest.name ?? activePluginId;
+    }
+    return tLabel('categories', activeCategory.id);
+  });
+  const pageDescription = $derived.by<string | undefined>(() => {
+    if (!(isPluginsCategory && activePluginId)) return undefined;
+    return resolvePluginStringOptional(
+      activePluginId,
+      pluginById(activePluginId)?.manifest.descriptionKey
+    );
+  });
+
+  /** Back steps plugin page → plugin list → category list. */
+  function back() {
+    if (activePluginId) activePluginId = null;
+    else activeCategoryId = null;
+  }
 
   // Honor a deep-link requested via openSettings('<category>') — e.g. a
   // notification jumping to Plugins. Consumed once.
@@ -103,25 +145,24 @@
     }
   });
 
+  // One more nav-stack level for a plugin page, so system back returns to
+  // the plugin list first.
+  const PLUGIN_NAV_ID = 'mobile-settings-plugin';
+  let pluginNavHeld = false;
+  $effect(() => {
+    const onPlugin = settingsDialog.open && activePluginId !== null;
+    if (onPlugin && !pluginNavHeld) {
+      pluginNavHeld = true;
+      openNavOverlay(PLUGIN_NAV_ID, () => (activePluginId = null));
+    } else if (!onPlugin && pluginNavHeld) {
+      pluginNavHeld = false;
+      closeNavOverlay(PLUGIN_NAV_ID);
+    }
+  });
+
   function categoryIcon(name: string | undefined) {
     if (!name) return FALLBACK_ICON;
     return SETTINGS_ICONS[name] ?? FALLBACK_ICON;
-  }
-
-  /**
-   * The gear on a plugin row jumps to its settings. Mobile has no separate
-   * per-plugin pane — every enabled plugin's sections already render below the
-   * overview on the same scroll — so "open settings" scrolls that plugin's
-   * first section into view.
-   */
-  function scrollToPluginSettings(id: string): void {
-    const sec = pluginSettingsSectionsFor(id)[0];
-    if (!sec) return;
-    requestAnimationFrame(() => {
-      document
-        .getElementById(`plugins-section-${sec.id}`)
-        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
   }
 
   let contentEl = $state<HTMLElement | null>(null);
@@ -197,14 +238,14 @@
           <button
             type="button"
             class="flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            onclick={() => (activeCategoryId = null)}
+            onclick={back}
             aria-label={tUi('back')}
             title={tUi('back')}
           >
             <ArrowLeft class="size-5" />
           </button>
           <Dialog.Title class="truncate text-center text-base font-semibold">
-            {tLabel('categories', activeCategory.id)}
+            {pageTitle}
           </Dialog.Title>
           <Dialog.Close
             class="flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -215,17 +256,23 @@
         </header>
 
         <section class="flex-1 overflow-y-auto pb-6">
-          {#if activeCategory.id === PLUGINS_CATEGORY_ID}
-            <!-- Management overview first, then each enabled plugin's sections. -->
+          {#if isPluginsCategory && !activePluginId}
+            <!-- The plugin list; each plugin's gear opens its own page. -->
             <div class="px-4 pt-6">
-              <PluginsOverview onOpenSettings={scrollToPluginSettings} />
+              <PluginsOverview
+                onOpenSettings={(id: string) => (activePluginId = id)}
+              />
             </div>
-          {:else if visibleSettings(activeCategory).length === 0}
+          {:else if pageDescription}
+            <p class="px-4 pt-6 text-sm text-muted-foreground">
+              {pageDescription}
+            </p>
+          {:else if !isPluginsCategory && visibleSettings(activeCategory).length === 0}
             <p class="px-4 py-6 text-center text-sm text-muted-foreground">
               {tUi('empty')}
             </p>
           {/if}
-          {#each activeCategory.sections as sec (sec.id)}
+          {#each pageSections as sec (sec.id)}
             {@const sectionSettings = isSectionVisible(sec)
               ? sec.settings.filter((s) => isVisible(s))
               : []}
@@ -246,18 +293,11 @@
               </div>
             {/if}
           {/each}
-          {#if activeCategory.id === PLUGINS_CATEGORY_ID}
-            {#each allPlugins() as plugin (plugin.manifest.id)}
-              {#if plugin.enabled && (plugin.manifest.contributes.nativeTools ?? []).length > 0}
-                <div
-                  class="mb-6 px-4 pt-6"
-                  id="plugins-nativetools-{plugin.manifest.id}"
-                >
-                  <PluginNativeToolsSection pluginId={plugin.manifest.id} />
-                  <PluginTextCheckersSection pluginId={plugin.manifest.id} />
-                </div>
-              {/if}
-            {/each}
+          {#if isPluginsCategory && activePluginId}
+            <div class="mb-6 px-4 pt-6">
+              <PluginNativeToolsSection pluginId={activePluginId} />
+              <PluginTextCheckersSection pluginId={activePluginId} />
+            </div>
           {/if}
         </section>
       {/if}
