@@ -47,6 +47,7 @@ import {
   searchActiveNote
 } from './bus.svelte';
 import { openShortcutHelp } from './help.svelte';
+import { isMac } from './platform';
 import { pluginHotkeyCommands } from '$lib/plugins/hotkeys';
 import {
   openRightSidebar,
@@ -264,6 +265,16 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     scope: 'global',
     labelKey: 'hotkeys.command.global.redo',
     defaultBinding: 'mod+shift+z',
+    run: () => runActiveEditorCommand(APP_REDO_COMMAND, ui.activeNoteId)
+  },
+  {
+    id: 'global.redoAlternate',
+    scope: 'global',
+    labelKey: 'hotkeys.command.global.redoAlternate',
+    // Ctrl+Y is the usual second redo chord on Windows and Linux. On
+    // macOS Cmd+Y belongs to other things (browser history), so it
+    // stays unbound there.
+    defaultBinding: isMac() ? null : 'mod+y',
     run: () => runActiveEditorCommand(APP_REDO_COMMAND, ui.activeNoteId)
   },
   {

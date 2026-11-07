@@ -265,5 +265,10 @@ describe('catalogue consistency', () => {
       scope: 'global',
       defaultBinding: 'mod+shift+z'
     });
+    // jsdom reports a non-Mac platform, so Ctrl+Y redoes as well.
+    expect(commandById('global.redoAlternate')).toMatchObject({
+      scope: 'global',
+      defaultBinding: 'mod+y'
+    });
   });
 });

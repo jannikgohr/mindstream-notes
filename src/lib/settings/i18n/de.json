@@ -510,6 +510,7 @@
     "hotkeys.command.global.searchActiveNote": "Aktive Notiz durchsuchen",
     "hotkeys.command.global.undo": "Rückgängig",
     "hotkeys.command.global.redo": "Wiederholen",
+    "hotkeys.command.global.redoAlternate": "Wiederholen (alternatives Tastenkürzel)",
     "hotkeys.command.global.toggleNoteOverview": "Notizübersicht ein-/ausblenden",
     "hotkeys.command.global.toggleNoteMetadata": "Rechte Seitenleiste ein-/ausblenden",
     "hotkeys.command.global.addTag": "Tag hinzufügen",
