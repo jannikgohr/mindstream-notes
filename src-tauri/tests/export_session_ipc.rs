@@ -270,11 +270,19 @@ fn a_staged_export_needs_valid_save_options_and_cleans_up_either_way() {
 #[test]
 fn abort_drops_the_staged_files_and_tolerates_unknown_tokens() {
     let fixture = Fixture::new();
+    // A file still half written, as after a failed chunk.
+    let file = fixture.begin(json!({ "kind": "file" }));
+    fixture
+        .write(&file, "Note.pdf", true, 10, b"%PDF", false)
+        .unwrap();
     let token = fixture.begin(json!({ "kind": "archive" }));
     fixture
         .write(&token, "Note.md", true, 1, b"x", false)
         .unwrap();
-    assert_eq!(fixture.staged_sessions(), 1);
+    assert_eq!(fixture.staged_sessions(), 2);
+    fixture
+        .json("export_abort", json!({ "token": file }))
+        .unwrap();
     fixture
         .json("export_abort", json!({ "token": token }))
         .unwrap();
@@ -289,14 +297,21 @@ fn abort_drops_the_staged_files_and_tolerates_unknown_tokens() {
 }
 
 #[test]
-fn a_new_export_sweeps_staging_left_by_a_crash_but_keeps_live_sessions() {
+fn the_first_staged_export_sweeps_what_a_crash_left_but_never_a_live_export() {
     let fixture = Fixture::new();
-    let live = fixture.begin(json!({ "kind": "archive" }));
     let stale = fixture.staging().join("left-by-a-crash");
     std::fs::create_dir_all(&stale).unwrap();
-    let _next = fixture.begin(json!({ "kind": "file" }));
+    let first = fixture.begin(json!({ "kind": "archive" }));
     assert!(!stale.exists());
-    assert!(fixture.staging().join(&live).exists());
+    fixture
+        .write(&first, "Note.md", true, 1, b"x", false)
+        .unwrap();
+
+    // Starting more exports leaves the first one's staged files alone.
+    let _second = fixture.begin(json!({ "kind": "file" }));
+    let _third = fixture.begin(json!({ "kind": "archive" }));
+    assert!(fixture.staging().join(&first).join("export.zip").exists());
+    assert_eq!(fixture.staged_sessions(), 3);
 }
 
 #[test]

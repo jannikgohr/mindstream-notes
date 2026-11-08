@@ -178,17 +178,22 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
         streamVaultExport
       } = await import('$lib/notes-export');
       const destination = root;
+      const picked = browserFile;
+      // From here on the stream owns the picked file and discards it itself.
+      browserFile = undefined;
       const report =
         destination !== null
           ? await exportVaultToFolder(destination)
           : isTauri()
             ? await saveVaultArchive()
-            : browserFile
-              ? await streamVaultExport(browserFile)
+            : picked
+              ? await streamVaultExport(picked)
               : await downloadVaultExport();
       if (report === null) return;
       await showExportResult(report, destination);
     } catch (err) {
+      // Failed before the stream took the picked file over: discard it here.
+      await browserFile?.abort();
       console.error('[settings] export-vault failed', err);
       await alert({
         title: tUi('data.exportVault.failed.title'),
