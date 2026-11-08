@@ -174,19 +174,20 @@ fn a_dirty_row_with_its_own_edits_keeps_its_rendering() {
     assert_eq!(dirty, 1);
 }
 
-/// A device pushed the merged CRDT with a body it could not render, then an
-/// editor here saved the correct rendering of that same state.
-fn repaired_note(db: &Db, local_modified: &str) -> NotePayload {
+const FULL_BODY: &str = "Heyo Ichi\n\nFor the year and a bit\n";
+const STALE_BODY: &str = "Heyo Ichi\n";
+
+/// Both sides hold the same CRDT, rendered once in full and once stale: a
+/// device pushed the merged state with a body it could not render.
+fn same_state_note(
+    db: &Db,
+    local_body: &str,
+    local_modified: &str,
+    remote_body: &str,
+) -> NotePayload {
     let state = desktop_state(&yrs_doc::editor_state_for_tests("Heyo Ichi"));
     db.with_conn(|c| {
-        insert_note(
-            c,
-            "note_ichi",
-            "Heyo Ichi\n\nFor the year and a bit\n",
-            &state,
-            Some("uid"),
-            1,
-        );
+        insert_note(c, "note_ichi", local_body, &state, Some("uid"), 1);
         c.execute(
             "UPDATE notes SET modified = ?1 WHERE id = 'note_ichi'",
             params![local_modified],
@@ -195,7 +196,7 @@ fn repaired_note(db: &Db, local_modified: &str) -> NotePayload {
     })
     .unwrap();
     let mut remote = remote_note("note_ichi", None, None);
-    remote.body = "Heyo Ichi\n".into();
+    remote.body = remote_body.into();
     remote.yrs_state = state;
     remote.modified = Some("2026-05-02T12:00:00Z".into());
     remote
@@ -203,27 +204,28 @@ fn repaired_note(db: &Db, local_modified: &str) -> NotePayload {
 
 #[test]
 fn an_editor_repair_of_the_same_state_survives_the_next_pull() {
+    // The remote is the newer copy by its stamp, as after a rename there.
     let db = open_memory_for_tests();
-    let remote = repaired_note(&db, "2026-05-03T08:00:00+00:00");
+    let remote = same_state_note(&db, FULL_BODY, "2026-04-01T08:00:00+00:00", STALE_BODY);
     apply_note_payload(&db, &remote, "uid", "etag_2", None, true).unwrap();
 
     let (body, dirty) = body_and_dirty(&db, "note_ichi");
     assert_eq!(
-        body, "Heyo Ichi\n\nFor the year and a bit\n",
-        "the later rendering of the shared state goes up, not the stale one"
+        body, FULL_BODY,
+        "the full rendering goes up, not the stale one"
     );
     assert_eq!(dirty, 1);
 }
 
 #[test]
-fn an_older_rendering_of_the_same_state_takes_the_remote_one() {
-    // A server switch dirties every row without anything being rendered.
+fn a_stale_local_rendering_takes_the_repaired_remote_one() {
+    // The stale side renamed the note after the repair, so its stamp is newer.
     let db = open_memory_for_tests();
-    let remote = repaired_note(&db, "2026-04-01T08:00:00+00:00");
+    let remote = same_state_note(&db, STALE_BODY, "2026-05-03T08:00:00+00:00", FULL_BODY);
     apply_note_payload(&db, &remote, "uid", "etag_2", None, true).unwrap();
 
     let (body, _) = body_and_dirty(&db, "note_ichi");
-    assert_eq!(body, "Heyo Ichi\n");
+    assert_eq!(body, FULL_BODY);
 }
 
 fn insert_asset(conn: &Connection, scope: Option<&str>) {

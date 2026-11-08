@@ -175,14 +175,19 @@ pub(in crate::sync) fn apply_note_payload(
         // Both sides hold the same CRDT but different renderings of it. One
         // of them is the stale body a device pushed after merging edits it
         // could not render, the other an editor's later save of that state.
-        // The later rendering wins, so an editor's repair is not undone by
-        // the pull that follows it.
-        let local_renders_later = existing.as_ref().is_some_and(|local| {
+        // The stale one was rendered before some of the state's text existed,
+        // so it holds less of it; the fuller rendering wins, and an editor's
+        // repair is not undone by the pull that follows it. Timestamps cannot
+        // tell them apart: a rename or a move also moves `modified`.
+        let local_renders_more = existing.as_ref().is_some_and(|local| {
             !local_adds_content
                 && local.schema == incoming_schema
                 && local.body != payload.body
                 && yrs_doc::contains_state(&local.yrs_state, &payload.yrs_state)
-                && rendered_later(&local.modified, payload.modified.as_deref())
+                && {
+                    let live = yrs_doc::live_strings(&payload.yrs_state);
+                    rendered_share(&live, &local.body) > rendered_share(&live, &payload.body)
+                }
         });
         // For v2 payloads the remote ships the rendered markdown alongside
         // the prosemirror state — Rust can't render markdown from XmlFragment.
@@ -199,9 +204,9 @@ pub(in crate::sync) fn apply_note_payload(
         // Still open: when BOTH sides carry edits, neither rendering matches
         // the merged state, and the local one is kept until an editor saves
         // the note again. That save leaves the states equal, and
-        // `local_renders_later` keeps it through the next pull.
+        // `local_renders_more` keeps it through the next pull.
         let body = if payload.schema >= 2 {
-            if keep_local_meta && (local_adds_content || local_renders_later) {
+            if keep_local_meta && (local_adds_content || local_renders_more) {
                 existing
                     .as_ref()
                     .map(|local| local.body.clone())
@@ -405,15 +410,13 @@ pub(in crate::sync) fn apply_note_payload(
     })
 }
 
-/// Whether the local `modified` stamp is later than the remote one. A remote
-/// copy without a readable stamp counts as older; an unreadable local stamp
-/// never wins.
-fn rendered_later(local: &str, remote: Option<&str>) -> bool {
-    let Ok(local) = chrono::DateTime::parse_from_rfc3339(local) else {
-        return false;
-    };
-    match remote.map(chrono::DateTime::parse_from_rfc3339) {
-        Some(Ok(remote)) => local > remote,
-        _ => true,
-    }
+/// How many of the state's live strings (one per line, see
+/// [`yrs_doc::live_strings`]) appear in `body`. Formatting and escaping can
+/// keep a string from appearing verbatim, but they do so for every rendering
+/// of the same state alike.
+fn rendered_share(live: &str, body: &str) -> usize {
+    live.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && body.contains(line))
+        .count()
 }
