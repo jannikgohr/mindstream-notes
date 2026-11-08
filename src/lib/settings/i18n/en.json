@@ -186,6 +186,8 @@
     "data.importNotes.kind.evernote": "Evernote (.enex)",
     "data.importNotes.running.scanning": "Scanning the source…",
     "data.importNotes.running.counted": "Imported {done} of {total} notes",
+    "data.importNotes.running.title": "Importing notes",
+    "data.importNotes.running.waits": "Mindstream waits for the import to finish before it saves anything else. If you stop it, nothing is imported.",
     "data.importNotes.button.cancel": "Cancel",
     "data.importNotes.button.import": "Import",
     "data.importNotes.button.stop": "Stop",

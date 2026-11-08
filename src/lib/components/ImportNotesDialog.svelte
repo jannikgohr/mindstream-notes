@@ -26,6 +26,7 @@
   import { tree } from '$lib/stores/tree.svelte';
   import { formatBytes } from '$lib/utils';
   import { importNotesQueue } from './import-notes-dialog.svelte';
+  import { importActivity } from '$lib/storage/import-activity.svelte';
   import {
     folderOptions,
     sourceKindLabelKey,
@@ -66,6 +67,15 @@
     maxAttachmentBytes = api.DEFAULT_MAX_ATTACHMENT_BYTES;
     unresolvedLinks = 'plain-text';
     destination = null;
+  });
+
+  // This dialog shows the progress in its window; other windows show
+  // `ImportProgressOverlay`.
+  $effect(() => {
+    importActivity.shownByDialog = stage === 'running';
+    return () => {
+      importActivity.shownByDialog = false;
+    };
   });
 
   // Progress arrives as an app event because the run is a single long command;
@@ -351,6 +361,9 @@
             style={`width: ${percent ?? 5}%`}
           ></div>
         </div>
+        <p class="mt-3 text-xs text-muted-foreground">
+          {tUi('data.importNotes.running.waits')}
+        </p>
       {/if}
 
       {#if errorMessage}

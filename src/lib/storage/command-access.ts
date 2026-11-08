@@ -51,6 +51,7 @@ const COMMAND_ACCESS: Record<`${TauriCommandName}`, CommandAccess> = {
   plugins_preview_stop: 'exempt',
   plugins_run_native_tool: 'exempt',
   notes_import_cancel: 'exempt',
+  notes_import_running: 'exempt',
 
   // Dialogs, folders and files the user picked, outside the vault.
   open_data_folder: 'exempt',

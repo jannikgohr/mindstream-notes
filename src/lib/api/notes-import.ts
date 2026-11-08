@@ -212,6 +212,12 @@ async function runBrowserImport(
     return { ...EMPTY_REPORT, cancelled: true };
   } finally {
     running = null;
+    // As the app's import command does, however the run ended.
+    void emit(TauriEventName.ImportProgress, {
+      phase: 'finished',
+      done: 0,
+      total: 0
+    });
   }
 }
 
