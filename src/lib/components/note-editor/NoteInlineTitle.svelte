@@ -40,6 +40,21 @@
   $effect(() => {
     void document.fonts?.ready.then(fit);
   });
+  // A narrower pane wraps the title onto more lines, and a title measured
+  // while its pane was hidden (Source mode) has no height at all. Only width
+  // changes count: fit() itself changes the height.
+  $effect(() => {
+    if (!field || typeof ResizeObserver === 'undefined') return;
+    let width = -1;
+    const observer = new ResizeObserver(([entry]) => {
+      const next = entry.contentRect.width;
+      if (next === width) return;
+      width = next;
+      fit();
+    });
+    observer.observe(field);
+    return () => observer.disconnect();
+  });
 
   async function commit() {
     if (draft === null) return;
