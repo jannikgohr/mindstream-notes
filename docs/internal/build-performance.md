@@ -393,3 +393,17 @@ cache from the previous release profile. The recipe hash now goes directly into
 `shared-key`. This first corrected run will populate the separate cache; a
 subsequent run must verify reuse before claiming a warm packaged-build speedup.
 Compiler settings and guest cache recipes stay unchanged.
+
+All 22 checks passed on `203bb29b`. The E2E job used the corrected cache key,
+compiled its dependencies on a cache miss and uploaded the new cache. The
+development repeat reused all artifacts in 0.46s. All three TypeScript fixture
+components were cache hits on both Windows and macOS.
+
+### Round 4: warm-cache confirmation
+
+The final confirmation changes reporting only. Native and packaged build jobs
+now display retained per-fixture durations and cache hits in the Actions summary.
+The reports identify their output directories and can describe earlier builds
+if Cargo reuses those directories. Compiler inputs and cache recipes stay the
+same so the packaged build can restore the cache populated in round 3. Compare
+its Cargo timing report and actual restored key before interpreting elapsed time.
