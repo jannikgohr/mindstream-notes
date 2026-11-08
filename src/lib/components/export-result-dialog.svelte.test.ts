@@ -131,6 +131,13 @@ describe('showBackupResult', () => {
     expect(exportResultQueue.items[0].location).toBeUndefined();
   });
 
+  it('does not offer to open an Android document URI as a folder', () => {
+    void showBackupResult(
+      report({ destination: 'content://provider/document/backup.zip' })
+    );
+    expect(exportResultQueue.items[0].location).toBeUndefined();
+  });
+
   it('derives the open location from the destination parent dir', () => {
     void showBackupResult(report());
     const loc = exportResultQueue.items[0].location;

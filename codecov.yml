@@ -23,6 +23,10 @@ coverage:
     patch:
       default:
         informational: false
+        # New lines need 80% coverage, the same floor the Rust coverage script
+        # enforces. Without a target Codecov uses `auto`, which demands the
+        # whole project's coverage of every change.
+        target: 80%
 
 comment:
   layout: 'reach, diff, flags, files'

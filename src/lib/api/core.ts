@@ -82,6 +82,12 @@ export enum TauriCommandName {
   EtebaseLogin = 'etebase_login',
   EtebaseLogout = 'etebase_logout',
   EtebaseSession = 'etebase_session',
+  ExportAbort = 'export_abort',
+  ExportAssetTypes = 'export_asset_types',
+  ExportBegin = 'export_begin',
+  ExportCopyAsset = 'export_copy_asset',
+  ExportFinish = 'export_finish',
+  ExportWrite = 'export_write',
   FetchDrawingAsset = 'fetch_drawing_asset',
   FetchAssetBytes = 'fetch_asset_bytes',
   UploadAssetBytes = 'upload_asset_bytes',
@@ -136,7 +142,6 @@ export enum TauriCommandName {
   NoteRoomTicket = 'note_room_ticket',
   NoteWordCount = 'note_word_count',
   NotesExportPickDir = 'notes_export_pick_dir',
-  NotesExportWriteFile = 'notes_export_write_file',
   NotesImportCancel = 'notes_import_cancel',
   NotesImportDetect = 'notes_import_detect',
   NotesImportPickFile = 'notes_import_pick_file',
@@ -182,8 +187,6 @@ export enum TauriCommandName {
   RestoreMany = 'restore_many',
   RestoreNote = 'restore_note',
   SaveNote = 'save_note',
-  SavePdfExport = 'save_pdf_export',
-  SaveFileExport = 'save_file_export',
   SaveSignature = 'save_signature',
   SearchNotes = 'search_notes',
   SetCloseToTray = 'set_close_to_tray',
@@ -238,6 +241,25 @@ export async function invokeTauri<T>(
 ): Promise<T> {
   if (commandWrites(command)) await requireVaultAccess(command);
   return tauriInvoke<T>(command, args);
+}
+
+/**
+ * Send file bytes without expanding them into a JSON number array: a
+ * four-byte little-endian metadata length, JSON metadata, then the bytes.
+ * Rust decodes it with `assets::binary::decode`. Android's bridge still
+ * turns the body into JSON, so callers keep each payload small.
+ */
+export async function invokeFile<T>(
+  command: TauriCommandName,
+  input: Record<string, unknown>,
+  bytes: Uint8Array
+): Promise<T> {
+  const metadata = new TextEncoder().encode(JSON.stringify(input));
+  const payload = new Uint8Array(4 + metadata.length + bytes.length);
+  new DataView(payload.buffer).setUint32(0, metadata.length, true);
+  payload.set(metadata, 4);
+  payload.set(bytes, 4 + metadata.length);
+  return invokeTauri<T>(command, payload);
 }
 
 export async function invokeOrFallback<T>(
