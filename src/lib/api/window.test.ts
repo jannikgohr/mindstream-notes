@@ -12,7 +12,11 @@ const fixture = vi.hoisted(() => ({
   close: vi.fn(),
   decorations: vi.fn(),
   existing: vi.fn(),
-  emitTo: vi.fn()
+  emitTo: vi.fn(),
+  saveEditors: vi.fn()
+}));
+vi.mock('$lib/editor/suspend-flush', () => ({
+  flushPendingEditorSaves: fixture.saveEditors
 }));
 vi.mock('./core', () => ({ isTauri: () => true }));
 vi.mock('./events', () => ({
@@ -47,6 +51,7 @@ beforeEach(() => {
   fixture.handlers.clear();
   fixture.existing.mockResolvedValue(null);
   fixture.decorations.mockResolvedValue(true);
+  fixture.saveEditors.mockResolvedValue(undefined);
 });
 
 function source() {
@@ -103,6 +108,26 @@ it('detaches after successful creation and restores once even if the group disap
     title: panel.title
   });
   expect(fixture.close).not.toHaveBeenCalled();
+});
+
+it('saves the docked editor before the popout loads the note', async () => {
+  const { group, api } = source();
+  fixture.saveEditors.mockImplementation(async () => {
+    expect(fixture.options).not.toHaveBeenCalled();
+  });
+  await openNoteWindow('note_one', 'Disposable note', group, api);
+  expect(fixture.saveEditors).toHaveBeenCalledTimes(1);
+  expect(fixture.options).toHaveBeenCalledTimes(1);
+});
+
+it('keeps the tab and opens no window when that save fails', async () => {
+  const { group, dock, api } = source();
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  fixture.saveEditors.mockRejectedValue(new Error('disk full'));
+  await openNoteWindow('note_one', 'Disposable note', group, api);
+  expect(fixture.options).not.toHaveBeenCalled();
+  expect(dock.removePanel).not.toHaveBeenCalled();
+  log.mockRestore();
 });
 
 it('does not remove a replacement panel if the source changed during creation', async () => {
