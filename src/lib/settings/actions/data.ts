@@ -8,6 +8,13 @@
  */
 
 import { tick } from 'svelte';
+import { isMobile } from '$lib/platform';
+import { restartToApply } from '$lib/app-restart';
+import {
+  pickBrowserSaveFile,
+  type BrowserSaveFile
+} from '$lib/api/file-export';
+import { vaultArchiveName } from '$lib/notes-export/archive-name';
 import {
   backupNow,
   convertLegacyWikilinks,
@@ -19,8 +26,7 @@ import {
   isTauri,
   openDataFolder,
   pickExportDir,
-  trashCounts,
-  writeExportFile
+  trashCounts
 } from '$lib/api';
 import {
   emptyTrash as emptyTrashStore,
@@ -128,9 +134,21 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
     }
   },
   'export-vault': async () => {
+    const folderExport = isTauri() && !isMobile();
     let root: string | null = null;
+    // A browser with a save picker streams the archive to disk. Ask first,
+    // while the click still counts as the gesture the picker requires.
+    let browserFile: BrowserSaveFile | null | undefined;
     try {
-      if (isTauri()) root = await pickExportDir();
+      if (folderExport) root = await pickExportDir();
+      else if (!isTauri()) {
+        browserFile = await pickBrowserSaveFile({
+          suggestedName: vaultArchiveName(),
+          description: tUi('data.exportVault.saveDialog.filter'),
+          mime: 'application/zip',
+          extension: '.zip'
+        });
+      }
     } catch (err) {
       console.error('[settings] export-vault picker failed', err);
       await alert({
@@ -142,8 +160,8 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
       });
       return;
     }
-    if (isTauri() && !root) {
-      // User cancelled the folder picker — stay quiet.
+    if ((folderExport && !root) || browserFile === null) {
+      // User cancelled the folder or save picker — stay quiet.
       return;
     }
     try {
@@ -153,17 +171,29 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
       const { flushPendingEditorSaves } =
         await import('$lib/editor/suspend-flush');
       await flushPendingEditorSaves();
-      const { downloadVaultExport, exportVault } =
-        await import('$lib/notes-export');
+      const {
+        downloadVaultExport,
+        exportVaultToFolder,
+        saveVaultArchive,
+        streamVaultExport
+      } = await import('$lib/notes-export');
       const destination = root;
+      const picked = browserFile;
+      // From here on the stream owns the picked file and discards it itself.
+      browserFile = undefined;
       const report =
-        destination === null
-          ? await downloadVaultExport()
-          : await exportVault((path, bytes) =>
-              writeExportFile(destination, path, bytes)
-            );
+        destination !== null
+          ? await exportVaultToFolder(destination)
+          : isTauri()
+            ? await saveVaultArchive()
+            : picked
+              ? await streamVaultExport(picked)
+              : await downloadVaultExport();
+      if (report === null) return;
       await showExportResult(report, destination);
     } catch (err) {
+      // Failed before the stream took the picked file over: discard it here.
+      await browserFile?.abort();
       console.error('[settings] export-vault failed', err);
       await alert({
         title: tUi('data.exportVault.failed.title'),
@@ -336,9 +366,13 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
       }
       if (staged.restart_required) {
         const action = await showRestoreReadyResult(preview, staged);
-        if (action === 'restart') {
-          const { relaunch } = await import('@tauri-apps/plugin-process');
-          await relaunch();
+        // The restore is already staged here, so a failed restart is not a
+        // failed import: the next launch swaps the backup in either way.
+        if (action === 'restart' && !(await restartToApply())) {
+          await alert({
+            title: tUi('data.import.restart.manual.title'),
+            message: tUi('data.import.restart.manual.message')
+          });
         }
       } else if (!isTauri()) {
         window.location.reload();

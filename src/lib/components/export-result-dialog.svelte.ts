@@ -200,7 +200,7 @@ export function showBackupResult(report: BackupReport): Promise<string> {
     headerIcon: 'archive',
     tone: 'success',
     location:
-      report.destination === null
+      report.destination === null || report.destination.startsWith('content://')
         ? undefined
         : {
             labelKey: 'data.backupNow.savedTo',

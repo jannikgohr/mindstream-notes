@@ -17,7 +17,7 @@ pub(super) fn default_backup_dir(app: &AppHandle) -> AppResult<PathBuf> {
 /// the user cancels — distinct from an error — so the JS side stays
 /// quiet (no error toast for a deliberate cancel).
 ///
-/// Mirrors the dialog-then-write pattern in `pdf_export.rs`.
+/// Same dialog-then-write shape as the export session's `export_finish`.
 #[tauri::command]
 pub async fn backup_now(app: AppHandle) -> CommandResult<Option<BackupReport>> {
     backup_now_inner(app).await.map_err(Into::into)
@@ -46,6 +46,7 @@ pub(super) async fn backup_now_inner(app: AppHandle) -> AppResult<Option<BackupR
     let Some(file_path) = rx.await.map_err(|e| AppError::InvalidArg(e.to_string()))? else {
         return Ok(None);
     };
+    #[cfg(not(target_os = "android"))]
     let destination = file_path
         .into_path()
         .map_err(|e| AppError::InvalidArg(format!("path conversion: {e}")))?;
@@ -56,10 +57,37 @@ pub(super) async fn backup_now_inner(app: AppHandle) -> AppResult<Option<BackupR
     // async dialog future stays cooperative. Reach for the Db state
     // inside the closure since `tauri::State` isn't `Send`.
     let app_for_blocking = app.clone();
-    let report = tauri::async_runtime::spawn_blocking(move || {
+    let report = tauri::async_runtime::spawn_blocking(move || -> AppResult<BackupReport> {
         let _job = job;
         let db = app_for_blocking.state::<Db>();
-        db.with_conn_mut(|conn| run_backup(&app_for_blocking, conn, &destination, session.as_ref()))
+        #[cfg(not(target_os = "android"))]
+        {
+            db.with_conn_mut(|conn| {
+                run_backup(&app_for_blocking, conn, &destination, session.as_ref())
+            })
+        }
+        #[cfg(target_os = "android")]
+        {
+            use tauri_plugin_fs::FsExt;
+
+            // Document-provider URIs are not paths. Build the archive privately,
+            // then stream it to the selected document without buffering it in RAM.
+            let directory = crate::paths::app_data_dir(&app_for_blocking)?
+                .join("backups/.staging")
+                .join(uuid::Uuid::new_v4().to_string());
+            fs::create_dir_all(&directory)?;
+            let _cleanup = DirectoryCleanup(directory.clone());
+            let destination = directory.join("backup.zip");
+            let mut report = db.with_conn_mut(|conn| {
+                run_backup(&app_for_blocking, conn, &destination, session.as_ref())
+            })?;
+            let mut options = tauri_plugin_fs::OpenOptions::new();
+            options.write(true).create(true).truncate(true);
+            let mut output = app_for_blocking.fs().open(file_path.clone(), options)?;
+            crate::export_session::stream_copy(&destination, &mut output)?;
+            report.destination = file_path.to_string();
+            Ok(report)
+        }
     })
     .await
     .map_err(|e| AppError::InvalidArg(format!("backup task: {e}")))??;

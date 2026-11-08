@@ -1,9 +1,5 @@
-import {
-  assertBoolean,
-  invokeOrFallback,
-  isTauri,
-  TauriCommandName
-} from './core';
+import { isTauri } from './core';
+import { saveFileNatively } from './export-session';
 
 export interface SaveFileExportArgs {
   suggestedName: string;
@@ -34,28 +30,82 @@ export function downloadBlob(blob: Blob, filename: string): void {
 export async function saveFileExport(
   args: SaveFileExportArgs
 ): Promise<boolean> {
-  return invokeOrFallback(
-    TauriCommandName.SaveFileExport,
-    // Tauri needs a number array, one element per byte. A browser never sends
-    // it, and for a large file building it could cost the tab its memory.
-    isTauri()
-      ? {
-          input: {
-            suggestedName: args.suggestedName,
-            dialogTitle: args.dialogTitle,
-            bytes: Array.from(args.bytes),
-            filterName: args.filterName,
-            extensions: args.extensions
-          }
+  if (!isTauri()) {
+    downloadBlob(
+      new Blob([args.bytes.slice().buffer], { type: args.mime }),
+      args.suggestedName
+    );
+    return true;
+  }
+  return saveFileNatively({
+    suggestedName: args.suggestedName,
+    dialogTitle: args.dialogTitle,
+    filterName: args.filterName,
+    extensions: args.extensions,
+    bytes: args.bytes
+  });
+}
+
+/** A file the user picked in the browser, written in chunks. */
+export interface BrowserSaveFile {
+  write(chunk: Uint8Array): Promise<void>;
+  close(): Promise<void>;
+  /** Discard what was written. Never throws. */
+  abort(): Promise<void>;
+}
+
+interface WritableFile {
+  write(data: Uint8Array): Promise<void>;
+  close(): Promise<void>;
+  abort(): Promise<void>;
+}
+
+type SaveFilePicker = (options: {
+  suggestedName: string;
+  types: { description: string; accept: Record<string, string[]> }[];
+}) => Promise<{ createWritable(): Promise<WritableFile> }>;
+
+/**
+ * Ask where to save a file with the browser's File System Access picker, so
+ * a large export can stream to disk instead of building up in memory.
+ * Resolves `undefined` when the browser has no such picker and `null` when
+ * the user cancels it. Call it straight from the click: browsers only open
+ * the picker during a user gesture.
+ */
+export async function pickBrowserSaveFile(options: {
+  suggestedName: string;
+  description: string;
+  mime: string;
+  extension: string;
+}): Promise<BrowserSaveFile | null | undefined> {
+  const picker = (window as { showSaveFilePicker?: SaveFilePicker })
+    .showSaveFilePicker;
+  if (typeof picker !== 'function') return undefined;
+  let writable: WritableFile;
+  try {
+    const handle = await picker.call(window, {
+      suggestedName: options.suggestedName,
+      types: [
+        {
+          description: options.description,
+          accept: { [options.mime]: [options.extension] }
         }
-      : undefined,
-    () => {
-      downloadBlob(
-        new Blob([args.bytes.slice().buffer], { type: args.mime }),
-        args.suggestedName
-      );
-      return true;
-    },
-    (value) => assertBoolean(value, 'save_file_export response')
-  );
+      ]
+    });
+    writable = await handle.createWritable();
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') return null;
+    throw err;
+  }
+  return {
+    write: (chunk) => writable.write(chunk),
+    close: () => writable.close(),
+    abort: async () => {
+      try {
+        await writable.abort();
+      } catch (err) {
+        console.warn('[export] could not discard the partial file', err);
+      }
+    }
+  };
 }

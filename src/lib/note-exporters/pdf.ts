@@ -86,6 +86,18 @@ interface PdfNoteSources {
   annotations: PdfAnnotation[];
 }
 
+/**
+ * Whether exporting the note draws anything onto its stored PDF: annotations,
+ * form values or ink. Without any, the export is the stored file unchanged.
+ */
+export function pdfNoteHasOverlays(note: Note): boolean {
+  return (
+    liveAnnotationsFrom(note).length > 0 ||
+    liveFormValuesFrom(note).size > 0 ||
+    sharedInkAnnotations(note.yrs_state).length > 0
+  );
+}
+
 async function loadPdfNoteSources(
   noteId: string,
   includeSharedInk = true,
