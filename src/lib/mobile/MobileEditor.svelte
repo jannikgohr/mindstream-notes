@@ -24,6 +24,13 @@
   // Published by the note's editor once it is ready; null for note kinds
   // without view modes, which then render no toggle.
   const viewModeControl = $derived(getNoteViewMode(noteId));
+  // Markdown notes show their title as the heading above the body. Other
+  // kinds have no such heading, and Source mode hides it, so the header
+  // carries the title for those.
+  const headerShowsTitle = $derived(
+    !!note &&
+      (note.note_kind !== 'markdown' || viewModeControl?.value === 'source')
+  );
   let metadataOpen = $state(false);
 
   function back() {
@@ -54,9 +61,15 @@
     >
       <ArrowLeft class="size-5" />
     </Button>
-    <!-- The note's title is the big heading at the top of the body, so the
-         bar holds only actions, each a full touch target. -->
-    <span class="min-w-0 flex-1" aria-hidden="true"></span>
+    <!-- A Markdown note's title is the big heading at the top of the body,
+         so the bar then holds only actions, each a full touch target. -->
+    {#if headerShowsTitle}
+      <span class="min-w-0 flex-1 truncate px-1 text-sm font-medium">
+        {note?.title || tUi('mobile.editor.fallbackTitle')}
+      </span>
+    {:else}
+      <span class="min-w-0 flex-1" aria-hidden="true"></span>
+    {/if}
     {#if noteId}
       <!-- Snapshot the (non-null inside this block) noteId so the click
            closure captures a plain `string` instead of the reactive

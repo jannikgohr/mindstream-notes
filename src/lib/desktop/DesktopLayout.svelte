@@ -88,6 +88,9 @@
     group: DockviewGroupPanel;
     index: number;
   } | null = null;
+  /** The pointer dragging the tab. Another finger or pen neither moves the
+   *  drop target nor ends the drag. */
+  let dragPointerId: number | null = null;
   const reduceMotion = $derived(prefersReducedMotion());
   const dockviewTheme = $derived<DockviewTheme>({
     name: 'bridge',
@@ -272,6 +275,8 @@
     ensureTabDragPin();
     dock.onWillDragPanel((event) => {
       pointerDraggedPanel = event.panel;
+      dragPointerId =
+        'pointerId' in event.nativeEvent ? event.nativeEvent.pointerId : null;
       markDragging();
     });
     dock.onWillDragGroup(() => {
@@ -459,6 +464,11 @@
     stopTabDragPin();
     pointerDraggedPanel = null;
     pointerTabDropTarget = null;
+    dragPointerId = null;
+  }
+
+  function isDragPointer(event: PointerEvent): boolean {
+    return dragPointerId === null || event.pointerId === dragPointerId;
   }
 
   function findDockGroupForElement(el: Element): DockviewGroupPanel | null {
@@ -483,7 +493,7 @@
   }
 
   function updatePointerTabDropTarget(event: PointerEvent) {
-    if (!dock || !pointerDraggedPanel) return;
+    if (!dock || !pointerDraggedPanel || !isDragPointer(event)) return;
     const strip = document
       .elementFromPoint(event.clientX, event.clientY)
       ?.closest<HTMLElement>('.dv-tabs-and-actions-container');
@@ -542,9 +552,20 @@
     }, 0);
   }
 
-  function handlePointerDragEnd() {
+  function handlePointerDragEnd(event: PointerEvent) {
+    if (!isDragPointer(event)) return;
     commitPointerTabDrop();
     clearDragging();
+  }
+
+  /** A cancelled drag leaves the tabs where they were. Dockview cancels on
+   *  the same events (see patches/dockview-core). */
+  function cancelPointerDrag(event: PointerEvent) {
+    if (isDragPointer(event)) clearDragging();
+  }
+
+  function cancelDragOnEscape(event: KeyboardEvent) {
+    if (event.key === 'Escape' && pointerDraggedPanel) clearDragging();
   }
 
   async function openTrayCreatedNote(id: string) {
@@ -772,11 +793,13 @@
         pushToast(tUi('fileDrop.unsupported'), { variant: 'error' })
     });
     // Pointer drags (dndStrategy: 'pointer') don't emit a DOM `dragend`/`drop`,
-    // so the drag terminates on pointerup/pointercancel. clearDragging is
-    // idempotent, so firing it on unrelated pointerups is harmless.
+    // so the drag ends on the dragging pointer's pointerup, and is cancelled
+    // by its pointercancel, Escape, or the window losing focus.
     window.addEventListener('pointermove', updatePointerTabDropTarget, true);
     window.addEventListener('pointerup', handlePointerDragEnd, true);
-    window.addEventListener('pointercancel', clearDragging, true);
+    window.addEventListener('pointercancel', cancelPointerDrag, true);
+    window.addEventListener('keydown', cancelDragOnEscape, true);
+    window.addEventListener('blur', clearDragging);
 
     // Reposition the tabs-overflow popup relative to whichever chevron
     // was clicked, AND give the chevron click toggle-close semantics —
@@ -813,7 +836,9 @@
         true
       );
       window.removeEventListener('pointerup', handlePointerDragEnd, true);
-      window.removeEventListener('pointercancel', clearDragging, true);
+      window.removeEventListener('pointercancel', cancelPointerDrag, true);
+      window.removeEventListener('keydown', cancelDragOnEscape, true);
+      window.removeEventListener('blur', clearDragging);
       dockHost?.removeEventListener(
         'pointerdown',
         handleChevronPointerDown,
