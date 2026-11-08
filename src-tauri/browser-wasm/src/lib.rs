@@ -39,6 +39,14 @@ const BACKUP_SNAPSHOT: &str = "/backup-snapshot.sqlite3";
 /// Where a backup waits for the user's choice in the import dialog.
 const STAGED_BACKUP: &str = "/staged-backup.sqlite3";
 
+/// Delete a scratch database along with the rollback journal a write cut off
+/// halfway leaves beside it. The pool deletes exactly the name it is given,
+/// and a stray journal would hold one of its few files until the next backup.
+fn delete_scratch(pool: &OpfsSAHPoolUtil, name: &str) {
+    let _ = pool.delete_db(name);
+    let _ = pool.delete_db(&format!("{name}-journal"));
+}
+
 /// A restore holds the vault, a staged backup and a safety snapshot at once,
 /// and each can need a journal. The pool's default of 6 would be just enough.
 const POOL_CAPACITY: u32 = 8;
@@ -188,9 +196,9 @@ impl BrowserDatabase {
     /// A snapshot and manifest in the native backup format. A snapshot left
     /// by an interrupted backup is replaced, and nothing stays behind.
     pub fn backup(&mut self) -> Result<JsValue, JsValue> {
-        let _ = self.pool.delete_db(BACKUP_SNAPSHOT);
+        delete_scratch(&self.pool, BACKUP_SNAPSHOT);
         let result = self.write_backup();
-        let _ = self.pool.delete_db(BACKUP_SNAPSHOT);
+        delete_scratch(&self.pool, BACKUP_SNAPSHOT);
         result
     }
 
@@ -414,8 +422,8 @@ impl BrowserDatabase {
         match opened {
             Ok(conn) => {
                 // A backup or import left here by a closed tab has no owner.
-                let _ = pool.delete_db(BACKUP_SNAPSHOT);
-                let _ = pool.delete_db(STAGED_BACKUP);
+                delete_scratch(&pool, BACKUP_SNAPSHOT);
+                delete_scratch(&pool, STAGED_BACKUP);
                 Ok(Self {
                     conn: Some(conn),
                     pool,
@@ -477,7 +485,7 @@ impl BrowserDatabase {
 
     fn discard_staged(&mut self) {
         self.staged = None;
-        let _ = self.pool.delete_db(STAGED_BACKUP);
+        delete_scratch(&self.pool, STAGED_BACKUP);
     }
 
     fn write_backup(&mut self) -> Result<JsValue, JsValue> {
