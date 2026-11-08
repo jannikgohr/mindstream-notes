@@ -9,6 +9,7 @@
 
 import { tick } from 'svelte';
 import { isMobile } from '$lib/platform';
+import { restartToApply } from '$lib/app-restart';
 import {
   backupNow,
   convertLegacyWikilinks,
@@ -341,9 +342,13 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
       }
       if (staged.restart_required) {
         const action = await showRestoreReadyResult(preview, staged);
-        if (action === 'restart') {
-          const { relaunch } = await import('@tauri-apps/plugin-process');
-          await relaunch();
+        // The restore is already staged here, so a failed restart is not a
+        // failed import: the next launch swaps the backup in either way.
+        if (action === 'restart' && !(await restartToApply())) {
+          await alert({
+            title: tUi('data.import.restart.manual.title'),
+            message: tUi('data.import.restart.manual.message')
+          });
         }
       } else if (!isTauri()) {
         window.location.reload();

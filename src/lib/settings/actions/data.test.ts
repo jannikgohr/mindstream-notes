@@ -10,22 +10,37 @@ const mocks = vi.hoisted(() => ({
   export: vi.fn(),
   flush: vi.fn(),
   result: vi.fn(),
-  alert: vi.fn()
+  alert: vi.fn(),
+  confirm: vi.fn(),
+  importBegin: vi.fn(),
+  importRestore: vi.fn(),
+  importCleanup: vi.fn(),
+  choice: vi.fn(),
+  restoreReady: vi.fn(),
+  restart: vi.fn()
 }));
 vi.mock('$lib/api', () => ({
   isTauri: () => mocks.native,
   pickExportDir: mocks.pick,
-  writeExportFile: mocks.write
+  writeExportFile: mocks.write,
+  importBegin: mocks.importBegin,
+  importRestore: mocks.importRestore,
+  importCleanup: mocks.importCleanup
 }));
+vi.mock('$lib/app-restart', () => ({ restartToApply: mocks.restart }));
 vi.mock('$lib/platform', () => ({ isMobile: () => mocks.mobile }));
 vi.mock('$lib/stores/tree.svelte', () => ({}));
-vi.mock('$lib/components/import-choice-dialog.svelte', () => ({}));
+vi.mock('$lib/components/import-choice-dialog.svelte', () => ({
+  pickImportChoice: mocks.choice
+}));
 vi.mock('$lib/components/import-notes-dialog.svelte', () => ({}));
 vi.mock('$lib/components/confirm-dialog.svelte', () => ({
-  alert: mocks.alert
+  alert: mocks.alert,
+  confirm: mocks.confirm
 }));
 vi.mock('$lib/components/export-result-dialog.svelte', () => ({
-  showExportResult: mocks.result
+  showExportResult: mocks.result,
+  showRestoreReadyResult: mocks.restoreReady
 }));
 vi.mock('../i18n.svelte', () => ({ tUi: (key: string) => key }));
 vi.mock('$lib/editor/suspend-flush', () => ({
@@ -100,5 +115,45 @@ describe('notes export platform routing', () => {
     await DATA_ACTIONS['export-vault']();
     expect(mocks.export).not.toHaveBeenCalled();
     expect(mocks.result).not.toHaveBeenCalled();
+  });
+});
+
+describe('restore restart', () => {
+  const preview = { token: 't', same_account: false };
+
+  beforeEach(() => {
+    mocks.native = true;
+    mocks.importBegin.mockResolvedValue(preview);
+    mocks.choice.mockResolvedValue('restore');
+    mocks.confirm.mockResolvedValue(true);
+    mocks.importRestore.mockResolvedValue({ restart_required: true });
+    mocks.restoreReady.mockResolvedValue('restart');
+  });
+
+  it('restarts through the platform helper once the backup is staged', async () => {
+    mocks.restart.mockResolvedValue(true);
+    await DATA_ACTIONS['restore-backup']();
+    expect(mocks.restart).toHaveBeenCalledOnce();
+    expect(mocks.alert).not.toHaveBeenCalled();
+    expect(mocks.importCleanup).not.toHaveBeenCalled();
+  });
+
+  it('asks for a manual restart instead of reporting a failed import', async () => {
+    mocks.restart.mockResolvedValue(false);
+    await DATA_ACTIONS['restore-backup']();
+    expect(mocks.alert).toHaveBeenCalledOnce();
+    expect(mocks.alert).toHaveBeenCalledWith({
+      title: 'data.import.restart.manual.title',
+      message: 'data.import.restart.manual.message'
+    });
+    // The staged restore must survive for the next launch to apply.
+    expect(mocks.importCleanup).not.toHaveBeenCalled();
+  });
+
+  it('does not restart when the user picks Later', async () => {
+    mocks.restoreReady.mockResolvedValue('later');
+    await DATA_ACTIONS['restore-backup']();
+    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(mocks.alert).not.toHaveBeenCalled();
   });
 });
