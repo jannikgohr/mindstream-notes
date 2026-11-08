@@ -84,7 +84,7 @@ pub(super) async fn backup_now_inner(app: AppHandle) -> AppResult<Option<BackupR
             let mut options = tauri_plugin_fs::OpenOptions::new();
             options.write(true).create(true).truncate(true);
             let mut output = app_for_blocking.fs().open(file_path.clone(), options)?;
-            copy_backup(&destination, &mut output)?;
+            crate::export_session::stream_copy(&destination, &mut output)?;
             report.destination = file_path.to_string();
             Ok(report)
         }
@@ -92,14 +92,6 @@ pub(super) async fn backup_now_inner(app: AppHandle) -> AppResult<Option<BackupR
     .await
     .map_err(|e| AppError::InvalidArg(format!("backup task: {e}")))??;
     Ok(Some(report))
-}
-
-/// Copy the finished archive to a document provider without loading it into memory.
-#[cfg(any(target_os = "android", test))]
-fn copy_backup(source: &Path, output: &mut impl Write) -> AppResult<()> {
-    std::io::copy(&mut fs::File::open(source)?, output)?;
-    output.flush()?;
-    Ok(())
 }
 
 pub(super) fn run_backup(
@@ -353,22 +345,5 @@ impl Drop for DirectoryCleanup {
 impl DirectoryCleanup {
     pub(super) fn keep(mut self) {
         self.0 = PathBuf::new();
-    }
-}
-
-#[cfg(test)]
-mod document_tests {
-    use super::*;
-
-    #[test]
-    fn copies_archive_bytes_and_propagates_provider_failure() {
-        let directory = tempfile::tempdir().unwrap();
-        let archive = directory.path().join("backup.zip");
-        let bytes = b"PK\x03\x04\0\xffbackup";
-        fs::write(&archive, bytes).unwrap();
-        let mut output = Vec::new();
-        copy_backup(&archive, &mut output).unwrap();
-        assert_eq!(output, bytes);
-        assert!(copy_backup(&archive, &mut std::io::Cursor::new(&mut [0u8; 2][..])).is_err());
     }
 }

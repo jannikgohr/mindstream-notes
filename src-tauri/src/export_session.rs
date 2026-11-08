@@ -328,10 +328,10 @@ fn archive_name(path: &str) -> AppResult<String> {
     Ok(path.to_string())
 }
 
-/// Stream a staged export without holding it in memory. A plain read/write
-/// loop, not `std::io::copy`, which may hand a file-to-file copy to the
-/// kernel and bypass a document provider's write path.
-fn stream_copy(source: &Path, output: &mut impl Write) -> AppResult<()> {
+/// Stream a staged export or backup without holding it in memory. A plain
+/// read/write loop, not `std::io::copy`, which may hand a file-to-file copy to
+/// the kernel and bypass a document provider's write path.
+pub(crate) fn stream_copy(source: &Path, output: &mut impl Write) -> AppResult<()> {
     let mut input = File::open(source)?;
     let mut buffer = vec![0u8; COPY_BUFFER_BYTES];
     loop {
