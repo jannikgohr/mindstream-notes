@@ -7,10 +7,15 @@
  * item back in the folder it came from, where "Restore" from the trash view
  * would drop it at the root. Permanent deletes (purge, empty trash) keep
  * their confirm dialogs: nothing can bring those back.
+ *
+ * Undo stays on screen for a few seconds, and the tree can change in that
+ * time. It only moves items this trash action still accounts for, and a
+ * folder that has since been trashed or deleted sends them to the root.
  */
 
-import type { TreeItemRef } from '$lib/api';
+import { TRASH_ID, type TreeItemRef } from '$lib/api';
 import { toErrorMessage } from '$lib/api/errors';
+import { ancestorIsTrash } from '$lib/editor/trash';
 import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
 import {
   moveCollectionTo,
@@ -55,6 +60,31 @@ export function groupByParent(
   return groups;
 }
 
+/** The newest trash action for each item, so an older toast's Undo cannot
+ *  overrule a later move or trash of the same item. */
+const latestTrash = new Map<string, number>();
+let trashActions = 0;
+
+function itemKey(item: TreeItemRef): string {
+  return `${item.kind}:${item.id}`;
+}
+
+/** Still in the trash where `action` put it, and not trashed again since. */
+function stillTrashedBy(item: TreeItemRef, action: number): boolean {
+  return (
+    latestTrash.get(itemKey(item)) === action && parentOf(item) === TRASH_ID
+  );
+}
+
+/** The folder to put items back in: where they came from, unless that
+ *  folder has been deleted or is in the trash itself. */
+function undoTarget(parent: string | null): string | null {
+  if (parent === null || !tree.collectionsById[parent]) return null;
+  return ancestorIsTrash(parent, tree.collectionsById, TRASH_ID)
+    ? null
+    : parent;
+}
+
 async function trashItems(items: readonly TreeItemRef[]): Promise<void> {
   if (items.length === 1) {
     const [item] = items;
@@ -66,22 +96,35 @@ async function trashItems(items: readonly TreeItemRef[]): Promise<void> {
 }
 
 async function putBack(
-  groups: Map<string | null, TreeItemRef[]>
+  groups: Map<string | null, TreeItemRef[]>,
+  action: number
 ): Promise<void> {
-  try {
-    for (const [parent, group] of groups) {
+  // Settled before anything moves: a folder put back first would otherwise
+  // read as a usable target for the groups after it, or the reverse.
+  const moves = [...groups].map(
+    ([parent, group]) =>
+      [
+        undoTarget(parent),
+        group.filter((item) => stillTrashedBy(item, action))
+      ] as const
+  );
+  let failure: unknown = null;
+  for (const [parent, group] of moves) {
+    try {
       if (group.length === 1) {
         const [item] = group;
         if (item.kind === 'note') await moveNoteTo(item.id, parent);
         else await moveCollectionTo(item.id, parent);
-      } else {
+      } else if (group.length > 1) {
         await moveManyTo(group, parent);
       }
+    } catch (err) {
+      // One group failing must not strand the others in the trash.
+      console.error('[trash] undo failed', err);
+      failure ??= err;
     }
-  } catch (err) {
-    console.error('[trash] undo failed', err);
-    pushToast(toErrorMessage(err), { variant: 'error' });
   }
+  if (failure) pushToast(toErrorMessage(failure), { variant: 'error' });
 }
 
 export async function trashWithUndo(
@@ -100,11 +143,13 @@ export async function trashWithUndo(
     pushToast(toErrorMessage(err), { variant: 'error' });
     return;
   }
+  const action = ++trashActions;
+  for (const item of items) latestTrash.set(itemKey(item), action);
   pushToast(message, {
     durationMs: TRASH_UNDO_TOAST_MS,
     action: {
       label: tUi('trash.undo.action'),
-      run: () => void putBack(origins)
+      run: () => void putBack(origins, action)
     }
   });
 }
