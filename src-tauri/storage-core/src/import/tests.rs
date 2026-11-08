@@ -587,6 +587,31 @@ fn a_cancelled_one_transaction_import_leaves_nothing() {
 }
 
 #[test]
+fn a_stop_during_the_last_batch_still_rolls_back() {
+    let mut conn = migrated_memory_db();
+    let before = counts(&conn);
+    let mut source = ScriptedSource::new(300);
+    let cancelled = AtomicBool::new(false);
+
+    let report = run_import_in_one_transaction(
+        &mut conn,
+        &mut source,
+        &options(ImportSourceKind::Obsidian),
+        &cancelled,
+        |p| {
+            // The run has left its loop: no item checks the flag again.
+            if p.phase == "done" {
+                cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        },
+    )
+    .unwrap();
+
+    assert!(report.cancelled);
+    assert_eq!(counts(&conn), before);
+}
+
+#[test]
 fn a_failed_write_rolls_back_the_whole_import() {
     let mut conn = migrated_memory_db();
     // A note already holds the id the source gives item 700, so the second

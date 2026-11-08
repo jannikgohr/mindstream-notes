@@ -312,8 +312,11 @@ pub fn run_import_in_one_transaction(
             })
         })
     };
+    // A Stop during the last batch or the placeholders is seen by no further
+    // loop turn, so it is checked once more here.
+    let stopped = cancelled.load(Ordering::SeqCst);
     let finish = match &result {
-        Ok(report) if !report.cancelled => conn.execute_batch("COMMIT"),
+        Ok(report) if !report.cancelled && !stopped => conn.execute_batch("COMMIT"),
         _ => conn.execute_batch("ROLLBACK"),
     };
     if let Err(err) = finish {
@@ -325,7 +328,7 @@ pub fn run_import_in_one_transaction(
         return Err(err.into());
     }
     let report = result?;
-    Ok(if report.cancelled {
+    Ok(if report.cancelled || stopped {
         ImportReport {
             cancelled: true,
             ..ImportReport::default()

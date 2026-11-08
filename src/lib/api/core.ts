@@ -2,7 +2,10 @@ import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { browserStorageEnabled, isBrowserCommand } from '../browser/commands';
 import { commandWrites } from '../storage/command-access';
 import { requireVaultAccess } from '../storage/vault-access.svelte';
-import { whenNoImportRuns } from '../storage/import-activity.svelte';
+import {
+  noteImportRunning,
+  whenNoImportRuns
+} from '../storage/import-activity.svelte';
 
 export enum CommandErrorCode {
   Database = 'database',
@@ -241,12 +244,40 @@ export async function invokeTauri<T>(
   command: TauriCommandName,
   args?: Parameters<typeof tauriInvoke>[1]
 ): Promise<T> {
-  if (commandWrites(command, args)) {
+  const writes = commandWrites(command, args);
+  if (writes) {
     await requireVaultAccess(command);
     // A running import holds the write lock; this would fail at once.
     await whenNoImportRuns();
   }
-  return tauriInvoke<T>(command, args);
+  try {
+    return await tauriInvoke<T>(command, args);
+  } catch (error) {
+    // Another window began an import before this one heard of it. SQLite
+    // refused the write before running it, so it waits for the import to
+    // end and goes again.
+    if (!writes || !isLockedError(error) || !(await appIsImporting()))
+      throw error;
+    noteImportRunning();
+    await whenNoImportRuns();
+    return tauriInvoke<T>(command, args);
+  }
+}
+
+function isLockedError(error: unknown): boolean {
+  const message =
+    typeof error === 'string'
+      ? error
+      : ((error as { message?: unknown } | null)?.message ?? '');
+  return typeof message === 'string' && message.includes('database is locked');
+}
+
+async function appIsImporting(): Promise<boolean> {
+  try {
+    return (await tauriInvoke<boolean>('notes_import_running')) === true;
+  } catch {
+    return false;
+  }
 }
 
 /**
