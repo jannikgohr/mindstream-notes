@@ -198,21 +198,25 @@ async function runBrowserImport(
   };
   running = run;
   try {
-    return parseReport(
+    const report = parseReport(
       await importBrowserNotes(source, { ...options }, (progress) => {
         if (progress.committed) run.committed = progress.committed;
         void emit(TauriEventName.ImportProgress, progress);
       })
     );
+    picked = null;
+    return report;
   } catch (error) {
+    // A failed run keeps the pick: the dialog goes back to its options, and
+    // Import there runs the same source again.
     if (!run.cancelled) throw error;
+    picked = null;
     // The stopped worker can't report. Its last progress ping carries the
     // counters as of the last commit. `done` counts failed items, so it is
     // not used for the report.
     return { ...(run.committed ?? EMPTY_REPORT), cancelled: true };
   } finally {
     running = null;
-    picked = null;
   }
 }
 
