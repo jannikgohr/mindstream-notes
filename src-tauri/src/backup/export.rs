@@ -17,7 +17,7 @@ pub(super) fn default_backup_dir(app: &AppHandle) -> AppResult<PathBuf> {
 /// the user cancels — distinct from an error — so the JS side stays
 /// quiet (no error toast for a deliberate cancel).
 ///
-/// Mirrors the dialog-then-write pattern in `pdf_export.rs`.
+/// Same dialog-then-write shape as the export session's `export_finish`.
 #[tauri::command]
 pub async fn backup_now(app: AppHandle) -> CommandResult<Option<BackupReport>> {
     backup_now_inner(app).await.map_err(Into::into)

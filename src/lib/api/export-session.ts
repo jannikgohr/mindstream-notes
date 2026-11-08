@@ -108,6 +108,25 @@ export class ExportSession {
   }
 }
 
+/**
+ * Save one file through the native save dialog. The bytes are staged in
+ * chunks first, so a large export never crosses IPC whole. Resolves `false`
+ * when the user cancels the dialog.
+ */
+export async function saveFileNatively(
+  file: ExportSaveOptions & { bytes: Uint8Array }
+): Promise<boolean> {
+  const { bytes, ...save } = file;
+  const session = await ExportSession.begin({ kind: 'file' });
+  try {
+    await session.write(save.suggestedName, bytes);
+  } catch (err) {
+    await session.abort();
+    throw err;
+  }
+  return session.finish(save);
+}
+
 /** MIME types of stored assets, keyed by id. Unknown ids are left out. */
 export async function exportAssetTypes(
   ids: string[]
