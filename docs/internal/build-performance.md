@@ -321,3 +321,19 @@ declaration errors described above. Cross-platform native tests and packaged
 app suites remain CI checks for the PR. Benchmark comparison targets were
 removed after retaining reports; the optimized artifacts remain in this
 worktree's normal `src-tauri/target` for subsequent local builds.
+
+## Further CI rounds
+
+The next measured change gives only the packaged E2E build an optimized release
+configuration with LTO off, 16 code generation units and optimization level 2.
+It still builds through `tauri build` in release mode, with production assets,
+release assertions, unwinding and bundled plugin AOT. Shipped release commands
+continue to use the checked-in size-focused profile. Set
+`MINDSTREAM_E2E_PRODUCTION_PROFILE=1` to compare against that profile locally.
+Explicit caller Cargo profile settings remain available.
+
+The timing artifact now includes `rust-profile.json`, recording the three actual
+release overrides. The E2E cache key includes the helper recipe, because those
+child-process environment settings are not visible when the cache action runs.
+The first run populates dependencies for this configuration; a subsequent run
+is needed to measure the steady-state application compile/link cost.
