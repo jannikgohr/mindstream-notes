@@ -114,6 +114,29 @@ describe('notes export platform routing', () => {
     expect(mocks.result).toHaveBeenCalledWith({ errors: 0 }, null);
   });
 
+  it('discards the picked file when the export fails before streaming', async () => {
+    const file = { write: vi.fn(), close: vi.fn(), abort: vi.fn() };
+    mocks.browserPick.mockResolvedValue(file);
+    mocks.flush.mockRejectedValueOnce(new Error('editor save failed'));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await DATA_ACTIONS['export-vault']();
+    log.mockRestore();
+    expect(file.abort).toHaveBeenCalledOnce();
+    expect(mocks.stream).not.toHaveBeenCalled();
+    expect(mocks.alert).toHaveBeenCalledOnce();
+  });
+
+  it('leaves discarding to the stream once it has the picked file', async () => {
+    const file = { write: vi.fn(), close: vi.fn(), abort: vi.fn() };
+    mocks.browserPick.mockResolvedValue(file);
+    mocks.stream.mockRejectedValueOnce(new Error('disk full'));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await DATA_ACTIONS['export-vault']();
+    log.mockRestore();
+    expect(file.abort).not.toHaveBeenCalled();
+    expect(mocks.alert).toHaveBeenCalledOnce();
+  });
+
   it('stays quiet when the browser save picker is cancelled', async () => {
     mocks.browserPick.mockResolvedValue(null);
     await DATA_ACTIONS['export-vault']();

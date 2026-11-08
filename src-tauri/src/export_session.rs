@@ -11,7 +11,7 @@
 //!   the user picks when the session finishes.
 //! - `file`: one file staged the same way, for single-note exports.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -37,51 +37,40 @@ const MAX_ASSET_IDS: usize = 10_000;
 const COPY_BUFFER_BYTES: usize = 1024 * 1024;
 const STAGING_DIR: &str = "exports/.staging";
 
-struct Entry {
-    session: Arc<Mutex<Session>>,
-    /// The session's staging directory, kept here so a sweep never has to
-    /// wait for a session that is mid-write.
-    directory: Option<PathBuf>,
+#[derive(Default)]
+pub struct ExportSessions {
+    sessions: Mutex<HashMap<String, Arc<Mutex<Session>>>>,
+    /// Whether this run has cleared staging left behind by an earlier one.
+    /// Held while sweeping, so the sweep happens once, before any staged
+    /// session of this run exists, and never touches a live export.
+    swept: Mutex<bool>,
 }
 
-#[derive(Default)]
-pub struct ExportSessions(Mutex<HashMap<String, Entry>>);
-
 impl ExportSessions {
-    fn map(&self) -> MutexGuard<'_, HashMap<String, Entry>> {
-        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    fn map(&self) -> MutexGuard<'_, HashMap<String, Arc<Mutex<Session>>>> {
+        self.sessions.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn insert(&self, token: String, session: Session) {
-        let directory = session.directory.clone();
-        self.map().insert(
-            token,
-            Entry {
-                session: Arc::new(Mutex::new(session)),
-                directory,
-            },
-        );
+        self.map().insert(token, Arc::new(Mutex::new(session)));
     }
 
     fn get(&self, token: &str) -> AppResult<Arc<Mutex<Session>>> {
-        self.map()
-            .get(token)
-            .map(|entry| entry.session.clone())
-            .ok_or_else(unknown)
+        self.map().get(token).cloned().ok_or_else(unknown)
     }
 
     fn take(&self, token: &str) -> AppResult<Arc<Mutex<Session>>> {
-        self.map()
-            .remove(token)
-            .map(|entry| entry.session)
-            .ok_or_else(unknown)
+        self.map().remove(token).ok_or_else(unknown)
     }
 
-    fn staging_dirs(&self) -> HashSet<PathBuf> {
-        self.map()
-            .values()
-            .filter_map(|entry| entry.directory.clone())
-            .collect()
+    /// Clear what an earlier run left in `staging`, such as an export the app
+    /// crashed during. Only the first call of a run sweeps.
+    fn sweep_once(&self, staging: &Path) {
+        let mut swept = self.swept.lock().unwrap_or_else(|e| e.into_inner());
+        if !*swept {
+            sweep_staging(staging);
+            *swept = true;
+        }
     }
 }
 
@@ -162,6 +151,10 @@ pub struct Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        // Close the staged files first: fields drop only after this body, and
+        // a file that is still open may not be deletable on Windows.
+        self.open = None;
+        self.sink = Sink::File;
         if let Some(directory) = &self.directory {
             let _ = fs::remove_dir_all(directory);
         }
@@ -345,17 +338,13 @@ pub(crate) fn stream_copy(source: &Path, output: &mut impl Write) -> AppResult<(
     Ok(())
 }
 
-/// Delete staged exports no live session owns, such as ones left behind by
-/// a crash.
-fn sweep_staging(staging: &Path, keep: &HashSet<PathBuf>) {
+/// Delete everything in the staging directory.
+fn sweep_staging(staging: &Path) {
     let Ok(entries) = fs::read_dir(staging) else {
         return;
     };
     for entry in entries.flatten() {
-        let path = entry.path();
-        if !keep.contains(&path) {
-            let _ = fs::remove_dir_all(path);
-        }
+        let _ = fs::remove_dir_all(entry.path());
     }
 }
 
@@ -377,12 +366,12 @@ pub async fn export_begin<R: Runtime>(
         ExportTarget::Folder { .. } => None,
         _ => Some(crate::paths::app_data_dir(&app)?.join(STAGING_DIR)),
     };
-    let keep = app.state::<ExportSessions>().staging_dirs();
     let token = uuid::Uuid::new_v4().to_string();
     let directory = staging.as_ref().map(|staging| staging.join(&token));
+    let sweeper = app.clone();
     let session = blocking(move || {
         if let Some(staging) = &staging {
-            sweep_staging(staging, &keep);
+            sweeper.state::<ExportSessions>().sweep_once(staging);
         }
         match (target, directory) {
             (ExportTarget::Folder { root }, _) => Session::folder(PathBuf::from(root)),
@@ -702,15 +691,33 @@ mod tests {
     }
 
     #[test]
-    fn sweep_keeps_live_sessions_and_removes_the_rest() {
+    fn only_the_first_sweep_of_a_run_clears_staging() {
         let staging = tempfile::tempdir().unwrap();
-        let live = staging.path().join("live");
         let stale = staging.path().join("stale");
-        fs::create_dir_all(&live).unwrap();
         fs::create_dir_all(&stale).unwrap();
-        sweep_staging(staging.path(), &HashSet::from([live.clone()]));
-        assert!(live.exists());
+        let sessions = ExportSessions::default();
+        sessions.sweep_once(staging.path());
         assert!(!stale.exists());
+
+        // A later export must not touch this run's sessions, even one that is
+        // no longer registered because it is finishing.
+        let finishing = staging.path().join("finishing");
+        fs::create_dir_all(&finishing).unwrap();
+        sessions.sweep_once(staging.path());
+        assert!(finishing.exists());
+    }
+
+    #[test]
+    fn dropping_an_unfinished_staged_export_deletes_its_files() {
+        let staging = tempfile::tempdir().unwrap();
+        for archive in [true, false] {
+            let directory = staging.path().join(format!("open-{archive}"));
+            let mut session = Session::staged(directory.clone(), archive).unwrap();
+            session.start("Note.md", 4).unwrap();
+            session.append("Note.md", b"half").unwrap();
+            drop(session);
+            assert!(!directory.exists(), "archive={archive}");
+        }
     }
 
     // No mock app here: on Windows it makes this test binary unloadable.
