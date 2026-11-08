@@ -342,6 +342,7 @@ struct ScriptedSource {
     failing_attachments: Vec<usize>,
     body: &'static str,
     attachments: bool,
+    attachment_size: usize,
 }
 
 impl ScriptedSource {
@@ -353,6 +354,7 @@ impl ScriptedSource {
             failing_attachments: Vec::new(),
             body: "body",
             attachments: false,
+            attachment_size: 4,
         }
     }
 }
@@ -412,7 +414,9 @@ impl source::ImportSource for ScriptedSource {
         if self.failing_attachments.contains(&index) {
             return Err(AppError::InvalidArg(format!("attachment {index} is gone")));
         }
-        Ok(Some(vec![137, 80, 78, 71]))
+        let mut bytes = vec![0; self.attachment_size];
+        bytes[..4].copy_from_slice(&[137, 80, 78, 71]);
+        Ok(Some(bytes))
     }
 
     fn rewrite_options(&self) -> links::RewriteOptions {
@@ -460,6 +464,33 @@ fn progress_reports_committed_notes_apart_from_items_processed() {
     let last = progress.last().unwrap();
     assert_eq!(last.phase, "done");
     assert_eq!(last.committed, report);
+}
+
+#[test]
+fn a_batch_is_written_once_its_attachments_reach_the_byte_limit() {
+    // Eight 8 MiB attachments fill a batch long before 500 notes do.
+    let mut source = ScriptedSource::new(20);
+    source.attachments = true;
+    source.attachment_size = 8 * 1024 * 1024;
+    let store = MemoryStore::new();
+    let mut progress = Vec::new();
+
+    let report = run_import(
+        &store,
+        &mut source,
+        &options(ImportSourceKind::Obsidian),
+        &AtomicBool::new(false),
+        |p| progress.push(p),
+    )
+    .unwrap();
+
+    assert_eq!(report.notes_created, 20);
+    let pings: Vec<(usize, usize)> = progress
+        .iter()
+        .filter(|p| p.phase == "importing")
+        .map(|p| (p.done, p.committed.notes_created))
+        .collect();
+    assert_eq!(pings, [(8, 8), (16, 16)]);
 }
 
 #[test]
