@@ -6,7 +6,7 @@ settings:
 
 patchedDependencies:
   dockview-core@8.2.0:
-    hash: 656b03c72e3ec88f089f3cc126dc3ca0a40dcb9ca3c8c1fb2f213483dc58153c
+    hash: 10841964412cbd685b457f800d5921c4691856f1f591fa4ee2d340e06068544b
     path: patches/dockview-core@8.2.0.patch
 
 importers:
@@ -11141,11 +11141,11 @@ snapshots:
 
   diff@8.0.4: {}
 
-  dockview-core@8.2.0(patch_hash=656b03c72e3ec88f089f3cc126dc3ca0a40dcb9ca3c8c1fb2f213483dc58153c): {}
+  dockview-core@8.2.0(patch_hash=10841964412cbd685b457f800d5921c4691856f1f591fa4ee2d340e06068544b): {}
 
   dockview@8.2.0:
     dependencies:
-      dockview-core: 8.2.0(patch_hash=656b03c72e3ec88f089f3cc126dc3ca0a40dcb9ca3c8c1fb2f213483dc58153c)
+      dockview-core: 8.2.0(patch_hash=10841964412cbd685b457f800d5921c4691856f1f591fa4ee2d340e06068544b)
 
   docx@9.13.0:
     dependencies:
