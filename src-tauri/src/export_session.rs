@@ -468,6 +468,26 @@ pub async fn export_finish<R: Runtime>(
     token: String,
     save: Option<SaveRequest>,
 ) -> CommandResult<bool> {
+    finish_export(app, token, save, |app, save| async move {
+        pick_destination(&app, &save).await
+    })
+    .await
+}
+
+/// [`export_finish`] with the destination picker passed in, so tests can
+/// stand in for the native save dialog. `pick` resolves `None` on cancel.
+#[doc(hidden)]
+pub async fn finish_export<R, Pick, Picked>(
+    app: AppHandle<R>,
+    token: String,
+    save: Option<SaveRequest>,
+    pick: Pick,
+) -> CommandResult<bool>
+where
+    R: Runtime,
+    Pick: FnOnce(AppHandle<R>, SaveRequest) -> Picked,
+    Picked: std::future::Future<Output = AppResult<Option<FilePath>>>,
+{
     // Removed up front: whatever happens next, this session is over and its
     // staging directory goes with it.
     let session = app.state::<ExportSessions>().take(&token)?;
@@ -482,7 +502,7 @@ pub async fn export_finish<R: Runtime>(
     };
     let save = save.ok_or_else(|| AppError::InvalidArg("Missing save options".into()))?;
     save.validate()?;
-    let Some(destination) = pick_destination(&app, &save).await? else {
+    let Some(destination) = pick(app.clone(), save).await? else {
         return Ok(false);
     };
     blocking(move || {
@@ -626,6 +646,17 @@ mod tests {
         }
         #[cfg(windows)]
         assert!(session.start("C:/x.md", 1).is_err());
+    }
+
+    #[test]
+    fn a_finished_archive_takes_no_more_files() {
+        let staging = tempfile::tempdir().unwrap();
+        let mut session = Session::staged(staging.path().join("s"), true).unwrap();
+        session.start("a.md", 1).unwrap();
+        session.finish().unwrap();
+        let error = session.start("b.md", 1).unwrap_err();
+        assert!(error.to_string().contains("already finished"), "{error}");
+        assert!(session.finish().is_err());
     }
 
     #[test]
