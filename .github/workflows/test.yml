@@ -738,17 +738,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
 
-      # Same `shared-key` the suite jobs used, so this job inherits the cache
-      # they were populating. `cache-on-failure` matters more than it looks:
-      # the default drops the cache when the job fails, so a red build never
-      # saves one — and then never has one to restore.
+      # Separate compiler recipes must not restore the production-profile
+      # cache. rust-cache ignores `key` when `shared-key` is set, so put the
+      # recipe in the shared key itself. Save dependencies on failure too.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          shared-key: app-e2e
           # These release overrides are applied by the build helper, so include
           # its recipe in the key before the cache action runs.
-          key: e2e-profile-${{ hashFiles('e2e-tests/app/helpers/build-profile.ts') }}
+          shared-key: app-e2e-${{ hashFiles('e2e-tests/app/helpers/build-profile.ts') }}
           cache-on-failure: true
       - run: pnpm install --frozen-lockfile
       # Rust validates its own guest artifacts. The TypeScript component
