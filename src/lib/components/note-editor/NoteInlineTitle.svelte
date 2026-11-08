@@ -42,18 +42,25 @@
   });
   // A narrower pane wraps the title onto more lines, and a title measured
   // while its pane was hidden (Source mode) has no height at all. Only width
-  // changes count: fit() itself changes the height.
+  // changes count: fit() itself changes the height. It runs on the next
+  // frame, because resizing the field inside the observer's own callback
+  // makes the browser report an undelivered-notifications loop.
   $effect(() => {
     if (!field || typeof ResizeObserver === 'undefined') return;
     let width = -1;
+    let frame = 0;
     const observer = new ResizeObserver(([entry]) => {
       const next = entry.contentRect.width;
       if (next === width) return;
       width = next;
-      fit();
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(fit);
     });
     observer.observe(field);
-    return () => observer.disconnect();
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
   });
 
   async function commit() {

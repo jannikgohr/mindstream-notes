@@ -109,6 +109,18 @@ test.describe('wide viewport', () => {
   test('a wrapped title keeps every line through Split and a resize', async ({
     page
   }) => {
+    const loops: string[] = [];
+    page.on('pageerror', (error) => {
+      if (error.message.includes('ResizeObserver loop'))
+        loops.push(error.message);
+    });
+    await page.addInitScript(() =>
+      window.addEventListener('error', (event) => {
+        if (event.message.includes('ResizeObserver loop'))
+          (window as unknown as { roLoops?: number }).roLoops =
+            ((window as unknown as { roLoops?: number }).roLoops ?? 0) + 1;
+      })
+    );
     await boot(page);
     // A new note: Welcome opens on a heading with its own name, which
     // stands in for the title field.
@@ -132,6 +144,13 @@ test.describe('wide viewport', () => {
     await setMode(page, 'Source');
     await setMode(page, 'WYSIWYG');
     await expect.poll(clipped).toBe(false);
+    // Measuring inside the observer's callback would report a loop.
+    expect(loops).toEqual([]);
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { roLoops?: number }).roLoops ?? 0
+      )
+    ).toBe(0);
   });
 
   test('split shows both panes at once', async ({ page }) => {
