@@ -20,8 +20,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use serde::Deserialize;
 use tauri::ipc::Request;
 use tauri::{AppHandle, Manager, Runtime};
-use tauri_plugin_dialog::{DialogExt, FilePath};
-use tokio::sync::oneshot;
+use tauri_plugin_dialog::FilePath;
 use zip::write::FileOptions;
 use zip::CompressionMethod;
 
@@ -469,7 +468,13 @@ pub async fn export_finish<R: Runtime>(
     save: Option<SaveRequest>,
 ) -> CommandResult<bool> {
     finish_export(app, token, save, |app, save| async move {
-        pick_destination(&app, &save).await
+        let dialog = crate::save_dialog::SaveDialog {
+            title: save.dialog_title.as_deref().unwrap_or("Save export"),
+            filter_name: &save.filter_name,
+            extensions: &save.extensions,
+            suggested_name: &save.suggested_name,
+        };
+        crate::save_dialog::pick_save_path(&app, dialog).await
     })
     .await
 }
@@ -512,30 +517,6 @@ where
     })
     .await?;
     Ok(true)
-}
-
-/// Ask where to save a staged export. `None` means the user cancelled.
-async fn pick_destination<R: Runtime>(
-    app: &AppHandle<R>,
-    save: &SaveRequest,
-) -> AppResult<Option<FilePath>> {
-    let (tx, rx) = oneshot::channel();
-    app.dialog()
-        .file()
-        .set_title(save.dialog_title.as_deref().unwrap_or("Save export"))
-        .add_filter(
-            &save.filter_name,
-            &save
-                .extensions
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-        )
-        .set_file_name(&save.suggested_name)
-        .save_file(move |path| {
-            let _ = tx.send(path);
-        });
-    rx.await.map_err(|e| AppError::InvalidArg(e.to_string()))
 }
 
 /// Stream a staged export to the destination the user picked.

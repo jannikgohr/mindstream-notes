@@ -38,7 +38,7 @@ const IGNORE_REGEX = [
   'backup[/\\\\]',
   'auth[/\\\\]mod\\.rs$',
   'drawing[/\\\\]mod\\.rs$',
-  '(tray|native_menu|hotkeys|desktop_settings|pdf_export|system|error|i18n|paths)\\.rs$',
+  '(tray|native_menu|hotkeys|desktop_settings|save_dialog|system|error|i18n|paths)\\.rs$',
   '(vault_supervisor|vault_window_state)\\.rs$',
   '(worker_shutdown|update_windows|legacy_export)\\.rs$',
   'coordinator_(autostart|updater|revival)\\.rs$',
