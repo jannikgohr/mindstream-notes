@@ -276,6 +276,16 @@ describe('notes-import — browser storage', () => {
     await expect(run).rejects.toBe(failure);
   });
 
+  it('runs the same pick again after a failed run', async () => {
+    const { run, reject } = await pickAndHoldRun();
+    reject({ code: 'database', message: 'Disk full' });
+    await expect(run).rejects.toBeDefined();
+    browser.run.mockResolvedValue(report);
+    await expect(runImport(OPTIONS)).resolves.toEqual(report);
+    expect(browser.run).toHaveBeenCalledTimes(2);
+    expect(await runImport(OPTIONS)).toBeNull();
+  });
+
   it('has nothing to stop or run without a pick', async () => {
     await cancelImport();
     expect(browser.cancel).not.toHaveBeenCalled();
