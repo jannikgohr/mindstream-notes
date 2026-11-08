@@ -42,9 +42,15 @@ function notABackup(message: string) {
 /**
  * Read the manifest and snapshot out of a backup zip. Native backups also
  * carry resources for the app, which stay compressed, because a browser
- * restores the database only. Each size is checked before it is inflated.
+ * restores the database only. Each size is checked before it is inflated,
+ * and again after: the size a zip declares need not match what it holds.
  */
-export function unpackBackup(bytes: Uint8Array): UnpackedBackup {
+export function unpackBackup(
+  bytes: Uint8Array,
+  maxBytes = MAX_BACKUP_BYTES
+): UnpackedBackup {
+  const tooLarge = () =>
+    notABackup('This backup is too large to restore in a browser.');
   const entries: string[] = [];
   let files;
   try {
@@ -52,19 +58,19 @@ export function unpackBackup(bytes: Uint8Array): UnpackedBackup {
       filter: ({ name, originalSize }) => {
         entries.push(name);
         const wanted = name === MANIFEST || name === DATABASE;
-        if (wanted && originalSize > MAX_BACKUP_BYTES) throw new RangeError();
+        if (wanted && originalSize > maxBytes) throw new RangeError();
         return wanted;
       }
     });
   } catch (error) {
-    throw notABackup(
-      error instanceof RangeError
-        ? 'This backup is too large to restore in a browser.'
-        : 'This file is not a Mindstream backup.'
-    );
+    throw error instanceof RangeError
+      ? tooLarge()
+      : notABackup('This file is not a Mindstream backup.');
   }
   if (!files[MANIFEST] || !files[DATABASE])
     throw notABackup('This file is not a Mindstream backup.');
+  if (files[MANIFEST].length > maxBytes || files[DATABASE].length > maxBytes)
+    throw tooLarge();
   return {
     manifest: strFromU8(files[MANIFEST]),
     entries,
