@@ -44,8 +44,12 @@ subpath. To preview manually, run
 `.github/workflows/pages.yml` runs only when a release is published. It checks
 out that release tag, builds and tests the demo, then publishes the tested
 artifact to GitHub Pages. Set the repository's Pages source
-to GitHub Actions once. The default build path is `/mindstream-notes`; override
-`BROWSER_BASE_PATH` for another repository name or an empty path on a custom domain.
+to GitHub Actions once. The workflow runs on the release tag, so the
+`github-pages` environment must allow tags matching `v*` as well as `main`
+(Settings → Environments → github-pages → Deployment branches and tags), or the
+deploy job is rejected. The default build path is `/mindstream-notes`; override
+`BROWSER_BASE_PATH` for another repository name or an empty path on a custom
+domain, and set it the same way for `pnpm test:demo`.
 
 ## Testing modes
 
