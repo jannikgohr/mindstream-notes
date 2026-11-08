@@ -690,6 +690,9 @@ jobs:
         with:
           workspaces: src-tauri
           shared-key: app-e2e
+          # These release overrides are applied by the build helper, so include
+          # its recipe in the key before the cache action runs.
+          key: e2e-profile-${{ hashFiles('e2e-tests/app/helpers/build-profile.ts') }}
           cache-on-failure: true
       - run: pnpm install --frozen-lockfile
       - run: cargo install tauri-driver --locked
@@ -704,6 +707,7 @@ jobs:
         with:
           name: app-e2e-build-timings
           path: |
+            .output/tauri-e2e/rust-profile.json
             src-tauri/target/cargo-timings/
             src-tauri/target/release/build/mindstream-notes-*/out/build-timings.json
           if-no-files-found: ignore
