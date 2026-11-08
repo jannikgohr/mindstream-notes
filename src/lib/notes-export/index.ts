@@ -31,10 +31,11 @@ import {
 } from './markdown';
 import { dedupeAgainst, sanitizeName } from './sanitize';
 import { readExportBoard, boardMarkdown } from './kanban';
-import { downloadBlob } from '$lib/api/file-export';
+import { downloadBlob, type BrowserSaveFile } from '$lib/api/file-export';
 import { ExportSession, exportAssetTypes } from '$lib/api/export-session';
 import { tUi } from '$lib/settings/i18n.svelte';
-import { createExportZip } from './zip';
+import { createExportZip, createStreamingExportZip } from './zip';
+import { vaultArchiveName } from './archive-name';
 
 const ASSET_SUBDIR = '_assets';
 
@@ -73,13 +74,34 @@ export interface ExportReport {
   errors: number;
 }
 
-/** Export the vault into one zip download, for a browser. */
+/**
+ * Export the vault into one zip download, for a browser without a save
+ * picker. The whole archive is held in memory until the download starts.
+ */
 export async function downloadVaultExport(): Promise<ExportReport> {
   const zip = createExportZip();
   const report = await exportVault(zip.write);
-  const date = new Date().toISOString().slice(0, 10);
-  downloadBlob(zip.finish(), `mindstream-notes-${date}.zip`);
+  downloadBlob(zip.finish(), vaultArchiveName());
   return report;
+}
+
+/**
+ * Stream the vault's zip into a file the user picked in the browser, so
+ * memory holds one exported file at a time. A failed export discards the
+ * partial file.
+ */
+export async function streamVaultExport(
+  file: BrowserSaveFile
+): Promise<ExportReport> {
+  const zip = createStreamingExportZip(file);
+  try {
+    const report = await exportVault(zip.write);
+    await zip.finish();
+    return report;
+  } catch (err) {
+    await file.abort();
+    throw err;
+  }
 }
 
 function nativeAssets(session: ExportSession): AssetCopier {
@@ -114,7 +136,7 @@ export async function saveVaultArchive(): Promise<ExportReport | null> {
     throw err;
   }
   const saved = await session.finish({
-    suggestedName: `mindstream-notes-${new Date().toISOString().slice(0, 10)}.zip`,
+    suggestedName: vaultArchiveName(),
     dialogTitle: tUi('data.exportVault.saveDialog.title'),
     filterName: tUi('data.exportVault.saveDialog.filter'),
     extensions: ['zip']

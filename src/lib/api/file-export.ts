@@ -45,3 +45,67 @@ export async function saveFileExport(
     bytes: args.bytes
   });
 }
+
+/** A file the user picked in the browser, written in chunks. */
+export interface BrowserSaveFile {
+  write(chunk: Uint8Array): Promise<void>;
+  close(): Promise<void>;
+  /** Discard what was written. Never throws. */
+  abort(): Promise<void>;
+}
+
+interface WritableFile {
+  write(data: Uint8Array): Promise<void>;
+  close(): Promise<void>;
+  abort(): Promise<void>;
+}
+
+type SaveFilePicker = (options: {
+  suggestedName: string;
+  types: { description: string; accept: Record<string, string[]> }[];
+}) => Promise<{ createWritable(): Promise<WritableFile> }>;
+
+/**
+ * Ask where to save a file with the browser's File System Access picker, so
+ * a large export can stream to disk instead of building up in memory.
+ * Resolves `undefined` when the browser has no such picker and `null` when
+ * the user cancels it. Call it straight from the click: browsers only open
+ * the picker during a user gesture.
+ */
+export async function pickBrowserSaveFile(options: {
+  suggestedName: string;
+  description: string;
+  mime: string;
+  extension: string;
+}): Promise<BrowserSaveFile | null | undefined> {
+  const picker = (window as { showSaveFilePicker?: SaveFilePicker })
+    .showSaveFilePicker;
+  if (typeof picker !== 'function') return undefined;
+  let writable: WritableFile;
+  try {
+    const handle = await picker.call(window, {
+      suggestedName: options.suggestedName,
+      types: [
+        {
+          description: options.description,
+          accept: { [options.mime]: [options.extension] }
+        }
+      ]
+    });
+    writable = await handle.createWritable();
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') return null;
+    throw err;
+  }
+  return {
+    write: (chunk) => writable.write(chunk),
+    close: () => writable.close(),
+    abort: async () => {
+      try {
+        await writable.abort();
+      } catch (err) {
+        console.warn('[export] could not discard the partial file', err);
+      }
+    }
+  };
+}

@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   download: vi.fn(),
   save: vi.fn(),
   folder: vi.fn(),
+  stream: vi.fn(),
+  browserPick: vi.fn(),
   flush: vi.fn(),
   result: vi.fn(),
   alert: vi.fn(),
@@ -26,6 +28,9 @@ vi.mock('$lib/api', () => ({
   importCleanup: mocks.importCleanup
 }));
 vi.mock('$lib/app-restart', () => ({ restartToApply: mocks.restart }));
+vi.mock('$lib/api/file-export', () => ({
+  pickBrowserSaveFile: mocks.browserPick
+}));
 vi.mock('$lib/platform', () => ({ isMobile: () => mocks.mobile }));
 vi.mock('$lib/stores/tree.svelte', () => ({}));
 vi.mock('$lib/components/import-choice-dialog.svelte', () => ({
@@ -47,7 +52,8 @@ vi.mock('$lib/editor/suspend-flush', () => ({
 vi.mock('$lib/notes-export', () => ({
   downloadVaultExport: mocks.download,
   saveVaultArchive: mocks.save,
-  exportVaultToFolder: mocks.folder
+  exportVaultToFolder: mocks.folder,
+  streamVaultExport: mocks.stream
 }));
 import { DATA_ACTIONS } from './data';
 
@@ -59,6 +65,8 @@ beforeEach(() => {
   mocks.save.mockResolvedValue({ errors: 0 });
   mocks.download.mockResolvedValue({ errors: 0 });
   mocks.folder.mockResolvedValue({ errors: 0 });
+  mocks.stream.mockResolvedValue({ errors: 0 });
+  mocks.browserPick.mockResolvedValue(undefined);
 });
 
 describe('notes export platform routing', () => {
@@ -91,6 +99,35 @@ describe('notes export platform routing', () => {
       expect(mocks.save).not.toHaveBeenCalled();
     }
   );
+
+  it('streams to a picked file in a browser with a save picker', async () => {
+    const file = { write: vi.fn(), close: vi.fn(), abort: vi.fn() };
+    mocks.browserPick.mockResolvedValue(file);
+    await DATA_ACTIONS['export-vault']();
+    expect(mocks.browserPick).toHaveBeenCalledOnce();
+    // Picked before the editor flush, while the click still counts.
+    expect(mocks.browserPick.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.flush.mock.invocationCallOrder[0]
+    );
+    expect(mocks.stream).toHaveBeenCalledWith(file);
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.result).toHaveBeenCalledWith({ errors: 0 }, null);
+  });
+
+  it('stays quiet when the browser save picker is cancelled', async () => {
+    mocks.browserPick.mockResolvedValue(null);
+    await DATA_ACTIONS['export-vault']();
+    expect(mocks.flush).not.toHaveBeenCalled();
+    expect(mocks.stream).not.toHaveBeenCalled();
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.result).not.toHaveBeenCalled();
+  });
+
+  it('never opens the browser picker in the app', async () => {
+    mocks.native = mocks.mobile = true;
+    await DATA_ACTIONS['export-vault']();
+    expect(mocks.browserPick).not.toHaveBeenCalled();
+  });
 
   it('stays quiet when the Android save picker is cancelled', async () => {
     mocks.native = mocks.mobile = true;
