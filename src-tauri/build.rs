@@ -3,7 +3,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     generate_i18n_bundle_list()?;
     track_builtin_plugins()?;
     precompile_builtin_plugins()?;
-    tauri_build::build();
+    // Generate cached icons and context before rustc starts. Generating them
+    // inside generate_context! makes new files newer than Cargo's compilation
+    // timestamp, causing another app rebuild on the next invocation.
+    tauri_build::try_build(
+        tauri_build::Attributes::new().codegen(tauri_build::CodegenContext::new()),
+    )?;
     // tauri-build links its Common Controls v6 manifest into binaries only.
     // The native runtime spike and IPC test harness need that manifest too,
     // or Windows cannot resolve comctl32!TaskDialogIndirect before main runs.
@@ -22,6 +27,7 @@ fn precompile_builtin_plugins() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-env-changed=MINDSTREAM_BUNDLED_AOT");
     let out = PathBuf::from(env::var("OUT_DIR")?).join("plugin-precompiled");
     fs::create_dir_all(&out)?;
+    #[cfg(feature = "bundled-aot")]
     if env::var("PROFILE").as_deref() == Ok("release")
         && env::var("MINDSTREAM_BUNDLED_AOT").as_deref() != Ok("0")
     {
@@ -31,9 +37,9 @@ fn precompile_builtin_plugins() -> Result<(), Box<dyn std::error::Error>> {
             &out,
             &env::var("TARGET")?,
         )?;
-    } else {
-        fs::write(out.join("precompiled.rs"), "&[]")?;
+        return Ok(());
     }
+    fs::write(out.join("precompiled.rs"), "&[]")?;
     Ok(())
 }
 

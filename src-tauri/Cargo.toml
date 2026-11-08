@@ -26,6 +26,11 @@ default-members = [".", "plugin-runtime", "storage-core"]
 sqlite-wasm-vfs = { path = "vendor/sqlite-wasm-vfs" }
 
 [features]
+default = ["bundled-aot"]
+# Release builds precompile the committed guests. The development launcher
+# disables this default to avoid compiling a second, all-architecture runtime
+# for the host build script.
+bundled-aot = ["dep:mindstream-plugin-runtime"]
 dev-environment = []
 # Permit the MINDSTREAM_PROFILE_DIR env override of the active profile
 # directory in a *release* build. Dev (debug_assertions) builds always
@@ -36,8 +41,8 @@ dev-environment = []
 e2e-data-dir = []
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
-mindstream-plugin-runtime = { path = "plugin-runtime", features = ["aot-build"] }
+tauri-build = { version = "2", features = ["codegen"] }
+mindstream-plugin-runtime = { path = "plugin-runtime", features = ["aot-build"], optional = true }
 
 [dependencies]
 mindstream-storage-core = { path = "storage-core" }
