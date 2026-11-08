@@ -9,6 +9,23 @@ const args = process.argv.slice(2);
 const env = { ...process.env };
 
 if (args[0] === 'dev') {
+  // Keep Linux DWARF data in separate .dwo files instead of copying it into
+  // every executable/archive on each edit. Explicit targets, Cargo overrides
+  // and user environment settings keep their choice. Release is unaffected.
+  const explicitTarget = args.some(
+    (arg) => arg === '--target' || arg.startsWith('--target=')
+  );
+  const explicitSplitDebug = args.some((arg) =>
+    arg.includes('profile.dev.split-debuginfo')
+  );
+  if (
+    process.platform === 'linux' &&
+    !explicitTarget &&
+    !explicitSplitDebug &&
+    !env.CARGO_BUILD_TARGET
+  ) {
+    env.CARGO_PROFILE_DEV_SPLIT_DEBUGINFO ??= 'unpacked';
+  }
   const separator = args.indexOf('--');
   args.splice(
     separator < 0 ? args.length : separator,
@@ -22,7 +39,15 @@ if (args[0] === 'dev') {
   // explicitly also stops Tauri from re-enabling the manifest's defaults.
   // Those defaults build the release-only Wasmtime/all-arch precompiler.
   if (!args.includes('--')) args.push('--');
-  args.splice(args.indexOf('--') + 1, 0, '--no-default-features');
+  const runnerStart = args.indexOf('--') + 1;
+  const appStart = args.indexOf('--', runnerStart);
+  const runnerArgs = args.slice(
+    runnerStart,
+    appStart < 0 ? args.length : appStart
+  );
+  if (!runnerArgs.includes('--no-default-features')) {
+    args.splice(runnerStart, 0, '--no-default-features');
+  }
 }
 
 configureLinuxTrayPkgConfig(env);
