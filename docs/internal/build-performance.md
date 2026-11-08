@@ -350,11 +350,14 @@ The native Windows test build script for fixtures took 93.63s in this run.
 ### Round 2: guest fixture reuse
 
 Rust guest builds retain Cargo's source, flag and toolchain validation. Their
-existing target directories now have a dedicated CI cache. Its keys include job,
-OS, architecture, Rust version, Node version, sources and lockfiles. Separate job
-keys avoid an incomplete conformance-only E2E cache winning a race against jobs
-that build the full fixture set. This cache is separate from native targets, so
-it does not invalidate the newly populated E2E compiler cache.
+existing target directories now have a dedicated CI cache. Its keys include
+fixture set, OS, architecture, Rust version, Node version, sources and lockfiles.
+Native, runtime
+and coverage jobs share the full-set cache. The conformance-only E2E cache stays
+separate so it cannot replace a full-set entry. Only exact source keys restore,
+so stale Cargo artifacts do not accumulate across fixture revisions. Changing
+fixture inputs therefore starts a fresh guest cache. This cache is separate from
+native targets, so it does not invalidate the E2E compiler cache.
 
 TypeScript fixture components can be reused across Cargo output directories
 when source, WIT, SDK, builder recipe, lockfile, Node version and platform match.
@@ -407,3 +410,35 @@ The reports identify their output directories and can describe earlier builds
 if Cargo reuses those directories. Compiler inputs and cache recipes stay the
 same so the packaged build can restore the cache populated in round 3. Compare
 its Cargo timing report and actual restored key before interpreting elapsed time.
+
+## Review follow-ups and tradeoffs
+
+Development context generation omits `frontendDist` only when the effective
+configuration uses a dev server. Rebuilding `.output/build` must not recompile
+the development backend in that case. Release builds and debug configurations
+without a dev URL retain frontend asset tracking. The performance workflow
+creates frontend output before its initial build, changes it afterward, and
+asserts that every backend artifact remains fresh.
+
+Full fixture jobs share caches rather than storing separate copies for native,
+coverage and runtime tests. The E2E conformance-only cache remains separate.
+Exact source keys bound each entry to one fixture revision, at the cost of a cold
+guest build after source or dependency changes. Repository cache pressure can
+still evict native caches; caching does not guarantee a warm runner.
+
+Reduced dependency debug information omits dependency locals and types, while
+workspace debugging information remains complete. Linux `.dwo` files must stay
+with the build artifacts for full debugging. The launcher's split-debug default
+is an environment override, so it also takes precedence over `.cargo/config.toml`
+settings. Use an explicit `CARGO_PROFILE_DEV_SPLIT_DEBUGINFO` or inline Cargo
+profile override to select another value. Android development does not yet get
+the optional host-compiler optimization.
+
+The E2E profile does not exercise production LTO or size optimization. It can miss
+optimization-specific bugs or deadline failures that occur only with the shipped
+profile. Use `MINDSTREAM_E2E_PRODUCTION_PROFILE=1` for a pre-release comparison;
+no scheduled production-profile E2E run is added here. Release packaging on
+Windows, macOS and Android still needs its normal release validation.
+
+A release build without `bundled-aot` emits a warning unless
+`MINDSTREAM_BUNDLED_AOT=0` explicitly acknowledges runtime compilation.

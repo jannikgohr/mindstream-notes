@@ -52,13 +52,15 @@ jobs:
       # frontend server, display or user data directory is needed for this build.
       - name: Build development backend
         run: |
-          mkdir -p .output/build-performance
+          mkdir -p .output/build-performance .output/build
+          printf "frontend before build\n" > .output/build/freshness-probe.txt
           rustc --version > .output/build-performance/toolchain.txt
           /usr/bin/time -f '%e' -o .output/build-performance/initial-seconds.txt cargo build --locked --manifest-path src-tauri/Cargo.toml -p mindstream-notes --no-default-features --features dev-environment --timings
-      - name: Assert unchanged rebuild reuses all artifacts
+      - name: Assert frontend output changes do not rebuild the development backend
         env:
           CARGO_LOG: cargo::core::compiler::fingerprint=info
         run: |
+          printf 'frontend changed after build\n' > .output/build/freshness-probe.txt
           /usr/bin/time -f '%e' -o .output/build-performance/repeat-seconds.txt cargo build --locked --manifest-path src-tauri/Cargo.toml -p mindstream-notes --no-default-features --features dev-environment --timings --message-format=json > .output/build-performance/repeat.jsonl
           node scripts/check-cargo-fresh.mjs .output/build-performance/repeat.jsonl
       - name: Summarize development build
@@ -74,7 +76,7 @@ jobs:
             `Toolchain: ${read('toolchain.txt')}. Two Cargo jobs. Linux split debug information enabled.`, '',
             '| Measurement | Result |', '| --- | ---: |',
             `| Initial build, including any restored dependencies | ${read('initial-seconds.txt')} s |`,
-            `| Unchanged rebuild | ${read('repeat-seconds.txt')} s |`,
+            `| Backend rebuild after frontend output changes | ${read('repeat-seconds.txt')} s |`,
             `| Artifacts reused | ${reuse.artifacts} |`,
             `| Artifacts recompiled | ${reuse.rebuilt} |`,
             `| Executable | ${(statSync('src-tauri/target/debug/mindstream-notes').size / 1024 ** 2).toFixed(1)} MiB |`, '',

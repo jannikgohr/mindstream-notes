@@ -7,6 +7,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     precompile_builtin_plugins()?;
     let plugin_seconds = plugin_started.elapsed().as_secs_f64();
     let context_started = std::time::Instant::now();
+    use_dev_server_context()?;
     // Generate cached icons and context before rustc starts. Generating them
     // inside generate_context! makes new files newer than Cargo's compilation
     // timestamp, causing another app rebuild on the next invocation.
@@ -34,11 +35,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn use_dev_server_context() -> Result<(), Box<dyn std::error::Error>> {
+    // Codegen watches frontendDist even when devUrl supplies the frontend.
+    // Ignore production output only in that case, preserving asset tracking
+    // for releases and for debug builds that intentionally use local assets.
+    if tauri_build::is_dev()
+        && tauri_codegen::get_config(std::path::Path::new("tauri.conf.json"))?
+            .0
+            .build
+            .dev_url
+            .is_some()
+    {
+        let mut overlay: serde_json::Value =
+            serde_json::from_str(&std::env::var("TAURI_CONFIG").unwrap_or_else(|_| "{}".into()))?;
+        overlay["build"]["frontendDist"] = serde_json::Value::Null;
+        // Build scripts run before application code; this only changes the
+        // environment used by the following tauri-build/codegen calls.
+        std::env::set_var("TAURI_CONFIG", serde_json::to_string(&overlay)?);
+    }
+    Ok(())
+}
+
 fn precompile_builtin_plugins() -> Result<(), Box<dyn std::error::Error>> {
     use std::{env, fs, path::PathBuf};
     println!("cargo:rerun-if-env-changed=MINDSTREAM_BUNDLED_AOT");
     let out = PathBuf::from(env::var("OUT_DIR")?).join("plugin-precompiled");
     fs::create_dir_all(&out)?;
+    #[cfg(not(feature = "bundled-aot"))]
+    if env::var("PROFILE").as_deref() == Ok("release")
+        && env::var("MINDSTREAM_BUNDLED_AOT").as_deref() != Ok("0")
+    {
+        println!("cargo:warning=Release build has bundled AOT disabled; enable bundled-aot or set MINDSTREAM_BUNDLED_AOT=0 to acknowledge runtime compilation");
+    }
     #[cfg(feature = "bundled-aot")]
     if env::var("PROFILE").as_deref() == Ok("release")
         && env::var("MINDSTREAM_BUNDLED_AOT").as_deref() != Ok("0")

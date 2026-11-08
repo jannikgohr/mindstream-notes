@@ -228,6 +228,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # Rust validates its own guest artifacts. The TypeScript component
       # cache separately verifies source/recipe hashes and output digests.
+      # Full fixture jobs share entries. Exact source keys avoid retaining
+      # stale Cargo artifacts across fixture revisions.
       - name: Cache guest fixture builds
         uses: actions/cache@v4
         with:
@@ -235,9 +237,7 @@ jobs:
             plugin-sdk/conformance/rust/target/fixtures
             plugin-sdk/prototypes/templates-rust/target/fixtures
             .output/plugin-fixture-cache
-          key: fixtures-v1-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig.json', 'plugin-sdk/typescript/tsconfig.json', 'plugin-sdk/**/Cargo.lock', 'plugin-sdk/fixtures.mjs', 'plugin-sdk/fixture-cache.mjs', 'plugin-sdk/wit/**', 'plugin-sdk/typescript/lib/**', 'plugin-sdk/typescript/src/**', 'plugin-sdk/typescript/package.json', 'plugin-sdk/conformance/rust/Cargo.toml', 'plugin-sdk/conformance/rust/src/**', 'plugin-sdk/conformance/typescript/main.ts', 'plugin-sdk/prototypes/templates-rust/Cargo.toml', 'plugin-sdk/prototypes/templates-rust/src/**', 'plugin-sdk/examples/templates-typescript/*.ts', 'plugin-sdk/examples/typst-typescript/*.ts') }}
-          restore-keys: |
-            fixtures-v1-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-
+          key: fixtures-v2-full-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig.json', 'plugin-sdk/typescript/tsconfig.json', 'plugin-sdk/**/Cargo.lock', 'plugin-sdk/fixtures.mjs', 'plugin-sdk/fixture-cache.mjs', 'plugin-sdk/wit/**', 'plugin-sdk/typescript/lib/**', 'plugin-sdk/typescript/src/**', 'plugin-sdk/typescript/package.json', 'plugin-sdk/conformance/rust/Cargo.toml', 'plugin-sdk/conformance/rust/src/**', 'plugin-sdk/conformance/typescript/main.ts', 'plugin-sdk/prototypes/templates-rust/Cargo.toml', 'plugin-sdk/prototypes/templates-rust/src/**', 'plugin-sdk/examples/templates-typescript/*.ts', 'plugin-sdk/examples/typst-typescript/*.ts') }}
 
       # Formatting and lints run only on Linux: both are platform-agnostic,
       # and repeating them on three runners just triples the failure noise
@@ -390,6 +390,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # Rust validates its own guest artifacts. The TypeScript component
       # cache separately verifies source/recipe hashes and output digests.
+      # Full fixture jobs share entries. Exact source keys avoid retaining
+      # stale Cargo artifacts across fixture revisions.
       - name: Cache guest fixture builds
         uses: actions/cache@v4
         with:
@@ -397,9 +399,7 @@ jobs:
             plugin-sdk/conformance/rust/target/fixtures
             plugin-sdk/prototypes/templates-rust/target/fixtures
             .output/plugin-fixture-cache
-          key: fixtures-v1-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig.json', 'plugin-sdk/typescript/tsconfig.json', 'plugin-sdk/**/Cargo.lock', 'plugin-sdk/fixtures.mjs', 'plugin-sdk/fixture-cache.mjs', 'plugin-sdk/wit/**', 'plugin-sdk/typescript/lib/**', 'plugin-sdk/typescript/src/**', 'plugin-sdk/typescript/package.json', 'plugin-sdk/conformance/rust/Cargo.toml', 'plugin-sdk/conformance/rust/src/**', 'plugin-sdk/conformance/typescript/main.ts', 'plugin-sdk/prototypes/templates-rust/Cargo.toml', 'plugin-sdk/prototypes/templates-rust/src/**', 'plugin-sdk/examples/templates-typescript/*.ts', 'plugin-sdk/examples/typst-typescript/*.ts') }}
-          restore-keys: |
-            fixtures-v1-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-
+          key: fixtures-v2-full-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig.json', 'plugin-sdk/typescript/tsconfig.json', 'plugin-sdk/**/Cargo.lock', 'plugin-sdk/fixtures.mjs', 'plugin-sdk/fixture-cache.mjs', 'plugin-sdk/wit/**', 'plugin-sdk/typescript/lib/**', 'plugin-sdk/typescript/src/**', 'plugin-sdk/typescript/package.json', 'plugin-sdk/conformance/rust/Cargo.toml', 'plugin-sdk/conformance/rust/src/**', 'plugin-sdk/conformance/typescript/main.ts', 'plugin-sdk/prototypes/templates-rust/Cargo.toml', 'plugin-sdk/prototypes/templates-rust/src/**', 'plugin-sdk/examples/templates-typescript/*.ts', 'plugin-sdk/examples/typst-typescript/*.ts') }}
       - name: Measure native component execution
         shell: bash
         run: cargo run --manifest-path src-tauri/Cargo.toml --locked --release -p mindstream-plugin-runtime --example plugin-bench > plugin-native.json
@@ -554,6 +554,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # Rust validates its own guest artifacts. The TypeScript component
       # cache separately verifies source/recipe hashes and output digests.
+      # Full fixture jobs share entries. Exact source keys avoid retaining
+      # stale Cargo artifacts across fixture revisions.
       - name: Cache guest fixture builds
         uses: actions/cache@v4
         with:
@@ -561,9 +563,7 @@ jobs:
             plugin-sdk/conformance/rust/target/fixtures
             plugin-sdk/prototypes/templates-rust/target/fixtures
             .output/plugin-fixture-cache
-          key: fixtures-v1-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig.json', 'plugin-sdk/typescript/tsconfig.json', 'plugin-sdk/**/Cargo.lock', 'plugin-sdk/fixtures.mjs', 'plugin-sdk/fixture-cache.mjs', 'plugin-sdk/wit/**', 'plugin-sdk/typescript/lib/**', 'plugin-sdk/typescript/src/**', 'plugin-sdk/typescript/package.json', 'plugin-sdk/conformance/rust/Cargo.toml', 'plugin-sdk/conformance/rust/src/**', 'plugin-sdk/conformance/typescript/main.ts', 'plugin-sdk/prototypes/templates-rust/Cargo.toml', 'plugin-sdk/prototypes/templates-rust/src/**', 'plugin-sdk/examples/templates-typescript/*.ts', 'plugin-sdk/examples/typst-typescript/*.ts') }}
-          restore-keys: |
-            fixtures-v1-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-
+          key: fixtures-v2-full-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig.json', 'plugin-sdk/typescript/tsconfig.json', 'plugin-sdk/**/Cargo.lock', 'plugin-sdk/fixtures.mjs', 'plugin-sdk/fixture-cache.mjs', 'plugin-sdk/wit/**', 'plugin-sdk/typescript/lib/**', 'plugin-sdk/typescript/src/**', 'plugin-sdk/typescript/package.json', 'plugin-sdk/conformance/rust/Cargo.toml', 'plugin-sdk/conformance/rust/src/**', 'plugin-sdk/conformance/typescript/main.ts', 'plugin-sdk/prototypes/templates-rust/Cargo.toml', 'plugin-sdk/prototypes/templates-rust/src/**', 'plugin-sdk/examples/templates-typescript/*.ts', 'plugin-sdk/examples/typst-typescript/*.ts') }}
 
       - name: JS coverage
         run: pnpm test:coverage
@@ -755,6 +755,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # Rust validates its own guest artifacts. The TypeScript component
       # cache separately verifies source/recipe hashes and output digests.
+      # Full fixture jobs share entries. Exact source keys avoid retaining
+      # stale Cargo artifacts across fixture revisions.
       - name: Cache guest fixture builds
         uses: actions/cache@v4
         with:
@@ -762,9 +764,7 @@ jobs:
             plugin-sdk/conformance/rust/target/fixtures
             plugin-sdk/prototypes/templates-rust/target/fixtures
             .output/plugin-fixture-cache
-          key: fixtures-v1-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig.json', 'plugin-sdk/typescript/tsconfig.json', 'plugin-sdk/**/Cargo.lock', 'plugin-sdk/fixtures.mjs', 'plugin-sdk/fixture-cache.mjs', 'plugin-sdk/wit/**', 'plugin-sdk/typescript/lib/**', 'plugin-sdk/typescript/src/**', 'plugin-sdk/typescript/package.json', 'plugin-sdk/conformance/rust/Cargo.toml', 'plugin-sdk/conformance/rust/src/**', 'plugin-sdk/conformance/typescript/main.ts', 'plugin-sdk/prototypes/templates-rust/Cargo.toml', 'plugin-sdk/prototypes/templates-rust/src/**', 'plugin-sdk/examples/templates-typescript/*.ts', 'plugin-sdk/examples/typst-typescript/*.ts') }}
-          restore-keys: |
-            fixtures-v1-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-
+          key: fixtures-v2-conformance-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig.json', 'plugin-sdk/typescript/tsconfig.json', 'plugin-sdk/**/Cargo.lock', 'plugin-sdk/fixtures.mjs', 'plugin-sdk/fixture-cache.mjs', 'plugin-sdk/wit/**', 'plugin-sdk/typescript/lib/**', 'plugin-sdk/typescript/src/**', 'plugin-sdk/typescript/package.json', 'plugin-sdk/conformance/rust/Cargo.toml', 'plugin-sdk/conformance/rust/src/**', 'plugin-sdk/conformance/typescript/main.ts', 'plugin-sdk/prototypes/templates-rust/Cargo.toml', 'plugin-sdk/prototypes/templates-rust/src/**', 'plugin-sdk/examples/templates-typescript/*.ts', 'plugin-sdk/examples/typst-typescript/*.ts') }}
       - run: cargo install tauri-driver --locked
       # The suites' own build path (helpers/preflight.ts), not a second recipe
       # that could drift from it.
