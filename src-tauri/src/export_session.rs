@@ -493,7 +493,23 @@ pub async fn export_finish<R: Runtime>(
     };
     let save = save.ok_or_else(|| AppError::InvalidArg("Missing save options".into()))?;
     save.validate()?;
+    let Some(destination) = pick_destination(&app, &save).await? else {
+        return Ok(false);
+    };
+    blocking(move || {
+        // Keep the session, and so its staged file, alive until the copy ends.
+        let _session = session;
+        save_to(&app, destination, &staged)
+    })
+    .await?;
+    Ok(true)
+}
 
+/// Ask where to save a staged export. `None` means the user cancelled.
+async fn pick_destination<R: Runtime>(
+    app: &AppHandle<R>,
+    save: &SaveRequest,
+) -> AppResult<Option<FilePath>> {
     let (tx, rx) = oneshot::channel();
     app.dialog()
         .file()
@@ -510,17 +526,13 @@ pub async fn export_finish<R: Runtime>(
         .save_file(move |path| {
             let _ = tx.send(path);
         });
-    let Some(destination) = rx.await.map_err(|e| AppError::InvalidArg(e.to_string()))? else {
-        return Ok(false);
-    };
-    blocking(move || {
-        // Keep the session, and so its staged file, alive until the copy ends.
-        let _session = session;
-        let mut output = open_destination(&app, destination)?;
-        stream_copy(&staged, &mut output)
-    })
-    .await?;
-    Ok(true)
+    rx.await.map_err(|e| AppError::InvalidArg(e.to_string()))
+}
+
+/// Stream a staged export to the destination the user picked.
+fn save_to<R: Runtime>(app: &AppHandle<R>, destination: FilePath, staged: &Path) -> AppResult<()> {
+    let mut output = open_destination(app, destination)?;
+    stream_copy(staged, &mut output)
 }
 
 #[cfg(target_os = "android")]
@@ -536,6 +548,13 @@ fn open_destination<R: Runtime>(app: &AppHandle<R>, destination: FilePath) -> Ap
 
 #[cfg(not(target_os = "android"))]
 fn open_destination<R: Runtime>(_app: &AppHandle<R>, destination: FilePath) -> AppResult<File> {
+    open_path(destination)
+}
+
+/// Open a picked filesystem path, replacing what is there. Desktop and iOS
+/// dialogs return paths; a document-provider URI is refused.
+#[cfg(not(target_os = "android"))]
+fn open_path(destination: FilePath) -> AppResult<File> {
     let path = destination
         .into_path()
         .map_err(|e| AppError::InvalidArg(format!("path conversion: {e}")))?;
@@ -692,6 +711,24 @@ mod tests {
         sweep_staging(staging.path(), &HashSet::from([live.clone()]));
         assert!(live.exists());
         assert!(!stale.exists());
+    }
+
+    // No mock app here: on Windows it makes this test binary unloadable.
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn a_staged_export_is_copied_to_a_picked_path_and_replaces_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let staged = directory.path().join("export.zip");
+        fs::write(&staged, b"PK new archive").unwrap();
+        let destination = directory.path().join("picked.zip");
+        fs::write(&destination, b"an older and longer file").unwrap();
+        let mut output = open_path(FilePath::Path(destination.clone())).unwrap();
+        stream_copy(&staged, &mut output).unwrap();
+        drop(output);
+        assert_eq!(fs::read(&destination).unwrap(), b"PK new archive");
+
+        let url = tauri::Url::parse("content://provider/document/1").unwrap();
+        assert!(open_path(FilePath::Url(url)).is_err());
     }
 
     #[test]
