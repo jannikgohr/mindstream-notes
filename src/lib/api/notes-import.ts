@@ -23,6 +23,7 @@ import {
   invokeTauri
 } from './core';
 import { emit, TauriEventName } from './events';
+import { flushPendingEditorSaves } from '../editor/suspend-flush';
 import { browserStorageEnabled } from '../browser/commands';
 import { pickFiles } from '../browser/pick-files';
 import type { PickedSource } from '../browser/protocol';
@@ -181,7 +182,11 @@ export async function detectImportSource(
 export async function runImport(
   options: ImportOptions
 ): Promise<ImportReport | null> {
-  if (!isTauri()) return picked ? runBrowserImport(picked, options) : null;
+  if (!isTauri() && !picked) return null;
+  // The import holds the vault's write lock until it ends. What the editors
+  // still hold is saved first, rather than waiting behind it.
+  await flushPendingEditorSaves();
+  if (!isTauri()) return runBrowserImport(picked!, options);
   return parseReport(
     await invokeTauri<unknown>(TauriCommandName.NotesImportRun, { options })
   );
