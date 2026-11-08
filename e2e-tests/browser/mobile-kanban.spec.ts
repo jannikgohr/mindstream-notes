@@ -286,3 +286,20 @@ test('mobile Kanban supports list management and card actions', async ({
   });
   await expect(touchGhost).toBeHidden();
 });
+
+test('a board names itself in the mobile header', async ({ page }) => {
+  await page.goto('/');
+  await page
+    .getByRole('button', { name: 'Show everything you can create' })
+    .click();
+  await page
+    .getByRole('dialog', { name: 'Create' })
+    .getByRole('button', { name: 'New Kanban board', exact: true })
+    .click();
+  await page.getByPlaceholder('Kanban board title').fill('Named board');
+  await page.getByRole('button', { name: 'Create', exact: true }).click();
+  await expect(page.locator('.kanban-scope.mobile .wx-board')).toBeVisible();
+
+  // A board has no title heading of its own.
+  await expect(page.locator('header').getByText('Named board')).toBeVisible();
+});
