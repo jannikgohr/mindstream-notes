@@ -41,19 +41,16 @@ describe('save scheduler', () => {
     await scheduler.destroy();
   });
 
-  it('saves manual edits on explicit close without enabling autosave', async () => {
+  it('saves a pending edit when the app closes before the debounce ends', async () => {
     const save = vi.fn(async () => {});
     const scheduler = createSaveScheduler({
-      canSave: () => false,
-      canSaveOnClose: () => true,
+      canSave: () => true,
       capture: () => save
     });
     const stop = scheduler.subscribeSuspend();
     try {
       scheduler.schedule();
-      await scheduler.flush();
       expect(save).not.toHaveBeenCalled();
-      expect(scheduler.pending).toBe(true);
       await flushBeforeAppClose();
       expect(save).toHaveBeenCalledTimes(1);
       expect(scheduler.pending).toBe(false);
@@ -190,7 +187,7 @@ describe('save scheduler', () => {
     expect(onError).toHaveBeenCalledWith(error);
     expect(save).toHaveBeenCalledTimes(2);
   });
-  it('uses configurable delay and cancels a disabled autosave', async () => {
+  it('uses the configured delay and drops a save once saving is refused', async () => {
     let enabled = true;
     const save = vi.fn(async () => {});
     const scheduler = createSaveScheduler({

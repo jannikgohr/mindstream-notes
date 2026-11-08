@@ -202,8 +202,9 @@ function pickScoped(
   return picked;
 }
 
-/** Settings that no longer exist. Values saved by older builds are dropped on load. */
-const RETIRED_SETTINGS = ['appearance.accent'];
+/** Settings that no longer exist. Values saved by older builds are dropped on load.
+ *  `editor.autoSave`: saving is always on. */
+const RETIRED_SETTINGS = ['appearance.accent', 'editor.autoSave'];
 
 function loadRaw(vaultId = activeSettingsVaultId): Record<string, unknown> {
   const deviceRaw = readStorage(DEVICE_STORAGE_KEY);

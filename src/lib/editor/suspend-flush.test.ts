@@ -85,15 +85,13 @@ describe('onAppSuspend', () => {
     stop();
   });
 
-  it('saves held-back edits before a reload through the close flush', async () => {
+  it('saves every mounted editor before a reload', async () => {
     const flush = vi.fn();
-    const close = vi.fn();
-    const stop = onAppSuspend(flush, close);
+    const stop = onAppSuspend(flush);
     await flushPendingEditorSaves();
-    expect(close).toHaveBeenCalledTimes(1);
-    expect(flush).not.toHaveBeenCalled();
+    expect(flush).toHaveBeenCalledTimes(1);
     stop();
     await flushPendingEditorSaves();
-    expect(close).toHaveBeenCalledTimes(1);
+    expect(flush).toHaveBeenCalledTimes(1);
   });
 });

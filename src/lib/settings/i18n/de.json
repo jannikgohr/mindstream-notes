@@ -1644,9 +1644,6 @@
       "label": "Deckkraft des Ink-Seitenhintergrunds",
       "description": "Transparenz des Hintergrundmusters handschriftlicher Seiten."
     },
-    "editor.autoSave": {
-      "label": "Auto-Speichern"
-    },
     "hotkeys.panel": {
       "label": "Tastaturkürzel"
     },
