@@ -6,13 +6,11 @@
 //! ruinous across a million. Here the position counters live in memory and
 //! nothing is read back.
 //!
-//! Work is committed in batches rather than one transaction for the whole
-//! run, for two reasons: a cancel (or a crash) keeps everything already
-//! written, and the global connection lock is released between batches so the
-//! rest of the app isn't frozen for the duration of a large import. When the
-//! caller already holds a transaction for the whole run (see
-//! [`super::run_import_in_one_transaction`]), each batch writes inside it
-//! instead.
+//! Work is written in batches, so an import holds one batch in memory at a
+//! time. [`super::run_import`] commits each batch as it goes. The app and the
+//! browser both run [`super::run_import_in_one_transaction`] instead, where
+//! each batch writes inside the one transaction that covers the whole run, so
+//! a stopped import leaves nothing.
 
 use std::collections::HashMap;
 
