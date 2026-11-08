@@ -6,14 +6,13 @@ mod picked_files;
 mod receipts;
 
 use mindstream_storage_core::error::AppError;
-use mindstream_storage_core::import::{self, ImportFiles, ImportSourceKind, ImportStore};
+use mindstream_storage_core::import::{self, ImportFiles, ImportSourceKind};
 use mindstream_storage_core::{asset_hash, backup, migrations, proof, vault_api};
 use picked_files::{BrowserFiles, PickedFiles};
 use rusqlite::backup::{Backup, StepResult};
 use rusqlite::Connection;
 use serde::Serialize;
 use sqlite_wasm_vfs::sahpool::{install, OpfsSAHPoolCfg, OpfsSAHPoolUtil};
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::AtomicBool;
 use wasm_bindgen::prelude::*;
@@ -62,18 +61,6 @@ struct BrowserBackup {
     filename: String,
     counts: backup::Counts,
     account_present: bool,
-}
-
-/// The worker's one connection, as the importer writes to it.
-struct LiveStore<'a>(RefCell<&'a mut Connection>);
-
-impl ImportStore for LiveStore<'_> {
-    fn with_conn_mut<T>(
-        &self,
-        write: impl FnOnce(&mut Connection) -> Result<T, AppError>,
-    ) -> Result<T, AppError> {
-        write(&mut self.0.borrow_mut())
-    }
 }
 
 #[wasm_bindgen]
@@ -301,8 +288,8 @@ impl BrowserDatabase {
         .map_err(error)
     }
 
-    /// Run an import to the end. A cancel terminates this worker, so what
-    /// earlier batches committed stays and the one in flight rolls back.
+    /// Run an import as one transaction. A cancel terminates this worker, and
+    /// opening the database again rolls the whole import back.
     pub fn import_notes(
         &mut self,
         picked: PickedFiles,
@@ -327,9 +314,8 @@ impl BrowserDatabase {
             Box::new(files)
         };
         let mut source = import::build_source(kind, files, name);
-        let store = LiveStore(RefCell::new(self.connection()?));
-        let report = import::run_import(
-            &store,
+        let report = import::run_import_in_one_transaction(
+            self.connection()?,
             source.as_mut(),
             &options,
             &AtomicBool::new(false),

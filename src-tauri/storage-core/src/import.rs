@@ -283,6 +283,72 @@ pub fn run_import(
     Ok(report)
 }
 
+/// [`run_import`] as one transaction: the whole import lands, or none of it.
+///
+/// For a connection nothing else writes to while the import runs, which is
+/// why it takes the connection itself: the browser's storage worker answers
+/// one request at a time, so the import holds the database either way.
+/// Batches still flush as [`run_import`] flushes them, so memory stays at one
+/// batch. What they write before the commit is the transaction's, and SQLite
+/// spills it to the database file under the rollback journal once its page
+/// cache is full, so the open transaction costs disk space, not memory. A
+/// stopped worker leaves that journal behind, and opening the database rolls
+/// the import back.
+///
+/// A cancelled run rolls back and reports nothing imported. Progress pings
+/// carry an empty `committed` report: nothing is committed before the end.
+pub fn run_import_in_one_transaction(
+    conn: &mut Connection,
+    source: &mut dyn source::ImportSource,
+    options: &ImportOptions,
+    cancelled: &AtomicBool,
+    mut on_progress: impl FnMut(ImportProgress),
+) -> AppResult<ImportReport> {
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    let result = {
+        let store = OneConnection(std::cell::RefCell::new(&mut *conn));
+        run_import(&store, source, options, cancelled, |progress| {
+            on_progress(ImportProgress {
+                committed: ImportReport::default(),
+                ..progress
+            })
+        })
+    };
+    let finish = match &result {
+        Ok(report) if !report.cancelled => conn.execute_batch("COMMIT"),
+        _ => conn.execute_batch("ROLLBACK"),
+    };
+    if let Err(err) = finish {
+        // A failed COMMIT can leave the transaction open.
+        if !conn.is_autocommit() {
+            let _ = conn.execute_batch("ROLLBACK");
+        }
+        result?;
+        return Err(err.into());
+    }
+    let report = result?;
+    Ok(if report.cancelled {
+        ImportReport {
+            cancelled: true,
+            ..ImportReport::default()
+        }
+    } else {
+        report
+    })
+}
+
+/// The one connection [`run_import_in_one_transaction`] writes through.
+struct OneConnection<'a>(std::cell::RefCell<&'a mut Connection>);
+
+impl ImportStore for OneConnection<'_> {
+    fn with_conn_mut<T>(
+        &self,
+        write: impl FnOnce(&mut Connection) -> AppResult<T>,
+    ) -> AppResult<T> {
+        write(&mut self.0.borrow_mut())
+    }
+}
+
 /// Commit the prepared batch, then fold its counters into the report. The
 /// counters move only after `write_batch` returns, so a rolled-back batch
 /// contributes nothing.

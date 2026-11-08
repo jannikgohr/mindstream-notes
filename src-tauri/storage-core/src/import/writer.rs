@@ -9,7 +9,10 @@
 //! Work is committed in batches rather than one transaction for the whole
 //! run, for two reasons: a cancel (or a crash) keeps everything already
 //! written, and the global connection lock is released between batches so the
-//! rest of the app isn't frozen for the duration of a large import.
+//! rest of the app isn't frozen for the duration of a large import. When the
+//! caller already holds a transaction for the whole run (see
+//! [`super::run_import_in_one_transaction`]), each batch writes inside it
+//! instead.
 
 use std::collections::HashMap;
 
@@ -20,6 +23,43 @@ use crate::notes::NoteKind;
 
 use super::model::{AttachmentRef, FolderIndex, StagedNote};
 use super::ImportStore;
+
+/// One write step's transaction: its own, or the caller's when one is already
+/// open. A nested `BEGIN` would fail, and a savepoint would keep a statement
+/// journal in memory for the whole batch.
+enum Batch<'c> {
+    Own(rusqlite::Transaction<'c>),
+    Shared(&'c Connection),
+}
+
+impl<'c> Batch<'c> {
+    fn begin(conn: &'c mut Connection) -> AppResult<Self> {
+        Ok(if conn.is_autocommit() {
+            Batch::Own(conn.transaction()?)
+        } else {
+            Batch::Shared(conn)
+        })
+    }
+
+    /// Commit a transaction of its own; the caller commits a shared one.
+    fn commit(self) -> AppResult<()> {
+        if let Batch::Own(tx) = self {
+            tx.commit()?;
+        }
+        Ok(())
+    }
+}
+
+impl std::ops::Deref for Batch<'_> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Connection {
+        match self {
+            Batch::Own(tx) => tx,
+            Batch::Shared(conn) => conn,
+        }
+    }
+}
 
 /// A note ready to be written, with its attachment bytes already read.
 pub struct PreparedNote {
@@ -86,7 +126,7 @@ pub fn write_folders(
         return Ok(0);
     }
     store.with_conn_mut(|conn| {
-        let tx = conn.transaction()?;
+        let tx = Batch::begin(conn)?;
         let now = chrono::Utc::now().to_rfc3339();
         let mut positions = PositionCounters::default();
         {
@@ -125,7 +165,7 @@ pub fn write_batch(
         return Ok(BatchOutcome::default());
     }
     store.with_conn_mut(|conn| {
-        let tx = conn.transaction()?;
+        let tx = Batch::begin(conn)?;
         let now = chrono::Utc::now().to_rfc3339();
         let mut outcome = BatchOutcome::default();
 
@@ -274,7 +314,7 @@ pub fn write_placeholders(
         return Ok(0);
     }
     store.with_conn_mut(|conn| {
-        let tx = conn.transaction()?;
+        let tx = Batch::begin(conn)?;
         let now = chrono::Utc::now().to_rfc3339();
         {
             let mut stmt = tx.prepare_cached(

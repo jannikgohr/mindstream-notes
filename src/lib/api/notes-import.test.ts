@@ -216,22 +216,15 @@ describe('notes-import — browser storage', () => {
     expect(browser.run.mock.calls[0][1]).toEqual(OPTIONS);
   });
 
-  it('reports what committed when the user stops the run', async () => {
+  it('reports nothing imported when the user stops the run', async () => {
     const { run, reject } = await pickAndHoldRun();
-    // 520 items were processed, but 20 of them failed, so only 500 notes landed.
-    // The snapshot also carries the folder and placeholder counts.
+    // Pings from older builds still counted batches as committed. The whole
+    // import rolls back now, so they do not count.
     browser.run.mock.calls[0][2]({
       phase: 'importing',
       done: 520,
       total: 900,
-      committed: {
-        ...REPORT,
-        notes_created: 500,
-        folders_created: 1,
-        placeholders_created: 2,
-        errors: 3,
-        cancelled: false
-      }
+      committed: { ...REPORT, notes_created: 500, cancelled: false }
     });
 
     await cancelImport();
@@ -239,11 +232,15 @@ describe('notes-import — browser storage', () => {
     reject({ code: 'closed', message: 'Storage worker is closed' });
 
     await expect(run).resolves.toEqual({
-      ...REPORT,
-      notes_created: 500,
-      folders_created: 1,
-      placeholders_created: 2,
-      errors: 3,
+      notes_created: 0,
+      folders_created: 0,
+      placeholders_created: 0,
+      attachments_imported: 0,
+      attachments_deduplicated: 0,
+      attachments_too_large: 0,
+      links_resolved: 0,
+      links_unresolved: 0,
+      errors: 0,
       cancelled: true
     });
   });
