@@ -110,6 +110,9 @@ fn perform(app: &AppHandle, input: Input) -> AppResult<Value> {
         ));
     }
     let _job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    if template(&input).is_some() {
+        crate::import::refuse_while_importing(app)?;
+    }
     let root = crate::paths::app_data_root(app)?;
     let vault = crate::paths::app_data_dir(app)?;
     let active = app.state::<crate::paths::ActiveProfile>();

@@ -98,4 +98,24 @@ describe('backup archive', () => {
       );
     }
   });
+
+  it('checks the size it unpacked too, not only the size the zip declares', () => {
+    const zip = zipSync(
+      { 'manifest.json': strToU8('{}'), 'data.db': new Uint8Array(64) },
+      { level: 0 }
+    );
+    // Claim a one-byte snapshot in the central directory record for data.db.
+    const view = new DataView(zip.buffer);
+    let offset = zip.length - 22;
+    offset = view.getUint32(offset + 16, true);
+    offset += 46 + view.getUint16(offset + 28, true);
+    view.setUint32(offset + 24, 1, true);
+
+    expect(() => unpackBackup(zip, 16)).toThrow(
+      expect.objectContaining({
+        message: 'This backup is too large to restore in a browser.'
+      })
+    );
+    expect(unpackBackup(zip, 64).database).toHaveLength(64);
+  });
 });

@@ -17,6 +17,10 @@ vi.mock('../browser/commands', async (importOriginal) => ({
   browserStorageEnabled: () => browser.enabled
 }));
 vi.mock('../browser/pick-files', () => ({ pickFiles: browser.pick }));
+const saveEditors = vi.hoisted(() => vi.fn());
+vi.mock('../editor/suspend-flush', () => ({
+  flushPendingEditorSaves: saveEditors
+}));
 vi.mock('../browser/vault', () => ({
   detectBrowserNotes: browser.detect,
   importBrowserNotes: browser.run,
@@ -216,22 +220,15 @@ describe('notes-import — browser storage', () => {
     expect(browser.run.mock.calls[0][1]).toEqual(OPTIONS);
   });
 
-  it('reports what committed when the user stops the run', async () => {
+  it('reports nothing imported when the user stops the run', async () => {
     const { run, reject } = await pickAndHoldRun();
-    // 520 items were processed, but 20 of them failed, so only 500 notes landed.
-    // The snapshot also carries the folder and placeholder counts.
+    // Pings from older builds still counted batches as committed. The whole
+    // import rolls back now, so they do not count.
     browser.run.mock.calls[0][2]({
       phase: 'importing',
       done: 520,
       total: 900,
-      committed: {
-        ...REPORT,
-        notes_created: 500,
-        folders_created: 1,
-        placeholders_created: 2,
-        errors: 3,
-        cancelled: false
-      }
+      committed: { ...REPORT, notes_created: 500, cancelled: false }
     });
 
     await cancelImport();
@@ -239,11 +236,15 @@ describe('notes-import — browser storage', () => {
     reject({ code: 'closed', message: 'Storage worker is closed' });
 
     await expect(run).resolves.toEqual({
-      ...REPORT,
-      notes_created: 500,
-      folders_created: 1,
-      placeholders_created: 2,
-      errors: 3,
+      notes_created: 0,
+      folders_created: 0,
+      placeholders_created: 0,
+      attachments_imported: 0,
+      attachments_deduplicated: 0,
+      attachments_too_large: 0,
+      links_resolved: 0,
+      links_unresolved: 0,
+      errors: 0,
       cancelled: true
     });
   });
@@ -276,6 +277,16 @@ describe('notes-import — browser storage', () => {
     await expect(run).rejects.toBe(failure);
   });
 
+  it('runs the same pick again after a failed run', async () => {
+    const { run, reject } = await pickAndHoldRun();
+    reject({ code: 'database', message: 'Disk full' });
+    await expect(run).rejects.toBeDefined();
+    browser.run.mockResolvedValue(report);
+    await expect(runImport(OPTIONS)).resolves.toEqual(report);
+    expect(browser.run).toHaveBeenCalledTimes(2);
+    expect(await runImport(OPTIONS)).toBeNull();
+  });
+
   it('has nothing to stop or run without a pick', async () => {
     await cancelImport();
     expect(browser.cancel).not.toHaveBeenCalled();
@@ -297,6 +308,25 @@ describe('notes-import — inside Tauri', () => {
     invoke.mockReset();
   });
   afterEach(() => setTauri(false));
+
+  it('saves open editors before the import takes the write lock', async () => {
+    const order: string[] = [];
+    saveEditors.mockImplementation(async () => {
+      order.push('save');
+    });
+    invoke.mockImplementation(async () => {
+      order.push('import');
+      return REPORT;
+    });
+    await runImport(OPTIONS);
+    expect(order).toEqual(['save', 'import']);
+  });
+
+  it('does not import when saving the editors fails', async () => {
+    saveEditors.mockRejectedValueOnce(new Error('disk full'));
+    await expect(runImport(OPTIONS)).rejects.toThrow('disk full');
+    expect(invoke).not.toHaveBeenCalled();
+  });
 
   it('forwards the options object under the key Rust expects', async () => {
     invoke.mockResolvedValue(REPORT);

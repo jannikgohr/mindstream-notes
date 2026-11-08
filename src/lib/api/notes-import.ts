@@ -23,6 +23,7 @@ import {
   invokeTauri
 } from './core';
 import { emit, TauriEventName } from './events';
+import { flushPendingEditorSaves } from '../editor/suspend-flush';
 import { browserStorageEnabled } from '../browser/commands';
 import { pickFiles } from '../browser/pick-files';
 import type { PickedSource } from '../browser/protocol';
@@ -87,6 +88,7 @@ export interface ImportProgress {
   /**
    * Every report counter as of the last commit. Optional so progress from
    * older payloads, and test fixtures that only track the phase, still type.
+   * A browser import commits only at the end, so its pings carry zeros.
    */
   committed?: ImportReport;
 }
@@ -118,8 +120,7 @@ export const DEFAULT_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 /** The browser's pick, kept here because a `File` can't travel in a path. */
 let picked: PickedSource | null = null;
-let running: { cancelled: boolean; committed: ImportReport | null } | null =
-  null;
+let running: { cancelled: boolean } | null = null;
 
 export async function pickImportFolder(): Promise<string | null> {
   if (!isTauri()) {
@@ -181,7 +182,11 @@ export async function detectImportSource(
 export async function runImport(
   options: ImportOptions
 ): Promise<ImportReport | null> {
-  if (!isTauri()) return picked ? runBrowserImport(picked, options) : null;
+  if (!isTauri() && !picked) return null;
+  // The import holds the vault's write lock until it ends. What the editors
+  // still hold is saved first, rather than waiting behind it.
+  await flushPendingEditorSaves();
+  if (!isTauri()) return runBrowserImport(picked!, options);
   return parseReport(
     await invokeTauri<unknown>(TauriCommandName.NotesImportRun, { options })
   );
@@ -192,34 +197,40 @@ async function runBrowserImport(
   options: ImportOptions
 ): Promise<ImportReport> {
   const { importBrowserNotes } = await import('../browser/vault');
-  const run: { cancelled: boolean; committed: ImportReport | null } = {
-    cancelled: false,
-    committed: null
-  };
+  const run = { cancelled: false };
   running = run;
   try {
-    return parseReport(
+    const report = parseReport(
       await importBrowserNotes(source, { ...options }, (progress) => {
-        if (progress.committed) run.committed = progress.committed;
         void emit(TauriEventName.ImportProgress, progress);
       })
     );
+    picked = null;
+    return report;
   } catch (error) {
+    // A failed run keeps the pick: the dialog goes back to its options, and
+    // Import there runs the same source again.
     if (!run.cancelled) throw error;
-    // The stopped worker can't report. Its last progress ping carries the
-    // counters as of the last commit. `done` counts failed items, so it is
-    // not used for the report.
-    return { ...(run.committed ?? EMPTY_REPORT), cancelled: true };
+    picked = null;
+    // The browser runs an import as one transaction, so a stopped one leaves
+    // nothing behind: the next open of the vault rolls it back.
+    return { ...EMPTY_REPORT, cancelled: true };
   } finally {
     running = null;
-    picked = null;
+    // As the app's import command does, however the run ended.
+    void emit(TauriEventName.ImportProgress, {
+      phase: 'finished',
+      done: 0,
+      total: 0
+    });
   }
 }
 
 /**
- * Ask a running import to stop. The run finishes its current batch and keeps
- * everything already written — a partial import is a real outcome, not a
- * failure, so the report comes back with `cancelled: true`.
+ * Ask a running import to stop, with the report coming back as
+ * `cancelled: true`. The app's run finishes its current batch and keeps
+ * everything already written. A browser run is one transaction and keeps
+ * nothing.
  */
 export async function cancelImport(): Promise<void> {
   if (!isTauri()) {

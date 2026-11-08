@@ -146,6 +146,18 @@ mod tests {
     }
 
     #[test]
+    fn snippet_keeps_angle_brackets_in_code() {
+        let db = open_memory_for_tests();
+        let body = "<div>Before</div>\nUse `Map<Key>`\n```ts\nconst r: Promise<Needle> = f();\n```";
+        seed_note(&db, "Trip", body);
+        let hits = db.with_conn(|c| search(c, "trip")).unwrap();
+        assert_eq!(
+            hits[0].snippet,
+            "Before · Use Map<Key> · const r: Promise<Needle> = f();"
+        );
+    }
+
+    #[test]
     fn title_match_ranges_returned() {
         let db = open_memory_for_tests();
         seed_note(&db, "the FooBar lives", "");

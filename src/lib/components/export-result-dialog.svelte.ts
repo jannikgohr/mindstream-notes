@@ -279,10 +279,18 @@ export function showMergeResult(report: MergeReport): Promise<string> {
  */
 export function showImportResult(report: ImportReport): Promise<string> {
   const clean = report.errors === 0 && !report.cancelled;
+  // A browser import is one transaction, so stopping it keeps nothing.
+  const keptNothing =
+    report.cancelled &&
+    report.notes_created === 0 &&
+    report.folders_created === 0;
   return showDataResult({
     titleKey: report.cancelled
       ? 'data.importNotes.result.stopped.title'
       : 'data.importNotes.result.success.title',
+    ...(keptNothing
+      ? { descriptionKey: 'data.importNotes.result.stopped.nothing' }
+      : {}),
     headerIcon: report.cancelled ? 'alertTriangle' : 'partyPopper',
     tone: clean ? 'success' : 'warning',
     primaryAction: {

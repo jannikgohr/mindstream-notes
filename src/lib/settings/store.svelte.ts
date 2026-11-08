@@ -285,8 +285,16 @@ export const settings = $state<SettingsState>({
 // A tab that could not open its vault kept the settings it read at startup,
 // and another tab may have saved newer ones since. When this tab gets its
 // vault after all, read them again before anything here is saved over them.
+// The same goes for a tab whose worker stopped: another tab may have owned
+// the vault until this one reconnected.
+let settingsMayBeStale = false;
 onVaultAccessChange((status, previous) => {
-  if (isTauri() || status !== 'ready' || previous !== 'unavailable') return;
+  if (isTauri()) return;
+  if (previous === 'ready' && status !== 'ready') settingsMayBeStale = true;
+  if (status !== 'ready') return;
+  const stale = settingsMayBeStale || previous === 'unavailable';
+  settingsMayBeStale = false;
+  if (!stale) return;
   if (persistTimer) {
     clearTimeout(persistTimer);
     persistTimer = null;

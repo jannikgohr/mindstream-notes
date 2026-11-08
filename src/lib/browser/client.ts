@@ -27,6 +27,8 @@ export class BrowserStorageClient {
   private slowRequests = 0;
   /** Hears a running notes import, which reports between its batches. */
   onProgress?: (progress: ImportProgressMessage) => void;
+  /** Called once when the worker stops, for whatever reason. */
+  onClose?: () => void;
 
   constructor(
     createWorker = () =>
@@ -135,5 +137,6 @@ export class BrowserStorageClient {
       pending.reject(error);
     }
     this.pending.clear();
+    this.onClose?.();
   }
 }

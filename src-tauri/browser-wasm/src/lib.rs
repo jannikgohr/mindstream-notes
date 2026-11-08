@@ -6,14 +6,13 @@ mod picked_files;
 mod receipts;
 
 use mindstream_storage_core::error::AppError;
-use mindstream_storage_core::import::{self, ImportFiles, ImportSourceKind, ImportStore};
+use mindstream_storage_core::import::{self, ImportFiles, ImportSourceKind};
 use mindstream_storage_core::{asset_hash, backup, migrations, proof, vault_api};
 use picked_files::{BrowserFiles, PickedFiles};
 use rusqlite::backup::{Backup, StepResult};
 use rusqlite::Connection;
 use serde::Serialize;
 use sqlite_wasm_vfs::sahpool::{install, OpfsSAHPoolCfg, OpfsSAHPoolUtil};
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::AtomicBool;
 use wasm_bindgen::prelude::*;
@@ -39,6 +38,14 @@ const BACKUP_SNAPSHOT: &str = "/backup-snapshot.sqlite3";
 /// Where a backup waits for the user's choice in the import dialog.
 const STAGED_BACKUP: &str = "/staged-backup.sqlite3";
 
+/// Delete a scratch database along with the rollback journal a write cut off
+/// halfway leaves beside it. The pool deletes exactly the name it is given,
+/// and a stray journal would hold one of its few files until the next backup.
+fn delete_scratch(pool: &OpfsSAHPoolUtil, name: &str) {
+    let _ = pool.delete_db(name);
+    let _ = pool.delete_db(&format!("{name}-journal"));
+}
+
 /// A restore holds the vault, a staged backup and a safety snapshot at once,
 /// and each can need a journal. The pool's default of 6 would be just enough.
 const POOL_CAPACITY: u32 = 8;
@@ -54,18 +61,6 @@ struct BrowserBackup {
     filename: String,
     counts: backup::Counts,
     account_present: bool,
-}
-
-/// The worker's one connection, as the importer writes to it.
-struct LiveStore<'a>(RefCell<&'a mut Connection>);
-
-impl ImportStore for LiveStore<'_> {
-    fn with_conn_mut<T>(
-        &self,
-        write: impl FnOnce(&mut Connection) -> Result<T, AppError>,
-    ) -> Result<T, AppError> {
-        write(&mut self.0.borrow_mut())
-    }
 }
 
 #[wasm_bindgen]
@@ -188,9 +183,9 @@ impl BrowserDatabase {
     /// A snapshot and manifest in the native backup format. A snapshot left
     /// by an interrupted backup is replaced, and nothing stays behind.
     pub fn backup(&mut self) -> Result<JsValue, JsValue> {
-        let _ = self.pool.delete_db(BACKUP_SNAPSHOT);
+        delete_scratch(&self.pool, BACKUP_SNAPSHOT);
         let result = self.write_backup();
-        let _ = self.pool.delete_db(BACKUP_SNAPSHOT);
+        delete_scratch(&self.pool, BACKUP_SNAPSHOT);
         result
     }
 
@@ -293,8 +288,8 @@ impl BrowserDatabase {
         .map_err(error)
     }
 
-    /// Run an import to the end. A cancel terminates this worker, so what
-    /// earlier batches committed stays and the one in flight rolls back.
+    /// Run an import as one transaction. A cancel terminates this worker, and
+    /// opening the database again rolls the whole import back.
     pub fn import_notes(
         &mut self,
         picked: PickedFiles,
@@ -319,9 +314,8 @@ impl BrowserDatabase {
             Box::new(files)
         };
         let mut source = import::build_source(kind, files, name);
-        let store = LiveStore(RefCell::new(self.connection()?));
-        let report = import::run_import(
-            &store,
+        let report = import::run_import_in_one_transaction(
+            self.connection()?,
             source.as_mut(),
             &options,
             &AtomicBool::new(false),
@@ -414,8 +408,8 @@ impl BrowserDatabase {
         match opened {
             Ok(conn) => {
                 // A backup or import left here by a closed tab has no owner.
-                let _ = pool.delete_db(BACKUP_SNAPSHOT);
-                let _ = pool.delete_db(STAGED_BACKUP);
+                delete_scratch(&pool, BACKUP_SNAPSHOT);
+                delete_scratch(&pool, STAGED_BACKUP);
                 Ok(Self {
                     conn: Some(conn),
                     pool,
@@ -477,7 +471,7 @@ impl BrowserDatabase {
 
     fn discard_staged(&mut self) {
         self.staged = None;
-        let _ = self.pool.delete_db(STAGED_BACKUP);
+        delete_scratch(&self.pool, STAGED_BACKUP);
     }
 
     fn write_backup(&mut self) -> Result<JsValue, JsValue> {

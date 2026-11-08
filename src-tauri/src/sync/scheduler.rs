@@ -157,6 +157,14 @@ pub fn spawn(app: AppHandle) {
 /// no difference between scheduler-triggered and user-triggered
 /// syncs.
 async fn tick(app: &AppHandle) -> Result<(), String> {
+    // An import holds the database's write lock until it ends. The next tick
+    // syncs what it brought in.
+    if app
+        .try_state::<crate::import::ImportState>()
+        .is_some_and(|import| import.is_running())
+    {
+        return Ok(());
+    }
     let Ok(job) = app.state::<crate::vault_jobs::Jobs>().enter() else {
         return Ok(());
     };

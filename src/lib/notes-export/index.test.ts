@@ -93,6 +93,27 @@ function seed(id: string, kind: string, body = '', yrs_state: number[] = []) {
 }
 
 describe('vault export additions', () => {
+  it('never puts a note file on the path of a folder', async () => {
+    const collections = state.collections as Record<string, unknown>;
+    collections.folder = {
+      id: 'folder',
+      name: 'plan.md',
+      parent_collection_id: null
+    };
+    try {
+      seed('plan', 'markdown', 'Root');
+      state.notes.plan.title = 'Plan';
+      seed('child', 'markdown', 'Inside');
+      state.notes.child.parent_collection_id = 'folder';
+      await exportVault(state.writeExportFile);
+      expect(
+        state.writeExportFile.mock.calls.map(([path]) => path).sort()
+      ).toEqual(['Plan_2.md', 'plan.md/Same title.md']);
+    } finally {
+      delete collections.folder;
+    }
+  });
+
   it('reports an attachment write failure and continues exporting other notes', async () => {
     seed('image', 'markdown', '![image](asset:mindstream/asset_one)');
     seed('source', 'plugin.com.mindstream.typst.document', '= Kept');

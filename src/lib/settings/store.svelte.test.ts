@@ -517,4 +517,24 @@ describe('vault access', () => {
     access.markVaultReady();
     expect(getSettingValue(id)).toBe('owner');
   });
+
+  it('reads settings again after the vault reconnects', async () => {
+    const access = await import('$lib/storage/vault-access.svelte');
+    access.markVaultReady();
+    settings.values[id] = 'stale';
+    access.markVaultLost();
+    // Another tab took the vault while this one's worker was gone.
+    const scope = BY_ID[id]?.scope === 'V' ? vaultKey : deviceKey;
+    localStorage.setItem(scope, JSON.stringify({ [id]: 'owner' }));
+    access.markVaultReady();
+    expect(getSettingValue(id)).toBe('owner');
+  });
+
+  it('keeps settings in memory when the vault opens the first time', async () => {
+    const access = await import('$lib/storage/vault-access.svelte');
+    access.resetVaultAccessForTests('pending');
+    settings.values[id] = 'in memory';
+    access.markVaultReady();
+    expect(getSettingValue(id)).toBe('in memory');
+  });
 });

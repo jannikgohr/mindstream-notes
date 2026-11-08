@@ -510,7 +510,13 @@ where
     let Some(destination) = pick(app.clone(), save).await? else {
         return Ok(false);
     };
+    // Registered only once the dialog is done, so a dialog left open does not
+    // hold up a shutdown. From here the shutdown waits for the copy: it
+    // truncates the destination first, and stopping halfway would leave a
+    // broken file where the user's old one was.
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
     blocking(move || {
+        let _job = job;
         // Keep the session, and so its staged file, alive until the copy ends.
         let _session = session;
         save_to(&app, destination, &staged)

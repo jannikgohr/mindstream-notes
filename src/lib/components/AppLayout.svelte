@@ -26,6 +26,8 @@
   import { setTrashRetention, sweepTrashRetention } from '$lib/api/data';
   import { setSyncSchedule } from '$lib/api/sync';
   import LazyRootSingletons from '$lib/components/LazyRootSingletons.svelte';
+  import ImportProgressOverlay from '$lib/components/ImportProgressOverlay.svelte';
+  import { installImportActivityBridge } from '$lib/storage/import-activity-bridge';
   import { installOpenedInviteLinkBridge } from '$lib/sharing/opened-links';
   import DiagnosticPopover from '$lib/components/note-editor/DiagnosticPopover.svelte';
   import {
@@ -65,6 +67,7 @@
   let { children } = $props();
 
   onMount(installWorkerCloseBridge);
+  onMount(installImportActivityBridge);
 
   // Document initialization and cross-window refresh replace the snapshot.
   // Hydration also renames legacy keys, so keep those mutations untracked.
@@ -380,3 +383,4 @@
 <DiagnosticPopover />
 
 <LazyRootSingletons />
+<ImportProgressOverlay />

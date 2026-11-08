@@ -5,6 +5,7 @@ import {
   writeAppStorage
 } from './app-storage';
 import {
+  markVaultLost,
   markVaultReady,
   markVaultUnavailable,
   registerVaultAccessProbe,
@@ -52,5 +53,18 @@ describe('app storage', () => {
     // Nothing held survives into a later successful load.
     markVaultReady();
     expect(localStorage.getItem('k')).toBe('owner');
+  });
+
+  it('drops writes held while the vault reconnects after a lost worker', () => {
+    markVaultReady();
+    writeAppStorage('k', 'before');
+    markVaultLost();
+    // Another tab owned the vault meanwhile and saved its own value.
+    localStorage.setItem('k', 'other tab');
+    writeAppStorage('k', 'stale snapshot');
+    markVaultReady();
+    expect(localStorage.getItem('k')).toBe('other tab');
+    writeAppStorage('k', 'after');
+    expect(localStorage.getItem('k')).toBe('after');
   });
 });
