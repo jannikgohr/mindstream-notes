@@ -54,7 +54,8 @@ import {
   downloadVaultExport,
   exportVault,
   exportVaultToFolder,
-  saveVaultArchive
+  saveVaultArchive,
+  streamVaultExport
 } from './index';
 
 beforeEach(() => {
@@ -312,5 +313,46 @@ describe('native export sessions', () => {
     expect(native.session.copyAsset).not.toHaveBeenCalled();
     expect(pdf.build).toHaveBeenCalledWith('plain');
     expect(written()).toContain('Same title.pdf');
+  });
+});
+
+describe('streamed browser export', () => {
+  const file = () => ({
+    chunks: [] as Uint8Array[],
+    write: vi.fn(async function (this: { chunks: Uint8Array[] }, chunk) {
+      this.chunks.push(chunk.slice());
+    }),
+    close: vi.fn(async () => {}),
+    abort: vi.fn(async () => {})
+  });
+
+  it('streams the vault zip into the picked file and closes it', async () => {
+    seed('typst', 'plugin.com.mindstream.typst.document', '= Good');
+    const target = file();
+    const report = await streamVaultExport(target);
+    expect(report.typst_written).toBe(1);
+    expect(target.close).toHaveBeenCalledOnce();
+    expect(target.abort).not.toHaveBeenCalled();
+    const bytes = new Uint8Array(
+      target.chunks.reduce((n, c) => n + c.length, 0)
+    );
+    let offset = 0;
+    for (const chunk of target.chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.length;
+    }
+    const { unzipSync } = await import('fflate');
+    expect(new TextDecoder().decode(unzipSync(bytes)['Same title.typ'])).toBe(
+      '= Good'
+    );
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it('discards the partial file when writing fails', async () => {
+    seed('typst', 'plugin.com.mindstream.typst.document', '= Good');
+    const target = file();
+    target.close.mockRejectedValue(new Error('disk full'));
+    await expect(streamVaultExport(target)).rejects.toThrow('disk full');
+    expect(target.abort).toHaveBeenCalledOnce();
   });
 });
