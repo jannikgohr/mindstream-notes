@@ -306,6 +306,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Summarize native fixture builds
+        if: always()
+        run: node scripts/summarize-fixture-builds.mjs src-tauri/target/debug/build
+
   bundled-plugins:
     name: Shipped Rust plugins
     runs-on: ubuntu-latest
@@ -786,6 +790,10 @@ jobs:
             src-tauri/target/release/build/mindstream-notes-*/out/build-timings.json
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Summarize packaged app fixture builds
+        if: always()
+        run: node scripts/summarize-fixture-builds.mjs .output/app-e2e-fixtures
 
       - uses: actions/upload-artifact@v4
         with:
