@@ -29,6 +29,8 @@ import {
   markVaultUnavailable,
   registerVaultAccessProbe
 } from '$lib/storage/vault-access.svelte';
+import { flushPendingEditorSaves } from '$lib/editor/suspend-flush';
+import { ancestorIsTrash } from '$lib/editor/trash';
 
 interface TreeState {
   tree: TreeNode[];
@@ -187,10 +189,24 @@ export async function trashNote(id: string): Promise<void> {
   await moveNoteTo(id, TRASH_ID);
 }
 
+/**
+ * An open editor turns read-only once its note lands in the trash, and a
+ * read-only editor saves nothing, not even on close. So whatever the editors
+ * still hold is saved before anything moves into the trash.
+ */
+async function saveEditorsBeforeTrashing(
+  targetCollectionId: string | null
+): Promise<void> {
+  if (!ancestorIsTrash(targetCollectionId, tree.collectionsById, TRASH_ID))
+    return;
+  await flushPendingEditorSaves();
+}
+
 export async function moveNoteTo(
   noteId: string,
   targetCollectionId: string | null
 ): Promise<void> {
+  await saveEditorsBeforeTrashing(targetCollectionId);
   const note = await api.saveNote({
     id: noteId,
     parent_collection_id: targetCollectionId
@@ -202,6 +218,7 @@ export async function moveManyTo(
   items: TreeItemRef[],
   targetCollectionId: string | null
 ): Promise<api.BatchCounts> {
+  await saveEditorsBeforeTrashing(targetCollectionId);
   const result = await api.moveMany(items, targetCollectionId);
   await loadTree();
   return result;
@@ -354,6 +371,7 @@ export async function moveCollectionTo(
   collectionId: string,
   targetCollectionId: string | null
 ): Promise<void> {
+  await saveEditorsBeforeTrashing(targetCollectionId);
   await api.updateCollection({
     id: collectionId,
     parent_collection_id: targetCollectionId
@@ -389,6 +407,7 @@ export async function stopSharingCollection(id: string): Promise<void> {
 export async function trashMany(
   items: TreeItemRef[]
 ): Promise<api.BatchCounts> {
+  await saveEditorsBeforeTrashing(TRASH_ID);
   const result = await api.trashMany(items);
   await loadTree();
   return result;

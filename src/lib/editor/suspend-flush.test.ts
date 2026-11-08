@@ -1,5 +1,10 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { flushBeforeAppClose, onAppClose, onAppSuspend } from './suspend-flush';
+import {
+  flushBeforeAppClose,
+  flushPendingEditorSaves,
+  onAppClose,
+  onAppSuspend
+} from './suspend-flush';
 
 function setVisibility(state: 'visible' | 'hidden') {
   Object.defineProperty(document, 'visibilityState', {
@@ -78,5 +83,17 @@ describe('onAppSuspend', () => {
     window.dispatchEvent(new Event('pagehide'));
     expect(flush).toHaveBeenCalledTimes(2);
     stop();
+  });
+
+  it('saves held-back edits before a reload through the close flush', async () => {
+    const flush = vi.fn();
+    const close = vi.fn();
+    const stop = onAppSuspend(flush, close);
+    await flushPendingEditorSaves();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(flush).not.toHaveBeenCalled();
+    stop();
+    await flushPendingEditorSaves();
+    expect(close).toHaveBeenCalledTimes(1);
   });
 });

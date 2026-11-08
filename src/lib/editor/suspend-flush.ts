@@ -24,7 +24,8 @@
  * webview can do here.
  */
 type SuspendFlush = () => void | Promise<void>;
-const pendingFlushes = new Set<SuspendFlush>();
+/** Each editor's suspend flush, mapped to its close flush. */
+const pendingFlushes = new Map<SuspendFlush, SuspendFlush>();
 const closeFlushes = new Set<SuspendFlush>();
 
 /** A controlled close must await every participant, even if one save fails. */
@@ -43,17 +44,23 @@ export function onAppClose(flush: SuspendFlush): () => void {
   };
 }
 
-/** Save all mounted editors before an intentional full-page reload. */
+/**
+ * Save all mounted editors before an intentional full-page reload, or before
+ * anything else that would replace what they show: a restore, a move to the
+ * trash, a hand-off to another window. Uses each editor's close flush, so
+ * edits held back because autosave is off are saved too, as closing the
+ * window would.
+ */
 export async function flushPendingEditorSaves(): Promise<void> {
-  const flushes = [...pendingFlushes].map((flush) =>
-    Promise.resolve().then(() => flush())
+  const flushes = [...pendingFlushes.values()].map((close) =>
+    Promise.resolve().then(() => close())
   );
   await Promise.all(flushes);
 }
 
 export function onAppSuspend(flush: SuspendFlush, close = flush): () => void {
   if (typeof document === 'undefined') return () => {};
-  pendingFlushes.add(flush);
+  pendingFlushes.set(flush, close);
   const stopClose = onAppClose(close);
   const run = () => {
     try {
