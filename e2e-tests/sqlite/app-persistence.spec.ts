@@ -477,9 +477,8 @@ test('folders, metadata, attachment bytes, history, and editor CRDT state persis
   expect((await rpc(page, 'load_note', { id: note.id })).body).toBe(body);
 });
 
-test('the vault downloads as a zip holding its notes and attachment bytes', async ({
-  page
-}) => {
+/** A folder, a note with an attachment, and a trashed note to leave out. */
+async function seedExportVault(page: Page) {
   const folder = await rpc(page, 'create_collection', {
     input: { name: 'Grüße' }
   });
@@ -504,11 +503,32 @@ test('the vault downloads as a zip holding its notes and attachment bytes', asyn
     input: { title: 'Thrown away' }
   });
   await rpc(page, 'trash_note', { id: trashed.id });
+  return { assetId: asset.id, picture };
+}
+
+function expectExportedVault(
+  files: Record<string, Uint8Array>,
+  { assetId, picture }: { assetId: string; picture: number[] }
+) {
+  const markdown = strFromU8(files['Grüße/Reise nach Köln.md']);
+  expect(markdown).toContain('Am Dom.');
+  expect(markdown).toContain(`_assets/${assetId}.png`);
+  expect(Array.from(files[`Grüße/_assets/${assetId}.png`])).toEqual(picture);
+  expect(Object.keys(files).join()).not.toContain('Thrown away');
+}
+
+test('the vault downloads as a zip holding its notes and attachment bytes', async ({
+  page
+}) => {
+  const seeded = await seedExportVault(page);
+  // Browsers without a save picker get the whole archive as a download.
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'showSaveFilePicker', { value: undefined });
+  });
   await hardReload(page);
 
-  await page.getByRole('button', { name: 'Open settings' }).click();
+  await openDataSettings(page);
   const settings = page.getByRole('dialog');
-  await settings.getByRole('button', { name: /^Data/ }).first().click();
   const [download] = await Promise.all([
     page.waitForEvent('download'),
     settings.getByRole('button', { name: 'Export vault' }).click()
@@ -516,16 +536,71 @@ test('the vault downloads as a zip holding its notes and attachment bytes', asyn
   expect(download.suggestedFilename()).toMatch(
     /^mindstream-notes-\d{4}-\d{2}-\d{2}\.zip$/
   );
-  const files = unzipSync(
-    new Uint8Array(await readFile(await download.path()))
+  expectExportedVault(
+    unzipSync(new Uint8Array(await readFile(await download.path()))),
+    seeded
   );
-
-  const markdown = strFromU8(files['Grüße/Reise nach Köln.md']);
-  expect(markdown).toContain('Am Dom.');
-  expect(markdown).toContain(`_assets/${asset.id}.png`);
-  expect(Array.from(files[`Grüße/_assets/${asset.id}.png`])).toEqual(picture);
-  expect(Object.keys(files).join()).not.toContain('Thrown away');
   await expect(page.getByText('Saved to')).toHaveCount(0);
+});
+
+test('the vault streams into a file picked with the save picker', async ({
+  page
+}) => {
+  const seeded = await seedExportVault(page);
+  // Stands in for the File System Access picker, which a test cannot click.
+  await page.addInitScript(() => {
+    const saved: {
+      options?: unknown;
+      chunks: number[][];
+      closed: boolean;
+    } = { chunks: [], closed: false };
+    Object.assign(window, {
+      __savedExport: saved,
+      showSaveFilePicker: async (options: unknown) => {
+        saved.options = options;
+        return {
+          createWritable: async () => ({
+            write: async (chunk: Uint8Array) => {
+              saved.chunks.push(Array.from(chunk));
+            },
+            close: async () => {
+              saved.closed = true;
+            },
+            abort: async () => {}
+          })
+        };
+      }
+    });
+  });
+  await hardReload(page);
+
+  await openDataSettings(page);
+  const settings = page.getByRole('dialog');
+  let downloaded = false;
+  page.on('download', () => {
+    downloaded = true;
+  });
+  await settings.getByRole('button', { name: 'Export vault' }).click();
+  await expect(page.getByText('Notes exported')).toBeVisible();
+
+  const saved = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __savedExport: {
+            options: { suggestedName: string };
+            chunks: number[][];
+            closed: boolean;
+          };
+        }
+      ).__savedExport
+  );
+  expect(saved.closed).toBe(true);
+  expect(saved.options.suggestedName).toMatch(
+    /^mindstream-notes-\d{4}-\d{2}-\d{2}\.zip$/
+  );
+  expectExportedVault(unzipSync(new Uint8Array(saved.chunks.flat())), seeded);
+  expect(downloaded).toBe(false);
 });
 
 test('a backup downloads in the native format and leaves browser state out', async ({
