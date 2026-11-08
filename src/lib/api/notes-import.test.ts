@@ -17,6 +17,10 @@ vi.mock('../browser/commands', async (importOriginal) => ({
   browserStorageEnabled: () => browser.enabled
 }));
 vi.mock('../browser/pick-files', () => ({ pickFiles: browser.pick }));
+const saveEditors = vi.hoisted(() => vi.fn());
+vi.mock('../editor/suspend-flush', () => ({
+  flushPendingEditorSaves: saveEditors
+}));
 vi.mock('../browser/vault', () => ({
   detectBrowserNotes: browser.detect,
   importBrowserNotes: browser.run,
@@ -304,6 +308,25 @@ describe('notes-import — inside Tauri', () => {
     invoke.mockReset();
   });
   afterEach(() => setTauri(false));
+
+  it('saves open editors before the import takes the write lock', async () => {
+    const order: string[] = [];
+    saveEditors.mockImplementation(async () => {
+      order.push('save');
+    });
+    invoke.mockImplementation(async () => {
+      order.push('import');
+      return REPORT;
+    });
+    await runImport(OPTIONS);
+    expect(order).toEqual(['save', 'import']);
+  });
+
+  it('does not import when saving the editors fails', async () => {
+    saveEditors.mockRejectedValueOnce(new Error('disk full'));
+    await expect(runImport(OPTIONS)).rejects.toThrow('disk full');
+    expect(invoke).not.toHaveBeenCalled();
+  });
 
   it('forwards the options object under the key Rust expects', async () => {
     invoke.mockResolvedValue(REPORT);
