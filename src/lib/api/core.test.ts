@@ -7,8 +7,6 @@ describe('TauriCommandName', () => {
     expect(TauriCommandName.SaveNote).toBe('save_note');
     expect(TauriCommandName.SetSyncSchedule).toBe('set_sync_schedule');
     expect(TauriCommandName.ListSignatures).toBe('list_signatures');
-    expect(TauriCommandName.NotesExportWriteFile).toBe(
-      'notes_export_write_file'
-    );
+    expect(TauriCommandName.ExportWrite).toBe('export_write');
   });
 });

@@ -10,7 +10,7 @@ use crate::db::Db;
 use crate::error::{AppError, AppResult, CommandError, CommandResult};
 use crate::notes::Note;
 
-fn decode<T: DeserializeOwned>(body: &InvokeBody) -> AppResult<(T, Vec<u8>)> {
+pub(crate) fn decode<T: DeserializeOwned>(body: &InvokeBody) -> AppResult<(T, Vec<u8>)> {
     let mobile;
     let payload = match body {
         InvokeBody::Raw(bytes) => bytes.as_slice(),

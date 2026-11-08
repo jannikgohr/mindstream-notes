@@ -47,6 +47,7 @@ mod device_notifications;
 pub mod drawing;
 pub mod environment;
 pub mod error;
+pub mod export_session;
 mod file_lock;
 #[cfg(desktop)]
 pub mod foreground;
@@ -675,6 +676,7 @@ pub fn run() {
             app.manage(plugins::preview_service::PreviewServiceRegistry::default());
             app.manage(spellcheck::SpellcheckState::default());
             app.manage(import::ImportState::default());
+            app.manage(export_session::ExportSessions::default());
             // Hunspell tables are ~21 MB resident for a bilingual user and
             // stay warm for the life of the process otherwise. Hands them
             // back once the user stops typing; the next check reloads in
@@ -915,7 +917,13 @@ pub fn run() {
                 import::notes_import_run,
                 import::notes_import_cancel,
                 notes_export::notes_export_pick_dir,
-                notes_export::notes_export_write_file,
+                // Chunked exports that never cross IPC whole
+                export_session::export_begin,
+                export_session::export_write,
+                export_session::export_copy_asset,
+                export_session::export_asset_types,
+                export_session::export_finish,
+                export_session::export_abort,
                 // PDF export
                 pdf_export::save_pdf_export,
                 pdf_export::save_file_export,

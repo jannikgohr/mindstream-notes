@@ -7,12 +7,11 @@
 //! asset-bytes extraction for pdf) that's much cheaper to do on the
 //! side where those types already exist.
 //!
-//! This Rust module is the file-system shim: pop the folder picker,
-//! then service per-file write calls from the driver. The write
-//! command enforces a path-traversal guard so a malicious relative
-//! path can't escape the chosen export root.
+//! This module pops the folder picker and owns the path-traversal guard.
+//! The files themselves are written through an export session (see
+//! `export_session.rs`), so a malicious relative path can't escape the
+//! chosen export root.
 
-use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use tauri::AppHandle;
@@ -58,28 +57,6 @@ async fn pick_dir_inner(_app: AppHandle) -> AppResult<Option<String>> {
     ))
 }
 
-/// Write a file under `root` at `relative_path`. The relative path is
-/// validated to ensure it cannot escape `root` via `..` or absolute
-/// components — any joined path that doesn't canonicalise back to a
-/// child of `root` is refused.
-#[tauri::command]
-pub fn notes_export_write_file(
-    root: String,
-    relative_path: String,
-    bytes: Vec<u8>,
-) -> CommandResult<()> {
-    write_under(&PathBuf::from(&root), &relative_path, &bytes).map_err(Into::into)
-}
-
-fn write_under(root: &Path, relative_path: &str, bytes: &[u8]) -> AppResult<()> {
-    let target = resolve_inside_root(root, relative_path)?;
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(&target, bytes)?;
-    Ok(())
-}
-
 /// Join `relative_path` onto `root` and reject any path whose
 /// components include `..` or an absolute prefix that would let the
 /// final target escape the root directory.
@@ -88,7 +65,7 @@ fn write_under(root: &Path, relative_path: &str, bytes: &[u8]) -> AppResult<()> 
 /// exist yet — `canonicalize` requires the path to be present on
 /// disk. Instead we walk components ourselves and forbid anything
 /// that could climb above `root`.
-fn resolve_inside_root(root: &Path, relative_path: &str) -> AppResult<PathBuf> {
+pub(crate) fn resolve_inside_root(root: &Path, relative_path: &str) -> AppResult<PathBuf> {
     let rel = Path::new(relative_path);
     if rel.is_absolute() {
         return Err(AppError::InvalidArg(format!(
@@ -168,31 +145,5 @@ mod tests {
             err.to_string().contains("absolute") || err.to_string().contains("escapes"),
             "got {err}"
         );
-    }
-
-    #[test]
-    fn write_under_creates_parent_dirs() {
-        let tmp = std::env::temp_dir().join(format!("ms-notes-export-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
-        write_under(&tmp, "a/b/c/note.md", b"hello").unwrap();
-        let body = fs::read(tmp.join("a/b/c/note.md")).unwrap();
-        assert_eq!(body, b"hello");
-        fs::remove_dir_all(&tmp).ok();
-    }
-
-    #[test]
-    fn write_file_command_writes_and_rejects_traversal() {
-        let tmp =
-            std::env::temp_dir().join(format!("ms-notes-export-cmd-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
-        let root = tmp.to_str().unwrap().to_string();
-
-        notes_export_write_file(root.clone(), "sub/file.md".into(), b"body".to_vec()).unwrap();
-        assert_eq!(fs::read(tmp.join("sub/file.md")).unwrap(), b"body");
-
-        let err = notes_export_write_file(root, "../escape.md".into(), b"x".to_vec()).unwrap_err();
-        assert!(err.message.contains("escapes export root"));
-
-        fs::remove_dir_all(&tmp).ok();
     }
 }

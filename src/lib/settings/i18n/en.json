@@ -236,6 +236,8 @@
     "data.import.failed.title": "Couldn't import backup",
     "data.import.failed.message": "{error}",
     "data.exportVault.success.title": "Notes exported",
+    "data.exportVault.saveDialog.title": "Export notes",
+    "data.exportVault.saveDialog.filter": "ZIP archive",
     "data.exportVault.savedTo": "Saved to",
     "data.exportVault.close": "Close",
     "data.exportVault.openLocation": "Open location",

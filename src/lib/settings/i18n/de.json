@@ -909,6 +909,8 @@
     "data.import.failed.title": "Backup konnte nicht importiert werden",
     "data.import.failed.message": "{error}",
     "data.exportVault.success.title": "Notizen exportiert",
+    "data.exportVault.saveDialog.title": "Notizen exportieren",
+    "data.exportVault.saveDialog.filter": "ZIP-Archiv",
     "data.exportVault.savedTo": "Gespeichert unter",
     "data.exportVault.close": "Schließen",
     "data.exportVault.openLocation": "Ordner öffnen",

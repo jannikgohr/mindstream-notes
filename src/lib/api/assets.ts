@@ -18,6 +18,7 @@ import {
   assertRecord,
   assertString,
   TauriCommandName,
+  invokeFile,
   invokeOrFallback,
   optionalString,
   invokeTauri,
@@ -68,20 +69,6 @@ export interface ImportPdfNoteInput {
 export interface ImportInkPdfNoteInput extends ImportPdfNoteInput {
   asset_id: string;
   yrs_state: number[];
-}
-
-/** Transfer file bytes without expanding them into a JSON number array. */
-async function invokeFile<T>(
-  command: TauriCommandName,
-  input: Record<string, unknown>,
-  bytes: Uint8Array
-): Promise<T> {
-  const metadata = new TextEncoder().encode(JSON.stringify(input));
-  const payload = new Uint8Array(4 + metadata.length + bytes.length);
-  new DataView(payload.buffer).setUint32(0, metadata.length, true);
-  payload.set(metadata, 4);
-  payload.set(bytes, 4 + metadata.length);
-  return invokeTauri<T>(command, payload);
 }
 
 export async function uploadDrawingAssetBytes(
