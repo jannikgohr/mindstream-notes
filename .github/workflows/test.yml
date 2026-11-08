@@ -183,6 +183,7 @@ jobs:
 
       # wasm32: the tests build their plugin components from source.
       - uses: dtolnay/rust-toolchain@stable
+        id: fixture_toolchain
         with:
           components: clippy, rustfmt
           targets: wasm32-unknown-unknown
@@ -219,11 +220,24 @@ jobs:
         with:
           version: 10
       - uses: actions/setup-node@v4
+        id: fixture_node
         with:
           node-version: 22
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      # Rust validates its own guest artifacts. The TypeScript component
+      # cache separately verifies source/recipe hashes and output digests.
+      - name: Cache guest fixture builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            plugin-sdk/conformance/rust/target/fixtures
+            plugin-sdk/prototypes/templates-rust/target/fixtures
+            .output/plugin-fixture-cache
+          key: fixtures-v1-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig.json', 'plugin-sdk/typescript/tsconfig.json', 'plugin-sdk/**/Cargo.lock', 'plugin-sdk/fixtures.mjs', 'plugin-sdk/fixture-cache.mjs', 'plugin-sdk/wit/**', 'plugin-sdk/typescript/lib/**', 'plugin-sdk/typescript/src/**', 'plugin-sdk/typescript/package.json', 'plugin-sdk/conformance/rust/Cargo.toml', 'plugin-sdk/conformance/rust/src/**', 'plugin-sdk/conformance/typescript/main.ts', 'plugin-sdk/prototypes/templates-rust/Cargo.toml', 'plugin-sdk/prototypes/templates-rust/src/**', 'plugin-sdk/examples/templates-typescript/*.ts', 'plugin-sdk/examples/typst-typescript/*.ts') }}
+          restore-keys: |
+            fixtures-v1-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-
 
       # Formatting and lints run only on Linux: both are platform-agnostic,
       # and repeating them on three runners just triples the failure noise
@@ -288,6 +302,7 @@ jobs:
           path: |
             src-tauri/target/cargo-timings/
             src-tauri/target/debug/build/mindstream-notes-*/out/build-timings.json
+            src-tauri/target/debug/build/mindstream-plugin-fixtures-*/out/fixture-build-timings.json
           if-no-files-found: ignore
           retention-days: 7
 
@@ -350,6 +365,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        id: fixture_toolchain
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
@@ -363,10 +379,23 @@ jobs:
         with:
           version: 10
       - uses: actions/setup-node@v4
+        id: fixture_node
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Rust validates its own guest artifacts. The TypeScript component
+      # cache separately verifies source/recipe hashes and output digests.
+      - name: Cache guest fixture builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            plugin-sdk/conformance/rust/target/fixtures
+            plugin-sdk/prototypes/templates-rust/target/fixtures
+            .output/plugin-fixture-cache
+          key: fixtures-v1-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig.json', 'plugin-sdk/typescript/tsconfig.json', 'plugin-sdk/**/Cargo.lock', 'plugin-sdk/fixtures.mjs', 'plugin-sdk/fixture-cache.mjs', 'plugin-sdk/wit/**', 'plugin-sdk/typescript/lib/**', 'plugin-sdk/typescript/src/**', 'plugin-sdk/typescript/package.json', 'plugin-sdk/conformance/rust/Cargo.toml', 'plugin-sdk/conformance/rust/src/**', 'plugin-sdk/conformance/typescript/main.ts', 'plugin-sdk/prototypes/templates-rust/Cargo.toml', 'plugin-sdk/prototypes/templates-rust/src/**', 'plugin-sdk/examples/templates-typescript/*.ts', 'plugin-sdk/examples/typst-typescript/*.ts') }}
+          restore-keys: |
+            fixtures-v1-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-
       - name: Measure native component execution
         shell: bash
         run: cargo run --manifest-path src-tauri/Cargo.toml --locked --release -p mindstream-plugin-runtime --example plugin-bench > plugin-native.json
@@ -388,7 +417,9 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           name: plugin-runtime-${{ matrix.os }}
-          path: plugin-*.json
+          path: |
+            plugin-*.json
+            src-tauri/target/release/build/mindstream-plugin-fixtures-*/out/fixture-build-timings.json
           retention-days: 14
 
   # The sync server: its own crate, lockfile and tests. The tests start the
@@ -501,11 +532,13 @@ jobs:
         with:
           version: 10
       - uses: actions/setup-node@v4
+        id: fixture_node
         with:
           node-version: 22
           cache: pnpm
 
       - uses: dtolnay/rust-toolchain@stable
+        id: fixture_toolchain
         with:
           components: llvm-tools-preview
           targets: wasm32-unknown-unknown
@@ -515,6 +548,18 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
 
       - run: pnpm install --frozen-lockfile
+      # Rust validates its own guest artifacts. The TypeScript component
+      # cache separately verifies source/recipe hashes and output digests.
+      - name: Cache guest fixture builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            plugin-sdk/conformance/rust/target/fixtures
+            plugin-sdk/prototypes/templates-rust/target/fixtures
+            .output/plugin-fixture-cache
+          key: fixtures-v1-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig.json', 'plugin-sdk/typescript/tsconfig.json', 'plugin-sdk/**/Cargo.lock', 'plugin-sdk/fixtures.mjs', 'plugin-sdk/fixture-cache.mjs', 'plugin-sdk/wit/**', 'plugin-sdk/typescript/lib/**', 'plugin-sdk/typescript/src/**', 'plugin-sdk/typescript/package.json', 'plugin-sdk/conformance/rust/Cargo.toml', 'plugin-sdk/conformance/rust/src/**', 'plugin-sdk/conformance/typescript/main.ts', 'plugin-sdk/prototypes/templates-rust/Cargo.toml', 'plugin-sdk/prototypes/templates-rust/src/**', 'plugin-sdk/examples/templates-typescript/*.ts', 'plugin-sdk/examples/typst-typescript/*.ts') }}
+          restore-keys: |
+            fixtures-v1-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-
 
       - name: JS coverage
         run: pnpm test:coverage
@@ -522,6 +567,15 @@ jobs:
       - name: Rust coverage
         if: ${{ !cancelled() }}
         run: node src-tauri/scripts/rust-coverage.mjs --lcov --output-path ../.output/coverage/rust/lcov.info
+
+      - name: Retain coverage fixture build timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fixture-build-timings-coverage
+          path: src-tauri/target/**/build/mindstream-plugin-fixtures-*/out/fixture-build-timings.json
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Note skipped Codecov upload
         if: ${{ env.CODECOV_TOKEN == '' }}
@@ -668,11 +722,13 @@ jobs:
         with:
           version: 10
       - uses: actions/setup-node@v4
+        id: fixture_node
         with:
           node-version: 22
           cache: pnpm
       # wasm32 builds the plugin the lifecycle suite installs.
       - uses: dtolnay/rust-toolchain@stable
+        id: fixture_toolchain
         with:
           targets: wasm32-unknown-unknown
 
@@ -695,8 +751,19 @@ jobs:
           key: e2e-profile-${{ hashFiles('e2e-tests/app/helpers/build-profile.ts') }}
           cache-on-failure: true
       - run: pnpm install --frozen-lockfile
+      # Rust validates its own guest artifacts. The TypeScript component
+      # cache separately verifies source/recipe hashes and output digests.
+      - name: Cache guest fixture builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            plugin-sdk/conformance/rust/target/fixtures
+            plugin-sdk/prototypes/templates-rust/target/fixtures
+            .output/plugin-fixture-cache
+          key: fixtures-v1-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig.json', 'plugin-sdk/typescript/tsconfig.json', 'plugin-sdk/**/Cargo.lock', 'plugin-sdk/fixtures.mjs', 'plugin-sdk/fixture-cache.mjs', 'plugin-sdk/wit/**', 'plugin-sdk/typescript/lib/**', 'plugin-sdk/typescript/src/**', 'plugin-sdk/typescript/package.json', 'plugin-sdk/conformance/rust/Cargo.toml', 'plugin-sdk/conformance/rust/src/**', 'plugin-sdk/conformance/typescript/main.ts', 'plugin-sdk/prototypes/templates-rust/Cargo.toml', 'plugin-sdk/prototypes/templates-rust/src/**', 'plugin-sdk/examples/templates-typescript/*.ts', 'plugin-sdk/examples/typst-typescript/*.ts') }}
+          restore-keys: |
+            fixtures-v1-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-
       - run: cargo install tauri-driver --locked
-
       # The suites' own build path (helpers/preflight.ts), not a second recipe
       # that could drift from it.
       - run: pnpm test:e2e:app:build

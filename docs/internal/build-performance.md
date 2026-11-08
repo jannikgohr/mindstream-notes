@@ -337,3 +337,42 @@ release overrides. The E2E cache key includes the helper recipe, because those
 child-process environment settings are not visible when the cache action runs.
 The first run populates dependencies for this configuration; a subsequent run
 is needed to measure the steady-state application compile/link cost.
+
+### Round 1: E2E compiler settings
+
+All 22 checks passed on `b2b1e371`, including all three packaged app suites.
+The app library and binary compile/link units totaled 83.71s instead of the
+baseline's 338.14s. The first build command took 558s, including 475.15s of Rust
+work, because it compiled dependencies for the new profile rather than reusing
+the previous LTO configuration. A warm-cache result is still required.
+The native Windows test build script for fixtures took 93.63s in this run.
+
+### Round 2: guest fixture reuse
+
+Rust guest builds retain Cargo's source, flag and toolchain validation. Their
+existing target directories now have a dedicated CI cache. Its keys include job,
+OS, architecture, Rust version, Node version, sources and lockfiles. Separate job
+keys avoid an incomplete conformance-only E2E cache winning a race against jobs
+that build the full fixture set. This cache is separate from native targets, so
+it does not invalidate the newly populated E2E compiler cache.
+
+TypeScript fixture components can be reused across Cargo output directories
+when source, WIT, SDK, builder recipe, lockfile, Node version and platform match.
+The cache verifies the output digest and replaces entries atomically. Missing,
+corrupt or inaccessible caches rebuild normally. Only one entry per fixture is
+retained. Set `MINDSTREAM_PLUGIN_FIXTURE_CACHE=0` to force fresh component builds.
+Source-directory watches also let Cargo notice added imports.
+
+A local first/repeat fixture build produced byte-identical bytes for all seven
+components. The three TypeScript component steps totaled about 1.02s initially
+and 0.11s on cache hits. Bundling still runs, and its exact JavaScript output is
+also part of the cache key so compiler configuration changes invalidate it. Rust validation continued on every invocation.
+The plugin runtime's 94 tests passed with these components. Unit checks cover
+source/WIT/recipe/lock invalidation, added files, corrupt output and cache I/O
+failure. Each output directory records per-fixture times and cache-hit state in
+`fixture-build-timings.json`, retained by the native test and runtime jobs.
+
+The cache preserves a built component's bytes; it does not assume independent
+fresh QuickJS snapshots are byte-reproducible. Direct SDK builds and the
+prebundled cache path expose identical component interfaces, and runtime tests
+validate execution. The packed SDK authoring check passed without Rust installed.
