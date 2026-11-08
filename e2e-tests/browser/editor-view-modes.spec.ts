@@ -5,6 +5,7 @@ import {
   type Locator,
   type Page
 } from '@playwright/test';
+import { clickFileTreeCreateAction } from './file-tree-toolbar';
 
 /**
  * View-mode availability across form factors.
@@ -103,6 +104,53 @@ test.describe('wide viewport', () => {
     await boot(page);
     expect(await currentMode(page)).toBe('WYSIWYG');
     expect(await cycle(page, 3)).toEqual(['Source', 'Split', 'WYSIWYG']);
+  });
+
+  test('a wrapped title keeps every line through Split and a resize', async ({
+    page
+  }) => {
+    const loops: string[] = [];
+    page.on('pageerror', (error) => {
+      if (error.message.includes('ResizeObserver loop'))
+        loops.push(error.message);
+    });
+    await page.addInitScript(() =>
+      window.addEventListener('error', (event) => {
+        if (event.message.includes('ResizeObserver loop'))
+          (window as unknown as { roLoops?: number }).roLoops =
+            ((window as unknown as { roLoops?: number }).roLoops ?? 0) + 1;
+      })
+    );
+    await boot(page);
+    // A new note: Welcome opens on a heading with its own name, which
+    // stands in for the title field.
+    await clickFileTreeCreateAction(page, 'New note');
+    const draft = page.getByRole('textbox', { name: 'New note' });
+    await draft.fill('A title long enough to wrap '.repeat(6).trim());
+    await draft.press('Enter');
+    const title = page.getByRole('textbox', {
+      name: 'Note title',
+      exact: true
+    });
+    await expect(title).toBeVisible();
+    const clipped = () =>
+      title.evaluate((field) => field.scrollHeight > field.clientHeight + 1);
+
+    await setMode(page, 'Split');
+    await expect.poll(clipped).toBe(false);
+    await page.setViewportSize({ width: 900, height: 800 });
+    await expect.poll(clipped).toBe(false);
+    // Measured while Source mode hid it, then shown again.
+    await setMode(page, 'Source');
+    await setMode(page, 'WYSIWYG');
+    await expect.poll(clipped).toBe(false);
+    // Measuring inside the observer's callback would report a loop.
+    expect(loops).toEqual([]);
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { roLoops?: number }).roLoops ?? 0
+      )
+    ).toBe(0);
   });
 
   test('split shows both panes at once', async ({ page }) => {

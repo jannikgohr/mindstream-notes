@@ -41,9 +41,14 @@ async function openTwoTabs(page: Page) {
 
 /**
  * Press on tab `from`, move through `waypoints` (x positions) at a hand's
- * pace, pause, and release.
+ * pace, pause, run `beforeRelease`, and release.
  */
-async function dragTab(page: Page, from: number, waypoints: number[]) {
+async function dragTab(
+  page: Page,
+  from: number,
+  waypoints: number[],
+  beforeRelease?: () => Promise<void>
+) {
   const source = (await tabs(page).nth(from).boundingBox())!;
   const y = source.y + source.height / 2;
   let x = source.x + source.width / 2;
@@ -58,6 +63,7 @@ async function dragTab(page: Page, from: number, waypoints: number[]) {
   }
   // A person pauses over the slot before letting go.
   await page.waitForTimeout(300);
+  await beforeRelease?.();
   await page.mouse.up();
 }
 
@@ -93,4 +99,36 @@ test('dropping a tab back in its own place leaves no gap', async ({ page }) => {
   expect(after.map((tab) => tab.title)).toEqual(before.map((tab) => tab.title));
   expect(after.map((tab) => tab.inlineMargin)).toEqual(['', '']);
   expect(after[1].left).toBeCloseTo(after[0].right, 0);
+});
+
+test('Escape cancels a drag, and releasing afterwards moves nothing', async ({
+  page
+}) => {
+  await openTwoTabs(page);
+  const before = await strip(page);
+  await dragTab(page, 1, [before[0].left + 20], () =>
+    page.keyboard.press('Escape')
+  );
+
+  const after = await settledStrip(page);
+  expect(after.map((tab) => tab.title)).toEqual(before.map((tab) => tab.title));
+  expect(after.map((tab) => tab.inlineMargin)).toEqual(['', '']);
+  await expect(page.locator('body')).not.toHaveClass(/dv-tab-dragging/);
+});
+
+test('a cancelled pointer leaves the tabs in order', async ({ page }) => {
+  await openTwoTabs(page);
+  const before = await strip(page);
+  await dragTab(page, 1, [before[0].left + 20], async () => {
+    await page.evaluate(() =>
+      window.dispatchEvent(
+        // Playwright's mouse is pointer 1, the one Dockview is tracking.
+        new PointerEvent('pointercancel', { pointerId: 1, bubbles: true })
+      )
+    );
+  });
+
+  const after = await settledStrip(page);
+  expect(after.map((tab) => tab.title)).toEqual(before.map((tab) => tab.title));
+  await expect(page.locator('body')).not.toHaveClass(/dv-tab-dragging/);
 });

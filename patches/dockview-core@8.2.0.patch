@@ -1,8 +1,77 @@
 diff --git a/dist/package/main.cjs.js b/dist/package/main.cjs.js
-index 3d3f2c8a49b845c0630f1692f2f6fa3fa3d6e87f..bd096e96d4e40bfd49daf31882c1aee7724ea18e 100644
+index 3d3f2c8a49b845c0630f1692f2f6fa3fa3d6e87f..97224ca39e8e9dc48b2d62ad114dd848fbab704b 100644
 --- a/dist/package/main.cjs.js
 +++ b/dist/package/main.cjs.js
-@@ -7854,6 +7854,10 @@ var TabReorderController = class extends CompositeDisposable {
+@@ -4417,6 +4417,14 @@ var PointerDragController = class PointerDragController extends CompositeDisposa
+ 			if (e.pointerId !== ((_this$_active3 = this._active) === null || _this$_active3 === void 0 ? void 0 : _this$_active3.pointerId)) return;
+ 			this._handleEnd(e, false);
+ 		});
++		// Mindstream patch: Escape cancels the drag, and so does the window
++		// losing focus, after which it may never see the pointer come up.
++		this._keyListener = addDisposableListener(targetWindow, "keydown", (e) => {
++			if (e.key !== "Escape") return;
++			e.preventDefault();
++			this.cancel();
++		}, true);
++		this._blurListener = addDisposableListener(targetWindow, "blur", () => this.cancel());
+ 	}
+ 	cancel() {
+ 		var _this$_currentTarget, _this$_dataDisposable;
+@@ -4431,7 +4439,8 @@ var PointerDragController = class PointerDragController extends CompositeDisposa
+ 			const dragEvent = {
+ 				clientX: lastEvent.clientX,
+ 				clientY: lastEvent.clientY,
+-				pointerEvent: lastEvent
++				pointerEvent: lastEvent,
++				dropped: false
+ 			};
+ 			onEnd === null || onEnd === void 0 || onEnd(dragEvent, false);
+ 			this._onDragEnd.fire(dragEvent);
+@@ -4469,10 +4478,13 @@ var PointerDragController = class PointerDragController extends CompositeDisposa
+ 		this._onDragMove.fire(dragEvent);
+ 	}
+ 	_handleEnd(e, dropped) {
++		// Mindstream patch: the end event says whether the drag was dropped, so
++		// a cancelled drag does not commit a tab reorder.
+ 		const dragEvent = {
+ 			clientX: e.clientX,
+ 			clientY: e.clientY,
+-			pointerEvent: e
++			pointerEvent: e,
++			dropped
+ 		};
+ 		if (dropped && this._currentTarget) this._currentTarget.handleDrop(dragEvent);
+ 		else {
+@@ -4488,7 +4500,7 @@ var PointerDragController = class PointerDragController extends CompositeDisposa
+ 		this._onDragEnd.fire(dragEvent);
+ 	}
+ 	_teardown() {
+-		var _this$_ghost2, _this$_iframeShield, _this$_moveListener, _this$_upListener, _this$_cancelListener;
++		var _this$_ghost2, _this$_iframeShield, _this$_moveListener, _this$_upListener, _this$_cancelListener, _this$_keyListener, _this$_blurListener;
+ 		this._currentTarget = void 0;
+ 		this._active = void 0;
+ 		this._lastPointerEvent = void 0;
+@@ -4504,6 +4516,10 @@ var PointerDragController = class PointerDragController extends CompositeDisposa
+ 		this._moveListener = void 0;
+ 		this._upListener = void 0;
+ 		this._cancelListener = void 0;
++		(_this$_keyListener = this._keyListener) === null || _this$_keyListener === void 0 || _this$_keyListener.dispose();
++		(_this$_blurListener = this._blurListener) === null || _this$_blurListener === void 0 || _this$_blurListener.dispose();
++		this._keyListener = void 0;
++		this._blurListener = void 0;
+ 	}
+ };
+ 
+@@ -7833,7 +7849,7 @@ var TabReorderController = class extends CompositeDisposable {
+ 	* dragover bridge may have installed.
+ 	*/
+ 	handlePointerDragEnd(e) {
+-		if (e && this._animState && this._animState.sourceIndex !== -1 && !this._animState.sourceTabGroupId && this._animState.currentInsertionIndex !== null && this.isPointInsideTabsList(e.clientX, e.clientY)) this.commitPointerReorder(e.pointerEvent);
++		if (e && e.dropped !== false && this._animState && this._animState.sourceIndex !== -1 && !this._animState.sourceTabGroupId && this._animState.currentInsertionIndex !== null && this.isPointInsideTabsList(e.clientX, e.clientY)) this.commitPointerReorder(e.pointerEvent);
+ 		this._pointerInsideTabsList = false;
+ 		this.resetDragAnimation();
+ 	}
+@@ -7854,6 +7870,10 @@ var TabReorderController = class extends CompositeDisposable {
  		this._animState = null;
  		this.clearWrapDropIndicator();
  		this.uncollapseSourceTab(animState.sourceTabId);
@@ -14,10 +83,79 @@ index 3d3f2c8a49b845c0630f1692f2f6fa3fa3d6e87f..bd096e96d4e40bfd49daf31882c1aee7
  		this.host.fireDrop({
  			event,
 diff --git a/dist/package/main.esm.mjs b/dist/package/main.esm.mjs
-index 6e8fd8c1dd781d0f24b1aa5d911edf6e5a0aeda2..474750935a2f9e336b911e3f61bab8b154bc307b 100644
+index 6e8fd8c1dd781d0f24b1aa5d911edf6e5a0aeda2..dd0cbe01c233a302261f5823e9c8375a9547cd5e 100644
 --- a/dist/package/main.esm.mjs
 +++ b/dist/package/main.esm.mjs
-@@ -7852,6 +7852,10 @@ var TabReorderController = class extends CompositeDisposable {
+@@ -4415,6 +4415,14 @@ var PointerDragController = class PointerDragController extends CompositeDisposa
+ 			if (e.pointerId !== ((_this$_active3 = this._active) === null || _this$_active3 === void 0 ? void 0 : _this$_active3.pointerId)) return;
+ 			this._handleEnd(e, false);
+ 		});
++		// Mindstream patch: Escape cancels the drag, and so does the window
++		// losing focus, after which it may never see the pointer come up.
++		this._keyListener = addDisposableListener(targetWindow, "keydown", (e) => {
++			if (e.key !== "Escape") return;
++			e.preventDefault();
++			this.cancel();
++		}, true);
++		this._blurListener = addDisposableListener(targetWindow, "blur", () => this.cancel());
+ 	}
+ 	cancel() {
+ 		var _this$_currentTarget, _this$_dataDisposable;
+@@ -4429,7 +4437,8 @@ var PointerDragController = class PointerDragController extends CompositeDisposa
+ 			const dragEvent = {
+ 				clientX: lastEvent.clientX,
+ 				clientY: lastEvent.clientY,
+-				pointerEvent: lastEvent
++				pointerEvent: lastEvent,
++				dropped: false
+ 			};
+ 			onEnd === null || onEnd === void 0 || onEnd(dragEvent, false);
+ 			this._onDragEnd.fire(dragEvent);
+@@ -4467,10 +4476,13 @@ var PointerDragController = class PointerDragController extends CompositeDisposa
+ 		this._onDragMove.fire(dragEvent);
+ 	}
+ 	_handleEnd(e, dropped) {
++		// Mindstream patch: the end event says whether the drag was dropped, so
++		// a cancelled drag does not commit a tab reorder.
+ 		const dragEvent = {
+ 			clientX: e.clientX,
+ 			clientY: e.clientY,
+-			pointerEvent: e
++			pointerEvent: e,
++			dropped
+ 		};
+ 		if (dropped && this._currentTarget) this._currentTarget.handleDrop(dragEvent);
+ 		else {
+@@ -4486,7 +4498,7 @@ var PointerDragController = class PointerDragController extends CompositeDisposa
+ 		this._onDragEnd.fire(dragEvent);
+ 	}
+ 	_teardown() {
+-		var _this$_ghost2, _this$_iframeShield, _this$_moveListener, _this$_upListener, _this$_cancelListener;
++		var _this$_ghost2, _this$_iframeShield, _this$_moveListener, _this$_upListener, _this$_cancelListener, _this$_keyListener, _this$_blurListener;
+ 		this._currentTarget = void 0;
+ 		this._active = void 0;
+ 		this._lastPointerEvent = void 0;
+@@ -4502,6 +4514,10 @@ var PointerDragController = class PointerDragController extends CompositeDisposa
+ 		this._moveListener = void 0;
+ 		this._upListener = void 0;
+ 		this._cancelListener = void 0;
++		(_this$_keyListener = this._keyListener) === null || _this$_keyListener === void 0 || _this$_keyListener.dispose();
++		(_this$_blurListener = this._blurListener) === null || _this$_blurListener === void 0 || _this$_blurListener.dispose();
++		this._keyListener = void 0;
++		this._blurListener = void 0;
+ 	}
+ };
+ 
+@@ -7831,7 +7847,7 @@ var TabReorderController = class extends CompositeDisposable {
+ 	* dragover bridge may have installed.
+ 	*/
+ 	handlePointerDragEnd(e) {
+-		if (e && this._animState && this._animState.sourceIndex !== -1 && !this._animState.sourceTabGroupId && this._animState.currentInsertionIndex !== null && this.isPointInsideTabsList(e.clientX, e.clientY)) this.commitPointerReorder(e.pointerEvent);
++		if (e && e.dropped !== false && this._animState && this._animState.sourceIndex !== -1 && !this._animState.sourceTabGroupId && this._animState.currentInsertionIndex !== null && this.isPointInsideTabsList(e.clientX, e.clientY)) this.commitPointerReorder(e.pointerEvent);
+ 		this._pointerInsideTabsList = false;
+ 		this.resetDragAnimation();
+ 	}
+@@ -7852,6 +7868,10 @@ var TabReorderController = class extends CompositeDisposable {
  		this._animState = null;
  		this.clearWrapDropIndicator();
  		this.uncollapseSourceTab(animState.sourceTabId);
