@@ -43,7 +43,11 @@ export function onAppClose(flush: SuspendFlush): () => void {
   };
 }
 
-/** Save all mounted editors before an intentional full-page reload. */
+/**
+ * Save all mounted editors before an intentional full-page reload, or before
+ * anything else that would replace what they show: a restore, a move to the
+ * trash, a hand-off to another window.
+ */
 export async function flushPendingEditorSaves(): Promise<void> {
   const flushes = [...pendingFlushes].map((flush) =>
     Promise.resolve().then(() => flush())
@@ -51,10 +55,10 @@ export async function flushPendingEditorSaves(): Promise<void> {
   await Promise.all(flushes);
 }
 
-export function onAppSuspend(flush: SuspendFlush, close = flush): () => void {
+export function onAppSuspend(flush: SuspendFlush): () => void {
   if (typeof document === 'undefined') return () => {};
   pendingFlushes.add(flush);
-  const stopClose = onAppClose(close);
+  const stopClose = onAppClose(flush);
   const run = () => {
     try {
       void Promise.resolve(flush()).catch((error) => {

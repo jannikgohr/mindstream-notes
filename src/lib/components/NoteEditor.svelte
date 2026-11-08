@@ -137,15 +137,12 @@
   let { noteId }: Props = $props();
 
   /**
-   * Auto-save settings — both reactive so a live change in the settings
-   * dialog takes effect on the next keystroke without remounting the
-   * editor. The debounce read is bounded defensively because a corrupt
+   * Auto-save delay — reactive so a live change in the settings dialog
+   * takes effect on the next keystroke without remounting the editor.
+   * Saving itself is always on. The read is bounded defensively because a corrupt
    * localStorage entry could otherwise put the editor into an infinite-
    * scheduled state (0 or negative) or fire too rarely to be useful.
    */
-  const autoSaveEnabled = $derived(
-    (getSettingValue('editor.autoSave') as boolean | undefined) ?? true
-  );
   const saveDebounceMs = $derived.by(() => {
     const raw = getSettingValue('editor.autoSaveDebounce');
     const n = typeof raw === 'number' ? raw : Number(raw);
@@ -1517,8 +1514,7 @@
   $effect(() => saveScheduler.subscribeSuspend());
 
   const saveScheduler = createSaveScheduler({
-    canSave: () => !isReadOnly && autoSaveEnabled,
-    canSaveOnClose: () => !isReadOnly && !!getMarkdown,
+    canSave: () => !isReadOnly,
     beforeFlush: () => sourceEditor?.flush(),
     checkpoint: () => {
       if (!sourceEditor?.hasPendingInput())

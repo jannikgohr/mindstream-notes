@@ -11,6 +11,7 @@ import { emitTo, TauriEventName } from './events';
 import { getCustomWindowDecorations } from './desktop-settings';
 import { getWorkerBrowserOptions } from './browser-identity';
 import { currentThemeWindowBackground } from '$lib/settings/theme-presets';
+import { flushPendingEditorSaves } from '$lib/editor/suspend-flush';
 import {
   type DockviewApi,
   type IDockviewGroupPanel,
@@ -141,6 +142,22 @@ export async function openNoteWindow(
 
   const customWindowDecorations = await getCustomWindowDecorations();
   const browserOptions = await getWorkerBrowserOptions();
+  // The new window reads the note from storage. Whatever the docked editor
+  // still holds is saved first, or the popout would open on older text and
+  // its next save would replace the newer one. If that save fails, the tab
+  // stays where it is with its edits. Saved last before the window is made,
+  // so little can be typed in between. What is goes with the tab's teardown
+  // save once the window is created, which is captured at once and normally
+  // lands well before the new window has booted and loaded the note.
+  if (activePanel) {
+    try {
+      await flushPendingEditorSaves();
+    } catch (err) {
+      console.error('[openNoteWindow] could not save before moving', id, err);
+      return;
+    }
+  }
+
   const win = new WebviewWindow(noteWindowLabel(id), {
     ...browserOptions,
     url: `?window=editor&id=${encodeURIComponent(id)}`,
