@@ -1,50 +1,16 @@
-import { assertRequiredString } from '$lib/validation';
 /**
  * Notes-as-files export bridge — mirror of `src-tauri/src/notes_export.rs`.
  *
- * The actual export loop lives in `$lib/notes-export/` and drives the
- * Rust side via these two calls:
- *   - pickExportDir  → folder picker; returns chosen path or null
- *   - writeExportFile → write bytes under the chosen root with a
- *                       path-traversal guard
+ * The actual export loop lives in `$lib/notes-export/`. It picks the
+ * folder here and writes through an export session (`./export-session`).
  */
 
-import {
-  assertString,
-  assertVoid,
-  isTauri,
-  TauriCommandName,
-  invokeTauri
-} from './core';
+import { assertString, isTauri, TauriCommandName, invokeTauri } from './core';
 
 export async function pickExportDir(): Promise<string | null> {
   if (!isTauri()) return null;
   return parseNullableString(
     await invokeTauri<unknown>(TauriCommandName.NotesExportPickDir)
-  );
-}
-
-export async function writeExportFile(
-  root: string,
-  relativePath: string,
-  bytes: Uint8Array
-): Promise<void> {
-  assertRequiredString(root, 'root');
-  assertRequiredString(relativePath, 'relativePath');
-  if (!(bytes instanceof Uint8Array)) {
-    throw new Error('bytes must be a Uint8Array');
-  }
-  if (!isTauri()) return;
-  assertVoid(
-    await invokeTauri<unknown>(TauriCommandName.NotesExportWriteFile, {
-      root,
-      relativePath,
-      // Tauri marshalling of Vec<u8> expects a JS number array. Most
-      // call sites already build a Uint8Array (TextEncoder output, asset
-      // bytes), so do the conversion here once.
-      bytes: Array.from(bytes)
-    }),
-    'notes_export_write_file response'
   );
 }
 

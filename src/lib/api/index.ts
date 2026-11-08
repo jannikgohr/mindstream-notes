@@ -28,7 +28,7 @@ export * from './profiles';
 export * from './hotkeys';
 export * from './server-urls';
 export * from './sharing';
-export { pickExportDir, writeExportFile } from './notes-export';
+export { pickExportDir } from './notes-export';
 export {
   cancelImport,
   convertLegacyWikilinks,

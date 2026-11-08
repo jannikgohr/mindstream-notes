@@ -4,10 +4,9 @@ const mocks = vi.hoisted(() => ({
   native: false,
   mobile: false,
   pick: vi.fn(),
-  write: vi.fn(),
   download: vi.fn(),
   save: vi.fn(),
-  export: vi.fn(),
+  folder: vi.fn(),
   flush: vi.fn(),
   result: vi.fn(),
   alert: vi.fn(),
@@ -22,7 +21,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock('$lib/api', () => ({
   isTauri: () => mocks.native,
   pickExportDir: mocks.pick,
-  writeExportFile: mocks.write,
   importBegin: mocks.importBegin,
   importRestore: mocks.importRestore,
   importCleanup: mocks.importCleanup
@@ -48,8 +46,8 @@ vi.mock('$lib/editor/suspend-flush', () => ({
 }));
 vi.mock('$lib/notes-export', () => ({
   downloadVaultExport: mocks.download,
-  saveVaultExport: mocks.save,
-  exportVault: mocks.export
+  saveVaultArchive: mocks.save,
+  exportVaultToFolder: mocks.folder
 }));
 import { DATA_ACTIONS } from './data';
 
@@ -60,14 +58,11 @@ beforeEach(() => {
   mocks.pick.mockResolvedValue('/export');
   mocks.save.mockResolvedValue({ errors: 0 });
   mocks.download.mockResolvedValue({ errors: 0 });
-  mocks.export.mockImplementation(async (write) => {
-    await write('Note.md', new Uint8Array([1]));
-    return { errors: 0 };
-  });
+  mocks.folder.mockResolvedValue({ errors: 0 });
 });
 
 describe('notes export platform routing', () => {
-  it('uses the native ZIP save flow on Android', async () => {
+  it('builds and saves a native ZIP on Android', async () => {
     mocks.native = true;
     mocks.mobile = true;
     await DATA_ACTIONS['export-vault']();
@@ -81,11 +76,7 @@ describe('notes export platform routing', () => {
     mocks.native = true;
     await DATA_ACTIONS['export-vault']();
     expect(mocks.pick).toHaveBeenCalledOnce();
-    expect(mocks.write).toHaveBeenCalledWith(
-      '/export',
-      'Note.md',
-      new Uint8Array([1])
-    );
+    expect(mocks.folder).toHaveBeenCalledWith('/export');
     expect(mocks.save).not.toHaveBeenCalled();
     expect(mocks.result).toHaveBeenCalledWith({ errors: 0 }, '/export');
   });
@@ -113,7 +104,7 @@ describe('notes export platform routing', () => {
     mocks.native = true;
     mocks.pick.mockResolvedValue(null);
     await DATA_ACTIONS['export-vault']();
-    expect(mocks.export).not.toHaveBeenCalled();
+    expect(mocks.folder).not.toHaveBeenCalled();
     expect(mocks.result).not.toHaveBeenCalled();
   });
 });

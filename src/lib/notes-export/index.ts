@@ -9,10 +9,11 @@
  *   typst    → `.typ` source, without requiring the plugin or compiler
  *   ink      → `.pdf` (one page per ink page, strokes rendered as vector polylines)
  *
- * Every file goes through an `ExportWriter`. The app writes into the chosen
- * folder through `writeExportFile`, and a browser fills a zip download. Both
- * refuse a path that would leave the export root, so user-supplied titles
- * can't escape it.
+ * Every file goes through an `ExportWriter`. The app writes through a native
+ * export session, into the chosen folder or a ZIP, and copies stored assets
+ * natively through an `AssetCopier`, so large files never cross IPC whole. A
+ * browser fills a zip download instead. Both refuse a path that would leave
+ * the export root, so user-supplied titles can't escape it.
  */
 
 import * as api from '$lib/api';
@@ -21,7 +22,7 @@ import type { Note, NoteSummary, Collection } from '$lib/api';
 import { pdfAssetIdFromBody } from '$lib/pdf/viewer-helpers';
 import { tree } from '$lib/stores/tree.svelte';
 import { buildExcalidrawFile } from './excalidraw';
-import { buildPdfNoteBytes } from '$lib/note-exporters/pdf';
+import { buildPdfNoteBytes, pdfNoteHasOverlays } from '$lib/note-exporters/pdf';
 import { buildInkPdf } from './ink-pdf';
 import {
   extractAssetIds,
@@ -30,7 +31,9 @@ import {
 } from './markdown';
 import { dedupeAgainst, sanitizeName } from './sanitize';
 import { readExportBoard, boardMarkdown } from './kanban';
-import { downloadBlob, saveFileExport } from '$lib/api/file-export';
+import { downloadBlob } from '$lib/api/file-export';
+import { ExportSession, exportAssetTypes } from '$lib/api/export-session';
+import { tUi } from '$lib/settings/i18n.svelte';
 import { createExportZip } from './zip';
 
 const ASSET_SUBDIR = '_assets';
@@ -40,6 +43,16 @@ export type ExportWriter = (
   relativePath: string,
   bytes: Uint8Array
 ) => Promise<void>;
+
+/**
+ * Copies stored assets into the export without loading their bytes into the
+ * webview. Without one, assets are fetched and passed to the writer.
+ */
+export interface AssetCopier {
+  /** MIME types by asset id. Ids that no longer exist are left out. */
+  types(ids: string[]): Promise<Map<string, string>>;
+  copy(path: string, assetId: string, mimeType?: string): Promise<void>;
+}
 
 export interface ExportReport {
   /** `.md` files written (note_kind = 'markdown'). */
@@ -69,22 +82,50 @@ export async function downloadVaultExport(): Promise<ExportReport> {
   return report;
 }
 
-/** Save a ZIP through the native document picker, including on Android. */
-export async function saveVaultExport(): Promise<ExportReport | null> {
-  const zip = createExportZip();
-  const report = await exportVault(zip.write);
-  const saved = await saveFileExport({
+function nativeAssets(session: ExportSession): AssetCopier {
+  return { types: exportAssetTypes, copy: session.copyAsset };
+}
+
+/** Export into a folder the user picked, through a native session. */
+export async function exportVaultToFolder(root: string): Promise<ExportReport> {
+  const session = await ExportSession.begin({ kind: 'folder', root });
+  try {
+    const report = await exportVault(session.write, nativeAssets(session));
+    await session.finish();
+    return report;
+  } catch (err) {
+    await session.abort();
+    throw err;
+  }
+}
+
+/**
+ * Build the export as a ZIP natively, then save it where the user picks.
+ * Works with Android's document picker, which offers no folders to write
+ * into. Resolves null when the user cancels the save dialog.
+ */
+export async function saveVaultArchive(): Promise<ExportReport | null> {
+  const session = await ExportSession.begin({ kind: 'archive' });
+  let report: ExportReport;
+  try {
+    report = await exportVault(session.write, nativeAssets(session));
+  } catch (err) {
+    await session.abort();
+    throw err;
+  }
+  const saved = await session.finish({
     suggestedName: `mindstream-notes-${new Date().toISOString().slice(0, 10)}.zip`,
-    dialogTitle: 'Export notes',
-    bytes: new Uint8Array(await zip.finish().arrayBuffer()),
-    mime: 'application/zip',
-    filterName: 'ZIP archive',
+    dialogTitle: tUi('data.exportVault.saveDialog.title'),
+    filterName: tUi('data.exportVault.saveDialog.filter'),
     extensions: ['zip']
   });
   return saved ? report : null;
 }
 
-export async function exportVault(write: ExportWriter): Promise<ExportReport> {
+export async function exportVault(
+  write: ExportWriter,
+  assets?: AssetCopier
+): Promise<ExportReport> {
   const report: ExportReport = {
     markdown_written: 0,
     freeform_written: 0,
@@ -140,7 +181,13 @@ export async function exportVault(write: ExportWriter): Promise<ExportReport> {
       continue;
     }
     try {
-      const written = await exportNote(write, summary, parentDir, takenFor);
+      const written = await exportNote(
+        write,
+        assets,
+        summary,
+        parentDir,
+        takenFor
+      );
       report.assets_written += written.assets_written;
       report.errors += written.errors ?? 0;
       switch (written.kind) {
@@ -249,6 +296,7 @@ interface AssetWriteSummary {
 
 async function exportNote(
   write: ExportWriter,
+  assets: AssetCopier | undefined,
   summary: NoteSummary,
   parentDir: string,
   takenFor: (dir: string) => Set<string>
@@ -256,7 +304,13 @@ async function exportNote(
   const note = await api.loadNote(summary.id);
   switch (note.note_kind) {
     case 'markdown': {
-      const written = await exportMarkdown(write, note, parentDir, takenFor);
+      const written = await exportMarkdown(
+        write,
+        assets,
+        note,
+        parentDir,
+        takenFor
+      );
       return { kind: 'markdown', ...written };
     }
     case 'freeform': {
@@ -264,7 +318,7 @@ async function exportNote(
       return { kind: 'freeform', assets_written: written.assets_written };
     }
     case 'pdf': {
-      const written = await exportPdf(write, note, parentDir, takenFor);
+      const written = await exportPdf(write, assets, note, parentDir, takenFor);
       return { kind: 'pdf', assets_written: written.assets_written };
     }
     case 'ink': {
@@ -278,6 +332,7 @@ async function exportNote(
       // alongside it so IDs, ordering, labels and card metadata survive too.
       const written = await exportMarkdown(
         write,
+        assets,
         { ...note, body: boardMarkdown(board, false) },
         parentDir,
         takenFor
@@ -314,6 +369,7 @@ async function exportNote(
 
 async function exportMarkdown(
   write: ExportWriter,
+  assets: AssetCopier | undefined,
   note: Note,
   parentDir: string,
   takenFor: (dir: string) => Set<string>
@@ -329,8 +385,29 @@ async function exportMarkdown(
   const filenameById = new Map<string, string>();
   let assetsWritten = 0;
   let errors = 0;
+  let types = new Map<string, string>();
+  if (assets && ids.length > 0) {
+    try {
+      types = await assets.types(ids);
+    } catch (err) {
+      // Every asset below then fails on its own and is counted as an error.
+      console.warn('[notes-export] could not look up assets', note.id, err);
+    }
+  }
   for (const id of ids) {
     try {
+      if (assets) {
+        const mime = types.get(id);
+        if (mime === undefined) throw new Error(`Asset not found: ${id}`);
+        const assetFilename = dedupeAgainst(
+          takenFor(assetSubdir),
+          `${id}${extensionForMime(mime)}`
+        );
+        await assets.copy(joinRel(assetSubdir, assetFilename), id, mime);
+        filenameById.set(id, assetFilename);
+        assetsWritten++;
+        continue;
+      }
       const asset = await api.fetchDrawingAsset(id);
       const ext = extensionForMime(asset.mime_type);
       const assetFilename = dedupeAgainst(takenFor(assetSubdir), `${id}${ext}`);
@@ -407,6 +484,7 @@ async function exportFreeform(
 
 async function exportPdf(
   write: ExportWriter,
+  assets: AssetCopier | undefined,
   note: Note,
   parentDir: string,
   takenFor: (dir: string) => Set<string>
@@ -422,12 +500,18 @@ async function exportPdf(
     );
     return { assets_written: 0 };
   }
-  const bytes = await buildPdfNoteBytes(note.id);
   const basename = dedupeAgainst(
     takenFor(parentDir),
     `${sanitizeName(note.title)}.pdf`
   );
-  await write(joinRel(parentDir, basename), bytes);
+  const path = joinRel(parentDir, basename);
+  // Nothing to draw onto the PDF, so the stored file is the export. Copy it
+  // natively rather than loading a possibly large document here.
+  if (assets && !pdfNoteHasOverlays(note)) {
+    await assets.copy(path, pdfAssetId, 'application/pdf');
+    return { assets_written: 0 };
+  }
+  await write(path, await buildPdfNoteBytes(note.id));
   return { assets_written: 0 };
 }
 

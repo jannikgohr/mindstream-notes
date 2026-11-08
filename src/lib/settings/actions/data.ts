@@ -21,8 +21,7 @@ import {
   isTauri,
   openDataFolder,
   pickExportDir,
-  trashCounts,
-  writeExportFile
+  trashCounts
 } from '$lib/api';
 import {
   emptyTrash as emptyTrashStore,
@@ -156,17 +155,15 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
       const { flushPendingEditorSaves } =
         await import('$lib/editor/suspend-flush');
       await flushPendingEditorSaves();
-      const { downloadVaultExport, saveVaultExport, exportVault } =
+      const { downloadVaultExport, saveVaultArchive, exportVaultToFolder } =
         await import('$lib/notes-export');
       const destination = root;
       const report =
         destination === null
           ? isTauri()
-            ? await saveVaultExport()
+            ? await saveVaultArchive()
             : await downloadVaultExport()
-          : await exportVault((path, bytes) =>
-              writeExportFile(destination, path, bytes)
-            );
+          : await exportVaultToFolder(destination);
       if (report === null) return;
       await showExportResult(report, destination);
     } catch (err) {
