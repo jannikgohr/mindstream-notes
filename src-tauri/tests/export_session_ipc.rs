@@ -9,9 +9,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tauri::ipc::{InvokeBody, InvokeResponseBody};
 use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime};
+use tauri_plugin_dialog::FilePath;
 
 struct Fixture {
-    _app: tauri::App<MockRuntime>,
+    app: tauri::App<MockRuntime>,
     view: tauri::WebviewWindow<MockRuntime>,
     profile: tempfile::TempDir,
 }
@@ -43,11 +44,7 @@ impl Fixture {
         let view = tauri::WebviewWindowBuilder::new(&app, "test", Default::default())
             .build()
             .unwrap();
-        Self {
-            _app: app,
-            view,
-            profile,
-        }
+        Self { app, view, profile }
     }
 
     fn call(&self, command: &str, body: InvokeBody) -> Result<InvokeResponseBody, Value> {
@@ -339,4 +336,79 @@ fn malformed_requests_are_refused() {
     assert!(fixture
         .json("export_asset_types", json!({ "ids": ids }))
         .is_err());
+}
+
+/// Finish an export as if the user picked `destination`, or cancelled.
+fn finish_to(fixture: &Fixture, token: &str, destination: Option<PathBuf>) -> bool {
+    let save = serde_json::from_value(json!({
+        "suggestedName": "vault.zip",
+        "dialogTitle": "Export notes",
+        "filterName": "ZIP archive",
+        "extensions": ["zip"]
+    }))
+    .unwrap();
+    tauri::async_runtime::block_on(mindstream_notes_lib::export_session::finish_export(
+        fixture.app.handle().clone(),
+        token.to_string(),
+        Some(save),
+        move |_, _| async move { Ok(destination.map(FilePath::Path)) },
+    ))
+    .unwrap()
+}
+
+#[test]
+fn a_finished_archive_lands_at_the_picked_path_with_every_entry() {
+    let fixture = Fixture::new();
+    let picture = [137u8, 80, 78, 71, 0, 255];
+    let asset = fixture.upload("image/png", &picture);
+    let token = fixture.begin(json!({ "kind": "archive" }));
+    fixture
+        .write(&token, "Work/Note.md", true, 5, b"# Hey", true)
+        .unwrap();
+    fixture
+        .json(
+            "export_copy_asset",
+            json!({ "token": token, "path": "Work/_assets/a.png", "assetId": asset }),
+        )
+        .unwrap();
+
+    let out = tempfile::tempdir().unwrap();
+    let destination = out.path().join("vault.zip");
+    std::fs::write(&destination, b"an older, longer file to replace").unwrap();
+    assert!(finish_to(&fixture, &token, Some(destination.clone())));
+    assert_eq!(fixture.staged_sessions(), 0);
+
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(&destination).unwrap()).unwrap();
+    let mut read = |name: &str| {
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut archive.by_name(name).unwrap(), &mut bytes).unwrap();
+        bytes
+    };
+    assert_eq!(read("Work/Note.md"), b"# Hey");
+    assert_eq!(read("Work/_assets/a.png"), picture);
+}
+
+#[test]
+fn a_single_file_export_is_saved_as_is_and_a_cancel_saves_nothing() {
+    let fixture = Fixture::new();
+    let out = tempfile::tempdir().unwrap();
+
+    let token = fixture.begin(json!({ "kind": "file" }));
+    fixture
+        .write(&token, "Note.pdf", true, 8, b"%PDF", false)
+        .unwrap();
+    fixture
+        .write(&token, "Note.pdf", false, 8, b"-1.7", false)
+        .unwrap();
+    let destination = out.path().join("Note.pdf");
+    assert!(finish_to(&fixture, &token, Some(destination.clone())));
+    assert_eq!(std::fs::read(&destination).unwrap(), b"%PDF-1.7");
+
+    let cancelled = fixture.begin(json!({ "kind": "file" }));
+    fixture
+        .write(&cancelled, "Other.pdf", true, 1, b"x", false)
+        .unwrap();
+    assert!(!finish_to(&fixture, &cancelled, None));
+    assert_eq!(fixture.staged_sessions(), 0);
+    assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 1);
 }
