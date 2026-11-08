@@ -86,13 +86,40 @@ function collapseWhitespace(s: string): string {
 }
 
 /**
+ * Drop HTML comments, and HTML tags outside code. In a fenced block or an
+ * inline code span, `<T>` is part of the text. Mirrors
+ * `strip_html_outside_code` in src-tauri/storage-core/src/search.rs.
+ */
+function stripHtmlOutsideCode(body: string): string {
+  let fenced = false;
+  return body
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .split('\n')
+    .map((line) => {
+      if (/^[ \t]*(?:```|~~~)/.test(line)) {
+        fenced = !fenced;
+        return line;
+      }
+      if (fenced) return line;
+      // Every second piece between backticks is an inline code span.
+      return line
+        .split('`')
+        .map((piece, i) =>
+          i % 2 === 1 ? piece : piece.replace(/<\/?[a-zA-Z][^>]*>/g, ' ')
+        )
+        .join('`');
+    })
+    .join('\n');
+}
+
+/**
  * The text a reader sees in `body`, for snippets: block markers and inline
  * emphasis go, link, image and wikilink labels stay, and former lines are
  * joined with " · ". Mirrors `snippet_text`
  * in src-tauri/storage-core/src/search.rs.
  */
 export function snippetText(body: string): string {
-  return body
+  return stripHtmlOutsideCode(body)
     .replace(/^[ \t]*(?:```|~~~).*$/gm, ' ')
     .replace(
       /^[ \t]*\|?(?:[ \t]*:?-{3,}:?[ \t]*\|)+[ \t]*(?::?-{3,}:?[ \t]*)?$/gm,
@@ -102,7 +129,6 @@ export function snippetText(body: string): string {
       /^[ \t]*(?:>[ \t]?)*(?:#{1,6}[ \t]+|(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)?/gm,
       ''
     )
-    .replace(/<!--[\s\S]*?-->|<\/?[a-zA-Z][^>]*>/g, ' ')
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(

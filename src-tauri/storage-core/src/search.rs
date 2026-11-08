@@ -21,7 +21,7 @@ use regex::{Captures, Regex};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
-use crate::content_stats::{cached_regex, html_re, replace_all_owned};
+use crate::content_stats::{cached_regex, replace_all_owned};
 use crate::error::AppResult;
 use crate::notes::{NoteKind, NoteSummary};
 
@@ -276,7 +276,7 @@ fn snippet_text(body: &str) -> String {
     static PIPE: OnceLock<Option<Regex>> = OnceLock::new();
 
     let s = replace_all_owned(
-        body.to_string(),
+        strip_html_outside_code(body),
         cached_regex("snippet fence", r"(?m)^[ \t]*(?:```|~~~).*$", &FENCE),
         " ",
     );
@@ -298,7 +298,6 @@ fn snippet_text(body: &str) -> String {
         ),
         "",
     );
-    let s = replace_all_owned(s, html_re(), " ");
     let s = replace_all_owned(
         s,
         cached_regex("snippet image", r"!\[([^\]]*)\]\([^)]*\)", &IMAGE),
@@ -350,6 +349,44 @@ fn snippet_text(body: &str) -> String {
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join(" · ")
+}
+
+/// Drop HTML comments, and HTML tags outside code. In a fenced block or an
+/// inline code span, `<T>` is part of the text. Mirrors the TS
+/// `stripHtmlOutsideCode`.
+fn strip_html_outside_code(body: &str) -> String {
+    static COMMENT: OnceLock<Option<Regex>> = OnceLock::new();
+    static TAG: OnceLock<Option<Regex>> = OnceLock::new();
+    static FENCE_OPEN: OnceLock<Option<Regex>> = OnceLock::new();
+    let body = replace_all_owned(
+        body.to_string(),
+        cached_regex("snippet html comment", r"(?s)<!--.*?-->", &COMMENT),
+        " ",
+    );
+    let tag = cached_regex("snippet html tag", r"</?[a-zA-Z][^>]*>", &TAG);
+    let fence = cached_regex("snippet fence open", r"^[ \t]*(?:```|~~~)", &FENCE_OPEN);
+    let mut fenced = false;
+    body.split('\n')
+        .map(|line| {
+            if fence.is_some_and(|re| re.is_match(line)) {
+                fenced = !fenced;
+                return line.to_string();
+            }
+            if fenced {
+                return line.to_string();
+            }
+            // Every second piece between backticks is an inline code span.
+            line.split('`')
+                .enumerate()
+                .map(|(i, piece)| match tag {
+                    Some(re) if i % 2 == 0 => re.replace_all(piece, " ").into_owned(),
+                    _ => piece.to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join("`")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Take a short excerpt of `body` centred on the first match of any
