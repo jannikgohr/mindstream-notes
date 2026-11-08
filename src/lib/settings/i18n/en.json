@@ -192,6 +192,7 @@
     "data.importNotes.error.unsupportedPlatform": "Importing notes isn't available on this platform yet.",
     "data.importNotes.result.success.title": "Import finished",
     "data.importNotes.result.stopped.title": "Import stopped",
+    "data.importNotes.result.stopped.nothing": "Nothing was imported.",
     "data.importNotes.chip.notes.status": "imported",
     "data.importNotes.chip.folders.status": "created",
     "data.importNotes.chip.links.one": "link",

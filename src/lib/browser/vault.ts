@@ -222,8 +222,9 @@ export async function importBrowserNotes(
   }
 }
 
-/** A busy worker can't read a cancel message, so stop it. What earlier batches
- * committed stays, the one in flight rolls back, and the next call reconnects. */
+/** A busy worker can't read a cancel message, so stop it. The import is one
+ * transaction, so the next call reconnects and the vault's open rolls all of it
+ * back. */
 export function cancelBrowserNotesImport(): void {
   if (notesImportAttempts.size === 0) return;
   for (const attempt of notesImportAttempts) attempt.cancelled = true;

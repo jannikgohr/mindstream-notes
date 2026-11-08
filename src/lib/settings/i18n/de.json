@@ -865,6 +865,7 @@
     "data.importNotes.error.unsupportedPlatform": "Der Import von Notizen ist auf dieser Plattform noch nicht verfügbar.",
     "data.importNotes.result.success.title": "Import abgeschlossen",
     "data.importNotes.result.stopped.title": "Import angehalten",
+    "data.importNotes.result.stopped.nothing": "Es wurde nichts importiert.",
     "data.importNotes.chip.notes.status": "importiert",
     "data.importNotes.chip.folders.status": "angelegt",
     "data.importNotes.chip.links.one": "Link",
