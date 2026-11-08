@@ -768,6 +768,14 @@ jobs:
       # that could drift from it.
       - run: pnpm test:e2e:app:build
 
+      - name: Collect what the suites need
+        run: |
+          mkdir -p .output/app-e2e-bin
+          cp src-tauri/target/release/mindstream-notes-e2e .output/app-e2e-bin/
+          cp "$HOME/.cargo/bin/tauri-driver" .output/app-e2e-bin/
+          node plugin-sdk/fixtures.mjs --out .output/app-e2e-fixtures conformance-rust
+          cp .output/app-e2e-fixtures/conformance-rust.wasm .output/app-e2e-bin/
+
       - name: Retain packaged app build timings
         if: always()
         uses: actions/upload-artifact@v4
@@ -775,17 +783,12 @@ jobs:
           name: app-e2e-build-timings
           path: |
             .output/tauri-e2e/rust-profile.json
+            .output/app-e2e-fixtures/fixture-build-timings.json
             src-tauri/target/cargo-timings/
             src-tauri/target/release/build/mindstream-notes-*/out/build-timings.json
           if-no-files-found: ignore
           retention-days: 7
 
-      - name: Collect what the suites need
-        run: |
-          mkdir -p .output/app-e2e-bin
-          cp src-tauri/target/release/mindstream-notes-e2e .output/app-e2e-bin/
-          cp "$HOME/.cargo/bin/tauri-driver" .output/app-e2e-bin/
-          node plugin-sdk/fixtures.mjs --out .output/app-e2e-bin conformance-rust
       - uses: actions/upload-artifact@v4
         with:
           name: app-e2e-bin
