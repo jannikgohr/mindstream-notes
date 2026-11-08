@@ -376,3 +376,20 @@ The cache preserves a built component's bytes; it does not assume independent
 fresh QuickJS snapshots are byte-reproducible. Direct SDK builds and the
 prebundled cache path expose identical component interfaces, and runtime tests
 validate execution. The packed SDK authoring check passed without Rust installed.
+
+All 22 checks passed on `927db0b7`, including all three packaged app suites.
+The Windows fixture build script took 31.80s with restored guests and TypeScript
+cache hits. The macOS fixture build script took 12.45s. The earlier cache
+population run took 162.96s for the Windows guest steps alone. These measurements
+come from different hosted runners, so the exact reduction needs repeat evidence.
+The development workflow's unchanged build took 0.62s and reused all artifacts.
+
+### Round 3: E2E cache recipe correction
+
+The E2E command still rebuilt dependencies despite an exact native cache hit.
+The action ignores its `key` input when `shared-key` is set. The profile hash
+therefore never reached the actual cache key, and every run restored an immutable
+cache from the previous release profile. The recipe hash now goes directly into
+`shared-key`. This first corrected run will populate the separate cache; a
+subsequent run must verify reuse before claiming a warm packaged-build speedup.
+Compiler settings and guest cache recipes stay unchanged.
