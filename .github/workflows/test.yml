@@ -278,7 +278,18 @@ jobs:
         # Debug Pulley calls use the production deadline. Concurrent compiler
         # fixtures can starve them on small runners. Keep functional tests
         # serial; release probes measure the unchanged budget independently.
-        run: cargo test --locked --workspace -- --test-threads=1
+        run: cargo test --locked --workspace --timings -- --test-threads=1
+
+      - name: Retain native test build timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-test-timings-${{ runner.os }}
+          path: |
+            src-tauri/target/cargo-timings/
+            src-tauri/target/debug/build/mindstream-notes-*/out/build-timings.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   bundled-plugins:
     name: Shipped Rust plugins
@@ -686,6 +697,17 @@ jobs:
       # The suites' own build path (helpers/preflight.ts), not a second recipe
       # that could drift from it.
       - run: pnpm test:e2e:app:build
+
+      - name: Retain packaged app build timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-e2e-build-timings
+          path: |
+            src-tauri/target/cargo-timings/
+            src-tauri/target/release/build/mindstream-notes-*/out/build-timings.json
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Collect what the suites need
         run: |

@@ -379,7 +379,9 @@ export function buildApp(): void {
       '--features',
       'e2e-data-dir',
       '--config',
-      writeE2eBuildConfig()
+      writeE2eBuildConfig(),
+      '--',
+      '--timings'
     ],
     { cwd: repoRoot, stdio: 'inherit', env: buildEnv }
   );

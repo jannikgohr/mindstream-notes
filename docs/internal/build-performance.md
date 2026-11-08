@@ -199,3 +199,125 @@ here that frontend dependency optimization repeats on every unchanged restart.
 The default native feature configuration also built successfully after the
 changes and its unchanged repeat took 2.26s with no compilation. All 29 script
 checks in `pnpm lint:ci` passed, including the four launcher regression tests.
+
+## Validation before the performance PR
+
+The follow-up benchmark compares the original `24e92845` with this branch using
+separate empty target directories, the same Rust 1.97.1 toolchain, two Cargo jobs,
+locked dependencies and the same development app configuration. Registry sources
+were already downloaded for both runs. Build jobs ran sequentially on this shared
+machine. A failed attempt that exceeded the `/tmp` quota was discarded before
+restarting the comparison on the regular disk.
+
+In addition to cold and unchanged builds, the probes change and restore an app
+Rust file and a plugin-runtime Rust file, then verify reuse on the next build.
+Source invalidation is useful here: an app edit should not compile plugin
+libraries, and a runtime edit should compile its development copy once.
+
+### CI evidence to collect
+
+The `Build performance` workflow runs on PRs that change the build setup or plugin
+runtime. It builds the development backend, repeats the exact configuration, and
+checks Cargo's JSON artifact stream. An unchanged rebuild fails the job if any
+artifact is not fresh. This checks actual compilation reuse without a noisy
+elapsed-time threshold. The workflow needs no frontend, guest compiler, display,
+Node dependencies or user profile. Its toolchain is pinned to match the local
+comparison. A manual run with `cold` enabled skips the Rust cache.
+
+The workflow attaches `development-build-timings`, including initial/repeat elapsed
+times, the repeat JSON stream, compiler version, Cargo HTML reports and build-script
+phase timings. Its summary includes executable size and reused artifact counts.
+
+The existing native test matrix now attaches `native-test-timings-Linux`,
+`native-test-timings-Windows` and `native-test-timings-macOS`. The packaged E2E build
+attaches `app-e2e-build-timings`. `build-timings.json` separates bundled plugin
+precompilation from Tauri context generation. The Cargo report still covers the
+full native build, including compiler dependencies and linking.
+
+Before merging, inspect these reports and run the packaged app suites. Those
+suites validate production asset loading after moving context generation into the
+build script, bundled plugin loading and the existing execution deadlines. Keep
+production release settings while collecting this first CI comparison. An E2E
+profile with cheaper linking, Android's repeated app builds and release cache
+consistency can then be separate measured changes.
+
+The standalone E2E TypeScript check currently reports missing declarations for
+`picomatch` and `lint-ci-filters.mjs` in `spec-discovery.test.ts`. The same two
+errors were reproduced on the original commit with the same installed Node
+dependencies; they are not introduced by the timing flag in the build helper.
+
+### Comparable local results
+
+The original commit took 355.85 seconds for an empty-target native build. The
+branch with reduced dependency debug information took 298.84 seconds. Adding
+Linux split debug information took 295.35 seconds. These are sequential single
+runs on a shared machine, not repeated statistical estimates. Both branch
+variants had empty target directories; neither reused compiled baseline crates.
+
+| Rust backend case                 | Original commit | This branch on Linux |       Observed reduction |
+| --------------------------------- | --------------: | -------------------: | -----------------------: |
+| Cold build                        |         355.85s |              295.35s |                    17.0% |
+| App function code edit            |          18.81s |               16.38s |                    12.9% |
+| Plugin-runtime function code edit |          16.12s |               11.07s |                    31.3% |
+| Unchanged build after a code edit |           0.46s |           0.45–0.46s | No compilation in either |
+| Development executable            |       764.3 MiB |            266.4 MiB |            65.1% smaller |
+| Development static library        |      2026.4 MiB |           1285.6 MiB |            36.6% smaller |
+
+The code-edit probes insert a `black_box` call inside an existing function,
+compile without running the app, and restore the original source. A separate
+comment-only invalidation probe measured 13.62s versus 9.44s for app edits and
+15.03s versus 11.72s for runtime edits. The table uses executable-code changes
+rather than the cheaper comment-only case. Restoring each code edit also caused
+the expected compilation, and every following unchanged build reused artifacts.
+App edits reused the runtime dependencies. Runtime edits compiled the runtime
+and app, with the branch omitting the host AOT copy.
+
+The first unchanged baseline invocation compiled the app again for 12.59s.
+The corresponding branch build compiled nothing. Its first repeat still took
+3.80s for Cargo and filesystem work, then settled to about 0.45s. This is why the
+CI guard checks `fresh` artifacts rather than a fixed time limit. The earlier
+30.09-second extra rebuild was a separate observation on the same machine;
+it is not mixed into this comparison.
+
+The development profile now keeps limited debug information for non-workspace
+packages. Workspace code retains full debug information, and optimization levels,
+debug assertions and the Pulley optimization are unchanged. Production release
+profiles are unchanged.
+
+On native Linux, the development launcher defaults to unpacked split debug
+information. Debugging data is retained in `.dwo` files instead of copying all
+of it into the executable and archives. Keep those files for debugging. GDB
+successfully resolved source locations and the `conn` and `note_id` local
+parameter symbols in the app function after the change, without starting the app.
+The smaller executable size does not mean all debugging data disappeared from
+the target directory, and is not a claim about runtime RAM use.
+
+Explicit targets and `CARGO_BUILD_TARGET` skip the launcher's Linux default.
+An existing `CARGO_PROFILE_DEV_SPLIT_DEBUGINFO` environment setting or an inline
+Cargo `profile.dev.split-debuginfo` override also takes precedence. macOS and
+Windows keep their existing split-debug behavior. To opt out on Linux:
+
+```sh
+CARGO_PROFILE_DEV_SPLIT_DEBUGINFO=off pnpm tauri-dev
+```
+
+The local raw results are written to `.output/build-performance/local-results.json`.
+Cold build reports include normal runtime compilation, the app and linking;
+frontend/server startup and app execution are excluded.
+
+### Final checks
+
+The full native workspace test run under Xvfb and a private D-Bus session passed
+1,200 tests, with 6 existing ignored tests. It used the normal default features,
+so the host compiler still compiled successfully where enabled. The optimized
+development build and its exact unchanged JSON repeat also passed; the repeat
+reused all 755 reported artifacts and rebuilt none. GDB resolved app parameter
+symbols with split debug information, and the real Tauri CLI forwarded the
+expected Cargo flags and environment.
+
+The script checks, YAML parsing, targeted ESLint, Rust formatting and Prettier
+checks passed. The standalone E2E typecheck remains at the two original missing
+declaration errors described above. Cross-platform native tests and packaged
+app suites remain CI checks for the PR. Benchmark comparison targets were
+removed after retaining reports; the optimized artifacts remain in this
+worktree's normal `src-tauri/target` for subsequent local builds.

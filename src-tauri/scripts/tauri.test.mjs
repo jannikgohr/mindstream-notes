@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 // Exercise the launcher without starting a WebView or the app's real profile.
-function launch(args) {
+function launch(args, overrides = {}) {
   const root = mkdtempSync(join(tmpdir(), 'build-launcher-'));
   try {
     const scripts = join(root, 'src-tauri', 'scripts');
@@ -25,17 +25,22 @@ function launch(args) {
     );
     writeFileSync(
       join(cli, 'tauri.js'),
-      'console.log(JSON.stringify(process.argv.slice(2)))'
+      'console.log(JSON.stringify({ args: process.argv.slice(2), splitDebugInfo: process.env.CARGO_PROFILE_DEV_SPLIT_DEBUGINFO ?? null }))'
     );
+    const env = { ...process.env };
+    delete env.CARGO_PROFILE_DEV_SPLIT_DEBUGINFO;
+    delete env.CARGO_BUILD_TARGET;
+    Object.assign(env, overrides);
     const result = spawnSync(
       process.execPath,
       [join(scripts, 'tauri.mjs'), ...args],
       {
-        encoding: 'utf8'
+        encoding: 'utf8',
+        env
       }
     );
     assert.equal(result.status, 0, result.stderr);
-    return { args: JSON.parse(result.stdout), root };
+    return { ...JSON.parse(result.stdout), root };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -84,4 +89,53 @@ test('development preserves arguments for the runner and the application', () =>
     '--',
     '--some-app-option'
   ]);
+});
+
+test('development preserves an existing Cargo defaults flag without duplicating it', () => {
+  const { args } = launch([
+    'dev',
+    '--',
+    '--no-default-features',
+    '--',
+    '--app-option'
+  ]);
+  const runnerStart = args.indexOf('--');
+  assert.deepEqual(args.slice(runnerStart), [
+    '--',
+    '--no-default-features',
+    '--',
+    '--app-option'
+  ]);
+});
+
+test('native Linux development uses split debug info without changing release builds', () => {
+  assert.equal(
+    launch(['dev']).splitDebugInfo,
+    process.platform === 'linux' ? 'unpacked' : null
+  );
+  assert.equal(launch(['build']).splitDebugInfo, null);
+});
+
+test('development respects explicit debug info settings and cross targets', () => {
+  assert.equal(
+    launch(['dev'], { CARGO_PROFILE_DEV_SPLIT_DEBUGINFO: 'packed' })
+      .splitDebugInfo,
+    'packed'
+  );
+  for (const args of [
+    ['dev', '--target', 'x86_64-pc-windows-gnu'],
+    ['dev', '--target=x86_64-pc-windows-gnu'],
+    ['dev', '--', '--target', 'x86_64-pc-windows-gnu']
+  ])
+    assert.equal(launch(args).splitDebugInfo, null);
+  assert.equal(
+    launch(['dev'], { CARGO_BUILD_TARGET: 'x86_64-pc-windows-gnu' })
+      .splitDebugInfo,
+    null
+  );
+  assert.equal(
+    launch(['dev', '--', '--config', 'profile.dev.split-debuginfo="packed"'])
+      .splitDebugInfo,
+    null
+  );
 });

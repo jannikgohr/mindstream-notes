@@ -142,6 +142,12 @@ tauri = { version = "2.11", features = ["test"] }
 # Paused time, for testing what the sync scheduler waits for.
 tokio = { version = "1.52.3", features = ["rt", "macros", "test-util"] }
 
+# Keep full debugging information for workspace code, but limited information
+# for external dependencies. This cuts the archives and linking work in the
+# local edit/build loop without changing optimization or debug assertions.
+[profile.dev.package."*"]
+debug = 1
+
 # Pulley executes every guest instruction in this dependency. An unoptimized
 # interpreter can exhaust production guest deadlines in otherwise debug builds.
 # Keep app/host debug assertions and the actual deadlines; optimize only the VM.

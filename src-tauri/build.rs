@@ -1,13 +1,25 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let started = std::time::Instant::now();
     println!("cargo:rustc-check-cfg=cfg(coverage)");
     generate_i18n_bundle_list()?;
     track_builtin_plugins()?;
+    let plugin_started = std::time::Instant::now();
     precompile_builtin_plugins()?;
+    let plugin_seconds = plugin_started.elapsed().as_secs_f64();
+    let context_started = std::time::Instant::now();
     // Generate cached icons and context before rustc starts. Generating them
     // inside generate_context! makes new files newer than Cargo's compilation
     // timestamp, causing another app rebuild on the next invocation.
     tauri_build::try_build(
         tauri_build::Attributes::new().codegen(tauri_build::CodegenContext::new()),
+    )?;
+    std::fs::write(
+        std::path::PathBuf::from(std::env::var("OUT_DIR")?).join("build-timings.json"),
+        format!(
+            "{{\"pluginPrecompileSeconds\":{plugin_seconds},\"tauriContextSeconds\":{},\"totalBuildScriptSeconds\":{}}}\n",
+            context_started.elapsed().as_secs_f64(),
+            started.elapsed().as_secs_f64(),
+        ),
     )?;
     // tauri-build links its Common Controls v6 manifest into binaries only.
     // The native runtime spike and IPC test harness need that manifest too,
