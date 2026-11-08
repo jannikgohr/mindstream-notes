@@ -53,18 +53,15 @@ pub use detect::{DetectedSource, ImportSourceKind};
 pub use files::{walk_paths, ImportEntry, ImportFiles};
 pub use model::{ImportReport, UnresolvedLinks};
 
-/// Where an import writes. Each batch takes the connection briefly, so that
-/// the app's global lock is handed back often enough to keep its UI responsive.
+/// Where an import writes. Each batch takes the connection only for its own
+/// writes.
 pub trait ImportStore {
     fn with_conn_mut<T>(&self, write: impl FnOnce(&mut Connection) -> AppResult<T>)
         -> AppResult<T>;
 }
 
-/// Notes written per transaction.
-///
-/// Small enough that a cancel loses almost nothing and the global connection
-/// lock is handed back often enough to keep the UI responsive; large enough
-/// that per-transaction overhead disappears against the row writes.
+/// Notes written per batch: small enough to hold in memory, large enough
+/// that per-batch overhead disappears against the row writes.
 const BATCH_SIZE: usize = 500;
 
 /// Attachment bytes a batch may hold before it is written, whatever its note
@@ -285,9 +282,10 @@ pub fn run_import(
 
 /// [`run_import`] as one transaction: the whole import lands, or none of it.
 ///
-/// For a connection nothing else writes to while the import runs, which is
-/// why it takes the connection itself: the browser's storage worker answers
-/// one request at a time, so the import holds the database either way.
+/// It takes the connection itself, which nothing else may use until it
+/// returns. The browser's storage worker answers one request at a time, so it
+/// passes its own. The app opens a second connection for the import, so its
+/// main one keeps reading while the import holds the write lock.
 /// Batches still flush as [`run_import`] flushes them, so memory stays at one
 /// batch. What they write before the commit is the transaction's, and SQLite
 /// spills it to the database file under the rollback journal once its page

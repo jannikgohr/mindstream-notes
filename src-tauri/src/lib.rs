@@ -916,6 +916,7 @@ pub fn run() {
                 import::notes_import_detect,
                 import::notes_import_run,
                 import::notes_import_cancel,
+                import::notes_import_running,
                 notes_export::notes_export_pick_dir,
                 // Chunked exports that never cross IPC whole
                 export_session::export_begin,
