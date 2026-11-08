@@ -271,6 +271,26 @@ pub async fn notes_import_run(
         return Err(AppError::InvalidArg("Another import is still running.".into()).into());
     };
     let progress_handle = app.clone();
+    // Windows hold their writes from the first progress event on; this one
+    // goes out before the import takes the write lock.
+    let starting = ImportProgress {
+        phase: "scanning",
+        done: 0,
+        total: 0,
+        committed: ImportReport::default(),
+    };
+    if let Err(err) = app.emit(AppEvent::ImportProgress.as_str(), &starting) {
+        log::warn!("[import] progress emit failed: {err}");
+    }
+    // A sync that is already running writes through the app's connection
+    // until it ends, and the import's transaction would make those writes
+    // fail. Claiming the slot stops new syncs; this waits out the running one
+    // and keeps the next from starting until the import is over.
+    let scheduler = app.try_state::<crate::sync::scheduler::SyncScheduler>();
+    let _sync = match &scheduler {
+        Some(scheduler) => Some(scheduler.acquire_in_flight().await),
+        None => None,
+    };
 
     // spawn_blocking, not a plain call: an import is minutes of synchronous
     // filesystem and SQLite work, and running it on the command thread would
@@ -296,6 +316,21 @@ pub async fn notes_import_run(
 #[tauri::command]
 pub fn notes_import_cancel(state: tauri::State<'_, ImportState>) -> CommandResult<()> {
     state.cancel();
+    Ok(())
+}
+
+/// Refuse a write that would meet a running import's lock. For native
+/// callers the frontend's write gate does not cover, such as the tray and
+/// global shortcuts.
+pub fn refuse_while_importing(app: &AppHandle) -> AppResult<()> {
+    if app
+        .try_state::<ImportState>()
+        .is_some_and(|import| import.is_running())
+    {
+        return Err(AppError::InvalidArg(
+            "Notes are being imported. Try again once the import is done.".into(),
+        ));
+    }
     Ok(())
 }
 

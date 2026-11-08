@@ -41,6 +41,11 @@ export function importProgressed(progress: {
   }
 }
 
+/** An import runs, learned some other way than from its events. */
+export function noteImportRunning(): void {
+  importActivity.running = true;
+}
+
 /** The import is over, however it ended. Held writes go ahead. */
 export function importFinished(): void {
   importActivity.running = false;
