@@ -67,6 +67,13 @@ pub trait ImportStore {
 /// that per-transaction overhead disappears against the row writes.
 const BATCH_SIZE: usize = 500;
 
+/// Attachment bytes a batch may hold before it is written, whatever its note
+/// count. A prepared note keeps its attachments in memory until the batch
+/// commits, and the same image referenced from many notes is read once per
+/// note, so a count alone could hold gigabytes. The browser's WASM build has
+/// a 4 GiB address space at most.
+const BATCH_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
+
 /// Default per-file attachment ceiling. Generous for a note vault, low enough
 /// that one stray disk image doesn't quietly add gigabytes to the SQLite file.
 pub const DEFAULT_MAX_ATTACHMENT_BYTES: u64 = 25 * 1024 * 1024;
@@ -201,6 +208,7 @@ pub fn run_import(
     let mut positions = writer::PositionCounters::default();
     let mut batch: Vec<writer::PreparedNote> = Vec::with_capacity(BATCH_SIZE);
     let mut batch_counts = PreparedCounts::default();
+    let mut batch_bytes = 0usize;
     let rewrite_options = source.rewrite_options();
 
     for (processed, item) in index.items.iter().enumerate() {
@@ -210,6 +218,11 @@ pub fn run_import(
         }
         match prepare_item(source, item, &mut link_index, rewrite_options, options) {
             Ok((prepared, counts)) => {
+                batch_bytes += prepared
+                    .attachments
+                    .iter()
+                    .map(|(_, bytes)| bytes.len())
+                    .sum::<usize>();
                 batch.push(prepared);
                 batch_counts.links_resolved += counts.links_resolved;
                 batch_counts.links_unresolved += counts.links_unresolved;
@@ -223,7 +236,8 @@ pub fn run_import(
             }
         }
 
-        if batch.len() >= BATCH_SIZE {
+        if batch.len() >= BATCH_SIZE || batch_bytes >= BATCH_ATTACHMENT_BYTES {
+            batch_bytes = 0;
             flush(
                 store,
                 &mut batch,
