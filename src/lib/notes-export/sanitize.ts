@@ -47,6 +47,11 @@ const RESERVED_BASENAMES = new Set(
 // eslint-disable-next-line no-control-regex
 const UNSAFE_CHARS = /[<>:"/\\|?*\x00-\x1F]/g;
 
+/** File systems cap a name at 255 bytes, not characters. This leaves room
+ *  for a dedup suffix and the longest extension the export appends. */
+const MAX_NAME_BYTES = 200;
+const utf8 = new TextEncoder();
+
 /**
  * Returns a string safe to use as a single filename component (no
  * separators). Drops leading/trailing whitespace and dots, replaces
@@ -54,24 +59,45 @@ const UNSAFE_CHARS = /[<>:"/\\|?*\x00-\x1F]/g;
  * so the result reads cleanly. Falls back to `Untitled` when input
  * is empty.
  *
- * Pass the desired max length (default 120). The cap leaves headroom
- * for the dedup suffix (`_<n>`) and the extension.
+ * Pass the desired max length in characters (default 120). The result
+ * also stays within {@link MAX_NAME_BYTES} of UTF-8, which leaves
+ * headroom for the dedup suffix (`_<n>`) and the extension.
  */
 export function sanitizeName(raw: string, maxLength = 120): string {
   let s = (raw ?? '').replace(UNSAFE_CHARS, ' ');
   // Collapse runs of whitespace so "a / b / c" becomes "a b c".
   s = s.replace(/\s+/g, ' ');
-  s = s.trim();
+  s = truncate(s.trim(), maxLength);
   // Trailing dots confuse Windows (foo. → foo).
   s = s.replace(/\.+$/u, '').trim();
-  // Reserved device names match case-insensitively against the basename
-  // (i.e. ignoring the extension we haven't appended yet).
-  if (RESERVED_BASENAMES.has(s.toUpperCase())) {
-    s = `${s}_file`;
+  if (!s) return 'Untitled';
+  // Windows reserves a device name whatever follows its first dot, so
+  // `CON.txt` is as unusable as `CON`. Matched case-insensitively.
+  const dot = s.indexOf('.');
+  const stem = dot < 0 ? s : s.slice(0, dot);
+  if (RESERVED_BASENAMES.has(stem.trim().toUpperCase())) {
+    s = `${stem}_file${dot < 0 ? '' : s.slice(dot)}`;
   }
-  if (s.length > maxLength) s = s.slice(0, maxLength).trim();
-  if (!s) s = 'Untitled';
   return s;
+}
+
+/** The longest prefix within `maxLength` characters and
+ *  {@link MAX_NAME_BYTES} bytes, never splitting a character. */
+function truncate(s: string, maxLength: number): string {
+  let out = '';
+  let bytes = 0;
+  for (const char of s) {
+    bytes += utf8.encode(char).length;
+    if (out.length + char.length > maxLength || bytes > MAX_NAME_BYTES) break;
+    out += char;
+  }
+  return out.trim();
+}
+
+/** Windows and macOS ignore case, and macOS Unicode normalisation too, so
+ *  names that differ only there would land on the same file. */
+function nameKey(name: string): string {
+  return name.normalize('NFC').toLowerCase();
 }
 
 /**
@@ -79,11 +105,13 @@ export function sanitizeName(raw: string, maxLength = 120): string {
  * same directory, return a non-colliding variant by appending `_2`,
  * `_3`, ... before the extension. Mutates `taken` by inserting the
  * chosen name so subsequent calls in the same directory dedup
- * naturally.
+ * naturally. Names that differ only in case or Unicode normalisation
+ * count as the same name. `taken` holds them in that folded form, so
+ * only this function should add to it.
  */
 export function dedupeAgainst(taken: Set<string>, desired: string): string {
-  if (!taken.has(desired)) {
-    taken.add(desired);
+  if (!taken.has(nameKey(desired))) {
+    taken.add(nameKey(desired));
     return desired;
   }
   const dot = desired.lastIndexOf('.');
@@ -91,14 +119,14 @@ export function dedupeAgainst(taken: Set<string>, desired: string): string {
   const ext = dot > 0 ? desired.slice(dot) : '';
   for (let n = 2; n < 10_000; n++) {
     const candidate = `${base}_${n}${ext}`;
-    if (!taken.has(candidate)) {
-      taken.add(candidate);
+    if (!taken.has(nameKey(candidate))) {
+      taken.add(nameKey(candidate));
       return candidate;
     }
   }
   // Astronomically unlikely; fall back to a uuid suffix so we never
   // return an unused name to the caller.
   const fallback = `${base}_${crypto.randomUUID()}${ext}`;
-  taken.add(fallback);
+  taken.add(nameKey(fallback));
   return fallback;
 }
