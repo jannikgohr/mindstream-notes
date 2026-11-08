@@ -66,7 +66,6 @@ pub mod notes;
 pub mod notes_export;
 pub mod onboarding;
 pub mod paths;
-pub mod pdf_export;
 pub mod pdf_text;
 pub mod plugins;
 pub mod profiles;
@@ -924,9 +923,6 @@ pub fn run() {
                 export_session::export_asset_types,
                 export_session::export_finish,
                 export_session::export_abort,
-                // PDF export
-                pdf_export::save_pdf_export,
-                pdf_export::save_file_export,
                 // System introspection
                 system::is_appimage_install,
                 // Hotkey display state mirrored from the JS hotkey store

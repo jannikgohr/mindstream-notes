@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-const invoke = vi.hoisted(() => vi.fn());
-vi.mock('@tauri-apps/api/core', () => ({ invoke }));
+const native = vi.hoisted(() => vi.fn());
+vi.mock('./export-session', () => ({ saveFileNatively: native }));
 import { saveFileExport } from './file-export';
 const input = {
   suggestedName: 'Cards.csv',
@@ -13,21 +13,20 @@ const input = {
 afterEach(() => {
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
   vi.restoreAllMocks();
+  native.mockReset();
 });
 
 describe('file export save bridge', () => {
-  it('passes the correct native filter and preserves cancellation', async () => {
+  it('stages the file natively with its filter and preserves cancellation', async () => {
     (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
-    invoke.mockResolvedValue(false);
+    native.mockResolvedValue(false);
     expect(await saveFileExport(input)).toBe(false);
-    expect(invoke).toHaveBeenCalledWith('save_file_export', {
-      input: {
-        suggestedName: 'Cards.csv',
-        dialogTitle: undefined,
-        bytes: [1, 2, 3],
-        filterName: 'CSV',
-        extensions: ['csv']
-      }
+    expect(native).toHaveBeenCalledWith({
+      suggestedName: 'Cards.csv',
+      dialogTitle: undefined,
+      filterName: 'CSV',
+      extensions: ['csv'],
+      bytes: input.bytes
     });
   });
 
@@ -38,6 +37,7 @@ describe('file export save bridge', () => {
     const from = vi.spyOn(Array, 'from');
     await saveFileExport(input);
     expect(from).not.toHaveBeenCalledWith(input.bytes);
+    expect(native).not.toHaveBeenCalled();
   });
 
   it('downloads with the requested MIME type and filename in a browser', async () => {

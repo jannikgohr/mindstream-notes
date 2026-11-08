@@ -2,19 +2,15 @@
  * Bridge for the annotated-PDF save flow.
  *
  * Why this lives separately from the rest of `lib/api/*`: it has to
- * branch on `isTauri()`. In the desktop app we hand the bytes to a
- * Rust command that pops the OS save dialog (so the user picks a
- * folder + filename, instead of the webview silently dropping the
- * file in ~/Downloads). In `pnpm dev` outside Tauri we fall back to
- * a Blob + `<a download>` anchor — works in any modern browser.
+ * branch on `isTauri()`. In the app the bytes go through a native export
+ * session, which pops the OS save dialog (so the user picks a folder +
+ * filename, instead of the webview silently dropping the file in
+ * ~/Downloads). In `pnpm dev` outside Tauri we fall back to a Blob +
+ * `<a download>` anchor — works in any modern browser.
  */
 
-import {
-  assertBoolean,
-  TauriCommandName,
-  invokeOrFallback,
-  isTauri
-} from './core';
+import { isTauri } from './core';
+import { saveFileNatively } from './export-session';
 
 export interface SavePdfExportArgs {
   /** Suggested filename pre-filled into the dialog (no extension stripped). */
@@ -32,22 +28,14 @@ export interface SavePdfExportArgs {
 export async function saveAnnotatedPdf(
   args: SavePdfExportArgs
 ): Promise<boolean> {
-  // Tauri's IPC layer serialises Uint8Array as a JSON number array,
-  // which the Rust side decodes into Vec<u8>. Array.from forces the
-  // serialisation explicitly — letting the typed array through
-  // sometimes ships as an empty `{}` object via JSON.stringify.
-  return invokeOrFallback<boolean>(
-    TauriCommandName.SavePdfExport,
-    {
-      input: {
-        suggestedName: args.suggestedName,
-        dialogTitle: args.dialogTitle,
-        bytes: Array.from(args.bytes)
-      }
-    },
-    () => downloadViaAnchor(args),
-    (value) => assertBoolean(value, 'save_pdf_export response')
-  );
+  if (!isTauri()) return downloadViaAnchor(args);
+  return saveFileNatively({
+    suggestedName: args.suggestedName,
+    dialogTitle: args.dialogTitle,
+    filterName: 'PDF',
+    extensions: ['pdf'],
+    bytes: args.bytes
+  });
 }
 
 function downloadViaAnchor(args: SavePdfExportArgs): boolean {

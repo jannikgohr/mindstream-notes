@@ -1,9 +1,5 @@
-import {
-  assertBoolean,
-  invokeOrFallback,
-  isTauri,
-  TauriCommandName
-} from './core';
+import { isTauri } from './core';
+import { saveFileNatively } from './export-session';
 
 export interface SaveFileExportArgs {
   suggestedName: string;
@@ -34,28 +30,18 @@ export function downloadBlob(blob: Blob, filename: string): void {
 export async function saveFileExport(
   args: SaveFileExportArgs
 ): Promise<boolean> {
-  return invokeOrFallback(
-    TauriCommandName.SaveFileExport,
-    // Tauri needs a number array, one element per byte. A browser never sends
-    // it, and for a large file building it could cost the tab its memory.
-    isTauri()
-      ? {
-          input: {
-            suggestedName: args.suggestedName,
-            dialogTitle: args.dialogTitle,
-            bytes: Array.from(args.bytes),
-            filterName: args.filterName,
-            extensions: args.extensions
-          }
-        }
-      : undefined,
-    () => {
-      downloadBlob(
-        new Blob([args.bytes.slice().buffer], { type: args.mime }),
-        args.suggestedName
-      );
-      return true;
-    },
-    (value) => assertBoolean(value, 'save_file_export response')
-  );
+  if (!isTauri()) {
+    downloadBlob(
+      new Blob([args.bytes.slice().buffer], { type: args.mime }),
+      args.suggestedName
+    );
+    return true;
+  }
+  return saveFileNatively({
+    suggestedName: args.suggestedName,
+    dialogTitle: args.dialogTitle,
+    filterName: args.filterName,
+    extensions: args.extensions,
+    bytes: args.bytes
+  });
 }

@@ -9,7 +9,12 @@ vi.mock('./core', async (importOriginal) => ({
   invokeTauri: ipc.invoke,
   invokeFile: ipc.invokeFile
 }));
-import { CHUNK_BYTES, ExportSession, exportAssetTypes } from './export-session';
+import {
+  CHUNK_BYTES,
+  ExportSession,
+  exportAssetTypes,
+  saveFileNatively
+} from './export-session';
 
 beforeEach(() => {
   ipc.invoke
@@ -124,5 +129,45 @@ describe('exportAssetTypes', () => {
   it('rejects a reply that is not a map of strings', async () => {
     ipc.invoke.mockResolvedValueOnce({ asset_a: 3 });
     await expect(exportAssetTypes(['asset_a'])).rejects.toThrow();
+  });
+});
+
+describe('saveFileNatively', () => {
+  const file = {
+    suggestedName: 'Note.pdf',
+    filterName: 'PDF',
+    extensions: ['pdf'],
+    bytes: new Uint8Array([37, 80, 68, 70])
+  };
+
+  it('stages one file, then saves it with the dialog options', async () => {
+    ipc.invoke.mockImplementation(async (command: string) =>
+      command === 'export_begin' ? 'token-1' : true
+    );
+    await expect(saveFileNatively(file)).resolves.toBe(true);
+    expect(ipc.invoke).toHaveBeenCalledWith('export_begin', {
+      target: { kind: 'file' }
+    });
+    expect(ipc.invokeFile.mock.calls[0][1]).toMatchObject({
+      path: 'Note.pdf',
+      first: true,
+      size: 4
+    });
+    expect(ipc.invoke).toHaveBeenLastCalledWith('export_finish', {
+      token: 'token-1',
+      save: {
+        suggestedName: 'Note.pdf',
+        filterName: 'PDF',
+        extensions: ['pdf']
+      }
+    });
+  });
+
+  it('drops the staged file when staging fails', async () => {
+    ipc.invokeFile.mockRejectedValueOnce(new Error('disk full'));
+    await expect(saveFileNatively(file)).rejects.toThrow('disk full');
+    expect(ipc.invoke).toHaveBeenLastCalledWith('export_abort', {
+      token: 'token-1'
+    });
   });
 });

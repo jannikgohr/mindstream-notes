@@ -187,8 +187,6 @@ export enum TauriCommandName {
   RestoreMany = 'restore_many',
   RestoreNote = 'restore_note',
   SaveNote = 'save_note',
-  SavePdfExport = 'save_pdf_export',
-  SaveFileExport = 'save_file_export',
   SaveSignature = 'save_signature',
   SearchNotes = 'search_notes',
   SetCloseToTray = 'set_close_to_tray',

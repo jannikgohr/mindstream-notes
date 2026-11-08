@@ -62,8 +62,6 @@ const COMMAND_ACCESS: Record<`${TauriCommandName}`, CommandAccess> = {
   export_abort: 'exempt',
   notes_import_pick_file: 'exempt',
   notes_import_pick_folder: 'exempt',
-  save_pdf_export: 'exempt',
-  save_file_export: 'exempt',
   account_save_secret_file: 'exempt',
 
   // Reads.
