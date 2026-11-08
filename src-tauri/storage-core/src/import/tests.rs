@@ -342,6 +342,9 @@ struct ScriptedSource {
     failing_attachments: Vec<usize>,
     body: &'static str,
     attachments: bool,
+    attachment_size: usize,
+    /// Give each attachment its own bytes, so none is deduplicated.
+    distinct_attachments: bool,
 }
 
 impl ScriptedSource {
@@ -353,6 +356,8 @@ impl ScriptedSource {
             failing_attachments: Vec::new(),
             body: "body",
             attachments: false,
+            attachment_size: 4,
+            distinct_attachments: false,
         }
     }
 }
@@ -412,7 +417,12 @@ impl source::ImportSource for ScriptedSource {
         if self.failing_attachments.contains(&index) {
             return Err(AppError::InvalidArg(format!("attachment {index} is gone")));
         }
-        Ok(Some(vec![137, 80, 78, 71]))
+        let mut bytes = vec![0; self.attachment_size];
+        bytes[..4].copy_from_slice(&[137, 80, 78, 71]);
+        if self.distinct_attachments {
+            bytes[4..12].copy_from_slice(&(index as u64).to_le_bytes());
+        }
+        Ok(Some(bytes))
     }
 
     fn rewrite_options(&self) -> links::RewriteOptions {
@@ -460,6 +470,230 @@ fn progress_reports_committed_notes_apart_from_items_processed() {
     let last = progress.last().unwrap();
     assert_eq!(last.phase, "done");
     assert_eq!(last.committed, report);
+}
+
+#[test]
+fn a_batch_is_written_once_its_attachments_reach_the_byte_limit() {
+    // Eight 8 MiB attachments fill a batch long before 500 notes do.
+    let mut source = ScriptedSource::new(20);
+    source.attachments = true;
+    source.attachment_size = 8 * 1024 * 1024;
+    let store = MemoryStore::new();
+    let mut progress = Vec::new();
+
+    let report = run_import(
+        &store,
+        &mut source,
+        &options(ImportSourceKind::Obsidian),
+        &AtomicBool::new(false),
+        |p| progress.push(p),
+    )
+    .unwrap();
+
+    assert_eq!(report.notes_created, 20);
+    let pings: Vec<(usize, usize)> = progress
+        .iter()
+        .filter(|p| p.phase == "importing")
+        .map(|p| (p.done, p.committed.notes_created))
+        .collect();
+    assert_eq!(pings, [(8, 8), (16, 16)]);
+}
+
+fn counts(conn: &Connection) -> (i64, i64, i64) {
+    conn.query_row(
+        "SELECT (SELECT COUNT(*) FROM notes),
+                (SELECT COUNT(*) FROM collections),
+                (SELECT COUNT(*) FROM assets)",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )
+    .unwrap()
+}
+
+fn migrated_memory_db() -> Connection {
+    let mut conn = Connection::open_in_memory().unwrap();
+    conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+    migrations::run(&mut conn).unwrap();
+    conn
+}
+
+#[test]
+fn a_one_transaction_import_lands_whole() {
+    let mut conn = migrated_memory_db();
+    let before = counts(&conn);
+    let mut source = ScriptedSource::new(1200);
+    source.folders = 2;
+    source.attachments = true;
+    let mut pings = Vec::new();
+
+    let report = run_import_in_one_transaction(
+        &mut conn,
+        &mut source,
+        &options(ImportSourceKind::Obsidian),
+        &AtomicBool::new(false),
+        |p| pings.push(p.committed),
+    )
+    .unwrap();
+
+    assert_eq!(report.notes_created, 1200);
+    assert!(conn.is_autocommit(), "the transaction is closed");
+    let after = counts(&conn);
+    // The notes, the source's two folders plus the folder the import makes,
+    // and one attachment that all 1,200 notes share.
+    assert_eq!(after, (before.0 + 1200, before.1 + 3, before.2 + 1));
+    assert!(
+        pings.iter().all(|c| *c == ImportReport::default()),
+        "nothing counts as committed before the end"
+    );
+}
+
+#[test]
+fn a_cancelled_one_transaction_import_leaves_nothing() {
+    let mut conn = migrated_memory_db();
+    let before = counts(&conn);
+    let mut source = ScriptedSource::new(1200);
+    source.folders = 2;
+    source.attachments = true;
+    let cancelled = AtomicBool::new(false);
+
+    let report = run_import_in_one_transaction(
+        &mut conn,
+        &mut source,
+        &options(ImportSourceKind::Obsidian),
+        &cancelled,
+        |p| {
+            // Stop once two batches are written.
+            if p.phase == "importing" && p.done > 600 {
+                cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        },
+    )
+    .unwrap();
+
+    assert!(report.cancelled);
+    assert_eq!(
+        report,
+        ImportReport {
+            cancelled: true,
+            ..ImportReport::default()
+        }
+    );
+    assert!(conn.is_autocommit());
+    assert_eq!(
+        counts(&conn),
+        before,
+        "not even the import's own folder stays"
+    );
+}
+
+#[test]
+fn a_stop_during_the_last_batch_still_rolls_back() {
+    let mut conn = migrated_memory_db();
+    let before = counts(&conn);
+    let mut source = ScriptedSource::new(300);
+    let cancelled = AtomicBool::new(false);
+
+    let report = run_import_in_one_transaction(
+        &mut conn,
+        &mut source,
+        &options(ImportSourceKind::Obsidian),
+        &cancelled,
+        |p| {
+            // The run has left its loop: no item checks the flag again.
+            if p.phase == "done" {
+                cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        },
+    )
+    .unwrap();
+
+    assert!(report.cancelled);
+    assert_eq!(counts(&conn), before);
+}
+
+#[test]
+fn a_failed_write_rolls_back_the_whole_import() {
+    let mut conn = migrated_memory_db();
+    // A note already holds the id the source gives item 700, so the second
+    // batch fails after the first was written.
+    conn.execute(
+        "INSERT INTO notes(id, title, body, position, created, modified)
+         VALUES (?1, 'Existing', '', 0, 't', 't')",
+        [format!("{:032x}", 700)],
+    )
+    .unwrap();
+    let before = counts(&conn);
+    let mut source = ScriptedSource::new(1200);
+    source.folders = 2;
+
+    let result = run_import_in_one_transaction(
+        &mut conn,
+        &mut source,
+        &options(ImportSourceKind::Obsidian),
+        &AtomicBool::new(false),
+        |_| {},
+    );
+
+    assert!(result.is_err());
+    assert!(conn.is_autocommit());
+    assert_eq!(counts(&conn), before);
+}
+
+/// SQLite's heap: what it holds now, and its peak since the last call.
+fn sqlite_memory(reset_peak: bool) -> (i64, i64) {
+    let (mut current, mut peak) = (0i64, 0i64);
+    // SAFETY: both pointers are valid for the call, and the status counters
+    // are safe to read from any thread.
+    unsafe {
+        rusqlite::ffi::sqlite3_status64(
+            rusqlite::ffi::SQLITE_STATUS_MEMORY_USED,
+            &mut current,
+            &mut peak,
+            reset_peak as i32,
+        );
+    }
+    (current, peak)
+}
+
+#[test]
+fn a_one_transaction_import_spills_to_disk_instead_of_memory() {
+    // Set up as the browser worker's database is: a file with a rollback
+    // journal and a 16 MiB page cache.
+    let path = std::env::temp_dir().join(format!("import-{}.sqlite3", uuid::Uuid::new_v4()));
+    let mut conn = Connection::open(&path).unwrap();
+    conn.pragma_update(None, "journal_mode", "DELETE").unwrap();
+    conn.pragma_update(None, "cache_size", -16384).unwrap();
+    conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+    migrations::run(&mut conn).unwrap();
+
+    // 40 notes with a 4 MiB attachment each: 160 MiB, in batches of 16.
+    let mut source = ScriptedSource::new(40);
+    source.attachments = true;
+    source.distinct_attachments = true;
+    source.attachment_size = 4 * 1024 * 1024;
+    sqlite_memory(true);
+    let report = run_import_in_one_transaction(
+        &mut conn,
+        &mut source,
+        &options(ImportSourceKind::Obsidian),
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+    let (_, peak) = sqlite_memory(false);
+    drop(conn);
+    for suffix in ["", "-journal"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+    }
+
+    assert_eq!(report.attachments_imported, 40);
+    // Other tests share SQLite's counters, so this leaves them room. Held in
+    // memory, the transaction alone would take 160 MiB.
+    assert!(
+        peak < 64 * 1024 * 1024,
+        "SQLite peaked at {} MiB",
+        peak / 1024 / 1024
+    );
 }
 
 #[test]

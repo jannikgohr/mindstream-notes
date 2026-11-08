@@ -20,6 +20,7 @@ pub mod stage;
 mod tests;
 
 pub use disk::DiskFiles;
+use mindstream_storage_core::import::run_import_in_one_transaction;
 pub use mindstream_storage_core::import::{
     build_source, links, markdown, mime, model, source, sources, writer, DetectedSource,
     ImportOptions, ImportProgress, ImportReport, ImportSourceKind, UnresolvedLinks,
@@ -30,6 +31,7 @@ pub use mindstream_storage_core::import::{
 #[derive(Default)]
 pub struct ImportState {
     cancelled: Arc<AtomicBool>,
+    running: Arc<AtomicBool>,
 }
 
 impl ImportState {
@@ -37,9 +39,49 @@ impl ImportState {
         self.cancelled.store(true, Ordering::SeqCst);
     }
 
-    fn begin(&self) -> Arc<AtomicBool> {
+    /// An import holds the database's write lock until it ends, so anything
+    /// else that writes waits for this to turn false.
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
+
+    /// Claim the one import slot. `None` while another import runs.
+    fn begin(&self) -> Option<(Arc<AtomicBool>, Running)> {
+        if self.running.swap(true, Ordering::SeqCst) {
+            return None;
+        }
         self.cancelled.store(false, Ordering::SeqCst);
-        Arc::clone(&self.cancelled)
+        Some((
+            Arc::clone(&self.cancelled),
+            Running(Arc::clone(&self.running)),
+        ))
+    }
+}
+
+/// Held for as long as an import runs. Dropping it, however the run ends,
+/// frees the slot.
+struct Running(Arc<AtomicBool>);
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Tells every window, once dropped, that the import is over.
+struct AnnounceFinished(AppHandle);
+
+impl Drop for AnnounceFinished {
+    fn drop(&mut self) {
+        let finished = ImportProgress {
+            phase: "finished",
+            done: 0,
+            total: 0,
+            committed: ImportReport::default(),
+        };
+        if let Err(err) = self.0.emit(AppEvent::ImportProgress.as_str(), &finished) {
+            log::warn!("[import] finished emit failed: {err}");
+        }
     }
 }
 
@@ -62,6 +104,14 @@ fn open_source(kind: ImportSourceKind, root: PathBuf) -> AppResult<Box<dyn sourc
 }
 
 /// Run an import to completion (or to cancellation) and report what landed.
+/// Run an import as one transaction: all of it lands, or a cancel, a failure
+/// or a crash leaves none of it.
+///
+/// The transaction runs on a connection of its own. The app's connection
+/// stays free, so the app keeps reading (WAL shows it the vault as it was
+/// before the import) and a write there fails at once with "database is
+/// locked" instead of waiting minutes on the main thread. The frontend holds
+/// its writes until the import ends, see `storage/import-activity`.
 pub fn run_import(
     db: &Db,
     options: ImportOptions,
@@ -72,8 +122,32 @@ pub fn run_import(
     let detected = detect::detect(&root)?;
     let kind = options.kind.unwrap_or(detected.kind);
     let mut source = open_source(kind, root)?;
-    Ok(mindstream_storage_core::import::run_import(
-        db,
+    let path = db.with_conn(|conn| {
+        Ok(conn
+            .path()
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from))
+    })?;
+    let Some(path) = path else {
+        // An in-memory database, as in tests, has no file for a second
+        // connection to open.
+        return db.with_conn_mut(|conn| {
+            Ok(run_import_in_one_transaction(
+                conn,
+                source.as_mut(),
+                &options,
+                cancelled,
+                on_progress,
+            )?)
+        });
+    };
+    let mut conn = rusqlite::Connection::open(path)?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    // A save on the app's connection may hold the write lock for a moment
+    // when the import starts.
+    conn.busy_timeout(std::time::Duration::from_secs(10))?;
+    Ok(run_import_in_one_transaction(
+        &mut conn,
         source.as_mut(),
         &options,
         cancelled,
@@ -193,14 +267,39 @@ pub async fn notes_import_run(
     options: ImportOptions,
 ) -> CommandResult<ImportReport> {
     let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
-    let cancelled = app.state::<ImportState>().begin();
+    let Some((cancelled, running)) = app.state::<ImportState>().begin() else {
+        return Err(AppError::InvalidArg("Another import is still running.".into()).into());
+    };
     let progress_handle = app.clone();
+    // Windows hold their writes from the first progress event on; this one
+    // goes out before the import takes the write lock.
+    let starting = ImportProgress {
+        phase: "scanning",
+        done: 0,
+        total: 0,
+        committed: ImportReport::default(),
+    };
+    if let Err(err) = app.emit(AppEvent::ImportProgress.as_str(), &starting) {
+        log::warn!("[import] progress emit failed: {err}");
+    }
+    // A sync that is already running writes through the app's connection
+    // until it ends, and the import's transaction would make those writes
+    // fail. Claiming the slot stops new syncs; this waits out the running one
+    // and keeps the next from starting until the import is over.
+    let scheduler = app.try_state::<crate::sync::scheduler::SyncScheduler>();
+    let _sync = match &scheduler {
+        Some(scheduler) => Some(scheduler.acquire_in_flight().await),
+        None => None,
+    };
 
     // spawn_blocking, not a plain call: an import is minutes of synchronous
     // filesystem and SQLite work, and running it on the command thread would
     // hold up the WebView's IPC.
     let result = tauri::async_runtime::spawn_blocking(move || {
         let _job = job;
+        // Dropped in reverse: the slot is free by the time windows hear.
+        let _finished = AnnounceFinished(progress_handle.clone());
+        let _running = running;
         let db = progress_handle.state::<Db>();
         run_import(&db, options, &cancelled, |progress| {
             if let Err(err) = progress_handle.emit(AppEvent::ImportProgress.as_str(), &progress) {
@@ -218,4 +317,25 @@ pub async fn notes_import_run(
 pub fn notes_import_cancel(state: tauri::State<'_, ImportState>) -> CommandResult<()> {
     state.cancel();
     Ok(())
+}
+
+/// Refuse a write that would meet a running import's lock. For native
+/// callers the frontend's write gate does not cover, such as the tray and
+/// global shortcuts.
+pub fn refuse_while_importing(app: &AppHandle) -> AppResult<()> {
+    if app
+        .try_state::<ImportState>()
+        .is_some_and(|import| import.is_running())
+    {
+        return Err(AppError::InvalidArg(
+            "Notes are being imported. Try again once the import is done.".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Whether an import is running, for a window that opens during one.
+#[tauri::command]
+pub fn notes_import_running(state: tauri::State<'_, ImportState>) -> bool {
+    state.is_running()
 }

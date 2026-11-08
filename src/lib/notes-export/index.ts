@@ -162,26 +162,28 @@ export async function exportVault(
     errors: 0
   };
 
-  // Build the folder-id → relative-path map first so notes can look
-  // up their parent in O(1). Collections under the special `trash`
-  // collection are excluded entirely — anything that's been trashed
-  // is treated as deleted from the user's POV.
-  const folderPath = computeFolderPaths();
-  report.folders_written = folderPath.size;
-
   // Per-directory dedup state. Keys are relative folder paths
-  // (e.g. "Work/Sprint planning"); values are the file basenames
-  // already used in that directory. `_assets/` lives one level deeper
-  // and gets its own bucket.
+  // (e.g. "Work/Sprint planning"); values are the names already used in
+  // that directory, by folders and files alike, so a note can't take a
+  // folder's path. `_assets/` lives one level deeper and gets its own
+  // bucket; its name is reserved in every directory.
   const takenByDir = new Map<string, Set<string>>();
   const takenFor = (dir: string): Set<string> => {
     let s = takenByDir.get(dir);
     if (!s) {
       s = new Set<string>();
+      dedupeAgainst(s, ASSET_SUBDIR);
       takenByDir.set(dir, s);
     }
     return s;
   };
+
+  // Build the folder-id → relative-path map first so notes can look
+  // up their parent in O(1). Collections under the special `trash`
+  // collection are excluded entirely — anything that's been trashed
+  // is treated as deleted from the user's POV.
+  const folderPath = computeFolderPaths(takenFor);
+  report.folders_written = folderPath.size;
 
   for (const summary of Object.values(tree.notesById)) {
     if (summary.trashed) {
@@ -255,7 +257,9 @@ export async function exportVault(
  * Trashed folders and anything beneath them are deliberately omitted
  * from the map — the export skips them.
  */
-function computeFolderPaths(): Map<string, string> {
+function computeFolderPaths(
+  takenFor: (dir: string) => Set<string>
+): Map<string, string> {
   const out = new Map<string, string>();
   // Group children by parent for fast lookup.
   const childrenOf = new Map<string | null, Collection[]>();
@@ -270,20 +274,18 @@ function computeFolderPaths(): Map<string, string> {
 
   // BFS from the root level (parent = null). Tracks per-directory
   // dedup so siblings with the same sanitised name get `_2`, `_3`
-  // suffixes consistently.
-  const takenForParent = new Map<string, Set<string>>();
+  // suffixes consistently. Folders claim their names before any note
+  // file does.
   const queue: Array<{ collection: Collection; parentPath: string }> = [];
   for (const c of childrenOf.get(null) ?? []) {
     queue.push({ collection: c, parentPath: '' });
   }
   while (queue.length > 0) {
     const { collection, parentPath } = queue.shift()!;
-    let taken = takenForParent.get(parentPath);
-    if (!taken) {
-      taken = new Set<string>();
-      takenForParent.set(parentPath, taken);
-    }
-    const folderName = dedupeAgainst(taken, sanitizeName(collection.name));
+    const folderName = dedupeAgainst(
+      takenFor(parentPath),
+      sanitizeName(collection.name)
+    );
     const fullPath = parentPath ? `${parentPath}/${folderName}` : folderName;
     out.set(collection.id, fullPath);
     for (const child of childrenOf.get(collection.id) ?? []) {

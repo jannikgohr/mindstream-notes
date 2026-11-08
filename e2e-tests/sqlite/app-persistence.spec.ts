@@ -917,13 +917,14 @@ test('a folder of notes imports with its links and attachments', async ({
   }
 });
 
-test('stopping an import keeps what it committed and the vault stays usable', async ({
+test('stopping an import keeps nothing of it and the vault stays usable', async ({
   page
 }) => {
-  // File selection, the first committed batch, and reopening after worker
+  // File selection, the first written batch, and reopening after worker
   // termination each need their own wait budget on a loaded runner.
   test.setTimeout(90_000);
-  const before = (await noteTitles(page)).length;
+  const notesBefore = (await noteTitles(page)).length;
+  const foldersBefore = (await rpc(page, 'list_collections', {})).length;
   // Large enough that Stop lands before the run ends, even in a fast browser.
   const total = 5_000;
   const vault = await mkdtemp(join(tmpdir(), 'large-vault-'));
@@ -945,6 +946,7 @@ test('stopping an import keeps what it committed and the vault stays usable', as
     await chooser.setFiles(vault);
     await dialog.getByRole('button', { name: 'Import', exact: true }).click();
 
+    // The first progress ping comes after the first 500 notes are written.
     await expect(dialog).toContainText(/Imported \d+ of 5000/, {
       timeout: 30_000
     });
@@ -953,8 +955,10 @@ test('stopping an import keeps what it committed and the vault stays usable', as
     );
     await dialog.getByRole('button', { name: 'Stop', exact: true }).click();
     await expect(dialog).toContainText('Import stopped', { timeout: 20_000 });
+    await expect(dialog).toContainText('Nothing was imported.');
 
-    // Batches commit 500 notes at a time, and the one in flight rolls back.
+    // The import is one transaction. Reopening the vault after the worker
+    // stopped rolls back every batch already written, and its folder too.
     await page.waitForFunction(
       (previous) =>
         (window as unknown as { vaultWorker: Worker }).vaultWorker !== previous,
@@ -965,16 +969,15 @@ test('stopping an import keeps what it committed and the vault stays usable', as
       .poll(
         async () =>
           noteTitles(page).then(
-            (titles) => titles.length - before,
+            (titles) => titles.length - notesBefore,
             () => -1
           ),
         { timeout: 30_000 }
       )
-      .toBeGreaterThanOrEqual(500);
-    const added = (await noteTitles(page)).length - before;
-    expect(added % 500).toBe(0);
-    expect(added).toBeLessThan(total);
-    expect((await loadNoteTitled(page, 'Note 0')).body).toContain('Body 0');
+      .toBe(0);
+    expect((await rpc(page, 'list_collections', {})).length).toBe(
+      foldersBefore
+    );
   } finally {
     await rm(vault, { recursive: true, force: true });
   }

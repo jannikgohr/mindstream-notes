@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tauri::ipc::{InvokeBody, InvokeResponseBody};
 use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime};
+use tauri::Manager;
 use tauri_plugin_dialog::FilePath;
 
 struct Fixture {
@@ -411,4 +412,43 @@ fn a_single_file_export_is_saved_as_is_and_a_cancel_saves_nothing() {
     assert!(!finish_to(&fixture, &cancelled, None));
     assert_eq!(fixture.staged_sessions(), 0);
     assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn a_shutdown_that_started_during_the_dialog_stops_the_export_before_it_writes() {
+    let fixture = Fixture::new();
+    let token = fixture.begin(json!({ "kind": "file" }));
+    fixture
+        .write(&token, "Note.pdf", true, 4, b"%PDF", false)
+        .unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let destination = out.path().join("Note.pdf");
+    std::fs::write(&destination, b"the user's old file").unwrap();
+
+    let save = serde_json::from_value(json!({
+        "suggestedName": "Note.pdf",
+        "filterName": "PDF",
+        "extensions": ["pdf"]
+    }))
+    .unwrap();
+    let picked = destination.clone();
+    let result =
+        tauri::async_runtime::block_on(mindstream_notes_lib::export_session::finish_export(
+            fixture.app.handle().clone(),
+            token,
+            Some(save),
+            move |app, _| async move {
+                // The app starts closing while the save dialog is open.
+                let pause = app
+                    .state::<mindstream_notes_lib::vault_jobs::Jobs>()
+                    .pause()
+                    .unwrap();
+                std::mem::forget(pause);
+                Ok(Some(FilePath::Path(picked)))
+            },
+        ));
+
+    assert!(result.is_err(), "a closing app must not start the copy");
+    assert_eq!(std::fs::read(&destination).unwrap(), b"the user's old file");
+    assert_eq!(fixture.staged_sessions(), 0);
 }

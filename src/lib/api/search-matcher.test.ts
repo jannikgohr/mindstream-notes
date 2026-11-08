@@ -42,6 +42,14 @@ describe('snippetText', () => {
     );
   });
 
+  it('keeps angle brackets in code and drops HTML around it', () => {
+    const body =
+      '<div>Before</div>\nUse `Map<Key>`\n```ts\nconst r: Promise<Needle> = f();\n```';
+    expect(snippetText(body)).toBe(
+      'Before · Use Map<Key> · const r: Promise<Needle> = f();'
+    );
+  });
+
   it('reads a wikilink without an alias as its target', () => {
     expect(snippetText('See [[Trip plan]] first')).toBe('See Trip plan first');
   });

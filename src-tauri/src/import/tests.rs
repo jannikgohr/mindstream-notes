@@ -107,9 +107,21 @@ fn omitted_import_options_use_safe_defaults() {
 fn beginning_an_import_clears_an_earlier_cancellation() {
     let state = ImportState::default();
     state.cancel();
-    let cancelled = state.begin();
+    let (cancelled, _running) = state.begin().expect("free slot");
 
     assert!(!cancelled.load(Ordering::SeqCst));
+}
+
+#[test]
+fn only_one_import_runs_at_a_time() {
+    let state = ImportState::default();
+    let running = state.begin().expect("free slot");
+    assert!(state.is_running());
+    assert!(state.begin().is_none());
+
+    drop(running);
+    assert!(!state.is_running());
+    assert!(state.begin().is_some());
 }
 
 fn note_id_of(db: &Db, title: &str) -> String {
@@ -644,12 +656,93 @@ fn cancelling_keeps_everything_already_committed() {
     let db = open_memory_for_tests();
 
     // Pre-cancelled: the run indexes, creates folders, then stops before the
-    // first note. Nothing is rolled back, and the report says so.
+    // first note. The import is one transaction, so the folders go too.
     let cancelled = AtomicBool::new(true);
-    let report = run_import(&db, options(&vault), &cancelled, |_| {}).expect("import");
+    let report = run_import(
+        &db,
+        ImportOptions {
+            create_folder_named: Some("Stopped".into()),
+            ..options(&vault)
+        },
+        &cancelled,
+        |_| {},
+    )
+    .expect("import");
 
     assert!(report.cancelled);
     assert_eq!(report.notes_created, 0);
+    let folders: i64 = db
+        .with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT COUNT(*) FROM collections WHERE name = 'Stopped'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(folders, 0);
+}
+
+/// A vault database on disk, as the app opens it.
+fn file_db(dir: &TempVault) -> Db {
+    Db::open(&dir.path().join("vault.sqlite3")).expect("open vault")
+}
+
+fn note_count(db: &Db) -> i64 {
+    db.with_conn(|c| Ok(c.query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0))?))
+        .unwrap()
+}
+
+#[test]
+fn an_import_on_disk_leaves_the_app_connection_free_while_it_runs() {
+    let vault = TempVault::new();
+    for i in 0..1200 {
+        vault.write(&format!("note{i}.md"), "body");
+    }
+    let dir = TempVault::new();
+    let db = file_db(&dir);
+    let before = note_count(&db);
+    let mut checked = false;
+
+    let report = run_import(&db, options(&vault), &AtomicBool::new(false), |progress| {
+        if progress.phase != "importing" || checked {
+            return;
+        }
+        checked = true;
+        // 500 notes are written, but not committed: the app's connection
+        // reads the vault as it was, and a write fails at once.
+        assert_eq!(note_count(&db), before);
+        let write = db
+            .with_conn(|c| Ok(c.execute("UPDATE notes SET title = title WHERE id = 'none'", [])?));
+        assert!(write.unwrap_err().to_string().contains("locked"));
+    })
+    .expect("import");
+
+    assert!(checked);
+    assert_eq!(report.notes_created, 1200);
+    assert_eq!(note_count(&db), before + 1200);
+}
+
+#[test]
+fn a_cancelled_import_on_disk_leaves_nothing() {
+    let vault = TempVault::new();
+    for i in 0..1200 {
+        vault.write(&format!("note{i}.md"), "body");
+    }
+    let dir = TempVault::new();
+    let db = file_db(&dir);
+    let before = note_count(&db);
+    let cancelled = AtomicBool::new(false);
+
+    let report = run_import(&db, options(&vault), &cancelled, |progress| {
+        if progress.phase == "importing" {
+            cancelled.store(true, Ordering::SeqCst);
+        }
+    })
+    .expect("import");
+
+    assert!(report.cancelled);
+    assert_eq!(note_count(&db), before);
 }
 
 #[test]

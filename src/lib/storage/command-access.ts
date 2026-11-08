@@ -51,6 +51,7 @@ const COMMAND_ACCESS: Record<`${TauriCommandName}`, CommandAccess> = {
   plugins_preview_stop: 'exempt',
   plugins_run_native_tool: 'exempt',
   notes_import_cancel: 'exempt',
+  notes_import_running: 'exempt',
 
   // Dialogs, folders and files the user picked, outside the vault.
   open_data_folder: 'exempt',
@@ -92,6 +93,8 @@ const COMMAND_ACCESS: Record<`${TauriCommandName}`, CommandAccess> = {
   get_start_in_tray: 'read',
   get_start_on_login: 'read',
   get_global_shortcut_status: 'read',
+  // Reads the cached text; with a `text` argument it stores it instead, see
+  // `commandWrites`.
   pdf_page_text: 'read',
   is_appimage_install: 'read',
   text_checker_check: 'read',
@@ -234,7 +237,23 @@ const COMMAND_ACCESS: Record<`${TauriCommandName}`, CommandAccess> = {
 };
 
 /** True when `command` has to wait for the vault access gate. */
-export function commandWrites(command: `${TauriCommandName}`): boolean {
+/** Read commands that write when called with this argument. */
+const WRITES_WITH_ARGUMENT: Partial<Record<`${TauriCommandName}`, string>> = {
+  pdf_page_text: 'text'
+};
+
+export function commandWrites(
+  command: `${TauriCommandName}`,
+  args?: unknown
+): boolean {
+  const argument = WRITES_WITH_ARGUMENT[command];
+  if (
+    argument &&
+    typeof args === 'object' &&
+    args !== null &&
+    (args as Record<string, unknown>)[argument] !== undefined
+  )
+    return true;
   return (
     COMMAND_ACCESS[command] !== 'read' && COMMAND_ACCESS[command] !== 'exempt'
   );

@@ -381,6 +381,14 @@ pub async fn sync_now(app: AppHandle) -> CommandResult<SyncReport> {
     // syncs serialise instead of racing to push the same dirty rows
     // or compete for the etebase stoken. The user pays at most one
     // scheduler tick's worth of wait — typically <1s of no-op pulls.
+    // An import holds the database's write lock until it ends. The app holds
+    // its own sync requests until then, so this only stops a stray one.
+    if app
+        .try_state::<crate::import::ImportState>()
+        .is_some_and(|import| import.is_running())
+    {
+        return Err("Notes are being imported. Sync again once the import ends.".into());
+    }
     let scheduler_state = app.state::<scheduler::SyncScheduler>();
     let _guard = scheduler_state.acquire_in_flight().await;
     let job = app.state::<crate::vault_jobs::Jobs>().enter()?;

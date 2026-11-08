@@ -53,19 +53,23 @@ pub use detect::{DetectedSource, ImportSourceKind};
 pub use files::{walk_paths, ImportEntry, ImportFiles};
 pub use model::{ImportReport, UnresolvedLinks};
 
-/// Where an import writes. Each batch takes the connection briefly, so that
-/// the app's global lock is handed back often enough to keep its UI responsive.
+/// Where an import writes. Each batch takes the connection only for its own
+/// writes.
 pub trait ImportStore {
     fn with_conn_mut<T>(&self, write: impl FnOnce(&mut Connection) -> AppResult<T>)
         -> AppResult<T>;
 }
 
-/// Notes written per transaction.
-///
-/// Small enough that a cancel loses almost nothing and the global connection
-/// lock is handed back often enough to keep the UI responsive; large enough
-/// that per-transaction overhead disappears against the row writes.
+/// Notes written per batch: small enough to hold in memory, large enough
+/// that per-batch overhead disappears against the row writes.
 const BATCH_SIZE: usize = 500;
+
+/// Attachment bytes a batch may hold before it is written, whatever its note
+/// count. A prepared note keeps its attachments in memory until the batch
+/// commits, and the same image referenced from many notes is read once per
+/// note, so a count alone could hold gigabytes. The browser's WASM build has
+/// a 4 GiB address space at most.
+const BATCH_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 
 /// Default per-file attachment ceiling. Generous for a note vault, low enough
 /// that one stray disk image doesn't quietly add gigabytes to the SQLite file.
@@ -201,6 +205,7 @@ pub fn run_import(
     let mut positions = writer::PositionCounters::default();
     let mut batch: Vec<writer::PreparedNote> = Vec::with_capacity(BATCH_SIZE);
     let mut batch_counts = PreparedCounts::default();
+    let mut batch_bytes = 0usize;
     let rewrite_options = source.rewrite_options();
 
     for (processed, item) in index.items.iter().enumerate() {
@@ -210,6 +215,11 @@ pub fn run_import(
         }
         match prepare_item(source, item, &mut link_index, rewrite_options, options) {
             Ok((prepared, counts)) => {
+                batch_bytes += prepared
+                    .attachments
+                    .iter()
+                    .map(|(_, bytes)| bytes.len())
+                    .sum::<usize>();
                 batch.push(prepared);
                 batch_counts.links_resolved += counts.links_resolved;
                 batch_counts.links_unresolved += counts.links_unresolved;
@@ -223,7 +233,8 @@ pub fn run_import(
             }
         }
 
-        if batch.len() >= BATCH_SIZE {
+        if batch.len() >= BATCH_SIZE || batch_bytes >= BATCH_ATTACHMENT_BYTES {
+            batch_bytes = 0;
             flush(
                 store,
                 &mut batch,
@@ -267,6 +278,76 @@ pub fn run_import(
         committed: report.clone(),
     });
     Ok(report)
+}
+
+/// [`run_import`] as one transaction: the whole import lands, or none of it.
+///
+/// It takes the connection itself, which nothing else may use until it
+/// returns. The browser's storage worker answers one request at a time, so it
+/// passes its own. The app opens a second connection for the import, so its
+/// main one keeps reading while the import holds the write lock.
+/// Batches still flush as [`run_import`] flushes them, so memory stays at one
+/// batch. What they write before the commit is the transaction's, and SQLite
+/// spills it to the database file under the rollback journal once its page
+/// cache is full, so the open transaction costs disk space, not memory. A
+/// stopped worker leaves that journal behind, and opening the database rolls
+/// the import back.
+///
+/// A cancelled run rolls back and reports nothing imported. Progress pings
+/// carry an empty `committed` report: nothing is committed before the end.
+pub fn run_import_in_one_transaction(
+    conn: &mut Connection,
+    source: &mut dyn source::ImportSource,
+    options: &ImportOptions,
+    cancelled: &AtomicBool,
+    mut on_progress: impl FnMut(ImportProgress),
+) -> AppResult<ImportReport> {
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    let result = {
+        let store = OneConnection(std::cell::RefCell::new(&mut *conn));
+        run_import(&store, source, options, cancelled, |progress| {
+            on_progress(ImportProgress {
+                committed: ImportReport::default(),
+                ..progress
+            })
+        })
+    };
+    // A Stop during the last batch or the placeholders is seen by no further
+    // loop turn, so it is checked once more here.
+    let stopped = cancelled.load(Ordering::SeqCst);
+    let finish = match &result {
+        Ok(report) if !report.cancelled && !stopped => conn.execute_batch("COMMIT"),
+        _ => conn.execute_batch("ROLLBACK"),
+    };
+    if let Err(err) = finish {
+        // A failed COMMIT can leave the transaction open.
+        if !conn.is_autocommit() {
+            let _ = conn.execute_batch("ROLLBACK");
+        }
+        result?;
+        return Err(err.into());
+    }
+    let report = result?;
+    Ok(if report.cancelled || stopped {
+        ImportReport {
+            cancelled: true,
+            ..ImportReport::default()
+        }
+    } else {
+        report
+    })
+}
+
+/// The one connection [`run_import_in_one_transaction`] writes through.
+struct OneConnection<'a>(std::cell::RefCell<&'a mut Connection>);
+
+impl ImportStore for OneConnection<'_> {
+    fn with_conn_mut<T>(
+        &self,
+        write: impl FnOnce(&mut Connection) -> AppResult<T>,
+    ) -> AppResult<T> {
+        write(&mut self.0.borrow_mut())
+    }
 }
 
 /// Commit the prepared batch, then fold its counters into the report. The

@@ -11,6 +11,10 @@
  *   - pending: held, latest value per key, and written once the vault is
  *     ready. Reads through `readAppStorage` see the held value.
  *   - unavailable: dropped. Held values are dropped too.
+ *   - pending after a lost connection: held, then dropped once the vault is
+ *     ready again. The worker that held the lock stopped, another tab may
+ *     have taken the vault in between, and what this tab held is a snapshot
+ *     from before that. Stores read their state again once it is ready.
  *
  * Tab-local `sessionStorage` and the draft recovery store, which has to keep
  * typing safe exactly when the vault is gone, write directly by design.
@@ -43,9 +47,18 @@ function flush(): void {
   }
 }
 
-onVaultAccessChange((status) => {
-  if (status === 'ready') flush();
-  else if (status === 'unavailable') held.clear();
+/** The vault connection was lost since this window last had it ready. */
+let lost = false;
+
+onVaultAccessChange((status, previous) => {
+  if (status === 'pending' && previous === 'ready') lost = true;
+  if (status === 'ready') {
+    if (lost) held.clear();
+    else flush();
+    lost = false;
+  } else if (status === 'unavailable') {
+    held.clear();
+  }
 });
 
 function write(key: string, value: string | null): void {
@@ -83,4 +96,5 @@ export function removeAppStorage(key: string): void {
 /** Drop held writes. Test-only. */
 export function resetAppStorageForTests(): void {
   held.clear();
+  lost = false;
 }

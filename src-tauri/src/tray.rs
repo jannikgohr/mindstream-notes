@@ -415,6 +415,11 @@ fn create_note_and_emit(
         return;
     };
     focus_main_window(app);
+    // The window just focused shows the running import.
+    if let Err(err) = crate::import::refuse_while_importing(app) {
+        log::info!("[{source}] {err}");
+        return;
+    }
 
     let db = app.state::<Db>();
     let result = db.with_conn(|conn| {

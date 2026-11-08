@@ -221,6 +221,20 @@ describe('showImportResult', () => {
     ).toBe(false);
   });
 
+  it('says when a stopped import kept nothing', () => {
+    void showImportResult(
+      report({
+        notes_created: 0,
+        folders_created: 0,
+        links_resolved: 0,
+        cancelled: true
+      })
+    );
+    const opts = exportResultQueue.items[0];
+    expect(opts.titleKey).toBe('data.importNotes.result.stopped.title');
+    expect(opts.descriptionKey).toBe('data.importNotes.result.stopped.nothing');
+  });
+
   it('shows every non-zero recovery and attachment metric', () => {
     void showImportResult(
       report({

@@ -18,6 +18,15 @@ describe('command access', () => {
     expect(commandWrites('open_folder')).toBe(false);
   });
 
+  it('holds a read command that stores what it was given', () => {
+    expect(commandWrites('pdf_page_text', { assetId: 'a', pageIndex: 0 })).toBe(
+      false
+    );
+    expect(
+      commandWrites('pdf_page_text', { assetId: 'a', pageIndex: 0, text: '' })
+    ).toBe(true);
+  });
+
   it('treats a command missing from the table as a write', () => {
     expect(commandWrites('not_a_command' as 'load_tree')).toBe(true);
   });

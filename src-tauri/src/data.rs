@@ -136,7 +136,11 @@ pub fn spawn_retention_sweep(app: AppHandle) {
             let enabled = scheduler.enabled.load(Ordering::Relaxed);
             let days = scheduler.days.load(Ordering::Relaxed);
 
-            if !enabled || days == 0 {
+            // An import holds the database's write lock until it ends.
+            let importing = app
+                .try_state::<crate::import::ImportState>()
+                .is_some_and(|import| import.is_running());
+            if !enabled || days == 0 || importing {
                 tokio::time::sleep(Duration::from_secs(DISABLED_POLL_SECS)).await;
                 continue;
             }
