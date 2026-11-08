@@ -23,6 +23,7 @@ import {
   markVaultLost,
   requireVaultAccess
 } from '$lib/storage/vault-access.svelte';
+import { whenNoImportRuns } from '$lib/storage/import-activity.svelte';
 
 // The healthy connection, if any. Set only after a successful open so a failed
 // attempt never leaves a dead client cached.
@@ -239,7 +240,12 @@ export async function invokeBrowser(
   // command table.
   const writes =
     command === 'insert_demo_notes' || commandWrites(command, args);
-  if (writes) await requireVaultAccess(command);
+  if (writes) {
+    await requireVaultAccess(command);
+    // The import is one transaction in the worker; a write would only queue
+    // behind it there.
+    await whenNoImportRuns();
+  }
   let connection = await connect();
   // Reconnecting after the worker stopped returns the window to pending: the
   // tree it loaded may be stale, and another tab may have owned the vault
