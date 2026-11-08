@@ -239,7 +239,7 @@ export async function invokeTauri<T>(
   command: TauriCommandName,
   args?: Parameters<typeof tauriInvoke>[1]
 ): Promise<T> {
-  if (commandWrites(command)) await requireVaultAccess(command);
+  if (commandWrites(command, args)) await requireVaultAccess(command);
   return tauriInvoke<T>(command, args);
 }
 
@@ -275,7 +275,7 @@ export async function invokeOrFallback<T>(
       const { invokeBrowser } = await import('../browser/vault');
       return validate(await invokeBrowser(command, args));
     }
-    if (commandWrites(command)) await requireVaultAccess(command);
+    if (commandWrites(command, args)) await requireVaultAccess(command);
     return await fallback();
   }
   return validate(await invokeTauri<unknown>(command, args));

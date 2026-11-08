@@ -152,6 +152,31 @@ describe('vault connection recovery', () => {
     expect(FakeWorker.instances).toHaveLength(2);
   });
 
+  it('holds writes as soon as the worker stops, before the next call', async () => {
+    const { invokeBrowser } = await loadVault();
+    const access = await import('$lib/storage/vault-access.svelte');
+    await invokeBrowser('list_notes', {});
+
+    FakeWorker.instances[0].onerror?.({ message: 'out of memory' });
+
+    expect(access.canWriteStorage()).toBe(false);
+  });
+
+  it('reloads the vault before a write goes to a new worker', async () => {
+    const { invokeBrowser } = await loadVault();
+    const access = await import('$lib/storage/vault-access.svelte');
+    await invokeBrowser('list_notes', {});
+    const reload = vi.fn(async () => access.markVaultReady());
+    access.registerVaultAccessProbe(reload);
+
+    FakeWorker.instances[0].onerror?.({ message: 'out of memory' });
+    await invokeBrowser('save_note', { input: { id: 'n1', body: 'x' } });
+
+    expect(reload).toHaveBeenCalled();
+    expect(FakeWorker.instances[0].invokes()).toHaveLength(1);
+    expect(FakeWorker.instances[1].invokes()).toHaveLength(1);
+  });
+
   it('reconnects on the next call after a stalled request times out', async () => {
     vi.useFakeTimers();
     FakeWorker.plans = [{ invoke: 'hang' }, {}];

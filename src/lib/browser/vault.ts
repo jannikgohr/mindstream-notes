@@ -19,6 +19,7 @@ import {
 import { tUi } from '$lib/settings/i18n.svelte';
 import { commandWrites } from '$lib/storage/command-access';
 import {
+  canWriteStorage,
   markVaultLost,
   requireVaultAccess
 } from '$lib/storage/vault-access.svelte';
@@ -111,6 +112,12 @@ async function openVault(): Promise<BrowserStorageClient> {
     throw error;
   }
   client = connection;
+  // The vault lock goes with the worker, and another tab may take it at
+  // once. Writes from this window wait from now on, not from its next call.
+  const opened = connection;
+  opened.onClose = () => {
+    if (client === opened) markVaultLost();
+  };
   return connection;
 }
 
@@ -229,9 +236,17 @@ export async function invokeBrowser(
 ): Promise<unknown> {
   // `insert_demo_notes` is browser-only, so it has no entry in the shared
   // command table.
-  if (command === 'insert_demo_notes' || commandWrites(command))
+  const writes =
+    command === 'insert_demo_notes' || commandWrites(command, args);
+  if (writes) await requireVaultAccess(command);
+  let connection = await connect();
+  // Reconnecting after the worker stopped returns the window to pending: the
+  // tree it loaded may be stale, and another tab may have owned the vault
+  // meanwhile. The write waits for the reload like any other.
+  if (writes && !canWriteStorage()) {
     await requireVaultAccess(command);
-  const connection = await connect();
+    connection = await connect();
+  }
   // The IPC adapter retains its existing validators. Rust deserializes this
   // request into VaultRequest before any query or mutation can execute.
   const { recoveryToken, ...operationArgs } = args;
