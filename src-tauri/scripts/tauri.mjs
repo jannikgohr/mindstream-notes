@@ -18,6 +18,11 @@ if (args[0] === 'dev') {
     '--features',
     'dev-environment'
   );
+  // This is a Cargo runner argument, not a Tauri CLI option. Passing it
+  // explicitly also stops Tauri from re-enabling the manifest's defaults.
+  // Those defaults build the release-only Wasmtime/all-arch precompiler.
+  if (!args.includes('--')) args.push('--');
+  args.splice(args.indexOf('--') + 1, 0, '--no-default-features');
 }
 
 configureLinuxTrayPkgConfig(env);
