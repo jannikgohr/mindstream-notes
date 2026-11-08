@@ -115,3 +115,27 @@ describe('browser save picker', () => {
     await expect(file!.abort()).resolves.toBeUndefined();
   });
 });
+
+describe('discarding a picked file', () => {
+  it('aborts the writable without warning when that succeeds', async () => {
+    const abort = vi.fn(async () => {});
+    (window as unknown as Record<string, unknown>).showSaveFilePicker =
+      async () => ({
+        createWritable: async () => ({
+          write: async () => {},
+          close: async () => {},
+          abort
+        })
+      });
+    const warn = vi.spyOn(console, 'warn');
+    const file = await pickBrowserSaveFile({
+      suggestedName: 'vault.zip',
+      description: 'ZIP archive',
+      mime: 'application/zip',
+      extension: '.zip'
+    });
+    await file!.abort();
+    expect(abort).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
