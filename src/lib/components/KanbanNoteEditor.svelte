@@ -845,6 +845,17 @@
     searchFilters = filters;
   }
 
+  function textFieldHasFocus(): boolean {
+    const focused = document.activeElement;
+    if (!(focused instanceof HTMLElement) || !host?.contains(focused))
+      return false;
+    return (
+      focused.tagName === 'INPUT' ||
+      focused.tagName === 'TEXTAREA' ||
+      focused.isContentEditable
+    );
+  }
+
   function undoKanbanAction(): void {
     if (!undoManager || isTrashed || !canUndo) return;
     undoManager.undo();
@@ -1331,11 +1342,15 @@
             openKanbanSearch();
             return true;
           }
+          // A text field on the board, such as its search or a card title,
+          // undoes its own typing; the board's history is for board changes.
           if (id === APP_UNDO_COMMAND) {
+            if (textFieldHasFocus()) return false;
             undoKanbanAction();
             return true;
           }
           if (id === APP_REDO_COMMAND) {
+            if (textFieldHasFocus()) return false;
             redoKanbanAction();
             return true;
           }

@@ -62,3 +62,28 @@ test('undoes and redoes board changes from the keyboard', async ({ page }) => {
   await expect(undo).toBeEnabled();
   await expect(redo).toBeDisabled();
 });
+
+test('undo in a board text field undoes the typing, not the board', async ({
+  page
+}) => {
+  await clickFileTreeCreateAction(page, 'New Kanban board');
+  const draft = page.getByRole('textbox', { name: 'New note' });
+  await draft.fill(`Board ${Date.now()}`);
+  await draft.press('Enter');
+  const toolbar = page.getByRole('toolbar', { name: 'Kanban board toolbar' });
+  const undo = toolbar.getByRole('button', { name: 'Undo', exact: true });
+  await page
+    .getByRole('button', { name: 'Add card', exact: true })
+    .first()
+    .click();
+  await expect(undo).toBeEnabled();
+  await page.keyboard.press('Escape');
+
+  await page.keyboard.press('Control+F');
+  const search = page.getByPlaceholder('Search Kanban cards');
+  await search.pressSequentially('abc');
+  await page.keyboard.press('Control+z');
+
+  await expect(search).not.toHaveValue('abc');
+  await expect(undo).toBeEnabled();
+});
