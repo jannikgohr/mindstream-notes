@@ -59,6 +59,16 @@ export async function bundle(source, options = {}) {
  */
 export async function buildComponent(options) {
   const jsSource = await bundle(options.source, { minify: options.minify });
+  return componentFromBundle(jsSource, options);
+}
+
+/**
+ * Build a component from the exact bundled JavaScript used as a cache input.
+ * @param {string} jsSource
+ * @param {{ out?: string, optSize?: boolean }} [options]
+ * @returns {Promise<Uint8Array>}
+ */
+export async function componentFromBundle(jsSource, options = {}) {
   const { componentize } = await import('componentize-qjs');
   const { component } = await componentize({
     witPath: witDir(),
