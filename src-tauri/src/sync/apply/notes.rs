@@ -172,6 +172,18 @@ pub(in crate::sync) fn apply_note_payload(
             }
             _ => true,
         };
+        // Both sides hold the same CRDT but different renderings of it. One
+        // of them is the stale body a device pushed after merging edits it
+        // could not render, the other an editor's later save of that state.
+        // The later rendering wins, so an editor's repair is not undone by
+        // the pull that follows it.
+        let local_renders_later = existing.as_ref().is_some_and(|local| {
+            !local_adds_content
+                && local.schema == incoming_schema
+                && local.body != payload.body
+                && yrs_doc::contains_state(&local.yrs_state, &payload.yrs_state)
+                && rendered_later(&local.modified, payload.modified.as_deref())
+        });
         // For v2 payloads the remote ships the rendered markdown alongside
         // the prosemirror state — Rust can't render markdown from XmlFragment.
         // If this row has unpushed local *content*, keep the local rendered
@@ -186,9 +198,10 @@ pub(in crate::sync) fn apply_note_payload(
         //
         // Still open: when BOTH sides carry edits, neither rendering matches
         // the merged state, and the local one is kept until an editor saves
-        // the note again.
+        // the note again. That save leaves the states equal, and
+        // `local_renders_later` keeps it through the next pull.
         let body = if payload.schema >= 2 {
-            if keep_local_meta && local_adds_content {
+            if keep_local_meta && (local_adds_content || local_renders_later) {
                 existing
                     .as_ref()
                     .map(|local| local.body.clone())
@@ -390,4 +403,17 @@ pub(in crate::sync) fn apply_note_payload(
         tx.commit()?;
         Ok(Some(payload.id.clone()))
     })
+}
+
+/// Whether the local `modified` stamp is later than the remote one. A remote
+/// copy without a readable stamp counts as older; an unreadable local stamp
+/// never wins.
+fn rendered_later(local: &str, remote: Option<&str>) -> bool {
+    let Ok(local) = chrono::DateTime::parse_from_rfc3339(local) else {
+        return false;
+    };
+    match remote.map(chrono::DateTime::parse_from_rfc3339) {
+        Some(Ok(remote)) => local > remote,
+        _ => true,
+    }
 }

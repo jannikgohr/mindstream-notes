@@ -479,28 +479,41 @@ pub fn live_note_references_asset(
     asset_id: &str,
     scope: Option<&str>,
 ) -> AppResult<bool> {
+    Ok(live_note_referencing_asset(conn, asset_id, scope)?.is_some())
+}
+
+/// The id of a note that [`live_note_references_asset`] would count, if any.
+pub fn live_note_referencing_asset(
+    conn: &Connection,
+    asset_id: &str,
+    scope: Option<&str>,
+) -> AppResult<Option<String>> {
     // instr() narrows the scan to rows whose bytes mention the id at all;
     // only those get their CRDT decoded to tell live from deleted content.
     let mut stmt = conn.prepare(
-        "SELECT body, yrs_state FROM notes
+        "SELECT id, body, yrs_state FROM notes
          WHERE share_scope_id IS ?2
            AND (instr(body, ?1) > 0 OR instr(yrs_state, CAST(?1 AS BLOB)) > 0)",
     )?;
     let rows = stmt.query_map(params![asset_id, scope], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, Option<Vec<u8>>>(1)?))
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Option<Vec<u8>>>(2)?,
+        ))
     })?;
     for row in rows {
-        let (body, state) = row?;
+        let (id, body, state) = row?;
         if body.contains(asset_id) {
-            return Ok(true);
+            return Ok(Some(id));
         }
         if let Some(state) = state {
             if crate::yrs_doc::live_strings(&state).contains(asset_id) {
-                return Ok(true);
+                return Ok(Some(id));
             }
         }
     }
-    Ok(false)
+    Ok(None)
 }
 
 /// Delete one asset row, queueing a server-side delete first if it had been

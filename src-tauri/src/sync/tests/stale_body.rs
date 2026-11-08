@@ -174,6 +174,58 @@ fn a_dirty_row_with_its_own_edits_keeps_its_rendering() {
     assert_eq!(dirty, 1);
 }
 
+/// A device pushed the merged CRDT with a body it could not render, then an
+/// editor here saved the correct rendering of that same state.
+fn repaired_note(db: &Db, local_modified: &str) -> NotePayload {
+    let state = desktop_state(&yrs_doc::editor_state_for_tests("Heyo Ichi"));
+    db.with_conn(|c| {
+        insert_note(
+            c,
+            "note_ichi",
+            "Heyo Ichi\n\nFor the year and a bit\n",
+            &state,
+            Some("uid"),
+            1,
+        );
+        c.execute(
+            "UPDATE notes SET modified = ?1 WHERE id = 'note_ichi'",
+            params![local_modified],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let mut remote = remote_note("note_ichi", None, None);
+    remote.body = "Heyo Ichi\n".into();
+    remote.yrs_state = state;
+    remote.modified = Some("2026-05-02T12:00:00Z".into());
+    remote
+}
+
+#[test]
+fn an_editor_repair_of_the_same_state_survives_the_next_pull() {
+    let db = open_memory_for_tests();
+    let remote = repaired_note(&db, "2026-05-03T08:00:00+00:00");
+    apply_note_payload(&db, &remote, "uid", "etag_2", None, true).unwrap();
+
+    let (body, dirty) = body_and_dirty(&db, "note_ichi");
+    assert_eq!(
+        body, "Heyo Ichi\n\nFor the year and a bit\n",
+        "the later rendering of the shared state goes up, not the stale one"
+    );
+    assert_eq!(dirty, 1);
+}
+
+#[test]
+fn an_older_rendering_of_the_same_state_takes_the_remote_one() {
+    // A server switch dirties every row without anything being rendered.
+    let db = open_memory_for_tests();
+    let remote = repaired_note(&db, "2026-04-01T08:00:00+00:00");
+    apply_note_payload(&db, &remote, "uid", "etag_2", None, true).unwrap();
+
+    let (body, _) = body_and_dirty(&db, "note_ichi");
+    assert_eq!(body, "Heyo Ichi\n");
+}
+
 fn insert_asset(conn: &Connection, scope: Option<&str>) {
     conn.execute(
         "INSERT INTO assets(id, owning_note_id, mime_type, bytes, size, created, modified,
@@ -223,6 +275,50 @@ fn a_remote_asset_delete_keeps_an_image_a_note_here_still_shows() {
         asset_row(&db),
         Some((None, 1)),
         "kept, detached from the deleted item and queued for re-upload"
+    );
+}
+
+#[test]
+fn a_kept_asset_whose_owner_was_deleted_is_uploaded_again() {
+    let base = yrs_doc::editor_state_for_tests("Heyo Ichi");
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        // The note that uploaded the GIF, and another one that also shows it.
+        insert_note(c, "note_ichi", "", &base, Some("uid_note"), 0);
+        insert_note(
+            c,
+            "note_ni",
+            &format!("![]({})", gif_link()),
+            &base,
+            Some("uid_ni"),
+            0,
+        );
+        insert_asset(c, None);
+        Ok(())
+    })
+    .unwrap();
+
+    // Another device deleted the first note, then the GIF.
+    db.with_conn(|c| apply_remote_delete(c, "notes", "uid_note", None))
+        .unwrap();
+    db.with_conn(|c| apply_remote_delete(c, "assets", "uid_gif", None))
+        .unwrap();
+
+    let owner: Option<String> = db
+        .with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT owning_note_id FROM assets WHERE id = ?1",
+                params![GIF],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(owner.as_deref(), Some("note_ni"));
+    let dirty = load_dirty_assets(&db, None).unwrap();
+    assert_eq!(
+        dirty.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+        [GIF],
+        "the push picks it up again"
     );
 }
 
