@@ -172,6 +172,23 @@ pub(in crate::sync) fn apply_note_payload(
             }
             _ => true,
         };
+        // Both sides hold the same CRDT but different renderings of it. One
+        // of them is the stale body a device pushed after merging edits it
+        // could not render, the other an editor's later save of that state.
+        // The stale one was rendered before some of the state's text existed,
+        // so it holds less of it; the fuller rendering wins, and an editor's
+        // repair is not undone by the pull that follows it. Timestamps cannot
+        // tell them apart: a rename or a move also moves `modified`.
+        let local_renders_more = existing.as_ref().is_some_and(|local| {
+            !local_adds_content
+                && local.schema == incoming_schema
+                && local.body != payload.body
+                && yrs_doc::contains_state(&local.yrs_state, &payload.yrs_state)
+                && {
+                    let live = yrs_doc::live_strings(&payload.yrs_state);
+                    rendered_share(&live, &local.body) > rendered_share(&live, &payload.body)
+                }
+        });
         // For v2 payloads the remote ships the rendered markdown alongside
         // the prosemirror state — Rust can't render markdown from XmlFragment.
         // If this row has unpushed local *content*, keep the local rendered
@@ -186,9 +203,10 @@ pub(in crate::sync) fn apply_note_payload(
         //
         // Still open: when BOTH sides carry edits, neither rendering matches
         // the merged state, and the local one is kept until an editor saves
-        // the note again.
+        // the note again. That save leaves the states equal, and
+        // `local_renders_more` keeps it through the next pull.
         let body = if payload.schema >= 2 {
-            if keep_local_meta && local_adds_content {
+            if keep_local_meta && (local_adds_content || local_renders_more) {
                 existing
                     .as_ref()
                     .map(|local| local.body.clone())
@@ -390,4 +408,15 @@ pub(in crate::sync) fn apply_note_payload(
         tx.commit()?;
         Ok(Some(payload.id.clone()))
     })
+}
+
+/// How many of the state's live strings (one per line, see
+/// [`yrs_doc::live_strings`]) appear in `body`. Formatting and escaping can
+/// keep a string from appearing verbatim, but they do so for every rendering
+/// of the same state alike.
+fn rendered_share(live: &str, body: &str) -> usize {
+    live.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && body.contains(line))
+        .count()
 }

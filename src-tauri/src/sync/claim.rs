@@ -108,11 +108,20 @@ pub(super) fn apply_remote_delete(
     if detached > 0 {
         return Ok(());
     }
-    if table == "assets" && asset_still_drawn(conn, etebase_uid, scope)? {
+    let drawn_by = if table == "assets" {
+        note_still_drawing(conn, etebase_uid, scope)?
+    } else {
+        None
+    };
+    if let Some(note_id) = drawn_by {
+        // The note that created the asset may be the one just deleted, which
+        // left `owning_note_id` NULL, and a dirty asset without an owner is
+        // never uploaded. The note that still shows it takes over.
         conn.execute(
-            "UPDATE assets SET etebase_uid = NULL, etebase_etag = NULL, released = 1, dirty = 1
+            "UPDATE assets SET etebase_uid = NULL, etebase_etag = NULL, released = 1, dirty = 1,
+                               owning_note_id = COALESCE(owning_note_id, ?3)
              WHERE etebase_uid = ?1 AND share_scope_id IS ?2",
-            params![etebase_uid, scope],
+            params![etebase_uid, scope, note_id],
         )?;
         log::warn!(
             "[sync] kept asset item {etebase_uid}: deleted remotely but a note here still shows it; re-uploading"
@@ -126,9 +135,13 @@ pub(super) fn apply_remote_delete(
     Ok(())
 }
 
-/// Whether the asset row behind item `etebase_uid` is still referenced by a
-/// note's current content, see [`crate::assets::live_note_references_asset`].
-fn asset_still_drawn(conn: &Connection, etebase_uid: &str, scope: Option<&str>) -> AppResult<bool> {
+/// A note whose current content still references the asset row behind item
+/// `etebase_uid`, see [`crate::assets::live_note_references_asset`].
+fn note_still_drawing(
+    conn: &Connection,
+    etebase_uid: &str,
+    scope: Option<&str>,
+) -> AppResult<Option<String>> {
     let asset_id: Option<String> = conn
         .query_row(
             "SELECT id FROM assets WHERE etebase_uid = ?1 AND share_scope_id IS ?2",
@@ -137,7 +150,9 @@ fn asset_still_drawn(conn: &Connection, etebase_uid: &str, scope: Option<&str>) 
         )
         .optional()?;
     match asset_id {
-        Some(id) => Ok(crate::assets::live_note_references_asset(conn, &id, scope)?),
-        None => Ok(false),
+        Some(id) => Ok(crate::assets::live_note_referencing_asset(
+            conn, &id, scope,
+        )?),
+        None => Ok(None),
     }
 }

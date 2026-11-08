@@ -21,6 +21,7 @@ const stopSharingCollectionMock = vi.fn();
 const runSyncMock = vi.fn();
 const setPdfTextMock = vi.fn();
 const extractPdfTextMock = vi.fn();
+const saveEditorsMock = vi.fn();
 
 vi.mock('$lib/api', () => ({
   saveNote: (...args: unknown[]) => saveNoteMock(...args),
@@ -43,6 +44,10 @@ vi.mock('$lib/api', () => ({
   stopSharingCollection: (...args: unknown[]) =>
     stopSharingCollectionMock(...args),
   TRASH_ID: 'trash'
+}));
+
+vi.mock('$lib/editor/suspend-flush', () => ({
+  flushPendingEditorSaves: (...args: unknown[]) => saveEditorsMock(...args)
 }));
 
 vi.mock('$lib/sync/runner', () => ({
@@ -238,6 +243,53 @@ describe('trashNote', () => {
       id: 'note_x',
       parent_collection_id: 'trash'
     });
+  });
+});
+
+describe('saving open editors before the trash', () => {
+  // Every mutation reloads the tree, so each call sets the folders again.
+  function folders() {
+    tree.collectionsById = {
+      binned: {
+        id: 'binned',
+        name: 'Binned',
+        parent_collection_id: 'trash'
+      } as never,
+      live: { id: 'live', name: 'Live', parent_collection_id: null } as never
+    };
+  }
+  beforeEach(() => {
+    saveEditorsMock.mockReset();
+    folders();
+  });
+
+  it('saves before a note, a folder or a batch moves into the trash', async () => {
+    const order: string[] = [];
+    saveEditorsMock.mockImplementation(async () => order.push('save'));
+    saveNoteMock.mockImplementation(async () => {
+      order.push('move');
+      return seedNote({ id: 'note_x' });
+    });
+    await trashNote('note_x');
+    expect(order).toEqual(['save', 'move']);
+    folders();
+    await moveNoteTo('note_x', 'binned');
+    folders();
+    await trashCollection('live');
+    folders();
+    await trashMany([{ kind: 'note', id: 'note_x' }]);
+    folders();
+    await moveManyTo([{ kind: 'note', id: 'note_x' }], 'binned');
+    expect(saveEditorsMock).toHaveBeenCalledTimes(5);
+  });
+
+  it('does not save for a move between ordinary folders', async () => {
+    await moveNoteTo('note_x', 'live');
+    folders();
+    await moveNoteTo('note_x', null);
+    folders();
+    await moveCollectionTo('binned', 'live');
+    expect(saveEditorsMock).not.toHaveBeenCalled();
   });
 });
 

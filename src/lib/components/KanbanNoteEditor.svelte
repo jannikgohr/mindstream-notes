@@ -257,9 +257,6 @@
     );
   });
 
-  const autoSaveEnabled = $derived(
-    getSettingValue('editor.autoSave') !== false
-  );
   const saveDebounceMs = $derived.by(() => {
     const v = Number(getSettingValue('editor.autoSaveDebounce'));
     return Number.isFinite(v) && v > 0 ? v : SAVE_DEBOUNCE_MS;
@@ -1149,8 +1146,7 @@
   });
 
   const saveScheduler = createSaveScheduler({
-    canSave: () => !isTrashed && saveReady && autoSaveEnabled && !!yDoc,
-    canSaveOnClose: () => !isTrashed && saveReady && !!yDoc,
+    canSave: () => !isTrashed && saveReady && !!yDoc,
     checkpoint: () =>
       checkpointBrowserNote(() =>
         yDoc && !isTrashed

@@ -472,12 +472,6 @@
           "id": "editor.autosave",
           "settings": [
             {
-              "id": "editor.autoSave",
-              "scope": "V",
-              "type": "toggle",
-              "default": true
-            },
-            {
               "id": "editor.autoSaveDebounce",
               "scope": "V",
               "type": "slider",
@@ -485,11 +479,7 @@
               "min": 100,
               "max": 5000,
               "step": 100,
-              "unit": "ms",
-              "showIf": {
-                "id": "editor.autoSave",
-                "equals": true
-              }
+              "unit": "ms"
             }
           ]
         }
