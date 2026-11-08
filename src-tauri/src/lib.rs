@@ -70,6 +70,7 @@ pub mod pdf_text;
 pub mod plugins;
 pub mod profiles;
 pub mod root_documents;
+mod save_dialog;
 pub mod search;
 pub mod serde_helpers;
 pub mod sharing;
