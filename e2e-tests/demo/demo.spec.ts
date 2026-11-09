@@ -78,7 +78,7 @@ test.describe('mobile demo settings', () => {
     hasTouch: true
   });
 
-  test('account settings explain browser limitations without sign-in controls', async ({
+  test('settings keep the demo banner and hide unsupported account controls', async ({
     page
   }) => {
     await page.goto('./');
@@ -93,6 +93,13 @@ test.describe('mobile demo settings', () => {
       page.getByRole('complementary', { name: 'Web demo' })
     ).toBeVisible();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    const overview = page.getByRole('dialog', {
+      name: 'Settings',
+      exact: true
+    });
+    await expect(
+      overview.getByRole('complementary', { name: 'Web demo' })
+    ).toBeVisible();
     await page
       .getByRole('button', { name: 'Account & Sync', exact: true })
       .click();
@@ -102,6 +109,17 @@ test.describe('mobile demo settings', () => {
     });
     await expect(settings).toContainText(
       'Accounts and sync are not available in the browser yet.'
+    );
+    const banner = settings.getByRole('complementary', { name: 'Web demo' });
+    await expect(banner).toBeVisible();
+    await banner
+      .getByRole('button', { name: 'Reset demo', exact: true })
+      .click({ trial: true });
+    await expect(
+      banner.getByRole('link', { name: 'Download the app' })
+    ).toHaveAttribute(
+      'href',
+      'https://github.com/jannikgohr/mindstream-notes/releases/latest'
     );
     await expect(settings.getByRole('textbox')).toHaveCount(0);
     await expect(settings.getByRole('radio')).toHaveCount(0);

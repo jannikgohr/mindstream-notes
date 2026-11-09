@@ -21,6 +21,8 @@
    */
   import { Dialog } from 'bits-ui';
   import { isTauri } from '$lib/api/core';
+  import DemoBanner from '$lib/browser/DemoBanner.svelte';
+  import { isBrowserDemo } from '$lib/browser/demo';
   import { ArrowLeft, ChevronRight, X } from '@lucide/svelte';
   import SettingControl from '$lib/settings/SettingControl.svelte';
   import {
@@ -197,8 +199,11 @@
         event.preventDefault();
         contentEl?.focus();
       }}
-      class="safe-top safe-bottom safe-x fixed inset-0 z-50 flex flex-col bg-background text-foreground focus:outline-none"
+      class="safe-bottom safe-x fixed inset-0 z-50 flex flex-col bg-background text-foreground focus:outline-none {isBrowserDemo()
+        ? ''
+        : 'safe-top'}"
     >
+      <DemoBanner />
       {#if activeCategory === null}
         <!-- ====================== Category list ====================== -->
         <header
