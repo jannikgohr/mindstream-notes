@@ -39,7 +39,9 @@ for the required Rust/WASM tools. `pnpm test:demo` tests that build under the
 Pages subpath, including editing, reloading, and resetting.
 
 The Web demo workflow builds and tests the published release tag, then deploys
-it to GitHub Pages. It runs only when a release is published.
+it to GitHub Pages. It runs when a release is published. To deploy a fix
+without a new app release, run the Web demo workflow manually from the branch
+containing the fix.
 In the repository's **Settings > Pages**, set **Source** to **GitHub Actions**.
 The default base path is `/mindstream-notes`; set `BROWSER_BASE_PATH` when building
 for a different repository path or use an empty value for a custom domain.

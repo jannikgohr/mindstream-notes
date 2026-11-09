@@ -4,7 +4,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 export const test = base.extend({
-  context: async ({ context, browserName, playwright, baseURL }, use) => {
+  context: async (
+    {
+      context,
+      browserName,
+      playwright,
+      baseURL,
+      userAgent,
+      viewport,
+      hasTouch
+    },
+    use
+  ) => {
     if (browserName !== 'webkit') {
       await use(context);
       return;
@@ -16,7 +27,9 @@ export const test = base.extend({
     try {
       persistent = await playwright.webkit.launchPersistentContext(profile, {
         baseURL,
-        viewport: { width: 1280, height: 720 }
+        userAgent,
+        viewport: viewport ?? { width: 1280, height: 720 },
+        hasTouch
       });
       await use(persistent);
     } finally {

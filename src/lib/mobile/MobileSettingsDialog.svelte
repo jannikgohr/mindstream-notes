@@ -20,6 +20,7 @@
    * status bar or gesture bar with edge-to-edge enabled.
    */
   import { Dialog } from 'bits-ui';
+  import { isTauri } from '$lib/api/core';
   import { ArrowLeft, ChevronRight, X } from '@lucide/svelte';
   import SettingControl from '$lib/settings/SettingControl.svelte';
   import {
@@ -87,6 +88,7 @@
   /** Sections of the current page: one plugin's, or the category's own. */
   const pageSections = $derived.by(() => {
     if (!activeCategory) return [];
+    if (activeCategory.id === 'account' && !isTauri()) return [];
     if (isPluginsCategory) {
       return activePluginId ? pluginSettingsSectionsFor(activePluginId) : [];
     }
@@ -256,7 +258,13 @@
         </header>
 
         <section class="flex-1 overflow-y-auto pb-6">
-          {#if isPluginsCategory && !activePluginId}
+          {#if activeCategory.id === 'account' && !isTauri()}
+            <p
+              class="mx-4 mt-6 rounded-md border border-border bg-muted/40 p-3 text-sm"
+            >
+              {tUi('account.browserUnavailable')}
+            </p>
+          {:else if isPluginsCategory && !activePluginId}
             <!-- The plugin list; each plugin's gear opens its own page. -->
             <div class="px-4 pt-6">
               <PluginsOverview
