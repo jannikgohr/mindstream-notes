@@ -19,7 +19,13 @@ import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { componentNew } from '@bytecodealliance/jco-transpile/wasm-tools';
-import { buildComponent } from './typescript/lib/build.js';
+import {
+  buildComponent,
+  bundle,
+  componentFromBundle
+} from './typescript/lib/build.js';
+import { witDir } from './typescript/lib/wit.js';
+import { cachedComponent } from './fixture-cache.mjs';
 
 const sdk = import.meta.dirname;
 const root = join(sdk, '..');
@@ -84,8 +90,13 @@ function rust(crate, artifact, features = []) {
 
 function typescript(source, optSize = true) {
   return {
+    cacheable: true,
+    bundle: () => bundle(join(sdk, source)),
     inputs: [dirname(join(sdk, source))],
-    build: (out) => buildComponent({ source: join(sdk, source), out, optSize })
+    build: (out, jsSource) =>
+      jsSource === undefined
+        ? buildComponent({ source: join(sdk, source), out, optSize })
+        : componentFromBundle(jsSource, { out, optSize })
   };
 }
 
@@ -117,11 +128,22 @@ export const fixtures = {
 // any of it changes. Build output and dependencies are left out.
 const shared = [
   join(sdk, 'fixtures.mjs'),
+  join(sdk, 'fixture-cache.mjs'),
   join(sdk, 'wit'),
+  witDir(),
+  join(sdk, 'typescript/package.json'),
+  join(sdk, 'typescript/tsconfig.json'),
+  join(root, 'tsconfig.json'),
   join(sdk, 'typescript/lib'),
   join(sdk, 'typescript/src'),
   join(root, 'pnpm-lock.yaml')
 ];
+
+function inputRoots(names) {
+  return [
+    ...new Set([...shared, ...names.flatMap((name) => fixtures[name].inputs)])
+  ];
+}
 
 async function* files(path) {
   if (!(await stat(path)).isDirectory()) {
@@ -138,18 +160,45 @@ async function* files(path) {
 export async function buildFixtures(out, names = Object.keys(fixtures)) {
   await mkdir(out, { recursive: true });
   const built = {};
+  const timings = [];
   for (const name of names) {
     const fixture = fixtures[name];
     if (!fixture) throw new Error(`unknown plugin test fixture: ${name}`);
     built[name] = join(out, `${name}.wasm`);
-    await fixture.build(built[name]);
+    const started = performance.now();
+    let cacheHit = null;
+    if (fixture.cacheable) {
+      const jsSource = await fixture.bundle();
+      ({ cacheHit } = await cachedComponent({
+        name,
+        recipe: jsSource,
+        inputs: await fixtureInputs([name]),
+        root,
+        cacheDir: join(root, '.output/plugin-fixture-cache'),
+        out: built[name],
+        build: (out) => fixture.build(out, jsSource),
+        enabled: process.env.MINDSTREAM_PLUGIN_FIXTURE_CACHE !== '0'
+      }));
+    } else {
+      // Rust still asks Cargo to validate sources, flags and the compiler.
+      await fixture.build(built[name]);
+    }
+    timings.push({
+      name,
+      cacheHit,
+      seconds: (performance.now() - started) / 1000
+    });
   }
+  await writeFile(
+    join(out, 'fixture-build-timings.json'),
+    JSON.stringify(timings, null, 2) + '\n'
+  );
   return built;
 }
 
 export async function fixtureInputs(names = Object.keys(fixtures)) {
   const inputs = new Set();
-  for (const path of [...shared, ...names.flatMap((n) => fixtures[n].inputs)])
+  for (const path of inputRoots(names))
     for await (const file of files(path)) inputs.add(file);
   return [...inputs].sort();
 }
@@ -170,7 +219,11 @@ if (
   const selected = names.length ? names : Object.keys(fixtures);
   const built = await buildFixtures(out, selected);
   if (cargo) {
-    for (const file of await fixtureInputs(selected))
+    // Watch source directories so Cargo also notices newly added imports.
+    for (const file of new Set([
+      ...inputRoots(selected),
+      ...(await fixtureInputs(selected))
+    ]))
       console.log(`cargo:rerun-if-changed=${file}`);
   } else {
     for (const path of Object.values(built)) console.error(`wrote ${path}`);

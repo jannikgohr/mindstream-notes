@@ -969,7 +969,7 @@ pub fn run() {
             ];
             handler(invoke)
         })
-        .build(tauri::generate_context!());
+        .build(tauri::tauri_build_context!());
 
     let app = match app {
         Ok(app) => app,
