@@ -183,6 +183,7 @@ jobs:
 
       # wasm32: the tests build their plugin components from source.
       - uses: dtolnay/rust-toolchain@stable
+        id: fixture_toolchain
         with:
           components: clippy, rustfmt
           targets: wasm32-unknown-unknown
@@ -219,11 +220,24 @@ jobs:
         with:
           version: 10
       - uses: actions/setup-node@v4
+        id: fixture_node
         with:
           node-version: 22
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      # Rust validates its own guest artifacts. The TypeScript component
+      # cache separately verifies source/recipe hashes and output digests.
+      # Full fixture jobs share entries. Exact source keys avoid retaining
+      # stale Cargo artifacts across fixture revisions.
+      - name: Cache guest fixture builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            plugin-sdk/conformance/rust/target/fixtures
+            plugin-sdk/prototypes/templates-rust/target/fixtures
+            .output/plugin-fixture-cache
+          key: fixtures-v2-full-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig.json', 'plugin-sdk/typescript/tsconfig.json', 'plugin-sdk/**/Cargo.lock', 'plugin-sdk/fixtures.mjs', 'plugin-sdk/fixture-cache.mjs', 'plugin-sdk/wit/**', 'plugin-sdk/typescript/lib/**', 'plugin-sdk/typescript/src/**', 'plugin-sdk/typescript/package.json', 'plugin-sdk/conformance/rust/Cargo.toml', 'plugin-sdk/conformance/rust/src/**', 'plugin-sdk/conformance/typescript/main.ts', 'plugin-sdk/prototypes/templates-rust/Cargo.toml', 'plugin-sdk/prototypes/templates-rust/src/**', 'plugin-sdk/examples/templates-typescript/*.ts', 'plugin-sdk/examples/typst-typescript/*.ts') }}
 
       # Formatting and lints run only on Linux: both are platform-agnostic,
       # and repeating them on three runners just triples the failure noise
@@ -278,7 +292,23 @@ jobs:
         # Debug Pulley calls use the production deadline. Concurrent compiler
         # fixtures can starve them on small runners. Keep functional tests
         # serial; release probes measure the unchanged budget independently.
-        run: cargo test --locked --workspace -- --test-threads=1
+        run: cargo test --locked --workspace --timings -- --test-threads=1
+
+      - name: Retain native test build timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-test-timings-${{ runner.os }}
+          path: |
+            src-tauri/target/cargo-timings/
+            src-tauri/target/debug/build/mindstream-notes-*/out/build-timings.json
+            src-tauri/target/debug/build/mindstream-plugin-fixtures-*/out/fixture-build-timings.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Summarize native fixture builds
+        if: always()
+        run: node scripts/summarize-fixture-builds.mjs src-tauri/target/debug/build
 
   bundled-plugins:
     name: Shipped Rust plugins
@@ -339,6 +369,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        id: fixture_toolchain
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
@@ -352,10 +383,23 @@ jobs:
         with:
           version: 10
       - uses: actions/setup-node@v4
+        id: fixture_node
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Rust validates its own guest artifacts. The TypeScript component
+      # cache separately verifies source/recipe hashes and output digests.
+      # Full fixture jobs share entries. Exact source keys avoid retaining
+      # stale Cargo artifacts across fixture revisions.
+      - name: Cache guest fixture builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            plugin-sdk/conformance/rust/target/fixtures
+            plugin-sdk/prototypes/templates-rust/target/fixtures
+            .output/plugin-fixture-cache
+          key: fixtures-v2-full-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig.json', 'plugin-sdk/typescript/tsconfig.json', 'plugin-sdk/**/Cargo.lock', 'plugin-sdk/fixtures.mjs', 'plugin-sdk/fixture-cache.mjs', 'plugin-sdk/wit/**', 'plugin-sdk/typescript/lib/**', 'plugin-sdk/typescript/src/**', 'plugin-sdk/typescript/package.json', 'plugin-sdk/conformance/rust/Cargo.toml', 'plugin-sdk/conformance/rust/src/**', 'plugin-sdk/conformance/typescript/main.ts', 'plugin-sdk/prototypes/templates-rust/Cargo.toml', 'plugin-sdk/prototypes/templates-rust/src/**', 'plugin-sdk/examples/templates-typescript/*.ts', 'plugin-sdk/examples/typst-typescript/*.ts') }}
       - name: Measure native component execution
         shell: bash
         run: cargo run --manifest-path src-tauri/Cargo.toml --locked --release -p mindstream-plugin-runtime --example plugin-bench > plugin-native.json
@@ -377,7 +421,9 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           name: plugin-runtime-${{ matrix.os }}
-          path: plugin-*.json
+          path: |
+            plugin-*.json
+            src-tauri/target/release/build/mindstream-plugin-fixtures-*/out/fixture-build-timings.json
           retention-days: 14
 
   # The sync server: its own crate, lockfile and tests. The tests start the
@@ -490,11 +536,13 @@ jobs:
         with:
           version: 10
       - uses: actions/setup-node@v4
+        id: fixture_node
         with:
           node-version: 22
           cache: pnpm
 
       - uses: dtolnay/rust-toolchain@stable
+        id: fixture_toolchain
         with:
           components: llvm-tools-preview
           targets: wasm32-unknown-unknown
@@ -504,6 +552,18 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
 
       - run: pnpm install --frozen-lockfile
+      # Rust validates its own guest artifacts. The TypeScript component
+      # cache separately verifies source/recipe hashes and output digests.
+      # Full fixture jobs share entries. Exact source keys avoid retaining
+      # stale Cargo artifacts across fixture revisions.
+      - name: Cache guest fixture builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            plugin-sdk/conformance/rust/target/fixtures
+            plugin-sdk/prototypes/templates-rust/target/fixtures
+            .output/plugin-fixture-cache
+          key: fixtures-v2-full-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig.json', 'plugin-sdk/typescript/tsconfig.json', 'plugin-sdk/**/Cargo.lock', 'plugin-sdk/fixtures.mjs', 'plugin-sdk/fixture-cache.mjs', 'plugin-sdk/wit/**', 'plugin-sdk/typescript/lib/**', 'plugin-sdk/typescript/src/**', 'plugin-sdk/typescript/package.json', 'plugin-sdk/conformance/rust/Cargo.toml', 'plugin-sdk/conformance/rust/src/**', 'plugin-sdk/conformance/typescript/main.ts', 'plugin-sdk/prototypes/templates-rust/Cargo.toml', 'plugin-sdk/prototypes/templates-rust/src/**', 'plugin-sdk/examples/templates-typescript/*.ts', 'plugin-sdk/examples/typst-typescript/*.ts') }}
 
       - name: JS coverage
         run: pnpm test:coverage
@@ -511,6 +571,15 @@ jobs:
       - name: Rust coverage
         if: ${{ !cancelled() }}
         run: node src-tauri/scripts/rust-coverage.mjs --lcov --output-path ../.output/coverage/rust/lcov.info
+
+      - name: Retain coverage fixture build timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fixture-build-timings-coverage
+          path: src-tauri/target/**/build/mindstream-plugin-fixtures-*/out/fixture-build-timings.json
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Note skipped Codecov upload
         if: ${{ env.CODECOV_TOKEN == '' }}
@@ -657,11 +726,13 @@ jobs:
         with:
           version: 10
       - uses: actions/setup-node@v4
+        id: fixture_node
         with:
           node-version: 22
           cache: pnpm
       # wasm32 builds the plugin the lifecycle suite installs.
       - uses: dtolnay/rust-toolchain@stable
+        id: fixture_toolchain
         with:
           targets: wasm32-unknown-unknown
 
@@ -671,18 +742,30 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
 
-      # Same `shared-key` the suite jobs used, so this job inherits the cache
-      # they were populating. `cache-on-failure` matters more than it looks:
-      # the default drops the cache when the job fails, so a red build never
-      # saves one — and then never has one to restore.
+      # Separate compiler recipes must not restore the production-profile
+      # cache. rust-cache ignores `key` when `shared-key` is set, so put the
+      # recipe in the shared key itself. Save dependencies on failure too.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          shared-key: app-e2e
+          # These release overrides are applied by the build helper, so include
+          # its recipe in the key before the cache action runs.
+          shared-key: app-e2e-${{ hashFiles('e2e-tests/app/helpers/build-profile.ts') }}
           cache-on-failure: true
       - run: pnpm install --frozen-lockfile
+      # Rust validates its own guest artifacts. The TypeScript component
+      # cache separately verifies source/recipe hashes and output digests.
+      # Full fixture jobs share entries. Exact source keys avoid retaining
+      # stale Cargo artifacts across fixture revisions.
+      - name: Cache guest fixture builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            plugin-sdk/conformance/rust/target/fixtures
+            plugin-sdk/prototypes/templates-rust/target/fixtures
+            .output/plugin-fixture-cache
+          key: fixtures-v2-conformance-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture_toolchain.outputs.cachekey }}-${{ steps.fixture_node.outputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig.json', 'plugin-sdk/typescript/tsconfig.json', 'plugin-sdk/**/Cargo.lock', 'plugin-sdk/fixtures.mjs', 'plugin-sdk/fixture-cache.mjs', 'plugin-sdk/wit/**', 'plugin-sdk/typescript/lib/**', 'plugin-sdk/typescript/src/**', 'plugin-sdk/typescript/package.json', 'plugin-sdk/conformance/rust/Cargo.toml', 'plugin-sdk/conformance/rust/src/**', 'plugin-sdk/conformance/typescript/main.ts', 'plugin-sdk/prototypes/templates-rust/Cargo.toml', 'plugin-sdk/prototypes/templates-rust/src/**', 'plugin-sdk/examples/templates-typescript/*.ts', 'plugin-sdk/examples/typst-typescript/*.ts') }}
       - run: cargo install tauri-driver --locked
-
       # The suites' own build path (helpers/preflight.ts), not a second recipe
       # that could drift from it.
       - run: pnpm test:e2e:app:build
@@ -692,7 +775,26 @@ jobs:
           mkdir -p .output/app-e2e-bin
           cp src-tauri/target/release/mindstream-notes-e2e .output/app-e2e-bin/
           cp "$HOME/.cargo/bin/tauri-driver" .output/app-e2e-bin/
-          node plugin-sdk/fixtures.mjs --out .output/app-e2e-bin conformance-rust
+          node plugin-sdk/fixtures.mjs --out .output/app-e2e-fixtures conformance-rust
+          cp .output/app-e2e-fixtures/conformance-rust.wasm .output/app-e2e-bin/
+
+      - name: Retain packaged app build timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-e2e-build-timings
+          path: |
+            .output/tauri-e2e/rust-profile.json
+            .output/app-e2e-fixtures/fixture-build-timings.json
+            src-tauri/target/cargo-timings/
+            src-tauri/target/release/build/mindstream-notes-*/out/build-timings.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Summarize packaged app fixture builds
+        if: always()
+        run: node scripts/summarize-fixture-builds.mjs .output/app-e2e-fixtures
+
       - uses: actions/upload-artifact@v4
         with:
           name: app-e2e-bin

@@ -32,6 +32,7 @@ import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SevereServiceError } from 'webdriverio';
 import { assertBackendReady } from './backend.js';
+import { e2eRustBuildEnv, rustProfileVariables } from './build-profile.js';
 
 /**
  * Fail the whole run, not just this hook.
@@ -133,7 +134,7 @@ const pathEnvKey =
 const nodeBinDir = dirname(process.execPath);
 const inheritedPath = process.env[pathEnvKey];
 
-const buildEnv = {
+const buildEnv = e2eRustBuildEnv({
   ...process.env,
   [pathEnvKey]: inheritedPath
     ? `${nodeBinDir}${delimiter}${inheritedPath}`
@@ -146,7 +147,7 @@ const buildEnv = {
   // hook try to purge node_modules.
   pnpm_config_verify_deps_before_run:
     process.env.pnpm_config_verify_deps_before_run ?? 'false'
-};
+});
 
 /**
  * A `#[tauri::command]` that only compiles under `--features e2e-data-dir`
@@ -317,6 +318,16 @@ export async function stopTauriDriverTree(
 function writeE2eBuildConfig(): string {
   const configDir = join(repoRoot, '.output', 'tauri-e2e');
   mkdirSync(configDir, { recursive: true });
+  writeFileSync(
+    join(configDir, 'rust-profile.json'),
+    JSON.stringify(
+      Object.fromEntries(
+        rustProfileVariables.map((key) => [key, buildEnv[key] ?? null])
+      ),
+      null,
+      2
+    ) + '\n'
+  );
   const configPath = join(configDir, 'tauri.e2e.conf.json');
   writeFileSync(
     configPath,
@@ -379,7 +390,9 @@ export function buildApp(): void {
       '--features',
       'e2e-data-dir',
       '--config',
-      writeE2eBuildConfig()
+      writeE2eBuildConfig(),
+      '--',
+      '--timings'
     ],
     { cwd: repoRoot, stdio: 'inherit', env: buildEnv }
   );

@@ -11,6 +11,7 @@ fn main() {
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     let node = env::var_os("NODE").unwrap_or_else(|| "node".into());
     println!("cargo:rerun-if-env-changed=NODE");
+    println!("cargo:rerun-if-env-changed=MINDSTREAM_PLUGIN_FIXTURE_CACHE");
     let output = Command::new(&node)
         .arg(&script)
         .args(["--cargo", "--out"])

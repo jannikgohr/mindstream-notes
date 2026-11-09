@@ -16,6 +16,7 @@ in the [documentation index](../README.md).
 - [Bits UI](bits-ui.md): maintaining dialogs and their tests
 - [Developing the sync server](server-development.md): its tests, coverage,
   conformance run and benchmark
+- [Build performance](build-performance.md): CI timings, development builds and plugin rebuilds
 - [Memory footprint](memory.md): how to measure the app's memory and what moved
   it
 - [Upstream fixes](upstream-fixes.md): local workarounds for dependency bugs
