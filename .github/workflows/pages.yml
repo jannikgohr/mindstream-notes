@@ -1,6 +1,7 @@
 name: Web demo
 
 on:
+  workflow_dispatch:
   release:
     types: [published]
 
@@ -18,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event.release.tag_name || github.sha }}
       # Third-party actions are pinned to a commit: this job builds what the
       # deploy job publishes.
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0

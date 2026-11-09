@@ -68,3 +68,50 @@ test('demo notes persist through reload and reset restores the samples', async (
   await expect(editor).toContainText('Welcome to Mindstream Notes');
   expect(failedAssets).toEqual([]);
 });
+
+test.describe('mobile demo settings', () => {
+  test.use({
+    userAgent:
+      'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 ' +
+      '(KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36',
+    viewport: { width: 412, height: 915 },
+    hasTouch: true
+  });
+
+  test('account settings explain browser limitations without sign-in controls', async ({
+    page
+  }) => {
+    await page.goto('./');
+    if (test.info().project.name === 'webkit')
+      test.skip(
+        !(await page.evaluate(
+          () => typeof navigator.storage?.getDirectory === 'function'
+        )),
+        'This WebKit has no OPFS API'
+      );
+    await expect(
+      page.getByRole('complementary', { name: 'Web demo' })
+    ).toBeVisible();
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page
+      .getByRole('button', { name: 'Account & Sync', exact: true })
+      .click();
+    const settings = page.getByRole('dialog', {
+      name: 'Account & Sync',
+      exact: true
+    });
+    await expect(settings).toContainText(
+      'Accounts and sync are not available in the browser yet.'
+    );
+    await expect(settings.getByRole('textbox')).toHaveCount(0);
+    await expect(settings.getByRole('radio')).toHaveCount(0);
+    await expect(
+      settings.getByRole('button', { name: /sign in|create account/i })
+    ).toHaveCount(0);
+    await settings.getByRole('button', { name: 'Back', exact: true }).click();
+    await page.getByRole('button', { name: 'Appearance', exact: true }).click();
+    await expect(
+      page.getByRole('dialog', { name: 'Appearance', exact: true })
+    ).toBeVisible();
+  });
+});
