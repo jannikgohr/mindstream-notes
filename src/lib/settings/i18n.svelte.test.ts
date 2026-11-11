@@ -62,6 +62,12 @@ describe('tUiFormat', () => {
     );
   });
 
+  it('replaces repeated occurrences of the same placeholder', () => {
+    expect(tUiFormat('{name} / {name}' as never, { name: '$&' })).toBe(
+      '$& / $&'
+    );
+  });
+
   it('uses the active language', () => {
     setLanguage('de');
     expect(tUiFormat('fileTree.menu.batch.delete', { count: 3 })).toBe(

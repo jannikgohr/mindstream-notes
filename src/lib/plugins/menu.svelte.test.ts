@@ -23,8 +23,6 @@ vi.mock('$lib/templates/user-templates', () => ({
 
 import { registerPlugin, resetPluginRegistry } from './registry.svelte';
 import {
-  hasPluginTemplates,
-  hasTemplateEntries,
   pluginTemplateDefaultTitle,
   pluginTemplateEntries,
   pluginTemplateNoteKind,
@@ -77,7 +75,6 @@ afterEach(() => resetPluginRegistry());
 describe('pluginTemplateEntries', () => {
   it('is empty with no plugins', () => {
     expect(pluginTemplateEntries()).toHaveLength(0);
-    expect(hasPluginTemplates()).toBe(false);
   });
 
   it('lists localized label + description for each enabled template', () => {
@@ -91,7 +88,6 @@ describe('pluginTemplateEntries', () => {
         description: 'Agenda and follow-ups'
       }
     ]);
-    expect(hasPluginTemplates()).toBe(true);
   });
 });
 
@@ -176,10 +172,9 @@ describe('pluginTemplateDefaultTitle', () => {
   });
 });
 
-describe('templateMenuEntries / hasTemplateEntries', () => {
+describe('templateMenuEntries', () => {
   it('is empty when neither plugin nor user templates exist', () => {
     expect(templateMenuEntries()).toEqual([]);
-    expect(hasTemplateEntries()).toBe(false);
   });
 
   it('lists plugin templates first, then user templates', () => {
@@ -195,7 +190,6 @@ describe('templateMenuEntries / hasTemplateEntries', () => {
       noteId: 'note-7',
       label: 'My note template'
     });
-    expect(hasTemplateEntries()).toBe(true);
   });
 });
 

@@ -1,25 +1,19 @@
 import type { NotificationWidgetComponent } from './types';
+import { lazyComponent } from '$lib/components/lazy-component';
 
 export type NotificationWidgetLoader =
   () => Promise<NotificationWidgetComponent>;
 
 export const FALLBACK_NOTIFICATION_WIDGET_LOADER: NotificationWidgetLoader =
-  () =>
-    import('./GenericNotificationWidget.svelte').then(
-      (mod) => mod.default as unknown as NotificationWidgetComponent
-    );
+  lazyComponent(() => import('./GenericNotificationWidget.svelte'));
 
 export const NOTIFICATION_WIDGET_LOADERS: Record<
   string,
   NotificationWidgetLoader
 > = {
   generic: FALLBACK_NOTIFICATION_WIDGET_LOADER,
-  update: () =>
-    import('./UpdateNotificationWidget.svelte').then(
-      (mod) => mod.default as unknown as NotificationWidgetComponent
-    ),
-  'share-invite': () =>
-    import('./ShareInviteNotificationWidget.svelte').then(
-      (mod) => mod.default as unknown as NotificationWidgetComponent
-    )
+  update: lazyComponent(() => import('./UpdateNotificationWidget.svelte')),
+  'share-invite': lazyComponent(
+    () => import('./ShareInviteNotificationWidget.svelte')
+  )
 };

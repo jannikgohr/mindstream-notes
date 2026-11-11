@@ -864,13 +864,11 @@
       const transform = currentSelectionTransform();
       for (const stroke of visibleStrokes) {
         if (!selectedStrokeSet.has(stroke.id)) continue;
+        const points = transformedPoints(stroke.points, transform);
         drawStroke(
           ctx,
-          transformedPoints(stroke.points, transform),
-          strokeCssColor(
-            selectionColorPreview ?? stroke.color,
-            transformedPoints(stroke.points, transform)
-          ),
+          points,
+          strokeCssColor(selectionColorPreview ?? stroke.color, points),
           stroke.width * transform.widthScale
         );
       }

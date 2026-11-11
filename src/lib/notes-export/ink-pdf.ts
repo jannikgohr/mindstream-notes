@@ -38,33 +38,34 @@ export async function buildInkPdf(
     return null;
   }
 
-  const strokes = inkDoc.visibleStrokes();
-  if (inkDoc.hasPages()) {
-    try {
-      return await buildPagedInkPdf(inkDoc);
-    } finally {
-      inkDoc.doc.destroy();
+  try {
+    if (inkDoc.hasPages()) return await buildPagedInkPdf(inkDoc);
+    const strokes = inkDoc.visibleStrokes();
+    // The editor keeps a trailing blank page (and a 2-page minimum) so
+    // there's always room to keep drawing. The export wants the opposite
+    // just the pages that actually contain ink, with a single blank
+    // page as a fallback so the file always exists.
+    const baseLayout = defaultLayout();
+    const maxY = inkDoc.contentMaxY();
+    const exportPageCount =
+      maxY > 0 ? Math.floor(maxY / strideY(baseLayout)) + 1 : 1;
+    const layout: DocumentLayout = {
+      ...baseLayout,
+      pageCount: exportPageCount
+    };
+
+    const lib = await import('pdf-lib');
+    const pdf = await lib.PDFDocument.create();
+
+    for (let i = 0; i < layout.pageCount; i++) {
+      const page = pdf.addPage([layout.page.width, layout.page.height]);
+      drawPageStrokes(page, strokes, layout, i, lib);
     }
+
+    return await pdf.save();
+  } finally {
+    inkDoc.doc.destroy();
   }
-  // The editor keeps a trailing blank page (and a 2-page minimum) so
-  // there's always room to keep drawing. The export wants the opposite
-  // — just the pages that actually contain ink, with a single blank
-  // page as a fallback so the file always exists.
-  const baseLayout = defaultLayout();
-  const maxY = inkDoc.contentMaxY();
-  const exportPageCount =
-    maxY > 0 ? Math.floor(maxY / strideY(baseLayout)) + 1 : 1;
-  const layout: DocumentLayout = { ...baseLayout, pageCount: exportPageCount };
-
-  const lib = await import('pdf-lib');
-  const pdf = await lib.PDFDocument.create();
-
-  for (let i = 0; i < layout.pageCount; i++) {
-    const page = pdf.addPage([layout.page.width, layout.page.height]);
-    drawPageStrokes(page, strokes, layout, i, lib);
-  }
-
-  return await pdf.save();
 }
 
 async function buildPagedInkPdf(ink: InkDocument): Promise<Uint8Array> {

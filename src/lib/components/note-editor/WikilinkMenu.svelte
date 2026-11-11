@@ -16,6 +16,7 @@
   import { folderPathLabel } from '$lib/notes/folder-path';
   import { tree } from '$lib/stores/tree.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { rankSubstringMatches } from '$lib/search/substring-rank';
   import type { WikilinkBridge } from '$lib/editor/plugins/wikilink-bridge.svelte';
   import { portalToBody, useTypeaheadPopup } from './typeahead-popup.svelte';
 
@@ -51,43 +52,12 @@
       const key = n.title.trim().toLowerCase();
       titleCounts.set(key, (titleCounts.get(key) ?? 0) + 1);
     }
-    let scored: Array<{
-      id: string;
-      title: string;
-      note_kind: string;
-      parent_collection_id: string | null;
-      rank: number;
-    }> = [];
-    if (!q) {
-      scored = all.map((n) => ({
-        id: n.id,
-        title: n.title,
-        note_kind: n.note_kind,
-        parent_collection_id: n.parent_collection_id,
-        rank: 0
-      }));
-      scored.sort((a, b) => {
-        const ma = tree.notesById[a.id]?.modified ?? '';
-        const mb = tree.notesById[b.id]?.modified ?? '';
-        return mb.localeCompare(ma);
-      });
-    } else {
-      for (const n of all) {
-        const t = n.title.toLowerCase();
-        const idx = t.indexOf(q);
-        if (idx < 0) continue;
-        const rank = idx === 0 ? 0 : idx + t.length / 1000;
-        scored.push({
-          id: n.id,
-          title: n.title,
-          note_kind: n.note_kind,
-          parent_collection_id: n.parent_collection_id,
-          rank
-        });
-      }
-      scored.sort((a, b) => a.rank - b.rank);
-    }
-    return scored.slice(0, MAX_RESULTS).map((note) => {
+    const notes = q
+      ? rankSubstringMatches(all, q, (n) => n.title, MAX_RESULTS)
+      : all
+          .sort((a, b) => (b.modified ?? '').localeCompare(a.modified ?? ''))
+          .slice(0, MAX_RESULTS);
+    return notes.map((note) => {
       const key = note.title.trim().toLowerCase();
       return {
         id: note.id,
