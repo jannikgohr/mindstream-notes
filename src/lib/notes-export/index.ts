@@ -214,31 +214,11 @@ export async function exportVault(
       );
       report.assets_written += written.assets_written;
       report.errors += written.errors ?? 0;
-      switch (written.kind) {
-        case 'markdown':
-          report.markdown_written++;
-          break;
-        case 'freeform':
-          report.freeform_written++;
-          break;
-        case 'pdf':
-          report.pdf_written++;
-          break;
-        case 'ink':
-          report.ink_written++;
-          break;
-        case 'kanban':
-          report.kanban_written++;
-          break;
-        case 'typst':
-          report.typst_written++;
-          break;
-        case 'unknown':
-          // Helper logged a warning and wrote nothing; surface it in
-          // the report under the existing "skipped unknown kind"
-          // bucket instead of double-counting it as a written note.
-          report.skipped_unknown_kind++;
-          break;
+      if (written.kind === 'unknown') {
+        // The exporter warned and wrote nothing for an unsupported note kind.
+        report.skipped_unknown_kind++;
+      } else {
+        report[`${written.kind}_written` as const]++;
       }
     } catch (err) {
       console.error('[notes-export] note failed', summary.id, err);
@@ -473,28 +453,15 @@ async function exportFreeform(
   parentDir: string,
   takenFor: (dir: string) => Set<string>
 ): Promise<AssetWriteSummary> {
-  const excalidraw = await buildExcalidrawFile(note.yrs_state);
-  if (!excalidraw) {
-    // Empty doc — write an empty scene so the file still appears in
-    // the export, opens cleanly, and round-trips back if re-imported.
-    const empty = {
-      type: 'excalidraw' as const,
-      version: 2,
-      source: 'https://excalidraw.com',
-      elements: [],
-      appState: {},
-      files: {}
-    };
-    const basename = dedupeAgainst(
-      takenFor(parentDir),
-      `${sanitizeName(note.title)}.excalidraw`
-    );
-    await write(
-      joinRel(parentDir, basename),
-      new TextEncoder().encode(JSON.stringify(empty, null, 2))
-    );
-    return { assets_written: 0 };
-  }
+  // Export an empty scene for a fresh note so it still round-trips.
+  const excalidraw = (await buildExcalidrawFile(note.yrs_state)) ?? {
+    type: 'excalidraw' as const,
+    version: 2,
+    source: 'https://excalidraw.com',
+    elements: [],
+    appState: {},
+    files: {}
+  };
   const basename = dedupeAgainst(
     takenFor(parentDir),
     `${sanitizeName(note.title)}.excalidraw`

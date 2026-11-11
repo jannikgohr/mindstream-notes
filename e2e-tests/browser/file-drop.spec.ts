@@ -1,5 +1,6 @@
 import { deflateSync } from 'node:zlib';
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { boot } from './editor-helpers';
 import { clickFileTreeCreateAction } from './file-tree-toolbar';
 
 /**
@@ -126,13 +127,6 @@ const pdf = (name: string): DroppedFile => ({
 });
 
 const UNSUPPORTED = 'Nothing here can use those files.';
-
-async function boot(page: Page) {
-  await page.goto('/');
-  await expect(
-    page.getByRole('button', { name: 'Welcome', exact: true })
-  ).toBeVisible();
-}
 
 function fileTree(page: Page): Locator {
   return page.getByRole('group', { name: 'File tree' });

@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { boot } from './editor-helpers';
 import { clickFileTreeCreateAction } from './file-tree-toolbar';
 
 /**
@@ -9,13 +10,6 @@ import { clickFileTreeCreateAction } from './file-tree-toolbar';
  * adding the single-item "Delete permanently" path, plus inline rename — all
  * against the live tree store and the in-memory API.
  */
-
-async function boot(page: Page) {
-  await page.goto('/');
-  await expect(
-    page.getByRole('button', { name: 'Welcome', exact: true })
-  ).toBeVisible();
-}
 
 function fileTree(page: Page): Locator {
   return page.getByRole('group', { name: 'File tree' });

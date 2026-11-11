@@ -45,7 +45,6 @@
     loadNote,
     saveNote as apiSaveNote,
     TRASH_ID,
-    noteRoomInfo,
     onSessionChange
   } from '$lib/api';
   import { markNoteSaved, tree } from '$lib/stores/tree.svelte';
@@ -56,7 +55,7 @@
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
   import { ExcalidrawRoomClient } from '$lib/freeform/excalidraw-room-client';
-  import { roomConnection } from '$lib/editor/collab-session';
+  import { createCollabSession } from '$lib/editor/collab-session';
   import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types';
   import { isMobile } from '$lib/platform';
   import { listen, TauriEventName } from '$lib/api/events';
@@ -98,8 +97,6 @@
     snapshotNowRequiresDirty: true
   });
 
-  /** Debounce window for save scheduling — same as NoteEditor. */
-
   /** Mount point for the React island. dockview gives us the full panel;
    *  the island fills it via `position: absolute; inset: 0`. */
   let mountEl: HTMLDivElement | null = $state(null);
@@ -110,7 +107,6 @@
   let yDoc: Y.Doc | null = null;
   let excalidrawApi: ExcalidrawImperativeAPI | null = null;
 
-  let roomClient: ExcalidrawRoomClient | null = null;
   let collabOnline = $state(false);
   let collabConfigured = $state(false);
 
@@ -328,11 +324,11 @@
       saveReady = true;
 
       lastSeenPushed = tree.notesById[noteId]?.pushed ?? false;
-      await setupExcalidrawRoom();
+      await collabSession.setup();
       collabReady = true;
 
       unsubSession = onSessionChange(() => {
-        void setupExcalidrawRoom();
+        void collabSession.setup();
       });
 
       // Merge fresh yrs_state into the live Y.Doc whenever sync pulls
@@ -458,7 +454,7 @@
     if (!collabReady) return;
     if (pushed === lastSeenPushed) return;
     lastSeenPushed = pushed;
-    void setupExcalidrawRoom();
+    void collabSession.setup();
   });
 
   function handleExcalidrawApi(api: ExcalidrawImperativeAPI | null): void {
@@ -470,49 +466,30 @@
       // user edit; setup is idempotent (destroys the prior client) so
       // calling it from both here and the load/session/pushed paths is
       // safe.
-      void setupExcalidrawRoom();
-    } else if (roomClient) {
-      // API gone (island unmounted ahead of us). Tear down so the
-      // socket doesn't keep emitting against a dead reference.
-      roomClient.destroy();
-      roomClient = null;
-      collabOnline = false;
+      void collabSession.setup();
+    } else {
+      collabSession.disconnect();
     }
   }
 
-  async function setupExcalidrawRoom() {
-    if (roomClient) {
-      roomClient.destroy();
-      roomClient = null;
-      collabOnline = false;
+  const collabSession = createCollabSession({
+    getContext: () => {
+      const url = getRoomSocketUrl(
+        (getSettingValue('account.serverUrl') as string | undefined) ?? ''
+      );
+      return url && excalidrawApi
+        ? { noteId, url, value: excalidrawApi }
+        : null;
+    },
+    create: (api, connection) =>
+      new ExcalidrawRoomClient({ ...connection, api }),
+    onConfigured: (configured) => {
+      collabConfigured = configured;
+    },
+    onStatusChange: (online) => {
+      collabOnline = online;
     }
-    collabConfigured = false;
-
-    // No server configured means no live collab. The address a socket
-    // connects to comes with the room, from the session the Rust side holds.
-    const collabUrl = getRoomSocketUrl(
-      (getSettingValue('account.serverUrl') as string | undefined) ?? ''
-    );
-    if (!collabUrl) return;
-    if (!excalidrawApi) return;
-
-    try {
-      const room = await noteRoomInfo(noteId);
-      // Re-check the api after the await in case the panel was dismantled
-      // while we were fetching room info.
-      if (!room || !excalidrawApi) return;
-      collabConfigured = true;
-      roomClient = new ExcalidrawRoomClient({
-        ...roomConnection(room),
-        api: excalidrawApi,
-        onStatusChange: (online) => {
-          collabOnline = online;
-        }
-      });
-    } catch (err) {
-      console.debug('[FreeformNoteEditor] room init failed', err);
-    }
-  }
+  });
 
   onDestroy(() => {
     // Flush before anything else in here: `flushSave` reads the Y.Doc
@@ -560,11 +537,8 @@
 
     if (yDoc && yDocUpdateHandler) yDoc.off('update', yDocUpdateHandler);
     yDocUpdateHandler = null;
-    roomClient?.destroy();
-    roomClient = null;
+    collabSession.destroy();
     excalidrawApi = null;
-    collabOnline = false;
-    collabConfigured = false;
     yDoc?.destroy();
     yDoc = null;
   });

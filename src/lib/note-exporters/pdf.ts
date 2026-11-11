@@ -1,7 +1,6 @@
 import * as Y from 'yjs';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import { fetchAssetBytes, loadNote, type Note } from '$lib/api';
-import { saveAnnotatedPdf } from '$lib/api/pdf-export';
 import { exportAnnotatedPdf } from '$lib/pdf/export-annotated-pdf';
 import {
   exportPrintReadyPdf,
@@ -98,18 +97,21 @@ export function pdfNoteHasOverlays(note: Note): boolean {
   );
 }
 
+async function loadPdfNote(noteId: string) {
+  const note = await loadNote(noteId);
+  if (note.note_kind !== 'pdf')
+    throw new Error('This export is only available for PDF notes.');
+  const assetId = pdfAssetIdFromBody(note.body);
+  if (!assetId) throw new Error('PDF asset is missing.');
+  return { note, assetId };
+}
+
 async function loadPdfNoteSources(
   noteId: string,
   includeSharedInk = true,
   includeLegacyInk = true
 ): Promise<PdfNoteSources> {
-  const note = await loadNote(noteId);
-  if (note.note_kind !== 'pdf') {
-    throw new Error('This export is only available for PDF notes.');
-  }
-
-  const assetId = pdfAssetIdFromBody(note.body);
-  if (!assetId) throw new Error('PDF asset is missing.');
+  const { note, assetId } = await loadPdfNote(noteId);
 
   const bytes = await fetchAssetBytes(assetId, 'application/pdf');
 
@@ -138,11 +140,14 @@ export async function buildPdfNoteBytes(
 
 export async function exportAnnotatedPdfNote(noteId: string): Promise<void> {
   const { note, pdfBytes, annotations } = await loadPdfNoteSources(noteId);
-  await saveAnnotatedPdf({
-    suggestedName: `${sanitizePdfFilename(note.title)}.pdf`,
-    dialogTitle: 'Save annotated PDF',
-    bytes: await exportAnnotatedPdf(pdfBytes, annotations)
-  });
+  await saveExportFile(
+    {
+      format: 'pdf',
+      name: `${sanitizePdfFilename(note.title)}.pdf`,
+      bytes: await exportAnnotatedPdf(pdfBytes, annotations)
+    },
+    'Save annotated PDF'
+  );
 }
 
 const PRINT_READY_WARNING_KEYS = {
@@ -157,11 +162,14 @@ export async function exportPrintReadyPdfNote(noteId: string): Promise<void> {
     page: tUi('pdf.comments.page'),
     resolved: tUi('pdf.comments.resolved')
   });
-  const saved = await saveAnnotatedPdf({
-    suggestedName: `${sanitizePdfFilename(note.title)} (print).pdf`,
-    dialogTitle: 'Save print-ready PDF',
-    bytes
-  });
+  const saved = await saveExportFile(
+    {
+      format: 'pdf',
+      name: `${sanitizePdfFilename(note.title)} (print).pdf`,
+      bytes
+    },
+    'Save print-ready PDF'
+  );
   if (!saved) return;
   for (const warning of warnings) {
     pushToast(tUi(PRINT_READY_WARNING_KEYS[warning]), { durationMs: 0 });
@@ -196,26 +204,21 @@ export const pdfExporters: NoteExporter[] = [
 ];
 
 export async function exportOriginalPdfNote(noteId: string): Promise<void> {
-  const note = await loadNote(noteId);
-  if (note.note_kind !== 'pdf')
-    throw new Error('This export is only available for PDF notes.');
-  const assetId = pdfAssetIdFromBody(note.body);
-  if (!assetId) throw new Error('PDF asset is missing.');
-  await saveAnnotatedPdf({
-    suggestedName: `${sanitizePdfFilename(note.title)} (original).pdf`,
-    dialogTitle: 'Save original PDF',
-    bytes: await fetchAssetBytes(assetId, 'application/pdf')
-  });
+  const { note, assetId } = await loadPdfNote(noteId);
+  await saveExportFile(
+    {
+      format: 'pdf',
+      name: `${sanitizePdfFilename(note.title)} (original).pdf`,
+      bytes: await fetchAssetBytes(assetId, 'application/pdf')
+    },
+    'Save original PDF'
+  );
 }
 
 export async function exportPdfAnnotationsMarkdown(
   noteId: string
 ): Promise<void> {
-  const note = await loadNote(noteId);
-  if (note.note_kind !== 'pdf')
-    throw new Error('This export is only available for PDF notes.');
-  const assetId = pdfAssetIdFromBody(note.body);
-  if (!assetId) throw new Error('PDF asset is missing.');
+  const { note, assetId } = await loadPdfNote(noteId);
   const { annotationsMarkdown } = await import('./pdf-markdown');
   const content = await annotationsMarkdown(
     note.title,

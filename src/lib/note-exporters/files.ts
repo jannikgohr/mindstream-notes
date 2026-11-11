@@ -46,11 +46,14 @@ export function textFile(
   };
 }
 
-export async function saveExportFile(file: ExportFile): Promise<boolean> {
+export async function saveExportFile(
+  file: ExportFile,
+  dialogTitle?: string
+): Promise<boolean> {
   const { mime, label } = EXPORT_FORMATS[file.format];
   return saveFileExport({
     suggestedName: file.name,
-    dialogTitle: `Save ${label}`,
+    dialogTitle: dialogTitle ?? `Save ${label}`,
     bytes: file.bytes,
     mime,
     filterName: label,

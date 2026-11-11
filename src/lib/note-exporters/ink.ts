@@ -1,5 +1,4 @@
 import { loadNote } from '$lib/api';
-import { saveAnnotatedPdf } from '$lib/api/pdf-export';
 import { buildInkPdf } from '$lib/notes-export/ink-pdf';
 import { sanitizePdfFilename } from '$lib/pdf/filename';
 import type { NoteExporter } from './types';
@@ -16,11 +15,14 @@ export async function exportInkNotePdf(noteId: string): Promise<void> {
     throw new Error('Handwritten note state is unreadable.');
   }
 
-  await saveAnnotatedPdf({
-    suggestedName: `${sanitizePdfFilename(note.title)}.pdf`,
-    dialogTitle: 'Save handwritten note as PDF',
-    bytes: pdfBytes
-  });
+  await saveExportFile(
+    {
+      format: 'pdf',
+      name: `${sanitizePdfFilename(note.title)}.pdf`,
+      bytes: pdfBytes
+    },
+    'Save handwritten note as PDF'
+  );
 }
 
 export const inkExporters: NoteExporter[] = [
