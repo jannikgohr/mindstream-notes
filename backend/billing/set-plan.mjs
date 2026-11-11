@@ -18,29 +18,13 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
 function fail(message) {
   console.error(message);
   process.exit(1);
-}
-
-/** `--name value` pairs and bare `--flag`s, as an object. */
-function parseArgs(argv) {
-  const options = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (!arg.startsWith('--')) fail(`unexpected argument: ${arg}`);
-    const next = argv[index + 1];
-    if (next === undefined || next.startsWith('--')) {
-      options[arg.slice(2)] = true;
-    } else {
-      options[arg.slice(2)] = next;
-      index += 1;
-    }
-  }
-  return options;
 }
 
 /**
@@ -62,7 +46,16 @@ export function entitlementsFor(name, plan, lapsed) {
 }
 
 async function main() {
-  const options = parseArgs(process.argv.slice(2));
+  const { values: options } = parseArgs({
+    options: {
+      server: { type: 'string' },
+      user: { type: 'string' },
+      plan: { type: 'string' },
+      plans: { type: 'string' },
+      lapsed: { type: 'boolean' },
+      show: { type: 'boolean' }
+    }
+  });
   const server = options.server ?? 'http://localhost:3735';
   const token = process.env.MINDSTREAM_ADMIN_TOKEN;
   if (!token)
@@ -120,5 +113,5 @@ if (
   process.argv[1] &&
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-  await main();
+  await main().catch((error) => fail(error.message));
 }

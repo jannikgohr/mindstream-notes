@@ -41,8 +41,9 @@ fn safe_path(path: &Path) -> Option<String> {
 impl TarFiles {
     /// Read the archive's index. `archive` names it inside `source`.
     pub fn new(source: Box<dyn ImportFiles>, archive: String) -> AppResult<Self> {
-        let unreadable =
-            |err: io::Error| AppError::InvalidArg(format!("not a readable .jex archive: {err}"));
+        let unreadable = |err: io::Error| {
+            AppError::InvalidArg(format!("not a readable .jex archive: {archive}: {err}"))
+        };
         let mut tar = tar::Archive::new(source.stream(&archive).map_err(unreadable)?);
         let mut entries = BTreeMap::new();
         for entry in tar.entries().map_err(unreadable)? {
@@ -96,7 +97,13 @@ impl ImportFiles for TarFiles {
 
     fn read(&self, path: &str) -> io::Result<Vec<u8>> {
         let entry = self.entry(path)?;
-        self.read_range(path, 0, entry.size as usize)
+        let size = usize::try_from(entry.size).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "archive entry exceeds address space",
+            )
+        })?;
+        self.read_range(path, 0, size)
     }
 
     fn read_range(&self, path: &str, start: u64, length: usize) -> io::Result<Vec<u8>> {

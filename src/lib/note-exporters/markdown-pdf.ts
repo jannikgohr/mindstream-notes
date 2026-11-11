@@ -7,9 +7,9 @@ import type {
 import {
   embedDocumentImages,
   nodeText,
-  rasterImage,
+  createRasterImageLoader,
+  linkTarget,
   referencedImage,
-  safeDocumentUrl,
   type MarkdownDocument
 } from './document';
 
@@ -21,18 +21,7 @@ export async function documentPdf(doc: MarkdownDocument): Promise<Uint8Array> {
   ]);
   pdfMake.addVirtualFileSystem(fonts);
 
-  const images = new Map<
-    string,
-    Promise<Awaited<ReturnType<typeof rasterImage>>>
-  >();
-  function image(url: string) {
-    let result = images.get(url);
-    if (!result) {
-      result = rasterImage(url);
-      images.set(url, result);
-    }
-    return result;
-  }
+  const image = createRasterImageLoader();
 
   function inline(
     node: Nodes,
@@ -50,13 +39,8 @@ export async function documentPdf(doc: MarkdownDocument): Promise<Uint8Array> {
       if (node.type === 'strong') next.bold = true;
       if (node.type === 'emphasis') next.italics = true;
       if (node.type === 'delete') next.decoration = 'lineThrough';
-      const url =
-        node.type === 'link'
-          ? node.url
-          : node.type === 'linkReference'
-            ? doc.definitions.get(node.identifier.toUpperCase())?.url
-            : undefined;
-      if (url && safeDocumentUrl(url)) {
+      const url = linkTarget(node, doc);
+      if (url) {
         next.link = url;
         next.color = '#164c96';
       }

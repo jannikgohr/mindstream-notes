@@ -1313,10 +1313,12 @@ fn a_joplin_markdown_export_resolves_relative_note_links() {
 }
 
 #[test]
-fn a_jex_entry_cannot_escape_the_staging_directory() {
-    // Archives are user-supplied files; an entry naming ../ must be refused
-    // rather than written outside the temp dir.
+fn a_jex_import_leaves_the_source_directory_unchanged() {
+    // Import the valid note without materializing either entry on disk.
+    // storage-core tests the archive index's traversal filtering directly.
     let holder = TempVault::new();
+    let outside = TempVault::new();
+    let escaped = outside.path().join("escaped.txt");
     let archive_path = holder.path().join("evil.jex");
     {
         let file = fs::File::create(&archive_path).expect("create archive");
@@ -1326,23 +1328,47 @@ fn a_jex_entry_cannot_escape_the_staging_directory() {
         // set_path refuses `..`, which is exactly the entry a hostile archive
         // would carry — so write the name straight into the header instead.
         // Nothing stops a real attacker from doing the same.
-        let name = b"../escaped.txt";
+        let name = format!(
+            "../{}/escaped.txt",
+            outside.path().file_name().unwrap().to_string_lossy()
+        );
         let gnu = header.as_gnu_mut().expect("gnu header");
-        gnu.name[..name.len()].copy_from_slice(name);
+        gnu.name[..name.len()].copy_from_slice(name.as_bytes());
         header.set_size(payload.len() as u64);
         header.set_mode(0o644);
         header.set_cksum();
         builder.append(&header, &payload[..]).expect("append");
+        let valid = joplin_item("Safe note", "Safe body", &[("id", NOTE_A), ("type_", "1")]);
+        let mut valid_header = tar::Header::new_gnu();
+        valid_header.set_size(valid.len() as u64);
+        valid_header.set_mode(0o644);
+        builder
+            .append_data(&mut valid_header, format!("{NOTE_A}.md"), valid.as_bytes())
+            .expect("append valid note");
         builder.finish().expect("finish");
     }
 
-    let staged = super::stage::extract_tar(&archive_path).expect("extract");
+    let db = open_memory_for_tests();
+    let report = import(
+        &db,
+        ImportOptions {
+            source_path: archive_path.to_string_lossy().to_string(),
+            kind: Some(ImportSourceKind::JoplinJex),
+            ..options(&holder)
+        },
+    );
 
+    assert_eq!(report.notes_created, 1);
+    assert_eq!(body_of(&db, "Safe note"), "Safe body");
+    assert!(
+        !escaped.exists(),
+        "traversal entry must not escape the archive root"
+    );
+    assert_eq!(fs::read_dir(holder.path()).unwrap().count(), 1);
     assert!(
         !holder.path().join("escaped.txt").exists(),
         "traversal entry must not be written"
     );
-    assert!(!staged.path().join("escaped.txt").exists());
 }
 
 // ---------- Evernote ----------

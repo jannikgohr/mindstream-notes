@@ -164,20 +164,17 @@
     normalizeInkPageTheme,
     normalizeInkTool,
     normalizeInkWidth,
-    pointInPolygon,
     POINTER_BUTTON_SECONDARY,
     POINTER_BUTTON_STYLUS_PRIMARY,
     POINTER_BUTTON_STYLUS_SECONDARY,
     resizeTransform,
     rotationTransform,
-    sanitizePressure,
     SELECTION_HANDLE_HIT_RADIUS_PX,
     SELECTION_HANDLE_RADIUS_PX,
     SELECTION_PASTE_OFFSET_PX,
     SELECTION_ROTATE_GAP_PX,
     selectionCenter,
     TOOL_PREVIEW_DASH,
-    transformIsIdentity,
     transformedPoints,
     transformSelectionFrame,
     translationTransform,
@@ -198,6 +195,9 @@
     type TouchPointer,
     type WebInkHandleInstance
   } from '$lib/ink/editor-helpers';
+  import { pointInPolygon } from '$lib/ink/stroke-geometry';
+  import { sanitizePressure } from '$lib/ink/stroke-codec';
+  import { transformIsIdentity } from '$lib/ink/stroke-transform';
   import {
     containsPagePoint,
     pageIndexAt,

@@ -3,9 +3,9 @@ import { base64ToBytes } from '$lib/editor/base64';
 import {
   embedDocumentImages,
   nodeText,
-  rasterImage,
+  createRasterImageLoader,
+  linkTarget,
   referencedImage,
-  safeDocumentUrl,
   type MarkdownDocument
 } from './document';
 import type { IRunOptions, ParagraphChild, Paragraph, Table } from 'docx';
@@ -27,22 +27,15 @@ export async function documentDocx(doc: MarkdownDocument): Promise<Uint8Array> {
     WidthType,
     LevelFormat
   } = lib;
-  const images = new Map<
-    string,
-    Promise<Awaited<ReturnType<typeof rasterImage>>>
-  >();
+  const image = createRasterImageLoader();
+
   async function inline(
     node: Nodes,
     style: IRunOptions = {}
   ): Promise<ParagraphChild[]> {
     const img = referencedImage(node, doc);
     if (img) {
-      let pending = images.get(img.url);
-      if (!pending) {
-        pending = rasterImage(img.url);
-        images.set(img.url, pending);
-      }
-      const rendered = await pending;
+      const rendered = await image(img.url);
       const scale = Math.min(1, 600 / rendered.width, 850 / rendered.height);
       return [
         new ImageRun({
@@ -74,15 +67,8 @@ export async function documentDocx(doc: MarkdownDocument): Promise<Uint8Array> {
       const children = (
         await Promise.all(node.children.map((child) => inline(child, next)))
       ).flat();
-      const url =
-        node.type === 'link'
-          ? node.url
-          : node.type === 'linkReference'
-            ? doc.definitions.get(node.identifier.toUpperCase())?.url
-            : undefined;
-      return url && safeDocumentUrl(url)
-        ? [new ExternalHyperlink({ link: url, children })]
-        : children;
+      const url = linkTarget(node, doc);
+      return url ? [new ExternalHyperlink({ link: url, children })] : children;
     }
     return nodeText(node)
       ? [new TextRun({ ...style, text: nodeText(node) })]

@@ -1,9 +1,6 @@
+import { markdownLine as plainLine } from '$lib/notes-export/markdown';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import type { PdfAnnotation } from '$lib/pdf/types';
-
-function plainLine(text: string): string {
-  return text.replace(/[\r\n]+/g, ' ').replace(/([\\`*_[\]<>#])/g, '\\$1');
-}
 
 export async function annotationsMarkdown(
   title: string,
