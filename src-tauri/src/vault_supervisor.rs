@@ -375,19 +375,7 @@ impl Book {
 
     fn open_status(&self, operation_id: Uuid) -> AppResult<OpenProgress> {
         let operation = self.operations.get(&operation_id).ok_or_else(invalid)?;
-        if !matches!(
-            operation.input["command"].as_str(),
-            Some(
-                "open"
-                    | "openFromWindow"
-                    | "handoffFromWindow"
-                    | "pickerOpen"
-                    | "shortcut"
-                    | "tray"
-                    | "quit"
-                    | "updateInstall"
-            )
-        ) {
+        if !is_open_operation(operation.input["command"].as_str()) {
             return Err(invalid());
         }
         Ok(match &operation.open_result {
@@ -406,19 +394,7 @@ impl Book {
             let quit_alias = operation.input["command"].as_str() == Some("quit")
                 && operation.reply["operation_id"].as_str() == Some(id.as_str());
             if (*request_id == operation_id || quit_alias)
-                && matches!(
-                    operation.input["command"].as_str(),
-                    Some(
-                        "open"
-                            | "openFromWindow"
-                            | "handoffFromWindow"
-                            | "pickerOpen"
-                            | "shortcut"
-                            | "tray"
-                            | "quit"
-                            | "updateInstall"
-                    )
-                )
+                && is_open_operation(operation.input["command"].as_str())
                 && operation.open_result.is_none()
             {
                 operation.open_result = Some(result.clone());
@@ -1052,6 +1028,28 @@ fn request(command: &impl Serialize) -> AppResult<Request> {
         id: Uuid::new_v4(),
         payload: serde_json::to_value(command).map_err(|_| invalid())?,
     })
+}
+
+fn call(endpoint: &Endpoint, command: &impl Serialize) -> AppResult<Value> {
+    endpoint
+        .retry_call(&request(command)?)?
+        .map_err(AppError::InvalidArg)
+}
+
+fn is_open_operation(command: Option<&str>) -> bool {
+    matches!(
+        command,
+        Some(
+            "open"
+                | "openFromWindow"
+                | "handoffFromWindow"
+                | "pickerOpen"
+                | "shortcut"
+                | "tray"
+                | "quit"
+                | "updateInstall"
+        )
+    )
 }
 
 /// Send invalidation only. Each worker reloads the root and its own vault;
@@ -2381,9 +2379,7 @@ fn close_for_quit(
         std::thread::sleep(Duration::from_millis(40));
     };
     let identified = (|| -> AppResult<()> {
-        let reply = endpoint
-            .retry_call(&request(&WorkerCommand::Identify { launch_id })?)?
-            .map_err(AppError::InvalidArg)?;
+        let reply = call(&endpoint, &WorkerCommand::Identify { launch_id })?;
         let identity: crate::worker_registration::Identity =
             serde_json::from_value(reply).map_err(|_| invalid())?;
         identity.require_compatible()?;
@@ -2413,9 +2409,7 @@ fn verified_worker(
     launch_id: Uuid,
     endpoint: &Endpoint,
 ) -> AppResult<crate::worker_registration::Identity> {
-    let reply = endpoint
-        .retry_call(&request(&WorkerCommand::Identify { launch_id })?)?
-        .map_err(AppError::InvalidArg)?;
+    let reply = call(endpoint, &WorkerCommand::Identify { launch_id })?;
     let identity: crate::worker_registration::Identity =
         serde_json::from_value(reply).map_err(|_| invalid())?;
     identity.require_compatible()?;
@@ -2483,11 +2477,12 @@ pub(crate) fn drain_for_update(
             .ready_endpoint(id, *launch_id)?
             .ok_or_else(invalid)?;
         let identity = verified_worker(&root, id, *launch_id, &endpoint)?;
-        let reply = endpoint
-            .retry_call(&request(&WorkerCommand::SnapshotWindows {
+        let reply = call(
+            &endpoint,
+            &WorkerCommand::SnapshotWindows {
                 launch_id: *launch_id,
-            })?)?
-            .map_err(AppError::InvalidArg)?;
+            },
+        )?;
         vaults.push(crate::update_recovery::Vault {
             id: id.clone(),
             directory: identity.directory,
@@ -2935,11 +2930,12 @@ fn handoff(
         if !index.profiles.iter().any(|vault| vault.id == target) {
             return Err(invalid());
         }
-        let snapshot = endpoint
-            .retry_call(&request(&WorkerCommand::SnapshotWindows {
+        let snapshot = call(
+            &endpoint,
+            &WorkerCommand::SnapshotWindows {
                 launch_id: source_launch,
-            })?)?
-            .map_err(AppError::InvalidArg)?;
+            },
+        )?;
         let windows: Vec<crate::update_recovery::Window> =
             serde_json::from_value(snapshot).map_err(|_| invalid())?;
         let geometry = windows
@@ -3359,9 +3355,7 @@ fn ready_tray_destination(app: &AppHandle) -> AppResult<(Endpoint, Uuid)> {
         launch_id,
         Instant::now() + OPEN_TIMEOUT,
     )?;
-    let reply = endpoint
-        .retry_call(&request(&WorkerCommand::Identify { launch_id })?)?
-        .map_err(AppError::InvalidArg)?;
+    let reply = call(&endpoint, &WorkerCommand::Identify { launch_id })?;
     let identity: crate::worker_registration::Identity =
         serde_json::from_value(reply).map_err(|_| invalid())?;
     identity.require_compatible()?;
@@ -3432,9 +3426,7 @@ fn dispatch_shortcut(
         launch_id,
         Instant::now() + OPEN_TIMEOUT,
     )?;
-    let identity = endpoint
-        .retry_call(&request(&WorkerCommand::Identify { launch_id })?)?
-        .map_err(AppError::InvalidArg)?;
+    let identity = call(&endpoint, &WorkerCommand::Identify { launch_id })?;
     let identity: crate::worker_registration::Identity =
         serde_json::from_value(identity).map_err(|_| invalid())?;
     identity.require_compatible()?;
@@ -3713,9 +3705,7 @@ fn activate_worker(
     endpoint: &Endpoint,
     window: Option<String>,
 ) -> AppResult<()> {
-    let reply = endpoint
-        .retry_call(&request(&WorkerCommand::Identify { launch_id })?)?
-        .map_err(AppError::InvalidArg)?;
+    let reply = call(endpoint, &WorkerCommand::Identify { launch_id })?;
     let identity: crate::worker_registration::Identity =
         serde_json::from_value(reply).map_err(|_| invalid())?;
     identity.require_compatible()?;

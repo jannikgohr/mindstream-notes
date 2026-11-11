@@ -76,12 +76,6 @@ pub(crate) fn restore_backup_values(
     save_device(root, &document)
 }
 
-pub(crate) fn scoped_device_keys(
-    plugin: &super::discovery::DiscoveredPlugin,
-) -> std::collections::BTreeSet<String> {
-    device_keys(plugin)
-}
-
 /// Imported database rows are vault configuration, never legacy D migration
 /// input. Even an unavailable plugin must not seed shared values when installed
 /// later. Existing root values and reset receipts remain authoritative.
@@ -115,7 +109,9 @@ pub fn prepare(root: &std::path::Path, selected: &std::path::Path) -> AppResult<
     Ok(())
 }
 
-fn device_keys(plugin: &super::discovery::DiscoveredPlugin) -> std::collections::BTreeSet<String> {
+pub(crate) fn device_keys(
+    plugin: &super::discovery::DiscoveredPlugin,
+) -> std::collections::BTreeSet<String> {
     plugin.manifest_json["contributes"]["settings"]
         .as_array()
         .into_iter()

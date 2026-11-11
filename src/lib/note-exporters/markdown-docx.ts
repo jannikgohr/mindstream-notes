@@ -11,7 +11,8 @@ import {
 import type { IRunOptions, ParagraphChild, Paragraph, Table } from 'docx';
 
 export async function documentDocx(doc: MarkdownDocument): Promise<Uint8Array> {
-  await embedDocumentImages(doc);
+  const image = createRasterImageLoader();
+  await embedDocumentImages(doc, image);
   const lib = await import('docx');
   const {
     Document,
@@ -27,8 +28,6 @@ export async function documentDocx(doc: MarkdownDocument): Promise<Uint8Array> {
     WidthType,
     LevelFormat
   } = lib;
-  const image = createRasterImageLoader();
-
   async function inline(
     node: Nodes,
     style: IRunOptions = {}

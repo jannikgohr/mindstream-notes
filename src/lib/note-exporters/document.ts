@@ -74,7 +74,10 @@ export function createRasterImageLoader() {
   return (url: string) => {
     let pending = images.get(url);
     if (!pending) {
-      pending = rasterImage(url);
+      pending = rasterImage(url).then((image) => {
+        images.set(image.data, Promise.resolve(image));
+        return image;
+      });
       images.set(url, pending);
     }
     return pending;
@@ -119,16 +122,20 @@ export async function parseDocument(
   return { title: note.title, tree, definitions };
 }
 
-async function imageDataUrl(url: string): Promise<string> {
+async function imageDataUrl(
+  url: string,
+  image: ReturnType<typeof createRasterImageLoader>
+): Promise<string> {
   if (/^data:image\/(png|jpeg|gif|webp|svg\+xml|bmp);base64,/i.test(url))
     return url;
   if (!/^https?:\/\//i.test(url))
     throw new Error(`Cannot embed image: ${url.slice(0, 120)}`);
-  return (await rasterImage(url)).data;
+  return (await image(url)).data;
 }
 
 export async function embedDocumentImages(
-  doc: MarkdownDocument
+  doc: MarkdownDocument,
+  raster = createRasterImageLoader()
 ): Promise<void> {
   const sources = new Map<string, Promise<string>>();
   const pending: Promise<void>[] = [];
@@ -137,7 +144,7 @@ export async function embedDocumentImages(
     if (!image) return;
     let data = sources.get(image.url);
     if (!data) {
-      data = imageDataUrl(image.url);
+      data = imageDataUrl(image.url, raster);
       sources.set(image.url, data);
     }
     pending.push(

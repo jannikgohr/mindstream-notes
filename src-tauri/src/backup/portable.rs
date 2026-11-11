@@ -375,7 +375,7 @@ pub(super) fn capture(
         crate::plugins::settings::effective(root, vault, conn, plugin)?;
         device_plugin_keys.insert(
             plugin.id.clone(),
-            crate::plugins::settings::scoped_device_keys(plugin),
+            crate::plugins::settings::device_keys(plugin),
         );
     }
     let payload = {
