@@ -302,8 +302,7 @@ fn rewrite(body: &str, index: &mut LinkIndex) -> (String, RewriteStats) {
                 wikilinks: true,
                 markdown_links: true,
                 id_links: true,
-                evernote_links: false,
-                keep_unresolved_wikilinks: false,
+                ..Default::default()
             },
             base_dir: String::new(),
         },

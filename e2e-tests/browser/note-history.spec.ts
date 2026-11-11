@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { sourceText, setMode, boot } from './editor-helpers';
+import { sourceText, setMode, boot, fileTree } from './editor-helpers';
 import { openDetailsPanel } from './details-panel';
 
 /**
@@ -15,10 +15,6 @@ import { openDetailsPanel } from './details-panel';
  * the Rust history table and SQLite — is deliberately a T3 (tauri-driver)
  * concern; see docs/internal/e2e/flows.md. This file proves the UI wiring only.
  */
-
-function fileTree(page: Page): Locator {
-  return page.getByRole('group', { name: 'File tree' });
-}
 
 /** Open the seeded markdown note "Ideas" (under Personal) in the editor. */
 async function openIdeas(page: Page) {

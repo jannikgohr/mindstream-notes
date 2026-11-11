@@ -1,6 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { boot } from './editor-helpers';
-import { clickFileTreeCreateAction } from './file-tree-toolbar';
+import { boot, createRootNote, treeItem } from './editor-helpers';
 
 /**
  * Flow 1.1 (docs/internal/e2e/flows.md): create → edit → reopen a markdown note.
@@ -12,26 +11,9 @@ import { clickFileTreeCreateAction } from './file-tree-toolbar';
  * journey against the real `save_note` IPC + SQLite is the T3 case.
  */
 
-function fileTree(page: Page): Locator {
-  return page.getByRole('group', { name: 'File tree' });
-}
-
-function treeItem(page: Page, name: string): Locator {
-  return fileTree(page).getByRole('button', { name, exact: true });
-}
-
 /** The live Milkdown (ProseMirror) contenteditable surface. */
 function editor(page: Page): Locator {
   return page.locator('.ProseMirror').first();
-}
-
-async function createRootNote(page: Page, title: string) {
-  await clickFileTreeCreateAction(page, 'New note');
-  const draft = page.getByRole('textbox', { name: 'New note' });
-  await expect(draft).toBeFocused();
-  await draft.fill(title);
-  await draft.press('Enter');
-  await expect(treeItem(page, title)).toBeVisible();
 }
 
 test.beforeEach(async ({ page }) => {

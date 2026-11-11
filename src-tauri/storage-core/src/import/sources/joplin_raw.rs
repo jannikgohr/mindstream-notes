@@ -1,8 +1,7 @@
 //! Joplin's RAW export, and the `.jex` archive that is a tar of it.
 //!
-//! One parser serves both: [`crate::import::stage`] unpacks a `.jex` into a
-//! temporary directory and hands back the same flat layout the RAW export
-//! writes directly.
+//! One parser serves both through ImportFiles: TarFiles reads `.jex` entries
+//! in place using the same flat layout as a RAW export.
 //!
 //! Every item — note, folder, resource, tag — is a `<id>.md` file shaped like:
 //!
@@ -259,11 +258,9 @@ impl ImportSource for JoplinRawSource {
     fn rewrite_options(&self) -> RewriteOptions {
         RewriteOptions {
             // Joplin writes plain markdown; `[[…]]` is not a link syntax.
-            wikilinks: false,
             markdown_links: true,
             id_links: true,
-            evernote_links: false,
-            keep_unresolved_wikilinks: false,
+            ..Default::default()
         }
     }
 }

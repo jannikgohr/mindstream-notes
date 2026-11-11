@@ -2,9 +2,9 @@
  * The three overlays drawn on top of a rendered PDF page.
  *
  * Each is a plain DOM layer rebuilt from scratch whenever its inputs
- * change — search hits, the PDF's own link annotations, and our
- * annotations (highlights, comments, ink, signatures) together with the
- * pointer handling that creates and edits them.
+ * change: search hits, and our annotations (highlights, comments, ink,
+ * signatures) together with the pointer handling that creates and edits
+ * them.
  *
  * They read the page's current draw state through a [`PageOverlayHost`]
  * rather than closing over it, so the render action can own that state
@@ -27,7 +27,6 @@ import {
   ANNOTATION_CLICK_SLOP_PX,
   INK_WIDTH,
   annotationIdAtPoint,
-  type PdfLink,
   type PdfViewport,
   type RenderParams
 } from '$lib/pdf/viewer-helpers';
@@ -42,8 +41,6 @@ export interface PageOverlayHost {
   /** The params of the draw currently on screen. */
   readonly params: RenderParams;
   readonly viewport: PdfViewport | null;
-  /** Link annotations fetched for this page by the last draw. */
-  readonly links: PdfLink[];
   /**
    * Teardown for the text-mode click-to-select listeners. They live on
    * the page element, which outlives any single annotation layer, so the
@@ -91,53 +88,6 @@ export function createPageOverlays(
     pageEl.append(layer);
   }
 
-  // Clickable overlay for the page's link annotations. Sits below the
-  // app-annotation layer, so links are only hit in select mode (when
-  // that layer passes pointer events through).
-  function renderLinkLayer() {
-    const pageEl = host.pageSurface.querySelector<HTMLElement>('.page');
-    const viewport = host.viewport;
-    if (!pageEl || !viewport) return;
-    pageEl.querySelector('.pdf-link-layer')?.remove();
-    if (host.links.length === 0) return;
-    const layer = document.createElement('div');
-    layer.className = 'pdf-link-layer';
-    for (const link of host.links) {
-      if (!Array.isArray(link.rect) || link.rect.length < 4) continue;
-      const [x1, y1] = viewport.convertToViewportPoint(
-        link.rect[0],
-        link.rect[1]
-      );
-      const [x2, y2] = viewport.convertToViewportPoint(
-        link.rect[2],
-        link.rect[3]
-      );
-      const node = document.createElement(link.url ? 'a' : 'button');
-      node.className = 'pdf-link';
-      node.style.left = `${Math.min(x1, x2)}px`;
-      node.style.top = `${Math.min(y1, y2)}px`;
-      node.style.width = `${Math.abs(x2 - x1)}px`;
-      node.style.height = `${Math.abs(y2 - y1)}px`;
-      if (link.url) {
-        const anchor = node as HTMLAnchorElement;
-        anchor.href = link.url;
-        anchor.title = link.url;
-        anchor.rel = 'noopener noreferrer';
-        anchor.addEventListener('click', (event) => {
-          event.preventDefault();
-          void ctx.openExternalUrl(link.url as string);
-        });
-      } else {
-        node.addEventListener('click', (event) => {
-          event.preventDefault();
-          void ctx.followLinkDest(link.dest);
-        });
-      }
-      layer.append(node);
-    }
-    pageEl.append(layer);
-  }
-
   function activateAnnotation(annotation: PdfAnnotation) {
     if (annotation.id.startsWith('shared:')) {
       ctx.selectAnnotation(annotation.id);
@@ -155,7 +105,6 @@ export function createPageOverlays(
     const viewport = host.viewport;
     if (!pageEl || !viewport) return;
 
-    renderLinkLayer();
     renderSearchLayer();
 
     pageEl.querySelector('.pdf-app-annotation-layer')?.remove();
@@ -645,5 +594,5 @@ export function createPageOverlays(
     });
   }
 
-  return { renderAppAnnotations, renderLinkLayer, renderSearchLayer };
+  return { renderAppAnnotations, renderSearchLayer };
 }

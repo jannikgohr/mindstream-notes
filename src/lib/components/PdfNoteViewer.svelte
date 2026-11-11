@@ -2638,33 +2638,11 @@
     opacity: 0.36;
   }
 
-  /* Link overlay: sits above the canvas/text but below the annotation
-     layer (z-index 3), so links are only clickable in select mode when
-     that layer passes pointer events through. */
-  :global(.pdf-page-host .pdf-link-layer) {
-    position: absolute;
-    inset: 0;
-    z-index: 2;
-    overflow: clip;
-    /* The layer spans the whole page above the text layer; without this
-       it would swallow pointer events and block text selection. Only the
-       individual link hotspots re-enable pointer events. */
-    pointer-events: none;
-  }
-
-  :global(.pdf-page-host .pdf-link) {
-    position: absolute;
-    display: block;
-    margin: 0;
-    padding: 0;
-    border: 0;
-    background: transparent;
+  /* Link hover. The anchors are pdf.js's own link hotspots, inside the
+     annotation layer (z-index 2), so they are only clickable in select mode
+     when the app layer above passes pointer events through. */
+  :global(.pdf-page-host .annotationLayer .linkAnnotation > a:hover) {
     border-radius: 2px;
-    cursor: pointer;
-    pointer-events: auto;
-  }
-
-  :global(.pdf-page-host .pdf-link:hover) {
     background: color-mix(in srgb, var(--ring) 18%, transparent);
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--ring) 55%, transparent);
   }

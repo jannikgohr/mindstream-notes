@@ -239,13 +239,10 @@ impl ImportSource for EvernoteSource {
 
     fn rewrite_options(&self) -> RewriteOptions {
         RewriteOptions {
-            wikilinks: false,
             // ENEX is flat and has no file paths, so a relative markdown link
             // could only be something the user typed by hand.
-            markdown_links: false,
-            id_links: false,
             evernote_links: true,
-            keep_unresolved_wikilinks: false,
+            ..Default::default()
         }
     }
 }
