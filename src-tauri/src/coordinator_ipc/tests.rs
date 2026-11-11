@@ -29,6 +29,24 @@ fn operation(payload: Value) -> Request {
 }
 
 #[test]
+fn bounded_poll_attempts_before_the_deadline_and_stops_at_the_first_value() {
+    let mut attempts = 0;
+    let value = poll_until(Instant::now(), || {
+        attempts += 1;
+        Ok(None::<u8>)
+    })
+    .unwrap();
+    assert_eq!((value, attempts), (None, 1));
+    let mut attempts = 0;
+    let value = poll_until(Instant::now() + Duration::from_secs(5), || {
+        attempts += 1;
+        Ok((attempts == 3).then_some(attempts))
+    })
+    .unwrap();
+    assert_eq!((value, attempts), (Some(3), 3));
+}
+
+#[test]
 fn activation_metadata_excludes_broadcast_grants_and_never_controls_ownership() {
     let fixture = Fixture::new();
     let owner = fixture.owner();

@@ -1,3 +1,5 @@
+import { bytesToBase64 } from '$lib/editor/base64';
+
 /**
  * Mermaid diagram support for Crepe.
  *
@@ -119,11 +121,9 @@ function makeRenderId(): string {
  * array stack-overflow that `String.fromCodePoint(...bytes)` would
  * trigger for big diagrams.
  */
-function svgToDataUrl(svg: string): string {
+export function svgToDataUrl(svg: string): string {
   const bytes = new TextEncoder().encode(svg);
-  let bin = '';
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return 'data:image/svg+xml;charset=utf-8;base64,' + btoa(bin);
+  return 'data:image/svg+xml;charset=utf-8;base64,' + bytesToBase64(bytes);
 }
 
 function applyMermaidError(applyPreview: ApplyPreview, message: string) {

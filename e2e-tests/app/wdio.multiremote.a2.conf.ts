@@ -21,78 +21,31 @@
  *   pnpm test:e2e:app:multi:a2
  */
 
-import type { ChildProcess } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   captureFailureArtifacts,
   installPageDiagnostics
 } from './helpers/failure-capture.js';
-import { webviewEnvironment } from './helpers/worker-isolation.js';
+import {
+  startClientDrivers,
+  stopClientDrivers,
+  type ClientProc
+} from './helpers/client-drivers.js';
 import {
   appBinary as application,
   preflight,
-  repoRoot,
-  spawnTauriDriver,
-  stopTauriDriverTree
+  repoRoot
 } from './helpers/preflight.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const outputDir = join(repoRoot, '.output', 'wdio', 'multi-a2');
-
-/**
- * One tauri-driver process per client. `port` is what wdio connects to;
- * `nativePort` is the underlying WebKitWebDriver — every value must be unique
- * across the three so the processes don't fight over a socket. `profileDir` is a
- * fresh, throwaway data dir per spec file (the `dir_override` seam,
- * e2e-data-dir feature); the `profileId` namespaces the OS keyring entry so A1
- * and A2 (same account, two devices) each hold their own session instead of
- * clobbering one keyring slot.
- */
-interface ClientProc {
-  port: number;
-  nativePort: number;
-  profileId: string;
-  profileDir?: string;
-  driver?: ChildProcess;
-  startTimer?: ReturnType<typeof setTimeout>;
-}
 
 const clients: Record<'browserA1' | 'browserA2' | 'browserB', ClientProc> = {
   browserA1: { port: 4444, nativePort: 4445, profileId: 'e2e-a1' },
   browserA2: { port: 4448, nativePort: 4449, profileId: 'e2e-a2' },
   browserB: { port: 4446, nativePort: 4447, profileId: 'e2e-b' }
 };
-
-const DRIVER_START_STAGGER_MS = 20_000;
-
-function spawnDriver(client: ClientProc): ChildProcess {
-  client.profileDir = mkdtempSync(
-    join(tmpdir(), `mindstream-${client.profileId}-`)
-  );
-  // Dictionaries live outside the profile dir, so each client needs a
-  // disposable one of its own — otherwise a T4 run reads and writes the
-  // developer's real dictionaries. See spellcheck::DICTIONARY_DIR_ENV.
-  const dictionaryDir = mkdtempSync(
-    join(tmpdir(), `mindstream-${client.profileId}-dict-`)
-  );
-  return spawnTauriDriver(
-    ['--port', String(client.port), '--native-port', String(client.nativePort)],
-    {
-      ...process.env,
-      MINDSTREAM_PROFILE_DIR: client.profileDir,
-      MINDSTREAM_ROOT_DIR: join(client.profileDir, '.app-root'),
-      MINDSTREAM_PROFILE_ID: client.profileId,
-      MINDSTREAM_DICTIONARY_DIR: dictionaryDir,
-      // Browser isolation (XDG_DATA_HOME/XDG_CACHE_HOME on Linux): without
-      // this the test build refuses to boot (environment::validate_browser_isolation).
-      ...webviewEnvironment(client.profileDir)
-    },
-    join(outputDir, `tauri-driver-${client.profileId}.log`)
-  );
-}
 
 export const config: WebdriverIO.Config = {
   runner: 'local',
@@ -156,29 +109,7 @@ export const config: WebdriverIO.Config = {
     });
   },
 
-  beforeSession: () => {
-    for (const [index, client] of Object.values(clients).entries()) {
-      if (client.driver || client.startTimer) continue;
-      if (index === 0) {
-        client.driver = spawnDriver(client);
-      } else {
-        client.startTimer = setTimeout(() => {
-          client.driver = spawnDriver(client);
-          client.startTimer = undefined;
-        }, index * DRIVER_START_STAGGER_MS);
-      }
-    }
-  },
+  beforeSession: () => startClientDrivers(clients, outputDir),
 
-  afterSession: async () => {
-    for (const client of Object.values(clients)) {
-      if (client.startTimer) {
-        clearTimeout(client.startTimer);
-        client.startTimer = undefined;
-      }
-      await stopTauriDriverTree(client.driver);
-      client.driver = undefined;
-      client.profileDir = undefined;
-    }
-  }
+  afterSession: () => stopClientDrivers(clients)
 };

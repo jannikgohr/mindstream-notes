@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { base64ToBytes } from './base64';
+import { base64ToBytes, bytesToBase64 } from './base64';
 
 const decode = (b64: string) => Array.from(base64ToBytes(b64));
 
 describe('base64ToBytes', () => {
+  it('round-trips bytes across the encoder chunk boundary', () => {
+    const bytes = Uint8Array.from({ length: 0x8000 + 37 }, (_, i) => i % 256);
+    expect(base64ToBytes(bytesToBase64(bytes))).toEqual(bytes);
+  });
   it('decodes standard base64', () => {
     // "Man" -> TWFu
     expect(decode('TWFu')).toEqual([77, 97, 110]);

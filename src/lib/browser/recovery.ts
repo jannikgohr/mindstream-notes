@@ -4,6 +4,7 @@ import { vaultNamespace } from './namespace';
 import { recoveryStatus } from './recovery-status.svelte';
 import type { BrowserStorageClient } from './client';
 import type { UpdateNoteInput, Note } from '../api/notes';
+import { base64ToBytes, bytesToBase64 } from '../editor/base64';
 
 type Draft = Pick<UpdateNoteInput, 'id' | 'body' | 'yrs_state'>;
 type DraftRecord = {
@@ -57,13 +58,10 @@ export function rememberBrowserNote(value: unknown): void {
 }
 
 function encode(bytes: number[]): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += 8192)
-    binary += String.fromCharCode(...bytes.slice(i, i + 8192));
-  return btoa(binary);
+  return bytesToBase64(bytes);
 }
 function decode(state: string): number[] {
-  return Array.from(atob(state), (char) => char.charCodeAt(0));
+  return Array.from(base64ToBytes(state));
 }
 function parseRecord(raw: string, key: string): DraftRecord {
   const { draft: PREFIX } = browserRecoveryNamespace();

@@ -122,16 +122,8 @@ pub fn elect(root: &Path) -> AppResult<Election> {
         .open(root.join(".coordinator.lock"))?;
     // is_owned probes hold this lease for an instant. Only a lease that stays
     // held is an existing coordinator.
-    let deadline = Instant::now() + PROBE_GRACE;
-    loop {
-        match ownership.try_lock() {
-            Ok(()) => break,
-            Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
-                thread::sleep(Duration::from_millis(10));
-            }
-            Err(TryLockError::WouldBlock) => return Ok(Election::Existing),
-            Err(TryLockError::Error(err)) => return Err(err.into()),
-        }
+    if !crate::file_lock::lock_within(&ownership, PROBE_GRACE, Duration::from_millis(10))? {
+        return Ok(Election::Existing);
     }
     let mut coordinator = Coordinator::bind()?;
     coordinator._ownership = Some(Arc::new(ownership));
@@ -139,6 +131,23 @@ pub fn elect(root: &Path) -> AppResult<Election> {
     let _lock = RootLock::acquire(root)?;
     crate::atomic_file::write_private(&root.join(ENDPOINT), &raw)?;
     Ok(Election::Owner(coordinator))
+}
+
+/// Run `attempt` until it yields a value or `deadline` passes. The attempt runs
+/// before the deadline check, so an expired deadline still gets one try.
+pub(crate) fn poll_until<T>(
+    deadline: Instant,
+    mut attempt: impl FnMut() -> AppResult<Option<T>>,
+) -> AppResult<Option<T>> {
+    loop {
+        if let Some(value) = attempt()? {
+            return Ok(Some(value));
+        }
+        if Instant::now() >= deadline {
+            return Ok(None);
+        }
+        thread::sleep(Duration::from_millis(40));
+    }
 }
 
 fn remaining(deadline: Instant) -> AppResult<Duration> {
@@ -257,17 +266,12 @@ impl Endpoint {
     /// instance. Preserve the operation ID; an explicit rejection is final.
     pub fn retry_call(&self, request: &Request) -> AppResult<Result<Value, String>> {
         let deadline = Instant::now() + STARTUP_TIMEOUT;
-        loop {
-            if let Ok(reply) =
-                self.call_until(request, deadline.min(Instant::now() + SOCKET_TIMEOUT))
-            {
-                return Ok(reply);
-            }
-            if Instant::now() >= deadline {
-                return Err(unavailable());
-            }
-            thread::sleep(Duration::from_millis(40));
-        }
+        poll_until(deadline, || {
+            Ok(self
+                .call_until(request, deadline.min(Instant::now() + SOCKET_TIMEOUT))
+                .ok())
+        })?
+        .ok_or_else(unavailable)
     }
 
     fn call_until(&self, request: &Request, deadline: Instant) -> AppResult<Result<Value, String>> {
@@ -304,19 +308,15 @@ pub fn request_with_endpoint(
     request: &Request,
 ) -> AppResult<(Endpoint, Result<Value, String>)> {
     let deadline = Instant::now() + STARTUP_TIMEOUT;
-    loop {
-        if let Ok(endpoint) = Endpoint::read(root) {
-            if let Ok(reply) =
-                endpoint.call_until(request, deadline.min(Instant::now() + SOCKET_TIMEOUT))
-            {
-                return Ok((endpoint, reply));
-            }
-        }
-        if Instant::now() >= deadline {
-            return Err(unavailable());
-        }
-        thread::sleep(Duration::from_millis(40));
-    }
+    poll_until(deadline, || {
+        Ok(Endpoint::read(root).ok().and_then(|endpoint| {
+            let reply = endpoint
+                .call_until(request, deadline.min(Instant::now() + SOCKET_TIMEOUT))
+                .ok()?;
+            Some((endpoint, reply))
+        }))
+    })?
+    .ok_or_else(unavailable)
 }
 
 pub struct Running {

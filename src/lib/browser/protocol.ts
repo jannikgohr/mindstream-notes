@@ -69,6 +69,26 @@ export interface StorageMethods {
 }
 
 export type StorageMethod = keyof StorageMethods;
+export type StorageScope = 'proof' | 'vault' | 'both';
+export const STORAGE_METHOD_SCOPE = {
+  open: 'both',
+  resetTestVault: 'vault',
+  invoke: 'vault',
+  receipt: 'vault',
+  backup: 'vault',
+  importBegin: 'vault',
+  importMerge: 'vault',
+  importRestore: 'vault',
+  importCleanup: 'vault',
+  notesDetect: 'vault',
+  notesImport: 'vault',
+  prepareInterruptedWrite: 'proof',
+  checkInterruptedWrite: 'proof',
+  verify: 'proof',
+  read: 'proof',
+  write: 'proof',
+  close: 'both'
+} satisfies Record<StorageMethod, StorageScope>;
 export type StorageRequest = {
   [K in StorageMethod]: {
     id: number;
@@ -156,25 +176,8 @@ export function parseRequest(value: unknown): StorageRequest {
     throw new Error('Invalid storage request ID');
   }
   if (
-    ![
-      'open',
-      'resetTestVault',
-      'invoke',
-      'receipt',
-      'backup',
-      'importBegin',
-      'importMerge',
-      'importRestore',
-      'importCleanup',
-      'notesDetect',
-      'notesImport',
-      'prepareInterruptedWrite',
-      'checkInterruptedWrite',
-      'verify',
-      'read',
-      'write',
-      'close'
-    ].includes(request.method as string)
+    typeof request.method !== 'string' ||
+    !Object.hasOwn(STORAGE_METHOD_SCOPE, request.method)
   ) {
     throw new Error('Unknown storage method');
   }

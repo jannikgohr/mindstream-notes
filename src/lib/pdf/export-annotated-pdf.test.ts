@@ -12,8 +12,16 @@
 import { describe, expect, it } from 'vitest';
 import { PDFArray, PDFDict, PDFDocument, PDFName, PDFString } from 'pdf-lib';
 import { inflateSync } from 'node:zlib';
-import { exportAnnotatedPdf } from './export-annotated-pdf';
-import type { PdfAnnotation } from './types';
+import {
+  buildSignatureAppearanceRef,
+  exportAnnotatedPdf
+} from './export-annotated-pdf';
+import { outlineSegments, strokeOutlinePoints } from './stroke-utils';
+import type {
+  PdfAnnotation,
+  PdfInkStroke,
+  PdfSignatureSnapshot
+} from './types';
 
 const PNG_DATA_URL =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
@@ -491,5 +499,73 @@ describe('exportAnnotatedPdf', () => {
 
     const out = await exportAnnotatedPdf(source, [annotation({ body: 'new' })]);
     expect(await readPageAnnots(out)).toHaveLength(2);
+  });
+});
+
+describe('signature stroke appearance geometry', () => {
+  const stroke: PdfInkStroke = {
+    id: 'pad-s1',
+    color: '#111827',
+    width: 3,
+    points: [
+      { x: 10, y: 10, pressure: 0.4 },
+      { x: 60, y: 30, pressure: 1 },
+      { x: 90, y: 20, pressure: 0.7 },
+      { x: 120, y: 60, pressure: 0.5 }
+    ]
+  };
+  const signature: PdfSignatureSnapshot = {
+    id: 'sig-geometry',
+    width: 200,
+    height: 100,
+    strokes: [stroke]
+  };
+  // 2× scale on both axes, with the Y axis flipped.
+  const placement = { x: 0, y: 0, width: 400, height: 200 };
+
+  it('draws one cubic per outline segment, ending on the raw midpoints', async () => {
+    const doc = await PDFDocument.create();
+    const ref = await buildSignatureAppearanceRef(
+      signature,
+      placement,
+      1,
+      doc,
+      doc.context
+    );
+    expect(ref).not.toBeNull();
+    const stream = doc.context.lookup(ref!) as unknown as {
+      getContents: () => Uint8Array;
+    };
+    const curves = inflateSync(stream.getContents())
+      .toString('utf8')
+      .split('\n')
+      .filter((line) => line.endsWith(' c'))
+      .map((line) => line.split(' ').slice(0, 6).map(Number));
+
+    const segments = outlineSegments(strokeOutlinePoints(stroke));
+    expect(curves).toHaveLength(segments.length);
+    // Each end point is the midpoint of the raw outline, rounded to two
+    // decimals, then mapped into placement space.
+    const round2 = (value: number) => Number(value.toFixed(2));
+    segments.forEach(([, [x, y]], i) => {
+      expect(curves[i][4]).toBeCloseTo(round2(x) * 2, 3);
+      expect(curves[i][5]).toBeCloseTo(placement.height - round2(y) * 2, 3);
+    });
+  });
+
+  it('drops a stroke that has a non-finite point', async () => {
+    const doc = await PDFDocument.create();
+    const broken: PdfSignatureSnapshot = {
+      ...signature,
+      strokes: [
+        {
+          ...stroke,
+          points: [...stroke.points, { x: NaN, y: 5 }]
+        }
+      ]
+    };
+    expect(
+      await buildSignatureAppearanceRef(broken, placement, 1, doc, doc.context)
+    ).toBeNull();
   });
 });

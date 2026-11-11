@@ -2564,6 +2564,23 @@ fn resume_update(app: &AppHandle, deadline: Instant) -> AppResult<bool> {
     Err(AppError::InvalidArg(format!("{error}; {outcome}")))
 }
 
+/// Wait for a worker window restore. Each caller sets its own deadline.
+fn await_window_restore(endpoint: &Endpoint, poll: &Request, deadline: Instant) -> AppResult<()> {
+    ipc::poll_until(deadline, || {
+        let reply = endpoint.retry_call(poll)?.map_err(AppError::InvalidArg)?;
+        match serde_json::from_value::<crate::update_windows::Progress>(reply)
+            .map_err(|_| invalid())?
+        {
+            crate::update_windows::Progress::Ready => Ok(Some(())),
+            crate::update_windows::Progress::Failed { message } => {
+                Err(AppError::InvalidArg(message))
+            }
+            crate::update_windows::Progress::Pending => Ok(None),
+        }
+    })?
+    .ok_or_else(invalid)
+}
+
 fn restore_update_session(
     app: &AppHandle,
     root: &std::path::Path,
@@ -2609,23 +2626,11 @@ fn restore_update_session(
                 launch_id,
                 operation_id: restore.id,
             })?;
-            let deadline = (Instant::now() + OPEN_TIMEOUT).min(deadline);
-            loop {
-                let reply = endpoint.retry_call(&poll)?.map_err(AppError::InvalidArg)?;
-                match serde_json::from_value::<crate::update_windows::Progress>(reply)
-                    .map_err(|_| invalid())?
-                {
-                    crate::update_windows::Progress::Ready => break,
-                    crate::update_windows::Progress::Failed { message } => {
-                        return Err(AppError::InvalidArg(message))
-                    }
-                    crate::update_windows::Progress::Pending => {}
-                }
-                if Instant::now() >= deadline {
-                    return Err(invalid());
-                }
-                std::thread::sleep(Duration::from_millis(40));
-            }
+            await_window_restore(
+                &endpoint,
+                &poll,
+                (Instant::now() + OPEN_TIMEOUT).min(deadline),
+            )?;
         }
         crate::update_recovery::restored(root, record.operation_id, &vault.id)?;
     }
@@ -2858,24 +2863,7 @@ fn restore_handoff_window(
             record.restore
         },
     })?;
-    let deadline = Instant::now() + OPEN_TIMEOUT;
-    loop {
-        let value = endpoint.retry_call(&poll)?.map_err(AppError::InvalidArg)?;
-        match serde_json::from_value::<crate::update_windows::Progress>(value)
-            .map_err(|_| invalid())?
-        {
-            crate::update_windows::Progress::Ready => break,
-            crate::update_windows::Progress::Failed { message } => {
-                return Err(AppError::InvalidArg(message))
-            }
-            crate::update_windows::Progress::Pending => {}
-        }
-        if Instant::now() >= deadline {
-            return Err(invalid());
-        }
-        std::thread::sleep(Duration::from_millis(40));
-    }
-    Ok(())
+    await_window_restore(endpoint, &poll, Instant::now() + OPEN_TIMEOUT)
 }
 
 fn commit_handoff(
@@ -3682,21 +3670,16 @@ fn wait_for_ready(
     launch_id: Uuid,
     deadline: Instant,
 ) -> AppResult<(Endpoint, Option<String>)> {
-    loop {
-        if let Some(endpoint) = book
-            .lock()
+    ipc::poll_until(deadline, || {
+        book.lock()
             .map_err(|_| invalid())?
-            .ready_endpoint(vault_id, launch_id)?
-        {
-            return Ok(endpoint);
-        }
-        if Instant::now() >= deadline {
-            return Err(AppError::InvalidArg(
-                "vault opening timed out; any running worker has been left intact".into(),
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(40));
-    }
+            .ready_endpoint(vault_id, launch_id)
+    })?
+    .ok_or_else(|| {
+        AppError::InvalidArg(
+            "vault opening timed out; any running worker has been left intact".into(),
+        )
+    })
 }
 
 fn open_and_wait(app: &AppHandle, vault_id: &str) -> AppResult<()> {
@@ -4301,20 +4284,19 @@ pub(crate) fn autostart_setting(app: &AppHandle, enabled: Option<bool>) -> AppRe
         operation_id: request.id,
     })?;
     let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
+    ipc::poll_until(deadline, || {
         let progress = host.retry_call(&poll)?.map_err(AppError::InvalidArg)?;
         match serde_json::from_value::<AutostartProgress>(progress).map_err(|_| invalid())? {
-            AutostartProgress::Ready { enabled } => return Ok(enabled),
-            AutostartProgress::Failed { message } => return Err(AppError::InvalidArg(message)),
-            AutostartProgress::Pending => {}
+            AutostartProgress::Ready { enabled } => Ok(Some(enabled)),
+            AutostartProgress::Failed { message } => Err(AppError::InvalidArg(message)),
+            AutostartProgress::Pending => Ok(None),
         }
-        if Instant::now() >= deadline {
-            return Err(AppError::InvalidArg(
-                "startup registration result is unavailable; reload the setting".into(),
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(40));
-    }
+    })?
+    .ok_or_else(|| {
+        AppError::InvalidArg(
+            "startup registration result is unavailable; reload the setting".into(),
+        )
+    })
 }
 
 pub(crate) fn window_state(app: &AppHandle) -> AppResult<crate::vault_window_state::View> {
@@ -4345,22 +4327,19 @@ pub(crate) fn check_update(
         operation_id: check.id,
     })?;
     let deadline = Instant::now() + Duration::from_secs(120);
-    loop {
+    ipc::poll_until(deadline, || {
         let reply = host.retry_call(&poll)?.map_err(AppError::InvalidArg)?;
         match serde_json::from_value::<crate::coordinator_updater::CheckProgress>(reply)
             .map_err(|_| invalid())?
         {
-            crate::coordinator_updater::CheckProgress::Ready { available } => return Ok(available),
+            crate::coordinator_updater::CheckProgress::Ready { available } => Ok(Some(available)),
             crate::coordinator_updater::CheckProgress::Failed { message } => {
-                return Err(AppError::InvalidArg(message))
+                Err(AppError::InvalidArg(message))
             }
-            crate::coordinator_updater::CheckProgress::Pending => {}
+            crate::coordinator_updater::CheckProgress::Pending => Ok(None),
         }
-        if Instant::now() >= deadline {
-            return Err(invalid());
-        }
-        std::thread::sleep(Duration::from_millis(40));
-    }
+    })?
+    .ok_or_else(invalid)
 }
 
 pub(crate) fn install_update(app: &AppHandle, update_id: Uuid) -> AppResult<()> {
@@ -4377,20 +4356,17 @@ pub(crate) fn install_update(app: &AppHandle, update_id: Uuid) -> AppResult<()> 
 
 fn await_open_result(host: &Endpoint, operation_id: Uuid, deadline: Instant) -> AppResult<()> {
     let poll = request(&HostCommand::OpenStatus { operation_id })?;
-    loop {
+    ipc::poll_until(deadline, || {
         let reply = host.retry_call(&poll)?.map_err(AppError::InvalidArg)?;
         match serde_json::from_value::<OpenProgress>(reply).map_err(|_| invalid())? {
-            OpenProgress::Ready => return Ok(()),
-            OpenProgress::Failed { message } => return Err(AppError::InvalidArg(message)),
-            OpenProgress::Pending => {}
+            OpenProgress::Ready => Ok(Some(())),
+            OpenProgress::Failed { message } => Err(AppError::InvalidArg(message)),
+            OpenProgress::Pending => Ok(None),
         }
-        if Instant::now() >= deadline {
-            return Err(AppError::InvalidArg(
-                "vault opening result is unavailable; source remains open".into(),
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(40));
-    }
+    })?
+    .ok_or_else(|| {
+        AppError::InvalidArg("vault opening result is unavailable; source remains open".into())
+    })
 }
 
 #[cfg(test)]

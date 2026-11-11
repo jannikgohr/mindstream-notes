@@ -17,12 +17,7 @@
  *   - Plugin calls:    setHandlers (once on attach)
  */
 
-/**
- * VS Code-style search/replace modifiers. Re-declared here (rather than
- * imported from `./markdown-search`) so this `.svelte.ts` module stays free
- * of the prose-plugin import graph; the shapes are kept in sync by the
- * `setOptions` contract.
- */
+/** Search matching and replacement options shared by the bridge and plugin. */
 export interface MarkdownSearchOptions {
   caseSensitive: boolean;
   wholeWord: boolean;
