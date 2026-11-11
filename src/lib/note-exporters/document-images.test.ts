@@ -237,6 +237,30 @@ last
   });
 
   it.each([documentPdf, documentDocx])(
+    'decodes a remote image once across embedding and rendering',
+    async (render) => {
+      const doc = await parseDocument({
+        title: 'Remote image',
+        body: '![Chart](https://example.com/chart.png)'
+      });
+      await render(doc);
+      expect(HTMLImageElement.prototype.decode).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each([documentPdf, documentDocx])(
+    'rejects unsafe nested images before rendering',
+    async (render) => {
+      const doc = await parseDocument({
+        title: 'Unsafe nested image',
+        body: '- nested\n\n  ![Image](file:///private/image.png)'
+      });
+      await expect(render(doc)).rejects.toThrow('Cannot embed image:');
+      expect(HTMLImageElement.prototype.decode).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([documentPdf, documentDocx])(
     'rejects a document when an image fails to decode',
     async (render) => {
       vi.mocked(HTMLImageElement.prototype.decode).mockRejectedValue(

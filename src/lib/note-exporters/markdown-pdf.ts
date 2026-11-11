@@ -14,14 +14,13 @@ import {
 } from './document';
 
 export async function documentPdf(doc: MarkdownDocument): Promise<Uint8Array> {
-  await embedDocumentImages(doc);
+  const image = createRasterImageLoader();
+  await embedDocumentImages(doc, image);
   const [{ default: pdfMake }, { default: fonts }] = await Promise.all([
     import('pdfmake/build/pdfmake'),
     import('pdfmake/build/vfs_fonts')
   ]);
   pdfMake.addVirtualFileSystem(fonts);
-
-  const image = createRasterImageLoader();
 
   function inline(
     node: Nodes,

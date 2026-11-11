@@ -9,11 +9,6 @@ import { transformPoint } from './stroke-transform';
 
 export type { StrokeTransform };
 
-/**
- * Legacy fixed eraser radius, kept as the reference point for the
- * width-derived radius: the default brush width (4) maps back to it.
- */
-export const ERASER_RADIUS = 10;
 /** Smallest eraser radius, so a thin brush still erases usefully. */
 export const ERASER_MIN_RADIUS = 5;
 /** Eraser radius per unit of brush width (4 × 2.5 = the legacy 10). */
