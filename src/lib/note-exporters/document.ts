@@ -56,6 +56,31 @@ export interface MarkdownDocument {
   definitions: Map<string, Definition>;
 }
 
+export function linkTarget(
+  node: Nodes,
+  doc: MarkdownDocument
+): string | undefined {
+  const url =
+    node.type === 'link'
+      ? node.url
+      : node.type === 'linkReference'
+        ? doc.definitions.get(node.identifier.toUpperCase())?.url
+        : undefined;
+  return url && safeDocumentUrl(url) ? url : undefined;
+}
+
+export function createRasterImageLoader() {
+  const images = new Map<string, ReturnType<typeof rasterImage>>();
+  return (url: string) => {
+    let pending = images.get(url);
+    if (!pending) {
+      pending = rasterImage(url);
+      images.set(url, pending);
+    }
+    return pending;
+  };
+}
+
 export function referencedImage(
   node: Nodes,
   doc: MarkdownDocument

@@ -124,9 +124,6 @@ ts-rs = "12.0.1"
 # recursion this replaces would have had to reimplement to be safe on a
 # user-supplied vault.
 walkdir = "2.5"
-# Joplin's .jex is a tar of its RAW export, so unpacking one lets a single
-# parser serve both formats.
-tar = "0.4"
 md-5 = "0.11.0"
 
 # NOTE: panic = "unwind" (the default) is deliberate, not an omission. The app
@@ -137,6 +134,8 @@ md-5 = "0.11.0"
 # guards no-ops and turn any panic into a hard crash. The size cost of unwinding
 # tables is accepted for that safety.
 [dev-dependencies]
+# Native import fixtures build Joplin archives; production uses storage-core.
+tar = "0.4"
 mindstream-storage-core = { path = "storage-core", features = ["test-support"] }
 mindstream-plugin-fixtures = { path = "plugin-fixtures" }
 tempfile = "3"

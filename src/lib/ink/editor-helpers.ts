@@ -5,6 +5,7 @@ import {
   type StrokeTransform
 } from './document';
 import type { InkPoint } from './page';
+import { transformPoint } from './stroke-transform';
 
 export type { StrokeTransform };
 
@@ -257,11 +258,6 @@ export function displayColor(argb: number, dark: boolean): number {
   return (alpha | (R << 16) | (G << 8) | B) >>> 0;
 }
 
-export function sanitizePressure(value: number): number {
-  if (!Number.isFinite(value) || value <= 0) return 1;
-  return Math.min(1, value);
-}
-
 export function pressureWidth(pressure: number): number {
   return 0.25 + 0.75 * Math.min(1, Math.max(0, pressure));
 }
@@ -272,28 +268,6 @@ export function identityTransform(): StrokeTransform {
 
 export function translationTransform(dx: number, dy: number): StrokeTransform {
   return { a: 1, b: 0, c: 0, d: 1, e: dx, f: dy, widthScale: 1 };
-}
-
-export function transformIsIdentity(transform: StrokeTransform): boolean {
-  return (
-    Math.abs(transform.a - 1) < 0.0001 &&
-    Math.abs(transform.b) < 0.0001 &&
-    Math.abs(transform.c) < 0.0001 &&
-    Math.abs(transform.d - 1) < 0.0001 &&
-    Math.abs(transform.e) < 0.001 &&
-    Math.abs(transform.f) < 0.001 &&
-    Math.abs(transform.widthScale - 1) < 0.0001
-  );
-}
-
-export function transformPoint(
-  point: { x: number; y: number },
-  transform: StrokeTransform
-): { x: number; y: number } {
-  return {
-    x: point.x * transform.a + point.y * transform.c + transform.e,
-    y: point.x * transform.b + point.y * transform.d + transform.f
-  };
 }
 
 export function resizeTransform(
@@ -340,10 +314,7 @@ export function transformedPoints(
   points: InkPoint[],
   transform: StrokeTransform
 ): InkPoint[] {
-  return points.map((point) => ({
-    ...transformPoint(point, transform),
-    pressure: point.pressure
-  }));
+  return points.map((point) => transformPoint(point, transform));
 }
 
 export function frameFromBounds(bounds: StrokeBounds): SelectionFrame {
@@ -375,22 +346,6 @@ export function selectionCenter(frame: SelectionFrame): {
     x: (frame.nw.x + frame.ne.x + frame.se.x + frame.sw.x) * 0.25,
     y: (frame.nw.y + frame.ne.y + frame.se.y + frame.sw.y) * 0.25
   };
-}
-
-export function pointInPolygon(
-  point: { x: number; y: number },
-  polygon: Array<{ x: number; y: number }>
-): boolean {
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const a = polygon[i];
-    const b = polygon[j];
-    const intersects =
-      a.y > point.y !== b.y > point.y &&
-      point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x;
-    if (intersects) inside = !inside;
-  }
-  return inside;
 }
 
 function clampUnit(value: number): number {

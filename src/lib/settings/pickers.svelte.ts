@@ -12,7 +12,8 @@ import { allTagsInUse } from '$lib/stores/tree.svelte';
 import { TRASH_ID } from '$lib/api/index';
 import { ALL_SETTINGS, getSettingValue, setSettingValue } from './store.svelte';
 import { pluginSettingsSections } from '$lib/plugins/registry.svelte';
-import type { Collection } from '$lib/api/collections';
+import { ancestorIsTrash } from '$lib/editor/trash';
+import { folderPathLabel } from '$lib/notes/folder-path';
 import type { Setting } from './types';
 
 export interface PickerItem {
@@ -22,15 +23,7 @@ export interface PickerItem {
 
 /** True when `id` is the trash folder or lives anywhere under it. */
 function isUnderTrash(id: string): boolean {
-  const byId = tree.collectionsById;
-  const seen = new Set<string>();
-  let current: string | null = id;
-  while (current && !seen.has(current)) {
-    if (current === TRASH_ID) return true;
-    seen.add(current);
-    current = byId[current]?.parent_collection_id ?? null;
-  }
-  return false;
+  return ancestorIsTrash(id, tree.collectionsById, TRASH_ID);
 }
 
 /**
@@ -51,21 +44,8 @@ function liveFolderIds(): Set<string> {
  */
 export function folderOptions(): PickerItem[] {
   const byId = tree.collectionsById;
-  const pathOf = (id: string): string => {
-    const parts: string[] = [];
-    const seen = new Set<string>();
-    let current: string | null = id;
-    while (current && !seen.has(current)) {
-      seen.add(current);
-      const folder: Collection | undefined = byId[current];
-      if (!folder) break;
-      parts.unshift(folder.name);
-      current = folder.parent_collection_id;
-    }
-    return parts.join(' / ');
-  };
   return [...liveFolderIds()]
-    .map((id) => ({ value: id, label: pathOf(id) }))
+    .map((id) => ({ value: id, label: folderPathLabel(id, byId) }))
     .sort((a, b) => a.label.localeCompare(b.label));
 }
 

@@ -133,3 +133,7 @@ export function renderMarkdownFile(note: Note, rewrittenBody: string): string {
   // closing `---` is the only separator the reader sees.
   return `${fm}${rewrittenBody.replace(/^\s+/, '')}`;
 }
+
+export function markdownLine(text: string): string {
+  return text.replace(/[\r\n]+/g, ' ').replace(/([\\`*_[\]<>#])/g, '\\$1');
+}

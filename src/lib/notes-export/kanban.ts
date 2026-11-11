@@ -1,3 +1,4 @@
+import { markdownLine as line } from './markdown';
 import * as Y from 'yjs';
 import {
   readBoardFromYDoc,
@@ -128,10 +129,6 @@ export async function boardXlsx(
   for (const label of board.labels ?? [])
     labels.addRow([label.id, label.label, label.color ?? '', label.order]);
   return new Uint8Array(await workbook.xlsx.writeBuffer());
-}
-
-function line(text: string): string {
-  return text.replace(/[\r\n]+/g, ' ').replace(/([\\`*_[\]<>#])/g, '\\$1');
 }
 
 export function boardMarkdown(
