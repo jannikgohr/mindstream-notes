@@ -180,25 +180,18 @@ impl ImportSource for MarkdownVaultSource {
             // `[[…]]` in plain GFM is far more likely to be a citation marker
             // than a link, so the wikilink pass stays off.
             Flavour::Gfm => RewriteOptions {
-                wikilinks: false,
                 markdown_links: true,
-                id_links: false,
-                evernote_links: false,
-                keep_unresolved_wikilinks: false,
+                ..Default::default()
             },
             Flavour::Obsidian => RewriteOptions {
                 wikilinks: true,
                 markdown_links: true,
-                id_links: false,
-                evernote_links: false,
-                keep_unresolved_wikilinks: false,
+                ..Default::default()
             },
             Flavour::JoplinMarkdown => RewriteOptions {
-                wikilinks: false,
                 markdown_links: true,
                 id_links: true,
-                evernote_links: false,
-                keep_unresolved_wikilinks: false,
+                ..Default::default()
             },
         }
     }
@@ -281,14 +274,15 @@ impl MarkdownVaultSource {
             return None;
         }
         let decoded = links::percent_decode(target);
-        [
-            links::rebase(base_dir, &decoded),
-            links::rebase("", &decoded),
-        ]
-        .into_iter()
-        .flatten()
-        .find(|candidate| self.files.is_file(candidate))
-        .or_else(|| self.attachment_by_name(&decoded))
+        self.resolve_vault_file(base_dir, &decoded)
+    }
+
+    fn resolve_vault_file(&self, base_dir: &str, decoded: &str) -> Option<String> {
+        [links::rebase(base_dir, decoded), links::rebase("", decoded)]
+            .into_iter()
+            .flatten()
+            .find(|candidate| self.files.is_file(candidate))
+            .or_else(|| self.attachment_by_name(decoded))
     }
 
     /// Obsidian's name-based attachment lookup. Returns `None` for every other
@@ -320,17 +314,7 @@ impl MarkdownVaultSource {
             if decoded.is_empty() || mime::is_markdown(decoded) || has_scheme(decoded) {
                 continue;
             }
-            // Try the path as written and rebased on the note's directory,
-            // matching what the link rewriter does for note links.
-            let candidates = [links::rebase(base_dir, decoded), links::rebase("", decoded)];
-            let resolved = candidates
-                .into_iter()
-                .flatten()
-                .find(|candidate| self.files.is_file(candidate))
-                // Obsidian only: a bare file name resolves anywhere in the
-                // vault. GFM stays strict, where a path that doesn't exist is
-                // a broken link and guessing would be worse than leaving it.
-                .or_else(|| self.attachment_by_name(decoded));
+            let resolved = self.resolve_vault_file(base_dir, decoded);
             let Some(resolved) = resolved else {
                 continue;
             };

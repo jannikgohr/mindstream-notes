@@ -25,18 +25,9 @@
 
 import type { CollectionShareAccessLevel } from '$lib/api/sharing';
 
-/**
- * Caret rectangle in viewport coordinates — see the identical type in
- * `./wikilink-bridge.svelte.ts` for the floating-ui rationale.
- */
-export interface CaretRect {
-  top: number;
-  left: number;
-  right: number;
-  bottom: number;
-  width: number;
-  height: number;
-}
+import type { CaretRect } from './prose/typeahead';
+import { createTypeaheadHandlers } from './typeahead-bridge';
+export type { CaretRect } from './prose/typeahead';
 
 /** A user offered by the mention dropdown. */
 export interface MentionUser {
@@ -89,23 +80,5 @@ export function createUserMentionBridge(): UserMentionBridge {
     users: [] as MentionUser[]
   });
 
-  // Stub callables so both sides can call through without null checks even
-  // before the other side has wired up. Replaced via the setters.
-  let insertFn: (user: { username: string }) => void = () => {};
-  let cancelFn: () => void = () => {};
-  let commitFn: () => void = () => {};
-
-  return {
-    state,
-    insert: (user) => insertFn(user),
-    cancel: () => cancelFn(),
-    commitFromPopup: () => commitFn(),
-    setHandlers(handlers) {
-      insertFn = handlers.insert;
-      cancelFn = handlers.cancel;
-    },
-    setCommitFromPopup(commit) {
-      commitFn = commit;
-    }
-  };
+  return createTypeaheadHandlers(state, (_user: { username: string }) => {});
 }

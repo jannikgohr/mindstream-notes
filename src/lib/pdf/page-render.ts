@@ -4,9 +4,9 @@
  * One instance is attached to every page surface. It owns that page's
  * pdf.js `PDFPageView`, the debounced draw scheduling that keeps the
  * single pdf.js worker from being swamped during fast scroll, and the
- * three overlays drawn on top of the canvas: search hits, link
- * annotations, and our own annotations (highlights, comments, ink,
- * signatures).
+ * two overlays drawn on top of the canvas: search hits and our own
+ * annotations (highlights, comments, ink, signatures). The PDF's link
+ * annotations come from pdf.js's own annotation layer.
  *
  * It reads and mutates a lot of viewer state, which arrives as an
  * explicit [`PageRenderContext`] rather than a closure over the
@@ -29,10 +29,10 @@ import {
   MAX_CANVAS_PIXELS,
   PDF_TO_CSS_UNITS,
   clampZoom,
+  createPdfLinkService,
   type PageSize,
   type PdfDocument,
   type PdfJs,
-  type PdfLink,
   type PdfPageView,
   type PdfTool,
   type PdfViewer,
@@ -95,6 +95,16 @@ export function createPageRenderer(ctx: PageRenderContext) {
     pageSurface: HTMLDivElement,
     params: RenderParams
   ) {
+    // Internal PDF destinations stay in this viewer, including auxiliary clicks.
+    const blockInternalLinkActions = (event: Event) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest('.annotationLayer [data-internal-link] a')
+      )
+        event.preventDefault();
+    };
+    pageSurface.addEventListener('auxclick', blockInternalLinkActions);
+    pageSurface.addEventListener('contextmenu', blockInternalLinkActions);
     let current = params;
     let cancelled = false;
     let drawGeneration = 0;
@@ -106,9 +116,6 @@ export function createPageRenderer(ctx: PageRenderContext) {
       Awaited<ReturnType<PdfDocument['getPage']>>['getViewport']
     > | null = null;
     let renderedSize: PageSize | null = null;
-    // Link annotations for this page (external URLs + internal jumps),
-    // fetched once per draw and overlaid as clickable anchors.
-    let currentLinks: PdfLink[] = [];
     // Tears down the text-mode click-to-select listeners installed by
     // renderAppAnnotations (they live on the page element, which
     // outlives each annotation layer).
@@ -138,9 +145,6 @@ export function createPageRenderer(ctx: PageRenderContext) {
       },
       get viewport() {
         return currentViewport;
-      },
-      get links() {
-        return currentLinks;
       },
       get textModeClickCleanup() {
         return textModeClickCleanup;
@@ -309,7 +313,7 @@ export function createPageRenderer(ctx: PageRenderContext) {
           fieldObjectsPromise: ctx.pdfFieldObjectsPromise,
           findController: null,
           hasJSActionsPromise: Promise.resolve(false),
-          linkService: new pdfViewer.SimpleLinkService({ eventBus })
+          linkService: createPdfLinkService(pdfViewer, eventBus, ctx)
         },
         annotationMode: pdfjs.AnnotationMode.ENABLE_FORMS,
         maxCanvasPixels: MAX_CANVAS_PIXELS,
@@ -333,25 +337,6 @@ export function createPageRenderer(ctx: PageRenderContext) {
       pendingPageView = nextPageView;
       nextPageView.setPdfPage(page);
       try {
-        // Link annotations for the clickable overlay. Best-effort: a
-        // failure here shouldn't stop the page from rendering.
-        let nextLinks: PdfLink[] = [];
-        try {
-          const annots = await page.getAnnotations({ intent: 'display' });
-          if (cancelled || generation !== drawGeneration) {
-            clearPendingPageView(nextLayer, nextPageView);
-            return;
-          }
-          nextLinks = annots
-            .filter((a: { subtype?: string }) => a.subtype === 'Link')
-            .map((a: { rect: number[]; url?: string; dest?: unknown }) => ({
-              rect: a.rect,
-              url: a.url,
-              dest: a.dest as string | unknown[] | null | undefined
-            }));
-        } catch {
-          nextLinks = [];
-        }
         await nextPageView.draw();
         if (cancelled || generation !== drawGeneration) {
           clearPendingPageView(nextLayer, nextPageView);
@@ -375,7 +360,6 @@ export function createPageRenderer(ctx: PageRenderContext) {
               height: viewport.height
             })
           : { width: viewport.width, height: viewport.height };
-        currentLinks = nextLinks;
         // Expose only the committed viewport so selection/client-rect math
         // never points at an invisible staging layer.
         ctx.pageViewports.set(request.pageNumber, viewport);
@@ -442,6 +426,11 @@ export function createPageRenderer(ctx: PageRenderContext) {
         }
       },
       destroy() {
+        pageSurface.removeEventListener('auxclick', blockInternalLinkActions);
+        pageSurface.removeEventListener(
+          'contextmenu',
+          blockInternalLinkActions
+        );
         cancelled = true;
         drawGeneration += 1;
         cancelScheduledDraw();

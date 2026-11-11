@@ -1,4 +1,22 @@
 import { expect, type Locator, type Page } from '@playwright/test';
+import { clickFileTreeCreateAction } from './file-tree-toolbar';
+
+export function fileTree(page: Page): Locator {
+  return page.getByRole('group', { name: 'File tree' });
+}
+
+export function treeItem(page: Page, name: string): Locator {
+  return fileTree(page).getByRole('button', { name, exact: true });
+}
+
+export async function createRootNote(page: Page, title: string) {
+  await clickFileTreeCreateAction(page, 'New note');
+  const draft = page.getByRole('textbox', { name: 'New note' });
+  await expect(draft).toBeFocused();
+  await draft.fill(title);
+  await draft.press('Enter');
+  await expect(treeItem(page, title)).toBeVisible();
+}
 
 export function modeButton(page: Page): Locator {
   return page.getByRole('button', { name: /^Editor view mode:/ });

@@ -97,17 +97,19 @@ export type StorageRequest = {
   };
 }[StorageMethod];
 
-export type StorageErrorCode =
-  | 'io'
-  | 'notFound'
-  | 'refused'
-  | 'database'
-  | 'databaseBusy'
-  | 'unsupported'
-  | 'invalidArgument'
-  | 'worker'
-  | 'timeout'
-  | 'closed';
+const ERROR_CODES = [
+  'io',
+  'notFound',
+  'refused',
+  'database',
+  'databaseBusy',
+  'unsupported',
+  'invalidArgument',
+  'worker',
+  'timeout',
+  'closed'
+] as const;
+export type StorageErrorCode = (typeof ERROR_CODES)[number];
 
 export interface StorageError {
   code: StorageErrorCode;
@@ -120,18 +122,7 @@ export type StorageResponse =
   | { id: number; ok: false; error: StorageError }
   | { id?: undefined; progress: ImportProgressMessage };
 
-const errorCodes = new Set<StorageErrorCode>([
-  'io',
-  'notFound',
-  'refused',
-  'database',
-  'databaseBusy',
-  'unsupported',
-  'invalidArgument',
-  'worker',
-  'timeout',
-  'closed'
-]);
+const errorCodes = new Set<StorageErrorCode>(ERROR_CODES);
 
 export function storageError(error: unknown): StorageError {
   if (

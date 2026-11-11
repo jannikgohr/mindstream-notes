@@ -96,10 +96,8 @@ pub fn convert_legacy_wikilinks(db: &Db) -> AppResult<LegacyLinkReport> {
     let context = RewriteContext {
         options: RewriteOptions {
             wikilinks: true,
-            markdown_links: false,
-            id_links: false,
-            evernote_links: false,
             keep_unresolved_wikilinks: true,
+            ..Default::default()
         },
         base_dir: String::new(),
     };

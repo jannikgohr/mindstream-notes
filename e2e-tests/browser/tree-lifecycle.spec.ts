@@ -1,29 +1,11 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
-import { boot } from './editor-helpers';
-import { clickFileTreeCreateAction } from './file-tree-toolbar';
+import { expect, test, type Page } from '@playwright/test';
+import { boot, createRootNote, treeItem } from './editor-helpers';
 
 /**
  * CI-safe tree lifecycle coverage for browser-fallback mode. These tests
  * exercise Svelte UI + the in-memory API only, so they do not require Tauri,
  * native dialogs, Docker, a local sync server, or OS-specific integration.
  */
-
-function fileTree(page: Page): Locator {
-  return page.getByRole('group', { name: 'File tree' });
-}
-
-function treeItem(page: Page, name: string): Locator {
-  return fileTree(page).getByRole('button', { name, exact: true });
-}
-
-async function createRootNote(page: Page, title: string) {
-  await clickFileTreeCreateAction(page, 'New note');
-  const draft = page.getByRole('textbox', { name: 'New note' });
-  await expect(draft).toBeFocused();
-  await draft.fill(title);
-  await draft.press('Enter');
-  await expect(treeItem(page, title)).toBeVisible();
-}
 
 async function chooseContextItem(page: Page, item: string) {
   const escaped = item.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
