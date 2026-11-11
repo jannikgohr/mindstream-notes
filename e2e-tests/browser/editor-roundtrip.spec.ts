@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { boot } from './editor-helpers';
 import { clickFileTreeCreateAction } from './file-tree-toolbar';
 
 /**
@@ -10,13 +11,6 @@ import { clickFileTreeCreateAction } from './file-tree-toolbar';
  * survives the serialise/parse cycle — without Tauri or SQLite. The same
  * journey against the real `save_note` IPC + SQLite is the T3 case.
  */
-
-async function boot(page: Page) {
-  await page.goto('/');
-  await expect(
-    page.getByRole('button', { name: 'Welcome', exact: true })
-  ).toBeVisible();
-}
 
 function fileTree(page: Page): Locator {
   return page.getByRole('group', { name: 'File tree' });

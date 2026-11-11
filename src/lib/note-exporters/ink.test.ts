@@ -8,16 +8,13 @@ const { pdfPngFiles, saveFileExport } = vi.hoisted(() => ({
 vi.mock('./pdf-images', () => ({ pdfPngFiles }));
 vi.mock('$lib/api/file-export', () => ({ saveFileExport }));
 
-const { loadNote, saveAnnotatedPdf, buildInkPdf, sanitizePdfFilename } =
-  vi.hoisted(() => ({
-    loadNote: vi.fn(),
-    saveAnnotatedPdf: vi.fn(),
-    buildInkPdf: vi.fn(),
-    sanitizePdfFilename: vi.fn((s: string) => s)
-  }));
+const { loadNote, buildInkPdf, sanitizePdfFilename } = vi.hoisted(() => ({
+  loadNote: vi.fn(),
+  buildInkPdf: vi.fn(),
+  sanitizePdfFilename: vi.fn((s: string) => s)
+}));
 
 vi.mock('$lib/api', () => ({ loadNote }));
-vi.mock('$lib/api/pdf-export', () => ({ saveAnnotatedPdf }));
 vi.mock('$lib/notes-export/ink-pdf', () => ({ buildInkPdf }));
 vi.mock('$lib/pdf/filename', () => ({ sanitizePdfFilename }));
 
@@ -33,7 +30,6 @@ const inkNote = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   loadNote.mockReset();
-  saveAnnotatedPdf.mockReset().mockResolvedValue(undefined);
   buildInkPdf.mockReset();
   sanitizePdfFilename.mockReset().mockImplementation((s: string) => s);
   pdfPngFiles.mockReset();
@@ -51,7 +47,7 @@ describe('exportInkNotePdf', () => {
     loadNote.mockResolvedValue(inkNote());
     buildInkPdf.mockResolvedValue(null);
     await expect(exportInkNotePdf('n1')).rejects.toThrow(/unreadable/i);
-    expect(saveAnnotatedPdf).not.toHaveBeenCalled();
+    expect(saveFileExport).not.toHaveBeenCalled();
   });
 
   it('builds the PDF and saves it under a sanitised filename', async () => {
@@ -63,7 +59,7 @@ describe('exportInkNotePdf', () => {
     await exportInkNotePdf('n1');
 
     expect(buildInkPdf).toHaveBeenCalledWith([1, 2, 3]);
-    expect(saveAnnotatedPdf).toHaveBeenCalledWith(
+    expect(saveFileExport).toHaveBeenCalledWith(
       expect.objectContaining({ suggestedName: 'A-B-C.pdf', bytes })
     );
   });

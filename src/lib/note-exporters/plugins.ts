@@ -6,7 +6,6 @@ import {
   type PluginNoteExporterRef
 } from '$lib/plugins/registry.svelte';
 import { resolvePluginString } from '$lib/plugins/plugin-i18n';
-import { saveAnnotatedPdf } from '$lib/api/pdf-export';
 import {
   EXPORT_FORMATS,
   exportFilename,
@@ -162,14 +161,12 @@ export async function runPluginNoteExporter(
     file = await bundleExportFiles(note.title, files);
   } else file = toFile(result, note.title);
 
-  // Keep the existing PDF bridge for compatibility with PDF-only callers.
-  if (file.format === 'pdf') {
-    await saveAnnotatedPdf({
-      suggestedName: file.name,
-      dialogTitle: `Save ${resolvePluginString(ref.pluginId, ref.exporter.labelKey)}`,
-      bytes: file.bytes
-    });
-  } else await saveExportFile(file);
+  await saveExportFile(
+    file,
+    file.format === 'pdf'
+      ? `Save ${resolvePluginString(ref.pluginId, ref.exporter.labelKey)}`
+      : undefined
+  );
 }
 
 export function pluginExportersForNote(

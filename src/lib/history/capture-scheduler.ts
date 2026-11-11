@@ -161,5 +161,3 @@ export function createHistoryCapture(options: HistoryCaptureOptions) {
     }
   };
 }
-
-export type HistoryCapture = ReturnType<typeof createHistoryCapture>;

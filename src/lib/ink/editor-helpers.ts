@@ -1,4 +1,3 @@
-export { base64ToBytes } from '$lib/editor/base64';
 import {
   DEFAULT_WIDTH,
   type InkStrokeInput,
@@ -9,7 +8,6 @@ import type { InkPoint } from './page';
 
 export type { StrokeTransform };
 
-export { SAVE_DEBOUNCE_MS } from '$lib/editor/save-scheduler';
 /**
  * Legacy fixed eraser radius, kept as the reference point for the
  * width-derived radius: the default brush width (4) maps back to it.

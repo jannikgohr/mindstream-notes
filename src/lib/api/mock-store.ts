@@ -24,6 +24,7 @@ import type { Version, VersionAction, VersionSummary } from './history';
 import { mockSearchNotes } from './search-matcher';
 import type { DemoNote } from './onboarding';
 import { demoNoteId } from '$lib/onboarding/demo-note-id';
+import { serializeYjsSnapshot } from '$lib/history/snapshot';
 import {
   countWords,
   markdownToPlain,
@@ -45,23 +46,6 @@ let versionSeq = 0;
 
 function nowIso(): string {
   return new Date().toISOString();
-}
-
-function bytesToBase64(bytes: Uint8Array | number[]): string {
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
-function yjsHistorySnapshot(noteKind: string, bytes: Uint8Array | number[]) {
-  return JSON.stringify({
-    marker: 'mindstream-history-snapshot',
-    version: 1,
-    noteKind,
-    payloadKind: 'yjs-update',
-    encoding: 'base64',
-    data: bytesToBase64(bytes)
-  });
 }
 
 function randId(prefix: 'note' | 'coll' | 'asset' | 'ver'): string {
@@ -636,7 +620,7 @@ export const mockApi = {
     const snapshot =
       note.note_kind === 'markdown'
         ? note.body
-        : yjsHistorySnapshot(note.note_kind, note.yrs_state);
+        : serializeYjsSnapshot(note.note_kind, note.yrs_state);
     return this.captureNoteVersion(
       noteId,
       note.note_kind,

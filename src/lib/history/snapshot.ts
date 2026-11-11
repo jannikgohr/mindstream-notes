@@ -1,4 +1,3 @@
-export { base64ToBytes } from '$lib/editor/base64';
 import { base64ToBytes } from '$lib/editor/base64';
 import type { NoteKind } from '$lib/api';
 

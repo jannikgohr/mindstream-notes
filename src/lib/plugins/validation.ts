@@ -1722,94 +1722,70 @@ export function validateManifest(input: unknown): PluginManifest {
     delete (contributes as Record<string, unknown>)[key];
   }
 
-  // ---- Artifacts -------------------------------------------------------
-  const artifacts = contributes.artifacts ?? [];
-  if (!Array.isArray(artifacts)) {
-    throw new PluginValidationError(
-      pluginId,
-      'manifest.contributes.artifacts must be an array'
-    );
+  function contributionList<T>(
+    value: T[] | null | undefined,
+    point: string
+  ): T[] {
+    const list = value ?? [];
+    if (!Array.isArray(list)) {
+      throw new PluginValidationError(
+        pluginId,
+        `manifest.contributes.${point} must be an array`
+      );
+    }
+    return list;
   }
+
+  function claimId(seen: Set<string>, id: string, label: string): void {
+    if (seen.has(id)) {
+      throw new PluginValidationError(pluginId, `duplicate ${label} "${id}"`);
+    }
+    seen.add(id);
+  }
+
+  // ---- Artifacts -------------------------------------------------------
+  const artifacts = contributionList(contributes.artifacts, 'artifacts');
   const seenArtifactIds = new Set<string>();
   for (const [i, artifact] of artifacts.entries()) {
     validateArtifact(pluginId, artifact, `artifacts[${i}]`);
-    if (seenArtifactIds.has(artifact.id)) {
-      throw new PluginValidationError(
-        pluginId,
-        `duplicate artifact id "${artifact.id}"`
-      );
-    }
-    seenArtifactIds.add(artifact.id);
+    claimId(seenArtifactIds, artifact.id, 'artifact id');
   }
 
   // ---- Native tools ----------------------------------------------------
-  const nativeTools = contributes.nativeTools ?? [];
-  if (!Array.isArray(nativeTools)) {
-    throw new PluginValidationError(
-      pluginId,
-      'manifest.contributes.nativeTools must be an array'
-    );
-  }
+  const nativeTools = contributionList(contributes.nativeTools, 'nativeTools');
   const seenNativeToolIds = new Set<string>();
   for (const [i, tool] of nativeTools.entries()) {
     validateNativeTool(pluginId, tool, `nativeTools[${i}]`);
-    if (seenNativeToolIds.has(tool.id)) {
-      throw new PluginValidationError(
-        pluginId,
-        `duplicate native tool id "${tool.id}"`
-      );
-    }
-    seenNativeToolIds.add(tool.id);
+    claimId(seenNativeToolIds, tool.id, 'native tool id');
   }
 
   // ---- Native services (long-lived preview servers) --------------------
-  const nativeServices = contributes.nativeServices ?? [];
-  if (!Array.isArray(nativeServices)) {
-    throw new PluginValidationError(
-      pluginId,
-      'manifest.contributes.nativeServices must be an array'
-    );
-  }
+  const nativeServices = contributionList(
+    contributes.nativeServices,
+    'nativeServices'
+  );
   const seenNativeServiceIds = new Set<string>();
   for (const [i, service] of nativeServices.entries()) {
     validateNativeService(pluginId, service, `nativeServices[${i}]`);
-    if (seenNativeServiceIds.has(service.id)) {
-      throw new PluginValidationError(
-        pluginId,
-        `duplicate native service id "${service.id}"`
-      );
-    }
-    seenNativeServiceIds.add(service.id);
+    claimId(seenNativeServiceIds, service.id, 'native service id');
   }
 
   // ---- Source editor language modes -----------------------------------
-  const sourceLanguages = contributes.sourceLanguages ?? [];
-  if (!Array.isArray(sourceLanguages)) {
-    throw new PluginValidationError(
-      pluginId,
-      'manifest.contributes.sourceLanguages must be an array'
-    );
-  }
+  const sourceLanguages = contributionList(
+    contributes.sourceLanguages,
+    'sourceLanguages'
+  );
   const seenSourceLanguageIds = new Set<string>();
   for (const [i, language] of sourceLanguages.entries()) {
     validateSourceLanguage(pluginId, language, `sourceLanguages[${i}]`);
-    if (seenSourceLanguageIds.has(language.id)) {
-      throw new PluginValidationError(
-        pluginId,
-        `duplicate source language id "${language.id}"`
-      );
-    }
-    seenSourceLanguageIds.add(language.id);
+    claimId(seenSourceLanguageIds, language.id, 'source language id');
   }
 
   // ---- Text checkers ---------------------------------------------------
-  const textCheckers = contributes.textCheckers ?? [];
-  if (!Array.isArray(textCheckers)) {
-    throw new PluginValidationError(
-      pluginId,
-      'manifest.contributes.textCheckers must be an array'
-    );
-  }
+  const textCheckers = contributionList(
+    contributes.textCheckers,
+    'textCheckers'
+  );
   const seenCheckerIds = new Set<string>();
   for (const [i, checker] of textCheckers.entries()) {
     const path = `textCheckers[${i}]`;
@@ -1882,23 +1858,11 @@ export function validateManifest(input: unknown): PluginManifest {
     if (checker.labelKey !== undefined) {
       assertI18nKey(pluginId, checker.labelKey, `${path}.labelKey`);
     }
-    if (seenCheckerIds.has(checker.id)) {
-      throw new PluginValidationError(
-        pluginId,
-        `duplicate text checker id "${checker.id}"`
-      );
-    }
-    seenCheckerIds.add(checker.id);
+    claimId(seenCheckerIds, checker.id, 'text checker id');
   }
 
   // ---- Plugin note kinds ----------------------------------------------
-  const noteKinds = contributes.noteKinds ?? [];
-  if (!Array.isArray(noteKinds)) {
-    throw new PluginValidationError(
-      pluginId,
-      'manifest.contributes.noteKinds must be an array'
-    );
-  }
+  const noteKinds = contributionList(contributes.noteKinds, 'noteKinds');
   const seenNoteKindIds = new Set<string>();
   const pluginNoteKindIds = new Set<string>();
   for (const [i, c] of noteKinds.entries()) {
@@ -1911,13 +1875,7 @@ export function validateManifest(input: unknown): PluginManifest {
       seenNativeServiceIds,
       permissions
     );
-    if (seenNoteKindIds.has(c.id)) {
-      throw new PluginValidationError(
-        pluginId,
-        `duplicate note kind id "${c.id}"`
-      );
-    }
-    seenNoteKindIds.add(c.id);
+    claimId(seenNoteKindIds, c.id, 'note kind id');
     pluginNoteKindIds.add(appKind);
   }
   if (noteKinds.length > 0 && !isScriptedRuntime(m.runtime)) {
@@ -1928,13 +1886,10 @@ export function validateManifest(input: unknown): PluginManifest {
   }
 
   // ---- Note exporters --------------------------------------------------
-  const noteExporters = contributes.noteExporters ?? [];
-  if (!Array.isArray(noteExporters)) {
-    throw new PluginValidationError(
-      pluginId,
-      'manifest.contributes.noteExporters must be an array'
-    );
-  }
+  const noteExporters = contributionList(
+    contributes.noteExporters,
+    'noteExporters'
+  );
   const seenNoteExporterIds = new Set<string>();
   for (const [i, exporter] of noteExporters.entries()) {
     validateNoteExporter(
@@ -1945,13 +1900,7 @@ export function validateManifest(input: unknown): PluginManifest {
       seenNativeToolIds,
       permissions
     );
-    if (seenNoteExporterIds.has(exporter.id)) {
-      throw new PluginValidationError(
-        pluginId,
-        `duplicate note exporter id "${exporter.id}"`
-      );
-    }
-    seenNoteExporterIds.add(exporter.id);
+    claimId(seenNoteExporterIds, exporter.id, 'note exporter id');
   }
   if (noteExporters.length > 0 && !isScriptedRuntime(m.runtime)) {
     throw new PluginValidationError(
@@ -1962,22 +1911,13 @@ export function validateManifest(input: unknown): PluginManifest {
 
   // ---- Templates -------------------------------------------------------
   const templateIds = new Set<string>();
-  const templates = contributes.noteTemplates ?? [];
-  if (!Array.isArray(templates)) {
-    throw new PluginValidationError(
-      pluginId,
-      'manifest.contributes.noteTemplates must be an array'
-    );
-  }
+  const templates = contributionList(
+    contributes.noteTemplates,
+    'noteTemplates'
+  );
   for (const [i, t] of templates.entries()) {
     validateTemplate(pluginId, t, `noteTemplates[${i}]`, pluginNoteKindIds);
-    if (templateIds.has(t.id)) {
-      throw new PluginValidationError(
-        pluginId,
-        `duplicate template id "${t.id}"`
-      );
-    }
-    templateIds.add(t.id);
+    claimId(templateIds, t.id, 'template id');
   }
   // A `render` macro is a backend script export, so it only makes sense on a
   // scripted plugin.
@@ -1992,74 +1932,35 @@ export function validateManifest(input: unknown): PluginManifest {
   }
 
   // ---- Settings --------------------------------------------------------
-  const settings = contributes.settings ?? [];
-  if (!Array.isArray(settings)) {
-    throw new PluginValidationError(
-      pluginId,
-      'manifest.contributes.settings must be an array'
-    );
-  }
+  const settings = contributionList(contributes.settings, 'settings');
   const seenSettingIds = new Set<string>();
   const seenSectionIds = new Set<string>();
   for (const [i, c] of settings.entries()) {
     validateSettingsContribution(pluginId, c, `settings[${i}]`, seenSettingIds);
-    if (seenSectionIds.has(c.sectionId)) {
-      throw new PluginValidationError(
-        pluginId,
-        `duplicate settings section id "${c.sectionId}"`
-      );
-    }
-    seenSectionIds.add(c.sectionId);
+    claimId(seenSectionIds, c.sectionId, 'settings section id');
   }
 
   // ---- Commands --------------------------------------------------------
-  const commands = contributes.commands ?? [];
-  if (!Array.isArray(commands)) {
-    throw new PluginValidationError(
-      pluginId,
-      'manifest.contributes.commands must be an array'
-    );
-  }
+  const commands = contributionList(contributes.commands, 'commands');
   const seenCommandIds = new Set<string>();
   for (const [i, c] of commands.entries()) {
     validateCommand(pluginId, c, `commands[${i}]`, templateIds);
-    if (seenCommandIds.has(c.id)) {
-      throw new PluginValidationError(
-        pluginId,
-        `duplicate command id "${c.id}"`
-      );
-    }
-    seenCommandIds.add(c.id);
+    claimId(seenCommandIds, c.id, 'command id');
   }
 
   // ---- Documentation ---------------------------------------------------
-  const documentation = contributes.documentation ?? [];
-  if (!Array.isArray(documentation)) {
-    throw new PluginValidationError(
-      pluginId,
-      'manifest.contributes.documentation must be an array'
-    );
-  }
+  const documentation = contributionList(
+    contributes.documentation,
+    'documentation'
+  );
   const seenDocFiles = new Set<string>();
   for (const [i, d] of documentation.entries()) {
     validateDocSection(pluginId, d, `documentation[${i}]`);
-    if (seenDocFiles.has(d.file)) {
-      throw new PluginValidationError(
-        pluginId,
-        `duplicate documentation file "${d.file}"`
-      );
-    }
-    seenDocFiles.add(d.file);
+    claimId(seenDocFiles, d.file, 'documentation file');
   }
 
   // ---- Toolbar buttons -------------------------------------------------
-  const toolbar = contributes.toolbar ?? [];
-  if (!Array.isArray(toolbar)) {
-    throw new PluginValidationError(
-      pluginId,
-      'manifest.contributes.toolbar must be an array'
-    );
-  }
+  const toolbar = contributionList(contributes.toolbar, 'toolbar');
   const seenToolbarIds = new Set<string>();
   for (const [i, b] of toolbar.entries()) {
     validateToolbarButton(
@@ -2070,13 +1971,7 @@ export function validateManifest(input: unknown): PluginManifest {
       (contributes.settings ?? []).flatMap((section) => section.settings),
       m.permissions
     );
-    if (seenToolbarIds.has(b.id)) {
-      throw new PluginValidationError(
-        pluginId,
-        `duplicate toolbar button id "${b.id}"`
-      );
-    }
-    seenToolbarIds.add(b.id);
+    claimId(seenToolbarIds, b.id, 'toolbar button id');
   }
   // Script toolbar buttons run a backend export on click, so they require a
   // scripted runtime. Host-owned source edits are declarative and need none.

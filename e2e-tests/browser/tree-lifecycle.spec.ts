@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { boot } from './editor-helpers';
 import { clickFileTreeCreateAction } from './file-tree-toolbar';
 
 /**
@@ -6,13 +7,6 @@ import { clickFileTreeCreateAction } from './file-tree-toolbar';
  * exercise Svelte UI + the in-memory API only, so they do not require Tauri,
  * native dialogs, Docker, a local sync server, or OS-specific integration.
  */
-
-async function boot(page: Page) {
-  await page.goto('/');
-  await expect(
-    page.getByRole('button', { name: 'Welcome', exact: true })
-  ).toBeVisible();
-}
 
 function fileTree(page: Page): Locator {
   return page.getByRole('group', { name: 'File tree' });

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { boot } from './editor-helpers';
 import { clickFileTreeCreateAction } from './file-tree-toolbar';
 
 /**
@@ -7,13 +8,6 @@ import { clickFileTreeCreateAction } from './file-tree-toolbar';
  * across its siblings, tooltips skip their delay once one has shown, and a
  * flick on a mobile Kanban card keeps coasting after the finger lifts.
  */
-
-async function boot(page: Page) {
-  await page.goto('/');
-  await expect(
-    page.getByRole('button', { name: 'Welcome', exact: true })
-  ).toBeVisible();
-}
 
 async function createNote(page: Page, action: string, title: string) {
   await clickFileTreeCreateAction(page, action);
