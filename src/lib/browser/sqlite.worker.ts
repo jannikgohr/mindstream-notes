@@ -3,6 +3,7 @@ import { PickedFiles } from './picked-files';
 import { vaultNamespace } from './namespace';
 import {
   parseRequest,
+  STORAGE_METHOD_SCOPE,
   storageError,
   type ImportProgressMessage,
   type StorageRequest,
@@ -152,34 +153,12 @@ async function handle(request: StorageRequest): Promise<unknown> {
     scope = requestedScope;
     testId = request.args?.testId;
   }
-  if (
-    [
-      'invoke',
-      'receipt',
-      'backup',
-      'importBegin',
-      'importMerge',
-      'importRestore',
-      'importCleanup',
-      'notesDetect',
-      'notesImport'
-    ].includes(request.method) &&
-    scope !== 'vault'
-  )
+  if (STORAGE_METHOD_SCOPE[request.method] === 'vault' && scope !== 'vault')
     throw {
       code: 'invalidArgument',
       message: 'Vault storage has not been opened'
     };
-  if (
-    [
-      'verify',
-      'read',
-      'write',
-      'prepareInterruptedWrite',
-      'checkInterruptedWrite'
-    ].includes(request.method) &&
-    scope !== 'proof'
-  )
+  if (STORAGE_METHOD_SCOPE[request.method] === 'proof' && scope !== 'proof')
     throw {
       code: 'invalidArgument',
       message: 'Proof operations require proof storage'

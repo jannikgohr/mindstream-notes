@@ -15,16 +15,14 @@
  * the single-client T3 specs stay on wdio.conf.ts.
  */
 
-import type { ChildProcess } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { configureWorker, multiWorkers } from './helpers/worker-isolation.js';
 import {
-  configureWorker,
-  multiWorkers,
-  webviewEnvironment
-} from './helpers/worker-isolation.js';
+  startClientDrivers,
+  stopClientDrivers,
+  type ClientProc
+} from './helpers/client-drivers.js';
 import {
   captureFailureArtifacts,
   installPageDiagnostics
@@ -32,64 +30,16 @@ import {
 import {
   appBinary as application,
   preflight,
-  repoRoot,
-  spawnTauriDriver,
-  stopTauriDriverTree
+  repoRoot
 } from './helpers/preflight.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const outputDir = join(repoRoot, '.output', 'wdio', 'multi');
 
-/**
- * One tauri-driver process per client. `port` is what wdio connects to;
- * `nativePort` is the underlying WebKitWebDriver — every value must be unique
- * across the two so the processes don't fight over a socket. `profileDir` is a
- * fresh, throwaway data dir per spec file (the `dir_override` seam,
- * e2e-data-dir feature) so the two clients are fully isolated on disk without
- * leaking app/WebView state into the next session.
- */
-interface ClientProc {
-  port: number;
-  nativePort: number;
-  profileId: string;
-  profileDir?: string;
-  driver?: ChildProcess;
-  startTimer?: ReturnType<typeof setTimeout>;
-}
-
 const clients: Record<'browserA' | 'browserB', ClientProc> = {
   browserA: { port: 4444, nativePort: 4445, profileId: 'e2e-a' },
   browserB: { port: 4446, nativePort: 4447, profileId: 'e2e-b' }
 };
-
-const DRIVER_START_STAGGER_MS = 20_000;
-
-function spawnDriver(client: ClientProc): ChildProcess {
-  client.profileDir = mkdtempSync(
-    join(tmpdir(), `mindstream-${client.profileId}-`)
-  );
-  // Dictionaries live outside the profile dir, so each client needs a
-  // disposable one of its own — otherwise a T4 run reads and writes the
-  // developer's real dictionaries. See spellcheck::DICTIONARY_DIR_ENV.
-  const dictionaryDir = mkdtempSync(
-    join(tmpdir(), `mindstream-${client.profileId}-dict-`)
-  );
-  return spawnTauriDriver(
-    ['--port', String(client.port), '--native-port', String(client.nativePort)],
-    {
-      ...process.env,
-      // The launched app reads its data dir from here — this is what makes
-      // the two clients distinct users' devices. The profile id namespaces the
-      // OS keyring entry; without it both clients default to `e2e`.
-      MINDSTREAM_PROFILE_DIR: client.profileDir,
-      MINDSTREAM_ROOT_DIR: join(client.profileDir, '.app-root'),
-      MINDSTREAM_PROFILE_ID: client.profileId,
-      MINDSTREAM_DICTIONARY_DIR: dictionaryDir,
-      ...webviewEnvironment(client.profileDir)
-    },
-    join(outputDir, `tauri-driver-${client.profileId}.log`)
-  );
-}
 
 export const config: WebdriverIO.Config = {
   runner: 'local',
@@ -164,40 +114,15 @@ export const config: WebdriverIO.Config = {
     });
   },
 
-  // Bring up tauri-driver processes on a stagger. wdio opens multiremote
-  // sessions concurrently; if both driver ports are already listening, that
-  // means both native Tauri/WebView2 hosts cold-start together. On Windows that
-  // occasionally leaves one app process not responding before Svelte mounts.
-  // Leaving later ports closed briefly makes wdio's normal connection retry
-  // machinery serialize the expensive native app boot without changing specs.
+  // Configure worker ports before starting their drivers.
   beforeSession: (_config, capabilities, _specs, cid) => {
     configureWorker(
       clients,
       capabilities as unknown as Record<string, { port?: number }>,
       cid
     );
-    for (const [index, client] of Object.values(clients).entries()) {
-      if (client.driver || client.startTimer) continue;
-      if (index === 0) {
-        client.driver = spawnDriver(client);
-      } else {
-        client.startTimer = setTimeout(() => {
-          client.driver = spawnDriver(client);
-          client.startTimer = undefined;
-        }, index * DRIVER_START_STAGGER_MS);
-      }
-    }
+    startClientDrivers(clients, outputDir);
   },
 
-  afterSession: async () => {
-    for (const client of Object.values(clients)) {
-      if (client.startTimer) {
-        clearTimeout(client.startTimer);
-        client.startTimer = undefined;
-      }
-      await stopTauriDriverTree(client.driver);
-      client.driver = undefined;
-      client.profileDir = undefined;
-    }
-  }
+  afterSession: () => stopClientDrivers(clients)
 };

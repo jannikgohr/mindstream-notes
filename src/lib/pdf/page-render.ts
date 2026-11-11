@@ -15,7 +15,6 @@
 
 import type { FlatOutlineItem } from '$lib/pdf/outline';
 import type { PdfSearchMatch } from '$lib/pdf/pdf-text-index';
-import {} from '$lib/pdf/stroke-utils';
 import type {
   PdfAnnotation,
   PdfAnnotationType,

@@ -32,7 +32,10 @@ import type { EditorView } from '@milkdown/kit/prose/view';
 import type { Node as ProseNode } from '@milkdown/kit/prose/model';
 import { $prose } from '@milkdown/kit/utils';
 import { parseNoteHref } from '../wikilink-href';
-import type { MarkdownSearchBridge } from './markdown-search-bridge.svelte';
+import type {
+  MarkdownSearchBridge,
+  MarkdownSearchOptions as SearchOptions
+} from './markdown-search-bridge.svelte';
 
 export type {
   MarkdownSearchBridge,
@@ -45,20 +48,7 @@ interface SearchMatch {
   to: number;
 }
 
-/**
- * VS Code-style search/replace modifiers. The first three shape matching;
- * `preserveCase` only affects how replacements are cased.
- */
-export interface SearchOptions {
-  /** Case-sensitive matching (`Aa`). */
-  caseSensitive: boolean;
-  /** Only match whole words, bounded by `\b` (`ab|`). */
-  wholeWord: boolean;
-  /** Treat the query as a regular expression (`.*`). */
-  regex: boolean;
-  /** When replacing, carry the matched text's casing onto the replacement. */
-  preserveCase: boolean;
-}
+export type { MarkdownSearchOptions as SearchOptions } from './markdown-search-bridge.svelte';
 
 export const DEFAULT_SEARCH_OPTIONS: SearchOptions = {
   caseSensitive: false,

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { mermaidLanguageDescription, renderMermaidPreview } from './mermaid';
+import {
+  mermaidLanguageDescription,
+  renderMermaidPreview,
+  svgToDataUrl
+} from './mermaid';
 
 describe('mermaidLanguageDescription', () => {
   // Regression: the original no-op token (`() => null`) never advanced
@@ -20,6 +24,15 @@ describe('mermaidLanguageDescription', () => {
 });
 
 describe('renderMermaidPreview', () => {
+  it('encodes Unicode SVG as UTF-8', () => {
+    const svg = '<svg><text>café 🧠</text></svg>';
+    const url = svgToDataUrl(svg);
+    const encoded = url.slice(url.indexOf(',') + 1);
+    const decoded = Uint8Array.from(atob(encoded), (char) =>
+      char.charCodeAt(0)
+    );
+    expect(new TextDecoder().decode(decoded)).toBe(svg);
+  });
   it('falls through for other languages', () => {
     expect(renderMermaidPreview('javascript', 'graph TD', () => {})).toBeNull();
   });

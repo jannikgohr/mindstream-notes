@@ -79,6 +79,20 @@ fn invalid() -> AppError {
     AppError::InvalidArg("invalid UI settings document; preserve it for recovery".into())
 }
 
+/// A missing receipt means the migration is still pending. Other bytes must
+/// match one of `accepted`, or the caller's `corrupt` error refuses them.
+fn read_receipt(
+    path: &Path,
+    accepted: &[&[u8]],
+    corrupt: impl FnOnce() -> AppError,
+) -> AppResult<Option<Vec<u8>>> {
+    match crate::root_documents::read_optional(path)? {
+        Some(raw) if accepted.contains(&raw.as_slice()) => Ok(Some(raw)),
+        Some(_) => Err(corrupt()),
+        None => Ok(None),
+    }
+}
+
 fn validate_values(values: &Values) -> AppResult<()> {
     if values.len() > 4096 || values.keys().any(|id| id.is_empty() || id.len() > 512) {
         return Err(invalid());
@@ -363,12 +377,7 @@ fn migrate_shortcut_scope(
     device: &mut Document,
     content: &mut Document,
 ) -> AppResult<(bool, bool)> {
-    let migrated = match fs::read(vault.join(SHORTCUT_RECEIPT)) {
-        Ok(raw) if raw == b"1" => true,
-        Ok(_) => return Err(invalid()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-        Err(error) => return Err(error.into()),
-    };
+    let migrated = read_receipt(&vault.join(SHORTCUT_RECEIPT), &[b"1"], invalid)?.is_some();
     let path = root.join("global-shortcuts-migration.json");
     crate::root_documents::recover(
         &path,
@@ -432,12 +441,7 @@ pub(crate) fn shortcut_eligible(root: &Path, vault_id: &str, vault: &Path) -> Ap
         }
         Err(error) => return Err(error.into()),
     };
-    let migrated = match fs::read(vault.join(SHORTCUT_RECEIPT)) {
-        Ok(raw) if raw == b"1" => true,
-        Ok(_) => return Err(invalid()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-        Err(error) => return Err(error.into()),
-    };
+    let migrated = read_receipt(&vault.join(SHORTCUT_RECEIPT), &[b"1"], invalid)?.is_some();
     if let Some(value) = content
         .as_ref()
         .and_then(|doc| doc.values.get(GLOBAL_SHORTCUTS))
@@ -571,16 +575,9 @@ fn initialize_classified(
         read(&vault_path, false)?
     };
     let preferences_marker = root.join(".ui-preferences-migrated");
-    let preferences_receipt = match fs::read(&preferences_marker) {
-        Ok(raw) if raw == b"1" || raw == b"2" => Some(raw),
-        Ok(_) => {
-            return Err(AppError::InvalidArg(
-                "invalid UI preferences migration record".into(),
-            ))
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-        Err(err) => return Err(err.into()),
-    };
+    let preferences_receipt = read_receipt(&preferences_marker, &[b"1", b"2"], || {
+        AppError::InvalidArg("invalid UI preferences migration record".into())
+    })?;
     let need_preferences = preferences_receipt.is_none();
     let content_preferences_marker = vault.join(".ui-content-preferences-migrated");
     let need_content_preferences = match archive_owner {
@@ -588,22 +585,12 @@ fn initialize_classified(
         Some(false) => false,
         // Version 1 already imported all preferences in the live legacy store.
         Some(true) if preferences_receipt.as_deref() == Some(b"1") => false,
-        Some(true) => match fs::read(&content_preferences_marker) {
-            Ok(raw) if raw == b"1" => false,
-            Ok(_) => return Err(invalid()),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
-            Err(err) => return Err(err.into()),
-        },
+        Some(true) => read_receipt(&content_preferences_marker, &[b"1"], invalid)?.is_none(),
     };
     let mut device_changed = false;
     let mut vault_changed = false;
     let appearance_receipt = root.join(APPEARANCE_RECEIPT);
-    let appearance_complete = match fs::read(&appearance_receipt) {
-        Ok(raw) if raw == b"1" => true,
-        Ok(_) => return Err(invalid()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-        Err(error) => return Err(error.into()),
-    };
+    let appearance_complete = read_receipt(&appearance_receipt, &[b"1"], invalid)?.is_some();
     let owner = appearance_owner(root, vault, vault_id)?;
     let finish_appearance = !appearance_complete
         && owner.vault_id == vault_id
@@ -623,16 +610,10 @@ fn initialize_classified(
         }
     }
     let layout_marker = vault.join(".dock-layout-migrated");
-    let need_layout = match fs::read(&layout_marker) {
-        Ok(raw) if raw == b"1" => false,
-        Ok(_) => {
-            return Err(AppError::InvalidArg(
-                "invalid dock layout migration record".into(),
-            ))
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
-        Err(err) => return Err(err.into()),
-    };
+    let need_layout = read_receipt(&layout_marker, &[b"1"], || {
+        AppError::InvalidArg("invalid dock layout migration record".into())
+    })?
+    .is_none();
     if need_layout && !vault_doc.values.contains_key("ui.dockLayout") {
         if let Some(raw) = layout_raw {
             if raw.len() > MAX_BYTES {
@@ -808,11 +789,8 @@ pub struct DeviceBrowserState {
 fn migrate_device_ui(root: &Path, input: &DeviceBrowserState) -> AppResult<()> {
     let _lock = RootLock::acquire(root)?;
     let receipt = root.join(".device-ui-migrated");
-    match fs::read(&receipt) {
-        Ok(raw) if raw == b"1" => return Ok(()),
-        Ok(_) => return Err(invalid()),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => return Err(err.into()),
+    if read_receipt(&receipt, &[b"1"], invalid)?.is_some() {
+        return Ok(());
     }
     let path = root.join("ui-settings.json");
     recover(&path, true)?;
@@ -1042,6 +1020,29 @@ pub async fn patch_ui_setting(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn receipts_accept_only_exact_bytes_and_report_the_callers_refusal() {
+        let root = std::env::temp_dir().join(format!("ms-receipt-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(".receipt");
+        assert_eq!(read_receipt(&path, &[b"1", b"2"], invalid).unwrap(), None);
+        fs::write(&path, b"2").unwrap();
+        assert_eq!(
+            read_receipt(&path, &[b"1", b"2"], invalid).unwrap(),
+            Some(b"2".to_vec())
+        );
+        fs::write(&path, b"2 ").unwrap();
+        let refused = read_receipt(&path, &[b"1", b"2"], || {
+            AppError::InvalidArg("dock layout migration record".into())
+        })
+        .unwrap_err();
+        assert!(matches!(
+            refused,
+            AppError::InvalidArg(message) if message == "dock layout migration record"
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn selected_vault_migrates_appearance_once_and_retains_every_vault_source() {

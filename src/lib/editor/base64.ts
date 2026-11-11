@@ -1,3 +1,12 @@
+export function bytesToBase64(bytes: Uint8Array | number[]): string {
+  let binary = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.slice(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
 /**
  * Decode standard or URL-safe base64 into bytes. The Rust side emits
  * standard base64 via etebase::utils::to_base64; URL-safe handling is
@@ -14,7 +23,5 @@ export function base64ToBytes(b64: string): Uint8Array {
   if (typeof atob !== 'function' && buffer)
     return new Uint8Array(buffer.from(padded, 'base64'));
   const bin = atob(padded);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
+  return Uint8Array.from(bin, (char) => char.charCodeAt(0));
 }

@@ -14,7 +14,7 @@ fn previous_path(path: &Path) -> AppResult<PathBuf> {
     Ok(path.with_file_name(name))
 }
 
-fn read_optional(path: &Path) -> AppResult<Option<Vec<u8>>> {
+pub(crate) fn read_optional(path: &Path) -> AppResult<Option<Vec<u8>>> {
     match fs::read(path) {
         Ok(raw) => Ok(Some(raw)),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),

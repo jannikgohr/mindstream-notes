@@ -26,21 +26,13 @@ pub struct RootLock {
 impl RootLock {
     pub fn acquire(root: &Path) -> AppResult<Self> {
         let (_, file) = open_lock(root, ".root.lock")?;
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            match crate::file_lock::try_lock_exclusive(&file) {
-                Ok(()) => return Ok(Self { _file: file }),
-                Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                Err(TryLockError::WouldBlock) => {
-                    return Err(AppError::InvalidArg(
-                        "app root is busy; retry the operation".into(),
-                    ))
-                }
-                Err(TryLockError::Error(err)) => return Err(err.into()),
-            }
+        let timeout = Duration::from_secs(5);
+        if !crate::file_lock::lock_within(&file, timeout, Duration::from_millis(20))? {
+            return Err(AppError::InvalidArg(
+                "app root is busy; retry the operation".into(),
+            ));
         }
+        Ok(Self { _file: file })
     }
 }
 
