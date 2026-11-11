@@ -7,20 +7,9 @@
  * rules for long comment bodies) can be asserted directly.
  */
 
-import { tUi } from '$lib/settings/i18n.svelte';
+import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
 import type { PdfAnnotation, PdfAnnotationType } from '$lib/pdf/types';
 import type { PdfTool } from '$lib/pdf/viewer-helpers';
-
-export function formatPdfUi(
-  key: Parameters<typeof tUi>[0],
-  replacements: Record<string, string | number>
-): string {
-  let value = tUi(key);
-  for (const [name, replacement] of Object.entries(replacements)) {
-    value = value.replaceAll(`{${name}}`, String(replacement));
-  }
-  return value;
-}
 
 export function annotationTypeLabel(type: PdfAnnotationType): string {
   switch (type) {
@@ -39,7 +28,7 @@ export function accessibleCommentText(annotation: PdfAnnotation): string {
   const body = annotation.body?.replace(/\s+/g, ' ').trim();
   if (!body) return '';
   const comment = body.length > 140 ? `${body.slice(0, 137)}...` : body;
-  return formatPdfUi('pdf.annotation.accessible.comment', { comment });
+  return tUiFormat('pdf.annotation.accessible.comment', { comment });
 }
 
 export function annotationAriaLabel(
@@ -51,7 +40,7 @@ export function annotationAriaLabel(
 ): string {
   const part =
     rectCount > 1
-      ? formatPdfUi('pdf.annotation.accessible.part', {
+      ? tUiFormat('pdf.annotation.accessible.part', {
           part: rectIndex + 1,
           total: rectCount
         })
@@ -62,7 +51,7 @@ export function annotationAriaLabel(
       : annotation.resolved
         ? tUi('pdf.annotation.accessible.resolved')
         : '';
-  return formatPdfUi(
+  return tUiFormat(
     activeTool === 'delete'
       ? 'pdf.annotation.accessible.delete'
       : 'pdf.annotation.accessible.select',

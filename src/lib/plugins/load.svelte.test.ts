@@ -22,7 +22,6 @@ vi.mock('./manage.svelte', () => ({ refreshPluginAdmin }));
 import { loadPlugins, watchPluginChanges } from './load';
 import {
   allPlugins,
-  enabledPlugins,
   pluginById,
   pluginLoadError,
   pluginSettingsSections,
@@ -120,7 +119,7 @@ describe('loadPlugins — Tauri (backend discovery)', () => {
     ]);
     await loadPlugins();
     expect(allPlugins()).toHaveLength(1);
-    expect(enabledPlugins()).toHaveLength(0);
+    expect(allPlugins().filter((plugin) => plugin.enabled)).toHaveLength(0);
     expect(pluginTemplates()).toHaveLength(0);
     expect(pluginLoadError(CORE_ID)).toBe('manifest hash changed');
     // A previously-approved plugin that changed (non-empty accepted hash)
@@ -168,7 +167,7 @@ describe('loadPlugins — Tauri (backend discovery)', () => {
     isTauri.mockReturnValue(true);
     pluginsDiscover.mockResolvedValue([view({ enabled: true })]);
     await loadPlugins();
-    expect(enabledPlugins()).toHaveLength(1);
+    expect(allPlugins().filter((plugin) => plugin.enabled)).toHaveLength(1);
     pluginsDiscover.mockResolvedValue([]);
     await loadPlugins();
     expect(allPlugins()).toHaveLength(0);

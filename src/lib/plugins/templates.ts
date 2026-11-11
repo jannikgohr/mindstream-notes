@@ -66,11 +66,6 @@ export function shouldOpenOnCreate(pluginId: string): boolean {
 // grammar inside is parsed by template-format's parseExpr.
 const PLACEHOLDER_RE = /\{\{\s*([^{}]*?)\s*\}\}/g;
 
-/** Today's date as `YYYY-MM-DD` — the default rendering of `{{date}}`. */
-export function todayIsoDate(now: Date = new Date()): string {
-  return formatDate(now, 'YYYY-MM-DD');
-}
-
 /** A fresh random id for the `{{uuid}}` built-in, with a non-crypto fallback. */
 function newUuid(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {

@@ -5,7 +5,7 @@
  * catalogue, i18n bundles) stay **static** — this registry never mutates them.
  * Instead it holds the validated manifests of loaded plugins and exposes
  * *merged views* (`pluginTemplates()`, `pluginSettingsSections()`,
- * `pluginCommands()`, `pluginI18nBundles()`) that the built-in surfaces read
+ * `pluginCommands()`) that the built-in surfaces read
  * alongside their own static data. Keeping the two apart means a plugin can
  * never corrupt a core array, and turning a plugin off is just dropping it out
  * of the merged view.
@@ -28,7 +28,6 @@ import type {
   PluginPermission,
   PluginContributionPoint,
   PluginContributions,
-  PluginI18nContribution,
   PluginManifest,
   PluginNoteExporterContribution,
   PluginNoteKindContribution,
@@ -185,11 +184,6 @@ export function pluginLoadError(pluginId: string): string | undefined {
 /** Every registered plugin, enabled or not, in registration order. */
 export function allPlugins(): RegisteredPlugin[] {
   return Object.values(state.plugins);
-}
-
-/** Only the enabled plugins — the ones that contribute to the app. */
-export function enabledPlugins(): RegisteredPlugin[] {
-  return Object.values(state.plugins).filter((p) => p.enabled);
 }
 
 /** Look up a single registration by id. */
@@ -355,16 +349,6 @@ export function pluginToolbarButtons(
       );
     })
     .map(({ pluginId, entry }) => ({ pluginId, button: entry }));
-}
-
-/** i18n bundles of all enabled plugins, keyed by plugin id. */
-export function pluginI18nBundles(): Record<string, PluginI18nContribution> {
-  const out: Record<string, PluginI18nContribution> = {};
-  for (const { manifest, enabled } of Object.values(state.plugins)) {
-    if (!enabled) continue;
-    if (manifest.contributes.i18n) out[manifest.id] = manifest.contributes.i18n;
-  }
-  return out;
 }
 
 /** Drop all registry state. Test-only; keeps suites isolated. */

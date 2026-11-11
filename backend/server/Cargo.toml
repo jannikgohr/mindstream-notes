@@ -32,9 +32,6 @@ sha2 = "0.10"
 # One-time passwords: the arithmetic and the link an authenticator reads.
 # That a code is accepted once, the backup codes and the lockout are ours.
 totp-rs = { version = "6", default-features = false, features = ["std", "otpauth"] }
-# The encoding of an authenticator secret, which backup and signup codes
-# borrow. The same crate totp-rs uses.
-base32 = "0.5"
 # The bucket per caller behind the limit on sign-in attempts. Who the
 # caller is, looking through trusted proxies, stays ours.
 governor = { version = "0.10", default-features = false, features = ["std", "dashmap"] }

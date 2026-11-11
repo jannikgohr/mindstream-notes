@@ -11,6 +11,7 @@
 
   import { AtSign } from '@lucide/svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { rankSubstringMatches } from '$lib/search/substring-rank';
   import type {
     MentionUser,
     UserMentionBridge
@@ -33,18 +34,12 @@
   const candidates = $derived.by<MentionUser[]>(() => {
     if (!bridge.state.open) return [];
     const q = bridge.state.query.trim().toLowerCase();
-    const all = bridge.state.users;
-    if (!q) return all.slice(0, MAX_RESULTS);
-    const scored: Array<{ user: MentionUser; rank: number }> = [];
-    for (const user of all) {
-      const name = user.username.toLowerCase();
-      const idx = name.indexOf(q);
-      if (idx < 0) continue;
-      const rank = idx === 0 ? 0 : idx + name.length / 1000;
-      scored.push({ user, rank });
-    }
-    scored.sort((a, b) => a.rank - b.rank);
-    return scored.slice(0, MAX_RESULTS).map((s) => s.user);
+    return rankSubstringMatches(
+      bridge.state.users,
+      q,
+      (user) => user.username,
+      MAX_RESULTS
+    );
   });
 
   function commitHighlighted() {

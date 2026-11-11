@@ -10,6 +10,7 @@
  */
 
 import type { Component } from 'svelte';
+import { lazyComponent } from '$lib/components/lazy-component';
 import { setMode } from 'mode-watcher';
 import {
   getCloseToTray,
@@ -176,38 +177,22 @@ export type CustomComponentLoader = () => Promise<AnyComponent>;
 
 /** Components rendered in place of a generic control. */
 export const CUSTOM_COMPONENT_LOADERS: Record<string, CustomComponentLoader> = {
-  'hotkey-preset': () =>
-    import('./customs/HotkeyPreset.svelte').then(
-      (mod) => mod.default as unknown as AnyComponent
-    ),
-  'theme-presets': () =>
-    import('./customs/ThemePresets.svelte').then(
-      (mod) => mod.default as unknown as AnyComponent
-    ),
-  'sign-in-form': () =>
-    import('./customs/SignInForm.svelte').then(
-      (mod) => mod.default as unknown as AnyComponent
-    ),
-  'account-security': () =>
-    import('./customs/AccountSecurity.svelte').then(
-      (mod) => mod.default as unknown as AnyComponent
-    ),
-  'hotkeys-panel': () =>
-    import('./customs/HotkeysPanel.svelte').then(
-      (mod) => mod.default as unknown as AnyComponent
-    ),
-  'spellcheck-dictionaries': () =>
-    import('./customs/SpellcheckDictionaries.svelte').then(
-      (mod) => mod.default as unknown as AnyComponent
-    ),
-  'spellcheck-custom-words': () =>
-    import('./customs/SpellcheckCustomWords.svelte').then(
-      (mod) => mod.default as unknown as AnyComponent
-    ),
-  'freeform-embed-hosts': () =>
-    import('./customs/FreeformEmbedHosts.svelte').then(
-      (mod) => mod.default as unknown as AnyComponent
-    )
+  'hotkey-preset': lazyComponent(() => import('./customs/HotkeyPreset.svelte')),
+  'theme-presets': lazyComponent(() => import('./customs/ThemePresets.svelte')),
+  'sign-in-form': lazyComponent(() => import('./customs/SignInForm.svelte')),
+  'account-security': lazyComponent(
+    () => import('./customs/AccountSecurity.svelte')
+  ),
+  'hotkeys-panel': lazyComponent(() => import('./customs/HotkeysPanel.svelte')),
+  'spellcheck-dictionaries': lazyComponent(
+    () => import('./customs/SpellcheckDictionaries.svelte')
+  ),
+  'spellcheck-custom-words': lazyComponent(
+    () => import('./customs/SpellcheckCustomWords.svelte')
+  ),
+  'freeform-embed-hosts': lazyComponent(
+    () => import('./customs/FreeformEmbedHosts.svelte')
+  )
 };
 
 type DataActionId =

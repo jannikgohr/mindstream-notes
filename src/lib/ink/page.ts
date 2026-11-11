@@ -104,10 +104,18 @@ export function pageIndexAt(
   y: number
 ): number | null {
   if (layout.pages) {
+    let top = 0;
     for (let i = 0; i < layout.pages.length; i++) {
-      const rect = pageRect(layout, i)!;
-      if (x >= rect[0] && x <= rect[2] && y >= rect[1] && y <= rect[3])
+      const page = layout.pages[i];
+      const left = (layout.page.width - page.width) / 2;
+      if (
+        x >= left &&
+        x <= left + page.width &&
+        y >= top &&
+        y <= top + page.height
+      )
         return i;
+      top = top + page.height + layout.pageGap;
     }
     return null;
   }

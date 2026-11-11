@@ -189,3 +189,24 @@ describe('PDF-backed ink export', () => {
     ink.doc.destroy();
   });
 });
+
+// Both successful and failed legacy exports must release their decoded document.
+it.each([false, true])(
+  'destroys a flat ink document with draw failure set to %s',
+  async (throws) => {
+    const ink = new InkDocument();
+    const decode = vi.spyOn(InkDocument, 'fromBytes').mockReturnValueOnce(ink);
+    if (throws)
+      vi.spyOn(ink, 'visibleStrokes').mockImplementationOnce(() => {
+        throw new Error('draw failed');
+      });
+    try {
+      const result = buildInkPdf(new Uint8Array());
+      if (throws) await expect(result).rejects.toThrow('draw failed');
+      else expect(await result).toBeInstanceOf(Uint8Array);
+      expect(ink.doc.isDestroyed).toBe(true);
+    } finally {
+      decode.mockRestore();
+    }
+  }
+);
