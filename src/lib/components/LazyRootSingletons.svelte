@@ -10,251 +10,110 @@
   import { shareDialog } from './share-dialog.svelte';
   import { joinLinkDialog } from './join-link-dialog.svelte';
   import { toasts } from './toast.svelte';
+  import { createLazyComponent } from './lazy-component.svelte';
   import PluginMenuHost from './PluginMenuHost.svelte';
 
-  let ConfirmDialog = $state<any | null>(null);
-  let ExportResultDialog = $state<any | null>(null);
-  let ImportChoiceDialog = $state<any | null>(null);
-  let ImportNotesDialog = $state<any | null>(null);
-  let UpdaterProgressDialog = $state<any | null>(null);
-  let ShortcutHelpDialog = $state<any | null>(null);
-  let SearchDialog = $state<any | null>(null);
-  let CommandPalette = $state<any | null>(null);
-  let ShareCollectionDialog = $state<any | null>(null);
-  let ManageAccessDialog = $state<any | null>(null);
-  let JoinSharedFolderDialog = $state<any | null>(null);
-  let ToastHost = $state<any | null>(null);
-
-  let confirmToken = 0;
-  let exportToken = 0;
-  let importToken = 0;
-  let importNotesToken = 0;
-  let updaterToken = 0;
-  let shortcutToken = 0;
-  let searchToken = 0;
-  let commandPaletteToken = 0;
-  let shareToken = 0;
-  let manageToken = 0;
-  let joinLinkToken = 0;
-  let toastToken = 0;
-
-  $effect(() => {
-    const active = confirmQueue.items.length > 0;
-    const token = ++confirmToken;
-    if (!active) {
-      ConfirmDialog = null;
-      return;
-    }
-    void import('./ConfirmDialog.svelte').then((mod) => {
-      if (token === confirmToken && confirmQueue.items.length > 0) {
-        ConfirmDialog = mod.default;
-      }
-    });
+  const ConfirmDialog = createLazyComponent({
+    load: () => import('./ConfirmDialog.svelte'),
+    when: () => confirmQueue.items.length > 0
   });
 
-  $effect(() => {
-    const active = importChoiceQueue.items.length > 0;
-    const token = ++importToken;
-    if (!active) {
-      ImportChoiceDialog = null;
-      return;
-    }
-    void import('./ImportChoiceDialog.svelte').then((mod) => {
-      if (token === importToken && importChoiceQueue.items.length > 0) {
-        ImportChoiceDialog = mod.default;
-      }
-    });
+  const ImportChoiceDialog = createLazyComponent({
+    load: () => import('./ImportChoiceDialog.svelte'),
+    when: () => importChoiceQueue.items.length > 0
   });
 
-  $effect(() => {
-    const active = importNotesQueue.items.length > 0;
-    const token = ++importNotesToken;
-    if (!active) {
-      ImportNotesDialog = null;
-      return;
-    }
-    void import('./ImportNotesDialog.svelte').then((mod) => {
-      if (token === importNotesToken && importNotesQueue.items.length > 0) {
-        ImportNotesDialog = mod.default;
-      }
-    });
+  const ImportNotesDialog = createLazyComponent({
+    load: () => import('./ImportNotesDialog.svelte'),
+    when: () => importNotesQueue.items.length > 0
   });
 
-  $effect(() => {
-    const active = exportResultQueue.items.length > 0;
-    const token = ++exportToken;
-    if (!active) {
-      ExportResultDialog = null;
-      return;
-    }
-    void import('./ExportResultDialog.svelte').then((mod) => {
-      if (token === exportToken && exportResultQueue.items.length > 0) {
-        ExportResultDialog = mod.default;
-      }
-    });
+  const ExportResultDialog = createLazyComponent({
+    load: () => import('./ExportResultDialog.svelte'),
+    when: () => exportResultQueue.items.length > 0
   });
 
-  $effect(() => {
-    const active = updaterProgress.active;
-    const token = ++updaterToken;
-    if (!active) {
-      UpdaterProgressDialog = null;
-      return;
-    }
-    void import('$lib/updater/ProgressDialog.svelte').then((mod) => {
-      if (token === updaterToken && updaterProgress.active) {
-        UpdaterProgressDialog = mod.default;
-      }
-    });
+  const UpdaterProgressDialog = createLazyComponent({
+    load: () => import('$lib/updater/ProgressDialog.svelte'),
+    when: () => updaterProgress.active
   });
 
-  $effect(() => {
-    const active = shortcutHelp.open;
-    const token = ++shortcutToken;
-    if (!active) {
-      ShortcutHelpDialog = null;
-      return;
-    }
-    void import('./ShortcutHelpDialog.svelte').then((mod) => {
-      if (token === shortcutToken && shortcutHelp.open) {
-        ShortcutHelpDialog = mod.default;
-      }
-    });
+  const ShortcutHelpDialog = createLazyComponent({
+    load: () => import('./ShortcutHelpDialog.svelte'),
+    when: () => shortcutHelp.open
   });
 
-  $effect(() => {
-    const active = searchDialog.open;
-    const token = ++searchToken;
-    if (!active) {
-      SearchDialog = null;
-      return;
-    }
-    void import('$lib/search/SearchDialog.svelte').then((mod) => {
-      if (token === searchToken && searchDialog.open) {
-        SearchDialog = mod.default;
-      }
-    });
+  const SearchDialog = createLazyComponent({
+    load: () => import('$lib/search/SearchDialog.svelte'),
+    when: () => searchDialog.open
   });
 
-  $effect(() => {
-    const active = commandPalette.open;
-    const token = ++commandPaletteToken;
-    if (!active) {
-      CommandPalette = null;
-      return;
-    }
-    void import('$lib/command-palette/CommandPalette.svelte').then((mod) => {
-      if (token === commandPaletteToken && commandPalette.open) {
-        CommandPalette = mod.default;
-      }
-    });
+  const CommandPalette = createLazyComponent({
+    load: () => import('$lib/command-palette/CommandPalette.svelte'),
+    when: () => commandPalette.open
   });
 
-  $effect(() => {
-    const active =
-      shareDialog.collectionId !== null && shareDialog.view === 'invite';
-    const token = ++shareToken;
-    if (!active) {
-      ShareCollectionDialog = null;
-      return;
-    }
-    void import('./ShareCollectionDialog.svelte').then((mod) => {
-      if (
-        token === shareToken &&
-        shareDialog.collectionId !== null &&
-        shareDialog.view === 'invite'
-      ) {
-        ShareCollectionDialog = mod.default;
-      }
-    });
+  const ShareCollectionDialog = createLazyComponent({
+    load: () => import('./ShareCollectionDialog.svelte'),
+    when: () =>
+      shareDialog.collectionId !== null && shareDialog.view === 'invite'
   });
 
-  $effect(() => {
-    const active = joinLinkDialog.open;
-    const token = ++joinLinkToken;
-    if (!active) {
-      JoinSharedFolderDialog = null;
-      return;
-    }
-    void import('./JoinSharedFolderDialog.svelte').then((mod) => {
-      if (token === joinLinkToken && joinLinkDialog.open) {
-        JoinSharedFolderDialog = mod.default;
-      }
-    });
+  const JoinSharedFolderDialog = createLazyComponent({
+    load: () => import('./JoinSharedFolderDialog.svelte'),
+    when: () => joinLinkDialog.open
   });
 
-  $effect(() => {
-    const active =
-      shareDialog.collectionId !== null && shareDialog.view === 'access';
-    const token = ++manageToken;
-    if (!active) {
-      ManageAccessDialog = null;
-      return;
-    }
-    void import('./ManageAccessDialog.svelte').then((mod) => {
-      if (
-        token === manageToken &&
-        shareDialog.collectionId !== null &&
-        shareDialog.view === 'access'
-      ) {
-        ManageAccessDialog = mod.default;
-      }
-    });
+  const ManageAccessDialog = createLazyComponent({
+    load: () => import('./ManageAccessDialog.svelte'),
+    when: () =>
+      shareDialog.collectionId !== null && shareDialog.view === 'access'
   });
 
-  $effect(() => {
-    const active = toasts.items.length > 0;
-    const token = ++toastToken;
-    if (!active) {
-      // Keep the host mounted through the fade-out of the last toast: unmounting
-      // the moment the array empties would cut its exit transition. The store
-      // has already removed the item, so an empty host renders nothing.
-      return;
-    }
-    void import('./ToastHost.svelte').then((mod) => {
-      if (token === toastToken && toasts.items.length > 0) {
-        ToastHost = mod.default;
-      }
-    });
+  const ToastHost = createLazyComponent({
+    load: () => import('./ToastHost.svelte'),
+    when: () => toasts.items.length > 0,
+    // Retain the empty host so the last toast can finish its exit transition.
+    keepMountedWhenInactive: true
   });
 </script>
 
-{#if ConfirmDialog}
-  <ConfirmDialog />
+{#if ConfirmDialog.component}
+  <ConfirmDialog.component />
 {/if}
-{#if ImportChoiceDialog}
-  <ImportChoiceDialog />
+{#if ImportChoiceDialog.component}
+  <ImportChoiceDialog.component />
 {/if}
-{#if ImportNotesDialog}
-  <ImportNotesDialog />
+{#if ImportNotesDialog.component}
+  <ImportNotesDialog.component />
 {/if}
-{#if ExportResultDialog}
-  <ExportResultDialog />
+{#if ExportResultDialog.component}
+  <ExportResultDialog.component />
 {/if}
-{#if UpdaterProgressDialog}
-  <UpdaterProgressDialog />
+{#if UpdaterProgressDialog.component}
+  <UpdaterProgressDialog.component />
 {/if}
-{#if ShortcutHelpDialog}
-  <ShortcutHelpDialog />
+{#if ShortcutHelpDialog.component}
+  <ShortcutHelpDialog.component />
 {/if}
-{#if SearchDialog}
-  <SearchDialog />
+{#if SearchDialog.component}
+  <SearchDialog.component />
 {/if}
-{#if CommandPalette}
-  <CommandPalette />
+{#if CommandPalette.component}
+  <CommandPalette.component />
 {/if}
-{#if ShareCollectionDialog}
-  <ShareCollectionDialog />
+{#if ShareCollectionDialog.component}
+  <ShareCollectionDialog.component />
 {/if}
-{#if ManageAccessDialog}
-  <ManageAccessDialog />
+{#if ManageAccessDialog.component}
+  <ManageAccessDialog.component />
 {/if}
-{#if JoinSharedFolderDialog}
+{#if JoinSharedFolderDialog.component}
   {#key joinLinkDialog.opened}
-    <JoinSharedFolderDialog />
+    <JoinSharedFolderDialog.component />
   {/key}
 {/if}
-{#if ToastHost}
-  <ToastHost />
+{#if ToastHost.component}
+  <ToastHost.component />
 {/if}
 <PluginMenuHost />
