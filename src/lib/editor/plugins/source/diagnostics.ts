@@ -33,7 +33,7 @@ import { Decoration, EditorView, ViewPlugin } from '@codemirror/view';
 import type { DecorationSet, ViewUpdate } from '@codemirror/view';
 import { excludeIgnored, maskRanges } from '$lib/diagnostics/ignore-ranges';
 import { markdownSyntax, type DiagnosticSyntax } from '$lib/diagnostics/syntax';
-import { isAbortError } from '$lib/diagnostics/bus';
+import { createDiagnosticRunner } from '$lib/diagnostics/runner';
 import type { Diagnostic, Segment } from '$lib/diagnostics/types';
 import type { DiagnosticMenuContext } from '$lib/diagnostics/popover-bridge.svelte';
 
@@ -129,107 +129,64 @@ export function sourceDiagnostics(
 
   const runner = ViewPlugin.fromClass(
     class {
-      timer: ReturnType<typeof setTimeout> | null = null;
-      controller: AbortController | null = null;
-
       unsubscribe: (() => void) | null = null;
-      /**
-       * Edits made while a check is outstanding. A network check takes
-       * seconds and a note keeps changing as it loads, so results are moved
-       * onto the current text rather than discarded — discarding them is
-       * what made squiggles take so long to appear at all.
-       */
-      inflight: ChangeSet | null = null;
-      /** An edit arrived mid-check; run once more when this one lands. */
-      rerun = false;
+      changes: ChangeSet | null = null;
+      runner: ReturnType<typeof createDiagnosticRunner>;
 
       constructor(readonly view: EditorView) {
-        // Check on open so an existing note shows its squiggles without
-        // needing an edit first.
-        this.schedule(0);
+        this.runner = createDiagnosticRunner({
+          debounceMs,
+          enabled: options.enabled,
+          clear: () => {
+            if (this.view.state.field(diagnosticsField).diagnostics.length > 0)
+              this.view.dispatch({ effects: setDiagnostics.of([]) });
+          },
+          run: async ({ signal, publish }) => {
+            this.changes = ChangeSet.empty(this.view.state.doc.length);
+            try {
+              const text = this.view.state.doc.toString();
+              const ignored = await syntax.ignoreRanges(text);
+              if (signal.aborted) return;
+              // Mask before segmentation so providers never receive ignored text.
+              // Offsets remain aligned with the original snapshot.
+              const segments = syntax.segment(maskRanges(text, ignored));
+              const draw = (diagnostics: Diagnostic[]) =>
+                publish(() => {
+                  const kept = excludeIgnored(diagnostics, ignored).map(
+                    (d) => ({
+                      ...d,
+                      from: this.changes!.mapPos(d.from, 1),
+                      to: this.changes!.mapPos(d.to, -1)
+                    })
+                  );
+                  this.view.dispatch({ effects: setDiagnostics.of(kept) });
+                });
+              draw(await options.check(segments, signal, draw));
+            } finally {
+              this.changes = null;
+            }
+          }
+        });
+        this.runner.start();
         this.unsubscribe =
-          options.subscribeInvalidate?.(() => this.schedule(0)) ?? null;
+          options.subscribeInvalidate?.(() => this.runner.invalidate()) ?? null;
       }
 
       update(update: ViewUpdate) {
         if (!update.docChanged) return;
-        if (this.inflight) {
-          this.inflight = this.inflight.compose(update.changes);
+        if (this.changes) {
+          this.changes = this.changes.compose(update.changes);
         }
         // A suggestion's range describes the document it was offered for.
         options.onDismissMenu?.();
-        this.schedule(debounceMs);
+        this.runner.documentChanged();
       }
 
       destroy() {
-        if (this.timer !== null) clearTimeout(this.timer);
-        this.controller?.abort();
-        this.unsubscribe?.();
-      }
-
-      schedule(delay: number) {
-        // Does NOT abort an outstanding check: cancelling one already
-        // seconds into flight on every keystroke is what made results take
-        // so long to appear at all.
-        if (this.timer !== null) clearTimeout(this.timer);
-        this.timer = setTimeout(() => void this.run(), delay);
-      }
-
-      async run() {
-        // Single-flight; the trailing re-run picks up anything that changed.
-        if (this.inflight) {
-          this.rerun = true;
-          return;
-        }
-        if (options.enabled && !options.enabled()) {
-          // Clear rather than return — the user may have just switched it off.
-          const { diagnostics } = this.view.state.field(diagnosticsField);
-          if (diagnostics.length > 0) {
-            this.view.dispatch({ effects: setDiagnostics.of([]) });
-          }
-          return;
-        }
-        this.controller = new AbortController();
-        const { signal } = this.controller;
-        this.inflight = ChangeSet.empty(this.view.state.doc.length);
-        const text = this.view.state.doc.toString();
-        // Awaited: a plugin-declared grammar computes its patterns in a
-        // Worker, so this is the one step of the check that can suspend before
-        // any provider is called. `inflight` is already open, so edits made
-        // while it resolves are mapped like any other.
-        const ignored = await syntax.ignoreRanges(text);
-        // Mask BEFORE segmenting, not just filter afterwards: a network
-        // checker has already received the text by the time results come
-        // back, so code blocks and link targets would leave the machine only
-        // to have their findings discarded. Masking is offset-preserving, so
-        // positions still line up with the real document.
-        const segments = syntax.segment(maskRanges(text, ignored));
-
-        // Filter in the coordinates the check ran against, then carry the
-        // survivors onto the text as it stands now.
-        const draw = (diagnostics: Diagnostic[]) => {
-          if (signal.aborted) return;
-          const changes = this.inflight;
-          const kept = excludeIgnored(diagnostics, ignored).map((d) => ({
-            ...d,
-            from: changes ? changes.mapPos(d.from, 1) : d.from,
-            to: changes ? changes.mapPos(d.to, -1) : d.to
-          }));
-          this.view.dispatch({ effects: setDiagnostics.of(kept) });
-        };
-
-        try {
-          draw(await options.check(segments, signal, draw));
-        } catch (err) {
-          if (!isAbortError(err))
-            console.error('Diagnostics check failed', err);
-        } finally {
-          this.inflight = null;
-          if (this.rerun) {
-            this.rerun = false;
-            void this.run();
-          }
-        }
+        this.runner.destroy();
+        const unsubscribe = this.unsubscribe;
+        this.unsubscribe = null;
+        unsubscribe?.();
       }
     }
   );

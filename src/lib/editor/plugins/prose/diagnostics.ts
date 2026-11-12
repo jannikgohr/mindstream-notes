@@ -19,9 +19,8 @@ import { Plugin, PluginKey } from '@milkdown/kit/prose/state';
 import type { Transaction } from '@milkdown/kit/prose/state';
 import type { Node as ProseNode } from '@milkdown/kit/prose/model';
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view';
-import type { EditorView } from '@milkdown/kit/prose/view';
 import { excludeIgnored } from '$lib/diagnostics/ignore-ranges';
-import { isAbortError } from '$lib/diagnostics/bus';
+import { createDiagnosticRunner } from '$lib/diagnostics/runner';
 import type { Diagnostic, Segment, TextRange } from '$lib/diagnostics/types';
 import type { DiagnosticMenuContext } from '$lib/diagnostics/popover-bridge.svelte';
 import { parseNoteHref } from '../wikilink-href';
@@ -232,81 +231,9 @@ export function diagnosticsPlugin(
 ): Plugin<DiagnosticsState> {
   const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
 
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  let controller: AbortController | null = null;
-
-  /**
-   * Transaction mappings collected while a check is in flight.
-   *
-   * A network check takes seconds, and a note being opened keeps changing
-   * while its content loads. Discarding results because the document moved
-   * meant the first several checks were thrown away and the user waited for
-   * the document to go quiet before seeing anything. Results are mapped
-   * forward instead.
-   */
   let inflight: {
     maps: { map(pos: number, assoc?: number): number }[];
   } | null = null;
-  /** An edit arrived mid-check, so run once more when this one lands. */
-  let rerun = false;
-
-  /** Carry a position through every edit that happened during the check. */
-  const forward = (pos: number, assoc: number) =>
-    (inflight?.maps ?? []).reduce((at, mapping) => mapping.map(at, assoc), pos);
-
-  const cancel = () => {
-    if (timer !== null) clearTimeout(timer);
-    timer = null;
-    controller?.abort();
-    controller = null;
-  };
-
-  async function run(view: EditorView) {
-    // Single-flight. Starting a second request while one is outstanding
-    // just multiplies load on a server that already takes seconds; the
-    // trailing re-run picks up whatever changed meanwhile.
-    if (inflight) {
-      rerun = true;
-      return;
-    }
-    if (options.enabled && !options.enabled()) {
-      // Clear rather than return: the user may have just switched it off.
-      const drawn = diagnosticsPluginKey.getState(view.state)?.diagnostics;
-      if (drawn && drawn.length > 0) {
-        view.dispatch(view.state.tr.setMeta(diagnosticsPluginKey, []));
-      }
-      return;
-    }
-    controller = new AbortController();
-    const { signal } = controller;
-    inflight = { maps: [] };
-    const { segments, skips } = analyzeDocument(view.state.doc);
-
-    // Both the findings and `skips` are in the coordinates of the document
-    // as it was when the check started, so filter first and move the
-    // survivors onto the current text afterwards.
-    const draw = (diagnostics: Diagnostic[]) => {
-      if (signal.aborted || view.isDestroyed) return;
-      const moved = excludeIgnored(diagnostics, skips).map((d) => ({
-        ...d,
-        from: forward(d.from, 1),
-        to: forward(d.to, -1)
-      }));
-      view.dispatch(view.state.tr.setMeta(diagnosticsPluginKey, moved));
-    };
-
-    try {
-      draw(await options.check(segments, signal, draw));
-    } catch (err) {
-      if (!isAbortError(err)) console.error('Diagnostics check failed', err);
-    } finally {
-      inflight = null;
-      if (rerun && !view.isDestroyed) {
-        rerun = false;
-        void run(view);
-      }
-    }
-  }
 
   return new Plugin<DiagnosticsState>({
     key: diagnosticsPluginKey,
@@ -350,32 +277,57 @@ export function diagnosticsPlugin(
       }
     },
     view(view) {
-      // Check once on open so an existing note shows its squiggles without
-      // requiring an edit first.
-      const initial = setTimeout(() => run(view), 0);
-      // Settings and dictionary changes are invisible from inside the
-      // editor, so re-check immediately rather than on the next keystroke.
-      const unsubscribe = options.subscribeInvalidate?.(() => {
-        if (timer !== null) clearTimeout(timer);
-        controller?.abort();
-        void run(view);
+      const runner = createDiagnosticRunner({
+        debounceMs,
+        enabled: options.enabled,
+        clear: () => {
+          if (diagnosticsPluginKey.getState(view.state)?.diagnostics.length)
+            view.dispatch(view.state.tr.setMeta(diagnosticsPluginKey, []));
+        },
+        run: async ({ signal, publish }) => {
+          const snapshot = {
+            maps: [] as { map(pos: number, assoc?: number): number }[]
+          };
+          inflight = snapshot;
+          try {
+            const { segments, skips } = analyzeDocument(view.state.doc);
+            const forward = (pos: number, assoc: number) =>
+              snapshot.maps.reduce(
+                (at, mapping) => mapping.map(at, assoc),
+                pos
+              );
+            const draw = (diagnostics: Diagnostic[]) =>
+              publish(() => {
+                const moved = excludeIgnored(diagnostics, skips).map((d) => ({
+                  ...d,
+                  from: forward(d.from, 1),
+                  to: forward(d.to, -1)
+                }));
+                view.dispatch(
+                  view.state.tr.setMeta(diagnosticsPluginKey, moved)
+                );
+              });
+            draw(await options.check(segments, signal, draw));
+          } finally {
+            inflight = null;
+          }
+        }
       });
+      runner.start();
+      let unsubscribe = options.subscribeInvalidate?.(() =>
+        runner.invalidate()
+      );
       return {
         update(updatedView, prevState) {
           if (updatedView.state.doc.eq(prevState.doc)) return;
-          // The open menu describes a document that no longer exists.
           options.onDismissMenu?.();
-          // Deliberately does NOT abort an outstanding check. Cancelling on
-          // every keystroke is why opening a note took so long: each edit
-          // threw away a request already seconds into flight and started the
-          // wait again.
-          if (timer !== null) clearTimeout(timer);
-          timer = setTimeout(() => run(updatedView), debounceMs);
+          runner.documentChanged();
         },
         destroy() {
-          clearTimeout(initial);
-          unsubscribe?.();
-          cancel();
+          runner.destroy();
+          const cleanup = unsubscribe;
+          unsubscribe = undefined;
+          cleanup?.();
         }
       };
     },
