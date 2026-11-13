@@ -1,5 +1,5 @@
 /**
- * The three overlays drawn on top of a rendered PDF page.
+ * The two overlays drawn on top of a rendered PDF page.
  *
  * Each is a plain DOM layer rebuilt from scratch whenever its inputs
  * change: search hits, and our annotations (highlights, comments, ink,
@@ -41,6 +41,8 @@ export interface PageOverlayHost {
   /** The params of the draw currently on screen. */
   readonly params: RenderParams;
   readonly viewport: PdfViewport | null;
+  /** False while the renderer is replacing the page or its coordinate system. */
+  readonly gesturesEnabled: boolean;
   /**
    * Teardown for the text-mode click-to-select listeners. They live on
    * the page element, which outlives any single annotation layer, so the
@@ -53,6 +55,54 @@ export function createPageOverlays(
   ctx: PageRenderContext,
   host: PageOverlayHost
 ) {
+  let activeGesture: (() => void) | null = null;
+
+  function cancelGesture() {
+    activeGesture?.();
+  }
+
+  function canStartGesture(event: PointerEvent) {
+    return event.button === 0 && host.gesturesEnabled;
+  }
+
+  function beginPointerSession(
+    target: EventTarget,
+    pointerId: number,
+    move: (event: PointerEvent) => void,
+    finish: (event: PointerEvent) => void,
+    cleanup: () => void
+  ) {
+    cancelGesture();
+    let stopped = false;
+    const stop = () => {
+      if (stopped) return;
+      stopped = true;
+      target.removeEventListener('pointermove', onMove);
+      target.removeEventListener('pointerup', onUp);
+      target.removeEventListener('pointercancel', onCancel);
+      if (activeGesture === stop) activeGesture = null;
+      cleanup();
+    };
+    const onMove = (event: Event) => {
+      const pointer = event as PointerEvent;
+      if (pointer.pointerId === pointerId) move(pointer);
+    };
+    const onUp = (event: Event) => {
+      const pointer = event as PointerEvent;
+      if (pointer.pointerId !== pointerId) return;
+      // Commands may synchronously replace this layer or start another gesture.
+      stop();
+      finish(pointer);
+    };
+    const onCancel = (event: Event) => {
+      if ((event as PointerEvent).pointerId === pointerId) stop();
+    };
+    activeGesture = stop;
+    target.addEventListener('pointermove', onMove);
+    target.addEventListener('pointerup', onUp);
+    target.addEventListener('pointercancel', onCancel);
+  }
+
   // Search-hit overlay: translucent boxes over every match on this page,
   // with the active hit emphasised. Read imperatively from the parent's
   // per-page match map; the `searchVersion` param triggers the refresh.
@@ -101,6 +151,7 @@ export function createPageOverlays(
   }
 
   function renderAppAnnotations() {
+    cancelGesture();
     const pageEl = host.pageSurface.querySelector<HTMLElement>('.page');
     const viewport = host.viewport;
     if (!pageEl || !viewport) return;
@@ -133,7 +184,7 @@ export function createPageOverlays(
     // (cheap CSS transform) and commits the PDF-space delta on release.
     function attachMoveHandler(node: HTMLElement, annotation: PdfAnnotation) {
       node.addEventListener('pointerdown', (event) => {
-        if (event.button !== 0) return;
+        if (!canStartGesture(event)) return;
         event.preventDefault();
         event.stopPropagation();
         const pageRect = pageEl!.getBoundingClientRect();
@@ -144,7 +195,6 @@ export function createPageOverlays(
         const startClientX = event.clientX;
         const startClientY = event.clientY;
         let moving = false;
-        node.setPointerCapture?.(event.pointerId);
 
         const onMove = (moveEvent: PointerEvent) => {
           const dxPx = moveEvent.clientX - startClientX;
@@ -157,11 +207,6 @@ export function createPageOverlays(
           node.style.transform = `translate(${dxPx}px, ${dyPx}px)`;
         };
         const onUp = (upEvent: PointerEvent) => {
-          node.removeEventListener('pointermove', onMove);
-          node.removeEventListener('pointerup', onUp);
-          node.releasePointerCapture?.(upEvent.pointerId);
-          node.classList.remove('pdf-app-annotation-moving');
-          node.style.transform = '';
           if (!moving) {
             ctx.selectAnnotation(annotation.id);
             return;
@@ -176,8 +221,14 @@ export function createPageOverlays(
             pdfEndY - pdfStartY
           );
         };
-        node.addEventListener('pointermove', onMove);
-        node.addEventListener('pointerup', onUp);
+        beginPointerSession(node, event.pointerId, onMove, onUp, () => {
+          if (node.hasPointerCapture?.(event.pointerId)) {
+            node.releasePointerCapture(event.pointerId);
+          }
+          node.classList.remove('pdf-app-annotation-moving');
+          node.style.transform = '';
+        });
+        node.setPointerCapture?.(event.pointerId);
       });
     }
 
@@ -401,7 +452,7 @@ export function createPageOverlays(
 
     if (host.params.activeTool === 'pen') {
       layer.addEventListener('pointerdown', (event) => {
-        if (event.button !== 0) return;
+        if (!canStartGesture(event)) return;
         event.preventDefault();
         const pageRect = pageEl.getBoundingClientRect();
         const preview = document.createElementNS(
@@ -452,10 +503,7 @@ export function createPageOverlays(
           pushPoint(moveEvent.clientX, moveEvent.clientY);
         };
         const onUp = (upEvent: PointerEvent) => {
-          window.removeEventListener('pointermove', onMove);
-          window.removeEventListener('pointerup', onUp);
           pushPoint(upEvent.clientX, upEvent.clientY);
-          preview.remove();
           if (pdfPoints.length < 2) return;
           const rect = strokeBounds(pdfPoints, INK_WIDTH * 2);
           if (rect.width < 1 || rect.height < 1) return;
@@ -477,8 +525,9 @@ export function createPageOverlays(
           );
         };
 
-        window.addEventListener('pointermove', onMove);
-        window.addEventListener('pointerup', onUp, { once: true });
+        beginPointerSession(window, event.pointerId, onMove, onUp, () =>
+          preview.remove()
+        );
       });
       return;
     }
@@ -496,7 +545,7 @@ export function createPageOverlays(
     }
 
     layer.addEventListener('pointerdown', (event) => {
-      if (event.button !== 0) return;
+      if (!canStartGesture(event)) return;
       event.preventDefault();
       if (
         host.params.activeTool === 'signature' &&
@@ -527,10 +576,6 @@ export function createPageOverlays(
         updatePreview(moveEvent.clientX, moveEvent.clientY);
       };
       const onUp = (upEvent: PointerEvent) => {
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-        preview.remove();
-
         const endX = upEvent.clientX - pageRect.left;
         const endY = upEvent.clientY - pageRect.top;
         const [pdfEndX, pdfEndY] = viewport.convertToPdfPoint(endX, endY);
@@ -589,10 +634,11 @@ export function createPageOverlays(
         );
       };
 
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp, { once: true });
+      beginPointerSession(window, event.pointerId, onMove, onUp, () =>
+        preview.remove()
+      );
     });
   }
 
-  return { renderAppAnnotations, renderSearchLayer };
+  return { renderAppAnnotations, renderSearchLayer, cancelGesture };
 }

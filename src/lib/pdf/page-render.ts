@@ -116,6 +116,7 @@ export function createPageRenderer(ctx: PageRenderContext) {
       Awaited<ReturnType<PdfDocument['getPage']>>['getViewport']
     > | null = null;
     let renderedSize: PageSize | null = null;
+    let gesturesEnabled = false;
     // Tears down the text-mode click-to-select listeners installed by
     // renderAppAnnotations (they live on the page element, which
     // outlives each annotation layer).
@@ -133,6 +134,8 @@ export function createPageRenderer(ctx: PageRenderContext) {
     //   3. pageView.cancelRendering — interrupts the pageView's own
     //      render task (only relevant once draw() got past getPage()).
     ctx.pageCancelHooks.set(current.pageNumber, () => {
+      gesturesEnabled = false;
+      overlays.cancelGesture();
       cancelScheduledDraw();
       drawGeneration += 1;
       pendingPageView?.cancelRendering();
@@ -145,6 +148,9 @@ export function createPageRenderer(ctx: PageRenderContext) {
       },
       get viewport() {
         return currentViewport;
+      },
+      get gesturesEnabled() {
+        return gesturesEnabled;
       },
       get textModeClickCleanup() {
         return textModeClickCleanup;
@@ -181,6 +187,8 @@ export function createPageRenderer(ctx: PageRenderContext) {
     }
 
     function teardownPageView() {
+      gesturesEnabled = false;
+      overlays.cancelGesture();
       clearPendingPageView();
       textModeClickCleanup?.();
       textModeClickCleanup = null;
@@ -345,6 +353,7 @@ export function createPageRenderer(ctx: PageRenderContext) {
         const pageEl = nextLayer.querySelector<HTMLElement>('.page');
         const previousPageView = pageView;
         const previousLayer = activeLayer;
+        overlays.cancelGesture();
         nextLayer.classList.remove('pdf-page-buffer-pending');
         nextLayer.classList.add('pdf-page-buffer-active');
         previousLayer?.remove();
@@ -364,6 +373,7 @@ export function createPageRenderer(ctx: PageRenderContext) {
         // never points at an invisible staging layer.
         ctx.pageViewports.set(request.pageNumber, viewport);
         clearPreviewScale();
+        gesturesEnabled = true;
         renderAppAnnotations();
       } catch (err) {
         clearPendingPageView(nextLayer, nextPageView);
@@ -382,7 +392,6 @@ export function createPageRenderer(ctx: PageRenderContext) {
     return {
       update(next: RenderParams) {
         const prev = current;
-        current = next;
         // Page entered the render window — draw it. Page left the window
         // (or pageNumber/zoom changed) — let draw() decide whether to
         // teardown or redraw, based on the now-current shouldRender flag.
@@ -398,6 +407,16 @@ export function createPageRenderer(ctx: PageRenderContext) {
           // Bumped when an externally-cancelled render needs to restart
           // after the user scrolled back inside the band before grace.
           next.invalidation !== prev.invalidation;
+        if (visualChange || !next.shouldRender) gesturesEnabled = false;
+        if (
+          visualChange ||
+          !next.shouldRender ||
+          next.activeTool !== prev.activeTool ||
+          next.areaMode !== prev.areaMode
+        ) {
+          overlays.cancelGesture();
+        }
+        current = next;
         if (leavingRender) {
           // Tear down immediately — the now-irrelevant pageView is hogging
           // worker capacity that a visible page needs. No debounce here.
