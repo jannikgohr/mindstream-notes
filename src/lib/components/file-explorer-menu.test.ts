@@ -337,8 +337,14 @@ describe('folder create submenu', () => {
       entry.onSelect?.();
     }
 
-    expect(drafts.length).toBeGreaterThan(0);
-    expect(drafts.every(([, parentId]) => parentId === 'folder-1')).toBe(true);
+    expect(drafts).toEqual([
+      ['note', 'folder-1'],
+      ['drawing', 'folder-1'],
+      ['ink', 'folder-1'],
+      ['pdf', 'folder-1'],
+      ['kanban', 'folder-1'],
+      ['folder', 'folder-1']
+    ]);
   });
 });
 

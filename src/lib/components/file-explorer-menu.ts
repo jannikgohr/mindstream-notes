@@ -294,25 +294,22 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
     ];
   }
 
-  // The "create a … inside this folder" entries, shared between the Home folder
-  // menu and the editable-shared folder menu so the two stay in lockstep. The
-  // plugin create group is fenced by separators into its own section.
-  async function folderCreateMenuItems(
-    id: string
-  ): Promise<(MenuItem | 'separator')[]> {
-    const pluginItems = await pluginCreateMenuItems(ctx, id);
+  function builtInNoteCreateMenuItems(
+    parentId: string | null,
+    kanbanLabelKey: 'nav.create.kanban' | 'nav.create.kanbanInFolder'
+  ): MenuItem[] {
     return [
       {
         label: tUi('fileTree.newNote'),
         icon: noteKindIcon('markdown'),
-        onSelect: () => ctx.startDraft('note', id)
+        onSelect: () => ctx.startDraft('note', parentId)
       },
       ...(noteTypeEnabled('freeform')
         ? [
             {
               label: tUi('fileTree.newDrawing'),
               icon: noteKindIcon('freeform'),
-              onSelect: () => ctx.startDraft('drawing', id)
+              onSelect: () => ctx.startDraft('drawing', parentId)
             }
           ]
         : []),
@@ -321,7 +318,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
             {
               label: tUi('fileTree.newInk'),
               icon: noteKindIcon('ink'),
-              onSelect: () => ctx.startDraft('ink', id)
+              onSelect: () => ctx.startDraft('ink', parentId)
             }
           ]
         : []),
@@ -330,19 +327,31 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
             {
               label: tUi('fileTree.importPdf'),
               icon: noteKindIcon('pdf'),
-              onSelect: () => ctx.startPdfImport(id)
+              onSelect: () => ctx.startPdfImport(parentId)
             }
           ]
         : []),
       ...(noteTypeEnabled('kanban')
         ? [
             {
-              label: tUi('nav.create.kanbanInFolder'),
+              label: tUi(kanbanLabelKey),
               icon: noteKindIcon('kanban'),
-              onSelect: () => ctx.startDraft('kanban', id)
+              onSelect: () => ctx.startDraft('kanban', parentId)
             }
           ]
-        : []),
+        : [])
+    ];
+  }
+
+  // The "create a … inside this folder" entries, shared between the Home folder
+  // menu and the editable-shared folder menu so the two stay in lockstep. The
+  // plugin create group is fenced by separators into its own section.
+  async function folderCreateMenuItems(
+    id: string
+  ): Promise<(MenuItem | 'separator')[]> {
+    const pluginItems = await pluginCreateMenuItems(ctx, id);
+    return [
+      ...builtInNoteCreateMenuItems(id, 'nav.create.kanbanInFolder'),
       ...(pluginItems.length > 0
         ? (['separator', ...pluginItems, 'separator'] as (
             | MenuItem
@@ -698,47 +707,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
 
     const pluginItems = await pluginCreateMenuItems(ctx, null);
     return [
-      {
-        label: tUi('fileTree.newNote'),
-        icon: noteKindIcon('markdown'),
-        onSelect: () => ctx.startDraft('note', null)
-      },
-      ...(noteTypeEnabled('freeform')
-        ? [
-            {
-              label: tUi('fileTree.newDrawing'),
-              icon: noteKindIcon('freeform'),
-              onSelect: () => ctx.startDraft('drawing', null)
-            }
-          ]
-        : []),
-      ...(noteTypeEnabled('ink')
-        ? [
-            {
-              label: tUi('fileTree.newInk'),
-              icon: noteKindIcon('ink'),
-              onSelect: () => ctx.startDraft('ink', null)
-            }
-          ]
-        : []),
-      ...(noteTypeEnabled('pdf')
-        ? [
-            {
-              label: tUi('fileTree.importPdf'),
-              icon: noteKindIcon('pdf'),
-              onSelect: () => ctx.startPdfImport(null)
-            }
-          ]
-        : []),
-      ...(noteTypeEnabled('kanban')
-        ? [
-            {
-              label: tUi('nav.create.kanban'),
-              icon: noteKindIcon('kanban'),
-              onSelect: () => ctx.startDraft('kanban', null)
-            }
-          ]
-        : []),
+      ...builtInNoteCreateMenuItems(null, 'nav.create.kanban'),
       ...(pluginItems.length > 0
         ? (['separator', ...pluginItems, 'separator'] as (
             | MenuItem
