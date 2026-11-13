@@ -202,6 +202,7 @@
     containsPagePoint,
     pageIndexAt,
     defaultLayout,
+    forEachPageRect,
     pageRect,
     type InkPoint
   } from '$lib/ink/page';
@@ -532,9 +533,7 @@
     if (canvasRect.width <= 0 || canvasRect.height <= 0) return [];
     const dpr = window.devicePixelRatio || 1;
     const bounds: number[] = [];
-    for (let i = 0; i < layout.pageCount; i++) {
-      const rect = pageRect(layout, i);
-      if (!rect) continue;
+    forEachPageRect(layout, (rect) => {
       const [x0p, y0p, x1p, y1p] = rect;
       const tl = pageToScreen({ x: x0p, y: y0p });
       const br = pageToScreen({ x: x1p, y: y1p });
@@ -544,14 +543,14 @@
       const top = Math.max(tl.y, 0);
       const right = Math.min(br.x, view.width);
       const bottom = Math.min(br.y, view.height);
-      if (right <= left || bottom <= top) continue;
+      if (right <= left || bottom <= top) return;
       bounds.push(
         (canvasRect.left + left) * dpr,
         (canvasRect.top + top) * dpr,
         (canvasRect.left + right) * dpr,
         (canvasRect.top + bottom) * dpr
       );
-    }
+    });
     return bounds;
   }
 
