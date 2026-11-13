@@ -77,20 +77,27 @@ export function collectionIsSharedRoot(
   );
 }
 
-export function collectionIsSharedOrUnderShared(
+function sharedWithMeRootFor(
   collectionId: string | null,
   collectionsById: Record<string, Collection>
-): boolean {
+): Collection | null {
   let current = collectionId;
   const seen = new Set<string>();
   while (current && !seen.has(current)) {
     seen.add(current);
     const collection = collectionsById[current];
-    if (!collection) return false;
-    if (collectionIsSharedWithMe(collection)) return true;
+    if (!collection) return null;
+    if (collectionIsSharedWithMe(collection)) return collection;
     current = collection.parent_collection_id;
   }
-  return false;
+  return null;
+}
+
+export function collectionIsSharedOrUnderShared(
+  collectionId: string | null,
+  collectionsById: Record<string, Collection>
+): boolean {
+  return sharedWithMeRootFor(collectionId, collectionsById) !== null;
 }
 
 /**
@@ -106,18 +113,8 @@ export function collectionScopeIsReadOnly(
   collectionId: string | null,
   collectionsById: Record<string, Collection>
 ): boolean {
-  let current = collectionId;
-  const seen = new Set<string>();
-  while (current && !seen.has(current)) {
-    seen.add(current);
-    const collection = collectionsById[current];
-    if (!collection) return false;
-    if (collectionIsSharedWithMe(collection)) {
-      return collection.shared_role === 'read_only';
-    }
-    current = collection.parent_collection_id;
-  }
-  return false;
+  const root = sharedWithMeRootFor(collectionId, collectionsById);
+  return root?.shared_role === 'read_only';
 }
 
 /**
@@ -132,16 +129,8 @@ export function sharedRootIdFor(
   collectionId: string | null,
   collectionsById: Record<string, Collection>
 ): string | null {
-  let current = collectionId;
-  const seen = new Set<string>();
-  while (current && !seen.has(current)) {
-    seen.add(current);
-    const collection = collectionsById[current];
-    if (!collection) return null;
-    if (collectionIsSharedWithMe(collection)) return collection.id;
-    current = collection.parent_collection_id;
-  }
-  return null;
+  const root = sharedWithMeRootFor(collectionId, collectionsById);
+  return root === null ? null : root.id;
 }
 
 /**
