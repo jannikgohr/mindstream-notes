@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   proseUndo: vi.fn(),
   proseRedo: vi.fn(),
   applyListAction: vi.fn(),
+  isInCodeOrList: vi.fn(() => false),
   insertImageBlock: vi.fn(),
   insertMath: vi.fn(),
   insertMermaid: vi.fn(),
@@ -40,6 +41,7 @@ vi.mock('@milkdown/kit/prose/history', () => ({
 }));
 vi.mock('$lib/components/editor-toolbar/commands', () => ({
   applyListAction: h.applyListAction,
+  isInCodeOrList: h.isInCodeOrList,
   insertImageBlock: h.insertImageBlock,
   insertMath: h.insertMath,
   insertMermaid: h.insertMermaid,
@@ -72,6 +74,7 @@ function makeCtx(blockNames: string[] = ['doc']) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.isInCodeOrList.mockReturnValue(false);
 });
 
 describe('MARKDOWN_ACTIONS', () => {
@@ -97,18 +100,24 @@ describe('MARKDOWN_ACTIONS', () => {
 
   it('headings call setBlockTypeCommand with the level', () => {
     MARKDOWN_ACTIONS['editor.markdown.h2'](makeCtx(['doc', 'paragraph']));
+    expect(h.isInCodeOrList).toHaveBeenCalledOnce();
+    expect(h.isInCodeOrList).toHaveBeenCalledWith(
+      expect.objectContaining({ selection: expect.any(Object) })
+    );
     expect(commandCall).toHaveBeenCalledWith(
       'setBlockType',
       expect.objectContaining({ attrs: { level: 2 } })
     );
   });
 
-  it('skips block conversions inside a code block or list', () => {
+  it('honors the shared block guard for heading and paragraph conversions', () => {
+    h.isInCodeOrList.mockReturnValue(true);
     MARKDOWN_ACTIONS['editor.markdown.h1'](makeCtx(['doc', 'code_block']));
     MARKDOWN_ACTIONS['editor.markdown.paragraph'](
       makeCtx(['doc', 'bullet_list', 'list_item'])
     );
     expect(commandCall).not.toHaveBeenCalled();
+    expect(h.isInCodeOrList).toHaveBeenCalledTimes(2);
   });
 
   it('list toggles delegate to applyListAction; inserts delegate to their commands', () => {
