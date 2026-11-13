@@ -70,15 +70,32 @@ export async function bundleExportFiles(
   if (files.length === 1)
     return { ...files[0], name: exportFilename(title, files[0].format) };
   const { zip } = await import('fflate');
+  // Reserve all originals so a duplicate cannot take a later page's name.
+  // ZIP keys are exact strings, unlike case-folded filesystem names.
+  const reserved = new Set(files.map((file) => file.name));
+  const nextSuffix = new Map<string, number>();
+  const entries = files.map((file) => {
+    let suffix = nextSuffix.get(file.name);
+    if (suffix === undefined) {
+      nextSuffix.set(file.name, 2);
+      return [file.name, file.bytes];
+    }
+    const dot = file.name.lastIndexOf('.');
+    const base = dot > 0 ? file.name.slice(0, dot) : file.name;
+    const extension = dot > 0 ? file.name.slice(dot) : '';
+    let name: string;
+    do {
+      name = `${base}_${suffix++}${extension}`;
+    } while (reserved.has(name));
+    nextSuffix.set(file.name, suffix);
+    reserved.add(name);
+    return [name, file.bytes];
+  });
   const bytes = await new Promise<Uint8Array>((resolve, reject) => {
-    zip(
-      Object.fromEntries(files.map((file) => [file.name, file.bytes])),
-      { level: 6 },
-      (err, result) => {
-        if (err) reject(err);
-        else resolve(result);
-      }
-    );
+    zip(Object.fromEntries(entries), { level: 6 }, (err, result) => {
+      if (err) reject(err);
+      else resolve(result);
+    });
   });
   return { name: exportFilename(title, 'zip'), format: 'zip', bytes };
 }
