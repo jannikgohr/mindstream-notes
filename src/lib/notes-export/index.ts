@@ -260,8 +260,8 @@ function computeFolderPaths(
   for (const c of childrenOf.get(null) ?? []) {
     queue.push({ collection: c, parentPath: '' });
   }
-  while (queue.length > 0) {
-    const { collection, parentPath } = queue.shift()!;
+  for (let head = 0; head < queue.length; head++) {
+    const { collection, parentPath } = queue[head];
     const folderName = dedupeAgainst(
       takenFor(parentPath),
       sanitizeName(collection.name)
