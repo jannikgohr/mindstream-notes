@@ -93,6 +93,41 @@ function seed(id: string, kind: string, body = '', yrs_state: number[] = []) {
 }
 
 describe('vault export additions', () => {
+  it('keeps nested folder collisions and excludes disconnected or trashed subtrees', async () => {
+    const collections = state.collections as Record<string, unknown>;
+    const folders = [
+      ['a', 'Same', null],
+      ['b', 'same', null],
+      ['c', 'Child', 'a'],
+      ['d', 'Child', 'a'],
+      ['e', 'Child', 'b'],
+      ['assets', '_assets', null],
+      ['trash', 'Trash', null],
+      ['deleted', 'Deleted', 'trash'],
+      ['hidden', 'Hidden', 'deleted'],
+      ['orphan', 'Orphan', 'missing']
+    ] as const;
+    try {
+      for (const [id, name, parent] of folders) {
+        collections[id] = { id, name, parent_collection_id: parent };
+        seed(id, 'markdown');
+        state.notes[id].parent_collection_id = id;
+      }
+      const report = await exportVault(state.writeExportFile);
+      expect(report.folders_written).toBe(6);
+      expect(state.writeExportFile.mock.calls.map(([path]) => path)).toEqual([
+        'Same/Same title.md',
+        'same_2/Same title.md',
+        'Same/Child/Same title.md',
+        'Same/Child_2/Same title.md',
+        'same_2/Child/Same title.md',
+        '_assets_2/Same title.md'
+      ]);
+    } finally {
+      for (const [id] of folders) delete collections[id];
+    }
+  });
+
   it('never puts a note file on the path of a folder', async () => {
     const collections = state.collections as Record<string, unknown>;
     collections.folder = {
