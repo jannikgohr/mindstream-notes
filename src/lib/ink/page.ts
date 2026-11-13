@@ -98,6 +98,24 @@ export function pageRect(
   return [0, top, layout.page.width, top + layout.page.height];
 }
 
+/** Visit page rectangles in order without editing geometry during the walk. */
+export function forEachPageRect(
+  layout: DocumentLayout,
+  visit: (rect: [number, number, number, number]) => void
+): void {
+  let top = 0;
+  for (let i = 0; i < layout.pageCount; i++) {
+    if (!layout.pages) {
+      visit(pageRect(layout, i)!);
+      continue;
+    }
+    const page = layout.pages[i];
+    const left = (layout.page.width - page.width) / 2;
+    visit([left, top, left + page.width, top + page.height]);
+    top = top + page.height + layout.pageGap;
+  }
+}
+
 export function pageIndexAt(
   layout: DocumentLayout,
   x: number,

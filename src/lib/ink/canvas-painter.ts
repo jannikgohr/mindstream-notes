@@ -19,7 +19,11 @@ import {
   type PageBackgroundMode
 } from '$lib/ink/editor-helpers';
 import { canvasPageSurface } from '$lib/layout/page-layout';
-import { pageRect, type DocumentLayout, type InkPoint } from '$lib/ink/page';
+import {
+  forEachPageRect,
+  type DocumentLayout,
+  type InkPoint
+} from '$lib/ink/page';
 import { traceStrokeCurve } from '$lib/ink/stroke-curve';
 import type { StrokeBounds } from '$lib/ink/stroke-types';
 import { pageToScreen, type InkView } from '$lib/ink/view-transform';
@@ -52,14 +56,12 @@ export function drawPages(
   scene: InkScene
 ) {
   const { view, layout, pageDark, displayCssColor } = scene;
-  for (let i = 0; i < layout.pageCount; i += 1) {
-    const rect = pageRect(layout, i);
-    if (!rect) continue;
+  forEachPageRect(layout, (rect) => {
     const [x0, y0, x1, y1] = rect;
-    if (y1 < visible.minY || y0 > visible.maxY) continue;
+    if (y1 < visible.minY || y0 > visible.maxY) return;
     const a = pageToScreen(view, { x: x0, y: y0 });
     const b = pageToScreen(view, { x: x1, y: y1 });
-    if (b.y < -32 || a.y > view.height + 32) continue;
+    if (b.y < -32 || a.y > view.height + 32) return;
     const width = b.x - a.x;
     const height = b.y - a.y;
     const surface = canvasPageSurface(pageDark);
@@ -75,7 +77,7 @@ export function drawPages(
     ctx.strokeStyle = surface.edgeColor;
     ctx.lineWidth = 1;
     ctx.strokeRect(a.x + 0.5, a.y + 0.5, width - 1, height - 1);
-  }
+  });
 }
 
 /**
