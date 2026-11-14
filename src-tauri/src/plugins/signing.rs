@@ -21,10 +21,10 @@
 //! (and any assets) — tampering with the code breaks the signature exactly as
 //! editing the manifest does, which is what makes running a signed plugin safe.
 
+use super::sha256_hex;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 
 /// Result of verifying a plugin's signature against its manifest bytes.
@@ -69,15 +69,6 @@ fn invalid() -> Verification {
         status: SignatureStatus::Invalid,
         signer: None,
     }
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
 }
 
 fn fingerprint(public_key: &[u8]) -> String {

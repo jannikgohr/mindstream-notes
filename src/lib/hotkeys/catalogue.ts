@@ -660,6 +660,67 @@ export interface CommandGroup {
   commands: CommandDefinition[];
 }
 
+export type DisplayCommandGroup = CommandGroup & {
+  displayScope?: 'globalShortcuts';
+};
+
+export function displayCommandGroups(
+  groups: CommandGroup[],
+  globalShortcutsEnabled: boolean
+): DisplayCommandGroup[] {
+  if (!globalShortcutsEnabled) {
+    return groups
+      .map((group) =>
+        group.scope === 'global'
+          ? {
+              ...group,
+              commands: group.commands.filter(
+                (cmd) => !isGlobalShortcutOnlyCommand(cmd)
+              )
+            }
+          : group
+      )
+      .filter((group) => group.commands.length > 0);
+  }
+
+  const next: DisplayCommandGroup[] = [];
+  for (const group of groups) {
+    if (group.scope !== 'global') {
+      next.push(group);
+      continue;
+    }
+    const shortcuts = group.commands.filter(isGlobalShortcutCommand);
+    const application = group.commands.filter(
+      (cmd) => !isGlobalShortcutCommand(cmd)
+    );
+    if (shortcuts.length) {
+      next.push({
+        scope: 'global',
+        editorKind: null,
+        commands: shortcuts,
+        displayScope: 'globalShortcuts'
+      });
+    }
+    if (application.length) next.push({ ...group, commands: application });
+  }
+  return next;
+}
+
+export function displayCommandGroupLabel(
+  group: DisplayCommandGroup,
+  translate: (key: string) => string
+): string {
+  if (group.displayScope === 'globalShortcuts') {
+    return translate('hotkeys.group.globalShortcuts');
+  }
+  if (group.scope === 'global') return translate('hotkeys.group.global');
+  return translate(`hotkeys.group.editor.${group.editorKind}`);
+}
+
+export function hotkeyTextMatches(query: string, terms: string[]): boolean {
+  return terms.join(' ').toLowerCase().includes(query);
+}
+
 export function groupedCommands(): CommandGroup[] {
   const groups = new Map<string, CommandGroup>();
   // Include plugin commands: they're global-scope, so they fold into the

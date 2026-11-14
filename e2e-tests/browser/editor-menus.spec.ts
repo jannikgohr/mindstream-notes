@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { boot, fileTree, treeItem } from './editor-helpers';
 import { clickFileTreeCreateAction } from './file-tree-toolbar';
 
 /**
@@ -14,21 +15,6 @@ import { clickFileTreeCreateAction } from './file-tree-toolbar';
  * kind of thing these tests are meant to catch on the next run rather than
  * in the next bug report.
  */
-
-async function boot(page: Page) {
-  await page.goto('/');
-  await expect(
-    page.getByRole('button', { name: 'Welcome', exact: true })
-  ).toBeVisible();
-}
-
-function fileTree(page: Page): Locator {
-  return page.getByRole('group', { name: 'File tree' });
-}
-
-function treeItem(page: Page, name: string): Locator {
-  return fileTree(page).getByRole('button', { name, exact: true });
-}
 
 /** The live Milkdown (ProseMirror) contenteditable surface. */
 function editor(page: Page): Locator {

@@ -38,13 +38,6 @@ const KEY_DISPLAY: Record<string, string> = {
   minus: '-'
 };
 
-function displayKey(key: string): string {
-  if (KEY_DISPLAY[key]) return KEY_DISPLAY[key];
-  // F-keys keep their uppercase form ("F2"); single characters get
-  // upper-cased so "b" → "B".
-  return key.length === 1 ? key.toUpperCase() : key.toUpperCase();
-}
-
 /**
  * ARIA `aria-keyshortcuts` value names, mapped from our normalised key
  * tokens. The ARIA spec dictates a specific set of named keys
@@ -75,11 +68,8 @@ const ARIA_KEY_NAMES: Record<string, string> = {
   minus: '-'
 };
 
-function ariaKeyName(key: string): string {
-  if (ARIA_KEY_NAMES[key]) return ARIA_KEY_NAMES[key];
-  // F-keys keep their upper form ("F2"); single characters get
-  // upper-cased so "b" → "B".
-  return key.length === 1 ? key.toUpperCase() : key.toUpperCase();
+function keyName(key: string, names = ARIA_KEY_NAMES): string {
+  return names[key] || key.toUpperCase();
 }
 
 /**
@@ -115,32 +105,8 @@ export function ariaKeyShortcut(binding: string | null): string {
   if (chord.ctrl) parts.push('Control');
   if (chord.alt) parts.push('Alt');
   if (chord.shift) parts.push('Shift');
-  parts.push(ariaKeyName(chord.key));
+  parts.push(keyName(chord.key));
   return parts.join('+');
-}
-
-const TAURI_KEY_NAMES: Record<string, string> = {
-  space: 'Space',
-  enter: 'Enter',
-  tab: 'Tab',
-  escape: 'Escape',
-  backspace: 'Backspace',
-  delete: 'Delete',
-  arrowup: 'ArrowUp',
-  arrowdown: 'ArrowDown',
-  arrowleft: 'ArrowLeft',
-  arrowright: 'ArrowRight',
-  pageup: 'PageUp',
-  pagedown: 'PageDown',
-  home: 'Home',
-  end: 'End',
-  plus: '+',
-  minus: '-'
-};
-
-function tauriKeyName(key: string): string {
-  if (TAURI_KEY_NAMES[key]) return TAURI_KEY_NAMES[key];
-  return key.length === 1 ? key.toUpperCase() : key.toUpperCase();
 }
 
 /**
@@ -164,7 +130,7 @@ export function tauriAccelerator(binding: string | null): string | null {
   if (chord.ctrl) parts.push('Ctrl');
   if (chord.alt) parts.push('Alt');
   if (chord.shift) parts.push('Shift');
-  parts.push(tauriKeyName(chord.key));
+  parts.push(keyName(chord.key));
   return parts.join('+');
 }
 
@@ -264,7 +230,7 @@ export function displayBinding(binding: string | null): string {
     if (chord.alt) out += '⌥';
     if (chord.shift) out += '⇧';
     if (chord.mod) out += '⌘';
-    out += displayKey(chord.key);
+    out += keyName(chord.key, KEY_DISPLAY);
     return out;
   }
 
@@ -277,6 +243,6 @@ export function displayBinding(binding: string | null): string {
   if (ctrlShown) parts.push('Ctrl');
   if (chord.alt) parts.push('Alt');
   if (chord.shift) parts.push('Shift');
-  parts.push(displayKey(chord.key));
+  parts.push(keyName(chord.key, KEY_DISPLAY));
   return parts.join('+');
 }

@@ -1,24 +1,13 @@
 <script lang="ts">
   import { settingsDialog } from './store.svelte';
+  import { createLazyComponent } from '$lib/components/lazy-component.svelte';
 
-  let SettingsDialog = $state<any | null>(null);
-  let loadToken = 0;
-
-  $effect(() => {
-    const active = settingsDialog.open;
-    const token = ++loadToken;
-    if (!active) {
-      SettingsDialog = null;
-      return;
-    }
-    void import('./SettingsDialog.svelte').then((mod) => {
-      if (token === loadToken && settingsDialog.open) {
-        SettingsDialog = mod.default;
-      }
-    });
+  const settings = createLazyComponent({
+    load: () => import('./SettingsDialog.svelte'),
+    when: () => settingsDialog.open
   });
 </script>
 
-{#if SettingsDialog}
-  <SettingsDialog />
+{#if settings.component}
+  <settings.component />
 {/if}

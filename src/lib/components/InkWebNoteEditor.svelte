@@ -164,20 +164,17 @@
     normalizeInkPageTheme,
     normalizeInkTool,
     normalizeInkWidth,
-    pointInPolygon,
     POINTER_BUTTON_SECONDARY,
     POINTER_BUTTON_STYLUS_PRIMARY,
     POINTER_BUTTON_STYLUS_SECONDARY,
     resizeTransform,
     rotationTransform,
-    sanitizePressure,
     SELECTION_HANDLE_HIT_RADIUS_PX,
     SELECTION_HANDLE_RADIUS_PX,
     SELECTION_PASTE_OFFSET_PX,
     SELECTION_ROTATE_GAP_PX,
     selectionCenter,
     TOOL_PREVIEW_DASH,
-    transformIsIdentity,
     transformedPoints,
     transformSelectionFrame,
     translationTransform,
@@ -198,10 +195,14 @@
     type TouchPointer,
     type WebInkHandleInstance
   } from '$lib/ink/editor-helpers';
+  import { pointInPolygon } from '$lib/ink/stroke-geometry';
+  import { sanitizePressure } from '$lib/ink/stroke-codec';
+  import { transformIsIdentity } from '$lib/ink/stroke-transform';
   import {
     containsPagePoint,
     pageIndexAt,
     defaultLayout,
+    forEachPageRect,
     pageRect,
     type InkPoint
   } from '$lib/ink/page';
@@ -311,7 +312,6 @@
   let inFlightSmoothing: StrokeSmoothing = NO_SMOOTHING;
   let inFlightMinSpacing = 1.5;
   let lassoPoints = $state<InkPoint[]>([]);
-  let selectionDragStart: InkPoint | null = null;
   let selectionDragOffset = $state({ x: 0, y: 0 });
   let selectionInteraction: SelectionInteraction | null = null;
   let selectionTransformPreview = $state(identityTransform());
@@ -533,9 +533,7 @@
     if (canvasRect.width <= 0 || canvasRect.height <= 0) return [];
     const dpr = window.devicePixelRatio || 1;
     const bounds: number[] = [];
-    for (let i = 0; i < layout.pageCount; i++) {
-      const rect = pageRect(layout, i);
-      if (!rect) continue;
+    forEachPageRect(layout, (rect) => {
       const [x0p, y0p, x1p, y1p] = rect;
       const tl = pageToScreen({ x: x0p, y: y0p });
       const br = pageToScreen({ x: x1p, y: y1p });
@@ -545,14 +543,14 @@
       const top = Math.max(tl.y, 0);
       const right = Math.min(br.x, view.width);
       const bottom = Math.min(br.y, view.height);
-      if (right <= left || bottom <= top) continue;
+      if (right <= left || bottom <= top) return;
       bounds.push(
         (canvasRect.left + left) * dpr,
         (canvasRect.top + top) * dpr,
         (canvasRect.left + right) * dpr,
         (canvasRect.top + bottom) * dpr
       );
-    }
+    });
     return bounds;
   }
 
@@ -865,13 +863,11 @@
       const transform = currentSelectionTransform();
       for (const stroke of visibleStrokes) {
         if (!selectedStrokeSet.has(stroke.id)) continue;
+        const points = transformedPoints(stroke.points, transform);
         drawStroke(
           ctx,
-          transformedPoints(stroke.points, transform),
-          strokeCssColor(
-            selectionColorPreview ?? stroke.color,
-            transformedPoints(stroke.points, transform)
-          ),
+          points,
+          strokeCssColor(selectionColorPreview ?? stroke.color, points),
           stroke.width * transform.widthScale
         );
       }
@@ -1386,38 +1382,7 @@
       lastPointer = { x: event.clientX, y: event.clientY };
       return;
     }
-    if (isTrashed) return;
-    const handle = selectionHandleAtCanvasPoint(
-      canvasPoint(event.clientX, event.clientY)
-    );
-    if (tool === 'lasso' && hasSelection && handle) {
-      beginSelectionTransform(handle, event);
-      return;
-    }
-    if (
-      tool === 'lasso' &&
-      hasSelection &&
-      selectionContainsPoint(eventPoint(event))
-    ) {
-      beginSelectionMove(event);
-      return;
-    }
-    if (tool === 'lasso') {
-      beginLasso(event);
-      return;
-    }
-    if (tool === 'eraser') {
-      pointerMode = 'erase';
-      selectedStrokeIds = [];
-      selectionFrame = null;
-      beginEraseSession(eraserHits);
-      eraseFromEvent(event);
-      return;
-    }
-    pointerMode = 'draw';
-    inFlight = [];
-    drawingStrokeActive = false;
-    pushPointerSamples(event);
+    beginToolPointer(event);
   }
 
   function handleTouchPointerMove(event: PointerEvent) {
@@ -1465,16 +1430,17 @@
     focusCanvasFromPointer(canvasEl);
     canvasEl.setPointerCapture(event.pointerId);
     activePointerId = event.pointerId;
-    const isFinger = event.pointerType === 'touch';
-    const shouldPan =
-      event.button === 1 ||
-      event.buttons === 4 ||
-      (isFinger && !fingerDrawingAllowed);
-    if (shouldPan) {
+    if (event.button === 1 || event.buttons === 4) {
       pointerMode = 'pan';
       lastPointer = { x: event.clientX, y: event.clientY };
       return;
     }
+    beginToolPointer(event);
+  }
+
+  // Starts the active tool for a pointer that is not panning. Touch and
+  // mouse/pen share this; eraser-button detection is a no-op for touch.
+  function beginToolPointer(event: PointerEvent) {
     if (isTrashed) return;
     const handle = selectionHandleAtCanvasPoint(
       canvasPoint(event.clientX, event.clientY)
@@ -1722,8 +1688,7 @@
 
   function beginSelectionMove(event: PointerEvent) {
     pointerMode = 'moveSelection';
-    selectionDragStart = eventPoint(event);
-    selectionInteraction = { kind: 'move', start: selectionDragStart };
+    selectionInteraction = { kind: 'move', start: eventPoint(event) };
     selectionDragOffset = { x: 0, y: 0 };
     selectionTransformPreview = identityTransform();
     lassoPoints = [];
@@ -1736,7 +1701,6 @@
     const frame = baseSelectionFrame();
     if (!frame) return;
     pointerMode = 'moveSelection';
-    selectionDragStart = eventPoint(event);
     selectionDragOffset = { x: 0, y: 0 };
     selectionTransformPreview = identityTransform();
     lassoPoints = [];
@@ -1798,11 +1762,14 @@
     scheduleDraw();
   }
 
-  function cancelSelectionMove() {
-    selectionDragStart = null;
+  function resetSelectionInteraction() {
     selectionInteraction = null;
     selectionDragOffset = { x: 0, y: 0 };
     selectionTransformPreview = identityTransform();
+  }
+
+  function cancelSelectionMove() {
+    resetSelectionInteraction();
     scheduleDraw();
   }
 
@@ -1815,10 +1782,7 @@
     const frame = baseSelectionFrame();
     const move = selectionDragOffset;
     const transform = currentSelectionTransform();
-    selectionDragStart = null;
-    selectionInteraction = null;
-    selectionDragOffset = { x: 0, y: 0 };
-    selectionTransformPreview = identityTransform();
+    resetSelectionInteraction();
     if (interaction.kind === 'move') {
       if (Math.abs(move.x) < 0.001 && Math.abs(move.y) < 0.001) {
         scheduleDraw();
@@ -2142,10 +2106,7 @@
       return bounds ? frameFromBounds(bounds) : null;
     })();
     lassoPoints = [];
-    selectionInteraction = null;
-    selectionDragStart = null;
-    selectionDragOffset = { x: 0, y: 0 };
-    selectionTransformPreview = identityTransform();
+    resetSelectionInteraction();
     applyDocumentMutation(update);
     emitToolbarSettings();
     return true;
@@ -2167,10 +2128,7 @@
   function setTool(next: ToolMode) {
     tool = next;
     lassoPoints = [];
-    selectionInteraction = null;
-    selectionDragStart = null;
-    selectionDragOffset = { x: 0, y: 0 };
-    selectionTransformPreview = identityTransform();
+    resetSelectionInteraction();
     clearToolPreview();
     emitToolbarSettings();
     updateLiveInkOverlayStyle();
@@ -2292,10 +2250,7 @@
     selectedStrokeIds = [];
     selectionFrame = null;
     lassoPoints = [];
-    selectionInteraction = null;
-    selectionDragStart = null;
-    selectionDragOffset = { x: 0, y: 0 };
-    selectionTransformPreview = identityTransform();
+    resetSelectionInteraction();
     const { value, update } = doc.undoLast();
     if (value) applyDocumentMutation(update);
   }
@@ -2306,10 +2261,7 @@
     selectedStrokeIds = [];
     selectionFrame = null;
     lassoPoints = [];
-    selectionInteraction = null;
-    selectionDragStart = null;
-    selectionDragOffset = { x: 0, y: 0 };
-    selectionTransformPreview = identityTransform();
+    resetSelectionInteraction();
     const { value, update } = doc.redoLast();
     if (value) applyDocumentMutation(update);
   }
@@ -2321,10 +2273,7 @@
     selectedStrokeIds = [];
     selectionFrame = null;
     lassoPoints = [];
-    selectionInteraction = null;
-    selectionDragStart = null;
-    selectionDragOffset = { x: 0, y: 0 };
-    selectionTransformPreview = identityTransform();
+    resetSelectionInteraction();
     if (value.length > 0) {
       applyDocumentMutation(update);
       return true;
@@ -2339,10 +2288,7 @@
     selectedStrokeIds = [];
     selectionFrame = null;
     lassoPoints = [];
-    selectionInteraction = null;
-    selectionDragStart = null;
-    selectionDragOffset = { x: 0, y: 0 };
-    selectionTransformPreview = identityTransform();
+    resetSelectionInteraction();
     const { value, update } = doc.clearAll();
     if (value.length > 0) applyDocumentMutation(update);
   }

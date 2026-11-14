@@ -53,6 +53,22 @@ pub use detect::{DetectedSource, ImportSourceKind};
 pub use files::{walk_paths, ImportEntry, ImportFiles};
 pub use model::{ImportReport, UnresolvedLinks};
 
+/// Wrap a `.jex` archive in its in-place reader.
+pub fn open_files(
+    kind: ImportSourceKind,
+    files: Box<dyn ImportFiles>,
+    file_name: &str,
+) -> AppResult<Box<dyn ImportFiles>> {
+    if kind == ImportSourceKind::JoplinJex {
+        Ok(Box::new(tar_files::TarFiles::new(
+            files,
+            file_name.to_string(),
+        )?))
+    } else {
+        Ok(files)
+    }
+}
+
 /// Where an import writes. Each batch takes the connection only for its own
 /// writes.
 pub trait ImportStore {

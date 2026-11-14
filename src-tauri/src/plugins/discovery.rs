@@ -24,12 +24,11 @@
 //! package.
 
 use std::collections::HashSet;
-use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::sha256_hex;
 use include_dir::{include_dir, Dir};
-use sha2::{Digest, Sha256};
 use tauri::AppHandle;
 
 use super::manifest;
@@ -72,15 +71,6 @@ pub struct DiscoveredPlugin {
     /// reading the entry again means what runs is exactly what was hashed,
     /// with no window for the file to change in between.
     pub entry_bytes: Option<super::runtime::wasm::precompiled::VerifiedComponent>,
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
 }
 
 /// The builtin plugins, embedded into the binary at compile time from the

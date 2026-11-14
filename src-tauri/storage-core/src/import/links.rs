@@ -159,7 +159,7 @@ pub fn normalize_title(raw: &str) -> String {
 /// Which link syntaxes a source wants rewritten. Plain GFM has no wikilinks;
 /// running the wikilink pass over it anyway would turn `[[1]]` in a citation
 /// into a link.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct RewriteOptions {
     pub wikilinks: bool,
     pub markdown_links: bool,

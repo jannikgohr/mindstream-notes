@@ -24,7 +24,11 @@ import type {
   PdfRect,
   PdfSignatureSnapshot
 } from './types';
-import { strokeOutlinePath } from './stroke-utils';
+import {
+  outlineSegments,
+  strokeBounds,
+  strokeOutlinePoints
+} from './stroke-utils';
 import { pressureWidth } from '$lib/ink/editor-helpers';
 
 const ANNOT_FLAG_PRINT = 4;
@@ -66,29 +70,6 @@ function quadPointsForRect(rect: PdfRect): number[] {
   const yBot = rect.y;
   const yTop = rect.y + rect.height;
   return [x1, yTop, x2, yTop, x1, yBot, x2, yBot];
-}
-
-function strokeBounds(
-  points: { x: number; y: number }[],
-  padding = 0
-): PdfRect {
-  if (points.length === 0) return { x: 0, y: 0, width: 0, height: 0 };
-  let minX = Number.POSITIVE_INFINITY;
-  let minY = Number.POSITIVE_INFINITY;
-  let maxX = Number.NEGATIVE_INFINITY;
-  let maxY = Number.NEGATIVE_INFINITY;
-  for (const p of points) {
-    minX = Math.min(minX, p.x);
-    minY = Math.min(minY, p.y);
-    maxX = Math.max(maxX, p.x);
-    maxY = Math.max(maxY, p.y);
-  }
-  return {
-    x: minX - padding,
-    y: minY - padding,
-    width: maxX - minX + padding * 2,
-    height: maxY - minY + padding * 2
-  };
 }
 
 /** Bounding box of a set of strokes, padded by the widest stroke. */
@@ -215,6 +196,28 @@ function buildInk(
 }
 
 /**
+ * Form XObject that paints `body` with `opacity` applied to every paint,
+ * over a box the size of `size`.
+ */
+export function opacityFormRef(
+  context: PdfContext,
+  body: string[],
+  size: { width: number; height: number },
+  opacity: number
+): PDFRef {
+  return context.register(
+    context.flateStream(['q', '/GS0 gs', ...body, 'Q'].join('\n'), {
+      Type: 'XObject',
+      Subtype: 'Form',
+      BBox: [0, 0, size.width, size.height],
+      Resources: {
+        ExtGState: { GS0: { CA: opacity, ca: opacity } }
+      }
+    })
+  );
+}
+
+/**
  * Appearance stream for shared (handwriting-layer) ink: one segment per
  * point pair so pressure can vary the width along the stroke. Coordinates
  * are relative to `bbox`'s origin.
@@ -225,7 +228,7 @@ export function buildSharedInkAppearanceRef(
   bbox: PdfRect,
   context: PdfContext
 ): PDFRef {
-  const commands = ['q', '/GS0 gs', '1 J', '1 j'];
+  const commands = ['1 J', '1 j'];
   for (const stroke of strokes) {
     const [red, green, blue] = hexToRgb(stroke.color);
     commands.push(`${red} ${green} ${blue} RG`);
@@ -243,19 +246,7 @@ export function buildSharedInkAppearanceRef(
       );
     }
   }
-  commands.push('Q');
-  return context.register(
-    context.flateStream(commands.join('\n'), {
-      Type: 'XObject',
-      Subtype: 'Form',
-      BBox: [0, 0, bbox.width, bbox.height],
-      Resources: {
-        ExtGState: {
-          GS0: { CA: opacity, ca: opacity }
-        }
-      }
-    })
-  );
+  return opacityFormRef(context, commands, bbox, opacity);
 }
 
 export function pdfNumber(value: number): string {
@@ -296,29 +287,27 @@ function signatureStrokeAppearancePath(
   signature: PdfSignatureSnapshot,
   placement: PdfRect
 ): string {
-  const svgPath = strokeOutlinePath(stroke);
-  const tokens = svgPath.match(/[A-Za-z]|-?\d+(?:\.\d+)?/g) ?? [];
-  if (tokens.length < 6 || tokens[0] !== 'M') return '';
+  const outline = strokeOutlinePoints(stroke);
+  if (outline.length === 0) return '';
 
-  let index = 1;
-  const readPoint = () => {
-    const x = Number(tokens[index++]);
-    const y = Number(tokens[index++]);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-    return signaturePointToAppearance({ x, y }, signature, placement);
+  // Control and end points keep the two decimals the outline path has
+  // always been written with, and a non-finite point drops the whole stroke.
+  const toAppearance = (x: number, y: number) => {
+    const point = { x: Number(x.toFixed(2)), y: Number(y.toFixed(2)) };
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
+    return signaturePointToAppearance(point, signature, placement);
   };
 
-  let current = readPoint();
-  if (!current || tokens[index++] !== 'Q') return '';
+  let current = toAppearance(outline[0][0], outline[0][1]);
+  if (!current) return '';
   const commands = [`${pdfNumber(current.x)} ${pdfNumber(current.y)} m`];
 
-  while (index < tokens.length) {
-    if (tokens[index] === 'Z') break;
-    const control = readPoint();
-    const end = readPoint();
-    if (!control || !end) return '';
-    commands.push(quadraticToCubic(current, control, end));
-    current = end;
+  for (const [control, end] of outlineSegments(outline)) {
+    const c = toAppearance(control[0], control[1]);
+    const e = toAppearance(end[0], end[1]);
+    if (!c || !e) return '';
+    commands.push(quadraticToCubic(current, c, e));
+    current = e;
   }
 
   commands.push('f');
@@ -372,30 +361,15 @@ function buildSignatureStrokeAppearanceRef(
   opacity: number,
   context: PdfContext
 ): PDFRef | null {
-  const commands: string[] = ['q', '/GS0 gs'];
+  const commands: string[] = [];
   for (const stroke of signature.strokes) {
     const path = signatureStrokeAppearancePath(stroke, signature, placement);
     if (!path) continue;
     const [r, g, b] = hexToRgb(stroke.color);
     commands.push(`${pdfNumber(r)} ${pdfNumber(g)} ${pdfNumber(b)} rg`, path);
   }
-  if (commands.length === 2) return null;
-  commands.push('Q');
-
-  const stream = context.flateStream(commands.join('\n'), {
-    Type: 'XObject',
-    Subtype: 'Form',
-    BBox: [0, 0, placement.width, placement.height],
-    Resources: {
-      ExtGState: {
-        GS0: {
-          ca: opacity,
-          CA: opacity
-        }
-      }
-    }
-  });
-  return context.register(stream);
+  if (commands.length === 0) return null;
+  return opacityFormRef(context, commands, placement, opacity);
 }
 
 /**

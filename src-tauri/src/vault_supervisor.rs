@@ -375,19 +375,7 @@ impl Book {
 
     fn open_status(&self, operation_id: Uuid) -> AppResult<OpenProgress> {
         let operation = self.operations.get(&operation_id).ok_or_else(invalid)?;
-        if !matches!(
-            operation.input["command"].as_str(),
-            Some(
-                "open"
-                    | "openFromWindow"
-                    | "handoffFromWindow"
-                    | "pickerOpen"
-                    | "shortcut"
-                    | "tray"
-                    | "quit"
-                    | "updateInstall"
-            )
-        ) {
+        if !is_open_operation(operation.input["command"].as_str()) {
             return Err(invalid());
         }
         Ok(match &operation.open_result {
@@ -406,19 +394,7 @@ impl Book {
             let quit_alias = operation.input["command"].as_str() == Some("quit")
                 && operation.reply["operation_id"].as_str() == Some(id.as_str());
             if (*request_id == operation_id || quit_alias)
-                && matches!(
-                    operation.input["command"].as_str(),
-                    Some(
-                        "open"
-                            | "openFromWindow"
-                            | "handoffFromWindow"
-                            | "pickerOpen"
-                            | "shortcut"
-                            | "tray"
-                            | "quit"
-                            | "updateInstall"
-                    )
-                )
+                && is_open_operation(operation.input["command"].as_str())
                 && operation.open_result.is_none()
             {
                 operation.open_result = Some(result.clone());
@@ -1052,6 +1028,28 @@ fn request(command: &impl Serialize) -> AppResult<Request> {
         id: Uuid::new_v4(),
         payload: serde_json::to_value(command).map_err(|_| invalid())?,
     })
+}
+
+fn call(endpoint: &Endpoint, command: &impl Serialize) -> AppResult<Value> {
+    endpoint
+        .retry_call(&request(command)?)?
+        .map_err(AppError::InvalidArg)
+}
+
+fn is_open_operation(command: Option<&str>) -> bool {
+    matches!(
+        command,
+        Some(
+            "open"
+                | "openFromWindow"
+                | "handoffFromWindow"
+                | "pickerOpen"
+                | "shortcut"
+                | "tray"
+                | "quit"
+                | "updateInstall"
+        )
+    )
 }
 
 /// Send invalidation only. Each worker reloads the root and its own vault;
@@ -2381,9 +2379,7 @@ fn close_for_quit(
         std::thread::sleep(Duration::from_millis(40));
     };
     let identified = (|| -> AppResult<()> {
-        let reply = endpoint
-            .retry_call(&request(&WorkerCommand::Identify { launch_id })?)?
-            .map_err(AppError::InvalidArg)?;
+        let reply = call(&endpoint, &WorkerCommand::Identify { launch_id })?;
         let identity: crate::worker_registration::Identity =
             serde_json::from_value(reply).map_err(|_| invalid())?;
         identity.require_compatible()?;
@@ -2413,9 +2409,7 @@ fn verified_worker(
     launch_id: Uuid,
     endpoint: &Endpoint,
 ) -> AppResult<crate::worker_registration::Identity> {
-    let reply = endpoint
-        .retry_call(&request(&WorkerCommand::Identify { launch_id })?)?
-        .map_err(AppError::InvalidArg)?;
+    let reply = call(endpoint, &WorkerCommand::Identify { launch_id })?;
     let identity: crate::worker_registration::Identity =
         serde_json::from_value(reply).map_err(|_| invalid())?;
     identity.require_compatible()?;
@@ -2483,11 +2477,12 @@ pub(crate) fn drain_for_update(
             .ready_endpoint(id, *launch_id)?
             .ok_or_else(invalid)?;
         let identity = verified_worker(&root, id, *launch_id, &endpoint)?;
-        let reply = endpoint
-            .retry_call(&request(&WorkerCommand::SnapshotWindows {
+        let reply = call(
+            &endpoint,
+            &WorkerCommand::SnapshotWindows {
                 launch_id: *launch_id,
-            })?)?
-            .map_err(AppError::InvalidArg)?;
+            },
+        )?;
         vaults.push(crate::update_recovery::Vault {
             id: id.clone(),
             directory: identity.directory,
@@ -2564,6 +2559,23 @@ fn resume_update(app: &AppHandle, deadline: Instant) -> AppResult<bool> {
     Err(AppError::InvalidArg(format!("{error}; {outcome}")))
 }
 
+/// Wait for a worker window restore. Each caller sets its own deadline.
+fn await_window_restore(endpoint: &Endpoint, poll: &Request, deadline: Instant) -> AppResult<()> {
+    ipc::poll_until(deadline, || {
+        let reply = endpoint.retry_call(poll)?.map_err(AppError::InvalidArg)?;
+        match serde_json::from_value::<crate::update_windows::Progress>(reply)
+            .map_err(|_| invalid())?
+        {
+            crate::update_windows::Progress::Ready => Ok(Some(())),
+            crate::update_windows::Progress::Failed { message } => {
+                Err(AppError::InvalidArg(message))
+            }
+            crate::update_windows::Progress::Pending => Ok(None),
+        }
+    })?
+    .ok_or_else(invalid)
+}
+
 fn restore_update_session(
     app: &AppHandle,
     root: &std::path::Path,
@@ -2609,23 +2621,11 @@ fn restore_update_session(
                 launch_id,
                 operation_id: restore.id,
             })?;
-            let deadline = (Instant::now() + OPEN_TIMEOUT).min(deadline);
-            loop {
-                let reply = endpoint.retry_call(&poll)?.map_err(AppError::InvalidArg)?;
-                match serde_json::from_value::<crate::update_windows::Progress>(reply)
-                    .map_err(|_| invalid())?
-                {
-                    crate::update_windows::Progress::Ready => break,
-                    crate::update_windows::Progress::Failed { message } => {
-                        return Err(AppError::InvalidArg(message))
-                    }
-                    crate::update_windows::Progress::Pending => {}
-                }
-                if Instant::now() >= deadline {
-                    return Err(invalid());
-                }
-                std::thread::sleep(Duration::from_millis(40));
-            }
+            await_window_restore(
+                &endpoint,
+                &poll,
+                (Instant::now() + OPEN_TIMEOUT).min(deadline),
+            )?;
         }
         crate::update_recovery::restored(root, record.operation_id, &vault.id)?;
     }
@@ -2858,24 +2858,7 @@ fn restore_handoff_window(
             record.restore
         },
     })?;
-    let deadline = Instant::now() + OPEN_TIMEOUT;
-    loop {
-        let value = endpoint.retry_call(&poll)?.map_err(AppError::InvalidArg)?;
-        match serde_json::from_value::<crate::update_windows::Progress>(value)
-            .map_err(|_| invalid())?
-        {
-            crate::update_windows::Progress::Ready => break,
-            crate::update_windows::Progress::Failed { message } => {
-                return Err(AppError::InvalidArg(message))
-            }
-            crate::update_windows::Progress::Pending => {}
-        }
-        if Instant::now() >= deadline {
-            return Err(invalid());
-        }
-        std::thread::sleep(Duration::from_millis(40));
-    }
-    Ok(())
+    await_window_restore(endpoint, &poll, Instant::now() + OPEN_TIMEOUT)
 }
 
 fn commit_handoff(
@@ -2947,11 +2930,12 @@ fn handoff(
         if !index.profiles.iter().any(|vault| vault.id == target) {
             return Err(invalid());
         }
-        let snapshot = endpoint
-            .retry_call(&request(&WorkerCommand::SnapshotWindows {
+        let snapshot = call(
+            &endpoint,
+            &WorkerCommand::SnapshotWindows {
                 launch_id: source_launch,
-            })?)?
-            .map_err(AppError::InvalidArg)?;
+            },
+        )?;
         let windows: Vec<crate::update_recovery::Window> =
             serde_json::from_value(snapshot).map_err(|_| invalid())?;
         let geometry = windows
@@ -3371,9 +3355,7 @@ fn ready_tray_destination(app: &AppHandle) -> AppResult<(Endpoint, Uuid)> {
         launch_id,
         Instant::now() + OPEN_TIMEOUT,
     )?;
-    let reply = endpoint
-        .retry_call(&request(&WorkerCommand::Identify { launch_id })?)?
-        .map_err(AppError::InvalidArg)?;
+    let reply = call(&endpoint, &WorkerCommand::Identify { launch_id })?;
     let identity: crate::worker_registration::Identity =
         serde_json::from_value(reply).map_err(|_| invalid())?;
     identity.require_compatible()?;
@@ -3444,9 +3426,7 @@ fn dispatch_shortcut(
         launch_id,
         Instant::now() + OPEN_TIMEOUT,
     )?;
-    let identity = endpoint
-        .retry_call(&request(&WorkerCommand::Identify { launch_id })?)?
-        .map_err(AppError::InvalidArg)?;
+    let identity = call(&endpoint, &WorkerCommand::Identify { launch_id })?;
     let identity: crate::worker_registration::Identity =
         serde_json::from_value(identity).map_err(|_| invalid())?;
     identity.require_compatible()?;
@@ -3682,21 +3662,16 @@ fn wait_for_ready(
     launch_id: Uuid,
     deadline: Instant,
 ) -> AppResult<(Endpoint, Option<String>)> {
-    loop {
-        if let Some(endpoint) = book
-            .lock()
+    ipc::poll_until(deadline, || {
+        book.lock()
             .map_err(|_| invalid())?
-            .ready_endpoint(vault_id, launch_id)?
-        {
-            return Ok(endpoint);
-        }
-        if Instant::now() >= deadline {
-            return Err(AppError::InvalidArg(
-                "vault opening timed out; any running worker has been left intact".into(),
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(40));
-    }
+            .ready_endpoint(vault_id, launch_id)
+    })?
+    .ok_or_else(|| {
+        AppError::InvalidArg(
+            "vault opening timed out; any running worker has been left intact".into(),
+        )
+    })
 }
 
 fn open_and_wait(app: &AppHandle, vault_id: &str) -> AppResult<()> {
@@ -3730,9 +3705,7 @@ fn activate_worker(
     endpoint: &Endpoint,
     window: Option<String>,
 ) -> AppResult<()> {
-    let reply = endpoint
-        .retry_call(&request(&WorkerCommand::Identify { launch_id })?)?
-        .map_err(AppError::InvalidArg)?;
+    let reply = call(endpoint, &WorkerCommand::Identify { launch_id })?;
     let identity: crate::worker_registration::Identity =
         serde_json::from_value(reply).map_err(|_| invalid())?;
     identity.require_compatible()?;
@@ -4301,20 +4274,19 @@ pub(crate) fn autostart_setting(app: &AppHandle, enabled: Option<bool>) -> AppRe
         operation_id: request.id,
     })?;
     let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
+    ipc::poll_until(deadline, || {
         let progress = host.retry_call(&poll)?.map_err(AppError::InvalidArg)?;
         match serde_json::from_value::<AutostartProgress>(progress).map_err(|_| invalid())? {
-            AutostartProgress::Ready { enabled } => return Ok(enabled),
-            AutostartProgress::Failed { message } => return Err(AppError::InvalidArg(message)),
-            AutostartProgress::Pending => {}
+            AutostartProgress::Ready { enabled } => Ok(Some(enabled)),
+            AutostartProgress::Failed { message } => Err(AppError::InvalidArg(message)),
+            AutostartProgress::Pending => Ok(None),
         }
-        if Instant::now() >= deadline {
-            return Err(AppError::InvalidArg(
-                "startup registration result is unavailable; reload the setting".into(),
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(40));
-    }
+    })?
+    .ok_or_else(|| {
+        AppError::InvalidArg(
+            "startup registration result is unavailable; reload the setting".into(),
+        )
+    })
 }
 
 pub(crate) fn window_state(app: &AppHandle) -> AppResult<crate::vault_window_state::View> {
@@ -4345,22 +4317,19 @@ pub(crate) fn check_update(
         operation_id: check.id,
     })?;
     let deadline = Instant::now() + Duration::from_secs(120);
-    loop {
+    ipc::poll_until(deadline, || {
         let reply = host.retry_call(&poll)?.map_err(AppError::InvalidArg)?;
         match serde_json::from_value::<crate::coordinator_updater::CheckProgress>(reply)
             .map_err(|_| invalid())?
         {
-            crate::coordinator_updater::CheckProgress::Ready { available } => return Ok(available),
+            crate::coordinator_updater::CheckProgress::Ready { available } => Ok(Some(available)),
             crate::coordinator_updater::CheckProgress::Failed { message } => {
-                return Err(AppError::InvalidArg(message))
+                Err(AppError::InvalidArg(message))
             }
-            crate::coordinator_updater::CheckProgress::Pending => {}
+            crate::coordinator_updater::CheckProgress::Pending => Ok(None),
         }
-        if Instant::now() >= deadline {
-            return Err(invalid());
-        }
-        std::thread::sleep(Duration::from_millis(40));
-    }
+    })?
+    .ok_or_else(invalid)
 }
 
 pub(crate) fn install_update(app: &AppHandle, update_id: Uuid) -> AppResult<()> {
@@ -4377,20 +4346,17 @@ pub(crate) fn install_update(app: &AppHandle, update_id: Uuid) -> AppResult<()> 
 
 fn await_open_result(host: &Endpoint, operation_id: Uuid, deadline: Instant) -> AppResult<()> {
     let poll = request(&HostCommand::OpenStatus { operation_id })?;
-    loop {
+    ipc::poll_until(deadline, || {
         let reply = host.retry_call(&poll)?.map_err(AppError::InvalidArg)?;
         match serde_json::from_value::<OpenProgress>(reply).map_err(|_| invalid())? {
-            OpenProgress::Ready => return Ok(()),
-            OpenProgress::Failed { message } => return Err(AppError::InvalidArg(message)),
-            OpenProgress::Pending => {}
+            OpenProgress::Ready => Ok(Some(())),
+            OpenProgress::Failed { message } => Err(AppError::InvalidArg(message)),
+            OpenProgress::Pending => Ok(None),
         }
-        if Instant::now() >= deadline {
-            return Err(AppError::InvalidArg(
-                "vault opening result is unavailable; source remains open".into(),
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(40));
-    }
+    })?
+    .ok_or_else(|| {
+        AppError::InvalidArg("vault opening result is unavailable; source remains open".into())
+    })
 }
 
 #[cfg(test)]

@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { sourceText, setMode, modeButton } from './editor-helpers';
 
 /**
  * The source-mode plugins from `src/lib/editor/plugins/source`, driven through
@@ -16,10 +17,6 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
  * than a decorated `[[Title]]`. That's the point of the source surface: the
  * link is meant to be visible and editable as text.
  */
-
-function modeButton(page: Page): Locator {
-  return page.getByRole('button', { name: /^Editor view mode:/ });
-}
 
 function sourcePane(page: Page): Locator {
   return page.locator('.cm-content');
@@ -44,22 +41,6 @@ async function boot(page: Page) {
   ).toBeVisible();
   await expect(wysiwygPane(page)).toBeVisible();
   await expect(modeButton(page)).toBeVisible();
-}
-
-/** Cycle the single view-mode button until it reports `target`. */
-async function setMode(page: Page, target: 'WYSIWYG' | 'Source' | 'Split') {
-  for (let i = 0; i < 4; i++) {
-    const label = await modeButton(page).getAttribute('aria-label');
-    if (label === `Editor view mode: ${target}`) return;
-    await modeButton(page).click();
-  }
-  throw new Error(`could not reach view mode ${target}`);
-}
-
-/** The Source pane's exact text, reconstructed from CodeMirror's line divs. */
-async function sourceText(page: Page): Promise<string> {
-  const lines = await page.locator('.cm-line').allTextContents();
-  return lines.join('\n');
 }
 
 /** Empty the Source document and leave the caret in it. */

@@ -14,7 +14,6 @@ use crate::error::{AppError, AppResult, CommandResult};
 pub mod detect;
 mod disk;
 pub mod legacy_links;
-pub mod stage;
 
 #[cfg(test)]
 mod tests;
@@ -87,10 +86,7 @@ impl Drop for AnnounceFinished {
 
 fn open_source(kind: ImportSourceKind, root: PathBuf) -> AppResult<Box<dyn source::ImportSource>> {
     let (files, file_name) = match kind {
-        ImportSourceKind::JoplinJex => {
-            (DiskFiles::staged(stage::extract_tar(&root)?), String::new())
-        }
-        ImportSourceKind::Evernote => {
+        ImportSourceKind::JoplinJex | ImportSourceKind::Evernote => {
             let name = root
                 .file_name()
                 .map(|name| name.to_string_lossy().to_string())
@@ -100,7 +96,8 @@ fn open_source(kind: ImportSourceKind, root: PathBuf) -> AppResult<Box<dyn sourc
         }
         _ => (DiskFiles::new(root), String::new()),
     };
-    Ok(build_source(kind, Box::new(files), &file_name))
+    let files = mindstream_storage_core::import::open_files(kind, Box::new(files), &file_name)?;
+    Ok(build_source(kind, files, &file_name))
 }
 
 /// Run an import to completion (or to cancellation) and report what landed.

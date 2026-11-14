@@ -1,10 +1,10 @@
 /**
- * The three overlays drawn on top of a rendered PDF page.
+ * The two overlays drawn on top of a rendered PDF page.
  *
  * Each is a plain DOM layer rebuilt from scratch whenever its inputs
- * change — search hits, the PDF's own link annotations, and our
- * annotations (highlights, comments, ink, signatures) together with the
- * pointer handling that creates and edits them.
+ * change: search hits, and our annotations (highlights, comments, ink,
+ * signatures) together with the pointer handling that creates and edits
+ * them.
  *
  * They read the page's current draw state through a [`PageOverlayHost`]
  * rather than closing over it, so the render action can own that state
@@ -27,7 +27,6 @@ import {
   ANNOTATION_CLICK_SLOP_PX,
   INK_WIDTH,
   annotationIdAtPoint,
-  type PdfLink,
   type PdfViewport,
   type RenderParams
 } from '$lib/pdf/viewer-helpers';
@@ -42,8 +41,8 @@ export interface PageOverlayHost {
   /** The params of the draw currently on screen. */
   readonly params: RenderParams;
   readonly viewport: PdfViewport | null;
-  /** Link annotations fetched for this page by the last draw. */
-  readonly links: PdfLink[];
+  /** False while the renderer is replacing the page or its coordinate system. */
+  readonly gesturesEnabled: boolean;
   /**
    * Teardown for the text-mode click-to-select listeners. They live on
    * the page element, which outlives any single annotation layer, so the
@@ -56,6 +55,82 @@ export function createPageOverlays(
   ctx: PageRenderContext,
   host: PageOverlayHost
 ) {
+  let activeGesture: (() => void) | null = null;
+  let gestureIsCurrent: (() => boolean) | null = null;
+  let annotationRefreshPending = false;
+
+  function refreshAfterGesture() {
+    if (annotationRefreshPending) {
+      annotationRefreshPending = false;
+      renderAppAnnotations();
+    }
+  }
+
+  function cancelGesture() {
+    activeGesture?.();
+    refreshAfterGesture();
+  }
+
+  function canStartGesture(event: PointerEvent) {
+    return event.button === 0 && host.gesturesEnabled;
+  }
+
+  function beginPointerSession(
+    target: EventTarget,
+    pointerId: number,
+    move: (event: PointerEvent) => void,
+    finish: (event: PointerEvent) => void,
+    cleanup: () => void
+  ) {
+    activeGesture?.();
+    const viewport = host.viewport;
+    const page = host.pageSurface.querySelector('.page');
+    const { pageNumber, activeTool, areaMode } = host.params;
+    let stopped = false;
+    const stop = () => {
+      if (stopped) return;
+      stopped = true;
+      target.removeEventListener('pointermove', onMove);
+      target.removeEventListener('pointerup', onUp);
+      target.removeEventListener('pointercancel', onCancel);
+      if (activeGesture === stop) {
+        activeGesture = null;
+        gestureIsCurrent = null;
+      }
+      cleanup();
+    };
+    const onMove = (event: Event) => {
+      const pointer = event as PointerEvent;
+      if (pointer.pointerId === pointerId) move(pointer);
+    };
+    const onUp = (event: Event) => {
+      const pointer = event as PointerEvent;
+      if (pointer.pointerId !== pointerId) return;
+      // Commands may synchronously replace this layer or start another gesture.
+      stop();
+      try {
+        finish(pointer);
+      } finally {
+        refreshAfterGesture();
+      }
+    };
+    const onCancel = (event: Event) => {
+      if ((event as PointerEvent).pointerId === pointerId) cancelGesture();
+    };
+    activeGesture = stop;
+    gestureIsCurrent = () =>
+      host.gesturesEnabled &&
+      !ctx.isTrashed &&
+      host.viewport === viewport &&
+      host.pageSurface.querySelector('.page') === page &&
+      host.params.pageNumber === pageNumber &&
+      host.params.activeTool === activeTool &&
+      host.params.areaMode === areaMode;
+    target.addEventListener('pointermove', onMove);
+    target.addEventListener('pointerup', onUp);
+    target.addEventListener('pointercancel', onCancel);
+  }
+
   // Search-hit overlay: translucent boxes over every match on this page,
   // with the active hit emphasised. Read imperatively from the parent's
   // per-page match map; the `searchVersion` param triggers the refresh.
@@ -91,53 +166,6 @@ export function createPageOverlays(
     pageEl.append(layer);
   }
 
-  // Clickable overlay for the page's link annotations. Sits below the
-  // app-annotation layer, so links are only hit in select mode (when
-  // that layer passes pointer events through).
-  function renderLinkLayer() {
-    const pageEl = host.pageSurface.querySelector<HTMLElement>('.page');
-    const viewport = host.viewport;
-    if (!pageEl || !viewport) return;
-    pageEl.querySelector('.pdf-link-layer')?.remove();
-    if (host.links.length === 0) return;
-    const layer = document.createElement('div');
-    layer.className = 'pdf-link-layer';
-    for (const link of host.links) {
-      if (!Array.isArray(link.rect) || link.rect.length < 4) continue;
-      const [x1, y1] = viewport.convertToViewportPoint(
-        link.rect[0],
-        link.rect[1]
-      );
-      const [x2, y2] = viewport.convertToViewportPoint(
-        link.rect[2],
-        link.rect[3]
-      );
-      const node = document.createElement(link.url ? 'a' : 'button');
-      node.className = 'pdf-link';
-      node.style.left = `${Math.min(x1, x2)}px`;
-      node.style.top = `${Math.min(y1, y2)}px`;
-      node.style.width = `${Math.abs(x2 - x1)}px`;
-      node.style.height = `${Math.abs(y2 - y1)}px`;
-      if (link.url) {
-        const anchor = node as HTMLAnchorElement;
-        anchor.href = link.url;
-        anchor.title = link.url;
-        anchor.rel = 'noopener noreferrer';
-        anchor.addEventListener('click', (event) => {
-          event.preventDefault();
-          void ctx.openExternalUrl(link.url as string);
-        });
-      } else {
-        node.addEventListener('click', (event) => {
-          event.preventDefault();
-          void ctx.followLinkDest(link.dest);
-        });
-      }
-      layer.append(node);
-    }
-    pageEl.append(layer);
-  }
-
   function activateAnnotation(annotation: PdfAnnotation) {
     if (annotation.id.startsWith('shared:')) {
       ctx.selectAnnotation(annotation.id);
@@ -151,11 +179,18 @@ export function createPageOverlays(
   }
 
   function renderAppAnnotations() {
+    // Keep the preview and captured node mounted during annotation-only updates.
+    // Apply the latest annotations when the gesture finishes or is cancelled.
+    if (activeGesture && gestureIsCurrent?.()) {
+      annotationRefreshPending = true;
+      return;
+    }
+    annotationRefreshPending = false;
+    cancelGesture();
     const pageEl = host.pageSurface.querySelector<HTMLElement>('.page');
     const viewport = host.viewport;
     if (!pageEl || !viewport) return;
 
-    renderLinkLayer();
     renderSearchLayer();
 
     pageEl.querySelector('.pdf-app-annotation-layer')?.remove();
@@ -184,7 +219,7 @@ export function createPageOverlays(
     // (cheap CSS transform) and commits the PDF-space delta on release.
     function attachMoveHandler(node: HTMLElement, annotation: PdfAnnotation) {
       node.addEventListener('pointerdown', (event) => {
-        if (event.button !== 0) return;
+        if (!canStartGesture(event)) return;
         event.preventDefault();
         event.stopPropagation();
         const pageRect = pageEl!.getBoundingClientRect();
@@ -195,7 +230,6 @@ export function createPageOverlays(
         const startClientX = event.clientX;
         const startClientY = event.clientY;
         let moving = false;
-        node.setPointerCapture?.(event.pointerId);
 
         const onMove = (moveEvent: PointerEvent) => {
           const dxPx = moveEvent.clientX - startClientX;
@@ -208,11 +242,6 @@ export function createPageOverlays(
           node.style.transform = `translate(${dxPx}px, ${dyPx}px)`;
         };
         const onUp = (upEvent: PointerEvent) => {
-          node.removeEventListener('pointermove', onMove);
-          node.removeEventListener('pointerup', onUp);
-          node.releasePointerCapture?.(upEvent.pointerId);
-          node.classList.remove('pdf-app-annotation-moving');
-          node.style.transform = '';
           if (!moving) {
             ctx.selectAnnotation(annotation.id);
             return;
@@ -227,8 +256,14 @@ export function createPageOverlays(
             pdfEndY - pdfStartY
           );
         };
-        node.addEventListener('pointermove', onMove);
-        node.addEventListener('pointerup', onUp);
+        beginPointerSession(node, event.pointerId, onMove, onUp, () => {
+          if (node.hasPointerCapture?.(event.pointerId)) {
+            node.releasePointerCapture(event.pointerId);
+          }
+          node.classList.remove('pdf-app-annotation-moving');
+          node.style.transform = '';
+        });
+        node.setPointerCapture?.(event.pointerId);
       });
     }
 
@@ -452,7 +487,7 @@ export function createPageOverlays(
 
     if (host.params.activeTool === 'pen') {
       layer.addEventListener('pointerdown', (event) => {
-        if (event.button !== 0) return;
+        if (!canStartGesture(event)) return;
         event.preventDefault();
         const pageRect = pageEl.getBoundingClientRect();
         const preview = document.createElementNS(
@@ -503,10 +538,7 @@ export function createPageOverlays(
           pushPoint(moveEvent.clientX, moveEvent.clientY);
         };
         const onUp = (upEvent: PointerEvent) => {
-          window.removeEventListener('pointermove', onMove);
-          window.removeEventListener('pointerup', onUp);
           pushPoint(upEvent.clientX, upEvent.clientY);
-          preview.remove();
           if (pdfPoints.length < 2) return;
           const rect = strokeBounds(pdfPoints, INK_WIDTH * 2);
           if (rect.width < 1 || rect.height < 1) return;
@@ -528,8 +560,9 @@ export function createPageOverlays(
           );
         };
 
-        window.addEventListener('pointermove', onMove);
-        window.addEventListener('pointerup', onUp, { once: true });
+        beginPointerSession(window, event.pointerId, onMove, onUp, () =>
+          preview.remove()
+        );
       });
       return;
     }
@@ -547,7 +580,7 @@ export function createPageOverlays(
     }
 
     layer.addEventListener('pointerdown', (event) => {
-      if (event.button !== 0) return;
+      if (!canStartGesture(event)) return;
       event.preventDefault();
       if (
         host.params.activeTool === 'signature' &&
@@ -578,10 +611,6 @@ export function createPageOverlays(
         updatePreview(moveEvent.clientX, moveEvent.clientY);
       };
       const onUp = (upEvent: PointerEvent) => {
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-        preview.remove();
-
         const endX = upEvent.clientX - pageRect.left;
         const endY = upEvent.clientY - pageRect.top;
         const [pdfEndX, pdfEndY] = viewport.convertToPdfPoint(endX, endY);
@@ -640,10 +669,11 @@ export function createPageOverlays(
         );
       };
 
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp, { once: true });
+      beginPointerSession(window, event.pointerId, onMove, onUp, () =>
+        preview.remove()
+      );
     });
   }
 
-  return { renderAppAnnotations, renderLinkLayer, renderSearchLayer };
+  return { renderAppAnnotations, renderSearchLayer, cancelGesture };
 }

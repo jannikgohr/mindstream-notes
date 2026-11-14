@@ -200,6 +200,20 @@ describe('root create actions', () => {
     const { menuItemsForTarget } = createMenuBuilder(ctx);
     const items = await menuItemsForTarget({ kind: 'root' });
 
+    expect(
+      items.map((item) => (item === 'separator' ? '---' : item.label))
+    ).toEqual([
+      'New note',
+      'New drawing canvas',
+      'New handwritten note',
+      'Import PDF',
+      'New Kanban board',
+      '---',
+      'Letter',
+      '---',
+      'New folder'
+    ]);
+
     find(items, 'New note').onSelect!();
     expect(ctx.startDraft).toHaveBeenCalledWith('note', null);
     find(items, 'New drawing canvas').onSelect!();
@@ -208,6 +222,8 @@ describe('root create actions', () => {
     expect(ctx.startDraft).toHaveBeenCalledWith('ink', null);
     find(items, 'Import PDF').onSelect!();
     expect(ctx.startPdfImport).toHaveBeenCalledWith(null);
+    find(items, 'New Kanban board').onSelect!();
+    expect(ctx.startDraft).toHaveBeenCalledWith('kanban', null);
     find(items, 'New folder').onSelect!();
     expect(ctx.startDraft).toHaveBeenCalledWith('folder', null);
     find(items, 'Letter').onSelect!();

@@ -43,11 +43,33 @@ export type ZoomAnchor = {
 export type PdfViewport = ReturnType<
   Awaited<ReturnType<PdfDocument['getPage']>>['getViewport']
 >;
-export type PdfLink = {
-  rect: number[];
-  url?: string;
-  dest?: string | unknown[] | null;
-};
+/**
+ * Link service for a page's annotation layer. pdf.js already draws each
+ * link annotation as an anchor and calls back into this service on click,
+ * so it only routes those clicks: external URLs go through the app's
+ * scheme policy, in-document destinations go to the viewer.
+ */
+export function createPdfLinkService(
+  pdfViewer: PdfViewer,
+  eventBus: InstanceType<PdfViewer['EventBus']>,
+  routes: {
+    openExternalUrl(url: string): Promise<void> | void;
+    followLinkDest(dest: string | unknown[] | null | undefined): Promise<void>;
+  }
+) {
+  const service = new pdfViewer.SimpleLinkService({ eventBus });
+  service.addLinkAttributes = (link, url) => {
+    link.href = url;
+    link.title = url;
+    link.rel = 'noopener noreferrer';
+    link.addEventListener('click', (event) => {
+      event.preventDefault();
+      void routes.openExternalUrl(url);
+    });
+  };
+  service.goToDestination = (dest) => routes.followLinkDest(dest);
+  return service;
+}
 
 export const MIN_ZOOM = 0.5;
 export const MAX_ZOOM = 4;
@@ -57,7 +79,6 @@ export const PDF_PAGE_COLUMN_CLASS = `${PAGE_COLUMN_CLASS} pdf-page-column`;
 export const PDF_TO_CSS_UNITS = 96 / 72;
 export const MAX_CANVAS_DIM = 16384;
 export const MAX_CANVAS_PIXELS = 2 ** 25;
-export { SAVE_DEBOUNCE_MS } from '$lib/editor/save-scheduler';
 export const SEARCH_DEBOUNCE_MS = 220;
 /** Apollo ink, the default for pens and signatures. oklch(0.26 0.026 252) */
 const APOLLO_INK = '#1b2530';

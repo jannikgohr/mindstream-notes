@@ -25,8 +25,7 @@ import {
   buildTemplateContext,
   createNoteFromPluginTemplate,
   renderPluginTemplate,
-  renderTemplateString,
-  todayIsoDate
+  renderTemplateString
 } from './templates';
 import type { PluginNoteTemplateContribution } from './types';
 
@@ -287,12 +286,14 @@ describe('createNoteFromPluginTemplate', () => {
   });
 });
 
-describe('todayIsoDate', () => {
+describe('renderTemplateString date placeholder', () => {
   it('formats the local date as YYYY-MM-DD', () => {
     // Local-time construction so the assertion holds in any timezone. Unlike
     // the previous UTC-based implementation, {{date}} reflects the user's own
     // calendar day (correct for daily notes near midnight).
-    expect(todayIsoDate(new Date(2026, 0, 5, 23, 0, 0))).toBe('2026-01-05');
+    expect(renderTemplateString('{{date}}', {}, new Date(2026, 0, 5, 23))).toBe(
+      '2026-01-05'
+    );
   });
 });
 

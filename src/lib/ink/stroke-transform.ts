@@ -3,7 +3,6 @@
  * detection, inversion (for undo) and point application.
  */
 
-import type { InkPoint } from '$lib/ink/page';
 import type { StrokeTransform } from './stroke-types';
 
 export function validTransform(transform: StrokeTransform): boolean {
@@ -47,13 +46,14 @@ export function invertTransform(
   };
 }
 
-export function transformPoint(
-  point: InkPoint,
+/** Applies the transform to a point, keeping every other field (pressure). */
+export function transformPoint<P extends { x: number; y: number }>(
+  point: P,
   transform: StrokeTransform
-): InkPoint {
+): P {
   return {
+    ...point,
     x: point.x * transform.a + point.y * transform.c + transform.e,
-    y: point.x * transform.b + point.y * transform.d + transform.f,
-    pressure: point.pressure
+    y: point.x * transform.b + point.y * transform.d + transform.f
   };
 }

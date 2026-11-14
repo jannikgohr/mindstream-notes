@@ -19,20 +19,23 @@ export function strokePointsAttr(points: PdfStrokePoint[]): string {
 }
 
 /**
- * Filled-outline SVG path for a variable-width stroke (render with
- * `fill={stroke.color}`, no stroke). Point `pressure` scales the local
- * width around `stroke.width`; pressures are normalised to their mean
- * per stroke, so uniform-pressure strokes — everything hand-drawn with
- * a mouse (constant 0.5) or old saved signatures — render at exactly
- * the nominal width, identical to the previous fixed-width polylines.
- * Traced photo imports store measured widths as mean-relative pressure
- * (see signature-trace.ts fitToPad), which this renders faithfully.
+ * Unrounded perfect-freehand outline of a variable-width stroke, one
+ * `[x, y]` per vertex. Point `pressure` scales the local width around
+ * `stroke.width`; pressures are normalised to their mean per stroke, so
+ * uniform-pressure strokes — everything hand-drawn with a mouse (constant
+ * 0.5) or old saved signatures — render at exactly the nominal width,
+ * identical to the previous fixed-width polylines. Traced photo imports
+ * store measured widths as mean-relative pressure (see signature-trace.ts
+ * fitToPad), which this renders faithfully.
+ *
+ * Empty when there is nothing to draw: no points, or fewer than three
+ * outline vertices.
  */
-export function strokeOutlinePath(
+export function strokeOutlinePoints(
   stroke: Pick<PdfInkStroke, 'points' | 'width'>
-): string {
+): number[][] {
   const { points, width } = stroke;
-  if (points.length === 0) return '';
+  if (points.length === 0) return [];
 
   let sum = 0;
   for (const p of points) sum += p.pressure ?? 1;
@@ -50,21 +53,41 @@ export function strokeOutlinePath(
       last: true
     }
   );
-  if (outline.length < 3) return '';
+  return outline.length < 3 ? [] : outline;
+}
 
-  // Midpoint-quadratic smoothing of the outline polygon (the standard
-  // perfect-freehand companion snippet).
+/**
+ * Midpoint-quadratic smoothing of an outline polygon (the standard
+ * perfect-freehand companion snippet): each vertex is a control point and
+ * the midpoint toward the next vertex is the segment end. Midpoints come
+ * from the raw neighbours, so callers round only when they format.
+ */
+export function outlineSegments(
+  outline: number[][]
+): [control: number[], end: number[]][] {
+  return outline.map((control, i) => {
+    const next = outline[(i + 1) % outline.length];
+    return [control, [(control[0] + next[0]) / 2, (control[1] + next[1]) / 2]];
+  });
+}
+
+/**
+ * Filled-outline SVG path for a variable-width stroke (render with
+ * `fill={stroke.color}`, no stroke). See `strokeOutlinePoints` for how
+ * the outline is built.
+ */
+export function strokeOutlinePath(
+  stroke: Pick<PdfInkStroke, 'points' | 'width'>
+): string {
+  const outline = strokeOutlinePoints(stroke);
+  if (outline.length === 0) return '';
+
   const d: string[] = [
     `M ${outline[0][0].toFixed(2)} ${outline[0][1].toFixed(2)} Q`
   ];
-  for (let i = 0; i < outline.length; i++) {
-    const [x0, y0] = outline[i];
-    const [x1, y1] = outline[(i + 1) % outline.length];
+  for (const [control, end] of outlineSegments(outline)) {
     d.push(
-      `${x0.toFixed(2)} ${y0.toFixed(2)} ${((x0 + x1) / 2).toFixed(2)} ${(
-        (y0 + y1) /
-        2
-      ).toFixed(2)}`
+      `${control[0].toFixed(2)} ${control[1].toFixed(2)} ${end[0].toFixed(2)} ${end[1].toFixed(2)}`
     );
   }
   d.push('Z');

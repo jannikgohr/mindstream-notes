@@ -43,11 +43,6 @@ export function pluginTemplateEntries(): PluginTemplateEntry[] {
   }));
 }
 
-/** True when at least one enabled plugin contributes a template. */
-export function hasPluginTemplates(): boolean {
-  return pluginTemplates().length > 0;
-}
-
 /**
  * Create + open a note from a template, swallowing failures with a console
  * error. Menu handlers are fire-and-forget, so this keeps a bad template from
@@ -134,11 +129,6 @@ export function templateMenuEntries(): TemplateMenuEntry[] {
     label: entry.label
   }));
   return [...plugin, ...user];
-}
-
-/** True when the create menus have at least one template to offer. */
-export function hasTemplateEntries(): boolean {
-  return templateMenuEntries().length > 0;
 }
 
 /**

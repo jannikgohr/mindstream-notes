@@ -22,7 +22,8 @@ import {
   insertImageBlock,
   insertMath,
   insertMermaid,
-  insertTable
+  insertTable,
+  isInCodeOrList
 } from '$lib/components/editor-toolbar/commands';
 
 /* --- Markdown actions ------------------------------------------------------
@@ -64,35 +65,14 @@ const toggleItalic = (ctx: Ctx) => {
   view.focus();
 };
 
-/** Headings and paragraph: skipped inside code/lists, same gate the
- *  toolbar uses. We don't fail silently — we just no-op, because a
- *  keyboard shortcut firing inside a code block should not corrupt the
- *  doc nor surprise the user with a heading. */
-function isInCodeOrList(ctx: Ctx): boolean {
-  const view = ctx.get(editorViewCtx);
-  const { $from } = view.state.selection;
-  for (let d = $from.depth; d >= 0; d--) {
-    const name = $from.node(d).type.name;
-    if (
-      name === 'code_block' ||
-      name === 'bullet_list' ||
-      name === 'ordered_list' ||
-      name === 'list_item'
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 const turnIntoParagraph = (ctx: Ctx) => {
-  if (isInCodeOrList(ctx)) return;
+  if (isInCodeOrList(ctx.get(editorViewCtx).state)) return;
   ctx.get(commandsCtx).call(setBlockTypeCommand.key, {
     nodeType: paragraphSchema.type(ctx)
   });
 };
 const turnIntoHeading = (level: number) => (ctx: Ctx) => {
-  if (isInCodeOrList(ctx)) return;
+  if (isInCodeOrList(ctx.get(editorViewCtx).state)) return;
   ctx.get(commandsCtx).call(setBlockTypeCommand.key, {
     nodeType: headingSchema.type(ctx),
     attrs: { level }
