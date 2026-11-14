@@ -56,9 +56,19 @@ export function createPageOverlays(
   host: PageOverlayHost
 ) {
   let activeGesture: (() => void) | null = null;
+  let gestureIsCurrent: (() => boolean) | null = null;
+  let annotationRefreshPending = false;
+
+  function refreshAfterGesture() {
+    if (annotationRefreshPending) {
+      annotationRefreshPending = false;
+      renderAppAnnotations();
+    }
+  }
 
   function cancelGesture() {
     activeGesture?.();
+    refreshAfterGesture();
   }
 
   function canStartGesture(event: PointerEvent) {
@@ -72,7 +82,10 @@ export function createPageOverlays(
     finish: (event: PointerEvent) => void,
     cleanup: () => void
   ) {
-    cancelGesture();
+    activeGesture?.();
+    const viewport = host.viewport;
+    const page = host.pageSurface.querySelector('.page');
+    const { pageNumber, activeTool, areaMode } = host.params;
     let stopped = false;
     const stop = () => {
       if (stopped) return;
@@ -80,7 +93,10 @@ export function createPageOverlays(
       target.removeEventListener('pointermove', onMove);
       target.removeEventListener('pointerup', onUp);
       target.removeEventListener('pointercancel', onCancel);
-      if (activeGesture === stop) activeGesture = null;
+      if (activeGesture === stop) {
+        activeGesture = null;
+        gestureIsCurrent = null;
+      }
       cleanup();
     };
     const onMove = (event: Event) => {
@@ -92,12 +108,24 @@ export function createPageOverlays(
       if (pointer.pointerId !== pointerId) return;
       // Commands may synchronously replace this layer or start another gesture.
       stop();
-      finish(pointer);
+      try {
+        finish(pointer);
+      } finally {
+        refreshAfterGesture();
+      }
     };
     const onCancel = (event: Event) => {
-      if ((event as PointerEvent).pointerId === pointerId) stop();
+      if ((event as PointerEvent).pointerId === pointerId) cancelGesture();
     };
     activeGesture = stop;
+    gestureIsCurrent = () =>
+      host.gesturesEnabled &&
+      !ctx.isTrashed &&
+      host.viewport === viewport &&
+      host.pageSurface.querySelector('.page') === page &&
+      host.params.pageNumber === pageNumber &&
+      host.params.activeTool === activeTool &&
+      host.params.areaMode === areaMode;
     target.addEventListener('pointermove', onMove);
     target.addEventListener('pointerup', onUp);
     target.addEventListener('pointercancel', onCancel);
@@ -151,6 +179,13 @@ export function createPageOverlays(
   }
 
   function renderAppAnnotations() {
+    // Keep the preview and captured node mounted during annotation-only updates.
+    // Apply the latest annotations when the gesture finishes or is cancelled.
+    if (activeGesture && gestureIsCurrent?.()) {
+      annotationRefreshPending = true;
+      return;
+    }
+    annotationRefreshPending = false;
     cancelGesture();
     const pageEl = host.pageSurface.querySelector<HTMLElement>('.page');
     const viewport = host.viewport;
