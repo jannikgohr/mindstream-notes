@@ -116,9 +116,10 @@ describe('PDF overlay gestures', () => {
   it.each(['highlight', 'pen'] as const)(
     'does not commit a cancelled %s gesture',
     (tool) => {
-      const { ctx, layer } = setup(tool);
+      const { ctx, overlays, layer } = setup(tool);
       pointer(layer(), 'pointerdown');
       pointer(window, 'pointermove', 60, 80);
+      overlays.renderAppAnnotations();
       pointer(window, 'pointercancel', 60, 80);
       expect(layer().querySelector('[class*="preview"]')).toBeNull();
       pointer(window, 'pointerup', 90, 100);
@@ -134,6 +135,26 @@ describe('PDF overlay gestures', () => {
     pointer(window, 'pointerup', 60, 80);
     expect(ctx.createAnnotation).not.toHaveBeenCalled();
   });
+
+  it.each(['highlight', 'pen'] as const)(
+    'keeps a %s gesture and its preview through annotation refreshes',
+    (tool) => {
+      const { ctx, params, overlays, layer } = setup(tool);
+      pointer(layer(), 'pointerdown');
+      pointer(window, 'pointermove', 60, 80);
+      const originalLayer = layer();
+      const preview = originalLayer.querySelector('[class*="preview"]')!;
+      params.annotationVersion += 1;
+      overlays.renderAppAnnotations();
+      overlays.renderAppAnnotations();
+      expect(layer()).toBe(originalLayer);
+      expect(preview.isConnected).toBe(true);
+      pointer(window, 'pointerup', 70, 90);
+      expect(ctx.createAnnotation).toHaveBeenCalledOnce();
+      expect(layer()).not.toBe(originalLayer);
+      expect(preview.isConnected).toBe(false);
+    }
+  );
 
   it('keeps pen sampling and completes only once', () => {
     const { ctx, layer } = setup('pen');
@@ -196,8 +217,9 @@ describe('PDF overlay gestures', () => {
   });
 
   it('replaces a pending gesture and removes its preview', () => {
-    const { ctx, layer } = setup();
+    const { ctx, overlays, layer } = setup();
     pointer(layer(), 'pointerdown');
+    overlays.renderAppAnnotations();
     const oldPreview = layer().firstElementChild!;
     pointer(layer(), 'pointerdown', 30, 40, 2);
     expect(oldPreview.isConnected).toBe(false);
@@ -243,10 +265,10 @@ describe('PDF overlay gestures', () => {
     }
   );
 
-  it.each(['pointercancel', 'rerender', 'teardown'] as const)(
+  it.each(['pointercancel', 'geometry change', 'teardown'] as const)(
     'clears movement and capture on %s without committing',
     (reason) => {
-      const { ctx, overlays, layer } = setup('select');
+      const { ctx, host, overlays, layer } = setup('select');
       ctx.annotations.push({
         id: 'ink',
         type: 'ink',
@@ -274,8 +296,12 @@ describe('PDF overlay gestures', () => {
       pointer(node, 'pointermove', 60, 80);
       expect(node.classList.contains('pdf-app-annotation-moving')).toBe(true);
       if (reason === 'pointercancel') pointer(node, reason, 60, 80);
-      else if (reason === 'rerender') overlays.renderAppAnnotations();
-      else overlays.cancelGesture();
+      else if (reason === 'geometry change') {
+        Object.defineProperty(host, 'viewport', {
+          value: { ...host.viewport }
+        });
+        overlays.renderAppAnnotations();
+      } else overlays.cancelGesture();
       expect(captured).toBe(false);
       expect(node.releasePointerCapture).toHaveBeenCalledOnce();
       expect(node.style.transform).toBe('');
@@ -307,6 +333,8 @@ describe('PDF overlay gestures', () => {
       )!;
       pointer(node, 'pointerdown');
       pointer(node, 'pointermove', moving ? 60 : 12, moving ? 80 : 20);
+      overlays.renderAppAnnotations();
+      expect(node.isConnected).toBe(true);
       pointer(node, 'pointerup', moving ? 60 : 12, moving ? 80 : 20);
       if (moving) {
         expect(ctx.moveAnnotation).toHaveBeenCalledWith('ink', 50, 60);
@@ -381,6 +409,26 @@ describe('PDF renderer gesture ownership', () => {
     expect(preview.isConnected).toBe(false);
     pointer(window, 'pointerup', 60, 80);
     expect(ctx.createAnnotation).not.toHaveBeenCalled();
+    action.destroy();
+  });
+
+  it('commits an area after a same-viewport annotation update', async () => {
+    const { action, ctx, params, layer } = await renderer();
+    pointer(layer(), 'pointerdown');
+    pointer(window, 'pointermove', 60, 80);
+    const originalLayer = layer();
+    action.update({ ...params, annotationVersion: 1 });
+    expect(layer()).toBe(originalLayer);
+    pointer(window, 'pointerup', 60, 80);
+    expect(ctx.createAnnotation).toHaveBeenCalledOnce();
+    expect(ctx.createAnnotation).toHaveBeenCalledWith(
+      'highlight',
+      0,
+      { x: 10, y: 20, width: 50, height: 60 },
+      undefined,
+      {}
+    );
+    expect(layer()).not.toBe(originalLayer);
     action.destroy();
   });
 
