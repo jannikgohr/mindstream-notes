@@ -34,10 +34,12 @@
   } from '$lib/hotkeys/format';
   import {
     allHotkeyCommands,
-    groupedCommands,
     isGlobalShortcutCommand,
-    isGlobalShortcutOnlyCommand,
-    type CommandGroup,
+    groupedCommands,
+    displayCommandGroups,
+    displayCommandGroupLabel,
+    hotkeyTextMatches,
+    type DisplayCommandGroup,
     type CommandDefinition
   } from '$lib/hotkeys/catalogue';
   import { pluginCommandLabel } from '$lib/plugins/hotkeys';
@@ -127,53 +129,8 @@
   );
   const lowerSearchQuery = $derived(searchQuery.trim().toLowerCase());
 
-  type DisplayCommandGroup = CommandGroup & {
-    displayScope?: 'globalShortcuts';
-  };
-
   const groups = $derived.by<DisplayCommandGroup[]>(() => {
-    if (!globalShortcutsEnabled) {
-      return catalogueGroups
-        .map((group) =>
-          group.scope === 'global'
-            ? {
-                ...group,
-                commands: group.commands.filter(
-                  (cmd) => !isGlobalShortcutOnlyCommand(cmd)
-                )
-              }
-            : group
-        )
-        .filter((group) => group.commands.length > 0);
-    }
-
-    const next: DisplayCommandGroup[] = [];
-    for (const group of catalogueGroups) {
-      if (group.scope !== 'global') {
-        next.push(group);
-        continue;
-      }
-
-      const globalShortcutCommands = group.commands.filter(
-        isGlobalShortcutCommand
-      );
-      const applicationCommands = group.commands.filter(
-        (cmd) => !isGlobalShortcutCommand(cmd)
-      );
-
-      if (globalShortcutCommands.length > 0) {
-        next.push({
-          scope: 'global',
-          editorKind: null,
-          commands: globalShortcutCommands,
-          displayScope: 'globalShortcuts'
-        });
-      }
-      if (applicationCommands.length > 0) {
-        next.push({ ...group, commands: applicationCommands });
-      }
-    }
-    return next;
+    return displayCommandGroups(catalogueGroups, globalShortcutsEnabled);
   });
 
   /**
@@ -195,12 +152,7 @@
   );
 
   function groupLabel(group: DisplayCommandGroup): string {
-    if (group.displayScope === 'globalShortcuts') {
-      return tUi('hotkeys.group.globalShortcuts');
-    }
-    const { scope, editorKind } = group;
-    if (scope === 'global') return tUi('hotkeys.group.global');
-    return tUi(`hotkeys.group.editor.${editorKind}`);
+    return displayCommandGroupLabel(group, tUi);
   }
 
   function commandLabel(cmd: CommandDefinition): string {
@@ -215,10 +167,13 @@
   ): boolean {
     if (!lowerSearchQuery) return true;
     const display = displayBinding(current) || tUi('hotkeys.unset');
-    return [cmd.id, commandLabel(cmd), groupName, current ?? '', display]
-      .join(' ')
-      .toLowerCase()
-      .includes(lowerSearchQuery);
+    return hotkeyTextMatches(lowerSearchQuery, [
+      cmd.id,
+      commandLabel(cmd),
+      groupName,
+      current ?? '',
+      display
+    ]);
   }
 
   function conflictLabel(id: string): string {

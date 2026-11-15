@@ -178,8 +178,8 @@ async fn remove_membership(
     .bind(by_admin)
     .execute(&mut *conn)
     .await?;
-    withdraw_invitations(conn, collection.id, account_id).await?;
-    withdraw_invitations_to(conn, collection.id, account_id).await?;
+    withdraw_invitations(conn, collection.id, account_id, Direction::Outgoing).await?;
+    withdraw_invitations(conn, collection.id, account_id, Direction::Incoming).await?;
     withdraw_links(conn, collection.id, account_id).await?;
     // Their open sockets close, and the remaining members see the roster
     // change.
@@ -300,7 +300,7 @@ pub async fn modify_member(
     .execute(&mut *tx)
     .await?;
     if body.access_level != ACCESS_ADMIN {
-        withdraw_invitations(&mut tx, collection.id, target).await?;
+        withdraw_invitations(&mut tx, collection.id, target, Direction::Outgoing).await?;
         withdraw_links(&mut tx, collection.id, target).await?;
     }
     let access = Event::Membership {
@@ -339,53 +339,33 @@ fn sender_still_admin() -> String {
     )
 }
 
-/// Delete the invitations an account sent into a collection it is no longer
-/// an admin of, and tell the invited, whose lists just got shorter. The
-/// caller holds the lock on the collection.
+/// Delete the invitations an account is on one side of in a collection, and
+/// tell the account on the other side, whose lists just got shorter. With
+/// `Outgoing` the account sent them, and it is no longer an admin of the
+/// collection. With `Incoming` the account holds them, because it is joining
+/// or has just gone. An invitation is only a way in for someone outside, so
+/// left standing it would outlive the membership and be a way back after a
+/// removal. The caller holds the lock on the collection.
 async fn withdraw_invitations(
     conn: &mut PgConnection,
     collection_id: i64,
-    sender: i64,
+    account_id: i64,
+    direction: Direction,
 ) -> ApiResult<()> {
-    let invited: Vec<(i64, i64)> = sqlx::query_as(
-        "DELETE FROM invitations WHERE collection_id = $1 AND from_account_id = $2
-         RETURNING to_account_id,
-                   (octet_length(uid) + octet_length(signed_encryption_key))::bigint",
-    )
+    let withdrawn: Vec<(i64, i64)> = sqlx::query_as(&format!(
+        "DELETE FROM invitations i WHERE i.collection_id = $1 AND {column} = $2
+         RETURNING {counterpart},
+                   (octet_length(i.uid) + octet_length(i.signed_encryption_key))::bigint",
+        column = direction.column(),
+        counterpart = direction.counterpart_column(),
+    ))
     .bind(collection_id)
-    .bind(sender)
+    .bind(account_id)
     .fetch_all(&mut *conn)
     .await?;
-    let bytes = invited.iter().map(|(_, bytes)| bytes).sum();
+    let bytes = withdrawn.iter().map(|(_, bytes)| bytes).sum();
     give_back(conn, collection_id, bytes).await?;
-    for (account, _) in invited {
-        events::publish(conn, &Event::Invitation { account }).await?;
-    }
-    Ok(())
-}
-
-/// Delete the invitations an account still holds into a collection, because
-/// it is joining or has just gone. An invitation is only a way in for someone
-/// outside: left standing it would outlive the membership, and be a way back
-/// after a removal. Tell whoever sent them. The caller holds the lock on the
-/// collection.
-async fn withdraw_invitations_to(
-    conn: &mut PgConnection,
-    collection_id: i64,
-    recipient: i64,
-) -> ApiResult<()> {
-    let senders: Vec<(i64, i64)> = sqlx::query_as(
-        "DELETE FROM invitations WHERE collection_id = $1 AND to_account_id = $2
-         RETURNING from_account_id,
-                   (octet_length(uid) + octet_length(signed_encryption_key))::bigint",
-    )
-    .bind(collection_id)
-    .bind(recipient)
-    .fetch_all(&mut *conn)
-    .await?;
-    let bytes = senders.iter().map(|(_, bytes)| bytes).sum();
-    give_back(conn, collection_id, bytes).await?;
-    for (account, _) in senders {
+    for (account, _) in withdrawn {
         events::publish(conn, &Event::Invitation { account }).await?;
     }
     Ok(())
@@ -596,6 +576,14 @@ impl Direction {
             Direction::Outgoing => "i.from_account_id",
         }
     }
+
+    /// The column that holds the other account on the invitation.
+    fn counterpart_column(self) -> &'static str {
+        match self {
+            Direction::Incoming => "i.from_account_id",
+            Direction::Outgoing => "i.to_account_id",
+        }
+    }
 }
 
 async fn list_invitations(
@@ -769,7 +757,7 @@ pub(crate) async fn add_member(
     // An invitation to this account is no longer a way in once it joins.
     // Withdraw it first, so the space it used is part of what the new
     // membership has to fit.
-    withdraw_invitations_to(conn, collection_id, user.account_id).await?;
+    withdraw_invitations(conn, collection_id, user.account_id, Direction::Incoming).await?;
     let old_bytes: Option<(i32, i32)> = sqlx::query_as(
         "SELECT octet_length(encryption_key), octet_length(collection_type)
          FROM members WHERE collection_id = $1 AND account_id = $2",
@@ -882,7 +870,7 @@ pub async fn accept(
     .fetch_optional(&mut *tx)
     .await?;
     if already_member.is_some() {
-        withdraw_invitations_to(&mut tx, collection_id, user.account_id).await?;
+        withdraw_invitations(&mut tx, collection_id, user.account_id, Direction::Incoming).await?;
         tx.commit().await?;
         return Err(ApiError::conflict(
             "already_member",

@@ -75,20 +75,17 @@ export function computeInkAlpha(
 /* --- Step 4: speck removal --------------------------------------------------- */
 
 /**
- * Drop 8-connected components smaller than `minSize` pixels. Mutates a
- * copy — the input mask is left untouched.
+ * Pixel indices of each 8-connected component of `mask`, yielded one at a
+ * time so callers can decide per component without holding them all.
  */
-export function removeSpecks(mask: BinaryMask, minSize: number): BinaryMask {
-  const { width, height } = mask;
-  const data = Uint8Array.from(mask.data);
+function* connectedComponents(mask: BinaryMask): Generator<number[]> {
+  const { width, height, data } = mask;
   const seen = new Uint8Array(data.length);
   const stack: number[] = [];
-  const component: number[] = [];
 
   for (let start = 0; start < data.length; start++) {
     if (!data[start] || seen[start]) continue;
-    stack.length = 0;
-    component.length = 0;
+    const component: number[] = [];
     stack.push(start);
     seen[start] = 1;
     while (stack.length) {
@@ -110,6 +107,18 @@ export function removeSpecks(mask: BinaryMask, minSize: number): BinaryMask {
         }
       }
     }
+    yield component;
+  }
+}
+
+/**
+ * Drop 8-connected components smaller than `minSize` pixels. Mutates a
+ * copy — the input mask is left untouched.
+ */
+export function removeSpecks(mask: BinaryMask, minSize: number): BinaryMask {
+  const { width, height } = mask;
+  const data = Uint8Array.from(mask.data);
+  for (const component of connectedComponents(mask)) {
     if (component.length < minSize) {
       for (const idx of component) data[idx] = 0;
     }
@@ -177,39 +186,16 @@ export function removeBorderBlobs(
   const { width, height } = mask;
   const data = Uint8Array.from(mask.data);
   const dist = distanceTransform(mask);
-  const seen = new Uint8Array(data.length);
-  const stack: number[] = [];
-  const component: number[] = [];
 
-  for (let start = 0; start < data.length; start++) {
-    if (!data[start] || seen[start]) continue;
-    stack.length = 0;
-    component.length = 0;
-    stack.push(start);
-    seen[start] = 1;
+  for (const component of connectedComponents(mask)) {
     let touchesBorder = false;
     let thickness = 0;
-    while (stack.length) {
-      const idx = stack.pop()!;
-      component.push(idx);
+    for (const idx of component) {
       if (dist[idx] > thickness) thickness = dist[idx];
       const x = idx % width;
       const y = (idx - x) / width;
       if (x === 0 || y === 0 || x === width - 1 || y === height - 1) {
         touchesBorder = true;
-      }
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if (dx === 0 && dy === 0) continue;
-          const nx = x + dx;
-          const ny = y + dy;
-          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
-          const nIdx = ny * width + nx;
-          if (data[nIdx] && !seen[nIdx]) {
-            seen[nIdx] = 1;
-            stack.push(nIdx);
-          }
-        }
       }
     }
     if (touchesBorder && thickness > maxThickness) {
@@ -269,8 +255,6 @@ export function removeFaintComponents(
   const data = Uint8Array.from(mask.data);
   if (ratio <= 0) return { width, height, data };
   const means = localMeans(signal, width, height);
-  const seen = new Uint8Array(data.length);
-  const stack: number[] = [];
   const allContrasts: number[] = [];
 
   interface Component {
@@ -279,28 +263,7 @@ export function removeFaintComponents(
   }
   const components: Component[] = [];
 
-  for (let start = 0; start < data.length; start++) {
-    if (!data[start] || seen[start]) continue;
-    stack.length = 0;
-    stack.push(start);
-    seen[start] = 1;
-    const pixels: number[] = [];
-    while (stack.length) {
-      const idx = stack.pop()!;
-      pixels.push(idx);
-      const x = idx % width;
-      const y = (idx - x) / width;
-      for (const [dx, dy] of NEIGHBOURS) {
-        const nx = x + dx;
-        const ny = y + dy;
-        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
-        const nIdx = ny * width + nx;
-        if (data[nIdx] && !seen[nIdx]) {
-          seen[nIdx] = 1;
-          stack.push(nIdx);
-        }
-      }
-    }
+  for (const pixels of connectedComponents(mask)) {
     const contrasts = pixels.map((idx) => {
       const mean = means[idx];
       return mean > 0 ? Math.max(0, (mean - signal[idx]) / mean) : 0;

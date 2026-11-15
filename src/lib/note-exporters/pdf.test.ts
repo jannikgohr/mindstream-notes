@@ -3,19 +3,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const {
   loadNote,
   fetchAssetBytes,
-  saveAnnotatedPdf,
+  saveFileExport,
   exportPrintReadyPdf,
   pushToast
 } = vi.hoisted(() => ({
   loadNote: vi.fn(),
   fetchAssetBytes: vi.fn(),
-  saveAnnotatedPdf: vi.fn(),
+  saveFileExport: vi.fn(),
   exportPrintReadyPdf: vi.fn(),
   pushToast: vi.fn()
 }));
 
 vi.mock('$lib/api', () => ({ loadNote, fetchAssetBytes }));
-vi.mock('$lib/api/pdf-export', () => ({ saveAnnotatedPdf }));
+vi.mock('$lib/api/file-export', () => ({ saveFileExport }));
 vi.mock('$lib/pdf/export-print-ready-pdf', () => ({ exportPrintReadyPdf }));
 vi.mock('$lib/ink/pdf-annotations', () => ({
   sharedInkAnnotations: () => []
@@ -40,7 +40,7 @@ beforeEach(() => {
     yrs_state: []
   });
   fetchAssetBytes.mockReset().mockResolvedValue(sourceBytes);
-  saveAnnotatedPdf.mockReset().mockResolvedValue(true);
+  saveFileExport.mockReset().mockResolvedValue(true);
   exportPrintReadyPdf
     .mockReset()
     .mockResolvedValue({ bytes: outputBytes, warnings: [] });
@@ -66,7 +66,7 @@ describe('exportPrintReadyPdfNote', () => {
       [],
       expect.objectContaining({ page: 'Page {page}' })
     );
-    expect(saveAnnotatedPdf).toHaveBeenCalledWith(
+    expect(saveFileExport).toHaveBeenCalledWith(
       expect.objectContaining({
         suggestedName: 'Lease draft (print).pdf',
         bytes: outputBytes
@@ -91,7 +91,7 @@ describe('exportPrintReadyPdfNote', () => {
       bytes: outputBytes,
       warnings: ['form-not-flattened']
     });
-    saveAnnotatedPdf.mockResolvedValue(false);
+    saveFileExport.mockResolvedValue(false);
     await exportPrintReadyPdfNote('n1');
     expect(pushToast).not.toHaveBeenCalled();
   });
@@ -111,7 +111,7 @@ describe('pdfExporters', () => {
 
 it('exports the original asset unchanged without filling forms or adding annotations', async () => {
   await exportOriginalPdfNote('n1');
-  expect(saveAnnotatedPdf).toHaveBeenCalledWith(
+  expect(saveFileExport).toHaveBeenCalledWith(
     expect.objectContaining({
       bytes: sourceBytes,
       suggestedName: 'Lease draft (original).pdf'

@@ -163,6 +163,10 @@ describe('explicit ink pages', () => {
     expect(pageIndexAt(layout, 90, 20)).toBeNull();
     expect(pageIndexAt(layout, 20, 380)).toBe(1);
     expect(pageIndexAt(layout, 20, 350)).toBeNull();
+    expect(pageIndexAt(layout, 100, 0)).toBe(0);
+    expect(pageIndexAt(layout, 300, 300)).toBe(0);
+    expect(pageIndexAt(layout, 300, 300.001)).toBeNull();
+    expect(pageIndexAt(layout, 0, 372)).toBe(1);
   });
   it('persists page-local strokes and keeps them attached through reorder, delete and undo', () => {
     const ink = new InkDocument();

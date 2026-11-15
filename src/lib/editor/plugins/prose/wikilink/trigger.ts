@@ -8,14 +8,15 @@
  * plugin only looks at what is in the doc, never at what was typed.
  */
 
-import {
-  Plugin,
-  PluginKey,
-  TextSelection,
-  type EditorState
-} from '@milkdown/kit/prose/state';
+import { Plugin, PluginKey, type EditorState } from '@milkdown/kit/prose/state';
 import type { EditorView } from '@milkdown/kit/prose/view';
 import { noteHref } from '../../wikilink-href';
+import {
+  commitTypeahead,
+  resetTypeahead,
+  syncTypeahead,
+  typeaheadKeys
+} from '../typeahead';
 import type { WikilinkBridge } from '../../wikilink-bridge.svelte';
 
 /* --- Trigger plugin -------------------------------------------------------- */
@@ -165,10 +166,7 @@ export function wikilinkTriggerPlugin(
   let suppressAutoOpenTimer: ReturnType<typeof setTimeout> | null = null;
 
   function resetBridgeState() {
-    bridge.state.open = false;
-    bridge.state.query = '';
-    bridge.state.caretRect = null;
-    bridge.state.highlight = 0;
+    resetTypeahead(bridge.state);
   }
 
   function suppressModifierClickAutoOpen() {
@@ -207,27 +205,15 @@ export function wikilinkTriggerPlugin(
     const cursor = view.state.selection.from;
     const replaceTo = findInsertionReplaceTo(view.state, start, cursor);
     const label = note.title.trim() || 'Untitled';
-    const linkType = view.state.schema.marks.link;
-    if (!linkType) {
-      const tr = view.state.tr.insertText(label, start, replaceTo);
-      tr.setMeta(triggerPluginKey, { close: true });
-      view.dispatch(tr);
-      view.focus();
-      close();
-      return;
-    }
-    const linkMark = linkType.create({
-      href: noteHref(note.id),
-      title: null
-    });
-    const linkText = view.state.schema.text(label, [linkMark]);
-    const tr = view.state.tr.replaceWith(start, replaceTo, linkText);
-    tr.setSelection(TextSelection.create(tr.doc, start + label.length));
-    tr.setStoredMarks([]);
-    tr.setMeta(triggerPluginKey, { close: true });
-    view.dispatch(tr);
-    view.focus();
-    close();
+    commitTypeahead(
+      view,
+      start,
+      replaceTo,
+      label,
+      noteHref(note.id),
+      triggerPluginKey,
+      close
+    );
   }
 
   bridge.setHandlers({ insert, cancel: close });
@@ -276,48 +262,9 @@ export function wikilinkTriggerPlugin(
     view(view) {
       viewRef = view;
       return {
-        update(view, prevState) {
+        update(view) {
           const trigger = triggerPluginKey.getState(view.state);
-          const wasOpen = bridge.state.open;
-          if (!trigger || trigger.startPos === null) {
-            if (wasOpen) {
-              bridge.state.open = false;
-              bridge.state.query = '';
-              bridge.state.caretRect = null;
-              bridge.state.highlight = 0;
-            }
-            return;
-          }
-          const cursor = view.state.selection.from;
-          const query = view.state.doc.textBetween(
-            trigger.startPos + 2,
-            cursor,
-            '\n'
-          );
-          // Caret rect in viewport coords. The popup hands this to
-          // floating-ui's virtual element so positioning survives
-          // ancestors with CSS transforms (dockview panels) and the
-          // sidebar opening/closing without us re-deriving coords.
-          const c = view.coordsAtPos(cursor);
-          const caretRect = {
-            top: c.top,
-            bottom: c.bottom,
-            left: c.left,
-            right: c.left,
-            width: 0,
-            height: c.bottom - c.top
-          };
-          // Only reset highlight when the query string actually changes
-          // (so arrow-key nav isn't clobbered by a tick of reactivity).
-          if (!wasOpen || bridge.state.query !== query) {
-            bridge.state.highlight = 0;
-          }
-          bridge.state.open = true;
-          bridge.state.query = query;
-          bridge.state.caretRect = caretRect;
-          // (intentionally don't touch newState/prevState beyond what
-          // ProseMirror already gives us)
-          void prevState;
+          syncTypeahead(view, bridge.state, trigger?.startPos ?? null, 2);
         },
         destroy() {
           if (viewRef === view) {
@@ -354,34 +301,13 @@ export function wikilinkTriggerPlugin(
 
       handleKeyDown(view, event) {
         const trigger = triggerPluginKey.getState(view.state);
-        if (!trigger || trigger.startPos === null) return false;
-        switch (event.key) {
-          case 'Escape':
-            event.preventDefault();
-            close();
-            return true;
-          case 'Enter':
-            event.preventDefault();
-            bridge.commitFromPopup();
-            return true;
-          case 'ArrowDown':
-            event.preventDefault();
-            bridge.state.highlight = bridge.state.highlight + 1;
-            return true;
-          case 'ArrowUp':
-            event.preventDefault();
-            bridge.state.highlight = Math.max(0, bridge.state.highlight - 1);
-            return true;
-          case 'Tab':
-            // Tab also commits — matches the convention from most
-            // typeahead UIs and avoids the user accidentally
-            // indenting the line via prosemirror's tab handling.
-            event.preventDefault();
-            bridge.commitFromPopup();
-            return true;
-          default:
-            return false;
-        }
+        return typeaheadKeys(
+          event,
+          trigger?.startPos !== null && trigger?.startPos !== undefined,
+          bridge.state,
+          close,
+          () => bridge.commitFromPopup()
+        );
       }
     }
   });

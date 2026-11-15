@@ -8,13 +8,11 @@ const {
   loadNote,
   pluginsNativeToolStatus,
   pluginsRunScript,
-  saveAnnotatedPdf,
   sanitizePdfFilename
 } = vi.hoisted(() => ({
   loadNote: vi.fn(),
   pluginsNativeToolStatus: vi.fn(),
   pluginsRunScript: vi.fn(),
-  saveAnnotatedPdf: vi.fn(),
   sanitizePdfFilename: vi.fn((name: string) => name)
 }));
 
@@ -26,7 +24,6 @@ vi.mock('$lib/api/plugins', () => ({
   pluginsNativeToolStatus,
   pluginsRunScript
 }));
-vi.mock('$lib/api/pdf-export', () => ({ saveAnnotatedPdf }));
 vi.mock('$lib/pdf/filename', () => ({ sanitizePdfFilename }));
 
 import {
@@ -82,7 +79,6 @@ beforeEach(() => {
   loadNote.mockReset();
   pluginsNativeToolStatus.mockReset();
   pluginsRunScript.mockReset();
-  saveAnnotatedPdf.mockReset().mockResolvedValue(true);
   saveFileExport.mockReset().mockResolvedValue(true);
   sanitizePdfFilename.mockReset().mockImplementation((name: string) => name);
 });
@@ -122,9 +118,12 @@ describe('runPluginNoteExporter', () => {
         format: 'pdf'
       }
     );
-    expect(saveAnnotatedPdf).toHaveBeenCalledWith({
+    expect(saveFileExport).toHaveBeenCalledWith({
       suggestedName: 'Letter.pdf',
       dialogTitle: 'Save PDF',
+      mime: 'application/pdf',
+      filterName: 'PDF',
+      extensions: ['pdf'],
       bytes: new Uint8Array([37, 80, 68, 70])
     });
   });
@@ -151,7 +150,7 @@ describe('runPluginNoteExporter', () => {
       /typst.*PATH/i
     );
     expect(pluginsRunScript).not.toHaveBeenCalled();
-    expect(saveAnnotatedPdf).not.toHaveBeenCalled();
+    expect(saveFileExport).not.toHaveBeenCalled();
   });
 
   function primeAvailable(): ReturnType<typeof registerTypstExporter> {
@@ -182,7 +181,6 @@ describe('runPluginNoteExporter', () => {
       await expect(runPluginNoteExporter(ref, 'n1')).rejects.toThrow(
         'Plugin export result must be an object'
       );
-      expect(saveAnnotatedPdf).not.toHaveBeenCalled();
       expect(saveFileExport).not.toHaveBeenCalled();
     }
   );
@@ -200,7 +198,7 @@ describe('runPluginNoteExporter', () => {
     await expect(runPluginNoteExporter(ref, 'n1')).rejects.toThrow(
       'Plugin export did not produce file bytes.'
     );
-    expect(saveAnnotatedPdf).not.toHaveBeenCalled();
+    expect(saveFileExport).not.toHaveBeenCalled();
   });
 
   it('rejects when the note kind does not match the exporter', async () => {
@@ -271,7 +269,7 @@ describe('runPluginNoteExporter', () => {
       }
     });
     await runPluginNoteExporter(ref, 'n1');
-    expect(saveAnnotatedPdf).toHaveBeenCalledWith(
+    expect(saveFileExport).toHaveBeenCalledWith(
       expect.objectContaining({ suggestedName: 'Report.pdf' })
     );
   });
@@ -303,7 +301,7 @@ describe('pluginExportersForNote', () => {
       dataBase64: 'JVBERg=='
     });
     await exporters[0].run('n1');
-    expect(saveAnnotatedPdf).toHaveBeenCalledWith(
+    expect(saveFileExport).toHaveBeenCalledWith(
       expect.objectContaining({
         suggestedName: 'Letter.pdf',
         bytes: new Uint8Array([37, 80, 68, 70])

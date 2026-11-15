@@ -301,16 +301,9 @@ export class RoomSocket {
     if (this.destroyed || this.ws !== ws || ws.readyState !== WebSocket.OPEN) {
       return;
     }
-    const head =
-      target === null
-        ? Uint8Array.of(cls)
-        : Uint8Array.of(
-            cls,
-            (target >>> 24) & 0xff,
-            (target >>> 16) & 0xff,
-            (target >>> 8) & 0xff,
-            target & 0xff
-          );
+    const head = new Uint8Array(target === null ? 1 : 1 + SENDER_BYTES);
+    head[0] = cls;
+    if (target !== null) new DataView(head.buffer).setUint32(1, target);
     try {
       ws.send(concat(head, iv, ciphertext));
     } catch (err) {

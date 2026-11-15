@@ -2,8 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   accessibleCommentText,
   annotationAriaLabel,
-  annotationTypeLabel,
-  formatPdfUi
+  annotationTypeLabel
 } from './annotation-labels';
 import type { PdfAnnotation } from './types';
 
@@ -20,14 +19,6 @@ function annotation(patch: Partial<PdfAnnotation> = {}): PdfAnnotation {
     ...patch
   } as PdfAnnotation;
 }
-
-describe('formatPdfUi', () => {
-  it('substitutes every occurrence of a placeholder', () => {
-    expect(
-      formatPdfUi('pdf.annotation.accessible.part', { part: 2, total: 5 })
-    ).toContain('2');
-  });
-});
 
 describe('annotationTypeLabel', () => {
   it('names each annotation type', () => {
@@ -64,6 +55,11 @@ describe('accessibleCommentText', () => {
     const body = 'y'.repeat(140);
     expect(accessibleCommentText(annotation({ body }))).toContain(body);
   });
+
+  it('keeps replacement patterns like $& and $$ in the body literal', () => {
+    const body = "Costs $& $' $$";
+    expect(accessibleCommentText(annotation({ body }))).toContain(body);
+  });
 });
 
 describe('annotationAriaLabel', () => {
@@ -83,7 +79,7 @@ describe('annotationAriaLabel', () => {
     const single = annotationAriaLabel(annotation(), 0, 1, null, 'select');
     const part = annotationAriaLabel(annotation(), 1, 3, null, 'select');
     expect(part.length).toBeGreaterThan(single.length);
-    expect(part).toContain('2');
+    expect(part).toContain('Part 2 of 3');
   });
 
   it('reports the selected state only for the selected annotation', () => {

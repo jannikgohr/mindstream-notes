@@ -5,6 +5,8 @@ import {
   DEFAULT_PAGE_GAP,
   defaultLayout,
   documentHeight,
+  forEachPageRect,
+  layoutForPages,
   MIN_PAGE_COUNT,
   pageCountForContentMaxY,
   pageIndexAt,
@@ -13,6 +15,55 @@ import {
   pointToSegmentDistanceSq,
   strideY
 } from './page';
+
+describe('page rectangle traversal', () => {
+  const explicit = layoutForPages(
+    Array.from({ length: 12 }, (_, i) => ({
+      id: String(i),
+      width: 200 + i / 3,
+      height: 100 + i / 7
+    }))
+  );
+  explicit.pageGap = 1 / 9;
+
+  it.each([
+    ['uniform', defaultLayout(12)],
+    ['fractional pages', explicit],
+    ['empty', layoutForPages([])],
+    ['truncated', { ...explicit, pageCount: 3 }]
+  ] as const)(
+    'matches random access exactly for %s layouts',
+    (_name, layout) => {
+      const rects: unknown[] = [];
+      forEachPageRect(layout, (rect) => rects.push(rect));
+      expect(rects).toEqual(
+        Array.from({ length: layout.pageCount }, (_, i) => pageRect(layout, i))
+      );
+    }
+  );
+
+  it('reads edited page geometry on the next traversal', () => {
+    const layout = layoutForPages([
+      { id: 'a', width: 200, height: 100 },
+      { id: 'b', width: 200, height: 100 }
+    ]);
+    forEachPageRect(layout, () => {});
+    layout.pages![0].height = 123.4;
+    layout.pageGap = 10.1;
+    const rects: unknown[] = [];
+    forEachPageRect(layout, (rect) => rects.push(rect));
+    expect(rects).toEqual([pageRect(layout, 0), pageRect(layout, 1)]);
+  });
+
+  it('retains the failure for an explicit page count longer than the page array', () => {
+    const layout = {
+      ...layoutForPages([{ id: 'a', width: 200, height: 100 }]),
+      pageCount: 2
+    };
+    expect(() => pageRect(layout, 1)).toThrow(TypeError);
+    expect(() => forEachPageRect(layout, () => {})).toThrow(TypeError);
+  });
+});
 
 describe('defaultLayout', () => {
   it('uses the A4 page and enforces a minimum page count', () => {

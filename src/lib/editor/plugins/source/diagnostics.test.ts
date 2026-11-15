@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { splitParagraphs } from './diagnostics';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EditorView } from '@codemirror/view';
+import type { Diagnostic } from '$lib/diagnostics/types';
+import { sourceDiagnostics, splitParagraphs } from './diagnostics';
 
 /**
  * Segmentation for the source surface. The invariant that matters is the
@@ -74,5 +76,145 @@ describe('splitParagraphs', () => {
       'Letzter Absatz.'
     ].join('\n');
     expect(roundTrips(text)).toBe(true);
+  });
+});
+
+describe('source lifecycle', () => {
+  let view: EditorView;
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    view?.destroy();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  const finding: Diagnostic = {
+    from: 0,
+    to: 3,
+    kind: 'spelling',
+    source: 'test',
+    message: 'word',
+    replacements: []
+  };
+  const marks = () =>
+    [...view.dom.querySelectorAll('.cm-diagnostic')].map(
+      (mark) => mark.textContent
+    );
+
+  it('maps partial and final results through edits during preparation and masks ignored text', async () => {
+    let prepare!: (ranges: { from: number; to: number }[]) => void;
+    let finish!: (results: Diagnostic[]) => void;
+    let partial!: (results: Diagnostic[]) => void;
+    const ignoreRanges = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            prepare = resolve;
+          })
+      )
+      .mockResolvedValue([]);
+    const check = vi.fn((_segments, _signal, onPartial) => {
+      partial = onPartial;
+      return new Promise<Diagnostic[]>((resolve) => {
+        finish = resolve;
+      });
+    });
+    view = new EditorView({
+      doc: 'bad secret',
+      extensions: [
+        sourceDiagnostics({
+          check,
+          syntax: { id: 'plain', ignoreRanges, segment: splitParagraphs },
+          debounceMs: 400
+        })
+      ]
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    view.dispatch({ changes: { from: 0, insert: 'X ' } });
+    prepare([{ from: 4, to: 10 }]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(check.mock.calls[0][0][0].text).not.toContain('secret');
+    partial([finding, { ...finding, from: 4, to: 10 }]);
+    expect(marks()).toEqual(['bad']);
+    finish([finding]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(marks()).toEqual(['bad']);
+    expect(check).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(check).toHaveBeenCalledTimes(2);
+  });
+
+  it('recovers rejected preparation and clears immediately on disabled invalidation', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    let invalidate!: () => void;
+    let enabled = true;
+    let finish!: (results: Diagnostic[]) => void;
+    const ignoreRanges = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('syntax'))
+      .mockResolvedValue([]);
+    const check = vi
+      .fn()
+      .mockResolvedValueOnce([finding])
+      .mockImplementation(
+        () =>
+          new Promise<Diagnostic[]>((resolve) => {
+            finish = resolve;
+          })
+      );
+    view = new EditorView({
+      doc: 'bad',
+      extensions: [
+        sourceDiagnostics({
+          check,
+          enabled: () => enabled,
+          syntax: { id: 'plain', ignoreRanges, segment: splitParagraphs },
+          subscribeInvalidate: (listener) => {
+            invalidate = listener;
+            return vi.fn();
+          }
+        })
+      ]
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    invalidate();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(marks()).toEqual(['bad']);
+    invalidate();
+    await vi.advanceTimersByTimeAsync(0);
+    enabled = false;
+    invalidate();
+    expect(marks()).toEqual([]);
+    expect(check.mock.calls[1][1].aborted).toBe(true);
+    finish([finding]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(marks()).toEqual([]);
+  });
+
+  it('never invokes a provider after destruction during syntax preparation', async () => {
+    let prepare!: (ranges: []) => void;
+    const check = vi.fn().mockResolvedValue([]);
+    view = new EditorView({
+      doc: 'bad',
+      extensions: [
+        sourceDiagnostics({
+          check,
+          syntax: {
+            id: 'plain',
+            ignoreRanges: () =>
+              new Promise((resolve) => {
+                prepare = resolve;
+              }),
+            segment: splitParagraphs
+          }
+        })
+      ]
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    view.dispatch({ changes: { from: 0, insert: 'x' } });
+    view.destroy();
+    prepare([]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(check).not.toHaveBeenCalled();
   });
 });

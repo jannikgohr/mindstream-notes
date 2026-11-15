@@ -3,7 +3,9 @@ import schema from '$lib/settings/schema.json';
 import {
   centeredPatternPositions,
   INK_COLOR_SWATCHES,
-  normalizeInkPageBackgroundOpacity
+  normalizeInkPageBackgroundOpacity,
+  transformedPoints,
+  translationTransform
 } from './editor-helpers';
 
 /** WCAG contrast of an sRGB hex colour against the white page. */
@@ -53,5 +55,14 @@ describe('centeredPatternPositions', () => {
 
   it('returns no marks when the step cannot fit', () => {
     expect(centeredPatternPositions(0, 20, 28)).toEqual([]);
+  });
+});
+
+describe('transformedPoints', () => {
+  it('moves each point and keeps its pressure and other fields', () => {
+    const points = [{ x: 1, y: 2, pressure: 0.5, id: 'p1' }];
+    expect(transformedPoints(points, translationTransform(10, 20))).toEqual([
+      { x: 11, y: 22, pressure: 0.5, id: 'p1' }
+    ]);
   });
 });

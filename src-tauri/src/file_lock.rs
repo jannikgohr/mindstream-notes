@@ -1,6 +1,9 @@
 //! File ownership on desktop and Android. Rust's std file locks currently
 //! return Unsupported on Android, where bionic provides flock instead.
 use std::fs::{File, TryLockError};
+use std::time::{Duration, Instant};
+
+use crate::error::AppResult;
 
 pub(crate) fn try_lock_exclusive(file: &File) -> Result<(), TryLockError> {
     #[cfg(not(target_os = "android"))]
@@ -21,6 +24,21 @@ pub(crate) fn try_lock_shared(file: &File) -> Result<(), TryLockError> {
     #[cfg(target_os = "android")]
     {
         android_lock(file, 1) // LOCK_SH from <sys/file.h>.
+    }
+}
+
+/// Retry the exclusive lock until `timeout`. Returns false if another owner kept it.
+pub(crate) fn lock_within(file: &File, timeout: Duration, interval: Duration) -> AppResult<bool> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match try_lock_exclusive(file) {
+            Ok(()) => return Ok(true),
+            Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                std::thread::sleep(interval);
+            }
+            Err(TryLockError::WouldBlock) => return Ok(false),
+            Err(TryLockError::Error(err)) => return Err(err.into()),
+        }
     }
 }
 
@@ -87,6 +105,17 @@ mod tests {
         ));
         drop(owner);
         try_lock_exclusive(&other).unwrap();
+        drop(other);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn bounded_wait_gives_up_while_held_and_takes_the_lock_after_release() {
+        let (path, owner, other) = files();
+        try_lock_exclusive(&owner).unwrap();
+        assert!(!lock_within(&other, Duration::from_millis(30), Duration::from_millis(5)).unwrap());
+        drop(owner);
+        assert!(lock_within(&other, Duration::from_secs(1), Duration::from_millis(5)).unwrap());
         drop(other);
         std::fs::remove_file(path).unwrap();
     }

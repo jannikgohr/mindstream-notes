@@ -547,6 +547,19 @@ describe('removeBorderBlobs', () => {
     ]);
     expect(inkCount(removeBorderBlobs(mask, 2))).toBe(5);
   });
+
+  it('removes blocks that touch only diagonally with the border blob', () => {
+    // The interior block joins the corner block through (1, 1) → (2, 2),
+    // so 8-connectivity makes them one thick component on the border.
+    const mask = maskFromAscii([
+      '##.....',
+      '##.....',
+      '..##...',
+      '..##...',
+      '.......'
+    ]);
+    expect(inkCount(removeBorderBlobs(mask, 1))).toBe(0);
+  });
 });
 
 describe('thin', () => {

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Plus, X } from '@lucide/svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { rankSubstringMatches } from '$lib/search/substring-rank';
 
   export interface KanbanLabelOption {
     id: string;
@@ -60,26 +61,14 @@
       )
   );
 
-  const results = $derived.by(() => {
-    const q = normalizedQuery;
-    return options
-      .filter((option) => !selectedIds.has(option.id))
-      .map((option) => {
-        const label = option.label.toLowerCase();
-        const idx = q ? label.indexOf(q) : 0;
-        if (idx < 0) return null;
-        return {
-          option,
-          rank: idx === 0 ? 0 : idx + label.length / 1000
-        };
-      })
-      .filter((entry): entry is { option: KanbanLabelOption; rank: number } =>
-        Boolean(entry)
-      )
-      .sort((a, b) => a.rank - b.rank)
-      .slice(0, MAX_RESULTS)
-      .map((entry) => entry.option);
-  });
+  const results = $derived(
+    rankSubstringMatches(
+      options.filter((option) => !selectedIds.has(option.id)),
+      normalizedQuery,
+      (option) => option.label,
+      MAX_RESULTS
+    )
+  );
 
   $effect(() => {
     if (highlight >= results.length)

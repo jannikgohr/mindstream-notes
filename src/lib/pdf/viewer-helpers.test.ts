@@ -1,9 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+// The core build sets globalThis.pdfjsLib, which the viewer module reads.
+import 'pdfjs-dist';
+import * as pdfViewer from 'pdfjs-dist/web/pdf_viewer.mjs';
 import {
   annotationIdAtPoint,
   buildPdfAnnotation,
   clampZoom,
   clonePdfFormValue,
+  createPdfLinkService,
   isCommentLikeAnnotation,
   MAX_ZOOM,
   MIN_ZOOM,
@@ -267,5 +271,40 @@ describe('annotationIdAtPoint', () => {
     ]);
     expect(annotationIdAtPoint(layer, 10, 10)).toBe('a');
     expect(annotationIdAtPoint(layer, 20, 20)).toBe('a');
+  });
+});
+
+describe('createPdfLinkService', () => {
+  it('sends a clicked external link through openExternalUrl and cancels navigation', () => {
+    const routes = { openExternalUrl: vi.fn(), followLinkDest: vi.fn() };
+    const service = createPdfLinkService(
+      pdfViewer,
+      new pdfViewer.EventBus(),
+      routes
+    );
+    const link = document.createElement('a');
+    service.addLinkAttributes(link, 'https://example.com/paper');
+    const click = new MouseEvent('click', { cancelable: true });
+    link.dispatchEvent(click);
+
+    expect(routes.openExternalUrl).toHaveBeenCalledWith(
+      'https://example.com/paper'
+    );
+    expect(click.defaultPrevented).toBe(true);
+    expect(routes.followLinkDest).not.toHaveBeenCalled();
+  });
+
+  it('sends in-document destinations to followLinkDest', () => {
+    const routes = { openExternalUrl: vi.fn(), followLinkDest: vi.fn() };
+    const service = createPdfLinkService(
+      pdfViewer,
+      new pdfViewer.EventBus(),
+      routes
+    );
+    const dest = [{ num: 3, gen: 0 }, { name: 'XYZ' }, 0, 700, null];
+    void service.goToDestination(dest);
+
+    expect(routes.followLinkDest).toHaveBeenCalledWith(dest);
+    expect(routes.openExternalUrl).not.toHaveBeenCalled();
   });
 });

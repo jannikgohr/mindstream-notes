@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { sourceText, setMode, boot, fileTree } from './editor-helpers';
 import { openDetailsPanel } from './details-panel';
 
 /**
@@ -14,17 +15,6 @@ import { openDetailsPanel } from './details-panel';
  * the Rust history table and SQLite — is deliberately a T3 (tauri-driver)
  * concern; see docs/internal/e2e/flows.md. This file proves the UI wiring only.
  */
-
-async function boot(page: Page) {
-  await page.goto('/');
-  await expect(
-    page.getByRole('button', { name: 'Welcome', exact: true })
-  ).toBeVisible();
-}
-
-function fileTree(page: Page): Locator {
-  return page.getByRole('group', { name: 'File tree' });
-}
 
 /** Open the seeded markdown note "Ideas" (under Personal) in the editor. */
 async function openIdeas(page: Page) {
@@ -42,26 +32,8 @@ function editor(page: Page): Locator {
   return page.locator('.ProseMirror').first();
 }
 
-function modeButton(page: Page): Locator {
-  return page.getByRole('button', { name: /^Editor view mode:/ });
-}
-
 function sourcePane(page: Page): Locator {
   return page.locator('.cm-content');
-}
-
-async function setMode(page: Page, target: 'WYSIWYG' | 'Source' | 'Split') {
-  for (let i = 0; i < 4; i++) {
-    const label = await modeButton(page).getAttribute('aria-label');
-    if (label === `Editor view mode: ${target}`) return;
-    await modeButton(page).click();
-  }
-  throw new Error(`could not reach view mode ${target}`);
-}
-
-async function sourceText(page: Page): Promise<string> {
-  const lines = await page.locator('.cm-line').allTextContents();
-  return lines.join('\n');
 }
 
 async function typeInEditor(page: Page, text: string) {

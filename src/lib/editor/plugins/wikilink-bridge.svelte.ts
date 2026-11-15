@@ -20,21 +20,9 @@
  *   - Popup calls:     setCommitFromPopup (once on mount)
  */
 
-/**
- * Caret rectangle in viewport coordinates — what ProseMirror's
- * `view.coordsAtPos` returns, repackaged as a DOMRect-shaped struct so
- * floating-ui can consume it via a virtual element's
- * `getBoundingClientRect()`. We keep it deliberately plain (not a real
- * `DOMRect` instance) so the bridge stays serialisable / debuggable.
- */
-export interface CaretRect {
-  top: number;
-  left: number;
-  right: number;
-  bottom: number;
-  width: number;
-  height: number;
-}
+import type { CaretRect } from './prose/typeahead';
+import { createTypeaheadHandlers } from './typeahead-bridge';
+export type { CaretRect } from './prose/typeahead';
 
 export interface WikilinkBridge {
   state: {
@@ -75,23 +63,8 @@ export function createWikilinkBridge(): WikilinkBridge {
     highlight: 0
   });
 
-  // Stub callables so both sides can call through without null checks
-  // even before the other side has wired up. Replaced via the setters.
-  let insertFn: (note: { id: string; title: string }) => void = () => {};
-  let cancelFn: () => void = () => {};
-  let commitFn: () => void = () => {};
-
-  return {
+  return createTypeaheadHandlers(
     state,
-    insert: (note) => insertFn(note),
-    cancel: () => cancelFn(),
-    commitFromPopup: () => commitFn(),
-    setHandlers(handlers) {
-      insertFn = handlers.insert;
-      cancelFn = handlers.cancel;
-    },
-    setCommitFromPopup(commit) {
-      commitFn = commit;
-    }
-  };
+    (_note: { id: string; title: string }) => {}
+  );
 }
