@@ -546,3 +546,66 @@ describe('sharedMoveIsLegal', () => {
     expect(move([], 'aSub')).toBe(false);
   });
 });
+
+describe('shared ancestry projections', () => {
+  function result(id: string | null, cols: Record<string, Collection>) {
+    return [
+      collectionIsSharedOrUnderShared(id, cols),
+      collectionScopeIsReadOnly(id, cols),
+      sharedRootIdFor(id, cols)
+    ];
+  }
+
+  it.each(['read_only', 'read_write'])(
+    'uses the nearest share role: %s',
+    (role) => {
+      const cols = byId([
+        collection('outer', null, {
+          shared_role: role === 'read_only' ? 'read_write' : 'read_only'
+        }),
+        collection('inner', 'outer', { shared_role: role }),
+        collection('child', 'inner')
+      ]);
+      expect(result('child', cols)).toEqual([
+        true,
+        role === 'read_only',
+        'inner'
+      ]);
+    }
+  );
+
+  it.each(['other', ''])(
+    'returns the matched record id without relooking it up: %j',
+    (id) => {
+      const cols = {
+        alias: collection(id, null, { shared_role: 'read_only' })
+      };
+      expect(result('alias', cols)).toEqual([true, true, id]);
+    }
+  );
+
+  it('skips owned share metadata while looking for a received ancestor', () => {
+    const cols = byId([
+      collection('root', null, { shared_role: 'read_write' }),
+      collection('mine', 'root', {
+        shared_by_me: true,
+        shared_role: 'read_only'
+      })
+    ]);
+    expect(result('mine', cols)).toEqual([true, false, 'root']);
+  });
+
+  it('stops on empty keys, missing links and cycles, while keeping matches before a cycle', () => {
+    const cols = byId([
+      collection('', null, { shared_role: 'read_only' }),
+      collection('missing', 'absent'),
+      collection('a', 'b'),
+      collection('b', 'a'),
+      collection('shared', 'child', { shared_role: 'read_only' }),
+      collection('child', 'shared')
+    ]);
+    for (const id of ['', null, 'missing', 'a'])
+      expect(result(id, cols)).toEqual([false, false, null]);
+    expect(result('child', cols)).toEqual([true, true, 'shared']);
+  });
+});

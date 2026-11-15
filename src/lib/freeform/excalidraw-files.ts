@@ -20,6 +20,7 @@ import type {
   BinaryFiles,
   DataURL
 } from '@excalidraw/excalidraw/types';
+import { base64ToBytes, bytesToBase64 } from '$lib/editor/base64';
 
 /** What the Y.Doc stores in place of a file's bytes. */
 export interface PersistedFileRef {
@@ -61,24 +62,17 @@ export function dataUrlToBytes(
   if (!match) return null;
   const [, mimeType, payload] = match;
   try {
-    const binary = atob(payload);
-    const bytes = new Array<number>(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return { bytes, mimeType: mimeType || 'application/octet-stream' };
+    return {
+      bytes: Array.from(base64ToBytes(payload)),
+      mimeType: mimeType || 'application/octet-stream'
+    };
   } catch {
     return null;
   }
 }
 
 export function bytesToDataUrl(bytes: number[], mimeType: string): string {
-  // Chunked: String.fromCharCode(...bytes) blows the argument limit on
-  // anything larger than a small image.
-  let binary = '';
-  const CHUNK = 0x8000;
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    binary += String.fromCharCode(...bytes.slice(i, i + CHUNK));
-  }
-  return `data:${mimeType};base64,${btoa(binary)}`;
+  return `data:${mimeType};base64,${bytesToBase64(bytes)}`;
 }
 
 /** Fetch an asset and render it back as a base64 data URL. */

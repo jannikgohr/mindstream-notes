@@ -428,10 +428,7 @@ impl source::ImportSource for ScriptedSource {
     fn rewrite_options(&self) -> links::RewriteOptions {
         links::RewriteOptions {
             wikilinks: true,
-            markdown_links: false,
-            id_links: false,
-            evernote_links: false,
-            keep_unresolved_wikilinks: false,
+            ..Default::default()
         }
     }
 }

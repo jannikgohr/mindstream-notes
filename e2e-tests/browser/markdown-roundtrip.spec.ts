@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { modeButton, sourceText, setMode } from './editor-helpers';
 
 /**
  * Markdown round-trip fidelity through the REAL Milkdown parser/serializer.
@@ -17,10 +18,6 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
  * parse half of that is unit tested in src/lib/editor/plugins/blank-lines.test.ts.
  */
 
-function modeButton(page: Page): Locator {
-  return page.getByRole('button', { name: /^Editor view mode:/ });
-}
-
 function sourcePane(page: Page): Locator {
   return page.locator('.cm-content');
 }
@@ -37,23 +34,6 @@ async function boot(page: Page) {
   await expect(wysiwygPane(page)).toBeVisible();
   // The mode toggle only appears once the editor is interactive.
   await expect(modeButton(page)).toBeVisible();
-}
-
-/** Cycle the single view-mode button until it reports `target`. */
-async function setMode(page: Page, target: 'WYSIWYG' | 'Source' | 'Split') {
-  for (let i = 0; i < 4; i++) {
-    const label = await modeButton(page).getAttribute('aria-label');
-    if (label === `Editor view mode: ${target}`) return;
-    await modeButton(page).click();
-  }
-  throw new Error(`could not reach view mode ${target}`);
-}
-
-/** The Source pane's exact text, reconstructed from CodeMirror's line divs
- *  (innerText would inflate blank lines — each renders as a <br>). */
-async function sourceText(page: Page): Promise<string> {
-  const lines = await page.locator('.cm-line').allTextContents();
-  return lines.join('\n');
 }
 
 /** Replace the Source document. `insertText` rather than `type` so no keymap

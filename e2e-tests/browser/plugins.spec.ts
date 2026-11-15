@@ -1,8 +1,10 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { boot } from './editor-helpers';
 import {
   fileTreeCreateAction,
   openFileTreeCreateMore
 } from './file-tree-toolbar';
+import { treeItem } from './editor-helpers';
 import { setTemplateFolder } from './template-sources';
 
 /**
@@ -26,21 +28,8 @@ import { setTemplateFolder } from './template-sources';
 
 const NEW_FROM_TEMPLATE = 'New from template';
 
-async function boot(page: Page) {
-  await page.goto('/');
-  await expect(
-    page.getByRole('button', { name: 'Welcome', exact: true })
-  ).toBeVisible();
-}
-
 function toolbarTemplateButton(page: Page): Locator {
   return fileTreeCreateAction(page, NEW_FROM_TEMPLATE);
-}
-
-function treeItem(page: Page, name: string): Locator {
-  return page
-    .getByRole('group', { name: 'File tree' })
-    .getByRole('button', { name, exact: true });
 }
 
 /** Rename a tree note through its context menu. */

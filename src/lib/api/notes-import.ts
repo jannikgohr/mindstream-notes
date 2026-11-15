@@ -93,7 +93,7 @@ export interface ImportProgress {
   committed?: ImportReport;
 }
 
-const EMPTY_REPORT: ImportReport = {
+const REPORT_COUNTERS = {
   notes_created: 0,
   folders_created: 0,
   placeholders_created: 0,
@@ -102,9 +102,9 @@ const EMPTY_REPORT: ImportReport = {
   attachments_too_large: 0,
   links_resolved: 0,
   links_unresolved: 0,
-  errors: 0,
-  cancelled: false
-};
+  errors: 0
+} satisfies Record<Exclude<keyof ImportReport, 'cancelled'>, number>;
+const EMPTY_REPORT: ImportReport = { ...REPORT_COUNTERS, cancelled: false };
 
 /** Outcome of converting bare `[[Title]]` spans into ID-backed links. */
 export interface LegacyLinkReport {
@@ -304,34 +304,14 @@ function parseKind(value: unknown): ImportSourceKind {
 
 function parseReport(value: unknown): ImportReport {
   const raw = assertRecord(value, 'import report');
+  const counters = Object.fromEntries(
+    Object.keys(REPORT_COUNTERS).map((key) => [
+      key,
+      assertNumber(raw[key], `report.${key}`)
+    ])
+  ) as Omit<ImportReport, 'cancelled'>;
   return {
-    notes_created: assertNumber(raw.notes_created, 'report.notes_created'),
-    folders_created: assertNumber(
-      raw.folders_created,
-      'report.folders_created'
-    ),
-    placeholders_created: assertNumber(
-      raw.placeholders_created,
-      'report.placeholders_created'
-    ),
-    attachments_imported: assertNumber(
-      raw.attachments_imported,
-      'report.attachments_imported'
-    ),
-    attachments_deduplicated: assertNumber(
-      raw.attachments_deduplicated,
-      'report.attachments_deduplicated'
-    ),
-    attachments_too_large: assertNumber(
-      raw.attachments_too_large,
-      'report.attachments_too_large'
-    ),
-    links_resolved: assertNumber(raw.links_resolved, 'report.links_resolved'),
-    links_unresolved: assertNumber(
-      raw.links_unresolved,
-      'report.links_unresolved'
-    ),
-    errors: assertNumber(raw.errors, 'report.errors'),
+    ...counters,
     cancelled: assertBoolean(raw.cancelled, 'report.cancelled')
   };
 }

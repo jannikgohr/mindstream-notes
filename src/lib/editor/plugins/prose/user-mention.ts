@@ -39,6 +39,12 @@ import { Decoration, DecorationSet } from '@milkdown/kit/prose/view';
 import type { EditorView } from '@milkdown/kit/prose/view';
 import { $prose } from '@milkdown/kit/utils';
 import { parseUserHref, userHref } from '../user-mention-href';
+import {
+  commitTypeahead,
+  resetTypeahead,
+  syncTypeahead,
+  typeaheadKeys
+} from './typeahead';
 import type { UserMentionBridge } from '../user-mention-bridge.svelte';
 
 // Re-export so consumers can reach everything mention-related through this one
@@ -167,10 +173,7 @@ function userMentionTriggerPlugin(
   let viewRef: EditorView | null = null;
 
   function resetBridgeState() {
-    bridge.state.open = false;
-    bridge.state.query = '';
-    bridge.state.caretRect = null;
-    bridge.state.highlight = 0;
+    resetTypeahead(bridge.state);
   }
 
   function close() {
@@ -199,24 +202,15 @@ function userMentionTriggerPlugin(
       return;
     }
     const label = `@${username}`;
-    const linkType = view.state.schema.marks.link;
-    if (!linkType) {
-      const tr = view.state.tr.insertText(label, start, replaceTo);
-      tr.setMeta(triggerPluginKey, { close: true });
-      view.dispatch(tr);
-      view.focus();
-      close();
-      return;
-    }
-    const linkMark = linkType.create({ href: userHref(username), title: null });
-    const linkText = view.state.schema.text(label, [linkMark]);
-    const tr = view.state.tr.replaceWith(start, replaceTo, linkText);
-    tr.setSelection(TextSelection.create(tr.doc, start + label.length));
-    tr.setStoredMarks([]);
-    tr.setMeta(triggerPluginKey, { close: true });
-    view.dispatch(tr);
-    view.focus();
-    close();
+    commitTypeahead(
+      view,
+      start,
+      replaceTo,
+      label,
+      userHref(username),
+      triggerPluginKey,
+      close
+    );
   }
 
   bridge.setHandlers({ insert, cancel: close });
@@ -249,32 +243,7 @@ function userMentionTriggerPlugin(
       return {
         update(view) {
           const trigger = triggerPluginKey.getState(view.state);
-          const wasOpen = bridge.state.open;
-          if (!trigger || trigger.startPos === null) {
-            if (wasOpen) resetBridgeState();
-            return;
-          }
-          const cursor = view.state.selection.from;
-          const query = view.state.doc.textBetween(
-            trigger.startPos + 1,
-            cursor,
-            '\n'
-          );
-          const c = view.coordsAtPos(cursor);
-          const caretRect = {
-            top: c.top,
-            bottom: c.bottom,
-            left: c.left,
-            right: c.left,
-            width: 0,
-            height: c.bottom - c.top
-          };
-          if (!wasOpen || bridge.state.query !== query) {
-            bridge.state.highlight = 0;
-          }
-          bridge.state.open = true;
-          bridge.state.query = query;
-          bridge.state.caretRect = caretRect;
+          syncTypeahead(view, bridge.state, trigger?.startPos ?? null, 1);
         },
         destroy() {
           if (viewRef === view) {
@@ -288,31 +257,13 @@ function userMentionTriggerPlugin(
     props: {
       handleKeyDown(view, event) {
         const trigger = triggerPluginKey.getState(view.state);
-        if (!trigger || trigger.startPos === null) return false;
-        switch (event.key) {
-          case 'Escape':
-            event.preventDefault();
-            close();
-            return true;
-          case 'Enter':
-            event.preventDefault();
-            bridge.commitFromPopup();
-            return true;
-          case 'ArrowDown':
-            event.preventDefault();
-            bridge.state.highlight = bridge.state.highlight + 1;
-            return true;
-          case 'ArrowUp':
-            event.preventDefault();
-            bridge.state.highlight = Math.max(0, bridge.state.highlight - 1);
-            return true;
-          case 'Tab':
-            event.preventDefault();
-            bridge.commitFromPopup();
-            return true;
-          default:
-            return false;
-        }
+        return typeaheadKeys(
+          event,
+          trigger?.startPos !== null && trigger?.startPos !== undefined,
+          bridge.state,
+          close,
+          () => bridge.commitFromPopup()
+        );
       }
     }
   });

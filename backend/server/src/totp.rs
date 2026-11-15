@@ -54,7 +54,7 @@ pub fn verify(secret: &[u8], code: &str, now_secs: u64, last_step: u64) -> Optio
 /// RFC 4648 base32 without padding, the form authenticator apps expect a
 /// secret in.
 pub fn base32(bytes: &[u8]) -> String {
-    base32::encode(base32::Alphabet::Rfc4648 { padding: false }, bytes)
+    totp_rs::Secret::from(bytes).to_base32()
 }
 
 /// Whether an authenticator can show this as the name of the server. It

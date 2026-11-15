@@ -21,16 +21,6 @@
  */
 
 /**
- * Identifies the platform-level "command" modifier:
- *   - macOS: ⌘ (event.metaKey)
- *   - everything else: Ctrl (event.ctrlKey)
- *
- * Users author bindings in terms of `mod` so the same string works on
- * both Mac and Windows/Linux without per-platform forks.
- */
-export type ModifierToken = 'mod' | 'ctrl' | 'alt' | 'shift';
-
-/**
  * Parsed binding. `key` is normalized — see KEY_ALIASES in parse.ts —
  * and is compared case-insensitively against `KeyboardEvent.key`.
  *

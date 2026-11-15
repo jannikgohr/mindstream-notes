@@ -7,30 +7,13 @@ use std::path::{Path, PathBuf};
 use mindstream_storage_core::import::{ImportEntry, ImportFiles};
 use walkdir::WalkDir;
 
-use super::stage::StagedArchive;
-
 pub struct DiskFiles {
     root: PathBuf,
-    /// Kept alive for the whole run when the source was a `.jex`: the
-    /// extracted files are read lazily in phase 2, so dropping this earlier
-    /// would delete the vault mid-import.
-    _staged: Option<StagedArchive>,
 }
 
 impl DiskFiles {
     pub fn new(root: PathBuf) -> Self {
-        Self {
-            root,
-            _staged: None,
-        }
-    }
-
-    /// Read a `.jex` that was unpacked for this run.
-    pub fn staged(staged: StagedArchive) -> Self {
-        Self {
-            root: staged.path().to_path_buf(),
-            _staged: Some(staged),
-        }
+        Self { root }
     }
 
     fn absolute(&self, relative: &str) -> PathBuf {

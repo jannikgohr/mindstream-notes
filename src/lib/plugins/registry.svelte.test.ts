@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   allPlugins,
-  enabledPlugins,
   pluginById,
   pluginCommands,
   pluginLoadError,
@@ -16,13 +15,13 @@ import {
   pluginTemplate,
   pluginTemplates,
   pluginTextCheckers,
-  pluginI18nBundles,
   recordPluginLoadError,
   registerPlugin,
   resetPluginRegistry,
   setPluginEnabled,
   unregisterPlugin
 } from './registry.svelte';
+import { resolvePluginString } from './plugin-i18n';
 
 // A manifest whose only contribution is permission-gated, so the grant is the
 // only thing that decides whether it appears.
@@ -246,7 +245,10 @@ describe('registerPlugin', () => {
     expect(pluginSourceLanguages()).toHaveLength(1);
     expect(pluginNoteExporters()).toHaveLength(0);
     expect(pluginSourceLanguage('typ')?.language.id).toBe('typst');
-    expect(pluginI18nBundles()['com.example.templates']).toBeTruthy();
+    // Existing content can still resolve labels after disabling its plugin.
+    expect(
+      resolvePluginString('com.example.templates', 'templates.meeting.name')
+    ).toBe('Meeting notes');
   });
 
   it('throws on an invalid manifest and does not register anything', () => {
@@ -269,17 +271,20 @@ describe('registerPlugin', () => {
 });
 
 describe('enabled/disabled filtering', () => {
-  it('excludes disabled plugins from the merged views but keeps them registered', () => {
+  it('excludes disabled contributions but keeps their registration and labels', () => {
     registerPlugin(manifest());
     setPluginEnabled('com.example.templates', false);
     expect(allPlugins()).toHaveLength(1);
-    expect(enabledPlugins()).toHaveLength(0);
+    expect(allPlugins().filter((plugin) => plugin.enabled)).toHaveLength(0);
     expect(pluginTemplates()).toHaveLength(0);
     expect(pluginSettingsSections()).toHaveLength(0);
     expect(pluginCommands()).toHaveLength(0);
     expect(pluginSourceLanguages()).toHaveLength(0);
     expect(pluginNoteExporters()).toHaveLength(0);
-    expect(pluginI18nBundles()).toEqual({});
+    // Existing content can still resolve labels after disabling its plugin.
+    expect(
+      resolvePluginString('com.example.templates', 'templates.meeting.name')
+    ).toBe('Meeting notes');
     expect(pluginTemplate('com.example.templates', 'meeting')).toBeUndefined();
   });
 

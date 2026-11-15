@@ -2,6 +2,7 @@
   import { ExternalLink, FileQuestion, Search, X } from '@lucide/svelte';
   import NoteKindIcon from '$lib/components/NoteKindIcon.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { rankSubstringMatches } from '$lib/search/substring-rank';
   import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
 
   export interface KanbanNoteOption {
@@ -48,26 +49,16 @@
     const q = query.trim().toLowerCase();
     const available = options.filter((option) => !option.trashed);
     if (!q) {
-      return [...available]
+      return available
         .sort((a, b) => (b.modified ?? '').localeCompare(a.modified ?? ''))
         .slice(0, MAX_RESULTS);
     }
-    return available
-      .map((option) => {
-        const title = option.label.toLowerCase();
-        const idx = title.indexOf(q);
-        if (idx < 0) return null;
-        return {
-          option,
-          rank: idx === 0 ? 0 : idx + title.length / 1000
-        };
-      })
-      .filter((entry): entry is { option: KanbanNoteOption; rank: number } =>
-        Boolean(entry)
-      )
-      .sort((a, b) => a.rank - b.rank)
-      .slice(0, MAX_RESULTS)
-      .map((entry) => entry.option);
+    return rankSubstringMatches(
+      available,
+      q,
+      (option) => option.label,
+      MAX_RESULTS
+    );
   });
 
   $effect(() => {

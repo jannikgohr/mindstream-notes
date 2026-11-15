@@ -553,10 +553,12 @@ describe('slow checks', () => {
   function mounted(text: string) {
     let release: ((value: Diagnostic[]) => void) | null = null;
     let calls = 0;
+    let partial: ((value: Diagnostic[]) => void) | undefined;
 
     const plugin = diagnosticsPlugin({
       debounceMs: 0,
-      check: (segments) => {
+      check: (segments, _signal, onPartial) => {
+        partial = onPartial;
         calls++;
         void segments;
         return new Promise<Diagnostic[]>((resolve) => {
@@ -573,6 +575,7 @@ describe('slow checks', () => {
     return {
       view,
       finish: (d: Diagnostic[]) => release?.(d),
+      partial: (d: Diagnostic[]) => partial?.(d),
       callCount: () => calls
     };
   }
@@ -594,6 +597,9 @@ describe('slow checks', () => {
     // The document changes while the request is outstanding.
     h.view.dispatch(h.view.state.tr.insertText('XXXX ', 1));
     // The answer describes the document as it was: "teh" at 5..8.
+    h.partial([flagging(5, 8)]);
+    const first = diagnosticsPluginKey.getState(h.view.state)!.diagnostics[0];
+    expect(h.view.state.doc.textBetween(first.from, first.to)).toBe('teh');
     h.finish([flagging(5, 8)]);
     await settle();
 

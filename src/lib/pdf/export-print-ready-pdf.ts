@@ -32,6 +32,7 @@ import {
   buildSignatureAppearanceRef,
   hexToRgb,
   inkBounds,
+  opacityFormRef,
   pdfNumber,
   unionRects,
   type PdfContext,
@@ -382,7 +383,7 @@ function buildPolylineInkAppearanceRef(
   bbox: PdfRect,
   context: PdfContext
 ): PDFRef | null {
-  const commands = ['q', '/GS0 gs', '1 J', '1 j'];
+  const commands = ['1 J', '1 j'];
   for (const stroke of strokes) {
     if (stroke.points.length < 2) continue;
     const [r, g, b] = hexToRgb(stroke.color || fallbackColor);
@@ -397,18 +398,8 @@ function buildPolylineInkAppearanceRef(
     });
     commands.push('S');
   }
-  if (commands.length === 4) return null;
-  commands.push('Q');
-  return context.register(
-    context.flateStream(commands.join('\n'), {
-      Type: 'XObject',
-      Subtype: 'Form',
-      BBox: [0, 0, bbox.width, bbox.height],
-      Resources: {
-        ExtGState: { GS0: { CA: opacity, ca: opacity } }
-      }
-    })
-  );
+  if (commands.length === 2) return null;
+  return opacityFormRef(context, commands, bbox, opacity);
 }
 
 async function paintAnnotation(

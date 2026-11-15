@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   cloneInkStroke,
   cloneSignatureSnapshot,
+  outlineSegments,
   strokeBounds,
   strokeOutlinePath,
   strokePointsAttr,
@@ -97,6 +98,31 @@ describe('strokeOutlinePath', () => {
     });
     expect(d.startsWith('M ')).toBe(true);
     expect(d.endsWith('Z')).toBe(true);
+  });
+});
+
+describe('outlineSegments', () => {
+  it('takes each midpoint from the raw neighbours, wrapping at the end', () => {
+    expect(
+      outlineSegments([
+        [0, 0],
+        [1, 3],
+        [2, 0]
+      ])
+    ).toEqual([
+      [
+        [0, 0],
+        [0.5, 1.5]
+      ],
+      [
+        [1, 3],
+        [1.5, 1.5]
+      ],
+      [
+        [2, 0],
+        [1, 0]
+      ]
+    ]);
   });
 });
 

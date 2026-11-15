@@ -305,14 +305,7 @@ impl BrowserDatabase {
             None => import::detect::detect_file_kind(name)
                 .unwrap_or_else(|| import::detect::detect_directory_kind(&files)),
         };
-        let files: Box<dyn ImportFiles> = if kind == ImportSourceKind::JoplinJex {
-            Box::new(
-                import::tar_files::TarFiles::new(Box::new(files), name.to_string())
-                    .map_err(command_error)?,
-            )
-        } else {
-            Box::new(files)
-        };
+        let files = import::open_files(kind, Box::new(files), name).map_err(command_error)?;
         let mut source = import::build_source(kind, files, name);
         let report = import::run_import_in_one_transaction(
             self.connection()?,
