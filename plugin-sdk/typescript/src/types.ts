@@ -58,6 +58,8 @@ export interface TemplateInput extends Context {
   title?: string;
   body?: string;
   vars?: Record<string, unknown>;
+  /** ISO timestamp date placeholders count from, such as a daily note's day. Defaults to `now`. */
+  date?: string;
 }
 
 /**

@@ -49,6 +49,13 @@ describe.each(['Rust', 'TypeScript'])(
         title: 'Log 2026',
         body: 'LOG 2026\n2026-08-01\n2026-06-27\nSamstag, 25 Juli\nHello WORLD\nhello-world\n\n42\nfalse\n  hello WORLD  '
       });
+      expect(
+        await plugin.call('renderTemplate', {
+          title: '{{date}}',
+          body: '{{date+1d}} {{time}}',
+          date: '2026-12-24T18:30:00Z'
+        })
+      ).toEqual({ title: '2026-12-24', body: '2026-12-25 18:30' });
       const result = await plugin.call<{ body: string }>('renderTemplate', {
         body: '{{uuid}}\n{{uuid}}'
       });
