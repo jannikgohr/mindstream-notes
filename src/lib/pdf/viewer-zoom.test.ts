@@ -122,7 +122,7 @@ describe('horizontal panning without a laid-out container', () => {
   it('re-centring and cancelling are safe no-ops', () => {
     const { zoom } = harness();
     expect(() => {
-      zoom.recentreForLayoutChange(1);
+      zoom.recentreForLayoutChange(1, false);
       zoom.cancelPendingCentring();
     }).not.toThrow();
   });
@@ -595,7 +595,7 @@ describe('gesture-driven zoom', () => {
       const { state, zoom } = harness(container);
       state.zoomMode = 'fit-width';
 
-      zoom.recentreForLayoutChange(1);
+      zoom.recentreForLayoutChange(1, false);
 
       expect(container.scrollLeft).toBe(zoom.targetScrollLeftForPage(1));
     });
@@ -609,7 +609,7 @@ describe('gesture-driven zoom', () => {
       const { zoom } = harness(container);
 
       // Not fit-width, but the first centring pass always runs.
-      zoom.recentreForLayoutChange(1);
+      zoom.recentreForLayoutChange(1, true);
 
       // pageLeft (120) − PAGE_FIT_MARGIN (16) = 104.
       expect(container.scrollLeft).toBe(104);
@@ -623,11 +623,26 @@ describe('gesture-driven zoom', () => {
       });
       const { zoom } = harness(container);
 
-      zoom.recentreForLayoutChange(1); // first pass sets scrollLeft to 104
+      zoom.recentreForLayoutChange(1, true); // first pass sets scrollLeft to 104
       container.scrollLeft = 999; // user scrolled away
-      zoom.recentreForLayoutChange(1); // wide page, fixed mode → left alone
+      zoom.recentreForLayoutChange(1, true); // wide page, fixed mode → left alone
 
       expect(container.scrollLeft).toBe(999);
+    });
+
+    it('re-aligns a page that zoomed past the viewport and gained the panning gutter', () => {
+      const { container } = buildScroller({
+        pageWidth: 2000,
+        viewportWidth: 500,
+        pageLeft: 120
+      });
+      const { zoom } = harness(container);
+
+      zoom.recentreForLayoutChange(1, false); // page still fit the viewport
+      container.scrollLeft = 0; // the gutter's arrival shifted the page right
+      zoom.recentreForLayoutChange(1, true);
+
+      expect(container.scrollLeft).toBe(104);
     });
 
     it('setFitWidthZoom schedules a centring pass', () => {

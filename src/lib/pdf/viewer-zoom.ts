@@ -52,6 +52,7 @@ export function createViewerZoom(ctx: ViewerZoomContext) {
   let zoomScrollToken = 0;
   let horizontalCenterFrame = 0;
   let initialHorizontalCenterDone = false;
+  let centredWithGutter = false;
 
   function setFixedZoom(value: number) {
     ctx.zoomMode = 'fixed';
@@ -395,16 +396,23 @@ export function createViewerZoom(ctx: ViewerZoomContext) {
    * The caller owns the reactive tracking and passes the page to centre
    * explicitly — reading it here would make a plain page change compete
    * with an in-flight smooth scroll from the toolbar.
+   *
+   * `hasGutter` says whether the page column carries its panning gutter.
+   * The gutter arriving shifts the page right by half the viewport, so
+   * that transition always realigns.
    */
-  function recentreForLayoutChange(pageNumber: number) {
+  function recentreForLayoutChange(pageNumber: number, hasGutter: boolean) {
     if (!ctx.container) return;
     cancelAnimationFrame(horizontalCenterFrame);
     horizontalCenterFrame = requestAnimationFrame(() => {
+      const gutterAppeared = hasGutter && !centredWithGutter;
+      centredWithGutter = hasGutter;
       const figure = figureForPage(pageNumber);
       const pageHost = figure ? pageHostForFigure(figure) : null;
       const shouldCenter =
         ctx.zoomMode === 'fit-width' ||
         !initialHorizontalCenterDone ||
+        gutterAppeared ||
         (pageHost ? pageFitsViewportWidth(pageHost) : false);
       if (shouldCenter && centerPageHorizontally(pageNumber)) {
         initialHorizontalCenterDone = true;
