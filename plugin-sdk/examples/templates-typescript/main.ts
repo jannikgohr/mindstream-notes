@@ -72,7 +72,7 @@ function newFromTemplate(ctx: Context): Effect {
 
 function renderTemplate(input: TemplateInput): TemplateResult {
   const vars = { ...input.vars };
-  const ctx = { now: input.now, vars, locale: input.locale };
+  const ctx = { now: input.date ?? input.now, vars, locale: input.locale };
   const title = render(input.title ?? '', ctx);
   vars.title = title;
   return { title, body: render(input.body ?? '', ctx) };

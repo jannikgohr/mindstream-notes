@@ -104,6 +104,13 @@ const renderInputs: Input[] = [
     title: '{{date:YYYY}}',
     body: '{{date+1M-2d:YYYY-MM-DD}} '.repeat(50)
   },
+  // A daily note's day replaces `now` for date placeholders.
+  {
+    now: '2026-07-25T10:00:00Z',
+    date: '2026-12-24T18:30:00Z',
+    title: '{{date}}',
+    body: '{{date-1d:dddd}} {{datetime}}'
+  },
   // A variable named like a built-in, and spacing inside placeholders.
   {
     now: '2026-12-31T23:30:00Z',

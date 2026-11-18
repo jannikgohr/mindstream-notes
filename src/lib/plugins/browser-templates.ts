@@ -370,7 +370,8 @@ function resolve(
   if (base === 'uuid') {
     value = host.uuid();
   } else if (defaultFormat) {
-    let time = parseDate(typeof input.now === 'string' ? input.now : '');
+    const anchor = typeof input.date === 'string' ? input.date : input.now;
+    let time = parseDate(typeof anchor === 'string' ? anchor : '');
     for (const [count, unit] of offsets.reverse()) {
       const amount = BigInt(count);
       if (amount > I64_MAX || amount < -I64_MAX - 1n)
