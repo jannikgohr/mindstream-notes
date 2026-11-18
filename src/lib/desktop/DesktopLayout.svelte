@@ -1033,8 +1033,10 @@
           class="dockview-theme-bridge h-full w-full"
         ></div>
         {#if layoutReady && openPanelCount === 0}
+          <!-- z-10 lifts it over dockview's watermark (absolute, z-index 1),
+               which otherwise swallows every click. -->
           <div
-            class="pointer-events-none absolute inset-0 flex items-center justify-center p-6"
+            class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center p-6"
           >
             <section
               class="pointer-events-auto flex max-w-md flex-col items-center px-6 py-7 text-center"
