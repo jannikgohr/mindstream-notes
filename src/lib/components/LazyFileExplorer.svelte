@@ -6,6 +6,8 @@
     source?: DesktopNoteSource;
     onSourceChange?: (source: DesktopNoteSource) => void;
     onOpenNote: (id: string) => void;
+    /** A plain click on a note row. Falls back to `onOpenNote`. */
+    onPreviewNote?: (id: string) => void;
     onOpenNoteRight?: (id: string) => void;
     onOpenNoteBelow?: (id: string) => void;
     onOpenInNewWindow?: (id: string) => void;
@@ -15,6 +17,7 @@
     source = 'home',
     onSourceChange,
     onOpenNote,
+    onPreviewNote,
     onOpenNoteRight,
     onOpenNoteBelow,
     onOpenInNewWindow
@@ -40,6 +43,7 @@
     {source}
     {onSourceChange}
     {onOpenNote}
+    {onPreviewNote}
     {onOpenNoteRight}
     {onOpenNoteBelow}
     {onOpenInNewWindow}

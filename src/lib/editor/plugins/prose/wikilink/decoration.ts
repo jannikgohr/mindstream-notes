@@ -482,7 +482,7 @@ export function wikilinkDecorationPlugin(
         ) {
           event.preventDefault();
           bridge.cancel();
-          requestOpenNote(noteId);
+          requestOpenNote(noteId, { preview: true });
           return true;
         }
         const title = linkEl.getAttribute('data-wikilink-title');
@@ -496,7 +496,7 @@ export function wikilinkDecorationPlugin(
         }
         event.preventDefault();
         bridge.cancel();
-        requestOpenNote(id);
+        requestOpenNote(id, { preview: true });
         return true;
       },
       handleKeyDown(view, event) {

@@ -72,7 +72,7 @@
           <button
             type="button"
             class="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent hover:text-accent-foreground"
-            onclick={() => requestOpenNote(linkedNote.id)}
+            onclick={() => requestOpenNote(linkedNote.id, { preview: true })}
           >
             <NoteKindIcon
               kind={linkedNote.note_kind}
