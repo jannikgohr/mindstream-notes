@@ -1028,7 +1028,7 @@
   <div
     role="group"
     aria-label={tUi('fileTree.tree')}
-    class="min-h-0 flex-1 overflow-y-auto px-2 pb-3 text-[13px]"
+    class="themed-scrollbar min-h-0 flex-1 overflow-y-auto px-2 pb-3 text-[13px]"
     class:ring-1={dragOver === 'root'}
     class:ring-ring={dragOver === 'root'}
     data-file-drop-accept={fileDropAccept}
