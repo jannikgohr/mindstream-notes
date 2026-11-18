@@ -1302,6 +1302,18 @@
     zoomMode === 'fit-width' ? fitWidthZoom : zoom
   );
 
+  // Only a page wider than the viewport gets the panning gutter. Without it,
+  // a page that fits is centred by layout alone and can't sit off-centre
+  // when a scrollLeft write is missed or reset. The 1px slack absorbs
+  // fit-width rounding.
+  const pageOverflowsViewport = $derived.by(() => {
+    const widest = pageSizes.reduce(
+      (max, size) => Math.max(max, size.width),
+      firstPageWidth
+    );
+    return widest * effectiveZoom + PAGE_FIT_MARGIN * 2 > containerWidth + 1;
+  });
+
   function isRendering(pageNumber: number): boolean {
     void renderWindowVersion;
     return pageWindow.isRendering(pageNumber);
@@ -1437,12 +1449,16 @@
     void pageSizes;
     void zoom;
     void zoomMode;
+    const hasGutter = pageOverflowsViewport;
     if (!container || pageNumbers.length === 0) return;
     // Reading activePageNumber via untrack keeps page changes (scroll-driven
     // or via the toolbar controls) from triggering a competing scrollLeft
     // write that would abort an in-flight smooth scroll — toolbar navigation
     // centers the page itself.
-    viewerZoom.recentreForLayoutChange(untrack(() => activePageNumber));
+    viewerZoom.recentreForLayoutChange(
+      untrack(() => activePageNumber),
+      hasGutter
+    );
   });
 
   $effect(() => {
@@ -2184,7 +2200,10 @@
           use:touchPinchZoom
           class="pdf-page-scroller min-h-0 min-w-0 flex-1 {PAGE_SCROLLER_CLASS} {PAGE_SCROLLER_SCROLLBAR_CLASS}"
         >
-          <div class={PDF_PAGE_COLUMN_CLASS}>
+          <div
+            class={PDF_PAGE_COLUMN_CLASS}
+            class:pdf-page-column-pannable={pageOverflowsViewport}
+          >
             {#each pageNumbers as pageNumber (pageNumber)}
               {@const size = placeholderSize(pageNumber)}
               {@const shouldRender = isRendering(pageNumber)}
@@ -2338,7 +2357,7 @@
     touch-action: pan-x pan-y;
   }
 
-  :global(.pdf-page-column) {
+  :global(.pdf-page-column.pdf-page-column-pannable) {
     box-sizing: content-box;
     padding-inline: 50%;
   }
