@@ -11,9 +11,9 @@ describe('open-note intent bus', () => {
     const offA = subscribeOpenNoteRequest(a);
     const offB = subscribeOpenNoteRequest(b);
 
-    expect(requestOpenNote('n1')).toBe(true);
-    expect(a).toHaveBeenCalledWith('n1');
-    expect(b).toHaveBeenCalledWith('n1');
+    expect(requestOpenNote('n1', { preview: true })).toBe(true);
+    expect(a).toHaveBeenCalledWith('n1', { preview: true });
+    expect(b).toHaveBeenCalledWith('n1', { preview: true });
 
     offA();
     offB();

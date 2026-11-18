@@ -654,6 +654,11 @@ body.dv-tab-dragging
   background: var(--accent-brand);
 }
 
+/* A preview tab, which the next note opened in its group replaces. */
+.dockview-theme-bridge .preview-tab {
+  font-style: italic;
+}
+
 /* Hover pill — most of the way toward the active tab's --background but
  * mixed with the strip so it reads as a slighter version of the selected
  * pill rather than identical to it. Solid OKLCH mix (not an alpha

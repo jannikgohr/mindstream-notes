@@ -20,7 +20,12 @@
  *     the new one re-subscribes on mount without races.
  */
 
-type OpenNoteHandler = (id: string) => void;
+export interface OpenNoteRequest {
+  /** Open as a preview tab, which the next preview open replaces. */
+  preview?: boolean;
+}
+
+type OpenNoteHandler = (id: string, request: OpenNoteRequest) => void;
 
 const handlers = new Set<OpenNoteHandler>();
 
@@ -43,7 +48,10 @@ export function subscribeOpenNoteRequest(handler: OpenNoteHandler): () => void {
  * subscribed — useful for debugging "I clicked a wikilink and nothing
  * happened" without inspecting the wrong layer.
  */
-export function requestOpenNote(id: string): boolean {
+export function requestOpenNote(
+  id: string,
+  request: OpenNoteRequest = {}
+): boolean {
   if (handlers.size === 0) {
     console.warn(
       '[open-note-intent] no subscriber; nothing handled request for',
@@ -51,6 +59,6 @@ export function requestOpenNote(id: string): boolean {
     );
     return false;
   }
-  for (const h of handlers) h(id);
+  for (const h of handlers) h(id, request);
   return true;
 }

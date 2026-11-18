@@ -1539,6 +1539,10 @@
       "label": "Start in system tray",
       "description": "When launched by your system at login, start hidden in the tray instead of opening the window."
     },
+    "general.previewTabs": {
+      "label": "Preview tabs",
+      "description": "A single click opens a note in an italic preview tab. The next note you open that way in the same pane replaces it. Edit the note or double-click it to keep the tab."
+    },
     "appearance.mode": {
       "label": "Mode"
     },
