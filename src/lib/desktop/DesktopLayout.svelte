@@ -73,12 +73,24 @@
   import { installFileDropRouter } from '$lib/file-drop';
   import { importDroppedPdfs } from '$lib/file-drop-import';
   import { pushToast } from '$lib/components/toast.svelte';
+  import { settings } from '$lib/settings/store.svelte';
+  import { getNoteStatus } from '$lib/stores/note-status.svelte';
+  import { SvelteSet } from 'svelte/reactivity';
 
   let dockHost: HTMLDivElement | null = $state(null);
   let dock: DockviewApi | null = null;
   let lastActiveGroup: DockviewGroupPanel | null = null;
   const openPanels = new Map<string, IDockviewPanel>();
   let openPanelCount = $state(0);
+  // Notes whose tab is a preview: at most one per group, replaced by the
+  // next preview open there. Not persisted, so a restored layout has none.
+  const previewNotes = new SvelteSet<string>();
+  // Preview notes the user pressed a key or pointer in. Only their saves pin
+  // the tab, so a collaborator's edit or a load-time save leaves it a preview.
+  const touchedPreviewNotes = new Set<string>();
+  const previewTabsEnabled = $derived(
+    (settings.values['general.previewTabs'] ?? true) as boolean
+  );
   let layoutReady = $state(false);
   let saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
   let layoutPersistenceReady = false;
@@ -141,6 +153,7 @@
     // fields are declared explicitly and assigned in the constructor.
     private el: HTMLElement = document.createElement('div');
     private instance: ReturnType<typeof mount> | null = null;
+    private noteId: string | null = null;
     // Widening ComponentType to accept `any` props completely satisfies both the
     // Svelte 5 mount wrapper and the legacy class/functional definitions from
     // the WebStorm ambient module shim.
@@ -161,6 +174,9 @@
       this.el.style.width = '100%';
       const noteId = (parameters.params as { noteId?: string })?.noteId;
       if (!noteId) return;
+      this.noteId = noteId;
+      this.el.addEventListener('pointerdown', this.touch, true);
+      this.el.addEventListener('keydown', this.touch, true);
 
       // By using a type cast here, we satisfy mount's internal generics
       // while safely passing the verified noteId down to the target layout.
@@ -175,7 +191,14 @@
       });
     }
 
+    private touch = () => {
+      if (this.noteId && previewNotes.has(this.noteId))
+        touchedPreviewNotes.add(this.noteId);
+    };
+
     dispose(): void {
+      this.el.removeEventListener('pointerdown', this.touch, true);
+      this.el.removeEventListener('keydown', this.touch, true);
       if (this.instance) {
         void unmount(this.instance).catch((err: unknown) =>
           console.error('[desktop] unmount failed', err)
@@ -250,7 +273,10 @@
     });
     dock.onDidRemovePanel((panel) => {
       const noteId = (panel.params as { noteId?: string } | undefined)?.noteId;
-      if (noteId) openPanels.delete(noteId);
+      if (noteId) {
+        openPanels.delete(noteId);
+        pinNote(noteId);
+      }
       openPanelCount = openPanels.size;
       setActiveNote(
         (dock?.activePanel?.params as { noteId?: string } | undefined)
@@ -274,6 +300,7 @@
      */
     ensureTabDragPin();
     dock.onWillDragPanel((event) => {
+      pinNote(noteIdOf(event.panel));
       pointerDraggedPanel = event.panel;
       dragPointerId =
         'pointerId' in event.nativeEvent ? event.nativeEvent.pointerId : null;
@@ -390,6 +417,24 @@
     referenceNoteId?: string;
     /** Add the tab without bringing it to the front. */
     background?: boolean;
+    /** Open as the group's preview tab, replacing the one it has. */
+    preview?: boolean;
+  }
+
+  function noteIdOf(panel: IDockviewPanel): string | null {
+    return (panel.params as { noteId?: string } | undefined)?.noteId ?? null;
+  }
+
+  /** Turn a preview tab into a normal one. A no-op for any other note. */
+  function pinNote(noteId: string | null) {
+    if (!noteId) return;
+    previewNotes.delete(noteId);
+    touchedPreviewNotes.delete(noteId);
+  }
+
+  function activateOpenNote(panel: IDockviewPanel, opts: OpenNoteOptions) {
+    if (!opts.preview) pinNote(noteIdOf(panel));
+    panel.api.setActive();
   }
 
   export async function openNote(id: string, opts: OpenNoteOptions = {}) {
@@ -400,14 +445,14 @@
     // Stop if note is already open
     const existing = openPanels.get(id);
     if (existing) {
-      existing.api.setActive();
+      activateOpenNote(existing, opts);
       return;
     }
 
     if (await focusExistingNoteWindow(id)) return;
     const openedWhileChecking = openPanels.get(id);
     if (openedWhileChecking) {
-      openedWhileChecking.api.setActive();
+      activateOpenNote(openedWhileChecking, opts);
       return;
     }
 
@@ -417,9 +462,11 @@
       lastActiveGroup = dock.groups[0];
     }
 
+    const preview = !!opts.preview && previewTabsEnabled;
+    let replacedPreview: IDockviewPanel | undefined;
     let position:
       | { referencePanel: string; direction: SplitDirection }
-      | { referenceGroup: DockviewGroupPanel }
+      | { referenceGroup: DockviewGroupPanel; index?: number }
       | undefined;
     if (opts.splitDirection) {
       const referencePanel = opts.referenceNoteId
@@ -431,6 +478,17 @@
     } else {
       const target = lastActiveGroup ?? dock.activeGroup ?? null;
       if (target) position = { referenceGroup: target };
+      if (target && preview) {
+        replacedPreview = target.panels.find((panel) =>
+          previewNotes.has(noteIdOf(panel) ?? '')
+        );
+        if (replacedPreview) {
+          position = {
+            referenceGroup: target,
+            index: target.panels.indexOf(replacedPreview)
+          };
+        }
+      }
     }
 
     const panel = dock.addPanel({
@@ -444,6 +502,9 @@
 
     openPanels.set(id, panel);
     openPanelCount = openPanels.size;
+    if (preview) previewNotes.add(id);
+    // Closed after the new tab is in, so the group never empties and goes.
+    replacedPreview?.api.close();
     if (!opts.background) setActiveNote(id);
   }
 
@@ -726,6 +787,12 @@
     event.stopImmediatePropagation();
   }
 
+  function handleDockTabDoubleClick(event: MouseEvent) {
+    const panelId = dockPanelIdFromTabEventTarget(event.target);
+    const panel = panelId ? dock?.getPanel(panelId) : undefined;
+    if (panel) pinNote(noteIdOf(panel));
+  }
+
   function handleDockTabAuxClick(event: MouseEvent) {
     if (event.button !== 1) return;
     const panelId = dockPanelIdFromTabEventTarget(event.target);
@@ -754,8 +821,8 @@
     // dispatch through the open-note bus rather than prop-drilling up
     // here. Unsubscribed on unmount so a stale handler from a
     // re-mounted layout doesn't double-open a note.
-    const unsub = subscribeOpenNoteRequest((id) => {
-      void openNote(id);
+    const unsub = subscribeOpenNoteRequest((id, { preview }) => {
+      void openNote(id, { preview });
     });
     const trayUnlisten = listen(TauriEventName.TrayNoteCreated, (payload) => {
       void openTrayCreatedNote(payload.note_id);
@@ -823,6 +890,7 @@
       true
     );
     dockHost?.addEventListener('auxclick', handleDockTabAuxClick, true);
+    dockHost?.addEventListener('dblclick', handleDockTabDoubleClick);
     dockHost?.addEventListener('click', handleChevronClick, true);
 
     return () => {
@@ -850,6 +918,7 @@
         true
       );
       dockHost?.removeEventListener('auxclick', handleDockTabAuxClick, true);
+      dockHost?.removeEventListener('dblclick', handleDockTabDoubleClick);
       dockHost?.removeEventListener('click', handleChevronClick, true);
       // Defensive — if we unmount mid-drag (HMR, route change), don't
       // leave the class stuck on <body>.
@@ -911,6 +980,29 @@
     }
   });
 
+  $effect(() => {
+    void openPanelCount;
+    for (const [noteId, panel] of openPanels) {
+      panel.view.tab.element.classList.toggle(
+        'preview-tab',
+        previewNotes.has(noteId)
+      );
+    }
+  });
+
+  // A preview tab the user edits stays open as a normal tab.
+  $effect(() => {
+    for (const noteId of previewNotes) {
+      const { savingState } = getNoteStatus(noteId);
+      const saving = savingState === 'pending' || savingState === 'saving';
+      if (saving && touchedPreviewNotes.has(noteId)) pinNote(noteId);
+    }
+  });
+
+  $effect(() => {
+    if (!previewTabsEnabled) previewNotes.clear();
+  });
+
   // Notes whose tab was open while they were outside the trash. A note
   // opened from the trash view is never in here, so its tab stays.
   const openedOutsideTrash = new Set<string>();
@@ -965,6 +1057,7 @@
   const onOpenNote = (id: string) => {
     void openNote(id);
   };
+  const onPreviewNote = (id: string) => void openNote(id, { preview: true });
   const onOpenNoteRight = (id: string) =>
     void openNote(id, { splitDirection: 'right' });
   const onOpenNoteBelow = (id: string) =>
@@ -1011,6 +1104,7 @@
           source={desktopNoteSource.active}
           onSourceChange={setDesktopNoteSource}
           {onOpenNote}
+          {onPreviewNote}
           {onOpenNoteRight}
           {onOpenNoteBelow}
           {onOpenInNewWindow}
@@ -1087,7 +1181,8 @@
                         <button
                           type="button"
                           class="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm transition-colors hover:bg-accent"
-                          onclick={() => requestOpenNote(note.id)}
+                          onclick={() =>
+                            requestOpenNote(note.id, { preview: true })}
                         >
                           <NoteKindIcon
                             kind={note.note_kind}

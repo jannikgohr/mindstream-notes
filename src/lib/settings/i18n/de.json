@@ -1533,6 +1533,10 @@
       "label": "In Systemablage starten",
       "description": "Wenn das System die App bei der Anmeldung startet, wird sie ausgeblendet in der Systemablage geöffnet."
     },
+    "general.previewTabs": {
+      "label": "Vorschau-Tabs",
+      "description": "Ein einfacher Klick öffnet eine Notiz in einem kursiven Vorschau-Tab. Die nächste so geöffnete Notiz im selben Bereich ersetzt ihn. Bearbeite die Notiz oder doppelklicke sie, um den Tab zu behalten."
+    },
     "appearance.mode": {
       "label": "Modus"
     },

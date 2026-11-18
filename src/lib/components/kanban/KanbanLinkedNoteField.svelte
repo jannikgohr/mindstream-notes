@@ -94,7 +94,7 @@
   function openLinkedNote(event: MouseEvent): void {
     event.preventDefault();
     event.stopPropagation();
-    if (value) requestOpenNote(value);
+    if (value) requestOpenNote(value, { preview: true });
   }
 
   function handleKeydown(event: KeyboardEvent): void {

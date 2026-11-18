@@ -33,6 +33,11 @@
   import ViewOnlyBanner from './note-editor/ViewOnlyBanner.svelte';
   import { setNoteBody, tree } from '$lib/stores/tree.svelte';
   import {
+    clearNoteStatus,
+    setNoteStatus,
+    type SavingState
+  } from '$lib/stores/note-status.svelte';
+  import {
     collectionScopeIsReadOnly,
     noteIsUnderTrash
   } from '$lib/stores/note-source.svelte';
@@ -268,6 +273,17 @@
     );
   });
   const isReadOnly = $derived(isTrashed || isReadOnlyScope);
+  let savingState = $state<SavingState>('idle');
+
+  $effect(() => {
+    setNoteStatus(noteId, {
+      collabConfigured: false,
+      collabOnline: false,
+      savingState,
+      isTrashed,
+      readOnly: isReadOnlyScope
+    });
+  });
 
   // ---- History ----
   // A plugin document note is edited as plain source text in `body`; this editor
@@ -711,11 +727,13 @@
       ),
     capture: captureSave,
     onError: (error) => {
+      savingState = 'error';
       console.error('[PluginDocumentNoteEditor] save failed', error);
     }
   });
   function scheduleSave() {
     saveScheduler.schedule();
+    savingState = saveScheduler.pending ? 'pending' : 'idle';
   }
 
   function captureSave(): (() => Promise<void>) | null {
@@ -724,8 +742,10 @@
     const capturedSource = source;
     const acknowledge = captureBrowserAcknowledgement(capturedNoteId);
     return async () => {
+      savingState = 'saving';
       await setNoteBody(capturedNoteId, capturedSource, acknowledge.token);
       acknowledge();
+      savingState = 'saved';
     };
   }
 
@@ -1113,6 +1133,7 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
     sourceEditor?.flush();
     historyCapture.cancel();
     void saveScheduler.destroy();
+    clearNoteStatus(noteId);
     if (renderTimer) clearTimeout(renderTimer);
     if (editorListener) {
       unregisterEditor(editorListener);

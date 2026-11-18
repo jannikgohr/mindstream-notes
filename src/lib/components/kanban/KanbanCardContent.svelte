@@ -135,7 +135,7 @@
     event.preventDefault();
     event.stopPropagation();
     if (card.linkedNoteId && linkedNote && !linkedNote.trashed) {
-      requestOpenNote(card.linkedNoteId);
+      requestOpenNote(card.linkedNoteId, { preview: true });
     }
   }
 </script>
