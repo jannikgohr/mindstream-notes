@@ -107,6 +107,8 @@
     source?: DesktopNoteSource;
     onSourceChange?: (source: DesktopNoteSource) => void;
     onOpenNote: (id: string) => void;
+    /** A plain click on a note row. Falls back to `onOpenNote`. */
+    onPreviewNote?: (id: string) => void;
     onOpenNoteRight?: (id: string) => void;
     onOpenNoteBelow?: (id: string) => void;
     onOpenInNewWindow?: (id: string) => void;
@@ -115,6 +117,7 @@
     source = 'home',
     onSourceChange,
     onOpenNote,
+    onPreviewNote,
     onOpenNoteRight,
     onOpenNoteBelow,
     onOpenInNewWindow
@@ -1220,7 +1223,11 @@
           // to its own window when it is popped out, and end the rename.
           if (renaming) return;
           const modified = selectNodeFromClick(e, node);
-          if (!modified) onOpenNote(node.id);
+          if (!modified) (onPreviewNote ?? onOpenNote)(node.id);
+        }}
+        ondblclick={(e) => {
+          if (renaming || e.ctrlKey || e.metaKey || e.shiftKey) return;
+          onOpenNote(node.id);
         }}
         oncontextmenu={(e) => openMenu(e, { kind: 'note', id: node.id })}
       >

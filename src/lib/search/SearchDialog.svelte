@@ -127,7 +127,7 @@
     const hit = hits[index];
     if (!hit) return;
     closeSearch();
-    requestOpenNote(hit.note.id);
+    requestOpenNote(hit.note.id, { preview: true });
   }
 
   function onKeydown(e: KeyboardEvent) {

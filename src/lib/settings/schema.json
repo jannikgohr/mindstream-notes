@@ -125,6 +125,13 @@
                 "id": "general.startOnLogin",
                 "equals": true
               }
+            },
+            {
+              "id": "general.previewTabs",
+              "scope": "D",
+              "type": "toggle",
+              "default": true,
+              "platforms": ["desktop"]
             }
           ]
         }
