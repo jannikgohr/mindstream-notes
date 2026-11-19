@@ -299,10 +299,20 @@ native tool exists, so Typst falls back to source only, its editor does not ask
 for a `typst` binary, and the exports that need one are hidden. `batch` is not
 implemented, and a component that imports it fails with a message naming it.
 
-Calls run on the page thread with a fresh instance each time. Nothing enforces
-`limits.timeoutMs` or a memory cap, which is acceptable only for components the
-app ships. A third-party plugin would need a Worker that can be terminated, plus
-install and storage, before it could run here.
+Calls run in one module Worker per plugin (`plugin-runner.ts`), with a fresh
+instance each time. `limits.timeoutMs` is clamped like the app's
+`limits::WASM` policy, 1 s by default and 5 s at most, and an overrun
+terminates the Worker. The deadline starts when the Worker reports the
+component loaded, so a slow first download over the network does not count.
+Calls queued behind an overrun are cancelled with it. Wasm memory is defined
+inside the component, so the page cannot cap it as Wasmtime does. That is
+acceptable only for components the app ships. A third-party plugin would also
+need install and storage before it could run here.
+
+Everything a call sends crosses `postMessage`, so the note snapshot and grant
+list must be plain arrays. A Svelte state proxy fails the structured clone.
+`vite.config.ts` builds Workers as ES modules with the component plugin,
+because the plugin Worker imports components lazily.
 
 The on/off switch is saved in localStorage under
 `notes-app:browser-plugins-enabled:v1`. Typst starts off, as its manifest asks.
