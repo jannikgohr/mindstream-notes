@@ -111,14 +111,23 @@ async function invoke(
   return instance.invoke(exportName, input);
 }
 
-/** Run one export of a bundled plugin and `post` its JSON result. */
-export async function handlePluginRequest(
+let queue = Promise.resolve();
+
+/**
+ * Run one export of a bundled plugin and `post` its JSON result. Requests run
+ * one at a time, so a call's `started` waits until the call before it is done
+ * and its deadline never covers another call's work.
+ */
+export function handlePluginRequest(
   request: PluginRequest,
   post: (response: PluginResponse) => void
 ): Promise<void> {
-  try {
-    post({ id: request.id, output: await invoke(request, post) });
-  } catch (error) {
-    post({ id: request.id, error: failure(error) });
-  }
+  queue = queue.then(async () => {
+    try {
+      post({ id: request.id, output: await invoke(request, post) });
+    } catch (error) {
+      post({ id: request.id, error: failure(error) });
+    }
+  });
+  return queue;
 }

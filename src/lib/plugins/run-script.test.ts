@@ -46,13 +46,16 @@ function note(id: string, title: string, extra: Record<string, unknown> = {}) {
   };
 }
 
+const posted: PluginResponse[] = [];
+
 /** Runs the Worker's handler in-process, behind the clone a real one applies. */
 class InlineWorker {
   onmessage: ((event: { data: PluginResponse }) => void) | null = null;
   postMessage(request: PluginRequest) {
-    void handlePluginRequest(structuredClone(request), (data) =>
-      this.onmessage?.({ data: structuredClone(data) })
-    );
+    void handlePluginRequest(structuredClone(request), (data) => {
+      posted.push(data);
+      this.onmessage?.({ data: structuredClone(data) });
+    });
   }
   terminate() {}
 }
@@ -72,6 +75,7 @@ beforeEach(() => {
   };
 });
 afterEach(() => {
+  posted.length = 0;
   resetPluginRunner();
   vi.unstubAllGlobals();
   resetPluginRegistry();
@@ -82,6 +86,19 @@ it('runs every bundled Wasm plugin', () => {
   expect(bundledWasmManifests().map((m) => (m as { id: string }).id)).toEqual([
     TEMPLATES,
     TYPST
+  ]);
+});
+
+it("starts a call's deadline only after the call before it is done", async () => {
+  await Promise.all([
+    runPluginScript(TYPST, 'exportDocument', { format: 'typ', body: 'a' }),
+    runPluginScript(TYPST, 'exportDocument', { format: 'typ', body: 'b' })
+  ]);
+  expect(posted.map((message) => Object.keys(message)[1])).toEqual([
+    'started',
+    'output',
+    'started',
+    'output'
   ]);
 });
 
