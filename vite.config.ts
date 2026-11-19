@@ -4,6 +4,7 @@ import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { excalidrawFonts } from './src-tauri/scripts/excalidraw-fonts.mjs';
+import { pluginComponents } from './scripts/browser/plugin-components.mjs';
 
 function isIgnorableWarning(message: string, filePath = ''): boolean {
   return (
@@ -89,6 +90,7 @@ export default defineConfig({
   plugins: [
     silenceUpstreamWarnings(),
     excalidrawFonts(),
+    pluginComponents(),
     tailwindcss(),
     sveltekit(),
     // React JSX transform — scoped to .tsx files so it doesn't touch

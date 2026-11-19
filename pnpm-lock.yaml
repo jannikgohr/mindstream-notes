@@ -167,6 +167,9 @@ importers:
         specifier: ^13.6.30
         version: 13.6.30
     devDependencies:
+      '@bytecodealliance/jco-transpile':
+        specifier: ^0.20.0
+        version: 0.20.0
       '@commitlint/cli':
         specifier: ^21.0.1
         version: 21.0.1(@types/node@22.19.17)(conventional-commits-parser@6.4.0)(typescript@5.9.3)

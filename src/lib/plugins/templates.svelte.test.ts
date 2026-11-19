@@ -19,6 +19,11 @@ const { pluginsRunScript } = vi.hoisted(() => ({
   pluginsRunScript: vi.fn()
 }));
 vi.mock('$lib/api/plugins', () => ({ pluginsRunScript }));
+// The app path. `run-script.test.ts` runs plugins the browser way.
+vi.mock('$lib/api/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/api/core')>()),
+  isTauri: () => true
+}));
 
 import { registerPlugin, resetPluginRegistry } from './registry.svelte';
 import {
