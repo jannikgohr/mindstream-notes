@@ -43,10 +43,38 @@ async function openPluginsCategory(): Promise<void> {
   await expect(byName('Enable in this vault')).toBeDisplayed();
 }
 
+/**
+ * Open one plugin's settings. Every card's button has the same label, so the
+ * card is found by the plugin's name, as `setPluginEnabledByName` does.
+ */
+async function openPluginSettingsByName(name: string): Promise<void> {
+  await browser.execute((pluginName: string) => {
+    const buttons = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        'button[aria-label="Plugin settings"]'
+      )
+    );
+    const found = buttons.find((button) => {
+      let row: HTMLElement | null = button.parentElement;
+      while (
+        row &&
+        row.querySelectorAll('button[aria-label="Plugin settings"]').length ===
+          1
+      ) {
+        if (row.textContent?.includes(pluginName)) return true;
+        row = row.parentElement;
+      }
+      return false;
+    });
+    if (!found) throw new Error(`no plugin settings button for ${pluginName}`);
+    found.click();
+  }, name);
+}
+
 /** Use the real picker and wait for its vault setting to reach SQLite. */
 async function setTemplateFolder(folder: string | null): Promise<void> {
   await openPluginsCategory();
-  await clickName('Plugin settings');
+  await openPluginSettingsByName(TEMPLATES_PLUGIN);
   await clickElement($('button[aria-label="Template folder"]'));
   await $('[role="listbox"]').waitForDisplayed();
   await browser.execute((label) => {
