@@ -765,6 +765,7 @@
     "editor.status.viewonly": "View only — shared read-only",
     "editor.trash.banner": "This note is in the trash and is read-only. Restore it to edit.",
     "editor.viewonly.banner": "This note is in a folder shared with you as view only. You can read it but not make changes.",
+    "editor.newer.banner": "A newer version of the app wrote this note. Update the app to edit it. You can still rename and move it.",
     "editor.menu.mermaid": "Mermaid diagram",
     "editor.wikilink.menu.label": "Link to note",
     "editor.wikilink.menu.empty": "No notes match — keep typing to insert a new link",

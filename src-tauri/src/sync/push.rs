@@ -264,7 +264,7 @@ pub(super) fn push_notes(
         };
 
         let payload = NotePayload {
-            schema: PAYLOAD_SCHEMA,
+            schema: pushed_schema(row.schema),
             id: row.id.clone(),
             parent_folder_id: row.parent_collection_id.clone(),
             title: row.title.clone(),
@@ -667,6 +667,12 @@ pub(super) fn drain_tombstones(
     Ok(())
 }
 
+/// The schema a note goes up in. A note a newer app wrote keeps its own,
+/// so this app never passes off content it cannot read as its own format.
+fn pushed_schema(row_schema: i64) -> u32 {
+    u32::try_from(row_schema).map_or(PAYLOAD_SCHEMA, |schema| schema.max(PAYLOAD_SCHEMA))
+}
+
 #[derive(Clone, Copy)]
 enum PushedKind {
     Folder,
@@ -731,7 +737,7 @@ fn acknowledge_push(conn: &Connection, receipt: PushReceipt<'_>) -> AppResult<()
         )?;
     } else if matches!(receipt.kind, PushedKind::Note) {
         conn.execute(
-            "UPDATE notes SET payload_schema = ?1, tags_state = ?2
+            "UPDATE notes SET payload_schema = MAX(payload_schema, ?1), tags_state = ?2
             WHERE id = ?3 AND modified = ?4",
             params![
                 PAYLOAD_SCHEMA as i64,
@@ -807,6 +813,54 @@ mod receipt_tests {
                 )?,
                 0
             );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn a_push_keeps_the_schema_of_a_note_from_a_newer_app() {
+        let db = crate::db::open_memory_for_tests();
+        db.with_conn(|c| {
+            for schema in [1, 3] {
+                let note = crate::notes::create(
+                    c,
+                    crate::notes::CreateNote {
+                        title: None,
+                        body: None,
+                        parent_collection_id: None,
+                        note_kind: None,
+                    },
+                )?;
+                c.execute(
+                    "UPDATE notes SET payload_schema = ?1 WHERE id = ?2",
+                    params![schema, note.summary.id],
+                )?;
+                acknowledge_push(
+                    c,
+                    PushReceipt {
+                        kind: PushedKind::Note,
+                        id: &note.summary.id,
+                        modified: &note.summary.modified,
+                        previous_uid: None,
+                        scope: None,
+                        uid: &format!("uid-{schema}"),
+                        etag: "etag",
+                        tags_state: &[],
+                    },
+                )?;
+                let stored: i64 = c.query_row(
+                    "SELECT payload_schema FROM notes WHERE id = ?1",
+                    params![note.summary.id],
+                    |r| r.get(0),
+                )?;
+                // An older note goes up in today's schema, a newer one in its own.
+                assert_eq!(stored, schema.max(PAYLOAD_SCHEMA as i64));
+                assert_eq!(
+                    pushed_schema(schema),
+                    schema.max(PAYLOAD_SCHEMA as i64) as u32
+                );
+            }
             Ok(())
         })
         .unwrap();

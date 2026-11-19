@@ -11,10 +11,12 @@
   import { tUi } from '$lib/settings/i18n.svelte';
 
   interface Props {
+    /** Why the note is read-only. Defaults to the view-only share. */
+    message?: string;
     children?: Snippet;
   }
 
-  let { children }: Props = $props();
+  let { message, children }: Props = $props();
 </script>
 
 <div
@@ -22,7 +24,7 @@
 >
   <div class="flex min-w-0 items-center gap-2" role="status">
     <Eye class="size-3.5 shrink-0" aria-hidden="true" />
-    <span>{tUi('editor.viewonly.banner')}</span>
+    <span>{message ?? tUi('editor.viewonly.banner')}</span>
   </div>
   {#if children}
     <div class="-my-1 ml-auto shrink-0 text-foreground">

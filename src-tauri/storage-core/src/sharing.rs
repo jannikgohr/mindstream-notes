@@ -358,6 +358,9 @@ pub fn rewrite_note_asset_id(
     old_id: &str,
     new_id: &str,
 ) -> AppResult<()> {
+    // Moving a note between share scopes rewrites the asset ids in its
+    // content, which a newer app's note does not allow here.
+    crate::notes::ensure_content_editable(conn, note_id)?;
     let (body, state): (String, Option<Vec<u8>>) = conn.query_row(
         "SELECT body, yrs_state FROM notes WHERE id = ?1",
         params![note_id],

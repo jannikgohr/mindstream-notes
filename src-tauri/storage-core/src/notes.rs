@@ -188,6 +188,30 @@ fn default_payload_schema() -> u32 {
     1
 }
 
+/// The newest note payload schema this app can edit. A note in a newer one
+/// was written by a newer app: here it is read-only. Its body and state
+/// stay as they arrived, and only renames, moves and other metadata apply.
+pub const NEWEST_NOTE_SCHEMA: i64 = 2;
+
+/// Refuse to change the content of a note a newer app wrote.
+pub fn ensure_content_editable(conn: &Connection, id: &str) -> AppResult<()> {
+    let schema: Option<i64> = conn
+        .query_row(
+            "SELECT payload_schema FROM notes WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if schema.is_some_and(|schema| schema > NEWEST_NOTE_SCHEMA) {
+        return Err(AppError::Refused {
+            reason: "newer_note",
+            message: "A newer version of the app wrote this note. Update the app to edit it."
+                .into(),
+        });
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateNote {
     pub title: Option<String>,
@@ -365,6 +389,7 @@ use chrono::Utc;
 /// update.
 pub fn save_yrs_state(conn: &mut Connection, id: &str, bytes: &[u8]) -> AppResult<bool> {
     crate::sharing::ensure_note_writable(conn, id)?;
+    ensure_content_editable(conn, id)?;
     let now = chrono::Utc::now().to_rfc3339();
     let tx = conn.transaction()?;
     let existing_row: Option<Option<Vec<u8>>> = tx
@@ -448,6 +473,9 @@ pub fn create(conn: &Connection, input: CreateNote) -> AppResult<Note> {
 
 pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
     crate::sharing::ensure_note_writable(conn, &input.id)?;
+    if input.body.is_some() || input.yrs_state.is_some() {
+        ensure_content_editable(conn, &input.id)?;
+    }
     if let Some(parent) = &input.parent_collection_id {
         crate::sharing::ensure_parent_writable(conn, parent.as_deref())?;
     }

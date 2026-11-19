@@ -60,6 +60,7 @@ pub(super) struct DirtyNote {
     pub(super) favourite: bool,
     pub(super) note_kind: String,
     pub(super) tags_state: Vec<u8>,
+    pub(super) schema: i64,
 }
 
 pub(super) fn load_tags_for_note(conn: &Connection, note_id: &str) -> AppResult<Vec<String>> {
@@ -99,7 +100,7 @@ pub(super) fn load_dirty_notes(db: &Db, scope: Option<&str>) -> AppResult<Vec<Di
         let mut stmt = c.prepare(
             "SELECT id, parent_collection_id, title, position, created, modified,
                     trashed_at, yrs_state, etebase_uid, body, favourite, note_kind,
-                    tags_state
+                    tags_state, payload_schema
              FROM notes WHERE dirty = 1
                AND ((?1 IS NULL AND share_scope_id IS NULL) OR share_scope_id = ?1)",
         )?;
@@ -119,6 +120,7 @@ pub(super) fn load_dirty_notes(db: &Db, scope: Option<&str>) -> AppResult<Vec<Di
                 favourite: r.get::<_, i64>(10)? != 0,
                 note_kind: r.get(11)?,
                 tags_state: r.get::<_, Option<Vec<u8>>>(12)?.unwrap_or_default(),
+                schema: r.get(13)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

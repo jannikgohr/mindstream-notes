@@ -152,9 +152,15 @@ export interface Note extends NoteSummary {
    * number array — wasteful for large docs but avoids a base64 hop.
    */
   yrs_state: number[];
-  /** 1 = legacy Y.Text, 2 = y-prosemirror XmlFragment (current). */
+  /** 1 = legacy Y.Text, 2 = y-prosemirror XmlFragment (current). A higher
+   *  number is the format of a newer app, see `NEWEST_NOTE_SCHEMA`. */
   payload_schema: number;
 }
+
+/** The newest payload schema this app can edit. A note in a newer one was
+ *  written by a newer app: it opens read-only and only its metadata
+ *  changes. Mirrors `NEWEST_NOTE_SCHEMA` in storage-core's `notes.rs`. */
+export const NEWEST_NOTE_SCHEMA = 2;
 
 export interface CreateNoteInput {
   title?: string;

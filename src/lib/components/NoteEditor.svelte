@@ -22,6 +22,7 @@
   import { Awareness } from 'y-protocols/awareness';
   import {
     loadNote,
+    NEWEST_NOTE_SCHEMA,
     saveNote as apiSaveNote,
     TRASH_ID,
     etebaseSession,
@@ -450,7 +451,13 @@
   // semantics; the read-only scope reuses the same input lock (setReadonly,
   // hidden toolbar, no replace) so a viewer can't type into content they can't
   // push.
-  const isReadOnly = $derived(isTrashed || isReadOnlyScope);
+  // The body of a note a newer app wrote. Such a note is shown as text and
+  // nothing here writes to it, see `NEWEST_NOTE_SCHEMA`.
+  let newerBody = $state<string | null>(null);
+
+  const isReadOnly = $derived(
+    isTrashed || isReadOnlyScope || newerBody !== null
+  );
 
   /** Candidates are a property of the note, not of a surface — both panes'
    *  mention menus offer the same people, so every resolution path feeds both
@@ -504,6 +511,13 @@
       activeSurface = 'wysiwyg';
       const note = await loadNote(noteId);
       if (!host) return; // unmounted while awaiting
+      // Milkdown would build a fragment of its own next to a newer app's
+      // state and join the note's live room, so it never opens such a note.
+      if (note.payload_schema > NEWEST_NOTE_SCHEMA) {
+        viewMode = 'wysiwyg';
+        newerBody = note.body;
+        return;
+      }
 
       // Build the live Doc + Awareness BEFORE we ask Crepe to materialise
       // the editor — the collab plugin needs them at bind time.
@@ -947,9 +961,18 @@
     notesPulledIds: string[],
     assetsPulledIds: string[]
   ) {
-    if (notesPulledIds.includes(noteId) && yDoc) {
+    if (notesPulledIds.includes(noteId) && newerBody !== null) {
+      newerBody = (await loadNote(noteId)).body;
+    } else if (notesPulledIds.includes(noteId) && yDoc) {
       try {
         const fresh = await loadNote(noteId);
+        // Another device moved the note on to a newer app's format.
+        if (fresh.payload_schema > NEWEST_NOTE_SCHEMA) {
+          closeEditor();
+          viewMode = 'wysiwyg';
+          newerBody = fresh.body;
+          return;
+        }
         if (yDoc && fresh.yrs_state.length > 0) {
           // Tag the origin so yDocUpdateHandler skips the redundant re-save:
           // these bytes came straight from SQLite, so the row is already
@@ -1087,43 +1110,8 @@
     };
   });
 
-  onDestroy(() => {
-    void saveScheduler.destroy();
-    // Flush a final history version for edits made since the last capture,
-    // while the editor (and getMarkdown) is still alive. Fire-and-forget —
-    // the backend dedups, so a no-op close is harmless.
-    if (historyTimer) {
-      clearTimeout(historyTimer);
-      historyTimer = null;
-    }
-    if (historyDirty) void captureHistoryVersion('edited');
-    if (sourceSyncTimer) {
-      clearTimeout(sourceSyncTimer);
-      sourceSyncTimer = null;
-    }
-    if (presenceTimer) {
-      clearTimeout(presenceTimer);
-      presenceTimer = null;
-    }
-    if (awareness && awarenessChangeHandler) {
-      awareness.off('change', awarenessChangeHandler);
-    }
-    awarenessChangeHandler = null;
-    presenceCacheDoc = null;
-    unregisterHistory?.();
-    unregisterHistory = null;
-    if (editorListener) {
-      unregisterEditor(editorListener);
-      editorListener = null;
-    }
-    unsubSession?.();
-    unsubSession = null;
-    unsubSync?.();
-    unsubSync = null;
-    // Drop our row from the global status store so the dockview
-    // header doesn't keep showing stale icons after the panel closes.
-    clearNoteStatus(noteId);
-    clearNoteViewMode(noteId);
+  /** Take Milkdown, the Yjs doc and the live room down. */
+  function closeEditor() {
     saveReady = false;
     if (yDoc && yDocUpdateHandler) {
       yDoc.off('update', yDocUpdateHandler);
@@ -1169,6 +1157,46 @@
     assetBridge?.dispose();
     assetBridge = null;
     crepeReady = false;
+  }
+
+  onDestroy(() => {
+    void saveScheduler.destroy();
+    // Flush a final history version for edits made since the last capture,
+    // while the editor (and getMarkdown) is still alive. Fire-and-forget —
+    // the backend dedups, so a no-op close is harmless.
+    if (historyTimer) {
+      clearTimeout(historyTimer);
+      historyTimer = null;
+    }
+    if (historyDirty) void captureHistoryVersion('edited');
+    if (sourceSyncTimer) {
+      clearTimeout(sourceSyncTimer);
+      sourceSyncTimer = null;
+    }
+    if (presenceTimer) {
+      clearTimeout(presenceTimer);
+      presenceTimer = null;
+    }
+    if (awareness && awarenessChangeHandler) {
+      awareness.off('change', awarenessChangeHandler);
+    }
+    awarenessChangeHandler = null;
+    presenceCacheDoc = null;
+    unregisterHistory?.();
+    unregisterHistory = null;
+    if (editorListener) {
+      unregisterEditor(editorListener);
+      editorListener = null;
+    }
+    unsubSession?.();
+    unsubSession = null;
+    unsubSync?.();
+    unsubSync = null;
+    // Drop our row from the global status store so the dockview
+    // header doesn't keep showing stale icons after the panel closes.
+    clearNoteStatus(noteId);
+    clearNoteViewMode(noteId);
+    closeEditor();
   });
 
   // Push the read-only state into Crepe whenever either side changes.
@@ -1764,6 +1792,8 @@
         <EditorModeToggle value={viewMode} onCycle={cycleViewMode} />
       {/if}
     </TrashBanner>
+  {:else if newerBody !== null}
+    <ViewOnlyBanner message={tUi('editor.newer.banner')} />
   {:else if isReadOnlyScope}
     <ViewOnlyBanner>
       {#if showInlineModeToggle}
@@ -1896,6 +1926,13 @@
               compact={mobile}
               onEnter={focusBodyStart}
             />
+          </div>
+        {/if}
+        {#if newerBody !== null}
+          <div
+            class="mx-auto max-w-3xl px-4 py-2 font-mono text-sm whitespace-pre-wrap"
+          >
+            {newerBody}
           </div>
         {/if}
         <div

@@ -776,3 +776,55 @@ fn direct_trash_and_restore_move_the_note_in_the_tree() {
     })
     .unwrap();
 }
+
+#[test]
+fn a_note_from_a_newer_app_keeps_its_content_but_can_be_renamed() {
+    let db = open_memory_for_tests();
+    let n = empty_note(&db, None);
+    let id = n.summary.id.clone();
+    db.with_conn(|c| {
+        c.execute(
+            "UPDATE notes SET payload_schema = 3, yrs_state = X'0102' WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let edit = |body: Option<&str>, yrs_state: Option<Vec<u8>>, title: Option<&str>| UpdateNote {
+        id: id.clone(),
+        title: title.map(str::to_owned),
+        body: body.map(str::to_owned),
+        parent_collection_id: None,
+        position: None,
+        tags: None,
+        yrs_state,
+        favourite: None,
+    };
+
+    for (body, state) in [
+        (Some("# Changed"), None),
+        (None, Some(vec![9])),
+        (Some("# Changed"), Some(vec![9])),
+    ] {
+        let refused = db.with_conn_mut(|c| update(c, edit(body, state, None)));
+        assert!(
+            matches!(
+                refused,
+                Err(AppError::Refused {
+                    reason: "newer_note",
+                    ..
+                })
+            ),
+            "{refused:?}"
+        );
+    }
+    assert!(db.with_conn_mut(|c| save_yrs_state(c, &id, &[9])).is_err());
+
+    db.with_conn_mut(|c| update(c, edit(None, None, Some("Renamed"))))
+        .unwrap();
+    let loaded = db.with_conn(|c| load(c, &id)).unwrap();
+    assert_eq!(loaded.summary.title, "Renamed");
+    assert_eq!(loaded.body, "# Body");
+    assert_eq!(loaded.yrs_state, [1, 2]);
+    assert_eq!(loaded.payload_schema, 3);
+}
