@@ -106,6 +106,9 @@ importers:
       fflate:
         specifier: ^0.8.3
         version: 0.8.3
+      folio-codemirror:
+        specifier: link:../folio/packages/folio-codemirror
+        version: link:../folio/packages/folio-codemirror
       image-js:
         specifier: ^1.6.2
         version: 1.6.2

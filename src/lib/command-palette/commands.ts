@@ -35,6 +35,7 @@ import {
   type TemplateMenuEntry
 } from '$lib/plugins/menu';
 import { tUi } from '$lib/settings/i18n.svelte';
+import { base } from '$app/paths';
 
 export type PaletteSection = 'application' | 'templates';
 
@@ -133,6 +134,15 @@ function templateCommands(): PaletteCommand[] {
 }
 
 /** The full palette entry list, freshly built from the live app state. */
+/** Opens the Folio spike page, which runs outside the app layout. */
+const folioSpike: PaletteCommand = {
+  id: 'spike.folio',
+  label: 'Open the Folio spike',
+  section: 'application',
+  keywords: 'folio editor codemirror spike',
+  run: () => window.location.assign(`${base}/folio-spike`)
+};
+
 export function paletteCommands(): PaletteCommand[] {
-  return [...applicationCommands(), ...templateCommands()];
+  return [...applicationCommands(), folioSpike, ...templateCommands()];
 }

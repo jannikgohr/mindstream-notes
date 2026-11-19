@@ -7,7 +7,7 @@
   let AppLayout = $state<Component<{ children: Snippet }> | null>(null);
   let failed = $state(false);
   onMount(() => {
-    picker = /^\/(vault-picker|sqlite-proof)\/?$/.test(
+    picker = /^\/(vault-picker|sqlite-proof|folio-spike)\/?$/.test(
       window.location.pathname.slice(base.length)
     );
     if (!picker)

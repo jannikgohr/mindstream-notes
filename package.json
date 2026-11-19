@@ -114,6 +114,7 @@
     "@codemirror/language": "6.12.3",
     "@codemirror/state": "6.7.0",
     "@codemirror/view": "6.43.4",
+    "folio-codemirror": "link:../folio/packages/folio-codemirror",
     "@excalidraw/excalidraw": "^0.18.1",
     "@floating-ui/dom": "^1.7.6",
     "@jis3r/icons": "^2.7.0",

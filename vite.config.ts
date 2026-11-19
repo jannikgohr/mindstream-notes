@@ -84,6 +84,8 @@ const packageJsonPath = fileURLToPath(new URL('package.json', import.meta.url));
 const workspacePackagesPath = fileURLToPath(
   new URL('packages', import.meta.url)
 );
+// The Folio spike builds against a checkout of Folio next to this one.
+const folioPath = fileURLToPath(new URL('../folio', import.meta.url));
 
 export default defineConfig({
   plugins: [
@@ -222,7 +224,7 @@ export default defineConfig({
       ignored: ['**/src-tauri/**']
     },
     fs: {
-      allow: [packageJsonPath, workspacePackagesPath]
+      allow: [packageJsonPath, workspacePackagesPath, folioPath]
     }
   },
 
