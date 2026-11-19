@@ -209,6 +209,28 @@ fn ink_signature_skips_deleted_and_bare_pages_and_signs_text_assets() {
         yrs_doc::ink_background_signature(&state),
         r#"[["page_d","asset_late",1],["page_a","asset_pdf",2]]"#
     );
+
+    let handwriting = doc.get_or_insert_map("ink:handwriting");
+    {
+        let mut txn = doc.transact_mut();
+        let entry = |signature: &str| {
+            Any::Map(Arc::new(HashMap::from([
+                ("text".to_string(), Any::String("Einkaufsliste".into())),
+                ("signature".to_string(), Any::String(signature.into())),
+            ])))
+        };
+        handwriting.insert(&mut txn, "page_c", entry("c1"));
+        handwriting.insert(&mut txn, "page_a", entry("a1"));
+        handwriting.insert(&mut txn, "page_x", "not an entry");
+    }
+    let state = doc
+        .transact()
+        .encode_state_as_update_v1(&StateVector::default());
+    // Same string as backgroundSignature in src/lib/ink/handwriting.test.ts.
+    assert_eq!(
+        yrs_doc::ink_background_signature(&state),
+        r#"[["page_d","asset_late",1],["page_a","asset_pdf",2],["page_a","a1"],["page_c","c1"]]"#
+    );
 }
 
 #[test]

@@ -33,6 +33,7 @@
     "ink.pages.insert": "Insert selected pages",
     "ink.pages.working": "Preparing PDF pages...",
     "ink.pages.rasterizing": "Saving page images: {page} / {total}",
+    "ink.handwriting.failed": "Handwriting recognition failed: {error}",
     "ink.pdf.convert": "Convert to handwritten note",
     "ink.pdf.converting": "Converting PDF to handwritten note…",
     "ink.pdf.write": "Handwriting",
@@ -1466,6 +1467,10 @@
     "editor.ink": {
       "label": "Ink toolbar"
     },
+    "editor.handwriting": {
+      "label": "Handwriting recognition",
+      "description": "Makes handwritten notes searchable. Each page you write on is sent as an image to a vision model you choose, and the text it reads is saved with the note and synced to your other devices."
+    },
     "editor.autosave": {
       "label": "Auto-save"
     },
@@ -1656,6 +1661,18 @@
     "editor.ink.pageBackgroundOpacity": {
       "label": "Ink page background opacity",
       "description": "Transparency of the handwritten page background pattern."
+    },
+    "editor.handwriting.endpoint": {
+      "label": "Server URL",
+      "description": "Base URL of an OpenAI-compatible API, for example http://localhost:11434/v1 for Ollama. Until this and the model are set, nothing is recognized and no page leaves your device."
+    },
+    "editor.handwriting.model": {
+      "label": "Model",
+      "description": "A model that reads images, for example qwen2.5vl:7b."
+    },
+    "editor.handwriting.apiKey": {
+      "label": "API key",
+      "description": "Only needed for hosted APIs. Stored on this device and never synced with your notes."
     },
     "hotkeys.panel": {
       "label": "Keyboard shortcuts"

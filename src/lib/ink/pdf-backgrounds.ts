@@ -3,19 +3,30 @@ import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { fetchAssetBytes } from '$lib/api/assets';
 import { loadNote } from '$lib/api/notes';
 import { DEFAULT_PAGE, type InkPage } from './page';
+import type { InkDocument } from './document';
 import { cachedPdfPageText, pdfNoteNeedsText } from '$lib/api/pdf-text';
 import { savePdfPageImages, type PageImageProgress } from './page-images';
+import { recognizedSignatures, recognizedText } from './handwriting';
 
-export function backgroundSignature(pages: InkPage[]): string {
-  return JSON.stringify(
-    pages
+/** Must stay identical to `ink_background_signature` in Rust; see `recognizedSignatures`. */
+export function backgroundSignature(
+  pages: InkPage[],
+  recognized: Array<[string, string]> = []
+): string {
+  return JSON.stringify([
+    ...pages
       .filter((p) => p.background)
       .map((p) => [
         p.id,
         p.background!.textAssetId ?? p.background!.assetId,
         p.background!.pageIndex
-      ])
-  );
+      ]),
+    ...recognized
+  ]);
+}
+
+export function inkTextSignature(ink: InkDocument): string {
+  return backgroundSignature(ink.pages(), recognizedSignatures(ink.doc));
 }
 
 async function pdfLibrary() {
@@ -292,7 +303,8 @@ export function createPdfBackgroundCache(
 
 const pageText = new Map<string, string>();
 export async function extractInkBackgroundText(
-  pages: InkPage[]
+  pages: InkPage[],
+  handwriting: ReadonlyMap<string, string> = new Map()
 ): Promise<string> {
   const text = new Map<string, string>();
   for (const page of pages)
@@ -351,7 +363,9 @@ export async function extractInkBackgroundText(
       );
   }
   const result = pages
-    .map((p) => text.get(p.id) ?? '')
+    .map((p) =>
+      [text.get(p.id), handwriting.get(p.id)].filter(Boolean).join('\n')
+    )
     .filter(Boolean)
     .join('\n\n');
   while (pageText.size > 256) pageText.delete(pageText.keys().next().value!);
@@ -367,8 +381,8 @@ export async function indexInkNote(noteId: string): Promise<void> {
   const ink = InkDocument.fromBytes(note.yrs_state);
   try {
     const pages = ink.pages();
-    const signature = backgroundSignature(pages);
-    const text = await extractInkBackgroundText(pages);
+    const signature = inkTextSignature(ink);
+    const text = await extractInkBackgroundText(pages, recognizedText(ink.doc));
     await setPdfText(noteId, text, signature);
   } finally {
     ink.doc.destroy();

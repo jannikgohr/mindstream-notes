@@ -32,6 +32,7 @@ import {
   pressElementKey,
   setElementValue,
   setPluginEnabledByName,
+  setSettingText,
   waitForShell
 } from '../../helpers/harness.js';
 
@@ -167,42 +168,6 @@ async function openPluginSettings(name: string): Promise<void> {
     if (!found) throw new Error(`no settings button for ${pluginName}`);
     found.click();
   }, name);
-}
-
-/**
- * Type into the text input of the settings row carrying this label.
- *
- * The control has no accessible name of its own — the label sits beside it as
- * ordinary text, not wrapped around it and not linked by `for` — so it is
- * reached through the row rather than by name. Values are written through the
- * native setter and announced with `input`, which is what the row's handler
- * listens for.
- */
-async function setSettingText(label: string, value: string): Promise<void> {
-  await browser.execute(
-    (name: string, next: string) => {
-      const labelled = Array.from(document.querySelectorAll('*')).find(
-        (element) =>
-          element.children.length === 0 && element.textContent?.trim() === name
-      );
-      let row = labelled?.parentElement ?? null;
-      let input: HTMLInputElement | null = null;
-      for (let up = 0; up < 5 && row && !input; up++) {
-        input = row.querySelector<HTMLInputElement>('input[type="text"]');
-        row = row.parentElement;
-      }
-      if (!input) throw new Error(`no text input for ${name}`);
-      const setter = Object.getOwnPropertyDescriptor(
-        HTMLInputElement.prototype,
-        'value'
-      )?.set;
-      setter?.call(input, next);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      input.dispatchEvent(new Event('change', { bubbles: true }));
-    },
-    label,
-    value
-  );
 }
 
 async function openPluginsCategory(): Promise<void> {

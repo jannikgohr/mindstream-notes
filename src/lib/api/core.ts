@@ -125,6 +125,7 @@ export enum TauriCommandName {
   IsAppimageInstall = 'is_appimage_install',
   TextCheckerCheck = 'text_checker_check',
   TextCheckerTestConnection = 'text_checker_test_connection',
+  HandwritingRecognize = 'handwriting_recognize',
   LeaveSharedCollection = 'leave_shared_collection',
   ListCollectionMembers = 'list_collection_members',
   LegacyWikilinkCount = 'legacy_wikilink_count',

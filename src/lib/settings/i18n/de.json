@@ -33,6 +33,7 @@
     "ink.pages.insert": "Ausgewählte Seiten einfügen",
     "ink.pages.working": "PDF-Seiten werden vorbereitet...",
     "ink.pages.rasterizing": "Seitenbilder werden gespeichert: {page} / {total}",
+    "ink.handwriting.failed": "Handschrifterkennung fehlgeschlagen: {error}",
     "ink.pdf.convert": "In handschriftliche Notiz umwandeln",
     "ink.pdf.converting": "PDF wird in handschriftliche Notiz umgewandelt…",
     "ink.pdf.write": "Handschrift",
@@ -1466,6 +1467,10 @@
     "editor.ink": {
       "label": "Ink-Werkzeugleiste"
     },
+    "editor.handwriting": {
+      "label": "Handschrifterkennung",
+      "description": "Macht handschriftliche Notizen durchsuchbar. Jede beschriebene Seite wird als Bild an ein Bildmodell deiner Wahl gesendet; der erkannte Text wird mit der Notiz gespeichert und mit deinen anderen Geräten synchronisiert."
+    },
     "editor.autosave": {
       "label": "Auto-Speichern"
     },
@@ -1650,6 +1655,18 @@
     "editor.ink.pageBackgroundOpacity": {
       "label": "Deckkraft des Ink-Seitenhintergrunds",
       "description": "Transparenz des Hintergrundmusters handschriftlicher Seiten."
+    },
+    "editor.handwriting.endpoint": {
+      "label": "Server-URL",
+      "description": "Basis-URL einer OpenAI-kompatiblen API, zum Beispiel http://localhost:11434/v1 für Ollama. Solange URL und Modell fehlen, wird nichts erkannt und keine Seite verlässt dein Gerät."
+    },
+    "editor.handwriting.model": {
+      "label": "Modell",
+      "description": "Ein Modell, das Bilder lesen kann, zum Beispiel qwen2.5vl:7b."
+    },
+    "editor.handwriting.apiKey": {
+      "label": "API-Schlüssel",
+      "description": "Nur für gehostete APIs nötig. Wird auf diesem Gerät gespeichert und nie mit den Notizen synchronisiert."
     },
     "hotkeys.panel": {
       "label": "Tastaturkürzel"

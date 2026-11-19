@@ -11,6 +11,9 @@
     indexInkNote,
     type PreparedPdfImport
   } from '$lib/ink/pdf-backgrounds';
+  import { recognizeInk, renderStrokesPng } from '$lib/ink/handwriting';
+  import { recognizeHandwriting } from '$lib/api/handwriting';
+  import { pushToast } from '$lib/components/toast.svelte';
   import { INK_PAGES, INK_META, INK_SCHEMA } from '$lib/ink/page-document';
   import { DEFAULT_PAGE, type InkPage } from '$lib/ink/page';
   import { ancestorIsTrash } from '$lib/editor/trash';
@@ -637,12 +640,66 @@
         void indexInkNote(noteId).catch((error) =>
           console.warn('[ink] indexing failed', error)
         );
+      scheduleHandwritingRecognition();
     },
     onStatus: (status) => {
       savingState = status;
     }
   });
   $effect(() => inkSave.subscribeSuspend());
+
+  const HANDWRITING_IDLE_MS = 5000;
+  const handwritingAbort = new AbortController();
+  let handwritingTimer: ReturnType<typeof setTimeout> | undefined;
+  let handwritingRunning = false;
+  let handwritingFailureShown = false;
+
+  function scheduleHandwritingRecognition() {
+    if (!allowPageEditing || !isTauri()) return;
+    clearTimeout(handwritingTimer);
+    handwritingTimer = setTimeout(
+      () => void recognizeHandwritingNow(),
+      HANDWRITING_IDLE_MS
+    );
+  }
+
+  async function recognizeHandwritingNow() {
+    const endpoint = String(
+      getSettingValue('editor.handwriting.endpoint') ?? ''
+    ).trim();
+    const model = String(
+      getSettingValue('editor.handwriting.model') ?? ''
+    ).trim();
+    const apiKey = String(getSettingValue('editor.handwriting.apiKey') ?? '');
+    if (!doc || disposed || isTrashed || !endpoint || !model) return;
+    if (handwritingRunning) return scheduleHandwritingRecognition();
+    handwritingRunning = true;
+    try {
+      await recognizeInk(
+        doc,
+        (strokes) =>
+          recognizeHandwriting(
+            endpoint,
+            model,
+            apiKey,
+            renderStrokesPng(strokes)
+          ),
+        applyDocumentMutation,
+        handwritingAbort.signal
+      );
+    } catch (error) {
+      console.warn('[ink] handwriting recognition failed', error);
+      if (!handwritingFailureShown && !disposed) {
+        handwritingFailureShown = true;
+        pushToast(
+          tUiFormat('ink.handwriting.failed', { error: String(error) }),
+          { variant: 'error' }
+        );
+      }
+    } finally {
+      handwritingRunning = false;
+    }
+  }
   const queueSaveUpdates = inkSave.queue;
   export async function flush(): Promise<void> {
     await inkSave.flush();
@@ -2545,6 +2602,7 @@
     refreshFromDoc();
     resizeCanvas();
     updateLiveInkOverlayStyle();
+    scheduleHandwritingRecognition();
     if (
       allowPageEditing &&
       !isTrashed &&
@@ -2633,6 +2691,8 @@
 
   onDestroy(() => {
     backgroundUpgrade.abort();
+    handwritingAbort.abort();
+    clearTimeout(handwritingTimer);
     window.removeEventListener(
       'mindstream:android-stylus-eraser',
       handleAndroidStylusEraser

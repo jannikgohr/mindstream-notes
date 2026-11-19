@@ -367,15 +367,11 @@ export const mockApi = {
     if (input.yrs_state !== undefined) {
       if (n.note_kind === 'ink') {
         const { InkDocument } = await import('$lib/ink/document');
-        const { backgroundSignature } =
-          await import('$lib/ink/pdf-backgrounds');
+        const { inkTextSignature } = await import('$lib/ink/pdf-backgrounds');
         const before = InkDocument.fromBytes(n.yrs_state),
           after = InkDocument.fromBytes(input.yrs_state);
         try {
-          if (
-            backgroundSignature(before.pages()) !==
-            backgroundSignature(after.pages())
-          )
+          if (inkTextSignature(before) !== inkTextSignature(after))
             pdfTexts.delete(n.id);
         } finally {
           before.doc.destroy();
@@ -507,10 +503,10 @@ export const mockApi = {
     // Idempotent + PDF-only, mirroring the Rust `pdf_text IS NULL` guard.
     if (n?.note_kind === 'ink' && expectedSignature !== undefined) {
       const { InkDocument } = await import('$lib/ink/document');
-      const { backgroundSignature } = await import('$lib/ink/pdf-backgrounds');
+      const { inkTextSignature } = await import('$lib/ink/pdf-backgrounds');
       const doc = InkDocument.fromBytes(n.yrs_state);
       try {
-        if (backgroundSignature(doc.pages()) === expectedSignature)
+        if (inkTextSignature(doc) === expectedSignature)
           pdfTexts.set(noteId, text);
       } finally {
         doc.doc.destroy();

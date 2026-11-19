@@ -51,6 +51,7 @@ pub mod export_session;
 mod file_lock;
 #[cfg(desktop)]
 pub mod foreground;
+pub mod handwriting;
 pub mod history;
 pub mod hotkeys;
 pub mod i18n;
@@ -737,6 +738,8 @@ pub fn run() {
                 spellcheck::spellcheck_release_dictionaries,
                 spellcheck::http_checker::text_checker_check,
                 spellcheck::http_checker::text_checker_test_connection,
+                // Handwriting recognition (sends page images to the configured server)
+                handwriting::handwriting_recognize,
                 // Search
                 search::search_notes,
                 // PDF searchable-text index (derived, local-only)

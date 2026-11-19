@@ -54,6 +54,7 @@ pub fn ink_background_signature(state: &[u8]) -> String {
     let pages = doc.get_or_insert_map("ink:pages");
     let order = doc.get_or_insert_map("ink:pageOrder");
     let deleted = doc.get_or_insert_map("ink:deletedPages");
+    let handwriting = doc.get_or_insert_map("ink:handwriting");
     let txn = doc.transact();
     let mut rows = Vec::new();
     for (id, value) in pages.iter(&txn) {
@@ -78,13 +79,29 @@ pub fn ink_background_signature(state: &[u8]) -> String {
         }
     }
     rows.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-    serde_json::to_string(
-        &rows
+    let mut signed: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|(_, id, asset, index)| serde_json::json!([id, asset, index]))
+        .collect();
+    // Must stay identical to `backgroundSignature` in src/lib/ink/pdf-backgrounds.ts,
+    // or every handwriting index write is rejected as stale.
+    let mut recognized: Vec<(String, String)> = handwriting
+        .iter(&txn)
+        .filter_map(|(id, value)| match value {
+            Out::Any(Any::Map(entry)) => match entry.get("signature") {
+                Some(Any::String(signature)) => Some((id.to_string(), signature.to_string())),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    recognized.sort();
+    signed.extend(
+        recognized
             .into_iter()
-            .map(|(_, id, asset, index)| (id, asset, index))
-            .collect::<Vec<_>>(),
-    )
-    .unwrap_or_else(|_| "[]".into())
+            .map(|(id, signature)| serde_json::json!([id, signature])),
+    );
+    serde_json::to_string(&signed).unwrap_or_else(|_| "[]".into())
 }
 
 /// First-time state for a brand-new note. The yrs Doc is initialised by

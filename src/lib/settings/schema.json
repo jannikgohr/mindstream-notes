@@ -476,6 +476,32 @@
           ]
         },
         {
+          "id": "editor.handwriting",
+          "nativeOnly": true,
+          "settings": [
+            {
+              "id": "editor.handwriting.endpoint",
+              "scope": "D",
+              "type": "text",
+              "default": "",
+              "placeholder": "http://localhost:11434/v1"
+            },
+            {
+              "id": "editor.handwriting.model",
+              "scope": "D",
+              "type": "text",
+              "default": "",
+              "placeholder": "qwen2.5vl:7b"
+            },
+            {
+              "id": "editor.handwriting.apiKey",
+              "scope": "D",
+              "type": "text",
+              "default": ""
+            }
+          ]
+        },
+        {
           "id": "editor.autosave",
           "settings": [
             {

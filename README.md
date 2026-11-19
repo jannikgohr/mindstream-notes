@@ -62,6 +62,8 @@ Demo storage is isolated from the normal browser vault and browser QA vaults.
   and Evernote, and export every note type.
 - **Spelling and grammar.** Spell checking with the app's own dictionaries, and
   grammar checking through a LanguageTool server.
+- **Searchable handwriting.** A vision model you choose reads handwritten notes,
+  so search finds what you wrote.
 - **Plugins.** Sandboxed WebAssembly components, written in Rust or TypeScript.
 - Several vaults side by side, and an English and German interface.
 

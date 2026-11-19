@@ -99,6 +99,7 @@ const COMMAND_ACCESS: Record<`${TauriCommandName}`, CommandAccess> = {
   is_appimage_install: 'read',
   text_checker_check: 'read',
   text_checker_test_connection: 'read',
+  handwriting_recognize: 'read',
   list_collection_members: 'read',
   legacy_wikilink_count: 'read',
   list_collections: 'read',

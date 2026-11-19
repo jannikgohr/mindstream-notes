@@ -81,6 +81,17 @@ pages come from a `tauri://` address, which sends no `Referer`, and the player
 would only show "Error 153". So there a YouTube embed shows the video's
 thumbnail and a **Watch on YouTube** button that opens it in the browser.
 
+## Handwritten notes
+
+### Handwriting is recognized only while the note is open — _known limitation_
+
+With a server set under **Settings → Editor → Handwriting recognition**, the
+desktop and mobile apps read a page a few seconds after you stop writing on it,
+and only while the note is open. Notes written before you set the server are
+read the next time you open them. The browser version can't reach a model
+server, so it never recognizes handwriting itself, but it searches the text
+your other devices recognized, which syncs with the note.
+
 ## Import
 
 The importer and what each format maps to are described in
