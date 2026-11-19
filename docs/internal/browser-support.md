@@ -302,8 +302,9 @@ implemented, and a component that imports it fails with a message naming it.
 Calls run in one module Worker per plugin (`plugin-runner.ts`), with a fresh
 instance each time. `limits.timeoutMs` is clamped like the app's
 `limits::WASM` policy, 1 s by default and 5 s at most, and an overrun
-terminates the Worker. The deadline starts when the Worker reports the
-component loaded, so a slow first download over the network does not count.
+terminates the Worker. A Worker runs one call at a time, and the deadline
+starts when it reports that call's component loaded, so neither a slow first
+download nor the call ahead of it counts.
 Calls queued behind an overrun are cancelled with it. Wasm memory is defined
 inside the component, so the page cannot cap it as Wasmtime does. That is
 acceptable only for components the app ships. A third-party plugin would also
