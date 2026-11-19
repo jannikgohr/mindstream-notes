@@ -640,6 +640,20 @@ when notes, the plugin's settings or the language change.
 | `{ type: "calendar", month, selected?, days, onSelect, onMonth }`             | a month grid; `days` maps `YYYY-MM-DD` to `{ marks, strong?, title? }` |
 | `{ type: "list", items: [{ label, detail?, icon?, noteKind?, tone?, on? }] }` | rows, like the file tree's                                             |
 
+Text in a node (`text`, `label`, `detail`, a day's `title`) is one of:
+
+- a string, shown as is, for content such as a note title;
+- `{ key, params?, count? }`: the plugin's own string from `contributes.i18n`,
+  in the app's language, with `{name}` filled from `params`. With `count` the
+  key gets the language's plural category as a suffix (`view.notes.one`,
+  `view.notes.other`, …; `.other` is the fallback) and `{count}` is filled in;
+- `{ date: "YYYY-MM-DD", format }`: the day formatted in the app's language,
+  with `format` picking `weekday`, `day`, `month` and `year` as in
+  `Intl.DateTimeFormat`.
+
+So a view never chooses a language itself, and adding a translation is a
+manifest change.
+
 An `on` is either an effect, performed directly, or `{ event, value? }`, which
 calls `onEvent({ ...ctx, state, event, value })`. That returns
 `{ state?, effect? }`; the app performs the effect and redraws. Calendar

@@ -22,7 +22,12 @@
   import { runPluginScript } from './run-script';
   import SchemaCalendar from './SchemaCalendar.svelte';
   import { onSidebarViewAction } from './sidebar-views';
-  import { parseViewNode, type ViewAction, type ViewNode } from './view-schema';
+  import {
+    parseViewNode,
+    viewText,
+    type ViewAction,
+    type ViewNode
+  } from './view-schema';
 
   let { ref, source }: { ref: PluginSidebarViewRef; source: string } = $props();
 
@@ -129,7 +134,7 @@
     <h3
       class="mt-4 px-1 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
     >
-      {n.text}
+      {viewText(pluginId, n.text)}
     </h3>
   {:else if n.type === 'text'}
     <p
@@ -139,7 +144,7 @@
           ? 'text-accent-brand'
           : ''}"
     >
-      {n.text}
+      {viewText(pluginId, n.text)}
     </p>
   {:else if n.type === 'button'}
     <Button
@@ -149,10 +154,11 @@
       onclick={() => dispatch(n.on)}
     >
       {#if n.icon}<PluginIcon {pluginId} file={n.icon} class="size-3.5" />{/if}
-      {n.label}
+      {viewText(pluginId, n.label)}
     </Button>
   {:else if n.type === 'calendar'}
     <SchemaCalendar
+      {pluginId}
       node={n}
       onEvent={(event, value) => dispatch({ event }, value)}
     />
@@ -183,10 +189,12 @@
                   : ''}"
               />
             {/if}
-            <span class="min-w-0 flex-1 truncate">{item.label}</span>
+            <span class="min-w-0 flex-1 truncate"
+              >{viewText(pluginId, item.label)}</span
+            >
             {#if item.detail}<span
                 class="max-w-24 shrink-0 truncate text-xs text-muted-foreground"
-                >{item.detail}</span
+                >{viewText(pluginId, item.detail)}</span
               >{/if}
           </button>
         </li>
