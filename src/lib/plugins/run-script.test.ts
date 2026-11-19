@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Runs the shipped `plugins/*/plugin.wasm` through the browser host. The tree
-// and settings are stand-ins; everything from the context merge down is real.
+// Runs the shipped `plugins/*/plugin.wasm` through the browser host. The tree,
+// the settings and the Worker are stand-ins; everything from the context merge
+// down is real.
 const { tree, settings } = vi.hoisted(() => ({
   tree: {
     notesById: {} as Record<string, unknown>,
@@ -14,7 +15,13 @@ vi.mock('$lib/settings/store.svelte', () => ({
   getSettingValue: (id: string) => settings[id]
 }));
 
-import { bundledWasmManifests } from './browser-runtime';
+import {
+  bundledWasmManifests,
+  handlePluginRequest,
+  type PluginRequest,
+  type PluginResponse
+} from './browser-runtime';
+import { resetPluginRunner } from './plugin-runner';
 import {
   registerPlugin,
   resetPluginRegistry,
@@ -39,7 +46,19 @@ function note(id: string, title: string, extra: Record<string, unknown> = {}) {
   };
 }
 
+/** Runs the Worker's handler in-process, behind the clone a real one applies. */
+class InlineWorker {
+  onmessage: ((event: { data: PluginResponse }) => void) | null = null;
+  postMessage(request: PluginRequest) {
+    void handlePluginRequest(structuredClone(request), (data) =>
+      this.onmessage?.({ data: structuredClone(data) })
+    );
+  }
+  terminate() {}
+}
+
 beforeEach(() => {
+  vi.stubGlobal('Worker', InlineWorker);
   for (const manifest of bundledWasmManifests()) registerPlugin(manifest);
   tree.collectionsById = {
     root: { id: 'root', name: 'Templates', parent_collection_id: null },
@@ -53,6 +72,8 @@ beforeEach(() => {
   };
 });
 afterEach(() => {
+  resetPluginRunner();
+  vi.unstubAllGlobals();
   resetPluginRegistry();
   for (const key of Object.keys(settings)) delete settings[key];
 });

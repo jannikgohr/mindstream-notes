@@ -5,8 +5,10 @@
  * The app hands every call to `plugins_run_script`, which merges `settings`,
  * `folders` and `now` into the input before Wasmtime runs the component (see
  * `backend_script_context` in `src-tauri/src/plugins/mod.rs`). Without the app,
- * the bundled components run in `browser-runtime.ts`, and this module builds
- * the same context and note snapshot from the tree and the settings store.
+ * the bundled components run in a Worker (`plugin-runner.ts`), and this module
+ * builds the same context and note snapshot from the tree and the settings
+ * store. Everything it sends must survive a structured clone, so reactive
+ * arrays are copied.
  * Any other plugin still gets the backend's "only available in the app" error.
  */
 
@@ -15,7 +17,7 @@ import { pluginsRunScript } from '$lib/api/plugins';
 import { getSettingValue } from '$lib/settings/store.svelte';
 import { tree } from '$lib/stores/tree.svelte';
 import type { HostNote } from './browser-host';
-import { invokeBundledPlugin } from './browser-runtime';
+import { runBundledPlugin } from './plugin-runner';
 import { pluginById } from './registry.svelte';
 import { pluginSettingId } from './settings-store.svelte';
 import type { PluginPermission } from './types';
@@ -65,7 +67,7 @@ function browserNotes(pluginId: string): HostNote[] {
     .map((note) => ({
       id: note.id,
       title: note.title,
-      tags: note.tags,
+      tags: [...note.tags],
       kind: note.note_kind,
       folderId: note.parent_collection_id ?? undefined,
       folderPath: folderPath(note.parent_collection_id),
@@ -89,9 +91,9 @@ export async function runPluginScript(
     input && typeof input === 'object' && !Array.isArray(input)
       ? { ...input, ...context }
       : context;
-  return invokeBundledPlugin(exportName, merged, {
+  return runBundledPlugin(exportName, merged, {
     pluginId,
-    granted: plugin?.granted ?? [],
+    granted: [...(plugin?.granted ?? [])],
     notes: browserNotes(pluginId),
     nativeTools: (plugin?.manifest.contributes.nativeTools ?? []).map(
       (tool) => tool.id

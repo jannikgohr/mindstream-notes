@@ -228,6 +228,13 @@ export default defineConfig({
     }
   },
 
+  // The plugin Worker imports `.wasm?component` modules lazily, which needs a
+  // code-split ES bundle. Every Worker here is created with `type: 'module'`.
+  worker: {
+    format: 'es',
+    plugins: () => [pluginComponents()]
+  },
+
   // Make Tauri's env vars visible to the frontend.
   envPrefix: ['VITE_', 'TAURI_ENV_*'],
   build: {
