@@ -8,7 +8,7 @@
  *     contributions and any frontend load error, and
  *   - the backend records ({@link pluginsList}) for the durable `source` and
  *     `lastLoadError` (integrity gate). Backend is Tauri-only; in the browser
- *     the overview is registry-only and enable/disable is in-memory.
+ *     the overview is registry-only and enable/disable goes to localStorage.
  *
  * Enable/disable is optimistic + reactive: it flips the registry immediately
  * (so the plugin's settings, create-menu templates and hotkeys appear/vanish
@@ -24,7 +24,7 @@ import {
   pluginsRemove,
   type PluginRecord
 } from '$lib/api/plugins';
-import { loadPlugins } from './load';
+import { loadPlugins, saveBrowserPluginEnabled } from './load';
 import { SOURCE_BUILTIN } from './source';
 import {
   allPlugins,
@@ -163,14 +163,17 @@ export function pluginsWithSettings(): { id: string; name: string }[] {
 /**
  * Toggle a plugin on/off. Flips the reactive registry immediately, then
  * persists to the backend. A failed write restores the old state and reports
- * the error. Browser fallback remains in memory.
+ * the error. The browser keeps the choice in localStorage instead.
  */
 export async function setPluginEnabledAdmin(
   id: string,
   enabled: boolean
 ): Promise<void> {
   setPluginEnabled(id, enabled);
-  if (!isTauri()) return;
+  if (!isTauri()) {
+    saveBrowserPluginEnabled(id, enabled);
+    return;
+  }
   try {
     const record = enabled ? await pluginsEnable(id) : await pluginsDisable(id);
     setPluginEnabled(id, record.enabled);

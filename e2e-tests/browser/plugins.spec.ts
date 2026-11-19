@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 import { boot } from './editor-helpers';
 import {
   fileTreeCreateAction,
@@ -11,9 +12,10 @@ import { setTemplateFolder } from './template-sources';
  * The plugin framework, driven through the browser-fallback SPA.
  *
  * Outside Tauri there is no backend discovery, so `loadPlugins()` registers the
- * bundled **Templates** core plugin (`com.mindstream.templates.core`) directly
- * from its manifest. That single real plugin is enough to prove the whole
- * frontend integration the unit suites can only test in isolation:
+ * bundled Wasm plugins, **Templates** (`com.mindstream.templates.core`) and
+ * **Typst** (`com.mindstream.typst`), from their manifests, and the page runs
+ * their shipped components. That is enough to prove the whole frontend
+ * integration the unit suites can only test in isolation:
  *
  *   - its `file-tree` toolbar contribution reaches the create bar
  *     (registry → `pluginToolbarButtons` → the file-explorer menu),
@@ -61,6 +63,13 @@ async function openPluginsCategory(page: Page): Promise<Locator> {
   return dialog;
 }
 
+/** One plugin's row in the overview, named after the plugin. */
+function pluginCard(dialog: Locator, name: string): Locator {
+  return dialog.getByRole('group', { name, exact: true });
+}
+
+const ENABLE = { name: 'Enable in this vault' };
+
 test.describe('plugin framework — bundled Templates plugin', () => {
   test('shows its toolbar action only while a template source has notes', async ({
     page
@@ -80,17 +89,15 @@ test.describe('plugin framework — bundled Templates plugin', () => {
     page
   }) => {
     await boot(page);
-    const dialog = await openPluginsCategory(page);
+    const card = pluginCard(await openPluginsCategory(page), 'Templates');
 
     // Unique strings from the manifest prove the overview card rendered.
-    await expect(dialog.getByText('Version: 1.0.0')).toBeVisible();
-    await expect(dialog.getByText('By Mindstream')).toBeVisible();
+    await expect(card.getByText('Version: 1.0.0')).toBeVisible();
+    await expect(card.getByText('By Mindstream')).toBeVisible();
     await expect(
-      dialog.getByText('Reusable templates from your own notes.')
+      card.getByText('Reusable templates from your own notes.')
     ).toBeVisible();
-    await expect(
-      dialog.getByRole('switch', { name: 'Enable in this vault' })
-    ).toBeVisible();
+    await expect(card.getByRole('switch', ENABLE)).toBeChecked();
   });
 
   test('opening the plugin settings shows its contributed section', async ({
@@ -115,7 +122,7 @@ test.describe('plugin framework — bundled Templates plugin', () => {
 
     // Disable → the contribution and the "Plugin settings" affordance vanish.
     const dialog = await openPluginsCategory(page);
-    await dialog.getByRole('switch', { name: 'Enable in this vault' }).click();
+    await pluginCard(dialog, 'Templates').getByRole('switch', ENABLE).click();
     await expect(
       dialog.getByRole('button', { name: 'Plugin settings' })
     ).toBeHidden();
@@ -125,14 +132,13 @@ test.describe('plugin framework — bundled Templates plugin', () => {
 
     // Re-enable → the toolbar button comes back.
     const dialog2 = await openPluginsCategory(page);
-    await dialog2.getByRole('switch', { name: 'Enable in this vault' }).click();
+    await pluginCard(dialog2, 'Templates').getByRole('switch', ENABLE).click();
     await dialog2.getByRole('button', { name: 'Close' }).click();
     await openFileTreeCreateMore(page);
     await expect(templateButton).toBeVisible();
   });
 
-  // The app runs the plugin's WebAssembly component in its backend; the
-  // browser runs the TypeScript port in src/lib/plugins/browser-templates.ts.
+  // The page runs the same `plugin.wasm` the app runs in its backend.
   test('the folder menu lists template notes and creates a rendered copy', async ({
     page
   }) => {
@@ -191,5 +197,47 @@ test.describe('plugin framework — bundled Templates plugin', () => {
     await expect(treeItem(page, 'Welcome')).toBeVisible();
     await openFileTreeCreateMore(page);
     await expect(toolbarTemplateButton(page)).toBeVisible();
+  });
+});
+
+test.describe('plugin framework — bundled Typst plugin', () => {
+  test('stays enabled across a reload and edits documents as source', async ({
+    page
+  }) => {
+    await boot(page);
+    const toggle = pluginCard(
+      await openPluginsCategory(page),
+      'Typst'
+    ).getByRole('switch', ENABLE);
+    await expect(toggle).not.toBeChecked();
+    await toggle.click();
+    await expect(toggle).toBeChecked();
+    await page.reload();
+    await expect(treeItem(page, 'Welcome')).toBeVisible();
+
+    await treeItem(page, 'Work').click({ button: 'right' });
+    await page
+      .getByRole('menuitem', { name: 'Typst document', exact: true })
+      .click();
+    await page.keyboard.type('Thesis');
+    await page.keyboard.press('Enter');
+    const panel = page.getByRole('tabpanel', { name: 'Thesis' });
+    await expect(panel.getByText('= Thesis')).toBeVisible();
+    // A browser has no typst binary to install, so it does not ask for one.
+    await expect(panel.getByText(/wasn't found on PATH/)).toHaveCount(0);
+
+    // Only the export that needs no native tool is offered, and the plugin's
+    // component produces it.
+    await treeItem(page, 'Thesis').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Export', exact: true }).hover();
+    const exports = page.getByRole('menu').last().getByRole('menuitem');
+    await expect(exports).toHaveText(['Typst source']);
+    const pending = page.waitForEvent('download');
+    await exports.first().click();
+    const download = await pending;
+    expect(download.suggestedFilename()).toBe('Thesis.typ');
+    expect(await readFile((await download.path())!, 'utf8')).toBe(
+      '#set document(title: [Thesis])\n\n= Thesis\n\nStart writing in Typst here.'
+    );
   });
 });
