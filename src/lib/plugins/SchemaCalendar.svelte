@@ -1,5 +1,6 @@
 <script lang="ts">
   /** The `calendar` node of a schema view: a month grid with marked days. */
+  import { untrack } from 'svelte';
   import { Calendar } from 'bits-ui';
   import { parseDate, type DateValue } from '@internationalized/date';
   import { ChevronLeft, ChevronRight } from '@lucide/svelte';
@@ -37,16 +38,23 @@
   const selectedKey = $derived(node.selected);
   const monthKey = $derived(node.month);
   const value = $derived(selectedKey ? parseDate(selectedKey) : undefined);
-  const placeholder = $derived(parseDate(`${monthKey}-01`));
+  // The shown month belongs to the plugin. bits-ui moves it to the selected
+  // day at mount and on each selection by assigning that very `value`; month
+  // buttons and keyboard paging assign new dates.
+  let placeholder = $state(parseDate(`${untrack(() => monthKey)}-01`));
+  $effect.pre(() => {
+    placeholder = parseDate(`${monthKey}-01`);
+  });
   const monthOf = (date: DateValue) => date.toString().slice(0, 7);
 </script>
 
 <Calendar.Root
   type="single"
   {value}
-  {placeholder}
+  bind:placeholder
   onPlaceholderChange={(next) => {
-    if (monthOf(next) !== node.month) onEvent(node.onMonth, monthOf(next));
+    if (next === value) placeholder = parseDate(`${monthKey}-01`);
+    else if (monthOf(next) !== node.month) onEvent(node.onMonth, monthOf(next));
   }}
   onValueChange={(next) => {
     if (next) onEvent(node.onSelect, next.toString());
@@ -96,12 +104,6 @@
                 <Calendar.Cell {date} month={month.value} class="p-0">
                   <Calendar.Day
                     title={mark?.title}
-                    onclick={() => {
-                      // A click on the selected day changes no value, but
-                      // still opens it.
-                      if (date.toString() === node.selected)
-                        onEvent(node.onSelect, date.toString());
-                    }}
                     class="group mx-auto flex size-8 flex-col items-center justify-center rounded-md text-xs tabular-nums transition-colors hover:bg-accent data-[outside-month]:text-muted-foreground/50 data-[today]:text-accent-brand data-[today]:ring-1 data-[today]:ring-inset data-[today]:ring-accent-brand/50 data-[selected]:bg-accent-brand data-[selected]:text-accent-brand-foreground data-[selected]:ring-0 data-[selected]:hover:bg-accent-brand {mark?.strong
                       ? 'font-semibold'
                       : ''}"

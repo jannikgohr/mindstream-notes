@@ -39,7 +39,8 @@ vi.mock('$lib/hotkeys', () => ({
   insertMarkdownIntoActiveNote: h.insertMarkdown
 }));
 vi.mock('$lib/templates/user-templates', () => ({
-  createNoteFromNote: h.createNoteFromNote
+  createNoteFromNote: h.createNoteFromNote,
+  TEMPLATES_PLUGIN_ID: 'com.mindstream.templates.core'
 }));
 vi.mock('$lib/components/toast.svelte', () => ({ pushToast: h.pushToast }));
 vi.mock('$lib/settings/store.svelte', () => ({

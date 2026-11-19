@@ -1059,7 +1059,10 @@
         >{source === 'home'
           ? tUi('fileTree.notes')
           : tUi(
-              FILE_EXPLORER_SOURCES.find((item) => item.id === source)!.labelKey
+              // A plugin view whose plugin was just disabled has no entry;
+              // the effect above is about to switch to Home.
+              FILE_EXPLORER_SOURCES.find((item) => item.id === source)
+                ?.labelKey ?? 'fileTree.notes'
             )}</span
       >
       <SortControl

@@ -1,19 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { state, createNoteIn, requestOpenNote, renderUserTemplateBody } =
-  vi.hoisted(() => ({
-    state: {
-      notesById: {} as Record<string, unknown>,
-      collectionsById: {} as Record<string, unknown>
-    },
-    createNoteIn: vi.fn(),
-    requestOpenNote: vi.fn(),
-    renderUserTemplateBody: vi.fn()
-  }));
+const {
+  state,
+  createNoteIn,
+  requestOpenNote,
+  renderUserTemplateBody,
+  templatesEnabled
+} = vi.hoisted(() => ({
+  state: {
+    notesById: {} as Record<string, unknown>,
+    collectionsById: {} as Record<string, unknown>
+  },
+  createNoteIn: vi.fn(),
+  requestOpenNote: vi.fn(),
+  renderUserTemplateBody: vi.fn(),
+  templatesEnabled: { value: true }
+}));
 
 vi.mock('$lib/stores/tree.svelte', () => ({ tree: state, createNoteIn }));
 vi.mock('$lib/stores/open-note-intent.svelte', () => ({ requestOpenNote }));
-vi.mock('$lib/templates/user-templates', () => ({ renderUserTemplateBody }));
+vi.mock('$lib/templates/user-templates', () => ({
+  renderUserTemplateBody,
+  TEMPLATES_PLUGIN_ID: 'templates'
+}));
+vi.mock('./registry.svelte', () => ({
+  pluginById: (id: string) =>
+    id === 'templates' ? { enabled: templatesEnabled.value } : undefined
+}));
 
 import { openOrCreateNote } from './open-or-create';
 
@@ -38,6 +51,7 @@ beforeEach(() => {
   createNoteIn.mockReset().mockResolvedValue('new-note');
   requestOpenNote.mockReset();
   renderUserTemplateBody.mockReset();
+  templatesEnabled.value = true;
 });
 
 describe('openOrCreateNote', () => {
@@ -96,6 +110,20 @@ describe('openOrCreateNote', () => {
       title: 'Day',
       parentId: null,
       template: { sourceNoteId: 'gone' }
+    });
+
+    expect(renderUserTemplateBody).not.toHaveBeenCalled();
+    expect(createNoteIn).toHaveBeenCalledWith(null, 'Day', 'markdown');
+  });
+
+  it('creates a blank note when the Templates plugin is disabled', async () => {
+    state.notesById = { tpl: note('tpl', 'Template', null) };
+    templatesEnabled.value = false;
+
+    await openOrCreateNote({
+      title: 'Day',
+      parentId: null,
+      template: { sourceNoteId: 'tpl' }
     });
 
     expect(renderUserTemplateBody).not.toHaveBeenCalled();
