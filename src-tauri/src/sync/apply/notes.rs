@@ -128,6 +128,20 @@ pub(in crate::sync) fn apply_note_payload(
 
         let incoming_schema = payload.schema as i64;
         let remote_authoritative = !preserve_dirty_local_edits;
+        // Unpushed edits made here while another device moved the note to
+        // another schema cannot be merged with it: the two states have
+        // different formats. They go into a copy next to the note, which
+        // takes the remote version, instead of being dropped.
+        let conflict_copy = existing.as_ref().filter(|local| {
+            preserve_dirty_local_edits
+                && local.dirty != 0
+                && local.schema != incoming_schema
+                && !local.body.trim().is_empty()
+                && local.body != payload.body
+        });
+        if let Some(local) = conflict_copy {
+            keep_conflict_copy(&tx, local, &local_tags, scope)?;
+        }
         let (merged_state, dirty_after) = match &existing {
             // View-only/read-only shares must discard any local state. Those
             // local edits should be impossible in the UI; if they appear, the
@@ -205,8 +219,10 @@ pub(in crate::sync) fn apply_note_payload(
         // the merged state, and the local one is kept until an editor saves
         // the note again. That save leaves the states equal, and
         // `local_renders_more` keeps it through the next pull.
+        // A local body cannot stand next to the state of another schema.
+        let same_schema = existing.as_ref().is_some_and(|local| local.schema == incoming_schema);
         let body = if payload.schema >= 2 {
-            if keep_local_meta && (local_adds_content || local_renders_more) {
+            if keep_local_meta && same_schema && (local_adds_content || local_renders_more) {
                 existing
                     .as_ref()
                     .map(|local| local.body.clone())
@@ -408,6 +424,51 @@ pub(in crate::sync) fn apply_note_payload(
         tx.commit()?;
         Ok(Some(payload.id.clone()))
     })
+}
+
+/// Keep a local version of a note that cannot be merged with the pulled
+/// one as a note of its own, next to it and marked as a conflict.
+fn keep_conflict_copy(
+    tx: &Connection,
+    local: &LocalNoteState,
+    tags: &[String],
+    scope: Option<&str>,
+) -> AppResult<()> {
+    let id = format!("note_{}", uuid::Uuid::new_v4());
+    let now = Utc::now();
+    let title = format!(
+        "{} (conflict, {}, {})",
+        local.title,
+        auth::device_name(),
+        now.format("%Y-%m-%d")
+    );
+    let now = now.to_rfc3339();
+    tx.execute(
+        "INSERT INTO notes (id, parent_collection_id, title, body, position, created,
+                            modified, trashed_at, yrs_state, dirty, payload_schema,
+                            favourite, note_kind, share_scope_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, 1, ?9, ?10, ?11, ?12)",
+        params![
+            id,
+            local.parent_collection_id,
+            title,
+            local.body,
+            local.position,
+            now,
+            local.trashed_at,
+            local.yrs_state,
+            local.schema,
+            local.favourite,
+            local.note_kind,
+            scope,
+        ],
+    )?;
+    let mut stmt = tx.prepare("INSERT INTO note_tags(note_id, tag) VALUES (?1, ?2)")?;
+    for tag in tags {
+        stmt.execute(params![id, tag])?;
+    }
+    crate::assets::register_body_refs(tx, &id, &local.body)?;
+    Ok(())
 }
 
 /// How many of the state's live strings (one per line, see

@@ -158,7 +158,7 @@ fn resolve_server_url(server_type: &str, server_url: Option<&str>) -> AppResult<
 /// user tell their devices apart: the app, the machine's name where the
 /// system gives one, and the system. No word of any language, because the
 /// list shows it as it is to a user of any.
-fn device_name() -> String {
+pub(crate) fn device_name() -> String {
     let machine = ["COMPUTERNAME", "HOSTNAME"]
         .iter()
         .find_map(|name| std::env::var(name).ok())

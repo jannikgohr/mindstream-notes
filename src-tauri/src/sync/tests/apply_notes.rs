@@ -354,3 +354,90 @@ fn apply_note_relinks_a_row_whose_etebase_uid_was_cleared() {
         "the pull must reuse the local row, not insert a second one"
     );
 }
+
+/// A local row with unpushed edits, in the schema of today's editor.
+fn insert_dirty_local_note(db: &Db, body: &str) {
+    db.with_conn(|c| {
+        c.execute(
+            "INSERT INTO notes(id, parent_collection_id, title, body, position,
+                               created, modified, trashed_at, yrs_state,
+                               etebase_uid, etebase_etag, dirty, payload_schema,
+                               favourite, note_kind)
+             VALUES ('note_x', NULL, 'Plan', ?1, 0, 't', 't', NULL, X'0A0B',
+                     'uid_x', 'etag_old', 1, 2, 0, 'markdown')",
+            params![body],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn apply_note_keeps_unpushed_edits_as_a_copy_when_another_schema_arrives() {
+    let db = open_memory_for_tests();
+    insert_dirty_local_note(&db, "local edit");
+    let mut remote = remote_note("note_x", None, None);
+    remote.schema = 3;
+    remote.body = "converted".into();
+    remote.yrs_state = vec![3, 3];
+    apply_note_payload(&db, &remote, "uid_x", "etag_new", None, true).unwrap();
+
+    let (body, schema, state): (String, i64, Vec<u8>) = db
+        .with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT body, payload_schema, yrs_state FROM notes WHERE id = 'note_x'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!((body.as_str(), schema, state), ("converted", 3, vec![3, 3]));
+
+    type Copy = (String, String, Vec<u8>, i64, i64, Option<String>);
+    let copies: Vec<Copy> = db
+        .with_conn(|c| {
+            let mut stmt = c.prepare(
+                "SELECT title, body, yrs_state, payload_schema, dirty, etebase_uid
+                 FROM notes WHERE id != 'note_x'",
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            })?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .unwrap();
+    assert_eq!(copies.len(), 1, "one copy keeps the local edits");
+    let (title, body, state, schema, dirty, uid) = &copies[0];
+    assert!(title.starts_with("Plan (conflict, "), "{title}");
+    assert_eq!(
+        (
+            body.as_str(),
+            state.as_slice(),
+            *schema,
+            *dirty,
+            uid.as_deref()
+        ),
+        ("local edit", &[0x0A, 0x0B][..], 2, 1, None)
+    );
+}
+
+#[test]
+fn apply_note_makes_no_copy_when_the_local_text_is_already_remote() {
+    let db = open_memory_for_tests();
+    insert_dirty_local_note(&db, "same text");
+    let mut remote = remote_note("note_x", None, None);
+    remote.schema = 3;
+    remote.body = "same text".into();
+    apply_note_payload(&db, &remote, "uid_x", "etag_new", None, true).unwrap();
+    let notes: i64 = db
+        .with_conn(|c| Ok(c.query_row("SELECT count(*) FROM notes", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(notes, 1);
+}
