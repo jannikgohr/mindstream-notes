@@ -9,7 +9,11 @@ import type { NoteKind } from '$lib/api';
 import { noteIsUnderTrash } from '$lib/stores/note-source.svelte';
 import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
 import { createNoteIn, tree } from '$lib/stores/tree.svelte';
-import { renderUserTemplateBody } from '$lib/templates/user-templates';
+import {
+  renderUserTemplateBody,
+  TEMPLATES_PLUGIN_ID
+} from '$lib/templates/user-templates';
+import { pluginById } from './registry.svelte';
 
 export interface OpenOrCreateRequest {
   title: string;
@@ -53,7 +57,14 @@ async function createNote({
   template
 }: OpenOrCreateRequest): Promise<string> {
   const source = template ? tree.notesById[template.sourceNoteId] : undefined;
-  if (!template || !source || noteIsUnderTrash(source, tree.collectionsById)) {
+  // Templates renders the template; with it disabled the note starts blank.
+  const renders = pluginById(TEMPLATES_PLUGIN_ID)?.enabled === true;
+  if (
+    !template ||
+    !source ||
+    !renders ||
+    noteIsUnderTrash(source, tree.collectionsById)
+  ) {
     return createNoteIn(parentId, title, 'markdown');
   }
   const body = await renderUserTemplateBody(

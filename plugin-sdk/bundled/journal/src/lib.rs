@@ -102,13 +102,6 @@ impl<'a> Journal<'a> {
         Ok(effect)
     }
 
-    fn days(&self) -> Result<Value, String> {
-        let from = day(&self.input["from"], "from")?;
-        let selected = day(&self.input["selected"], "selected")?;
-        let count = self.input["count"].as_u64().unwrap_or(42);
-        self.days_for(&from, count, &selected)
-    }
-
     /// Marks for `count` days from `from`, and the notes on `selected`.
     fn days_for(&self, from: &str, count: u64, selected: &str) -> Result<Value, String> {
         let count = count.min(MAX_DAYS);
@@ -185,11 +178,9 @@ impl Guest for Plugin {
         let input: Value = serde_json::from_str(&input).map_err(|e| e.to_string())?;
         let journal = Journal::new(&input);
         let output = match export.as_str() {
-            "$exports" => json!(["days", "openDay", "openToday", "render", "onEvent"]),
-            "days" => journal.days()?,
+            "$exports" => json!(["openToday", "render", "onEvent"]),
             "render" => journal.render()?,
             "onEvent" => journal.on_event()?,
-            "openDay" => journal.open_day(&day(&input["date"], "date")?)?,
             "openToday" => journal.open_day(&journal.today()?)?,
             _ => return Err(format!("unknown export {export}")),
         };

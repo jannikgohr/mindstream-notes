@@ -80,6 +80,13 @@ function text(value: unknown): string | undefined {
   return typeof value === 'string' ? value.slice(0, MAX_TEXT) : undefined;
 }
 
+/** A `YYYY-MM-DD` that names a real day: `2026-02-31` doesn't. */
+function isDay(value: unknown): value is string {
+  if (typeof value !== 'string' || !DAY_RE.test(value)) return false;
+  const [y, m, d] = value.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDate() === d;
+}
+
 function tone(value: unknown): ViewTone {
   return value === 'muted' || value === 'accent' ? value : 'default';
 }
@@ -105,7 +112,7 @@ function parseDays(value: unknown): Record<string, ViewCalendarDay> {
   const days: Record<string, ViewCalendarDay> = {};
   if (!isObject(value)) return days;
   for (const [date, raw] of Object.entries(value).slice(0, MAX_DAYS)) {
-    if (!DAY_RE.test(date) || !isObject(raw)) continue;
+    if (!isDay(date) || !isObject(raw)) continue;
     const marks = Array.isArray(raw.marks)
       ? raw.marks
           .filter(
@@ -167,10 +174,7 @@ export function parseViewNode(value: unknown, depth = 0): ViewNode | null {
       if (typeof value.month !== 'string' || !MONTH_RE.test(value.month))
         return null;
       if (!onSelect || !onMonth) return null;
-      const selected =
-        typeof value.selected === 'string' && DAY_RE.test(value.selected)
-          ? value.selected
-          : undefined;
+      const selected = isDay(value.selected) ? value.selected : undefined;
       return {
         type: 'calendar',
         month: value.month,

@@ -8,8 +8,12 @@
 
 import { expect } from '@wdio/globals';
 import {
+  byName,
   clickElement,
+  clickName,
+  closeSettingsDialog,
   restartApp,
+  setPluginEnabledByName,
   waitForShell
 } from '../../helpers/harness.js';
 
@@ -124,6 +128,13 @@ describe('Journal plugin', () => {
     await browser.waitUntil(async () => (await heading()) !== shown, {
       timeoutMsg: 'the next month was not shown'
     });
+    const next = await heading();
+    // Leaving the view and coming back keeps the month browsed to.
+    await clickElement($('nav button[aria-label="Home"]'));
+    await clickElement($('nav button[aria-label="Journal"]'));
+    await browser.waitUntil(async () => (await heading()) === next, {
+      timeoutMsg: 'reopening the view lost the browsed month'
+    });
     await clickElement($('[data-plugin-view] [data-calendar-prev-button]'));
     await browser.waitUntil(async () => (await heading()) === shown, {
       timeoutMsg: 'the previous month was not shown'
@@ -152,5 +163,27 @@ describe('Journal plugin', () => {
     expect(
       (await dailyNotes(folderId)).filter((n) => n.title.endsWith(suffix))
     ).toHaveLength(1);
+  });
+
+  it('falls back to Home when Journal is disabled while open', async () => {
+    const journal = $('nav button[aria-label="Journal"]');
+    await clickElement(journal);
+    await clickName('Open settings');
+    await clickName('Plugins');
+    await expect(byName('Enable in this vault')).toBeDisplayed();
+    await setPluginEnabledByName('Journal', false);
+    await closeSettingsDialog(browser);
+
+    await journal.waitForExist({ reverse: true });
+    await expect($('nav button[aria-label="Home"]')).toHaveAttribute(
+      'aria-current',
+      'page'
+    );
+
+    await clickName('Open settings');
+    await clickName('Plugins');
+    await setPluginEnabledByName('Journal', true);
+    await closeSettingsDialog(browser);
+    await journal.waitForExist();
   });
 });

@@ -319,14 +319,18 @@ describe('Journal component', { timeout: 60_000 }, () => {
         template: 'tpl'
       }
     });
-    expect(await plugin.call('openDay', { date: '2026-11-23' })).toEqual({
-      effect: 'openOrCreateNote',
-      title: 'Monday, 23 November 2026',
-      parentId: 'daily',
-      template: { sourceNoteId: 'tpl', date: '2026-11-23' }
+    expect(
+      await plugin.call('onEvent', { event: 'open', value: '2026-11-23' })
+    ).toMatchObject({
+      effect: {
+        effect: 'openOrCreateNote',
+        title: 'Monday, 23 November 2026',
+        parentId: 'daily',
+        template: { sourceNoteId: 'tpl', date: '2026-11-23' }
+      }
     });
     await expect(
-      plugin.call('openDay', { date: '23.11.2026' })
+      plugin.call('onEvent', { event: 'open', value: '23.11.2026' })
     ).rejects.toThrow(/YYYY-MM-DD/);
     expect(await (await journal()).call('openToday')).toEqual({
       effect: 'openOrCreateNote',
@@ -452,30 +456,28 @@ describe('Journal component', { timeout: 60_000 }, () => {
         }
       ]
     });
-    expect(
-      await plugin.call('days', {
-        from: '2026-11-18',
-        count: 4,
-        selected: '2026-11-19'
-      })
-    ).toEqual({
-      days: [
-        { date: '2026-11-18', daily: false, notes: 0 },
-        { date: '2026-11-19', daily: true, notes: 1 },
-        { date: '2026-11-20', daily: false, notes: 1 },
-        { date: '2026-11-21', daily: false, notes: 1 }
-      ],
-      selected: {
-        date: '2026-11-19',
-        daily: {
-          id: 'd19',
-          title: '2026-11-19',
-          kind: 'markdown',
-          folder: 'Daily'
-        },
-        notes: [{ id: 'n19', title: 'Ideas', kind: 'markdown', folder: 'Work' }]
-      }
+    type Calendar = {
+      days: Record<string, { marks: string[]; strong: boolean }>;
+    };
+    const { view } = await plugin.call<{
+      view: { children: [Calendar, unknown, { items: unknown[] }] };
+    }>('render', { state: { month: '2026-11', selected: '2026-11-19' } });
+    const [calendar, , list] = view.children;
+    // A daily note outside the folder is an ordinary note; an edit counts on
+    // the day it happened too.
+    expect(calendar.days).toEqual({
+      '2026-11-19': {
+        marks: ['accent', 'muted'],
+        strong: true,
+        title: '1 note'
+      },
+      '2026-11-20': { marks: ['muted'], strong: false, title: '1 note' },
+      '2026-11-21': { marks: ['muted'], strong: false, title: '1 note' }
     });
+    expect(list.items).toEqual([
+      expect.objectContaining({ label: '2026-11-19', tone: 'accent' }),
+      expect.objectContaining({ label: 'Ideas', detail: 'Work' })
+    ]);
   });
 });
 

@@ -115,6 +115,25 @@ describe('parseViewNode', () => {
     expect(flatten(parseViewNode(deep))).toBeLessThan(10);
   });
 
+  it('drops days that are not on the calendar', () => {
+    expect(
+      parseViewNode({
+        type: 'calendar',
+        month: '2026-02',
+        selected: '2026-02-31',
+        days: {
+          '2026-02-30': { strong: true },
+          '2026-02-28': { strong: true }
+        },
+        onSelect: 'select',
+        onMonth: 'month'
+      })
+    ).toMatchObject({
+      selected: undefined,
+      days: { '2026-02-28': { strong: true } }
+    });
+  });
+
   it('caps text length so a view cannot grow the sidebar without bound', () => {
     const node = parseViewNode({ type: 'text', text: 'x'.repeat(10_000) });
     expect(node).toMatchObject({ type: 'text' });
