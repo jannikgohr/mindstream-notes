@@ -18,10 +18,7 @@
 
 import { i18n } from '$lib/settings/i18n.svelte';
 import { parsePluginEffect } from './effects';
-import {
-  resolvePluginString,
-  resolvePluginStringOptional
-} from './plugin-i18n';
+import { resolvePluginPlural, resolvePluginString } from './plugin-i18n';
 import type { PluginEffect } from './types';
 
 /** Intl options a `date` text may use. */
@@ -97,7 +94,7 @@ const MAX_TEXT = 300;
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const DAY_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 const EVENT_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
-const KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const PARAM_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 const MAX_PARAMS = 8;
 const DATE_FORMAT_VALUES: Record<keyof ViewDateFormat, readonly string[]> = {
   weekday: ['long', 'short', 'narrow'],
@@ -122,14 +119,16 @@ function text(value: unknown): string | undefined {
 function isDay(value: unknown): value is string {
   if (typeof value !== 'string' || !DAY_RE.test(value)) return false;
   const [y, m, d] = value.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d)).getUTCDate() === d;
+  const day = new Date(0);
+  day.setUTCFullYear(y, m - 1, d);
+  return day.getUTCDate() === d;
 }
 
 function displayText(value: unknown): ViewText | undefined {
   if (typeof value === 'string') return value.slice(0, MAX_TEXT);
   if (!isObject(value)) return undefined;
   if (typeof value.key === 'string') {
-    if (!KEY_RE.test(value.key)) return undefined;
+    if (value.key === '' || value.key.length > MAX_TEXT) return undefined;
     const params: Record<string, string> = {};
     if (isObject(value.params)) {
       for (const [name, v] of Object.entries(value.params).slice(
@@ -137,7 +136,7 @@ function displayText(value: unknown): ViewText | undefined {
         MAX_PARAMS
       )) {
         if (
-          EVENT_RE.test(name) &&
+          PARAM_RE.test(name) &&
           (typeof v === 'string' || typeof v === 'number')
         )
           params[name] = String(v).slice(0, MAX_TEXT);
@@ -168,23 +167,26 @@ export function viewText(pluginId: string, text: ViewText): string {
   if (typeof text === 'string') return text;
   const locale = i18n.language;
   if ('date' in text) {
+    // In UTC, so no time zone can move the day: a local midnight can fall in
+    // a skipped day. setUTCFullYear keeps years 0–99 as written.
     const [y, m, d] = text.date.split('-').map(Number);
-    return new Intl.DateTimeFormat(locale, text.format).format(
-      new Date(y, m - 1, d)
-    );
+    const day = new Date(0);
+    day.setUTCFullYear(y, m - 1, d);
+    return new Intl.DateTimeFormat(locale, {
+      ...text.format,
+      timeZone: 'UTC'
+    }).format(day);
   }
   const params: Record<string, string> = { ...text.params };
-  let key = text.key;
+  let template: string;
   if (text.count !== undefined) {
     params.count = new Intl.NumberFormat(locale).format(text.count);
-    const plural = `${key}.${new Intl.PluralRules(locale).select(text.count)}`;
-    key = resolvePluginStringOptional(pluginId, plural)
-      ? plural
-      : `${key}.other`;
+    template = resolvePluginPlural(pluginId, text.key, text.count);
+  } else {
+    template = resolvePluginString(pluginId, text.key);
   }
-  return resolvePluginString(pluginId, key).replace(
-    /\{(\w+)\}/g,
-    (slot, name) => (name in params ? params[name] : slot)
+  return template.replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/g, (slot, name) =>
+    Object.hasOwn(params, name) ? params[name] : slot
   );
 }
 

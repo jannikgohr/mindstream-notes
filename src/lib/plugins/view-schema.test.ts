@@ -23,7 +23,10 @@ vi.mock('./plugin-i18n', () => {
   return {
     resolvePluginString: (id: string, key: string) =>
       find(key) ?? `plugins.${id}.${key}`,
-    resolvePluginStringOptional: (_id: string, key: string) => find(key)
+    resolvePluginPlural: (id: string, key: string, count: number) =>
+      find(`${key}.${new Intl.PluralRules(locale.language).select(count)}`) ??
+      find(`${key}.other`) ??
+      `plugins.${id}.${key}.other`
   };
 });
 
@@ -171,7 +174,7 @@ describe('view text', () => {
             type: 'heading',
             text: { key: 'hello', params: { name: 'Ada', 'bad name': 'x' } }
           },
-          { type: 'heading', text: { key: '../escape' } },
+          { type: 'heading', text: { key: '' } },
           { type: 'text', text: { key: 'notes', count: 3 } },
           {
             type: 'heading',
@@ -228,6 +231,8 @@ describe('view text', () => {
         format: { weekday: 'long', month: 'long', day: 'numeric' }
       })
     ).toBe('Donnerstag, 19. November');
+    // Only own parameters fill a slot.
+    expect(viewText('p', { key: 'hello', params: {} })).toBe('Hello, {name}');
     // A missing string shows its key rather than nothing.
     expect(viewText('p', { key: 'missing', params: {} })).toBe(
       'plugins.p.missing'
