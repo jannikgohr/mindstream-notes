@@ -2,10 +2,10 @@
  * Adapts plugin command contributions into the app's hotkey system.
  *
  * A plugin command is app-local only: it becomes a `global`-scope
- * {@link GlobalCommand} whose `run()` performs the app-owned action (currently
- * just `createTemplateNote`). It is deliberately NOT registered as a native /
- * global OS shortcut — it dispatches through the same in-app keydown path as
- * built-in application commands, with the same collision handling.
+ * {@link GlobalCommand} whose `run()` performs the app-owned action. It is
+ * deliberately NOT registered as a native / global OS shortcut — it dispatches
+ * through the same in-app keydown path as built-in application commands, with
+ * the same collision handling.
  *
  * The app-wide command id is `plugin.<pluginId>.<localId>`, matching the
  * namespacing used everywhere else. Labels resolve through plugin i18n (via
@@ -41,6 +41,12 @@ export function pluginHotkeyCommands(): GlobalCommand[] {
       // arbitrary behaviour, only pick one of the handlers the app provides.
       if (command.action.type === 'createTemplateNote') {
         void runPluginTemplate(pluginId, command.action.templateId, null);
+      } else {
+        const exportName = command.action.export;
+        // Lazy: effects.ts reaches back into the hotkey catalogue.
+        void import('./effects').then(({ runExportEffect }) =>
+          runExportEffect(pluginId, exportName, {}, 'command')
+        );
       }
     }
   }));

@@ -23,6 +23,7 @@ import { createNoteFromNote } from '$lib/templates/user-templates';
 import { pushToast } from '$lib/components/toast.svelte';
 import type { MenuItem } from '$lib/components/context-menu-types';
 import { buildPluginContext } from './plugin-ctx';
+import { openOrCreateNote } from './open-or-create';
 import { openPluginMenu } from './plugin-menu.svelte';
 import { pluginById, pluginNoteKind } from './registry.svelte';
 import type {
@@ -65,6 +66,14 @@ function requireCreate(pluginId: string): void {
   if (!pluginHasPermission(pluginId, 'notes.create')) {
     throw new Error(
       `Plugin "${pluginId}" is not permitted to create notes (missing notes.create)`
+    );
+  }
+}
+
+function requireRead(pluginId: string): void {
+  if (!pluginHasPermission(pluginId, 'notes.read')) {
+    throw new Error(
+      `Plugin "${pluginId}" is not permitted to open notes (missing notes.read)`
     );
   }
 }
@@ -127,6 +136,29 @@ export function parsePluginEffect(value: unknown): PluginEffect | null {
     case 'insertMarkdown':
       if (typeof e.markdown !== 'string') return null;
       return { effect: 'insertMarkdown', markdown: e.markdown };
+    case 'openNote':
+      if (typeof e.noteId !== 'string') return null;
+      return e.preview === true
+        ? { effect: 'openNote', noteId: e.noteId, preview: true }
+        : { effect: 'openNote', noteId: e.noteId };
+    case 'openOrCreateNote': {
+      if (typeof e.title !== 'string' || e.title.trim() === '') return null;
+      const raw = e.template as Record<string, unknown> | null | undefined;
+      if (raw !== undefined && raw !== null) {
+        if (typeof raw !== 'object' || typeof raw.sourceNoteId !== 'string')
+          return null;
+        return {
+          effect: 'openOrCreateNote',
+          title: e.title,
+          parentId,
+          template: {
+            sourceNoteId: raw.sourceNoteId,
+            ...(typeof raw.date === 'string' ? { date: raw.date } : {})
+          }
+        };
+      }
+      return { effect: 'openOrCreateNote', title: e.title, parentId };
+    }
     case 'openMenu': {
       if (!Array.isArray(e.items)) return null;
       const items = [];
@@ -237,6 +269,19 @@ export async function runPluginEffect(
     case 'insertMarkdown':
       insertMarkdownIntoActiveNote(effect.markdown);
       return;
+    case 'openNote':
+      requireRead(pluginId);
+      if (tree.notesById[effect.noteId])
+        requestOpenNote(effect.noteId, { preview: effect.preview });
+      return;
+    case 'openOrCreateNote':
+      requireCreate(pluginId);
+      await openOrCreateNote({
+        title: effect.title,
+        parentId: parentId(effect),
+        template: effect.template
+      });
+      return;
     case 'openMenu': {
       const items = pluginEffectMenuItems(pluginId, effect.items, anchor, opts);
       openPluginMenu(anchor?.x ?? 0, anchor?.y ?? 0, items);
@@ -262,23 +307,58 @@ export async function pluginButtonEffect(
     );
     return null;
   }
+  return exportEffect(pluginId, button.action.export, {}, 'toolbar button');
+}
+
+/**
+ * Run a backend export with the plugin context plus `input`, and parse what it
+ * returns as an effect. Logs and returns `null` on a failure or a value that is
+ * not an effect, so click handlers never throw.
+ */
+export async function exportEffect(
+  pluginId: string,
+  exportName: string,
+  input: Record<string, unknown> = {},
+  caller = 'export'
+): Promise<PluginEffect | null> {
   try {
-    const ctx = buildPluginContext();
-    const raw = await runPluginScript(pluginId, button.action.export, ctx);
+    const raw = await runPluginScript(pluginId, exportName, {
+      ...buildPluginContext(),
+      ...input
+    });
     const effect = parsePluginEffect(raw);
     if (!effect) {
       console.error(
-        '[plugins] toolbar button returned an invalid effect',
+        `[plugins] ${caller} returned an invalid effect`,
         pluginId,
-        button.id,
+        exportName,
         raw
       );
       return null;
     }
     return effect;
   } catch (err) {
-    console.error('[plugins] toolbar button failed', pluginId, button.id, err);
+    console.error(`[plugins] ${caller} failed`, pluginId, exportName, err);
     return null;
+  }
+}
+
+/** Run a backend export and perform the effect it returns. */
+export async function runExportEffect(
+  pluginId: string,
+  exportName: string,
+  input: Record<string, unknown> = {},
+  caller?: string
+): Promise<void> {
+  const effect = await exportEffect(pluginId, exportName, input, caller);
+  if (!effect) return;
+  try {
+    await runPluginEffect(pluginId, effect);
+  } catch (err) {
+    console.error('[plugins] effect failed', pluginId, exportName, err);
+    pushToast(err instanceof Error ? err.message : String(err), {
+      variant: 'error'
+    });
   }
 }
 

@@ -447,6 +447,8 @@
     "nav.shared": "Geteilt",
     "nav.favourite": "Favoriten",
     "nav.trash": "Papierkorb",
+    "calendar.previousMonth": "Vorheriger Monat",
+    "calendar.nextMonth": "Nächster Monat",
     "fab.newNote": "Neue Notiz",
     "fab.menu": "Erstellen",
     "fab.showMenu": "Alles anzeigen, was du erstellen kannst",

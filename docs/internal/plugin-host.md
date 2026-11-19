@@ -140,9 +140,13 @@ itself in the app through its manifest's `descriptionKey` and `documentation`.
 - **Typst** (`com.mindstream.typst`) renders and exports through the declared
   native `typst` tool. Its settings, source language, toolbar items and the
   `tinymist` preview service are declarative.
+- **Journal** (`com.mindstream.journal`) is a compiled Rust component. It
+  turns days into daily-note titles and buckets notes by local day; the host
+  finds or creates the note (`openOrCreateNote`) and renders its template
+  through Templates.
 - **LanguageTool** (`com.mindstream.languagetool`) is manifest-only.
 
-Rebuild both committed components with `pnpm plugins:build`, using the pinned
+Rebuild the committed components with `pnpm plugins:build`, using the pinned
 Rust toolchain and Node 22.11 or later. Core components contain no QuickJS
 runtime, and the app needs no Node or Rust guest compiler at runtime.
 

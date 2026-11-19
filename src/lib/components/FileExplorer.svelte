@@ -34,6 +34,15 @@
   import { alert, confirm } from './confirm-dialog.svelte';
   import SortControl from './SortControl.svelte';
   import VaultSwitcher from './VaultSwitcher.svelte';
+  import PluginIcon from '$lib/plugins/PluginIcon.svelte';
+  import PluginSidebarView from '$lib/plugins/PluginSidebarView.svelte';
+  import { resolvePluginString } from '$lib/plugins/plugin-i18n';
+  import { pluginSidebarViews } from '$lib/plugins/registry.svelte';
+  import {
+    sendSidebarViewAction,
+    sidebarViewForSource,
+    sidebarViewSource
+  } from '$lib/plugins/sidebar-views';
   import FileTreeCreateToolbar from './FileTreeCreateToolbar.svelte';
   import {
     FILE_TREE_MAIN_ACTION_CLASS,
@@ -160,6 +169,12 @@
       ui.sortDirection
     )
   );
+
+  const pluginView = $derived(sidebarViewForSource(source));
+  // A disabled plugin takes its view with it; fall back to Home.
+  $effect(() => {
+    if (source.startsWith('plugin:') && !pluginView) onSourceChange?.('home');
+  });
 
   const sourceNodes = $derived(
     nodesForDesktopSource(
@@ -977,6 +992,30 @@
       <FileTreeSharedActions
         onNewSharedFolder={() => startDraft('folder', null)}
       />
+    {:else if pluginView}
+      {#each pluginView.view.actions ?? [] as action, i (action.id)}
+        {@const label = resolvePluginString(
+          pluginView.pluginId,
+          action.labelKey
+        )}
+        <Button
+          variant="ghost"
+          size={i === 0 ? 'sm' : 'icon'}
+          onclick={() => sendSidebarViewAction(source, action.id)}
+          title={label}
+          aria-label={label}
+          class={i === 0
+            ? FILE_TREE_MAIN_ACTION_CLASS
+            : 'size-7 shrink-0 text-muted-foreground'}
+        >
+          <PluginIcon
+            pluginId={pluginView.pluginId}
+            file={action.icon}
+            class="size-3.5 shrink-0"
+          />
+          {#if i === 0}<span class="min-w-0 truncate">{label}</span>{/if}
+        </Button>
+      {/each}
     {/if}
   </div>
 
@@ -988,81 +1027,108 @@
       e.stopPropagation();
     }}
   >
-    {#each FILE_EXPLORER_SOURCES as item (item.id)}
-      {@const active = source === item.id}
+    {#each FILE_EXPLORER_SOURCES as item, i (item.id)}
       {@const Icon = item.icon}
-      {@const label = tUi(item.labelKey)}
-      <button
-        type="button"
-        class="inline-flex h-8 min-w-0 shrink-0 items-center gap-2.5 rounded-md px-2.5 text-left text-xs transition-colors {active
-          ? 'bg-accent-brand/10 font-medium text-accent-brand'
-          : 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
-        use:tooltip={active ? undefined : label}
-        aria-current={active ? 'page' : undefined}
-        aria-label={label}
-        onclick={() => onSourceChange?.(item.id)}
-      >
-        <Icon class="size-3.5 shrink-0" />
-        <span class="truncate">{label}</span>
-      </button>
+      {#snippet coreIcon()}<Icon class="size-3.5 shrink-0" />{/snippet}
+      {@render navButton(item.id, tUi(item.labelKey), coreIcon)}
+      <!-- Plugin views sit right after Home. -->
+      {#if i === 0}
+        {#each pluginSidebarViews() as ref (sidebarViewSource(ref.pluginId, ref.view.id))}
+          {#snippet viewIcon()}<PluginIcon
+              pluginId={ref.pluginId}
+              file={ref.view.icon}
+              class="size-3.5 shrink-0"
+            />{/snippet}
+          {@render navButton(
+            sidebarViewSource(ref.pluginId, ref.view.id),
+            resolvePluginString(ref.pluginId, ref.view.labelKey),
+            viewIcon
+          )}
+        {/each}
+      {/if}
     {/each}
   </nav>
 
   <Separator />
-  <div class="flex h-11 shrink-0 items-center justify-between gap-2 px-4">
-    <span
-      class="min-w-0 truncate text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
-      >{source === 'home'
-        ? tUi('fileTree.notes')
-        : tUi(
-            FILE_EXPLORER_SOURCES.find((item) => item.id === source)!.labelKey
-          )}</span
+  {#if pluginView}
+    <PluginSidebarView ref={pluginView} {source} />
+  {:else}
+    <div class="flex h-11 shrink-0 items-center justify-between gap-2 px-4">
+      <span
+        class="min-w-0 truncate text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
+        >{source === 'home'
+          ? tUi('fileTree.notes')
+          : tUi(
+              FILE_EXPLORER_SOURCES.find((item) => item.id === source)!.labelKey
+            )}</span
+      >
+      <SortControl
+        strategy={ui.sortStrategy}
+        direction={ui.sortDirection}
+        onStrategyChange={setSortStrategy}
+        onDirectionChange={setSortDirection}
+        variant="ghost"
+        compact
+        collapsed
+      />
+    </div>
+    <div
+      role="group"
+      aria-label={tUi('fileTree.tree')}
+      class="themed-scrollbar min-h-0 flex-1 overflow-y-auto px-2 pb-3 text-[13px]"
+      class:ring-1={dragOver === 'root'}
+      class:ring-ring={dragOver === 'root'}
+      data-file-drop-accept={fileDropAccept}
+      ondragover={onDragOverRoot}
+      ondragleave={onDragLeave}
+      ondrop={onDropOnRoot}
+      onpointerdown={onTreePointerDown}
     >
-    <SortControl
-      strategy={ui.sortStrategy}
-      direction={ui.sortDirection}
-      onStrategyChange={setSortStrategy}
-      onDirectionChange={setSortDirection}
-      variant="ghost"
-      compact
-      collapsed
-    />
-  </div>
-  <div
-    role="group"
-    aria-label={tUi('fileTree.tree')}
-    class="themed-scrollbar min-h-0 flex-1 overflow-y-auto px-2 pb-3 text-[13px]"
-    class:ring-1={dragOver === 'root'}
-    class:ring-ring={dragOver === 'root'}
-    data-file-drop-accept={fileDropAccept}
-    ondragover={onDragOverRoot}
-    ondragleave={onDragLeave}
-    ondrop={onDropOnRoot}
-    onpointerdown={onTreePointerDown}
-  >
-    {#if tree.error}
-      <p class="px-2 py-3 text-xs text-destructive">
-        {tUi('fileTree.error')}: {tree.error}
-      </p>
-    {:else if !tree.ready}
-      <p class="px-2 py-3 text-xs text-muted-foreground">
-        {tUi('fileTree.loading')}
-      </p>
-    {:else if sourceNodes.length === 0 && !draft}
-      <p class="px-2 py-3 text-xs text-muted-foreground">
-        {emptyStateMessage()}
-      </p>
-    {/if}
+      {#if tree.error}
+        <p class="px-2 py-3 text-xs text-destructive">
+          {tUi('fileTree.error')}: {tree.error}
+        </p>
+      {:else if !tree.ready}
+        <p class="px-2 py-3 text-xs text-muted-foreground">
+          {tUi('fileTree.loading')}
+        </p>
+      {:else if sourceNodes.length === 0 && !draft}
+        <p class="px-2 py-3 text-xs text-muted-foreground">
+          {emptyStateMessage()}
+        </p>
+      {/if}
 
-    {#each sourceNodes as node (nodeKey(node))}
-      {@render renderNode(node)}
-    {/each}
+      {#each sourceNodes as node (nodeKey(node))}
+        {@render renderNode(node)}
+      {/each}
 
-    {#if (canCreateNotes || source === 'shared') && draft && draft.parentId === null}
-      {@render renderDraft()}
-    {/if}
-  </div>
+      {#if (canCreateNotes || source === 'shared') && draft && draft.parentId === null}
+        {@render renderDraft()}
+      {/if}
+    </div>
+  {/if}
 </Surface>
+
+{#snippet navButton(
+  id: DesktopNoteSource,
+  label: string,
+  icon: import('svelte').Snippet
+)}
+  {@const active = source === id}
+  <button
+    type="button"
+    class="inline-flex h-8 min-w-0 shrink-0 items-center gap-2.5 rounded-md px-2.5 text-left text-xs transition-colors {active
+      ? 'bg-accent-brand/10 font-medium text-accent-brand'
+      : 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
+    use:tooltip={active ? undefined : label}
+    aria-current={active ? 'page' : undefined}
+    aria-label={label}
+    onclick={() => onSourceChange?.(id)}
+  >
+    {@render icon()}
+    <span class="truncate">{label}</span>
+  </button>
+{/snippet}
 
 <input
   bind:this={pdfInput}
