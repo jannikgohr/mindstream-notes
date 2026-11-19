@@ -15,12 +15,6 @@ struct State {
 }
 
 impl Journal<'_> {
-    fn german(&self) -> bool {
-        self.input["locale"]
-            .as_str()
-            .is_some_and(|l| l.starts_with("de"))
-    }
-
     fn state(&self) -> Result<State, String> {
         let state = &self.input["state"];
         let selected = match day(&state["selected"], "selected") {
@@ -43,11 +37,6 @@ impl Journal<'_> {
         let from = host(clock::format(&from, "YYYY-MM-DD", None))?;
         let data = self.days_for(&from, 49, &state.selected)?;
 
-        let (one, many) = if self.german() {
-            ("Notiz", "Notizen")
-        } else {
-            ("note", "notes")
-        };
         let mut days = serde_json::Map::new();
         for d in data["days"].as_array().into_iter().flatten() {
             let daily = d["daily"].as_bool() == Some(true);
@@ -60,11 +49,7 @@ impl Journal<'_> {
                 marks.push("accent");
             }
             marks.extend(std::iter::repeat_n("muted", notes.min(MAX_DOTS) as usize));
-            let title = match notes {
-                0 => None,
-                1 => Some(format!("1 {one}")),
-                n => Some(format!("{n} {many}")),
-            };
+            let title = (notes > 0).then(|| json!({ "key": "view.notes", "count": notes }));
             days.insert(
                 d["date"].as_str().unwrap_or_default().to_string(),
                 json!({ "marks": marks, "strong": daily, "title": title }),
@@ -81,7 +66,7 @@ impl Journal<'_> {
                 "on": { "effect": "openNote", "noteId": daily["id"] },
             })),
             None => items.push(json!({
-                "label": if self.german() { "Tagesnotiz erstellen" } else { "Create daily note" },
+                "label": { "key": "view.createDailyNote" },
                 "icon": CALENDAR_ICON,
                 "tone": "muted",
                 "on": { "event": "open", "value": state.selected },
@@ -96,16 +81,10 @@ impl Journal<'_> {
             }));
         }
 
-        let heading_format = if self.german() {
-            "dddd, D. MMMM"
-        } else {
-            "dddd, MMMM D"
-        };
-        let heading = host(clock::format(
-            &self.noon(&state.selected),
-            heading_format,
-            self.input["locale"].as_str(),
-        ))?;
+        let heading = json!({
+            "date": state.selected,
+            "format": { "weekday": "long", "month": "long", "day": "numeric" },
+        });
         Ok(json!({
             "state": { "month": state.month, "selected": state.selected },
             "view": {

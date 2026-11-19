@@ -7,7 +7,27 @@ vi.mock('./effects', () => ({
       : null
 }));
 
-import { parseViewNode } from './view-schema';
+const locale = vi.hoisted(() => ({ language: 'en' }));
+vi.mock('$lib/settings/i18n.svelte', () => ({ i18n: locale }));
+vi.mock('./plugin-i18n', () => {
+  const strings: Record<string, Record<string, string>> = {
+    en: {
+      'notes.one': '{count} note',
+      'notes.other': '{count} notes',
+      hello: 'Hello, {name}'
+    },
+    de: { 'notes.one': '{count} Notiz', 'notes.other': '{count} Notizen' }
+  };
+  const find = (key: string) =>
+    strings[locale.language]?.[key] ?? strings.en[key];
+  return {
+    resolvePluginString: (id: string, key: string) =>
+      find(key) ?? `plugins.${id}.${key}`,
+    resolvePluginStringOptional: (_id: string, key: string) => find(key)
+  };
+});
+
+import { parseViewNode, viewText } from './view-schema';
 
 describe('parseViewNode', () => {
   it('keeps the known nodes and drops unknown ones and bad fields', () => {
@@ -138,5 +158,80 @@ describe('parseViewNode', () => {
     const node = parseViewNode({ type: 'text', text: 'x'.repeat(10_000) });
     expect(node).toMatchObject({ type: 'text' });
     expect((node as { text: string }).text.length).toBe(300);
+  });
+});
+
+describe('view text', () => {
+  it('parses keys and dates, dropping what it cannot resolve safely', () => {
+    expect(
+      parseViewNode({
+        type: 'stack',
+        children: [
+          {
+            type: 'heading',
+            text: { key: 'hello', params: { name: 'Ada', 'bad name': 'x' } }
+          },
+          { type: 'heading', text: { key: '../escape' } },
+          { type: 'text', text: { key: 'notes', count: 3 } },
+          {
+            type: 'heading',
+            text: {
+              date: '2026-11-19',
+              format: { weekday: 'long', hour: 'numeric' }
+            }
+          },
+          { type: 'heading', text: { date: '2026-02-30', format: {} } }
+        ]
+      })
+    ).toEqual({
+      type: 'stack',
+      children: [
+        { type: 'heading', text: { key: 'hello', params: { name: 'Ada' } } },
+        {
+          type: 'text',
+          text: { key: 'notes', params: {}, count: 3 },
+          tone: 'default'
+        },
+        {
+          type: 'heading',
+          text: { date: '2026-11-19', format: { weekday: 'long' } }
+        }
+      ]
+    });
+  });
+
+  it('resolves in the app’s language, with plural forms and parameters', () => {
+    locale.language = 'en';
+    expect(viewText('p', { key: 'notes', params: {}, count: 1 })).toBe(
+      '1 note'
+    );
+    expect(viewText('p', { key: 'notes', params: {}, count: 1200 })).toBe(
+      '1,200 notes'
+    );
+    expect(viewText('p', { key: 'hello', params: { name: 'Ada' } })).toBe(
+      'Hello, Ada'
+    );
+    expect(
+      viewText('p', {
+        date: '2026-11-19',
+        format: { weekday: 'long', month: 'long', day: 'numeric' }
+      })
+    ).toBe('Thursday, November 19');
+
+    locale.language = 'de';
+    expect(viewText('p', { key: 'notes', params: {}, count: 2 })).toBe(
+      '2 Notizen'
+    );
+    expect(
+      viewText('p', {
+        date: '2026-11-19',
+        format: { weekday: 'long', month: 'long', day: 'numeric' }
+      })
+    ).toBe('Donnerstag, 19. November');
+    // A missing string shows its key rather than nothing.
+    expect(viewText('p', { key: 'missing', params: {} })).toBe(
+      'plugins.p.missing'
+    );
+    locale.language = 'en';
   });
 });

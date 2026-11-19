@@ -7,13 +7,43 @@
  * interaction either names an event, sent back to the plugin's `onEvent`, or
  * carries an effect the host performs directly.
  *
+ * Text is language-agnostic: a string shown as is (a note title), a key into
+ * the plugin's own `contributes.i18n` strings, or a day the host formats. The
+ * host resolves both in the app's language, so a plugin never picks one.
+ *
  * The tree is untrusted: everything is shape-checked, unknown nodes and bad
  * fields are dropped, and size limits keep a runaway plugin from building a
  * page the sidebar can't draw.
  */
 
+import { i18n } from '$lib/settings/i18n.svelte';
 import { parsePluginEffect } from './effects';
+import {
+  resolvePluginString,
+  resolvePluginStringOptional
+} from './plugin-i18n';
 import type { PluginEffect } from './types';
+
+/** Intl options a `date` text may use. */
+export interface ViewDateFormat {
+  weekday?: 'long' | 'short' | 'narrow';
+  day?: 'numeric' | '2-digit';
+  month?: 'long' | 'short' | 'narrow' | 'numeric' | '2-digit';
+  year?: 'numeric' | '2-digit';
+}
+
+/**
+ * - a string, shown as is;
+ * - `{ key, params?, count? }`: the plugin's string for `key`, with `{name}`
+ *   replaced from `params`. With `count`, the key is suffixed by its plural
+ *   category in the app's language (`.one`, `.other`, …, falling back to
+ *   `.other`), and `{count}` is available;
+ * - `{ date, format }`: a `YYYY-MM-DD` formatted in the app's language.
+ */
+export type ViewText =
+  | string
+  | { key: string; params: Record<string, string>; count?: number }
+  | { date: string; format: ViewDateFormat };
 
 export type ViewAction = { event: string; value?: string } | PluginEffect;
 
@@ -25,12 +55,12 @@ export interface ViewCalendarDay {
   /** Bold day number. */
   strong: boolean;
   /** Tooltip. */
-  title?: string;
+  title?: ViewText;
 }
 
 export interface ViewListItem {
-  label: string;
-  detail?: string;
+  label: ViewText;
+  detail?: ViewText;
   /** Plugin-relative `.svg` icon, or a note kind's icon. */
   icon?: string;
   noteKind?: string;
@@ -40,9 +70,9 @@ export interface ViewListItem {
 
 export type ViewNode =
   | { type: 'stack'; children: ViewNode[] }
-  | { type: 'heading'; text: string }
-  | { type: 'text'; text: string; tone: ViewTone }
-  | { type: 'button'; label: string; icon?: string; on: ViewAction }
+  | { type: 'heading'; text: ViewText }
+  | { type: 'text'; text: ViewText; tone: ViewTone }
+  | { type: 'button'; label: ViewText; icon?: string; on: ViewAction }
   | {
       type: 'calendar';
       /** `YYYY-MM` shown. */
@@ -67,6 +97,14 @@ const MAX_TEXT = 300;
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const DAY_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 const EVENT_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+const KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const MAX_PARAMS = 8;
+const DATE_FORMAT_VALUES: Record<keyof ViewDateFormat, readonly string[]> = {
+  weekday: ['long', 'short', 'narrow'],
+  day: ['numeric', '2-digit'],
+  month: ['long', 'short', 'narrow', 'numeric', '2-digit'],
+  year: ['numeric', '2-digit']
+};
 // Same rule as manifest icons: a relative .svg inside the plugin.
 const SVG_RE = /^(?!\/)(?!.*\.\.)(?!.*\\)[A-Za-z0-9_./-]+\.svg$/;
 
@@ -85,6 +123,69 @@ function isDay(value: unknown): value is string {
   if (typeof value !== 'string' || !DAY_RE.test(value)) return false;
   const [y, m, d] = value.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, d)).getUTCDate() === d;
+}
+
+function displayText(value: unknown): ViewText | undefined {
+  if (typeof value === 'string') return value.slice(0, MAX_TEXT);
+  if (!isObject(value)) return undefined;
+  if (typeof value.key === 'string') {
+    if (!KEY_RE.test(value.key)) return undefined;
+    const params: Record<string, string> = {};
+    if (isObject(value.params)) {
+      for (const [name, v] of Object.entries(value.params).slice(
+        0,
+        MAX_PARAMS
+      )) {
+        if (
+          EVENT_RE.test(name) &&
+          (typeof v === 'string' || typeof v === 'number')
+        )
+          params[name] = String(v).slice(0, MAX_TEXT);
+      }
+    }
+    const count =
+      typeof value.count === 'number' && Number.isFinite(value.count)
+        ? value.count
+        : undefined;
+    return count === undefined
+      ? { key: value.key, params }
+      : { key: value.key, params, count };
+  }
+  if (isDay(value.date) && isObject(value.format)) {
+    const format: ViewDateFormat = {};
+    for (const [part, allowed] of Object.entries(DATE_FORMAT_VALUES)) {
+      const v = value.format[part];
+      if (typeof v === 'string' && allowed.includes(v))
+        (format as Record<string, string>)[part] = v;
+    }
+    return { date: value.date, format };
+  }
+  return undefined;
+}
+
+/** A view text in the app's language, for `pluginId`'s strings. */
+export function viewText(pluginId: string, text: ViewText): string {
+  if (typeof text === 'string') return text;
+  const locale = i18n.language;
+  if ('date' in text) {
+    const [y, m, d] = text.date.split('-').map(Number);
+    return new Intl.DateTimeFormat(locale, text.format).format(
+      new Date(y, m - 1, d)
+    );
+  }
+  const params: Record<string, string> = { ...text.params };
+  let key = text.key;
+  if (text.count !== undefined) {
+    params.count = new Intl.NumberFormat(locale).format(text.count);
+    const plural = `${key}.${new Intl.PluralRules(locale).select(text.count)}`;
+    key = resolvePluginStringOptional(pluginId, plural)
+      ? plural
+      : `${key}.other`;
+  }
+  return resolvePluginString(pluginId, key).replace(
+    /\{(\w+)\}/g,
+    (slot, name) => (name in params ? params[name] : slot)
+  );
 }
 
 function tone(value: unknown): ViewTone {
@@ -120,18 +221,22 @@ function parseDays(value: unknown): Record<string, ViewCalendarDay> {
           )
           .slice(0, MAX_MARKS)
       : [];
-    days[date] = { marks, strong: raw.strong === true, title: text(raw.title) };
+    days[date] = {
+      marks,
+      strong: raw.strong === true,
+      title: displayText(raw.title)
+    };
   }
   return days;
 }
 
 function parseItem(value: unknown): ViewListItem | undefined {
   if (!isObject(value)) return undefined;
-  const label = text(value.label);
+  const label = displayText(value.label);
   if (label === undefined) return undefined;
   return {
     label,
-    detail: text(value.detail),
+    detail: displayText(value.detail),
     icon: icon(value.icon),
     noteKind: text(value.noteKind),
     tone: tone(value.tone),
@@ -153,17 +258,17 @@ export function parseViewNode(value: unknown, depth = 0): ViewNode | null {
       return { type: 'stack', children };
     }
     case 'heading': {
-      const t = text(value.text);
+      const t = displayText(value.text);
       return t === undefined ? null : { type: 'heading', text: t };
     }
     case 'text': {
-      const t = text(value.text);
+      const t = displayText(value.text);
       return t === undefined
         ? null
         : { type: 'text', text: t, tone: tone(value.tone) };
     }
     case 'button': {
-      const label = text(value.label);
+      const label = displayText(value.label);
       const on = parseViewAction(value.on);
       if (label === undefined || !on) return null;
       return { type: 'button', label, icon: icon(value.icon), on };

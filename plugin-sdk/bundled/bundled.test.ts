@@ -372,11 +372,18 @@ describe('Journal component', { timeout: 60_000 }, () => {
         '2026-11-19': {
           marks: ['accent', 'muted'],
           strong: true,
-          title: '1 note'
+          title: { key: 'view.notes', count: 1 }
         }
       }
     });
-    expect(heading).toEqual({ type: 'heading', text: 'Thursday, November 19' });
+    // Text is keys and dates for the host to resolve in the app's language.
+    expect(heading).toEqual({
+      type: 'heading',
+      text: {
+        date: '2026-11-19',
+        format: { weekday: 'long', month: 'long', day: 'numeric' }
+      }
+    });
     expect(list.items).toEqual([
       {
         label: '2026-11-19',
@@ -421,7 +428,7 @@ describe('Journal component', { timeout: 60_000 }, () => {
     });
     expect(empty.view.children[2].items).toEqual([
       {
-        label: 'Create daily note',
+        label: { key: 'view.createDailyNote' },
         icon: 'icons/calendar.svg',
         tone: 'muted',
         on: { event: 'open', value: '2026-12-02' }
@@ -469,10 +476,18 @@ describe('Journal component', { timeout: 60_000 }, () => {
       '2026-11-19': {
         marks: ['accent', 'muted'],
         strong: true,
-        title: '1 note'
+        title: { key: 'view.notes', count: 1 }
       },
-      '2026-11-20': { marks: ['muted'], strong: false, title: '1 note' },
-      '2026-11-21': { marks: ['muted'], strong: false, title: '1 note' }
+      '2026-11-20': {
+        marks: ['muted'],
+        strong: false,
+        title: { key: 'view.notes', count: 1 }
+      },
+      '2026-11-21': {
+        marks: ['muted'],
+        strong: false,
+        title: { key: 'view.notes', count: 1 }
+      }
     });
     expect(list.items).toEqual([
       expect.objectContaining({ label: '2026-11-19', tone: 'accent' }),

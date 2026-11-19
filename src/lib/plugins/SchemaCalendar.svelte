@@ -1,18 +1,21 @@
 <script lang="ts">
   /** The `calendar` node of a schema view: a month grid with marked days. */
-  import { untrack } from 'svelte';
   import { Calendar } from 'bits-ui';
   import { parseDate, type DateValue } from '@internationalized/date';
   import { ChevronLeft, ChevronRight } from '@lucide/svelte';
   import { i18n, tUi } from '$lib/settings/i18n.svelte';
-  import type { ViewNode } from './view-schema';
+  import { viewText, type ViewNode } from './view-schema';
 
   type CalendarNode = Extract<ViewNode, { type: 'calendar' }>;
   let {
+    pluginId,
     node,
     onEvent
-  }: { node: CalendarNode; onEvent: (event: string, value: string) => void } =
-    $props();
+  }: {
+    pluginId: string;
+    node: CalendarNode;
+    onEvent: (event: string, value: string) => void;
+  } = $props();
 
   const MONTH_BUTTON =
     'inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground';
@@ -41,10 +44,7 @@
   // The shown month belongs to the plugin. bits-ui moves it to the selected
   // day at mount and on each selection by assigning that very `value`; month
   // buttons and keyboard paging assign new dates.
-  let placeholder = $state(parseDate(`${untrack(() => monthKey)}-01`));
-  $effect.pre(() => {
-    placeholder = parseDate(`${monthKey}-01`);
-  });
+  let placeholder = $derived(parseDate(`${monthKey}-01`));
   const monthOf = (date: DateValue) => date.toString().slice(0, 7);
 </script>
 
@@ -70,17 +70,31 @@
     <Calendar.Header class="flex h-11 items-center justify-between gap-2 pl-1">
       <Calendar.Heading class="min-w-0 truncate text-[13px] font-medium" />
       <div class="flex shrink-0 items-center">
-        <Calendar.PrevButton
-          class={MONTH_BUTTON}
-          aria-label={tUi('calendar.previousMonth')}
-        >
-          <ChevronLeft class="size-4" />
+        <!-- Through `child`: bits-ui sets its own English aria-label, and a
+             prop can't override it. -->
+        <Calendar.PrevButton>
+          {#snippet child({ props })}
+            <button
+              {...props}
+              class={MONTH_BUTTON}
+              aria-label={tUi('calendar.previousMonth')}
+              title={tUi('calendar.previousMonth')}
+            >
+              <ChevronLeft class="size-4" />
+            </button>
+          {/snippet}
         </Calendar.PrevButton>
-        <Calendar.NextButton
-          class={MONTH_BUTTON}
-          aria-label={tUi('calendar.nextMonth')}
-        >
-          <ChevronRight class="size-4" />
+        <Calendar.NextButton>
+          {#snippet child({ props })}
+            <button
+              {...props}
+              class={MONTH_BUTTON}
+              aria-label={tUi('calendar.nextMonth')}
+              title={tUi('calendar.nextMonth')}
+            >
+              <ChevronRight class="size-4" />
+            </button>
+          {/snippet}
         </Calendar.NextButton>
       </div>
     </Calendar.Header>
@@ -103,8 +117,8 @@
                 {@const mark = node.days[date.toString()]}
                 <Calendar.Cell {date} month={month.value} class="p-0">
                   <Calendar.Day
-                    title={mark?.title}
-                    class="group mx-auto flex size-8 flex-col items-center justify-center rounded-md text-xs tabular-nums transition-colors hover:bg-accent data-[outside-month]:text-muted-foreground/50 data-[today]:text-accent-brand data-[today]:ring-1 data-[today]:ring-inset data-[today]:ring-accent-brand/50 data-[selected]:bg-accent-brand data-[selected]:text-accent-brand-foreground data-[selected]:ring-0 data-[selected]:hover:bg-accent-brand {mark?.strong
+                    title={mark?.title && viewText(pluginId, mark.title)}
+                    class="group mx-auto flex size-8 flex-col items-center justify-center rounded-md text-xs tabular-nums transition-colors hover:bg-accent data-[outside-month]:text-muted-foreground/50 data-[today]:not-data-[selected]:text-accent-brand data-[today]:not-data-[selected]:ring-1 data-[today]:not-data-[selected]:ring-inset data-[today]:not-data-[selected]:ring-accent-brand/50 data-[selected]:bg-accent-brand data-[selected]:text-accent-brand-foreground data-[selected]:hover:bg-accent-brand {mark?.strong
                       ? 'font-semibold'
                       : ''}"
                   >
