@@ -308,7 +308,7 @@ describe('emptyStateMessageForSource', () => {
 });
 
 describe('FILE_EXPLORER_SOURCES', () => {
-  it('lists the four nav sources in order', () => {
+  it('lists the nav sources in order', () => {
     expect(FILE_EXPLORER_SOURCES.map((s) => s.id)).toEqual([
       'home',
       'favourites',

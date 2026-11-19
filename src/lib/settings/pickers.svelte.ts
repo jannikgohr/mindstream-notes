@@ -14,6 +14,7 @@ import { ALL_SETTINGS, getSettingValue, setSettingValue } from './store.svelte';
 import { pluginSettingsSections } from '$lib/plugins/registry.svelte';
 import { ancestorIsTrash } from '$lib/editor/trash';
 import { folderPathLabel } from '$lib/notes/folder-path';
+import { noteIsUnderTrash } from '$lib/stores/note-source.svelte';
 import type { Setting } from './types';
 
 export interface PickerItem {
@@ -49,6 +50,21 @@ export function folderOptions(): PickerItem[] {
     .sort((a, b) => a.label.localeCompare(b.label));
 }
 
+/** Every note outside the trash as `{ id, "Folder / Title" }`, sorted by label. */
+export function noteOptions(): PickerItem[] {
+  const byId = tree.collectionsById;
+  return Object.values(tree.notesById)
+    .filter((note) => !noteIsUnderTrash(note, byId))
+    .map((note) => {
+      const title = note.title.trim() || 'Untitled';
+      const folder = note.parent_collection_id
+        ? folderPathLabel(note.parent_collection_id, byId)
+        : '';
+      return { value: note.id, label: folder ? `${folder} / ${title}` : title };
+    })
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
 /** Every tag currently in use, as picker items. */
 export function tagOptions(): PickerItem[] {
   return allTagsInUse().map((tag) => ({ value: tag, label: tag }));
@@ -57,7 +73,7 @@ export function tagOptions(): PickerItem[] {
 /** A setting that uses a picker primitive, with its resolved runtime id. */
 interface PickerSetting {
   id: string;
-  kind: 'folder' | 'tag';
+  kind: 'folder' | 'tag' | 'note';
 }
 
 /**
@@ -67,13 +83,21 @@ interface PickerSetting {
 function pickerSettings(): PickerSetting[] {
   const out: PickerSetting[] = [];
   for (const setting of ALL_SETTINGS as Setting[]) {
-    if (setting.type === 'folder' || setting.type === 'tag') {
+    if (
+      setting.type === 'folder' ||
+      setting.type === 'tag' ||
+      setting.type === 'note'
+    ) {
       out.push({ id: setting.id, kind: setting.type });
     }
   }
   for (const { pluginId, contribution } of pluginSettingsSections()) {
     for (const setting of contribution.settings) {
-      if (setting.type === 'folder' || setting.type === 'tag') {
+      if (
+        setting.type === 'folder' ||
+        setting.type === 'tag' ||
+        setting.type === 'note'
+      ) {
         out.push({
           id: `plugins.${pluginId}.${setting.id}`,
           kind: setting.type
@@ -99,11 +123,17 @@ export function startPickerSettingPruning(): () => void {
       if (!tree.ready || tree.error) return;
       const folders = liveFolderIds();
       const tags = new Set(allTagsInUse());
+      const notes = new Set(
+        Object.values(tree.notesById)
+          .filter((note) => !noteIsUnderTrash(note, tree.collectionsById))
+          .map((note) => note.id)
+      );
       for (const { id, kind } of pickerSettings()) {
         const value = getSettingValue(id);
         if (typeof value !== 'string' || value === '') continue;
-        const orphaned =
-          kind === 'folder' ? !folders.has(value) : !tags.has(value);
+        const live =
+          kind === 'folder' ? folders : kind === 'tag' ? tags : notes;
+        const orphaned = !live.has(value);
         if (orphaned) void setSettingValue(id, '').catch(() => {});
       }
     });

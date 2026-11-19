@@ -82,7 +82,14 @@ export type Effect =
       parentId?: string | null;
     }
   | { effect: 'insertMarkdown'; markdown: string }
-  | { effect: 'openMenu'; items: MenuItem[] };
+  | { effect: 'openMenu'; items: MenuItem[] }
+  | { effect: 'openNote'; noteId: string; preview?: boolean }
+  | {
+      effect: 'openOrCreateNote';
+      title: string;
+      parentId?: string | null;
+      template?: { sourceNoteId: string; date?: string };
+    };
 
 /** One entry of an `openMenu` effect. */
 export interface MenuItem {

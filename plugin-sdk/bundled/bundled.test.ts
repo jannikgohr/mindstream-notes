@@ -302,6 +302,183 @@ describe.each(['Rust', 'TypeScript'])(
   }
 );
 
+describe('Journal component', { timeout: 60_000 }, () => {
+  const journal = (options: HostOptions = {}) =>
+    loadPlugin(component('journal'), {
+      now: '2026-11-19T10:00:00Z',
+      timeZone: 'UTC',
+      permissions: ['notes.read', 'notes.create'],
+      ...options
+    });
+
+  it('asks the host to open or create the day’s note, from the template', async () => {
+    const plugin = await journal({
+      settings: {
+        folder: 'daily',
+        'title-format': 'dddd, D MMMM YYYY',
+        template: 'tpl'
+      }
+    });
+    expect(await plugin.call('openDay', { date: '2026-11-23' })).toEqual({
+      effect: 'openOrCreateNote',
+      title: 'Monday, 23 November 2026',
+      parentId: 'daily',
+      template: { sourceNoteId: 'tpl', date: '2026-11-23' }
+    });
+    await expect(
+      plugin.call('openDay', { date: '23.11.2026' })
+    ).rejects.toThrow(/YYYY-MM-DD/);
+    expect(await (await journal()).call('openToday')).toEqual({
+      effect: 'openOrCreateNote',
+      title: '2026-11-19',
+      parentId: null
+    });
+  });
+
+  it('draws the calendar as a schema view and keeps its state in the host', async () => {
+    const plugin = await journal({
+      settings: { folder: 'daily' },
+      notes: [
+        {
+          id: 'd19',
+          title: '2026-11-19',
+          folderId: 'daily',
+          created: '2026-11-19T08:00:00Z'
+        },
+        {
+          id: 'n19',
+          title: 'Ideas',
+          folderPath: 'Work',
+          created: '2026-11-19T09:00:00Z'
+        }
+      ]
+    });
+    type Rendered = {
+      state: { month: string; selected: string };
+      view: { children: Record<string, unknown>[] };
+    };
+    const first = await plugin.call<Rendered>('render', { state: null });
+    expect(first.state).toEqual({ month: '2026-11', selected: '2026-11-19' });
+    const [calendar, heading, list] = first.view.children;
+    expect(calendar).toMatchObject({
+      type: 'calendar',
+      month: '2026-11',
+      selected: '2026-11-19',
+      days: {
+        '2026-11-19': {
+          marks: ['accent', 'muted'],
+          strong: true,
+          title: '1 note'
+        }
+      }
+    });
+    expect(heading).toEqual({ type: 'heading', text: 'Thursday, November 19' });
+    expect(list.items).toEqual([
+      {
+        label: '2026-11-19',
+        icon: 'icons/calendar.svg',
+        tone: 'accent',
+        on: { effect: 'openNote', noteId: 'd19' }
+      },
+      {
+        label: 'Ideas',
+        noteKind: 'markdown',
+        detail: 'Work',
+        on: { effect: 'openNote', noteId: 'n19', preview: true }
+      }
+    ]);
+
+    expect(
+      await plugin.call('onEvent', {
+        state: first.state,
+        event: 'select',
+        value: '2026-12-02'
+      })
+    ).toEqual({
+      state: { month: '2026-12', selected: '2026-12-02' },
+      effect: {
+        effect: 'openOrCreateNote',
+        title: '2026-12-02',
+        parentId: 'daily'
+      }
+    });
+    expect(
+      await plugin.call('onEvent', {
+        state: first.state,
+        event: 'month',
+        value: '2027-01'
+      })
+    ).toEqual({
+      state: { month: '2027-01', selected: '2026-11-19' },
+      effect: null
+    });
+    const empty = await plugin.call<Rendered>('render', {
+      state: { month: '2026-12', selected: '2026-12-02' }
+    });
+    expect(empty.view.children[2].items).toEqual([
+      {
+        label: 'Create daily note',
+        icon: 'icons/calendar.svg',
+        tone: 'muted',
+        on: { event: 'open', value: '2026-12-02' }
+      }
+    ]);
+  });
+
+  it('marks daily notes and counts the other notes created or edited each day', async () => {
+    const plugin = await journal({
+      settings: { folder: 'daily' },
+      notes: [
+        {
+          id: 'd19',
+          title: '2026-11-19',
+          folderId: 'daily',
+          folderPath: 'Daily',
+          created: '2026-11-19T08:00:00Z'
+        },
+        {
+          id: 'loose',
+          title: '2026-11-20',
+          folderPath: '',
+          created: '2026-11-20T08:00:00Z',
+          modified: '2026-11-21T08:00:00Z'
+        },
+        {
+          id: 'n19',
+          title: 'Ideas',
+          folderId: 'work',
+          folderPath: 'Areas / Work',
+          created: '2026-11-19T09:00:00Z'
+        }
+      ]
+    });
+    expect(
+      await plugin.call('days', {
+        from: '2026-11-18',
+        count: 4,
+        selected: '2026-11-19'
+      })
+    ).toEqual({
+      days: [
+        { date: '2026-11-18', daily: false, notes: 0 },
+        { date: '2026-11-19', daily: true, notes: 1 },
+        { date: '2026-11-20', daily: false, notes: 1 },
+        { date: '2026-11-21', daily: false, notes: 1 }
+      ],
+      selected: {
+        date: '2026-11-19',
+        daily: {
+          id: 'd19',
+          title: '2026-11-19',
+          kind: 'markdown',
+          folder: 'Daily'
+        },
+        notes: [{ id: 'n19', title: 'Ideas', kind: 'markdown', folder: 'Work' }]
+      }
+    });
+  });
+});
+
 it('both builtin packages pass SDK preflight with unchanged contribution IDs', async () => {
   for (const name of ['templates', 'typst']) {
     const dir = join(bundledRoot, name);
@@ -338,7 +515,12 @@ it('every shipped plugin uses v2 and LanguageTool stays declarative', async () =
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
-  expect(directories).toEqual(['languagetool', 'templates', 'typst']);
+  expect(directories).toEqual([
+    'journal',
+    'languagetool',
+    'templates',
+    'typst'
+  ]);
   for (const name of directories) {
     const dir = join(shippedRoot, name);
     const manifest = JSON.parse(

@@ -80,8 +80,9 @@ asymmetric:
   executable plugins receive the values as `ctx.settings`. Its `scope` is `"V"`
   to keep the value per vault, or `"D"` to share it between every vault on the
   device. Control `type`s: `toggle`, `text`, `number`, `slider`, `select`,
-  `radio`, `color`, and the vault pickers **`folder`** and **`tag`** (their value
-  is a folder id or tag string, and clears itself when the target is deleted).
+  `radio`, `color`, and the vault pickers **`folder`**, **`tag`** and
+  **`note`** (their value is a folder id, tag string or note id, and clears
+  itself when the target is deleted).
   `select` and `radio` settings can add `optionLabelKeys`
   (`{ "<option>": "<i18nKey>" }`) so plugin-owned values like `wysiwyg` can
   display domain language such as "Live Preview".
@@ -113,8 +114,12 @@ asymmetric:
 
 - **`noteTemplates`** — declarative templates (`titleTemplate` / `bodyTemplate`
   with `{{…}}` placeholders, see below). Requires `notes.create`.
-- **`commands`** — app-local commands (currently `createTemplateNote`), each
-  bindable to a hotkey.
+- **`commands`** — app-local commands, each listed in the command palette and
+  bindable to a hotkey. The action is `createTemplateNote` or
+  `{ "type": "script", "export": "…" }`, which runs the export and performs the
+  effect it returns, like a toolbar button.
+- **`sidebarViews`** — a view in the desktop sidebar's navigation; see
+  "Sidebar views" below.
 - **`artifacts`** — binaries the host downloads and digest-verifies on the
   plugin's behalf, for webview renderers. Requires `pluginArtifacts.download`;
   see "Webview previews" below.
@@ -311,21 +316,30 @@ its operations run, so a request over the 1 MiB literal limit that fits the
 [the batch contract](plugin-batch-api.md#the-general-batch-contract) for
 failure phases and recovery.
 
-### Effects (toolbar buttons)
+### Effects (toolbar buttons, commands)
 
-A toolbar button's export is called with the context object and returns a
+A toolbar button's or script command's export is called with the context object and returns a
 **declarative effect**: one of a closed set the app performs on the plugin's
 behalf. The plugin computes, the app acts, and the plugin never touches the
 page:
 
-| Effect                                                      | Does                                             |
-| ----------------------------------------------------------- | ------------------------------------------------ |
-| `{ effect: "none" }`                                        | nothing                                          |
-| `{ effect: "toast", message, kind? }`                       | show a toast (`kind` `"info"`\|`"error"`)        |
-| `{ effect: "createNote", title, body, parentId? }`          | create + open a note (needs `notes.create`)      |
-| `{ effect: "createNoteFromNote", sourceNoteId, parentId? }` | copy a source note (interpolated) into a new one |
-| `{ effect: "insertMarkdown", markdown }`                    | insert Markdown at the active note's cursor      |
-| `{ effect: "openMenu", items: [{ label, run: <effect> }] }` | show a menu; each item runs its nested effect    |
+| Effect                                                        | Does                                                                              |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `{ effect: "none" }`                                          | nothing                                                                           |
+| `{ effect: "toast", message, kind? }`                         | show a toast (`kind` `"info"`\|`"error"`)                                         |
+| `{ effect: "createNote", title, body, parentId? }`            | create + open a note (needs `notes.create`)                                       |
+| `{ effect: "createNoteFromNote", sourceNoteId, parentId? }`   | copy a source note (interpolated) into a new one                                  |
+| `{ effect: "insertMarkdown", markdown }`                      | insert Markdown at the active note's cursor                                       |
+| `{ effect: "openMenu", items: [{ label, run: <effect> }] }`   | show a menu; each item runs its nested effect                                     |
+| `{ effect: "openNote", noteId, preview? }`                    | open a note (needs `notes.read`)                                                  |
+| `{ effect: "openOrCreateNote", title, parentId?, template? }` | open the note with that title in that folder, or create it (needs `notes.create`) |
+
+`openOrCreateNote` is decided by the app against its live tree, one creation
+at a time per folder and title, so two quick calls make one note. A plugin's
+`notes` snapshot can't do that: it is taken when its call starts. With
+`template: { sourceNoteId, date? }` a new note is rendered from that note by
+the Templates plugin, its date placeholders counting from the local
+`YYYY-MM-DD` `date`.
 
 Returning a terminal effect makes the button a single action; returning
 `openMenu` makes it a submenu. With `notes` (metadata, behind `notes.read`) a
@@ -595,6 +609,43 @@ The LanguageTool plugin is a complete worked example, and is nothing but a
 manifest: the app contains no code specific to it. A service whose response
 cannot be described with pointers, such as XML or two round trips, is outside
 what the protocol can express today.
+
+## Sidebar views (`contributes.sidebarViews`)
+
+A sidebar view adds an entry to the desktop sidebar's navigation, right after
+Home, with its own body and optional buttons in the action row above the
+navigation. It needs a scripted runtime.
+
+```json
+"sidebarViews": [{
+  "id": "calendar",
+  "labelKey": "view.label",
+  "icon": "icons/calendar.svg",
+  "actions": [{ "id": "today", "labelKey": "action.today", "icon": "icons/calendar.svg" }],
+  "render": { "type": "schema", "render": "render", "onEvent": "onEvent" }
+}]
+```
+
+With `"type": "schema"` the app calls `render({ ...ctx, state })` and draws the
+`view` it returns from its own components, so the view follows the theme and the
+app's keyboard and screen-reader behaviour. The plugin keeps no memory between
+calls: return `state` and the app hands it back on the next call. It redraws
+when notes, the plugin's settings or the language change.
+
+| Node                                                                          | Draws                                                                  |
+| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `{ type: "stack", children }`                                                 | children top to bottom                                                 |
+| `{ type: "heading", text }` / `{ type: "text", text, tone? }`                 | a section label / a line of text                                       |
+| `{ type: "button", label, icon?, on }`                                        | a button                                                               |
+| `{ type: "calendar", month, selected?, days, onSelect, onMonth }`             | a month grid; `days` maps `YYYY-MM-DD` to `{ marks, strong?, title? }` |
+| `{ type: "list", items: [{ label, detail?, icon?, noteKind?, tone?, on? }] }` | rows, like the file tree's                                             |
+
+An `on` is either an effect, performed directly, or `{ event, value? }`, which
+calls `onEvent({ ...ctx, state, event, value })`. That returns
+`{ state?, effect? }`; the app performs the effect and redraws. Calendar
+selection and month changes are events too, with the day or month as `value`,
+and an action-row button sends its `id`. Unknown nodes and fields are dropped,
+and text, list and nesting sizes are capped.
 
 ## Webview previews (`render.webview`, `contributes.artifacts`)
 

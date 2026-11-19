@@ -48,7 +48,7 @@ if (metadata.error) throw metadata.error;
 if (metadata.status !== 0) throw new Error(metadata.stderr);
 const initial = Buffer.concat(
   await Promise.all(
-    ['templates', 'typst'].map((name) => readFile(corePath(name)))
+    ['journal', 'templates', 'typst'].map((name) => readFile(corePath(name)))
   )
 );
 async function* rustFiles(dir) {
@@ -85,7 +85,7 @@ cargo(
     .map(([from, to]) => `--remap-path-prefix=${from}=${to}`)
 );
 const artifacts = [];
-for (const name of ['templates', 'typst']) {
+for (const name of ['journal', 'templates', 'typst']) {
   const dir = join(root, 'plugins', name);
   const manifest = JSON.parse(
     await readFile(join(dir, 'manifest.json'), 'utf8')

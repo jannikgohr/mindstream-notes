@@ -43,6 +43,15 @@ export function referencedExports(manifest) {
   for (const button of c.toolbar ?? []) {
     if (button.action?.type === 'script') names.add(button.action.export);
   }
+  for (const command of c.commands ?? []) {
+    if (command.action?.type === 'script') names.add(command.action.export);
+  }
+  for (const view of c.sidebarViews ?? []) {
+    if (view.render?.type === 'schema') {
+      names.add(view.render.render);
+      names.add(view.render.onEvent);
+    }
+  }
   for (const kind of c.noteKinds ?? []) names.add(kind.render?.export);
   for (const exporter of c.noteExporters ?? []) names.add(exporter.export);
   for (const template of c.noteTemplates ?? []) names.add(template.render);

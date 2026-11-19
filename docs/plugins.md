@@ -56,6 +56,18 @@ to approve it again, even when the files are identical.
 
 ## The plugins that come with the app
 
+### Journal
+
+Adds **Journal** to the desktop sidebar: a month calendar showing which days
+have a daily note and how many other notes were created or edited, with that
+day's notes listed below. Clicking a day, or **Today**, opens its daily note and
+creates it if needed. In its settings, pick the folder daily notes go in, their
+title format, and a note to use as their template. Disable it to remove Journal
+from the sidebar; your daily notes stay. It needs the desktop app, not the
+browser.
+
+It can read the titles, folders and dates of your notes, and create notes.
+
 ### Templates
 
 Turns your own notes into templates; it brings none of its own. In its settings,
