@@ -7,16 +7,23 @@
  * again, its editor takes its history back. Rust keeps it in memory only, so
  * a quit still starts with empty histories.
  *
+ * A browser may discard a hidden tab without another event, and the reload
+ * keeps the tab's sessionStorage. So the browser hands the histories over
+ * there each time the tab hides.
+ *
  * An editor's history is whatever JSON its capture returns. Keys name the
  * editor and the note, e.g. `markdown:<id>`.
  */
 
 import {
   invokeOrFallback,
+  isTauri,
   optionalString,
   assertVoid,
   TauriCommandName
 } from '$lib/api/core';
+
+const SESSION_KEY = 'mindstream:undo-history';
 
 type Capture = () => unknown;
 
@@ -27,7 +34,7 @@ function retainedHistories(): Promise<Map<string, unknown>> {
   retained ??= invokeOrFallback(
     TauriCommandName.TakeUndoHistory,
     undefined,
-    async () => null,
+    async () => sessionStorage.getItem(SESSION_KEY),
     (value) => optionalString(value, 'retained undo history')
   )
     .then((text) => new Map(Object.entries(text ? JSON.parse(text) : {})))
@@ -73,7 +80,30 @@ export async function handOverUndoHistories(): Promise<void> {
   await invokeOrFallback(
     TauriCommandName.RetainUndoHistory,
     { history: JSON.stringify(Object.fromEntries(histories)) },
-    () => undefined,
+    () => keepInSession(JSON.stringify(Object.fromEntries(histories))),
     (value) => assertVoid(value, 'retain undo history')
   );
+}
+
+function keepInSession(history: string): void {
+  try {
+    sessionStorage.setItem(SESSION_KEY, history);
+  } catch (err) {
+    // An older handoff would otherwise come back after a discard.
+    sessionStorage.removeItem(SESSION_KEY);
+    throw err;
+  }
+}
+
+/** In the browser: hand the histories over whenever the tab hides. */
+export function retainUndoWhileHidden(): () => void {
+  if (isTauri()) return () => {};
+  const onVisibility = () => {
+    if (document.visibilityState !== 'hidden') return;
+    handOverUndoHistories().catch((err: unknown) =>
+      console.warn('[undo] could not keep histories for this tab', err)
+    );
+  };
+  document.addEventListener('visibilitychange', onVisibility);
+  return () => document.removeEventListener('visibilitychange', onVisibility);
 }
