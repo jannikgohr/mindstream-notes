@@ -66,12 +66,17 @@ beforeEach(() => {
   for (const manifest of bundledWasmManifests()) registerPlugin(manifest);
   tree.collectionsById = {
     root: { id: 'root', name: 'Templates', parent_collection_id: null },
-    child: { id: 'child', name: 'Daily', parent_collection_id: 'root' }
+    child: { id: 'child', name: 'Daily', parent_collection_id: 'root' },
+    gone: { id: 'gone', name: 'Old', parent_collection_id: 'trash' }
   };
   tree.notesById = {
     z: note('z', 'Zulu', { parent_collection_id: 'child' }),
     a: note('a', 'Alpha', { tags: ['template'] }),
     t: note('t', 'Trashed', { tags: ['template'], trashed: true }),
+    g: note('g', 'In trashed folder', {
+      tags: ['template'],
+      parent_collection_id: 'gone'
+    }),
     o: note('o', 'Other')
   };
 });

@@ -12,10 +12,12 @@
  * Any other plugin still gets the backend's "only available in the app" error.
  */
 
+import { TRASH_ID } from '$lib/api';
 import { isTauri } from '$lib/api/core';
 import { pluginsRunScript } from '$lib/api/plugins';
 import { getSettingValue } from '$lib/settings/store.svelte';
 import { tree } from '$lib/stores/tree.svelte';
+import { ancestorIsTrash } from '$lib/editor/trash';
 import type { HostNote } from './browser-host';
 import { runBundledPlugin } from './plugin-runner';
 import { pluginById } from './registry.svelte';
@@ -59,11 +61,19 @@ function folderPath(folderId: string | null): string {
   return parts.reverse().join(' / ');
 }
 
-/** The `notes.*` snapshot `note_snapshot` takes in the backend. */
+/** The `notes.*` snapshot `note_snapshot` takes in the backend, from `active_notes`. */
 function browserNotes(pluginId: string): HostNote[] {
   if (!granted(pluginId, 'notes.read')) return [];
   return Object.values(tree.notesById)
-    .filter((note) => !note.trashed)
+    .filter(
+      (note) =>
+        !note.trashed &&
+        !ancestorIsTrash(
+          note.parent_collection_id,
+          tree.collectionsById,
+          TRASH_ID
+        )
+    )
     .map((note) => ({
       id: note.id,
       title: note.title,
