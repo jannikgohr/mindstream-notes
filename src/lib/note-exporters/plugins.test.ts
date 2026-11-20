@@ -5,15 +5,23 @@ const saveFileExport = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 vi.mock('$lib/api/file-export', () => ({ saveFileExport }));
 
 const {
+  isTauri,
   loadNote,
   pluginsNativeToolStatus,
   pluginsRunScript,
   sanitizePdfFilename
 } = vi.hoisted(() => ({
+  isTauri: vi.fn(() => true),
   loadNote: vi.fn(),
   pluginsNativeToolStatus: vi.fn(),
   pluginsRunScript: vi.fn(),
   sanitizePdfFilename: vi.fn((name: string) => name)
+}));
+
+// The app path. `run-script.test.ts` runs plugins the browser way.
+vi.mock('$lib/api/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/api/core')>()),
+  isTauri
 }));
 
 vi.mock('$lib/api', async (importOriginal) => {
@@ -279,6 +287,12 @@ describe('pluginExportersForNote', () => {
   it('returns [] for a nullish note', () => {
     expect(pluginExportersForNote(null)).toEqual([]);
     expect(pluginExportersForNote(undefined)).toEqual([]);
+  });
+
+  it('leaves out exporters that need a native tool in a browser', () => {
+    registerTypstExporter();
+    isTauri.mockReturnValueOnce(false);
+    expect(pluginExportersForNote({ note_kind: typstKind })).toEqual([]);
   });
 
   it('maps registered exporters to runnable NoteExporter entries', async () => {

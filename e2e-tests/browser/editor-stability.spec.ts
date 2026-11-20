@@ -370,10 +370,9 @@ async function refreshPluginRegistry(page: Page) {
     .getByRole('button', { name: 'Plugins', exact: true })
     .first()
     .click();
-  const enabled = dialog.getByRole('switch', {
-    name: 'Enable in this vault',
-    exact: true
-  });
+  const enabled = dialog
+    .getByRole('group', { name: 'Templates', exact: true })
+    .getByRole('switch', { name: 'Enable in this vault', exact: true });
   await enabled.click();
   await expect(enabled).toHaveAttribute('aria-checked', 'false');
   await enabled.click();
