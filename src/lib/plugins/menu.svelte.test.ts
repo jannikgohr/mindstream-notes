@@ -5,15 +5,18 @@ const {
   requestOpenNote,
   userTemplateEntries,
   createNoteFromUserTemplate,
-  renderUserTemplateBody
+  renderUserTemplateBody,
+  pushToast
 } = vi.hoisted(() => ({
   createNoteIn: vi.fn(),
   requestOpenNote: vi.fn(),
   userTemplateEntries: vi.fn(),
   createNoteFromUserTemplate: vi.fn(),
-  renderUserTemplateBody: vi.fn()
+  renderUserTemplateBody: vi.fn(),
+  pushToast: vi.fn()
 }));
 vi.mock('$lib/stores/tree.svelte', () => ({ createNoteIn }));
+vi.mock('$lib/components/toast.svelte', () => ({ pushToast }));
 vi.mock('$lib/stores/open-note-intent.svelte', () => ({ requestOpenNote }));
 vi.mock('$lib/templates/user-templates', () => ({
   userTemplateEntries,
@@ -103,12 +106,15 @@ describe('runPluginTemplate', () => {
     );
   });
 
-  it('swallows errors from an unknown template', async () => {
+  it('shows an error from an unknown template instead of throwing', async () => {
     register();
     await expect(
       runPluginTemplate(PLUGIN_ID, 'ghost', null)
     ).resolves.toBeUndefined();
     expect(createNoteIn).not.toHaveBeenCalled();
+    expect(pushToast).toHaveBeenCalledWith(expect.stringContaining('ghost'), {
+      variant: 'error'
+    });
   });
 });
 
@@ -220,10 +226,11 @@ describe('runTemplateEntry', () => {
     );
   });
 
-  it('swallows errors from a failing entry', async () => {
+  it('shows an error from a failing entry instead of throwing', async () => {
     createNoteFromUserTemplate.mockRejectedValue(new Error('boom'));
     await expect(
       runTemplateEntry({ kind: 'user', noteId: 'x', label: 'x' }, null)
     ).resolves.toBeUndefined();
+    expect(pushToast).toHaveBeenCalledWith('boom', { variant: 'error' });
   });
 });

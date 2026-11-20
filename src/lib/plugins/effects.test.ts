@@ -339,6 +339,26 @@ describe('runPluginEffect', () => {
     expect(h.createNoteFromNote).toHaveBeenCalledWith('n1', null);
   });
 
+  it('shows a failed menu pick as an error toast', async () => {
+    h.perms.p1 = ['notes.create'];
+    h.createNoteFromNote.mockRejectedValueOnce(
+      new Error('date shift is out of range')
+    );
+    const item = menuItemFromPluginEffect('p1', 'templates', 'From template', {
+      effect: 'openMenu',
+      items: [
+        {
+          label: 'Bad',
+          run: { effect: 'createNoteFromNote', sourceNoteId: 'n1' }
+        }
+      ]
+    });
+    await item.children?.[0]?.onSelect?.();
+    expect(h.pushToast).toHaveBeenCalledWith('date shift is out of range', {
+      variant: 'error'
+    });
+  });
+
   it('converts openMenu effects into submenu items with inherited defaults', async () => {
     h.perms.p1 = ['notes.create'];
     h.noteKinds.kanban = {
