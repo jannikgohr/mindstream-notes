@@ -3941,11 +3941,13 @@ pub fn register_worker(
                         let target = app
                             .get_webview_window(&label)
                             .or_else(|| app.get_webview_window("main"));
-                        if let Some(window) = target {
-                            crate::tray::focus_vault_window(&app, &window);
-                            let _ = app
-                                .emit(crate::app_events::AppEvent::OnboardingChanged.as_str(), ());
+                        match target {
+                            Some(window) => crate::tray::focus_vault_window(&app, &window),
+                            // Unloaded: this builds it again.
+                            None => crate::tray::focus_main_window(&app),
                         }
+                        let _ =
+                            app.emit(crate::app_events::AppEvent::OnboardingChanged.as_str(), ());
                     })
                     .map_err(|_| "worker activation unavailable".to_string())?;
                 Ok(json!({"accepted":true}))

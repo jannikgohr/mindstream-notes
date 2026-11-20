@@ -1061,7 +1061,7 @@ test('a tab that cannot open the database keeps folder and tag settings', async 
   await second.goto('/');
   await expect(
     second.getByText(
-      'The database is open in another tab. Close it there and retry.',
+      'The database is open in another tab. This tab opens it once that one closes.',
       { exact: false }
     )
   ).toBeVisible();
@@ -1070,7 +1070,6 @@ test('a tab that cannot open the database keeps folder and tag settings', async 
   await second.waitForTimeout(1_000);
   expect(await storedFolder(second)).toBe(folder);
   await page.close();
-  await second.reload();
   await expect(
     second
       .getByRole('group', { name: 'File tree' })
@@ -1081,7 +1080,7 @@ test('a tab that cannot open the database keeps folder and tag settings', async 
   await expect(fileTreeCreateAction(second, 'New from template')).toBeVisible();
 });
 
-test('another tab reports the database owner and opens persisted data after it closes', async ({
+test('another tab reports the database owner and opens persisted data once it closes', async ({
   page,
   context
 }) => {
@@ -1093,12 +1092,11 @@ test('another tab reports the database owner and opens persisted data after it c
   await second.goto('/');
   await expect(
     second.getByText(
-      'The database is open in another tab. Close it there and retry.',
+      'The database is open in another tab. This tab opens it once that one closes.',
       { exact: false }
     )
   ).toBeVisible();
   await page.close();
-  await second.reload();
   await expect(
     second
       .getByRole('group', { name: 'File tree' })

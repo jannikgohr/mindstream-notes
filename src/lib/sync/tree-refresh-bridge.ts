@@ -8,21 +8,23 @@
  * nothing on the JS side reacted — so a note created on another device only
  * showed up after a manual sync (or an app restart).
  *
- * Installed once from the root layout. Refreshing on every completion (not
- * just non-empty pulls) is deliberate: a push-only sync still changes the
- * `modified` timestamps and `pushed` flags the tree renders and sorts on.
- * `loadTree` coalesces concurrent callers, so overlapping with `runSync`'s
- * own reload costs nothing.
+ * Installed once from the root layout. Rust compares the tree before and
+ * after each sync, because a push-only sync still changes the `pushed` flags
+ * the tree renders, so the report's pull counts can't tell. `loadTree`
+ * coalesces concurrent callers, so overlapping with `runSync`'s own reload
+ * costs nothing. A hidden window reloads once when it is shown.
  */
 
 import { isTauri } from '$lib/api/core';
 import { listen, TauriEventName } from '$lib/api/events';
+import { deferWhileHidden } from '$lib/defer-while-hidden';
 import { applyNoteChange, loadTree } from '$lib/stores/tree.svelte';
 
 export function installSyncTreeRefreshBridge(): () => void {
   if (!isTauri()) return () => {};
-  const unlisten = listen(TauriEventName.SyncCompleted, () => {
-    void loadTree();
+  const refresh = deferWhileHidden(() => void loadTree());
+  const unlisten = listen(TauriEventName.SyncCompleted, (sync) => {
+    if (sync.tree_changed) refresh.request();
   });
   // A rename or edit in a note window, or in the main window while a note
   // window is open. Each window holds its own tree, so the others would
@@ -31,6 +33,7 @@ export function installSyncTreeRefreshBridge(): () => void {
     applyNoteChange(change);
   });
   return () => {
+    refresh.dispose();
     void unlisten.then((off) => off());
     void unlistenNotes.then((off) => off());
   };

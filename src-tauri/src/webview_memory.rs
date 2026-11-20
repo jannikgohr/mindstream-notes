@@ -26,7 +26,14 @@
 //! behaviour. Deferred by [`HIDE_GRACE`], because undoing it costs page
 //! faults on the way back and a ten-second minimise should not pay them.
 //!
-//! Everything here is Windows-only and best-effort. `IsVisible` is on
+//! **Unloading.** A webview hidden for [`UNLOAD_AFTER`] is saved and
+//! destroyed outright (`worker_shutdown::unload_main_window`), because an
+//! idle WebKitGTK page alone holds about 250 MB however little it shows. The
+//! worker keeps syncing, and `tray::focus_main_window` builds the window
+//! again. Only a window hidden to the tray counts: a minimised one keeps its
+//! taskbar entry.
+//!
+//! The two knobs above are Windows-only and best-effort. `IsVisible` is on
 //! the controller wry hands us; the memory level arrived in WebView2
 //! runtime 1.0.1722.45, and on anything older that cast fails and only
 //! the level is skipped.
@@ -73,6 +80,10 @@ enum Posture {
 /// minimise-and-restore ten seconds later it is a pure loss, paid exactly
 /// when the user is looking. The delay keeps the win and skips the churn.
 const HIDE_GRACE: Duration = Duration::from_secs(20);
+
+/// How long the window has to stay hidden before it is unloaded. Bringing
+/// it back then costs a page load, which a short trip to the tray should not.
+const UNLOAD_AFTER: Duration = Duration::from_secs(15 * 60);
 
 #[derive(Debug, PartialEq, Eq)]
 struct VisibilityChange {
@@ -165,7 +176,7 @@ fn is_out_of_sight<R: Runtime>(window: &WebviewWindow<R>) -> bool {
 /// Safe to call as often as you like — repeat calls for a level already
 /// applied return without touching the webview, so callers do not have
 /// to track edges themselves.
-pub fn sync_to_visibility<R: Runtime>(app: &tauri::AppHandle<R>) {
+pub fn sync_to_visibility(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window(MAIN) else {
         return;
     };
@@ -194,7 +205,49 @@ pub fn sync_to_visibility<R: Runtime>(app: &tauri::AppHandle<R>) {
         if let Some(posture) = POLICY.parking_due(generation, is_out_of_sight(&window)) {
             apply(&window, posture);
         }
+        drop(window);
+        tokio::time::sleep(UNLOAD_AFTER - HIDE_GRACE).await;
+        unload_if_still_hidden(&app, generation);
     });
+}
+
+/// A popout keeps a hidden main window loaded. Once the last one closes,
+/// the main window gets a full [`UNLOAD_AFTER`] before it is unloaded.
+pub fn popout_closed(app: &tauri::AppHandle) {
+    let generation = POLICY.generation.load(Ordering::Relaxed);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(UNLOAD_AFTER).await;
+        unload_if_still_hidden(&app, generation);
+    });
+}
+
+fn unload_if_still_hidden(app: &tauri::AppHandle, generation: u64) {
+    let hidden = app
+        .get_webview_window(MAIN)
+        .is_some_and(|window| window.is_visible().ok() == Some(false));
+    if POLICY.is_current(generation) && hidden {
+        crate::worker_shutdown::unload_main_window(app);
+    }
+}
+
+/// The main window was just destroyed. glibc keeps the heap it freed for
+/// reuse; hand it back, since nothing is about to need it.
+pub fn unloaded<R: Runtime>(app: &tauri::AppHandle<R>) {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            // WebKit lets go of the page over the next few event-loop turns.
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            if app.get_webview_window(MAIN).is_none() {
+                // SAFETY: malloc_trim only releases free memory.
+                unsafe { libc::malloc_trim(0) };
+            }
+        });
+    }
+    #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+    let _ = app;
 }
 
 #[cfg(target_os = "windows")]

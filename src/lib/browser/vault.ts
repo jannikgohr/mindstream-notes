@@ -64,6 +64,18 @@ async function waitForTerminatedWorker(lock: string): Promise<void> {
   }
 }
 
+/**
+ * Another tab owns the vault. Queue for its lock and reload once it is free,
+ * so every store loads from the start. Chrome won't freeze an owner while a
+ * queued request waits on its lock.
+ */
+let queuedForVault = false;
+function reloadWhenVaultFree(lock: string): void {
+  if (queuedForVault || !navigator.locks) return;
+  queuedForVault = true;
+  void navigator.locks.request(lock, () => location.reload());
+}
+
 async function openVault(): Promise<BrowserStorageClient> {
   const testId = browserTestVaultId();
   const resetKey = vaultNamespace(testId).reset;
@@ -109,6 +121,14 @@ async function openVault(): Promise<BrowserStorageClient> {
     if (reset) {
       resetFailure = failedReset(error);
       throw resetFailure;
+    }
+    const failure = storageError(error);
+    if (failure.code === 'databaseBusy') {
+      reloadWhenVaultFree(vaultNamespace(testId).lock);
+      throw {
+        ...failure,
+        message: `${failure.message} This tab opens it once that one closes.`
+      };
     }
     throw error;
   }

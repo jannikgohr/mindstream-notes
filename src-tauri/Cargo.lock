@@ -3519,6 +3519,7 @@ dependencies = [
  "include_dir",
  "jni 0.21.1",
  "keyring-core",
+ "libc",
  "log",
  "md-5",
  "mindstream-plugin-fixtures",

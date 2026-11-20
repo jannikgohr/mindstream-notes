@@ -116,6 +116,37 @@ describe('InkDocument', () => {
     expect(doc.visibleStrokes()).toHaveLength(1);
   });
 
+  it('keeps undo and redo across an unloaded window, unless the ink changed', () => {
+    const doc = new InkDocument();
+    for (const x of [1, 2]) {
+      doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+      doc.pushPoint(x, x, 1);
+      doc.endStroke();
+    }
+    doc.undoLast();
+    const saved = JSON.parse(JSON.stringify(doc.captureUndoHistory()));
+
+    const reopened = InkDocument.fromBytes(doc.encode());
+    expect(reopened.restoreUndoHistory(saved)).toBe(true);
+    expect(reopened.redoLast().value).toBe(true);
+    expect(pointPairs(reopened)).toEqual([
+      [1, 1],
+      [2, 2]
+    ]);
+    reopened.undoLast();
+    reopened.undoLast();
+    expect(reopened.visibleStrokes()).toHaveLength(0);
+
+    const peer = InkDocument.fromBytes(doc.encode());
+    peer.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    peer.pushPoint(3, 3, 1);
+    peer.endStroke();
+    const changed = InkDocument.fromBytes(peer.encode());
+    expect(changed.restoreUndoHistory(saved)).toBe(false);
+    expect(changed.undoLast().value).toBe(false);
+    expect(new InkDocument().captureUndoHistory()).toBeNull();
+  });
+
   it('clears undo and redo stacks after a history restore', () => {
     const doc = new InkDocument();
     doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);

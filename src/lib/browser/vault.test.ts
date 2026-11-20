@@ -250,10 +250,42 @@ describe('vault connection recovery', () => {
 
     expect(await outcome(invokeBrowser('list_notes', {}))).toEqual({
       ok: false,
-      error: { code: 'databaseBusy', message: 'Already open' }
+      error: {
+        code: 'databaseBusy',
+        message: 'Already open This tab opens it once that one closes.'
+      }
     });
     await expect(invokeBrowser('list_notes', {})).resolves.toEqual([]);
     expect(FakeWorker.instances).toHaveLength(2);
+  });
+
+  it('reloads once the tab that owns the vault lets it go', async () => {
+    let free!: () => void;
+    const request = vi.fn(
+      (_name: string, callback: () => void) =>
+        new Promise<void>((done) => {
+          free = () => done(callback());
+        })
+    );
+    vi.stubGlobal('navigator', { ...navigator, locks: { request } });
+    const reload = vi.fn();
+    vi.stubGlobal(
+      'location',
+      Object.assign(new URL(location.href), { reload })
+    );
+    FakeWorker.plans = [
+      { open: { error: { code: 'databaseBusy', message: 'Other tab' } } },
+      { open: { error: { code: 'databaseBusy', message: 'Other tab' } } }
+    ];
+    const { invokeBrowser } = await loadVault();
+
+    await outcome(invokeBrowser('list_notes', {}));
+    await outcome(invokeBrowser('list_notes', {}));
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0][0]).toBe('mindstream:sqlite-vault:pool');
+    expect(reload).not.toHaveBeenCalled();
+    free();
+    expect(reload).toHaveBeenCalledOnce();
   });
 
   it('shares one open attempt among concurrent callers and fails them together', async () => {

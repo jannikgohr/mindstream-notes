@@ -20,6 +20,9 @@ struct Book {
     pending: Option<Batch>,
     window_closes: BTreeMap<String, WindowClose>,
     committed: bool,
+    /// The main window was saved and destroyed to free the webview's memory,
+    /// and is built again when it is next asked for. See `unload_main_window`.
+    unloaded: bool,
     requests: BTreeMap<Uuid, CloseRequest>,
     #[cfg(any(debug_assertions, feature = "e2e-data-dir"))]
     fail_next_close: bool,
@@ -144,10 +147,8 @@ impl Book {
         if self.pending.is_some() || self.committed {
             return Ok(None);
         }
-        if !self.window_closes.is_empty()
-            || !windows.contains("main")
-            || !windows.is_subset(&self.ready)
-        {
+        let main_accounted = windows.contains("main") || (self.unloaded && windows.is_empty());
+        if !self.window_closes.is_empty() || !main_accounted || !windows.is_subset(&self.ready) {
             return Err(unavailable());
         }
         let id = Uuid::new_v4();
@@ -283,6 +284,25 @@ impl Book {
         Ok(Some(id))
     }
 
+    /// Only a main window that is alone may be unloaded: a popout left open
+    /// still needs the webview, and would lose its vault window behind it.
+    fn begin_unload(&mut self, windows: &BTreeSet<String>) -> AppResult<Option<Uuid>> {
+        if self.pending.is_some()
+            || self.committed
+            || *windows != BTreeSet::from(["main".to_owned()])
+            || !self.ready.contains("main")
+        {
+            return Err(unavailable());
+        }
+        if self.window_closes.contains_key("main") {
+            return Ok(None);
+        }
+        let id = Uuid::new_v4();
+        self.window_closes
+            .insert("main".into(), WindowClose { id, saved: None });
+        Ok(Some(id))
+    }
+
     fn window_close_waiting(&self, label: &str, id: Uuid) -> bool {
         self.window_closes
             .get(label)
@@ -297,9 +317,14 @@ impl Book {
         {
             return false;
         }
-        self.window_closes
+        let saved = self
+            .window_closes
             .remove(label)
-            .is_some_and(|close| close.saved == Some(true))
+            .is_some_and(|close| close.saved == Some(true));
+        if saved && label == "main" {
+            self.unloaded = true;
+        }
+        saved
     }
 }
 
@@ -432,18 +457,20 @@ fn cancel_with_reason(app: &AppHandle, id: Uuid, reason: Option<&'static str>) {
 }
 
 fn notify(app: &AppHandle, participants: &BTreeSet<String>, id: Uuid, phase: &'static str) -> bool {
+    notify_with_reason(app, participants, id, phase, None)
+}
+
+fn notify_with_reason(
+    app: &AppHandle,
+    participants: &BTreeSet<String>,
+    id: Uuid,
+    phase: &'static str,
+    reason: Option<&'static str>,
+) -> bool {
     participants.iter().all(|label| {
         app.get_webview_window(label).is_some_and(|_| {
-            app.emit_to(
-                label.clone(),
-                CLOSE_EVENT,
-                Notice {
-                    id,
-                    phase,
-                    reason: None,
-                },
-            )
-            .is_ok()
+            app.emit_to(label.clone(), CLOSE_EVENT, Notice { id, phase, reason })
+                .is_ok()
         })
     })
 }
@@ -451,29 +478,91 @@ fn notify(app: &AppHandle, participants: &BTreeSet<String>, id: Uuid, phase: &'s
 /// A popout can close independently without stopping services in other windows.
 /// Its editor remains mounted until the final save has completed or failed.
 pub fn request_window_close(window: &tauri::Window) {
-    let app = window.app_handle();
+    let label = window.label().to_owned();
+    close_one(window.app_handle(), label, None, |book, label| {
+        book.begin_window_close(label)
+    });
+}
+
+/// Save the main window and destroy it, so its webview's memory goes back to
+/// the system while the worker keeps syncing. `focus_main_window` builds it
+/// again. The window's frontend is told why, and stays quiet if it fails.
+pub fn unload_main_window(app: &AppHandle) {
+    let windows = windows(app);
+    close_one(app, "main".into(), Some(UNLOAD), |book, _| {
+        book.begin_unload(&windows)
+    });
+}
+
+pub fn is_unloaded(app: &AppHandle) -> bool {
+    app.try_state::<Shutdown>()
+        .is_some_and(|state| state.book.lock().is_ok_and(|book| book.unloaded))
+}
+
+/// The main window is being built again.
+pub fn reload(app: &AppHandle) {
+    if let Some(state) = app.try_state::<Shutdown>() {
+        if let Ok(mut book) = state.book.lock() {
+            book.unloaded = false;
+        }
+    }
+}
+
+const UNLOAD: &str = "unload";
+
+/// The editors' undo histories, handed over by the main window before it is
+/// unloaded and taken back by the window built after it. One JSON document,
+/// opaque here, held in memory only. See `$lib/editor/retained-undo`.
+#[derive(Default)]
+pub struct RetainedUndo(Mutex<Option<String>>);
+
+#[tauri::command]
+pub fn retain_undo_history(retained: tauri::State<'_, RetainedUndo>, history: String) {
+    *retained
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(history);
+}
+
+#[tauri::command]
+pub fn take_undo_history(retained: tauri::State<'_, RetainedUndo>) -> Option<String> {
+    retained
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take()
+}
+
+fn close_one(
+    app: &AppHandle,
+    label: String,
+    reason: Option<&'static str>,
+    begin: impl FnOnce(&mut Book, &str) -> AppResult<Option<Uuid>>,
+) {
     let Some(state) = app.try_state::<Shutdown>() else {
         return;
     };
-    let label = window.label().to_owned();
     let started = state
         .book
         .lock()
         .map_err(|_| unavailable())
-        .and_then(|mut book| book.begin_window_close(&label));
+        .and_then(|mut book| begin(&mut book, &label));
     let id = match started {
         Ok(Some(id)) => id,
         Ok(None) => return,
         Err(_) => {
-            let _ = app.emit_to(
-                label,
-                CLOSE_EVENT,
-                Notice {
-                    id: Uuid::nil(),
-                    phase: "cancel",
-                    reason: None,
-                },
-            );
+            // An unload is not the user's request; nobody needs to hear it failed.
+            if reason.is_none() {
+                let _ = app.emit_to(
+                    label,
+                    CLOSE_EVENT,
+                    Notice {
+                        id: Uuid::nil(),
+                        phase: "cancel",
+                        reason: None,
+                    },
+                );
+            }
             return;
         }
     };
@@ -483,7 +572,7 @@ pub fn request_window_close(window: &tauri::Window) {
         .name("note-close".into())
         .spawn(move || {
             let participants = BTreeSet::from([closing_label.clone()]);
-            if notify(&handle, &participants, id, "prepare") {
+            if notify_with_reason(&handle, &participants, id, "prepare", reason) {
                 if let Some(state) = handle.try_state::<Shutdown>() {
                     if let Ok(book) = state.book.lock() {
                         // Drop the lock before scheduling native destruction.
@@ -500,18 +589,20 @@ pub fn request_window_close(window: &tauri::Window) {
             let final_handle = handle.clone();
             let final_label = closing_label.clone();
             if handle
-                .run_on_main_thread(move || finish_window_close(&final_handle, &final_label, id))
+                .run_on_main_thread(move || {
+                    finish_window_close(&final_handle, &final_label, id, reason)
+                })
                 .is_err()
             {
-                cancel_window_close(&handle, &closing_label, id);
+                cancel_window_close(&handle, &closing_label, id, reason);
             }
         });
     if spawned.is_err() {
-        cancel_window_close(app, &label, id);
+        cancel_window_close(app, &label, id, reason);
     }
 }
 
-fn cancel_window_close(app: &AppHandle, label: &str, id: Uuid) {
+fn cancel_window_close(app: &AppHandle, label: &str, id: Uuid, reason: Option<&'static str>) {
     if let Some(state) = app.try_state::<Shutdown>() {
         if let Ok(mut book) = state.book.lock() {
             if book
@@ -530,12 +621,22 @@ fn cancel_window_close(app: &AppHandle, label: &str, id: Uuid) {
         Notice {
             id,
             phase: "cancel",
-            reason: None,
+            reason,
         },
     );
 }
 
-fn finish_window_close(app: &AppHandle, label: &str, id: Uuid) {
+fn finish_window_close(app: &AppHandle, label: &str, id: Uuid, reason: Option<&'static str>) {
+    let window = app.get_webview_window(label);
+    // Shown again while it saved: the user is looking at it.
+    if reason == Some(UNLOAD)
+        && window
+            .as_ref()
+            .is_none_or(|w| w.is_visible().unwrap_or(true))
+    {
+        cancel_window_close(app, label, id, reason);
+        return;
+    }
     let saved = app.try_state::<Shutdown>().is_some_and(|state| {
         state
             .book
@@ -543,13 +644,20 @@ fn finish_window_close(app: &AppHandle, label: &str, id: Uuid) {
             .is_ok_and(|mut book| book.finish_window_close(label, id))
     });
     if saved {
-        if let Some(window) = app.get_webview_window(label) {
+        if let Some(window) = window {
             if window.destroy().is_ok() {
+                if reason == Some(UNLOAD) {
+                    log::info!("[vaults] main window saved and unloaded");
+                    crate::webview_memory::unloaded(app);
+                }
                 return;
             }
         }
+        if reason == Some(UNLOAD) {
+            reload(app);
+        }
     }
-    cancel_window_close(app, label, id);
+    cancel_window_close(app, label, id, reason);
 }
 
 /// Called from the native close event; all waits happen off the event-loop thread.
@@ -810,6 +918,34 @@ mod tests {
         let replacement = book.begin_window_close(label).unwrap().unwrap();
         assert!(!book.finish_window_close(label, destroyed));
         assert!(book.window_close_waiting(label, replacement));
+    }
+
+    #[test]
+    fn an_unloaded_main_window_closes_like_a_popout_and_the_vault_still_quits() {
+        let (mut book, windows) = ready();
+        assert!(book.begin_unload(&windows).is_err());
+        let main = BTreeSet::from(["main".into()]);
+        let id = book.begin_unload(&main).unwrap().unwrap();
+        assert!(book.begin(main.clone()).is_err());
+        book.ack(id, "main", true).unwrap();
+        assert!(book.finish_window_close("main", id));
+        assert!(book.unloaded);
+        book.ready.remove("main");
+        assert!(book.begin(BTreeSet::new()).unwrap().is_some());
+    }
+
+    #[test]
+    fn an_unsaved_unload_keeps_the_window() {
+        let mut book = Book {
+            ready: BTreeSet::from(["main".into()]),
+            ..Book::default()
+        };
+        let main = BTreeSet::from(["main".into()]);
+        let id = book.begin_unload(&main).unwrap().unwrap();
+        book.ack(id, "main", false).unwrap();
+        assert!(!book.finish_window_close("main", id));
+        assert!(!book.unloaded);
+        assert!(book.begin(BTreeSet::new()).is_err());
     }
 
     #[test]

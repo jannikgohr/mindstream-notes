@@ -66,6 +66,18 @@ the restored network-service process.
 
 Minimised or parked in the tray, the same build sits at 18–33 MB (below).
 
+All of the Windows numbers on this page predate vault worker processes. A
+release launch now runs a coordinator, which owns the tray and has no webview,
+plus one worker per open vault that owns the window and its webview. On Linux
+the coordinator holds about 19 MB private and a worker 43–48 MB, next to a
+WebKit web process of 240–270 MB with no tabs open. The `e2e-data-dir` build
+the app harness launches runs a single direct process, so it does not show
+the coordinator, and its numbers are not a release build's.
+
+The first launch after the browser-storage migration is not representative
+either: the migration page leaves the coordinator with a WebKit network
+process until it exits. Measure the second launch.
+
 ## What moved it
 
 ### WebView2 process configuration
@@ -170,6 +182,109 @@ minimise-and-restore ten seconds later should not.
 Only the `main` window is managed. Popout note windows get their own webview
 and are short-lived, so they are left alone.
 
+### Mounting editors only when their tab is first shown
+
+Every tab used to mount its full editor when its dock panel was created, and a
+restored layout creates all of them at startup. Dockview's default renderer
+only detaches a background tab's element, so the editor, its Y.Doc, its
+awareness timer and its sync listener all stayed alive. Measured on the Linux
+release build with 1,500 notes: twelve restored tabs cost about 280 MB in the
+web process, whichever kind of note was active, and hiding the window gave
+back only about 70 MB of it.
+
+`mountWhenFirstVisible` (`src/lib/desktop/mount-when-visible.ts`) now mounts a
+panel's editor the first time dockview shows it. Dockview reports a new panel
+as visible until its group has placed it, and a restore activates panels in
+turn, so visibility is only read after the current synchronous work. Tabs the
+user has visited stay mounted; unmounting them would lose scroll position and
+undo history.
+
+### Keeping a hidden window idle
+
+What makes a parked window's footprint unstable is anything that wakes it. On
+Windows a wake faults trimmed pages back in, and on every platform it adds
+garbage. The largest one was scheduled sync: every 30 seconds while signed
+in, `sync-completed` made the hidden page reload the whole note tree into
+reactive state and re-run the PDF search-index sweep, even when the sync
+changed nothing. With 1,500 notes on Linux that was ~120 ms of CPU and a
+6–30 MB swing in the web process per tick.
+
+`deferWhileHidden` (`src/lib/defer-while-hidden.ts`) holds work that only keeps
+the UI current while `document.visibilityState` is hidden, and runs it once
+when the page is shown again. The tree refresh, the PDF sweep and the PDF
+viewer's signature refresh use it; the sync itself still runs in Rust. With
+it, the same hidden window stayed within 1 MB across three minutes of ticks.
+Use it for any new listener that only refreshes what the user would see.
+
+A visible window reloads the tree only when `sync-completed` says
+`tree_changed`. Rust compares a hash of the tree snapshot with the one the
+last successful sync saw, because the report's counts miss changes such as a
+shared folder's discarded edits, and a sync can change the tree and then
+fail. A hidden `CollabProvider` sends no presence: it tells the room its
+cursor is gone and re-announces it when shown. Awareness would otherwise renew
+it every 15 seconds for each open shared note.
+
+### Unloading a window hidden for long
+
+An idle WebKitGTK page holds about 250 MB however little it shows, and 400 MB
+after some ink and editing, so no amount of trimming inside it gets a tray app
+under 100 MB. A main window hidden to the tray for 15 minutes, with no popout
+open (or 15 minutes after the last one closed), is therefore saved and destroyed (`worker_shutdown::unload_main_window`,
+timed from `webview_memory.rs`). The worker keeps the Rust sync and the change
+feed running; live Yjs collaboration lives in the page and stops with it.
+`tray::focus_main_window` builds the window again for anything that asks for
+it: the tray, a second launch, a shortcut, an invite link.
+
+Measured on Linux, 1,500 notes, 12 tabs, private memory of the whole tree:
+
+| state                      | coordinator | worker | WebKit |  total |
+| -------------------------- | ----------: | -----: | -----: | -----: |
+| hidden, after some editing |       20 MB |  57 MB | 411 MB | 490 MB |
+| unloaded                   |       20 MB |  39 MB |   8 MB |  68 MB |
+
+The worker drops below its visible size because it calls `malloc_trim` after
+the destroy; without it, glibc kept ~30 MB of the freed page and the total sat
+at ~100 MB. WebKit's network process stays (8 MB) and is not worth chasing.
+
+Traps:
+
+- Tauri raises `ExitRequested` when the last window goes. A worker answers that
+  by quitting the whole app, so it must not while unloaded (`lib.rs`).
+- A full quit while unloaded has no window to save; `Book::begin` accepts the
+  empty set only then.
+- The rebuilt page loads before its listeners exist. A note made from the tray
+  or a shortcut waits in `tray::CreatedNotes` until the window takes it.
+- Undo history survives through `$lib/editor/retained-undo`: before the
+  destroy each editor hands its history to Rust (in memory only), and a tab
+  takes it back when it mounts. Yjs undo needs the deleted content the stored
+  note has collected, so `yjs-undo-snapshot` carries the editor's document too.
+  Excalidraw's history cannot be exported, so a freeform tab loses its undo,
+  and a note left in Source view comes back in the default view without its
+  source-pane history, as a switch to WYSIWYG already does.
+
+### A browser tab
+
+The browser leaves a tab's memory to Chrome. Measured on Linux Chromium with
+1,500 notes and the same 12 tabs, the tab's renderer (with the SQLite worker)
+holds 129 MB restored with one tab shown, 196 MB after every tab was shown
+once and 186 MB hidden. The app's JS stays idle while hidden. Energy Saver's
+freezing frees nothing and rarely applies: it only freezes CPU-heavy tabs, and
+never one the user has edited. Memory Saver's discard frees the whole
+renderer, and the tab reloads with `document.wasDiscarded` in under a second.
+
+What a discard would lose, and how it is kept:
+
+- Edits inside the save debounce: `suspend-flush` saves on hide, and a tab is
+  always hidden before it is discarded.
+- Undo history: `retained-undo` writes every editor's history to
+  sessionStorage each time the tab hides, and the reload takes it back, as the
+  desktop does across an unload. A reload the user starts keeps it too.
+
+A second tab is refused the vault lock but queues for it, and reloads once
+the owner closes (`reloadWhenVaultFree` in `$lib/browser/vault.ts`). The
+queued request also stops Chrome freezing the owner. A frozen owner would
+otherwise hold the lock with nothing to make Chrome wake it.
+
 ### Not holding spellcheck dictionaries the user is not using
 
 Hunspell tables are by far the largest thing the Rust process holds, and the
@@ -221,9 +336,6 @@ really there.
 
 ## What is not worth chasing
 
-- **Open notes.** Dockview only renders the visible panel, so the second and
-  later tabs cost ~1.2 MB of heap and ~190 DOM nodes each — a tab strip entry
-  and a tree row, not an editor. "Ten notes open" is not why the app is large.
 - **A leak.** Twelve open/close cycles on the same note settle ~2.7 MB above
   the first open and stop climbing; DOM node count returns exactly to baseline.
 - **Shaving JS.** Worth knowing the exchange rate: V8 keeps each loaded script

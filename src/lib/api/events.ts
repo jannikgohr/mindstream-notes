@@ -45,6 +45,7 @@ export type TauriEventKey = `${TauriEventName}`;
  *   assets_pulled_ids — asset bytes inserted or updated; open editors
  *                       evict matching blob URLs from AssetBridge and
  *                       kick matching image views so they re-resolve
+ *   tree_changed      — something the file tree shows changed
  *
  *   limits            — the spaces the server took nothing new for,
  *                       because a limit of the plan that pays for them
@@ -56,6 +57,7 @@ export interface SyncCompletedPayload {
   report: SyncReport;
   notes_pulled_ids: string[];
   assets_pulled_ids: string[];
+  tree_changed: boolean;
   limits?: SyncLimitReached[];
 }
 
@@ -143,7 +145,8 @@ export type TauriEvents = {
   'vault-worker-close': {
     id: string;
     phase: 'waiting' | 'prepare' | 'cancel';
-    reason?: 'background' | 'recovery';
+    /** `unload`: the worker frees a window that has been hidden for long. */
+    reason?: 'background' | 'recovery' | 'unload';
   };
 };
 

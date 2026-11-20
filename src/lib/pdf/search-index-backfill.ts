@@ -20,6 +20,7 @@ import {
   setPdfText
 } from '$lib/api';
 import { listen, TauriEventName } from '$lib/api/events';
+import { deferWhileHidden } from '$lib/defer-while-hidden';
 import { extractPdfText } from './extract-text';
 import { indexInkNote } from '$lib/ink/pdf-backgrounds';
 import { pdfAssetIdFromBody } from './viewer-helpers';
@@ -27,6 +28,7 @@ import { pdfAssetIdFromBody } from './viewer-helpers';
 let running = false;
 let rerunQueued = false;
 let listenerArmed = false;
+const resweep = deferWhileHidden(() => void sweep());
 
 /** Yield to the browser between PDFs so indexing never blocks interaction. */
 function idle(): Promise<void> {
@@ -93,16 +95,15 @@ async function sweep(): Promise<void> {
 /**
  * Kick off PDF search indexing for this window and keep it fresh: an initial
  * sweep plus a re-sweep whenever a sync pull completes (which may have brought
- * in new PDF notes). Safe to call more than once — only the first call arms the
- * sync listener, and overlapping sweeps coalesce.
+ * in new PDF notes), deferred while the window is hidden. Safe to call more
+ * than once — only the first call arms the sync listener, and overlapping
+ * sweeps coalesce.
  */
 export function startPdfSearchIndexing(): void {
   void sweep();
   if (listenerArmed) return;
   listenerArmed = true;
-  void listen(TauriEventName.SyncCompleted, () => {
-    void sweep();
-  }).catch((err) => {
+  void listen(TauriEventName.SyncCompleted, resweep.request).catch((err) => {
     listenerArmed = false;
     console.warn('[pdf-index] sync listener registration failed', err);
   });

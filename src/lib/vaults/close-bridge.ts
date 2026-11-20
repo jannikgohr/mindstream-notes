@@ -8,6 +8,7 @@ import {
 import { listen, TauriEventName } from '$lib/api/events';
 import { isMobile } from '$lib/platform';
 import { flushBeforeAppClose } from '$lib/editor/suspend-flush';
+import { handOverUndoHistories } from '$lib/editor/retained-undo';
 import { flushSettingsWrites } from '$lib/settings/store.svelte';
 import { tUi } from '$lib/settings/i18n.svelte';
 import { pushToast } from '$lib/components/toast.svelte';
@@ -18,9 +19,11 @@ export function installWorkerCloseBridge(): () => void {
   if (!isTauri() || isMobile()) return () => {};
   let overlay: ReturnType<typeof freezeCloseInput> | null = null;
   const participant = createCloseParticipant({
-    flush: async () => {
+    flush: async (reason) => {
       try {
         await flushBeforeAppClose();
+        // Taken after the saves, so each history matches the saved note.
+        if (reason === 'unload') await handOverUndoHistories();
       } finally {
         await flushSettingsWrites();
       }
@@ -42,6 +45,8 @@ export function installWorkerCloseBridge(): () => void {
     },
     phase: (phase) => overlay?.phase(phase),
     failed: (reason) => {
+      // The window was hidden and stays open; nobody asked for this.
+      if (reason === 'unload') return;
       const message =
         reason === 'recovery'
           ? 'vault.switchCancelled'

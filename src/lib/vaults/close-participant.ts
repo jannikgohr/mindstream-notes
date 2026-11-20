@@ -1,10 +1,10 @@
 /** Keep a window frozen until the native owner commits or cancels this close. */
 export function createCloseParticipant(options: {
-  flush: () => Promise<void>;
+  flush: (reason?: 'unload') => Promise<void>;
   acknowledge: (id: string, saved: boolean) => Promise<void>;
   freeze: () => () => void;
   phase?: (phase: 'waiting' | 'prepare') => void;
-  failed: (reason?: 'background' | 'recovery') => void;
+  failed: (reason?: 'background' | 'recovery' | 'unload') => void;
   onError: (error: unknown) => void;
 }) {
   let active: string | null = null;
@@ -15,7 +15,7 @@ export function createCloseParticipant(options: {
   async function receive(notice: {
     id: string;
     phase: 'waiting' | 'prepare' | 'cancel';
-    reason?: 'background' | 'recovery';
+    reason?: 'background' | 'recovery' | 'unload';
   }) {
     if (disposed) return;
     if (notice.phase === 'cancel') {
@@ -50,7 +50,9 @@ export function createCloseParticipant(options: {
       // services have completed and emitted their last content updates.
       if (notice.phase === 'waiting') return;
       preparing = true;
-      await options.flush();
+      await options.flush(
+        notice.reason === 'unload' ? notice.reason : undefined
+      );
       if (active === notice.id && !disposed) {
         await options.acknowledge(notice.id, true);
       }

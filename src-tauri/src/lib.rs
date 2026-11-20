@@ -246,6 +246,9 @@ pub fn run() {
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 worker_shutdown::window_destroyed(window.app_handle(), window.label());
+                if window.label().starts_with("note_") {
+                    webview_memory::popout_closed(window.app_handle());
+                }
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if worker_shutdown::closing(window.app_handle()) {
@@ -283,9 +286,12 @@ pub fn run() {
                         api.prevent_close();
                         worker_shutdown::request_close(app_handle);
                     }
-                    tauri::WindowEvent::Destroyed => {
-                        let app_handle = window.app_handle();
-                        app_handle.exit(0);
+                    // An unloaded window is built again on demand; the worker
+                    // goes on syncing without it.
+                    tauri::WindowEvent::Destroyed
+                        if !worker_shutdown::is_unloaded(window.app_handle()) =>
+                    {
+                        window.app_handle().exit(0);
                     }
                     // Minimise, restore and show all surface here as a
                     // resize; `sync_to_visibility` reads the window's
@@ -552,18 +558,6 @@ pub fn run() {
             // Create after profile selection so the first document gets the
             // correct account's CSP. A fresh document after sign-in/sign-out
             // reads the newly persisted session before allowing relay traffic.
-            let policy_app = app.handle().clone();
-            #[cfg(desktop)]
-            let preview_port = Some(plugins::preview_service::gateway_port()?);
-            #[cfg(not(desktop))]
-            let preview_port = None;
-            let config = app
-                .config()
-                .app
-                .windows
-                .iter()
-                .find(|window| window.label == "main")
-                .ok_or("main window configuration is missing")?;
             let title = if app.state::<environment::Environment>().kind == environment::Kind::Dev {
                 "Mindstream Notes Dev".to_owned()
             } else {
@@ -584,30 +578,9 @@ pub fn run() {
             } else {
                 title
             };
-            let builder = tauri::WebviewWindowBuilder::from_config(app, config)?
-                .initialization_script(theme_presets::initialization_script(app.handle())?)
-                .title(title)
-                .on_web_resource_request(move |_request, response| {
-                    if !response
-                        .headers()
-                        .contains_key(tauri::http::header::CONTENT_SECURITY_POLICY)
-                    {
-                        return;
-                    }
-                    let session = auth::read_session_info(&policy_app).ok().flatten();
-                    webview_security::apply_account_policy(
-                        response,
-                        session.as_ref().map(|session| session.server_url.as_str()),
-                        preview_port,
-                    );
-                });
+            build_main_window(app.handle(), &title)?;
             #[cfg(desktop)]
-            let builder = if let Some(identity) = app.try_state::<browser_identity::Identity>() {
-                identity.apply(builder)
-            } else {
-                builder
-            };
-            builder.build()?;
+            app.manage(MainWindowTitle(title));
 
             #[cfg(target_os = "macos")]
             native_menu::init(app)?;
@@ -659,6 +632,10 @@ pub fn run() {
             sync::scheduler::spawn(app.handle().clone());
             // An invite link opened outside the app, now or when it started.
             app.manage(deep_links::PendingInviteLink::default());
+            #[cfg(desktop)]
+            app.manage(tray::CreatedNotes::default());
+            #[cfg(desktop)]
+            app.manage(worker_shutdown::RetainedUndo::default());
             #[cfg(desktop)]
             deep_links::listen(app.handle());
             // The server says when something changed elsewhere, so that
@@ -887,6 +864,12 @@ pub fn run() {
                 sharing::user_key_info,
                 sharing::own_key_fingerprint,
                 deep_links::take_pending_invite_link,
+                #[cfg(desktop)]
+                tray::take_created_notes,
+                #[cfg(desktop)]
+                worker_shutdown::retain_undo_history,
+                #[cfg(desktop)]
+                worker_shutdown::take_undo_history,
                 #[cfg(feature = "e2e-data-dir")]
                 deep_links::e2e_open_address,
                 #[cfg(feature = "e2e-data-dir")]
@@ -988,7 +971,10 @@ pub fn run() {
         {
             if app.try_state::<worker_shutdown::Shutdown>().is_some() {
                 api.prevent_exit();
-                vault_supervisor::request_quit(app);
+                // Its last window was unloaded, not closed: the worker stays.
+                if !worker_shutdown::is_unloaded(app) {
+                    vault_supervisor::request_quit(app);
+                }
             }
         }
         #[cfg(desktop)]
@@ -1019,6 +1005,80 @@ pub fn run() {
         #[cfg(not(target_os = "macos"))]
         let _ = app;
     });
+}
+
+fn build_main_window(
+    app: &tauri::AppHandle,
+    title: &str,
+) -> Result<tauri::WebviewWindow, Box<dyn std::error::Error>> {
+    let policy_app = app.clone();
+    #[cfg(desktop)]
+    let preview_port = Some(plugins::preview_service::gateway_port()?);
+    #[cfg(not(desktop))]
+    let preview_port = None;
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == "main")
+        .ok_or("main window configuration is missing")?;
+    let builder = tauri::WebviewWindowBuilder::from_config(app, config)?
+        .initialization_script(theme_presets::initialization_script(app)?)
+        .title(title)
+        .on_web_resource_request(move |_request, response| {
+            if !response
+                .headers()
+                .contains_key(tauri::http::header::CONTENT_SECURITY_POLICY)
+            {
+                return;
+            }
+            let session = auth::read_session_info(&policy_app).ok().flatten();
+            webview_security::apply_account_policy(
+                response,
+                session.as_ref().map(|session| session.server_url.as_str()),
+                preview_port,
+            );
+        });
+    #[cfg(desktop)]
+    let builder = if let Some(identity) = app.try_state::<browser_identity::Identity>() {
+        identity.apply(builder)
+    } else {
+        builder
+    };
+    Ok(builder.build()?)
+}
+
+#[cfg(desktop)]
+struct MainWindowTitle(String);
+
+/// Build the main window again after `worker_shutdown::unload_main_window`
+/// destroyed it. It comes back hidden; the caller shows it.
+#[cfg(desktop)]
+pub(crate) fn reload_main_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
+    if !worker_shutdown::is_unloaded(app) {
+        return None;
+    }
+    let title = app.try_state::<MainWindowTitle>()?;
+    let window = match build_main_window(app, &title.0) {
+        Ok(window) => window,
+        Err(err) => {
+            log::error!("[window] rebuild main window: {err}");
+            return None;
+        }
+    };
+    worker_shutdown::reload(app);
+    log::info!("[window] main window rebuilt");
+    if let Err(err) = window.restore_state(WINDOW_STATE_FLAGS) {
+        log::warn!("[window-state] restore main window: {err}");
+    }
+    if let Err(err) = desktop_settings::apply_window_decorations(
+        app,
+        desktop_settings::should_use_custom_window_decorations(app),
+    ) {
+        log::warn!("[window] apply decorations: {err}");
+    }
+    Some(window)
 }
 
 #[cfg(desktop)]
