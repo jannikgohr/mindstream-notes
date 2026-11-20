@@ -152,6 +152,15 @@
   import NameInputSheet from '$lib/mobile/NameInputSheet.svelte';
   import { closeNavOverlay, openNavOverlay } from '$lib/mobile/state.svelte';
   import { toErrorMessage } from '$lib/api/errors';
+  import {
+    retainUndoOnUnload,
+    takeRetainedUndo
+  } from '$lib/editor/retained-undo';
+  import {
+    captureYjsUndo,
+    loadRetainedYjsUndo,
+    type YjsUndoJSON
+  } from '$lib/sync/yjs-undo-snapshot';
 
   registerEditorItem('mindstream-linked-note', KanbanLinkedNoteField);
   registerEditorItem('mindstream-labels', KanbanLabelsField);
@@ -204,6 +213,7 @@
   let yDoc: Y.Doc | null = null;
   let awareness: Awareness | null = null;
   let undoManager: Y.UndoManager | null = null;
+  let releaseUndo: (() => void) | null = null;
   let api = $state<KanbanInstanceApi | null>(null);
   let searchPanel = $state<{ focus: () => void } | null>(null);
   /** Board props handed to the widget. Reassigned only on remote changes. */
@@ -1247,11 +1257,17 @@
     if (!host) return;
     mobile = isMobile();
     try {
-      const note = await loadNote(noteId);
+      const undoKey = `kanban:${noteId}`;
+      const [note, savedUndo] = await Promise.all([
+        loadNote(noteId),
+        takeRetainedUndo<YjsUndoJSON>(undoKey)
+      ]);
       if (!host) return; // unmounted while awaiting
 
       const localYDoc = new Y.Doc();
       yDoc = localYDoc;
+      const restoreUndo =
+        savedUndo && loadRetainedYjsUndo(localYDoc, savedUndo);
       if (note.yrs_state.length > 0) {
         try {
           Y.applyUpdate(localYDoc, new Uint8Array(note.yrs_state));
@@ -1263,7 +1279,10 @@
       // three so the user lands on a usable board. No-op for existing boards.
       seedDefaultBoard(localYDoc);
       board = readBoardFromYDoc(localYDoc);
-      undoManager = createKanbanUndoManager(localYDoc);
+      const manager = createKanbanUndoManager(localYDoc);
+      undoManager = manager;
+      restoreUndo?.(manager);
+      releaseUndo = retainUndoOnUnload(undoKey, () => captureYjsUndo(manager));
       updateUndoState();
 
       const localAwareness = new Awareness(localYDoc);
@@ -1411,6 +1430,7 @@
   });
 
   onDestroy(() => {
+    releaseUndo?.();
     clearNoteStatus(noteId);
     cleanupListPointerDrag();
     cleanupMobileListTransitionGhost();

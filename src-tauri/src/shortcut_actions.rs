@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -134,11 +134,7 @@ fn perform(app: &AppHandle, input: Input) -> AppResult<Value> {
         log::warn!("[capture] note committed but focus failed: {error}");
     }
     if let Some(id) = &note_id {
-        if let Err(error) = app.emit_to(
-            "main",
-            crate::app_events::AppEvent::TrayNoteCreated.as_str(),
-            json!({"note_id":id}),
-        ) {
+        if let Err(error) = crate::tray::note_created(app, id.clone()) {
             // Cache success after commit, even if notification delivery fails.
             log::warn!("[capture] note committed but notification failed: {error}");
         }

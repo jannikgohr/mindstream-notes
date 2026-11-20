@@ -43,6 +43,40 @@ struct TrayNoteCreatedPayload {
     note_id: String,
 }
 
+/// Notes made from the tray or a global shortcut that the main window has not
+/// opened yet. It may still be loading when one is made: at launch, or when
+/// it is built again after `worker_shutdown::unload_main_window`.
+#[derive(Default)]
+pub struct CreatedNotes(Mutex<Vec<String>>);
+
+/// Keep a new note for the main window and tell it to come and get it.
+pub(crate) fn note_created(app: &AppHandle, note_id: String) -> tauri::Result<()> {
+    if let Some(notes) = app.try_state::<CreatedNotes>() {
+        notes
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(note_id.clone());
+    }
+    app.emit_to(
+        "main",
+        AppEvent::TrayNoteCreated.as_str(),
+        TrayNoteCreatedPayload { note_id },
+    )
+}
+
+/// The notes made from the tray or a shortcut since the window last asked.
+/// It asks when it starts and again whenever it is told one was made.
+#[tauri::command]
+pub fn take_created_notes(notes: tauri::State<'_, CreatedNotes>) -> Vec<String> {
+    std::mem::take(
+        &mut *notes
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    )
+}
+
 struct TrayMenuItems {
     #[cfg(target_os = "linux")]
     dev: Option<IconMenuItem<tauri::Wry>>,
@@ -436,12 +470,7 @@ fn create_note_and_emit(
 
     match result {
         Ok(note) => {
-            if let Err(err) = app.emit(
-                AppEvent::TrayNoteCreated.as_str(),
-                TrayNoteCreatedPayload {
-                    note_id: note.summary.id,
-                },
-            ) {
+            if let Err(err) = note_created(app, note.summary.id) {
                 log::warn!("[{source}] failed to emit note-created event: {err}");
             }
         }
@@ -479,7 +508,10 @@ fn global_shortcut_template(
 }
 
 pub(crate) fn focus_main_window(app: &AppHandle) {
-    let Some(window) = app.get_webview_window("main") else {
+    let window = app
+        .get_webview_window("main")
+        .or_else(|| crate::reload_main_window(app));
+    let Some(window) = window else {
         eprintln!("[focus_main_window] no 'main' window — cannot focus");
         return;
     };

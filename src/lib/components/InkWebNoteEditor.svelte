@@ -134,9 +134,14 @@
     DEFAULT_COLOR,
     DEFAULT_WIDTH,
     InkDocument,
+    type InkUndoHistory,
     type StrokeBounds,
     type StrokeStylePatch
   } from '$lib/ink/document';
+  import {
+    retainUndoOnUnload,
+    takeRetainedUndo
+  } from '$lib/editor/retained-undo';
   import {
     argbToColorHex,
     colorHexToArgb,
@@ -256,6 +261,7 @@
   let toolbarEl = $state<HTMLDivElement | null>(null);
   let boundsFrame: number | null = null;
   let doc = $state<InkDocument | null>(null);
+  let releaseUndo: (() => void) | null = null;
   let handle: WebInkHandleInstance | null = null;
   let provider: InkWebCollabProvider | null = null;
   let disposed = false;
@@ -2464,6 +2470,8 @@
 
   onMount(async () => {
     const mountStartedAt = performance.now();
+    const undoKey = `ink:${noteId}`;
+    const retainedUndo = takeRetainedUndo<InkUndoHistory>(undoKey);
     const mobile = isMobile();
     mobileToolbar = mobile;
     if (isTauri() && mobile) {
@@ -2521,6 +2529,13 @@
       });
       if (mutation.update) queueSaveUpdates([mutation.update]);
     }
+    const savedUndo = await retainedUndo;
+    if (disposed) return;
+    if (savedUndo) doc.restoreUndoHistory(savedUndo);
+    releaseUndo = retainUndoOnUnload(
+      undoKey,
+      () => doc?.captureUndoHistory() ?? null
+    );
     const decodedAt = performance.now();
     handle = {
       encode_state_vector: () => doc?.encodeStateVector() ?? new Uint8Array(),
@@ -2632,6 +2647,7 @@
   });
 
   onDestroy(() => {
+    releaseUndo?.();
     backgroundUpgrade.abort();
     window.removeEventListener(
       'mindstream:android-stylus-eraser',

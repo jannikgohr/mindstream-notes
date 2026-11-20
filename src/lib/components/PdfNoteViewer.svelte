@@ -149,6 +149,15 @@
   import { createViewerZoom } from '$lib/pdf/viewer-zoom';
   import { alert } from './confirm-dialog.svelte';
   import { toErrorMessage } from '$lib/api/errors';
+  import {
+    retainUndoOnUnload,
+    takeRetainedUndo
+  } from '$lib/editor/retained-undo';
+  import {
+    captureYjsUndo,
+    loadRetainedYjsUndo,
+    type YjsUndoJSON
+  } from '$lib/sync/yjs-undo-snapshot';
 
   interface Props {
     noteId: string;
@@ -207,6 +216,7 @@
   let highlightColor = $state(HIGHLIGHT_COLOR);
   let inkColor = $state(INK_COLOR);
   let undoManager: Y.UndoManager | null = null;
+  let releaseUndo: (() => void) | null = null;
   let canUndo = $state(false);
   let canRedo = $state(false);
   // Floating bubble for text-aware highlight/comment on a text selection.
@@ -1549,11 +1559,17 @@
       registerEditor(editorListener);
     }
     try {
-      const note = await loadNote(noteId);
+      const undoKey = `pdf:${noteId}`;
+      const [note, savedUndo] = await Promise.all([
+        loadNote(noteId),
+        takeRetainedUndo<YjsUndoJSON>(undoKey)
+      ]);
       isTrashed = note.trashed;
 
       const localYDoc = new Y.Doc();
       yDoc = localYDoc;
+      const restoreUndo =
+        savedUndo && loadRetainedYjsUndo(localYDoc, savedUndo);
       if (note.yrs_state.length > 0) {
         try {
           Y.applyUpdate(localYDoc, new Uint8Array(note.yrs_state));
@@ -1587,13 +1603,17 @@
       // Undo/redo scoped to this note's annotations. trackedOrigins is
       // limited to LOCAL_ORIGIN so undo never reverts a peer's edit or a
       // sync merge — only changes this client authored.
-      undoManager = new Y.UndoManager(annotationsMap, {
+      const manager = new Y.UndoManager(annotationsMap, {
         trackedOrigins: new Set([LOCAL_ORIGIN])
       });
+      undoManager = manager;
+      restoreUndo?.(manager);
+      releaseUndo = retainUndoOnUnload(undoKey, () => captureYjsUndo(manager));
       const refreshUndoState = () => {
         canUndo = (undoManager?.undoStack.length ?? 0) > 0;
         canRedo = (undoManager?.redoStack.length ?? 0) > 0;
       };
+      refreshUndoState();
       undoManager.on('stack-item-added', refreshUndoState);
       undoManager.on('stack-item-popped', refreshUndoState);
       undoManager.on('stack-cleared', refreshUndoState);
@@ -1750,6 +1770,7 @@
   });
 
   onDestroy(() => {
+    releaseUndo?.();
     void saveScheduler.destroy();
     historyCapture.cancel();
     void historyCapture.capture('edited');

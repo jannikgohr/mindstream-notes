@@ -92,6 +92,9 @@ source worker before showing the target. The durable `vault-handoff.json` record
 binds exact vault paths, launch/operation IDs, geometry and phase. Recovery keeps
 a still-open source; after source closure it finishes the target. Whole-app Quit
 and updates save every participating window before releasing worker ownership.
+A main window hidden to the tray for 15 minutes, with no popout open, is saved
+the same way and destroyed while its worker keeps syncing; anything that asks
+for the window builds it again (see `memory.md`).
 Progress shares the bottom-right toast component and cannot be dismissed while
 native closure is deciding. Once its last worker has exited, the coordinator
 exits too unless close-to-tray is on. That setting alone decides, in `tauri dev`

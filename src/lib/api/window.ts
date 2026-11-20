@@ -6,7 +6,12 @@
  */
 
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { isTauri } from './core';
+import {
+  assertStringArray,
+  invokeOrFallback,
+  isTauri,
+  TauriCommandName
+} from './core';
 import { emitTo, TauriEventName } from './events';
 import { getCustomWindowDecorations } from './desktop-settings';
 import { getWorkerBrowserOptions } from './browser-identity';
@@ -75,6 +80,19 @@ export async function requestNoteWindow(
 
 function noteWindowLabel(id: string): string {
   return id.startsWith('note_') ? id : `note_${id}`;
+}
+
+/**
+ * Notes made from the tray or a global shortcut that this window has not
+ * opened yet, once each. Asked at start and on `TrayNoteCreated`.
+ */
+export function takeCreatedNotes(): Promise<string[]> {
+  return invokeOrFallback(
+    TauriCommandName.TakeCreatedNotes,
+    undefined,
+    async () => [],
+    (value) => assertStringArray(value, 'created notes')
+  );
 }
 
 export async function focusMainWindow(): Promise<void> {
