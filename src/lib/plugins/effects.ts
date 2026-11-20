@@ -21,6 +21,7 @@ import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
 import { insertMarkdownIntoActiveNote } from '$lib/hotkeys';
 import { createNoteFromNote } from '$lib/templates/user-templates';
 import { pushToast } from '$lib/components/toast.svelte';
+import { toErrorMessage } from '$lib/api/errors';
 import type { MenuItem } from '$lib/components/context-menu-types';
 import { buildPluginContext } from './plugin-ctx';
 import { openOrCreateNote } from './open-or-create';
@@ -200,7 +201,7 @@ function pluginEffectMenuItems(
         : undefined,
       onSelect: () => {
         opts?.onPick?.();
-        void runPluginEffect(pluginId, it.run, anchor, opts);
+        return runPickedEffect(pluginId, it.run, anchor, opts);
       }
     };
   });
@@ -228,8 +229,23 @@ export function menuItemFromPluginEffect(
   return {
     id,
     label,
-    onSelect: () => void runPluginEffect(pluginId, effect, anchor, opts)
+    onSelect: () => runPickedEffect(pluginId, effect, anchor, opts)
   };
+}
+
+/** Perform an effect the user picked, showing a failure instead of throwing. */
+async function runPickedEffect(
+  pluginId: string,
+  effect: PluginEffect,
+  anchor?: EffectAnchor,
+  opts?: RunEffectOptions
+): Promise<void> {
+  try {
+    await runPluginEffect(pluginId, effect, anchor, opts);
+  } catch (err) {
+    console.error('[plugins] effect failed', pluginId, effect.effect, err);
+    pushToast(toErrorMessage(err), { variant: 'error' });
+  }
 }
 
 /** Perform one parsed effect. Note-creating effects require `notes.create`. */
@@ -351,15 +367,7 @@ export async function runExportEffect(
   caller?: string
 ): Promise<void> {
   const effect = await exportEffect(pluginId, exportName, input, caller);
-  if (!effect) return;
-  try {
-    await runPluginEffect(pluginId, effect);
-  } catch (err) {
-    console.error('[plugins] effect failed', pluginId, exportName, err);
-    pushToast(err instanceof Error ? err.message : String(err), {
-      variant: 'error'
-    });
-  }
+  if (effect) await runPickedEffect(pluginId, effect);
 }
 
 /**
