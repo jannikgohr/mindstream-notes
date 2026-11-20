@@ -197,8 +197,8 @@ test('plugin docs and permissions take the full phone screen', async ({
   // Docs open on their section list; a section is a page with a back arrow,
   // and its text gets the whole width instead of a column beside the list.
   await page
+    .getByRole('group', { name: 'Templates', exact: true })
     .getByRole('button', { name: /documentation/i })
-    .first()
     .click();
   const docs = page.getByRole('dialog', { name: 'Templates' });
   const sections = docs.getByRole('navigation').getByRole('button');

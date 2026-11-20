@@ -56,15 +56,17 @@ to approve it again, even when the files are identical.
 
 ## The plugins that come with the app
 
+The browser version has Journal, Templates and Typst. LanguageTool and plugins you
+install need the app.
+
 ### Journal
 
-Adds **Journal** to the desktop sidebar: a month calendar showing which days
+Adds **Journal** to the sidebar: a month calendar showing which days
 have a daily note and how many other notes were created or edited, with that
 day's notes listed below. Clicking a day, or **Today**, opens its daily note and
 creates it if needed. In its settings, pick the folder daily notes go in, their
 title format, and a note to use as their template. Disable it to remove Journal
-from the sidebar; your daily notes stay. It needs the desktop app, not the
-browser.
+from the sidebar; your daily notes stay.
 
 It can read the titles, folders and dates of your notes, and create notes.
 
@@ -84,7 +86,8 @@ It can read the titles, tags and folders of your notes, and create notes.
 Adds Typst documents: Typst source with a preview beside it, exported as PDF,
 PNG or SVG. The preview and those exports need the `typst` program on your
 computer, and the live preview with click-to-source also needs `tinymist`.
-Without them, as on Android, a Typst document stays editable as source, and
+Without them, as on Android or in a browser, a Typst document stays editable
+as source, and
 exporting the source still works. The plugin's documentation says what to
 install.
 

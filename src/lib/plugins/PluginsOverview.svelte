@@ -236,6 +236,8 @@
              as one row, the switch at its end; wider screens keep them side
              by side. -->
         <div
+          role="group"
+          aria-label={entry.name}
           class="flex flex-col gap-1 py-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4"
         >
           <div class="min-w-0">

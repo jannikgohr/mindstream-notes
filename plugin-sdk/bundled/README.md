@@ -37,7 +37,8 @@ cargo test --locked --workspace
 The SDK's bundled tests run the same behavior assertions against the shipped
 Rust components and the [non-shipped TypeScript examples](../examples/README.md).
 Runtime tests cover the compiled components on native Wasmtime and the Pulley
-interpreter.
+interpreter. `src/lib/plugins/run-script.test.ts` runs them through jco and the
+browser host, as the browser version does.
 
 Templates keeps the measured scalar host calendar path. The guest handles
 placeholder parsing, variables, ASCII filters, folder/tag selection and menu

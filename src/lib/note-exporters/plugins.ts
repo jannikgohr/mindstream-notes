@@ -1,11 +1,13 @@
 import { loadNote } from '$lib/api';
-import { pluginsNativeToolStatus, pluginsRunScript } from '$lib/api/plugins';
+import { isTauri } from '$lib/api/core';
+import { pluginsNativeToolStatus } from '$lib/api/plugins';
 import { base64ToBytes } from '$lib/editor/base64';
 import {
   pluginNoteExportersForKind,
   type PluginNoteExporterRef
 } from '$lib/plugins/registry.svelte';
 import { resolvePluginString } from '$lib/plugins/plugin-i18n';
+import { runPluginScript } from '$lib/plugins/run-script';
 import {
   EXPORT_FORMATS,
   exportFilename,
@@ -105,7 +107,7 @@ export async function runPluginNoteExporter(
     body: note.body,
     format: ref.exporter.format
   };
-  const result = await pluginsRunScript(
+  const result = await runPluginScript(
     ref.pluginId,
     ref.exporter.export,
     input
@@ -148,7 +150,7 @@ export async function runPluginNoteExporter(
       );
     const files: ExportFile[] = [];
     for (let page = 1; page <= pageCount; page++) {
-      const result = await pluginsRunScript(ref.pluginId, ref.exporter.export, {
+      const result = await runPluginScript(ref.pluginId, ref.exporter.export, {
         ...input,
         page
       });
@@ -173,10 +175,13 @@ export function pluginExportersForNote(
   note: { note_kind: string } | null | undefined
 ): NoteExporter[] {
   if (!note) return [];
-  return pluginNoteExportersForKind(note.note_kind).map((ref) => ({
-    id: `plugin.${ref.pluginId}.${ref.exporter.id}`,
-    noteKind: ref.exporter.noteKind,
-    label: resolvePluginString(ref.pluginId, ref.exporter.labelKey),
-    run: (noteId) => runPluginNoteExporter(ref, noteId)
-  }));
+  // A browser has no native tools, so these exports could only fail.
+  return pluginNoteExportersForKind(note.note_kind)
+    .filter((ref) => isTauri() || !ref.exporter.requiresNativeTool)
+    .map((ref) => ({
+      id: `plugin.${ref.pluginId}.${ref.exporter.id}`,
+      noteKind: ref.exporter.noteKind,
+      label: resolvePluginString(ref.pluginId, ref.exporter.labelKey),
+      run: (noteId) => runPluginNoteExporter(ref, noteId)
+    }));
 }

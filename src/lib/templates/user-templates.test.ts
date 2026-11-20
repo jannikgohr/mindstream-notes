@@ -40,6 +40,12 @@ vi.mock('$lib/plugins/templates', () => ({
     settings.get(`plugins.${pluginId}.open-on-create`) !== false
 }));
 
+import templatesManifest from '../../../plugins/templates/manifest.json';
+import {
+  registerPlugin,
+  resetPluginRegistry,
+  setPluginEnabled
+} from '$lib/plugins/registry.svelte';
 import {
   TEMPLATES_PLUGIN_ID,
   createNoteFromUserTemplate,
@@ -76,6 +82,8 @@ function folder(id: string, name: string, parent: string | null = null) {
 }
 
 beforeEach(() => {
+  resetPluginRegistry();
+  registerPlugin(templatesManifest);
   state.notesById = {};
   state.collectionsById = {};
   settings.clear();
@@ -105,6 +113,15 @@ describe('userTemplateEntries', () => {
     };
     const labels = userTemplateEntries().map((e) => e.label);
     expect(labels).toEqual(['Direct', 'Nested']);
+  });
+
+  it('lists nothing while the Templates plugin is disabled', () => {
+    settings.set(TAG_KEY, 'tpl');
+    state.notesById = { a: note('a', { title: 'Tagged', tags: ['tpl'] }) };
+    setPluginEnabled(TEMPLATES_PLUGIN_ID, false);
+    expect(userTemplateEntries()).toEqual([]);
+    setPluginEnabled(TEMPLATES_PLUGIN_ID, true);
+    expect(userTemplateEntries()).toHaveLength(1);
   });
 
   it('includes notes carrying the source tag', () => {

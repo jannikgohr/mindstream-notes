@@ -63,6 +63,7 @@
     "test:qa": "pnpm build:wasm && node e2e-tests/browser/playwright.cjs test --config e2e-tests/qa/playwright.config.ts"
   },
   "devDependencies": {
+    "@bytecodealliance/jco-transpile": "^0.20.0",
     "@commitlint/cli": "^21.0.1",
     "@commitlint/config-conventional": "^21.0.1",
     "@eslint/js": "^10.0.1",
