@@ -20,7 +20,7 @@
  * (`{{date}}`, `{{uuid}}`, `{{date+7d:YYYY-MM-DD}}`, …) interpolated by the
  * **Templates plugin's component** (`renderTemplate`) — the plugin owns the macro
  * engine; the app only performs the note write. The web build runs the same
- * component logic through its TypeScript port (`plugins/browser-templates.ts`).
+ * component in the page (`plugins/browser-runtime.ts`).
  */
 
 import { loadNote } from '$lib/api/notes';
@@ -31,6 +31,7 @@ import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
 import { getSettingValue } from '$lib/settings/store.svelte';
 import { i18n } from '$lib/settings/i18n.svelte';
 import { shouldOpenOnCreate } from '$lib/plugins/templates';
+import { pluginById } from '$lib/plugins/registry.svelte';
 
 /** The Templates plugin owns the source-folder / source-tag settings. */
 export const TEMPLATES_PLUGIN_ID = 'com.mindstream.templates.core';
@@ -72,10 +73,13 @@ function isInFolder(collectionId: string | null, folderId: string): boolean {
 /**
  * Every note that qualifies as a user template under the current settings,
  * sorted by title, regardless of note kind (trashed notes excluded). Empty when
- * neither source is configured. Reads the reactive tree + settings, so it
- * re-derives when notes, tags, or the settings change.
+ * neither source is configured or the Templates plugin is disabled. Reads the
+ * reactive tree + settings, so it re-derives when notes, tags, or the settings
+ * change.
  */
 export function userTemplateEntries(): UserTemplateEntry[] {
+  // Rendering runs the plugin, which refuses while it is disabled.
+  if (!pluginById(TEMPLATES_PLUGIN_ID)?.enabled) return [];
   const folderId = trimmedSetting(SOURCE_FOLDER_KEY);
   const tag = trimmedSetting(SOURCE_TAG_KEY);
   if (!folderId && !tag) return [];

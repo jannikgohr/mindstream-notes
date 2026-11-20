@@ -1,6 +1,7 @@
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vitest/config';
 import path from 'node:path';
+import { pluginComponents } from './scripts/browser/plugin-components.mjs';
 
 /**
  * Vitest config kept separate from vite.config.ts because vitest pulls in
@@ -11,7 +12,7 @@ import path from 'node:path';
 export default defineConfig({
   // @ts-expect-error - vitest resolves its own vite, so the svelte plugin's
   // Plugin type comes from a different copy than the one defineConfig expects.
-  plugins: [svelte({ hot: false })],
+  plugins: [svelte({ hot: false }), pluginComponents()],
   resolve: {
     alias: {
       $lib: path.resolve('./src/lib'),

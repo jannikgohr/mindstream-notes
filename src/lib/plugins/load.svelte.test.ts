@@ -19,7 +19,11 @@ vi.mock('$lib/api/events', async (orig) => {
 });
 vi.mock('./manage.svelte', () => ({ refreshPluginAdmin }));
 
-import { loadPlugins, watchPluginChanges } from './load';
+import {
+  loadPlugins,
+  saveBrowserPluginEnabled,
+  watchPluginChanges
+} from './load';
 import {
   allPlugins,
   pluginById,
@@ -86,6 +90,7 @@ beforeEach(() => {
 afterEach(() => {
   resetPluginRegistry();
   notificationState.items = [];
+  localStorage.clear();
 });
 
 describe('loadPlugins — browser (no backend)', () => {
@@ -100,6 +105,23 @@ describe('loadPlugins — browser (no backend)', () => {
     expect(pluginTemplates()).toHaveLength(0);
     expect(pluginSettingsSections().length).toBeGreaterThanOrEqual(1);
     expect(pluginsDiscover).not.toHaveBeenCalled();
+  });
+
+  it('registers the other bundled Wasm plugins as their manifests default', async () => {
+    isTauri.mockReturnValue(false);
+    await loadPlugins();
+    expect(pluginById('com.mindstream.typst')?.enabled).toBe(false);
+    // Manifest-only, and its text checks stay out of the browser.
+    expect(pluginById('com.mindstream.languagetool')).toBeUndefined();
+  });
+
+  it("keeps the user's on/off choice across loads", async () => {
+    isTauri.mockReturnValue(false);
+    saveBrowserPluginEnabled('com.mindstream.typst', true);
+    saveBrowserPluginEnabled(CORE_ID, false);
+    await loadPlugins();
+    expect(pluginById('com.mindstream.typst')?.enabled).toBe(true);
+    expect(pluginById(CORE_ID)?.enabled).toBe(false);
   });
 });
 

@@ -56,6 +56,9 @@ to approve it again, even when the files are identical.
 
 ## The plugins that come with the app
 
+The browser version has Templates and Typst. LanguageTool and plugins you
+install need the app.
+
 ### Templates
 
 Turns your own notes into templates; it brings none of its own. In its settings,
@@ -72,7 +75,8 @@ It can read the titles, tags and folders of your notes, and create notes.
 Adds Typst documents: Typst source with a preview beside it, exported as PDF,
 PNG or SVG. The preview and those exports need the `typst` program on your
 computer, and the live preview with click-to-source also needs `tinymist`.
-Without them, as on Android, a Typst document stays editable as source, and
+Without them, as on Android or in a browser, a Typst document stays editable
+as source, and
 exporting the source still works. The plugin's documentation says what to
 install.
 
