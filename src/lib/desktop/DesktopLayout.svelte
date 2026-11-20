@@ -26,6 +26,7 @@
   import LazyFileExplorer from '$lib/components/LazyFileExplorer.svelte';
   import LazyNoteSidebar from '$lib/components/LazyNoteSidebar.svelte';
   import NoteKindRenderer from '$lib/components/NoteKindRenderer.svelte';
+  import { mountWhenFirstVisible } from './mount-when-visible';
   import ResizeHandle from '$lib/components/ResizeHandle.svelte';
   import LazySettingsDialog from '$lib/settings/LazySettingsDialog.svelte';
   import { PopoutHeaderAction } from './dockview-popout-action';
@@ -153,6 +154,7 @@
     // fields are declared explicitly and assigned in the constructor.
     private el: HTMLElement = document.createElement('div');
     private instance: ReturnType<typeof mount> | null = null;
+    private stopWaiting: (() => void) | null = null;
     private noteId: string | null = null;
     // Widening ComponentType to accept `any` props completely satisfies both the
     // Svelte 5 mount wrapper and the legacy class/functional definitions from
@@ -178,16 +180,18 @@
       this.el.addEventListener('pointerdown', this.touch, true);
       this.el.addEventListener('keydown', this.touch, true);
 
-      // By using a type cast here, we satisfy mount's internal generics
-      // while safely passing the verified noteId down to the target layout.
-      this.instance = mount(this.Component as Component<any>, {
-        target: this.el,
-        props: {
-          noteId,
-          noteKind:
-            (parameters.params as { noteKind?: string } | undefined)
-              ?.noteKind ?? this.noteKind
-        }
+      this.stopWaiting = mountWhenFirstVisible(parameters.api, () => {
+        // By using a type cast here, we satisfy mount's internal generics
+        // while safely passing the verified noteId down to the target layout.
+        this.instance = mount(this.Component as Component<any>, {
+          target: this.el,
+          props: {
+            noteId,
+            noteKind:
+              (parameters.params as { noteKind?: string } | undefined)
+                ?.noteKind ?? this.noteKind
+          }
+        });
       });
     }
 
@@ -197,6 +201,7 @@
     };
 
     dispose(): void {
+      this.stopWaiting?.();
       this.el.removeEventListener('pointerdown', this.touch, true);
       this.el.removeEventListener('keydown', this.touch, true);
       if (this.instance) {

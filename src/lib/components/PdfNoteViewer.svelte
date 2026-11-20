@@ -51,6 +51,7 @@
     setPdfText
   } from '$lib/api';
   import { listen, TauriEventName } from '$lib/api/events';
+  import { deferWhileHidden } from '$lib/defer-while-hidden';
   import { openExternalUrl } from '$lib/api/external-url';
   import { extractTextFromDocument } from '$lib/pdf/extract-text';
   import { otherPeerCount } from '$lib/editor/awareness-presence';
@@ -268,6 +269,7 @@
   let restoringHistorySnapshot = false;
   let unregisterHistory: (() => void) | null = null;
   let unsubSync: (() => void) | null = null;
+  const signatureRefresh = deferWhileHidden(() => void refreshSignatures());
   let unsubSession: (() => void) | null = null;
   let editorListener: EditorListener | null = null;
   let resizeObserver: ResizeObserver | null = null;
@@ -1671,7 +1673,7 @@
         // Refresh the shared signature library so signatures added/removed on
         // another device show up here (and in any other open viewer) without
         // reopening. The reconciling effect re-arms the selection if needed.
-        await refreshSignatures();
+        signatureRefresh.request();
 
         if (!payload.notes_pulled_ids.includes(noteId) || !yDoc) return;
         try {
@@ -1763,6 +1765,7 @@
     }
     unsubSync?.();
     unsubSync = null;
+    signatureRefresh.dispose();
     unsubSession?.();
     unsubSession = null;
     viewerZoom.cancelPendingCentring();

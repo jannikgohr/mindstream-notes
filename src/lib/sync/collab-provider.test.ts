@@ -186,6 +186,42 @@ describe('live Yjs co-editing', () => {
     expect(ann.awareness.getStates().has(bob.doc.clientID)).toBe(false);
   });
 
+  it('takes the cursor away while the window is hidden', async () => {
+    let visibility: DocumentVisibilityState = 'visible';
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => visibility
+    });
+    cleanup.push(
+      () => delete (document as { visibilityState?: unknown }).visibilityState
+    );
+    const setVisibility = (next: DocumentVisibilityState) => {
+      visibility = next;
+      document.dispatchEvent(new Event('visibilitychange'));
+    };
+    const ann = device('ann', ADMIN);
+    const bob = device('bob', READ_WRITE);
+    ann.open();
+    bob.open();
+    bob.awareness.setLocalStateField('user', { name: 'bob' });
+    await settle();
+    expect(ann.awareness.getStates().has(bob.doc.clientID)).toBe(true);
+
+    setVisibility('hidden');
+    await settle();
+    expect(ann.awareness.getStates().has(bob.doc.clientID)).toBe(false);
+    const presenceSent = sent(ROOM_CLASS_PRESENCE);
+    bob.awareness.setLocalStateField('user', { name: 'bob, away' });
+    await settle();
+    expect(sent(ROOM_CLASS_PRESENCE)).toBe(presenceSent);
+
+    setVisibility('visible');
+    await settle();
+    expect(ann.awareness.getStates().get(bob.doc.clientID)).toEqual({
+      user: { name: 'bob, away' }
+    });
+  });
+
   it('does not let presence change the document', async () => {
     const ann = device('ann', ADMIN, 'intact');
     const reader = device('reader', READ_ONLY);
