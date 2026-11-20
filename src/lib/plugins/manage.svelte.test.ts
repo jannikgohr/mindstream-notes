@@ -18,8 +18,11 @@ vi.mock('$lib/api/plugins', () => ({
   pluginsApprove: api.approve,
   pluginsRemove: api.remove
 }));
-const loadPlugins = vi.hoisted(() => vi.fn());
-vi.mock('./load', () => ({ loadPlugins }));
+const { loadPlugins, saveBrowserPluginEnabled } = vi.hoisted(() => ({
+  loadPlugins: vi.fn(),
+  saveBrowserPluginEnabled: vi.fn()
+}));
+vi.mock('./load', () => ({ loadPlugins, saveBrowserPluginEnabled }));
 
 import { registerPlugin, resetPluginRegistry } from './registry.svelte';
 import {
@@ -123,6 +126,10 @@ describe('pluginOverview', () => {
     const overview = pluginOverview();
     expect(overview).toHaveLength(1);
     expect(overview[0].enabled).toBe(false);
+    expect(saveBrowserPluginEnabled).toHaveBeenCalledWith(
+      'com.a.plugin',
+      false
+    );
   });
 });
 

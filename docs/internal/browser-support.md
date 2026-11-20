@@ -277,6 +277,47 @@ would report another tab.
 new one from `run_backup_at` when the format changes, and keep it readable by
 the browser tests.
 
+## Plugins
+
+The browser registers the bundled plugins whose manifest says
+`"runtime": "wasm"`, which today means Journal, Templates and Typst, and runs the same
+`plugin.wasm` the app runs. `scripts/browser/plugin-components.mjs` is a Vite
+plugin that transpiles each component with jco when it is imported as
+`plugin.wasm?component`. Vitest uses it too, so the unit tests run the shipped
+components. It inlines the core modules as base64 and strips jco's
+`new URL(..., import.meta.url)` fallback, which Vite would otherwise turn into
+an asset glob over the plugin folder. Each component is a lazy chunk of about
+200 KB.
+
+`src/lib/plugins/browser-host.ts` implements the host interfaces. Its clock,
+frontmatter writer, permission checks and refusal messages follow
+`src-tauri/plugin-runtime`, and `browser-host.test.ts` mirrors the Rust tests.
+Keep the two in step. The clock parses RFC 3339 by hand, because `Date` accepts
+`24:00` and rolls 30 February over to March where chrono refuses both. There
+is no plugin data directory, so storage calls refuse with `unavailable`. No
+native tool exists, so Typst falls back to source only, its editor does not ask
+for a `typst` binary, and the exports that need one are hidden. `batch` is not
+implemented, and a component that imports it fails with a message naming it.
+
+Calls run in one module Worker per plugin (`plugin-runner.ts`), with a fresh
+instance each time. `limits.timeoutMs` is clamped like the app's
+`limits::WASM` policy, 1 s by default and 5 s at most, and an overrun
+terminates the Worker. A Worker runs one call at a time, and the deadline
+starts when it reports that call's component loaded, so neither a slow first
+download nor the call ahead of it counts.
+Calls queued behind an overrun are cancelled with it. Wasm memory is defined
+inside the component, so the page cannot cap it as Wasmtime does. That is
+acceptable only for components the app ships. A third-party plugin would also
+need install and storage before it could run here.
+
+Everything a call sends crosses `postMessage`, so the note snapshot and grant
+list must be plain arrays. A Svelte state proxy fails the structured clone.
+`vite.config.ts` builds Workers as ES modules with the component plugin,
+because the plugin Worker imports components lazily.
+
+The on/off switch is saved in localStorage under
+`notes-app:browser-plugins-enabled:v1`. Typst starts off, as its manifest asks.
+
 ## Native-only features
 
 The browser hides what only the native app can do: the tray, start on login,
@@ -294,8 +335,8 @@ that belongs in the browser.
 
 ## Remaining increments
 
-Plugins stay limited to the bundled core plugin until a later project, and
-LanguageTool checks stay out of the browser.
+Third-party plugins stay app-only, and LanguageTool checks stay out of the
+browser.
 
 1. Add spellcheck in a worker and separate vaults on one origin.
 2. Complete credentials and networking for the steps below.

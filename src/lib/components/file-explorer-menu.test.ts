@@ -20,6 +20,11 @@ const pluginApi = vi.hoisted(() => ({
 vi.mock('$lib/api/plugins', () => ({
   pluginsRunScript: pluginApi.runScript
 }));
+// The app path. `run-script.test.ts` runs plugins the browser way.
+vi.mock('$lib/api/core', async (orig) => ({
+  ...(await orig<typeof import('$lib/api/core')>()),
+  isTauri: () => true
+}));
 
 const confirmMock = vi.hoisted(() => vi.fn());
 vi.mock('./confirm-dialog.svelte', () => ({ confirm: confirmMock }));

@@ -23,6 +23,11 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('$lib/api/plugins', () => ({ pluginsRunScript: h.runScript }));
+// The app path. `run-script.test.ts` runs plugins the browser way.
+vi.mock('$lib/api/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/api/core')>()),
+  isTauri: () => true
+}));
 vi.mock('$lib/stores/tree.svelte', () => ({
   createNoteIn: h.createNoteIn,
   tree: {

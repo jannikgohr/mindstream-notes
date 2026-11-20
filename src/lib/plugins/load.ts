@@ -9,10 +9,10 @@
  * the contributions of the enabled ones into the reactive registry.
  *
  * Outside Tauri (`vite preview` / web-mobile) there is no backend and no disk
- * discovery, so the bundled core plugin's manifest — the single canonical
- * `plugins/templates/manifest.json` (repo root; bundled into the app resource
- * dir as `core-plugins/`) the app also ships as a resource — is imported
- * directly and registered as a builtin.
+ * discovery. The bundled Wasm plugins, which the page can run
+ * (`browser-runtime.ts`), are registered as builtins from the repo-root
+ * `plugins/` manifests the app also ships. Their on/off choice is kept in
+ * localStorage, since there is no backend record to hold it.
  *
  * Every plugin loads in isolation: a manifest that fails validation is recorded
  * as that plugin's load error and skipped, so a broken plugin can never take
@@ -21,7 +21,9 @@
 
 import { isTauri } from '$lib/api/core';
 import { pluginsDiscover, type DiscoveredPluginView } from '$lib/api/plugins';
-import templatesManifest from '../../../plugins/templates/manifest.json';
+import { readAppStorage, writeAppStorage } from '$lib/storage/app-storage';
+import { isRecord } from '$lib/validation';
+import { bundledWasmManifests } from './browser-runtime';
 import {
   allPlugins,
   unregisterPlugin,
@@ -48,6 +50,34 @@ function manifestName(manifest: unknown, fallback: string): string {
     if (typeof name === 'string') return name;
   }
   return fallback;
+}
+
+const BROWSER_ENABLED_KEY = 'notes-app:browser-plugins-enabled:v1';
+
+function browserEnabledChoices(): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(
+      readAppStorage(BROWSER_ENABLED_KEY) ?? '{}'
+    );
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/** The user's choice for a bundled plugin in the browser, else its default. */
+function browserPluginEnabled(manifest: unknown): boolean {
+  const stored = browserEnabledChoices()[manifestId(manifest)];
+  if (typeof stored === 'boolean') return stored;
+  return !(isRecord(manifest) && manifest.enabledByDefault === false);
+}
+
+/** Remember a browser enable/disable across reloads. */
+export function saveBrowserPluginEnabled(id: string, enabled: boolean): void {
+  writeAppStorage(
+    BROWSER_ENABLED_KEY,
+    JSON.stringify({ ...browserEnabledChoices(), [id]: enabled })
+  );
 }
 
 /**
@@ -100,15 +130,15 @@ function applyDiscovered(view: DiscoveredPluginView): void {
  */
 export async function loadPlugins(): Promise<void> {
   if (!isTauri()) {
-    // No backend discovery available: register the bundled core plugin so the
-    // example is present in the web build.
-    try {
-      registerPlugin(templatesManifest, { enabled: true });
-    } catch (err) {
-      recordPluginLoadError(
-        manifestId(templatesManifest),
-        err instanceof Error ? err.message : String(err)
-      );
+    for (const manifest of bundledWasmManifests()) {
+      try {
+        registerPlugin(manifest, { enabled: browserPluginEnabled(manifest) });
+      } catch (err) {
+        recordPluginLoadError(
+          manifestId(manifest),
+          err instanceof Error ? err.message : String(err)
+        );
+      }
     }
     return;
   }

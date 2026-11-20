@@ -17,9 +17,10 @@
     pluginsDownloadArtifact,
     pluginsNativeServiceStatus,
     pluginsNativeToolStatus,
-    pluginsReadArtifact,
-    pluginsRunScript
+    pluginsReadArtifact
   } from '$lib/api/plugins';
+  import { isTauri } from '$lib/api/core';
+  import { runPluginScript } from '$lib/plugins/run-script';
   import { isMobile } from '$lib/platform';
   import { base64ToBytes } from '$lib/editor/base64';
   import { tUi } from '$lib/settings/i18n.svelte';
@@ -134,12 +135,13 @@
 
   // Native-tool render gating: when a note kind declares `requiresNativeTool`
   // the host checks the binary is available before ever rendering. If it isn't
-  // (not installed, or a mobile platform) the editor drops to source-only.
+  // (not installed, or mobile or a browser) the editor drops to source-only.
   type ToolState = 'unknown' | 'checking' | 'available' | 'unavailable';
   let toolState = $state<ToolState>('unknown');
   let toolBinaryName = $state('');
   let toolCheckToken = 0;
-  const mobile = isMobile();
+  // Nowhere to install a native tool, so no point asking the user to.
+  const noNativeTools = isMobile() || !isTauri();
 
   // Live preview service (e.g. tinymist): when its binary is available the
   // editor loads the service's own frontend in an iframe with click-to-source,
@@ -376,8 +378,8 @@
   $effect(() => {
     const ref = contributionRef;
     const serviceId = previewServiceId;
-    if (!ref || !serviceId || mobile) {
-      serviceState = mobile && serviceId ? 'unavailable' : 'unknown';
+    if (!ref || !serviceId || noNativeTools) {
+      serviceState = noNativeTools && serviceId ? 'unavailable' : 'unknown';
       return;
     }
     const token = ++serviceCheckToken;
@@ -785,7 +787,7 @@
     rendering = true;
     renderError = null;
     try {
-      const raw = await pluginsRunScript(
+      const raw = await runPluginScript(
         ref.pluginId,
         ref.contribution.render.export,
         {
@@ -1193,7 +1195,7 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
     {:else if isReadOnlyScope}
       <ViewOnlyBanner />
     {/if}
-    {#if previewBlocked && !mobile}
+    {#if previewBlocked && !noNativeTools}
       <div
         class="flex shrink-0 items-center gap-2 border-b border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
       >
