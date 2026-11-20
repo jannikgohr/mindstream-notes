@@ -26,6 +26,7 @@
   import LazyFileExplorer from '$lib/components/LazyFileExplorer.svelte';
   import LazyNoteSidebar from '$lib/components/LazyNoteSidebar.svelte';
   import NoteKindRenderer from '$lib/components/NoteKindRenderer.svelte';
+  import { mountWhenFirstVisible } from './mount-when-visible';
   import ResizeHandle from '$lib/components/ResizeHandle.svelte';
   import LazySettingsDialog from '$lib/settings/LazySettingsDialog.svelte';
   import { PopoutHeaderAction } from './dockview-popout-action';
@@ -39,7 +40,8 @@
     focusMainWindow,
     isKnownNoteKind,
     isTauri,
-    openNoteWindow
+    openNoteWindow,
+    takeCreatedNotes
   } from '$lib/api';
   import { clearSavedLayout, loadSavedLayout, saveLayout } from '$lib/api';
   import { onAppClose } from '$lib/editor/suspend-flush';
@@ -94,7 +96,7 @@
   let layoutReady = $state(false);
   let saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
   let layoutPersistenceReady = false;
-  let pendingTrayNoteId: string | null = null;
+  const pendingTrayNotes: string[] = [];
   let pointerDraggedPanel: IDockviewPanel | null = null;
   let pointerTabDropTarget: {
     group: DockviewGroupPanel;
@@ -153,6 +155,7 @@
     // fields are declared explicitly and assigned in the constructor.
     private el: HTMLElement = document.createElement('div');
     private instance: ReturnType<typeof mount> | null = null;
+    private stopWaiting: (() => void) | null = null;
     private noteId: string | null = null;
     // Widening ComponentType to accept `any` props completely satisfies both the
     // Svelte 5 mount wrapper and the legacy class/functional definitions from
@@ -178,16 +181,18 @@
       this.el.addEventListener('pointerdown', this.touch, true);
       this.el.addEventListener('keydown', this.touch, true);
 
-      // By using a type cast here, we satisfy mount's internal generics
-      // while safely passing the verified noteId down to the target layout.
-      this.instance = mount(this.Component as Component<any>, {
-        target: this.el,
-        props: {
-          noteId,
-          noteKind:
-            (parameters.params as { noteKind?: string } | undefined)
-              ?.noteKind ?? this.noteKind
-        }
+      this.stopWaiting = mountWhenFirstVisible(parameters.api, () => {
+        // By using a type cast here, we satisfy mount's internal generics
+        // while safely passing the verified noteId down to the target layout.
+        this.instance = mount(this.Component as Component<any>, {
+          target: this.el,
+          props: {
+            noteId,
+            noteKind:
+              (parameters.params as { noteKind?: string } | undefined)
+                ?.noteKind ?? this.noteKind
+          }
+        });
       });
     }
 
@@ -197,6 +202,7 @@
     };
 
     dispose(): void {
+      this.stopWaiting?.();
       this.el.removeEventListener('pointerdown', this.touch, true);
       this.el.removeEventListener('keydown', this.touch, true);
       if (this.instance) {
@@ -329,11 +335,7 @@
 
     lastActiveGroup = dock.activeGroup ?? lastActiveGroup;
 
-    if (pendingTrayNoteId) {
-      const id = pendingTrayNoteId;
-      pendingTrayNoteId = null;
-      void openNote(id);
-    }
+    for (const id of pendingTrayNotes.splice(0)) void openNote(id);
 
     layoutReady = true;
 
@@ -632,8 +634,9 @@
   async function openTrayCreatedNote(id: string) {
     await loadTree();
     scheduleTrayCreateSync(id);
-    if (!dock) {
-      pendingTrayNoteId = id;
+    // Restoring the saved layout would replace a panel opened before it.
+    if (!layoutPersistenceReady) {
+      pendingTrayNotes.push(id);
       return;
     }
     await openNote(id);
@@ -824,9 +827,17 @@
     const unsub = subscribeOpenNoteRequest((id, { preview }) => {
       void openNote(id, { preview });
     });
-    const trayUnlisten = listen(TauriEventName.TrayNoteCreated, (payload) => {
-      void openTrayCreatedNote(payload.note_id);
+    // The note waits in Rust: this window may have been loading when it was
+    // made, as after the worker unloaded it.
+    const openCreatedNotes = () =>
+      takeCreatedNotes().then(
+        (ids) => ids.forEach((id) => void openTrayCreatedNote(id)),
+        (err) => console.warn('[tray] created notes unavailable', err)
+      );
+    const trayUnlisten = listen(TauriEventName.TrayNoteCreated, () => {
+      void openCreatedNotes();
     });
+    void trayUnlisten.then(openCreatedNotes, () => {});
     const showAppUnlisten = listen(TauriEventName.ShowApp, () => {
       void focusMainWindow();
     });

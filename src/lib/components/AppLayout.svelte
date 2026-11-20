@@ -55,6 +55,7 @@
     profilesState
   } from '$lib/stores/profiles.svelte';
   import { installWorkerCloseBridge } from '$lib/vaults/close-bridge';
+  import { retainUndoWhileHidden } from '$lib/editor/retained-undo';
   import { installSyncStatusBridge } from '$lib/notifications/sync-status';
   import { installSyncTreeRefreshBridge } from '$lib/sync/tree-refresh-bridge';
   import { loadPlugins, watchPluginChanges } from '$lib/plugins/load';
@@ -67,6 +68,7 @@
   let { children } = $props();
 
   onMount(installWorkerCloseBridge);
+  onMount(retainUndoWhileHidden);
   onMount(installImportActivityBridge);
 
   // Document initialization and cross-window refresh replace the snapshot.

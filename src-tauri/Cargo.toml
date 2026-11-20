@@ -206,6 +206,8 @@ windows-core = "0.61"
 windows = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# malloc_trim, to hand back the heap a destroyed webview leaves behind.
+libc = "0.2"
 # AppIndicator exports GtkImageMenuItem images and labels to the desktop tray.
 gtk = "0.18"
 muda = { version = "0.19", default-features = false, features = ["gtk"] }

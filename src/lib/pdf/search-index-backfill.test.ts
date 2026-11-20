@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi
+} from 'vitest';
 
 const pdfNotesMissingTextMock = vi.fn();
 const loadNoteMock = vi.fn();
@@ -117,6 +125,36 @@ describe('startPdfSearchIndexing', () => {
       expect(setPdfTextMock).toHaveBeenCalledWith('good', 'hello pdf');
     });
     expect(setPdfTextMock).not.toHaveBeenCalledWith('bad', expect.anything());
+  });
+
+  it('re-sweeps after a sync only once the window is seen again', async () => {
+    let visibility: DocumentVisibilityState = 'visible';
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => visibility
+    });
+    onTestFinished(() => {
+      delete (document as { visibilityState?: unknown }).visibilityState;
+    });
+    const { startPdfSearchIndexing } = await importBackfill();
+    startPdfSearchIndexing();
+    await vi.waitFor(() =>
+      expect(pdfNotesMissingTextMock).toHaveBeenCalledTimes(1)
+    );
+    const onSync = listenMock.mock.calls[0][1] as () => void;
+
+    visibility = 'hidden';
+    document.dispatchEvent(new Event('visibilitychange'));
+    onSync();
+    onSync();
+    await Promise.resolve();
+    expect(pdfNotesMissingTextMock).toHaveBeenCalledTimes(1);
+
+    visibility = 'visible';
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.waitFor(() =>
+      expect(pdfNotesMissingTextMock).toHaveBeenCalledTimes(2)
+    );
   });
 
   it('logs listener registration failures and retries on the next start', async () => {

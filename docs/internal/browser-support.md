@@ -144,8 +144,8 @@ A dedicated worker owns one connection and one OPFS sync-access-handle pool.
 It uses rollback journals and `synchronous=FULL`. Native connections keep
 using WAL. An exclusive Web Lock covers the whole pool because installing
 the pool acquires its file handles. A second tab receives `databaseBusy`
-before it installs the VFS. It can retry after the owner closes. Closing or
-terminating the worker releases ownership. Requests run in sequence, and the
+before it installs the VFS, queues for the lock and reloads once the owner
+closes. Closing or terminating the worker releases ownership. Requests run in sequence, and the
 client rejects pending requests if the worker fails or times out.
 
 This follows the upstream [VFS constraints](https://docs.rs/crate/sqlite-wasm-rs/0.5.1)
