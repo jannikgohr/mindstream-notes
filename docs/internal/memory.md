@@ -262,6 +262,29 @@ Traps:
   and a note left in Source view comes back in the default view without its
   source-pane history, as a switch to WYSIWYG already does.
 
+### A browser tab
+
+The browser leaves a tab's memory to Chrome. Measured on Linux Chromium with
+1,500 notes and the same 12 tabs, the tab's renderer (with the SQLite worker)
+holds 129 MB restored with one tab shown, 196 MB after every tab was shown
+once and 186 MB hidden. The app's JS stays idle while hidden. Energy Saver's
+freezing frees nothing and rarely applies: it only freezes CPU-heavy tabs, and
+never one the user has edited. Memory Saver's discard frees the whole
+renderer, and the tab reloads with `document.wasDiscarded` in under a second.
+
+What a discard would lose, and how it is kept:
+
+- Edits inside the save debounce: `suspend-flush` saves on hide, and a tab is
+  always hidden before it is discarded.
+- Undo history: `retained-undo` writes every editor's history to
+  sessionStorage each time the tab hides, and the reload takes it back, as the
+  desktop does across an unload. A reload the user starts keeps it too.
+
+A second tab is refused the vault lock but queues for it, and reloads once
+the owner closes (`reloadWhenVaultFree` in `$lib/browser/vault.ts`). The
+queued request also stops Chrome freezing the owner. A frozen owner would
+otherwise hold the lock with nothing to make Chrome wake it.
+
 ### Not holding spellcheck dictionaries the user is not using
 
 Hunspell tables are by far the largest thing the Rust process holds, and the
