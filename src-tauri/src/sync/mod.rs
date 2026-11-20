@@ -210,6 +210,8 @@ impl From<AppError> for RunError {
     }
 }
 
+static TREE: crate::tree::TreeWatch = crate::tree::TreeWatch::new();
+
 /// [`run`], and what follows when it could not finish for a reason that is
 /// not an error to report.
 ///
@@ -240,6 +242,7 @@ pub(crate) fn run_session(
             if let Err(err) = room_keys::keep(db, seal.as_ref(), learned) {
                 log::warn!("[sync] could not keep the room keys of this sync: {err}");
             }
+            delta.tree_changed = TREE.moved(db);
             Ok(Some(delta))
         }
         Err(RunError::Unreachable(detail)) => {
@@ -311,6 +314,9 @@ pub struct SyncCompletedEvent {
     pub report: SyncReport,
     pub notes_pulled_ids: Vec<String>,
     pub assets_pulled_ids: Vec<String>,
+    /// Whether anything the file tree shows changed. The report's counts
+    /// miss some of it, such as a shared folder's discarded edits.
+    pub tree_changed: bool,
     /// The spaces the server took nothing new for, see [`LimitReached`].
     /// Empty when everything went up, which is also what takes an earlier
     /// notice away.
@@ -433,6 +439,7 @@ pub async fn sync_now(app: AppHandle) -> CommandResult<SyncReport> {
         report: delta.report.clone(),
         notes_pulled_ids: delta.notes_pulled_ids,
         assets_pulled_ids: delta.assets_pulled_ids,
+        tree_changed: delta.tree_changed,
         limits: delta.limits,
     };
     let event_name = AppEvent::SyncCompleted.as_str();
@@ -461,6 +468,8 @@ pub struct SyncDelta {
     /// editors evict matching blob URLs from their AssetBridge cache
     /// and kick the corresponding image NodeView so it re-resolves.
     pub assets_pulled_ids: Vec<String>,
+    /// Set by [`run_session`], see [`SyncCompletedEvent::tree_changed`].
+    pub tree_changed: bool,
     /// The spaces whose push the server refused for a limit. Their rows
     /// stay dirty and go up with the first sync that has room.
     pub limits: Vec<LimitReached>,

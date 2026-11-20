@@ -66,6 +66,18 @@ the restored network-service process.
 
 Minimised or parked in the tray, the same build sits at 18–33 MB (below).
 
+All of the Windows numbers on this page predate vault worker processes. A
+release launch now runs a coordinator, which owns the tray and has no webview,
+plus one worker per open vault that owns the window and its webview. On Linux
+the coordinator holds about 19 MB private and a worker 43–48 MB, next to a
+WebKit web process of 240–270 MB with no tabs open. The `e2e-data-dir` build
+the app harness launches runs a single direct process, so it does not show
+the coordinator, and its numbers are not a release build's.
+
+The first launch after the browser-storage migration is not representative
+either: the migration page leaves the coordinator with a WebKit network
+process until it exits. Measure the second launch.
+
 ## What moved it
 
 ### WebView2 process configuration
@@ -170,6 +182,48 @@ minimise-and-restore ten seconds later should not.
 Only the `main` window is managed. Popout note windows get their own webview
 and are short-lived, so they are left alone.
 
+### Mounting editors only when their tab is first shown
+
+Every tab used to mount its full editor when its dock panel was created, and a
+restored layout creates all of them at startup. Dockview's default renderer
+only detaches a background tab's element, so the editor, its Y.Doc, its
+awareness timer and its sync listener all stayed alive. Measured on the Linux
+release build with 1,500 notes: twelve restored tabs cost about 280 MB in the
+web process, whichever kind of note was active, and hiding the window gave
+back only about 70 MB of it.
+
+`mountWhenFirstVisible` (`src/lib/desktop/mount-when-visible.ts`) now mounts a
+panel's editor the first time dockview shows it. Dockview reports a new panel
+as visible until its group has placed it, and a restore activates panels in
+turn, so visibility is only read after the current synchronous work. Tabs the
+user has visited stay mounted; unmounting them would lose scroll position and
+undo history.
+
+### Keeping a hidden window idle
+
+What makes a parked window's footprint unstable is anything that wakes it. On
+Windows a wake faults trimmed pages back in, and on every platform it adds
+garbage. The largest one was scheduled sync: every 30 seconds while signed
+in, `sync-completed` made the hidden page reload the whole note tree into
+reactive state and re-run the PDF search-index sweep, even when the sync
+changed nothing. With 1,500 notes on Linux that was ~120 ms of CPU and a
+6–30 MB swing in the web process per tick.
+
+`deferWhileHidden` (`src/lib/defer-while-hidden.ts`) holds work that only keeps
+the UI current while `document.visibilityState` is hidden, and runs it once
+when the page is shown again. The tree refresh, the PDF sweep and the PDF
+viewer's signature refresh use it; the sync itself still runs in Rust. With
+it, the same hidden window stayed within 1 MB across three minutes of ticks.
+Use it for any new listener that only refreshes what the user would see.
+
+A visible window reloads the tree only when `sync-completed` says
+`tree_changed`. Rust compares a hash of the tree snapshot with the one the
+last successful sync saw, because the report's counts miss changes such as a
+shared folder's discarded edits, and a sync can change the tree and then
+fail. A hidden `CollabProvider` sends no presence: it tells the room its
+cursor is gone and re-announces it when shown. Awareness would otherwise renew
+it every 15 seconds for each open shared note.
+
 ### Not holding spellcheck dictionaries the user is not using
 
 Hunspell tables are by far the largest thing the Rust process holds, and the
@@ -221,9 +275,6 @@ really there.
 
 ## What is not worth chasing
 
-- **Open notes.** Dockview only renders the visible panel, so the second and
-  later tabs cost ~1.2 MB of heap and ~190 DOM nodes each — a tab strip entry
-  and a tree row, not an editor. "Ten notes open" is not why the app is large.
 - **A leak.** Twelve open/close cycles on the same note settle ~2.7 MB above
   the first open and stop climbing; DOM node count returns exactly to baseline.
 - **Shaving JS.** Worth knowing the exchange rate: V8 keeps each loaded script

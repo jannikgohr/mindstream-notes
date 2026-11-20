@@ -18,7 +18,8 @@
  * writer's request it sends one of its own.
  *
  * After that, each local edit goes out as an update. Presence travels in its
- * own class, which members who may only read can send too.
+ * own class, which members who may only read can send too. While the window
+ * is hidden this device sends none, and the peers stop showing its cursor.
  *
  * Only updates and replies ever touch the document. The server relays those
  * classes from writers alone, so a member who may only read cannot change
@@ -110,6 +111,9 @@ export class CollabProvider {
   /** Which awareness clients each peer has spoken for. A peer that drops
    *  off without saying goodbye still has its cursor removed. */
   private readonly awarenessOf = new Map<number, Set<number>>();
+  private hidden =
+    typeof document !== 'undefined' && document.visibilityState === 'hidden';
+  private readonly visibilityHandler = () => this.onVisibilityChange();
 
   private readonly docUpdateHandler: (
     update: Uint8Array,
@@ -140,7 +144,7 @@ export class CollabProvider {
         }
         return;
       }
-      if (origin === this) return;
+      if (origin === this || this.hidden) return;
       const changedClients = [...added, ...updated, ...removed];
       if (changedClients.length === 0) return;
       for (const client of changedClients)
@@ -158,6 +162,9 @@ export class CollabProvider {
 
     this.opts.doc.on('update', this.docUpdateHandler);
     this.opts.awareness.on('update', this.awarenessUpdateHandler);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', this.visibilityHandler);
+    }
 
     this.socket = new RoomSocket({
       url: this.opts.url,
@@ -179,6 +186,9 @@ export class CollabProvider {
     this.pendingAwarenessClients.clear();
     this.opts.doc.off('update', this.docUpdateHandler);
     this.opts.awareness.off('update', this.awarenessUpdateHandler);
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.visibilityHandler);
+    }
     // Drop our own awareness state so this editor stops showing itself. The
     // peers hear from the server that we left and remove our cursor.
     try {
@@ -197,9 +207,32 @@ export class CollabProvider {
     // alone, and tells us its own state so we can answer in kind.
     void this.socket.send(ROOM_CLASS_SYNC, Y.encodeStateVector(this.opts.doc));
     // Announce our presence so the peers' cursor list shows us joining.
+    if (this.hidden) return;
     void this.socket.send(
       ROOM_CLASS_PRESENCE,
       encodeAwarenessUpdate(this.opts.awareness, [this.opts.awareness.clientID])
+    );
+  }
+
+  private onVisibilityChange(): void {
+    const hidden = document.visibilityState === 'hidden';
+    if (this.destroyed || hidden === this.hidden) return;
+    this.hidden = hidden;
+    const { awareness } = this.opts;
+    if (!hidden) {
+      // Setting the state again moves its clock past the removal the peers
+      // were sent, so they take it, and the handler above sends it.
+      const state = awareness.getLocalState();
+      if (state !== null) awareness.setLocalState(state);
+      return;
+    }
+    if (this.awarenessFrame !== null) cancelAnimationFrame(this.awarenessFrame);
+    this.awarenessFrame = null;
+    this.pendingAwarenessClients.clear();
+    // Encoded without its state, this client reads to the peers as gone.
+    void this.socket.send(
+      ROOM_CLASS_PRESENCE,
+      encodeAwarenessUpdate(awareness, [awareness.clientID], new Map())
     );
   }
 
