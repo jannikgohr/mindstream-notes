@@ -18,7 +18,8 @@ const h = vi.hoisted(() => ({
   emitCommand: vi.fn(),
   insertMarkdown: vi.fn(),
   runTemplateEntry: vi.fn(),
-  renderTemplateEntryBody: vi.fn()
+  renderTemplateEntryBody: vi.fn(),
+  pushToast: vi.fn()
 }));
 
 vi.mock('$lib/hotkeys', () => ({
@@ -42,6 +43,8 @@ vi.mock('$lib/plugins/menu', () => ({
   runTemplateEntry: h.runTemplateEntry,
   renderTemplateEntryBody: h.renderTemplateEntryBody
 }));
+
+vi.mock('$lib/components/toast.svelte', () => ({ pushToast: h.pushToast }));
 
 vi.mock('$lib/settings/i18n.svelte', () => ({
   tUi: (key: string) => {
@@ -188,5 +191,18 @@ describe('template commands', () => {
     await vi.waitFor(() =>
       expect(h.insertMarkdown).toHaveBeenCalledWith('BODY', 'n1')
     );
+  });
+
+  it('"insert" run() shows a template that fails to render', async () => {
+    h.active = { kind: 'markdown', noteId: 'n1' };
+    h.renderTemplateEntryBody.mockRejectedValue(new Error('out of range'));
+    const cmd = paletteCommands().find(
+      (c) => c.id === 'template.insert.user:n1'
+    );
+    await cmd?.run();
+    expect(h.insertMarkdown).not.toHaveBeenCalled();
+    expect(h.pushToast).toHaveBeenCalledWith('out of range', {
+      variant: 'error'
+    });
   });
 });

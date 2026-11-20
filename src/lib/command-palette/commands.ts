@@ -35,6 +35,8 @@ import {
   type TemplateMenuEntry
 } from '$lib/plugins/menu';
 import { tUi } from '$lib/settings/i18n.svelte';
+import { pushToast } from '$lib/components/toast.svelte';
+import { toErrorMessage } from '$lib/api/errors';
 
 export type PaletteSection = 'application' | 'templates';
 
@@ -115,8 +117,8 @@ function templateCommands(): PaletteCommand[] {
         label: withName('commandPalette.template.insert', entry.label),
         section: 'templates',
         keywords: entry.description,
-        run: () => {
-          void renderTemplateEntryBody(entry)
+        run: () =>
+          renderTemplateEntryBody(entry)
             .then((body) => insertMarkdownIntoActiveNote(body, targetNoteId))
             .catch((err) => {
               console.error(
@@ -124,8 +126,8 @@ function templateCommands(): PaletteCommand[] {
                 key,
                 err
               );
-            });
-        }
+              pushToast(toErrorMessage(err), { variant: 'error' });
+            })
       });
     }
   }
