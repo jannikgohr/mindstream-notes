@@ -29,10 +29,12 @@ export type SettingType =
   | 'info'
   | 'custom'
   // Live pickers whose choices come from the vault, not the schema. The stored
-  // value is a folder id / a tag string; both auto-clear when the target is
-  // deleted (see settings/pickers.svelte.ts). Reusable by any plugin setting.
+  // value is a folder id / a tag string / a note id; each auto-clears when the
+  // target is deleted (see settings/pickers.svelte.ts). Reusable by any plugin
+  // setting.
   | 'folder'
-  | 'tag';
+  | 'tag'
+  | 'note';
 
 /** Conditional visibility based on another setting's value. */
 export interface ShowIf {
@@ -138,6 +140,11 @@ export interface TagSetting extends SettingBase {
   type: 'tag';
   default?: string;
 }
+/** Picks a note from the vault; stores the note id (or '' when unset). */
+export interface NoteSetting extends SettingBase {
+  type: 'note';
+  default?: string;
+}
 export interface CustomSetting extends SettingBase {
   type: 'custom';
   customId: string;
@@ -156,7 +163,8 @@ export type Setting =
   | InfoSetting
   | CustomSetting
   | FolderSetting
-  | TagSetting;
+  | TagSetting
+  | NoteSetting;
 
 export interface Section {
   id: string;

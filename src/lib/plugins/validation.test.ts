@@ -8,6 +8,7 @@ import type { PluginManifest } from './types';
 import typstManifest from '../../../plugins/typst/manifest.json';
 import languagetoolManifest from '../../../plugins/languagetool/manifest.json';
 import templatesManifest from '../../../plugins/templates/manifest.json';
+import journalManifest from '../../../plugins/journal/manifest.json';
 
 /** A minimal manifest that passes validation; override to probe failures. */
 function validManifest(
@@ -1099,6 +1100,61 @@ describe('validateManifest', () => {
       };
     });
     expect(() => validateManifest(m)).toThrow(/does not contribute/);
+  });
+
+  it('accepts a script command only from a scripted runtime', () => {
+    const script = (runtime: string) => ({
+      ...withContributes((c) => {
+        (c.commands as Record<string, unknown>[])[0].action = {
+          type: 'script',
+          export: 'openToday'
+        };
+      }),
+      runtime,
+      ...(runtime === 'wasm' ? { entry: 'plugin.wasm' } : {})
+    });
+    expect(() => validateManifest(script('wasm'))).not.toThrow();
+    expect(() => validateManifest(script('manifest-only'))).toThrow(
+      /script commands/
+    );
+  });
+
+  it('accepts the shipped Journal manifest', () => {
+    expect(
+      validateManifest(structuredClone(journalManifest)).contributes
+        .commands?.[0].action
+    ).toEqual({ type: 'script', export: 'openToday' });
+  });
+
+  it('rejects a sidebar view without a supported renderer or a safe icon', () => {
+    const view = (over: Record<string, unknown>) =>
+      withContributes((c) => {
+        c.sidebarViews = [
+          {
+            id: 'calendar',
+            labelKey: 'view.label',
+            icon: 'icons/calendar.svg',
+            render: { type: 'nope' },
+            ...over
+          }
+        ];
+      });
+    expect(() => validateManifest(view({}))).toThrow(
+      /not a supported sidebar view renderer/
+    );
+    expect(() => validateManifest(view({ icon: '../x.svg' }))).toThrow(
+      /safe relative \.svg path/
+    );
+    expect(() =>
+      validateManifest(
+        view({
+          actions: [
+            { id: 'today', labelKey: 'a', icon: 'icons/a.svg' },
+            { id: 'today', labelKey: 'b', icon: 'icons/b.svg' }
+          ]
+        })
+      )
+    ).toThrow(/duplicate sidebar view action id/);
   });
 
   it('rejects an unsupported command action', () => {

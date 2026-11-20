@@ -3,6 +3,7 @@ import { setLanguage } from '$lib/settings/i18n.svelte';
 import { registerPlugin, resetPluginRegistry } from './registry.svelte';
 import {
   namespacedPluginKey,
+  resolvePluginPlural,
   resolvePluginString,
   resolvePluginStringOptional
 } from './plugin-i18n';
@@ -21,9 +22,14 @@ function register(): void {
       i18n: {
         en: {
           'templates.meeting.name': 'Meeting notes',
-          'templates.meeting.description': 'Agenda and follow-ups'
+          'templates.meeting.description': 'Agenda and follow-ups',
+          'notes.one': '{count} note',
+          'notes.other': '{count} notes'
         },
-        de: { 'templates.meeting.name': 'Besprechungsnotizen' }
+        de: {
+          'templates.meeting.name': 'Besprechungsnotizen',
+          'notes.other': '{count} Notizen'
+        }
       },
       noteTemplates: [
         {
@@ -96,5 +102,17 @@ describe('resolvePluginStringOptional', () => {
     expect(
       resolvePluginStringOptional(PLUGIN_ID, 'templates.meeting.name')
     ).toBe('Meeting notes');
+  });
+});
+
+describe('resolvePluginPlural', () => {
+  it('stays in the active language when it has only some forms', () => {
+    register();
+    expect(resolvePluginPlural(PLUGIN_ID, 'notes', 1)).toBe('{count} note');
+    setLanguage('de');
+    expect(resolvePluginPlural(PLUGIN_ID, 'notes', 1)).toBe('{count} Notizen');
+    expect(resolvePluginPlural(PLUGIN_ID, 'missing', 1)).toBe(
+      namespacedPluginKey(PLUGIN_ID, 'missing.other')
+    );
   });
 });

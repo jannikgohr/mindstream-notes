@@ -29,6 +29,7 @@ import {
 } from './registry.svelte';
 import { runPluginScript } from './run-script';
 
+const JOURNAL = 'com.mindstream.journal';
 const TEMPLATES = 'com.mindstream.templates.core';
 const TYPST = 'com.mindstream.typst';
 
@@ -65,12 +66,17 @@ beforeEach(() => {
   for (const manifest of bundledWasmManifests()) registerPlugin(manifest);
   tree.collectionsById = {
     root: { id: 'root', name: 'Templates', parent_collection_id: null },
-    child: { id: 'child', name: 'Daily', parent_collection_id: 'root' }
+    child: { id: 'child', name: 'Daily', parent_collection_id: 'root' },
+    gone: { id: 'gone', name: 'Old', parent_collection_id: 'trash' }
   };
   tree.notesById = {
     z: note('z', 'Zulu', { parent_collection_id: 'child' }),
     a: note('a', 'Alpha', { tags: ['template'] }),
     t: note('t', 'Trashed', { tags: ['template'], trashed: true }),
+    g: note('g', 'In trashed folder', {
+      tags: ['template'],
+      parent_collection_id: 'gone'
+    }),
     o: note('o', 'Other')
   };
 });
@@ -84,6 +90,7 @@ afterEach(() => {
 
 it('runs every bundled Wasm plugin', () => {
   expect(bundledWasmManifests().map((m) => (m as { id: string }).id)).toEqual([
+    JOURNAL,
     TEMPLATES,
     TYPST
   ]);
@@ -151,6 +158,60 @@ describe('Templates', () => {
     await expect(
       runPluginScript(TEMPLATES, 'newFromTemplate', {})
     ).rejects.toThrow(`plugin ${TEMPLATES} is not enabled`);
+  });
+});
+
+describe('Journal', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ now: new Date(2026, 10, 19, 12), toFake: ['Date'] });
+    settings[`plugins.${JOURNAL}.folder`] = 'child';
+    tree.notesById = {
+      d: note('d', '2026-11-19', {
+        parent_collection_id: 'child',
+        created: new Date(2026, 10, 19, 8).toISOString()
+      }),
+      o: note('o', 'Ideas', {
+        created: new Date(2026, 10, 19, 9).toISOString()
+      })
+    };
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("draws today's calendar from the tree's notes", async () => {
+    const { state, view } = (await runPluginScript(JOURNAL, 'render', {
+      state: null
+    })) as {
+      state: unknown;
+      view: { children: Record<string, unknown>[] };
+    };
+    expect(state).toEqual({ month: '2026-11', selected: '2026-11-19' });
+    expect(view.children[0]).toMatchObject({
+      type: 'calendar',
+      days: { '2026-11-19': { marks: ['accent', 'muted'], strong: true } }
+    });
+    expect(view.children[2]).toMatchObject({
+      items: [
+        { label: '2026-11-19', on: { effect: 'openNote', noteId: 'd' } },
+        { label: 'Ideas', on: { effect: 'openNote', noteId: 'o' } }
+      ]
+    });
+  });
+
+  it('opens or creates a picked day in its folder', async () => {
+    expect(
+      await runPluginScript(JOURNAL, 'onEvent', {
+        state: { month: '2026-11', selected: '2026-11-19' },
+        event: 'select',
+        value: '2026-11-23'
+      })
+    ).toEqual({
+      state: { month: '2026-11', selected: '2026-11-23' },
+      effect: {
+        effect: 'openOrCreateNote',
+        title: '2026-11-23',
+        parentId: 'child'
+      }
+    });
   });
 });
 

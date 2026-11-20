@@ -13,7 +13,10 @@ export async function setTemplateFolder(
     .getByRole('button', { name: 'Plugins', exact: true })
     .first()
     .click();
-  await dialog.getByRole('button', { name: 'Plugin settings' }).click();
+  await dialog
+    .getByRole('group', { name: 'Templates', exact: true })
+    .getByRole('button', { name: 'Plugin settings' })
+    .click();
   const picker = dialog.getByRole('button', {
     name: 'Template folder',
     exact: true

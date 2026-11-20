@@ -50,6 +50,7 @@ import {
   type PluginSourceLanguageContribution,
   type PluginSettingsContribution,
   type PluginCommandContribution,
+  type PluginSidebarViewContribution,
   type PluginTemplateVariable,
   type PluginToolbarButton,
   type PluginToolbarLocation,
@@ -144,7 +145,8 @@ const SETTING_TYPES = new Set<PluginSetting['type']>([
   'color',
   'text',
   'folder',
-  'tag'
+  'tag',
+  'note'
 ]);
 
 const DIAGNOSTIC_KINDS = new Set(['spelling', 'grammar', 'style']);
@@ -1279,6 +1281,76 @@ function validateNativeService(
   }
 }
 
+function assertExportName(
+  pluginId: string,
+  value: unknown,
+  path: string
+): void {
+  if (typeof value !== 'string' || !EXPORT_NAME_RE.test(value)) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path} must be a backend script export name (letters, digits, underscore)`
+    );
+  }
+}
+
+function assertSvgPath(pluginId: string, value: unknown, path: string): void {
+  assertNonEmptyString(pluginId, value, path);
+  if (!SAFE_SVG_PATH_RE.test(value as string)) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path} ("${String(value)}") must be a safe relative .svg path inside the plugin dir (no "..", absolute paths, or "\\\\")`
+    );
+  }
+}
+
+function validateSidebarView(
+  pluginId: string,
+  v: PluginSidebarViewContribution,
+  path: string
+): void {
+  assertSlug(pluginId, v?.id, `${path}.id`);
+  assertI18nKey(pluginId, v.labelKey, `${path}.labelKey`);
+  assertSvgPath(pluginId, v.icon, `${path}.icon`);
+  if (v.actions !== undefined && !Array.isArray(v.actions)) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.actions must be an array`
+    );
+  }
+  const seen = new Set<string>();
+  for (const [i, action] of (v.actions ?? []).entries()) {
+    assertSlug(pluginId, action?.id, `${path}.actions[${i}].id`);
+    assertI18nKey(pluginId, action.labelKey, `${path}.actions[${i}].labelKey`);
+    assertSvgPath(pluginId, action.icon, `${path}.actions[${i}].icon`);
+    if (seen.has(action.id)) {
+      throw new PluginValidationError(
+        pluginId,
+        `duplicate sidebar view action id "${action.id}"`
+      );
+    }
+    seen.add(action.id);
+  }
+  validateSidebarViewRender(pluginId, v.render, `${path}.render`);
+}
+
+function validateSidebarViewRender(
+  pluginId: string,
+  render: unknown,
+  path: string
+): void {
+  const r = render as Record<string, unknown> | null;
+  if (r?.type === 'schema') {
+    assertExportName(pluginId, r.render, `${path}.render`);
+    assertExportName(pluginId, r.onEvent, `${path}.onEvent`);
+    return;
+  }
+  throw new PluginValidationError(
+    pluginId,
+    `${path}.type ("${String(r?.type)}") is not a supported sidebar view renderer`
+  );
+}
+
 function validateCommand(
   pluginId: string,
   c: PluginCommandContribution,
@@ -1297,10 +1369,14 @@ function validateCommand(
       `${path}.defaultBinding must be a string or null`
     );
   }
+  if (c.action?.type === 'script') {
+    assertExportName(pluginId, c.action.export, `${path}.action.export`);
+    return;
+  }
   if (c.action?.type !== 'createTemplateNote') {
     throw new PluginValidationError(
       pluginId,
-      `${path}.action.type ("${String(c.action?.type)}") is not a supported command action`
+      `${path}.action.type ("${String((c.action as { type?: unknown } | undefined)?.type)}") is not a supported command action`
     );
   }
   assertSlug(pluginId, c.action.templateId, `${path}.action.templateId`);
@@ -1485,15 +1561,7 @@ function validateToolbarAction(
     );
   }
   if (action.type === 'script') {
-    if (
-      typeof action.export !== 'string' ||
-      !EXPORT_NAME_RE.test(action.export)
-    ) {
-      throw new PluginValidationError(
-        pluginId,
-        `${path}.export must be a backend script export name (letters, digits, underscore)`
-      );
-    }
+    assertExportName(pluginId, action.export, `${path}.export`);
     return;
   }
   if (location !== 'note-editor') {
@@ -1946,6 +2014,33 @@ export function validateManifest(input: unknown): PluginManifest {
   for (const [i, c] of commands.entries()) {
     validateCommand(pluginId, c, `commands[${i}]`, templateIds);
     claimId(seenCommandIds, c.id, 'command id');
+  }
+
+  if (
+    commands.some((c) => c.action.type === 'script') &&
+    !isScriptedRuntime(m.runtime)
+  ) {
+    throw new PluginValidationError(
+      pluginId,
+      'contributes script commands, which run a backend script export and require a scripted runtime ("wasm")'
+    );
+  }
+
+  // ---- Sidebar views ---------------------------------------------------
+  const sidebarViews = contributionList(
+    contributes.sidebarViews,
+    'sidebarViews'
+  );
+  const seenSidebarViewIds = new Set<string>();
+  for (const [i, v] of sidebarViews.entries()) {
+    validateSidebarView(pluginId, v, `sidebarViews[${i}]`);
+    claimId(seenSidebarViewIds, v.id, 'sidebar view id');
+  }
+  if (sidebarViews.length > 0 && !isScriptedRuntime(m.runtime)) {
+    throw new PluginValidationError(
+      pluginId,
+      'contributes sidebar views, which run backend script exports and require a scripted runtime ("wasm")'
+    );
   }
 
   // ---- Documentation ---------------------------------------------------

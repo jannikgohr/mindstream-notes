@@ -55,3 +55,25 @@ export function resolvePluginStringOptional(
   const english = bundle?.['en']?.[key];
   return typeof english === 'string' ? english : undefined;
 }
+
+/**
+ * The plugin's string for `key` in the plural category of `count`
+ * (`key.one`, `key.other`, …). The active language is tried whole before
+ * English, so a partial translation never mixes in an English form.
+ */
+export function resolvePluginPlural(
+  pluginId: string,
+  key: string,
+  count: number
+): string {
+  const bundle = pluginById(pluginId)?.manifest.contributes.i18n;
+  for (const language of [i18n.language, 'en']) {
+    const strings = bundle?.[language];
+    const category = new Intl.PluralRules(language).select(count);
+    for (const candidate of [`${key}.${category}`, `${key}.other`]) {
+      const value = strings?.[candidate];
+      if (typeof value === 'string') return value;
+    }
+  }
+  return namespacedPluginKey(pluginId, `${key}.other`);
+}

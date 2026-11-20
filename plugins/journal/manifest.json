@@ -1,0 +1,113 @@
+{
+  "manifestVersion": 2,
+  "id": "com.mindstream.journal",
+  "name": "Journal",
+  "version": "1.0.0",
+  "author": "Mindstream",
+  "runtime": "wasm",
+  "entry": "plugin.wasm",
+  "descriptionKey": "plugin.description",
+  "icon": "icons/calendar.svg",
+  "permissions": ["notes.read", "notes.create"],
+  "contributes": {
+    "documentation": [
+      {
+        "file": "docs/getting-started.md"
+      }
+    ],
+    "sidebarViews": [
+      {
+        "id": "calendar",
+        "labelKey": "view.label",
+        "icon": "icons/calendar.svg",
+        "actions": [
+          {
+            "id": "today",
+            "labelKey": "action.today",
+            "icon": "icons/calendar.svg"
+          }
+        ],
+        "render": {
+          "type": "schema",
+          "render": "render",
+          "onEvent": "onEvent"
+        }
+      }
+    ],
+    "commands": [
+      {
+        "id": "open-today",
+        "labelKey": "command.openToday",
+        "defaultBinding": null,
+        "action": {
+          "type": "script",
+          "export": "openToday"
+        }
+      }
+    ],
+    "i18n": {
+      "en": {
+        "plugin.description": "A calendar of your notes, with a daily note for each day.",
+        "view.label": "Journal",
+        "action.today": "Today",
+        "view.createDailyNote": "Create daily note",
+        "view.notes.one": "{count} note",
+        "view.notes.other": "{count} notes",
+        "command.openToday": "Open today's note",
+        "settings.journal.title": "Daily notes",
+        "settings.folder.label": "Daily notes folder",
+        "settings.folder.description": "Where daily notes are created and looked up. Without one, they go in the vault root.",
+        "settings.titleFormat.label": "Title format",
+        "settings.titleFormat.description": "How a daily note is named, such as YYYY-MM-DD or dddd, D MMMM YYYY. Notes named with an earlier format are no longer found.",
+        "settings.template.label": "Template",
+        "settings.template.description": "A note copied into each new daily note. Its date placeholders use the daily note's day."
+      },
+      "de": {
+        "plugin.description": "Ein Kalender deiner Notizen, mit einer Tagesnotiz für jeden Tag.",
+        "view.label": "Journal",
+        "action.today": "Heute",
+        "view.createDailyNote": "Tagesnotiz erstellen",
+        "view.notes.one": "{count} Notiz",
+        "view.notes.other": "{count} Notizen",
+        "command.openToday": "Heutige Notiz öffnen",
+        "settings.journal.title": "Tagesnotizen",
+        "settings.folder.label": "Ordner für Tagesnotizen",
+        "settings.folder.description": "Hier werden Tagesnotizen angelegt und gesucht. Ohne Ordner landen sie in der obersten Ebene des Tresors.",
+        "settings.titleFormat.label": "Titelformat",
+        "settings.titleFormat.description": "Wie eine Tagesnotiz heißt, etwa YYYY-MM-DD oder dddd, D MMMM YYYY. Notizen mit einem früheren Format werden nicht mehr gefunden.",
+        "settings.template.label": "Vorlage",
+        "settings.template.description": "Eine Notiz, die in jede neue Tagesnotiz kopiert wird. Ihre Datumsplatzhalter verwenden den Tag der Tagesnotiz."
+      }
+    },
+    "settings": [
+      {
+        "sectionId": "journal",
+        "titleKey": "settings.journal.title",
+        "settings": [
+          {
+            "id": "folder",
+            "labelKey": "settings.folder.label",
+            "descriptionKey": "settings.folder.description",
+            "scope": "V",
+            "type": "folder"
+          },
+          {
+            "id": "title-format",
+            "labelKey": "settings.titleFormat.label",
+            "descriptionKey": "settings.titleFormat.description",
+            "scope": "V",
+            "type": "text",
+            "default": "YYYY-MM-DD"
+          },
+          {
+            "id": "template",
+            "labelKey": "settings.template.label",
+            "descriptionKey": "settings.template.description",
+            "scope": "V",
+            "type": "note"
+          }
+        ]
+      }
+    ]
+  }
+}

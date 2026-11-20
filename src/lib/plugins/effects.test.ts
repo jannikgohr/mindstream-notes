@@ -44,7 +44,8 @@ vi.mock('$lib/hotkeys', () => ({
   insertMarkdownIntoActiveNote: h.insertMarkdown
 }));
 vi.mock('$lib/templates/user-templates', () => ({
-  createNoteFromNote: h.createNoteFromNote
+  createNoteFromNote: h.createNoteFromNote,
+  TEMPLATES_PLUGIN_ID: 'com.mindstream.templates.core'
 }));
 vi.mock('$lib/components/toast.svelte', () => ({ pushToast: h.pushToast }));
 vi.mock('$lib/settings/store.svelte', () => ({
@@ -129,6 +130,39 @@ describe('parsePluginEffect', () => {
     });
   });
 
+  it('parses openNote and openOrCreateNote, dropping a bad template', () => {
+    expect(parsePluginEffect({ effect: 'openNote', noteId: 'n1' })).toEqual({
+      effect: 'openNote',
+      noteId: 'n1'
+    });
+    expect(
+      parsePluginEffect({ effect: 'openNote', noteId: 'n1', preview: true })
+    ).toEqual({ effect: 'openNote', noteId: 'n1', preview: true });
+    expect(
+      parsePluginEffect({
+        effect: 'openOrCreateNote',
+        title: '2026-11-23',
+        parentId: 'f1',
+        template: { sourceNoteId: 'tpl', date: '2026-11-23', extra: 1 }
+      })
+    ).toEqual({
+      effect: 'openOrCreateNote',
+      title: '2026-11-23',
+      parentId: 'f1',
+      template: { sourceNoteId: 'tpl', date: '2026-11-23' }
+    });
+    expect(
+      parsePluginEffect({ effect: 'openOrCreateNote', title: ' ' })
+    ).toBeNull();
+    expect(
+      parsePluginEffect({
+        effect: 'openOrCreateNote',
+        title: 'T',
+        template: { date: '2026-11-23' }
+      })
+    ).toBeNull();
+  });
+
   it('parses insertMarkdown and rejects it without a string', () => {
     expect(
       parsePluginEffect({ effect: 'insertMarkdown', markdown: '# hi' })
@@ -179,6 +213,29 @@ describe('runPluginEffect', () => {
     });
     expect(h.createNoteIn).toHaveBeenCalledWith(null, 'T', 'markdown', 'B');
     expect(h.requestOpenNote).toHaveBeenCalledWith('note-new');
+  });
+
+  it('gates openNote on notes.read and openOrCreateNote on notes.create', async () => {
+    await expect(
+      runPluginEffect('p1', { effect: 'openNote', noteId: 'n1' })
+    ).rejects.toThrow(/notes\.read/);
+    await expect(
+      runPluginEffect('p1', { effect: 'openOrCreateNote', title: 'Day' })
+    ).rejects.toThrow(/notes\.create/);
+    expect(h.requestOpenNote).not.toHaveBeenCalled();
+
+    h.perms.p1 = ['notes.read', 'notes.create'];
+    await runPluginEffect('p1', { effect: 'openNote', noteId: 'n1' });
+    expect(h.requestOpenNote).toHaveBeenCalledWith('n1', {
+      preview: undefined
+    });
+    await runPluginEffect(
+      'p1',
+      { effect: 'openOrCreateNote', title: 'Day' },
+      undefined,
+      { defaultParentId: 'f1' }
+    );
+    expect(h.createNoteIn).toHaveBeenCalledWith('f1', 'Day', 'markdown');
   });
 
   it('runs toast + insertMarkdown without a permission', async () => {
@@ -280,6 +337,26 @@ describe('runPluginEffect', () => {
     await items[0].onSelect();
     expect(onPick).toHaveBeenCalledTimes(1);
     expect(h.createNoteFromNote).toHaveBeenCalledWith('n1', null);
+  });
+
+  it('shows a failed menu pick as an error toast', async () => {
+    h.perms.p1 = ['notes.create'];
+    h.createNoteFromNote.mockRejectedValueOnce(
+      new Error('date shift is out of range')
+    );
+    const item = menuItemFromPluginEffect('p1', 'templates', 'From template', {
+      effect: 'openMenu',
+      items: [
+        {
+          label: 'Bad',
+          run: { effect: 'createNoteFromNote', sourceNoteId: 'n1' }
+        }
+      ]
+    });
+    await item.children?.[0]?.onSelect?.();
+    expect(h.pushToast).toHaveBeenCalledWith('date shift is out of range', {
+      variant: 'error'
+    });
   });
 
   it('converts openMenu effects into submenu items with inherited defaults', async () => {

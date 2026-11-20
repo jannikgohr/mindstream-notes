@@ -34,6 +34,7 @@ import type {
   PluginNoteTemplateContribution,
   PluginSettingsContribution,
   PluginSourceLanguageContribution,
+  PluginSidebarViewContribution,
   PluginToolbarButton,
   PluginTextCheckerContribution,
   PluginToolbarLocation
@@ -349,6 +350,20 @@ export function pluginToolbarButtons(
       );
     })
     .map(({ pluginId, entry }) => ({ pluginId, button: entry }));
+}
+
+/** A sidebar view paired with its owning plugin. */
+export interface PluginSidebarViewRef {
+  pluginId: string;
+  view: PluginSidebarViewContribution;
+}
+
+/** Sidebar views contributed by all enabled plugins, in registration order. */
+export function pluginSidebarViews(): PluginSidebarViewRef[] {
+  return contributionsOf('sidebarViews').map(({ pluginId, entry }) => ({
+    pluginId,
+    view: entry
+  }));
 }
 
 /** Drop all registry state. Test-only; keeps suites isolated. */
