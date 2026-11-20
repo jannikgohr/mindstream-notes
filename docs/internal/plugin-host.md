@@ -3,7 +3,7 @@
 How the plugin host stores, verifies and runs plugins, and how the core
 plugins and the TypeScript SDK are maintained. The contract plugin authors work
 against is in [Writing plugins](../plugin-development.md); what people see is
-in [Plugins](../plugins.md). The proposals for new host capabilities are in the
+in [Plugins](../plugins.md). Decided and proposed host capabilities are in the
 [host API design](plugin-host-api-design.md).
 
 The contribution and permission types are in
@@ -92,9 +92,11 @@ it, which a future event or watcher would require. Only the two window-scoped
 fields (`activeNoteId`, `locale`) come from the frontend.
 
 **Reserved namespaces.** The ABI reserves future `mindstream:ai` and
-`mindstream:ocr` capability namespaces. They are design boundaries only. A
-future host API should use opaque model and attachment IDs, explicit grants and
-cancellable asynchronous jobs.
+`mindstream:ocr` capability namespaces for models the host itself would run.
+They are design boundaries only. Handwriting recognition does not use them: it
+is a plugin that sends rendered pages to a model server the user picks,
+through the note events, jobs and ink APIs in the
+[host API design](plugin-host-api-design.md#note-events-jobs-and-ink-pages).
 
 **Why the host makes text-checker requests.** Besides keeping note text away
 from plugin code, it is the only way the request works at all. A self-hosted

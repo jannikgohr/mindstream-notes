@@ -35,24 +35,26 @@ payload copying or replace a good bulk/query API.
 
 ## Next host capabilities
 
-This is a proposal, not a list of implemented imports. The current Wasm API
-has no general HTTP, note-body, attachment, credential or event API. Declared
-text-checker services, artifact downloads and native services already have
-separate host mechanisms; they do not grant a Wasm guest arbitrary networking.
-The existing `notes` interface returns metadata, while note writes use
-validated effects.
+The current Wasm API has no general HTTP, note-body, attachment, credential or
+event API. Declared text-checker services, artifact downloads and native
+services already have separate host mechanisms; they do not grant a Wasm guest
+arbitrary networking. The existing `notes` interface returns metadata, while
+note writes use validated effects.
 
-Prioritize capabilities with concrete plugin uses:
+Note events, background jobs, a first form of scoped HTTP, secret settings and
+ink page access are decided, for handwriting recognition as their first user.
+They are described under
+[Note events, jobs and ink pages](#note-events-jobs-and-ink-pages) and are not
+implemented yet. The rest of this table is still a proposal:
 
-| Capability                                         | Useful for                                                               | Host contract to define                                                                                                                               |
-| -------------------------------------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Bounded note queries and opt-in content reads      | Search, backlinks, transformations, summarizers                          | Filters, selected fields, pagination, revision IDs and separate grants for content access. Avoid returning every body by default.                     |
-| Revision-checked bulk edit effects                 | Applying transformations across notes                                    | Expected revisions, validation before writes, conflict results and explicit atomicity. Do not make generic host batching promise a vault transaction. |
-| Scoped HTTP requests                               | Service integrations, publishing, remote lookups and local model servers | Approved destinations, bounded bytes and concurrency, typed responses, cancellation and credential isolation.                                         |
-| Host-managed credentials                           | Authenticated service integrations                                       | User-selected opaque credential references scoped to a plugin and destination. No app account tokens, cookies or raw secrets in manifests/logs.       |
-| Attachment handles and user-selected import/export | OCR, image processing, PDF tools and export formats                      | Explicit selection or vault grants, byte limits and streamed access where needed. No arbitrary filesystem paths.                                      |
-| Cancellable jobs and bounded change subscriptions  | Slow I/O, AI/OCR and incremental indexing                                | Ownership, progress, result delivery, backpressure and teardown on disable/remove/vault closure. Mobile OS suspension must remain visible.            |
-| Capability and version discovery                   | Portable third-party plugins                                             | Supported interface versions and optional operations, distinct from the user's grants. A guest can choose a fallback before calling a missing import. |
+| Capability                                         | Useful for                                                         | Host contract to define                                                                                                                               |
+| -------------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bounded note queries and opt-in content reads      | Search, backlinks, transformations, summarizers                    | Filters, selected fields, pagination, revision IDs and separate grants for content access. Avoid returning every body by default.                     |
+| Revision-checked bulk edit effects                 | Applying transformations across notes                              | Expected revisions, validation before writes, conflict results and explicit atomicity. Do not make generic host batching promise a vault transaction. |
+| HTTP to manifest-declared destinations             | Service integrations, publishing and remote lookups                | The general form of the decided setting-origin requests: approved destinations, concurrency, and requests outside jobs.                               |
+| Credential handles                                 | Authenticated service integrations                                 | Opaque references scoped to a plugin and destination, beyond the decided `secret` settings. No app account tokens or cookies.                         |
+| Attachment handles and user-selected import/export | OCR of attachments, image processing, PDF tools and export formats | Explicit selection or vault grants, byte limits and streamed access where needed. No arbitrary filesystem paths.                                      |
+| Capability and version discovery                   | Portable third-party plugins                                       | Supported interface versions and optional operations, distinct from the user's grants. A guest can choose a fallback before calling a missing import. |
 
 ### HTTP proposal
 
@@ -66,8 +68,10 @@ Require an explicit networking grant plus approved scheme/host/port
 destinations. A manifest update that widens destinations must require review,
 even if its permission names are unchanged. HTTPS should be the default.
 Loopback/LAN endpoints and plain HTTP need distinct, visible opt-in so local
-LanguageTool/model servers remain possible. A read-and-network plugin can
-send granted note data to those destinations; approval must make that clear.
+LanguageTool/model servers remain possible. In the decided first form the
+destination is the origin of a setting, and typing a LAN or plain-HTTP URL
+into it is that opt-in. A read-and-network plugin can send granted note data
+to those destinations; approval must make that clear.
 
 The host must enforce destinations during DNS resolution and connection,
 including IPv4/IPv6, redirects and DNS rebinding. Default to no automatic
@@ -79,11 +83,12 @@ This needs backend enforcement rather than relying on WebView CORS.
 
 Set explicit request/response byte caps, decompressed-body caps, concurrency
 limits and connect/total timeouts. Requests must stop on cancellation, plugin
-disable/remove and vault closure. Slow I/O needs a specified job/continuation
-contract or an explicitly bounded I/O allowance. The existing one-second
-guest budget must not silently expand, and network waits must not freeze the
-UI. Result delivery must recheck the plugin and vault lifetime. Neither
-generic batching nor an automatic retry should replay a non-idempotent POST.
+disable/remove and vault closure. Slow I/O goes through the decided job
+contract, so the one-second guest budget does not expand and network waits
+never hold a guest call open. Result delivery must recheck the plugin and
+vault lifetime. Generic batching must not replay a non-idempotent POST; jobs
+are delivered at least once, so a plugin may only queue requests that are
+safe to repeat.
 If network batches become useful, specify their sequential/parallel and
 partial-completion semantics separately from the current synchronous batch.
 
@@ -99,6 +104,186 @@ Pure text parsing, filtering, sorting, hashing and service-specific payload
 construction should stay in guests unless measurement justifies a shared
 implementation. Bounded queries and host-owned jobs reduce repeated data
 transfer more effectively than mirroring every small helper in the host.
+
+## Note events, jobs and ink pages
+
+Decided on 2026-11-20 with handwriting recognition as the first user. None of
+this is implemented yet. Every contract here is implemented in both hosts,
+the Rust backend and `src/lib/plugins/browser-host.ts`, with mirrored tests,
+so neither host gets a contract the other cannot meet. iOS is out of scope.
+
+### Handwriting recognition is a plugin
+
+Recognition needs a model server the user picks, so it is not core. The host
+owns what needs authority or consistency: reading pages, rendering them,
+storing recognized text, the search index, events, jobs and HTTP. The plugin
+owns policy: when to recognize, the prompt, building the request and parsing
+the reply. It ships as a bundled Rust plugin, "Handwriting recognition
+(OpenAI-compatible)", off by default, in the desktop, Android and browser
+apps. It reads pages after local edits, and after sync only pages that have
+no recognized text yet, so two devices do not both read a page just written
+on one of them.
+
+The cursor and job tables and the queue rules (claiming, backoff, dedupe,
+limits) are in `storage-core`, which the browser also runs in its SQLite
+worker. Only the loop that runs jobs and the settle timer exist once per host.
+
+### Note events
+
+A plugin subscribes in its manifest and needs `notes.watch`:
+
+```json
+"events": [
+  { "on": "note.changed", "export": "noteChanged", "noteKinds": ["ink"], "settleMs": 5000 }
+]
+```
+
+- One event per note, carrying `noteId`, `kind`, `revision` and
+  `origin: "local" | "sync"`. No content: knowing that a note changed and
+  reading what is in it are separate grants.
+- The host holds a note's events until nothing in it has changed for
+  `settleMs`, then delivers one event for the latest revision. Editor saves
+  and sync writes settle the same way.
+- Delivery uses a durable cursor per plugin and vault, in the vault's local
+  database, and is at least once. Handlers must tolerate repeats. The cursor
+  follows a local change sequence that every note write path advances, sync
+  included; a write path that skips it silently loses events.
+- A new cursor starts at the beginning, so enabling a plugin delivers every
+  existing note of its kinds.
+- Trashing or deleting a note sends no event.
+- When a handler fails with `queue-full`, the cursor stays put and the event
+  is delivered again once the queue has room. A large backlog is read in
+  batches instead of being dropped.
+
+### Background jobs
+
+Slow work runs as host-owned jobs, so no guest call waits on the network.
+A job has three exports:
+
+1. An event or action handler queues the job with a payload of at most
+   16 KiB, a dedupe key and the names of its two other exports.
+2. When the job's turn comes, the host calls `prepare` with the payload. It
+   returns the request and up to 64 KiB of context, or nothing to finish the
+   job without a request. Building the request late keeps queued rows small
+   and uses the note as it is when the job runs.
+3. The host sends the request, then calls the continuation with the payload,
+   the context and the response or error.
+
+Rules:
+
+- Jobs live in the vault's local SQLite, never sync and survive restarts. A
+  request in flight when the app quits is sent again, which is one more reason
+  queued requests must be safe to repeat.
+- Queuing a job whose dedupe key is already waiting replaces the waiting job.
+  A running job finishes; the host's own checks reject a result that went
+  stale meanwhile.
+- One job runs at a time per plugin.
+- Network errors, 5xx, 408 and 429 are retried after 1, 5 and 30 minutes.
+  Any other 4xx fails at once.
+- Each plugin may have 10,000 jobs and 16 MiB of payload queued per vault.
+  Failed jobs count toward the limit, and only the newest 100 failures are
+  kept. Queuing past a limit fails with `queue-full`.
+- Jobs pause while the vault is closed, while the Android app is in the
+  background, and in any browser tab that does not own the vault. Running in
+  Android's background scheduler is a separate integration.
+- The host draws a "Background work" section in the plugin's settings with
+  queued, running and failed counts, each failure's error, Retry, Dismiss and
+  Cancel all. Background failures raise no toasts, except one for the first
+  failure after a plugin setting changed, so a mistyped URL is noticed.
+
+Disabling a plugin is the same as removing it for everything the host runs on
+its behalf: the request in flight is aborted and its jobs and cursor are
+deleted. Settings, plugin storage and permission grants are kept, as they are
+today. Enabling it again starts a fresh cursor.
+
+### HTTP from a setting's origin
+
+The first form of scoped HTTP, the general contract above restricted to jobs
+and to one kind of destination. It needs `network.settingOrigin`:
+
+```json
+"network": { "destinations": [{ "setting": "endpoint" }] }
+```
+
+- A request has a method (`GET` or `POST`), a URL, `content-type` and
+  `accept` headers, headers filled from a setting
+  (`{ "header": "authorization", "fromSetting": "apiKey", "prefix": "Bearer " }`),
+  a body of at most 32 MiB and a timeout of at most 300 s.
+- The response has a status, bounded headers and a body of at most 1 MiB.
+  HTTP error statuses are responses. Destination, timeout, size and transport
+  failures are distinct errors.
+- The URL's origin must equal the named setting's origin when the request is
+  sent, not when it was queued. Otherwise the job fails with "server URL
+  changed".
+- No redirects, no cookies, no app credentials.
+- The native host sends requests with `reqwest`, for the reasons in
+  [plugin host internals](plugin-host.md#design-notes). The browser host uses
+  `fetch` and so is subject to CORS, mixed-content blocking and Chrome's Local
+  Network Access prompt. It checks the URL's shape when it is entered, for
+  example a plain-HTTP hostname from an HTTPS page, and its failures carry
+  one hint covering the causes a page cannot tell apart. What works from the
+  browser, per server setup, belongs in the user documentation.
+
+### Secret settings
+
+A new plugin setting type, available to every plugin:
+
+- `type: "secret"` is valid only with `scope: "D"`, so it never syncs and
+  stays out of vault backups.
+- The settings UI masks it, with show/hide and Clear.
+- Plugin calls receive only whether it is set, never the value. The host
+  inserts it through `fromSetting` in a job request or through a text
+  checker's `apiKeySetting`. LanguageTool's `api-key`, already device-scoped,
+  switches to it without a migration.
+- Values never appear in job rows, errors, logs or diagnostics. In the
+  browser they sit in the origin's storage, where any script on that origin
+  can read them.
+
+### Ink pages and recognized text
+
+Two permissions: `ink.read` and `ink.writeRecognizedText`.
+
+- `ink.pages(note)` lists each page with its stroke signature, computed by the
+  host, and its recognized entry, if any.
+- `ink.render-page(note, page)` returns PNG bytes drawn by one fixed recipe:
+  strokes only, cropped to their bounds with 24 px padding, on white, at most
+  1600 px per side. The plugin sees the image; options wait for a second user.
+- `ink.set-recognized-text(note, page, signature, text)` fails with `stale`
+  when the page's strokes no longer match `signature`, and with
+  `not-active-recognizer` for any plugin but the vault's chosen one.
+
+Recognized text lives in the note's `ink:handwriting` map: page ID to text,
+stroke signature and the plugin that wrote it. It syncs and stays outside
+undo. The host prunes entries for pages that were deleted or have no strokes.
+With more than one recognizer enabled, the user picks the active one in
+settings. Disabling the active one clears the choice, and if exactly one
+other recognizer is enabled it takes over. Recognized text stays in notes when
+a plugin is disabled or removed, because it is note content.
+
+The stroke decoder, renderer and signature are Rust in a crate both hosts
+build, with tiny-skia and a PNG encoder, so both send the same image for the
+same page. The TypeScript codec writes strokes, so a parity test keeps the
+Rust decoder in step with it. The rendered image does not need to match the
+editor canvas.
+
+Search reuses the ink index in `notes.pdf_text`. Its staleness signature,
+`ink_background_signature` in Rust and `backgroundSignature` in TypeScript,
+also covers recognized pages, and a test in each language asserts the same
+string. Rust cannot rebuild that text alone, because PDF background text comes
+from pdf.js, so after a write the host emits `index-stale` and the existing
+TypeScript sweep re-indexes the note.
+
+An open ink editor is not told about host writes. That is safe: ink saves
+merge into the stored state rather than replace it, and the editor does not
+show recognized text.
+
+Ways to see and undo the state:
+
+- The ink note menu gets "Recognized text", a read-only sheet with each page's
+  text and whether it is current, outdated or not read yet.
+- Settings → Search gets "Remove recognized text", which says how many notes
+  it touches, deletes `ink:handwriting` from every ink note in the vault as a
+  synced edit, and clears the active recognizer so the text does not return.
 
 ## What other systems do
 
