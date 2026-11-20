@@ -82,8 +82,7 @@ async function open(reset = false) {
           if (!lock) {
             reject({
               code: 'databaseBusy',
-              message:
-                'The database is open in another tab. Close it there and retry.'
+              message: 'The database is open in another tab.'
             });
             return;
           }
